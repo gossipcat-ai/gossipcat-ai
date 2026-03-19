@@ -1,262 +1,245 @@
-import { createInterface } from 'readline';
+import * as p from '@clack/prompts';
 import { writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { Keychain } from './keychain';
 
-// ── ANSI helpers ─────────────────────────────────────────────────────────────
-const c = {
-  reset:   '\x1b[0m',
-  bold:    '\x1b[1m',
-  dim:     '\x1b[2m',
-  green:   '\x1b[32m',
-  yellow:  '\x1b[33m',
-  blue:    '\x1b[34m',
-  magenta: '\x1b[35m',
-  cyan:    '\x1b[36m',
-  white:   '\x1b[37m',
-  gray:    '\x1b[90m',
-  bgBlue:  '\x1b[44m',
-};
-
-const LOGO = `
-${c.cyan}${c.bold}   ╔══════════════════════════════════════╗
-   ║        ${c.magenta}GOSSIP MESH${c.cyan}  v0.1.0          ║
-   ║  ${c.white}Multi-Agent Orchestration Platform${c.cyan}   ║
-   ╚══════════════════════════════════════╝${c.reset}
-`;
-
-const PROVIDER_INFO: Record<string, { display: string; color: string; models: string[] }> = {
+// ── Provider + Model catalog ────────────────────────────────────────────────
+const PROVIDERS = {
   anthropic: {
-    display: 'Anthropic (Claude)',
-    color: c.magenta,
-    models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+    label: 'Anthropic (Claude)',
+    hint: 'claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5',
+    models: [
+      { value: 'claude-opus-4-6',   label: 'Claude Opus 4.6',   hint: 'Most capable, highest cost' },
+      { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6',  hint: 'Fast + smart — recommended' },
+      { value: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',   hint: 'Fastest, lowest cost' },
+    ],
   },
   openai: {
-    display: 'OpenAI (GPT)',
-    color: c.green,
-    models: ['gpt-5', 'gpt-4o', 'gpt-4o-mini', 'o3', 'o3-mini'],
+    label: 'OpenAI (GPT)',
+    hint: 'gpt-5, gpt-4o, o3, o3-mini',
+    models: [
+      { value: 'gpt-5',      label: 'GPT-5',       hint: 'Most capable' },
+      { value: 'gpt-4o',     label: 'GPT-4o',      hint: 'Fast + smart — recommended' },
+      { value: 'gpt-4o-mini', label: 'GPT-4o Mini', hint: 'Fastest, lowest cost' },
+      { value: 'o3',         label: 'o3',           hint: 'Reasoning model' },
+      { value: 'o3-mini',    label: 'o3-mini',      hint: 'Fast reasoning' },
+    ],
   },
   google: {
-    display: 'Google (Gemini)',
-    color: c.blue,
-    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+    label: 'Google (Gemini)',
+    hint: 'gemini-2.5-pro, gemini-2.5-flash',
+    models: [
+      { value: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro',   hint: 'Most capable' },
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', hint: 'Fast — recommended' },
+      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', hint: 'Previous gen, stable' },
+    ],
   },
+} as const;
+
+type ProviderKey = keyof typeof PROVIDERS | 'local';
+
+const PRESETS = [
+  { value: 'architect',   label: 'Architect',   hint: 'Design, decompose, review trade-offs' },
+  { value: 'implementer', label: 'Implementer', hint: 'Write code, build features, tests alongside' },
+  { value: 'reviewer',    label: 'Reviewer',    hint: 'Find bugs, security holes, quality issues' },
+  { value: 'tester',      label: 'Tester',      hint: 'Write tests, verify, coverage analysis' },
+  { value: 'researcher',  label: 'Researcher',  hint: 'Read docs, gather context, summarize' },
+  { value: 'debugger',    label: 'Debugger',    hint: 'Investigate errors, trace root causes' },
+] as const;
+
+const PRESET_SKILLS: Record<string, string[]> = {
+  architect:   ['typescript', 'system_design', 'code_review', 'api_design'],
+  implementer: ['typescript', 'implementation', 'testing', 'react'],
+  reviewer:    ['code_review', 'security_audit', 'debugging'],
+  tester:      ['testing', 'debugging', 'e2e', 'integration'],
+  researcher:  ['documentation', 'api_design', 'research'],
+  debugger:    ['debugging', 'testing', 'code_review'],
 };
 
-const PRESETS: Record<string, { label: string; skills: string[] }> = {
-  architect:   { label: 'Architect — design, decompose, review',     skills: ['typescript', 'system_design', 'code_review', 'api_design'] },
-  implementer: { label: 'Implementer — write code, build features',  skills: ['typescript', 'implementation', 'testing', 'react'] },
-  reviewer:    { label: 'Reviewer — find bugs, security, quality',   skills: ['code_review', 'security_audit', 'debugging'] },
-  tester:      { label: 'Tester — write tests, verify, coverage',    skills: ['testing', 'debugging', 'e2e', 'integration'] },
-  researcher:  { label: 'Researcher — read docs, gather context',    skills: ['documentation', 'api_design', 'research'] },
-  debugger:    { label: 'Debugger — investigate errors, root cause',  skills: ['debugging', 'testing', 'code_review'] },
-};
-
-function step(num: number, total: number, title: string): void {
-  console.log(`\n  ${c.bgBlue}${c.white}${c.bold} ${num}/${total} ${c.reset} ${c.bold}${title}${c.reset}\n`);
-}
-
-function success(msg: string): void {
-  console.log(`  ${c.green}✓${c.reset} ${msg}`);
-}
-
-function info(msg: string): void {
-  console.log(`  ${c.gray}${msg}${c.reset}`);
-}
-
-function showMenu(options: string[], labels: string[]): void {
-  options.forEach((_, i) => {
-    console.log(`  ${c.cyan}${c.bold}${i + 1}${c.reset}  ${labels[i]}`);
-  });
-}
-
-function agentCard(id: string, provider: string, model: string, preset: string, skills: string[]): void {
-  console.log(`  ${c.cyan}┌─${c.reset} ${c.bold}${id}${c.reset}`);
-  console.log(`  ${c.cyan}│${c.reset}  ${c.dim}Provider:${c.reset} ${provider}  ${c.dim}Model:${c.reset} ${model}`);
-  console.log(`  ${c.cyan}│${c.reset}  ${c.dim}Role:${c.reset}     ${preset}  ${c.dim}Skills:${c.reset} ${skills.join(', ')}`);
-  console.log(`  ${c.cyan}└──────${c.reset}`);
-}
-
-export async function runSetupWizard(): Promise<void> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q: string) => new Promise<string>(res => rl.question(q, res));
-
-  const selectOne = async (prompt: string, options: string[], labels: string[]): Promise<string> => {
-    showMenu(options, labels);
-    console.log('');
-    while (true) {
-      const answer = await ask(`  ${prompt} `);
-      const num = parseInt(answer.trim());
-      if (num >= 1 && num <= options.length) return options[num - 1];
-      console.log(`  ${c.yellow}Enter a number 1-${options.length}${c.reset}`);
-    }
-  };
-
-  const selectMany = async (prompt: string, options: string[], labels: string[]): Promise<string[]> => {
-    showMenu(options, labels);
-    console.log('');
-    while (true) {
-      const answer = await ask(`  ${prompt} `);
-      const nums = answer.trim().split(/[,\s]+/).map(s => parseInt(s)).filter(n => !isNaN(n));
-      if (nums.length > 0 && nums.every(n => n >= 1 && n <= options.length)) {
-        return nums.map(n => options[n - 1]);
-      }
-      console.log(`  ${c.yellow}Enter numbers separated by commas (e.g. 1,2,3)${c.reset}`);
-    }
-  };
-
-  console.log(LOGO);
-
-  // ── Step 1: Select Providers ──────────────────────────────────────────────
-  step(1, 4, 'Select Your Providers');
-  info('Which LLM providers do you want to use?\n');
-
-  const providerKeys = Object.keys(PROVIDER_INFO);
-  const providerLabels = providerKeys.map(k => {
-    const p = PROVIDER_INFO[k];
-    return `${p.color}${p.display}${c.reset}`;
-  });
-
-  // Check for Ollama
-  let ollamaModels: string[] = [];
+// ── Helpers ─────────────────────────────────────────────────────────────────
+async function detectOllama(): Promise<string[]> {
   try {
     const res = await fetch('http://localhost:11434/api/tags');
-    if (res.ok) {
-      const data = await res.json() as any;
-      ollamaModels = (data.models || []).map((m: any) => m.name);
-    }
-  } catch { /* no Ollama */ }
+    if (!res.ok) return [];
+    const data = await res.json() as any;
+    return (data.models || []).map((m: any) => m.name);
+  } catch {
+    return [];
+  }
+}
+
+function shortName(provider: string): string {
+  return provider === 'anthropic' ? 'claude'
+    : provider === 'openai' ? 'gpt'
+    : provider === 'google' ? 'gemini'
+    : 'local';
+}
+
+// ── Main wizard ─────────────────────────────────────────────────────────────
+export async function runSetupWizard(): Promise<void> {
+  p.intro('  Gossip Mesh  —  Multi-Agent Orchestration Platform');
+
+  // ── Detect local models ─────────────────────────────────────────────────
+  const ollamaModels = await detectOllama();
+
+  // ── Step 1: Select providers ────────────────────────────────────────────
+  const providerOptions: Array<{ value: ProviderKey; label: string; hint?: string }> = [
+    { value: 'anthropic', label: PROVIDERS.anthropic.label, hint: PROVIDERS.anthropic.hint },
+    { value: 'openai',    label: PROVIDERS.openai.label,    hint: PROVIDERS.openai.hint },
+    { value: 'google',    label: PROVIDERS.google.label,    hint: PROVIDERS.google.hint },
+  ];
 
   if (ollamaModels.length > 0) {
-    providerKeys.push('local');
-    providerLabels.push(`${c.yellow}Local (Ollama)${c.reset} ${c.dim}— ${ollamaModels.length} model${ollamaModels.length > 1 ? 's' : ''} detected${c.reset}`);
+    providerOptions.push({
+      value: 'local',
+      label: `Local (Ollama)`,
+      hint: `${ollamaModels.length} model${ollamaModels.length > 1 ? 's' : ''} detected — ${ollamaModels.slice(0, 3).join(', ')}`,
+    });
   }
 
-  const selectedProviders = await selectMany(
-    `Select providers ${c.dim}(e.g. 1,2)${c.reset}:`,
-    providerKeys,
-    providerLabels
-  );
+  const selectedProviders = await p.multiselect({
+    message: 'Which providers do you want to use?',
+    options: providerOptions,
+    required: true,
+  });
 
-  // ── Step 2: API Keys for Selected Providers ───────────────────────────────
-  step(2, 4, 'Enter API Keys');
+  if (p.isCancel(selectedProviders)) {
+    p.cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  // ── Step 2: API keys ────────────────────────────────────────────────────
   const keychain = new Keychain();
-  const configuredProviders: Array<{ name: string }> = [];
+  const configuredProviders: ProviderKey[] = [];
 
   for (const provider of selectedProviders) {
     if (provider === 'local') {
-      success(`Ollama — no API key needed`);
-      configuredProviders.push({ name: 'local' });
+      p.log.success('Ollama — no API key needed');
+      configuredProviders.push('local');
       continue;
     }
 
-    const pInfo = PROVIDER_INFO[provider];
-    const key = await ask(`  ${pInfo.color}${pInfo.display}${c.reset} API key: `);
-    if (key.trim()) {
-      await keychain.setKey(provider, key.trim());
-      configuredProviders.push({ name: provider });
-      success(`${pInfo.display} — key saved`);
-    } else {
-      info(`${pInfo.display} skipped (no key entered)`);
+    const info = PROVIDERS[provider as keyof typeof PROVIDERS];
+    const key = await p.password({
+      message: `${info.label} API key:`,
+      validate: (val) => {
+        if (!val || val.trim().length === 0) return 'API key is required. Deselect the provider to skip it.';
+      },
+    });
+
+    if (p.isCancel(key)) {
+      p.cancel('Setup cancelled.');
+      process.exit(0);
     }
+
+    await keychain.setKey(provider, key);
+    configuredProviders.push(provider);
+    p.log.success(`${info.label} — key saved to keychain`);
   }
 
   if (configuredProviders.length === 0) {
-    console.log(`\n  ${c.yellow}${c.bold}No providers configured.${c.reset}`);
-    console.log(`  ${c.dim}Run ${c.white}gossipcat setup${c.dim} to try again.${c.reset}\n`);
-    rl.close();
-    return;
+    p.cancel('No providers configured. Run gossipcat setup to try again.');
+    process.exit(0);
   }
 
-  // ── Step 3: Select Models ─────────────────────────────────────────────────
-  step(3, 4, 'Choose Models');
+  // ── Step 3: Orchestrator model ──────────────────────────────────────────
+  p.log.step('Choose your orchestrator — the main agent that routes tasks to your team.');
+  p.log.info('Tip: Pick a fast model here. It only routes, not heavy lifting.');
 
-  // Main agent model
-  info('Select the model for your main agent (orchestrator).');
-  info('Tip: Use a fast model — it routes tasks, not heavy work.\n');
+  const mainProvider = configuredProviders[0];
+  const mainModelOptions = mainProvider === 'local'
+    ? ollamaModels.slice(0, 10).map((m, i) => ({
+        value: m, label: m, hint: i === 0 ? 'Recommended' : undefined,
+      }))
+    : PROVIDERS[mainProvider as keyof typeof PROVIDERS].models.map(m => ({
+        value: m.value, label: m.label, hint: m.hint,
+      }));
 
-  const mainProvider = configuredProviders[0].name;
-  const mainModels = mainProvider === 'local'
-    ? ollamaModels.slice(0, 8)
-    : PROVIDER_INFO[mainProvider]?.models || [];
+  const mainModel = await p.select({
+    message: `Orchestrator model (${mainProvider}):`,
+    options: mainModelOptions,
+  });
 
-  const mainModel = await selectOne(
-    `Orchestrator model:`,
-    mainModels,
-    mainModels.map((m, i) => i === 0 ? `${c.bold}${m}${c.reset} ${c.dim}(recommended)${c.reset}` : m)
-  );
-  success(`Orchestrator: ${c.bold}${mainModel}${c.reset} ${c.dim}(${mainProvider})${c.reset}`);
+  if (p.isCancel(mainModel)) {
+    p.cancel('Setup cancelled.');
+    process.exit(0);
+  }
 
-  // ── Step 4: Build Agent Team ──────────────────────────────────────────────
-  step(4, 4, 'Configure Agent Team');
-  info('Each agent gets a role and an LLM. You can customize later.\n');
+  // ── Step 4: Configure agent team ────────────────────────────────────────
+  p.log.step('Now let\'s set up your agent team. Each provider gets an agent with a role.');
 
-  const config: any = {
-    main_agent: { provider: mainProvider, model: mainModel },
-    agents: {} as Record<string, any>,
-  };
-
-  const presetKeys = Object.keys(PRESETS);
-  const presetLabels = presetKeys.map(k => PRESETS[k].label);
+  const agents: Record<string, any> = {};
 
   for (const provider of configuredProviders) {
-    const pInfo = provider.name === 'local'
-      ? { display: 'Local (Ollama)', color: c.yellow, models: ollamaModels.slice(0, 8) }
-      : PROVIDER_INFO[provider.name];
+    const providerLabel = provider === 'local'
+      ? 'Local (Ollama)'
+      : PROVIDERS[provider as keyof typeof PROVIDERS].label;
 
-    console.log(`\n  ${pInfo.color}${c.bold}${pInfo.display}${c.reset}`);
+    p.log.message(`\n  ${providerLabel}`);
 
-    // Select role/preset
-    const preset = await selectOne(
-      `Role for this agent:`,
-      presetKeys,
-      presetLabels
-    );
+    // Select role
+    const preset = await p.select({
+      message: `Role for ${providerLabel} agent:`,
+      options: PRESETS.map(pr => ({ value: pr.value, label: pr.label, hint: pr.hint })),
+    });
+
+    if (p.isCancel(preset)) {
+      p.cancel('Setup cancelled.');
+      process.exit(0);
+    }
 
     // Select model
-    const models = pInfo.models;
-    const model = await selectOne(
-      `Model:`,
-      models,
-      models.map((m, i) => i === 0 ? `${c.bold}${m}${c.reset} ${c.dim}(recommended)${c.reset}` : m)
-    );
+    const modelOptions = provider === 'local'
+      ? ollamaModels.slice(0, 10).map((m, i) => ({
+          value: m, label: m, hint: i === 0 ? 'Recommended' : undefined,
+        }))
+      : PROVIDERS[provider as keyof typeof PROVIDERS].models.map(m => ({
+          value: m.value, label: m.label, hint: m.hint,
+        }));
 
-    // Generate agent ID
-    const shortProvider = provider.name === 'anthropic' ? 'claude'
-      : provider.name === 'openai' ? 'gpt'
-      : provider.name === 'google' ? 'gemini'
-      : 'local';
-    const agentId = `${shortProvider}-${preset}`;
+    const model = await p.select({
+      message: `Model for ${providerLabel} agent:`,
+      options: modelOptions,
+    });
 
-    const agentConfig = {
-      provider: provider.name,
+    if (p.isCancel(model)) {
+      p.cancel('Setup cancelled.');
+      process.exit(0);
+    }
+
+    const agentId = `${shortName(provider)}-${preset}`;
+    agents[agentId] = {
+      provider,
       model,
       preset,
-      skills: PRESETS[preset].skills,
+      skills: PRESET_SKILLS[preset as string] || [],
     };
-    config.agents[agentId] = agentConfig;
 
-    console.log('');
-    agentCard(agentId, provider.name, model, preset, PRESETS[preset].skills);
+    p.log.success(`${agentId} — ${model} as ${preset}`);
   }
 
-  // ── Save ──────────────────────────────────────────────────────────────────
+  // ── Save config ─────────────────────────────────────────────────────────
+  const config = {
+    main_agent: { provider: mainProvider, model: mainModel },
+    agents,
+  };
+
   const configPath = resolve(process.cwd(), 'gossip.agents.json');
   writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-  console.log(`\n  ${c.cyan}──────────────────────────────────────${c.reset}`);
-  success(`Config saved to ${c.dim}gossip.agents.json${c.reset}`);
-  success(`Keys stored in ${c.dim}system keychain${c.reset}`);
-  console.log('');
+  // ── Summary ─────────────────────────────────────────────────────────────
+  p.log.success('Config saved to gossip.agents.json');
+  p.log.success('Keys stored in system keychain');
 
-  // Show final team summary
-  const agentCount = Object.keys(config.agents).length;
-  console.log(`  ${c.bold}Your team (${agentCount} agent${agentCount > 1 ? 's' : ''})${c.reset}`);
-  for (const [id, agent] of Object.entries(config.agents as Record<string, any>)) {
-    agentCard(id, agent.provider, agent.model, agent.preset, agent.skills);
-  }
+  const agentCount = Object.keys(agents).length;
+  const summary = Object.entries(agents)
+    .map(([id, a]: [string, any]) => `  ${id} → ${a.model} (${a.preset})`)
+    .join('\n');
 
-  console.log(`\n  ${c.bold}Ready!${c.reset} Run ${c.cyan}${c.bold}gossipcat${c.reset} to start chatting.\n`);
+  p.note(
+    `Orchestrator: ${mainModel} (${mainProvider})\n\nTeam (${agentCount} agent${agentCount > 1 ? 's' : ''}):\n${summary}`,
+    'Your Setup'
+  );
 
-  rl.close();
+  p.outro('Ready! Run gossipcat to start chatting.');
 }
