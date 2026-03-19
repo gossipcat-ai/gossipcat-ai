@@ -2,7 +2,7 @@
   "name": "@gossip/cli",
   "version": "0.1.0",
   "bin": { "gossipcat": "dist/index.js" },
-  "scripts": { "build": "tsc", "start": "ts-node src/index.ts" },
+  "scripts": { "build": "tsc", "start": "ts-node -r tsconfig-paths/register -P ../../tsconfig.json src/index.ts" },
   "dependencies": {
     "@gossip/types": "*",
     "@gossip/relay": "*",
