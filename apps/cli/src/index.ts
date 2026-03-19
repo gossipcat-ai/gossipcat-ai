@@ -3,6 +3,7 @@ import { findConfigPath, loadConfig } from './config';
 import { runSetupWizard } from './setup-wizard';
 import { startChat } from './chat';
 import { createAgent, listAgents, removeAgent } from './create-agent';
+import { createTeam } from './create-team';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -24,6 +25,10 @@ async function main(): Promise<void> {
 
     case 'remove-agent':
       await removeAgent(args[1]);
+      return;
+
+    case 'create-team':
+      await createTeam(args.slice(1).join(' ') || undefined);
       return;
 
     case 'help':
@@ -62,10 +67,15 @@ function printHelp(): void {
   Usage:
     gossipcat                  Interactive chat with your agent team
     gossipcat setup            Run the setup wizard
-    gossipcat create-agent     Add a new agent to your team
+    gossipcat create-agent     Add a new agent to your team (interactive)
+    gossipcat create-team      Create a full team from a description (AI-powered)
     gossipcat list-agents      Show your current agent team
     gossipcat remove-agent     Remove an agent from your team
     gossipcat help             Show this help
+
+  Examples:
+    gossipcat create-team "Building a Next.js + Supabase SaaS. Need architecture, coding, and review."
+    gossipcat create-team      (interactive prompt if no description given)
 
   Agent files:
     .gossip/agents/<id>/

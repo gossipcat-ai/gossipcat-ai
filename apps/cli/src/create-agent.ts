@@ -96,7 +96,7 @@ function shortName(provider: string): string {
 }
 
 // ── Agent directory structure ───────────────────────────────────────────────
-function createAgentDirectory(agentId: string, agentConfig: any): void {
+export function createAgentDirectory(agentId: string, agentConfig: any): void {
   const agentDir = resolve(process.cwd(), '.gossip', 'agents', agentId);
   mkdirSync(resolve(agentDir, 'memory'), { recursive: true });
   mkdirSync(resolve(agentDir, 'context'), { recursive: true });
