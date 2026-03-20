@@ -15,38 +15,51 @@ let workers: Map<string, any> = new Map();
 let mainAgent: any = null;
 const tasks: Map<string, any> = new Map();
 
+// Cache modules after first import
+let _modules: any = null;
+
+async function getModules() {
+  if (_modules) return _modules;
+  _modules = {
+    RelayServer: (await import('@gossip/relay')).RelayServer,
+    ToolServer: (await import('@gossip/tools')).ToolServer,
+    ALL_TOOLS: (await import('@gossip/tools')).ALL_TOOLS,
+    MainAgent: (await import('@gossip/orchestrator')).MainAgent,
+    WorkerAgent: (await import('@gossip/orchestrator')).WorkerAgent,
+    createProvider: (await import('@gossip/orchestrator')).createProvider,
+    ...(await import('./config')),
+    Keychain: (await import('./keychain')).Keychain,
+  };
+  return _modules;
+}
+
 async function boot() {
   if (booted) return;
+  const m = await getModules();
 
-  const { RelayServer } = await import('@gossip/relay');
-  const { ToolServer, ALL_TOOLS } = await import('@gossip/tools');
-  const { MainAgent, WorkerAgent, createProvider } = await import('@gossip/orchestrator');
-  const { findConfigPath, loadConfig, configToAgentConfigs } = await import('./config');
-  const { Keychain } = await import('./keychain');
-
-  const configPath = findConfigPath();
+  const configPath = m.findConfigPath();
   if (!configPath) throw new Error('No gossip.agents.json found. Run gossipcat setup first.');
 
-  const config = loadConfig(configPath);
-  const agentConfigs = configToAgentConfigs(config);
-  const keychain = new Keychain();
+  const config = m.loadConfig(configPath);
+  const agentConfigs = m.configToAgentConfigs(config);
+  const keychain = new m.Keychain();
 
-  relay = new RelayServer({ port: 0 });
+  relay = new m.RelayServer({ port: 0 });
   await relay.start();
 
-  toolServer = new ToolServer({ relayUrl: relay.url, projectRoot: process.cwd() });
+  toolServer = new m.ToolServer({ relayUrl: relay.url, projectRoot: process.cwd() });
   await toolServer.start();
 
   for (const ac of agentConfigs) {
     const key = await keychain.getKey(ac.provider);
-    const llm = createProvider(ac.provider, ac.model, key ?? undefined);
-    const worker = new WorkerAgent(ac.id, llm, relay.url, ALL_TOOLS);
+    const llm = m.createProvider(ac.provider, ac.model, key ?? undefined);
+    const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS);
     await worker.start();
     workers.set(ac.id, worker);
   }
 
   const mainKey = await keychain.getKey(config.main_agent.provider);
-  mainAgent = new MainAgent({
+  mainAgent = new m.MainAgent({
     provider: config.main_agent.provider,
     model: config.main_agent.model,
     apiKey: mainKey ?? undefined,
@@ -57,6 +70,38 @@ async function boot() {
 
   booted = true;
   process.stderr.write(`[gossipcat] Booted: relay :${relay.port}, ${workers.size} workers\n`);
+}
+
+/**
+ * Hot-reload: re-read gossip.agents.json and spawn any new workers
+ * that aren't already running. No restart needed.
+ */
+async function syncWorkers() {
+  if (!booted) return;
+  const m = await getModules();
+
+  const configPath = m.findConfigPath();
+  if (!configPath) return;
+
+  const config = m.loadConfig(configPath);
+  const agentConfigs = m.configToAgentConfigs(config);
+  const keychain = new m.Keychain();
+
+  let added = 0;
+  for (const ac of agentConfigs) {
+    if (workers.has(ac.id)) continue; // already running
+    const key = await keychain.getKey(ac.provider);
+    const llm = m.createProvider(ac.provider, ac.model, key ?? undefined);
+    const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS);
+    await worker.start();
+    workers.set(ac.id, worker);
+    added++;
+    process.stderr.write(`[gossipcat] Hot-added agent: ${ac.id}\n`);
+  }
+
+  if (added > 0) {
+    process.stderr.write(`[gossipcat] Synced: ${workers.size} workers total\n`);
+  }
 }
 
 // ── Create MCP Server ─────────────────────────────────────────────────────
@@ -92,6 +137,7 @@ server.tool(
   },
   async ({ agent_id, task }) => {
     await boot();
+    await syncWorkers(); // hot-reload new agents from config
     const worker = workers.get(agent_id);
     if (!worker) {
       return { content: [{ type: 'text' as const, text: `Agent "${agent_id}" not found. Available: ${Array.from(workers.keys()).join(', ')}` }] };
@@ -124,6 +170,7 @@ server.tool(
   },
   async ({ tasks: taskDefs }) => {
     await boot();
+    await syncWorkers(); // hot-reload new agents from config
     const { loadSkills } = await import('./skill-loader-bridge');
     const taskIds: string[] = [];
     const errors: string[] = [];

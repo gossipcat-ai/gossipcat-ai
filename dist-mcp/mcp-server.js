@@ -18488,31 +18488,42 @@ var toolServer = null;
 var workers = /* @__PURE__ */ new Map();
 var mainAgent = null;
 var tasks = /* @__PURE__ */ new Map();
+var _modules = null;
+async function getModules() {
+  if (_modules) return _modules;
+  _modules = {
+    RelayServer: (await Promise.resolve().then(() => (init_src2(), src_exports))).RelayServer,
+    ToolServer: (await Promise.resolve().then(() => (init_src4(), src_exports2))).ToolServer,
+    ALL_TOOLS: (await Promise.resolve().then(() => (init_src4(), src_exports2))).ALL_TOOLS,
+    MainAgent: (await Promise.resolve().then(() => (init_src5(), src_exports3))).MainAgent,
+    WorkerAgent: (await Promise.resolve().then(() => (init_src5(), src_exports3))).WorkerAgent,
+    createProvider: (await Promise.resolve().then(() => (init_src5(), src_exports3))).createProvider,
+    ...await Promise.resolve().then(() => (init_config(), config_exports)),
+    Keychain: (await Promise.resolve().then(() => (init_keychain(), keychain_exports))).Keychain
+  };
+  return _modules;
+}
 async function boot() {
   if (booted) return;
-  const { RelayServer: RelayServer2 } = await Promise.resolve().then(() => (init_src2(), src_exports));
-  const { ToolServer: ToolServer2, ALL_TOOLS: ALL_TOOLS2 } = await Promise.resolve().then(() => (init_src4(), src_exports2));
-  const { MainAgent: MainAgent2, WorkerAgent: WorkerAgent2, createProvider: createProvider2 } = await Promise.resolve().then(() => (init_src5(), src_exports3));
-  const { findConfigPath: findConfigPath2, loadConfig: loadConfig2, configToAgentConfigs: configToAgentConfigs2 } = await Promise.resolve().then(() => (init_config(), config_exports));
-  const { Keychain: Keychain2 } = await Promise.resolve().then(() => (init_keychain(), keychain_exports));
-  const configPath = findConfigPath2();
+  const m = await getModules();
+  const configPath = m.findConfigPath();
   if (!configPath) throw new Error("No gossip.agents.json found. Run gossipcat setup first.");
-  const config2 = loadConfig2(configPath);
-  const agentConfigs = configToAgentConfigs2(config2);
-  const keychain = new Keychain2();
-  relay = new RelayServer2({ port: 0 });
+  const config2 = m.loadConfig(configPath);
+  const agentConfigs = m.configToAgentConfigs(config2);
+  const keychain = new m.Keychain();
+  relay = new m.RelayServer({ port: 0 });
   await relay.start();
-  toolServer = new ToolServer2({ relayUrl: relay.url, projectRoot: process.cwd() });
+  toolServer = new m.ToolServer({ relayUrl: relay.url, projectRoot: process.cwd() });
   await toolServer.start();
   for (const ac of agentConfigs) {
     const key = await keychain.getKey(ac.provider);
-    const llm = createProvider2(ac.provider, ac.model, key ?? void 0);
-    const worker = new WorkerAgent2(ac.id, llm, relay.url, ALL_TOOLS2);
+    const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
+    const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS);
     await worker.start();
     workers.set(ac.id, worker);
   }
   const mainKey = await keychain.getKey(config2.main_agent.provider);
-  mainAgent = new MainAgent2({
+  mainAgent = new m.MainAgent({
     provider: config2.main_agent.provider,
     model: config2.main_agent.model,
     apiKey: mainKey ?? void 0,
@@ -18523,6 +18534,31 @@ async function boot() {
   booted = true;
   process.stderr.write(`[gossipcat] Booted: relay :${relay.port}, ${workers.size} workers
 `);
+}
+async function syncWorkers() {
+  if (!booted) return;
+  const m = await getModules();
+  const configPath = m.findConfigPath();
+  if (!configPath) return;
+  const config2 = m.loadConfig(configPath);
+  const agentConfigs = m.configToAgentConfigs(config2);
+  const keychain = new m.Keychain();
+  let added = 0;
+  for (const ac of agentConfigs) {
+    if (workers.has(ac.id)) continue;
+    const key = await keychain.getKey(ac.provider);
+    const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
+    const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS);
+    await worker.start();
+    workers.set(ac.id, worker);
+    added++;
+    process.stderr.write(`[gossipcat] Hot-added agent: ${ac.id}
+`);
+  }
+  if (added > 0) {
+    process.stderr.write(`[gossipcat] Synced: ${workers.size} workers total
+`);
+  }
 }
 var server = new import_mcp.McpServer({
   name: "gossipcat",
@@ -18554,6 +18590,7 @@ server.tool(
   },
   async ({ agent_id, task }) => {
     await boot();
+    await syncWorkers();
     const worker = workers.get(agent_id);
     if (!worker) {
       return { content: [{ type: "text", text: `Agent "${agent_id}" not found. Available: ${Array.from(workers.keys()).join(", ")}` }] };
@@ -18586,6 +18623,7 @@ server.tool(
   },
   async ({ tasks: taskDefs }) => {
     await boot();
+    await syncWorkers();
     const { loadSkills: loadSkills3 } = await Promise.resolve().then(() => (init_skill_loader_bridge(), skill_loader_bridge_exports));
     const taskIds = [];
     const errors = [];
