@@ -1,5 +1,5 @@
 import * as p from '@clack/prompts';
-import { writeFileSync } from 'fs';
+import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve } from 'path';
 import { Keychain } from './keychain';
 
@@ -227,10 +227,64 @@ export async function runSetupWizard(): Promise<void> {
   const configPath = resolve(process.cwd(), 'gossip.agents.json');
   writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-  // ── Summary ─────────────────────────────────────────────────────────────
-  p.log.success('Config saved to gossip.agents.json');
-  p.log.success('Keys stored in system keychain');
+  // ── Generate .mcp.json if not exists ────────────────────────────────────
+  const mcpPath = resolve(process.cwd(), '.mcp.json');
+  if (!existsSync(mcpPath)) {
+    writeFileSync(mcpPath, JSON.stringify({
+      mcpServers: {
+        gossipcat: {
+          command: 'npx',
+          args: ['gossipcat-mcp'],
+          cwd: process.cwd(),
+        },
+      },
+    }, null, 2));
+    p.log.success('MCP server config saved to .mcp.json');
+  }
 
+  // ── Generate Claude Code rules for hybrid agent dispatch ────────────────
+  const rulesDir = resolve(process.cwd(), '.claude', 'rules');
+  mkdirSync(rulesDir, { recursive: true });
+
+  const agentList = Object.entries(agents)
+    .map(([id, a]: [string, any]) => `- ${id}: ${a.provider}/${a.model} (${a.preset})`)
+    .join('\n');
+
+  writeFileSync(resolve(rulesDir, 'gossipcat.md'), `# Gossipcat — Multi-Agent Dispatch
+
+This project uses gossipcat for multi-agent orchestration. You have two dispatch mechanisms:
+
+## Non-Claude agents (Gemini, GPT, local models) — use gossipcat MCP tools:
+\`\`\`
+gossip_dispatch(agent_id: "<id>", task: "description")
+gossip_dispatch_parallel(tasks: [{agent_id: "<id>", task: "..."}, ...])
+gossip_collect(task_ids: ["..."])
+gossip_agents()   — list available agents
+\`\`\`
+
+## Claude agents (Sonnet, Haiku) — use Claude Code's built-in Agent tool (free):
+\`\`\`
+Agent(model: "sonnet", prompt: "...", run_in_background: true)
+Agent(model: "haiku", prompt: "...", run_in_background: true)
+\`\`\`
+
+## Parallel multi-provider dispatch — combine both in one message:
+Send gossip_dispatch for non-Claude agents AND Agent tool for Claude agents simultaneously.
+Then synthesize all results.
+
+## Available agents
+${agentList}
+
+## Skills
+Skills auto-inject from agent config. No need to pass them manually.
+
+## Adding agents
+Edit gossip.agents.json — new agents hot-reload on next dispatch.
+`);
+
+  p.log.success('Claude Code rules saved to .claude/rules/gossipcat.md');
+
+  // ── Summary ─────────────────────────────────────────────────────────────
   const agentCount = Object.keys(agents).length;
   const summary = Object.entries(agents)
     .map(([id, a]: [string, any]) => `  ${id} → ${a.model} (${a.preset})`)
