@@ -31,6 +31,11 @@ async function main(): Promise<void> {
       await createTeam(args.slice(1).join(' ') || undefined);
       return;
 
+    case 'mcp-serve':
+      // Run MCP server via stdio — used by Claude Code / Cursor / any MCP client
+      await import('./mcp-server-sdk');
+      return;
+
     case 'help':
     case '--help':
     case '-h':
@@ -71,6 +76,7 @@ function printHelp(): void {
     gossipcat create-team      Create a full team from a description (AI-powered)
     gossipcat list-agents      Show your current agent team
     gossipcat remove-agent     Remove an agent from your team
+    gossipcat mcp-serve        Start MCP server (for Claude Code / Cursor)
     gossipcat help             Show this help
 
   Examples:

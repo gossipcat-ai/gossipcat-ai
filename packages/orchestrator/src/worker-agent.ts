@@ -56,7 +56,7 @@ export class WorkerAgent {
       const response = await this.llm.generate(messages, { tools: this.tools });
 
       if (!response.toolCalls?.length) {
-        return response.text;
+        return response.text || '[No response from agent]';
       }
 
       // Add assistant message with tool calls
@@ -68,7 +68,12 @@ export class WorkerAgent {
 
       // Execute each tool call via relay RPC
       for (const toolCall of response.toolCalls) {
-        const result = await this.callTool(toolCall.name, toolCall.arguments);
+        let result: string;
+        try {
+          result = await this.callTool(toolCall.name, toolCall.arguments);
+        } catch (err) {
+          result = `Error: ${(err as Error).message}`;
+        }
         messages.push({
           role: 'tool',
           content: result,
@@ -86,13 +91,17 @@ export class WorkerAgent {
     const requestId = randomUUID();
 
     const resultPromise = new Promise<string>((resolve, reject) => {
-      this.pendingToolCalls.set(requestId, { resolve, reject });
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pendingToolCalls.has(requestId)) {
           this.pendingToolCalls.delete(requestId);
           reject(new Error(`Tool call ${name} timed out`));
         }
       }, TOOL_CALL_TIMEOUT_MS);
+
+      this.pendingToolCalls.set(requestId, {
+        resolve: (r) => { clearTimeout(timer); resolve(r); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
     });
 
     const msg = Message.createRpcRequest(
@@ -101,7 +110,12 @@ export class WorkerAgent {
       requestId,
       Buffer.from(msgpackEncode({ tool: name, args })) as unknown as Uint8Array
     );
-    await this.agent.sendEnvelope(msg.envelope);
+    try {
+      await this.agent.sendEnvelope(msg.envelope);
+    } catch (err) {
+      this.pendingToolCalls.delete(requestId);
+      throw err;
+    }
 
     return resultPromise;
   }

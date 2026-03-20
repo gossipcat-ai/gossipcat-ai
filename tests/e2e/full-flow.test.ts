@@ -148,10 +148,10 @@ describe('E2E: Full Gossip Mesh Flow', () => {
     await worker.start();
     await new Promise(r => setTimeout(r, 100));
 
-    // The tool-server rejects the path; the worker propagates it as a thrown error
-    await expect(worker.executeTask('Read /etc/passwd')).rejects.toThrow(
-      /outside project root/i,
-    );
+    // The tool-server rejects the path; the worker catches the error and
+    // passes it as a tool result so the LLM can see it and adapt
+    const result = await worker.executeTask('Read /etc/passwd');
+    expect(result.toLowerCase()).toContain('outside project root');
 
     await worker.stop();
   }, 30_000);

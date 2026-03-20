@@ -4128,7 +4128,7 @@ ${context}` : ""}`
         for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
           const response = await this.llm.generate(messages, { tools: this.tools });
           if (!response.toolCalls?.length) {
-            return response.text;
+            return response.text || "[No response from agent]";
           }
           messages.push({
             role: "assistant",
@@ -4136,7 +4136,12 @@ ${context}` : ""}`
             toolCalls: response.toolCalls
           });
           for (const toolCall of response.toolCalls) {
-            const result = await this.callTool(toolCall.name, toolCall.arguments);
+            let result;
+            try {
+              result = await this.callTool(toolCall.name, toolCall.arguments);
+            } catch (err) {
+              result = `Error: ${err.message}`;
+            }
             messages.push({
               role: "tool",
               content: result,
@@ -4151,13 +4156,22 @@ ${context}` : ""}`
       async callTool(name, args) {
         const requestId = (0, import_crypto5.randomUUID)();
         const resultPromise = new Promise((resolve6, reject) => {
-          this.pendingToolCalls.set(requestId, { resolve: resolve6, reject });
-          setTimeout(() => {
+          const timer = setTimeout(() => {
             if (this.pendingToolCalls.has(requestId)) {
               this.pendingToolCalls.delete(requestId);
               reject(new Error(`Tool call ${name} timed out`));
             }
           }, TOOL_CALL_TIMEOUT_MS);
+          this.pendingToolCalls.set(requestId, {
+            resolve: (r) => {
+              clearTimeout(timer);
+              resolve6(r);
+            },
+            reject: (e) => {
+              clearTimeout(timer);
+              reject(e);
+            }
+          });
         });
         const msg = Message.createRpcRequest(
           this.agentId,
@@ -4165,7 +4179,12 @@ ${context}` : ""}`
           requestId,
           Buffer.from((0, import_msgpack4.encode)({ tool: name, args }))
         );
-        await this.agent.sendEnvelope(msg.envelope);
+        try {
+          await this.agent.sendEnvelope(msg.envelope);
+        } catch (err) {
+          this.pendingToolCalls.delete(requestId);
+          throw err;
+        }
         return resultPromise;
       }
       /** Handle incoming messages — resolve pending RPC tool calls */
