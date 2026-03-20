@@ -86,7 +86,10 @@ export class PresenceTracker {
   }
 
   getOnlineAgents(): string[] {
-    return Array.from(this.presence.keys()).sort();
+    return Array.from(this.presence.entries())
+      .filter(([, entry]) => entry.status === 'online')
+      .map(([id]) => id)
+      .sort();
   }
 
   count(): number {

@@ -56,6 +56,7 @@ export class GossipAgent extends EventEmitter {
   private _connected = false;
   private _sessionId: string | null = null;
   private intentionalDisconnect = false;
+  private subscribedChannels: Set<string> = new Set();
 
   constructor(config: GossipAgentConfig) {
     super();
@@ -184,12 +185,14 @@ export class GossipAgent extends EventEmitter {
 
   async subscribe(channel: string): Promise<void> {
     const ch = channel.replace(/^#/, '');
+    this.subscribedChannels.add(ch);
     const msg = Message.createSubscription(this.config.agentId, ch, undefined, { seq: this.seq++ });
     await this.sendEnvelope(msg.envelope);
   }
 
   async unsubscribe(channel: string): Promise<void> {
     const ch = channel.replace(/^#/, '');
+    this.subscribedChannels.delete(ch);
     const msg = Message.createUnsubscription(this.config.agentId, ch, { seq: this.seq++ });
     await this.sendEnvelope(msg.envelope);
   }
@@ -255,6 +258,11 @@ export class GossipAgent extends EventEmitter {
       try {
         await this.connect();
         console.log('[GossipAgent] Reconnected');
+        // Re-subscribe to all channels after reconnection
+        for (const ch of this.subscribedChannels) {
+          const msg = Message.createSubscription(this.config.agentId, ch, undefined, { seq: this.seq++ });
+          await this.sendEnvelope(msg.envelope).catch(() => {});
+        }
       } catch (err) {
         console.warn(`[GossipAgent] Reconnect attempt ${this.reconnectAttempts} failed:`, (err as Error).message);
         this.attemptReconnect();

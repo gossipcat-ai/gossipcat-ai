@@ -2179,6 +2179,9 @@ var init_connection_manager = __esm({
         if (this.connections.has(sessionId)) {
           throw new Error(`Session ID ${sessionId} already registered`);
         }
+        if (this.agentIdIndex.has(connection.agentId)) {
+          throw new Error(`Agent ID ${connection.agentId} is already connected`);
+        }
         this.connections.set(sessionId, connection);
         this.agentIdIndex.set(connection.agentId, connection);
       }
@@ -2490,7 +2493,7 @@ var init_presence = __esm({
         return entry ? entry.status === "online" : false;
       }
       getOnlineAgents() {
-        return Array.from(this.presence.keys()).sort();
+        return Array.from(this.presence.entries()).filter(([, entry]) => entry.status === "online").map(([id]) => id).sort();
       }
       count() {
         return this.presence.size;
@@ -2711,6 +2714,9 @@ var init_router = __esm({
       getPresenceTracker() {
         return this.presenceTracker;
       }
+      stop() {
+        this.presenceTracker.stop();
+      }
     };
   }
 });
@@ -2809,6 +2815,7 @@ var init_server = __esm({
         });
       }
       async stop() {
+        this.router.stop();
         for (const client of this.wss.clients) {
           client.close(1001, "Server shutting down");
         }
@@ -2942,6 +2949,7 @@ var init_gossip_agent = __esm({
       _connected = false;
       _sessionId = null;
       intentionalDisconnect = false;
+      subscribedChannels = /* @__PURE__ */ new Set();
       constructor(config2) {
         super();
         this.config = {
@@ -3058,11 +3066,13 @@ var init_gossip_agent = __esm({
       }
       async subscribe(channel) {
         const ch = channel.replace(/^#/, "");
+        this.subscribedChannels.add(ch);
         const msg = Message.createSubscription(this.config.agentId, ch, void 0, { seq: this.seq++ });
         await this.sendEnvelope(msg.envelope);
       }
       async unsubscribe(channel) {
         const ch = channel.replace(/^#/, "");
+        this.subscribedChannels.delete(ch);
         const msg = Message.createUnsubscription(this.config.agentId, ch, { seq: this.seq++ });
         await this.sendEnvelope(msg.envelope);
       }
@@ -3121,6 +3131,11 @@ var init_gossip_agent = __esm({
           try {
             await this.connect();
             console.log("[GossipAgent] Reconnected");
+            for (const ch of this.subscribedChannels) {
+              const msg = Message.createSubscription(this.config.agentId, ch, void 0, { seq: this.seq++ });
+              await this.sendEnvelope(msg.envelope).catch(() => {
+              });
+            }
           } catch (err) {
             console.warn(`[GossipAgent] Reconnect attempt ${this.reconnectAttempts} failed:`, err.message);
             this.attemptReconnect();
@@ -4298,11 +4313,13 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       dispatcher;
       workers = /* @__PURE__ */ new Map();
       relayUrl;
+      apiKeys;
       constructor(config2) {
         this.llm = createProvider(config2.provider, config2.model, config2.apiKey);
         this.registry = new AgentRegistry();
         this.dispatcher = new TaskDispatcher(this.llm, this.registry);
         this.relayUrl = config2.relayUrl;
+        this.apiKeys = config2.apiKeys ?? {};
         for (const agent of config2.agents) {
           this.registry.register(agent);
         }
@@ -4310,7 +4327,7 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       /** Start all worker agents (connect to relay) */
       async start() {
         for (const config2 of this.registry.getAll()) {
-          const llm = createProvider(config2.provider, config2.model);
+          const llm = createProvider(config2.provider, config2.model, this.apiKeys[config2.provider]);
           const worker = new WorkerAgent(config2.id, llm, this.relayUrl, ALL_TOOLS);
           await worker.start();
           this.workers.set(config2.id, worker);
@@ -18558,6 +18575,7 @@ config(en_default());
 // apps/cli/src/mcp-server-sdk.ts
 var import_crypto6 = require("crypto");
 var booted = false;
+var bootPromise = null;
 var relay = null;
 var toolServer = null;
 var workers = /* @__PURE__ */ new Map();
@@ -18579,7 +18597,11 @@ async function getModules() {
   return _modules;
 }
 async function boot() {
-  if (booted) return;
+  if (bootPromise) return bootPromise;
+  bootPromise = doBoot();
+  return bootPromise;
+}
+async function doBoot() {
   const m = await getModules();
   const configPath = m.findConfigPath();
   if (!configPath) throw new Error("No gossip.agents.json found. Run gossipcat setup first.");

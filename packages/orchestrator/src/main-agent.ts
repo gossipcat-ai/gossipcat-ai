@@ -37,6 +37,7 @@ export interface MainAgentConfig {
   apiKey?: string;
   relayUrl: string;
   agents: AgentConfig[];
+  apiKeys?: Record<string, string>;  // provider → key
 }
 
 export class MainAgent {
@@ -45,12 +46,14 @@ export class MainAgent {
   private dispatcher: TaskDispatcher;
   private workers: Map<string, WorkerAgent> = new Map();
   private relayUrl: string;
+  private apiKeys: Record<string, string>;
 
   constructor(config: MainAgentConfig) {
     this.llm = createProvider(config.provider, config.model, config.apiKey);
     this.registry = new AgentRegistry();
     this.dispatcher = new TaskDispatcher(this.llm, this.registry);
     this.relayUrl = config.relayUrl;
+    this.apiKeys = config.apiKeys ?? {};
 
     for (const agent of config.agents) {
       this.registry.register(agent);
@@ -60,7 +63,7 @@ export class MainAgent {
   /** Start all worker agents (connect to relay) */
   async start(): Promise<void> {
     for (const config of this.registry.getAll()) {
-      const llm = createProvider(config.provider, config.model);
+      const llm = createProvider(config.provider, config.model, this.apiKeys[config.provider]);
       const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS);
       await worker.start();
       this.workers.set(config.id, worker);

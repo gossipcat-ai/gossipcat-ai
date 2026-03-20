@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 
 // Lazy imports — only load heavy modules when first tool is called
 let booted = false;
+let bootPromise: Promise<void> | null = null;
 let relay: any = null;
 let toolServer: any = null;
 let workers: Map<string, any> = new Map();
@@ -34,7 +35,12 @@ async function getModules() {
 }
 
 async function boot() {
-  if (booted) return;
+  if (bootPromise) return bootPromise;
+  bootPromise = doBoot();
+  return bootPromise;
+}
+
+async function doBoot() {
   const m = await getModules();
 
   const configPath = m.findConfigPath();

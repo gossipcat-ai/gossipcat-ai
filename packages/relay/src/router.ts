@@ -224,4 +224,8 @@ export class MessageRouter {
   getPresenceTracker(): PresenceTracker {
     return this.presenceTracker;
   }
+
+  stop(): void {
+    this.presenceTracker.stop();
+  }
 }

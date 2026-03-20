@@ -51,6 +51,7 @@ export class RelayServer {
   }
 
   async stop(): Promise<void> {
+    this.router.stop();  // stop presence tracker interval
     for (const client of this.wss.clients) {
       client.close(1001, 'Server shutting down');
     }

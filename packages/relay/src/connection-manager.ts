@@ -19,6 +19,9 @@ export class ConnectionManager {
     if (this.connections.has(sessionId)) {
       throw new Error(`Session ID ${sessionId} already registered`);
     }
+    if (this.agentIdIndex.has(connection.agentId)) {
+      throw new Error(`Agent ID ${connection.agentId} is already connected`);
+    }
     this.connections.set(sessionId, connection);
     this.agentIdIndex.set(connection.agentId, connection);
   }
