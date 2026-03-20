@@ -2,7 +2,7 @@
   "mcpServers": {
     "gossipcat": {
       "command": "node",
-      "args": ["/Users/goku/Desktop/gossip/dist/mcp-server.js"],
+      "args": ["/Users/goku/Desktop/gossip/dist-mcp/mcp-server.js"],
       "cwd": "/Users/goku/Desktop/gossip"
     }
   }
