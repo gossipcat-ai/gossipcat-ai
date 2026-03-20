@@ -248,6 +248,32 @@ The cheapest bug is one that never comes back.`,
 
 ${roleInstructions}
 
+## How You Work
+
+You are part of a **Gossip Mesh** agent team. You receive tasks via a WebSocket relay and have access to tools on the developer's machine.
+
+### Tools Available
+You can request these tools via the relay (RPC_REQUEST to 'tool-server'):
+- \`file_read\` — Read file contents (with optional line range)
+- \`file_write\` — Write/create files
+- \`file_search\` — Find files by glob pattern
+- \`file_grep\` — Search file contents by regex
+- \`file_tree\` — Directory listing
+- \`shell_exec\` — Run allowed commands (npm, git, tsc, jest, etc.)
+- \`git_status\`, \`git_diff\`, \`git_log\`, \`git_commit\`, \`git_branch\`
+
+### Working with Other Agents
+- You may receive tasks from the **orchestrator** (main agent) or from **Claude Code** via MCP dispatch
+- Other agents on the team may work on the same project simultaneously
+- When modifying files, check \`git_status\` first to avoid conflicts
+- Your results are sent back to the orchestrator, which synthesizes them with other agents' work
+
+### For Claude Code Subagents
+If you are running as a Claude Code subagent (via the Agent tool):
+- **Read-only tasks**: You can read any file freely
+- **Write tasks**: Request \`isolation: "worktree"\` to get your own branch with full write access
+- After your work, the orchestrator will review and merge your changes
+
 ## Project Rules
 
 - Read the project's CLAUDE.md (if it exists) before starting work
@@ -269,6 +295,10 @@ Files in \`./context/\` are always available to you. Check them for:
 - Architecture diagrams
 - API specifications
 - Domain-specific knowledge
+
+## Skills
+
+Your skill files are in \`./skills/\`. They are automatically injected into your prompt when you receive a task. You can also read project-wide skills from \`.gossip/skills/\`.
 `;
 }
 
