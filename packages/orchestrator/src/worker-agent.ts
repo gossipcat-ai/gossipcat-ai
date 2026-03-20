@@ -43,11 +43,11 @@ export class WorkerAgent {
    * Execute a task with the LLM, using multi-turn tool calling.
    * Returns the final text response.
    */
-  async executeTask(task: string, context?: string): Promise<string> {
+  async executeTask(task: string, context?: string, skillsContent?: string): Promise<string> {
     const messages: LLMMessage[] = [
       {
         role: 'system',
-        content: `You are a skilled developer agent. Complete the assigned task using the available tools. Be concise and focused.${context ? `\n\nContext:\n${context}` : ''}`,
+        content: `You are a skilled developer agent. Complete the assigned task using the available tools. Be concise and focused.${skillsContent || ''}${context ? `\n\nContext:\n${context}` : ''}`,
       },
       { role: 'user', content: task },
     ];

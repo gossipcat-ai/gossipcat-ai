@@ -1,4 +1,5 @@
 export { MainAgent } from './main-agent';
+export { loadSkills, listAvailableSkills } from './skill-loader';
 export type { MainAgentConfig } from './main-agent';
 export { WorkerAgent } from './worker-agent';
 export { AgentRegistry } from './agent-registry';
