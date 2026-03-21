@@ -153,3 +153,28 @@ describe('WorkerAgent tool loop', () => {
     expect(paths).toEqual(['/file1', '/file2']);
   });
 });
+
+describe('instructions and gossip', () => {
+  it('accepts instructions at constructor', () => {
+    // Create a WorkerAgent with custom instructions (don't need to connect for this)
+    const mockLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const worker = new WorkerAgent('test', mockLlm as any, 'ws://localhost:9999', [], 'You are a reviewer.');
+    expect(worker.getInstructions()).toBe('You are a reviewer.');
+  });
+
+  it('uses default instructions when none provided', () => {
+    const mockLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const worker = new WorkerAgent('test', mockLlm as any, 'ws://localhost:9999', []);
+    expect(worker.getInstructions()).toContain('skilled developer agent');
+  });
+
+  it('setInstructions updates instructions', () => {
+    const mockLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const worker = new WorkerAgent('test', mockLlm as any, 'ws://localhost:9999', []);
+    worker.setInstructions('New instructions');
+    expect(worker.getInstructions()).toBe('New instructions');
+  });
+});
