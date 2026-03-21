@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { findConfigPath, loadConfig } from './config';
+import { findConfigPath, loadConfig, configToAgentConfigs } from './config';
 import { runSetupWizard } from './setup-wizard';
 import { startChat } from './chat';
 import { createAgent, listAgents, removeAgent } from './create-agent';
@@ -59,11 +59,34 @@ async function main(): Promise<void> {
 
   const config = loadConfig(configPath);
 
-  // One-shot task
+  // One-shot task — boot, run, print result, exit
   if (args.length > 0) {
     const task = args.join(' ');
-    console.log(`One-shot mode not yet implemented. Task: "${task}"`);
-    console.log("Run 'gossipcat' for interactive chat.");
+    const { RelayServer } = await import('@gossip/relay');
+    const { ToolServer } = await import('@gossip/tools');
+    const { MainAgent } = await import('@gossip/orchestrator');
+    const { Keychain } = await import('./keychain');
+
+    const keychain = new Keychain();
+    const relay = new RelayServer({ port: 0 });
+    await relay.start();
+    const toolServer = new ToolServer({ relayUrl: relay.url, projectRoot: process.cwd() });
+    await toolServer.start();
+
+    const mainKey = await keychain.getKey(config.main_agent.provider);
+    const mainAgent = new MainAgent({
+      provider: config.main_agent.provider, model: config.main_agent.model,
+      apiKey: mainKey || undefined, relayUrl: relay.url,
+      agents: configToAgentConfigs(config), projectRoot: process.cwd(),
+    });
+    await mainAgent.start();
+
+    const response = await mainAgent.handleMessage(task);
+    console.log(response.text);
+
+    await mainAgent.stop();
+    await toolServer.stop();
+    await relay.stop();
     return;
   }
 

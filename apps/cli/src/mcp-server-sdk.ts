@@ -321,9 +321,16 @@ server.tool(
       return { content: [{ type: 'text' as const, text: 'Instruction update exceeds 5000 char limit.' }] };
     }
 
-    // Basic content blocklist
-    const blocked = ['rm -rf', 'curl ', 'wget ', 'eval(', 'exec('];
-    if (blocked.some(b => instruction_update.toLowerCase().includes(b))) {
+    // Block shell commands and code execution patterns (case-insensitive, whitespace-flexible)
+    const blockedPatterns = [
+      /rm\s+(-\w*[rf]|--force|--recursive)/i,
+      /curl\s/i, /wget\s/i,
+      /\beval\s*\(/i, /\bexec\s*\(/i, /\bspawn\s*\(/i,
+      /\bimport\s*\(/i, /\brequire\s*\(/i,
+      /process\.(env|exit|kill)/i,
+      /child_process/i,
+    ];
+    if (blockedPatterns.some(p => p.test(instruction_update))) {
       return { content: [{ type: 'text' as const, text: 'Instruction update contains blocked content.' }] };
     }
 

@@ -2,16 +2,6 @@ import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, rea
 import { join } from 'path';
 import { TaskMemoryEntry } from './types';
 
-const memoryLocks = new Map<string, Promise<void>>();
-
-async function withMemoryLock(agentId: string, fn: () => Promise<void>): Promise<void> {
-  const prev = memoryLocks.get(agentId) ?? Promise.resolve();
-  // Wait for previous operation to complete (success or failure), then run fn
-  const next = prev.catch(() => {}).then(fn);
-  memoryLocks.set(agentId, next);
-  await next;
-}
-
 /** Truncate text at a word boundary, appending "..." if truncated */
 function truncateAtWord(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
@@ -59,7 +49,7 @@ export class MemoryWriter {
     appendFileSync(join(memDir, 'tasks.jsonl'), JSON.stringify(entry) + '\n');
   }
 
-  deriveImportance(scores: { relevance: number; accuracy: number; uniqueness: number }): number {
+  private deriveImportance(scores: { relevance: number; accuracy: number; uniqueness: number }): number {
     return (scores.relevance + scores.accuracy + scores.uniqueness) / 15;
   }
 
@@ -111,13 +101,5 @@ export class MemoryWriter {
     }
 
     writeFileSync(join(memDir, 'MEMORY.md'), parts.join('\n'));
-  }
-
-  async writeKnowledge(agentId: string, filename: string, content: string): Promise<void> {
-    await withMemoryLock(agentId, async () => {
-      const memDir = this.ensureDirs(agentId);
-      writeFileSync(join(memDir, 'knowledge', filename), content);
-      this.rebuildIndex(agentId);
-    });
   }
 }

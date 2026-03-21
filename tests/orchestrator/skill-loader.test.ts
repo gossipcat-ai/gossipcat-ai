@@ -1,4 +1,5 @@
-import { loadSkills, listAvailableSkills } from '@gossip/orchestrator';
+import { loadSkills } from '@gossip/orchestrator';
+import { listAvailableSkills } from '../../packages/orchestrator/src/skill-loader';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';

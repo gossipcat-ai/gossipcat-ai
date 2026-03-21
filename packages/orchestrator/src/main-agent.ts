@@ -75,10 +75,19 @@ export class MainAgent {
 
   /** Start all worker agents (connect to relay) */
   async start(): Promise<void> {
+    const { existsSync, readFileSync } = await import('fs');
+    const { join } = await import('path');
+
     for (const config of this.registry.getAll()) {
       if (this.workers.has(config.id)) continue; // skip if already set externally
       const llm = createProvider(config.provider, config.model, this.apiKeys[config.provider]);
-      const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS);
+
+      // Load per-agent instructions if available
+      const instructionsPath = join(this.projectRoot, '.gossip', 'agents', config.id, 'instructions.md');
+      const instructions = existsSync(instructionsPath)
+        ? readFileSync(instructionsPath, 'utf-8') : undefined;
+
+      const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS, instructions);
       await worker.start();
       this.workers.set(config.id, worker);
     }

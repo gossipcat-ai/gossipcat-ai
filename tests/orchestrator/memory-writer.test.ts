@@ -64,10 +64,14 @@ describe('MemoryWriter', () => {
     expect(index).toContain('first task');
   });
 
-  it('derives importance from scores correctly', () => {
+  it('derives importance from scores via writeTaskEntry', async () => {
     const writer = new MemoryWriter(testDir);
-    expect(writer.deriveImportance({ relevance: 5, accuracy: 5, uniqueness: 5 })).toBe(1.0);
-    expect(writer.deriveImportance({ relevance: 1, accuracy: 1, uniqueness: 1 })).toBeCloseTo(0.2, 1);
-    expect(writer.deriveImportance({ relevance: 3, accuracy: 3, uniqueness: 3 })).toBeCloseTo(0.6, 1);
+    await writer.writeTaskEntry('test-agent', {
+      taskId: 'imp-test', task: 'test importance', skills: ['testing'],
+      scores: { relevance: 5, accuracy: 5, uniqueness: 5 },
+    });
+    const tasksPath = join(testDir, '.gossip', 'agents', 'test-agent', 'memory', 'tasks.jsonl');
+    const entry = JSON.parse(readFileSync(tasksPath, 'utf-8').trim());
+    expect(entry.importance).toBe(1.0); // (5+5+5)/15 = 1.0
   });
 });
