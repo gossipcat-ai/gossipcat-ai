@@ -125,6 +125,7 @@ export async function startChat(config: GossipConfig): Promise<void> {
     apiKey: mainKey || undefined,
     relayUrl: relay.url,
     agents: configToAgentConfigs(config),
+    projectRoot: process.cwd(),
   };
 
   const mainAgent = new MainAgent(mainAgentConfig);
