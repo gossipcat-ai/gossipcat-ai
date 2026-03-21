@@ -2,6 +2,7 @@ import { execFileSync } from 'child_process';
 import { platform } from 'os';
 
 const SERVICE_NAME = 'gossip-mesh';
+const VALID_PROVIDERS = /^[a-zA-Z0-9_-]{1,32}$/;
 
 export class Keychain {
   private inMemoryStore: Map<string, string> = new Map();
@@ -52,7 +53,14 @@ export class Keychain {
     return false;
   }
 
+  private validateProvider(provider: string): void {
+    if (!VALID_PROVIDERS.test(provider)) {
+      throw new Error(`Invalid provider name: "${provider}"`);
+    }
+  }
+
   private readFromKeychain(provider: string): string {
+    this.validateProvider(provider);
     if (platform() === 'darwin') {
       return execFileSync('security', [
         'find-generic-password', '-s', SERVICE_NAME, '-a', provider, '-w'
@@ -67,6 +75,7 @@ export class Keychain {
   }
 
   private writeToKeychain(provider: string, key: string): void {
+    this.validateProvider(provider);
     if (platform() === 'darwin') {
       try {
         execFileSync('security', [

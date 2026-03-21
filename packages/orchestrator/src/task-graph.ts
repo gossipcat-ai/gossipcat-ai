@@ -23,7 +23,11 @@ export class TaskGraph {
     this.indexPath = join(gossipDir, 'task-graph-index.json');
     this.loadIndex();
     if (existsSync(this.graphPath)) {
-      this.eventCount = readFileSync(this.graphPath, 'utf-8').trim().split('\n').filter(Boolean).length;
+      // Count lines without loading entire file into memory
+      const buf = readFileSync(this.graphPath);
+      let count = 0;
+      for (let i = 0; i < buf.length; i++) { if (buf[i] === 10) count++; }
+      this.eventCount = count;
     }
   }
 

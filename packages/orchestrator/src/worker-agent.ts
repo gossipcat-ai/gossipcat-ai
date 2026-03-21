@@ -18,6 +18,7 @@ export class WorkerAgent {
   private agent: GossipAgent;
   private instructions: string;
   private gossipQueue: string[] = [];
+  private static readonly MAX_GOSSIP_QUEUE = 20;
   private pendingToolCalls: Map<string, {
     resolve: (result: string) => void;
     reject: (err: Error) => void;
@@ -55,6 +56,15 @@ export class WorkerAgent {
   async start(): Promise<void> {
     await this.agent.connect();
     this.agent.on('message', this.handleMessage.bind(this));
+    this.agent.on('error', () => this.rejectPendingToolCalls('Relay connection error'));
+    this.agent.on('disconnect', () => this.rejectPendingToolCalls('Relay disconnected'));
+  }
+
+  private rejectPendingToolCalls(reason: string): void {
+    for (const [, pending] of this.pendingToolCalls) {
+      pending.reject(new Error(reason));
+    }
+    this.pendingToolCalls.clear();
   }
 
   async stop(): Promise<void> {
@@ -162,7 +172,9 @@ export class WorkerAgent {
         payload?.forAgentId === this.agentId &&
         envelope.sid === 'gossip-publisher'
       ) {
-        this.gossipQueue.push(payload.summary as string);
+        if (this.gossipQueue.length < WorkerAgent.MAX_GOSSIP_QUEUE) {
+          this.gossipQueue.push(payload.summary as string);
+        }
       }
       return;
     }

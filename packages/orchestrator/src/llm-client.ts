@@ -8,6 +8,7 @@
  * - Ollama (local models)
  */
 
+import { randomUUID } from 'crypto';
 import { ToolDefinition, LLMMessage } from '@gossip/types';
 import { LLMResponse } from './types';
 
@@ -273,16 +274,15 @@ export class GeminiProvider implements ILLMProvider {
 
     const textParts: string[] = [];
     const toolCalls: LLMResponse['toolCalls'] = [];
-    let callIndex = 0;
 
     for (const part of parts) {
       if (part.text) {
         textParts.push(part.text as string);
       }
       if (part.functionCall) {
-        const fc = part.functionCall as { name: string; args: Record<string, unknown> };
+        const fc = part.functionCall as { name: string; args: Record<string, unknown>; id?: string };
         toolCalls.push({
-          id: `gemini-call-${callIndex++}`,
+          id: fc.id || randomUUID().slice(0, 12),
           name: fc.name,
           arguments: fc.args || {},
         });

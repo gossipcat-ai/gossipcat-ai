@@ -266,8 +266,8 @@ export class DispatchPipeline {
             }
           }).catch(() => {});
         }
-      } catch {
-        errors.push(`Agent "${def.agentId}" not found`);
+      } catch (err) {
+        errors.push(`Agent "${def.agentId}": ${(err as Error).message}`);
       }
     }
 
