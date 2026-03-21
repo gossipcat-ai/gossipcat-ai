@@ -472,6 +472,105 @@ After this refactor, `gossipcat` standalone chat automatically gets:
 - TaskGraph recording is non-blocking (try/catch)
 - `gossip_update_instructions` MCP tool stays as MCP-only — CLI chat doesn't need it
 
+## Reviewer Fixes (from Sonnet review — 7 issues)
+
+### Fix 1 (BLOCKER): loadSkills wrong call signature
+
+The orchestrator's `loadSkills` takes 3 args: `(agentId, skills[], projectRoot)`. The spec's dispatch() pseudo-code used only 2 args (from the bridge). Fix: call the orchestrator's real signature:
+
+```typescript
+const agentSkills = this.registry.get(agentId)?.skills || [];
+const skills = loadSkills(agentId, agentSkills, this.projectRoot);
+```
+
+### Fix 2 (BLOCKER): collect() missing batch cleanup
+
+Port batch unsubscribe from MCP's `gossip_collect` handler into `collect()`:
+
+```typescript
+// At end of collect(), after task cleanup:
+for (const [bid, taskIdSet] of this.batches) {
+  const allDone = Array.from(taskIdSet).every(tid => {
+    const t = this.tasks.get(tid);
+    return !t || t.status !== 'running';
+  });
+  if (allDone) {
+    for (const tid of taskIdSet) {
+      const t = this.tasks.get(tid);
+      if (t) {
+        const w = this.workers.get(t.agentId);
+        if (w?.unsubscribeFromBatch) w.unsubscribeFromBatch(bid).catch(() => {});
+      }
+    }
+    this.batches.delete(bid);
+  }
+}
+```
+
+### Fix 3 (Minor): flushIndex never called
+
+Pre-existing issue. Add a note: `this.taskGraph.flushIndex()` should be called in `stop()` to persist the in-memory index on shutdown.
+
+### Fix 4 (BLOCKER): Keychain cross-package dependency
+
+`Keychain` lives in `apps/cli/`, not `@gossip/orchestrator`. `syncWorkers()` cannot import it directly. Fix: accept a callback instead:
+
+```typescript
+async syncWorkers(keyProvider: (provider: string) => Promise<string | null>): Promise<number> {
+  // ...
+  const key = await keyProvider(ac.provider);
+  // ...
+}
+```
+
+The MCP server and CLI chat pass their own Keychain-backed provider:
+```typescript
+await mainAgent.syncWorkers((provider) => keychain.getKey(provider));
+```
+
+### Fix 5 (Medium): Double recordCompleted prevention
+
+Document the invariant: `handleMessage()` path tasks are deleted from `this.tasks` by `writeMemoryForTask()` BEFORE they become visible to `collect()`. The `collect()` method with no args only targets `status === 'running'` tasks. Since `writeMemoryForTask` runs synchronously within `handleMessage` before returning, no race is possible.
+
+Add a comment in collect():
+```typescript
+// Note: handleMessage path tasks are cleaned by writeMemoryForTask()
+// before they can appear as 'running' to collect(). No double-record risk.
+```
+
+### Fix 6 (BLOCKER): File exceeds 300-line rule — split plan
+
+MainAgent would reach ~433 lines. Split into two files:
+
+```
+packages/orchestrator/src/main-agent.ts        — constructor, handleMessage, handleChoice,
+                                                  synthesize, parseResponse, start, stop,
+                                                  setWorkers, getWorker (~250 lines)
+
+packages/orchestrator/src/dispatch-pipeline.ts — DispatchPipeline class: dispatch(), collect(),
+                                                  dispatchParallel(), writeMemoryForTask(),
+                                                  tasks Map, batches Map, pipeline instances
+                                                  (~180 lines)
+```
+
+MainAgent holds a `DispatchPipeline` instance and delegates:
+```typescript
+dispatch(agentId, task) { return this.pipeline.dispatch(agentId, task); }
+collect(taskIds, timeout) { return this.pipeline.collect(taskIds, timeout); }
+```
+
+### Fix 7 (Medium): skill-loader-bridge hyphen normalization
+
+Before deleting `skill-loader-bridge.ts`, port the underscore-to-hyphen normalization into `packages/orchestrator/src/skill-loader.ts:resolveSkill()`:
+
+```typescript
+// In resolveSkill, after trying the exact filename:
+const hyphenFilename = sanitized.replace(/_/g, '-') + '.md';
+// Try hyphenated variant as fallback
+```
+
+This ensures `code_review` → `code-review.md` resolution works without the bridge.
+
 ## Testing Strategy
 
 - **dispatch():** Unit test — dispatch to mock worker, verify memory loaded, TaskGraph recorded, skills injected
