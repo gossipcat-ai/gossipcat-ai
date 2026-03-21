@@ -155,6 +155,7 @@ export class TaskGraph {
   getReferences(taskId: string): TaskReferenceEvent[];
 
   // Sync support
+  getEventCount(): number;       // count JSONL lines (derived, not stored)
   getUnsynced(lastSyncTimestamp: string): TaskGraphEvent[];
   getSyncMeta(): SyncMeta;
   updateSyncMeta(meta: Partial<SyncMeta>): void;
@@ -189,9 +190,8 @@ Stored at `.gossip/task-graph-sync.json`:
 
 ```typescript
 export interface SyncMeta {
-  totalEvents: number;
   lastSync: string;            // ISO timestamp
-  lastSyncEventCount: number;  // events at time of last sync
+  lastSyncEventCount: number;  // JSONL line count at time of last sync
 }
 ```
 
@@ -212,7 +212,7 @@ CREATE TABLE tasks (
   agent_id text NOT NULL,
   task text NOT NULL,
   skills text[],
-  parent_id text REFERENCES tasks(id),
+  parent_id text REFERENCES tasks(id) ON DELETE CASCADE,
   status text NOT NULL CHECK (status IN ('created', 'completed', 'failed', 'cancelled')),
   result text,
   error text,
@@ -232,7 +232,7 @@ CREATE INDEX idx_tasks_created ON tasks(created_at DESC);
 -- Decomposition records
 CREATE TABLE task_decompositions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  parent_id text NOT NULL REFERENCES tasks(id),
+  parent_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   strategy text NOT NULL CHECK (strategy IN ('single', 'parallel', 'sequential')),
   sub_task_ids text[] NOT NULL,
   created_at timestamptz DEFAULT now()
@@ -243,8 +243,8 @@ CREATE INDEX idx_decomp_parent ON task_decompositions(parent_id);
 -- Cross-references between tasks
 CREATE TABLE task_references (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  from_task_id text NOT NULL REFERENCES tasks(id),
-  to_task_id text NOT NULL REFERENCES tasks(id),
+  from_task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  to_task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   relationship text NOT NULL CHECK (relationship IN ('triggered_by', 'fixes', 'follows_up', 'related_to')),
   evidence text,
   created_at timestamptz DEFAULT now()
@@ -258,7 +258,7 @@ CREATE TABLE agent_scores (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id text NOT NULL,
   agent_id text NOT NULL,
-  task_id text REFERENCES tasks(id),
+  task_id text REFERENCES tasks(id) ON DELETE CASCADE,
   task_type text,
   skills text[],
   lens text,
@@ -396,9 +396,11 @@ try {
     }
   }
 
-  // Check sync threshold (every 30 tasks)
+  // Check sync threshold (every 30 events)
+  // totalEvents derived by counting JSONL lines — not a stored counter
+  const totalEvents = graph.getEventCount();
   const syncMeta = graph.getSyncMeta();
-  if (syncMeta.totalEvents - syncMeta.lastSyncEventCount >= 30) {
+  if (totalEvents - syncMeta.lastSyncEventCount >= 30) {
     const supaConfig = loadSupabaseConfig();
     if (supaConfig) {
       const { TaskGraphSync } = await import('@gossip/orchestrator');
@@ -424,7 +426,16 @@ try {
 6. Check sync threshold → trigger Supabase sync if needed (NEW)
 ```
 
-All steps 2-6 are async non-blocking after the collect response returns.
+**Pipeline execution model:** Steps 2-6 run inline (awaited) within the collect handler before it returns. They are wrapped in try/catch so failures are logged, never blocking the response. This is "non-failing" rather than "non-blocking" — the collect response waits for all steps. True background execution (fire-and-forget after response) would require restructuring the MCP handler, which is deferred.
+
+**Cancellation:** When `gossip_collect` hits its timeout (line 262-265 in mcp-server-sdk.ts), tasks with `status: 'running'` should be recorded as cancelled:
+```typescript
+for (const t of targets) {
+  if (t.status === 'running') {
+    graph.recordCancelled(t.id, 'collect timeout', timeout_ms || 120000);
+  }
+}
+```
 
 ### In-Memory Map — Unchanged
 
