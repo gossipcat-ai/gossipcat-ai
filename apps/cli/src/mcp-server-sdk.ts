@@ -159,6 +159,15 @@ server.tool(
     const { loadSkills } = await import('./skill-loader-bridge');
     const skillsContent = loadSkills(agent_id, process.cwd());
 
+    // Load agent memory and assemble prompt
+    const { AgentMemoryReader, assemblePrompt } = await import('@gossip/orchestrator');
+    const memoryReader = new AgentMemoryReader(process.cwd());
+    const memoryContent = memoryReader.loadMemory(agent_id, task);
+    const promptContent = assemblePrompt({
+      memory: memoryContent || undefined,
+      skills: skillsContent,
+    });
+
     const { checkSkillCoverage } = await import('./skill-catalog-check');
     const cfgPath2 = (await import('./config')).findConfigPath();
     const agentSkills = cfgPath2
@@ -168,7 +177,7 @@ server.tool(
 
     const taskId = randomUUID().slice(0, 8);
     const entry: any = { id: taskId, agentId: agent_id, task, status: 'running', startedAt: Date.now(), skillWarnings };
-    entry.promise = worker.executeTask(task, undefined, skillsContent)
+    entry.promise = worker.executeTask(task, undefined, promptContent)
       .then((result: string) => { entry.status = 'completed'; entry.result = result; entry.completedAt = Date.now(); })
       .catch((err: Error) => { entry.status = 'failed'; entry.error = err.message; entry.completedAt = Date.now(); });
     tasks.set(taskId, entry);
@@ -200,16 +209,27 @@ server.tool(
       ? (await import('./config')).configToAgentConfigs((await import('./config')).loadConfig(cfgPathP))
       : [];
 
+    const { AgentMemoryReader: AgentMemoryReaderP, assemblePrompt: assemblePromptP } = await import('@gossip/orchestrator');
+    const memoryReaderP = new AgentMemoryReaderP(process.cwd());
+
     for (const def of taskDefs) {
       const worker = workers.get(def.agent_id);
       if (!worker) { errors.push(`Agent "${def.agent_id}" not found`); continue; }
 
       const skillsContent = loadSkills(def.agent_id, process.cwd());
+
+      // Load agent memory and assemble prompt
+      const memoryContentP = memoryReaderP.loadMemory(def.agent_id, def.task);
+      const promptContentP = assemblePromptP({
+        memory: memoryContentP || undefined,
+        skills: skillsContent,
+      });
+
       const agentSkillsP = allAgentConfigs.find((a: any) => a.id === def.agent_id)?.skills || [];
       const skillWarnings = checkSkillCoverage(def.agent_id, agentSkillsP, def.task, process.cwd());
       const taskId = randomUUID().slice(0, 8);
       const entry: any = { id: taskId, agentId: def.agent_id, task: def.task, status: 'running', startedAt: Date.now(), skillWarnings };
-      entry.promise = worker.executeTask(def.task, undefined, skillsContent)
+      entry.promise = worker.executeTask(def.task, undefined, promptContentP)
         .then((result: string) => { entry.status = 'completed'; entry.result = result; entry.completedAt = Date.now(); })
         .catch((err: Error) => { entry.status = 'failed'; entry.error = err.message; entry.completedAt = Date.now(); });
       tasks.set(taskId, entry);
@@ -285,6 +305,40 @@ server.tool(
         results.push('📝 ' + skeletonMessages.join('\n📝 '));
       }
     } catch { /* orchestrator not available — skip */ }
+
+    // Write agent memories (async, non-blocking)
+    try {
+      const { MemoryWriter, MemoryCompactor } = await import('@gossip/orchestrator');
+      const memWriter = new MemoryWriter(process.cwd());
+      const compactor = new MemoryCompactor(process.cwd());
+
+      const { findConfigPath, loadConfig, configToAgentConfigs } = await import('./config');
+      const cfgPathM = findConfigPath();
+      const allAgentConfigsM = cfgPathM
+        ? configToAgentConfigs(loadConfig(cfgPathM))
+        : [];
+
+      for (const t of targets) {
+        if (t.status === 'completed') {
+          const agentSkillsForMemory = allAgentConfigsM.find((a: any) => a.id === t.agentId)?.skills || [];
+
+          await memWriter.writeTaskEntry(t.agentId, {
+            taskId: t.id,
+            task: t.task,
+            skills: agentSkillsForMemory,
+            scores: { relevance: 3, accuracy: 3, uniqueness: 3 },
+          });
+          memWriter.rebuildIndex(t.agentId);
+
+          const result = compactor.compactIfNeeded(t.agentId);
+          if (result.message) {
+            process.stderr.write(`[gossipcat] ${result.message}\n`);
+          }
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`[gossipcat] Memory write error: ${(err as Error).message}\n`);
+    }
 
     for (const t of targets) { if (t.status !== 'running') tasks.delete(t.id); }
     return { content: [{ type: 'text' as const, text: results.join('\n\n---\n\n') }] };
