@@ -296,6 +296,13 @@ ${agentList}
 ## Skills & agents
 Skills auto-inject from agent config. Edit gossip.agents.json to add agents (hot-reloads).
 
+## Agent Memory
+Gossipcat MCP agents get memory auto-injected at dispatch and auto-written at collect.
+
+Claude Code subagents (Agent tool) bypass the MCP pipeline. You MUST manually handle memory:
+- Before dispatch: read \`.gossip/agents/<id>/memory/MEMORY.md\` and include in the Agent prompt
+- After completion: append a task entry to \`.gossip/agents/<id>/memory/tasks.jsonl\`
+
 ## When to Use Multi-Agent Dispatch (REQUIRED)
 
 These tasks MUST use parallel multi-agent dispatch. Never use a single agent or Explore subagent.

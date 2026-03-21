@@ -42,6 +42,27 @@ gossip_dispatch(agent_id: "gemini-reviewer", task: "Security review of X")
 Agent(model: "sonnet", prompt: "Performance review of X", isolation: "worktree", run_in_background: true)
 ```
 
+## Agent Memory
+
+**Gossipcat MCP agents** get memory auto-injected at dispatch and auto-written at collect. No manual action needed.
+
+**Claude Code subagents** (Agent tool) bypass the MCP pipeline. You MUST manually handle memory:
+
+**Before dispatching:**
+```
+// Read the matching agent's memory
+Read('.gossip/agents/sonnet-implementer/memory/MEMORY.md')
+// Include the content in the Agent prompt
+Agent(model: "sonnet", prompt: "[memory content here]\n\nYour task: ...")
+```
+
+**After completion:** Append a task entry to `.gossip/agents/<id>/memory/tasks.jsonl`:
+```jsonl
+{"version":1,"taskId":"<id>","task":"<description>","skills":["<skill>"],"scores":{"relevance":3,"accuracy":3,"uniqueness":3},"warmth":1,"importance":0.6,"timestamp":"<ISO>"}
+```
+
+Match the agent ID to the gossip.agents.json equivalent: `sonnet-implementer` or `sonnet-debugger`.
+
 ## Available agents
 Run `gossip_agents()` to see current team. Edit `gossip.agents.json` to add agents (hot-reloads, no restart).
 

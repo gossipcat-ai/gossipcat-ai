@@ -31,6 +31,39 @@ Then synthesize both results.
 ### Agent skills
 Skills are auto-injected from `.gossip/agents/<id>/skills/` and `packages/orchestrator/src/default-skills/`. Project-wide skills in `.gossip/skills/`. No need to pass skills manually.
 
+### Agent memory
+Agents accumulate memory across tasks. Memory is stored in `.gossip/agents/<id>/memory/`:
+- `MEMORY.md` — index (auto-injected into agent prompt on dispatch)
+- `knowledge/` — topic files with warmth scoring
+- `tasks.jsonl` — task outcome history
+- `calibration/` — per-skill accuracy (future)
+
+**Memory is auto-managed for gossipcat MCP agents** — loaded at dispatch, written at collect.
+
+### Agent memory for Claude Code subagents
+
+Claude Code's `Agent()` tool bypasses gossipcat's MCP pipeline. To give Sonnet/Haiku subagents memory:
+
+**Before dispatching** — read the agent's memory and include it in the prompt:
+```
+// Read memory for the matching gossipcat agent
+const memory = read('.gossip/agents/sonnet-implementer/memory/MEMORY.md');
+
+Agent(model: "sonnet", prompt: `
+${memory}
+
+Your task: Fix the bug in worker-agent.ts...
+`)
+```
+
+**After completion** — write a task entry so the agent remembers next time:
+```
+// Append to .gossip/agents/sonnet-implementer/memory/tasks.jsonl
+{"version":1,"taskId":"...","task":"Fix bug in worker-agent.ts","skills":["debugging"],"scores":{"relevance":3,"accuracy":3,"uniqueness":3},"warmth":1,"importance":0.6,"timestamp":"..."}
+```
+
+The matching agent ID is typically `sonnet-implementer` or `sonnet-debugger` from `gossip.agents.json`.
+
 ### Adding agents
 Edit `gossip.agents.json` — new agents are hot-reloaded on next dispatch (no restart needed).
 
