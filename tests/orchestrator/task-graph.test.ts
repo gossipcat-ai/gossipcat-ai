@@ -197,5 +197,28 @@ describe('TaskGraph', () => {
       const task = graph.getTask('t3');
       expect(task!.error).toContain('[REDACTED_API_KEY]');
     });
+
+    it('persists index and loads on new instance', () => {
+      const graph = new TaskGraph(testDir);
+      graph.recordCreated('idx-1', 'agent', 'indexed task', ['test']);
+      graph.recordCompleted('idx-1', 'done', 500);
+
+      // New instance loads the persisted index
+      const graph2 = new TaskGraph(testDir);
+      const task = graph2.getTask('idx-1');
+      expect(task).not.toBeNull();
+      expect(task!.taskId).toBe('idx-1');
+      expect(task!.status).toBe('completed');
+    });
+
+    it('getEventCount uses cached count', () => {
+      const graph = new TaskGraph(testDir);
+      graph.recordCreated('t1', 'a', 'task', []);
+      graph.recordCompleted('t1', 'done', 100);
+
+      // New instance should have the correct count from disk
+      const graph2 = new TaskGraph(testDir);
+      expect(graph2.getEventCount()).toBe(2);
+    });
   });
 });

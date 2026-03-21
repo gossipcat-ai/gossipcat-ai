@@ -11,16 +11,46 @@ const MAX_SCAN_LINES = 1000;
 export class TaskGraph {
   private readonly graphPath: string;
   private readonly syncMetaPath: string;
+  private readonly indexPath: string;
+  private index: Map<string, number> = new Map(); // taskId → last event line number
+  private eventCount: number = 0;
 
   constructor(projectRoot: string) {
     const gossipDir = join(projectRoot, '.gossip');
     mkdirSync(gossipDir, { recursive: true }); // idempotent, no TOCTOU
     this.graphPath = join(gossipDir, 'task-graph.jsonl');
     this.syncMetaPath = join(gossipDir, 'task-graph-sync.json');
+    this.indexPath = join(gossipDir, 'task-graph-index.json');
+    this.loadIndex();
+    if (existsSync(this.graphPath)) {
+      this.eventCount = readFileSync(this.graphPath, 'utf-8').trim().split('\n').filter(Boolean).length;
+    }
+  }
+
+  private loadIndex(): void {
+    if (existsSync(this.indexPath)) {
+      try {
+        const data = JSON.parse(readFileSync(this.indexPath, 'utf-8'));
+        this.index = new Map(Object.entries(data).map(([k, v]) => [k, Number(v)]));
+      } catch { /* corrupt index — will rebuild on next write */ }
+    }
+  }
+
+  private saveIndex(): void {
+    writeFileSync(this.indexPath, JSON.stringify(Object.fromEntries(this.index)));
   }
 
   private appendEvent(event: TaskGraphEvent): void {
     appendFileSync(this.graphPath, JSON.stringify(event) + '\n');
+
+    if ('taskId' in event) {
+      this.index.set((event as any).taskId, this.eventCount);
+    }
+    if (event.type === 'task.decomposed') {
+      this.index.set(event.parentId, this.eventCount);
+    }
+    this.eventCount++;
+    this.saveIndex();
   }
 
   /** Redact common secret patterns from text before persisting */
@@ -175,9 +205,7 @@ export class TaskGraph {
   }
 
   getEventCount(): number {
-    if (!existsSync(this.graphPath)) return 0;
-    const content = readFileSync(this.graphPath, 'utf-8');
-    return content.trim().split('\n').filter(Boolean).length;
+    return this.eventCount;
   }
 
   getSyncMeta(): SyncMeta {
