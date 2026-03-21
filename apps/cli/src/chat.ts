@@ -151,7 +151,7 @@ export async function startChat(config: GossipConfig): Promise<void> {
       return;
     }
 
-    if (input === '/image') {
+    if (input === '/image' || input.startsWith('/image ')) {
       try {
         const { readClipboardImage } = await import('./clipboard');
         const { processImage } = await import('./image-handler');
@@ -169,11 +169,13 @@ export async function startChat(config: GossipConfig): Promise<void> {
           : '';
         console.log(`\n${c.green}  Image detected: ${processed.format.toUpperCase()}${dimStr} (${Math.round(processed.sizeBytes / 1024)} KB)${c.reset}`);
 
-        rl.question(`${c.dim}  Message (Enter for image only): ${c.reset}`, async (message) => {
+        // Extract inline message: "/image what's this?" → "what's this?"
+        const inlineMessage = input.startsWith('/image ') ? input.slice(7).trim() : '';
+
+        const sendImage = async (text: string) => {
           const content: ContentBlock[] = [
             { type: 'image', data: processed.base64, mediaType: processed.mediaType },
           ];
-          const text = message?.trim() || 'Describe this image.';
           content.push({ type: 'text', text });
 
           process.stdout.write(`${c.dim}  thinking...${c.reset}`);
@@ -186,7 +188,17 @@ export async function startChat(config: GossipConfig): Promise<void> {
             console.log(`\n${c.yellow}  Error: ${(err as Error).message}${c.reset}\n`);
           }
           rl.prompt();
-        });
+        };
+
+        if (inlineMessage) {
+          // /image what's wrong with this UI? → send immediately
+          await sendImage(inlineMessage);
+        } else {
+          // /image alone → prompt for message
+          rl.question(`${c.dim}  Message (Enter for image only): ${c.reset}`, async (message) => {
+            await sendImage(message?.trim() || 'Describe this image.');
+          });
+        }
       } catch (err) {
         console.log(`\n${c.yellow}  Error: ${(err as Error).message}${c.reset}\n`);
         rl.prompt();
