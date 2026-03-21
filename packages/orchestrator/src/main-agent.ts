@@ -42,6 +42,7 @@ export interface MainAgentConfig {
   apiKeys?: Record<string, string>;  // provider → key
   projectRoot?: string;  // defaults to process.cwd()
   llm?: ILLMProvider;  // override for testing
+  bootstrapPrompt?: string;  // NEW — injected by BootstrapGenerator
 }
 
 export class MainAgent {
@@ -53,6 +54,7 @@ export class MainAgent {
   private apiKeys: Record<string, string>;
   private projectRoot: string;
   private pipeline: DispatchPipeline;
+  private bootstrapPrompt: string;
 
   constructor(config: MainAgentConfig) {
     this.llm = config.llm ?? createProvider(config.provider, config.model, config.apiKey);
@@ -60,6 +62,7 @@ export class MainAgent {
     this.dispatcher = new TaskDispatcher(this.llm, this.registry);
     this.relayUrl = config.relayUrl;
     this.apiKeys = config.apiKeys ?? {};
+    this.bootstrapPrompt = config.bootstrapPrompt || '';
 
     for (const agent of config.agents) {
       this.registry.register(agent);
@@ -156,8 +159,11 @@ export class MainAgent {
     // Handle unassigned tasks directly with main LLM
     const unassigned = plan.subTasks.filter(st => !st.assignedAgent);
     if (unassigned.length === plan.subTasks.length) {
+      const systemPrompt = this.bootstrapPrompt
+        ? this.bootstrapPrompt + '\n\n' + CHAT_SYSTEM_PROMPT
+        : CHAT_SYSTEM_PROMPT;
       const response = await this.llm.generate([
-        { role: 'system', content: CHAT_SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage },
       ]);
       return this.parseResponse(response.text);
@@ -186,8 +192,11 @@ export class MainAgent {
 
   /** Handle a user's choice selection — continues the conversation with context */
   async handleChoice(originalMessage: string, choiceValue: string): Promise<ChatResponse> {
+    const systemPrompt = this.bootstrapPrompt
+      ? this.bootstrapPrompt + '\n\n' + CHAT_SYSTEM_PROMPT
+      : CHAT_SYSTEM_PROMPT;
     const response = await this.llm.generate([
-      { role: 'system', content: CHAT_SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: originalMessage },
       { role: 'assistant', content: `I presented options and the developer chose: "${choiceValue}". Proceeding with that approach.` },
       { role: 'user', content: `Yes, go with "${choiceValue}".` },

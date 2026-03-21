@@ -81,6 +81,68 @@ describe('MainAgent orchestration flow', () => {
   });
 });
 
+describe('MainAgent bootstrapPrompt', () => {
+  it('accepts bootstrapPrompt config and prepends it to the system prompt', async () => {
+    const systemMessages: string[] = [];
+    const mockLLM: ILLMProvider = {
+      async generate(messages: LLMMessage[]) {
+        if (messages[0]?.role === 'system') {
+          systemMessages.push(messages[0].content as string);
+        }
+        // Always return unassigned path: single subTask with no matching skill
+        return {
+          text: '{"strategy":"single","subTasks":[{"description":"do something","requiredSkills":["unknown"]}]}',
+        };
+      },
+    };
+
+    const mainAgent = new MainAgent({
+      provider: 'local',
+      model: 'mock',
+      relayUrl: 'ws://localhost:0',
+      agents: [],
+      llm: mockLLM,
+      bootstrapPrompt: '## Bootstrap Context\nTeam info here.',
+    });
+
+    await mainAgent.handleMessage('do something');
+
+    // The system prompt used in the unassigned path should contain bootstrapPrompt + CHAT_SYSTEM_PROMPT
+    expect(systemMessages.length).toBeGreaterThan(0);
+    const lastSystem = systemMessages[systemMessages.length - 1];
+    expect(lastSystem).toContain('## Bootstrap Context');
+    expect(lastSystem).toContain('Team info here.');
+    expect(lastSystem).toContain('You are a developer assistant');
+  });
+
+  it('uses CHAT_SYSTEM_PROMPT alone when bootstrapPrompt is not set', async () => {
+    const systemMessages: string[] = [];
+    const mockLLM: ILLMProvider = {
+      async generate(messages: LLMMessage[]) {
+        if (messages[0]?.role === 'system') {
+          systemMessages.push(messages[0].content as string);
+        }
+        return {
+          text: '{"strategy":"single","subTasks":[{"description":"do something","requiredSkills":["unknown"]}]}',
+        };
+      },
+    };
+
+    const mainAgent = new MainAgent({
+      provider: 'local',
+      model: 'mock',
+      relayUrl: 'ws://localhost:0',
+      agents: [],
+      llm: mockLLM,
+    });
+
+    await mainAgent.handleMessage('do something');
+
+    const lastSystem = systemMessages[systemMessages.length - 1];
+    expect(lastSystem).toBe('You are a developer assistant powering Gossip Mesh. Be concise and direct.\n\nWhen you want to present the developer with choices, use this format in your response:\n\n[CHOICES]\nmessage: Your question here?\n- option_value | Display Label | Optional hint text\n- option_value | Display Label | Optional hint\n[/CHOICES]\n\nExamples of when to use choices:\n- Multiple approaches to a task (refactor in-place vs extract vs rewrite)\n- Confirming a destructive action (delete files, reset branch)\n- Selecting which files/modules to work on\n- Choosing between trade-offs (speed vs thoroughness)\n\nOnly present choices when there\'s a genuine decision. Don\'t use them for simple yes/no — just ask directly.\nWhen there\'s a clear best option, recommend it but still offer alternatives.');
+  });
+});
+
 describe('MainAgent dispatch pipeline', () => {
   it('exposes dispatch() that delegates to pipeline', () => {
     expect(typeof MainAgent.prototype.dispatch).toBe('function');
