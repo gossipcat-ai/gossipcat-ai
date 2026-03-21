@@ -73,3 +73,40 @@ export interface LLMResponse {
   }>;
   usage?: { inputTokens: number; outputTokens: number };
 }
+
+/** Frontmatter for knowledge files — warmth metadata */
+export interface MemoryFrontmatter {
+  name: string;
+  description: string;
+  importance: number;
+  lastAccessed: string;
+  accessCount: number;
+  version?: number;
+}
+
+/** A single task outcome stored in tasks.jsonl */
+export interface TaskMemoryEntry {
+  version: number;
+  taskId: string;
+  task: string;
+  skills: string[];
+  lens?: string;
+  findings: number;
+  hallucinated: number;
+  scores: {
+    relevance: number;
+    accuracy: number;
+    uniqueness: number;
+  };
+  warmth: number;
+  importance: number;
+  timestamp: string;
+}
+
+/** An archived task entry in archive.jsonl */
+export interface ArchivedTaskEntry {
+  archivedAt: string;
+  reason: string;
+  warmth: number;
+  entry: TaskMemoryEntry;
+}
