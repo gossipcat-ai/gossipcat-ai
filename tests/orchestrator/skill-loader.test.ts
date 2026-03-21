@@ -1,4 +1,7 @@
 import { loadSkills, listAvailableSkills } from '@gossip/orchestrator';
+import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 describe('SkillLoader', () => {
   it('loads default skills by name', () => {
@@ -25,5 +28,19 @@ describe('SkillLoader', () => {
   it('wraps multiple skills with delimiters', () => {
     const content = loadSkills('test-agent', ['typescript'], process.cwd());
     expect(content).toMatch(/^[\s\S]*--- SKILLS ---[\s\S]*--- END SKILLS ---[\s\S]*$/);
+  });
+
+  it('resolves underscore skill names to hyphenated filenames', () => {
+    const tmpDir = join(tmpdir(), `gossip-test-${Date.now()}`);
+    const skillDir = join(tmpDir, '.gossip', 'skills');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'code-review.md'), '# Code Review Skill');
+
+    try {
+      const result = loadSkills('test-agent', ['code_review'], tmpDir);
+      expect(result).toContain('Code Review Skill');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
