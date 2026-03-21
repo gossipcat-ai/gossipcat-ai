@@ -7,7 +7,7 @@
 
 import { WebSocketServer, WebSocket, RawData } from 'ws';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
-import { randomUUID } from 'crypto';
+import { randomUUID, timingSafeEqual } from 'crypto';
 import { Codec } from '@gossip/types';
 import { ConnectionManager } from './connection-manager';
 import { MessageRouter } from './router';
@@ -128,11 +128,15 @@ export class RelayServer {
               return;
             }
 
-            // Validate API key if server has one configured
-            if (expectedKey && authMsg.apiKey !== expectedKey) {
-              clearTimeout(authTimer);
-              ws.close(1008, 'Invalid API key');
-              return;
+            // Validate API key — timing-safe comparison to prevent enumeration
+            if (expectedKey) {
+              const a = Buffer.from(String(authMsg.apiKey));
+              const b = Buffer.from(expectedKey);
+              if (a.length !== b.length || !timingSafeEqual(a, b)) {
+                clearTimeout(authTimer);
+                ws.close(1008, 'Invalid API key');
+                return;
+              }
             }
 
             // Validate agentId format — alphanumeric, hyphens, underscores, max 64 chars

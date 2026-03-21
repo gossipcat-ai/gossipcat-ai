@@ -40,6 +40,10 @@ export class ToolServer {
   async start(): Promise<void> {
     await this.agent.connect();
     this.agent.on('message', this.handleToolRequest.bind(this));
+    this.agent.on('error', (err: Error) => console.error(`[ToolServer] Relay error: ${err.message}`));
+    if (!this.allowedCallers) {
+      console.warn('[ToolServer] WARNING: No allowedCallers configured — any relay agent can call any tool');
+    }
   }
 
   async stop(): Promise<void> {
