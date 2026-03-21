@@ -14,15 +14,26 @@ export class TaskGraph {
 
   constructor(projectRoot: string) {
     const gossipDir = join(projectRoot, '.gossip');
-    if (!existsSync(gossipDir)) {
-      mkdirSync(gossipDir, { recursive: true });
-    }
+    mkdirSync(gossipDir, { recursive: true }); // idempotent, no TOCTOU
     this.graphPath = join(gossipDir, 'task-graph.jsonl');
     this.syncMetaPath = join(gossipDir, 'task-graph-sync.json');
   }
 
   private appendEvent(event: TaskGraphEvent): void {
     appendFileSync(this.graphPath, JSON.stringify(event) + '\n');
+  }
+
+  /** Redact common secret patterns from text before persisting */
+  private redactSecrets(text: string): string {
+    return text
+      .replace(/sk[-_]live[-_][a-zA-Z0-9]{20,}/g, '[REDACTED_STRIPE_KEY]')
+      .replace(/sk[-_]ant[-_][a-zA-Z0-9]{20,}/g, '[REDACTED_ANTHROPIC_KEY]')
+      .replace(/sk[-_][a-zA-Z0-9]{40,}/g, '[REDACTED_API_KEY]')
+      .replace(/ghp_[a-zA-Z0-9]{36,}/g, '[REDACTED_GITHUB_TOKEN]')
+      .replace(/gho_[a-zA-Z0-9]{36,}/g, '[REDACTED_GITHUB_OAUTH]')
+      .replace(/AIza[a-zA-Z0-9_-]{35}/g, '[REDACTED_GOOGLE_KEY]')
+      .replace(/eyJ[a-zA-Z0-9_-]{50,}\.[a-zA-Z0-9_-]{50,}\.[a-zA-Z0-9_-]{50,}/g, '[REDACTED_JWT]')
+      .replace(/-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----[\s\S]*?-----END (RSA |EC |DSA )?PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]');
   }
 
   recordCreated(taskId: string, agentId: string, task: string, skills: string[], parentId?: string): void {
@@ -36,7 +47,7 @@ export class TaskGraph {
 
   recordCompleted(taskId: string, result: string, duration: number): void {
     const event: TaskCompletedEvent = {
-      type: 'task.completed', taskId, result: result.slice(0, 4000), duration,
+      type: 'task.completed', taskId, result: this.redactSecrets(result.slice(0, 4000)), duration,
       timestamp: new Date().toISOString(),
     };
     this.appendEvent(event);
@@ -44,7 +55,7 @@ export class TaskGraph {
 
   recordFailed(taskId: string, error: string, duration: number): void {
     const event: TaskFailedEvent = {
-      type: 'task.failed', taskId, error, duration,
+      type: 'task.failed', taskId, error: this.redactSecrets(error), duration,
       timestamp: new Date().toISOString(),
     };
     this.appendEvent(event);

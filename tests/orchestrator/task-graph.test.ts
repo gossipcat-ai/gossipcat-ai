@@ -171,5 +171,31 @@ describe('TaskGraph', () => {
       const task = graph.getTask('t1');
       expect(task!.result!.length).toBe(4000);
     });
+
+    it('redacts secret patterns from results', () => {
+      const graph = new TaskGraph(testDir);
+      graph.recordCreated('t1', 'agent', 'task', []);
+      graph.recordCompleted('t1', 'Found key: sk-ant-abc123def456ghi789jkl012mno345 in config', 100);
+      const task = graph.getTask('t1');
+      expect(task!.result).toContain('[REDACTED_ANTHROPIC_KEY]');
+      expect(task!.result).not.toContain('sk-ant-abc123');
+    });
+
+    it('redacts GitHub tokens from results', () => {
+      const graph = new TaskGraph(testDir);
+      graph.recordCreated('t2', 'agent', 'task', []);
+      graph.recordCompleted('t2', 'Token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij in env', 100);
+      const task = graph.getTask('t2');
+      expect(task!.result).toContain('[REDACTED_GITHUB_TOKEN]');
+      expect(task!.result).not.toContain('ghp_');
+    });
+
+    it('redacts secrets from error messages too', () => {
+      const graph = new TaskGraph(testDir);
+      graph.recordCreated('t3', 'agent', 'task', []);
+      graph.recordFailed('t3', 'API error with key sk-abcdefghijklmnopqrstuvwxyz0123456789abcdef', 100);
+      const task = graph.getTask('t3');
+      expect(task!.error).toContain('[REDACTED_API_KEY]');
+    });
   });
 });
