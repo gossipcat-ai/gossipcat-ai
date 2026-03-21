@@ -135,4 +135,20 @@ export const GIT_TOOLS: ToolDefinition[] = [
   }
 ];
 
-export const ALL_TOOLS: ToolDefinition[] = [...FILE_TOOLS, ...SHELL_TOOLS, ...GIT_TOOLS];
+export const SKILL_TOOLS: ToolDefinition[] = [
+  {
+    name: 'suggest_skill',
+    description: 'Suggest a skill that would help with the current task. Non-blocking — logs the suggestion and you keep working.',
+    parameters: {
+      type: 'object',
+      properties: {
+        skill_name: { type: 'string', description: 'Skill name using underscores (e.g. "dos_resilience")' },
+        reason: { type: 'string', description: 'Why you need this skill' },
+        task_context: { type: 'string', description: 'What you were doing when you noticed the gap' }
+      },
+      required: ['skill_name', 'reason', 'task_context']
+    }
+  }
+];
+
+export const ALL_TOOLS: ToolDefinition[] = [...FILE_TOOLS, ...SHELL_TOOLS, ...GIT_TOOLS, ...SKILL_TOOLS];

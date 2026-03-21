@@ -4,6 +4,7 @@ import { encode as msgpackEncode } from '@msgpack/msgpack';
 import { FileTools } from './file-tools';
 import { ShellTools } from './shell-tools';
 import { GitTools } from './git-tools';
+import { SkillTools } from './skill-tools';
 import { Sandbox } from './sandbox';
 
 export interface ToolServerConfig {
@@ -17,6 +18,7 @@ export class ToolServer {
   private fileTools: FileTools;
   private shellTools: ShellTools;
   private gitTools: GitTools;
+  private skillTools: SkillTools;
   private sandbox: Sandbox;
 
   constructor(config: ToolServerConfig) {
@@ -24,6 +26,7 @@ export class ToolServer {
     this.fileTools = new FileTools(this.sandbox);
     this.shellTools = new ShellTools();
     this.gitTools = new GitTools(config.projectRoot);
+    this.skillTools = new SkillTools(config.projectRoot);
     this.agent = new GossipAgent({
       agentId: config.agentId || 'tool-server',
       relayUrl: config.relayUrl,
@@ -54,7 +57,7 @@ export class ToolServer {
     let responsePayload: Record<string, unknown>;
 
     try {
-      result = await this.executeTool(toolName, args);
+      result = await this.executeTool(toolName, args, envelope.sid);
       responsePayload = { result };
     } catch (err) {
       responsePayload = { error: (err as Error).message };
@@ -78,7 +81,7 @@ export class ToolServer {
     }
   }
 
-  async executeTool(name: string, args: Record<string, unknown>): Promise<string> {
+  async executeTool(name: string, args: Record<string, unknown>, callerId?: string): Promise<string> {
     switch (name) {
       case 'file_read':
         return this.fileTools.fileRead(args as { path: string; startLine?: number; endLine?: number });
@@ -105,6 +108,11 @@ export class ToolServer {
         return this.gitTools.gitCommit(args as { message: string; files?: string[] });
       case 'git_branch':
         return this.gitTools.gitBranch(args as { name?: string });
+      case 'suggest_skill':
+        return this.skillTools.suggestSkill(
+          args as { skill_name: string; reason: string; task_context: string },
+          callerId
+        );
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
