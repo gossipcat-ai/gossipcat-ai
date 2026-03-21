@@ -1,4 +1,7 @@
-import { validateConfig } from '../../apps/cli/src/config';
+import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { validateConfig, findConfigPath } from '../../apps/cli/src/config';
 
 describe('Config Validation', () => {
   it('accepts valid config', () => {
@@ -33,5 +36,43 @@ describe('Config Validation', () => {
   it('accepts config without agents (main agent only)', () => {
     const config = validateConfig({ main_agent: { provider: 'anthropic', model: 'claude' } });
     expect(config.agents).toBeUndefined();
+  });
+});
+
+describe('findConfigPath', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `gossip-test-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns null when no config files exist', () => {
+    expect(findConfigPath(tmpDir)).toBeNull();
+  });
+
+  it('finds gossip.agents.json when present', () => {
+    const filePath = join(tmpDir, 'gossip.agents.json');
+    writeFileSync(filePath, '{}');
+    expect(findConfigPath(tmpDir)).toBe(filePath);
+  });
+
+  it('prefers .gossip/config.json over gossip.agents.json', () => {
+    const gossipDir = join(tmpDir, '.gossip');
+    mkdirSync(gossipDir, { recursive: true });
+    const preferredPath = join(gossipDir, 'config.json');
+    writeFileSync(preferredPath, '{}');
+    writeFileSync(join(tmpDir, 'gossip.agents.json'), '{}');
+    expect(findConfigPath(tmpDir)).toBe(preferredPath);
+  });
+
+  it('falls back to gossip.agents.json when .gossip/config.json is absent', () => {
+    const filePath = join(tmpDir, 'gossip.agents.json');
+    writeFileSync(filePath, '{}');
+    expect(findConfigPath(tmpDir)).toBe(filePath);
   });
 });

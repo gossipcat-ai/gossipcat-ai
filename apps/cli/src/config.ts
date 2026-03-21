@@ -15,14 +15,16 @@ export interface GossipConfig {
   }>;
 }
 
-export function findConfigPath(): string | null {
+export function findConfigPath(projectRoot?: string): string | null {
+  const root = projectRoot || process.cwd();
   const candidates = [
-    resolve(process.cwd(), 'gossip.agents.json'),
-    resolve(process.cwd(), 'gossip.agents.yaml'),
-    resolve(process.cwd(), 'gossip.agents.yml'),
+    resolve(root, '.gossip', 'config.json'),
+    resolve(root, 'gossip.agents.json'),
+    resolve(root, 'gossip.agents.yaml'),
+    resolve(root, 'gossip.agents.yml'),
   ];
-  for (const path of candidates) {
-    if (existsSync(path)) return path;
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
   }
   return null;
 }
