@@ -540,7 +540,10 @@ server.tool(
 
     // Backup current instructions before replace
     if (mode === 'replace') {
-      const backupPath = joinPath(process.cwd(), '.gossip', 'agents', agent_id, 'instructions-backup.md');
+      const { mkdirSync: mkdirFS } = require('fs');
+      const agentDir = joinPath(process.cwd(), '.gossip', 'agents', agent_id);
+      mkdirFS(agentDir, { recursive: true });
+      const backupPath = joinPath(agentDir, 'instructions-backup.md');
       writeFS(backupPath, worker.getInstructions());
     }
 

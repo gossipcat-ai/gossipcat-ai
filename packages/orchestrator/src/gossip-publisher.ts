@@ -53,7 +53,8 @@ Return JSON: { "<agentId>": "<summary>", ... }`,
       ];
 
       const response = await this.llm.generate(messages, { temperature: 0 });
-      const jsonMatch = response.text.match(/\{[\s\S]*\}/);
+      const responseText = response.text || '';
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (!jsonMatch) return;
 
       const summaries = JSON.parse(jsonMatch[0]) as Record<string, string>;

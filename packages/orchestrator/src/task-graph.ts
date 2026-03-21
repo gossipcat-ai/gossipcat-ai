@@ -36,13 +36,15 @@ export class TaskGraph {
     }
   }
 
-  private saveIndex(): void {
+  /** Save index to disk (call explicitly, not on every append) */
+  flushIndex(): void {
     writeFileSync(this.indexPath, JSON.stringify(Object.fromEntries(this.index)));
   }
 
   private appendEvent(event: TaskGraphEvent): void {
     appendFileSync(this.graphPath, JSON.stringify(event) + '\n');
 
+    // Maintain in-memory index (for future use — not yet queried by getTask)
     if ('taskId' in event) {
       this.index.set((event as any).taskId, this.eventCount);
     }
@@ -50,7 +52,7 @@ export class TaskGraph {
       this.index.set(event.parentId, this.eventCount);
     }
     this.eventCount++;
-    this.saveIndex();
+    // Index saved periodically, not on every append (was blocking event loop)
   }
 
   /** Redact common secret patterns from text before persisting */

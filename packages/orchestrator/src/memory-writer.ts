@@ -6,7 +6,8 @@ const memoryLocks = new Map<string, Promise<void>>();
 
 async function withMemoryLock(agentId: string, fn: () => Promise<void>): Promise<void> {
   const prev = memoryLocks.get(agentId) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
+  // Wait for previous operation to complete (success or failure), then run fn
+  const next = prev.catch(() => {}).then(fn);
   memoryLocks.set(agentId, next);
   await next;
 }
