@@ -192,3 +192,12 @@ export interface SyncMeta {
   lastSync: string;
   lastSyncEventCount: number;
 }
+
+export interface GossipMessage {
+  type: 'gossip';
+  batchId: string;
+  fromAgentId: string;
+  forAgentId: string;
+  summary: string;
+  timestamp: string;
+}
