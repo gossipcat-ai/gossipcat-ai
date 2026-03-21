@@ -119,6 +119,16 @@ export async function startChat(config: GossipConfig): Promise<void> {
 
   const mainKey = await keychain.getKey(config.main_agent.provider);
 
+  // Generate bootstrap prompt for team context
+  const { BootstrapGenerator } = await import('@gossip/orchestrator');
+  const bootstrapGen = new BootstrapGenerator(process.cwd());
+  const { prompt: bootstrapPrompt } = bootstrapGen.generate();
+  // Write .gossip/bootstrap.md for humans/tools that read static files
+  const { writeFileSync: writeBs, mkdirSync: mkBs } = await import('fs');
+  const { join: joinBs } = await import('path');
+  mkBs(joinBs(process.cwd(), '.gossip'), { recursive: true });
+  writeBs(joinBs(process.cwd(), '.gossip', 'bootstrap.md'), bootstrapPrompt);
+
   const mainAgentConfig: MainAgentConfig = {
     provider: config.main_agent.provider,
     model: config.main_agent.model,
@@ -126,6 +136,7 @@ export async function startChat(config: GossipConfig): Promise<void> {
     relayUrl: relay.url,
     agents: configToAgentConfigs(config),
     projectRoot: process.cwd(),
+    bootstrapPrompt,
   };
 
   const mainAgent = new MainAgent(mainAgentConfig);
