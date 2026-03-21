@@ -12,6 +12,7 @@ import { WorkerAgent } from './worker-agent';
 import { AgentConfig, TaskResult, ChatResponse } from './types';
 import { ALL_TOOLS } from '@gossip/tools';
 import { ContentBlock, TextContent } from '@gossip/types';
+import { DispatchPipeline } from './dispatch-pipeline';
 
 const CHAT_SYSTEM_PROMPT = `You are a developer assistant powering Gossip Mesh. Be concise and direct.
 
@@ -39,6 +40,8 @@ export interface MainAgentConfig {
   relayUrl: string;
   agents: AgentConfig[];
   apiKeys?: Record<string, string>;  // provider → key
+  projectRoot?: string;  // defaults to process.cwd()
+  llm?: ILLMProvider;  // override for testing
 }
 
 export class MainAgent {
@@ -48,9 +51,11 @@ export class MainAgent {
   private workers: Map<string, WorkerAgent> = new Map();
   private relayUrl: string;
   private apiKeys: Record<string, string>;
+  private projectRoot: string;
+  private pipeline: DispatchPipeline;
 
   constructor(config: MainAgentConfig) {
-    this.llm = createProvider(config.provider, config.model, config.apiKey);
+    this.llm = config.llm ?? createProvider(config.provider, config.model, config.apiKey);
     this.registry = new AgentRegistry();
     this.dispatcher = new TaskDispatcher(this.llm, this.registry);
     this.relayUrl = config.relayUrl;
@@ -59,6 +64,13 @@ export class MainAgent {
     for (const agent of config.agents) {
       this.registry.register(agent);
     }
+
+    this.projectRoot = config.projectRoot || process.cwd();
+    this.pipeline = new DispatchPipeline({
+      projectRoot: this.projectRoot,
+      workers: this.workers,
+      registryGet: (id) => this.registry.get(id),
+    });
   }
 
   /** Start all worker agents (connect to relay) */
@@ -79,8 +91,43 @@ export class MainAgent {
     }
   }
 
+  dispatch(agentId: string, task: string) { return this.pipeline.dispatch(agentId, task); }
+  async collect(taskIds?: string[], timeoutMs?: number) { return this.pipeline.collect(taskIds, timeoutMs); }
+  dispatchParallel(tasks: Array<{ agentId: string; task: string }>) { return this.pipeline.dispatchParallel(tasks); }
+  getWorker(agentId: string) { return this.workers.get(agentId); }
+  getTask(taskId: string) { return this.pipeline.getTask(taskId); }
+  setGossipPublisher(publisher: any) { this.pipeline.setGossipPublisher(publisher); }
+
+  /** Register new agent configs (for hot-reload from config changes) */
+  registerAgent(config: AgentConfig): void {
+    this.registry.register(config);
+  }
+
+  async syncWorkers(keyProvider: (provider: string) => Promise<string | null>): Promise<number> {
+    const { existsSync, readFileSync } = await import('fs');
+    const { join } = await import('path');
+
+    let added = 0;
+    for (const ac of this.registry.getAll()) {
+      if (this.workers.has(ac.id)) continue;
+      const key = await keyProvider(ac.provider);
+      const llm = createProvider(ac.provider, ac.model, key ?? undefined);
+
+      const instructionsPath = join(this.projectRoot, '.gossip', 'agents', ac.id, 'instructions.md');
+      const instructions = existsSync(instructionsPath)
+        ? readFileSync(instructionsPath, 'utf-8') : undefined;
+
+      const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions);
+      await worker.start();
+      this.workers.set(ac.id, worker);
+      added++;
+    }
+    return added;
+  }
+
   /** Stop all worker agents */
   async stop(): Promise<void> {
+    this.pipeline.flushTaskGraph();
     for (const worker of this.workers.values()) {
       await worker.stop();
     }
@@ -193,13 +240,11 @@ export class MainAgent {
   }
 
   private async executeSubTask(subTask: { assignedAgent?: string; description: string }): Promise<TaskResult> {
-    const worker = this.workers.get(subTask.assignedAgent!);
-    if (!worker) {
-      return { agentId: 'unknown', task: subTask.description, result: '', error: 'No worker', duration: 0 };
-    }
+    const { taskId, promise } = this.pipeline.dispatch(subTask.assignedAgent!, subTask.description);
     const start = Date.now();
     try {
-      const result = await worker.executeTask(subTask.description);
+      const result = await promise;
+      await this.pipeline.writeMemoryForTask(taskId);
       return { agentId: subTask.assignedAgent!, task: subTask.description, result, duration: Date.now() - start };
     } catch (err) {
       return {

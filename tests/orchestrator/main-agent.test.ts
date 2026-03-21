@@ -1,4 +1,4 @@
-import { AgentRegistry, TaskDispatcher, ILLMProvider } from '@gossip/orchestrator';
+import { AgentRegistry, TaskDispatcher, ILLMProvider, MainAgent } from '@gossip/orchestrator';
 import { LLMMessage } from '@gossip/types';
 
 /**
@@ -78,5 +78,59 @@ describe('MainAgent orchestration flow', () => {
 
     // Sub-task should remain unassigned (no rust skill)
     expect(plan.subTasks[0].assignedAgent).toBeUndefined();
+  });
+});
+
+describe('MainAgent dispatch pipeline', () => {
+  it('exposes dispatch() that delegates to pipeline', () => {
+    expect(typeof MainAgent.prototype.dispatch).toBe('function');
+  });
+
+  it('exposes collect() that delegates to pipeline', () => {
+    expect(typeof MainAgent.prototype.collect).toBe('function');
+  });
+
+  it('exposes getWorker() to access workers', () => {
+    expect(typeof MainAgent.prototype.getWorker).toBe('function');
+  });
+});
+
+describe('MainAgent handleMessage → pipeline integration', () => {
+  it('executeSubTask uses dispatch pipeline for task execution', async () => {
+    const mockLLM: ILLMProvider = {
+      async generate(messages: LLMMessage[]) {
+        if (messages[0]?.content?.toString().includes('task decomposition engine')) {
+          return {
+            text: JSON.stringify({
+              strategy: 'single',
+              subTasks: [{ description: 'review the code', requiredSkills: ['code_review'] }],
+            }),
+          };
+        }
+        return { text: 'synthesized result' };
+      },
+    };
+
+    const mainAgent = new MainAgent({
+      provider: 'local', model: 'mock', relayUrl: 'ws://localhost:0',
+      agents: [{ id: 'reviewer', provider: 'local', model: 'mock', skills: ['code_review'] }],
+      projectRoot: '/tmp/gossip-pipeline-test-' + Date.now(),
+      llm: mockLLM,
+    });
+
+    const executeTaskCalls: string[] = [];
+    const mockWorker = {
+      executeTask: async (task: string, _lens?: string, _promptContent?: string) => {
+        executeTaskCalls.push(task);
+        return 'review complete';
+      },
+      start: async () => {},
+      stop: async () => {},
+    };
+    mainAgent.setWorkers(new Map([['reviewer', mockWorker as any]]));
+
+    const response = await mainAgent.handleMessage('review the code');
+    expect(response.status).toBe('done');
+    expect(executeTaskCalls).toContain('review the code');
   });
 });
