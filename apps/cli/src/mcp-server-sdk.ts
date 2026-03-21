@@ -502,6 +502,62 @@ server.tool(
   }
 );
 
+// ── Tool: update agent instructions ──────────────────────────────────────
+server.tool(
+  'gossip_update_instructions',
+  'Update a worker agent\'s instructions for subsequent tasks. Use to adjust behavior based on performance.',
+  {
+    agent_id: z.string().describe('Agent ID to update'),
+    instruction_update: z.string().describe('New instructions content (max 5000 chars)'),
+    mode: z.enum(['append', 'replace']).describe('"append" to add to existing, "replace" to overwrite'),
+  },
+  async ({ agent_id, instruction_update, mode }) => {
+    await boot();
+
+    // Validate agent_id format (prevent path traversal)
+    if (!/^[a-zA-Z0-9_-]+$/.test(agent_id)) {
+      return { content: [{ type: 'text' as const, text: 'Invalid agent ID format.' }] };
+    }
+
+    // Size limit
+    if (instruction_update.length > 5000) {
+      return { content: [{ type: 'text' as const, text: 'Instruction update exceeds 5000 char limit.' }] };
+    }
+
+    const worker = workers.get(agent_id);
+    if (!worker) {
+      return { content: [{ type: 'text' as const, text: `Agent "${agent_id}" not found. Available: ${Array.from(workers.keys()).join(', ')}` }] };
+    }
+
+    // Basic content blocklist
+    const blocked = ['rm -rf', 'curl ', 'wget ', 'eval(', 'exec('];
+    if (blocked.some(b => instruction_update.toLowerCase().includes(b))) {
+      return { content: [{ type: 'text' as const, text: 'Instruction update contains blocked content.' }] };
+    }
+
+    const { writeFileSync: writeFS } = require('fs');
+    const { join: joinPath } = require('path');
+
+    // Backup current instructions before replace
+    if (mode === 'replace') {
+      const backupPath = joinPath(process.cwd(), '.gossip', 'agents', agent_id, 'instructions-backup.md');
+      writeFS(backupPath, worker.getInstructions());
+    }
+
+    if (mode === 'replace') {
+      worker.setInstructions(instruction_update);
+    } else {
+      worker.setInstructions(worker.getInstructions() + '\n\n' + instruction_update);
+    }
+
+    // Persist to instructions.md
+    const instructionsPath = joinPath(process.cwd(), '.gossip', 'agents', agent_id, 'instructions.md');
+    writeFS(instructionsPath, worker.getInstructions());
+
+    return { content: [{ type: 'text' as const, text: `Updated instructions for ${agent_id} (${mode}). Takes effect on next task.` }] };
+  }
+);
+
 // ── Start ─────────────────────────────────────────────────────────────────
 async function main() {
   const transport = new StdioServerTransport();
