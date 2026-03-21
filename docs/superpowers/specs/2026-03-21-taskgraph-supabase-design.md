@@ -71,7 +71,7 @@ interface TaskCreatedEvent extends TaskGraphEventBase {
 interface TaskCompletedEvent extends TaskGraphEventBase {
   type: 'task.completed';
   taskId: string;
-  result: string;          // truncated to 2000 chars
+  result: string;          // truncated to 4000 chars
   duration: number;        // ms
 }
 
@@ -389,10 +389,12 @@ try {
   const { TaskGraph } = await import('@gossip/orchestrator');
   const graph = new TaskGraph(process.cwd());
   for (const t of targets) {
+    // Guard against NaN duration when task times out (completedAt undefined)
+    const duration = t.completedAt ? t.completedAt - t.startedAt : -1;
     if (t.status === 'completed') {
-      graph.recordCompleted(t.id, (t.result || '').slice(0, 2000), t.completedAt - t.startedAt);
+      graph.recordCompleted(t.id, (t.result || '').slice(0, 4000), duration);
     } else if (t.status === 'failed') {
-      graph.recordFailed(t.id, t.error || 'Unknown', t.completedAt - t.startedAt);
+      graph.recordFailed(t.id, t.error || 'Unknown', duration);
     }
   }
 
