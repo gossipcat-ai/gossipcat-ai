@@ -182,6 +182,13 @@ server.tool(
       .catch((err: Error) => { entry.status = 'failed'; entry.error = err.message; entry.completedAt = Date.now(); });
     tasks.set(taskId, entry);
 
+    // Record task creation in TaskGraph
+    try {
+      const { TaskGraph } = await import('@gossip/orchestrator');
+      const graph = new TaskGraph(process.cwd());
+      graph.recordCreated(taskId, agent_id, task, agentSkills);
+    } catch { /* non-blocking */ }
+
     return { content: [{ type: 'text' as const, text: `Dispatched to ${agent_id}. Task ID: ${taskId}` }] };
   }
 );
@@ -233,6 +240,14 @@ server.tool(
         .then((result: string) => { entry.status = 'completed'; entry.result = result; entry.completedAt = Date.now(); })
         .catch((err: Error) => { entry.status = 'failed'; entry.error = err.message; entry.completedAt = Date.now(); });
       tasks.set(taskId, entry);
+
+      try {
+        const { TaskGraph: TaskGraphP } = await import('@gossip/orchestrator');
+        const graphP = new TaskGraphP(process.cwd());
+        const skills = allAgentConfigs.find((a: any) => a.id === def.agent_id)?.skills || [];
+        graphP.recordCreated(taskId, def.agent_id, def.task, skills);
+      } catch { /* non-blocking */ }
+
       taskIds.push(taskId);
     }
 
@@ -278,6 +293,22 @@ server.tool(
 
       return text;
     });
+
+    // Record task completion/failure/cancellation in TaskGraph
+    try {
+      const { TaskGraph: TaskGraphC } = await import('@gossip/orchestrator');
+      const graphC = new TaskGraphC(process.cwd());
+      for (const t of targets) {
+        const duration = t.completedAt ? t.completedAt - t.startedAt : -1;
+        if (t.status === 'completed') {
+          graphC.recordCompleted(t.id, (t.result || '').slice(0, 4000), duration);
+        } else if (t.status === 'failed') {
+          graphC.recordFailed(t.id, t.error || 'Unknown', duration);
+        } else if (t.status === 'running') {
+          graphC.recordCancelled(t.id, 'collect timeout', duration);
+        }
+      }
+    } catch { /* non-blocking */ }
 
     // Check for skill suggestions and skeleton generation
     try {
