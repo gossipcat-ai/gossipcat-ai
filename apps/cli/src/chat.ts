@@ -3,6 +3,7 @@ import { createInterface, Interface } from 'readline';
 import { MainAgent, MainAgentConfig, ChatResponse } from '@gossip/orchestrator';
 import { RelayServer } from '@gossip/relay';
 import { ToolServer } from '@gossip/tools';
+import { ContentBlock } from '@gossip/types';
 import { GossipConfig, configToAgentConfigs } from './config';
 import { Keychain } from './keychain';
 
@@ -147,6 +148,49 @@ export async function startChat(config: GossipConfig): Promise<void> {
     if (!input) { rl.prompt(); return; }
     if (input === 'exit' || input === 'quit') {
       await shutdown(relay, toolServer, mainAgent, rl);
+      return;
+    }
+
+    if (input === '/image') {
+      try {
+        const { readClipboardImage } = await import('./clipboard');
+        const { processImage } = await import('./image-handler');
+
+        const image = await readClipboardImage();
+        if (!image) {
+          console.log(`\n${c.yellow}  No image found in clipboard. Copy an image first, then run /image.${c.reset}\n`);
+          rl.prompt();
+          return;
+        }
+
+        const processed = processImage(image);
+        const dimStr = processed.dimensions
+          ? ` ${processed.dimensions.width}x${processed.dimensions.height}`
+          : '';
+        console.log(`\n${c.green}  Image detected: ${processed.format.toUpperCase()}${dimStr} (${Math.round(processed.sizeBytes / 1024)} KB)${c.reset}`);
+
+        rl.question(`${c.dim}  Message (Enter for image only): ${c.reset}`, async (message) => {
+          const content: ContentBlock[] = [
+            { type: 'image', data: processed.base64, mediaType: processed.mediaType },
+          ];
+          const text = message?.trim() || 'Describe this image.';
+          content.push({ type: 'text', text });
+
+          process.stdout.write(`${c.dim}  thinking...${c.reset}`);
+          try {
+            const response = await mainAgent.handleMessage(content);
+            process.stdout.write('\r\x1b[K');
+            await renderResponse(response, text, mainAgent);
+          } catch (err) {
+            process.stdout.write('\r\x1b[K');
+            console.log(`\n${c.yellow}  Error: ${(err as Error).message}${c.reset}\n`);
+          }
+          rl.prompt();
+        });
+      } catch (err) {
+        console.log(`\n${c.yellow}  Error: ${(err as Error).message}${c.reset}\n`);
+        rl.prompt();
+      }
       return;
     }
 
