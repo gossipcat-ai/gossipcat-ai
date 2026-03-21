@@ -205,6 +205,17 @@ The generator reads:
 
 All reads are synchronous (fs.readFileSync) since this runs at boot, not in a hot path.
 
+**Memory truncation:** Per-agent memory summary is capped at 500 chars of MEMORY.md content. The "Topics" line in the Tier 3 example extracts keywords from the MEMORY.md knowledge section headers — it does not include full file content. This keeps the bootstrap prompt under ~3K tokens even with 10+ agents.
+
+### Error Handling
+
+The generator must be resilient to corrupt/missing data:
+
+- **Malformed `.gossip/config.json`:** Catch JSON parse errors, fall back to tier 1 (no-config). Log: `[gossipcat] Config parse error, falling back to setup mode`.
+- **Missing agent memory files:** Skip that agent's memory section, show "no task history yet" (same as tier 2 for that agent).
+- **Malformed `tasks.jsonl` lines:** Skip bad lines when counting tasks / reading last timestamp. Same pattern as `MemoryCompactor.compactIfNeeded()` which already does `try { JSON.parse(line) } catch { /* skip */ }`.
+- **Missing `catalog.json`:** Omit available skills list from setup guidance. Non-fatal.
+
 ---
 
 ## Component 3: gossip_setup() MCP Tool
@@ -225,7 +236,7 @@ server.tool(
         provider: z.string(),
         model: z.string(),
         preset: z.string().optional(),
-        skills: z.array(z.string()),
+        skills: z.array(z.string()).min(1),
       })).optional(),
     }),
   },
@@ -242,7 +253,8 @@ server.tool(
 **Behavior:**
 - Creates `.gossip/` directory if needed
 - Writes `.gossip/config.json`
-- Returns: "Config saved. X agents configured. Call gossip_bootstrap() to see your team."
+- Returns: "Config saved. X agents configured. Agents will start on first dispatch — call gossip_dispatch() to begin."
+- Does NOT call `boot()` or start workers — deferred boot happens automatically on the next `gossip_dispatch` or `gossip_collect` call (they call `await boot()` which retries now that config exists)
 - Does NOT auto-bootstrap (keeps tools orthogonal)
 
 ---
@@ -251,17 +263,11 @@ server.tool(
 
 ### MCP Server Boot (`doBoot()`)
 
-After booting relay, workers, and MainAgent, call the generator:
+Bootstrap file is NOT written at boot — this avoids a race with explicit `gossip_bootstrap()` calls. The file is only written when:
+1. `gossip_bootstrap()` is called explicitly (MCP tool)
+2. CLI chat starts (writes before MainAgent creation)
 
-```typescript
-// At end of doBoot()
-const { BootstrapGenerator } = await import('@gossip/orchestrator');
-const generator = new BootstrapGenerator(process.cwd());
-const { prompt } = generator.generate();
-writeFileSync(join(process.cwd(), '.gossip', 'bootstrap.md'), prompt);
-```
-
-Silent — no tool call, just writes the file at startup.
+The MCP server doesn't need the file — it returns the prompt as tool output directly. The file exists for humans and tools that read static files (like Claude Code loading `.gossip/bootstrap.md` at session start).
 
 ### MCP Tool (`gossip_bootstrap()`)
 
@@ -284,14 +290,38 @@ Returns the prompt AND writes the file.
 ### CLI Chat Boot (`startChat()`)
 
 ```typescript
-// In startChat(), after MainAgent is created
+// In startChat(), after config is loaded but before MainAgent is created
 const { BootstrapGenerator } = await import('@gossip/orchestrator');
 const generator = new BootstrapGenerator(process.cwd());
 const { prompt } = generator.generate();
-// Inject into MainAgent system prompt (prepend to CHAT_SYSTEM_PROMPT)
+
+const mainAgent = new MainAgent({
+  ...mainAgentConfig,
+  bootstrapPrompt: prompt,  // NEW field
+});
 ```
 
-The CLI chat's MainAgent gets the bootstrap context in its system prompt, so it knows about the team when decomposing tasks.
+**MainAgent change required:** Add `bootstrapPrompt?: string` to `MainAgentConfig`. In `handleMessage`, prepend it to the system prompt in `this.llm.generate()` calls:
+
+```typescript
+// In MainAgentConfig:
+export interface MainAgentConfig {
+  // ... existing fields ...
+  bootstrapPrompt?: string;  // NEW — injected by bootstrap generator
+}
+
+// In MainAgent constructor:
+private bootstrapPrompt: string;
+// ...
+this.bootstrapPrompt = config.bootstrapPrompt || '';
+
+// In handleMessage's generate calls, replace CHAT_SYSTEM_PROMPT with:
+const systemPrompt = this.bootstrapPrompt
+  ? this.bootstrapPrompt + '\n\n' + CHAT_SYSTEM_PROMPT
+  : CHAT_SYSTEM_PROMPT;
+```
+
+This threads the bootstrap content into both the unassigned-task path and the choice-handling path in MainAgent.
 
 ### CLAUDE.md Update
 
@@ -329,6 +359,8 @@ function migrateConfig(projectRoot: string): void {
 
 Called at the start of `generate()`. Non-destructive — copies, doesn't move. Old file stays for backward compat until user deletes it manually.
 
+**Migration warning:** After copying, log once to stderr: `[gossipcat] Migrated config to .gossip/config.json — gossip.agents.json is now ignored.` This prevents the confusing silent failure where a user edits the old file after migration.
+
 `findConfigPath()` updated to check `.gossip/config.json` first.
 
 ---
@@ -338,13 +370,14 @@ Called at the start of `generate()`. Non-destructive — copies, doesn't move. O
 | File | Action | Change |
 |------|--------|--------|
 | `packages/orchestrator/src/bootstrap.ts` | **Create** | BootstrapGenerator class (~120 lines) |
+| `packages/orchestrator/src/main-agent.ts` | **Edit** | Add `bootstrapPrompt` to MainAgentConfig, thread into system prompt |
 | `packages/orchestrator/src/index.ts` | **Edit** | Export BootstrapGenerator |
-| `apps/cli/src/config.ts` | **Edit** | Update findConfigPath() lookup order |
-| `apps/cli/src/mcp-server-sdk.ts` | **Edit** | Add gossip_bootstrap + gossip_setup tools, call generator in doBoot() |
-| `apps/cli/src/chat.ts` | **Edit** | Inject bootstrap prompt into MainAgent system prompt |
-| `CLAUDE.md` | **Edit** | Slim gossipcat section to pointer |
+| `apps/cli/src/config.ts` | **Edit** | Update findConfigPath() lookup order, add `.gossip/config.json` |
+| `apps/cli/src/mcp-server-sdk.ts` | **Edit** | Add gossip_bootstrap + gossip_setup tools |
+| `apps/cli/src/chat.ts` | **Edit** | Generate bootstrap prompt, pass to MainAgent via bootstrapPrompt field |
+| `CLAUDE.md` | **Edit** | Slim gossipcat section to pointer at .gossip/bootstrap.md |
 | `.claude/rules/gossipcat.md` | **Delete** | Replaced by .gossip/bootstrap.md |
-| `tests/orchestrator/bootstrap.test.ts` | **Create** | Test all three tiers, migration, prompt content |
+| `tests/orchestrator/bootstrap.test.ts` | **Create** | Test all three tiers, migration, prompt content, error handling |
 
 ---
 
