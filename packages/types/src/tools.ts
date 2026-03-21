@@ -23,10 +23,26 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+/** Image content block for multimodal messages */
+export interface ImageContent {
+  type: 'image';
+  data: string;       // base64-encoded
+  mediaType: string;  // "image/png", "image/jpeg", etc.
+}
+
+/** Text content block for multimodal messages */
+export interface TextContent {
+  type: 'text';
+  text: string;
+}
+
+/** A content block — either text or image */
+export type ContentBlock = TextContent | ImageContent;
+
 /** A single message in the multi-turn LLM session history */
 export interface LLMMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | ContentBlock[];  // string for backward compat, array for multimodal
   toolCallId?: string;   // Provider-issued call ID
   name?: string;         // Tool/function name (used by tool role messages)
   toolCalls?: ToolCall[];  // When role === 'assistant' and it made tool calls

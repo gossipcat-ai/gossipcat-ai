@@ -5,7 +5,8 @@ import { LLMMessage } from '@gossip/types';
 function createMockLLM(): ILLMProvider {
   return {
     async generate(messages: LLMMessage[]) {
-      const task = messages.find(m => m.role === 'user')?.content || '';
+      const rawContent = messages.find(m => m.role === 'user')?.content || '';
+      const task = typeof rawContent === 'string' ? rawContent : '';
       if (task.includes('simple')) {
         return {
           text: '{"strategy":"single","subTasks":[{"description":"do the thing","requiredSkills":["typescript"]}]}',
