@@ -557,6 +557,8 @@ The relay stamps `envelope.sid` from the authenticated session (server.ts:100). 
 2. **No shell/code injection patterns** — Reject content containing `shell_exec`, `rm -rf`, `curl`, `eval` (basic blocklist)
 3. **Backup before replace** — When `mode: 'replace'`, save current instructions to `.gossip/agents/<id>/instructions-backup.md` first
 
+**Path traversal guard:** The `workers.get(agent_id)` lookup acts as an implicit guard — only registered agent IDs can be updated. If the lookup fails, the tool returns "not found" before any file path is constructed. Additionally, validate that `agent_id` matches `/^[a-zA-Z0-9_-]+$/` before path construction.
+
 Note: The MCP tool is callable only via the MCP protocol (stdio). Workers communicate via relay RPC to the ToolServer, which does NOT have this tool registered. Workers cannot call MCP tools.
 
 ### General constraints (unchanged)
