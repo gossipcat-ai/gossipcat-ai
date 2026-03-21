@@ -144,3 +144,94 @@ describe('LLM Client', () => {
     });
   });
 });
+
+describe('Multimodal message formatting', () => {
+  const multimodalMessage = {
+    role: 'user' as const,
+    content: [
+      { type: 'image' as const, data: 'base64data', mediaType: 'image/png' },
+      { type: 'text' as const, text: 'What is this?' },
+    ],
+  };
+
+  it('AnthropicProvider formats multimodal content', async () => {
+    let sentBody: any = null;
+    global.fetch = jest.fn().mockImplementation(async (_url: string, opts: any) => {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ content: [{ type: 'text', text: 'response' }], usage: { input_tokens: 1, output_tokens: 1 } }) };
+    }) as unknown as typeof fetch;
+
+    const provider = new AnthropicProvider('test-key', 'claude-3');
+    await provider.generate([
+      { role: 'system', content: 'You are helpful.' },
+      multimodalMessage,
+    ]);
+
+    expect(typeof sentBody.system).toBe('string');
+    const userMsg = sentBody.messages[0];
+    expect(userMsg.content[0].type).toBe('image');
+    expect(userMsg.content[0].source.type).toBe('base64');
+    expect(userMsg.content[0].source.data).toBe('base64data');
+    expect(userMsg.content[1].type).toBe('text');
+  });
+
+  it('OpenAIProvider formats multimodal content', async () => {
+    let sentBody: any = null;
+    global.fetch = jest.fn().mockImplementation(async (_url: string, opts: any) => {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ choices: [{ message: { content: 'response' } }] }) };
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAIProvider('test-key', 'gpt-4o');
+    await provider.generate([multimodalMessage]);
+
+    const userMsg = sentBody.messages[0];
+    expect(userMsg.content[0].type).toBe('image_url');
+    expect(userMsg.content[0].image_url.url).toContain('data:image/png;base64,base64data');
+    expect(userMsg.content[1].type).toBe('text');
+  });
+
+  it('GeminiProvider formats multimodal content', async () => {
+    let sentBody: any = null;
+    global.fetch = jest.fn().mockImplementation(async (_url: string, opts: any) => {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'response' }] } }] }) };
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('test-key', 'gemini-pro');
+    await provider.generate([multimodalMessage]);
+
+    const userContent = sentBody.contents[0];
+    expect(userContent.parts[0].inlineData.mimeType).toBe('image/png');
+    expect(userContent.parts[0].inlineData.data).toBe('base64data');
+    expect(userContent.parts[1].text).toBe('What is this?');
+  });
+
+  it('OllamaProvider formats multimodal content', async () => {
+    let sentBody: any = null;
+    global.fetch = jest.fn().mockImplementation(async (_url: string, opts: any) => {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ message: { content: 'response' } }) };
+    }) as unknown as typeof fetch;
+
+    const provider = new OllamaProvider('llava');
+    await provider.generate([multimodalMessage]);
+
+    const userMsg = sentBody.messages[0];
+    expect(userMsg.content).toBe('What is this?');
+    expect(userMsg.images).toEqual(['base64data']);
+  });
+
+  it('providers handle string content unchanged', async () => {
+    let sentBody: any = null;
+    global.fetch = jest.fn().mockImplementation(async (_url: string, opts: any) => {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ content: [{ type: 'text', text: 'r' }], usage: { input_tokens: 1, output_tokens: 1 } }) };
+    }) as unknown as typeof fetch;
+
+    const provider = new AnthropicProvider('test-key', 'claude-3');
+    await provider.generate([{ role: 'user', content: 'plain text' }]);
+
+    expect(sentBody.messages[0].content).toBe('plain text');
+  });
+});

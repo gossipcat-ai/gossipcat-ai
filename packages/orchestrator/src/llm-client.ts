@@ -35,7 +35,7 @@ export class AnthropicProvider implements ILLMProvider {
       max_tokens: options?.maxTokens ?? 4096,
       messages: nonSystemMsgs.map(m => this.toAnthropicMessage(m)),
     };
-    if (systemMsg) body.system = systemMsg.content;
+    if (systemMsg) body.system = typeof systemMsg.content === 'string' ? systemMsg.content : '';
     if (options?.temperature !== undefined) body.temperature = options.temperature;
     if (options?.tools?.length) {
       body.tools = options.tools.map(t => ({
@@ -62,15 +62,28 @@ export class AnthropicProvider implements ILLMProvider {
   }
 
   private toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
+    // Multimodal content — translate ContentBlock[] to Anthropic format
+    if (typeof m.content !== 'string') {
+      return {
+        role: m.role,
+        content: m.content.map(block =>
+          block.type === 'image'
+            ? { type: 'image', source: { type: 'base64', media_type: block.mediaType, data: block.data } }
+            : { type: 'text', text: block.text }
+        ),
+      };
+    }
+    // Tool result — guard content with typeof
     if (m.role === 'tool') {
       return {
         role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: m.toolCallId, content: m.content }],
+        content: [{ type: 'tool_result', tool_use_id: m.toolCallId, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }],
       };
     }
+    // Assistant with tool calls — cast content to string
     if (m.role === 'assistant' && m.toolCalls?.length) {
       const content: unknown[] = [];
-      if (m.content) content.push({ type: 'text', text: m.content });
+      if (m.content) content.push({ type: 'text', text: m.content as string });
       for (const tc of m.toolCalls) {
         content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.arguments });
       }
@@ -136,12 +149,22 @@ export class OpenAIProvider implements ILLMProvider {
   }
 
   private toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
+    if (typeof m.content !== 'string') {
+      return {
+        role: m.role,
+        content: m.content.map(block =>
+          block.type === 'image'
+            ? { type: 'image_url', image_url: { url: `data:${block.mediaType};base64,${block.data}` } }
+            : { type: 'text', text: block.text }
+        ),
+      };
+    }
     if (m.role === 'tool') {
-      return { role: 'tool', content: m.content, tool_call_id: m.toolCallId };
+      return { role: 'tool', content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content), tool_call_id: m.toolCallId };
     }
     if (m.role === 'assistant' && m.toolCalls?.length) {
       return {
-        role: 'assistant', content: m.content || null,
+        role: 'assistant', content: (m.content as string) || null,
         tool_calls: m.toolCalls.map(tc => ({
           id: tc.id, type: 'function',
           function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
@@ -176,13 +199,23 @@ export class GeminiProvider implements ILLMProvider {
   constructor(private apiKey: string, private model: string) {}
 
   async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
-    const contents = messages.filter(m => m.role !== 'system').map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
+    const contents = messages.filter(m => m.role !== 'system').map(m => {
+      const role = m.role === 'assistant' ? 'model' : 'user';
+      if (typeof m.content !== 'string') {
+        return {
+          role,
+          parts: m.content.map(block =>
+            block.type === 'image'
+              ? { inlineData: { mimeType: block.mediaType, data: block.data } }
+              : { text: block.text }
+          ),
+        };
+      }
+      return { role, parts: [{ text: m.content }] };
+    });
     const systemMsg = messages.find(m => m.role === 'system');
     const body: Record<string, unknown> = { contents };
-    if (systemMsg) body.systemInstruction = { parts: [{ text: systemMsg.content }] };
+    if (systemMsg) body.systemInstruction = { parts: [{ text: typeof systemMsg.content === 'string' ? systemMsg.content : '' }] };
     if (options?.temperature !== undefined) {
       body.generationConfig = { temperature: options.temperature, maxOutputTokens: options?.maxTokens ?? 4096 };
     }
@@ -213,7 +246,18 @@ export class OllamaProvider implements ILLMProvider {
   async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
-      messages: messages.map(m => ({ role: m.role === 'tool' ? 'user' : m.role, content: m.content })),
+      messages: messages.map(m => {
+        if (typeof m.content !== 'string') {
+          const texts = m.content.filter(b => b.type === 'text').map(b => (b as any).text);
+          const images = m.content.filter(b => b.type === 'image').map(b => (b as any).data);
+          return {
+            role: m.role === 'tool' ? 'user' : m.role,
+            content: texts.join(' ') || '',
+            ...(images.length ? { images } : {}),
+          };
+        }
+        return { role: m.role === 'tool' ? 'user' : m.role, content: m.content };
+      }),
       stream: false,
     };
     if (options?.temperature !== undefined) body.options = { temperature: options.temperature };
