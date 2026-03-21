@@ -2,74 +2,11 @@
 
 ## Gossipcat — Multi-Agent Orchestration
 
-This project has a gossipcat MCP server that dispatches tasks to worker agents (Gemini, GPT, local models) via a WebSocket relay. Config is in `gossip.agents.json`.
+Team context is auto-generated at `.gossip/bootstrap.md`.
+Call `gossip_bootstrap()` to refresh after adding/removing agents.
 
-### How to use agents
-
-**Gemini/GPT/local agents** — use gossipcat MCP tools:
-```
-gossip_dispatch(agent_id: "gemini-reviewer", task: "Review packages/relay/src/server.ts for security issues")
-gossip_dispatch_parallel(tasks: [{agent_id: "gemini-reviewer", task: "..."}, {agent_id: "gemini-tester", task: "..."}])
-gossip_collect(task_ids: ["abc123"])
-gossip_agents()                    — list available agents
-gossip_status()                    — check system status
-gossip_update_instructions(agent_ids: "gemini-reviewer" | ["id1","id2"], instruction_update: "...", mode: "append"|"replace")
-gossip_tools()                     — list all available gossipcat tools (call after /mcp reconnect)
-```
-
-**After every `/mcp` reconnect**, call `gossip_tools()` to discover all available tools — new tools may have been added.
-
-**Claude agents (Sonnet/Haiku)** — use Claude Code's built-in Agent tool (free, no API key needed):
-```
-Agent(model: "sonnet", prompt: "Review this file for bugs...", run_in_background: true)
-Agent(model: "haiku", prompt: "Quick check...", run_in_background: true)
-```
-
-**Parallel multi-provider dispatch** — combine both in one message:
-```
-gossip_dispatch(agent_id: "gemini-reviewer", task: "Security review of X")     ← Gemini via relay
-Agent(model: "sonnet", prompt: "Review X for performance issues")               ← Sonnet via Claude Code
-```
-Then synthesize both results.
-
-### Agent skills
-Skills are auto-injected from `.gossip/agents/<id>/skills/` and `packages/orchestrator/src/default-skills/`. Project-wide skills in `.gossip/skills/`. No need to pass skills manually.
-
-### Agent memory
-Agents accumulate memory across tasks. Memory is stored in `.gossip/agents/<id>/memory/`:
-- `MEMORY.md` — index (auto-injected into agent prompt on dispatch)
-- `knowledge/` — topic files with warmth scoring
-- `tasks.jsonl` — task outcome history
-- `calibration/` — per-skill accuracy (future)
-
-**Memory is auto-managed for gossipcat MCP agents** — loaded at dispatch, written at collect.
-
-### Agent memory for Claude Code subagents
-
-Claude Code's `Agent()` tool bypasses gossipcat's MCP pipeline. To give Sonnet/Haiku subagents memory:
-
-**Before dispatching** — read the agent's memory and include it in the prompt:
-```
-// Read memory for the matching gossipcat agent
-const memory = read('.gossip/agents/sonnet-implementer/memory/MEMORY.md');
-
-Agent(model: "sonnet", prompt: `
-${memory}
-
-Your task: Fix the bug in worker-agent.ts...
-`)
-```
-
-**After completion** — write a task entry so the agent remembers next time:
-```
-// Append to .gossip/agents/sonnet-implementer/memory/tasks.jsonl
-{"version":1,"taskId":"...","task":"Fix bug in worker-agent.ts","skills":["debugging"],"scores":{"relevance":3,"accuracy":3,"uniqueness":3},"warmth":1,"importance":0.6,"timestamp":"..."}
-```
-
-The matching agent ID is typically `sonnet-implementer` or `sonnet-debugger` from `gossip.agents.json`.
-
-### Adding agents
-Edit `gossip.agents.json` — new agents are hot-reloaded on next dispatch (no restart needed).
+For full team context, tools, dispatch rules, and memory handling,
+read `.gossip/bootstrap.md`.
 
 ---
 
