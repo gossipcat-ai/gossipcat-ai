@@ -15,3 +15,5 @@ export type { ILLMProvider, LLMGenerateOptions } from './llm-client';
 export * from './types';
 export { SkillCatalog } from './skill-catalog';
 export type { CatalogEntry } from './skill-catalog';
+export { SkillGapTracker } from './skill-gap-tracker';
+export type { GapSuggestion, GapResolution, GapEntry } from './skill-gap-tracker';
