@@ -556,11 +556,11 @@ private toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
       ),
     };
   }
-  // Existing paths unchanged
+  // Existing paths — with typeof safety fallback for tool content
   if (m.role === 'tool') {
     return {
       role: 'user',
-      content: [{ type: 'tool_result', tool_use_id: m.toolCallId, content: m.content }],
+      content: [{ type: 'tool_result', tool_use_id: m.toolCallId, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }],
     };
   }
   if (m.role === 'assistant' && m.toolCalls?.length) {
@@ -591,7 +591,7 @@ private toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
     };
   }
   if (m.role === 'tool') {
-    return { role: 'tool', content: m.content, tool_call_id: m.toolCallId };
+    return { role: 'tool', content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content), tool_call_id: m.toolCallId };
   }
   if (m.role === 'assistant' && m.toolCalls?.length) {
     return {
@@ -701,6 +701,14 @@ In the "unassigned" branch (line 89-93), pass `userMessage` (may be `ContentBloc
 ```
 
 In the "planning" branch (line 100-104), also pass `userMessage`.
+
+**CRITICAL (from multi-agent review):** In `synthesize()` call (around line 121), pass `textForDispatch` NOT `userMessage`:
+```typescript
+// Before: const text = await this.synthesize(userMessage, results);
+// After:
+const text = await this.synthesize(textForDispatch, results);
+```
+`synthesize()` uses template literal interpolation (`Original task: ${originalTask}`). If `userMessage` is `ContentBlock[]`, this produces `"Original task: [object Object]"`. `textForDispatch` is always a string.
 
 - [ ] **Step 4: Add import for ContentBlock types**
 
