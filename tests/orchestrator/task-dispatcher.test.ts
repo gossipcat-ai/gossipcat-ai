@@ -97,4 +97,23 @@ describe('TaskDispatcher', () => {
 
     expect(plan.subTasks[0].id).not.toBe(plan.subTasks[1].id);
   });
+
+  it('returns warnings field in dispatch plan', async () => {
+    const dispatcher = new TaskDispatcher(createMockLLM(), new AgentRegistry());
+    const plan = await dispatcher.decompose('simple task');
+    expect(plan.warnings).toBeDefined();
+    expect(Array.isArray(plan.warnings)).toBe(true);
+  });
+
+  it('warns when required skill has no agent', async () => {
+    const registry = new AgentRegistry();
+    registry.register({ id: 'py', provider: 'local', model: 'qwen', skills: ['python'] });
+
+    const dispatcher = new TaskDispatcher(createMockLLM(), registry);
+    const plan = await dispatcher.decompose('simple task'); // needs 'typescript'
+    dispatcher.assignAgents(plan);
+
+    // typescript is required but no agent has it
+    expect(plan.warnings!.some(w => w.includes('typescript'))).toBe(true);
+  });
 });

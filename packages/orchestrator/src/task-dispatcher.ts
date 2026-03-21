@@ -56,6 +56,7 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
           requiredSkills: st.requiredSkills || [],
           status: 'pending' as const,
         })),
+        warnings: [],
       };
     } catch {
       // Fallback: single sub-task with no specific skills
@@ -68,6 +69,7 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
           requiredSkills: [],
           status: 'pending' as const,
         }],
+        warnings: [],
       };
     }
   }
@@ -75,12 +77,24 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
   /**
    * Assign agents to each sub-task by skill match.
    * Modifies the plan in-place and returns it.
+   * Populates plan.warnings for any required skill with no matching agent.
    */
   assignAgents(plan: DispatchPlan): DispatchPlan {
+    if (!plan.warnings) plan.warnings = [];
     for (const subTask of plan.subTasks) {
       const match = this.registry.findBestMatch(subTask.requiredSkills);
       if (match) {
         subTask.assignedAgent = match.id;
+      } else {
+        for (const skill of subTask.requiredSkills) {
+          const hasAgent = this.registry.findBySkill(skill).length > 0;
+          if (!hasAgent) {
+            plan.warnings.push(
+              `Skill '${skill}' is required but no agent has it assigned. ` +
+              `Add it to an agent's skills in gossip.agents.json.`
+            );
+          }
+        }
       }
     }
     return plan;

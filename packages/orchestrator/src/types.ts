@@ -36,6 +36,7 @@ export interface DispatchPlan {
   originalTask: string;
   subTasks: SubTask[];
   strategy: 'single' | 'parallel' | 'sequential';
+  warnings?: string[];
 }
 
 /** A choice option presented to the developer in the chat */
