@@ -61,7 +61,7 @@ Reads image data from the system clipboard using platform-specific commands.
 | Platform | Command | Notes |
 |----------|---------|-------|
 | macOS | `osascript -e 'the clipboard as «class PNGf»'` or `pngpaste -` | `pngpaste` is cleaner; fall back to osascript |
-| Linux | `xclip -selection clipboard -t image/png -o` | Requires xclip installed |
+| Linux | Try MIME types in order: `xclip -selection clipboard -t image/png -o`, then `image/jpeg`, then `image/gif`, then `image/webp`. Use first successful read. | Requires xclip installed |
 | Windows | `powershell -command "Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if ($img) { $ms = New-Object System.IO.MemoryStream; $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray()) }"` | Saves clipboard image to memory stream, outputs base64 PNG |
 
 ### Interface
@@ -130,9 +130,13 @@ export interface ProcessedImage {
   };
 }
 
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
+
 /**
  * Process a clipboard image for LLM consumption.
- * Validates format, base64-encodes, extracts dimensions.
+ * Validates format and size, base64-encodes, extracts dimensions.
+ * Throws if image exceeds MAX_IMAGE_SIZE (checked BEFORE base64 encoding
+ * to avoid allocating a ~33% larger buffer for an image we'll reject).
  */
 export function processImage(image: ClipboardImage): ProcessedImage;
 ```
@@ -252,7 +256,7 @@ Each provider's `generate()` method must translate the common multimodal format 
 }
 ```
 
-**Vision check for Ollama:** Before sending, the `OllamaProvider` should attempt the call. If the model returns an error about unsupported image input, surface it as a clear message to the user rather than a raw API error.
+**Vision check for Ollama:** Ollama does not have a standardized error code for unsupported vision. Wrap the API call in a try/catch. If the error message contains keywords like "image", "vision", "multimodal", or "not supported", surface a clear message: `"Model '${model}' doesn't support images. Use a vision model like llava or llama3.2-vision."` For other errors, rethrow as-is. This is a catch-all heuristic — not fragile string matching.
 
 ### Translation Logic
 
@@ -285,7 +289,18 @@ The same pattern applies to each provider's existing formatting function. The `t
 
 Since only `role: 'user'` messages carry multimodal content (see Component 3 constraints), `systemMsg.content` is always a string in practice — but the defensive check prevents breakage if this invariant is ever violated.
 
-**Tool message coexistence:** Tool-call messages (`role: 'tool'`, `role: 'assistant'` with toolCalls) always use `content: string`. The existing tool-call formatting logic in each provider is unaffected — the `typeof` check routes them to the string path.
+**CRITICAL: All provider message mappers must `typeof`-check content for ALL messages (multi-agent review finding).**
+
+The `typeof m.content !== 'string'` check must be the FIRST branch in every provider's message mapper — not just for user messages. Reason: `handleMessage` in `main-agent.ts` has a planning branch (lines 105-113) that passes `userMessage` (which may be `ContentBlock[]`) to `this.llm.generate()` in an intermediate LLM call. If the Gemini provider's mapper doesn't check `typeof`, it will produce `{ text: [object Object] }` and silently corrupt the message.
+
+**The rule:** Every message mapper (`toAnthropicMessage`, `toOpenAIMessage`, Gemini's inline map, Ollama's mapper) must:
+1. Check `typeof m.content !== 'string'` first
+2. If array: translate `ContentBlock[]` to provider-specific multimodal format
+3. If string: take existing path unchanged
+
+This applies to ALL message roles, not just `role: 'user'`. While only user messages should carry `ContentBlock[]` in practice, the `typeof` guard makes every provider resilient to accidental array content in any role.
+
+**Tool message branches specifically:** The `role === 'tool'` branches in `toAnthropicMessage` (line 68) and `toOpenAIMessage` (line 140) pass `m.content` raw. Add `typeof m.content === 'string' ? m.content : JSON.stringify(m.content)` as a safety fallback. Same for the Ollama mapper at line 216.
 
 ## Component 5: Chat Integration
 
@@ -387,6 +402,11 @@ async handleMessage(userMessage: string | ContentBlock[]): Promise<ChatResponse>
 
 The key insight: `userMessage` (which may contain the image) goes directly to the main LLM. The `textForDispatch` (text-only extraction) goes to the dispatcher for task decomposition. Workers never see the raw image.
 
+## Known Limitations (from multi-agent review)
+
+- **OpenAI `detail` parameter:** OpenAI's image_url content block accepts `detail: 'low' | 'high' | 'auto'` which affects token cost. We default to `auto` (omit the parameter). Users can override via future config if needed.
+- **Gemini tool message bug (pre-existing):** The Gemini provider maps `role: 'tool'` to `role: 'user'` which is incorrect for the Gemini API. This is a pre-existing bug outside the scope of this spec, but the `typeof content` guard added for multimodal support will prevent it from getting worse.
+
 ## Conversation History (Issue #8 fix)
 
 Image messages in chat history accumulate large base64 strings in memory. After the main agent responds to an image message, replace the image content blocks in the history with a text placeholder:
@@ -430,4 +450,7 @@ Animated GIFs are accepted and passed through as-is to the LLM API. Most vision 
 - **Image handler:** Feed known PNG/JPEG/GIF/WebP buffers, verify base64 output, dimensions, media type
 - **LLM client:** Verify multimodal message translation for each provider (Anthropic, OpenAI, Google, Ollama formats)
 - **Chat integration:** Mock clipboard + LLM, verify `/image` command flow end-to-end
-- **Error cases:** No image in clipboard, unsupported format, non-vision model
+- **Error cases:** No image in clipboard, unsupported format, non-vision model, oversized image (>20MB), corrupted image (valid magic bytes but truncated data)
+- **Provider typeof guards:** Verify that ContentBlock[] in non-user messages (tool, assistant) is handled safely by every provider — should never produce `[object Object]` in output
+- **Linux clipboard:** Test MIME type fallback chain (PNG → JPEG → GIF → WebP)
+- **Conversation history:** Verify image placeholder replaces base64 after response
