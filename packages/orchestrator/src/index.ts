@@ -19,3 +19,4 @@ export { SkillGapTracker } from './skill-gap-tracker';
 export type { GapSuggestion, GapResolution, GapEntry } from './skill-gap-tracker';
 export { assemblePrompt } from './prompt-assembler';
 export { AgentMemoryReader } from './agent-memory';
+export { MemoryWriter } from './memory-writer';
