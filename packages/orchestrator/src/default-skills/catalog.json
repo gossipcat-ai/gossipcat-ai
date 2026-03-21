@@ -66,6 +66,12 @@
       "description": "Components, data flow, failure modes, trade-offs, scale, graceful degradation",
       "keywords": ["architecture", "design", "scale", "components", "trade-offs"],
       "categories": ["design"]
+    },
+    {
+      "name": "verification",
+      "description": "Evidence-based analysis, quote exact code, read before cite, no hallucination",
+      "keywords": ["verify", "evidence", "quote", "cite", "audit"],
+      "categories": ["review"]
     }
   ]
 }

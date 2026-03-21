@@ -35,6 +35,6 @@ export class Sandbox {
     if (!fullReal.startsWith(this.root + '/') && fullReal !== this.root) {
       throw new Error(`Path "${filePath}" resolves outside project root`);
     }
-    return resolved; // Return the resolved absolute path
+    return fullReal; // Return post-symlink-resolved path to close TOCTOU gap
   }
 }

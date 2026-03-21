@@ -19,7 +19,8 @@ describe('ShellTools', () => {
   });
 
   it('enforces timeout', async () => {
-    const result = await shell.shellExec({ command: 'sleep 10', timeout: 100 });
+    // node is in the allowlist; sleep was removed (DoS vector)
+    const result = await shell.shellExec({ command: 'node', args: ['-e', 'setTimeout(()=>{},60000)'], timeout: 100 });
     expect(result).toContain('timed out');
   }, 5000);
 

@@ -113,10 +113,11 @@ export class GossipAgent extends EventEmitter {
               this._sessionId = msg.sessionId;
               this.reconnectAttempts = 0;
 
-              // Swap to binary message handler
+              // Swap to binary message handler + register persistent error handler
               ws.removeAllListeners('message');
               ws.on('message', (d: WebSocket.RawData) => this.handleMessage(d));
               ws.on('close', (code: number, reason: Buffer) => this.handleClose(code, reason));
+              ws.on('error', (err: Error) => this.emit('error', err));
 
               this.startKeepAlive();
               this.emit('connect', msg.sessionId);

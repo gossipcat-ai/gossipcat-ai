@@ -154,18 +154,6 @@ export class MainAgent {
       return this.parseResponse(response.text);
     }
 
-    // If multiple approaches, present choices before executing
-    if (plan.subTasks.length > 1 && plan.strategy !== 'parallel') {
-      // Ask the LLM if it wants to present choices
-      const planSummary = plan.subTasks.map((st, i) => `${i + 1}. ${st.description}`).join('\n');
-      await this.llm.generate([
-        { role: 'system', content: CHAT_SYSTEM_PROMPT },
-        { role: 'user', content: userMessage },
-        { role: 'assistant', content: `I've broken this into steps:\n${planSummary}\n\nShould I present these as choices to the developer, or just execute them all?` },
-      ]);
-      // If the LLM suggests choices, the response will be parsed by parseResponse
-    }
-
     // Execute assigned sub-tasks
     const results: TaskResult[] = [];
     const assigned = plan.subTasks.filter(st => st.assignedAgent);

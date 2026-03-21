@@ -17,6 +17,7 @@ export interface RelayServerConfig {
   port: number;
   host?: string;
   authTimeoutMs?: number;
+  apiKey?: string;  // If set, clients must provide this exact key to authenticate
 }
 
 export class RelayServer {
@@ -86,22 +87,35 @@ export class RelayServer {
 
     let authenticated = false;
     let connection: AgentConnection | null = null;
-    let authAttempts = 0; // S3: auth attempt counter
+    let authAttempts = 0;
+    let cleaned = false; // Idempotent cleanup flag — prevents double-decrement
     const maxAuthAttempts = 3;
+    const expectedKey = this.config.apiKey;
 
-    // Auth timeout — close if not authenticated in time
     const authTimer = setTimeout(() => {
       if (!authenticated) {
         ws.close(1008, 'Authentication timeout');
       }
     }, this.authTimeoutMs);
 
+    // Idempotent cleanup — safe to call from both close and error
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      decrementIp();
+      clearTimeout(authTimer);
+      if (connection) {
+        this.router.onAgentDisconnect(connection.sessionId);
+        this.connectionManager.unregister(connection.sessionId);
+      }
+    };
+
     ws.on('message', (data: RawData) => {
       try {
         if (!authenticated) {
-          // S3: Limit auth attempts to prevent CPU burn
           authAttempts++;
           if (authAttempts > maxAuthAttempts) {
+            clearTimeout(authTimer);
             ws.close(1008, 'Too many auth attempts');
             return;
           }
@@ -109,31 +123,56 @@ export class RelayServer {
           const authMsg = JSON.parse(data.toString());
           if (authMsg.type === 'auth' && authMsg.agentId) {
             if (!authMsg.apiKey) {
+              clearTimeout(authTimer);
               ws.close(1008, 'API key required');
               return;
             }
+
+            // Validate API key if server has one configured
+            if (expectedKey && authMsg.apiKey !== expectedKey) {
+              clearTimeout(authTimer);
+              ws.close(1008, 'Invalid API key');
+              return;
+            }
+
+            // Validate agentId format — alphanumeric, hyphens, underscores, max 64 chars
+            if (!/^[a-zA-Z0-9_-]{1,64}$/.test(authMsg.agentId)) {
+              clearTimeout(authTimer);
+              ws.close(1008, 'Invalid agent ID format');
+              return;
+            }
+
             clearTimeout(authTimer);
             const sessionId = randomUUID();
-            connection = new AgentConnection(sessionId, authMsg.agentId, ws);
-            this.connectionManager.register(sessionId, connection);
+
+            // Handle reconnect collision gracefully
+            try {
+              connection = new AgentConnection(sessionId, authMsg.agentId, ws);
+              this.connectionManager.register(sessionId, connection);
+            } catch (regErr) {
+              ws.close(1008, 'Agent ID already connected');
+              return;
+            }
+
             authenticated = true;
             ws.send(JSON.stringify({ type: 'auth_ok', sessionId, agentId: authMsg.agentId }));
             return;
           }
+          clearTimeout(authTimer);
           ws.close(1008, 'Authentication required');
           return;
         }
 
-        // Authenticated — decode MessagePack and route
-        const envelope = this.codec.decode(data as Buffer);
-        // Stamp sender ID from authenticated session (prevents impersonation)
+        // Authenticated — normalize RawData, decode MessagePack, and route
+        const buf = Array.isArray(data) ? Buffer.concat(data) : (data instanceof Buffer ? data : Buffer.from(data as ArrayBuffer));
+        const envelope = this.codec.decode(buf);
         envelope.sid = connection!.agentId;
         this.router.route(envelope, connection!);
       } catch (err) {
-        // S4: Only send error details to authenticated connections
         if (authenticated) {
-          ws.send(JSON.stringify({ type: 'error', message: (err as Error).message }));
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid message' }));
         } else {
+          clearTimeout(authTimer);
           ws.close(1008, 'Bad request');
         }
       }
@@ -148,23 +187,8 @@ export class RelayServer {
       }
     };
 
-    ws.on('close', () => {
-      decrementIp();
-      clearTimeout(authTimer);
-      if (connection) {
-        this.router.onAgentDisconnect(connection.sessionId);
-        this.connectionManager.unregister(connection.sessionId);
-      }
-    });
-
-    ws.on('error', () => {
-      decrementIp();
-      clearTimeout(authTimer);
-      if (connection) {
-        this.router.onAgentDisconnect(connection.sessionId);
-        this.connectionManager.unregister(connection.sessionId);
-      }
-    });
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
   }
 
   private handleHttp(req: IncomingMessage, res: ServerResponse): void {

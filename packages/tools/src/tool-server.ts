@@ -11,6 +11,7 @@ export interface ToolServerConfig {
   relayUrl: string;
   projectRoot: string;
   agentId?: string;
+  allowedCallers?: string[];  // If set, only these agent IDs can call tools
 }
 
 export class ToolServer {
@@ -20,8 +21,10 @@ export class ToolServer {
   private gitTools: GitTools;
   private skillTools: SkillTools;
   private sandbox: Sandbox;
+  private allowedCallers: Set<string> | null;
 
   constructor(config: ToolServerConfig) {
+    this.allowedCallers = config.allowedCallers ? new Set(config.allowedCallers) : null;
     this.sandbox = new Sandbox(config.projectRoot);
     this.fileTools = new FileTools(this.sandbox);
     this.shellTools = new ShellTools();
@@ -46,8 +49,13 @@ export class ToolServer {
   get agentId(): string { return this.agent.agentId; }
 
   private async handleToolRequest(data: unknown, envelope: MessageEnvelope): Promise<void> {
-    // Only handle RPC_REQUEST messages
     if (envelope.t !== MessageType.RPC_REQUEST) return;
+
+    // Authorization: check if caller is allowed
+    if (this.allowedCallers && !this.allowedCallers.has(envelope.sid)) {
+      console.error(`[ToolServer] Unauthorized tool call from ${envelope.sid}`);
+      return;
+    }
 
     const payload = data as Record<string, unknown>;
     const toolName = payload?.tool as string;
