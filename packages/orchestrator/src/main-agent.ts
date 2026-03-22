@@ -265,7 +265,12 @@ export class MainAgent {
     const payload = data as Record<string, unknown>;
     if (payload?.tool !== 'review_request') return;
 
-    const args = payload.args as { callerId: string; diff: string; testResult: string };
+    const rawArgs = payload.args as Record<string, unknown> | undefined;
+    if (!rawArgs || typeof rawArgs.callerId !== 'string' || typeof rawArgs.diff !== 'string' || typeof rawArgs.testResult !== 'string') {
+      console.error('[MainAgent] Malformed review_request payload — missing or invalid args');
+      return;
+    }
+    const args = rawArgs as { callerId: string; diff: string; testResult: string };
     let reviewText = 'No reviewer available — tests-only verification.';
 
     try {

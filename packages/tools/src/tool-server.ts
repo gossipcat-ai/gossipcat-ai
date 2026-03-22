@@ -16,6 +16,12 @@ export interface ToolServerConfig {
   allowedCallers?: string[];  // If set, only these agent IDs can call tools
 }
 
+function truncateAtLine(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  const cut = text.lastIndexOf('\n', maxLength);
+  return text.slice(0, cut !== -1 ? cut : maxLength);
+}
+
 export class ToolServer {
   private agent: GossipAgent;
   private fileTools: FileTools;
@@ -28,6 +34,8 @@ export class ToolServer {
   private agentRoots: Map<string, string> = new Map();    // agentId → worktree root path
   private writeAgents: Set<string> = new Set();            // agents with any write mode active
   private pendingReviews: Map<string, { resolve: (r: string) => void; reject: (e: Error) => void }> = new Map();
+  private agentWrittenFiles: Map<string, Set<string>> = new Map(); // agentId → written file paths
+  private static readonly MAX_WRITTEN_FILES_PER_AGENT = 1024;
 
   constructor(config: ToolServerConfig) {
     this.allowedCallers = config.allowedCallers ? new Set(config.allowedCallers) : null;
@@ -73,6 +81,7 @@ export class ToolServer {
     this.agentScopes.delete(agentId);
     this.agentRoots.delete(agentId);
     this.writeAgents.delete(agentId);
+    this.agentWrittenFiles.delete(agentId);
   }
 
   private async handleToolRequest(data: unknown, envelope: MessageEnvelope): Promise<void> {
@@ -210,8 +219,18 @@ export class ToolServer {
     switch (name) {
       case 'file_read':
         return this.fileTools.fileRead(args as { path: string; startLine?: number; endLine?: number });
-      case 'file_write':
-        return this.fileTools.fileWrite(args as { path: string; content: string });
+      case 'file_write': {
+        const result = await this.fileTools.fileWrite(args as { path: string; content: string });
+        if (callerId) {
+          if (!this.agentWrittenFiles.has(callerId)) this.agentWrittenFiles.set(callerId, new Set());
+          const tracked = this.agentWrittenFiles.get(callerId)!;
+          if (tracked.size >= ToolServer.MAX_WRITTEN_FILES_PER_AGENT && !tracked.has(args.path as string)) {
+            throw new Error(`Agent ${callerId} exceeded max tracked file writes (${ToolServer.MAX_WRITTEN_FILES_PER_AGENT})`);
+          }
+          tracked.add(args.path as string);
+        }
+        return result;
+      }
       case 'file_search':
         return this.fileTools.fileSearch(args as { pattern: string });
       case 'file_grep':
@@ -246,21 +265,35 @@ export class ToolServer {
   }
 
   private async handleVerifyWrite(callerId: string, testFile?: string): Promise<string> {
-    // 1. Capture git diff (direct call — bypasses enforceWriteScope)
+    // 1. Capture git diff scoped to files the agent actually wrote (avoids noisy unrelated changes)
+    const writtenFiles = this.agentWrittenFiles.get(callerId);
+    const scope = this.agentScopes.get(callerId);
+    const paths = writtenFiles?.size ? [...writtenFiles] : scope ? [scope] : undefined;
     let fullDiff = '';
     try {
-      const diff = await this.gitTools.gitDiff({ staged: false });
-      const staged = await this.gitTools.gitDiff({ staged: true });
-      fullDiff = [diff, staged].filter(Boolean).join('\n');
-    } catch { /* not a git repo or no changes */ }
+      const diff = await this.gitTools.gitDiff({ staged: false, paths });
+      const staged = await this.gitTools.gitDiff({ staged: true, paths });
+      // Include untracked (new) files — git diff doesn't show them
+      const untracked = paths ? await this.gitTools.gitUntrackedDiff(paths) : '';
+      fullDiff = [diff, staged, untracked].filter(Boolean).join('\n');
+    } catch (err) {
+      console.warn(`[ToolServer] verify_write git diff failed: ${(err as Error).message}`);
+    }
 
     if (!fullDiff.trim()) {
       return 'No changes detected. Nothing to verify.';
     }
 
-    // 2. Run tests (direct call — bypasses enforceWriteScope for scoped agents)
-    // Use args array (not string concat) to prevent shell injection via testFile
-    if (testFile) this.sandbox.validatePath(testFile);
+    // 2. Run tests — validate testFile is a safe file path (not a CLI flag or config override)
+    if (testFile) {
+      this.sandbox.validatePath(testFile);
+      if (testFile.startsWith('-')) {
+        throw new Error(`verify_write: test_file must be a file path, not a flag: "${testFile}"`);
+      }
+      if (/\.(js|json)$/i.test(testFile) && !testFile.includes('.test.') && !testFile.includes('.spec.')) {
+        throw new Error(`verify_write: test_file must be a test file (.test.ts/.spec.ts), got: "${testFile}"`);
+      }
+    }
     const testArgs = ['jest', '--config', 'jest.config.base.js'];
     if (testFile) testArgs.push(testFile);
     testArgs.push('--verbose');
@@ -281,7 +314,7 @@ export class ToolServer {
 
     // 4. Format result
     const testStatus = testResult.includes('FAIL') ? 'FAIL' : 'PASS';
-    return `## Verification Result\n\n### Tests: ${testStatus}\n${testResult.slice(-2000)}\n\n### Peer Review\n${reviewResult || 'No reviewer available'}\n\n### Diff Summary\n${fullDiff.slice(0, 3000)}`;
+    return `## Verification Result\n\n### Tests: ${testStatus}\n${testResult.slice(-2000)}\n\n### Peer Review\n${reviewResult || 'No reviewer available'}\n\n### Diff Summary\n${truncateAtLine(fullDiff, 3000)}`;
   }
 
   private async requestPeerReview(callerId: string, diff: string, testResult: string): Promise<string> {
@@ -303,7 +336,7 @@ export class ToolServer {
     try {
       const body = Buffer.from(msgpackEncode({
         tool: 'review_request',
-        args: { callerId, diff: diff.slice(0, 3000), testResult: testResult.slice(0, 1000) },
+        args: { callerId, diff: truncateAtLine(diff, 3000), testResult: truncateAtLine(testResult, 1000) },
       })) as unknown as Uint8Array;
       const msg = Message.createRpcRequest(this.agent.agentId, 'orchestrator', requestId, body);
       await this.agent.sendEnvelope(msg.toEnvelope());

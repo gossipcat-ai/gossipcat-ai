@@ -39,6 +39,10 @@ export class ScopeTracker {
     }
   }
 
+  getActiveScopeCount(): number {
+    return this.activeScopes.size;
+  }
+
   clear(): void {
     this.activeScopes.clear();
     this.taskToScope.clear();

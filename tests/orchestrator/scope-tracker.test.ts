@@ -51,4 +51,20 @@ describe('ScopeTracker', () => {
       expect(tracker.hasOverlap('packages/relay/').overlaps).toBe(false);
     });
   });
+
+  describe('getActiveScopeCount', () => {
+    it('returns the number of active scopes', () => {
+      expect(tracker.getActiveScopeCount()).toBe(0);
+
+      tracker.register('packages/relay/', 'task-1');
+      tracker.register('packages/tools/', 'task-2');
+      expect(tracker.getActiveScopeCount()).toBe(2);
+
+      tracker.release('task-1');
+      expect(tracker.getActiveScopeCount()).toBe(1);
+
+      tracker.release('task-2');
+      expect(tracker.getActiveScopeCount()).toBe(0);
+    });
+  });
 });
