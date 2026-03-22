@@ -25,5 +25,7 @@ export { TaskGraph } from './task-graph';
 export { GossipPublisher } from './gossip-publisher';
 export { DispatchPipeline } from './dispatch-pipeline';
 export type { DispatchPipelineConfig } from './dispatch-pipeline';
+export { ScopeTracker } from './scope-tracker';
+export { WorktreeManager } from './worktree-manager';
 export { BootstrapGenerator } from './bootstrap';
 export type { BootstrapResult } from './bootstrap';
