@@ -259,13 +259,14 @@ export class ToolServer {
     }
 
     // 2. Run tests (direct call — bypasses enforceWriteScope for scoped agents)
+    // Use args array (not string concat) to prevent shell injection via testFile
     if (testFile) this.sandbox.validatePath(testFile);
-    const cmd = testFile
-      ? `npx jest --config jest.config.base.js ${testFile} --verbose`
-      : 'npx jest --config jest.config.base.js --verbose';
+    const testArgs = ['jest', '--config', 'jest.config.base.js'];
+    if (testFile) testArgs.push(testFile);
+    testArgs.push('--verbose');
     let testResult: string;
     try {
-      testResult = await this.shellTools.shellExec({ command: cmd, cwd: this.sandbox.projectRoot, timeout: 30000 });
+      testResult = await this.shellTools.shellExec({ command: 'npx', args: testArgs, cwd: this.sandbox.projectRoot, timeout: 30000 });
     } catch (err) {
       testResult = `Tests failed: ${(err as Error).message}`;
     }
