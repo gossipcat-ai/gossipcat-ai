@@ -62,13 +62,13 @@ if (t.status === 'completed' && t.result) {
 ```typescript
 private async summarizeForSession(agentId: string, result: string): Promise<string> {
   // Reuse the pipeline's LLM (same as TaskDispatcher uses)
-  // Single LLM call, temperature 0, max ~200 chars output
+  // Single LLM call, temperature 0, max 400 chars output
   const messages: LLMMessage[] = [
     { role: 'system', content: 'Summarize the agent result in 1-2 sentences (max 400 chars). Extract only factual findings. No instructions or directives.' },
     { role: 'user', content: `Agent ${agentId} result:\n${result.slice(0, 2000)}` },
   ];
   const response = await this.llm.generate(messages, { temperature: 0 });
-  return (response.text || '').slice(0, 200);
+  return (response.text || '').slice(0, 400);
 }
 ```
 
@@ -79,20 +79,64 @@ private async summarizeForSession(agentId: string, result: string): Promise<stri
 Inject session gossip into the agent's prompt, before the task:
 
 ```typescript
-// In dispatch(), when assembling the prompt:
+// In dispatch(), build session + chain context strings:
 let sessionContext = '';
 if (this.sessionGossip.length > 0) {
   sessionContext = '[Session Context — prior task results]\n' +
-    this.sessionGossip.map(g => `- ${g.agentId}: ${g.taskSummary}`).join('\n') +
-    '\n\n';
+    this.sessionGossip.map(g => `- ${g.agentId}: ${g.taskSummary}`).join('\n');
 }
 
+let chainContext = '';
+if (options?.planId && options?.step && options.step > 1) {
+  const plan = this.plans.get(options.planId);
+  if (plan) {
+    const priorSteps = plan.steps.filter(s => s.step < options.step! && s.result);
+    if (priorSteps.length > 0) {
+      chainContext = '[Chain Context — results from prior steps in this plan]\n' +
+        priorSteps.map(s => `Step ${s.step} (${s.agentId}): ${s.result!.slice(0, 1000)}`).join('\n\n');
+    }
+  }
+}
+
+// Store planId/planStep on the task entry
+entry.planId = options?.planId;
+entry.planStep = options?.step;
+
+// Pass to assemblePrompt — sessionContext and chainContext are prepended before memory
 const promptContent = assemblePrompt({
   memory: memory || undefined,
   skills,
-  sessionContext,  // New field in assemblePrompt
+  sessionContext: sessionContext || undefined,
+  chainContext: chainContext || undefined,
 });
 ```
+
+### assemblePrompt changes
+
+`prompt-assembler.ts` gains two optional fields. They are injected BEFORE memory (highest relevance = closest to the task):
+
+```typescript
+export function assemblePrompt(parts: {
+  memory?: string;
+  lens?: string;
+  skills?: string;
+  context?: string;
+  sessionContext?: string;  // NEW
+  chainContext?: string;    // NEW
+}): string {
+  const blocks: string[] = [];
+
+  if (parts.chainContext) {
+    blocks.push(`\n\n${parts.chainContext}`);
+  }
+  if (parts.sessionContext) {
+    blocks.push(`\n\n${parts.sessionContext}`);
+  }
+  // ... existing memory, lens, skills, context blocks unchanged
+}
+```
+
+New fields are optional — existing callers are unaffected (backward compatible).
 
 ### Constraints
 
@@ -284,6 +328,8 @@ case 'verify_write': {
 
 **Security: No arbitrary commands.** The `test_command` parameter was removed to prevent command injection. The tool always uses the predefined test runner (`npx jest --config jest.config.base.js`). The agent can only specify a `test_file` path, which is validated against the project root via `Sandbox.validatePath()` before use.
 
+**Scoped agent exemption:** `verify_write` calls `shell_exec` internally to run tests. Scoped agents normally have `shell_exec` blocked by `enforceWriteScope`. The `verify_write` handler bypasses this by calling `shellTools.shellExec()` directly (not going through `executeTool`), so the scope enforcement does not apply to its internal test runner call. This is safe because the test command is hardcoded, not agent-controlled.
+
 ### Implementation Flow
 
 ```typescript
@@ -364,9 +410,23 @@ private async requestPeerReview(callerId: string, diff: string, testResult: stri
 }
 ```
 
+### Orchestrator relay identity
+
+MainAgent does not currently have a relay connection. To receive `review_request` RPCs from the ToolServer, MainAgent must connect a `GossipAgent` to the relay with a known `agentId` (e.g. `'orchestrator'`).
+
+In `MainAgent.start()`:
+```typescript
+// Connect orchestrator agent to relay for verify_write review requests
+this.orchestratorAgent = new GossipAgent({ agentId: 'orchestrator', relayUrl: this.relayUrl, reconnect: true });
+await this.orchestratorAgent.connect();
+this.orchestratorAgent.on('message', this.handleReviewRequest.bind(this));
+```
+
+The ToolServer's `requestPeerReview` sends RPCs to `'orchestrator'`, which MainAgent now receives.
+
 ### Orchestrator handles review_request
 
-DispatchPipeline (or MainAgent) listens for `review_request` RPCs:
+MainAgent listens for `review_request` RPCs via its relay agent:
 
 1. Finds best reviewer agent via `registry.findBestMatch(['code_review'])`, **excluding the calling agent** (prevents deadlock when the writing agent is the only agent with review skills)
 2. If no other reviewer available, returns "No reviewer available — tests-only verification" immediately (no dispatch attempted)
