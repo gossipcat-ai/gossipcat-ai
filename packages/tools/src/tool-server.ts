@@ -56,7 +56,8 @@ export class ToolServer {
   get agentId(): string { return this.agent.agentId; }
 
   assignScope(agentId: string, scope: string): void {
-    this.agentScopes.set(agentId, scope);
+    const normalized = scope.endsWith('/') ? scope : scope + '/';
+    this.agentScopes.set(agentId, normalized);
     this.writeAgents.add(agentId);
   }
 
@@ -118,8 +119,11 @@ export class ToolServer {
 
     if (toolName === 'file_write') {
       const filePath = args.path as string;
-      if (scope && !filePath.startsWith(scope)) {
-        throw new Error(`Write blocked: "${filePath}" is outside scope "${scope}"`);
+      if (scope) {
+        const normalizedPath = filePath.endsWith('/') ? filePath : filePath;
+        if (!normalizedPath.startsWith(scope)) {
+          throw new Error(`Write blocked: "${filePath}" is outside scope "${scope}"`);
+        }
       }
       if (root && !filePath.startsWith(root)) {
         throw new Error(`Write blocked: "${filePath}" is outside worktree root "${root}"`);
@@ -131,7 +135,21 @@ export class ToolServer {
       if (scope) {
         throw new Error('Shell execution blocked for scoped write agents');
       }
-      // Worktree agents can use shell (it runs in the worktree)
+      // Worktree agents: block dangerous patterns
+      if (root) {
+        const fullCmd = [args.command as string, ...((args.args as string[]) || [])].join(' ');
+        const blockedPatterns = [
+          /\.git\/hooks/i,
+          /\.git\/config/i,
+          /core\.hookspath/i,
+          /\.\.\//,
+        ];
+        for (const pattern of blockedPatterns) {
+          if (pattern.test(fullCmd)) {
+            throw new Error(`Shell command blocked for write-mode agent: matches ${pattern}`);
+          }
+        }
+      }
     }
 
     if (toolName === 'git_commit') {
@@ -141,12 +159,18 @@ export class ToolServer {
       }
       // Worktree agents: allow (they commit in their worktree)
     }
+
+    if (toolName === 'git_branch') {
+      if (scope) {
+        throw new Error('Git branch blocked for scoped write agents');
+      }
+    }
   }
 
   async executeTool(name: string, args: Record<string, unknown>, callerId?: string): Promise<string> {
     // Fail-closed: write agents can only use write tools within their scope/root
     if (callerId && this.writeAgents.has(callerId)) {
-      const writableTools = ['file_write', 'shell_exec', 'git_commit'];
+      const writableTools = ['file_write', 'shell_exec', 'git_commit', 'git_branch'];
       if (writableTools.includes(name)) {
         this.enforceWriteScope(name, args, callerId);
       }
@@ -166,7 +190,7 @@ export class ToolServer {
       case 'shell_exec':
         return this.shellTools.shellExec({
           ...(args as { command: string; timeout?: number }),
-          cwd: this.sandbox.projectRoot
+          cwd: (callerId && this.agentRoots.get(callerId)) || this.sandbox.projectRoot
         });
       case 'git_status':
         return this.gitTools.gitStatus();

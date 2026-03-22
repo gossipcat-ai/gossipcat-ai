@@ -77,6 +77,20 @@ describe('ToolServer scope enforcement', () => {
         expect((err as Error).message).not.toContain('scope');
       }
     });
+
+    it('blocks file_write to sibling prefix without trailing slash', async () => {
+      // Test that scope 'packages/relay/' doesn't allow 'packages/relay2/evil.ts'
+      // (This should work since assignScope normalizes trailing slash)
+      await expect(
+        server.executeTool('file_write', { path: 'packages/relay2/evil.ts', content: 'x' }, 'agent-1')
+      ).rejects.toThrow(/outside scope/);
+    });
+
+    it('blocks git_branch for scoped agents', async () => {
+      await expect(
+        server.executeTool('git_branch', { name: 'evil-branch' }, 'agent-1')
+      ).rejects.toThrow(/Git branch blocked/);
+    });
   });
 
   describe('worktree agents', () => {
@@ -97,6 +111,12 @@ describe('ToolServer scope enforcement', () => {
       } catch (err) {
         expect((err as Error).message).not.toContain('blocked');
       }
+    });
+
+    it('blocks shell commands with path traversal', async () => {
+      await expect(
+        server.executeTool('shell_exec', { command: 'cat ../../etc/passwd' }, 'agent-2')
+      ).rejects.toThrow(/Shell command blocked/);
     });
   });
 
