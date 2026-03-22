@@ -289,7 +289,7 @@ export class DispatchPipeline {
     return results;
   }
 
-  dispatchParallel(taskDefs: Array<{ agentId: string; task: string }>): {
+  dispatchParallel(taskDefs: Array<{ agentId: string; task: string; options?: DispatchOptions }>): {
     taskIds: string[];
     errors: string[];
   } {
@@ -297,6 +297,27 @@ export class DispatchPipeline {
     const errors: string[] = [];
     const batchId = randomUUID().slice(0, 8);
     const batchTaskIds = new Set<string>();
+
+    // Pre-validate write modes
+    const writeTasks = taskDefs.filter(d => d.options?.writeMode);
+    if (writeTasks.some(d => d.options?.writeMode === 'sequential')) {
+      return { taskIds: [], errors: ['sequential write mode cannot be used in parallel dispatch'] };
+    }
+
+    // Check scoped overlaps across the batch
+    const scopedTasks = writeTasks.filter(d => d.options?.writeMode === 'scoped');
+    for (let i = 0; i < scopedTasks.length; i++) {
+      for (let j = i + 1; j < scopedTasks.length; j++) {
+        const scopeA = scopedTasks[i].options!.scope!;
+        const scopeB = scopedTasks[j].options!.scope!;
+        // Simple prefix overlap check
+        const normA = scopeA.endsWith('/') ? scopeA : scopeA + '/';
+        const normB = scopeB.endsWith('/') ? scopeB : scopeB + '/';
+        if (normA.startsWith(normB) || normB.startsWith(normA)) {
+          return { taskIds: [], errors: [`Scoped tasks have overlapping paths: "${scopeA}" and "${scopeB}"`] };
+        }
+      }
+    }
 
     // Subscribe workers to batch channel
     for (const def of taskDefs) {
@@ -308,7 +329,7 @@ export class DispatchPipeline {
 
     for (const def of taskDefs) {
       try {
-        const { taskId, promise } = this.dispatch(def.agentId, def.task);
+        const { taskId, promise } = this.dispatch(def.agentId, def.task, def.options);
         taskIds.push(taskId);
         batchTaskIds.add(taskId);
 

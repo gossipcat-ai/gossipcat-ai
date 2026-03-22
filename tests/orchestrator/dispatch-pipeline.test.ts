@@ -185,5 +185,37 @@ describe('DispatchPipeline', () => {
       expect(errors).toHaveLength(1);
       expect(errors[0]).toContain('missing');
     });
+
+    it('rejects sequential mode in parallel dispatch', () => {
+      const { taskIds, errors } = pipeline.dispatchParallel([
+        { agentId: 'test-agent', task: 'task 1', options: { writeMode: 'sequential' } },
+      ]);
+      expect(taskIds).toHaveLength(0);
+      expect(errors[0]).toContain('sequential');
+    });
+
+    it('rejects overlapping scopes in parallel dispatch', () => {
+      const { taskIds, errors } = pipeline.dispatchParallel([
+        { agentId: 'test-agent', task: 'task 1', options: { writeMode: 'scoped', scope: 'packages/relay/' } },
+        { agentId: 'test-agent', task: 'task 2', options: { writeMode: 'scoped', scope: 'packages/relay/src/' } },
+      ]);
+      expect(taskIds).toHaveLength(0);
+      expect(errors[0]).toContain('overlapping');
+    });
+
+    it('allows non-overlapping scopes in parallel dispatch', () => {
+      workers.set('agent-b', mockWorker('result-b'));
+      pipeline = new DispatchPipeline({
+        projectRoot: '/tmp/gossip-test-' + Date.now(),
+        workers,
+        registryGet: (id) => ({ id, provider: 'local' as const, model: 'mock', skills: [] }),
+      });
+      const { taskIds, errors } = pipeline.dispatchParallel([
+        { agentId: 'test-agent', task: 'task 1', options: { writeMode: 'scoped', scope: 'packages/relay/' } },
+        { agentId: 'agent-b', task: 'task 2', options: { writeMode: 'scoped', scope: 'packages/tools/' } },
+      ]);
+      expect(taskIds).toHaveLength(2);
+      expect(errors).toHaveLength(0);
+    });
   });
 });
