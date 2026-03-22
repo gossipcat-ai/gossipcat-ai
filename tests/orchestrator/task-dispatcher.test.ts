@@ -1,4 +1,4 @@
-import { TaskDispatcher, AgentRegistry, ILLMProvider } from '@gossip/orchestrator';
+import { TaskDispatcher, AgentRegistry, ILLMProvider, DispatchPlan } from '@gossip/orchestrator';
 import { LLMMessage } from '@gossip/types';
 
 // Mock LLM that returns canned decomposition based on task content
@@ -116,5 +116,98 @@ describe('TaskDispatcher', () => {
 
     // typescript is required but no agent has it
     expect(plan.warnings!.some(w => w.includes('typescript'))).toBe(true);
+  });
+});
+
+function mockLLM(response: string): ILLMProvider {
+  return {
+    generate: jest.fn().mockResolvedValue({ text: response }),
+  };
+}
+
+function makeRegistry(): AgentRegistry {
+  const registry = new AgentRegistry();
+  registry.register({ id: 'gemini-implementer', provider: 'google', model: 'gemini-2.5-pro', skills: ['typescript', 'implementation'] });
+  registry.register({ id: 'gemini-reviewer', provider: 'google', model: 'gemini-2.5-pro', skills: ['code_review', 'security_audit'] });
+  return registry;
+}
+
+function makePlan(subTasks: Array<{ description: string; assignedAgent?: string }>): DispatchPlan {
+  return {
+    originalTask: 'test task',
+    strategy: 'parallel',
+    subTasks: subTasks.map((st, i) => ({
+      id: `task-${i}`,
+      description: st.description,
+      requiredSkills: [],
+      assignedAgent: st.assignedAgent,
+      status: 'pending' as const,
+    })),
+  };
+}
+
+describe('TaskDispatcher.classifyWriteModes', () => {
+  it('classifies write tasks with scoped mode', async () => {
+    const llm = mockLLM(JSON.stringify([
+      { index: 0, access: 'write', write_mode: 'scoped', scope: 'packages/tools/' },
+      { index: 1, access: 'read' },
+    ]));
+    const dispatcher = new TaskDispatcher(llm as any, makeRegistry());
+    const plan = makePlan([
+      { description: 'Fix bug in packages/tools/', assignedAgent: 'gemini-implementer' },
+      { description: 'Review the fix', assignedAgent: 'gemini-reviewer' },
+    ]);
+
+    const result = await dispatcher.classifyWriteModes(plan);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].access).toBe('write');
+    expect(result[0].writeMode).toBe('scoped');
+    expect(result[0].scope).toBe('packages/tools/');
+    expect(result[1].access).toBe('read');
+    expect(result[1].writeMode).toBeUndefined();
+  });
+
+  it('falls back to all-read on invalid LLM response', async () => {
+    const llm = mockLLM('This is not JSON at all');
+    const dispatcher = new TaskDispatcher(llm as any, makeRegistry());
+    const plan = makePlan([
+      { description: 'Fix something', assignedAgent: 'gemini-implementer' },
+    ]);
+
+    const result = await dispatcher.classifyWriteModes(plan);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].access).toBe('read');
+  });
+
+  it('falls back to all-read on LLM error', async () => {
+    const llm = { generate: jest.fn().mockRejectedValue(new Error('API down')) };
+    const dispatcher = new TaskDispatcher(llm as any, makeRegistry());
+    const plan = makePlan([
+      { description: 'Fix something', assignedAgent: 'gemini-implementer' },
+    ]);
+
+    const result = await dispatcher.classifyWriteModes(plan);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].access).toBe('read');
+  });
+
+  it('handles unassigned sub-tasks', async () => {
+    const llm = mockLLM(JSON.stringify([
+      { index: 0, access: 'write', write_mode: 'sequential' },
+    ]));
+    const dispatcher = new TaskDispatcher(llm as any, makeRegistry());
+    const plan = makePlan([
+      { description: 'Do something' },
+    ]);
+
+    const result = await dispatcher.classifyWriteModes(plan);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].agentId).toBe('');
+    expect(result[0].access).toBe('write');
+    expect(result[0].writeMode).toBe('sequential');
   });
 });

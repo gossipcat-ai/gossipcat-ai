@@ -9,7 +9,7 @@ import { randomUUID } from 'crypto';
 import { LLMMessage } from '@gossip/types';
 import { ILLMProvider } from './llm-client';
 import { AgentRegistry } from './agent-registry';
-import { DispatchPlan } from './types';
+import { DispatchPlan, PlannedTask } from './types';
 
 export class TaskDispatcher {
   constructor(
@@ -98,6 +98,65 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
       }
     }
     return plan;
+  }
+
+  /**
+   * Classify each sub-task as read or write and suggest write modes.
+   * Falls back to all-read on LLM failure.
+   */
+  async classifyWriteModes(plan: DispatchPlan): Promise<PlannedTask[]> {
+    const subTaskList = plan.subTasks
+      .map((st, i) => `${i}. [agent: ${st.assignedAgent || 'unassigned'}] ${st.description}`)
+      .join('\n');
+
+    try {
+      const messages: LLMMessage[] = [
+        {
+          role: 'system',
+          content: `Classify each sub-task as read-only or write. For write tasks, suggest a write mode and scope.
+
+Rules:
+- Tasks with action verbs (fix, implement, add, create, refactor, update, delete, write, build, migrate) → write
+- Tasks with observation verbs (review, analyze, check, verify, list, explain, summarize, audit, trace) → read
+- If the task mentions a specific directory or package path → write_mode: scoped, scope: that path
+- If the task is broad with no clear directory boundary → write_mode: sequential
+- If the task says "experiment", "try", "prototype", or "spike" → write_mode: worktree
+
+Respond as JSON array:
+[{ "index": 0, "access": "write", "write_mode": "scoped", "scope": "packages/tools/" }, { "index": 1, "access": "read" }]`,
+        },
+        { role: 'user', content: `Sub-tasks:\n${subTaskList}` },
+      ];
+
+      const response = await this.llm.generate(messages, { temperature: 0 });
+      const jsonMatch = response.text.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) throw new Error('No JSON array in response');
+
+      const classifications = JSON.parse(jsonMatch[0]) as Array<{
+        index: number;
+        access: 'read' | 'write';
+        write_mode?: string;
+        scope?: string;
+      }>;
+
+      return plan.subTasks.map((st, i) => {
+        const c = classifications.find(cl => cl.index === i);
+        return {
+          agentId: st.assignedAgent || '',
+          task: st.description,
+          access: c?.access || 'read',
+          writeMode: c?.access === 'write' ? c.write_mode as PlannedTask['writeMode'] : undefined,
+          scope: c?.scope,
+        };
+      });
+    } catch {
+      // Fallback: all read-only
+      return plan.subTasks.map(st => ({
+        agentId: st.assignedAgent || '',
+        task: st.description,
+        access: 'read' as const,
+      }));
+    }
   }
 
   /** Collect all unique skills from registered agents */
