@@ -199,9 +199,25 @@ server.tool(
       const registry = new AgentRegistry();
       for (const ac of agentConfigs) registry.register(ac);
 
-      const mainKey = await keychain.getKey(config.main_agent.provider);
       const { createProvider } = await import('@gossip/orchestrator');
-      const llm = createProvider(config.main_agent.provider, config.main_agent.model, mainKey ?? undefined);
+
+      // Try main agent first, fall back to any agent with a working key
+      let llm: any;
+      const mainKey = await keychain.getKey(config.main_agent.provider);
+      if (mainKey) {
+        llm = createProvider(config.main_agent.provider, config.main_agent.model, mainKey);
+      } else {
+        // Fallback: use the first agent that has an API key
+        for (const ac of agentConfigs) {
+          const key = await keychain.getKey(ac.provider);
+          if (key) {
+            llm = createProvider(ac.provider, ac.model, key);
+            process.stderr.write(`[gossipcat] gossip_plan: main agent key unavailable, using ${ac.provider}/${ac.model} for planning\n`);
+            break;
+          }
+        }
+        if (!llm) return { content: [{ type: 'text' as const, text: 'No API keys available. Run gossipcat setup to configure keys.' }] };
+      }
 
       const dispatcher = new TaskDispatcher(llm, registry);
 
