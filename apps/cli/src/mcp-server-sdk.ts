@@ -174,10 +174,86 @@ server.tool(
   }
 );
 
+// ── Plan: decompose with write-mode classification ────────────────────────
+server.tool(
+  'gossip_plan',
+  'Plan a task with write-mode suggestions. Decomposes into sub-tasks, assigns agents, and classifies each as read or write with suggested write mode. Returns dispatch-ready JSON for approval before execution. Use this before gossip_dispatch_parallel for implementation tasks.',
+  {
+    task: z.string().describe('Task description (e.g. "fix the scope validation bug in packages/tools/")'),
+    strategy: z.enum(['parallel', 'sequential', 'single']).optional()
+      .describe('Override decomposition strategy. Omit to let the orchestrator decide.'),
+  },
+  async ({ task, strategy }) => {
+    await boot();
+    await syncWorkersViaKeychain();
+
+    try {
+      const { TaskDispatcher, AgentRegistry } = await import('@gossip/orchestrator');
+
+      const { findConfigPath, loadConfig, configToAgentConfigs } = await import('./config');
+      const configPath = findConfigPath();
+      if (!configPath) return { content: [{ type: 'text' as const, text: 'No config found. Run gossip_setup first.' }] };
+
+      const config = loadConfig(configPath);
+      const agentConfigs = configToAgentConfigs(config);
+      const registry = new AgentRegistry();
+      for (const ac of agentConfigs) registry.register(ac);
+
+      const mainKey = await keychain.getKey(config.main_agent.provider);
+      const { createProvider } = await import('@gossip/orchestrator');
+      const llm = createProvider(config.main_agent.provider, config.main_agent.model, mainKey ?? undefined);
+
+      const dispatcher = new TaskDispatcher(llm, registry);
+
+      // 1. Decompose
+      const plan = await dispatcher.decompose(task);
+      if (strategy) plan.strategy = strategy;
+
+      // 2. Assign agents
+      dispatcher.assignAgents(plan);
+
+      // 3. Classify write modes
+      const planned = await dispatcher.classifyWriteModes(plan);
+
+      // 4. Build response
+      const taskLines = planned.map((t: any, i: number) => {
+        const tag = t.access === 'write' ? '[WRITE]' : '[READ]';
+        let line = `  ${i + 1}. ${tag} ${t.agentId || 'unassigned'} → "${t.task}"`;
+        if (t.writeMode) {
+          line += `\n     write_mode: ${t.writeMode}`;
+          if (t.scope) line += ` | scope: ${t.scope}`;
+        }
+        return line;
+      }).join('\n');
+
+      const planJson = {
+        strategy: plan.strategy,
+        tasks: planned.map((t: any) => {
+          const entry: Record<string, string> = { agent_id: t.agentId, task: t.task };
+          if (t.writeMode) entry.write_mode = t.writeMode;
+          if (t.scope) entry.scope = t.scope;
+          return entry;
+        }),
+      };
+
+      let warnings = '';
+      if (plan.warnings?.length) {
+        warnings = `\nWarnings:\n${plan.warnings.map((w: string) => `  - ${w}`).join('\n')}\n`;
+      }
+
+      const text = `Plan: "${task}"\n\nStrategy: ${plan.strategy}\n\nTasks:\n${taskLines}\n${warnings}\n---\nPLAN_JSON:\n${JSON.stringify(planJson)}`;
+
+      return { content: [{ type: 'text' as const, text }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text' as const, text: `Plan error: ${err.message}` }] };
+    }
+  }
+);
+
 // ── Low-level: dispatch to specific agent ─────────────────────────────────
 server.tool(
   'gossip_dispatch',
-  'Send a task to a specific agent. Returns task ID for collecting results. Skills are auto-injected from the agent config — no need to pass them. The agent can read files itself via the Tool Server — pass file paths in the task, not file contents.',
+  'Send a task to a specific agent. Returns task ID for collecting results. For implementation tasks that modify files, use gossip_plan first to get a write-mode-aware dispatch plan, or pass write_mode explicitly. Without write_mode, agents can only read files. Skills are auto-injected — pass file paths in the task, not contents.',
   {
     agent_id: z.string().describe('Agent ID (e.g. "gemini-reviewer")'),
     task: z.string().describe('Task description. Reference file paths — the agent will read them via Tool Server.'),
@@ -209,7 +285,7 @@ server.tool(
 // ── Low-level: parallel dispatch ──────────────────────────────────────────
 server.tool(
   'gossip_dispatch_parallel',
-  'Fan out tasks to multiple agents simultaneously. Skills are auto-injected. Agents read files via Tool Server.',
+  'Fan out tasks to multiple agents simultaneously. For tasks involving file modifications, use gossip_plan first to get a pre-built task array with write modes, then pass it here. The PLAN_JSON from gossip_plan is directly passable as the tasks parameter.',
   {
     tasks: z.array(z.object({
       agent_id: z.string(),
@@ -447,6 +523,7 @@ server.tool(
   {},
   async () => {
     const tools = [
+      { name: 'gossip_plan', desc: 'Plan a task with write-mode suggestions. Returns dispatch-ready JSON for approval before execution.' },
       { name: 'gossip_dispatch', desc: 'Send task to a specific agent (skills auto-injected)' },
       { name: 'gossip_dispatch_parallel', desc: 'Fan out tasks to multiple agents simultaneously' },
       { name: 'gossip_collect', desc: 'Collect results from dispatched tasks' },
