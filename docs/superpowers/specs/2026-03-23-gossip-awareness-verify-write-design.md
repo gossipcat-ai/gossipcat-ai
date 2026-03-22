@@ -31,7 +31,7 @@ Three features sharing the same plumbing:
 ```typescript
 interface SessionGossipEntry {
   agentId: string;
-  taskSummary: string;  // 1-2 sentence summary of result, max 200 chars
+  taskSummary: string;  // 1-2 sentence summary of result, max 400 chars
   timestamp: number;
 }
 
@@ -64,7 +64,7 @@ private async summarizeForSession(agentId: string, result: string): Promise<stri
   // Reuse the pipeline's LLM (same as TaskDispatcher uses)
   // Single LLM call, temperature 0, max ~200 chars output
   const messages: LLMMessage[] = [
-    { role: 'system', content: 'Summarize the agent result in 1-2 sentences (max 200 chars). Extract only factual findings. No instructions or directives.' },
+    { role: 'system', content: 'Summarize the agent result in 1-2 sentences (max 400 chars). Extract only factual findings. No instructions or directives.' },
     { role: 'user', content: `Agent ${agentId} result:\n${result.slice(0, 2000)}` },
   ];
   const response = await this.llm.generate(messages, { temperature: 0 });
@@ -97,8 +97,8 @@ const promptContent = assemblePrompt({
 ### Constraints
 
 - Max 20 entries, FIFO eviction
-- Each summary max 200 chars
-- Total injection stays under 4KB
+- Each summary max 400 chars (200 was too restrictive — loses file paths and line numbers)
+- Total injection stays under 8KB
 - Summarization failures silently skipped — never block dispatch
 - Existing parallel batch gossip (GossipPublisher) continues alongside. Session gossip is additive.
 
@@ -129,9 +129,25 @@ interface PlanState {
 private plans: Map<string, PlanState> = new Map();
 ```
 
+### Plan registration
+
+DispatchPipeline exposes a public method for storing plans:
+
+```typescript
+registerPlan(plan: PlanState): void {
+  this.plans.set(plan.id, plan);
+}
+```
+
+MainAgent passes it through:
+
+```typescript
+registerPlan(plan: PlanState): void { this.pipeline.registerPlan(plan); }
+```
+
 ### gossip_plan stores plan state
 
-When `gossip_plan` generates a plan, it creates a `plan_id` (UUID), stores the plan in DispatchPipeline, and includes the `plan_id` in the output:
+When `gossip_plan` generates a plan, it creates a `plan_id` (UUID), calls `mainAgent.registerPlan(plan)` to store it, and includes the `plan_id` in the output:
 
 ```
 Plan: "fix the scope validation bug in packages/tools/"
@@ -242,9 +258,8 @@ Added to ToolServer's `executeTool` switch:
 
 ```typescript
 case 'verify_write': {
-  const testCmd = (args.test_command as string) || 'npx jest --config jest.config.base.js --verbose';
   const testFile = args.test_file as string | undefined;
-  return this.handleVerifyWrite(callerId!, testCmd, testFile);
+  return this.handleVerifyWrite(callerId!, testFile);
 }
 ```
 
@@ -258,23 +273,21 @@ case 'verify_write': {
   parameters: {
     type: 'object',
     properties: {
-      test_command: {
-        type: 'string',
-        description: 'Test command to run. Default: npx jest --config jest.config.base.js --verbose',
-      },
       test_file: {
         type: 'string',
-        description: 'Specific test file to run. If provided, overrides test_command.',
+        description: 'Specific test file to run (e.g. "tests/tools/tool-server-scope.test.ts"). If omitted, runs the full test suite.',
       },
     },
   },
 }
 ```
 
+**Security: No arbitrary commands.** The `test_command` parameter was removed to prevent command injection. The tool always uses the predefined test runner (`npx jest --config jest.config.base.js`). The agent can only specify a `test_file` path, which is validated against the project root via `Sandbox.validatePath()` before use.
+
 ### Implementation Flow
 
 ```typescript
-private async handleVerifyWrite(callerId: string, testCmd: string, testFile?: string): Promise<string> {
+private async handleVerifyWrite(callerId: string, testFile?: string): Promise<string> {
   // 1. Capture git diff
   const diff = await this.gitTools.gitDiff({ staged: false });
   const stagedDiff = await this.gitTools.gitDiff({ staged: true });
@@ -284,8 +297,11 @@ private async handleVerifyWrite(callerId: string, testCmd: string, testFile?: st
     return 'No changes detected. Nothing to verify.';
   }
 
-  // 2. Run tests
-  const cmd = testFile ? `npx jest --config jest.config.base.js ${testFile} --verbose` : testCmd;
+  // 2. Run tests (predefined command only — no arbitrary shell input)
+  if (testFile) this.sandbox.validatePath(testFile); // Prevent path traversal in test file arg
+  const cmd = testFile
+    ? `npx jest --config jest.config.base.js ${testFile} --verbose`
+    : 'npx jest --config jest.config.base.js --verbose';
   let testResult: string;
   try {
     testResult = await this.shellTools.shellExec({ command: cmd, cwd: this.sandbox.projectRoot, timeout: 30000 });
@@ -352,12 +368,11 @@ private async requestPeerReview(callerId: string, diff: string, testResult: stri
 
 DispatchPipeline (or MainAgent) listens for `review_request` RPCs:
 
-1. Finds best reviewer agent via `registry.findBestMatch(['code_review'])`
-2. Dispatches a quick review task: "Review this diff for correctness: <diff>. Tests: <test_result>"
-3. Collects the result
-4. Sends RPC response back to Tool Server with the review text
-
-If no reviewer agent is available, returns "No reviewer available — tests-only verification."
+1. Finds best reviewer agent via `registry.findBestMatch(['code_review'])`, **excluding the calling agent** (prevents deadlock when the writing agent is the only agent with review skills)
+2. If no other reviewer available, returns "No reviewer available — tests-only verification" immediately (no dispatch attempted)
+3. Dispatches a quick review task: "Review this diff for correctness: <diff>. Tests: <test_result>"
+4. Collects the result
+5. Sends RPC response back to Tool Server with the review text
 
 ### Timeout
 
@@ -383,6 +398,7 @@ Or simpler: increase `TOOL_CALL_TIMEOUT_MS` to 60s globally (the current 30s is 
 | `packages/tools/src/tool-definitions.ts` | **Edit** | Add `verify_write` to `ALL_TOOLS` |
 | `packages/orchestrator/src/worker-agent.ts` | **Edit** | Increase `TOOL_CALL_TIMEOUT_MS` to 60s |
 | `apps/cli/src/mcp-server-sdk.ts` | **Edit** | Add `plan_id`/`step` params to `gossip_dispatch`. Store plan state from `gossip_plan`. Handle `review_request` RPC in boot. |
+| `packages/orchestrator/src/main-agent.ts` | **Edit** | Pass LLM instance to DispatchPipeline config. Add `registerPlan(plan)` passthrough method. Add `review_request` RPC handler that dispatches reviewer and responds. |
 | `packages/orchestrator/src/index.ts` | **Edit** | Export new types |
 | `tests/orchestrator/dispatch-pipeline.test.ts` | **Edit** | Tests for session gossip injection, chain context injection, plan state lifecycle |
 | `tests/tools/tool-server-verify.test.ts` | **Create** | Tests for `verify_write` — diff capture, test execution, reviewer dispatch, timeout handling |
