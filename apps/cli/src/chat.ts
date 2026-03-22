@@ -163,6 +163,24 @@ export async function startChat(config: GossipConfig): Promise<void> {
       return;
     }
 
+    if (input === '/write' || input.startsWith('/write ')) {
+      const parts = input.slice(7).trim().split(/\s+/);
+      const validModes = ['sequential', 'scoped', 'worktree'];
+      const mode = parts[0];
+      if (!mode || !validModes.includes(mode)) {
+        console.log(`\n${c.yellow}  Usage: /write <mode> [scope]${c.reset}`);
+        console.log(`${c.dim}  Modes: sequential, scoped, worktree${c.reset}`);
+        console.log(`${c.dim}  Example: /write scoped packages/relay/${c.reset}\n`);
+        rl.prompt();
+        return;
+      }
+      const scope = parts[1] || undefined;
+      console.log(`\n${c.green}  Write mode: ${mode}${scope ? ` (scope: ${scope})` : ''}${c.reset}`);
+      console.log(`${c.dim}  Next dispatched tasks will use this mode.${c.reset}\n`);
+      rl.prompt();
+      return;
+    }
+
     if (input === '/image' || input.startsWith('/image ')) {
       try {
         const { readClipboardImage } = await import('./clipboard');

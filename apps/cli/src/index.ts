@@ -61,7 +61,26 @@ async function main(): Promise<void> {
 
   // One-shot task — boot, run, print result, exit
   if (args.length > 0) {
-    const task = args.join(' ');
+    // Parse --write-mode flag
+    let writeMode: string | undefined;
+    let scope: string | undefined;
+    const filteredArgs: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--write-mode' && i + 1 < args.length) {
+        writeMode = args[++i];
+      } else if (args[i] === '--scope' && i + 1 < args.length) {
+        scope = args[++i];
+      } else {
+        filteredArgs.push(args[i]);
+      }
+    }
+    const task = filteredArgs.join(' ');
+
+    if (writeMode && !['sequential', 'scoped', 'worktree'].includes(writeMode)) {
+      console.error(`Invalid write mode: "${writeMode}". Must be sequential, scoped, or worktree.`);
+      process.exit(1);
+    }
+
     const { RelayServer } = await import('@gossip/relay');
     const { ToolServer } = await import('@gossip/tools');
     const { MainAgent } = await import('@gossip/orchestrator');
@@ -80,6 +99,10 @@ async function main(): Promise<void> {
       agents: configToAgentConfigs(config), projectRoot: process.cwd(),
     });
     await mainAgent.start();
+
+    if (writeMode) {
+      console.log(`Write mode: ${writeMode}${scope ? ` (scope: ${scope})` : ''}`);
+    }
 
     const response = await mainAgent.handleMessage(task);
     console.log(response.text);
@@ -111,9 +134,16 @@ function printHelp(): void {
     gossipcat mcp-serve        Start MCP server (for Claude Code / Cursor)
     gossipcat help             Show this help
 
+  Write modes:
+    --write-mode sequential    Queue write tasks (one at a time)
+    --write-mode scoped        Directory-locked parallel writes
+    --write-mode worktree      Git worktree isolation
+    --scope <path>             Directory scope for scoped mode
+
   Examples:
     gossipcat create-team "Building a Next.js + Supabase SaaS. Need architecture, coding, and review."
     gossipcat create-team      (interactive prompt if no description given)
+    gossipcat --write-mode scoped --scope packages/relay/ "refactor the relay module"
 
   Agent files:
     .gossip/agents/<id>/
