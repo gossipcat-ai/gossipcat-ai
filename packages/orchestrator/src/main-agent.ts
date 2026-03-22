@@ -9,9 +9,11 @@ import { ILLMProvider, createProvider } from './llm-client';
 import { AgentRegistry } from './agent-registry';
 import { TaskDispatcher } from './task-dispatcher';
 import { WorkerAgent } from './worker-agent';
-import { AgentConfig, DispatchOptions, TaskResult, ChatResponse } from './types';
+import { AgentConfig, DispatchOptions, PlanState, TaskResult, ChatResponse } from './types';
 import { ALL_TOOLS } from '@gossip/tools';
-import { ContentBlock, TextContent } from '@gossip/types';
+import { ContentBlock, TextContent, MessageType, MessageEnvelope, Message } from '@gossip/types';
+import { GossipAgent } from '@gossip/client';
+import { encode as msgpackEncode } from '@msgpack/msgpack';
 import { DispatchPipeline } from './dispatch-pipeline';
 
 const CHAT_SYSTEM_PROMPT = `You are a developer assistant powering Gossip Mesh. Be concise and direct.
@@ -55,6 +57,7 @@ export class MainAgent {
   private projectRoot: string;
   private pipeline: DispatchPipeline;
   private bootstrapPrompt: string;
+  private orchestratorAgent: GossipAgent | null = null;
 
   constructor(config: MainAgentConfig) {
     this.llm = config.llm ?? createProvider(config.provider, config.model, config.apiKey);
@@ -73,6 +76,7 @@ export class MainAgent {
       projectRoot: this.projectRoot,
       workers: this.workers,
       registryGet: (id) => this.registry.get(id),
+      llm: this.llm,
     });
   }
 
@@ -94,6 +98,15 @@ export class MainAgent {
       await worker.start();
       this.workers.set(config.id, worker);
     }
+
+    // Connect orchestrator agent to relay for verify_write review requests
+    try {
+      this.orchestratorAgent = new GossipAgent({ agentId: 'orchestrator', relayUrl: this.relayUrl, reconnect: true });
+      await this.orchestratorAgent.connect();
+      this.orchestratorAgent.on('message', this.handleReviewRequest.bind(this));
+    } catch (err) {
+      console.error(`[MainAgent] Orchestrator relay connection failed: ${(err as Error).message}`);
+    }
   }
 
   /** Set externally-created workers (used by MCP server to avoid duplicate connections) */
@@ -106,6 +119,7 @@ export class MainAgent {
   dispatch(agentId: string, task: string, options?: DispatchOptions) { return this.pipeline.dispatch(agentId, task, options); }
   async collect(taskIds?: string[], timeoutMs?: number) { return this.pipeline.collect(taskIds, timeoutMs); }
   dispatchParallel(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>) { return this.pipeline.dispatchParallel(tasks); }
+  registerPlan(plan: PlanState): void { this.pipeline.registerPlan(plan); }
   getWorker(agentId: string) { return this.workers.get(agentId); }
   getTask(taskId: string) { return this.pipeline.getTask(taskId); }
   setGossipPublisher(publisher: any) { this.pipeline.setGossipPublisher(publisher); }
@@ -243,6 +257,44 @@ export class MainAgent {
       choices: options.length > 0 ? { message, options, allowCustom: true, type: 'select' } : undefined,
       status: 'done',
     };
+  }
+
+  private async handleReviewRequest(data: unknown, envelope: MessageEnvelope): Promise<void> {
+    if (envelope.t !== MessageType.RPC_REQUEST) return;
+
+    const payload = data as Record<string, unknown>;
+    if (payload?.tool !== 'review_request') return;
+
+    const args = payload.args as { callerId: string; diff: string; testResult: string };
+    let reviewText = 'No reviewer available — tests-only verification.';
+
+    try {
+      // Find best reviewer, excluding the calling agent
+      const reviewer = this.registry.getAll()
+        .filter(a => a.id !== args.callerId && a.skills.includes('code_review'))
+        .find(a => this.workers.has(a.id));
+
+      if (reviewer) {
+        const { promise } = this.pipeline.dispatch(reviewer.id,
+          `Review this diff for correctness:\n\n${args.diff}\n\nTest results:\n${args.testResult}\n\nProvide a brief review: what's good, what needs fixing.`
+        );
+        try {
+          reviewText = await promise;
+        } catch { reviewText = 'Reviewer agent failed.'; }
+      }
+    } catch (err) {
+      reviewText = `Review error: ${(err as Error).message}`;
+    }
+
+    // Send RPC response back to ToolServer
+    try {
+      const body = Buffer.from(msgpackEncode({ result: reviewText })) as unknown as Uint8Array;
+      const correlationId = (envelope.rid_req || envelope.id) as string;
+      const response = Message.createRpcResponse('orchestrator', envelope.sid, correlationId, body);
+      await this.orchestratorAgent!.sendEnvelope(response.toEnvelope());
+    } catch (err) {
+      console.error(`[MainAgent] Failed to send review response: ${(err as Error).message}`);
+    }
   }
 
   private async executeSubTask(subTask: { assignedAgent?: string; description: string }): Promise<TaskResult> {
