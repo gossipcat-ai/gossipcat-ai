@@ -111,6 +111,13 @@ export interface ArchivedTaskEntry {
   entry: TaskMemoryEntry;
 }
 
+/** Options for write-mode dispatch */
+export interface DispatchOptions {
+  writeMode?: 'sequential' | 'scoped' | 'worktree';
+  scope?: string;
+  timeoutMs?: number;
+}
+
 /** A tracked dispatch task with status and result */
 export interface TaskEntry {
   id: string;
@@ -122,6 +129,12 @@ export interface TaskEntry {
   startedAt: number;
   completedAt?: number;
   skillWarnings?: string[];
+  writeMode?: 'sequential' | 'scoped' | 'worktree';
+  scope?: string;
+  worktreeInfo?: {
+    path: string;
+    branch: string;
+  };
 }
 
 // ── TaskGraph Event Types ────────────────────────────────────────────────
