@@ -352,17 +352,22 @@ export class DispatchPipeline {
       worktreeAgents.add(wt.agentId);
     }
 
-    // Check scoped overlaps across the batch
+    // Check scoped overlaps: within batch AND against already-running scopes
     const scopedTasks = writeTasks.filter(d => d.options?.writeMode === 'scoped');
     for (let i = 0; i < scopedTasks.length; i++) {
+      // Check against already-active scopes
+      const scopeI = scopedTasks[i].options!.scope!;
+      const activeOverlap = this.scopeTracker.hasOverlap(scopeI);
+      if (activeOverlap.overlaps) {
+        return { taskIds: [], errors: [`Scope "${scopeI}" conflicts with running task ${activeOverlap.conflictTaskId} at "${activeOverlap.conflictScope}"`] };
+      }
+      // Check against other tasks in this batch
       for (let j = i + 1; j < scopedTasks.length; j++) {
-        const scopeA = scopedTasks[i].options!.scope!;
-        const scopeB = scopedTasks[j].options!.scope!;
-        // Simple prefix overlap check
-        const normA = scopeA.endsWith('/') ? scopeA : scopeA + '/';
-        const normB = scopeB.endsWith('/') ? scopeB : scopeB + '/';
+        const scopeJ = scopedTasks[j].options!.scope!;
+        const normA = scopeI.endsWith('/') ? scopeI : scopeI + '/';
+        const normB = scopeJ.endsWith('/') ? scopeJ : scopeJ + '/';
         if (normA.startsWith(normB) || normB.startsWith(normA)) {
-          return { taskIds: [], errors: [`Scoped tasks have overlapping paths: "${scopeA}" and "${scopeB}"`] };
+          return { taskIds: [], errors: [`Scoped tasks have overlapping paths: "${scopeI}" and "${scopeJ}"`] };
         }
       }
     }

@@ -120,8 +120,11 @@ export class ToolServer {
     if (toolName === 'file_write') {
       const filePath = args.path as string;
       if (scope) {
-        const normalizedPath = filePath.endsWith('/') ? filePath : filePath;
-        if (!normalizedPath.startsWith(scope)) {
+        // Normalize: append '/' so 'packages/relay' becomes 'packages/relay/'
+        // This prevents 'packages/relay2' matching scope 'packages/relay/'
+        // But also allows writing to the scope directory itself
+        const pathWithSlash = filePath.endsWith('/') ? filePath : filePath + '/';
+        if (!pathWithSlash.startsWith(scope)) {
           throw new Error(`Write blocked: "${filePath}" is outside scope "${scope}"`);
         }
       }
@@ -168,13 +171,19 @@ export class ToolServer {
   }
 
   async executeTool(name: string, args: Record<string, unknown>, callerId?: string): Promise<string> {
-    // Fail-closed: write agents can only use write tools within their scope/root
+    // Fail-closed: write agents with no registered scope/root are rejected
     if (callerId && this.writeAgents.has(callerId)) {
+      if (!this.agentScopes.has(callerId) && !this.agentRoots.has(callerId)) {
+        throw new Error(`Agent ${callerId} is a write agent but has no scope/root registered — rejecting (fail-closed)`);
+      }
       const writableTools = ['file_write', 'shell_exec', 'git_commit', 'git_branch'];
       if (writableTools.includes(name)) {
         this.enforceWriteScope(name, args, callerId);
       }
     }
+
+    // Per-agent root for worktree isolation
+    const agentRoot = callerId ? this.agentRoots.get(callerId) : undefined;
 
     switch (name) {
       case 'file_read':
@@ -190,18 +199,18 @@ export class ToolServer {
       case 'shell_exec':
         return this.shellTools.shellExec({
           ...(args as { command: string; timeout?: number }),
-          cwd: (callerId && this.agentRoots.get(callerId)) || this.sandbox.projectRoot
+          cwd: agentRoot || this.sandbox.projectRoot
         });
       case 'git_status':
-        return this.gitTools.gitStatus();
+        return agentRoot ? new GitTools(agentRoot).gitStatus() : this.gitTools.gitStatus();
       case 'git_diff':
-        return this.gitTools.gitDiff(args as { staged?: boolean });
+        return agentRoot ? new GitTools(agentRoot).gitDiff(args as { staged?: boolean }) : this.gitTools.gitDiff(args as { staged?: boolean });
       case 'git_log':
-        return this.gitTools.gitLog(args as { count?: number });
+        return agentRoot ? new GitTools(agentRoot).gitLog(args as { count?: number }) : this.gitTools.gitLog(args as { count?: number });
       case 'git_commit':
-        return this.gitTools.gitCommit(args as { message: string; files?: string[] });
+        return agentRoot ? new GitTools(agentRoot).gitCommit(args as { message: string; files?: string[] }) : this.gitTools.gitCommit(args as { message: string; files?: string[] });
       case 'git_branch':
-        return this.gitTools.gitBranch(args as { name?: string });
+        return agentRoot ? new GitTools(agentRoot).gitBranch(args as { name?: string }) : this.gitTools.gitBranch(args as { name?: string });
       case 'suggest_skill':
         return this.skillTools.suggestSkill(
           args as { skill_name: string; reason: string; task_context: string },
