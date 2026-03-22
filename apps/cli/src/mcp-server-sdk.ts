@@ -263,7 +263,23 @@ server.tool(
         warnings += `\nUnassigned (excluded from PLAN_JSON — no matching agent):\n${unassignedTasks.map((t: any) => `  - "${t.task}"`).join('\n')}\n`;
       }
 
-      const text = `Plan: "${task}"\n\nStrategy: ${plan.strategy}\n\nTasks:\n${taskLines}\n${warnings}\n---\nPLAN_JSON:\n${JSON.stringify(planJson)}`;
+      // Format dispatch instructions based on strategy
+      let dispatchBlock: string;
+      if (plan.strategy === 'sequential' || plan.strategy === 'single') {
+        // Sequential: output individual gossip_dispatch calls
+        const steps = planJson.tasks.map((t: Record<string, string>, i: number) => {
+          const args = [`agent_id: "${t.agent_id}"`, `task: "${t.task}"`];
+          if (t.write_mode) args.push(`write_mode: "${t.write_mode}"`);
+          if (t.scope) args.push(`scope: "${t.scope}"`);
+          return `Step ${i + 1}: gossip_dispatch(${args.join(', ')})\n         then: gossip_collect()`;
+        });
+        dispatchBlock = `Execute sequentially:\n${steps.join('\n\n')}`;
+      } else {
+        // Parallel: output gossip_dispatch_parallel payload
+        dispatchBlock = `PLAN_JSON (pass to gossip_dispatch_parallel):\n${JSON.stringify(planJson)}`;
+      }
+
+      const text = `Plan: "${task}"\n\nStrategy: ${plan.strategy}\n\nTasks:\n${taskLines}\n${warnings}\n---\n${dispatchBlock}`;
 
       return { content: [{ type: 'text' as const, text }] };
     } catch (err: any) {
