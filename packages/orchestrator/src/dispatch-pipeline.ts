@@ -167,7 +167,12 @@ export class DispatchPipeline {
     return { taskId, promise: entry.promise };
   }
 
+  private static readonly MAX_WRITE_QUEUE = 20;
+
   private enqueueSequential(fn: () => Promise<string>): Promise<string> {
+    if (this.writeActive && this.writeQueue.length >= DispatchPipeline.MAX_WRITE_QUEUE) {
+      throw new Error('Sequential write queue full (20 tasks). Collect results before dispatching more.');
+    }
     return new Promise<string>((resolve, reject) => {
       const run = () => {
         this.writeActive = true;
@@ -273,6 +278,29 @@ export class DispatchPipeline {
       }
     }
 
+    // 6. Worktree merge/cleanup and scope release
+    for (const t of targets) {
+      if (t.writeMode === 'worktree' && t.worktreeInfo) {
+        try {
+          if (t.status === 'failed' || t.status === 'running') {
+            await this.worktreeManager.cleanup(t.id, t.worktreeInfo.path);
+          } else if (t.status === 'completed') {
+            const mergeResult = await this.worktreeManager.merge(t.id);
+            if (mergeResult.merged) {
+              await this.worktreeManager.cleanup(t.id, t.worktreeInfo.path);
+            } else {
+              // Preserve branch for manual resolution, note conflicts on the entry
+              t.result = (t.result || '') + `\n\nWorktree merge: CONFLICT\n  Conflicting files: ${(mergeResult.conflicts || []).join(', ')}\n  Branch preserved: ${t.worktreeInfo.branch}\n  Resolve manually: git merge ${t.worktreeInfo.branch}`;
+            }
+          }
+        } catch (err) { log(`Worktree cleanup failed for ${t.id}: ${(err as Error).message}`); }
+      }
+      // Scope is released inline in the promise chain, but release again as safety net
+      if (t.writeMode === 'scoped' && t.status !== 'running') {
+        this.scopeTracker.release(t.id);
+      }
+    }
+
     // Build clean result entries
     const results: TaskEntry[] = targets.map(t => ({
       id: t.id, agentId: t.agentId, task: t.task,
@@ -301,10 +329,27 @@ export class DispatchPipeline {
     const batchId = randomUUID().slice(0, 8);
     const batchTaskIds = new Set<string>();
 
+    // Pre-validate: all agents must exist (all-or-nothing)
+    for (const def of taskDefs) {
+      if (!this.workers.has(def.agentId)) {
+        return { taskIds: [], errors: [`Agent "${def.agentId}" not found`] };
+      }
+    }
+
     // Pre-validate write modes
     const writeTasks = taskDefs.filter(d => d.options?.writeMode);
     if (writeTasks.some(d => d.options?.writeMode === 'sequential')) {
       return { taskIds: [], errors: ['sequential write mode cannot be used in parallel dispatch'] };
+    }
+
+    // Check worktree agent collision (same agent can't have two worktree tasks)
+    const worktreeTasks = writeTasks.filter(d => d.options?.writeMode === 'worktree');
+    const worktreeAgents = new Set<string>();
+    for (const wt of worktreeTasks) {
+      if (worktreeAgents.has(wt.agentId)) {
+        return { taskIds: [], errors: [`Agent "${wt.agentId}" cannot have two simultaneous worktree tasks`] };
+      }
+      worktreeAgents.add(wt.agentId);
     }
 
     // Check scoped overlaps across the batch

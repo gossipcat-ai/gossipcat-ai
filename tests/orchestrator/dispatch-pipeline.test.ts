@@ -176,12 +176,12 @@ describe('DispatchPipeline', () => {
       expect(errors).toHaveLength(0);
     });
 
-    it('reports errors for missing agents', () => {
+    it('rejects entire batch when any agent is missing (all-or-nothing)', () => {
       const { taskIds, errors } = pipeline.dispatchParallel([
         { agentId: 'test-agent', task: 'task 1' },
         { agentId: 'missing', task: 'task 2' },
       ]);
-      expect(taskIds).toHaveLength(1);
+      expect(taskIds).toHaveLength(0); // all-or-nothing: zero dispatched
       expect(errors).toHaveLength(1);
       expect(errors[0]).toContain('missing');
     });

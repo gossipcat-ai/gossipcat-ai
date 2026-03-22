@@ -101,11 +101,21 @@ async function main(): Promise<void> {
     await mainAgent.start();
 
     if (writeMode) {
-      console.log(`Write mode: ${writeMode}${scope ? ` (scope: ${scope})` : ''}`);
+      // Write mode: dispatch to first available agent with write options
+      const agents = configToAgentConfigs(config);
+      if (agents.length === 0) {
+        console.error('No agents configured. Run gossipcat setup first.');
+        process.exit(1);
+      }
+      const options = { writeMode: writeMode as 'sequential' | 'scoped' | 'worktree', scope };
+      const { taskId } = mainAgent.dispatch(agents[0].id, task, options);
+      const results = await mainAgent.collect([taskId]);
+      const r = results[0];
+      console.log(r?.status === 'completed' ? r.result : `Error: ${r?.error || 'Unknown'}`);
+    } else {
+      const response = await mainAgent.handleMessage(task);
+      console.log(response.text);
     }
-
-    const response = await mainAgent.handleMessage(task);
-    console.log(response.text);
 
     await mainAgent.stop();
     await toolServer.stop();

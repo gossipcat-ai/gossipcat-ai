@@ -193,7 +193,7 @@ server.tool(
       return { content: [{ type: 'text' as const, text: `Invalid agent ID format: "${agent_id}"` }] };
     }
 
-    const options = write_mode ? { writeMode: write_mode as any, scope, timeoutMs: timeout_ms } : undefined;
+    const options = write_mode ? { writeMode: write_mode as 'sequential' | 'scoped' | 'worktree', scope, timeoutMs: timeout_ms } : undefined;
 
     try {
       const { taskId } = mainAgent.dispatch(agent_id, task, options);

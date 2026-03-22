@@ -155,6 +155,8 @@ export async function startChat(config: GossipConfig): Promise<void> {
   });
   rl.prompt();
 
+  let activeWriteMode: { mode: 'sequential' | 'scoped' | 'worktree'; scope?: string } | null = null;
+
   rl.on('line', async (line) => {
     const input = line.trim();
     if (!input) { rl.prompt(); return; }
@@ -165,18 +167,25 @@ export async function startChat(config: GossipConfig): Promise<void> {
 
     if (input === '/write' || input.startsWith('/write ')) {
       const parts = input.slice(7).trim().split(/\s+/);
-      const validModes = ['sequential', 'scoped', 'worktree'];
-      const mode = parts[0];
+      const validModes = ['sequential', 'scoped', 'worktree'] as const;
+      const mode = parts[0] as typeof validModes[number];
       if (!mode || !validModes.includes(mode)) {
-        console.log(`\n${c.yellow}  Usage: /write <mode> [scope]${c.reset}`);
+        if (parts[0] === 'off') {
+          activeWriteMode = null;
+          console.log(`\n${c.green}  Write mode disabled.${c.reset}\n`);
+          rl.prompt();
+          return;
+        }
+        console.log(`\n${c.yellow}  Usage: /write <mode> [scope] | /write off${c.reset}`);
         console.log(`${c.dim}  Modes: sequential, scoped, worktree${c.reset}`);
         console.log(`${c.dim}  Example: /write scoped packages/relay/${c.reset}\n`);
         rl.prompt();
         return;
       }
       const scope = parts[1] || undefined;
+      activeWriteMode = { mode, scope };
       console.log(`\n${c.green}  Write mode: ${mode}${scope ? ` (scope: ${scope})` : ''}${c.reset}`);
-      console.log(`${c.dim}  Next dispatched tasks will use this mode.${c.reset}\n`);
+      console.log(`${c.dim}  All dispatched tasks will use this mode. /write off to disable.${c.reset}\n`);
       rl.prompt();
       return;
     }
@@ -237,17 +246,32 @@ export async function startChat(config: GossipConfig): Promise<void> {
     }
 
     try {
-      // Show spinner while agent thinks
-      // We can't use p.spinner here because readline is active
-      // Instead show a simple indicator
-      process.stdout.write(`${c.dim}  thinking...${c.reset}`);
-
-      const response = await mainAgent.handleMessage(input);
-
-      // Clear the "thinking..." line
-      process.stdout.write('\r\x1b[K');
-
-      await renderResponse(response, input, mainAgent);
+      if (activeWriteMode) {
+        // Write mode: dispatch directly to first agent
+        const agents = configToAgentConfigs(config);
+        if (agents.length === 0) {
+          console.log(`\n${c.yellow}  No agents configured.${c.reset}\n`);
+          rl.prompt();
+          return;
+        }
+        process.stdout.write(`${c.dim}  dispatching [${activeWriteMode.mode}]...${c.reset}`);
+        const options = { writeMode: activeWriteMode.mode, scope: activeWriteMode.scope };
+        const { taskId } = mainAgent.dispatch(agents[0].id, input, options);
+        const results = await mainAgent.collect([taskId]);
+        process.stdout.write('\r\x1b[K');
+        const r = results[0];
+        if (r?.status === 'completed') {
+          console.log(`\n${r.result}\n`);
+        } else {
+          console.log(`\n${c.yellow}  Error: ${r?.error || 'Unknown'}${c.reset}\n`);
+        }
+      } else {
+        // Normal mode: orchestrate via MainAgent
+        process.stdout.write(`${c.dim}  thinking...${c.reset}`);
+        const response = await mainAgent.handleMessage(input);
+        process.stdout.write('\r\x1b[K');
+        await renderResponse(response, input, mainAgent);
+      }
     } catch (err) {
       process.stdout.write('\r\x1b[K');
       console.log(`\n${c.yellow}  Error: ${(err as Error).message}${c.reset}\n`);
