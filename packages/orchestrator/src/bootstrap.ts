@@ -179,6 +179,7 @@ ${teamSection}
 | \`gossip_status()\` | Check system status. |
 | \`gossip_update_instructions(agent_ids, instruction_update, mode)\` | Update agent instructions at runtime. |
 | \`gossip_tools()\` | List all available tools. |
+| \`gossip_plan(task)\` | Plan task with write-mode suggestions. Returns dispatch-ready JSON. |
 
 ## Dispatch Rules
 
@@ -201,6 +202,20 @@ gossip_dispatch_parallel(tasks: [
 ])
 \`\`\`
 Then collect and synthesize results.
+
+## Write Modes
+
+Agents can modify files when dispatched with a write mode:
+- \`sequential\` — one write task at a time (safe default for implementation)
+- \`scoped\` — parallel writes locked to non-overlapping directories
+- \`worktree\` — fully isolated git branch per task
+
+**Workflow for implementation tasks:**
+1. Call \`gossip_plan(task)\` to get a decomposed plan with write-mode suggestions
+2. Review the plan — adjust write modes or agents if needed
+3. Call \`gossip_dispatch_parallel\` with the plan's task array to execute
+
+For read-only tasks (reviews, analysis), use \`gossip_dispatch\` or \`gossip_orchestrate\` directly — no write mode needed.
 
 ## Memory
 
