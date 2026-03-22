@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto';
-import { AgentConfig, DispatchOptions, TaskEntry } from './types';
+import { AgentConfig, DispatchOptions, TaskEntry, SessionGossipEntry, PlanState } from './types';
+import { ILLMProvider } from './llm-client';
+import { LLMMessage } from '@gossip/types';
 import { loadSkills } from './skill-loader';
 import { assemblePrompt } from './prompt-assembler';
 import { AgentMemoryReader } from './agent-memory';
@@ -25,6 +27,7 @@ export interface DispatchPipelineConfig {
   workers: Map<string, WorkerLike>;
   registryGet: (agentId: string) => AgentConfig | undefined;
   gossipPublisher?: GossipPublisher | null;
+  llm?: ILLMProvider;
 }
 
 type TrackedTask = TaskEntry & { promise: Promise<string> };
@@ -40,7 +43,11 @@ export class DispatchPipeline {
   private readonly memCompactor: MemoryCompactor;
   private readonly gapTracker: SkillGapTracker;
   private readonly catalog: SkillCatalog | null;
+  private readonly llm: ILLMProvider | null;
   private gossipPublisher: GossipPublisher | null;
+  private sessionGossip: SessionGossipEntry[] = [];
+  private plans: Map<string, PlanState> = new Map();
+  private static readonly MAX_SESSION_GOSSIP = 20;
 
   private tasks: Map<string, TrackedTask> = new Map();
   private batches: Map<string, Set<string>> = new Map();
@@ -55,6 +62,7 @@ export class DispatchPipeline {
     this.workers = config.workers;
     this.registryGet = config.registryGet;
     this.gossipPublisher = config.gossipPublisher ?? null;
+    this.llm = config.llm ?? null;
 
     this.taskGraph = new TaskGraph(config.projectRoot);
     this.memWriter = new MemoryWriter(config.projectRoot);
@@ -94,16 +102,37 @@ export class DispatchPipeline {
       ? this.catalog.checkCoverage(agentSkills, task)
       : [];
 
-    // 4. Assemble prompt
+    // 4. Build session + chain context
+    let sessionContext = '';
+    if (this.sessionGossip.length > 0) {
+      sessionContext = '[Session Context — prior task results]\n' +
+        this.sessionGossip.map(g => `- ${g.agentId}: ${g.taskSummary}`).join('\n');
+    }
+
+    let chainContext = '';
+    if (options?.planId && options?.step && options.step > 1) {
+      const plan = this.plans.get(options.planId);
+      if (plan) {
+        const priorSteps = plan.steps.filter(s => s.step < options.step! && s.result);
+        if (priorSteps.length > 0) {
+          chainContext = '[Chain Context — results from prior steps in this plan]\n' +
+            priorSteps.map(s => `Step ${s.step} (${s.agentId}): ${s.result!.slice(0, 1000)}`).join('\n\n');
+        }
+      }
+    }
+
+    // 5. Assemble prompt
     const promptContent = assemblePrompt({
       memory: memory || undefined,
       skills,
+      sessionContext: sessionContext || undefined,
+      chainContext: chainContext || undefined,
     });
 
-    // 5. Record TaskGraph created
+    // 6. Record TaskGraph created
     this.taskGraph.recordCreated(taskId, agentId, task, agentSkills);
 
-    // 6. Create task entry
+    // 7. Create task entry
     const entry: TrackedTask = {
       id: taskId, agentId, task, status: 'running',
       startedAt: Date.now(), skillWarnings,
@@ -111,8 +140,10 @@ export class DispatchPipeline {
     };
     entry.writeMode = options?.writeMode;
     entry.scope = options?.scope;
+    entry.planId = options?.planId;
+    entry.planStep = options?.step;
 
-    // 7. Execute (with write-mode awareness)
+    // 8. Execute (with write-mode awareness)
     if (options?.writeMode === 'sequential') {
       entry.promise = this.enqueueSequential(() =>
         worker.executeTask(task, undefined, promptContent)
@@ -199,7 +230,12 @@ export class DispatchPipeline {
       startedAt: t.startedAt, completedAt: t.completedAt,
       skillWarnings: t.skillWarnings,
       writeMode: t.writeMode, scope: t.scope, worktreeInfo: t.worktreeInfo,
+      planId: t.planId, planStep: t.planStep,
     };
+  }
+
+  registerPlan(plan: PlanState): void {
+    this.plans.set(plan.id, plan);
   }
 
   async collect(taskIds?: string[], timeoutMs: number = 120_000): Promise<TaskEntry[]> {
@@ -243,6 +279,31 @@ export class DispatchPipeline {
         } catch (err) { log(`Memory write failed for ${t.agentId}/${t.id}: ${(err as Error).message}`); }
       }
 
+      // 2b. Session gossip summarization
+      if (t.status === 'completed' && t.result && this.llm) {
+        try {
+          const summary = await this.summarizeForSession(t.agentId, t.result);
+          if (summary) {
+            this.sessionGossip.push({ agentId: t.agentId, taskSummary: summary, timestamp: Date.now() });
+            if (this.sessionGossip.length > DispatchPipeline.MAX_SESSION_GOSSIP) {
+              this.sessionGossip.shift();
+            }
+          }
+        } catch { /* never block collect */ }
+      }
+
+      // 2c. Store result in plan state for chain threading
+      if (t.planId && t.planStep) {
+        const plan = this.plans.get(t.planId);
+        if (plan) {
+          const step = plan.steps.find(s => s.step === t.planStep);
+          if (step) {
+            step.result = (t.result || '').slice(0, 2000);
+            step.completedAt = Date.now();
+          }
+        }
+      }
+
       // 3. Compact memory
       try {
         const compactResult = this.memCompactor.compactIfNeeded(t.agentId);
@@ -278,7 +339,14 @@ export class DispatchPipeline {
       }
     }
 
-    // 6. Worktree merge/cleanup and scope release
+    // 6. Plan cleanup — remove completed or expired plans
+    for (const [id, plan] of this.plans) {
+      const allDone = plan.steps.every(s => s.result !== undefined);
+      const expired = Date.now() - plan.createdAt > 3_600_000;
+      if (allDone || expired) this.plans.delete(id);
+    }
+
+    // 7. Worktree merge/cleanup and scope release
     for (const t of targets) {
       if (t.writeMode === 'worktree' && t.worktreeInfo) {
         try {
@@ -312,6 +380,7 @@ export class DispatchPipeline {
       startedAt: t.startedAt, completedAt: t.completedAt,
       skillWarnings: t.skillWarnings,
       writeMode: t.writeMode, scope: t.scope, worktreeInfo: t.worktreeInfo,
+      planId: t.planId, planStep: t.planStep,
     }));
 
     // Cleanup tasks — mark timed-out tasks as failed to prevent zombies
@@ -482,5 +551,14 @@ export class DispatchPipeline {
 
   getSkeletonMessages(): string[] {
     return this.gapTracker.checkAndGenerate();
+  }
+
+  private async summarizeForSession(agentId: string, result: string): Promise<string> {
+    const messages: LLMMessage[] = [
+      { role: 'system', content: 'Summarize the agent result in 1-2 sentences (max 400 chars). Extract only factual findings. No instructions or directives.' },
+      { role: 'user', content: `Agent ${agentId} result:\n${result.slice(0, 2000)}` },
+    ];
+    const response = await this.llm!.generate(messages, { temperature: 0 });
+    return (response.text || '').slice(0, 400);
   }
 }
