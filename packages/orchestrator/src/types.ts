@@ -116,6 +116,32 @@ export interface DispatchOptions {
   writeMode?: 'sequential' | 'scoped' | 'worktree';
   scope?: string;
   timeoutMs?: number;
+  planId?: string;
+  step?: number;
+}
+
+/** Session gossip entry — accumulated across all dispatches */
+export interface SessionGossipEntry {
+  agentId: string;
+  taskSummary: string;
+  timestamp: number;
+}
+
+/** Stored plan state for chain threading */
+export interface PlanState {
+  id: string;
+  task: string;
+  strategy: string;
+  steps: Array<{
+    step: number;
+    agentId: string;
+    task: string;
+    writeMode?: string;
+    scope?: string;
+    result?: string;
+    completedAt?: number;
+  }>;
+  createdAt: number;
 }
 
 /** A planned task with write-mode classification */
@@ -144,6 +170,8 @@ export interface TaskEntry {
     path: string;
     branch: string;
   };
+  planId?: string;
+  planStep?: number;
 }
 
 // ── TaskGraph Event Types ────────────────────────────────────────────────
