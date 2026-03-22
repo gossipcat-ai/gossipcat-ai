@@ -2151,6 +2151,13 @@ var init_errors = __esm({
   }
 });
 
+// packages/types/src/orchestrator.ts
+var init_orchestrator = __esm({
+  "packages/types/src/orchestrator.ts"() {
+    "use strict";
+  }
+});
+
 // packages/types/src/index.ts
 var init_src = __esm({
   "packages/types/src/index.ts"() {
@@ -2160,6 +2167,7 @@ var init_src = __esm({
     init_codec();
     init_tools();
     init_errors();
+    init_orchestrator();
   }
 });
 
@@ -2806,7 +2814,7 @@ var init_server = __esm({
         return `ws://localhost:${this._port}`;
       }
       async start() {
-        return new Promise((resolve7) => {
+        return new Promise((resolve9) => {
           this.httpServer = (0, import_http.createServer)(this.handleHttp.bind(this));
           this.wss = new import_ws2.WebSocketServer({
             server: this.httpServer,
@@ -2817,7 +2825,7 @@ var init_server = __esm({
           this.httpServer.listen(this.config.port, this.config.host || "0.0.0.0", () => {
             const addr = this.httpServer.address();
             this._port = addr.port;
-            resolve7();
+            resolve9();
           });
         });
       }
@@ -2826,9 +2834,9 @@ var init_server = __esm({
         for (const client of this.wss.clients) {
           client.close(1001, "Server shutting down");
         }
-        return new Promise((resolve7) => {
+        return new Promise((resolve9) => {
           this.wss.close(() => {
-            this.httpServer.close(() => resolve7());
+            this.httpServer.close(() => resolve9());
           });
         });
       }
@@ -3034,7 +3042,7 @@ var init_gossip_agent = __esm({
       }
       // ─── Public API ─────────────────────────────────────────────────────────────
       connect() {
-        return new Promise((resolve7, reject) => {
+        return new Promise((resolve9, reject) => {
           const ws = new import_ws3.default(this.config.relayUrl);
           const timeout = setTimeout(() => {
             ws.removeAllListeners();
@@ -3067,7 +3075,7 @@ var init_gossip_agent = __esm({
                   ws.on("error", (err) => this.emit("error", err));
                   this.startKeepAlive();
                   this.emit("connect", msg.sessionId);
-                  resolve7();
+                  resolve9();
                 } else if (msg.type === "error") {
                   clearTimeout(timeout);
                   ws.removeAllListeners();
@@ -3093,7 +3101,7 @@ var init_gossip_agent = __esm({
           this.reconnectTimer = null;
         }
         if (!this.ws) return;
-        return new Promise((resolve7) => {
+        return new Promise((resolve9) => {
           this.intentionalDisconnect = true;
           this._connected = false;
           const ws = this.ws;
@@ -3104,7 +3112,7 @@ var init_gossip_agent = __esm({
             settled = true;
             this.intentionalDisconnect = false;
             this.emit("disconnect", code);
-            resolve7();
+            resolve9();
           };
           const timer = setTimeout(() => done(1e3), 2e3);
           ws.once("close", (code) => {
@@ -3143,8 +3151,8 @@ var init_gossip_agent = __esm({
           throw new Error("Not connected to relay");
         }
         const encoded = Buffer.from(this.codec.encode(envelope));
-        return new Promise((resolve7, reject) => {
-          this.ws.send(encoded, (err) => err ? reject(err) : resolve7());
+        return new Promise((resolve9, reject) => {
+          this.ws.send(encoded, (err) => err ? reject(err) : resolve9());
         });
       }
       // ─── Internal ────────────────────────────────────────────────────────────────
@@ -3516,7 +3524,30 @@ var init_git_tools = __esm({
         return this.git("status", "--short");
       }
       async gitDiff(args) {
-        return args?.staged ? this.git("diff", "--staged") : this.git("diff");
+        const flags = args?.staged ? ["diff", "--staged"] : ["diff"];
+        if (args?.paths?.length) flags.push("--", ...args.paths);
+        return this.git(...flags);
+      }
+      async gitUntrackedDiff(paths) {
+        const diffs = [];
+        for (const p of paths) {
+          try {
+            const status = await this.git("status", "--porcelain", "--", p);
+            if (!status.startsWith("??")) continue;
+            const { stdout } = await execFileAsync2(
+              "git",
+              ["diff", "--no-index", "/dev/null", p],
+              { cwd: this.cwd }
+            ).catch((err) => {
+              const e = err;
+              return { stdout: e.stdout || "" };
+            });
+            if (stdout) diffs.push(stdout.trim());
+          } catch (err) {
+            console.warn(`[GitTools] gitUntrackedDiff skipped "${p}": ${err.message}`);
+          }
+        }
+        return diffs.join("\n");
       }
       async gitLog(args) {
         return this.git("log", "--oneline", `-${args?.count || 20}`);
@@ -3611,19 +3642,26 @@ var init_sandbox = __esm({
 });
 
 // packages/tools/src/tool-server.ts
-var import_msgpack3, ToolServer;
+function truncateAtLine(text, maxLength) {
+  if (text.length <= maxLength) return text;
+  const cut = text.lastIndexOf("\n", maxLength);
+  return text.slice(0, cut !== -1 ? cut : maxLength);
+}
+var import_msgpack3, import_crypto4, import_path4, ToolServer;
 var init_tool_server = __esm({
   "packages/tools/src/tool-server.ts"() {
     "use strict";
     init_src3();
     init_src();
     import_msgpack3 = __toESM(require_dist());
+    import_crypto4 = require("crypto");
     init_file_tools();
     init_shell_tools();
     init_git_tools();
     init_skill_tools();
     init_sandbox();
-    ToolServer = class {
+    import_path4 = require("path");
+    ToolServer = class _ToolServer {
       agent;
       fileTools;
       shellTools;
@@ -3631,6 +3669,16 @@ var init_tool_server = __esm({
       skillTools;
       sandbox;
       allowedCallers;
+      agentScopes = /* @__PURE__ */ new Map();
+      // agentId → scope path
+      agentRoots = /* @__PURE__ */ new Map();
+      // agentId → worktree root path
+      writeAgents = /* @__PURE__ */ new Set();
+      // agents with any write mode active
+      pendingReviews = /* @__PURE__ */ new Map();
+      agentWrittenFiles = /* @__PURE__ */ new Map();
+      // agentId → written file paths
+      static MAX_WRITTEN_FILES_PER_AGENT = 1024;
       constructor(config2) {
         this.allowedCallers = config2.allowedCallers ? new Set(config2.allowedCallers) : null;
         this.sandbox = new Sandbox(config2.projectRoot);
@@ -3658,7 +3706,33 @@ var init_tool_server = __esm({
       get agentId() {
         return this.agent.agentId;
       }
+      assignScope(agentId, scope) {
+        const normalized = scope.endsWith("/") ? scope : scope + "/";
+        this.agentScopes.set(agentId, normalized);
+        this.writeAgents.add(agentId);
+      }
+      assignRoot(agentId, root) {
+        this.agentRoots.set(agentId, root);
+        this.writeAgents.add(agentId);
+      }
+      releaseAgent(agentId) {
+        this.agentScopes.delete(agentId);
+        this.agentRoots.delete(agentId);
+        this.writeAgents.delete(agentId);
+        this.agentWrittenFiles.delete(agentId);
+      }
       async handleToolRequest(data, envelope) {
+        if (envelope.t === 4 /* RPC_RESPONSE */) {
+          const correlationId = envelope.rid_req || envelope.id;
+          const pending = this.pendingReviews.get(correlationId);
+          if (pending) {
+            this.pendingReviews.delete(correlationId);
+            const payload2 = data;
+            if (payload2?.error) pending.reject(new Error(payload2.error));
+            else pending.resolve(payload2?.result || "");
+          }
+          return;
+        }
         if (envelope.t !== 3 /* RPC_REQUEST */) return;
         if (this.allowedCallers && !this.allowedCallers.has(envelope.sid)) {
           console.error(`[ToolServer] Unauthorized tool call from ${envelope.sid}`);
@@ -3691,12 +3765,85 @@ var init_tool_server = __esm({
           console.error("[ToolServer] Failed to send RPC_RESPONSE:", sendErr.message);
         }
       }
+      enforceWriteScope(toolName, args, callerId) {
+        const scope = this.agentScopes.get(callerId);
+        const root = this.agentRoots.get(callerId);
+        if (toolName === "file_write") {
+          const filePath = args.path;
+          if (scope) {
+            const resolved = (0, import_path4.resolve)(this.sandbox.projectRoot, filePath);
+            const rel = (0, import_path4.relative)(this.sandbox.projectRoot, resolved);
+            if (rel.startsWith("..")) {
+              throw new Error(`Write blocked: "${filePath}" resolves outside project root`);
+            }
+            const normalizedRel = rel.endsWith("/") ? rel : rel + "/";
+            if (!normalizedRel.startsWith(scope)) {
+              throw new Error(`Write blocked: "${filePath}" is outside scope "${scope}"`);
+            }
+          }
+          if (root) {
+            const resolved = (0, import_path4.resolve)(root, filePath);
+            if (!resolved.startsWith(root)) {
+              throw new Error(`Write blocked: "${filePath}" is outside worktree root "${root}"`);
+            }
+          }
+        }
+        if (toolName === "shell_exec") {
+          if (scope) {
+            throw new Error("Shell execution blocked for scoped write agents");
+          }
+          if (root) {
+            const fullCmd = [args.command, ...args.args || []].join(" ");
+            const blockedPatterns = [
+              /\.git\/hooks/i,
+              /\.git\/config/i,
+              /core\.hookspath/i,
+              /\.\.\//
+            ];
+            for (const pattern of blockedPatterns) {
+              if (pattern.test(fullCmd)) {
+                throw new Error(`Shell command blocked for write-mode agent: matches ${pattern}`);
+              }
+            }
+          }
+        }
+        if (toolName === "git_commit") {
+          if (scope) {
+            throw new Error("Git commit blocked for scoped write agents");
+          }
+        }
+        if (toolName === "git_branch") {
+          if (scope) {
+            throw new Error("Git branch blocked for scoped write agents");
+          }
+        }
+      }
       async executeTool(name, args, callerId) {
+        if (callerId && this.writeAgents.has(callerId)) {
+          if (!this.agentScopes.has(callerId) && !this.agentRoots.has(callerId)) {
+            throw new Error(`Agent ${callerId} is a write agent but has no scope/root registered \u2014 rejecting (fail-closed)`);
+          }
+          const writableTools = ["file_write", "shell_exec", "git_commit", "git_branch"];
+          if (writableTools.includes(name)) {
+            this.enforceWriteScope(name, args, callerId);
+          }
+        }
+        const agentRoot = callerId ? this.agentRoots.get(callerId) : void 0;
         switch (name) {
           case "file_read":
             return this.fileTools.fileRead(args);
-          case "file_write":
-            return this.fileTools.fileWrite(args);
+          case "file_write": {
+            const result = await this.fileTools.fileWrite(args);
+            if (callerId) {
+              if (!this.agentWrittenFiles.has(callerId)) this.agentWrittenFiles.set(callerId, /* @__PURE__ */ new Set());
+              const tracked = this.agentWrittenFiles.get(callerId);
+              if (tracked.size >= _ToolServer.MAX_WRITTEN_FILES_PER_AGENT && !tracked.has(args.path)) {
+                throw new Error(`Agent ${callerId} exceeded max tracked file writes (${_ToolServer.MAX_WRITTEN_FILES_PER_AGENT})`);
+              }
+              tracked.add(args.path);
+            }
+            return result;
+          }
           case "file_search":
             return this.fileTools.fileSearch(args);
           case "file_grep":
@@ -3706,33 +3853,122 @@ var init_tool_server = __esm({
           case "shell_exec":
             return this.shellTools.shellExec({
               ...args,
-              cwd: this.sandbox.projectRoot
+              cwd: agentRoot || this.sandbox.projectRoot
             });
           case "git_status":
-            return this.gitTools.gitStatus();
+            return agentRoot ? new GitTools(agentRoot).gitStatus() : this.gitTools.gitStatus();
           case "git_diff":
-            return this.gitTools.gitDiff(args);
+            return agentRoot ? new GitTools(agentRoot).gitDiff(args) : this.gitTools.gitDiff(args);
           case "git_log":
-            return this.gitTools.gitLog(args);
+            return agentRoot ? new GitTools(agentRoot).gitLog(args) : this.gitTools.gitLog(args);
           case "git_commit":
-            return this.gitTools.gitCommit(args);
+            return agentRoot ? new GitTools(agentRoot).gitCommit(args) : this.gitTools.gitCommit(args);
           case "git_branch":
-            return this.gitTools.gitBranch(args);
+            return agentRoot ? new GitTools(agentRoot).gitBranch(args) : this.gitTools.gitBranch(args);
           case "suggest_skill":
             return this.skillTools.suggestSkill(
               args,
               callerId
             );
+          case "verify_write":
+            return this.handleVerifyWrite(callerId || "unknown", args.test_file);
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
+      }
+      async handleVerifyWrite(callerId, testFile) {
+        const writtenFiles = this.agentWrittenFiles.get(callerId);
+        const scope = this.agentScopes.get(callerId);
+        const paths = writtenFiles?.size ? [...writtenFiles] : scope ? [scope] : void 0;
+        let fullDiff = "";
+        try {
+          const diff = await this.gitTools.gitDiff({ staged: false, paths });
+          const staged = await this.gitTools.gitDiff({ staged: true, paths });
+          const untracked = paths ? await this.gitTools.gitUntrackedDiff(paths) : "";
+          fullDiff = [diff, staged, untracked].filter(Boolean).join("\n");
+        } catch (err) {
+          console.warn(`[ToolServer] verify_write git diff failed: ${err.message}`);
+        }
+        if (!fullDiff.trim()) {
+          return "No changes detected. Nothing to verify.";
+        }
+        if (testFile) {
+          if (testFile.startsWith("-")) {
+            throw new Error(`verify_write: test_file must be a file path, not a flag: "${testFile}"`);
+          }
+          this.sandbox.validatePath(testFile);
+          if (/\.(js|json)$/i.test(testFile) && !testFile.includes(".test.") && !testFile.includes(".spec.")) {
+            throw new Error(`verify_write: test_file must be a test file (.test.ts/.spec.ts), got: "${testFile}"`);
+          }
+        }
+        const testArgs = ["jest", "--config", "jest.config.base.js"];
+        if (testFile) testArgs.push(testFile);
+        testArgs.push("--verbose");
+        let testResult;
+        try {
+          testResult = await this.shellTools.shellExec({ command: "npx", args: testArgs, cwd: this.sandbox.projectRoot, timeout: 3e4 });
+        } catch (err) {
+          testResult = `Tests failed: ${err.message}`;
+        }
+        let reviewResult = "";
+        try {
+          reviewResult = await this.requestPeerReview(callerId, fullDiff, testResult);
+        } catch (err) {
+          reviewResult = `Peer review unavailable: ${err.message}`;
+        }
+        const testStatus = testResult.includes("FAIL") ? "FAIL" : "PASS";
+        return `## Verification Result
+
+### Tests: ${testStatus}
+${testResult.slice(-2e3)}
+
+### Peer Review
+${reviewResult || "No reviewer available"}
+
+### Diff Summary
+${truncateAtLine(fullDiff, 3e3)}`;
+      }
+      async requestPeerReview(callerId, diff, testResult) {
+        const requestId = (0, import_crypto4.randomUUID)();
+        const reviewPromise = new Promise((resolve9, reject) => {
+          const timer = setTimeout(() => {
+            this.pendingReviews.delete(requestId);
+            reject(new Error("Review timed out"));
+          }, 55e3);
+          timer.unref();
+          this.pendingReviews.set(requestId, {
+            resolve: (r) => {
+              clearTimeout(timer);
+              resolve9(r);
+            },
+            reject: (e) => {
+              clearTimeout(timer);
+              reject(e);
+            }
+          });
+        });
+        try {
+          const body = Buffer.from((0, import_msgpack3.encode)({
+            tool: "review_request",
+            args: { callerId, diff: truncateAtLine(diff, 3e3), testResult: truncateAtLine(testResult, 1e3) }
+          }));
+          const msg = Message.createRpcRequest(this.agent.agentId, "orchestrator", requestId, body);
+          await this.agent.sendEnvelope(msg.toEnvelope());
+        } catch (err) {
+          const pending = this.pendingReviews.get(requestId);
+          if (pending) {
+            this.pendingReviews.delete(requestId);
+            pending.reject(err);
+          }
+        }
+        return reviewPromise;
       }
     };
   }
 });
 
 // packages/tools/src/definitions.ts
-var FILE_TOOLS, SHELL_TOOLS, GIT_TOOLS, SKILL_TOOLS, ALL_TOOLS;
+var FILE_TOOLS, SHELL_TOOLS, GIT_TOOLS, SKILL_TOOLS, VERIFY_TOOLS, ALL_TOOLS;
 var init_definitions = __esm({
   "packages/tools/src/definitions.ts"() {
     "use strict";
@@ -3883,7 +4119,19 @@ var init_definitions = __esm({
         }
       }
     ];
-    ALL_TOOLS = [...FILE_TOOLS, ...SHELL_TOOLS, ...GIT_TOOLS, ...SKILL_TOOLS];
+    VERIFY_TOOLS = [
+      {
+        name: "verify_write",
+        description: "Run tests and get a peer review of your changes. Call this after writing files to verify correctness. Returns test results + reviewer feedback.",
+        parameters: {
+          type: "object",
+          properties: {
+            test_file: { type: "string", description: 'Specific test file to run (e.g. "tests/tools/tool-server-scope.test.ts"). If omitted, runs full test suite.' }
+          }
+        }
+      }
+    ];
+    ALL_TOOLS = [...FILE_TOOLS, ...SHELL_TOOLS, ...GIT_TOOLS, ...SKILL_TOOLS, ...VERIFY_TOOLS];
   }
 });
 
@@ -3930,11 +4178,11 @@ function createProvider(provider, model, apiKey) {
       throw new Error(`Unknown provider: ${provider}`);
   }
 }
-var import_crypto4, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider;
+var import_crypto5, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider;
 var init_llm_client = __esm({
   "packages/orchestrator/src/llm-client.ts"() {
     "use strict";
-    import_crypto4 = require("crypto");
+    import_crypto5 = require("crypto");
     AnthropicProvider = class {
       constructor(apiKey, model) {
         this.apiKey = apiKey;
@@ -4156,9 +4404,24 @@ var init_llm_client = __esm({
       }
       parseGeminiResponse(data) {
         const candidates = data.candidates;
-        if (!candidates?.length) return { text: "[No response from Gemini]" };
-        const parts = candidates[0].content.parts;
-        if (!parts?.length) return { text: "" };
+        if (!candidates?.length) {
+          const blockReason = data.promptFeedback?.blockReason;
+          if (blockReason) process.stderr.write(`[GeminiProvider] Response blocked: ${blockReason}
+`);
+          return { text: "[No response from Gemini]" };
+        }
+        const candidate = candidates[0];
+        const finishReason = candidate.finishReason;
+        if (finishReason && finishReason !== "STOP" && finishReason !== "MAX_TOKENS") {
+          process.stderr.write(`[GeminiProvider] Unusual finishReason: ${finishReason}
+`);
+        }
+        const parts = candidate.content?.parts || [];
+        if (!parts?.length) {
+          process.stderr.write(`[GeminiProvider] Empty response parts (finishReason: ${finishReason || "unknown"})
+`);
+          return { text: finishReason === "SAFETY" ? "[Response blocked by Gemini safety filter]" : "" };
+        }
         const textParts = [];
         const toolCalls = [];
         for (const part of parts) {
@@ -4168,7 +4431,7 @@ var init_llm_client = __esm({
           if (part.functionCall) {
             const fc = part.functionCall;
             toolCalls.push({
-              id: fc.id || (0, import_crypto4.randomUUID)().slice(0, 12),
+              id: fc.id || (0, import_crypto5.randomUUID)().slice(0, 12),
               name: fc.name,
               arguments: fc.args || {}
             });
@@ -4272,11 +4535,11 @@ var init_agent_registry = __esm({
 });
 
 // packages/orchestrator/src/task-dispatcher.ts
-var import_crypto5, TaskDispatcher;
+var import_crypto6, TaskDispatcher;
 var init_task_dispatcher = __esm({
   "packages/orchestrator/src/task-dispatcher.ts"() {
     "use strict";
-    import_crypto5 = require("crypto");
+    import_crypto6 = require("crypto");
     TaskDispatcher = class {
       constructor(llm, registry2) {
         this.llm = llm;
@@ -4312,7 +4575,7 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
             originalTask: task,
             strategy: plan.strategy || "single",
             subTasks: (plan.subTasks || []).map((st) => ({
-              id: (0, import_crypto5.randomUUID)(),
+              id: (0, import_crypto6.randomUUID)(),
               description: st.description,
               requiredSkills: st.requiredSkills || [],
               status: "pending"
@@ -4324,7 +4587,7 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
             originalTask: task,
             strategy: "single",
             subTasks: [{
-              id: (0, import_crypto5.randomUUID)(),
+              id: (0, import_crypto6.randomUUID)(),
               description: task,
               requiredSkills: [],
               status: "pending"
@@ -4357,6 +4620,56 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
         }
         return plan;
       }
+      /**
+       * Classify each sub-task as read or write and suggest write modes.
+       * Falls back to all-read on LLM failure.
+       */
+      async classifyWriteModes(plan) {
+        const subTaskList = plan.subTasks.map((st, i) => `${i}. [agent: ${st.assignedAgent || "unassigned"}] ${st.description}`).join("\n");
+        try {
+          const messages = [
+            {
+              role: "system",
+              content: `Classify each sub-task as read-only or write. For write tasks, suggest a write mode and scope.
+
+Rules:
+- Tasks with action verbs (fix, implement, add, create, refactor, update, delete, write, build, migrate) \u2192 write
+- Tasks with observation verbs (review, analyze, check, verify, list, explain, summarize, audit, trace) \u2192 read
+- If the task mentions a specific directory or package path \u2192 write_mode: scoped, scope: that path
+- If the task is broad with no clear directory boundary \u2192 write_mode: sequential
+- If the task says "experiment", "try", "prototype", or "spike" \u2192 write_mode: worktree
+
+Respond as JSON array:
+[{ "index": 0, "access": "write", "write_mode": "scoped", "scope": "packages/tools/" }, { "index": 1, "access": "read" }]`
+            },
+            { role: "user", content: `Sub-tasks:
+${subTaskList}` }
+          ];
+          const response = await this.llm.generate(messages, { temperature: 0 });
+          const jsonMatch = response.text.match(/\[[\s\S]*\]/);
+          if (!jsonMatch) throw new Error("No JSON array in response");
+          const classifications = JSON.parse(jsonMatch[0]);
+          const validModes = /* @__PURE__ */ new Set(["sequential", "scoped", "worktree"]);
+          return plan.subTasks.map((st, i) => {
+            const c = classifications.find((cl) => cl.index === i);
+            const isWrite = c?.access === "write";
+            const mode = isWrite && c?.write_mode && validModes.has(c.write_mode) ? c.write_mode : void 0;
+            return {
+              agentId: st.assignedAgent || "",
+              task: st.description,
+              access: isWrite ? "write" : "read",
+              writeMode: mode,
+              scope: isWrite ? c?.scope : void 0
+            };
+          });
+        } catch {
+          return plan.subTasks.map((st) => ({
+            agentId: st.assignedAgent || "",
+            task: st.description,
+            access: "read"
+          }));
+        }
+      }
       /** Collect all unique skills from registered agents */
       getAvailableSkills() {
         const skills = /* @__PURE__ */ new Set();
@@ -4370,16 +4683,16 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
 });
 
 // packages/orchestrator/src/worker-agent.ts
-var import_crypto6, import_msgpack4, MAX_TOOL_TURNS, TOOL_CALL_TIMEOUT_MS, WorkerAgent;
+var import_crypto7, import_msgpack4, MAX_TOOL_TURNS, TOOL_CALL_TIMEOUT_MS, WorkerAgent;
 var init_worker_agent = __esm({
   "packages/orchestrator/src/worker-agent.ts"() {
     "use strict";
-    import_crypto6 = require("crypto");
+    import_crypto7 = require("crypto");
     init_src3();
     init_src();
     import_msgpack4 = __toESM(require_dist());
     MAX_TOOL_TURNS = 25;
-    TOOL_CALL_TIMEOUT_MS = 3e4;
+    TOOL_CALL_TIMEOUT_MS = 6e4;
     WorkerAgent = class _WorkerAgent {
       constructor(agentId, llm, relayUrl, tools, instructions) {
         this.agentId = agentId;
@@ -4476,8 +4789,8 @@ ${context}` : ""}`
       }
       /** Send RPC_REQUEST to tool-server via relay */
       async callTool(name, args) {
-        const requestId = (0, import_crypto6.randomUUID)();
-        const resultPromise = new Promise((resolve7, reject) => {
+        const requestId = (0, import_crypto7.randomUUID)();
+        const resultPromise = new Promise((resolve9, reject) => {
           const timer = setTimeout(() => {
             if (this.pendingToolCalls.has(requestId)) {
               this.pendingToolCalls.delete(requestId);
@@ -4487,7 +4800,7 @@ ${context}` : ""}`
           this.pendingToolCalls.set(requestId, {
             resolve: (r) => {
               clearTimeout(timer);
-              resolve7(r);
+              resolve9(r);
             },
             reject: (e) => {
               clearTimeout(timer);
@@ -4568,31 +4881,41 @@ function resolveSkill(agentId, skill, projectRoot) {
   const filename = `${sanitized}.md`;
   const hyphenFilename = `${sanitized.replace(/_/g, "-")}.md`;
   const bases = [
-    (0, import_path4.resolve)(projectRoot, ".gossip", "agents", agentId, "skills"),
-    (0, import_path4.resolve)(projectRoot, ".gossip", "skills"),
-    (0, import_path4.resolve)(__dirname, "default-skills")
+    (0, import_path5.resolve)(projectRoot, ".gossip", "agents", agentId, "skills"),
+    (0, import_path5.resolve)(projectRoot, ".gossip", "skills"),
+    (0, import_path5.resolve)(__dirname, "default-skills")
   ];
   for (const base of bases) {
     for (const fname of [filename, hyphenFilename]) {
-      const candidate = (0, import_path4.resolve)(base, fname);
+      const candidate = (0, import_path5.resolve)(base, fname);
       if (!candidate.startsWith(base + "/")) continue;
       if ((0, import_fs3.existsSync)(candidate)) return (0, import_fs3.readFileSync)(candidate, "utf-8");
     }
   }
   return null;
 }
-var import_fs3, import_path4;
+var import_fs3, import_path5;
 var init_skill_loader = __esm({
   "packages/orchestrator/src/skill-loader.ts"() {
     "use strict";
     import_fs3 = require("fs");
-    import_path4 = require("path");
+    import_path5 = require("path");
   }
 });
 
 // packages/orchestrator/src/prompt-assembler.ts
 function assemblePrompt(parts) {
   const blocks = [];
+  if (parts.chainContext) {
+    blocks.push(`
+
+${parts.chainContext}`);
+  }
+  if (parts.sessionContext) {
+    blocks.push(`
+
+${parts.sessionContext}`);
+  }
   if (parts.memory) {
     blocks.push(`
 
@@ -4629,23 +4952,23 @@ var init_prompt_assembler = __esm({
 });
 
 // packages/orchestrator/src/agent-memory.ts
-var import_fs4, import_path5, AgentMemoryReader;
+var import_fs4, import_path6, AgentMemoryReader;
 var init_agent_memory = __esm({
   "packages/orchestrator/src/agent-memory.ts"() {
     "use strict";
     import_fs4 = require("fs");
-    import_path5 = require("path");
+    import_path6 = require("path");
     AgentMemoryReader = class {
       constructor(projectRoot) {
         this.projectRoot = projectRoot;
       }
       loadMemory(agentId, taskText) {
-        const memDir = (0, import_path5.join)(this.projectRoot, ".gossip", "agents", agentId, "memory");
-        const indexPath = (0, import_path5.join)(memDir, "MEMORY.md");
+        const memDir = (0, import_path6.join)(this.projectRoot, ".gossip", "agents", agentId, "memory");
+        const indexPath = (0, import_path6.join)(memDir, "MEMORY.md");
         if (!(0, import_fs4.existsSync)(indexPath)) return null;
         const parts = [];
         parts.push((0, import_fs4.readFileSync)(indexPath, "utf-8"));
-        const knowledgeDir = (0, import_path5.join)(memDir, "knowledge");
+        const knowledgeDir = (0, import_path6.join)(memDir, "knowledge");
         if ((0, import_fs4.existsSync)(knowledgeDir)) {
           const files = this.selectKnowledgeFiles(knowledgeDir, taskText);
           for (const file2 of files) {
@@ -4654,7 +4977,7 @@ var init_agent_memory = __esm({
             this.touchKnowledgeFile(file2.path, content);
           }
         }
-        const calPath = (0, import_path5.join)(memDir, "calibration", "accuracy.md");
+        const calPath = (0, import_path6.join)(memDir, "calibration", "accuracy.md");
         if ((0, import_fs4.existsSync)(calPath)) {
           parts.push((0, import_fs4.readFileSync)(calPath, "utf-8"));
         }
@@ -4665,7 +4988,7 @@ var init_agent_memory = __esm({
         const scored = [];
         const lower = taskText.toLowerCase();
         for (const file2 of files) {
-          const filePath = (0, import_path5.join)(knowledgeDir, file2);
+          const filePath = (0, import_path6.join)(knowledgeDir, file2);
           const content = (0, import_fs4.readFileSync)(filePath, "utf-8");
           const frontmatter = this.parseFrontmatter(content);
           if (!frontmatter) continue;
@@ -4725,23 +5048,23 @@ function truncateAtWord(text, maxLen) {
   const lastSpace = truncated.lastIndexOf(" ");
   return (lastSpace > maxLen * 0.8 ? truncated.slice(0, lastSpace) : truncated) + "...";
 }
-var import_fs5, import_path6, MemoryWriter;
+var import_fs5, import_path7, MemoryWriter;
 var init_memory_writer = __esm({
   "packages/orchestrator/src/memory-writer.ts"() {
     "use strict";
     import_fs5 = require("fs");
-    import_path6 = require("path");
+    import_path7 = require("path");
     MemoryWriter = class {
       constructor(projectRoot) {
         this.projectRoot = projectRoot;
       }
       getMemDir(agentId) {
-        return (0, import_path6.join)(this.projectRoot, ".gossip", "agents", agentId, "memory");
+        return (0, import_path7.join)(this.projectRoot, ".gossip", "agents", agentId, "memory");
       }
       ensureDirs(agentId) {
         const memDir = this.getMemDir(agentId);
-        (0, import_fs5.mkdirSync)((0, import_path6.join)(memDir, "knowledge"), { recursive: true });
-        (0, import_fs5.mkdirSync)((0, import_path6.join)(memDir, "calibration"), { recursive: true });
+        (0, import_fs5.mkdirSync)((0, import_path7.join)(memDir, "knowledge"), { recursive: true });
+        (0, import_fs5.mkdirSync)((0, import_path7.join)(memDir, "calibration"), { recursive: true });
         return memDir;
       }
       async writeTaskEntry(agentId, data) {
@@ -4759,7 +5082,7 @@ var init_memory_writer = __esm({
           importance: this.deriveImportance(data.scores),
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
         };
-        (0, import_fs5.appendFileSync)((0, import_path6.join)(memDir, "tasks.jsonl"), JSON.stringify(entry) + "\n");
+        (0, import_fs5.appendFileSync)((0, import_path7.join)(memDir, "tasks.jsonl"), JSON.stringify(entry) + "\n");
       }
       deriveImportance(scores) {
         return (scores.relevance + scores.accuracy + scores.uniqueness) / 15;
@@ -4768,13 +5091,13 @@ var init_memory_writer = __esm({
         const memDir = this.getMemDir(agentId);
         const parts = [`# Agent Memory \u2014 ${agentId}
 `];
-        const knowledgeDir = (0, import_path6.join)(memDir, "knowledge");
+        const knowledgeDir = (0, import_path7.join)(memDir, "knowledge");
         if ((0, import_fs5.existsSync)(knowledgeDir)) {
           const files = (0, import_fs5.readdirSync)(knowledgeDir).filter((f) => f.endsWith(".md"));
           if (files.length > 0) {
             parts.push("## Knowledge");
             for (const file2 of files) {
-              const content = (0, import_fs5.readFileSync)((0, import_path6.join)(knowledgeDir, file2), "utf-8");
+              const content = (0, import_fs5.readFileSync)((0, import_path7.join)(knowledgeDir, file2), "utf-8");
               const descMatch = content.match(/description:\s*(.+)/);
               const desc = descMatch ? descMatch[1].trim() : file2.replace(".md", "");
               parts.push(`- [${file2.replace(".md", "")}](knowledge/${file2}) \u2014 ${desc}`);
@@ -4782,7 +5105,7 @@ var init_memory_writer = __esm({
             parts.push("");
           }
         }
-        const calPath = (0, import_path6.join)(memDir, "calibration", "accuracy.md");
+        const calPath = (0, import_path7.join)(memDir, "calibration", "accuracy.md");
         if ((0, import_fs5.existsSync)(calPath)) {
           const content = (0, import_fs5.readFileSync)(calPath, "utf-8");
           const descMatch = content.match(/description:\s*(.+)/);
@@ -4790,7 +5113,7 @@ var init_memory_writer = __esm({
           parts.push(`- [accuracy](calibration/accuracy.md) \u2014 ${descMatch ? descMatch[1].trim() : "accuracy data"}`);
           parts.push("");
         }
-        const tasksPath = (0, import_path6.join)(memDir, "tasks.jsonl");
+        const tasksPath = (0, import_path7.join)(memDir, "tasks.jsonl");
         if ((0, import_fs5.existsSync)(tasksPath)) {
           const lines = (0, import_fs5.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
           const recent = lines.slice(-5).reverse();
@@ -4808,19 +5131,19 @@ var init_memory_writer = __esm({
             parts.push("");
           }
         }
-        (0, import_fs5.writeFileSync)((0, import_path6.join)(memDir, "MEMORY.md"), parts.join("\n"));
+        (0, import_fs5.writeFileSync)((0, import_path7.join)(memDir, "MEMORY.md"), parts.join("\n"));
       }
     };
   }
 });
 
 // packages/orchestrator/src/memory-compactor.ts
-var import_fs6, import_path7, MemoryCompactor;
+var import_fs6, import_path8, MemoryCompactor;
 var init_memory_compactor = __esm({
   "packages/orchestrator/src/memory-compactor.ts"() {
     "use strict";
     import_fs6 = require("fs");
-    import_path7 = require("path");
+    import_path8 = require("path");
     MemoryCompactor = class {
       constructor(projectRoot) {
         this.projectRoot = projectRoot;
@@ -4830,8 +5153,8 @@ var init_memory_compactor = __esm({
         return importance * (1 / (1 + days / 30));
       }
       compactIfNeeded(agentId, maxEntries = 20) {
-        const memDir = (0, import_path7.join)(this.projectRoot, ".gossip", "agents", agentId, "memory");
-        const tasksPath = (0, import_path7.join)(memDir, "tasks.jsonl");
+        const memDir = (0, import_path8.join)(this.projectRoot, ".gossip", "agents", agentId, "memory");
+        const tasksPath = (0, import_path8.join)(memDir, "tasks.jsonl");
         if (!(0, import_fs6.existsSync)(tasksPath)) return { archived: 0 };
         const lines = (0, import_fs6.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
         if (lines.length <= maxEntries) return { archived: 0 };
@@ -4847,7 +5170,7 @@ var init_memory_compactor = __esm({
         entries.sort((a, b) => a.warmth - b.warmth);
         const toArchive = entries.slice(0, entries.length - maxEntries);
         const toKeep = entries.slice(entries.length - maxEntries);
-        const archivePath = (0, import_path7.join)(memDir, "archive.jsonl");
+        const archivePath = (0, import_path8.join)(memDir, "archive.jsonl");
         for (const item of toArchive) {
           const archived = {
             archivedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -4865,12 +5188,12 @@ var init_memory_compactor = __esm({
 });
 
 // packages/orchestrator/src/task-graph.ts
-var import_fs7, import_path8, MAX_SCAN_LINES, TaskGraph;
+var import_fs7, import_path9, MAX_SCAN_LINES, TaskGraph;
 var init_task_graph = __esm({
   "packages/orchestrator/src/task-graph.ts"() {
     "use strict";
     import_fs7 = require("fs");
-    import_path8 = require("path");
+    import_path9 = require("path");
     MAX_SCAN_LINES = 1e3;
     TaskGraph = class {
       graphPath;
@@ -4880,11 +5203,11 @@ var init_task_graph = __esm({
       // taskId → last event line number
       eventCount = 0;
       constructor(projectRoot) {
-        const gossipDir = (0, import_path8.join)(projectRoot, ".gossip");
+        const gossipDir = (0, import_path9.join)(projectRoot, ".gossip");
         (0, import_fs7.mkdirSync)(gossipDir, { recursive: true });
-        this.graphPath = (0, import_path8.join)(gossipDir, "task-graph.jsonl");
-        this.syncMetaPath = (0, import_path8.join)(gossipDir, "task-graph-sync.json");
-        this.indexPath = (0, import_path8.join)(gossipDir, "task-graph-index.json");
+        this.graphPath = (0, import_path9.join)(gossipDir, "task-graph.jsonl");
+        this.syncMetaPath = (0, import_path9.join)(gossipDir, "task-graph-sync.json");
+        this.indexPath = (0, import_path9.join)(gossipDir, "task-graph-index.json");
         this.loadIndex();
         if ((0, import_fs7.existsSync)(this.graphPath)) {
           const buf = (0, import_fs7.readFileSync)(this.graphPath);
@@ -5084,21 +5407,21 @@ var init_task_graph = __esm({
 });
 
 // packages/orchestrator/src/skill-catalog.ts
-var import_fs8, import_path9, SkillCatalog;
+var import_fs8, import_path10, SkillCatalog;
 var init_skill_catalog = __esm({
   "packages/orchestrator/src/skill-catalog.ts"() {
     "use strict";
     import_fs8 = require("fs");
-    import_path9 = require("path");
+    import_path10 = require("path");
     SkillCatalog = class {
       entries;
       skillsDir;
       constructor(catalogPath) {
-        const defaultPath = (0, import_path9.resolve)(__dirname, "default-skills", "catalog.json");
+        const defaultPath = (0, import_path10.resolve)(__dirname, "default-skills", "catalog.json");
         const raw = (0, import_fs8.readFileSync)(catalogPath || defaultPath, "utf-8");
         const data = JSON.parse(raw);
         this.entries = data.skills;
-        this.skillsDir = (0, import_path9.resolve)(__dirname, "default-skills");
+        this.skillsDir = (0, import_path10.resolve)(__dirname, "default-skills");
       }
       listSkills() {
         return [...this.entries];
@@ -5136,12 +5459,12 @@ var init_skill_catalog = __esm({
 });
 
 // packages/orchestrator/src/skill-gap-tracker.ts
-var import_fs9, import_path10, MAX_SCAN_LINES2, MAX_LOG_LINES, TRUNCATE_TO, SkillGapTracker;
+var import_fs9, import_path11, MAX_SCAN_LINES2, MAX_LOG_LINES, TRUNCATE_TO, SkillGapTracker;
 var init_skill_gap_tracker = __esm({
   "packages/orchestrator/src/skill-gap-tracker.ts"() {
     "use strict";
     import_fs9 = require("fs");
-    import_path10 = require("path");
+    import_path11 = require("path");
     MAX_SCAN_LINES2 = 500;
     MAX_LOG_LINES = 5e3;
     TRUNCATE_TO = 1e3;
@@ -5149,8 +5472,8 @@ var init_skill_gap_tracker = __esm({
       gapLogPath;
       skillsDir;
       constructor(projectRoot) {
-        this.gapLogPath = (0, import_path10.join)(projectRoot, ".gossip", "skill-gaps.jsonl");
-        this.skillsDir = (0, import_path10.join)(projectRoot, ".gossip", "skills");
+        this.gapLogPath = (0, import_path11.join)(projectRoot, ".gossip", "skill-gaps.jsonl");
+        this.skillsDir = (0, import_path11.join)(projectRoot, ".gossip", "skills");
       }
       readEntries() {
         if (!(0, import_fs9.existsSync)(this.gapLogPath)) return [];
@@ -5199,7 +5522,7 @@ var init_skill_gap_tracker = __esm({
         }
         const fileName = skillName.replace(/_/g, "-") + ".md";
         (0, import_fs9.mkdirSync)(this.skillsDir, { recursive: true });
-        const filePath = (0, import_path10.join)(this.skillsDir, fileName);
+        const filePath = (0, import_path11.join)(this.skillsDir, fileName);
         const suggestedBy = [...seen.entries()].map(([agent, reason]) => `- ${agent}: "${reason}"`).join("\n");
         const content = `# ${skillName}
 
@@ -5263,12 +5586,147 @@ ${suggestedBy}
   }
 });
 
+// packages/orchestrator/src/scope-tracker.ts
+var import_path12, ScopeTracker;
+var init_scope_tracker = __esm({
+  "packages/orchestrator/src/scope-tracker.ts"() {
+    "use strict";
+    import_path12 = require("path");
+    ScopeTracker = class {
+      // taskId → scope (for release)
+      constructor(projectRoot) {
+        this.projectRoot = projectRoot;
+      }
+      activeScopes = /* @__PURE__ */ new Map();
+      // normalized scope → taskId
+      taskToScope = /* @__PURE__ */ new Map();
+      normalize(scope) {
+        if (!scope || !scope.trim()) throw new Error("Scope must not be empty");
+        const abs = (0, import_path12.resolve)(this.projectRoot, scope);
+        const rel = (0, import_path12.relative)(this.projectRoot, abs);
+        if (rel.startsWith("..")) throw new Error(`Scope "${scope}" resolves outside project root`);
+        if (rel === "") throw new Error(`Scope "${scope}" resolves to project root \u2014 too broad`);
+        return rel.endsWith("/") ? rel : rel + "/";
+      }
+      hasOverlap(scope) {
+        const normalized = this.normalize(scope);
+        for (const [activeScope, taskId] of this.activeScopes) {
+          if (normalized.startsWith(activeScope) || activeScope.startsWith(normalized)) {
+            return { overlaps: true, conflictTaskId: taskId, conflictScope: activeScope };
+          }
+        }
+        return { overlaps: false };
+      }
+      register(scope, taskId) {
+        const normalized = this.normalize(scope);
+        this.activeScopes.set(normalized, taskId);
+        this.taskToScope.set(taskId, normalized);
+      }
+      release(taskId) {
+        const scope = this.taskToScope.get(taskId);
+        if (scope) {
+          this.activeScopes.delete(scope);
+          this.taskToScope.delete(taskId);
+        }
+      }
+      getActiveScopeCount() {
+        return this.activeScopes.size;
+      }
+      clear() {
+        this.activeScopes.clear();
+        this.taskToScope.clear();
+      }
+    };
+  }
+});
+
+// packages/orchestrator/src/worktree-manager.ts
+var import_child_process3, import_util5, import_promises2, import_path13, import_os, execFileAsync3, WorktreeManager;
+var init_worktree_manager = __esm({
+  "packages/orchestrator/src/worktree-manager.ts"() {
+    "use strict";
+    import_child_process3 = require("child_process");
+    import_util5 = require("util");
+    import_promises2 = require("fs/promises");
+    import_path13 = require("path");
+    import_os = require("os");
+    execFileAsync3 = (0, import_util5.promisify)(import_child_process3.execFile);
+    WorktreeManager = class {
+      constructor(projectRoot) {
+        this.projectRoot = projectRoot;
+      }
+      async create(taskId) {
+        const branch = `gossip-${taskId}`;
+        const wtPath = await (0, import_promises2.mkdtemp)((0, import_path13.join)((0, import_os.tmpdir)(), "gossip-wt-"));
+        await execFileAsync3("git", ["branch", branch, "HEAD"], { cwd: this.projectRoot });
+        try {
+          await execFileAsync3("git", ["worktree", "add", wtPath, branch], { cwd: this.projectRoot });
+        } catch (err) {
+          try {
+            await execFileAsync3("git", ["branch", "-D", branch], { cwd: this.projectRoot });
+          } catch {
+          }
+          throw err;
+        }
+        return { path: wtPath, branch };
+      }
+      async merge(taskId) {
+        const branch = `gossip-${taskId}`;
+        const log3 = await execFileAsync3("git", ["log", `HEAD..${branch}`, "--oneline"], { cwd: this.projectRoot });
+        if (!log3.stdout.trim()) return { merged: true };
+        try {
+          await execFileAsync3("git", ["-c", "core.hooksPath=/dev/null", "merge", branch, "--no-edit"], { cwd: this.projectRoot });
+          return { merged: true };
+        } catch {
+          await execFileAsync3("git", ["merge", "--abort"], { cwd: this.projectRoot });
+          const diff = await execFileAsync3("git", ["diff", "--name-only", `HEAD...${branch}`], { cwd: this.projectRoot });
+          const files = diff.stdout.trim();
+          return { merged: false, conflicts: files ? files.split("\n") : [] };
+        }
+      }
+      async cleanup(taskId, wtPath) {
+        const branch = `gossip-${taskId}`;
+        try {
+          await execFileAsync3("git", ["worktree", "remove", wtPath, "--force"], { cwd: this.projectRoot });
+        } catch {
+        }
+        try {
+          await execFileAsync3("git", ["branch", "-D", branch], { cwd: this.projectRoot });
+        } catch {
+        }
+      }
+      async pruneOrphans() {
+        try {
+          const result = await execFileAsync3("git", ["worktree", "list", "--porcelain"], { cwd: this.projectRoot });
+          const orphans = result.stdout.split("\n\n").filter((block) => block.includes("gossip-wt-")).map((block) => block.match(/worktree (.+)/)?.[1]).filter(Boolean);
+          for (const wtPath of orphans) {
+            try {
+              await execFileAsync3("git", ["worktree", "remove", wtPath, "--force"], { cwd: this.projectRoot });
+            } catch {
+            }
+          }
+          await execFileAsync3("git", ["worktree", "prune"], { cwd: this.projectRoot });
+          const branchResult = await execFileAsync3("git", ["branch", "--list", "gossip-*"], { cwd: this.projectRoot });
+          const branches = branchResult.stdout.trim().split("\n").map((b) => b.trim().replace(/^\*\s*/, "")).filter(Boolean);
+          for (const b of branches) {
+            try {
+              await execFileAsync3("git", ["branch", "-D", b], { cwd: this.projectRoot });
+            } catch {
+            }
+          }
+        } catch {
+        }
+      }
+    };
+  }
+});
+
 // packages/orchestrator/src/dispatch-pipeline.ts
-var import_crypto7, log, DispatchPipeline;
+var import_crypto8, log, DispatchPipeline;
 var init_dispatch_pipeline = __esm({
   "packages/orchestrator/src/dispatch-pipeline.ts"() {
     "use strict";
-    import_crypto7 = require("crypto");
+    import_crypto8 = require("crypto");
     init_skill_loader();
     init_prompt_assembler();
     init_agent_memory();
@@ -5277,6 +5735,8 @@ var init_dispatch_pipeline = __esm({
     init_task_graph();
     init_skill_catalog();
     init_skill_gap_tracker();
+    init_scope_tracker();
+    init_worktree_manager();
     log = (msg) => process.stderr.write(`[gossipcat] ${msg}
 `);
     DispatchPipeline = class _DispatchPipeline {
@@ -5289,41 +5749,74 @@ var init_dispatch_pipeline = __esm({
       memCompactor;
       gapTracker;
       catalog;
+      llm;
       gossipPublisher;
+      sessionGossip = [];
+      plans = /* @__PURE__ */ new Map();
+      static MAX_SESSION_GOSSIP = 20;
       tasks = /* @__PURE__ */ new Map();
       batches = /* @__PURE__ */ new Map();
+      scopeTracker;
+      worktreeManager;
+      writeQueue = [];
+      writeActive = false;
       constructor(config2) {
         this.projectRoot = config2.projectRoot;
         this.workers = config2.workers;
         this.registryGet = config2.registryGet;
         this.gossipPublisher = config2.gossipPublisher ?? null;
+        this.llm = config2.llm ?? null;
         this.taskGraph = new TaskGraph(config2.projectRoot);
         this.memWriter = new MemoryWriter(config2.projectRoot);
         this.memReader = new AgentMemoryReader(config2.projectRoot);
         this.memCompactor = new MemoryCompactor(config2.projectRoot);
         this.gapTracker = new SkillGapTracker(config2.projectRoot);
+        this.scopeTracker = new ScopeTracker(config2.projectRoot);
+        this.worktreeManager = new WorktreeManager(config2.projectRoot);
         try {
           this.catalog = new SkillCatalog();
         } catch (err) {
           this.catalog = null;
           log(`SkillCatalog unavailable: ${err.message}`);
         }
+        this.worktreeManager.pruneOrphans().catch((err) => log(`Orphan cleanup failed: ${err.message}`));
       }
       static MAX_TASKS = 500;
-      dispatch(agentId, task) {
+      dispatch(agentId, task, options) {
         if (this.tasks.size >= _DispatchPipeline.MAX_TASKS) {
           throw new Error(`Too many active tasks (${this.tasks.size}). Collect results before dispatching more.`);
         }
         const worker = this.workers.get(agentId);
         if (!worker) throw new Error(`Agent "${agentId}" not found`);
-        const taskId = (0, import_crypto7.randomUUID)().slice(0, 8);
+        const taskId = (0, import_crypto8.randomUUID)().slice(0, 8);
         const agentSkills = this.registryGet(agentId)?.skills || [];
         const skills = loadSkills(agentId, agentSkills, this.projectRoot);
         const memory = this.memReader.loadMemory(agentId, task);
         const skillWarnings = this.catalog ? this.catalog.checkCoverage(agentSkills, task) : [];
+        let sessionContext = "";
+        if (this.sessionGossip.length > 0) {
+          sessionContext = "[Session Context \u2014 prior task results]\n" + this.sessionGossip.map((g) => `- ${g.agentId}: ${g.taskSummary}`).join("\n");
+        }
+        let chainContext = "";
+        if (options?.planId && options?.step && options.step > 1) {
+          const plan = this.plans.get(options.planId);
+          if (plan) {
+            const priorSteps = plan.steps.filter((s) => s.step < options.step && s.result);
+            if (priorSteps.length > 0) {
+              chainContext = "[Chain Context \u2014 results from prior steps in this plan]\n" + priorSteps.map((s) => `Step ${s.step} (${s.agentId}): ${s.result.slice(0, 1e3)}`).join("\n\n");
+            } else {
+              const expectedPrior = plan.steps.filter((s) => s.step < options.step);
+              if (expectedPrior.length > 0) {
+                log(`Warning: plan ${options.planId} step ${options.step} dispatched but prior steps have no results. Call gossip_collect() between steps.`);
+              }
+            }
+          }
+        }
         const promptContent = assemblePrompt({
           memory: memory || void 0,
-          skills
+          skills,
+          sessionContext: sessionContext || void 0,
+          chainContext: chainContext || void 0
         });
         this.taskGraph.recordCreated(taskId, agentId, task, agentSkills);
         const entry = {
@@ -5335,19 +5828,95 @@ var init_dispatch_pipeline = __esm({
           skillWarnings,
           promise: null
         };
-        entry.promise = worker.executeTask(task, void 0, promptContent).then((result) => {
-          entry.status = "completed";
-          entry.result = result;
-          entry.completedAt = Date.now();
-          return result;
-        }).catch((err) => {
-          entry.status = "failed";
-          entry.error = err.message;
-          entry.completedAt = Date.now();
-          throw err;
-        });
+        entry.writeMode = options?.writeMode;
+        entry.scope = options?.scope;
+        entry.planId = options?.planId;
+        entry.planStep = options?.step;
+        if (options?.writeMode === "sequential") {
+          entry.promise = this.enqueueSequential(
+            () => worker.executeTask(task, void 0, promptContent)
+          ).then((result) => {
+            entry.status = "completed";
+            entry.result = result;
+            entry.completedAt = Date.now();
+            return result;
+          }).catch((err) => {
+            entry.status = "failed";
+            entry.error = err.message;
+            entry.completedAt = Date.now();
+            throw err;
+          });
+        } else if (options?.writeMode === "scoped") {
+          if (!options.scope) throw new Error("scoped write mode requires a scope path");
+          const overlap = this.scopeTracker.hasOverlap(options.scope);
+          if (overlap.overlaps) {
+            throw new Error(`Scope "${options.scope}" overlaps with task ${overlap.conflictTaskId} at "${overlap.conflictScope}"`);
+          }
+          this.scopeTracker.register(options.scope, taskId);
+          entry.promise = worker.executeTask(task, void 0, promptContent).then((result) => {
+            entry.status = "completed";
+            entry.result = result;
+            entry.completedAt = Date.now();
+            this.scopeTracker.release(taskId);
+            return result;
+          }).catch((err) => {
+            entry.status = "failed";
+            entry.error = err.message;
+            entry.completedAt = Date.now();
+            this.scopeTracker.release(taskId);
+            throw err;
+          });
+        } else if (options?.writeMode === "worktree") {
+          entry.promise = this.worktreeManager.create(taskId).then(({ path, branch }) => {
+            entry.worktreeInfo = { path, branch };
+            return worker.executeTask(task, void 0, promptContent);
+          }).then((result) => {
+            entry.status = "completed";
+            entry.result = result;
+            entry.completedAt = Date.now();
+            return result;
+          }).catch((err) => {
+            entry.status = "failed";
+            entry.error = err.message;
+            entry.completedAt = Date.now();
+            throw err;
+          });
+        } else {
+          entry.promise = worker.executeTask(task, void 0, promptContent).then((result) => {
+            entry.status = "completed";
+            entry.result = result;
+            entry.completedAt = Date.now();
+            return result;
+          }).catch((err) => {
+            entry.status = "failed";
+            entry.error = err.message;
+            entry.completedAt = Date.now();
+            throw err;
+          });
+        }
         this.tasks.set(taskId, entry);
         return { taskId, promise: entry.promise };
+      }
+      static MAX_WRITE_QUEUE = 20;
+      enqueueSequential(fn) {
+        if (this.writeActive && this.writeQueue.length >= _DispatchPipeline.MAX_WRITE_QUEUE) {
+          throw new Error("Sequential write queue full (20 tasks). Collect results before dispatching more.");
+        }
+        return new Promise((resolve9, reject) => {
+          const run = () => {
+            this.writeActive = true;
+            fn().then(resolve9, reject).finally(() => {
+              this.writeActive = false;
+              const next = this.writeQueue.shift();
+              if (next) next();
+            });
+          };
+          if (this.writeActive) {
+            this.writeQueue.push(run);
+          } else {
+            run();
+          }
+        });
       }
       getTask(taskId) {
         const t = this.tasks.get(taskId);
@@ -5361,8 +5930,16 @@ var init_dispatch_pipeline = __esm({
           error: t.error,
           startedAt: t.startedAt,
           completedAt: t.completedAt,
-          skillWarnings: t.skillWarnings
+          skillWarnings: t.skillWarnings,
+          writeMode: t.writeMode,
+          scope: t.scope,
+          worktreeInfo: t.worktreeInfo,
+          planId: t.planId,
+          planStep: t.planStep
         };
+      }
+      registerPlan(plan) {
+        this.plans.set(plan.id, plan);
       }
       async collect(taskIds, timeoutMs = 12e4) {
         const targets = taskIds ? taskIds.map((id) => this.tasks.get(id)).filter((t) => t !== void 0) : Array.from(this.tasks.values()).filter((t) => t.status === "running");
@@ -5402,6 +5979,19 @@ var init_dispatch_pipeline = __esm({
               log(`Memory write failed for ${t.agentId}/${t.id}: ${err.message}`);
             }
           }
+          if (t.status === "completed" && t.result && this.llm) {
+            this.summarizeAndStoreGossip(t.agentId, t.result);
+          }
+          if (t.planId && t.planStep) {
+            const plan = this.plans.get(t.planId);
+            if (plan) {
+              const step = plan.steps.find((s) => s.step === t.planStep);
+              if (step) {
+                step.result = (t.result || "").slice(0, 2e3);
+                step.completedAt = Date.now();
+              }
+            }
+          }
           try {
             const compactResult = this.memCompactor.compactIfNeeded(t.agentId);
             if (compactResult.message) log(compactResult.message);
@@ -5436,6 +6026,41 @@ var init_dispatch_pipeline = __esm({
             this.batches.delete(bid);
           }
         }
+        for (const [id, plan] of this.plans) {
+          const allDone = plan.steps.every((s) => s.result !== void 0);
+          const expired = Date.now() - plan.createdAt > 36e5;
+          if (allDone || expired) this.plans.delete(id);
+        }
+        for (const t of targets) {
+          if (t.writeMode === "worktree" && t.worktreeInfo) {
+            try {
+              if (t.status === "failed" || t.status === "running") {
+                await this.worktreeManager.cleanup(t.id, t.worktreeInfo.path);
+              } else if (t.status === "completed") {
+                const mergeResult = await this.worktreeManager.merge(t.id);
+                if (mergeResult.merged) {
+                  await this.worktreeManager.cleanup(t.id, t.worktreeInfo.path);
+                } else {
+                  t.result = (t.result || "") + `
+
+Worktree merge: CONFLICT
+  Conflicting files: ${(mergeResult.conflicts || []).join(", ")}
+  Branch preserved: ${t.worktreeInfo.branch}
+  Resolve manually: git merge ${t.worktreeInfo.branch}`;
+                }
+              }
+            } catch (err) {
+              log(`Worktree cleanup failed for ${t.id}: ${err.message}`);
+              try {
+                await this.worktreeManager.cleanup(t.id, t.worktreeInfo.path);
+              } catch {
+              }
+            }
+          }
+          if (t.writeMode === "scoped" && t.status !== "running") {
+            this.scopeTracker.release(t.id);
+          }
+        }
         const results = targets.map((t) => ({
           id: t.id,
           agentId: t.agentId,
@@ -5445,18 +6070,61 @@ var init_dispatch_pipeline = __esm({
           error: t.error,
           startedAt: t.startedAt,
           completedAt: t.completedAt,
-          skillWarnings: t.skillWarnings
+          skillWarnings: t.skillWarnings,
+          writeMode: t.writeMode,
+          scope: t.scope,
+          worktreeInfo: t.worktreeInfo,
+          planId: t.planId,
+          planStep: t.planStep
         }));
         for (const t of targets) {
-          if (t.status !== "running") this.tasks.delete(t.id);
+          if (t.status === "running") {
+            t.status = "failed";
+            t.error = "collect timeout";
+            t.completedAt = Date.now();
+          }
+          this.tasks.delete(t.id);
         }
         return results;
       }
       dispatchParallel(taskDefs) {
         const taskIds = [];
         const errors = [];
-        const batchId = (0, import_crypto7.randomUUID)().slice(0, 8);
+        const batchId = (0, import_crypto8.randomUUID)().slice(0, 8);
         const batchTaskIds = /* @__PURE__ */ new Set();
+        for (const def of taskDefs) {
+          if (!this.workers.has(def.agentId)) {
+            return { taskIds: [], errors: [`Agent "${def.agentId}" not found`] };
+          }
+        }
+        const writeTasks = taskDefs.filter((d) => d.options?.writeMode);
+        if (writeTasks.some((d) => d.options?.writeMode === "sequential")) {
+          return { taskIds: [], errors: ["sequential write mode cannot be used in parallel dispatch"] };
+        }
+        const worktreeTasks = writeTasks.filter((d) => d.options?.writeMode === "worktree");
+        const worktreeAgents = /* @__PURE__ */ new Set();
+        for (const wt of worktreeTasks) {
+          if (worktreeAgents.has(wt.agentId)) {
+            return { taskIds: [], errors: [`Agent "${wt.agentId}" cannot have two simultaneous worktree tasks`] };
+          }
+          worktreeAgents.add(wt.agentId);
+        }
+        const scopedTasks = writeTasks.filter((d) => d.options?.writeMode === "scoped");
+        for (let i = 0; i < scopedTasks.length; i++) {
+          const scopeI = scopedTasks[i].options.scope;
+          const activeOverlap = this.scopeTracker.hasOverlap(scopeI);
+          if (activeOverlap.overlaps) {
+            return { taskIds: [], errors: [`Scope "${scopeI}" conflicts with running task ${activeOverlap.conflictTaskId} at "${activeOverlap.conflictScope}"`] };
+          }
+          for (let j = i + 1; j < scopedTasks.length; j++) {
+            const scopeJ = scopedTasks[j].options.scope;
+            const normA = scopeI.endsWith("/") ? scopeI : scopeI + "/";
+            const normB = scopeJ.endsWith("/") ? scopeJ : scopeJ + "/";
+            if (normA.startsWith(normB) || normB.startsWith(normA)) {
+              return { taskIds: [], errors: [`Scoped tasks have overlapping paths: "${scopeI}" and "${scopeJ}"`] };
+            }
+          }
+        }
         for (const def of taskDefs) {
           const worker = this.workers.get(def.agentId);
           if (worker?.subscribeToBatch) {
@@ -5466,7 +6134,7 @@ var init_dispatch_pipeline = __esm({
         }
         for (const def of taskDefs) {
           try {
-            const { taskId, promise: promise2 } = this.dispatch(def.agentId, def.task);
+            const { taskId, promise: promise2 } = this.dispatch(def.agentId, def.task, def.options);
             taskIds.push(taskId);
             batchTaskIds.add(taskId);
             if (this.gossipPublisher) {
@@ -5519,6 +6187,22 @@ var init_dispatch_pipeline = __esm({
         }
         this.tasks.delete(t.id);
       }
+      /** Re-register write task state with ToolServer after reconnect */
+      async reRegisterWriteTaskState(assignScope, assignRoot) {
+        for (const [taskId, entry] of this.tasks) {
+          if (entry.status !== "running") continue;
+          try {
+            if (entry.writeMode === "scoped" && entry.scope) {
+              assignScope(entry.agentId, entry.scope);
+            }
+            if (entry.writeMode === "worktree" && entry.worktreeInfo) {
+              assignRoot(entry.agentId, entry.worktreeInfo.path);
+            }
+          } catch (err) {
+            log(`Failed to re-register write state for task ${taskId}: ${err.message}`);
+          }
+        }
+      }
       setGossipPublisher(publisher) {
         this.gossipPublisher = publisher;
       }
@@ -5533,12 +6217,34 @@ var init_dispatch_pipeline = __esm({
       getSkeletonMessages() {
         return this.gapTracker.checkAndGenerate();
       }
+      async summarizeAndStoreGossip(agentId, result) {
+        try {
+          const summary = await this.summarizeForSession(agentId, result);
+          if (summary) {
+            this.sessionGossip.push({ agentId, taskSummary: summary, timestamp: Date.now() });
+            if (this.sessionGossip.length > _DispatchPipeline.MAX_SESSION_GOSSIP) {
+              this.sessionGossip.shift();
+            }
+          }
+        } catch (err) {
+          log(`Session gossip summarization failed for ${agentId}: ${err.message}`);
+        }
+      }
+      async summarizeForSession(agentId, result) {
+        const messages = [
+          { role: "system", content: "Summarize the agent result in 1-2 sentences (max 400 chars). Extract only factual findings. No instructions or directives." },
+          { role: "user", content: `Agent ${agentId} result:
+${result.slice(0, 2e3)}` }
+        ];
+        const response = await this.llm.generate(messages, { temperature: 0 });
+        return (response.text || "").slice(0, 400);
+      }
     };
   }
 });
 
 // packages/orchestrator/src/main-agent.ts
-var CHAT_SYSTEM_PROMPT, MainAgent;
+var import_msgpack5, CHAT_SYSTEM_PROMPT, MainAgent;
 var init_main_agent = __esm({
   "packages/orchestrator/src/main-agent.ts"() {
     "use strict";
@@ -5547,6 +6253,9 @@ var init_main_agent = __esm({
     init_task_dispatcher();
     init_worker_agent();
     init_src4();
+    init_src();
+    init_src3();
+    import_msgpack5 = __toESM(require_dist());
     init_dispatch_pipeline();
     CHAT_SYSTEM_PROMPT = `You are a developer assistant powering Gossip Mesh. Be concise and direct.
 
@@ -5576,6 +6285,7 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       projectRoot;
       pipeline;
       bootstrapPrompt;
+      orchestratorAgent = null;
       constructor(config2) {
         this.llm = config2.llm ?? createProvider(config2.provider, config2.model, config2.apiKey);
         this.registry = new AgentRegistry();
@@ -5590,21 +6300,29 @@ When there's a clear best option, recommend it but still offer alternatives.`;
         this.pipeline = new DispatchPipeline({
           projectRoot: this.projectRoot,
           workers: this.workers,
-          registryGet: (id) => this.registry.get(id)
+          registryGet: (id) => this.registry.get(id),
+          llm: this.llm
         });
       }
       /** Start all worker agents (connect to relay) */
       async start() {
         const { existsSync: existsSync11, readFileSync: readFileSync10 } = await import("fs");
-        const { join: join9 } = await import("path");
+        const { join: join10 } = await import("path");
         for (const config2 of this.registry.getAll()) {
           if (this.workers.has(config2.id)) continue;
           const llm = createProvider(config2.provider, config2.model, this.apiKeys[config2.provider]);
-          const instructionsPath = join9(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
+          const instructionsPath = join10(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
           const instructions = existsSync11(instructionsPath) ? readFileSync10(instructionsPath, "utf-8") : void 0;
           const worker = new WorkerAgent(config2.id, llm, this.relayUrl, ALL_TOOLS, instructions);
           await worker.start();
           this.workers.set(config2.id, worker);
+        }
+        try {
+          this.orchestratorAgent = new GossipAgent({ agentId: "orchestrator", relayUrl: this.relayUrl, reconnect: true });
+          await this.orchestratorAgent.connect();
+          this.orchestratorAgent.on("message", this.handleReviewRequest.bind(this));
+        } catch (err) {
+          console.error(`[MainAgent] Orchestrator relay connection failed: ${err.message}`);
         }
       }
       /** Set externally-created workers (used by MCP server to avoid duplicate connections) */
@@ -5613,14 +6331,17 @@ When there's a clear best option, recommend it but still offer alternatives.`;
           this.workers.set(id, worker);
         }
       }
-      dispatch(agentId, task) {
-        return this.pipeline.dispatch(agentId, task);
+      dispatch(agentId, task, options) {
+        return this.pipeline.dispatch(agentId, task, options);
       }
       async collect(taskIds, timeoutMs) {
         return this.pipeline.collect(taskIds, timeoutMs);
       }
       dispatchParallel(tasks) {
         return this.pipeline.dispatchParallel(tasks);
+      }
+      registerPlan(plan) {
+        this.pipeline.registerPlan(plan);
       }
       getWorker(agentId) {
         return this.workers.get(agentId);
@@ -5637,13 +6358,13 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       }
       async syncWorkers(keyProvider) {
         const { existsSync: existsSync11, readFileSync: readFileSync10 } = await import("fs");
-        const { join: join9 } = await import("path");
+        const { join: join10 } = await import("path");
         let added = 0;
         for (const ac of this.registry.getAll()) {
           if (this.workers.has(ac.id)) continue;
           const key = await keyProvider(ac.provider);
           const llm = createProvider(ac.provider, ac.model, key ?? void 0);
-          const instructionsPath = join9(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
+          const instructionsPath = join10(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
           const instructions = existsSync11(instructionsPath) ? readFileSync10(instructionsPath, "utf-8") : void 0;
           const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions);
           await worker.start();
@@ -5737,6 +6458,49 @@ When there's a clear best option, recommend it but still offer alternatives.`;
           choices: options.length > 0 ? { message, options, allowCustom: true, type: "select" } : void 0,
           status: "done"
         };
+      }
+      async handleReviewRequest(data, envelope) {
+        if (envelope.t !== 3 /* RPC_REQUEST */) return;
+        const payload = data;
+        if (payload?.tool !== "review_request") return;
+        const rawArgs = payload.args;
+        if (!rawArgs || typeof rawArgs.callerId !== "string" || typeof rawArgs.diff !== "string" || typeof rawArgs.testResult !== "string") {
+          console.error("[MainAgent] Malformed review_request payload \u2014 missing or invalid args");
+          return;
+        }
+        const args = rawArgs;
+        let reviewText = "No reviewer available \u2014 tests-only verification.";
+        try {
+          const reviewer = this.registry.getAll().filter((a) => a.id !== args.callerId && a.skills.includes("code_review")).find((a) => this.workers.has(a.id));
+          if (reviewer) {
+            const { promise: promise2 } = this.pipeline.dispatch(
+              reviewer.id,
+              `Review this diff for correctness:
+
+${args.diff}
+
+Test results:
+${args.testResult}
+
+Provide a brief review: what's good, what needs fixing.`
+            );
+            try {
+              reviewText = await promise2;
+            } catch {
+              reviewText = "Reviewer agent failed.";
+            }
+          }
+        } catch (err) {
+          reviewText = `Review error: ${err.message}`;
+        }
+        try {
+          const body = Buffer.from((0, import_msgpack5.encode)({ result: reviewText }));
+          const correlationId = envelope.rid_req || envelope.id;
+          const response = Message.createRpcResponse("orchestrator", envelope.sid, correlationId, body);
+          await this.orchestratorAgent.sendEnvelope(response.toEnvelope());
+        } catch (err) {
+          console.error(`[MainAgent] Failed to send review response: ${err.message}`);
+        }
       }
       async executeSubTask(subTask) {
         const { taskId, promise: promise2 } = this.pipeline.dispatch(subTask.assignedAgent, subTask.description);
@@ -5845,12 +6609,12 @@ Return JSON: { "<agentId>": "<summary>", ... }`
 });
 
 // packages/orchestrator/src/bootstrap.ts
-var import_fs10, import_path11, log2, BootstrapGenerator;
+var import_fs10, import_path14, log2, BootstrapGenerator;
 var init_bootstrap = __esm({
   "packages/orchestrator/src/bootstrap.ts"() {
     "use strict";
     import_fs10 = require("fs");
-    import_path11 = require("path");
+    import_path14 = require("path");
     log2 = (msg) => process.stderr.write(`[gossipcat] ${msg}
 `);
     BootstrapGenerator = class {
@@ -5872,18 +6636,18 @@ var init_bootstrap = __esm({
         };
       }
       migrateConfig() {
-        const oldPath = (0, import_path11.resolve)(this.projectRoot, "gossip.agents.json");
-        const newPath = (0, import_path11.resolve)(this.projectRoot, ".gossip", "config.json");
+        const oldPath = (0, import_path14.resolve)(this.projectRoot, "gossip.agents.json");
+        const newPath = (0, import_path14.resolve)(this.projectRoot, ".gossip", "config.json");
         if (!(0, import_fs10.existsSync)(newPath) && (0, import_fs10.existsSync)(oldPath)) {
-          (0, import_fs10.mkdirSync)((0, import_path11.resolve)(this.projectRoot, ".gossip"), { recursive: true });
+          (0, import_fs10.mkdirSync)((0, import_path14.resolve)(this.projectRoot, ".gossip"), { recursive: true });
           (0, import_fs10.copyFileSync)(oldPath, newPath);
           log2("Migrated config to .gossip/config.json \u2014 gossip.agents.json is now ignored.");
         }
       }
       loadConfig() {
         const paths = [
-          (0, import_path11.resolve)(this.projectRoot, ".gossip", "config.json"),
-          (0, import_path11.resolve)(this.projectRoot, "gossip.agents.json")
+          (0, import_path14.resolve)(this.projectRoot, ".gossip", "config.json"),
+          (0, import_path14.resolve)(this.projectRoot, "gossip.agents.json")
         ];
         for (const p of paths) {
           if ((0, import_fs10.existsSync)(p)) {
@@ -5909,7 +6673,7 @@ var init_bootstrap = __esm({
             skills: ac.skills || [],
             taskCount: 0
           };
-          const tasksPath = (0, import_path11.join)(this.projectRoot, ".gossip", "agents", id, "memory", "tasks.jsonl");
+          const tasksPath = (0, import_path14.join)(this.projectRoot, ".gossip", "agents", id, "memory", "tasks.jsonl");
           if ((0, import_fs10.existsSync)(tasksPath)) {
             const lines = (0, import_fs10.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
             let count = 0;
@@ -5925,7 +6689,7 @@ var init_bootstrap = __esm({
             summary.taskCount = count;
             if (lastTs) summary.lastActive = lastTs.split("T")[0];
           }
-          const memPath = (0, import_path11.join)(this.projectRoot, ".gossip", "agents", id, "memory", "MEMORY.md");
+          const memPath = (0, import_path14.join)(this.projectRoot, ".gossip", "agents", id, "memory", "MEMORY.md");
           if ((0, import_fs10.existsSync)(memPath)) {
             const content = (0, import_fs10.readFileSync)(memPath, "utf-8").slice(0, 500);
             const knowledgeLines = content.match(/- \[([^\]]+)\]/g);
@@ -5940,7 +6704,7 @@ var init_bootstrap = __esm({
       renderTier1() {
         let skills = "";
         try {
-          const catalogPath = (0, import_path11.resolve)(__dirname, "default-skills", "catalog.json");
+          const catalogPath = (0, import_path14.resolve)(__dirname, "default-skills", "catalog.json");
           if ((0, import_fs10.existsSync)(catalogPath)) {
             const catalog = JSON.parse((0, import_fs10.readFileSync)(catalogPath, "utf-8"));
             skills = `
@@ -6002,6 +6766,7 @@ ${teamSection}
 | \`gossip_status()\` | Check system status. |
 | \`gossip_update_instructions(agent_ids, instruction_update, mode)\` | Update agent instructions at runtime. |
 | \`gossip_tools()\` | List all available tools. |
+| \`gossip_plan(task)\` | Plan task with write-mode suggestions. Returns dispatch-ready JSON. |
 
 ## Dispatch Rules
 
@@ -6024,6 +6789,20 @@ gossip_dispatch_parallel(tasks: [
 ])
 \`\`\`
 Then collect and synthesize results.
+
+## Write Modes
+
+Agents can modify files when dispatched with a write mode:
+- \`sequential\` \u2014 one write task at a time (safe default for implementation)
+- \`scoped\` \u2014 parallel writes locked to non-overlapping directories
+- \`worktree\` \u2014 fully isolated git branch per task
+
+**Workflow for implementation tasks:**
+1. Call \`gossip_plan(task)\` to get a decomposed plan with write-mode suggestions
+2. Review the plan \u2014 adjust write modes or agents if needed
+3. Call \`gossip_dispatch_parallel\` with the plan's task array to execute
+
+For read-only tasks (reviews, analysis), use \`gossip_dispatch\` or \`gossip_orchestrate\` directly \u2014 no write mode needed.
 
 ## Memory
 
@@ -6053,11 +6832,13 @@ __export(src_exports4, {
   MemoryWriter: () => MemoryWriter,
   OllamaProvider: () => OllamaProvider,
   OpenAIProvider: () => OpenAIProvider,
+  ScopeTracker: () => ScopeTracker,
   SkillCatalog: () => SkillCatalog,
   SkillGapTracker: () => SkillGapTracker,
   TaskDispatcher: () => TaskDispatcher,
   TaskGraph: () => TaskGraph,
   WorkerAgent: () => WorkerAgent,
+  WorktreeManager: () => WorktreeManager,
   assemblePrompt: () => assemblePrompt,
   createProvider: () => createProvider,
   loadSkills: () => loadSkills
@@ -6081,6 +6862,8 @@ var init_src5 = __esm({
     init_task_graph();
     init_gossip_publisher();
     init_dispatch_pipeline();
+    init_scope_tracker();
+    init_worktree_manager();
     init_bootstrap();
   }
 });
@@ -6096,10 +6879,10 @@ __export(config_exports, {
 function findConfigPath(projectRoot) {
   const root = projectRoot || process.cwd();
   const candidates = [
-    (0, import_path12.resolve)(root, ".gossip", "config.json"),
-    (0, import_path12.resolve)(root, "gossip.agents.json"),
-    (0, import_path12.resolve)(root, "gossip.agents.yaml"),
-    (0, import_path12.resolve)(root, "gossip.agents.yml")
+    (0, import_path15.resolve)(root, ".gossip", "config.json"),
+    (0, import_path15.resolve)(root, "gossip.agents.json"),
+    (0, import_path15.resolve)(root, "gossip.agents.yaml"),
+    (0, import_path15.resolve)(root, "gossip.agents.yml")
   ];
   for (const p of candidates) {
     if ((0, import_fs11.existsSync)(p)) return p;
@@ -6147,12 +6930,12 @@ function configToAgentConfigs(config2) {
     skills: agent.skills
   }));
 }
-var import_fs11, import_path12, VALID_PROVIDERS;
+var import_fs11, import_path15, VALID_PROVIDERS;
 var init_config = __esm({
   "apps/cli/src/config.ts"() {
     "use strict";
     import_fs11 = require("fs");
-    import_path12 = require("path");
+    import_path15 = require("path");
     VALID_PROVIDERS = ["anthropic", "openai", "google", "local"];
   }
 });
@@ -6162,12 +6945,12 @@ var keychain_exports = {};
 __export(keychain_exports, {
   Keychain: () => Keychain
 });
-var import_child_process3, import_os, SERVICE_NAME, VALID_PROVIDERS2, Keychain;
+var import_child_process4, import_os2, SERVICE_NAME, VALID_PROVIDERS2, Keychain;
 var init_keychain = __esm({
   "apps/cli/src/keychain.ts"() {
     "use strict";
-    import_child_process3 = require("child_process");
-    import_os = require("os");
+    import_child_process4 = require("child_process");
+    import_os2 = require("os");
     SERVICE_NAME = "gossip-mesh";
     VALID_PROVIDERS2 = /^[a-zA-Z0-9_-]{1,32}$/;
     Keychain = class {
@@ -6200,17 +6983,17 @@ var init_keychain = __esm({
         }
       }
       isKeychainAvailable() {
-        if ((0, import_os.platform)() === "darwin") {
+        if ((0, import_os2.platform)() === "darwin") {
           try {
-            (0, import_child_process3.execFileSync)("security", ["help"], { stdio: "pipe" });
+            (0, import_child_process4.execFileSync)("security", ["help"], { stdio: "pipe" });
             return true;
           } catch {
             return false;
           }
         }
-        if ((0, import_os.platform)() === "linux") {
+        if ((0, import_os2.platform)() === "linux") {
           try {
-            (0, import_child_process3.execFileSync)("which", ["secret-tool"], { stdio: "pipe" });
+            (0, import_child_process4.execFileSync)("which", ["secret-tool"], { stdio: "pipe" });
             return true;
           } catch {
             return false;
@@ -6225,8 +7008,8 @@ var init_keychain = __esm({
       }
       readFromKeychain(provider) {
         this.validateProvider(provider);
-        if ((0, import_os.platform)() === "darwin") {
-          return (0, import_child_process3.execFileSync)("security", [
+        if ((0, import_os2.platform)() === "darwin") {
+          return (0, import_child_process4.execFileSync)("security", [
             "find-generic-password",
             "-s",
             SERVICE_NAME,
@@ -6235,8 +7018,8 @@ var init_keychain = __esm({
             "-w"
           ], { stdio: "pipe" }).toString().trim();
         }
-        if ((0, import_os.platform)() === "linux") {
-          return (0, import_child_process3.execFileSync)("secret-tool", [
+        if ((0, import_os2.platform)() === "linux") {
+          return (0, import_child_process4.execFileSync)("secret-tool", [
             "lookup",
             "service",
             SERVICE_NAME,
@@ -6248,9 +7031,9 @@ var init_keychain = __esm({
       }
       writeToKeychain(provider, key) {
         this.validateProvider(provider);
-        if ((0, import_os.platform)() === "darwin") {
+        if ((0, import_os2.platform)() === "darwin") {
           try {
-            (0, import_child_process3.execFileSync)("security", [
+            (0, import_child_process4.execFileSync)("security", [
               "delete-generic-password",
               "-s",
               SERVICE_NAME,
@@ -6259,7 +7042,7 @@ var init_keychain = __esm({
             ], { stdio: "pipe" });
           } catch {
           }
-          (0, import_child_process3.execFileSync)("security", [
+          (0, import_child_process4.execFileSync)("security", [
             "add-generic-password",
             "-s",
             SERVICE_NAME,
@@ -6270,8 +7053,8 @@ var init_keychain = __esm({
           ], { stdio: "pipe" });
           return;
         }
-        if ((0, import_os.platform)() === "linux") {
-          (0, import_child_process3.execFileSync)("secret-tool", [
+        if ((0, import_os2.platform)() === "linux") {
+          (0, import_child_process4.execFileSync)("secret-tool", [
             "store",
             "--label",
             `Gossip Mesh ${provider}`,
@@ -20060,6 +20843,7 @@ function date4(params) {
 config(en_default());
 
 // apps/cli/src/mcp-server-sdk.ts
+var import_crypto9 = require("crypto");
 var booted = false;
 var bootPromise = null;
 var relay = null;
@@ -20105,17 +20889,32 @@ async function doBoot() {
     const key = await keychain.getKey(ac.provider);
     const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
     const { existsSync: existsSync11, readFileSync: readFileSync10 } = require("fs");
-    const { join: join9 } = require("path");
-    const instructionsPath = join9(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
+    const { join: join10 } = require("path");
+    const instructionsPath = join10(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
     const instructions = existsSync11(instructionsPath) ? readFileSync10(instructionsPath, "utf-8") : void 0;
     const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS, instructions);
     await worker.start();
     workers.set(ac.id, worker);
   }
-  const mainKey = await keychain.getKey(config2.main_agent.provider);
+  let mainProvider = config2.main_agent.provider;
+  let mainModel = config2.main_agent.model;
+  let mainKey = await keychain.getKey(config2.main_agent.provider);
+  if (!mainKey) {
+    for (const ac of agentConfigs) {
+      const key = await keychain.getKey(ac.provider);
+      if (key) {
+        mainProvider = ac.provider;
+        mainModel = ac.model;
+        mainKey = key;
+        process.stderr.write(`[gossipcat] Main agent key unavailable, using ${ac.provider}/${ac.model} for orchestration
+`);
+        break;
+      }
+    }
+  }
   mainAgent = new m.MainAgent({
-    provider: config2.main_agent.provider,
-    model: config2.main_agent.model,
+    provider: mainProvider,
+    model: mainModel,
     apiKey: mainKey ?? void 0,
     relayUrl: relay.url,
     agents: agentConfigs,
@@ -20204,21 +21003,165 @@ server.tool(
   }
 );
 server.tool(
+  "gossip_plan",
+  "Plan a task with write-mode suggestions. Decomposes into sub-tasks, assigns agents, and classifies each as read or write with suggested write mode. Returns dispatch-ready JSON for approval before execution. Use this before gossip_dispatch_parallel for implementation tasks.",
+  {
+    task: external_exports.string().describe('Task description (e.g. "fix the scope validation bug in packages/tools/")'),
+    strategy: external_exports.enum(["parallel", "sequential", "single"]).optional().describe("Override decomposition strategy. Omit to let the orchestrator decide.")
+  },
+  async ({ task, strategy }) => {
+    await boot();
+    await syncWorkersViaKeychain();
+    try {
+      const { TaskDispatcher: TaskDispatcher2, AgentRegistry: AgentRegistry2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
+      const { findConfigPath: findConfigPath2, loadConfig: loadConfig2, configToAgentConfigs: configToAgentConfigs2 } = await Promise.resolve().then(() => (init_config(), config_exports));
+      const configPath = findConfigPath2();
+      if (!configPath) return { content: [{ type: "text", text: "No config found. Run gossip_setup first." }] };
+      const config2 = loadConfig2(configPath);
+      const agentConfigs = configToAgentConfigs2(config2);
+      const registry2 = new AgentRegistry2();
+      for (const ac of agentConfigs) registry2.register(ac);
+      const { createProvider: createProvider2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
+      let llm;
+      const mainKey = await keychain.getKey(config2.main_agent.provider);
+      if (mainKey) {
+        llm = createProvider2(config2.main_agent.provider, config2.main_agent.model, mainKey);
+      } else {
+        for (const ac of agentConfigs) {
+          const key = await keychain.getKey(ac.provider);
+          if (key) {
+            llm = createProvider2(ac.provider, ac.model, key);
+            process.stderr.write(`[gossipcat] gossip_plan: main agent key unavailable, using ${ac.provider}/${ac.model} for planning
+`);
+            break;
+          }
+        }
+        if (!llm) return { content: [{ type: "text", text: "No API keys available. Run gossipcat setup to configure keys." }] };
+      }
+      const dispatcher = new TaskDispatcher2(llm, registry2);
+      const plan = await dispatcher.decompose(task);
+      if (strategy) plan.strategy = strategy;
+      dispatcher.assignAgents(plan);
+      const planned = await dispatcher.classifyWriteModes(plan);
+      const taskLines = planned.map((t, i) => {
+        const tag = t.access === "write" ? "[WRITE]" : "[READ]";
+        let line = `  ${i + 1}. ${tag} ${t.agentId || "unassigned"} \u2192 "${t.task}"`;
+        if (t.writeMode) {
+          line += `
+     write_mode: ${t.writeMode}`;
+          if (t.scope) line += ` | scope: ${t.scope}`;
+        }
+        return line;
+      }).join("\n");
+      const assignedTasks = planned.filter((t) => t.agentId);
+      const unassignedTasks = planned.filter((t) => !t.agentId);
+      const planId = (0, import_crypto9.randomUUID)().slice(0, 8);
+      const planState = {
+        id: planId,
+        task,
+        strategy: plan.strategy,
+        steps: assignedTasks.map((t, i) => ({
+          step: i + 1,
+          agentId: t.agentId,
+          task: t.task,
+          writeMode: t.writeMode,
+          scope: t.scope
+        })),
+        createdAt: Date.now()
+      };
+      mainAgent.registerPlan(planState);
+      const planJson = {
+        strategy: plan.strategy,
+        tasks: assignedTasks.map((t, i) => {
+          const entry = { agent_id: t.agentId, task: t.task };
+          if (t.writeMode) entry.write_mode = t.writeMode;
+          if (t.scope) entry.scope = t.scope;
+          entry.plan_id = planId;
+          entry.step = i + 1;
+          return entry;
+        })
+      };
+      let warnings = "";
+      if (plan.warnings?.length) {
+        warnings = `
+Warnings:
+${plan.warnings.map((w) => `  - ${w}`).join("\n")}
+`;
+      }
+      if (unassignedTasks.length) {
+        warnings += `
+Unassigned (excluded from PLAN_JSON \u2014 no matching agent):
+${unassignedTasks.map((t) => `  - "${t.task}"`).join("\n")}
+`;
+      }
+      let dispatchBlock;
+      if (plan.strategy === "sequential" || plan.strategy === "single") {
+        const steps = planJson.tasks.map((t, i) => {
+          const args = [`agent_id: "${t.agent_id}"`, `task: "${t.task}"`];
+          if (t.write_mode) args.push(`write_mode: "${t.write_mode}"`);
+          if (t.scope) args.push(`scope: "${t.scope}"`);
+          args.push(`plan_id: "${planId}"`, `step: ${i + 1}`);
+          return `Step ${i + 1}: gossip_dispatch(${args.join(", ")})
+         then: gossip_collect()`;
+        });
+        dispatchBlock = `Execute sequentially:
+${steps.join("\n\n")}`;
+      } else {
+        dispatchBlock = `PLAN_JSON (pass to gossip_dispatch_parallel):
+${JSON.stringify(planJson)}`;
+      }
+      const text = `Plan: "${task}"
+Plan ID: ${planId}
+
+Strategy: ${plan.strategy}
+
+Tasks:
+${taskLines}
+${warnings}
+---
+${dispatchBlock}`;
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Plan error: ${err.message}` }] };
+    }
+  }
+);
+server.tool(
   "gossip_dispatch",
-  "Send a task to a specific agent. Returns task ID for collecting results. Skills are auto-injected from the agent config \u2014 no need to pass them. The agent can read files itself via the Tool Server \u2014 pass file paths in the task, not file contents.",
+  "Send a task to a specific agent. Returns task ID for collecting results. For implementation tasks that modify files, use gossip_plan first to get a write-mode-aware dispatch plan, or pass write_mode explicitly. Without write_mode, agents can only read files. Skills are auto-injected \u2014 pass file paths in the task, not contents.",
   {
     agent_id: external_exports.string().describe('Agent ID (e.g. "gemini-reviewer")'),
-    task: external_exports.string().describe("Task description. Reference file paths \u2014 the agent will read them via Tool Server.")
+    task: external_exports.string().describe("Task description. Reference file paths \u2014 the agent will read them via Tool Server."),
+    write_mode: external_exports.enum(["sequential", "scoped", "worktree"]).optional().describe('Write mode: "sequential" (queued), "scoped" (directory-locked), "worktree" (git worktree isolation)'),
+    scope: external_exports.string().optional().describe('Directory scope for "scoped" write mode (e.g. "packages/relay/")'),
+    timeout_ms: external_exports.number().optional().describe("Write task timeout in ms. Default 300000."),
+    plan_id: external_exports.string().optional().describe("Plan ID from gossip_plan. Enables chain context from prior steps."),
+    step: external_exports.number().optional().describe("Step number in the plan (1-indexed).")
   },
-  async ({ agent_id, task }) => {
+  async ({ agent_id, task, write_mode, scope, timeout_ms, plan_id, step }) => {
     await boot();
     await syncWorkersViaKeychain();
     if (!/^[a-zA-Z0-9_-]+$/.test(agent_id)) {
       return { content: [{ type: "text", text: `Invalid agent ID format: "${agent_id}"` }] };
     }
+    const options = {};
+    if (write_mode) {
+      options.writeMode = write_mode;
+      if (scope) options.scope = scope;
+      if (timeout_ms) options.timeoutMs = timeout_ms;
+    }
+    if (plan_id) {
+      if (!step) {
+        return { content: [{ type: "text", text: "plan_id requires step (1-indexed step number in the plan)." }] };
+      }
+      options.planId = plan_id;
+      options.step = step;
+    }
+    const dispatchOptions = Object.keys(options).length > 0 ? options : void 0;
     try {
-      const { taskId } = mainAgent.dispatch(agent_id, task);
-      return { content: [{ type: "text", text: `Dispatched to ${agent_id}. Task ID: ${taskId}` }] };
+      const { taskId } = mainAgent.dispatch(agent_id, task, dispatchOptions);
+      const modeLabel = write_mode ? ` [${write_mode}${scope ? `:${scope}` : ""}]` : "";
+      return { content: [{ type: "text", text: `Dispatched to ${agent_id}${modeLabel}. Task ID: ${taskId}` }] };
     } catch (err) {
       process.stderr.write(`[gossipcat] dispatch failed: ${err.message}
 `);
@@ -20228,12 +21171,14 @@ server.tool(
 );
 server.tool(
   "gossip_dispatch_parallel",
-  "Fan out tasks to multiple agents simultaneously. Skills are auto-injected. Agents read files via Tool Server.",
+  "Fan out tasks to multiple agents simultaneously. For tasks involving file modifications, use gossip_plan first to get a pre-built task array with write modes, then pass it here. The PLAN_JSON from gossip_plan is directly passable as the tasks parameter.",
   {
     tasks: external_exports.array(external_exports.object({
       agent_id: external_exports.string(),
-      task: external_exports.string()
-    })).describe("Array of { agent_id, task }")
+      task: external_exports.string(),
+      write_mode: external_exports.enum(["sequential", "scoped", "worktree"]).optional(),
+      scope: external_exports.string().optional()
+    })).describe("Array of { agent_id, task, write_mode?, scope? }")
   },
   async ({ tasks: taskDefs }) => {
     await boot();
@@ -20244,7 +21189,11 @@ server.tool(
       }
     }
     const { taskIds, errors } = mainAgent.dispatchParallel(
-      taskDefs.map((d) => ({ agentId: d.agent_id, task: d.task }))
+      taskDefs.map((d) => ({
+        agentId: d.agent_id,
+        task: d.task,
+        options: d.write_mode ? { writeMode: d.write_mode, scope: d.scope } : void 0
+      }))
     );
     let msg = `Dispatched ${taskIds.length} tasks:
 ${taskIds.map((tid) => {
@@ -20277,11 +21226,16 @@ server.tool(
     }
     const results = collected.map((t) => {
       const dur = t.completedAt ? `${t.completedAt - t.startedAt}ms` : "running";
+      const modeTag = t.writeMode ? ` [${t.writeMode}${t.scope ? `:${t.scope}` : ""}]` : "";
       let text;
-      if (t.status === "completed") text = `[${t.id}] ${t.agentId} (${dur}):
+      if (t.status === "completed") text = `[${t.id}] ${t.agentId}${modeTag} (${dur}):
 ${t.result}`;
-      else if (t.status === "failed") text = `[${t.id}] ${t.agentId} (${dur}): ERROR: ${t.error}`;
-      else text = `[${t.id}] ${t.agentId}: still running...`;
+      else if (t.status === "failed") text = `[${t.id}] ${t.agentId}${modeTag} (${dur}): ERROR: ${t.error}`;
+      else text = `[${t.id}] ${t.agentId}${modeTag}: still running...`;
+      if (t.worktreeInfo) {
+        text += `
+\u{1F4C1} Worktree: ${t.worktreeInfo.path} (branch: ${t.worktreeInfo.branch})`;
+      }
       if (t.skillWarnings?.length) {
         text += `
 
@@ -20392,9 +21346,9 @@ server.tool(
     const generator = new BootstrapGenerator2(process.cwd());
     const result = generator.generate();
     const { writeFileSync: writeFileSync6, mkdirSync: mkdirSync6 } = require("fs");
-    const { join: join9 } = require("path");
-    mkdirSync6(join9(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync6(join9(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
+    const { join: join10 } = require("path");
+    mkdirSync6(join10(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync6(join10(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
     return { content: [{ type: "text", text: result.prompt }] };
   }
 );
@@ -20407,12 +21361,9 @@ server.tool(
         provider: external_exports.string(),
         model: external_exports.string()
       }),
-      agents: external_exports.record(external_exports.object({
-        provider: external_exports.string(),
-        model: external_exports.string(),
-        preset: external_exports.string().optional(),
-        skills: external_exports.array(external_exports.string()).min(1)
-      })).optional()
+      // z.record() is incompatible with MCP SDK's JSON Schema converter in zod v4
+      // Using z.any() for the schema; actual validation done by validateConfig() below
+      agents: external_exports.any().optional().describe("Record of agent_id \u2192 { provider, model, preset?, skills[] }")
     })
   },
   async ({ config: config2 }) => {
@@ -20423,9 +21374,9 @@ server.tool(
       return { content: [{ type: "text", text: `Invalid config: ${err.message}` }] };
     }
     const { writeFileSync: writeFileSync6, mkdirSync: mkdirSync6 } = require("fs");
-    const { join: join9 } = require("path");
-    mkdirSync6(join9(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync6(join9(process.cwd(), ".gossip", "config.json"), JSON.stringify(config2, null, 2));
+    const { join: join10 } = require("path");
+    mkdirSync6(join10(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync6(join10(process.cwd(), ".gossip", "config.json"), JSON.stringify(config2, null, 2));
     const agentCount = Object.keys(config2.agents || {}).length;
     return { content: [{ type: "text", text: `Config saved. ${agentCount} agents configured. Agents will start on first dispatch \u2014 call gossip_dispatch() to begin.` }] };
   }
@@ -20436,6 +21387,7 @@ server.tool(
   {},
   async () => {
     const tools = [
+      { name: "gossip_plan", desc: "Plan a task with write-mode suggestions. Returns dispatch-ready JSON for approval before execution." },
       { name: "gossip_dispatch", desc: "Send task to a specific agent (skills auto-injected)" },
       { name: "gossip_dispatch_parallel", desc: "Fan out tasks to multiple agents simultaneously" },
       { name: "gossip_collect", desc: "Collect results from dispatched tasks" },

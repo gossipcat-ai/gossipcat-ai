@@ -286,10 +286,10 @@ export class ToolServer {
 
     // 2. Run tests — validate testFile is a safe file path (not a CLI flag or config override)
     if (testFile) {
-      this.sandbox.validatePath(testFile);
       if (testFile.startsWith('-')) {
         throw new Error(`verify_write: test_file must be a file path, not a flag: "${testFile}"`);
       }
+      this.sandbox.validatePath(testFile);
       if (/\.(js|json)$/i.test(testFile) && !testFile.includes('.test.') && !testFile.includes('.spec.')) {
         throw new Error(`verify_write: test_file must be a test file (.test.ts/.spec.ts), got: "${testFile}"`);
       }
