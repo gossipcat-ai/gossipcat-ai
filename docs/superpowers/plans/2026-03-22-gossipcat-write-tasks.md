@@ -788,7 +788,101 @@ git commit -m "feat(mcp): add write_mode and scope params to dispatch tools"
 
 ---
 
-### Task 10: Full regression + smoke test
+### Task 10: Add CLI write mode support
+
+**Files:**
+- Modify: `apps/cli/src/index.ts` (one-shot mode)
+- Modify: `apps/cli/src/chat.ts` (interactive chat)
+
+- [ ] **Step 1: Add --write-mode flag to one-shot CLI**
+
+In `apps/cli/src/index.ts`, the one-shot mode (`if (args.length > 0)`) currently just runs `mainAgent.handleMessage(task)`. Add CLI flag parsing:
+
+```typescript
+// Parse --write-mode and --scope from args
+let writeMode: string | undefined;
+let scope: string | undefined;
+const filteredArgs: string[] = [];
+
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--write-mode' && args[i + 1]) {
+    writeMode = args[++i];
+  } else if (args[i] === '--scope' && args[i + 1]) {
+    scope = args[++i];
+  } else {
+    filteredArgs.push(args[i]);
+  }
+}
+const task = filteredArgs.join(' ');
+```
+
+If `writeMode` is set, use `mainAgent.dispatch()` + `mainAgent.collect()` instead of `handleMessage()`:
+
+```typescript
+if (writeMode) {
+  const { taskId } = mainAgent.dispatch(
+    configToAgentConfigs(config)[0]?.id || 'default',
+    task,
+    { writeMode: writeMode as any, scope }
+  );
+  const results = await mainAgent.collect([taskId]);
+  console.log(results[0]?.result || results[0]?.error || 'No result');
+} else {
+  const response = await mainAgent.handleMessage(task);
+  console.log(response.text);
+}
+```
+
+Usage: `gossipcat "fix the relay bug" --write-mode sequential`
+
+- [ ] **Step 2: Add /write command to interactive chat**
+
+In `apps/cli/src/chat.ts`, add a `/write` command handler alongside the existing `/image` handler:
+
+```typescript
+if (input.startsWith('/write ')) {
+  const writeTask = input.slice(7).trim();
+  if (!writeTask) { console.log('Usage: /write <task>'); rl.prompt(); return; }
+
+  process.stdout.write(`${c.dim}  dispatching write task...${c.reset}`);
+
+  // Use first available agent for sequential write
+  const agents = configToAgentConfigs(config);
+  if (agents.length === 0) { console.log('No agents configured.'); rl.prompt(); return; }
+
+  try {
+    const { taskId } = mainAgent.dispatch(agents[0].id, writeTask, { writeMode: 'sequential' });
+    const results = await mainAgent.collect([taskId]);
+    process.stdout.write('\r\x1b[K');
+    const r = results[0];
+    if (r?.status === 'completed') console.log(`\n${r.result}\n`);
+    else console.log(`\n${c.yellow}  Error: ${r?.error || 'Unknown'}${c.reset}\n`);
+  } catch (err) {
+    process.stdout.write('\r\x1b[K');
+    console.log(`\n${c.yellow}  Error: ${(err as Error).message}${c.reset}\n`);
+  }
+  rl.prompt();
+  return;
+}
+```
+
+Usage in chat: `/write fix the timer leak in worker-agent.ts`
+
+- [ ] **Step 3: Verify build**
+
+Run: `npx jest --config jest.config.base.js --verbose`
+Expected: All pass
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add apps/cli/src/index.ts apps/cli/src/chat.ts
+git commit -m "feat(cli): add --write-mode flag for one-shot and /write command for chat"
+```
+
+---
+
+### Task 11: Full regression + smoke test
 
 **Files:** None (verification only)
 
