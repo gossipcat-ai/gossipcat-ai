@@ -118,6 +118,15 @@ export interface DispatchOptions {
   timeoutMs?: number;
 }
 
+/** A planned task with write-mode classification */
+export interface PlannedTask {
+  agentId: string;
+  task: string;
+  access: 'read' | 'write';
+  writeMode?: 'sequential' | 'scoped' | 'worktree';
+  scope?: string;
+}
+
 /** A tracked dispatch task with status and result */
 export interface TaskEntry {
   id: string;
