@@ -66,6 +66,9 @@ export class DispatchPipeline {
 
     try { this.catalog = new SkillCatalog(); }
     catch (err) { this.catalog = null; log(`SkillCatalog unavailable: ${(err as Error).message}`); }
+
+    // Clean up orphaned worktrees from previous runs
+    this.worktreeManager.pruneOrphans().catch(err => log(`Orphan cleanup failed: ${(err as Error).message}`));
   }
 
   private static readonly MAX_TASKS = 500;
@@ -384,6 +387,26 @@ export class DispatchPipeline {
     } catch (err) { log(`Memory write failed for ${t.agentId}/${t.id}: ${(err as Error).message}`); }
 
     this.tasks.delete(t.id);
+  }
+
+  /** Re-register write task state with ToolServer after reconnect */
+  async reRegisterWriteTaskState(
+    assignScope: (agentId: string, scope: string) => void,
+    assignRoot: (agentId: string, root: string) => void,
+  ): Promise<void> {
+    for (const [taskId, entry] of this.tasks) {
+      if (entry.status !== 'running') continue;
+      try {
+        if (entry.writeMode === 'scoped' && entry.scope) {
+          assignScope(entry.agentId, entry.scope);
+        }
+        if (entry.writeMode === 'worktree' && entry.worktreeInfo) {
+          assignRoot(entry.agentId, entry.worktreeInfo.path);
+        }
+      } catch (err) {
+        log(`Failed to re-register write state for task ${taskId}: ${(err as Error).message}`);
+      }
+    }
   }
 
   setGossipPublisher(publisher: GossipPublisher | null): void {
