@@ -48,6 +48,7 @@ export class DispatchPipeline {
   private readonly llm: ILLMProvider | null;
   private gossipPublisher: GossipPublisher | null;
   private syncFactory: (() => TaskGraphSync | null) | null;
+  private isSyncing = false;
   private sessionGossip: SessionGossipEntry[] = [];
   private plans: Map<string, PlanState> = new Map();
   private static readonly MAX_SESSION_GOSSIP = 20;
@@ -323,16 +324,17 @@ export class DispatchPipeline {
       this.gapTracker.checkAndGenerate();
     } catch (err) { log(`Skill gap check failed: ${(err as Error).message}`); }
 
-    // 5. Sync threshold check (every 30 events)
+    // 5. Sync threshold check (every 30 events, with mutex to prevent concurrent syncs)
     try {
       const eventCount = this.taskGraph.getEventCount();
       const syncMeta = this.taskGraph.getSyncMeta();
-      if (eventCount - syncMeta.lastSyncEventCount >= 30 && this.syncFactory) {
+      if (eventCount - syncMeta.lastSyncEventCount >= 30 && this.syncFactory && !this.isSyncing) {
         const sync = this.syncFactory();
         if (sync?.isConfigured()) {
-          sync.sync().catch(err =>
-            log(`Supabase sync failed: ${(err as Error).message}`)
-          );
+          this.isSyncing = true;
+          sync.sync()
+            .catch(err => log(`Supabase sync failed: ${(err as Error).message}`))
+            .finally(() => { this.isSyncing = false; });
         }
       }
     } catch (err) { log(`Sync check failed: ${(err as Error).message}`); }

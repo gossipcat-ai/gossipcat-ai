@@ -10,7 +10,7 @@ global.fetch = jest.fn(async (url: string | URL, init?: RequestInit) => {
   const method = init?.method || 'GET';
   fetchCalls.push({ url: url.toString(), method, body });
   return new Response(JSON.stringify(body ? [body] : []), {
-    status: 201,
+    status: method === 'PATCH' ? 200 : 201,
     headers: { 'content-type': 'application/json' },
   });
 }) as any;
@@ -39,8 +39,10 @@ describe('TaskGraphSync', () => {
     expect(insert!.body.id).toBe('t1');
     expect(insert!.body.agent_id).toBe('gemini-reviewer');
     expect(insert!.body.status).toBe('created');
-    const completed = fetchCalls.find(c => c.body?.status === 'completed' && c.url.includes('on_conflict'));
+    // completed → PATCH (partial update, preserves existing fields)
+    const completed = fetchCalls.find(c => c.method === 'PATCH' && c.url.includes('id=eq.t1'));
     expect(completed).toBeDefined();
+    expect(completed!.body.status).toBe('completed');
     expect(completed!.body.result).toBe('Found 2 bugs');
   });
 
@@ -86,11 +88,11 @@ describe('TaskGraphSync', () => {
     expect(ref!.body.relationship).toBe('fixes');
   });
 
-  it('syncs failed events as UPSERT', async () => {
+  it('syncs failed events as PATCH', async () => {
     graph.recordCreated('t1', 'agent-a', 'Task', []);
     graph.recordFailed('t1', 'Timeout error', 30000);
     await sync.sync();
-    const failed = fetchCalls.find(c => c.body?.status === 'failed');
+    const failed = fetchCalls.find(c => c.method === 'PATCH' && c.body?.status === 'failed');
     expect(failed).toBeDefined();
     expect(failed!.body.error).toBe('Timeout error');
   });

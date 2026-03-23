@@ -72,22 +72,22 @@ export class TaskGraphSync {
   }
 
   private async syncCompleted(event: TaskCompletedEvent): Promise<void> {
-    await this.upsert('/rest/v1/tasks?on_conflict=id', {
-      id: event.taskId, status: 'completed', result: event.result,
+    await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
+      status: 'completed', result: event.result,
       duration_ms: event.duration, completed_at: event.timestamp,
     });
   }
 
   private async syncFailed(event: TaskFailedEvent): Promise<void> {
-    await this.upsert('/rest/v1/tasks?on_conflict=id', {
-      id: event.taskId, status: 'failed', error: event.error,
+    await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
+      status: 'failed', error: event.error,
       duration_ms: event.duration, completed_at: event.timestamp,
     });
   }
 
   private async syncCancelled(event: TaskCancelledEvent): Promise<void> {
-    await this.upsert('/rest/v1/tasks?on_conflict=id', {
-      id: event.taskId, status: 'cancelled', error: event.reason,
+    await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
+      status: 'cancelled', error: event.reason,
       duration_ms: event.duration, completed_at: event.timestamp,
     });
   }
@@ -130,17 +130,29 @@ export class TaskGraphSync {
     return synced;
   }
 
+  private async patch(path: string, body: Record<string, unknown>): Promise<void> {
+    const res = await fetch(`${this.supabaseUrl}${path}`, {
+      method: 'PATCH',
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`PATCH ${path} failed: ${res.status} ${await res.text()}`);
+  }
+
   private async upsert(path: string, body: Record<string, unknown>): Promise<void> {
     const res = await fetch(`${this.supabaseUrl}${path}`, {
       method: 'POST',
-      headers: {
-        'apikey': this.supabaseKey,
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=representation',
-      },
+      headers: { ...this.headers(), 'Prefer': 'resolution=merge-duplicates,return=representation' },
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`UPSERT ${path} failed: ${res.status} ${await res.text()}`);
+  }
+
+  private headers(): Record<string, string> {
+    return {
+      'apikey': this.supabaseKey,
+      'Authorization': `Bearer ${this.supabaseKey}`,
+      'Content-Type': 'application/json',
+    };
   }
 }
