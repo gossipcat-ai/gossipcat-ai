@@ -144,6 +144,7 @@ export class DispatchPipeline {
     // 5. Assemble prompt
     const promptContent = assemblePrompt({
       memory: memory || undefined,
+      lens: options?.lens,
       skills,
       sessionContext: sessionContext || undefined,
       chainContext: chainContext || undefined,
