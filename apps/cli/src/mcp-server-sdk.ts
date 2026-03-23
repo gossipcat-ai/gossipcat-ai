@@ -436,7 +436,7 @@ server.tool(
       }
     }
 
-    const { taskIds, errors } = mainAgent.dispatchParallel(
+    const { taskIds, errors } = await mainAgent.dispatchParallel(
       taskDefs.map((d: any) => ({
         agentId: d.agent_id,
         task: d.task,

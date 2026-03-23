@@ -14,6 +14,8 @@ import { GossipPublisher } from './gossip-publisher';
 import { ScopeTracker } from './scope-tracker';
 import { WorktreeManager } from './worktree-manager';
 import { TaskGraphSync } from './task-graph-sync';
+import { OverlapDetector } from './overlap-detector';
+import { LensGenerator } from './lens-generator';
 
 const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
 
@@ -68,6 +70,10 @@ export class DispatchPipeline {
   private readonly worktreeManager: WorktreeManager;
   private writeQueue: Array<() => void> = [];
   private writeActive = false;
+
+  private overlapDetector: OverlapDetector | null = null;
+  private lensGenerator: LensGenerator | null = null;
+
 
   constructor(config: DispatchPipelineConfig) {
     this.projectRoot = config.projectRoot;
@@ -478,10 +484,10 @@ export class DispatchPipeline {
     return results;
   }
 
-  dispatchParallel(taskDefs: Array<{ agentId: string; task: string; options?: DispatchOptions }>): {
+  async dispatchParallel(taskDefs: Array<{ agentId: string; task: string; options?: DispatchOptions }>): Promise<{
     taskIds: string[];
     errors: string[];
-  } {
+  }> {
     const taskIds: string[] = [];
     const errors: string[] = [];
     const batchId = randomUUID().slice(0, 8);
@@ -530,6 +536,27 @@ export class DispatchPipeline {
       }
     }
 
+    // Lens generation for overlapping agents
+    let lensMap: Map<string, string> | null = null;
+    if (this.overlapDetector && this.lensGenerator) {
+      const agentConfigs = taskDefs
+        .map(d => this.registryGet(d.agentId))
+        .filter((c): c is AgentConfig => c !== undefined);
+      const overlapResult = this.overlapDetector.detect(agentConfigs);
+      if (overlapResult.hasOverlaps) {
+        try {
+          const lenses = await this.lensGenerator.generateLenses(
+            overlapResult.agents, taskDefs[0]?.task || '', overlapResult.sharedSkills
+          );
+          if (lenses.length > 0) {
+            lensMap = new Map(lenses.map(l => [l.agentId, l.focus]));
+          }
+        } catch (err) {
+          // Graceful degradation — dispatch without lenses
+        }
+      }
+    }
+
     // Subscribe workers to batch channel
     for (const def of taskDefs) {
       const worker = this.workers.get(def.agentId);
@@ -540,7 +567,11 @@ export class DispatchPipeline {
 
     for (const def of taskDefs) {
       try {
-        const { taskId, promise } = this.dispatch(def.agentId, def.task, def.options);
+        const lens = lensMap?.get(def.agentId);
+        const { taskId, promise } = this.dispatch(def.agentId, def.task, {
+          ...def.options,
+          ...(lens ? { lens } : {}),
+        });
         taskIds.push(taskId);
         batchTaskIds.add(taskId);
 
@@ -619,6 +650,14 @@ export class DispatchPipeline {
 
   setGossipPublisher(publisher: GossipPublisher | null): void {
     this.gossipPublisher = publisher;
+  }
+
+  setOverlapDetector(detector: OverlapDetector | null): void {
+    this.overlapDetector = detector;
+  }
+
+  setLensGenerator(generator: LensGenerator | null): void {
+    this.lensGenerator = generator;
   }
 
   /** Flush TaskGraph index on shutdown */

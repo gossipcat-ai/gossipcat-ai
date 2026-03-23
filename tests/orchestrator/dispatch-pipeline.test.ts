@@ -173,7 +173,7 @@ describe('DispatchPipeline', () => {
   });
 
   describe('dispatchParallel()', () => {
-    it('dispatches multiple tasks and returns ids', () => {
+    it('dispatches multiple tasks and returns ids', async () => {
       workers.set('agent-b', mockWorker('result-b'));
       pipeline = new DispatchPipeline({
         projectRoot: '/tmp/gossip-test-' + Date.now(),
@@ -181,7 +181,7 @@ describe('DispatchPipeline', () => {
         registryGet: (id) => ({ id, provider: 'local' as const, model: 'mock', skills: [] }),
       });
 
-      const { taskIds, errors } = pipeline.dispatchParallel([
+      const { taskIds, errors } = await pipeline.dispatchParallel([
         { agentId: 'test-agent', task: 'task 1' },
         { agentId: 'agent-b', task: 'task 2' },
       ]);
@@ -189,8 +189,8 @@ describe('DispatchPipeline', () => {
       expect(errors).toHaveLength(0);
     });
 
-    it('rejects entire batch when any agent is missing (all-or-nothing)', () => {
-      const { taskIds, errors } = pipeline.dispatchParallel([
+    it('rejects entire batch when any agent is missing (all-or-nothing)', async () => {
+      const { taskIds, errors } = await pipeline.dispatchParallel([
         { agentId: 'test-agent', task: 'task 1' },
         { agentId: 'missing', task: 'task 2' },
       ]);
@@ -199,16 +199,16 @@ describe('DispatchPipeline', () => {
       expect(errors[0]).toContain('missing');
     });
 
-    it('rejects sequential mode in parallel dispatch', () => {
-      const { taskIds, errors } = pipeline.dispatchParallel([
+    it('rejects sequential mode in parallel dispatch', async () => {
+      const { taskIds, errors } = await pipeline.dispatchParallel([
         { agentId: 'test-agent', task: 'task 1', options: { writeMode: 'sequential' } },
       ]);
       expect(taskIds).toHaveLength(0);
       expect(errors[0]).toContain('sequential');
     });
 
-    it('rejects overlapping scopes in parallel dispatch', () => {
-      const { taskIds, errors } = pipeline.dispatchParallel([
+    it('rejects overlapping scopes in parallel dispatch', async () => {
+      const { taskIds, errors } = await pipeline.dispatchParallel([
         { agentId: 'test-agent', task: 'task 1', options: { writeMode: 'scoped', scope: 'packages/relay/' } },
         { agentId: 'test-agent', task: 'task 2', options: { writeMode: 'scoped', scope: 'packages/relay/src/' } },
       ]);
@@ -216,14 +216,14 @@ describe('DispatchPipeline', () => {
       expect(errors[0]).toContain('overlapping');
     });
 
-    it('allows non-overlapping scopes in parallel dispatch', () => {
+    it('allows non-overlapping scopes in parallel dispatch', async () => {
       workers.set('agent-b', mockWorker('result-b'));
       pipeline = new DispatchPipeline({
         projectRoot: '/tmp/gossip-test-' + Date.now(),
         workers,
         registryGet: (id) => ({ id, provider: 'local' as const, model: 'mock', skills: [] }),
       });
-      const { taskIds, errors } = pipeline.dispatchParallel([
+      const { taskIds, errors } = await pipeline.dispatchParallel([
         { agentId: 'test-agent', task: 'task 1', options: { writeMode: 'scoped', scope: 'packages/relay/' } },
         { agentId: 'agent-b', task: 'task 2', options: { writeMode: 'scoped', scope: 'packages/tools/' } },
       ]);

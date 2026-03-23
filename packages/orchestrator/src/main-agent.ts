@@ -123,11 +123,13 @@ export class MainAgent {
 
   dispatch(agentId: string, task: string, options?: DispatchOptions) { return this.pipeline.dispatch(agentId, task, options); }
   async collect(taskIds?: string[], timeoutMs?: number) { return this.pipeline.collect(taskIds, timeoutMs); }
-  dispatchParallel(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>) { return this.pipeline.dispatchParallel(tasks); }
+  async dispatchParallel(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>) { return this.pipeline.dispatchParallel(tasks); }
   registerPlan(plan: PlanState): void { this.pipeline.registerPlan(plan); }
   getWorker(agentId: string) { return this.workers.get(agentId); }
   getTask(taskId: string) { return this.pipeline.getTask(taskId); }
   setGossipPublisher(publisher: any) { this.pipeline.setGossipPublisher(publisher); }
+  setOverlapDetector(detector: any): void { this.pipeline.setOverlapDetector(detector); }
+  setLensGenerator(generator: any): void { this.pipeline.setLensGenerator(generator); }
 
   /** Register new agent configs (for hot-reload from config changes) */
   registerAgent(config: AgentConfig): void {
