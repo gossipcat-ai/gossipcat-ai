@@ -197,6 +197,10 @@ async function runSetup(): Promise<void> {
         headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
       });
       const refetched = await refetchRes.json();
+      if (!refetched.length) {
+        console.log(`${c.red}Failed to fetch team config after creation. Check Supabase RLS policies.${c.reset}`);
+        rl.close(); return;
+      }
       teamSalt = refetched[0].team_salt;
       console.log(`  ${c.green}✓${c.reset} Team "${projectName}" created.`);
     }
@@ -205,15 +209,20 @@ async function runSetup(): Promise<void> {
     const consent = await ask('  Continue? (Y/n) ');
     if (consent.toLowerCase() === 'n') { rl.close(); return; }
 
-    // Save old solo userId for migration on first team sync
-    const oldSoloUserId = getUserId(process.cwd());
+    // Save old solo userId for migration on first team sync (only if data was previously synced)
+    const graph = new TaskGraph(process.cwd());
+    const hasSyncedData = graph.getSyncMeta().lastSyncEventCount > 0;
+    const oldSoloUserId = hasSyncedData ? getUserId(process.cwd()) : undefined;
 
     rl.close();
 
     const keychain = new Keychain();
     await keychain.setKey('supabase', key);
     await keychain.setKey('supabase-team-salt', teamSalt);
-    saveSupabaseConfig({ url, projectRef: ref, mode: 'team', displayName: email, previousUserId: oldSoloUserId });
+    saveSupabaseConfig({
+      url, projectRef: ref, mode: 'team', displayName: email,
+      ...(oldSoloUserId ? { previousUserId: oldSoloUserId } : {}),
+    });
 
     console.log(`\n${c.green}Supabase configured (team mode).${c.reset}`);
     console.log(`  Config: .gossip/supabase.json`);

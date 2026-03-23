@@ -550,7 +550,7 @@ export class DispatchPipeline {
 
     const duration = t.completedAt ? t.completedAt - t.startedAt : -1;
     try {
-      this.taskGraph.recordCompleted(t.id, (t.result || '').slice(0, 4000), duration);
+      this.taskGraph.recordCompleted(t.id, (t.result || '').slice(0, 4000), duration, t.inputTokens, t.outputTokens);
     } catch (err) { log(`TaskGraph write failed for ${t.id}: ${(err as Error).message}`); }
 
     try {
