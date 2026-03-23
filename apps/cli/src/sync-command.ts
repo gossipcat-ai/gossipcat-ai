@@ -169,7 +169,7 @@ async function runSetup(): Promise<void> {
     const checkRes = await fetch(`${url}/rest/v1/team_config?project_id=eq.${projectId}`, {
       headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
     });
-    const existingTeam = await checkRes.json();
+    const existingTeam = await checkRes.json() as any[];
 
     let teamSalt: string;
     if (existingTeam.length > 0) {
@@ -196,7 +196,7 @@ async function runSetup(): Promise<void> {
       const refetchRes = await fetch(`${url}/rest/v1/team_config?project_id=eq.${projectId}`, {
         headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
       });
-      const refetched = await refetchRes.json();
+      const refetched = await refetchRes.json() as any[];
       if (!refetched.length) {
         console.log(`${c.red}Failed to fetch team config after creation. Check Supabase RLS policies.${c.reset}`);
         rl.close(); return;
