@@ -124,7 +124,10 @@ async function doBoot() {
         let displayName: string | null = null;
         if (supaConfig.mode === 'team') {
           const email = getGitEmail();
-          if (!supaTeamSalt || !email) return null;
+          if (!supaTeamSalt || !email) {
+            process.stderr.write(`[gossipcat] Team sync disabled: ${!supaTeamSalt ? 'missing teamSalt in keychain' : 'no git email configured'}. Run: gossipcat sync --setup\n`);
+            return null;
+          }
           userId = getTeamUserId(email, supaTeamSalt);
           displayName = supaConfig.displayName || email;
         } else {

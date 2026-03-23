@@ -38,7 +38,7 @@ export function normalizeGitUrl(url: string): string | null {
     const pathname = parsed.pathname.replace(/^\//, '').replace(/\.git$/, '');
     return `${parsed.hostname}/${pathname}`;
   } catch {
-    return url.replace(/^(https?:\/\/|git@|ssh:\/\/)/, '').replace(/\.git$/, '').replace(/:/, '/');
+    return url.replace(/^(https?:\/\/|git@|ssh:\/\/)/, '').replace(/\.git$/, '').replace(/:/g, '/');
   }
 }
 

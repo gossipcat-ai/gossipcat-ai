@@ -6,6 +6,15 @@ import type {
   TaskFailedEvent, TaskCancelledEvent, TaskDecomposedEvent, TaskReferenceEvent,
 } from './types';
 
+/** Validate that a value is safe to interpolate into PostgREST URL params.
+ *  Rejects characters that could inject query operators (&, =, (, ), |, !) */
+function safeId(value: string): string {
+  if (!value || /[&=?|()\s!]/.test(value)) {
+    throw new Error(`Invalid ID for PostgREST query: ${value?.slice(0, 20)}`);
+  }
+  return encodeURIComponent(value);
+}
+
 export interface SyncMigrationConfig {
   oldProjectId?: string;
   oldUserId?: string;
@@ -93,7 +102,7 @@ export class TaskGraphSync {
   }
 
   private async syncCompleted(event: TaskCompletedEvent): Promise<void> {
-    await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
+    await this.patch(`/rest/v1/tasks?id=eq.${safeId(event.taskId)}`, {
       status: 'completed', result: event.result,
       duration_ms: event.duration, completed_at: event.timestamp,
       input_tokens: event.inputTokens ?? null,
@@ -102,7 +111,7 @@ export class TaskGraphSync {
   }
 
   private async syncFailed(event: TaskFailedEvent): Promise<void> {
-    await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
+    await this.patch(`/rest/v1/tasks?id=eq.${safeId(event.taskId)}`, {
       status: 'failed', error: event.error,
       duration_ms: event.duration, completed_at: event.timestamp,
       input_tokens: event.inputTokens ?? null,
@@ -111,7 +120,7 @@ export class TaskGraphSync {
   }
 
   private async syncCancelled(event: TaskCancelledEvent): Promise<void> {
-    await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
+    await this.patch(`/rest/v1/tasks?id=eq.${safeId(event.taskId)}`, {
       status: 'cancelled', error: event.reason,
       duration_ms: event.duration, completed_at: event.timestamp,
     });
@@ -162,21 +171,21 @@ export class TaskGraphSync {
   private async runMigrations(): Promise<void> {
     if (this.migration?.oldProjectId) {
       await this.patch(
-        `/rest/v1/tasks?project_id=eq.${this.migration.oldProjectId}&user_id=eq.${this.userId}`,
+        `/rest/v1/tasks?project_id=eq.${safeId(this.migration.oldProjectId)}&user_id=eq.${safeId(this.userId)}`,
         { project_id: this.projectId }
       );
       await this.patch(
-        `/rest/v1/agent_scores?project_id=eq.${this.migration.oldProjectId}&user_id=eq.${this.userId}`,
+        `/rest/v1/agent_scores?project_id=eq.${safeId(this.migration.oldProjectId)}&user_id=eq.${safeId(this.userId)}`,
         { project_id: this.projectId }
       );
     }
     if (this.migration?.oldUserId) {
       await this.patch(
-        `/rest/v1/tasks?user_id=eq.${this.migration.oldUserId}&project_id=eq.${this.projectId}`,
+        `/rest/v1/tasks?user_id=eq.${safeId(this.migration.oldUserId)}&project_id=eq.${safeId(this.projectId)}`,
         { user_id: this.userId, display_name: this.displayName || null }
       );
       await this.patch(
-        `/rest/v1/agent_scores?user_id=eq.${this.migration.oldUserId}&project_id=eq.${this.projectId}`,
+        `/rest/v1/agent_scores?user_id=eq.${safeId(this.migration.oldUserId)}&project_id=eq.${safeId(this.projectId)}`,
         { user_id: this.userId, display_name: this.displayName || null }
       );
     }

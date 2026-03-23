@@ -206,8 +206,8 @@ async function runSetup(): Promise<void> {
     }
 
     console.log(`\n  Your git email (${email}) will be visible to teammates.`);
-    const consent = await ask('  Continue? (Y/n) ');
-    if (consent.toLowerCase() === 'n') { rl.close(); return; }
+    const consent = await ask('  Continue? (y/N) ');
+    if (consent.trim().toLowerCase() !== 'y') { rl.close(); return; }
 
     // Save old solo userId for migration on first team sync (only if data was previously synced)
     const graph = new TaskGraph(process.cwd());
