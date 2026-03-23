@@ -42,6 +42,17 @@ export function normalizeGitUrl(url: string): string | null {
   }
 }
 
+export function getTeamUserId(email: string, teamSalt: string): string {
+  return createHash('sha256').update(email + teamSalt).digest('hex').slice(0, 16);
+}
+
+export function getGitEmail(): string | null {
+  try {
+    const email = execFileSync('git', ['config', 'user.email'], { stdio: 'pipe' }).toString().trim();
+    return email || null;
+  } catch { return null; }
+}
+
 export function getProjectId(projectRoot: string): string {
   try {
     const remoteUrl = execFileSync(
