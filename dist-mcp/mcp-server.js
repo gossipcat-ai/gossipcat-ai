@@ -5753,6 +5753,7 @@ var init_dispatch_pipeline = __esm({
       llm;
       gossipPublisher;
       syncFactory;
+      isSyncing = false;
       sessionGossip = [];
       plans = /* @__PURE__ */ new Map();
       static MAX_SESSION_GOSSIP = 20;
@@ -6015,12 +6016,13 @@ var init_dispatch_pipeline = __esm({
         try {
           const eventCount = this.taskGraph.getEventCount();
           const syncMeta = this.taskGraph.getSyncMeta();
-          if (eventCount - syncMeta.lastSyncEventCount >= 30 && this.syncFactory) {
+          if (eventCount - syncMeta.lastSyncEventCount >= 30 && this.syncFactory && !this.isSyncing) {
             const sync = this.syncFactory();
             if (sync?.isConfigured()) {
-              sync.sync().catch(
-                (err) => log(`Supabase sync failed: ${err.message}`)
-              );
+              this.isSyncing = true;
+              sync.sync().catch((err) => log(`Supabase sync failed: ${err.message}`)).finally(() => {
+                this.isSyncing = false;
+              });
             }
           }
         } catch (err) {
@@ -6644,8 +6646,7 @@ var init_task_graph_sync = __esm({
         });
       }
       async syncCompleted(event) {
-        await this.upsert("/rest/v1/tasks?on_conflict=id", {
-          id: event.taskId,
+        await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
           status: "completed",
           result: event.result,
           duration_ms: event.duration,
@@ -6653,8 +6654,7 @@ var init_task_graph_sync = __esm({
         });
       }
       async syncFailed(event) {
-        await this.upsert("/rest/v1/tasks?on_conflict=id", {
-          id: event.taskId,
+        await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
           status: "failed",
           error: event.error,
           duration_ms: event.duration,
@@ -6662,8 +6662,7 @@ var init_task_graph_sync = __esm({
         });
       }
       async syncCancelled(event) {
-        await this.upsert("/rest/v1/tasks?on_conflict=id", {
-          id: event.taskId,
+        await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
           status: "cancelled",
           error: event.reason,
           duration_ms: event.duration,
@@ -6715,18 +6714,28 @@ var init_task_graph_sync = __esm({
         }
         return synced;
       }
+      async patch(path, body) {
+        const res = await fetch(`${this.supabaseUrl}${path}`, {
+          method: "PATCH",
+          headers: this.headers(),
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(`PATCH ${path} failed: ${res.status} ${await res.text()}`);
+      }
       async upsert(path, body) {
         const res = await fetch(`${this.supabaseUrl}${path}`, {
           method: "POST",
-          headers: {
-            "apikey": this.supabaseKey,
-            "Authorization": `Bearer ${this.supabaseKey}`,
-            "Content-Type": "application/json",
-            "Prefer": "resolution=merge-duplicates,return=representation"
-          },
+          headers: { ...this.headers(), "Prefer": "resolution=merge-duplicates,return=representation" },
           body: JSON.stringify(body)
         });
         if (!res.ok) throw new Error(`UPSERT ${path} failed: ${res.status} ${await res.text()}`);
+      }
+      headers() {
+        return {
+          "apikey": this.supabaseKey,
+          "Authorization": `Bearer ${this.supabaseKey}`,
+          "Content-Type": "application/json"
+        };
       }
     };
   }
