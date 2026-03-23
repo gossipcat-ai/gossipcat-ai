@@ -100,19 +100,12 @@ async function doBoot() {
       try {
         const { existsSync: exists, readFileSync: readF } = require('fs');
         const { join: joinP } = require('path');
-        const { createHash } = require('crypto');
-        const { execFileSync } = require('child_process');
         const configPath = joinP(process.cwd(), '.gossip', 'supabase.json');
         if (!exists(configPath) || !supaKey) return null;
         const supaConfig = JSON.parse(readF(configPath, 'utf-8'));
-        const saltPath = joinP(process.cwd(), '.gossip', 'local-salt');
-        const salt = exists(saltPath) ? readF(saltPath, 'utf-8').trim() : '';
-        let email = 'unknown';
-        try { email = execFileSync('git', ['config', 'user.email'], { stdio: 'pipe' }).toString().trim(); } catch {}
-        const userId = createHash('sha256').update(email + process.cwd() + salt).digest('hex').slice(0, 16);
-        const projectId = createHash('sha256').update(process.cwd()).digest('hex').slice(0, 16);
+        const { getUserId, getProjectId } = require('./identity');
         const { TaskGraph: TG, TaskGraphSync: TGS } = require('@gossip/orchestrator');
-        return new TGS(new TG(process.cwd()), supaConfig.url, supaKey, userId, projectId, process.cwd());
+        return new TGS(new TG(process.cwd()), supaConfig.url, supaKey, getUserId(process.cwd()), getProjectId(process.cwd()), process.cwd());
       } catch { return null; }
     },
   });

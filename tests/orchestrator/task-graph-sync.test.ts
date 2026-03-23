@@ -110,8 +110,7 @@ describe('TaskGraphSync', () => {
     graph.recordCreated('t1', 'agent-a', 'Task', []);
     graph.recordCancelled('t1', 'collect timeout', 120000);
     await sync.sync();
-    const upserts = fetchCalls.filter(c => c.url.includes('/rest/v1/tasks'));
-    const cancelled = upserts.find(c => c.body.status === 'cancelled');
+    const cancelled = fetchCalls.find(c => c.method === 'PATCH' && c.body?.status === 'cancelled');
     expect(cancelled).toBeDefined();
     expect(cancelled!.body.error).toBe('collect timeout');
   });

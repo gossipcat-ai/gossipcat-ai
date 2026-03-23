@@ -93,14 +93,16 @@ export class TaskGraphSync {
   }
 
   private async syncDecomposed(event: TaskDecomposedEvent): Promise<void> {
-    await this.upsert('/rest/v1/task_decompositions', {
+    // Plain POST — UUID PK means no natural dedup key for upsert.
+    // Re-sync may create duplicates; cosmetic only (low volume).
+    await this.post('/rest/v1/task_decompositions', {
       parent_id: event.parentId, strategy: event.strategy,
       sub_task_ids: event.subTaskIds, created_at: event.timestamp,
     });
   }
 
   private async syncReference(event: TaskReferenceEvent): Promise<void> {
-    await this.upsert('/rest/v1/task_references', {
+    await this.post('/rest/v1/task_references', {
       from_task_id: event.fromTaskId, to_task_id: event.toTaskId,
       relationship: event.relationship, evidence: event.evidence || null,
       created_at: event.timestamp,
@@ -118,7 +120,7 @@ export class TaskGraphSync {
       try {
         const entry = JSON.parse(line);
         if (meta.lastSync && entry.timestamp <= meta.lastSync) continue;
-        await this.upsert('/rest/v1/agent_scores', {
+        await this.post('/rest/v1/agent_scores', {
           user_id: this.userId, agent_id: entry.agentId, task_id: entry.taskId,
           skills: entry.skills || [], relevance: entry.scores?.relevance,
           accuracy: entry.scores?.accuracy, uniqueness: entry.scores?.uniqueness,
@@ -137,6 +139,15 @@ export class TaskGraphSync {
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`PATCH ${path} failed: ${res.status} ${await res.text()}`);
+  }
+
+  private async post(path: string, body: Record<string, unknown>): Promise<void> {
+    const res = await fetch(`${this.supabaseUrl}${path}`, {
+      method: 'POST',
+      headers: { ...this.headers(), 'Prefer': 'return=representation' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`);
   }
 
   private async upsert(path: string, body: Record<string, unknown>): Promise<void> {
