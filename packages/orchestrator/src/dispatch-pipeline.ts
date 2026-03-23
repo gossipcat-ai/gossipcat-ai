@@ -158,6 +158,7 @@ export class DispatchPipeline {
       skills,
       sessionContext: sessionContext || undefined,
       chainContext: chainContext || undefined,
+      consensusSummary: options?.consensus,
     });
 
     // 6. Record TaskGraph created
@@ -503,7 +504,7 @@ export class DispatchPipeline {
     return { results, consensus: consensusReport };
   }
 
-  async dispatchParallel(taskDefs: Array<{ agentId: string; task: string; options?: DispatchOptions }>): Promise<{
+  async dispatchParallel(taskDefs: Array<{ agentId: string; task: string; options?: DispatchOptions }>, pipelineOptions?: { consensus?: boolean }): Promise<{
     taskIds: string[];
     errors: string[];
   }> {
@@ -602,6 +603,7 @@ export class DispatchPipeline {
         const { taskId, promise } = this.dispatch(def.agentId, def.task, {
           ...def.options,
           ...(lens ? { lens } : {}),
+          ...(pipelineOptions?.consensus ? { consensus: true } : {}),
         });
         taskIds.push(taskId);
         batchTaskIds.add(taskId);

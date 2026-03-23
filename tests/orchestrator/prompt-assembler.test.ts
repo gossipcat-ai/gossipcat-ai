@@ -46,4 +46,15 @@ describe('assemblePrompt', () => {
   it('handles all empty — returns empty string', () => {
     expect(assemblePrompt({})).toBe('');
   });
+
+  it('includes consensus summary instruction when consensusSummary is true', () => {
+    const result = assemblePrompt({ consensusSummary: true });
+    expect(result).toContain('## Consensus Summary');
+    expect(result).toContain('one line per finding');
+  });
+
+  it('does not include consensus instruction when consensusSummary is false', () => {
+    const result = assemblePrompt({});
+    expect(result).not.toContain('## Consensus Summary');
+  });
 });

@@ -123,7 +123,7 @@ export class MainAgent {
 
   dispatch(agentId: string, task: string, options?: DispatchOptions) { return this.pipeline.dispatch(agentId, task, options); }
   async collect(taskIds?: string[], timeoutMs?: number, options?: { consensus?: boolean }) { return this.pipeline.collect(taskIds, timeoutMs, options); }
-  async dispatchParallel(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>) { return this.pipeline.dispatchParallel(tasks); }
+  async dispatchParallel(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>, options?: { consensus?: boolean }) { return this.pipeline.dispatchParallel(tasks, options); }
   registerPlan(plan: PlanState): void { this.pipeline.registerPlan(plan); }
   getWorker(agentId: string) { return this.workers.get(agentId); }
   getTask(taskId: string) { return this.pipeline.getTask(taskId); }

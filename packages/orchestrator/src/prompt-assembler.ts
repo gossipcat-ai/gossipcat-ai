@@ -10,6 +10,7 @@ export function assemblePrompt(parts: {
   context?: string;
   sessionContext?: string;
   chainContext?: string;
+  consensusSummary?: boolean;
 }): string {
   const blocks: string[] = [];
 
@@ -27,6 +28,15 @@ export function assemblePrompt(parts: {
 
   if (parts.lens) {
     blocks.push(`\n\n--- LENS ---\n${parts.lens}\n--- END LENS ---`);
+  }
+
+  if (parts.consensusSummary) {
+    blocks.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---
+End your response with a section titled "## Consensus Summary".
+List one line per finding with file:line references where applicable.
+Format: "- <finding description> (file:line)"
+This section will be used for cross-review with peer agents.
+--- END CONSENSUS OUTPUT FORMAT ---`);
   }
 
   if (parts.skills) {
