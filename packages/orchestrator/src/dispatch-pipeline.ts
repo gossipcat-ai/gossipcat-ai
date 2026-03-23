@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { AgentConfig, DispatchOptions, TaskEntry, SessionGossipEntry, PlanState } from './types';
+import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, SessionGossipEntry, PlanState } from './types';
 import { ILLMProvider } from './llm-client';
 import { LLMMessage } from '@gossip/types';
 import { loadSkills } from './skill-loader';
@@ -18,7 +18,7 @@ import { TaskGraphSync } from './task-graph-sync';
 const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
 
 interface WorkerLike {
-  executeTask(task: string, lens?: string, promptContent?: string): Promise<string>;
+  executeTask(task: string, lens?: string, promptContent?: string): Promise<TaskExecutionResult>;
   subscribeToBatch?(batchId: string): Promise<void>;
   unsubscribeFromBatch?(batchId: string): Promise<void>;
 }

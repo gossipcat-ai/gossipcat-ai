@@ -10,6 +10,7 @@ import { GossipAgent } from '@gossip/client';
 import { MessageType, MessageEnvelope, Message, ToolDefinition, LLMMessage } from '@gossip/types';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
 import { ILLMProvider } from './llm-client';
+import { TaskExecutionResult } from './types';
 
 const MAX_TOOL_TURNS = 25;
 const TOOL_CALL_TIMEOUT_MS = 60_000;
@@ -75,8 +76,10 @@ export class WorkerAgent {
    * Execute a task with the LLM, using multi-turn tool calling.
    * Returns the final text response.
    */
-  async executeTask(task: string, context?: string, skillsContent?: string): Promise<string> {
+  async executeTask(task: string, context?: string, skillsContent?: string): Promise<TaskExecutionResult> {
     this.gossipQueue = []; // clear gossip from previous task
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
     const messages: LLMMessage[] = [
       {
         role: 'system',
@@ -97,8 +100,13 @@ export class WorkerAgent {
 
       const response = await this.llm.generate(messages, { tools: this.tools });
 
+      if (response.usage) {
+        totalInputTokens += response.usage.inputTokens;
+        totalOutputTokens += response.usage.outputTokens;
+      }
+
       if (!response.toolCalls?.length) {
-        return response.text || '[No response from agent]';
+        return { result: response.text || '[No response from agent]', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
       }
 
       // Add assistant message with tool calls
@@ -125,7 +133,7 @@ export class WorkerAgent {
       }
     }
 
-    return 'Max tool turns reached';
+    return { result: 'Max tool turns reached', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
   }
 
   /** Send RPC_REQUEST to tool-server via relay */
