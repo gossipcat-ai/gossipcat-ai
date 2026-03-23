@@ -88,6 +88,7 @@ async function doBoot() {
       }
     }
   }
+  const supaKey = await keychain.getKey('supabase');
   mainAgent = new m.MainAgent({
     provider: mainProvider,
     model: mainModel,
@@ -95,6 +96,25 @@ async function doBoot() {
     relayUrl: relay.url,
     agents: agentConfigs,
     projectRoot: process.cwd(),
+    syncFactory: () => {
+      try {
+        const { existsSync: exists, readFileSync: readF } = require('fs');
+        const { join: joinP } = require('path');
+        const { createHash } = require('crypto');
+        const { execFileSync } = require('child_process');
+        const configPath = joinP(process.cwd(), '.gossip', 'supabase.json');
+        if (!exists(configPath) || !supaKey) return null;
+        const supaConfig = JSON.parse(readF(configPath, 'utf-8'));
+        const saltPath = joinP(process.cwd(), '.gossip', 'local-salt');
+        const salt = exists(saltPath) ? readF(saltPath, 'utf-8').trim() : '';
+        let email = 'unknown';
+        try { email = execFileSync('git', ['config', 'user.email'], { stdio: 'pipe' }).toString().trim(); } catch {}
+        const userId = createHash('sha256').update(email + process.cwd() + salt).digest('hex').slice(0, 16);
+        const projectId = createHash('sha256').update(process.cwd()).digest('hex').slice(0, 16);
+        const { TaskGraph: TG, TaskGraphSync: TGS } = require('@gossip/orchestrator');
+        return new TGS(new TG(process.cwd()), supaConfig.url, supaKey, userId, projectId, process.cwd());
+      } catch { return null; }
+    },
   });
   // Pass existing workers so MainAgent doesn't create duplicates
   mainAgent.setWorkers(workers);
