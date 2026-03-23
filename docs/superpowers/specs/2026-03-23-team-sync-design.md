@@ -360,6 +360,149 @@ WHERE project_id = 'abc123'
 GROUP BY display_name;
 ```
 
+## Component 7: Per-Task Token Tracking
+
+Inspired by crab-language's per-call token tracking. The gossipcat LLM providers already return `usage: { inputTokens, outputTokens }` in `LLMResponse`, but this data is discarded after each call. This component captures it in TaskGraph and syncs to Supabase for team-wide cost visibility.
+
+### JSONL Event Changes
+
+Add token fields to `task.completed` and `task.failed` events:
+
+```typescript
+interface TaskCompletedEvent extends TaskGraphEventBase {
+  type: 'task.completed';
+  taskId: string;
+  result: string;
+  duration: number;
+  inputTokens?: number;   // NEW — total input tokens for this task
+  outputTokens?: number;  // NEW — total output tokens for this task
+}
+
+// Same for TaskFailedEvent
+```
+
+These are optional (backwards-compatible). Older events without tokens are valid.
+
+### Where Tokens Come From
+
+The `WorkerAgent` runs multi-turn tool loops. Each turn calls `llm.generate()` which returns `LLMResponse.usage`. The worker should accumulate tokens across turns:
+
+```typescript
+// In WorkerAgent.executeTask():
+let totalInputTokens = 0;
+let totalOutputTokens = 0;
+
+// After each LLM call:
+if (response.usage) {
+  totalInputTokens += response.usage.inputTokens;
+  totalOutputTokens += response.usage.outputTokens;
+}
+
+// Return alongside result:
+return { result, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+```
+
+### Pipeline Integration
+
+`DispatchPipeline.collect()` passes tokens to `TaskGraph.recordCompleted()`:
+
+```typescript
+// In collect() post-processing:
+if (t.status === 'completed') {
+  this.taskGraph.recordCompleted(
+    t.id,
+    (t.result || '').slice(0, 4000),
+    duration,
+    t.inputTokens,    // NEW
+    t.outputTokens,   // NEW
+  );
+}
+```
+
+### Schema Changes
+
+```sql
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS input_tokens integer;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS output_tokens integer;
+```
+
+### Sync Changes
+
+`TaskGraphSync.syncCompleted()` includes token fields in the PATCH:
+
+```typescript
+private async syncCompleted(event: TaskCompletedEvent): Promise<void> {
+  await this.patch(`/rest/v1/tasks?id=eq.${event.taskId}`, {
+    status: 'completed',
+    result: event.result,
+    duration_ms: event.duration,
+    completed_at: event.timestamp,
+    input_tokens: event.inputTokens ?? null,   // NEW
+    output_tokens: event.outputTokens ?? null,  // NEW
+  });
+}
+```
+
+### Team Cost Queries
+
+```sql
+-- Token usage by agent this week
+SELECT agent_id,
+       count(*) as tasks,
+       sum(input_tokens) as total_input,
+       sum(output_tokens) as total_output,
+       sum(input_tokens + output_tokens) as total_tokens
+FROM tasks
+WHERE project_id = 'abc123'
+  AND created_at > now() - interval '7 days'
+  AND status = 'completed'
+GROUP BY agent_id
+ORDER BY total_tokens DESC;
+
+-- Token usage by team member
+SELECT display_name,
+       count(*) as tasks,
+       sum(input_tokens + output_tokens) as total_tokens,
+       avg(input_tokens + output_tokens)::int as avg_tokens_per_task
+FROM tasks
+WHERE project_id = 'abc123'
+  AND created_at > now() - interval '7 days'
+GROUP BY display_name
+ORDER BY total_tokens DESC;
+
+-- Most expensive task types (by average tokens)
+SELECT left(task, 60) as task_preview,
+       agent_id,
+       input_tokens + output_tokens as total_tokens,
+       duration_ms
+FROM tasks
+WHERE project_id = 'abc123'
+  AND status = 'completed'
+ORDER BY (input_tokens + output_tokens) DESC NULLS LAST
+LIMIT 20;
+```
+
+### CLI: gossipcat tasks --costs
+
+Extend the existing `gossipcat tasks` command with an optional `--costs` flag:
+
+```
+$ gossipcat tasks --costs
+
+Recent Tasks (20):
+
+  072281d1  gemini-reviewer  completed  7s   1.2k tok  Review relay...
+  c2e1c121  gemini-reviewer  completed  51s  8.4k tok  Security audit...
+
+  Total: 47.3k input + 12.1k output = 59.4k tokens
+```
+
+### What This Does NOT Include
+
+- **Hard budget ceilings** (Paperclip-style) — deferred. Per-task tracking is the foundation; budget enforcement can be added later by checking cumulative tokens against a configured limit before dispatch.
+- **Cost in dollars** — token costs vary by model and provider. Raw token counts are more universal. Dollar estimation can be a dashboard feature.
+- **Context pressure auto-rollup** (crab-language-style) — gossipcat agents run short tasks (not persistent loops), so context rarely grows large enough to need rollup. Session gossip summarization already handles cross-task context compression.
+
 ## Files Changed/Created
 
 | File | Action | Change |
@@ -367,8 +510,13 @@ GROUP BY display_name;
 | `apps/cli/src/identity.ts` | Modify | Add `normalizeGitUrl()`, `getTeamUserId()`, `getGitEmail()`, update `getProjectId()` to use normalized git remote |
 | `apps/cli/src/sync-command.ts` | Modify | Add mode selection (solo/team), team config fetch/create, displayName |
 | `apps/cli/src/mcp-server-sdk.ts` | Modify | Update syncFactory to use team identity when configured |
-| `packages/orchestrator/src/task-graph-sync.ts` | Modify | Add `displayName` constructor param, include in `syncCreated` |
-| `docs/migrations/002-team-sync.sql` | Create | `team_config` table + `display_name` column on tasks |
+| `packages/orchestrator/src/task-graph-sync.ts` | Modify | Add `displayName` constructor param, include in `syncCreated`, add token fields to `syncCompleted` |
+| `packages/orchestrator/src/task-graph.ts` | Modify | Add `inputTokens`/`outputTokens` params to `recordCompleted`/`recordFailed` |
+| `packages/orchestrator/src/types.ts` | Modify | Add `inputTokens`/`outputTokens` to `TaskCompletedEvent`/`TaskFailedEvent` and `TaskEntry` |
+| `packages/orchestrator/src/worker-agent.ts` | Modify | Accumulate token usage across multi-turn tool loops, return in result |
+| `packages/orchestrator/src/dispatch-pipeline.ts` | Modify | Pass token counts from task entry to `recordCompleted`/`recordFailed` |
+| `apps/cli/src/tasks-command.ts` | Modify | Add `--costs` flag for token display |
+| `docs/migrations/002-team-sync.sql` | Create | `team_config` table + `display_name` + `input_tokens`/`output_tokens` columns on tasks |
 | `.gossip/supabase.json` | Runtime | Add `mode`, `displayName`, `projectIdVersion`, `previousUserId` fields |
 
 ## Security Constraints
@@ -447,6 +595,14 @@ This is opt-in — if the user declines, old tasks stay under the old identity.
 - **Unit test:** Setup aborts if user declines email consent prompt
 - **Mock test:** `syncCreated` includes `display_name` when provided, null when solo
 - **Integration test:** Setup flow creates `team_config` row on first member, fetches on second
+
+### Token tracking
+- **Unit test:** `WorkerAgent.executeTask` accumulates tokens across multi-turn loops
+- **Unit test:** `recordCompleted` writes `inputTokens`/`outputTokens` to JSONL event
+- **Unit test:** `recordCompleted` without tokens (backwards compat) — fields are undefined, not null
+- **Unit test:** `syncCompleted` includes `input_tokens`/`output_tokens` in PATCH payload
+- **Unit test:** `gossipcat tasks --costs` displays token counts when available, `?` when not
+- **Mock test:** Worker with 3 tool turns accumulates correct token total
 
 ### Migration
 - **Unit test:** projectId migration detects missing `projectIdVersion` and sends PATCH
