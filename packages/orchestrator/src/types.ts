@@ -20,6 +20,13 @@ export interface TaskResult {
   duration: number;
 }
 
+/** Structured result from WorkerAgent.executeTask with token accounting */
+export interface TaskExecutionResult {
+  result: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 /** A decomposed sub-task with skill requirements and assignment */
 export interface SubTask {
   id: string;
@@ -172,6 +179,8 @@ export interface TaskEntry {
   };
   planId?: string;
   planStep?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 // ── TaskGraph Event Types ────────────────────────────────────────────────
@@ -191,6 +200,8 @@ export interface TaskCompletedEvent {
   taskId: string;
   result: string;
   duration: number;
+  inputTokens?: number;
+  outputTokens?: number;
   timestamp: string;
 }
 
@@ -199,6 +210,8 @@ export interface TaskFailedEvent {
   taskId: string;
   error: string;
   duration: number;
+  inputTokens?: number;
+  outputTokens?: number;
   timestamp: string;
 }
 
