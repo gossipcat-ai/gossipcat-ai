@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { createHash, randomBytes } from 'crypto';
 import { execFileSync } from 'child_process';
@@ -29,6 +29,29 @@ export function getUserId(projectRoot: string): string {
   } catch { return 'anonymous'; }
 }
 
+/** Normalize git remote URL to canonical form: hostname/owner/repo */
+export function normalizeGitUrl(url: string): string | null {
+  if (!url) return null;
+  try {
+    const withProtocol = url.replace(/^([^@]+@)?([^:\/]+):(?!\/)/, 'ssh://$2/');
+    const parsed = new URL(withProtocol);
+    const pathname = parsed.pathname.replace(/^\//, '').replace(/\.git$/, '');
+    return `${parsed.hostname}/${pathname}`;
+  } catch {
+    return url.replace(/^(https?:\/\/|git@|ssh:\/\/)/, '').replace(/\.git$/, '').replace(/:/, '/');
+  }
+}
+
 export function getProjectId(projectRoot: string): string {
+  try {
+    const remoteUrl = execFileSync(
+      'git', ['config', '--get', 'remote.origin.url'],
+      { cwd: projectRoot, stdio: 'pipe' }
+    ).toString().trim();
+    const normalized = normalizeGitUrl(remoteUrl);
+    if (normalized) {
+      return createHash('sha256').update(normalized).digest('hex').slice(0, 16);
+    }
+  } catch { /* no remote */ }
   return createHash('sha256').update(projectRoot).digest('hex').slice(0, 16);
 }
