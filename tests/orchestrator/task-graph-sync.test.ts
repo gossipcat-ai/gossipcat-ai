@@ -56,6 +56,8 @@ describe('TaskGraphSync', () => {
     graph.recordCreated('t1', 'agent-a', 'Old task', []);
     await sync.sync();
     fetchCalls.length = 0;
+    // Ensure distinct timestamp (ISO string comparison requires >)
+    await new Promise(r => setTimeout(r, 2));
     graph.recordCreated('t2', 'agent-b', 'New task', []);
     const result = await sync.sync();
     expect(result.events).toBe(1);
