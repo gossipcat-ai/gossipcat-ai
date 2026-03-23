@@ -6326,13 +6326,13 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       }
       /** Start all worker agents (connect to relay) */
       async start() {
-        const { existsSync: existsSync12, readFileSync: readFileSync11 } = await import("fs");
-        const { join: join11 } = await import("path");
+        const { existsSync: existsSync13, readFileSync: readFileSync12 } = await import("fs");
+        const { join: join12 } = await import("path");
         for (const config2 of this.registry.getAll()) {
           if (this.workers.has(config2.id)) continue;
           const llm = createProvider(config2.provider, config2.model, this.apiKeys[config2.provider]);
-          const instructionsPath = join11(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
-          const instructions = existsSync12(instructionsPath) ? readFileSync11(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join12(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
+          const instructions = existsSync13(instructionsPath) ? readFileSync12(instructionsPath, "utf-8") : void 0;
           const worker = new WorkerAgent(config2.id, llm, this.relayUrl, ALL_TOOLS, instructions);
           await worker.start();
           this.workers.set(config2.id, worker);
@@ -6377,15 +6377,15 @@ When there's a clear best option, recommend it but still offer alternatives.`;
         this.registry.register(config2);
       }
       async syncWorkers(keyProvider) {
-        const { existsSync: existsSync12, readFileSync: readFileSync11 } = await import("fs");
-        const { join: join11 } = await import("path");
+        const { existsSync: existsSync13, readFileSync: readFileSync12 } = await import("fs");
+        const { join: join12 } = await import("path");
         let added = 0;
         for (const ac of this.registry.getAll()) {
           if (this.workers.has(ac.id)) continue;
           const key = await keyProvider(ac.provider);
           const llm = createProvider(ac.provider, ac.model, key ?? void 0);
-          const instructionsPath = join11(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
-          const instructions = existsSync12(instructionsPath) ? readFileSync11(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join12(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
+          const instructions = existsSync13(instructionsPath) ? readFileSync12(instructionsPath, "utf-8") : void 0;
           const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions);
           await worker.start();
           this.workers.set(ac.id, worker);
@@ -6670,7 +6670,7 @@ var init_task_graph_sync = __esm({
         });
       }
       async syncDecomposed(event) {
-        await this.upsert("/rest/v1/task_decompositions", {
+        await this.post("/rest/v1/task_decompositions", {
           parent_id: event.parentId,
           strategy: event.strategy,
           sub_task_ids: event.subTaskIds,
@@ -6678,7 +6678,7 @@ var init_task_graph_sync = __esm({
         });
       }
       async syncReference(event) {
-        await this.upsert("/rest/v1/task_references", {
+        await this.post("/rest/v1/task_references", {
           from_task_id: event.fromTaskId,
           to_task_id: event.toTaskId,
           relationship: event.relationship,
@@ -6697,7 +6697,7 @@ var init_task_graph_sync = __esm({
           try {
             const entry = JSON.parse(line);
             if (meta3.lastSync && entry.timestamp <= meta3.lastSync) continue;
-            await this.upsert("/rest/v1/agent_scores", {
+            await this.post("/rest/v1/agent_scores", {
               user_id: this.userId,
               agent_id: entry.agentId,
               task_id: entry.taskId,
@@ -6721,6 +6721,14 @@ var init_task_graph_sync = __esm({
           body: JSON.stringify(body)
         });
         if (!res.ok) throw new Error(`PATCH ${path} failed: ${res.status} ${await res.text()}`);
+      }
+      async post(path, body) {
+        const res = await fetch(`${this.supabaseUrl}${path}`, {
+          method: "POST",
+          headers: { ...this.headers(), "Prefer": "return=representation" },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`);
       }
       async upsert(path, body) {
         const res = await fetch(`${this.supabaseUrl}${path}`, {
@@ -7263,6 +7271,50 @@ var init_keychain = __esm({
         }
       }
     };
+  }
+});
+
+// apps/cli/src/identity.ts
+var identity_exports = {};
+__export(identity_exports, {
+  getProjectId: () => getProjectId,
+  getUserId: () => getUserId
+});
+function getOrCreateSalt(projectRoot) {
+  const saltPath = (0, import_path17.join)(projectRoot, ".gossip", "local-salt");
+  try {
+    return (0, import_fs13.readFileSync)(saltPath, "utf-8").trim();
+  } catch {
+    const salt = (0, import_crypto9.randomBytes)(16).toString("hex");
+    (0, import_fs13.mkdirSync)((0, import_path17.join)(projectRoot, ".gossip"), { recursive: true });
+    try {
+      (0, import_fs13.writeFileSync)(saltPath, salt, { flag: "wx" });
+      return salt;
+    } catch {
+      return (0, import_fs13.readFileSync)(saltPath, "utf-8").trim();
+    }
+  }
+}
+function getUserId(projectRoot) {
+  try {
+    const email3 = (0, import_child_process5.execFileSync)("git", ["config", "user.email"], { stdio: "pipe" }).toString().trim();
+    const salt = getOrCreateSalt(projectRoot);
+    return (0, import_crypto9.createHash)("sha256").update(email3 + projectRoot + salt).digest("hex").slice(0, 16);
+  } catch {
+    return "anonymous";
+  }
+}
+function getProjectId(projectRoot) {
+  return (0, import_crypto9.createHash)("sha256").update(projectRoot).digest("hex").slice(0, 16);
+}
+var import_fs13, import_path17, import_crypto9, import_child_process5;
+var init_identity = __esm({
+  "apps/cli/src/identity.ts"() {
+    "use strict";
+    import_fs13 = require("fs");
+    import_path17 = require("path");
+    import_crypto9 = require("crypto");
+    import_child_process5 = require("child_process");
   }
 });
 
@@ -21039,7 +21091,7 @@ function date4(params) {
 config(en_default());
 
 // apps/cli/src/mcp-server-sdk.ts
-var import_crypto9 = require("crypto");
+var import_crypto10 = require("crypto");
 var booted = false;
 var bootPromise = null;
 var relay = null;
@@ -21084,10 +21136,10 @@ async function doBoot() {
   for (const ac of agentConfigs) {
     const key = await keychain.getKey(ac.provider);
     const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
-    const { existsSync: existsSync12, readFileSync: readFileSync11 } = require("fs");
-    const { join: join11 } = require("path");
-    const instructionsPath = join11(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
-    const instructions = existsSync12(instructionsPath) ? readFileSync11(instructionsPath, "utf-8") : void 0;
+    const { existsSync: existsSync13, readFileSync: readFileSync12 } = require("fs");
+    const { join: join12 } = require("path");
+    const instructionsPath = join12(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
+    const instructions = existsSync13(instructionsPath) ? readFileSync12(instructionsPath, "utf-8") : void 0;
     const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS, instructions);
     await worker.start();
     workers.set(ac.id, worker);
@@ -21120,22 +21172,12 @@ async function doBoot() {
       try {
         const { existsSync: exists, readFileSync: readF } = require("fs");
         const { join: joinP } = require("path");
-        const { createHash } = require("crypto");
-        const { execFileSync: execFileSync2 } = require("child_process");
         const configPath2 = joinP(process.cwd(), ".gossip", "supabase.json");
         if (!exists(configPath2) || !supaKey) return null;
         const supaConfig = JSON.parse(readF(configPath2, "utf-8"));
-        const saltPath = joinP(process.cwd(), ".gossip", "local-salt");
-        const salt = exists(saltPath) ? readF(saltPath, "utf-8").trim() : "";
-        let email3 = "unknown";
-        try {
-          email3 = execFileSync2("git", ["config", "user.email"], { stdio: "pipe" }).toString().trim();
-        } catch {
-        }
-        const userId = createHash("sha256").update(email3 + process.cwd() + salt).digest("hex").slice(0, 16);
-        const projectId = createHash("sha256").update(process.cwd()).digest("hex").slice(0, 16);
+        const { getUserId: getUserId2, getProjectId: getProjectId2 } = (init_identity(), __toCommonJS(identity_exports));
         const { TaskGraph: TG, TaskGraphSync: TGS } = (init_src5(), __toCommonJS(src_exports4));
-        return new TGS(new TG(process.cwd()), supaConfig.url, supaKey, userId, projectId, process.cwd());
+        return new TGS(new TG(process.cwd()), supaConfig.url, supaKey, getUserId2(process.cwd()), getProjectId2(process.cwd()), process.cwd());
       } catch {
         return null;
       }
@@ -21276,7 +21318,7 @@ server.tool(
       }).join("\n");
       const assignedTasks = planned.filter((t) => t.agentId);
       const unassignedTasks = planned.filter((t) => !t.agentId);
-      const planId = (0, import_crypto9.randomUUID)().slice(0, 8);
+      const planId = (0, import_crypto10.randomUUID)().slice(0, 8);
       const planState = {
         id: planId,
         task,
@@ -21566,10 +21608,10 @@ server.tool(
     const { BootstrapGenerator: BootstrapGenerator2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
     const generator = new BootstrapGenerator2(process.cwd());
     const result = generator.generate();
-    const { writeFileSync: writeFileSync6, mkdirSync: mkdirSync6 } = require("fs");
-    const { join: join11 } = require("path");
-    mkdirSync6(join11(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync6(join11(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
+    const { writeFileSync: writeFileSync7, mkdirSync: mkdirSync7 } = require("fs");
+    const { join: join12 } = require("path");
+    mkdirSync7(join12(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync7(join12(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
     return { content: [{ type: "text", text: result.prompt }] };
   }
 );
@@ -21594,10 +21636,10 @@ server.tool(
     } catch (err) {
       return { content: [{ type: "text", text: `Invalid config: ${err.message}` }] };
     }
-    const { writeFileSync: writeFileSync6, mkdirSync: mkdirSync6 } = require("fs");
-    const { join: join11 } = require("path");
-    mkdirSync6(join11(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync6(join11(process.cwd(), ".gossip", "config.json"), JSON.stringify(config2, null, 2));
+    const { writeFileSync: writeFileSync7, mkdirSync: mkdirSync7 } = require("fs");
+    const { join: join12 } = require("path");
+    mkdirSync7(join12(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync7(join12(process.cwd(), ".gossip", "config.json"), JSON.stringify(config2, null, 2));
     const agentCount = Object.keys(config2.agents || {}).length;
     return { content: [{ type: "text", text: `Config saved. ${agentCount} agents configured. Agents will start on first dispatch \u2014 call gossip_dispatch() to begin.` }] };
   }
