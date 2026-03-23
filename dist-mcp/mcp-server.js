@@ -5784,6 +5784,9 @@ var init_dispatch_pipeline = __esm({
       worktreeManager;
       writeQueue = [];
       writeActive = false;
+      overlapDetector = null;
+      lensGenerator = null;
+      bootWarningShown = false;
       constructor(config2) {
         this.projectRoot = config2.projectRoot;
         this.workers = config2.workers;
@@ -5840,6 +5843,7 @@ var init_dispatch_pipeline = __esm({
         }
         const promptContent = assemblePrompt({
           memory: memory || void 0,
+          lens: options?.lens,
           skills,
           sessionContext: sessionContext || void 0,
           chainContext: chainContext || void 0
@@ -6177,7 +6181,7 @@ Worktree merge: CONFLICT
         }
         return results;
       }
-      dispatchParallel(taskDefs) {
+      async dispatchParallel(taskDefs) {
         const taskIds = [];
         const errors = [];
         const batchId = (0, import_crypto8.randomUUID)().slice(0, 8);
@@ -6215,6 +6219,35 @@ Worktree merge: CONFLICT
             }
           }
         }
+        if (!this.bootWarningShown && this.overlapDetector) {
+          const allAgents = taskDefs.map((d) => this.registryGet(d.agentId)).filter((c) => c !== void 0);
+          const result = this.overlapDetector.detect(allAgents);
+          const warning = this.overlapDetector.formatWarning(result);
+          if (warning) {
+            process.stderr.write(`[gossipcat] Skill overlap detected:
+  ${warning}
+`);
+          }
+          this.bootWarningShown = true;
+        }
+        let lensMap = null;
+        if (this.overlapDetector && this.lensGenerator) {
+          const agentConfigs = taskDefs.map((d) => this.registryGet(d.agentId)).filter((c) => c !== void 0);
+          const overlapResult = this.overlapDetector.detect(agentConfigs);
+          if (overlapResult.hasOverlaps) {
+            try {
+              const lenses = await this.lensGenerator.generateLenses(
+                overlapResult.agents,
+                taskDefs[0]?.task || "",
+                overlapResult.sharedSkills
+              );
+              if (lenses.length > 0) {
+                lensMap = new Map(lenses.map((l) => [l.agentId, l.focus]));
+              }
+            } catch (err) {
+            }
+          }
+        }
         for (const def of taskDefs) {
           const worker = this.workers.get(def.agentId);
           if (worker?.subscribeToBatch) {
@@ -6224,7 +6257,11 @@ Worktree merge: CONFLICT
         }
         for (const def of taskDefs) {
           try {
-            const { taskId, promise: promise2 } = this.dispatch(def.agentId, def.task, def.options);
+            const lens = lensMap?.get(def.agentId);
+            const { taskId, promise: promise2 } = this.dispatch(def.agentId, def.task, {
+              ...def.options,
+              ...lens ? { lens } : {}
+            });
             taskIds.push(taskId);
             batchTaskIds.add(taskId);
             if (this.gossipPublisher) {
@@ -6295,6 +6332,12 @@ Worktree merge: CONFLICT
       }
       setGossipPublisher(publisher) {
         this.gossipPublisher = publisher;
+      }
+      setOverlapDetector(detector) {
+        this.overlapDetector = detector;
+      }
+      setLensGenerator(generator) {
+        this.lensGenerator = generator;
       }
       /** Flush TaskGraph index on shutdown */
       flushTaskGraph() {
@@ -6429,7 +6472,7 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       async collect(taskIds, timeoutMs) {
         return this.pipeline.collect(taskIds, timeoutMs);
       }
-      dispatchParallel(tasks) {
+      async dispatchParallel(tasks) {
         return this.pipeline.dispatchParallel(tasks);
       }
       registerPlan(plan) {
@@ -6443,6 +6486,12 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       }
       setGossipPublisher(publisher) {
         this.pipeline.setGossipPublisher(publisher);
+      }
+      setOverlapDetector(detector) {
+        this.pipeline.setOverlapDetector(detector);
+      }
+      setLensGenerator(generator) {
+        this.pipeline.setLensGenerator(generator);
       }
       /** Register new agent configs (for hot-reload from config changes) */
       registerAgent(config2) {
@@ -7140,6 +7189,111 @@ Skills are auto-injected from agent config. Project-wide skills in .gossip/skill
   }
 });
 
+// packages/orchestrator/src/overlap-detector.ts
+var OverlapDetector;
+var init_overlap_detector = __esm({
+  "packages/orchestrator/src/overlap-detector.ts"() {
+    "use strict";
+    OverlapDetector = class {
+      detect(agents) {
+        const pairs = [];
+        const allShared = /* @__PURE__ */ new Set();
+        for (let i = 0; i < agents.length; i++) {
+          for (let j = i + 1; j < agents.length; j++) {
+            const a = agents[i];
+            const b = agents[j];
+            const shared = a.skills.filter((s) => b.skills.includes(s));
+            if (shared.length > 0) {
+              const presetA = a.preset || "custom";
+              const presetB = b.preset || "custom";
+              const type = presetA === presetB ? "redundant" : "complementary";
+              pairs.push({ agentA: a.id, agentB: b.id, shared, type });
+              shared.forEach((s) => allShared.add(s));
+            }
+          }
+        }
+        return {
+          hasOverlaps: pairs.length > 0,
+          agents: agents.map((a) => ({ id: a.id, preset: a.preset || "custom", skills: a.skills })),
+          sharedSkills: Array.from(allShared),
+          pairs
+        };
+      }
+      formatWarning(result) {
+        const redundant = result.pairs.filter((p) => p.type === "redundant");
+        if (redundant.length === 0) return null;
+        return redundant.map(
+          (p) => `${p.agentA} \u2229 ${p.agentB} (same preset): ${p.shared.join(", ")}`
+        ).join("\n  ");
+      }
+    };
+  }
+});
+
+// packages/orchestrator/src/lens-generator.ts
+var STOP_WORDS, LensGenerator;
+var init_lens_generator = __esm({
+  "packages/orchestrator/src/lens-generator.ts"() {
+    "use strict";
+    STOP_WORDS = /* @__PURE__ */ new Set(["the", "a", "an", "on", "in", "for", "and", "or", "to", "of", "is", "do", "not", "focus"]);
+    LensGenerator = class {
+      constructor(llm) {
+        this.llm = llm;
+      }
+      async generateLenses(agents, task, sharedSkills) {
+        if (agents.length < 2 || sharedSkills.length === 0) return [];
+        const agentList = agents.map((a) => `- ${a.id} (${a.preset}): skills=[${a.skills.join(", ")}]`).join("\n");
+        const messages = [
+          {
+            role: "system",
+            content: `You are assigning review focuses to ${agents.length} agents working on the same task.
+Each agent should have a UNIQUE focus that avoids duplicating another's work.
+Consider their presets and skills when assigning focus areas.
+
+Agents:
+${agentList}
+
+Shared skills: ${sharedSkills.join(", ")}
+
+Return a JSON array of { "agentId": string, "focus": string, "avoidOverlap": string } for each agent.
+Return ONLY the JSON array, no other text.`
+          },
+          { role: "user", content: `Task: ${task}` }
+        ];
+        try {
+          const response = await this.llm.generate(messages, { temperature: 0.3 });
+          const text = (response.text || "").trim();
+          const jsonMatch = text.match(/\[[\s\S]*\]/);
+          if (!jsonMatch) return [];
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (!Array.isArray(parsed)) return [];
+          const valid = parsed.filter((l) => l.agentId && l.focus);
+          if (valid.length !== agents.length) return [];
+          if (!this.areDifferentiated(valid)) return [];
+          return valid;
+        } catch {
+          return [];
+        }
+      }
+      areDifferentiated(lenses) {
+        for (let i = 0; i < lenses.length; i++) {
+          for (let j = i + 1; j < lenses.length; j++) {
+            const wordsA = this.significantWords(lenses[i].focus);
+            const wordsB = this.significantWords(lenses[j].focus);
+            const intersection2 = wordsA.filter((w) => wordsB.includes(w));
+            const minLen = Math.min(wordsA.length, wordsB.length);
+            if (minLen > 0 && intersection2.length / minLen > 0.5) return false;
+          }
+        }
+        return true;
+      }
+      significantWords(text) {
+        return text.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+      }
+    };
+  }
+});
+
 // packages/orchestrator/src/index.ts
 var src_exports4 = {};
 __export(src_exports4, {
@@ -7150,11 +7304,13 @@ __export(src_exports4, {
   DispatchPipeline: () => DispatchPipeline,
   GeminiProvider: () => GeminiProvider,
   GossipPublisher: () => GossipPublisher,
+  LensGenerator: () => LensGenerator,
   MainAgent: () => MainAgent,
   MemoryCompactor: () => MemoryCompactor,
   MemoryWriter: () => MemoryWriter,
   OllamaProvider: () => OllamaProvider,
   OpenAIProvider: () => OpenAIProvider,
+  OverlapDetector: () => OverlapDetector,
   ScopeTracker: () => ScopeTracker,
   SkillCatalog: () => SkillCatalog,
   SkillGapTracker: () => SkillGapTracker,
@@ -7190,6 +7346,8 @@ var init_src5 = __esm({
     init_scope_tracker();
     init_worktree_manager();
     init_bootstrap();
+    init_overlap_detector();
+    init_lens_generator();
   }
 });
 
@@ -7232,6 +7390,15 @@ function validateConfig(raw) {
     throw new Error(
       `Invalid provider "${raw.main_agent.provider}". Must be one of: ${VALID_PROVIDERS.join(", ")}`
     );
+  }
+  if (raw.utility_model) {
+    if (!raw.utility_model.provider) throw new Error('Config "utility_model" missing provider');
+    if (!raw.utility_model.model) throw new Error('Config "utility_model" missing model');
+    if (!VALID_PROVIDERS.includes(raw.utility_model.provider)) {
+      throw new Error(
+        `Invalid utility_model provider "${raw.utility_model.provider}". Must be one of: ${VALID_PROVIDERS.join(", ")}`
+      );
+    }
   }
   if (raw.agents) {
     for (const [id, agent] of Object.entries(raw.agents)) {
@@ -21374,6 +21541,23 @@ async function doBoot() {
   mainAgent.setWorkers(workers);
   await mainAgent.start();
   try {
+    const { OverlapDetector: OverlapDetector2, LensGenerator: LensGenerator2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
+    let utilityLlm;
+    if (config2.utility_model) {
+      const utilityKey = await keychain.getKey(config2.utility_model.provider);
+      utilityLlm = m.createProvider(config2.utility_model.provider, config2.utility_model.model, utilityKey ?? void 0);
+    } else {
+      utilityLlm = m.createProvider(mainProvider, mainModel, mainKey ?? void 0);
+    }
+    mainAgent.setOverlapDetector(new OverlapDetector2());
+    mainAgent.setLensGenerator(new LensGenerator2(utilityLlm));
+    process.stderr.write(`[gossipcat] Adaptive team intelligence ready${config2.utility_model ? ` (utility: ${config2.utility_model.provider}/${config2.utility_model.model})` : ""}
+`);
+  } catch (err) {
+    process.stderr.write(`[gossipcat] Adaptive team intelligence failed: ${err.message}
+`);
+  }
+  try {
     const { GossipAgent: GossipAgentPub } = await Promise.resolve().then(() => (init_src3(), src_exports2));
     const publisherAgent = new GossipAgentPub({
       agentId: "gossip-publisher",
@@ -21639,7 +21823,7 @@ server.tool(
         return { content: [{ type: "text", text: `Invalid agent ID format: "${def.agent_id}"` }] };
       }
     }
-    const { taskIds, errors } = mainAgent.dispatchParallel(
+    const { taskIds, errors } = await mainAgent.dispatchParallel(
       taskDefs.map((d) => ({
         agentId: d.agent_id,
         task: d.task,
