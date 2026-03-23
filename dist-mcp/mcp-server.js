@@ -6219,22 +6219,20 @@ Worktree merge: CONFLICT
             }
           }
         }
-        if (!this.bootWarningShown && this.overlapDetector) {
-          const allAgents = taskDefs.map((d) => this.registryGet(d.agentId)).filter((c) => c !== void 0);
-          const result = this.overlapDetector.detect(allAgents);
-          const warning = this.overlapDetector.formatWarning(result);
-          if (warning) {
-            process.stderr.write(`[gossipcat] Skill overlap detected:
-  ${warning}
-`);
-          }
-          this.bootWarningShown = true;
-        }
         let lensMap = null;
-        if (this.overlapDetector && this.lensGenerator) {
+        if (this.overlapDetector) {
           const agentConfigs = taskDefs.map((d) => this.registryGet(d.agentId)).filter((c) => c !== void 0);
           const overlapResult = this.overlapDetector.detect(agentConfigs);
-          if (overlapResult.hasOverlaps) {
+          if (!this.bootWarningShown) {
+            const warning = this.overlapDetector.formatWarning(overlapResult);
+            if (warning) {
+              process.stderr.write(`[gossipcat] Skill overlap detected:
+  ${warning}
+`);
+            }
+            this.bootWarningShown = true;
+          }
+          if (overlapResult.hasOverlaps && this.lensGenerator) {
             try {
               const lenses = await this.lensGenerator.generateLenses(
                 overlapResult.agents,
@@ -6243,8 +6241,11 @@ Worktree merge: CONFLICT
               );
               if (lenses.length > 0) {
                 lensMap = new Map(lenses.map((l) => [l.agentId, l.focus]));
+                log(`Applied lenses:
+${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}`);
               }
             } catch (err) {
+              log(`Lens generation failed: ${err.message}. Dispatching without lenses.`);
             }
           }
         }
@@ -21542,16 +21543,21 @@ async function doBoot() {
   await mainAgent.start();
   try {
     const { OverlapDetector: OverlapDetector2, LensGenerator: LensGenerator2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
-    let utilityLlm;
+    let utilityLlm = m.createProvider(mainProvider, mainModel, mainKey ?? void 0);
+    let utilityModelId = `${mainProvider}/${mainModel}`;
     if (config2.utility_model) {
       const utilityKey = await keychain.getKey(config2.utility_model.provider);
-      utilityLlm = m.createProvider(config2.utility_model.provider, config2.utility_model.model, utilityKey ?? void 0);
-    } else {
-      utilityLlm = m.createProvider(mainProvider, mainModel, mainKey ?? void 0);
+      if (utilityKey) {
+        utilityLlm = m.createProvider(config2.utility_model.provider, config2.utility_model.model, utilityKey);
+        utilityModelId = `${config2.utility_model.provider}/${config2.utility_model.model}`;
+      } else {
+        process.stderr.write(`[gossipcat] Utility model key for "${config2.utility_model.provider}" not found, falling back to main agent model for lens generation.
+`);
+      }
     }
     mainAgent.setOverlapDetector(new OverlapDetector2());
     mainAgent.setLensGenerator(new LensGenerator2(utilityLlm));
-    process.stderr.write(`[gossipcat] Adaptive team intelligence ready${config2.utility_model ? ` (utility: ${config2.utility_model.provider}/${config2.utility_model.model})` : ""}
+    process.stderr.write(`[gossipcat] Adaptive team intelligence ready (utility: ${utilityModelId})
 `);
   } catch (err) {
     process.stderr.write(`[gossipcat] Adaptive team intelligence failed: ${err.message}

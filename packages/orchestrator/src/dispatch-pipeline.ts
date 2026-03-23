@@ -537,37 +537,35 @@ export class DispatchPipeline {
       }
     }
 
-    // One-time boot overlap warning
-    if (!this.bootWarningShown && this.overlapDetector) {
-      const allAgents = taskDefs
-        .map(d => this.registryGet(d.agentId))
-        .filter((c): c is AgentConfig => c !== undefined);
-      const result = this.overlapDetector.detect(allAgents);
-      const warning = this.overlapDetector.formatWarning(result);
-      if (warning) {
-        // Use process.stderr to avoid mixing with tool output
-        process.stderr.write(`[gossipcat] Skill overlap detected:\n  ${warning}\n`);
-      }
-      this.bootWarningShown = true;
-    }
-
-    // Lens generation for overlapping agents
+    // Overlap detection + lens generation (single detect call, reused for both)
     let lensMap: Map<string, string> | null = null;
-    if (this.overlapDetector && this.lensGenerator) {
+    if (this.overlapDetector) {
       const agentConfigs = taskDefs
         .map(d => this.registryGet(d.agentId))
         .filter((c): c is AgentConfig => c !== undefined);
       const overlapResult = this.overlapDetector.detect(agentConfigs);
-      if (overlapResult.hasOverlaps) {
+
+      // One-time boot warning
+      if (!this.bootWarningShown) {
+        const warning = this.overlapDetector.formatWarning(overlapResult);
+        if (warning) {
+          process.stderr.write(`[gossipcat] Skill overlap detected:\n  ${warning}\n`);
+        }
+        this.bootWarningShown = true;
+      }
+
+      // Lens generation for overlapping agents
+      if (overlapResult.hasOverlaps && this.lensGenerator) {
         try {
           const lenses = await this.lensGenerator.generateLenses(
             overlapResult.agents, taskDefs[0]?.task || '', overlapResult.sharedSkills
           );
           if (lenses.length > 0) {
             lensMap = new Map(lenses.map(l => [l.agentId, l.focus]));
+            log(`Applied lenses:\n${lenses.map(l => `  ${l.agentId} → ${l.focus.slice(0, 80)}`).join('\n')}`);
           }
         } catch (err) {
-          // Graceful degradation — dispatch without lenses
+          log(`Lens generation failed: ${(err as Error).message}. Dispatching without lenses.`);
         }
       }
     }
