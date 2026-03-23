@@ -13,6 +13,7 @@ export type {
 
 const SUMMARY_HEADER = '## Consensus Summary';
 const FALLBACK_MAX_LENGTH = 2000;
+const MAX_SUMMARY_LENGTH = 3000;
 const VALID_ACTIONS = new Set(['agree', 'disagree', 'new']);
 
 export interface ConsensusEngineConfig {
@@ -36,7 +37,8 @@ export class ConsensusEngine {
       let end = afterHeader.length;
       if (nextHeader !== -1) end = Math.min(end, nextHeader);
       if (nextBlankLine !== -1) end = Math.min(end, nextBlankLine);
-      return afterHeader.slice(0, end).trim();
+      // Cap extracted summary to prevent unbounded prompt sizes
+      return afterHeader.slice(0, Math.min(end, MAX_SUMMARY_LENGTH)).trim();
     }
 
     if (result.length <= FALLBACK_MAX_LENGTH) return result;
@@ -133,9 +135,10 @@ Return ONLY a JSON array:
 
     try {
       const response = await this.config.llm.generate(messages, { temperature: 0 });
+      const validPeerIds = new Set(summaries.keys());
       const entries = this.parseCrossReviewResponse(agent.agentId, response.text);
-      // Filter out self-references — an agent can't cross-review its own findings
-      return entries.filter(e => e.peerAgentId !== agent.agentId);
+      // Filter: no self-references, peerAgentId must be a real agent in this batch
+      return entries.filter(e => e.peerAgentId !== agent.agentId && validPeerIds.has(e.peerAgentId));
     } catch {
       // Graceful degradation: skip agents whose LLM call fails
       return [];
@@ -204,16 +207,16 @@ Return ONLY a JSON array:
           const f = findingMap.get(matchKey)!;
           f.confirmedBy.push(entry.agentId);
           f.confidences.push(entry.confidence);
+          signals.push({
+            type: 'consensus',
+            taskId: '',
+            signal: 'agreement',
+            agentId: entry.agentId,
+            counterpartId: entry.peerAgentId,
+            evidence: entry.evidence,
+            timestamp: now,
+          });
         }
-        signals.push({
-          type: 'consensus',
-          taskId: '',
-          signal: 'agreement',
-          agentId: entry.agentId,
-          counterpartId: entry.peerAgentId,
-          evidence: entry.evidence,
-          timestamp: now,
-        });
         continue;
       }
 
@@ -227,30 +230,30 @@ Return ONLY a JSON array:
             evidence: entry.evidence,
           });
           f.confidences.push(entry.confidence);
-        }
 
-        const isHallucination = this.detectHallucination(entry.evidence);
-        if (isHallucination) {
-          signals.push({
-            type: 'consensus',
-            taskId: '',
-            signal: 'hallucination_caught',
-            agentId: entry.peerAgentId,
-            counterpartId: entry.agentId,
-            outcome: 'incorrect',
-            evidence: entry.evidence,
-            timestamp: now,
-          });
-        } else {
-          signals.push({
-            type: 'consensus',
-            taskId: '',
-            signal: 'disagreement',
-            agentId: entry.agentId,
-            counterpartId: entry.peerAgentId,
-            evidence: entry.evidence,
-            timestamp: now,
-          });
+          const isHallucination = this.detectHallucination(entry.evidence);
+          if (isHallucination) {
+            signals.push({
+              type: 'consensus',
+              taskId: '',
+              signal: 'hallucination_caught',
+              agentId: entry.peerAgentId,
+              counterpartId: entry.agentId,
+              outcome: 'incorrect',
+              evidence: entry.evidence,
+              timestamp: now,
+            });
+          } else {
+            signals.push({
+              type: 'consensus',
+              taskId: '',
+              signal: 'disagreement',
+              agentId: entry.agentId,
+              counterpartId: entry.peerAgentId,
+              evidence: entry.evidence,
+              timestamp: now,
+            });
+          }
         }
       }
     }
@@ -317,13 +320,33 @@ Return ONLY a JSON array:
    */
   private detectHallucination(evidence: string): boolean {
     const indicators = [
-      'does not exist', "doesn't exist", 'no such file', 'no such function',
-      'no such method', 'no such variable', 'not found in', 'is a comment',
-      'only has', 'no line', 'nonexistent', 'non-existent', 'never defined',
-      'not defined', 'fabricated', 'hallucinated',
+      'does not exist',
+      "doesn't exist",
+      'no such file',
+      'no such function',
+      'no such method',
+      'no such variable',
+      'file not found',
+      'function not found',
+      'method not found',
+      'line is a comment',      // tightened: was 'is a comment'
+      'file only has',          // tightened: was 'only has'
+      'no line \\d',            // tightened: was 'no line' — require digit after
+      'nonexistent',
+      'non-existent',
+      'never defined',
+      'is not defined in',      // tightened: was 'not defined'
+      'not defined anywhere',   // tightened: was 'not defined'
+      'fabricated',
+      'hallucinated',
     ];
     const lower = evidence.toLowerCase();
-    return indicators.some(phrase => lower.includes(phrase));
+    return indicators.some(phrase => {
+      if (phrase.includes('\\d')) {
+        return new RegExp(phrase).test(lower);
+      }
+      return lower.includes(phrase);
+    });
   }
 
   /**
