@@ -23,6 +23,7 @@ export { MemoryWriter } from './memory-writer';
 export { MemoryCompactor } from './memory-compactor';
 export { TaskGraph } from './task-graph';
 export { TaskGraphSync } from './task-graph-sync';
+export type { SyncMigrationConfig } from './task-graph-sync';
 export { GossipPublisher } from './gossip-publisher';
 export { DispatchPipeline } from './dispatch-pipeline';
 export type { DispatchPipelineConfig, ToolServerCallbacks } from './dispatch-pipeline';
