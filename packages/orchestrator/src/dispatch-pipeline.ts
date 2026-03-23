@@ -286,6 +286,36 @@ export class DispatchPipeline {
       ? taskIds.map(id => this.tasks.get(id)).filter((t): t is TrackedTask => t !== undefined)
       : Array.from(this.tasks.values());
 
+    // Detect orphaned tasks — dispatched but lost due to server restart
+    if (taskIds && taskIds.length > 0) {
+      const missingIds = taskIds.filter(id => !this.tasks.has(id));
+      if (missingIds.length > 0) {
+        const orphaned = missingIds.filter(id => {
+          const graphTask = this.taskGraph.getTask(id);
+          return graphTask && graphTask.status === 'created';
+        });
+        if (orphaned.length > 0) {
+          log(`WARNING: ${orphaned.length} task(s) lost — dispatched but no longer tracked (server may have restarted). IDs: ${orphaned.join(', ')}`);
+          // Record failures in TaskGraph so they're not orphaned forever
+          for (const id of orphaned) {
+            try { this.taskGraph.recordFailed(id, 'Task lost — server restarted during execution', -1); }
+            catch { /* already recorded */ }
+          }
+          // Return orphaned entries alongside any found targets
+          const orphanEntries: TaskEntry[] = orphaned.map(id => {
+            const gt = this.taskGraph.getTask(id)!;
+            return {
+              id, agentId: gt.agentId, task: gt.task,
+              status: 'failed' as const, error: 'Task lost — server restarted during execution. Re-dispatch to retry.',
+              startedAt: new Date(gt.createdAt).getTime(), completedAt: Date.now(),
+            };
+          });
+          if (targets.length === 0) return orphanEntries;
+          // If some targets are still live, proceed with normal collect and append orphans to results
+        }
+      }
+    }
+
     if (targets.length === 0) return [];
 
     // Wait with timeout (clean up timer to avoid pinning event loop)

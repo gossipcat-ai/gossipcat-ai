@@ -92,6 +92,19 @@ describe('DispatchPipeline', () => {
       expect(results).toHaveLength(0);
     });
 
+    it('detects orphaned tasks from server restart and returns failure entries', async () => {
+      // Simulate: task was dispatched (recorded in TaskGraph) but pipeline restarted (Map is empty)
+      const { TaskGraph } = require('@gossip/orchestrator');
+      const taskGraph = new TaskGraph(pipeline['projectRoot']);
+      taskGraph.recordCreated('orphan-1', 'test-agent', 'lost task', ['testing']);
+
+      const results = await pipeline.collect(['orphan-1']);
+      expect(results).toHaveLength(1);
+      expect(results[0].id).toBe('orphan-1');
+      expect(results[0].status).toBe('failed');
+      expect(results[0].error).toContain('server restarted');
+    });
+
     it('cleans up completed tasks after collect', async () => {
       const { taskId } = pipeline.dispatch('test-agent', 'review code');
       await pipeline.collect([taskId]);
