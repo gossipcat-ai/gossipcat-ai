@@ -72,6 +72,36 @@ describe('TaskGraph', () => {
       graph.recordCreated('t1', 'agent', 'task', []);
       expect(existsSync(graphPath)).toBe(true);
     });
+
+    it('records token counts in completed events', () => {
+      const graph = new TaskGraph(testDir);
+      graph.recordCreated('t1', 'agent-a', 'task', []);
+      graph.recordCompleted('t1', 'done', 5000, 1200, 350);
+      const lines = readFileSync(graphPath, 'utf-8').trim().split('\n');
+      const completed = JSON.parse(lines[1]);
+      expect(completed.inputTokens).toBe(1200);
+      expect(completed.outputTokens).toBe(350);
+    });
+
+    it('records token counts in failed events', () => {
+      const graph = new TaskGraph(testDir);
+      graph.recordCreated('t1', 'agent-a', 'task', []);
+      graph.recordFailed('t1', 'timeout', 5000, 800, 100);
+      const lines = readFileSync(graphPath, 'utf-8').trim().split('\n');
+      const failed = JSON.parse(lines[1]);
+      expect(failed.inputTokens).toBe(800);
+      expect(failed.outputTokens).toBe(100);
+    });
+
+    it('omits token fields when not provided (backwards compat)', () => {
+      const graph = new TaskGraph(testDir);
+      graph.recordCreated('t1', 'agent-a', 'task', []);
+      graph.recordCompleted('t1', 'done', 5000);
+      const lines = readFileSync(graphPath, 'utf-8').trim().split('\n');
+      const completed = JSON.parse(lines[1]);
+      expect(completed.inputTokens).toBeUndefined();
+      expect(completed.outputTokens).toBeUndefined();
+    });
   });
 
   describe('read and reconstruct', () => {

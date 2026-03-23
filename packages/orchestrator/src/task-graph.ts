@@ -81,17 +81,21 @@ export class TaskGraph {
     this.appendEvent(event);
   }
 
-  recordCompleted(taskId: string, result: string, duration: number): void {
+  recordCompleted(taskId: string, result: string, duration: number, inputTokens?: number, outputTokens?: number): void {
     const event: TaskCompletedEvent = {
       type: 'task.completed', taskId, result: this.redactSecrets(result.slice(0, 4000)), duration,
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
       timestamp: new Date().toISOString(),
     };
     this.appendEvent(event);
   }
 
-  recordFailed(taskId: string, error: string, duration: number): void {
+  recordFailed(taskId: string, error: string, duration: number, inputTokens?: number, outputTokens?: number): void {
     const event: TaskFailedEvent = {
       type: 'task.failed', taskId, error: this.redactSecrets(error), duration,
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
       timestamp: new Date().toISOString(),
     };
     this.appendEvent(event);
