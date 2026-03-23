@@ -89,6 +89,7 @@ async function doBoot() {
     }
   }
   const supaKey = await keychain.getKey('supabase');
+  const supaTeamSalt = await keychain.getKey('supabase-team-salt');
   mainAgent = new m.MainAgent({
     provider: mainProvider,
     model: mainModel,
@@ -116,9 +117,21 @@ async function doBoot() {
         const configPath = joinP(process.cwd(), '.gossip', 'supabase.json');
         if (!exists(configPath) || !supaKey) return null;
         const supaConfig = JSON.parse(readF(configPath, 'utf-8'));
-        const { getUserId, getProjectId } = require('./identity');
+        const { getUserId, getProjectId, getTeamUserId, getGitEmail } = require('./identity');
         const { TaskGraph: TG, TaskGraphSync: TGS } = require('@gossip/orchestrator');
-        return new TGS(new TG(process.cwd()), supaConfig.url, supaKey, getUserId(process.cwd()), getProjectId(process.cwd()), process.cwd());
+
+        let userId: string;
+        let displayName: string | null = null;
+        if (supaConfig.mode === 'team') {
+          const email = getGitEmail();
+          if (!supaTeamSalt || !email) return null;
+          userId = getTeamUserId(email, supaTeamSalt);
+          displayName = supaConfig.displayName || email;
+        } else {
+          userId = getUserId(process.cwd());
+        }
+
+        return new TGS(new TG(process.cwd()), supaConfig.url, supaKey, userId, getProjectId(process.cwd()), process.cwd(), displayName);
       } catch { return null; }
     },
   });
