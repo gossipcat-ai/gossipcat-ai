@@ -13,6 +13,7 @@ export {
 } from './llm-client';
 export type { ILLMProvider, LLMGenerateOptions } from './llm-client';
 export * from './types';
+export * from './consensus-types';
 export { SkillCatalog } from './skill-catalog';
 export type { CatalogEntry } from './skill-catalog';
 export { SkillGapTracker } from './skill-gap-tracker';
