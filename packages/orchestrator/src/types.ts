@@ -126,6 +126,7 @@ export interface DispatchOptions {
   planId?: string;
   step?: number;
   lens?: string;  // NEW — focus lens from adaptive team intelligence
+  consensus?: boolean;  // Enable cross-review consensus
 }
 
 /** Result of analyzing skill overlap between co-dispatched agents */

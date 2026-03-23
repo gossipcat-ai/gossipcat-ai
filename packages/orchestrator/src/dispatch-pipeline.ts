@@ -16,6 +16,9 @@ import { WorktreeManager } from './worktree-manager';
 import { TaskGraphSync } from './task-graph-sync';
 import { OverlapDetector } from './overlap-detector';
 import { LensGenerator } from './lens-generator';
+import { ConsensusEngine } from './consensus-engine';
+import { PerformanceWriter } from './performance-writer';
+import { CollectResult } from './consensus-types';
 
 const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
 
@@ -289,7 +292,7 @@ export class DispatchPipeline {
     this.plans.set(plan.id, plan);
   }
 
-  async collect(taskIds?: string[], timeoutMs: number = 120_000): Promise<TaskEntry[]> {
+  async collect(taskIds?: string[], timeoutMs: number = 120_000, options?: { consensus?: boolean }): Promise<CollectResult> {
     const targets = taskIds
       ? taskIds.map(id => this.tasks.get(id)).filter((t): t is TrackedTask => t !== undefined)
       : Array.from(this.tasks.values());
@@ -318,13 +321,13 @@ export class DispatchPipeline {
               startedAt: new Date(gt.createdAt).getTime(), completedAt: Date.now(),
             };
           });
-          if (targets.length === 0) return orphanEntries;
+          if (targets.length === 0) return { results: orphanEntries };
           // If some targets are still live, proceed with normal collect and append orphans to results
         }
       }
     }
 
-    if (targets.length === 0) return [];
+    if (targets.length === 0) return { results: [] };
 
     // Wait with timeout (clean up timer to avoid pinning event loop)
     let timer: ReturnType<typeof setTimeout>;
@@ -472,6 +475,21 @@ export class DispatchPipeline {
       inputTokens: t.inputTokens, outputTokens: t.outputTokens,
     }));
 
+    // Consensus round
+    let consensusReport: import('./consensus-types').ConsensusReport | undefined;
+    if (options?.consensus && this.llm && results.filter(r => r.status === 'completed').length >= 2) {
+      try {
+        const engine = new ConsensusEngine({ llm: this.llm, registryGet: this.registryGet });
+        consensusReport = await engine.run(results);
+        if (consensusReport.signals.length > 0) {
+          const perfWriter = new PerformanceWriter(this.projectRoot);
+          perfWriter.appendSignals(consensusReport.signals);
+        }
+      } catch (err) {
+        process.stderr.write(`[gossipcat] Consensus failed: ${(err as Error).message}\n`);
+      }
+    }
+
     // Cleanup tasks — mark timed-out tasks as failed to prevent zombies
     for (const t of targets) {
       if (t.status === 'running') {
@@ -482,7 +500,7 @@ export class DispatchPipeline {
       this.tasks.delete(t.id);
     }
 
-    return results;
+    return { results, consensus: consensusReport };
   }
 
   async dispatchParallel(taskDefs: Array<{ agentId: string; task: string; options?: DispatchOptions }>): Promise<{
