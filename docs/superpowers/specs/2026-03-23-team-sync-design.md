@@ -385,22 +385,52 @@ These are optional (backwards-compatible). Older events without tokens are valid
 
 ### Where Tokens Come From
 
-The `WorkerAgent` runs multi-turn tool loops. Each turn calls `llm.generate()` which returns `LLMResponse.usage`. The worker should accumulate tokens across turns:
+The `WorkerAgent` runs multi-turn tool loops. Each turn calls `llm.generate()` which returns `LLMResponse.usage`. The worker must accumulate tokens across turns and return them alongside the result.
+
+**Breaking change:** `WorkerAgent.executeTask` currently returns `Promise<string>`. It must change to return a structured result:
 
 ```typescript
-// In WorkerAgent.executeTask():
-let totalInputTokens = 0;
-let totalOutputTokens = 0;
-
-// After each LLM call:
-if (response.usage) {
-  totalInputTokens += response.usage.inputTokens;
-  totalOutputTokens += response.usage.outputTokens;
+// New return type (add to types.ts):
+export interface TaskExecutionResult {
+  result: string;
+  inputTokens: number;
+  outputTokens: number;
 }
 
-// Return alongside result:
-return { result, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+// In WorkerAgent.executeTask():
+async executeTask(task: string, context?: string, skillsContent?: string): Promise<TaskExecutionResult> {
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+
+  for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+    const response = await this.llm.generate(messages, { tools: this.tools });
+    // Accumulate tokens (guard against providers that don't return usage)
+    if (response.usage) {
+      totalInputTokens += response.usage.inputTokens;
+      totalOutputTokens += response.usage.outputTokens;
+    }
+    // ... tool loop logic ...
+  }
+
+  return { result: lastAssistantContent, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+}
 ```
+
+**Failed tasks must also return tokens.** When `executeTask` catches an error mid-loop, it should return accumulated tokens up to the failure point rather than throwing:
+
+```typescript
+} catch (err) {
+  return {
+    result: `Error: ${(err as Error).message}`,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+  };
+}
+```
+
+This ensures `DispatchPipeline` always receives token data for both `recordCompleted` and `recordFailed`.
+
+**Callers that need updating:** `DispatchPipeline.dispatch()` and anywhere else that awaits `worker.executeTask()` must destructure `{ result, inputTokens, outputTokens }` instead of treating the return value as a string.
 
 ### Pipeline Integration
 
@@ -502,6 +532,7 @@ Recent Tasks (20):
 - **Hard budget ceilings** (Paperclip-style) — deferred. Per-task tracking is the foundation; budget enforcement can be added later by checking cumulative tokens against a configured limit before dispatch.
 - **Cost in dollars** — token costs vary by model and provider. Raw token counts are more universal. Dollar estimation can be a dashboard feature.
 - **Context pressure auto-rollup** (crab-language-style) — gossipcat agents run short tasks (not persistent loops), so context rarely grows large enough to need rollup. Session gossip summarization already handles cross-task context compression.
+- **Orchestrator token tracking** — the `MainAgent` makes 4 untracked LLM calls: task decomposition (`TaskDispatcher.decompose`), unassigned task handling (`main-agent.ts:228`), choice handling (`main-agent.ts:257`), and result synthesis (`main-agent.ts:377`). These orchestration tokens are not attributed to any worker task. A follow-up feature could create a "meta-task" in TaskGraph for orchestration costs.
 
 ## Files Changed/Created
 
@@ -597,12 +628,15 @@ This is opt-in — if the user declines, old tasks stay under the old identity.
 - **Integration test:** Setup flow creates `team_config` row on first member, fetches on second
 
 ### Token tracking
-- **Unit test:** `WorkerAgent.executeTask` accumulates tokens across multi-turn loops
+- **Unit test:** `WorkerAgent.executeTask` accumulates tokens across multi-turn tool loops (mock 3 LLM calls, verify sum)
+- **Unit test:** `WorkerAgent.executeTask` returns tokens even on failure (mock LLM error on turn 2, verify turn 1 tokens returned)
+- **Unit test:** `WorkerAgent.executeTask` handles `usage: undefined` from LLM provider — tokens default to 0, no crash
 - **Unit test:** `recordCompleted` writes `inputTokens`/`outputTokens` to JSONL event
+- **Unit test:** `recordFailed` writes `inputTokens`/`outputTokens` to JSONL event
 - **Unit test:** `recordCompleted` without tokens (backwards compat) — fields are undefined, not null
 - **Unit test:** `syncCompleted` includes `input_tokens`/`output_tokens` in PATCH payload
-- **Unit test:** `gossipcat tasks --costs` displays token counts when available, `?` when not
-- **Mock test:** Worker with 3 tool turns accumulates correct token total
+- **Unit test:** `gossipcat tasks --costs` displays token counts when available, `-` when not
+- **Unit test:** All `DispatchPipeline` callers of `executeTask` destructure `TaskExecutionResult` correctly
 
 ### Migration
 - **Unit test:** projectId migration detects missing `projectIdVersion` and sends PATCH
