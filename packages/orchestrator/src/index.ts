@@ -22,6 +22,7 @@ export { AgentMemoryReader } from './agent-memory';
 export { MemoryWriter } from './memory-writer';
 export { MemoryCompactor } from './memory-compactor';
 export { TaskGraph } from './task-graph';
+export { TaskGraphSync } from './task-graph-sync';
 export { GossipPublisher } from './gossip-publisher';
 export { DispatchPipeline } from './dispatch-pipeline';
 export type { DispatchPipelineConfig } from './dispatch-pipeline';
