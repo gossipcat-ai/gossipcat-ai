@@ -284,7 +284,7 @@ export class DispatchPipeline {
   async collect(taskIds?: string[], timeoutMs: number = 120_000): Promise<TaskEntry[]> {
     const targets = taskIds
       ? taskIds.map(id => this.tasks.get(id)).filter((t): t is TrackedTask => t !== undefined)
-      : Array.from(this.tasks.values()).filter(t => t.status === 'running');
+      : Array.from(this.tasks.values());
 
     if (targets.length === 0) return [];
 
