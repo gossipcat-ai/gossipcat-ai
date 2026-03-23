@@ -3834,14 +3834,16 @@ var init_tool_server = __esm({
           case "file_read":
             return this.fileTools.fileRead(args);
           case "file_write": {
-            const result = await this.fileTools.fileWrite(args);
             if (callerId) {
               if (!this.agentWrittenFiles.has(callerId)) this.agentWrittenFiles.set(callerId, /* @__PURE__ */ new Set());
               const tracked = this.agentWrittenFiles.get(callerId);
               if (tracked.size >= _ToolServer.MAX_WRITTEN_FILES_PER_AGENT && !tracked.has(args.path)) {
                 throw new Error(`Agent ${callerId} exceeded max tracked file writes (${_ToolServer.MAX_WRITTEN_FILES_PER_AGENT})`);
               }
-              tracked.add(args.path);
+            }
+            const result = await this.fileTools.fileWrite(args);
+            if (callerId) {
+              this.agentWrittenFiles.get(callerId).add(args.path);
             }
             return result;
           }
@@ -5753,6 +5755,7 @@ var init_dispatch_pipeline = __esm({
       llm;
       gossipPublisher;
       syncFactory;
+      toolServer;
       isSyncing = false;
       sessionGossip = [];
       plans = /* @__PURE__ */ new Map();
@@ -5770,6 +5773,7 @@ var init_dispatch_pipeline = __esm({
         this.gossipPublisher = config2.gossipPublisher ?? null;
         this.llm = config2.llm ?? null;
         this.syncFactory = config2.syncFactory ?? null;
+        this.toolServer = config2.toolServer ?? null;
         this.taskGraph = new TaskGraph(config2.projectRoot);
         this.memWriter = new MemoryWriter(config2.projectRoot);
         this.memReader = new AgentMemoryReader(config2.projectRoot);
@@ -5857,32 +5861,38 @@ var init_dispatch_pipeline = __esm({
             throw new Error(`Scope "${options.scope}" overlaps with task ${overlap.conflictTaskId} at "${overlap.conflictScope}"`);
           }
           this.scopeTracker.register(options.scope, taskId);
+          this.toolServer?.assignScope(agentId, options.scope);
           entry.promise = worker.executeTask(task, void 0, promptContent).then((result) => {
             entry.status = "completed";
             entry.result = result;
             entry.completedAt = Date.now();
             this.scopeTracker.release(taskId);
+            this.toolServer?.releaseAgent(agentId);
             return result;
           }).catch((err) => {
             entry.status = "failed";
             entry.error = err.message;
             entry.completedAt = Date.now();
             this.scopeTracker.release(taskId);
+            this.toolServer?.releaseAgent(agentId);
             throw err;
           });
         } else if (options?.writeMode === "worktree") {
           entry.promise = this.worktreeManager.create(taskId).then(({ path, branch }) => {
             entry.worktreeInfo = { path, branch };
+            this.toolServer?.assignRoot(agentId, path);
             return worker.executeTask(task, void 0, promptContent);
           }).then((result) => {
             entry.status = "completed";
             entry.result = result;
             entry.completedAt = Date.now();
+            this.toolServer?.releaseAgent(agentId);
             return result;
           }).catch((err) => {
             entry.status = "failed";
             entry.error = err.message;
             entry.completedAt = Date.now();
+            this.toolServer?.releaseAgent(agentId);
             throw err;
           });
         } else {
@@ -6321,7 +6331,8 @@ When there's a clear best option, recommend it but still offer alternatives.`;
           workers: this.workers,
           registryGet: (id) => this.registry.get(id),
           llm: this.llm,
-          syncFactory: config2.syncFactory
+          syncFactory: config2.syncFactory,
+          toolServer: config2.toolServer
         });
       }
       /** Start all worker agents (connect to relay) */
@@ -6593,13 +6604,16 @@ var init_task_graph_sync = __esm({
         const events = this.graph.getUnsynced(meta3.lastSync);
         if (events.length === 0) return { events: 0, scores: 0, errors: [] };
         let synced = 0;
+        let lastSyncedTimestamp = "";
         const errors = [];
         for (const event of events) {
           try {
             await this.syncEvent(event);
             synced++;
+            lastSyncedTimestamp = event.timestamp;
           } catch (err) {
             errors.push(`${event.type}: ${err.message}`);
+            break;
           }
         }
         let scores = 0;
@@ -6608,9 +6622,9 @@ var init_task_graph_sync = __esm({
         } catch (err) {
           errors.push(`agent_scores: ${err.message}`);
         }
-        if (synced > 0) {
+        if (synced > 0 && lastSyncedTimestamp) {
           this.graph.updateSyncMeta({
-            lastSync: events[events.length - 1].timestamp,
+            lastSync: lastSyncedTimestamp,
             lastSyncEventCount: meta3.lastSyncEventCount + synced
           });
         }
@@ -21178,6 +21192,11 @@ async function doBoot() {
         return "";
       }
     })(),
+    toolServer: toolServer ? {
+      assignScope: (agentId, scope) => toolServer.assignScope(agentId, scope),
+      assignRoot: (agentId, root) => toolServer.assignRoot(agentId, root),
+      releaseAgent: (agentId) => toolServer.releaseAgent(agentId)
+    } : null,
     syncFactory: () => {
       try {
         const { existsSync: exists, readFileSync: readF } = require("fs");
