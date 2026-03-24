@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { findConfigPath, loadConfig, configToAgentConfigs } from './config';
+import { findConfigPath, loadConfig, configToAgentConfigs, GossipConfig } from './config';
 import { runSetupWizard } from './setup-wizard';
 import { startChat } from './chat';
 import { createAgent, listAgents, removeAgent } from './create-agent';
@@ -58,8 +58,25 @@ async function main(): Promise<void> {
   // Check for config
   const configPath = findConfigPath();
   if (!configPath) {
-    console.log('No gossip.agents.json found. Running setup wizard...');
-    await runSetupWizard();
+    // No config — start chat anyway. Cognitive mode will detect no agents
+    // and trigger the project init flow automatically.
+    const minimalConfig: GossipConfig = {
+      main_agent: { provider: 'google', model: 'gemini-2.5-pro' },
+      agents: {},
+    };
+    // Try to detect a main agent provider from keychain
+    const { Keychain } = await import('./keychain');
+    const kc = new Keychain();
+    for (const provider of ['google', 'anthropic', 'openai'] as const) {
+      const key = await kc.getKey(provider);
+      if (key) {
+        minimalConfig.main_agent.provider = provider;
+        minimalConfig.main_agent.model = provider === 'google' ? 'gemini-2.5-pro'
+          : provider === 'anthropic' ? 'claude-sonnet-4-6' : 'gpt-4o';
+        break;
+      }
+    }
+    await startChat(minimalConfig);
     return;
   }
 
