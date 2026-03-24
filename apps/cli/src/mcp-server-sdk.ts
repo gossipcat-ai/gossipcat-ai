@@ -250,7 +250,7 @@ server.tool(
   async ({ task }) => {
     await boot();
     try {
-      const response = await mainAgent.handleMessage(task);
+      const response = await mainAgent.handleMessage(task, { mode: 'decompose' });
       const suffix = response.agents?.length ? `\n\n[Agents: ${response.agents.join(', ')}]` : '';
       return { content: [{ type: 'text' as const, text: response.text + suffix }] };
     } catch (err: any) {
@@ -451,7 +451,7 @@ server.tool(
       write_mode: z.enum(['sequential', 'scoped', 'worktree']).optional(),
       scope: z.string().optional(),
     })).describe('Array of { agent_id, task, write_mode?, scope? }'),
-    consensus: z.boolean().optional().describe('Enable consensus summary format in agent output. Pass consensus: true to gossip_collect later.'),
+    consensus: z.boolean().default(false).describe('Enable consensus summary format in agent output. Pass consensus: true to gossip_collect later.'),
   },
   async ({ tasks: taskDefs, consensus }) => {
     await boot();
@@ -488,14 +488,15 @@ server.tool(
   'gossip_collect',
   'Collect results from dispatched tasks. Waits for completion by default. Use consensus: true for cross-review round.',
   {
-    task_ids: z.array(z.string()).optional().describe('Task IDs to collect. Omit for all.'),
-    timeout_ms: z.number().optional().describe('Max wait time. Default 120000.'),
-    consensus: z.boolean().optional().describe('Enable cross-review consensus. Agents review each others findings.'),
+    task_ids: z.array(z.string()).default([]).describe('Task IDs to collect. Empty array for all.'),
+    timeout_ms: z.number().default(120000).describe('Max wait time in ms.'),
+    consensus: z.boolean().default(false).describe('Enable cross-review consensus. Agents review each others findings.'),
   },
   async ({ task_ids, timeout_ms, consensus }) => {
     let collected;
     try {
-      collected = await mainAgent.collect(task_ids, timeout_ms, consensus ? { consensus: true } : undefined);
+      const ids = task_ids.length > 0 ? task_ids : undefined;
+      collected = await mainAgent.collect(ids, timeout_ms, consensus ? { consensus: true } : undefined);
     } catch (err) {
       process.stderr.write(`[gossipcat] collect failed: ${(err as Error).message}\n`);
       return { content: [{ type: 'text' as const, text: `Collect error: ${(err as Error).message}` }] };
@@ -528,6 +529,83 @@ server.tool(
 
     if (consensusReport) {
       output += '\n\n' + consensusReport.summary;
+    }
+
+    return { content: [{ type: 'text' as const, text: output }] };
+  }
+);
+
+// ── Consensus: dispatch with summary instruction ─────────────────────────
+server.tool(
+  'gossip_dispatch_consensus',
+  'Dispatch tasks to multiple agents with consensus summary instruction injected. Agents will include a ## Consensus Summary section in their output. Returns task IDs — call gossip_collect_consensus to collect results with cross-review.',
+  {
+    tasks: z.array(z.object({
+      agent_id: z.string(),
+      task: z.string(),
+    })).describe('Array of { agent_id, task } — all agents review the same or related work'),
+  },
+  async ({ tasks: taskDefs }) => {
+    await boot();
+    await syncWorkersViaKeychain();
+
+    for (const def of taskDefs) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(def.agent_id)) {
+        return { content: [{ type: 'text' as const, text: `Invalid agent ID format: "${def.agent_id}"` }] };
+      }
+    }
+
+    const { taskIds, errors } = await mainAgent.dispatchParallel(
+      taskDefs.map((d: any) => ({ agentId: d.agent_id, task: d.task })),
+      { consensus: true },
+    );
+
+    let msg = `Dispatched ${taskIds.length} tasks with consensus:\n${taskIds.map((tid: string) => {
+      const t = mainAgent.getTask(tid);
+      return `  ${tid} → ${t?.agentId || 'unknown'}`;
+    }).join('\n')}`;
+    msg += '\n\nAgents will include ## Consensus Summary in output.';
+    msg += '\nCall gossip_collect_consensus with these task IDs when ready.';
+    if (errors.length) msg += `\nErrors: ${errors.join(', ')}`;
+    return { content: [{ type: 'text' as const, text: msg }] };
+  }
+);
+
+// ── Consensus: collect with cross-review ─────────────────────────────────
+server.tool(
+  'gossip_collect_consensus',
+  'Collect results and run consensus cross-review. Each agent reviews peer findings, producing agree/disagree/new judgments. Returns agent results + tagged consensus report (CONFIRMED/DISPUTED/UNIQUE/NEW). Writes signals to agent-performance.jsonl.',
+  {
+    task_ids: z.array(z.string()).describe('Task IDs from gossip_dispatch_consensus'),
+    timeout_ms: z.number().default(300000).describe('Max wait time in ms. Default 300000 (5min).'),
+  },
+  async ({ task_ids, timeout_ms }) => {
+    let collected;
+    try {
+      collected = await mainAgent.collect(task_ids, timeout_ms, { consensus: true });
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Collect error: ${(err as Error).message}` }] };
+    }
+
+    const { results: taskResults, consensus: consensusReport } = collected;
+
+    if (taskResults.length === 0) {
+      return { content: [{ type: 'text' as const, text: 'No matching tasks.' }] };
+    }
+
+    const resultTexts = taskResults.map((t: any) => {
+      const dur = t.completedAt ? `${t.completedAt - t.startedAt}ms` : 'running';
+      if (t.status === 'completed') return `[${t.id}] ${t.agentId} (${dur}):\n${t.result}`;
+      if (t.status === 'failed') return `[${t.id}] ${t.agentId} (${dur}): ERROR: ${t.error}`;
+      return `[${t.id}] ${t.agentId}: still running...`;
+    });
+
+    let output = resultTexts.join('\n\n---\n\n');
+
+    if (consensusReport) {
+      output += '\n\n' + consensusReport.summary;
+    } else {
+      output += '\n\n⚠️ Consensus cross-review did not run (need ≥2 successful agents).';
     }
 
     return { content: [{ type: 'text' as const, text: output }] };
@@ -697,6 +775,8 @@ server.tool(
       { name: 'gossip_dispatch', desc: 'Send task to a specific agent (skills auto-injected)' },
       { name: 'gossip_dispatch_parallel', desc: 'Fan out tasks to multiple agents simultaneously' },
       { name: 'gossip_collect', desc: 'Collect results from dispatched tasks' },
+      { name: 'gossip_dispatch_consensus', desc: 'Dispatch with consensus summary instruction. Returns task IDs.' },
+      { name: 'gossip_collect_consensus', desc: 'Collect + cross-review. Returns tagged CONFIRMED/DISPUTED/UNIQUE/NEW report.' },
       { name: 'gossip_orchestrate', desc: 'Submit task for multi-agent execution via MainAgent' },
       { name: 'gossip_agents', desc: 'List configured agents with provider, model, role, skills' },
       { name: 'gossip_status', desc: 'Check relay, tool-server, workers status' },

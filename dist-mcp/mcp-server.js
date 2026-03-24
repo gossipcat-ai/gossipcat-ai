@@ -4917,6 +4917,45 @@ var init_skill_loader = __esm({
 });
 
 // packages/orchestrator/src/prompt-assembler.ts
+function extractSpecReferences(taskText, specContent) {
+  const refs = /* @__PURE__ */ new Set();
+  const taskMatches = taskText.match(FILE_REF_PATTERN);
+  if (taskMatches) {
+    for (const raw of taskMatches) {
+      const cleaned = raw.replace(/^`|`$/g, "").replace(/:\d+$/, "");
+      if (cleaned.includes("..")) continue;
+      const ext = path.extname(cleaned);
+      if (!DOC_EXTENSIONS.has(ext)) continue;
+      if (SPEC_PATH_PATTERN.test(cleaned)) {
+        refs.add(cleaned);
+      }
+    }
+  }
+  if (specContent) {
+    let match;
+    const re = new RegExp(FILE_REF_PATTERN.source, FILE_REF_PATTERN.flags);
+    while ((match = re.exec(specContent)) !== null) {
+      const filePath = match[1] || match[2];
+      if (!filePath) continue;
+      const cleaned = filePath.replace(/:\d+$/, "");
+      if (cleaned.includes("..")) continue;
+      refs.add(cleaned);
+    }
+  }
+  return [...refs];
+}
+function buildSpecReviewEnrichment(implementationFiles) {
+  if (!implementationFiles.length) return null;
+  const fileList = implementationFiles.map((f) => `- ${f}`).join("\n");
+  return `IMPORTANT: This task references a spec document.
+Before completing:
+1. Verify described flows match the implementation
+2. Check backwards-compatibility constraints
+3. Confirm referenced functions/methods exist
+
+Implementation files to cross-reference:
+${fileList}`;
+}
 function assemblePrompt(parts) {
   const blocks = [];
   if (parts.chainContext) {
@@ -4943,6 +4982,16 @@ ${parts.memory}
 ${parts.lens}
 --- END LENS ---`);
   }
+  if (parts.consensusSummary) {
+    blocks.push(`
+
+--- CONSENSUS OUTPUT FORMAT ---
+End your response with a section titled "## Consensus Summary".
+List one line per finding with file:line references where applicable.
+Format: "- <finding description> (file:line)"
+This section will be used for cross-review with peer agents.
+--- END CONSENSUS OUTPUT FORMAT ---`);
+  }
   if (parts.skills) {
     blocks.push(`
 
@@ -4956,11 +5005,23 @@ ${parts.skills}
 Context:
 ${parts.context}`);
   }
+  if (parts.specReviewContext) {
+    blocks.push(`
+
+--- SPEC REVIEW ---
+${parts.specReviewContext}
+--- END SPEC REVIEW ---`);
+  }
   return blocks.join("");
 }
+var path, DOC_EXTENSIONS, SPEC_PATH_PATTERN, FILE_REF_PATTERN;
 var init_prompt_assembler = __esm({
   "packages/orchestrator/src/prompt-assembler.ts"() {
     "use strict";
+    path = __toESM(require("path"));
+    DOC_EXTENSIONS = /* @__PURE__ */ new Set([".md", ".txt", ".rst"]);
+    SPEC_PATH_PATTERN = /(?:docs\/|specs\/|[\w-]+-(?:design|spec)\.md)/;
+    FILE_REF_PATTERN = /(?:`([^`]+\.[a-z]{1,6})`|([a-zA-Z][\w/.@-]+\.[a-z]{1,6})(?::\d+)?)/g;
   }
 });
 
@@ -5693,8 +5754,8 @@ var init_worktree_manager = __esm({
       }
       async merge(taskId) {
         const branch = `gossip-${taskId}`;
-        const log3 = await execFileAsync3("git", ["log", `HEAD..${branch}`, "--oneline"], { cwd: this.projectRoot });
-        if (!log3.stdout.trim()) return { merged: true };
+        const log4 = await execFileAsync3("git", ["log", `HEAD..${branch}`, "--oneline"], { cwd: this.projectRoot });
+        if (!log4.stdout.trim()) return { merged: true };
         try {
           await execFileAsync3("git", ["-c", "core.hooksPath=/dev/null", "merge", branch, "--no-edit"], { cwd: this.projectRoot });
           return { merged: true };
@@ -5742,6 +5803,456 @@ var init_worktree_manager = __esm({
   }
 });
 
+// packages/orchestrator/src/consensus-engine.ts
+var SUMMARY_HEADER, FALLBACK_MAX_LENGTH, MAX_SUMMARY_LENGTH, MAX_CROSS_REVIEW_ENTRIES, VALID_ACTIONS, ConsensusEngine;
+var init_consensus_engine = __esm({
+  "packages/orchestrator/src/consensus-engine.ts"() {
+    "use strict";
+    SUMMARY_HEADER = "## Consensus Summary";
+    FALLBACK_MAX_LENGTH = 2e3;
+    MAX_SUMMARY_LENGTH = 3e3;
+    MAX_CROSS_REVIEW_ENTRIES = 50;
+    VALID_ACTIONS = /* @__PURE__ */ new Set(["agree", "disagree", "new"]);
+    ConsensusEngine = class {
+      config;
+      constructor(config2) {
+        this.config = config2;
+      }
+      extractSummary(result) {
+        const idx = result.indexOf(SUMMARY_HEADER);
+        if (idx !== -1) {
+          const afterHeader = result.slice(idx + SUMMARY_HEADER.length).trimStart();
+          const nextHeader = afterHeader.search(/\n##\s/);
+          const nextBlankLine = afterHeader.indexOf("\n\n");
+          let end = afterHeader.length;
+          if (nextHeader !== -1) end = Math.min(end, nextHeader);
+          if (nextBlankLine !== -1) end = Math.min(end, nextBlankLine);
+          return afterHeader.slice(0, Math.min(end, MAX_SUMMARY_LENGTH)).trim();
+        }
+        if (result.length <= FALLBACK_MAX_LENGTH) return result;
+        const truncated = result.slice(0, FALLBACK_MAX_LENGTH);
+        const lastPeriod = truncated.lastIndexOf(".");
+        if (lastPeriod > FALLBACK_MAX_LENGTH * 0.5) {
+          return truncated.slice(0, lastPeriod + 1);
+        }
+        return truncated;
+      }
+      async run(results) {
+        const successful = results.filter((r) => r.status === "completed" && r.result);
+        if (successful.length < 2) {
+          return {
+            agentCount: 0,
+            rounds: 0,
+            confirmed: [],
+            disputed: [],
+            unique: [],
+            newFindings: [],
+            signals: [],
+            summary: "Consensus skipped: insufficient agents (need \u22652 successful)."
+          };
+        }
+        process.stderr.write(`[consensus] Starting cross-review for ${successful.length} agents
+`);
+        const crossReviewEntries = await this.dispatchCrossReview(results);
+        process.stderr.write(`[consensus] Cross-review complete: ${crossReviewEntries.length} entries
+`);
+        const report = this.synthesize(results, crossReviewEntries);
+        process.stderr.write(`[consensus] ${report.confirmed.length} confirmed, ${report.disputed.length} disputed, ${report.unique.length} unique, ${report.newFindings.length} new
+`);
+        return report;
+      }
+      /**
+       * Phase 2: Send cross-review prompts to each agent and collect structured responses.
+       * Each agent reviews all peer summaries and produces agree/disagree/new entries.
+       */
+      async dispatchCrossReview(results) {
+        const successful = results.filter((r) => r.status === "completed" && r.result);
+        if (successful.length < 2) return [];
+        const summaries = /* @__PURE__ */ new Map();
+        for (const r of successful) {
+          summaries.set(r.agentId, this.extractSummary(r.result));
+        }
+        const allEntries = await Promise.all(
+          successful.map((agent) => this.crossReviewForAgent(agent, summaries))
+        );
+        return allEntries.flat();
+      }
+      /**
+       * Build the cross-review prompt for a single agent and call the LLM.
+       */
+      async crossReviewForAgent(agent, summaries) {
+        const ownSummary = summaries.get(agent.agentId) ?? "";
+        const peerLines = [];
+        for (const [peerId, peerSummary] of summaries) {
+          if (peerId === agent.agentId) continue;
+          const peerConfig = this.config.registryGet(peerId);
+          const preset = peerConfig?.preset ?? "unknown";
+          peerLines.push(`Agent "${peerId}" (${preset}):
+<data>${peerSummary}</data>`);
+        }
+        const userContent = `You previously reviewed code and produced findings. Now review your peers' findings.
+
+YOUR FINDINGS (Phase 1):
+<data>${ownSummary}</data>
+
+PEER FINDINGS:
+${peerLines.join("\n\n")}
+
+For each peer finding, respond with one of:
+- AGREE: You independently confirm this finding is correct. Cite your evidence.
+- DISAGREE: You believe this finding is incorrect. Explain why with evidence (file:line references).
+- NEW: Something ALL agents missed that you now realize after seeing peer work.
+
+Return ONLY a JSON array:
+[
+  { "action": "agree"|"disagree"|"new", "agentId": "peer_id", "finding": "summary", "evidence": "your reasoning", "confidence": 1-5 }
+]`;
+        const messages = [
+          { role: "system", content: "You are a code reviewer performing cross-review. Return only valid JSON." },
+          { role: "user", content: userContent }
+        ];
+        try {
+          const response = await this.config.llm.generate(messages, { temperature: 0 });
+          const validPeerIds = new Set(summaries.keys());
+          const entries = this.parseCrossReviewResponse(agent.agentId, response.text, MAX_CROSS_REVIEW_ENTRIES);
+          return entries.filter((e) => e.peerAgentId !== agent.agentId && validPeerIds.has(e.peerAgentId));
+        } catch {
+          return [];
+        }
+      }
+      /**
+       * Phase 3: Synthesize Phase 1 results and Phase 2 cross-review entries into a consensus report.
+       */
+      synthesize(results, crossReviewEntries) {
+        const signals = [];
+        const newFindings = [];
+        const successful = results.filter((r) => r.status === "completed" && r.result);
+        const findingMap = /* @__PURE__ */ new Map();
+        for (const r of successful) {
+          const summary2 = this.extractSummary(r.result);
+          const lines = summary2.split("\n").filter((l) => l.trimStart().startsWith("-"));
+          for (const line of lines) {
+            const finding = line.replace(/^\s*-\s*/, "").trim();
+            if (!finding) continue;
+            const key = `${r.agentId}::${finding}`;
+            findingMap.set(key, {
+              originalAgentId: r.agentId,
+              finding,
+              confirmedBy: [],
+              disputedBy: [],
+              confidences: []
+            });
+          }
+        }
+        for (const entry of crossReviewEntries) {
+          const now = (/* @__PURE__ */ new Date()).toISOString();
+          if (entry.action === "new") {
+            newFindings.push({
+              agentId: entry.agentId,
+              finding: entry.finding,
+              evidence: entry.evidence,
+              confidence: entry.confidence
+            });
+            signals.push({
+              type: "consensus",
+              taskId: "",
+              signal: "new_finding",
+              agentId: entry.agentId,
+              evidence: entry.evidence,
+              timestamp: now
+            });
+            continue;
+          }
+          if (entry.action === "agree") {
+            const matchKey = this.findMatchingFinding(findingMap, entry.peerAgentId, entry.finding);
+            if (matchKey) {
+              const f = findingMap.get(matchKey);
+              f.confirmedBy.push(entry.agentId);
+              f.confidences.push(entry.confidence);
+              signals.push({
+                type: "consensus",
+                taskId: "",
+                signal: "agreement",
+                agentId: entry.agentId,
+                counterpartId: entry.peerAgentId,
+                evidence: entry.evidence,
+                timestamp: now
+              });
+            }
+            continue;
+          }
+          if (entry.action === "disagree") {
+            const matchKey = this.findMatchingFinding(findingMap, entry.peerAgentId, entry.finding);
+            if (matchKey) {
+              const f = findingMap.get(matchKey);
+              f.disputedBy.push({
+                agentId: entry.agentId,
+                reason: entry.evidence,
+                evidence: entry.evidence
+              });
+              f.confidences.push(entry.confidence);
+              const isHallucination = this.detectHallucination(entry.evidence);
+              if (isHallucination) {
+                signals.push({
+                  type: "consensus",
+                  taskId: "",
+                  signal: "hallucination_caught",
+                  agentId: entry.peerAgentId,
+                  counterpartId: entry.agentId,
+                  outcome: "incorrect",
+                  evidence: entry.evidence,
+                  timestamp: now
+                });
+              } else {
+                signals.push({
+                  type: "consensus",
+                  taskId: "",
+                  signal: "disagreement",
+                  agentId: entry.agentId,
+                  counterpartId: entry.peerAgentId,
+                  evidence: entry.evidence,
+                  timestamp: now
+                });
+              }
+            }
+          }
+        }
+        const confirmed = [];
+        const disputed = [];
+        const unique = [];
+        let findingIdx = 0;
+        for (const [, entry] of findingMap) {
+          findingIdx++;
+          const avgConfidence = entry.confidences.length > 0 ? entry.confidences.reduce((a, b) => a + b, 0) / entry.confidences.length : 3;
+          const finding = {
+            id: `f${findingIdx}`,
+            originalAgentId: entry.originalAgentId,
+            finding: entry.finding,
+            tag: "unique",
+            confirmedBy: entry.confirmedBy,
+            disputedBy: entry.disputedBy,
+            confidence: Math.round(avgConfidence)
+          };
+          if (entry.disputedBy.length > 0) {
+            finding.tag = "disputed";
+            disputed.push(finding);
+          } else if (entry.confirmedBy.length > 0) {
+            finding.tag = "confirmed";
+            confirmed.push(finding);
+          } else {
+            finding.tag = "unique";
+            unique.push(finding);
+            signals.push({
+              type: "consensus",
+              taskId: "",
+              signal: "unique_unconfirmed",
+              agentId: entry.originalAgentId,
+              evidence: entry.finding,
+              timestamp: (/* @__PURE__ */ new Date()).toISOString()
+            });
+          }
+        }
+        const summary = this.formatReport(confirmed, disputed, unique, newFindings, successful.length);
+        return {
+          agentCount: successful.length,
+          rounds: 2,
+          confirmed,
+          disputed,
+          unique,
+          newFindings,
+          signals,
+          summary
+        };
+      }
+      /**
+       * Detect if disagreement evidence indicates a hallucination.
+       */
+      detectHallucination(evidence) {
+        const indicators = [
+          "does not exist",
+          "doesn't exist",
+          "no such file",
+          "no such function",
+          "no such method",
+          "no such variable",
+          "file not found",
+          "function not found",
+          "method not found",
+          "line is a comment",
+          // tightened: was 'is a comment'
+          "file only has",
+          // tightened: was 'only has'
+          "no line \\d",
+          // tightened: was 'no line' — require digit after
+          "nonexistent",
+          "non-existent",
+          "never defined",
+          "is not defined in",
+          // tightened: was 'not defined'
+          "not defined anywhere",
+          // tightened: was 'not defined'
+          "fabricated",
+          "hallucinated"
+        ];
+        const lower = evidence.toLowerCase();
+        return indicators.some((phrase) => {
+          if (phrase.includes("\\d")) {
+            return new RegExp(phrase).test(lower);
+          }
+          return lower.includes(phrase);
+        });
+      }
+      /**
+       * Find a matching finding in the map for a given peer agent and finding text.
+       * 3-tier matching: exact, substring, word overlap.
+       */
+      findMatchingFinding(findingMap, peerAgentId, findingText) {
+        const exactKey = `${peerAgentId}::${findingText}`;
+        if (findingMap.has(exactKey)) return exactKey;
+        const lowerText = findingText.toLowerCase();
+        for (const [key, entry] of findingMap) {
+          if (entry.originalAgentId !== peerAgentId) continue;
+          const lowerFinding = entry.finding.toLowerCase();
+          if (lowerFinding.includes(lowerText) || lowerText.includes(lowerFinding)) {
+            return key;
+          }
+        }
+        const significantWords = (text) => text.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
+        const textWords = significantWords(findingText);
+        if (textWords.length === 0) return null;
+        for (const [key, entry] of findingMap) {
+          if (entry.originalAgentId !== peerAgentId) continue;
+          const findingWords = significantWords(entry.finding);
+          if (findingWords.length === 0) continue;
+          const overlap = textWords.filter((w) => findingWords.includes(w)).length;
+          const overlapRatio = overlap / Math.max(textWords.length, findingWords.length);
+          if (overlapRatio > 0.5) return key;
+        }
+        return null;
+      }
+      /**
+       * Format the consensus report as a human-readable string.
+       */
+      formatReport(confirmed, disputed, unique, newFindings, agentCount) {
+        const bar = "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550";
+        const lines = [];
+        lines.push(bar);
+        lines.push(`CONSENSUS REPORT (${agentCount} agents, 2 rounds)`);
+        lines.push(bar);
+        lines.push("");
+        if (confirmed.length > 0) {
+          lines.push("CONFIRMED (high confidence \u2014 act on these):");
+          for (const f of confirmed) {
+            const origPreset = this.config.registryGet(f.originalAgentId)?.preset || f.originalAgentId;
+            const confirmerPresets = f.confirmedBy.map((id) => this.config.registryGet(id)?.preset || id).join(", ");
+            lines.push(`  \u2713 [${origPreset} + ${confirmerPresets}] ${f.finding}`);
+          }
+          lines.push("");
+        }
+        if (disputed.length > 0) {
+          lines.push("DISPUTED (agents disagree \u2014 review the evidence):");
+          for (const f of disputed) {
+            const origPreset = this.config.registryGet(f.originalAgentId)?.preset || f.originalAgentId;
+            lines.push(`  \u26A1 [${origPreset} vs ${f.disputedBy.map((d) => this.config.registryGet(d.agentId)?.preset || d.agentId).join(", ")}] "${f.finding}"`);
+            lines.push(`    \u2192 ${origPreset}: original finding`);
+            for (const d of f.disputedBy) {
+              const dispPreset = this.config.registryGet(d.agentId)?.preset || d.agentId;
+              lines.push(`    \u2192 ${dispPreset}: ${d.reason}`);
+            }
+          }
+          lines.push("");
+        }
+        if (unique.length > 0) {
+          lines.push("UNIQUE (one agent only \u2014 verify before acting):");
+          for (const f of unique) {
+            const preset = this.config.registryGet(f.originalAgentId)?.preset || f.originalAgentId;
+            lines.push(`  ? [${preset}] "${f.finding}"`);
+          }
+          lines.push("");
+        }
+        if (newFindings.length > 0) {
+          lines.push("NEW (discovered during cross-review):");
+          for (const f of newFindings) {
+            const preset = this.config.registryGet(f.agentId)?.preset || f.agentId;
+            lines.push(`  \u2605 [${preset}] "${f.finding}"`);
+          }
+          lines.push("");
+        }
+        lines.push(bar);
+        lines.push(`Summary: ${confirmed.length} confirmed, ${disputed.length} disputed, ${unique.length} unique, ${newFindings.length} new`);
+        lines.push(bar);
+        return lines.join("\n");
+      }
+      /**
+       * Parse LLM cross-review response into structured entries.
+       * Handles markdown code fences, invalid JSON, and confidence clamping.
+       */
+      parseCrossReviewResponse(reviewerAgentId, text, limit) {
+        let cleaned = text.trim();
+        const fenceMatch = cleaned.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
+        if (fenceMatch) {
+          cleaned = fenceMatch[1].trim();
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(cleaned);
+        } catch {
+          return [];
+        }
+        if (!Array.isArray(parsed)) return [];
+        const limited = parsed.slice(0, limit);
+        const entries = [];
+        for (const item of limited) {
+          if (!item || typeof item !== "object") continue;
+          if (!VALID_ACTIONS.has(item.action)) continue;
+          if (!item.finding || !item.evidence) continue;
+          let confidence;
+          if (typeof item.confidence === "number" && !isNaN(item.confidence)) {
+            confidence = Math.max(1, Math.min(5, item.confidence));
+          } else {
+            confidence = 3;
+          }
+          entries.push({
+            action: item.action,
+            agentId: reviewerAgentId,
+            peerAgentId: item.agentId ?? "",
+            finding: item.finding,
+            evidence: item.evidence,
+            confidence
+          });
+        }
+        return entries;
+      }
+    };
+  }
+});
+
+// packages/orchestrator/src/performance-writer.ts
+var import_fs10, import_path14, PerformanceWriter;
+var init_performance_writer = __esm({
+  "packages/orchestrator/src/performance-writer.ts"() {
+    "use strict";
+    import_fs10 = require("fs");
+    import_path14 = require("path");
+    PerformanceWriter = class {
+      filePath;
+      constructor(projectRoot) {
+        const dir = (0, import_path14.join)(projectRoot, ".gossip");
+        if (!(0, import_fs10.existsSync)(dir)) (0, import_fs10.mkdirSync)(dir, { recursive: true });
+        this.filePath = (0, import_path14.join)(dir, "agent-performance.jsonl");
+      }
+      appendSignal(signal) {
+        (0, import_fs10.appendFileSync)(this.filePath, JSON.stringify(signal) + "\n");
+      }
+      appendSignals(signals) {
+        if (signals.length === 0) return;
+        const data = signals.map((s) => JSON.stringify(s)).join("\n") + "\n";
+        (0, import_fs10.appendFileSync)(this.filePath, data);
+      }
+    };
+  }
+});
+
 // packages/orchestrator/src/dispatch-pipeline.ts
 var import_crypto8, log, DispatchPipeline;
 var init_dispatch_pipeline = __esm({
@@ -5758,6 +6269,8 @@ var init_dispatch_pipeline = __esm({
     init_skill_gap_tracker();
     init_scope_tracker();
     init_worktree_manager();
+    init_consensus_engine();
+    init_performance_writer();
     log = (msg) => process.stderr.write(`[gossipcat] ${msg}
 `);
     DispatchPipeline = class _DispatchPipeline {
@@ -5846,7 +6359,8 @@ var init_dispatch_pipeline = __esm({
           lens: options?.lens,
           skills,
           sessionContext: sessionContext || void 0,
-          chainContext: chainContext || void 0
+          chainContext: chainContext || void 0,
+          consensusSummary: options?.consensus
         });
         this.taskGraph.recordCreated(taskId, agentId, task, agentSkills);
         const entry = {
@@ -5904,9 +6418,9 @@ var init_dispatch_pipeline = __esm({
             throw err;
           });
         } else if (options?.writeMode === "worktree") {
-          entry.promise = this.worktreeManager.create(taskId).then(({ path, branch }) => {
-            entry.worktreeInfo = { path, branch };
-            this.toolServer?.assignRoot(agentId, path);
+          entry.promise = this.worktreeManager.create(taskId).then(({ path: path2, branch }) => {
+            entry.worktreeInfo = { path: path2, branch };
+            this.toolServer?.assignRoot(agentId, path2);
             return worker.executeTask(task, void 0, promptContent);
           }).then((execResult) => {
             entry.status = "completed";
@@ -5987,7 +6501,7 @@ var init_dispatch_pipeline = __esm({
       registerPlan(plan) {
         this.plans.set(plan.id, plan);
       }
-      async collect(taskIds, timeoutMs = 12e4) {
+      async collect(taskIds, timeoutMs = 12e4, options) {
         const targets = taskIds ? taskIds.map((id) => this.tasks.get(id)).filter((t) => t !== void 0) : Array.from(this.tasks.values());
         if (taskIds && taskIds.length > 0) {
           const missingIds = taskIds.filter((id) => !this.tasks.has(id));
@@ -6016,11 +6530,11 @@ var init_dispatch_pipeline = __esm({
                   completedAt: Date.now()
                 };
               });
-              if (targets.length === 0) return orphanEntries;
+              if (targets.length === 0) return { results: orphanEntries };
             }
           }
         }
-        if (targets.length === 0) return [];
+        if (targets.length === 0) return { results: [] };
         let timer;
         await Promise.race([
           Promise.all(targets.map((t) => t.promise.catch(() => {
@@ -6171,6 +6685,20 @@ Worktree merge: CONFLICT
           inputTokens: t.inputTokens,
           outputTokens: t.outputTokens
         }));
+        let consensusReport;
+        if (options?.consensus && this.llm && results.filter((r) => r.status === "completed").length >= 2) {
+          try {
+            const engine = new ConsensusEngine({ llm: this.llm, registryGet: this.registryGet });
+            consensusReport = await engine.run(results);
+            if (consensusReport.signals.length > 0) {
+              const perfWriter = new PerformanceWriter(this.projectRoot);
+              perfWriter.appendSignals(consensusReport.signals);
+            }
+          } catch (err) {
+            process.stderr.write(`[gossipcat] Consensus failed: ${err.message}
+`);
+          }
+        }
         for (const t of targets) {
           if (t.status === "running") {
             t.status = "failed";
@@ -6179,9 +6707,9 @@ Worktree merge: CONFLICT
           }
           this.tasks.delete(t.id);
         }
-        return results;
+        return { results, consensus: consensusReport };
       }
-      async dispatchParallel(taskDefs) {
+      async dispatchParallel(taskDefs, pipelineOptions) {
         const taskIds = [];
         const errors = [];
         const batchId = (0, import_crypto8.randomUUID)().slice(0, 8);
@@ -6261,7 +6789,8 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
             const lens = lensMap?.get(def.agentId);
             const { taskId, promise: promise2 } = this.dispatch(def.agentId, def.task, {
               ...def.options,
-              ...lens ? { lens } : {}
+              ...lens ? { lens } : {},
+              ...pipelineOptions?.consensus ? { consensus: true } : {}
             });
             taskIds.push(taskId);
             batchTaskIds.add(taskId);
@@ -6377,6 +6906,503 @@ ${result.slice(0, 2e3)}` }
   }
 });
 
+// packages/orchestrator/src/tool-definitions.ts
+function buildToolSystemPrompt(_agents) {
+  const toolLines = Object.entries(TOOL_SCHEMAS).map(([name, schema]) => {
+    const args = schema.requiredArgs.length ? ` (${schema.requiredArgs.join(", ")}${schema.optionalArgs ? ", " + schema.optionalArgs.map((a) => `${a}?`).join(", ") : ""})` : schema.optionalArgs ? ` (${schema.optionalArgs.map((a) => `${a}?`).join(", ")})` : "";
+    return `- **${name}**${args} \u2014 ${schema.description}`;
+  });
+  return `## Available Tools
+
+See the team context above for available agents.
+
+${toolLines.join("\n")}
+
+## How to Call Tools
+
+When you need to use a tool, emit a tool call block:
+
+\`\`\`
+[TOOL_CALL]
+tool: <tool_name>
+args:
+  key: value
+\`\`\`
+
+## When Uncertain
+
+If you are unsure which action to take, present options using:
+
+\`\`\`
+[CHOICES]
+message: "<question for the developer>"
+options:
+  - value: "option_a"
+    label: "Option A"
+  - value: "option_b"
+    label: "Option B"
+\`\`\``;
+}
+var TOOL_SCHEMAS, PLAN_CHOICES, PENDING_PLAN_CHOICES;
+var init_tool_definitions = __esm({
+  "packages/orchestrator/src/tool-definitions.ts"() {
+    "use strict";
+    TOOL_SCHEMAS = {
+      dispatch: {
+        description: "Send a task to a specific agent.",
+        requiredArgs: ["agent_id", "task"]
+      },
+      dispatch_parallel: {
+        description: "Send tasks to multiple agents in parallel.",
+        requiredArgs: ["tasks"]
+      },
+      dispatch_consensus: {
+        description: "Send a task for cross-review consensus among agents.",
+        requiredArgs: ["task"],
+        optionalArgs: ["agent_ids"]
+      },
+      plan: {
+        description: "Create an execution plan for a complex task.",
+        requiredArgs: ["task"]
+      },
+      agents: {
+        description: "List all registered agents and their skills.",
+        requiredArgs: []
+      },
+      agent_status: {
+        description: "Get the current status of a specific agent.",
+        requiredArgs: ["agent_id"]
+      },
+      agent_performance: {
+        description: "Show performance metrics for all agents.",
+        requiredArgs: []
+      },
+      update_instructions: {
+        description: "Update runtime instructions for one or more agents.",
+        requiredArgs: ["agent_ids", "instruction"],
+        optionalArgs: ["mode"]
+      },
+      read_task_history: {
+        description: "Read past task results for an agent.",
+        requiredArgs: ["agent_id"],
+        optionalArgs: ["limit"]
+      }
+    };
+    PLAN_CHOICES = {
+      EXECUTE: "plan_execute",
+      MODIFY: "plan_modify",
+      CANCEL: "plan_cancel"
+    };
+    PENDING_PLAN_CHOICES = {
+      DISCARD: "discard_and_replan",
+      EXECUTE_PENDING: "execute_pending",
+      CANCEL: "cancel"
+    };
+  }
+});
+
+// packages/orchestrator/src/tool-router.ts
+var import_fs11, import_path15, log2, AGENT_ID_RE, BLOCK_RE, ToolRouter, ToolExecutor;
+var init_tool_router = __esm({
+  "packages/orchestrator/src/tool-router.ts"() {
+    "use strict";
+    init_tool_definitions();
+    import_fs11 = require("fs");
+    import_path15 = require("path");
+    log2 = (msg) => process.stderr.write(`[tool-router] ${msg}
+`);
+    AGENT_ID_RE = /^[a-zA-Z0-9_-]+$/;
+    BLOCK_RE = /\[TOOL_CALL\]([\s\S]*?)\[\/TOOL_CALL\]/g;
+    ToolRouter = class {
+      /** Parse the FIRST [TOOL_CALL] block from LLM text. Returns null on any failure. */
+      static parseToolCall(text) {
+        try {
+          const match = /\[TOOL_CALL\]([\s\S]*?)\[\/TOOL_CALL\]/.exec(text);
+          if (!match) return null;
+          let json2 = match[1].trim();
+          json2 = json2.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+          json2 = json2.replace(/,\s*([}\]])/g, "$1");
+          const parsed = JSON.parse(json2);
+          const { tool, args } = parsed;
+          if (typeof tool !== "string" || !TOOL_SCHEMAS[tool]) {
+            log2(`unknown tool: ${tool}`);
+            return null;
+          }
+          const schema = TOOL_SCHEMAS[tool];
+          for (const req of schema.requiredArgs) {
+            if (!(req in (args ?? {}))) {
+              log2(`missing required arg '${req}' for tool '${tool}'`);
+              return null;
+            }
+          }
+          if (args?.agent_id !== void 0 && !AGENT_ID_RE.test(String(args.agent_id))) {
+            log2(`invalid agent_id: ${args.agent_id}`);
+            return null;
+          }
+          if (Array.isArray(args?.agent_ids)) {
+            for (const id of args.agent_ids) {
+              if (!AGENT_ID_RE.test(String(id))) {
+                log2(`invalid agent_id in agent_ids: ${id}`);
+                return null;
+              }
+            }
+          }
+          return { tool, args: args ?? {} };
+        } catch (err) {
+          log2(`parse error: ${err.message}`);
+          return null;
+        }
+      }
+      /** Remove ALL [TOOL_CALL] blocks from text, collapse excess newlines. */
+      static stripToolCallBlocks(text) {
+        const matches = text.match(BLOCK_RE);
+        if (matches && matches.length > 1) {
+          log2(`warning: ${matches.length} tool call blocks found, stripping all`);
+        }
+        return text.replace(BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+      }
+    };
+    ToolExecutor = class {
+      pendingPlan = null;
+      pendingInstructionUpdate = null;
+      pipeline;
+      registry;
+      projectRoot;
+      dispatcher;
+      constructor(config2) {
+        this.pipeline = config2.pipeline;
+        this.registry = config2.registry;
+        this.projectRoot = config2.projectRoot;
+        this.dispatcher = config2.dispatcher ?? null;
+      }
+      async execute(toolCall) {
+        try {
+          switch (toolCall.tool) {
+            case "dispatch":
+              return await this.handleDispatch(toolCall.args);
+            case "dispatch_parallel":
+              return await this.handleDispatchParallel(toolCall.args);
+            case "dispatch_consensus":
+              return await this.handleDispatchConsensus(toolCall.args);
+            case "plan":
+              return await this.handlePlan(toolCall.args);
+            case "agents":
+              return this.handleAgents();
+            case "agent_status":
+              return this.handleAgentStatus(toolCall.args);
+            case "agent_performance":
+              return this.handleAgentPerformance();
+            case "update_instructions":
+              return this.handleUpdateInstructions(toolCall.args);
+            case "read_task_history":
+              return this.handleReadTaskHistory(toolCall.args);
+            default:
+              return { text: `Tool error: unknown tool "${toolCall.tool}"` };
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Unknown error";
+          return { text: `Tool error: ${message}` };
+        }
+      }
+      async executePlan(pending) {
+        try {
+          const { plan, tasks } = pending;
+          const agents = [];
+          if (plan.strategy === "parallel") {
+            const taskDefs = tasks.map((t) => ({
+              agentId: t.agentId,
+              task: t.task,
+              options: t.writeMode ? { writeMode: t.writeMode, scope: t.scope } : void 0
+            }));
+            const { taskIds, errors } = await this.pipeline.dispatchParallel(taskDefs);
+            if (errors.length > 0) {
+              const taskSummary = tasks.map((t) => `  - [${t.agentId}] ${t.task}`).join("\n");
+              return { text: `Plan execution failed.
+
+Errors:
+${errors.map((e) => `  - ${e}`).join("\n")}
+
+Planned tasks:
+${taskSummary}` };
+            }
+            const collectResult = await this.pipeline.collect(taskIds, 12e4);
+            const lines = collectResult.results.map(
+              (r) => `[${r.agentId}] ${r.status === "completed" ? r.result : `ERROR: ${r.error}`}`
+            );
+            agents.push(...tasks.map((t) => t.agentId));
+            return { text: lines.join("\n\n"), agents };
+          }
+          const results = [];
+          for (const t of tasks) {
+            const opts = t.writeMode ? { writeMode: t.writeMode, scope: t.scope } : void 0;
+            const { taskId } = this.pipeline.dispatch(t.agentId, t.task, opts);
+            const collectResult = await this.pipeline.collect([taskId], 12e4);
+            const entry = collectResult.results[0];
+            results.push(`[${t.agentId}] ${entry?.status === "completed" ? entry.result : `ERROR: ${entry?.error}`}`);
+            agents.push(t.agentId);
+          }
+          return { text: results.join("\n\n"), agents };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Unknown error";
+          return { text: `Tool error: ${message}` };
+        }
+      }
+      async applyInstructionUpdate(pending) {
+        try {
+          const fsp = await import("fs/promises");
+          const updatedIds = [];
+          for (const id of pending.agentIds) {
+            const agentDir = (0, import_path15.join)(this.projectRoot, ".gossip", "agents", id);
+            const filePath = (0, import_path15.join)(agentDir, "instructions.md");
+            if (!(0, import_fs11.existsSync)(agentDir)) {
+              await fsp.mkdir(agentDir, { recursive: true });
+            }
+            if ((0, import_fs11.existsSync)(filePath)) {
+              await fsp.appendFile(filePath, `
+
+${pending.instruction}`, "utf-8");
+            } else {
+              await fsp.writeFile(filePath, pending.instruction, "utf-8");
+            }
+            updatedIds.push(id);
+          }
+          return { text: `Updated instructions for: ${updatedIds.join(", ")}` };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Unknown error";
+          return { text: `Tool error: ${message}` };
+        }
+      }
+      // ── Private handlers ──────────────────────────────────────────────────
+      async handleDispatch(args) {
+        const agentId = String(args.agent_id);
+        const task = String(args.task);
+        if (!this.registry.get(agentId)) {
+          return { text: `Tool error: agent "${agentId}" not found in registry` };
+        }
+        const options = {};
+        if (args.write_mode) options.writeMode = args.write_mode;
+        if (args.scope) options.scope = args.scope;
+        const dispatchOpts = Object.keys(options).length > 0 ? options : void 0;
+        const { taskId } = dispatchOpts ? this.pipeline.dispatch(agentId, task, dispatchOpts) : this.pipeline.dispatch(agentId, task);
+        const collectResult = await this.pipeline.collect([taskId], 12e4);
+        const entry = collectResult.results[0];
+        if (!entry || entry.status === "failed") {
+          return { text: `Tool error: ${entry?.error ?? "task failed"}`, agents: [agentId] };
+        }
+        return { text: entry.result ?? "", agents: [agentId] };
+      }
+      async handleDispatchParallel(args) {
+        const tasks = args.tasks;
+        const agents = [];
+        for (const t of tasks) {
+          if (!this.registry.get(t.agent_id)) {
+            return { text: `Tool error: agent "${t.agent_id}" not found in registry` };
+          }
+          agents.push(t.agent_id);
+        }
+        const taskDefs = tasks.map((t) => ({ agentId: t.agent_id, task: t.task }));
+        const { taskIds, errors } = await this.pipeline.dispatchParallel(taskDefs);
+        if (errors.length > 0) {
+          return { text: `Tool error: ${errors.join("; ")}`, agents };
+        }
+        const collectResult = await this.pipeline.collect(taskIds, 12e4);
+        const lines = collectResult.results.map(
+          (r) => `[${r.agentId}] ${r.status === "completed" ? r.result : `ERROR: ${r.error}`}`
+        );
+        return { text: lines.join("\n\n"), agents };
+      }
+      async handleDispatchConsensus(args) {
+        const task = String(args.task);
+        const specifiedIds = args.agent_ids;
+        let agents;
+        if (specifiedIds) {
+          const missing = specifiedIds.filter((id) => !this.registry.get(id));
+          if (missing.length > 0) {
+            return { text: `Tool error: agents not found in registry: ${missing.join(", ")}` };
+          }
+          agents = specifiedIds.map((id) => this.registry.get(id));
+        } else {
+          agents = this.registry.getAll();
+        }
+        if (agents.length < 2) {
+          return { text: "Tool error: consensus requires at least 2 agents" };
+        }
+        const agentIds = agents.map((a) => a.id);
+        const taskDefs = agentIds.map((id) => ({ agentId: id, task }));
+        const { taskIds, errors } = await this.pipeline.dispatchParallel(taskDefs, { consensus: true });
+        if (errors.length > 0) {
+          return { text: `Tool error: ${errors.join("; ")}`, agents: agentIds };
+        }
+        const collectResult = await this.pipeline.collect(taskIds, 3e5, { consensus: true });
+        const lines = collectResult.results.map(
+          (r) => `[${r.agentId}] ${r.status === "completed" ? r.result : `ERROR: ${r.error}`}`
+        );
+        let text = lines.join("\n\n");
+        if (collectResult.consensus?.summary) {
+          text += `
+
+## Consensus Report
+${collectResult.consensus.summary}`;
+        }
+        return { text, agents: agentIds };
+      }
+      async handlePlan(args) {
+        const task = String(args.task);
+        if (this.pendingPlan) {
+          return {
+            text: "A plan is already pending approval. Choose an action:",
+            choices: {
+              message: "A plan is already pending. What would you like to do?",
+              options: [
+                { value: PENDING_PLAN_CHOICES.EXECUTE_PENDING, label: "Execute pending plan" },
+                { value: PENDING_PLAN_CHOICES.DISCARD, label: "Discard and create new plan" },
+                { value: PENDING_PLAN_CHOICES.CANCEL, label: "Cancel" }
+              ]
+            }
+          };
+        }
+        if (!this.dispatcher) {
+          return { text: "Tool error: dispatcher not available for plan decomposition" };
+        }
+        const plan = await this.dispatcher.decompose(task);
+        const assigned = this.dispatcher.assignAgents(plan);
+        const tasks = await this.dispatcher.classifyWriteModes(assigned);
+        this.pendingPlan = { plan: assigned, tasks };
+        const planLines = tasks.map(
+          (t, i) => `${i + 1}. [${t.agentId}] ${t.task}${t.writeMode ? ` (${t.writeMode}${t.scope ? `: ${t.scope}` : ""})` : ""}`
+        );
+        return {
+          text: `## Plan: ${task}
+
+Strategy: ${assigned.strategy}
+
+${planLines.join("\n")}`,
+          choices: {
+            message: "How would you like to proceed?",
+            options: [
+              { value: PLAN_CHOICES.EXECUTE, label: "Execute plan" },
+              { value: PLAN_CHOICES.MODIFY, label: "Modify plan" },
+              { value: PLAN_CHOICES.CANCEL, label: "Cancel" }
+            ]
+          }
+        };
+      }
+      handleAgents() {
+        const agents = this.registry.getAll();
+        if (agents.length === 0) {
+          return { text: "No agents registered." };
+        }
+        const lines = agents.map(
+          (a) => `- **${a.id}** (${a.provider}/${a.model}) \u2014 skills: ${a.skills.join(", ") || "none"}`
+        );
+        return { text: `## Registered Agents
+
+${lines.join("\n")}` };
+      }
+      handleAgentStatus(args) {
+        const agentId = String(args.agent_id);
+        if (!this.registry.get(agentId)) {
+          return { text: `Tool error: agent "${agentId}" not found in registry` };
+        }
+        const tasksPath = (0, import_path15.join)(this.projectRoot, ".gossip", "agents", agentId, "memory", "tasks.jsonl");
+        if (!(0, import_fs11.existsSync)(tasksPath)) {
+          return { text: `Agent "${agentId}" \u2014 no task history found.` };
+        }
+        const rawLines = (0, import_fs11.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
+        const last5 = rawLines.slice(-5).map((line) => {
+          try {
+            return JSON.parse(line);
+          } catch (_e) {
+            return null;
+          }
+        }).filter(Boolean);
+        const formatted = last5.map(
+          (entry) => `- ${entry.task} \u2014 warmth: ${entry.warmth ?? "n/a"}, ${entry.timestamp ?? ""}`
+        );
+        return { text: `## Agent Status: ${agentId}
+
+Last ${last5.length} tasks:
+${formatted.join("\n")}` };
+      }
+      handleAgentPerformance() {
+        const perfPath = (0, import_path15.join)(this.projectRoot, ".gossip", "agent-performance.jsonl");
+        if (!(0, import_fs11.existsSync)(perfPath)) {
+          return { text: "No performance data found." };
+        }
+        const rawLines = (0, import_fs11.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
+        const last20 = rawLines.slice(-20).map((line) => {
+          try {
+            return JSON.parse(line);
+          } catch (_e) {
+            return null;
+          }
+        }).filter(Boolean);
+        const byAgent = /* @__PURE__ */ new Map();
+        for (const signal of last20) {
+          const id = String(signal.agentId ?? "unknown");
+          if (!byAgent.has(id)) byAgent.set(id, []);
+          byAgent.get(id).push(signal);
+        }
+        const sections = Array.from(byAgent.entries()).map(
+          ([id, signals]) => `### ${id}
+${signals.map((s) => `- ${s.signal ?? s.type ?? "signal"} (${s.outcome ?? "n/a"})`).join("\n")}`
+        );
+        return { text: `## Agent Performance (last ${last20.length} signals)
+
+${sections.join("\n\n")}` };
+      }
+      handleUpdateInstructions(args) {
+        const agentIds = args.agent_ids;
+        const instruction = String(args.instruction);
+        for (const id of agentIds) {
+          if (!this.registry.get(id)) {
+            return { text: `Tool error: agent "${id}" not found in registry` };
+          }
+        }
+        this.pendingInstructionUpdate = { agentIds, instruction };
+        return {
+          text: `Instruction update staged for: ${agentIds.join(", ")}
+
+Instruction: "${instruction}"`,
+          choices: {
+            message: "Apply this instruction update?",
+            options: [
+              { value: "apply", label: "Apply instruction update" },
+              { value: "cancel", label: "Cancel" }
+            ],
+            type: "confirm"
+          }
+        };
+      }
+      handleReadTaskHistory(args) {
+        const agentId = String(args.agent_id);
+        const limit = typeof args.limit === "number" ? args.limit : 10;
+        if (!this.registry.get(agentId)) {
+          return { text: `Tool error: agent "${agentId}" not found in registry` };
+        }
+        const tasksPath = (0, import_path15.join)(this.projectRoot, ".gossip", "agents", agentId, "memory", "tasks.jsonl");
+        if (!(0, import_fs11.existsSync)(tasksPath)) {
+          return { text: `No task history for agent "${agentId}".` };
+        }
+        const rawLines = (0, import_fs11.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
+        const entries = rawLines.slice(-limit).map((line) => {
+          try {
+            return JSON.parse(line);
+          } catch (_e) {
+            return null;
+          }
+        }).filter(Boolean);
+        const formatted = entries.map(
+          (e) => `- **${e.task}** \u2014 warmth: ${e.warmth ?? "n/a"}, scores: ${JSON.stringify(e.scores ?? {})}, ${e.timestamp ?? ""}`
+        );
+        return { text: `## Task History: ${agentId} (last ${entries.length})
+
+${formatted.join("\n")}` };
+      }
+    };
+  }
+});
+
 // packages/orchestrator/src/main-agent.ts
 var import_msgpack5, CHAT_SYSTEM_PROMPT, MainAgent;
 var init_main_agent = __esm({
@@ -6391,6 +7417,8 @@ var init_main_agent = __esm({
     init_src3();
     import_msgpack5 = __toESM(require_dist());
     init_dispatch_pipeline();
+    init_tool_router();
+    init_tool_definitions();
     CHAT_SYSTEM_PROMPT = `You are a developer assistant powering Gossip Mesh. Be concise and direct.
 
 When you want to present the developer with choices, use this format in your response:
@@ -6420,6 +7448,10 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       pipeline;
       bootstrapPrompt;
       orchestratorAgent = null;
+      toolExecutor;
+      conversationHistory = [];
+      MAX_HISTORY = 20;
+      // 10 pairs of user+assistant
       constructor(config2) {
         this.llm = config2.llm ?? createProvider(config2.provider, config2.model, config2.apiKey);
         this.registry = new AgentRegistry();
@@ -6439,16 +7471,22 @@ When there's a clear best option, recommend it but still offer alternatives.`;
           syncFactory: config2.syncFactory,
           toolServer: config2.toolServer
         });
+        this.toolExecutor = new ToolExecutor({
+          pipeline: this.pipeline,
+          registry: this.registry,
+          projectRoot: this.projectRoot,
+          dispatcher: this.dispatcher
+        });
       }
       /** Start all worker agents (connect to relay) */
       async start() {
-        const { existsSync: existsSync12, readFileSync: readFileSync12 } = await import("fs");
-        const { join: join12 } = await import("path");
+        const { existsSync: existsSync14, readFileSync: readFileSync13 } = await import("fs");
+        const { join: join14 } = await import("path");
         for (const config2 of this.registry.getAll()) {
           if (this.workers.has(config2.id)) continue;
           const llm = createProvider(config2.provider, config2.model, this.apiKeys[config2.provider]);
-          const instructionsPath = join12(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
-          const instructions = existsSync12(instructionsPath) ? readFileSync12(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join14(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
+          const instructions = existsSync14(instructionsPath) ? readFileSync13(instructionsPath, "utf-8") : void 0;
           const worker = new WorkerAgent(config2.id, llm, this.relayUrl, ALL_TOOLS, instructions);
           await worker.start();
           this.workers.set(config2.id, worker);
@@ -6470,11 +7508,11 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       dispatch(agentId, task, options) {
         return this.pipeline.dispatch(agentId, task, options);
       }
-      async collect(taskIds, timeoutMs) {
-        return this.pipeline.collect(taskIds, timeoutMs);
+      async collect(taskIds, timeoutMs, options) {
+        return this.pipeline.collect(taskIds, timeoutMs, options);
       }
-      async dispatchParallel(tasks) {
-        return this.pipeline.dispatchParallel(tasks);
+      async dispatchParallel(tasks, options) {
+        return this.pipeline.dispatchParallel(tasks, options);
       }
       registerPlan(plan) {
         this.pipeline.registerPlan(plan);
@@ -6499,15 +7537,15 @@ When there's a clear best option, recommend it but still offer alternatives.`;
         this.registry.register(config2);
       }
       async syncWorkers(keyProvider) {
-        const { existsSync: existsSync12, readFileSync: readFileSync12 } = await import("fs");
-        const { join: join12 } = await import("path");
+        const { existsSync: existsSync14, readFileSync: readFileSync13 } = await import("fs");
+        const { join: join14 } = await import("path");
         let added = 0;
         for (const ac of this.registry.getAll()) {
           if (this.workers.has(ac.id)) continue;
           const key = await keyProvider(ac.provider);
           const llm = createProvider(ac.provider, ac.model, key ?? void 0);
-          const instructionsPath = join12(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
-          const instructions = existsSync12(instructionsPath) ? readFileSync12(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join14(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
+          const instructions = existsSync14(instructionsPath) ? readFileSync13(instructionsPath, "utf-8") : void 0;
           const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions);
           await worker.start();
           this.workers.set(ac.id, worker);
@@ -6523,8 +7561,15 @@ When there's a clear best option, recommend it but still offer alternatives.`;
         }
         this.workers.clear();
       }
-      /** Handle a user message: decompose, dispatch, synthesize. Returns structured ChatResponse. */
-      async handleMessage(userMessage) {
+      /** Handle a user message. Default mode is cognitive (tool-calling); 'decompose' preserves the old flow. */
+      async handleMessage(userMessage, options) {
+        if (options?.mode === "decompose") {
+          return this.handleMessageDecompose(userMessage);
+        }
+        return this.handleMessageCognitive(userMessage);
+      }
+      /** Original decompose → assign → dispatch → synthesize flow. */
+      async handleMessageDecompose(userMessage) {
         const textForDispatch = typeof userMessage === "string" ? userMessage : userMessage.filter((b) => b.type === "text").map((b) => b.text).join(" ") || "Describe this image.";
         const plan = await this.dispatcher.decompose(textForDispatch);
         this.dispatcher.assignAgents(plan);
@@ -6554,8 +7599,83 @@ When there's a clear best option, recommend it but still offer alternatives.`;
           agents: results.map((r) => r.agentId)
         };
       }
+      /** Cognitive mode: LLM decides whether to chat or call tools. */
+      async handleMessageCognitive(userMessage) {
+        const text = typeof userMessage === "string" ? userMessage : userMessage.filter((b) => b.type === "text").map((b) => b.text).join(" ") || "Describe this image.";
+        const agents = this.registry.getAll();
+        const toolPrompt = buildToolSystemPrompt(agents);
+        const systemPrompt = [this.bootstrapPrompt, CHAT_SYSTEM_PROMPT, toolPrompt].filter(Boolean).join("\n\n");
+        const messages = [
+          { role: "system", content: systemPrompt },
+          ...this.conversationHistory,
+          { role: "user", content: userMessage }
+          // preserve ContentBlock[] for multimodal
+        ];
+        const response = await this.llm.generate(messages, { temperature: 0 });
+        const toolCall = ToolRouter.parseToolCall(response.text);
+        let result;
+        if (toolCall) {
+          const toolResult = await this.toolExecutor.execute(toolCall);
+          const explanation = ToolRouter.stripToolCallBlocks(response.text);
+          result = {
+            text: explanation ? `${explanation}
+
+${toolResult.text}` : toolResult.text,
+            status: "done",
+            agents: toolResult.agents,
+            choices: toolResult.choices
+          };
+        } else {
+          result = this.parseResponse(response.text);
+        }
+        this.conversationHistory.push(
+          { role: "user", content: text },
+          { role: "assistant", content: result.text.slice(0, 2e3) }
+          // cap to prevent context overflow
+        );
+        if (this.conversationHistory.length > this.MAX_HISTORY) {
+          this.conversationHistory = this.conversationHistory.slice(-this.MAX_HISTORY);
+        }
+        return result;
+      }
       /** Handle a user's choice selection — continues the conversation with context */
       async handleChoice(originalMessage, choiceValue) {
+        if (this.toolExecutor.pendingPlan) {
+          if (choiceValue === PLAN_CHOICES.EXECUTE) {
+            const plan = this.toolExecutor.pendingPlan;
+            this.toolExecutor.pendingPlan = null;
+            const toolResult = await this.toolExecutor.executePlan(plan);
+            return { text: toolResult.text, status: "done", agents: toolResult.agents };
+          }
+          if (choiceValue === PLAN_CHOICES.CANCEL || choiceValue === PENDING_PLAN_CHOICES.CANCEL) {
+            this.toolExecutor.pendingPlan = null;
+            return { text: "Plan cancelled.", status: "done" };
+          }
+          if (choiceValue === PENDING_PLAN_CHOICES.DISCARD) {
+            this.toolExecutor.pendingPlan = null;
+            return { text: "Old plan discarded. Send your new task.", status: "done" };
+          }
+          if (choiceValue === PENDING_PLAN_CHOICES.EXECUTE_PENDING) {
+            const plan = this.toolExecutor.pendingPlan;
+            this.toolExecutor.pendingPlan = null;
+            const toolResult = await this.toolExecutor.executePlan(plan);
+            return { text: toolResult.text, status: "done", agents: toolResult.agents };
+          }
+          if (choiceValue === PLAN_CHOICES.MODIFY) {
+            this.toolExecutor.pendingPlan = null;
+            return { text: "Plan discarded. Describe your modifications and I'll create a new plan.", status: "done" };
+          }
+        }
+        if (this.toolExecutor.pendingInstructionUpdate) {
+          if (choiceValue === "apply") {
+            const pending = this.toolExecutor.pendingInstructionUpdate;
+            this.toolExecutor.pendingInstructionUpdate = null;
+            const toolResult = await this.toolExecutor.applyInstructionUpdate(pending);
+            return { text: toolResult.text, status: "done" };
+          }
+          this.toolExecutor.pendingInstructionUpdate = null;
+          return { text: "Instruction update cancelled.", status: "done" };
+        }
         const systemPrompt = this.bootstrapPrompt ? this.bootstrapPrompt + "\n\n" + CHAT_SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT;
         const response = await this.llm.generate([
           { role: "system", content: systemPrompt },
@@ -6689,6 +7809,13 @@ var init_types = __esm({
   }
 });
 
+// packages/orchestrator/src/consensus-types.ts
+var init_consensus_types = __esm({
+  "packages/orchestrator/src/consensus-types.ts"() {
+    "use strict";
+  }
+});
+
 // packages/orchestrator/src/task-graph-sync.ts
 function safeId(value) {
   if (!value || /[&=?|()\s!]/.test(value)) {
@@ -6696,12 +7823,12 @@ function safeId(value) {
   }
   return encodeURIComponent(value);
 }
-var import_fs10, import_path14, TaskGraphSync;
+var import_fs12, import_path16, TaskGraphSync;
 var init_task_graph_sync = __esm({
   "packages/orchestrator/src/task-graph-sync.ts"() {
     "use strict";
-    import_fs10 = require("fs");
-    import_path14 = require("path");
+    import_fs12 = require("fs");
+    import_path16 = require("path");
     TaskGraphSync = class {
       constructor(graph, supabaseUrl, supabaseKey, userId, projectId, projectRoot, displayName, migration) {
         this.graph = graph;
@@ -6711,7 +7838,7 @@ var init_task_graph_sync = __esm({
         this.projectId = projectId;
         this.displayName = displayName;
         this.migration = migration;
-        this.gossipDir = (0, import_path14.join)(projectRoot, ".gossip");
+        this.gossipDir = (0, import_path16.join)(projectRoot, ".gossip");
       }
       gossipDir;
       migrationDone = false;
@@ -6834,9 +7961,9 @@ var init_task_graph_sync = __esm({
         });
       }
       async syncAgentScores() {
-        const perfPath = (0, import_path14.join)(this.gossipDir, "agent-performance.jsonl");
-        if (!(0, import_fs10.existsSync)(perfPath)) return 0;
-        const content = (0, import_fs10.readFileSync)(perfPath, "utf-8");
+        const perfPath = (0, import_path16.join)(this.gossipDir, "agent-performance.jsonl");
+        if (!(0, import_fs12.existsSync)(perfPath)) return 0;
+        const content = (0, import_fs12.readFileSync)(perfPath, "utf-8");
         const lines = content.trim().split("\n").filter(Boolean);
         const meta3 = this.graph.getSyncMeta();
         let synced = 0;
@@ -6885,29 +8012,29 @@ var init_task_graph_sync = __esm({
           );
         }
       }
-      async patch(path, body) {
-        const res = await fetch(`${this.supabaseUrl}${path}`, {
+      async patch(path2, body) {
+        const res = await fetch(`${this.supabaseUrl}${path2}`, {
           method: "PATCH",
           headers: this.headers(),
           body: JSON.stringify(body)
         });
-        if (!res.ok) throw new Error(`PATCH ${path} failed: ${res.status} ${await res.text()}`);
+        if (!res.ok) throw new Error(`PATCH ${path2} failed: ${res.status} ${await res.text()}`);
       }
-      async post(path, body) {
-        const res = await fetch(`${this.supabaseUrl}${path}`, {
+      async post(path2, body) {
+        const res = await fetch(`${this.supabaseUrl}${path2}`, {
           method: "POST",
           headers: { ...this.headers(), "Prefer": "return=representation" },
           body: JSON.stringify(body)
         });
-        if (!res.ok) throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`);
+        if (!res.ok) throw new Error(`POST ${path2} failed: ${res.status} ${await res.text()}`);
       }
-      async upsert(path, body) {
-        const res = await fetch(`${this.supabaseUrl}${path}`, {
+      async upsert(path2, body) {
+        const res = await fetch(`${this.supabaseUrl}${path2}`, {
           method: "POST",
           headers: { ...this.headers(), "Prefer": "resolution=merge-duplicates,return=representation" },
           body: JSON.stringify(body)
         });
-        if (!res.ok) throw new Error(`UPSERT ${path} failed: ${res.status} ${await res.text()}`);
+        if (!res.ok) throw new Error(`UPSERT ${path2} failed: ${res.status} ${await res.text()}`);
       }
       headers() {
         return {
@@ -6982,13 +8109,13 @@ Return JSON: { "<agentId>": "<summary>", ... }`
 });
 
 // packages/orchestrator/src/bootstrap.ts
-var import_fs11, import_path15, log2, BootstrapGenerator;
+var import_fs13, import_path17, log3, BootstrapGenerator;
 var init_bootstrap = __esm({
   "packages/orchestrator/src/bootstrap.ts"() {
     "use strict";
-    import_fs11 = require("fs");
-    import_path15 = require("path");
-    log2 = (msg) => process.stderr.write(`[gossipcat] ${msg}
+    import_fs13 = require("fs");
+    import_path17 = require("path");
+    log3 = (msg) => process.stderr.write(`[gossipcat] ${msg}
 `);
     BootstrapGenerator = class {
       constructor(projectRoot) {
@@ -7009,25 +8136,25 @@ var init_bootstrap = __esm({
         };
       }
       migrateConfig() {
-        const oldPath = (0, import_path15.resolve)(this.projectRoot, "gossip.agents.json");
-        const newPath = (0, import_path15.resolve)(this.projectRoot, ".gossip", "config.json");
-        if (!(0, import_fs11.existsSync)(newPath) && (0, import_fs11.existsSync)(oldPath)) {
-          (0, import_fs11.mkdirSync)((0, import_path15.resolve)(this.projectRoot, ".gossip"), { recursive: true });
-          (0, import_fs11.copyFileSync)(oldPath, newPath);
-          log2("Migrated config to .gossip/config.json \u2014 gossip.agents.json is now ignored.");
+        const oldPath = (0, import_path17.resolve)(this.projectRoot, "gossip.agents.json");
+        const newPath = (0, import_path17.resolve)(this.projectRoot, ".gossip", "config.json");
+        if (!(0, import_fs13.existsSync)(newPath) && (0, import_fs13.existsSync)(oldPath)) {
+          (0, import_fs13.mkdirSync)((0, import_path17.resolve)(this.projectRoot, ".gossip"), { recursive: true });
+          (0, import_fs13.copyFileSync)(oldPath, newPath);
+          log3("Migrated config to .gossip/config.json \u2014 gossip.agents.json is now ignored.");
         }
       }
       loadConfig() {
         const paths = [
-          (0, import_path15.resolve)(this.projectRoot, ".gossip", "config.json"),
-          (0, import_path15.resolve)(this.projectRoot, "gossip.agents.json")
+          (0, import_path17.resolve)(this.projectRoot, ".gossip", "config.json"),
+          (0, import_path17.resolve)(this.projectRoot, "gossip.agents.json")
         ];
         for (const p of paths) {
-          if ((0, import_fs11.existsSync)(p)) {
+          if ((0, import_fs13.existsSync)(p)) {
             try {
-              return JSON.parse((0, import_fs11.readFileSync)(p, "utf-8"));
+              return JSON.parse((0, import_fs13.readFileSync)(p, "utf-8"));
             } catch {
-              log2("Config parse error, falling back to setup mode");
+              log3("Config parse error, falling back to setup mode");
               return null;
             }
           }
@@ -7046,9 +8173,9 @@ var init_bootstrap = __esm({
             skills: ac.skills || [],
             taskCount: 0
           };
-          const tasksPath = (0, import_path15.join)(this.projectRoot, ".gossip", "agents", id, "memory", "tasks.jsonl");
-          if ((0, import_fs11.existsSync)(tasksPath)) {
-            const lines = (0, import_fs11.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
+          const tasksPath = (0, import_path17.join)(this.projectRoot, ".gossip", "agents", id, "memory", "tasks.jsonl");
+          if ((0, import_fs13.existsSync)(tasksPath)) {
+            const lines = (0, import_fs13.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
             let count = 0;
             let lastTs = "";
             for (const line of lines) {
@@ -7062,9 +8189,9 @@ var init_bootstrap = __esm({
             summary.taskCount = count;
             if (lastTs) summary.lastActive = lastTs.split("T")[0];
           }
-          const memPath = (0, import_path15.join)(this.projectRoot, ".gossip", "agents", id, "memory", "MEMORY.md");
-          if ((0, import_fs11.existsSync)(memPath)) {
-            const content = (0, import_fs11.readFileSync)(memPath, "utf-8").slice(0, 500);
+          const memPath = (0, import_path17.join)(this.projectRoot, ".gossip", "agents", id, "memory", "MEMORY.md");
+          if ((0, import_fs13.existsSync)(memPath)) {
+            const content = (0, import_fs13.readFileSync)(memPath, "utf-8").slice(0, 500);
             const knowledgeLines = content.match(/- \[([^\]]+)\]/g);
             if (knowledgeLines?.length) {
               summary.topics = knowledgeLines.map((l) => l.replace(/- \[([^\]]+)\].*/, "$1")).join(", ");
@@ -7077,9 +8204,9 @@ var init_bootstrap = __esm({
       renderTier1() {
         let skills = "";
         try {
-          const catalogPath = (0, import_path15.resolve)(__dirname, "default-skills", "catalog.json");
-          if ((0, import_fs11.existsSync)(catalogPath)) {
-            const catalog = JSON.parse((0, import_fs11.readFileSync)(catalogPath, "utf-8"));
+          const catalogPath = (0, import_path17.resolve)(__dirname, "default-skills", "catalog.json");
+          if ((0, import_fs13.existsSync)(catalogPath)) {
+            const catalog = JSON.parse((0, import_fs13.readFileSync)(catalogPath, "utf-8"));
             skills = `
 Available skills: ${catalog.skills.map((s) => s.name).join(", ")}`;
           }
@@ -7132,6 +8259,8 @@ ${teamSection}
 | \`gossip_dispatch(agent_id, task)\` | Send task to one agent. Returns task ID. |
 | \`gossip_dispatch_parallel(tasks)\` | Fan out to multiple agents simultaneously. |
 | \`gossip_collect(task_ids?, timeout_ms?)\` | Collect results. Waits for completion. |
+| \`gossip_dispatch_consensus(tasks)\` | Dispatch with consensus summary instruction. Returns task IDs. |
+| \`gossip_collect_consensus(task_ids, timeout_ms?)\` | Collect + cross-review. Returns tagged consensus report. |
 | \`gossip_bootstrap()\` | Refresh this prompt with latest team state. |
 | \`gossip_setup(config)\` | Create or update team configuration. |
 | \`gossip_orchestrate(task)\` | Auto-decompose task via MainAgent. |
@@ -7162,6 +8291,33 @@ gossip_dispatch_parallel(tasks: [
 ])
 \`\`\`
 Then collect and synthesize results.
+
+## Consensus Mode
+
+When multiple agents review the same work, use **consensus review** for structured cross-review:
+
+\`\`\`
+gossip_dispatch_consensus(tasks: [
+  { agent_id: "gemini-reviewer", task: "Security review X" },
+  { agent_id: "gemini-tester", task: "Security review X" },
+])
+// then:
+gossip_collect_consensus(task_ids, 300000)
+\`\`\`
+
+**What happens:** Dispatches all agents, waits for results, then runs a cross-review round where each agent reviews peer findings. Results are tagged:
+- **CONFIRMED** \u2014 multiple agents agree (high confidence, act on these)
+- **DISPUTED** \u2014 agents disagree (review the evidence)
+- **UNIQUE** \u2014 only one agent found this (verify before acting)
+- **NEW** \u2014 discovered during cross-review (highest-value findings)
+
+**When to use consensus:**
+- Pre-ship security reviews
+- Architecture decisions
+- Bug diagnosis with competing hypotheses
+- Spec reviews
+
+**Cost:** ~12% overhead (cross-review uses summaries, not full codebase).
 
 ## Write Modes
 
@@ -7302,6 +8458,7 @@ __export(src_exports4, {
   AgentRegistry: () => AgentRegistry,
   AnthropicProvider: () => AnthropicProvider,
   BootstrapGenerator: () => BootstrapGenerator,
+  ConsensusEngine: () => ConsensusEngine,
   DispatchPipeline: () => DispatchPipeline,
   GeminiProvider: () => GeminiProvider,
   GossipPublisher: () => GossipPublisher,
@@ -7312,16 +8469,25 @@ __export(src_exports4, {
   OllamaProvider: () => OllamaProvider,
   OpenAIProvider: () => OpenAIProvider,
   OverlapDetector: () => OverlapDetector,
+  PENDING_PLAN_CHOICES: () => PENDING_PLAN_CHOICES,
+  PLAN_CHOICES: () => PLAN_CHOICES,
+  PerformanceWriter: () => PerformanceWriter,
   ScopeTracker: () => ScopeTracker,
   SkillCatalog: () => SkillCatalog,
   SkillGapTracker: () => SkillGapTracker,
+  TOOL_SCHEMAS: () => TOOL_SCHEMAS,
   TaskDispatcher: () => TaskDispatcher,
   TaskGraph: () => TaskGraph,
   TaskGraphSync: () => TaskGraphSync,
+  ToolExecutor: () => ToolExecutor,
+  ToolRouter: () => ToolRouter,
   WorkerAgent: () => WorkerAgent,
   WorktreeManager: () => WorktreeManager,
   assemblePrompt: () => assemblePrompt,
+  buildSpecReviewEnrichment: () => buildSpecReviewEnrichment,
+  buildToolSystemPrompt: () => buildToolSystemPrompt,
   createProvider: () => createProvider,
+  extractSpecReferences: () => extractSpecReferences,
   loadSkills: () => loadSkills
 });
 var init_src5 = __esm({
@@ -7334,6 +8500,7 @@ var init_src5 = __esm({
     init_task_dispatcher();
     init_llm_client();
     init_types();
+    init_consensus_types();
     init_skill_catalog();
     init_skill_gap_tracker();
     init_prompt_assembler();
@@ -7349,6 +8516,10 @@ var init_src5 = __esm({
     init_bootstrap();
     init_overlap_detector();
     init_lens_generator();
+    init_performance_writer();
+    init_consensus_engine();
+    init_tool_router();
+    init_tool_definitions();
   }
 });
 
@@ -7363,18 +8534,18 @@ __export(config_exports, {
 function findConfigPath(projectRoot) {
   const root = projectRoot || process.cwd();
   const candidates = [
-    (0, import_path16.resolve)(root, ".gossip", "config.json"),
-    (0, import_path16.resolve)(root, "gossip.agents.json"),
-    (0, import_path16.resolve)(root, "gossip.agents.yaml"),
-    (0, import_path16.resolve)(root, "gossip.agents.yml")
+    (0, import_path18.resolve)(root, ".gossip", "config.json"),
+    (0, import_path18.resolve)(root, "gossip.agents.json"),
+    (0, import_path18.resolve)(root, "gossip.agents.yaml"),
+    (0, import_path18.resolve)(root, "gossip.agents.yml")
   ];
   for (const p of candidates) {
-    if ((0, import_fs12.existsSync)(p)) return p;
+    if ((0, import_fs14.existsSync)(p)) return p;
   }
   return null;
 }
 function loadConfig(configPath) {
-  const raw = (0, import_fs12.readFileSync)(configPath, "utf-8");
+  const raw = (0, import_fs14.readFileSync)(configPath, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -7423,12 +8594,12 @@ function configToAgentConfigs(config2) {
     skills: agent.skills
   }));
 }
-var import_fs12, import_path16, VALID_PROVIDERS;
+var import_fs14, import_path18, VALID_PROVIDERS;
 var init_config = __esm({
   "apps/cli/src/config.ts"() {
     "use strict";
-    import_fs12 = require("fs");
-    import_path16 = require("path");
+    import_fs14 = require("fs");
+    import_path18 = require("path");
     VALID_PROVIDERS = ["anthropic", "openai", "google", "local"];
   }
 });
@@ -7573,17 +8744,17 @@ __export(identity_exports, {
   normalizeGitUrl: () => normalizeGitUrl
 });
 function getOrCreateSalt(projectRoot) {
-  const saltPath = (0, import_path17.join)(projectRoot, ".gossip", "local-salt");
+  const saltPath = (0, import_path19.join)(projectRoot, ".gossip", "local-salt");
   try {
-    return (0, import_fs13.readFileSync)(saltPath, "utf-8").trim();
+    return (0, import_fs15.readFileSync)(saltPath, "utf-8").trim();
   } catch {
     const salt = (0, import_crypto9.randomBytes)(16).toString("hex");
-    (0, import_fs13.mkdirSync)((0, import_path17.join)(projectRoot, ".gossip"), { recursive: true });
+    (0, import_fs15.mkdirSync)((0, import_path19.join)(projectRoot, ".gossip"), { recursive: true });
     try {
-      (0, import_fs13.writeFileSync)(saltPath, salt, { flag: "wx" });
+      (0, import_fs15.writeFileSync)(saltPath, salt, { flag: "wx" });
       return salt;
     } catch {
-      return (0, import_fs13.readFileSync)(saltPath, "utf-8").trim();
+      return (0, import_fs15.readFileSync)(saltPath, "utf-8").trim();
     }
   }
 }
@@ -7633,12 +8804,12 @@ function getProjectId(projectRoot) {
   }
   return (0, import_crypto9.createHash)("sha256").update(projectRoot).digest("hex").slice(0, 16);
 }
-var import_fs13, import_path17, import_crypto9, import_child_process5;
+var import_fs15, import_path19, import_crypto9, import_child_process5;
 var init_identity = __esm({
   "apps/cli/src/identity.ts"() {
     "use strict";
-    import_fs13 = require("fs");
-    import_path17 = require("path");
+    import_fs15 = require("fs");
+    import_path19 = require("path");
     import_crypto9 = require("crypto");
     import_child_process5 = require("child_process");
   }
@@ -8415,10 +9586,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path) {
-  if (!path)
+function getElementAtPath(obj, path2) {
+  if (!path2)
     return obj;
-  return path.reduce((acc, key) => acc?.[key], obj);
+  return path2.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -8801,11 +9972,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path, issues) {
+function prefixIssues(path2, issues) {
   return issues.map((iss) => {
     var _a2;
     (_a2 = iss).path ?? (_a2.path = []);
-    iss.path.unshift(path);
+    iss.path.unshift(path2);
     return iss;
   });
 }
@@ -8988,7 +10159,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path = []) => {
+  const processError = (error49, path2 = []) => {
     var _a2, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -8998,7 +10169,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path, ...issue2.path];
+        const fullpath = [...path2, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -9030,8 +10201,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path) {
+  const path2 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path2) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -21008,13 +22179,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path = ref.slice(1).split("/").filter(Boolean);
-  if (path.length === 0) {
+  const path2 = ref.slice(1).split("/").filter(Boolean);
+  if (path2.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path[0] === defsKey) {
-    const key = path[1];
+  if (path2[0] === defsKey) {
+    const key = path2[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -21462,10 +22633,10 @@ async function doBoot() {
   for (const ac of agentConfigs) {
     const key = await keychain.getKey(ac.provider);
     const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
-    const { existsSync: existsSync12, readFileSync: readFileSync12 } = require("fs");
-    const { join: join12 } = require("path");
-    const instructionsPath = join12(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
-    const instructions = existsSync12(instructionsPath) ? readFileSync12(instructionsPath, "utf-8") : void 0;
+    const { existsSync: existsSync14, readFileSync: readFileSync13 } = require("fs");
+    const { join: join14 } = require("path");
+    const instructionsPath = join14(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
+    const instructions = existsSync14(instructionsPath) ? readFileSync13(instructionsPath, "utf-8") : void 0;
     const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS, instructions);
     await worker.start();
     workers.set(ac.id, worker);
@@ -21633,7 +22804,7 @@ server.tool(
   async ({ task }) => {
     await boot();
     try {
-      const response = await mainAgent.handleMessage(task);
+      const response = await mainAgent.handleMessage(task, { mode: "decompose" });
       const suffix = response.agents?.length ? `
 
 [Agents: ${response.agents.join(", ")}]` : "";
@@ -21812,16 +22983,17 @@ server.tool(
 );
 server.tool(
   "gossip_dispatch_parallel",
-  "Fan out tasks to multiple agents simultaneously. For tasks involving file modifications, use gossip_plan first to get a pre-built task array with write modes, then pass it here. The PLAN_JSON from gossip_plan is directly passable as the tasks parameter.",
+  "Fan out tasks to multiple agents simultaneously. Use consensus: true to enable cross-review when collecting. For tasks involving file modifications, use gossip_plan first to get a pre-built task array with write modes, then pass it here.",
   {
     tasks: external_exports.array(external_exports.object({
       agent_id: external_exports.string(),
       task: external_exports.string(),
       write_mode: external_exports.enum(["sequential", "scoped", "worktree"]).optional(),
       scope: external_exports.string().optional()
-    })).describe("Array of { agent_id, task, write_mode?, scope? }")
+    })).describe("Array of { agent_id, task, write_mode?, scope? }"),
+    consensus: external_exports.boolean().default(false).describe("Enable consensus summary format in agent output. Pass consensus: true to gossip_collect later.")
   },
-  async ({ tasks: taskDefs }) => {
+  async ({ tasks: taskDefs, consensus }) => {
     await boot();
     await syncWorkersViaKeychain();
     for (const def of taskDefs) {
@@ -21834,13 +23006,15 @@ server.tool(
         agentId: d.agent_id,
         task: d.task,
         options: d.write_mode ? { writeMode: d.write_mode, scope: d.scope } : void 0
-      }))
+      })),
+      consensus ? { consensus: true } : void 0
     );
     let msg = `Dispatched ${taskIds.length} tasks:
 ${taskIds.map((tid) => {
       const t = mainAgent.getTask(tid);
       return `  ${tid} \u2192 ${t?.agentId || "unknown"}`;
     }).join("\n")}`;
+    if (consensus) msg += "\n\n\u{1F4CB} Consensus mode: agents will include structured summary for cross-review.";
     if (errors.length) msg += `
 Errors: ${errors.join(", ")}`;
     return { content: [{ type: "text", text: msg }] };
@@ -21848,24 +23022,27 @@ Errors: ${errors.join(", ")}`;
 );
 server.tool(
   "gossip_collect",
-  "Collect results from dispatched tasks. Waits for completion by default.",
+  "Collect results from dispatched tasks. Waits for completion by default. Use consensus: true for cross-review round.",
   {
-    task_ids: external_exports.array(external_exports.string()).optional().describe("Task IDs to collect. Omit for all."),
-    timeout_ms: external_exports.number().optional().describe("Max wait time. Default 120000.")
+    task_ids: external_exports.array(external_exports.string()).default([]).describe("Task IDs to collect. Empty array for all."),
+    timeout_ms: external_exports.number().default(12e4).describe("Max wait time in ms."),
+    consensus: external_exports.boolean().default(false).describe("Enable cross-review consensus. Agents review each others findings.")
   },
-  async ({ task_ids, timeout_ms }) => {
+  async ({ task_ids, timeout_ms, consensus }) => {
     let collected;
     try {
-      collected = await mainAgent.collect(task_ids, timeout_ms);
+      const ids = task_ids.length > 0 ? task_ids : void 0;
+      collected = await mainAgent.collect(ids, timeout_ms, consensus ? { consensus: true } : void 0);
     } catch (err) {
       process.stderr.write(`[gossipcat] collect failed: ${err.message}
 `);
       return { content: [{ type: "text", text: `Collect error: ${err.message}` }] };
     }
-    if (collected.length === 0) {
+    const { results: taskResults, consensus: consensusReport } = collected;
+    if (taskResults.length === 0) {
       return { content: [{ type: "text", text: task_ids ? "No matching tasks." : "No pending tasks." }] };
     }
-    const results = collected.map((t) => {
+    const resultTexts = taskResults.map((t) => {
       const dur = t.completedAt ? `${t.completedAt - t.startedAt}ms` : "running";
       const modeTag = t.writeMode ? ` [${t.writeMode}${t.scope ? `:${t.scope}` : ""}]` : "";
       let text;
@@ -21885,7 +23062,78 @@ ${t.skillWarnings.map((w) => `  - ${w}`).join("\n")}`;
       }
       return text;
     });
-    return { content: [{ type: "text", text: results.join("\n\n---\n\n") }] };
+    let output = resultTexts.join("\n\n---\n\n");
+    if (consensusReport) {
+      output += "\n\n" + consensusReport.summary;
+    }
+    return { content: [{ type: "text", text: output }] };
+  }
+);
+server.tool(
+  "gossip_dispatch_consensus",
+  "Dispatch tasks to multiple agents with consensus summary instruction injected. Agents will include a ## Consensus Summary section in their output. Returns task IDs \u2014 call gossip_collect_consensus to collect results with cross-review.",
+  {
+    tasks: external_exports.array(external_exports.object({
+      agent_id: external_exports.string(),
+      task: external_exports.string()
+    })).describe("Array of { agent_id, task } \u2014 all agents review the same or related work")
+  },
+  async ({ tasks: taskDefs }) => {
+    await boot();
+    await syncWorkersViaKeychain();
+    for (const def of taskDefs) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(def.agent_id)) {
+        return { content: [{ type: "text", text: `Invalid agent ID format: "${def.agent_id}"` }] };
+      }
+    }
+    const { taskIds, errors } = await mainAgent.dispatchParallel(
+      taskDefs.map((d) => ({ agentId: d.agent_id, task: d.task })),
+      { consensus: true }
+    );
+    let msg = `Dispatched ${taskIds.length} tasks with consensus:
+${taskIds.map((tid) => {
+      const t = mainAgent.getTask(tid);
+      return `  ${tid} \u2192 ${t?.agentId || "unknown"}`;
+    }).join("\n")}`;
+    msg += "\n\nAgents will include ## Consensus Summary in output.";
+    msg += "\nCall gossip_collect_consensus with these task IDs when ready.";
+    if (errors.length) msg += `
+Errors: ${errors.join(", ")}`;
+    return { content: [{ type: "text", text: msg }] };
+  }
+);
+server.tool(
+  "gossip_collect_consensus",
+  "Collect results and run consensus cross-review. Each agent reviews peer findings, producing agree/disagree/new judgments. Returns agent results + tagged consensus report (CONFIRMED/DISPUTED/UNIQUE/NEW). Writes signals to agent-performance.jsonl.",
+  {
+    task_ids: external_exports.array(external_exports.string()).describe("Task IDs from gossip_dispatch_consensus"),
+    timeout_ms: external_exports.number().default(3e5).describe("Max wait time in ms. Default 300000 (5min).")
+  },
+  async ({ task_ids, timeout_ms }) => {
+    let collected;
+    try {
+      collected = await mainAgent.collect(task_ids, timeout_ms, { consensus: true });
+    } catch (err) {
+      return { content: [{ type: "text", text: `Collect error: ${err.message}` }] };
+    }
+    const { results: taskResults, consensus: consensusReport } = collected;
+    if (taskResults.length === 0) {
+      return { content: [{ type: "text", text: "No matching tasks." }] };
+    }
+    const resultTexts = taskResults.map((t) => {
+      const dur = t.completedAt ? `${t.completedAt - t.startedAt}ms` : "running";
+      if (t.status === "completed") return `[${t.id}] ${t.agentId} (${dur}):
+${t.result}`;
+      if (t.status === "failed") return `[${t.id}] ${t.agentId} (${dur}): ERROR: ${t.error}`;
+      return `[${t.id}] ${t.agentId}: still running...`;
+    });
+    let output = resultTexts.join("\n\n---\n\n");
+    if (consensusReport) {
+      output += "\n\n" + consensusReport.summary;
+    } else {
+      output += "\n\n\u26A0\uFE0F Consensus cross-review did not run (need \u22652 successful agents).";
+    }
+    return { content: [{ type: "text", text: output }] };
   }
 );
 server.tool(
@@ -21986,10 +23234,10 @@ server.tool(
     const { BootstrapGenerator: BootstrapGenerator2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
     const generator = new BootstrapGenerator2(process.cwd());
     const result = generator.generate();
-    const { writeFileSync: writeFileSync7, mkdirSync: mkdirSync7 } = require("fs");
-    const { join: join12 } = require("path");
-    mkdirSync7(join12(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync7(join12(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
+    const { writeFileSync: writeFileSync7, mkdirSync: mkdirSync8 } = require("fs");
+    const { join: join14 } = require("path");
+    mkdirSync8(join14(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync7(join14(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
     return { content: [{ type: "text", text: result.prompt }] };
   }
 );
@@ -22014,10 +23262,10 @@ server.tool(
     } catch (err) {
       return { content: [{ type: "text", text: `Invalid config: ${err.message}` }] };
     }
-    const { writeFileSync: writeFileSync7, mkdirSync: mkdirSync7 } = require("fs");
-    const { join: join12 } = require("path");
-    mkdirSync7(join12(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync7(join12(process.cwd(), ".gossip", "config.json"), JSON.stringify(config2, null, 2));
+    const { writeFileSync: writeFileSync7, mkdirSync: mkdirSync8 } = require("fs");
+    const { join: join14 } = require("path");
+    mkdirSync8(join14(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync7(join14(process.cwd(), ".gossip", "config.json"), JSON.stringify(config2, null, 2));
     const agentCount = Object.keys(config2.agents || {}).length;
     return { content: [{ type: "text", text: `Config saved. ${agentCount} agents configured. Agents will start on first dispatch \u2014 call gossip_dispatch() to begin.` }] };
   }
@@ -22032,6 +23280,8 @@ server.tool(
       { name: "gossip_dispatch", desc: "Send task to a specific agent (skills auto-injected)" },
       { name: "gossip_dispatch_parallel", desc: "Fan out tasks to multiple agents simultaneously" },
       { name: "gossip_collect", desc: "Collect results from dispatched tasks" },
+      { name: "gossip_dispatch_consensus", desc: "Dispatch with consensus summary instruction. Returns task IDs." },
+      { name: "gossip_collect_consensus", desc: "Collect + cross-review. Returns tagged CONFIRMED/DISPUTED/UNIQUE/NEW report." },
       { name: "gossip_orchestrate", desc: "Submit task for multi-agent execution via MainAgent" },
       { name: "gossip_agents", desc: "List configured agents with provider, model, role, skills" },
       { name: "gossip_status", desc: "Check relay, tool-server, workers status" },

@@ -170,8 +170,10 @@ ${teamSection}
 | Tool | Description |
 |------|-------------|
 | \`gossip_dispatch(agent_id, task)\` | Send task to one agent. Returns task ID. |
-| \`gossip_dispatch_parallel(tasks, {consensus?})\` | Fan out to multiple agents. Use \`consensus: true\` for cross-review. |
-| \`gossip_collect(task_ids?, timeout_ms?, {consensus?})\` | Collect results. \`consensus: true\` runs cross-review round. |
+| \`gossip_dispatch_parallel(tasks)\` | Fan out to multiple agents simultaneously. |
+| \`gossip_collect(task_ids?, timeout_ms?)\` | Collect results. Waits for completion. |
+| \`gossip_dispatch_consensus(tasks)\` | Dispatch with consensus summary instruction. Returns task IDs. |
+| \`gossip_collect_consensus(task_ids, timeout_ms?)\` | Collect + cross-review. Returns tagged consensus report. |
 | \`gossip_bootstrap()\` | Refresh this prompt with latest team state. |
 | \`gossip_setup(config)\` | Create or update team configuration. |
 | \`gossip_orchestrate(task)\` | Auto-decompose task via MainAgent. |
@@ -205,15 +207,18 @@ Then collect and synthesize results.
 
 ## Consensus Mode
 
-When multiple agents review the same work, enable **consensus** for structured cross-review:
+When multiple agents review the same work, use **consensus review** for structured cross-review:
 
 \`\`\`
-gossip_dispatch_parallel(tasks: [...], { consensus: true })
+gossip_dispatch_consensus(tasks: [
+  { agent_id: "gemini-reviewer", task: "Security review X" },
+  { agent_id: "gemini-tester", task: "Security review X" },
+])
 // then:
-gossip_collect(task_ids, timeout_ms, { consensus: true })
+gossip_collect_consensus(task_ids, 300000)
 \`\`\`
 
-**What happens:** After all agents complete, each agent reviews peer findings and produces agree/disagree/new judgments. Results are tagged:
+**What happens:** Dispatches all agents, waits for results, then runs a cross-review round where each agent reviews peer findings. Results are tagged:
 - **CONFIRMED** — multiple agents agree (high confidence, act on these)
 - **DISPUTED** — agents disagree (review the evidence)
 - **UNIQUE** — only one agent found this (verify before acting)

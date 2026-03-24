@@ -120,7 +120,7 @@ async function main(): Promise<void> {
       }
       const options = { writeMode: writeMode as 'sequential' | 'scoped' | 'worktree', scope };
       const { taskId } = mainAgent.dispatch(agents[0].id, task, options);
-      const results = await mainAgent.collect([taskId]);
+      const { results } = await mainAgent.collect([taskId]);
       const r = results[0];
       console.log(r?.status === 'completed' ? r.result : `Error: ${r?.error || 'Unknown'}`);
     } else {
