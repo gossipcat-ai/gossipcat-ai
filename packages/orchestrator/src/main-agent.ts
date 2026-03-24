@@ -367,14 +367,24 @@ export class MainAgent {
         this.projectInitializer.pendingTask = null;
         this.projectInitializer.pendingProposal = null;
 
-        // Return success with team summary — don't re-process original task
-        // (re-processing causes the LLM to propose a second team)
+        // Show team confirmation, then proceed with the original task
         const agentList = newAgents.join(', ');
-        return {
-          text: `Team configured! ${newAgents.length} agents ready (${agentList}).${workersStarted > 0 ? ` ${workersStarted} workers started.` : ''}\n\nYou can now:\n- Type your task naturally (e.g., "${task}")\n- Use /dispatch <agent> <task> for specific agents\n- Use /help for all commands`,
-          status: 'done',
-          agents: newAgents,
-        };
+        const teamMsg = `Team ready! ${newAgents.length} agents online (${agentList}).`;
+        process.stderr.write(`[gossipcat] ${teamMsg}\n`);
+
+        if (task) {
+          // Now proceed with the original task using cognitive mode
+          // Agents are registered, workers are started — cognitive mode will work
+          const taskResponse = await this.handleMessageCognitive(task);
+          return {
+            text: `${teamMsg}\n\n${taskResponse.text}`,
+            status: taskResponse.status,
+            agents: taskResponse.agents,
+            choices: taskResponse.choices,
+          };
+        }
+
+        return { text: teamMsg, status: 'done', agents: newAgents };
       }
       if (choiceValue === 'modify') {
         // Keep pendingTask so next message re-triggers init with modifications
