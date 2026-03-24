@@ -92,11 +92,25 @@ export class ProjectInitializer {
     const candidateData = candidates.map(c => ({ id: c.id, score: c.score, ...catalog.get(c.id) }));
     const summary = this.buildSignalSummary(signals);
 
+    // Build explicit model tiers per available provider
+    const MODEL_TIERS: Record<string, { best: string; fast: string; cheapest: string }> = {
+      google: { best: 'gemini-2.5-pro', fast: 'gemini-2.5-flash', cheapest: 'gemini-2.5-flash' },
+      anthropic: { best: 'claude-sonnet-4-6', fast: 'claude-sonnet-4-6', cheapest: 'claude-haiku-4-5' },
+      openai: { best: 'gpt-4o', fast: 'gpt-4o', cheapest: 'gpt-4o-mini' },
+    };
+    const availableModels = providers.map(p => {
+      const tiers = MODEL_TIERS[p];
+      if (!tiers) return `${p}: (use any available model)`;
+      return `${p}: ${tiers.best} (best), ${tiers.fast} (fast), ${tiers.cheapest} (cheapest)`;
+    }).join('\n');
+
     const systemPrompt = `You are configuring an agent team for a software project.
 
 Project description: "${userMessage}"
 Detected signals: ${summary}
-Available providers: ${providers.join(', ')}
+
+Available providers and models (use ONLY these exact model names):
+${availableModels}
 
 Candidate archetypes (pick one, blend, or customize):
 ${JSON.stringify(candidateData, null, 2)}
@@ -104,7 +118,9 @@ ${JSON.stringify(candidateData, null, 2)}
 Rules:
 - Pick the best archetype and customize roles for this specific project
 - Add project-specific skills beyond the defaults
-- Assign models: strongest available → hardest role, cheapest → light roles
+- Use ONLY the exact model names listed above — never use old or outdated model names
+- Choose models based on project complexity: simple projects can use "fast" for all roles, complex projects should use "best" for critical roles
+- For the main_agent (orchestrator), use the "best" model from the primary provider
 - Do NOT include agent IDs — the system generates them automatically
 - Max 5 agents
 - If the description is too vague, respond with a [CHOICES] block asking what kind of project
