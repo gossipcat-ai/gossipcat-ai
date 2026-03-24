@@ -105,6 +105,7 @@ async function doBoot() {
         return e(bp) ? r(bp, 'utf-8') : '';
       } catch { return ''; }
     })(),
+    keyProvider: async (provider: string) => keychain.getKey(provider),
     toolServer: toolServer ? {
       assignScope: (agentId: string, scope: string) => toolServer.assignScope(agentId, scope),
       assignRoot: (agentId: string, root: string) => toolServer.assignRoot(agentId, root),

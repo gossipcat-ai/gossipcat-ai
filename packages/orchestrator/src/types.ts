@@ -317,3 +317,50 @@ export interface HandleMessageOptions {
   /** 'cognitive' = intent detection (default), 'decompose' = old flow */
   mode?: 'cognitive' | 'decompose';
 }
+
+// ── Project Team Init Types ──────────────────────────────────────────────
+
+/** Project metadata stored in .gossip/config.json */
+export interface ProjectConfig {
+  description: string;
+  archetype: string;
+  initialized: string; // ISO timestamp
+}
+
+/** An archetype role definition */
+export interface ArchetypeRole {
+  preset: string;
+  focus: string;
+}
+
+/** Signal patterns for archetype detection */
+export interface ArchetypeSignals {
+  keywords: string[];
+  files: string[];
+  packages: string[];
+}
+
+/** A single archetype from the catalog */
+export interface Archetype {
+  name: string;
+  description: string;
+  roles: ArchetypeRole[];
+  signals: ArchetypeSignals;
+}
+
+/** Action for team modification */
+export interface TeamChangeAction {
+  action: 'add' | 'remove' | 'modify';
+  agentId?: string;
+  config?: Partial<AgentConfig>;
+  reason?: string;
+}
+
+/** Detected project signals from directory scan */
+export interface ProjectSignals {
+  language?: string;
+  framework?: string;
+  dependencies: string[];
+  directories: string[];
+  files: string[];
+}

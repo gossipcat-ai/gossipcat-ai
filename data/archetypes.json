@@ -1,0 +1,284 @@
+{
+  "solo-builder": {
+    "name": "Solo Builder",
+    "description": "CLIs, scripts, small libs, prototypes",
+    "roles": [
+      { "preset": "implementer", "focus": "code + tests" },
+      { "preset": "tester", "focus": "edge cases, validation" }
+    ],
+    "signals": {
+      "keywords": ["cli", "script", "utility", "tool", "prototype", "poc", "simple"],
+      "files": ["bin/", "*.sh"],
+      "packages": ["commander", "yargs", "inquirer", "chalk", "ora"]
+    }
+  },
+  "full-stack": {
+    "name": "Full-Stack",
+    "description": "Full-stack web, SaaS, e-commerce, admin panels",
+    "roles": [
+      { "preset": "architect", "focus": "system design, data model" },
+      { "preset": "implementer", "focus": "features, components" },
+      { "preset": "reviewer", "focus": "code quality, patterns" },
+      { "preset": "tester", "focus": "integration, e2e" }
+    ],
+    "signals": {
+      "keywords": ["fullstack", "webapp", "saas", "dashboard", "admin", "cms"],
+      "files": ["pages/", "app/", "components/", "api/"],
+      "packages": ["next", "nuxt", "remix", "sveltekit", "rails", "django", "laravel"]
+    }
+  },
+  "api-backend": {
+    "name": "API Backend",
+    "description": "REST/GraphQL APIs, microservices, serverless",
+    "roles": [
+      { "preset": "architect", "focus": "API design, schemas" },
+      { "preset": "implementer", "focus": "endpoints, middleware" },
+      { "preset": "reviewer", "focus": "security, validation" },
+      { "preset": "tester", "focus": "integration, load testing" }
+    ],
+    "signals": {
+      "keywords": ["api", "rest", "graphql", "microservice", "serverless", "backend", "endpoint"],
+      "files": ["routes/", "controllers/", "middleware/", "Dockerfile"],
+      "packages": ["express", "fastify", "koa", "hono", "nestjs", "fastapi", "flask", "gin", "prisma", "drizzle"]
+    }
+  },
+  "frontend-craft": {
+    "name": "Frontend Craft",
+    "description": "SPAs, static sites, browser extensions, PWAs, design systems",
+    "roles": [
+      { "preset": "implementer", "focus": "UI components, styling" },
+      { "preset": "reviewer", "focus": "UX, accessibility, responsive" },
+      { "preset": "tester", "focus": "E2E, visual regression" }
+    ],
+    "signals": {
+      "keywords": ["frontend", "spa", "ui", "design", "component", "pwa", "extension", "widget"],
+      "files": ["components/", "styles/", "public/", "manifest.json"],
+      "packages": ["react", "vue", "angular", "svelte", "tailwindcss", "shadcn", "radix", "storybook", "astro", "gatsby"]
+    }
+  },
+  "mobile-app": {
+    "name": "Mobile App",
+    "description": "React Native, Flutter, Swift, Kotlin",
+    "roles": [
+      { "preset": "implementer", "focus": "screens, navigation" },
+      { "preset": "tester", "focus": "device testing, platform quirks" },
+      { "preset": "reviewer", "focus": "performance, native patterns" },
+      { "preset": "researcher", "focus": "platform APIs, libraries" }
+    ],
+    "signals": {
+      "keywords": ["mobile", "ios", "android", "app", "native", "phone", "tablet"],
+      "files": ["android/", "ios/", "screens/", "App.tsx"],
+      "packages": ["react-native", "expo", "flutter", "swift", "kotlin"]
+    }
+  },
+  "data-research": {
+    "name": "Data & Research",
+    "description": "ML/AI training, data pipelines, ETL, analytics",
+    "roles": [
+      { "preset": "researcher", "focus": "data exploration, model selection" },
+      { "preset": "implementer", "focus": "pipelines, transformations" },
+      { "preset": "tester", "focus": "data quality, validation" }
+    ],
+    "signals": {
+      "keywords": ["data", "ml", "machine", "learning", "pipeline", "etl", "analytics", "model", "training", "dataset"],
+      "files": ["notebooks/", "data/", "models/", "*.ipynb"],
+      "packages": ["pandas", "numpy", "scikit-learn", "tensorflow", "pytorch", "dbt", "airflow", "spark", "jupyter"]
+    }
+  },
+  "llm-ai-app": {
+    "name": "LLM & AI App",
+    "description": "RAG systems, chatbots, agents, prompt engineering",
+    "roles": [
+      { "preset": "implementer", "focus": "chains, agents, embeddings" },
+      { "preset": "researcher", "focus": "prompts, models, evaluation" },
+      { "preset": "tester", "focus": "quality, hallucination detection" },
+      { "preset": "reviewer", "focus": "security, trust boundaries" }
+    ],
+    "signals": {
+      "keywords": ["llm", "rag", "chatbot", "agent", "prompt", "embedding", "openai", "anthropic", "gpt", "claude"],
+      "files": ["prompts/", "chains/", "agents/"],
+      "packages": ["langchain", "llamaindex", "openai", "anthropic", "pinecone", "chromadb", "weaviate"]
+    }
+  },
+  "game-dev": {
+    "name": "Game Dev",
+    "description": "Games, simulations, interactive experiences",
+    "roles": [
+      { "preset": "implementer", "focus": "game logic, rendering, mechanics" },
+      { "preset": "tester", "focus": "gameplay, edge cases, performance" },
+      { "preset": "researcher", "focus": "libraries, reference implementations" },
+      { "preset": "debugger", "focus": "frame rate, state bugs, input" }
+    ],
+    "signals": {
+      "keywords": ["game", "player", "score", "level", "sprite", "canvas", "render", "snake", "puzzle", "rpg"],
+      "files": ["assets/", "sprites/", "levels/", "scenes/"],
+      "packages": ["phaser", "pixi.js", "three.js", "babylon", "blessed", "pygame", "unity", "godot"]
+    }
+  },
+  "security-ops": {
+    "name": "Security Ops",
+    "description": "Pen testing, vulnerability research, compliance",
+    "roles": [
+      { "preset": "reviewer", "focus": "security audit, OWASP" },
+      { "preset": "tester", "focus": "fuzzing, edge cases" },
+      { "preset": "researcher", "focus": "CVEs, attack vectors" },
+      { "preset": "implementer", "focus": "fixes, hardening" }
+    ],
+    "signals": {
+      "keywords": ["security", "audit", "pentest", "vulnerability", "compliance", "owasp", "cve"],
+      "files": ["security/", "audit/", "policies/"],
+      "packages": ["snyk", "eslint-plugin-security", "helmet", "csurf", "bcrypt"]
+    }
+  },
+  "systems-infra": {
+    "name": "Systems & Infra",
+    "description": "Libraries/SDKs, compilers, DB engines, desktop",
+    "roles": [
+      { "preset": "architect", "focus": "API surface, memory model" },
+      { "preset": "implementer", "focus": "core logic, performance" },
+      { "preset": "debugger", "focus": "memory, concurrency bugs" },
+      { "preset": "tester", "focus": "unit, benchmark, stress" }
+    ],
+    "signals": {
+      "keywords": ["library", "sdk", "compiler", "parser", "engine", "driver", "desktop", "runtime"],
+      "files": ["lib/", "include/", "bench/"],
+      "packages": ["electron", "tauri", "wasm-pack", "napi", "ffi"]
+    }
+  },
+  "devops-platform": {
+    "name": "DevOps Platform",
+    "description": "Terraform, K8s, Docker, CI/CD",
+    "roles": [
+      { "preset": "architect", "focus": "infrastructure design, networking" },
+      { "preset": "implementer", "focus": "configs, pipelines" },
+      { "preset": "reviewer", "focus": "security, cost" },
+      { "preset": "tester", "focus": "smoke tests, rollback" }
+    ],
+    "signals": {
+      "keywords": ["devops", "infrastructure", "deploy", "kubernetes", "terraform", "docker", "cicd", "pipeline", "cloud"],
+      "files": ["terraform/", "k8s/", ".github/workflows/", "Dockerfile", "docker-compose.yml", "helm/"],
+      "packages": ["aws-cdk", "pulumi", "ansible"]
+    }
+  },
+  "migration-rewrite": {
+    "name": "Migration & Rewrite",
+    "description": "Framework upgrades, language migrations, legacy rewrites",
+    "roles": [
+      { "preset": "architect", "focus": "migration strategy, compatibility" },
+      { "preset": "reviewer", "focus": "diff review, regression detection" },
+      { "preset": "implementer", "focus": "rewrite, adaptation" },
+      { "preset": "tester", "focus": "regression, parity testing" }
+    ],
+    "signals": {
+      "keywords": ["migrate", "migration", "rewrite", "upgrade", "legacy", "port", "convert"],
+      "files": ["legacy/", "migration/", "deprecated/"],
+      "packages": ["codemod", "jscodeshift"]
+    }
+  },
+  "docs-content": {
+    "name": "Docs & Content",
+    "description": "Documentation, technical writing, tutorials, content sites",
+    "roles": [
+      { "preset": "researcher", "focus": "fact checking, completeness" },
+      { "preset": "reviewer", "focus": "clarity, accuracy, style" },
+      { "preset": "implementer", "focus": "writing, formatting, publishing" }
+    ],
+    "signals": {
+      "keywords": ["documentation", "docs", "tutorial", "guide", "wiki", "blog", "readme", "writing"],
+      "files": ["docs/", "content/", "wiki/", "blog/"],
+      "packages": ["docusaurus", "nextra", "vitepress", "mkdocs", "mdx"]
+    }
+  },
+  "monorepo-enterprise": {
+    "name": "Monorepo Enterprise",
+    "description": "Large codebases, multi-package repos",
+    "roles": [
+      { "preset": "architect", "focus": "package boundaries, dependencies" },
+      { "preset": "implementer", "focus": "cross-package changes" },
+      { "preset": "reviewer", "focus": "API contracts, breaking changes" },
+      { "preset": "tester", "focus": "integration across packages" },
+      { "preset": "researcher", "focus": "dependency analysis" }
+    ],
+    "signals": {
+      "keywords": ["monorepo", "workspace", "enterprise", "platform", "packages", "modules"],
+      "files": ["packages/", "apps/", "libs/", "lerna.json", "nx.json", "turbo.json", "pnpm-workspace.yaml"],
+      "packages": ["lerna", "nx", "turborepo"]
+    }
+  },
+  "ecommerce-fintech": {
+    "name": "E-Commerce & Fintech",
+    "description": "Payment systems, trading, banking",
+    "roles": [
+      { "preset": "architect", "focus": "transaction flow, data integrity" },
+      { "preset": "implementer", "focus": "payment logic, integrations" },
+      { "preset": "reviewer", "focus": "security, compliance, edge cases" },
+      { "preset": "tester", "focus": "transaction testing, rollback" },
+      { "preset": "researcher", "focus": "regulations, PCI-DSS" }
+    ],
+    "signals": {
+      "keywords": ["payment", "checkout", "ecommerce", "shop", "cart", "stripe", "finance", "trading", "banking"],
+      "files": ["payments/", "checkout/", "orders/"],
+      "packages": ["stripe", "paypal", "square", "shopify", "braintree"]
+    }
+  },
+  "realtime-collab": {
+    "name": "Realtime & Collab",
+    "description": "WebSocket apps, multiplayer, collaborative editors, chat",
+    "roles": [
+      { "preset": "architect", "focus": "state sync, conflict resolution" },
+      { "preset": "implementer", "focus": "websocket handlers, protocols" },
+      { "preset": "tester", "focus": "concurrency, race conditions" },
+      { "preset": "debugger", "focus": "connection issues, state drift" }
+    ],
+    "signals": {
+      "keywords": ["realtime", "websocket", "multiplayer", "collaborative", "chat", "live", "sync"],
+      "files": ["ws/", "sockets/", "channels/"],
+      "packages": ["socket.io", "ws", "pusher", "ably", "liveblocks", "yjs", "automerge"]
+    }
+  },
+  "hardware-embedded": {
+    "name": "Hardware & Embedded",
+    "description": "IoT firmware, Arduino/RPi, drivers",
+    "roles": [
+      { "preset": "implementer", "focus": "firmware, protocols" },
+      { "preset": "debugger", "focus": "timing, hardware interaction" },
+      { "preset": "tester", "focus": "hardware-in-loop, simulation" },
+      { "preset": "researcher", "focus": "datasheets, pin configurations" }
+    ],
+    "signals": {
+      "keywords": ["iot", "embedded", "firmware", "arduino", "raspberry", "sensor", "gpio", "rtos", "hardware"],
+      "files": ["firmware/", "drivers/", "*.ino", "platformio.ini"],
+      "packages": ["johnny-five", "serialport", "mqtt", "pigpio"]
+    }
+  },
+  "open-source-lib": {
+    "name": "Open Source Lib",
+    "description": "Public packages, SDKs, frameworks",
+    "roles": [
+      { "preset": "architect", "focus": "API design, backwards compatibility" },
+      { "preset": "reviewer", "focus": "docs, examples, changelog" },
+      { "preset": "tester", "focus": "cross-version, cross-platform" },
+      { "preset": "researcher", "focus": "similar projects, community needs" }
+    ],
+    "signals": {
+      "keywords": ["opensource", "library", "package", "npm", "crate", "pip", "gem", "framework"],
+      "files": ["examples/", "CONTRIBUTING.md", "CHANGELOG.md", ".npmrc"],
+      "packages": ["rollup", "esbuild", "tsup", "changesets", "semantic-release"]
+    }
+  },
+  "blockchain-web3": {
+    "name": "Blockchain & Web3",
+    "description": "Smart contracts, dApps, DeFi, NFTs",
+    "roles": [
+      { "preset": "architect", "focus": "contract design, gas optimization" },
+      { "preset": "implementer", "focus": "contracts, frontend integration" },
+      { "preset": "reviewer", "focus": "security audit, reentrancy" },
+      { "preset": "tester", "focus": "fork testing, fuzzing" }
+    ],
+    "signals": {
+      "keywords": ["blockchain", "web3", "smart", "contract", "solidity", "defi", "nft", "token", "dao", "ethereum"],
+      "files": ["contracts/", "scripts/deploy", "test/", "hardhat.config.*", "foundry.toml"],
+      "packages": ["hardhat", "foundry", "ethers", "web3", "wagmi", "viem", "openzeppelin"]
+    }
+  }
+}

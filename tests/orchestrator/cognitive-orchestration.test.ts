@@ -19,7 +19,15 @@ function createMockLLM(handler: (messages: LLMMessage[]) => string): ILLMProvide
   };
 }
 
-function createMainAgent(llm: ILLMProvider, agents: Array<{ id: string; provider: string; model: string; skills: string[] }> = []) {
+const DEFAULT_AGENTS = [
+  { id: 'default-agent', provider: 'anthropic' as const, model: 'claude', skills: ['general'] },
+];
+
+function createMainAgent(
+  llm: ILLMProvider,
+  agents: Array<{ id: string; provider: string; model: string; skills: string[] }> = DEFAULT_AGENTS,
+  opts?: { keyProvider?: (provider: string) => Promise<string | null> },
+) {
   return new MainAgent({
     provider: 'local',
     model: 'mock',
@@ -28,6 +36,7 @@ function createMainAgent(llm: ILLMProvider, agents: Array<{ id: string; provider
     llm,
     projectRoot: '/tmp/cognitive-test-' + Date.now(),
     bootstrapPrompt: '## Team\nTest team.',
+    keyProvider: opts?.keyProvider,
   });
 }
 
@@ -316,5 +325,87 @@ describe('Cognitive Orchestration', () => {
 
     expect(result.text).toBe('Proceeding with fast approach.');
     expect(result.status).toBe('done');
+  });
+
+  it('should trigger init flow when no agents configured', async () => {
+    const llm = createMockLLM(() => JSON.stringify({
+      archetype: 'fullstack',
+      reason: 'Detected TypeScript project',
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: [{ id: 'coder', provider: 'anthropic', model: 'claude', preset: 'implementer', skills: ['typescript'] }],
+    }));
+    const keyProvider = async (p: string) => p === 'anthropic' ? 'test-key' : null;
+    const mainAgent = createMainAgent(llm, [], { keyProvider });
+
+    const result = await mainAgent.handleMessage('build a REST API');
+
+    expect(result.text).toContain('fullstack');
+    expect(result.choices).toBeDefined();
+    expect(result.choices!.options.some((o: any) => o.value === 'accept')).toBe(true);
+    expect(result.choices!.options.some((o: any) => o.value === 'skip')).toBe(true);
+    expect(result.status).toBe('done');
+  });
+
+  it('should handle skip choice during init flow', async () => {
+    const llm = createMockLLM(() => 'ok');
+    const mainAgent = createMainAgent(llm, []);
+
+    // Manually set pending task to simulate init flow state
+    const initializer = (mainAgent as any).projectInitializer;
+    initializer.pendingTask = 'build something';
+    initializer.pendingProposal = { agents: [] };
+
+    const result = await mainAgent.handleChoice('build something', 'skip');
+
+    expect(result.text).toContain('No agents configured');
+    expect(result.status).toBe('done');
+    expect(initializer.pendingTask).toBeNull();
+    expect(initializer.pendingProposal).toBeNull();
+  });
+
+  it('should handle team add approval', async () => {
+    const agents = [
+      { id: 'existing', provider: 'anthropic' as const, model: 'claude', skills: ['typescript'] },
+    ];
+    const llm = createMockLLM(() => 'ok');
+    const mainAgent = createMainAgent(llm, agents);
+
+    // Set up pending team add action
+    const tm = (mainAgent as any).teamManager;
+    tm.pendingAction = {
+      action: 'add',
+      agentId: 'new-reviewer',
+      config: { id: 'new-reviewer', provider: 'google', model: 'gemini', preset: 'reviewer', skills: ['code_review'] },
+    };
+
+    // Mock registry.register and writeConfig to avoid filesystem
+    const registered: any[] = [];
+    const registry = (mainAgent as any).registry;
+    const origRegister = registry.register.bind(registry);
+    registry.register = (c: any) => { registered.push(c); origRegister(c); };
+    tm.writeConfig = () => {};
+
+    const result = await mainAgent.handleChoice('add reviewer', 'confirm_add');
+
+    expect(result.text).toContain('Added new-reviewer');
+    expect(result.status).toBe('done');
+    expect(registered.some((r: any) => r.id === 'new-reviewer')).toBe(true);
+  });
+
+  it('should handle team cancel', async () => {
+    const agents = [
+      { id: 'existing', provider: 'anthropic' as const, model: 'claude', skills: ['typescript'] },
+    ];
+    const llm = createMockLLM(() => 'ok');
+    const mainAgent = createMainAgent(llm, agents);
+
+    const tm = (mainAgent as any).teamManager;
+    tm.pendingAction = { action: 'add', agentId: 'new-agent', config: {} };
+
+    const result = await mainAgent.handleChoice('add agent', 'cancel');
+
+    expect(result.text).toBe('Cancelled.');
+    expect(result.status).toBe('done');
+    expect(tm.pendingAction).toBeNull();
   });
 });

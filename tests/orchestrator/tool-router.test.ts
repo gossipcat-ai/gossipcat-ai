@@ -461,6 +461,65 @@ describe('ToolExecutor', () => {
 
   // ── sequential plan execution ───────────────────────────────────────
 
+  // ── init_project & update_team ─────────────────────────────────────
+
+  it('init_project scans and proposes team', async () => {
+    const mockInitializer = {
+      scanDirectory: jest.fn().mockReturnValue({ dependencies: [], directories: [], files: [] }),
+      proposeTeam: jest.fn().mockResolvedValue({ text: 'Proposed team...', choices: { message: 'Accept?', options: [] } }),
+      pendingTask: null,
+    };
+    const exec = new ToolExecutor({
+      pipeline: mockPipeline,
+      registry: mockRegistry,
+      projectRoot: '/tmp/test-project',
+      initializer: mockInitializer,
+    });
+    await exec.execute({ tool: 'init_project', args: { description: 'build a game' } });
+    expect(mockInitializer.scanDirectory).toHaveBeenCalled();
+    expect(mockInitializer.proposeTeam).toHaveBeenCalledWith('build a game', expect.any(Object));
+    expect(mockInitializer.pendingTask).toBe('build a game');
+  });
+
+  it('update_team add proposes via team manager', async () => {
+    const mockTeamManager = {
+      proposeAdd: jest.fn().mockReturnValue({ text: 'Add agent?', choices: { message: 'Confirm?', options: [] } }),
+    };
+    const exec = new ToolExecutor({
+      pipeline: mockPipeline,
+      registry: mockRegistry,
+      projectRoot: '/tmp/test-project',
+      teamManager: mockTeamManager,
+    });
+    const result = await exec.execute({ tool: 'update_team', args: { action: 'add', preset: 'reviewer', skills: ['security_audit'] } });
+    expect(mockTeamManager.proposeAdd).toHaveBeenCalled();
+    expect(result.choices).toBeDefined();
+  });
+
+  it('update_team remove proposes via team manager', async () => {
+    const mockTeamManager = {
+      proposeRemove: jest.fn().mockReturnValue({ text: 'Remove?', choices: { message: 'Confirm?', options: [] } }),
+    };
+    const exec = new ToolExecutor({
+      pipeline: mockPipeline,
+      registry: mockRegistry,
+      projectRoot: '/tmp/test-project',
+      teamManager: mockTeamManager,
+    });
+    await exec.execute({ tool: 'update_team', args: { action: 'remove', agent_id: 'gemini-reviewer' } });
+    expect(mockTeamManager.proposeRemove).toHaveBeenCalledWith('gemini-reviewer');
+  });
+
+  it('init_project returns error when initializer not available', async () => {
+    const result = await executor.execute({ tool: 'init_project', args: { description: 'test' } });
+    expect(result.text).toContain('not available');
+  });
+
+  it('update_team returns error when team manager not available', async () => {
+    const result = await executor.execute({ tool: 'update_team', args: { action: 'add' } });
+    expect(result.text).toContain('not available');
+  });
+
   it('executePlan sequential dispatches one at a time', async () => {
     let dispatchCallCount = 0;
     mockPipeline.dispatch.mockImplementation((_agentId: string, _task: string) => {

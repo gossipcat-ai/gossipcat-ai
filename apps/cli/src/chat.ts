@@ -137,6 +137,7 @@ export async function startChat(config: GossipConfig): Promise<void> {
     agents: configToAgentConfigs(config),
     projectRoot: process.cwd(),
     bootstrapPrompt,
+    keyProvider: async (provider: string) => keychain.getKey(provider),
     toolServer: {
       assignScope: (agentId: string, scope: string) => toolServer.assignScope(agentId, scope),
       assignRoot: (agentId: string, root: string) => toolServer.assignRoot(agentId, root),
@@ -189,6 +190,7 @@ ${c.bold}Info${c.reset}
   ${c.cyan}/agents${c.reset}                             List configured agents
   ${c.cyan}/status${c.reset}                             System status
   ${c.cyan}/bootstrap${c.reset}                          Regenerate team context prompt
+  ${c.cyan}/init${c.reset} <description>                  Initialize project with tailored agent team
   ${c.cyan}/tools${c.reset}                              List all tools
   ${c.cyan}/image${c.reset} [message]                    Send clipboard image to orchestrator
 
@@ -400,6 +402,21 @@ ${c.dim}"exit" to quit.${c.reset}
       }
       activeWriteMode = { mode, scope };
       console.log(`\n${c.green}  Write mode: ${mode}${scope ? ` (scope: ${scope})` : ''}${c.reset}\n`);
+    },
+
+    // /init <description> — initialize project with tailored agent team
+    async init(args: string) {
+      const description = args.trim();
+      if (!description) {
+        console.log(`\n${c.yellow}  Usage: /init <project description>${c.reset}`);
+        console.log(`${c.dim}  Example: /init building a snake game in TypeScript${c.reset}\n`);
+        return;
+      }
+      process.stdout.write(`${c.dim}  scanning project and proposing team...${c.reset}`);
+      const response = await mainAgent.handleMessage(description);
+      process.stdout.write('\r\x1b[K');
+      console.log(`\n${response.text}\n`);
+      // If choices present, they'll be handled by the existing REPL flow
     },
 
     // /image [message]

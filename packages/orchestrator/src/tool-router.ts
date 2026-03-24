@@ -171,6 +171,8 @@ export interface ToolExecutorConfig {
   registry: any;       // AgentRegistry
   projectRoot: string;
   dispatcher?: any;    // TaskDispatcher
+  initializer?: any;   // ProjectInitializer
+  teamManager?: any;   // TeamManager
 }
 
 interface AgentLike {
@@ -197,12 +199,16 @@ export class ToolExecutor {
   private readonly registry: any;
   private readonly projectRoot: string;
   private readonly dispatcher: any;
+  private readonly initializer: any;
+  private readonly teamManager: any;
 
-  constructor(config: ToolExecutorConfig) {
+  constructor(private readonly config: ToolExecutorConfig) {
     this.pipeline = config.pipeline;
     this.registry = config.registry;
     this.projectRoot = config.projectRoot;
     this.dispatcher = config.dispatcher ?? null;
+    this.initializer = config.initializer ?? null;
+    this.teamManager = config.teamManager ?? null;
   }
 
   async execute(toolCall: ToolCall): Promise<ToolResult> {
@@ -226,6 +232,10 @@ export class ToolExecutor {
           return this.handleUpdateInstructions(toolCall.args);
         case 'read_task_history':
           return this.handleReadTaskHistory(toolCall.args);
+        case 'init_project':
+          return await this.handleInitProject(toolCall.args);
+        case 'update_team':
+          return this.handleUpdateTeam(toolCall.args);
         default:
           return { text: `Tool error: unknown tool "${toolCall.tool}"` };
       }
@@ -556,5 +566,44 @@ export class ToolExecutor {
     );
 
     return { text: `## Task History: ${agentId} (last ${entries.length})\n\n${formatted.join('\n')}` };
+  }
+
+  private async handleInitProject(args: Record<string, unknown>): Promise<ToolResult> {
+    if (!this.initializer) {
+      return { text: 'Project initialization not available in this context.' };
+    }
+    const description = String(args.description);
+    const signals = this.initializer.scanDirectory(this.config.projectRoot);
+    this.initializer.pendingTask = description;
+    return this.initializer.proposeTeam(description, signals);
+  }
+
+  private handleUpdateTeam(args: Record<string, unknown>): ToolResult {
+    if (!this.teamManager) {
+      return { text: 'Team management not available in this context.' };
+    }
+    const action = String(args.action);
+    switch (action) {
+      case 'add': {
+        const preset = String(args.preset || 'implementer');
+        const skills = Array.isArray(args.skills) ? args.skills.map(String) : [];
+        return this.teamManager.proposeAdd({
+          id: String(args.agent_id || `new-${preset}`),
+          provider: 'google',
+          model: 'gemini-2.5-pro',
+          preset,
+          skills,
+        });
+      }
+      case 'remove':
+        return this.teamManager.proposeRemove(String(args.agent_id));
+      case 'modify':
+        return this.teamManager.proposeModify(String(args.agent_id), {
+          skills: Array.isArray(args.skills) ? args.skills.map(String) : undefined,
+          preset: args.preset ? String(args.preset) : undefined,
+        });
+      default:
+        return { text: `Unknown team action: ${action}. Use add, remove, or modify.` };
+    }
   }
 }

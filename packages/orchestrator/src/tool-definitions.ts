@@ -49,6 +49,16 @@ export const TOOL_SCHEMAS: Record<string, ToolSchema> = {
     requiredArgs: ['agent_id'],
     optionalArgs: ['limit'],
   },
+  init_project: {
+    description: 'Initialize project with a tailored agent team based on project type',
+    requiredArgs: ['description'],
+    optionalArgs: ['archetype'],
+  },
+  update_team: {
+    description: 'Add, remove, or modify an agent in the team (requires confirmation)',
+    requiredArgs: ['action'],
+    optionalArgs: ['agent_id', 'preset', 'skills'],
+  },
 };
 
 export const PLAN_CHOICES = {
@@ -84,6 +94,14 @@ export function buildToolSystemPrompt(
 See the team context above for available agents.
 
 ${toolLines.join('\n')}
+
+init_project(description: string, archetype?: string)
+  Initialize this project with a tailored agent team. Scans directory for signals,
+  proposes agents based on project type. Use when no agents are configured.
+
+update_team(action: "add" | "remove" | "modify", agent_id?: string, preset?: string, skills?: string[])
+  Modify the agent team. Requires user confirmation before applying.
+  Use when user wants to add, remove, or change an agent.
 
 ## How to Call Tools
 

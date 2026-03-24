@@ -2815,7 +2815,7 @@ var init_server = __esm({
         return `ws://localhost:${this._port}`;
       }
       async start() {
-        return new Promise((resolve9) => {
+        return new Promise((resolve11) => {
           this.httpServer = (0, import_http.createServer)(this.handleHttp.bind(this));
           this.wss = new import_ws2.WebSocketServer({
             server: this.httpServer,
@@ -2826,7 +2826,7 @@ var init_server = __esm({
           this.httpServer.listen(this.config.port, this.config.host || "0.0.0.0", () => {
             const addr = this.httpServer.address();
             this._port = addr.port;
-            resolve9();
+            resolve11();
           });
         });
       }
@@ -2835,9 +2835,9 @@ var init_server = __esm({
         for (const client of this.wss.clients) {
           client.close(1001, "Server shutting down");
         }
-        return new Promise((resolve9) => {
+        return new Promise((resolve11) => {
           this.wss.close(() => {
-            this.httpServer.close(() => resolve9());
+            this.httpServer.close(() => resolve11());
           });
         });
       }
@@ -3043,7 +3043,7 @@ var init_gossip_agent = __esm({
       }
       // ─── Public API ─────────────────────────────────────────────────────────────
       connect() {
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve11, reject) => {
           const ws = new import_ws3.default(this.config.relayUrl);
           const timeout = setTimeout(() => {
             ws.removeAllListeners();
@@ -3076,7 +3076,7 @@ var init_gossip_agent = __esm({
                   ws.on("error", (err) => this.emit("error", err));
                   this.startKeepAlive();
                   this.emit("connect", msg.sessionId);
-                  resolve9();
+                  resolve11();
                 } else if (msg.type === "error") {
                   clearTimeout(timeout);
                   ws.removeAllListeners();
@@ -3102,7 +3102,7 @@ var init_gossip_agent = __esm({
           this.reconnectTimer = null;
         }
         if (!this.ws) return;
-        return new Promise((resolve9) => {
+        return new Promise((resolve11) => {
           this.intentionalDisconnect = true;
           this._connected = false;
           const ws = this.ws;
@@ -3113,7 +3113,7 @@ var init_gossip_agent = __esm({
             settled = true;
             this.intentionalDisconnect = false;
             this.emit("disconnect", code);
-            resolve9();
+            resolve11();
           };
           const timer = setTimeout(() => done(1e3), 2e3);
           ws.once("close", (code) => {
@@ -3152,8 +3152,8 @@ var init_gossip_agent = __esm({
           throw new Error("Not connected to relay");
         }
         const encoded = Buffer.from(this.codec.encode(envelope));
-        return new Promise((resolve9, reject) => {
-          this.ws.send(encoded, (err) => err ? reject(err) : resolve9());
+        return new Promise((resolve11, reject) => {
+          this.ws.send(encoded, (err) => err ? reject(err) : resolve11());
         });
       }
       // ─── Internal ────────────────────────────────────────────────────────────────
@@ -3933,7 +3933,7 @@ ${truncateAtLine(fullDiff, 3e3)}`;
       }
       async requestPeerReview(callerId, diff, testResult) {
         const requestId = (0, import_crypto4.randomUUID)();
-        const reviewPromise = new Promise((resolve9, reject) => {
+        const reviewPromise = new Promise((resolve11, reject) => {
           const timer = setTimeout(() => {
             this.pendingReviews.delete(requestId);
             reject(new Error("Review timed out"));
@@ -3942,7 +3942,7 @@ ${truncateAtLine(fullDiff, 3e3)}`;
           this.pendingReviews.set(requestId, {
             resolve: (r) => {
               clearTimeout(timer);
-              resolve9(r);
+              resolve11(r);
             },
             reject: (e) => {
               clearTimeout(timer);
@@ -4803,7 +4803,7 @@ ${context}` : ""}`
       /** Send RPC_REQUEST to tool-server via relay */
       async callTool(name, args) {
         const requestId = (0, import_crypto7.randomUUID)();
-        const resultPromise = new Promise((resolve9, reject) => {
+        const resultPromise = new Promise((resolve11, reject) => {
           const timer = setTimeout(() => {
             if (this.pendingToolCalls.has(requestId)) {
               this.pendingToolCalls.delete(requestId);
@@ -4813,7 +4813,7 @@ ${context}` : ""}`
           this.pendingToolCalls.set(requestId, {
             resolve: (r) => {
               clearTimeout(timer);
-              resolve9(r);
+              resolve11(r);
             },
             reject: (e) => {
               clearTimeout(timer);
@@ -6254,11 +6254,13 @@ var init_performance_writer = __esm({
 });
 
 // packages/orchestrator/src/dispatch-pipeline.ts
-var import_crypto8, log, DispatchPipeline;
+var import_crypto8, import_fs11, import_path15, log, DispatchPipeline;
 var init_dispatch_pipeline = __esm({
   "packages/orchestrator/src/dispatch-pipeline.ts"() {
     "use strict";
     import_crypto8 = require("crypto");
+    import_fs11 = require("fs");
+    import_path15 = require("path");
     init_skill_loader();
     init_prompt_assembler();
     init_agent_memory();
@@ -6354,13 +6356,28 @@ var init_dispatch_pipeline = __esm({
             }
           }
         }
+        let specReviewContext;
+        const specRefs = extractSpecReferences(task);
+        if (specRefs.length > 0) {
+          try {
+            const specPath = (0, import_path15.resolve)(this.projectRoot, specRefs[0]);
+            if (specPath.startsWith(this.projectRoot)) {
+              const specContent = (0, import_fs11.readFileSync)(specPath, "utf-8");
+              const implFiles = extractSpecReferences(task, specContent);
+              const enrichment = buildSpecReviewEnrichment(implFiles);
+              if (enrichment) specReviewContext = enrichment;
+            }
+          } catch {
+          }
+        }
         const promptContent = assemblePrompt({
           memory: memory || void 0,
           lens: options?.lens,
           skills,
           sessionContext: sessionContext || void 0,
           chainContext: chainContext || void 0,
-          consensusSummary: options?.consensus
+          consensusSummary: options?.consensus,
+          specReviewContext
         });
         this.taskGraph.recordCreated(taskId, agentId, task, agentSkills);
         const entry = {
@@ -6460,10 +6477,10 @@ var init_dispatch_pipeline = __esm({
         if (this.writeActive && this.writeQueue.length >= _DispatchPipeline.MAX_WRITE_QUEUE) {
           throw new Error("Sequential write queue full (20 tasks). Collect results before dispatching more.");
         }
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve11, reject) => {
           const run = () => {
             this.writeActive = true;
-            fn().then(resolve9, reject).finally(() => {
+            fn().then(resolve11, reject).finally(() => {
               this.writeActive = false;
               const next = this.writeQueue.shift();
               if (next) next();
@@ -6918,6 +6935,14 @@ See the team context above for available agents.
 
 ${toolLines.join("\n")}
 
+init_project(description: string, archetype?: string)
+  Initialize this project with a tailored agent team. Scans directory for signals,
+  proposes agents based on project type. Use when no agents are configured.
+
+update_team(action: "add" | "remove" | "modify", agent_id?: string, preset?: string, skills?: string[])
+  Modify the agent team. Requires user confirmation before applying.
+  Use when user wants to add, remove, or change an agent.
+
 ## How to Call Tools
 
 When you need to use a tool, emit a tool call block:
@@ -6986,6 +7011,16 @@ var init_tool_definitions = __esm({
         description: "Read past task results for an agent.",
         requiredArgs: ["agent_id"],
         optionalArgs: ["limit"]
+      },
+      init_project: {
+        description: "Initialize project with a tailored agent team based on project type",
+        requiredArgs: ["description"],
+        optionalArgs: ["archetype"]
+      },
+      update_team: {
+        description: "Add, remove, or modify an agent in the team (requires confirmation)",
+        requiredArgs: ["action"],
+        optionalArgs: ["agent_id", "preset", "skills"]
       }
     };
     PLAN_CHOICES = {
@@ -7002,44 +7037,106 @@ var init_tool_definitions = __esm({
 });
 
 // packages/orchestrator/src/tool-router.ts
-var import_fs11, import_path15, log2, AGENT_ID_RE, BLOCK_RE, ToolRouter, ToolExecutor;
+function parseYamlLikeToolCall(content) {
+  const lines = content.split("\n").map((l) => l.trimEnd());
+  const toolLine = lines.find((l) => /^tool:\s*/.test(l));
+  if (!toolLine) return null;
+  const tool = toolLine.replace(/^tool:\s*/, "").trim().replace(/^["']|["']$/g, "");
+  if (!tool) return null;
+  const args = {};
+  const argsIdx = lines.findIndex((l) => /^args:\s*/.test(l));
+  if (argsIdx === -1) {
+    const inlineArgs = toolLine.match(/args:\s*\{(.*)\}/);
+    if (inlineArgs) {
+      try {
+        return { tool, args: JSON.parse(`{${inlineArgs[1]}}`) };
+      } catch {
+      }
+    }
+    return { tool, args };
+  }
+  const inlineArgsMatch = lines[argsIdx].match(/^args:\s*\{(.*)\}\s*$/);
+  if (inlineArgsMatch) {
+    try {
+      return { tool, args: JSON.parse(`{${inlineArgsMatch[1]}}`) };
+    } catch {
+    }
+  }
+  for (let i = argsIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line || /^\S/.test(line)) break;
+    const kvMatch = line.match(/^\s+(\w+):\s*(.+)/);
+    if (kvMatch) {
+      let value = kvMatch[2].trim();
+      if (typeof value === "string" && /^["'].*["']$/.test(value)) {
+        value = value.slice(1, -1);
+      }
+      if (typeof value === "string" && /^\d+$/.test(value)) {
+        value = parseInt(value, 10);
+      }
+      args[kvMatch[1]] = value;
+    }
+  }
+  return { tool, args };
+}
+var import_fs12, import_path16, log2, AGENT_ID_RE, BLOCK_RE, BLOCK_IN_FENCE_RE, ToolRouter, ToolExecutor;
 var init_tool_router = __esm({
   "packages/orchestrator/src/tool-router.ts"() {
     "use strict";
     init_tool_definitions();
-    import_fs11 = require("fs");
-    import_path15 = require("path");
+    import_fs12 = require("fs");
+    import_path16 = require("path");
     log2 = (msg) => process.stderr.write(`[tool-router] ${msg}
 `);
     AGENT_ID_RE = /^[a-zA-Z0-9_-]+$/;
     BLOCK_RE = /\[TOOL_CALL\]([\s\S]*?)\[\/TOOL_CALL\]/g;
+    BLOCK_IN_FENCE_RE = /```[^\n]*\n\[TOOL_CALL\]([\s\S]*?)(?:\[\/TOOL_CALL\])?\s*```/g;
     ToolRouter = class {
       /** Parse the FIRST [TOOL_CALL] block from LLM text. Returns null on any failure. */
       static parseToolCall(text) {
         try {
-          const match = /\[TOOL_CALL\]([\s\S]*?)\[\/TOOL_CALL\]/.exec(text);
+          let match = /\[TOOL_CALL\]([\s\S]*?)\[\/TOOL_CALL\]/.exec(text);
+          if (!match) {
+            match = /```[^\n]*\n\[TOOL_CALL\]([\s\S]*?)(?:\[\/TOOL_CALL\])?\s*```/.exec(text);
+          }
+          if (!match) {
+            match = /\[TOOL_CALL\]\s*([\s\S]*?)(?:\n\n|\n```)/.exec(text);
+          }
           if (!match) return null;
-          let json2 = match[1].trim();
-          json2 = json2.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-          json2 = json2.replace(/,\s*([}\]])/g, "$1");
-          const parsed = JSON.parse(json2);
-          const { tool, args } = parsed;
+          let content = match[1].trim();
+          content = content.replace(/^```(?:json|yaml)?\s*/i, "").replace(/\s*```$/, "");
+          let tool;
+          let args;
+          const jsonAttempt = content.replace(/,\s*([}\]])/g, "$1");
+          try {
+            const parsed = JSON.parse(jsonAttempt);
+            tool = parsed.tool;
+            args = parsed.args ?? {};
+          } catch {
+            const yamlResult = parseYamlLikeToolCall(content);
+            if (!yamlResult) {
+              log2(`failed to parse tool call content: ${content.slice(0, 200)}`);
+              return null;
+            }
+            tool = yamlResult.tool;
+            args = yamlResult.args;
+          }
           if (typeof tool !== "string" || !TOOL_SCHEMAS[tool]) {
             log2(`unknown tool: ${tool}`);
             return null;
           }
           const schema = TOOL_SCHEMAS[tool];
           for (const req of schema.requiredArgs) {
-            if (!(req in (args ?? {}))) {
+            if (!(req in args)) {
               log2(`missing required arg '${req}' for tool '${tool}'`);
               return null;
             }
           }
-          if (args?.agent_id !== void 0 && !AGENT_ID_RE.test(String(args.agent_id))) {
+          if (args.agent_id !== void 0 && !AGENT_ID_RE.test(String(args.agent_id))) {
             log2(`invalid agent_id: ${args.agent_id}`);
             return null;
           }
-          if (Array.isArray(args?.agent_ids)) {
+          if (Array.isArray(args.agent_ids)) {
             for (const id of args.agent_ids) {
               if (!AGENT_ID_RE.test(String(id))) {
                 log2(`invalid agent_id in agent_ids: ${id}`);
@@ -7047,7 +7144,7 @@ var init_tool_router = __esm({
               }
             }
           }
-          return { tool, args: args ?? {} };
+          return { tool, args };
         } catch (err) {
           log2(`parse error: ${err.message}`);
           return null;
@@ -7055,26 +7152,40 @@ var init_tool_router = __esm({
       }
       /** Remove ALL [TOOL_CALL] blocks from text, collapse excess newlines. */
       static stripToolCallBlocks(text) {
-        const matches = text.match(BLOCK_RE);
-        if (matches && matches.length > 1) {
-          log2(`warning: ${matches.length} tool call blocks found, stripping all`);
+        let result = text;
+        const fencedMatches = result.match(BLOCK_IN_FENCE_RE);
+        if (fencedMatches) {
+          result = result.replace(BLOCK_IN_FENCE_RE, "");
         }
-        return text.replace(BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+        const rawMatches = result.match(BLOCK_RE);
+        if (rawMatches) {
+          result = result.replace(BLOCK_RE, "");
+        }
+        const totalMatches = (fencedMatches?.length ?? 0) + (rawMatches?.length ?? 0);
+        if (totalMatches > 1) {
+          log2(`warning: ${totalMatches} tool call blocks found, stripping all`);
+        }
+        return result.replace(/\n{3,}/g, "\n\n").trim();
       }
     };
     ToolExecutor = class {
+      constructor(config2) {
+        this.config = config2;
+        this.pipeline = config2.pipeline;
+        this.registry = config2.registry;
+        this.projectRoot = config2.projectRoot;
+        this.dispatcher = config2.dispatcher ?? null;
+        this.initializer = config2.initializer ?? null;
+        this.teamManager = config2.teamManager ?? null;
+      }
       pendingPlan = null;
       pendingInstructionUpdate = null;
       pipeline;
       registry;
       projectRoot;
       dispatcher;
-      constructor(config2) {
-        this.pipeline = config2.pipeline;
-        this.registry = config2.registry;
-        this.projectRoot = config2.projectRoot;
-        this.dispatcher = config2.dispatcher ?? null;
-      }
+      initializer;
+      teamManager;
       async execute(toolCall) {
         try {
           switch (toolCall.tool) {
@@ -7096,6 +7207,10 @@ var init_tool_router = __esm({
               return this.handleUpdateInstructions(toolCall.args);
             case "read_task_history":
               return this.handleReadTaskHistory(toolCall.args);
+            case "init_project":
+              return await this.handleInitProject(toolCall.args);
+            case "update_team":
+              return this.handleUpdateTeam(toolCall.args);
             default:
               return { text: `Tool error: unknown tool "${toolCall.tool}"` };
           }
@@ -7152,12 +7267,12 @@ ${taskSummary}` };
           const fsp = await import("fs/promises");
           const updatedIds = [];
           for (const id of pending.agentIds) {
-            const agentDir = (0, import_path15.join)(this.projectRoot, ".gossip", "agents", id);
-            const filePath = (0, import_path15.join)(agentDir, "instructions.md");
-            if (!(0, import_fs11.existsSync)(agentDir)) {
+            const agentDir = (0, import_path16.join)(this.projectRoot, ".gossip", "agents", id);
+            const filePath = (0, import_path16.join)(agentDir, "instructions.md");
+            if (!(0, import_fs12.existsSync)(agentDir)) {
               await fsp.mkdir(agentDir, { recursive: true });
             }
-            if ((0, import_fs11.existsSync)(filePath)) {
+            if ((0, import_fs12.existsSync)(filePath)) {
               await fsp.appendFile(filePath, `
 
 ${pending.instruction}`, "utf-8");
@@ -7304,11 +7419,11 @@ ${lines.join("\n")}` };
         if (!this.registry.get(agentId)) {
           return { text: `Tool error: agent "${agentId}" not found in registry` };
         }
-        const tasksPath = (0, import_path15.join)(this.projectRoot, ".gossip", "agents", agentId, "memory", "tasks.jsonl");
-        if (!(0, import_fs11.existsSync)(tasksPath)) {
+        const tasksPath = (0, import_path16.join)(this.projectRoot, ".gossip", "agents", agentId, "memory", "tasks.jsonl");
+        if (!(0, import_fs12.existsSync)(tasksPath)) {
           return { text: `Agent "${agentId}" \u2014 no task history found.` };
         }
-        const rawLines = (0, import_fs11.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
+        const rawLines = (0, import_fs12.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
         const last5 = rawLines.slice(-5).map((line) => {
           try {
             return JSON.parse(line);
@@ -7325,11 +7440,11 @@ Last ${last5.length} tasks:
 ${formatted.join("\n")}` };
       }
       handleAgentPerformance() {
-        const perfPath = (0, import_path15.join)(this.projectRoot, ".gossip", "agent-performance.jsonl");
-        if (!(0, import_fs11.existsSync)(perfPath)) {
+        const perfPath = (0, import_path16.join)(this.projectRoot, ".gossip", "agent-performance.jsonl");
+        if (!(0, import_fs12.existsSync)(perfPath)) {
           return { text: "No performance data found." };
         }
-        const rawLines = (0, import_fs11.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
+        const rawLines = (0, import_fs12.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
         const last20 = rawLines.slice(-20).map((line) => {
           try {
             return JSON.parse(line);
@@ -7380,11 +7495,11 @@ Instruction: "${instruction}"`,
         if (!this.registry.get(agentId)) {
           return { text: `Tool error: agent "${agentId}" not found in registry` };
         }
-        const tasksPath = (0, import_path15.join)(this.projectRoot, ".gossip", "agents", agentId, "memory", "tasks.jsonl");
-        if (!(0, import_fs11.existsSync)(tasksPath)) {
+        const tasksPath = (0, import_path16.join)(this.projectRoot, ".gossip", "agents", agentId, "memory", "tasks.jsonl");
+        if (!(0, import_fs12.existsSync)(tasksPath)) {
           return { text: `No task history for agent "${agentId}".` };
         }
-        const rawLines = (0, import_fs11.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
+        const rawLines = (0, import_fs12.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
         const entries = rawLines.slice(-limit).map((line) => {
           try {
             return JSON.parse(line);
@@ -7398,6 +7513,412 @@ Instruction: "${instruction}"`,
         return { text: `## Task History: ${agentId} (last ${entries.length})
 
 ${formatted.join("\n")}` };
+      }
+      async handleInitProject(args) {
+        if (!this.initializer) {
+          return { text: "Project initialization not available in this context." };
+        }
+        const description = String(args.description);
+        const signals = this.initializer.scanDirectory(this.config.projectRoot);
+        this.initializer.pendingTask = description;
+        return this.initializer.proposeTeam(description, signals);
+      }
+      handleUpdateTeam(args) {
+        if (!this.teamManager) {
+          return { text: "Team management not available in this context." };
+        }
+        const action = String(args.action);
+        switch (action) {
+          case "add": {
+            const preset = String(args.preset || "implementer");
+            const skills = Array.isArray(args.skills) ? args.skills.map(String) : [];
+            return this.teamManager.proposeAdd({
+              id: String(args.agent_id || `new-${preset}`),
+              provider: "google",
+              model: "gemini-2.5-pro",
+              preset,
+              skills
+            });
+          }
+          case "remove":
+            return this.teamManager.proposeRemove(String(args.agent_id));
+          case "modify":
+            return this.teamManager.proposeModify(String(args.agent_id), {
+              skills: Array.isArray(args.skills) ? args.skills.map(String) : void 0,
+              preset: args.preset ? String(args.preset) : void 0
+            });
+          default:
+            return { text: `Unknown team action: ${action}. Use add, remove, or modify.` };
+        }
+      }
+    };
+  }
+});
+
+// packages/orchestrator/src/archetype-catalog.ts
+var import_fs13, import_path17, DEFAULT_PATH, ArchetypeCatalog;
+var init_archetype_catalog = __esm({
+  "packages/orchestrator/src/archetype-catalog.ts"() {
+    "use strict";
+    import_fs13 = require("fs");
+    import_path17 = require("path");
+    DEFAULT_PATH = (0, import_path17.resolve)(__dirname, "..", "..", "..", "data", "archetypes.json");
+    ArchetypeCatalog = class {
+      archetypes;
+      constructor(catalogPath) {
+        const raw = (0, import_fs13.readFileSync)(catalogPath ?? DEFAULT_PATH, "utf-8");
+        this.archetypes = JSON.parse(raw);
+      }
+      /** Return all archetype IDs */
+      ids() {
+        return Object.keys(this.archetypes);
+      }
+      /** Get a single archetype by ID */
+      get(id) {
+        return this.archetypes[id];
+      }
+      /** Score archetypes against directory signals only (no user message). */
+      scoreSignals(signals) {
+        return this.ids().map((id) => {
+          const arch = this.archetypes[id];
+          let score = 0;
+          for (const pkg of arch.signals.packages) {
+            if (signals.dependencies.includes(pkg)) score += 3;
+          }
+          for (const dir of arch.signals.files) {
+            if (signals.directories.some((d) => d === dir || d.startsWith(dir))) score += 2;
+            if (signals.files.some((f) => f === dir || f.match(dir.replace("*", ".*")))) score += 1;
+          }
+          return { id, score };
+        }).sort((a, b) => b.score - a.score);
+      }
+      /** Score with keyword boost from user message. */
+      scoreWithMessage(signals, userMessage) {
+        const base = this.scoreSignals(signals);
+        const lower = userMessage.toLowerCase();
+        return base.map(({ id, score }) => {
+          const arch = this.archetypes[id];
+          let boost = 0;
+          for (const kw of arch.signals.keywords) {
+            if (lower.includes(kw)) boost += 3;
+          }
+          return { id, score: score + boost };
+        }).sort((a, b) => b.score - a.score);
+      }
+      /** Return top 3 candidates if any score > 0, otherwise all 19. */
+      getTopCandidates(signals, userMessage) {
+        const scored = userMessage ? this.scoreWithMessage(signals, userMessage) : this.scoreSignals(signals);
+        const hasNonZero = scored.some((s) => s.score > 0);
+        return hasNonZero ? scored.slice(0, 3) : scored;
+      }
+    };
+  }
+});
+
+// packages/orchestrator/src/project-initializer.ts
+var import_fs14, import_path18, SIGNAL_DIRS, SIGNAL_FILES, LANG_FILES, ProjectInitializer;
+var init_project_initializer = __esm({
+  "packages/orchestrator/src/project-initializer.ts"() {
+    "use strict";
+    init_archetype_catalog();
+    import_fs14 = require("fs");
+    import_path18 = require("path");
+    SIGNAL_DIRS = [
+      "src",
+      "pages",
+      "app",
+      "components",
+      "contracts",
+      "assets",
+      "terraform",
+      "k8s",
+      "android",
+      "ios",
+      "firmware",
+      "docs",
+      "packages"
+    ];
+    SIGNAL_FILES = ["Dockerfile", "docker-compose.yml", "hardhat.config.ts", "foundry.toml"];
+    LANG_FILES = {
+      "tsconfig.json": "TypeScript",
+      "Cargo.toml": "Rust",
+      "go.mod": "Go",
+      "requirements.txt": "Python",
+      "pyproject.toml": "Python"
+    };
+    ProjectInitializer = class {
+      config;
+      pendingTask = null;
+      pendingProposal = null;
+      constructor(config2) {
+        this.config = config2;
+      }
+      scanDirectory(root) {
+        const absRoot = (0, import_path18.resolve)(root);
+        const signals = { dependencies: [], directories: [], files: [] };
+        for (const [file2, lang] of Object.entries(LANG_FILES)) {
+          if (this.safeExists(absRoot, (0, import_path18.join)(absRoot, file2))) signals.language = lang;
+        }
+        const pkgPath = (0, import_path18.join)(absRoot, "package.json");
+        if (this.safeExists(absRoot, pkgPath)) {
+          signals.files.push("package.json");
+          try {
+            const pkg = JSON.parse((0, import_fs14.readFileSync)(pkgPath, "utf-8"));
+            signals.dependencies = [
+              ...Object.keys(pkg.dependencies || {}),
+              ...Object.keys(pkg.devDependencies || {})
+            ];
+          } catch {
+          }
+          if (!signals.language) signals.language = "JavaScript";
+        }
+        for (const dir of SIGNAL_DIRS) {
+          const p = (0, import_path18.join)(absRoot, dir);
+          if (this.safeExists(absRoot, p) && this.isDir(p)) signals.directories.push(`${dir}/`);
+        }
+        const wfPath = (0, import_path18.join)(absRoot, ".github", "workflows");
+        if (this.safeExists(absRoot, wfPath) && this.isDir(wfPath)) {
+          signals.directories.push(".github/workflows/");
+        }
+        for (const file2 of SIGNAL_FILES) {
+          if (this.safeExists(absRoot, (0, import_path18.join)(absRoot, file2))) signals.files.push(file2);
+        }
+        for (const file2 of Object.keys(LANG_FILES)) {
+          if (this.safeExists(absRoot, (0, import_path18.join)(absRoot, file2))) signals.files.push(file2);
+        }
+        return signals;
+      }
+      buildSignalSummary(signals) {
+        const lines = [];
+        if (signals.language) lines.push(`Language: ${signals.language}`);
+        if (signals.framework) lines.push(`Framework: ${signals.framework}`);
+        if (signals.dependencies.length) lines.push(`Dependencies: ${signals.dependencies.join(", ")}`);
+        if (signals.directories.length) lines.push(`Directories: ${signals.directories.join(", ")}`);
+        if (signals.files.length) lines.push(`Files: ${signals.files.join(", ")}`);
+        return lines.join("\n");
+      }
+      async proposeTeam(userMessage, signals) {
+        const providers = [];
+        for (const p of ["google", "anthropic", "openai"]) {
+          if (await this.config.keyProvider(p)) providers.push(p);
+        }
+        if (!providers.length) {
+          return { text: "No API keys available. Run gossipcat setup to configure providers." };
+        }
+        const catalog = new ArchetypeCatalog(this.config.catalogPath);
+        const candidates = catalog.getTopCandidates(signals, userMessage);
+        const candidateData = candidates.map((c) => ({ id: c.id, score: c.score, ...catalog.get(c.id) }));
+        const summary = this.buildSignalSummary(signals);
+        const systemPrompt = `You are configuring an agent team for a software project.
+
+Project description: "${userMessage}"
+Detected signals: ${summary}
+Available providers: ${providers.join(", ")}
+
+Candidate archetypes (pick one, blend, or customize):
+${JSON.stringify(candidateData, null, 2)}
+
+Rules:
+- Pick the best archetype and customize roles for this specific project
+- Add project-specific skills beyond the defaults
+- Assign models: strongest available \u2192 hardest role, cheapest \u2192 light roles
+- Agent IDs format: provider-preset (e.g. gemini-implementer)
+- Max 5 agents
+- If the description is too vague, respond with a [CHOICES] block asking what kind of project
+
+Respond with JSON:
+{
+  "archetype": "archetype-id",
+  "reason": "why this archetype fits",
+  "main_agent": { "provider": "...", "model": "..." },
+  "agents": [{ "id": "...", "provider": "...", "model": "...", "preset": "...", "skills": [...] }]
+}`;
+        const messages = [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage }
+        ];
+        const response = await this.config.llm.generate(messages, { temperature: 0 });
+        const jsonMatch = response.text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return { text: `LLM returned unexpected format:
+${response.text}` };
+        const proposal = JSON.parse(jsonMatch[0]);
+        this.pendingProposal = proposal;
+        this.pendingTask = userMessage;
+        const agentList = (proposal.agents || []).map((a) => `  - ${a.id} (${a.provider}/${a.model}) \u2014 ${a.preset}`).join("\n");
+        return {
+          text: `Proposed team (${proposal.archetype}): ${proposal.reason}
+
+Main: ${proposal.main_agent?.provider}/${proposal.main_agent?.model}
+Agents:
+${agentList}`,
+          choices: {
+            message: "How would you like to proceed?",
+            options: [
+              { value: "accept", label: "Accept" },
+              { value: "modify", label: "Modify" },
+              { value: "manual", label: "Manual setup" },
+              { value: "skip", label: "Skip" }
+            ]
+          }
+        };
+      }
+      async writeConfig(projectRoot) {
+        if (!this.pendingProposal) throw new Error("No pending proposal to write");
+        const gossipDir = (0, import_path18.join)(projectRoot, ".gossip");
+        if (!(0, import_fs14.existsSync)(gossipDir)) (0, import_fs14.mkdirSync)(gossipDir, { recursive: true });
+        const agents = {};
+        for (const a of this.pendingProposal.agents || []) {
+          agents[a.id] = { provider: a.provider, model: a.model, preset: a.preset, skills: a.skills || [] };
+          const agentDir = (0, import_path18.join)(gossipDir, "agents", a.id);
+          if (!(0, import_fs14.existsSync)(agentDir)) (0, import_fs14.mkdirSync)(agentDir, { recursive: true });
+        }
+        const config2 = {
+          main_agent: this.pendingProposal.main_agent,
+          project: {
+            description: this.pendingTask || "",
+            archetype: this.pendingProposal.archetype,
+            initialized: (/* @__PURE__ */ new Date()).toISOString()
+          },
+          agents
+        };
+        (0, import_fs14.writeFileSync)((0, import_path18.join)(gossipDir, "config.json"), JSON.stringify(config2, null, 2));
+      }
+      safeExists(root, target) {
+        const resolved = (0, import_path18.resolve)(target);
+        if (!resolved.startsWith(root)) return false;
+        try {
+          return !(0, import_fs14.lstatSync)(resolved).isSymbolicLink();
+        } catch {
+          return false;
+        }
+      }
+      isDir(target) {
+        try {
+          return (0, import_fs14.lstatSync)(target).isDirectory();
+        } catch {
+          return false;
+        }
+      }
+    };
+  }
+});
+
+// packages/orchestrator/src/team-manager.ts
+var import_fs15, import_path19, TeamManager;
+var init_team_manager = __esm({
+  "packages/orchestrator/src/team-manager.ts"() {
+    "use strict";
+    import_fs15 = require("fs");
+    import_path19 = require("path");
+    TeamManager = class {
+      registry;
+      pipeline;
+      projectRoot;
+      pendingAction = null;
+      constructor(config2) {
+        this.registry = config2.registry;
+        this.pipeline = config2.pipeline;
+        this.projectRoot = config2.projectRoot;
+      }
+      proposeAdd(config2) {
+        this.pendingAction = { action: "add", agentId: config2.id, config: config2 };
+        const skills = config2.skills.join(", ");
+        return {
+          text: `Proposed: Add ${config2.id} (${config2.preset ?? config2.model}, skills: ${skills})
+ - [confirm_add] Add this agent
+ - [cancel] Cancel`
+        };
+      }
+      proposeRemove(agentId) {
+        const agent = this.registry.get(agentId);
+        if (!agent) return { text: `Error: agent '${agentId}' not found in registry.` };
+        const activeTasks = this.pipeline?.getActiveTasks?.(agentId);
+        if (activeTasks?.length) {
+          this.pendingAction = { action: "remove", agentId, reason: "active_tasks" };
+          return {
+            text: `${agentId} has ${activeTasks.length} active tasks.
+ - [wait_and_remove] Let tasks finish, then remove
+ - [force_remove] Cancel tasks and remove now
+ - [cancel] Keep agent`
+          };
+        }
+        this.pendingAction = { action: "remove", agentId };
+        return {
+          text: `Remove ${agentId} from the team?
+ - [confirm_remove] Remove
+ - [cancel] Cancel`
+        };
+      }
+      proposeModify(agentId, changes) {
+        const agent = this.registry.get(agentId);
+        if (!agent) return { text: `Error: agent '${agentId}' not found in registry.` };
+        this.pendingAction = { action: "modify", agentId, config: changes };
+        const parts = [];
+        if (changes.skills) parts.push(`skills: ${changes.skills.join(", ")}`);
+        if (changes.preset) parts.push(`preset: ${changes.preset}`);
+        return {
+          text: `Proposed: Modify ${agentId} \u2014 ${parts.join("; ")}
+ - [confirm_modify] Apply changes
+ - [cancel] Cancel`
+        };
+      }
+      applyAdd(config2) {
+        this.registry.register(config2);
+        this.writeConfig();
+        const dir = (0, import_path19.join)(this.projectRoot, ".gossip", "agents", config2.id);
+        if (!(0, import_fs15.existsSync)(dir)) (0, import_fs15.mkdirSync)(dir, { recursive: true });
+        this.pendingAction = null;
+      }
+      applyRemove(agentId) {
+        this.registry.unregister(agentId);
+        this.writeConfig();
+        this.pendingAction = null;
+      }
+      detectSkillGap(requiredSkill) {
+        const agents = this.registry.getAll();
+        if (agents.some((a) => a.skills.includes(requiredSkill))) return null;
+        return {
+          text: `None of your agents have '${requiredSkill}' skills.
+ - [suggest_add] Add a ${requiredSkill.replace(/_/g, "-")}-reviewer agent
+ - [dispatch_anyway] Send to closest match
+ - [skip] Skip`
+        };
+      }
+      detectScopeChange(conversationHistory, projectDescription) {
+        const recent = conversationHistory.slice(-5);
+        const extract = (text) => text.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
+        const projWords = new Set(extract(projectDescription));
+        const convWords = extract(recent.join(" "));
+        if (convWords.length === 0 || projWords.size === 0) return null;
+        const overlap = convWords.filter((w) => projWords.has(w)).length;
+        const ratio = overlap / convWords.length;
+        if (ratio >= 0.3) return null;
+        return {
+          text: `Your project has expanded beyond '${projectDescription}'.
+ - [re_evaluate] Propose updated team
+ - [keep] Keep current team`
+        };
+      }
+      writeConfig() {
+        const configPath = (0, import_path19.join)(this.projectRoot, ".gossip", "config.json");
+        let existing = {};
+        if ((0, import_fs15.existsSync)(configPath)) {
+          try {
+            existing = JSON.parse((0, import_fs15.readFileSync)(configPath, "utf-8"));
+          } catch {
+          }
+        }
+        const agents = this.registry.getAll();
+        existing.agents = agents.map((a) => ({
+          id: a.id,
+          provider: a.provider,
+          model: a.model,
+          ...a.preset ? { preset: a.preset } : {},
+          skills: a.skills
+        }));
+        const dir = (0, import_path19.join)(this.projectRoot, ".gossip");
+        if (!(0, import_fs15.existsSync)(dir)) (0, import_fs15.mkdirSync)(dir, { recursive: true });
+        (0, import_fs15.writeFileSync)(configPath, JSON.stringify(existing, null, 2) + "\n");
       }
     };
   }
@@ -7419,6 +7940,8 @@ var init_main_agent = __esm({
     init_dispatch_pipeline();
     init_tool_router();
     init_tool_definitions();
+    init_project_initializer();
+    init_team_manager();
     CHAT_SYSTEM_PROMPT = `You are a developer assistant powering Gossip Mesh. Be concise and direct.
 
 When you want to present the developer with choices, use this format in your response:
@@ -7449,6 +7972,9 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       bootstrapPrompt;
       orchestratorAgent = null;
       toolExecutor;
+      projectInitializer;
+      teamManager;
+      keyProviderFn;
       conversationHistory = [];
       MAX_HISTORY = 20;
       // 10 pairs of user+assistant
@@ -7471,22 +7997,35 @@ When there's a clear best option, recommend it but still offer alternatives.`;
           syncFactory: config2.syncFactory,
           toolServer: config2.toolServer
         });
+        this.keyProviderFn = config2.keyProvider;
+        this.projectInitializer = new ProjectInitializer({
+          llm: this.llm,
+          projectRoot: this.projectRoot,
+          keyProvider: config2.keyProvider ?? (async () => null)
+        });
+        this.teamManager = new TeamManager({
+          registry: this.registry,
+          pipeline: this.pipeline,
+          projectRoot: this.projectRoot
+        });
         this.toolExecutor = new ToolExecutor({
           pipeline: this.pipeline,
           registry: this.registry,
           projectRoot: this.projectRoot,
-          dispatcher: this.dispatcher
+          dispatcher: this.dispatcher,
+          initializer: this.projectInitializer,
+          teamManager: this.teamManager
         });
       }
       /** Start all worker agents (connect to relay) */
       async start() {
-        const { existsSync: existsSync14, readFileSync: readFileSync13 } = await import("fs");
-        const { join: join14 } = await import("path");
+        const { existsSync: existsSync16, readFileSync: readFileSync17 } = await import("fs");
+        const { join: join16 } = await import("path");
         for (const config2 of this.registry.getAll()) {
           if (this.workers.has(config2.id)) continue;
           const llm = createProvider(config2.provider, config2.model, this.apiKeys[config2.provider]);
-          const instructionsPath = join14(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
-          const instructions = existsSync14(instructionsPath) ? readFileSync13(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join16(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
+          const instructions = existsSync16(instructionsPath) ? readFileSync17(instructionsPath, "utf-8") : void 0;
           const worker = new WorkerAgent(config2.id, llm, this.relayUrl, ALL_TOOLS, instructions);
           await worker.start();
           this.workers.set(config2.id, worker);
@@ -7537,21 +8076,29 @@ When there's a clear best option, recommend it but still offer alternatives.`;
         this.registry.register(config2);
       }
       async syncWorkers(keyProvider) {
-        const { existsSync: existsSync14, readFileSync: readFileSync13 } = await import("fs");
-        const { join: join14 } = await import("path");
+        const { existsSync: existsSync16, readFileSync: readFileSync17 } = await import("fs");
+        const { join: join16 } = await import("path");
         let added = 0;
         for (const ac of this.registry.getAll()) {
           if (this.workers.has(ac.id)) continue;
           const key = await keyProvider(ac.provider);
           const llm = createProvider(ac.provider, ac.model, key ?? void 0);
-          const instructionsPath = join14(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
-          const instructions = existsSync14(instructionsPath) ? readFileSync13(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join16(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
+          const instructions = existsSync16(instructionsPath) ? readFileSync17(instructionsPath, "utf-8") : void 0;
           const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions);
           await worker.start();
           this.workers.set(ac.id, worker);
           added++;
         }
         return added;
+      }
+      /** Stop a single worker agent */
+      async stopWorker(agentId) {
+        const worker = this.workers.get(agentId);
+        if (worker) {
+          await worker.stop();
+          this.workers.delete(agentId);
+        }
       }
       /** Stop all worker agents */
       async stop() {
@@ -7601,6 +8148,17 @@ When there's a clear best option, recommend it but still offer alternatives.`;
       }
       /** Cognitive mode: LLM decides whether to chat or call tools. */
       async handleMessageCognitive(userMessage) {
+        if (this.registry.getAll().length === 0) {
+          const text2 = typeof userMessage === "string" ? userMessage : userMessage.filter((b) => b.type === "text").map((b) => b.text).join(" ") || "";
+          const signals = this.projectInitializer.scanDirectory(this.projectRoot);
+          this.projectInitializer.pendingTask = text2;
+          const proposal = await this.projectInitializer.proposeTeam(text2, signals);
+          return {
+            text: proposal.text,
+            choices: proposal.choices,
+            status: "done"
+          };
+        }
         const text = typeof userMessage === "string" ? userMessage : userMessage.filter((b) => b.type === "text").map((b) => b.text).join(" ") || "Describe this image.";
         const agents = this.registry.getAll();
         const toolPrompt = buildToolSystemPrompt(agents);
@@ -7640,6 +8198,67 @@ ${toolResult.text}` : toolResult.text,
       }
       /** Handle a user's choice selection — continues the conversation with context */
       async handleChoice(originalMessage, choiceValue) {
+        if (this.projectInitializer.pendingTask) {
+          if (choiceValue === "accept") {
+            await this.projectInitializer.writeConfig(this.projectRoot);
+            if (this.projectInitializer.pendingProposal?.agents) {
+              for (const agent of this.projectInitializer.pendingProposal.agents) {
+                this.registry.register(agent);
+              }
+            }
+            if (this.keyProviderFn) {
+              await this.syncWorkers(this.keyProviderFn);
+            }
+            const task = this.projectInitializer.pendingTask;
+            this.projectInitializer.pendingTask = null;
+            this.projectInitializer.pendingProposal = null;
+            return this.handleMessageCognitive(task);
+          }
+          if (choiceValue === "modify") {
+            this.projectInitializer.pendingTask = null;
+            this.projectInitializer.pendingProposal = null;
+            return { text: "Describe what you'd like to change and I'll create a new proposal.", status: "done" };
+          }
+          if (choiceValue === "manual") {
+            this.projectInitializer.pendingTask = null;
+            this.projectInitializer.pendingProposal = null;
+            return { text: "Run `gossipcat setup` in your terminal to manually configure agents.", status: "done" };
+          }
+          if (choiceValue === "skip") {
+            this.projectInitializer.pendingTask = null;
+            this.projectInitializer.pendingProposal = null;
+            return { text: "No agents configured. You can chat directly or run /init later.", status: "done" };
+          }
+        }
+        if (this.teamManager.pendingAction) {
+          if (choiceValue === "confirm_add" && this.teamManager.pendingAction.action === "add") {
+            const config2 = this.teamManager.pendingAction.config;
+            this.teamManager.applyAdd(config2);
+            this.teamManager.pendingAction = null;
+            if (this.keyProviderFn) {
+              await this.syncWorkers(this.keyProviderFn);
+            }
+            return { text: `Added ${config2.id} to your team.`, status: "done" };
+          }
+          if (choiceValue === "confirm_remove" || choiceValue === "force_remove") {
+            const agentId = this.teamManager.pendingAction.agentId;
+            this.teamManager.applyRemove(agentId);
+            this.teamManager.pendingAction = null;
+            await this.stopWorker(agentId);
+            return { text: `Removed ${agentId} from your team.`, status: "done" };
+          }
+          if (choiceValue === "wait_and_remove") {
+            const agentId = this.teamManager.pendingAction.agentId;
+            this.teamManager.pendingAction = null;
+            this.teamManager.applyRemove(agentId);
+            await this.stopWorker(agentId);
+            return { text: `Waited for tasks and removed ${agentId}.`, status: "done" };
+          }
+          if (choiceValue === "cancel") {
+            this.teamManager.pendingAction = null;
+            return { text: "Cancelled.", status: "done" };
+          }
+        }
         if (this.toolExecutor.pendingPlan) {
           if (choiceValue === PLAN_CHOICES.EXECUTE) {
             const plan = this.toolExecutor.pendingPlan;
@@ -7823,12 +8442,12 @@ function safeId(value) {
   }
   return encodeURIComponent(value);
 }
-var import_fs12, import_path16, TaskGraphSync;
+var import_fs16, import_path20, TaskGraphSync;
 var init_task_graph_sync = __esm({
   "packages/orchestrator/src/task-graph-sync.ts"() {
     "use strict";
-    import_fs12 = require("fs");
-    import_path16 = require("path");
+    import_fs16 = require("fs");
+    import_path20 = require("path");
     TaskGraphSync = class {
       constructor(graph, supabaseUrl, supabaseKey, userId, projectId, projectRoot, displayName, migration) {
         this.graph = graph;
@@ -7838,7 +8457,7 @@ var init_task_graph_sync = __esm({
         this.projectId = projectId;
         this.displayName = displayName;
         this.migration = migration;
-        this.gossipDir = (0, import_path16.join)(projectRoot, ".gossip");
+        this.gossipDir = (0, import_path20.join)(projectRoot, ".gossip");
       }
       gossipDir;
       migrationDone = false;
@@ -7961,9 +8580,9 @@ var init_task_graph_sync = __esm({
         });
       }
       async syncAgentScores() {
-        const perfPath = (0, import_path16.join)(this.gossipDir, "agent-performance.jsonl");
-        if (!(0, import_fs12.existsSync)(perfPath)) return 0;
-        const content = (0, import_fs12.readFileSync)(perfPath, "utf-8");
+        const perfPath = (0, import_path20.join)(this.gossipDir, "agent-performance.jsonl");
+        if (!(0, import_fs16.existsSync)(perfPath)) return 0;
+        const content = (0, import_fs16.readFileSync)(perfPath, "utf-8");
         const lines = content.trim().split("\n").filter(Boolean);
         const meta3 = this.graph.getSyncMeta();
         let synced = 0;
@@ -8109,12 +8728,12 @@ Return JSON: { "<agentId>": "<summary>", ... }`
 });
 
 // packages/orchestrator/src/bootstrap.ts
-var import_fs13, import_path17, log3, BootstrapGenerator;
+var import_fs17, import_path21, log3, BootstrapGenerator;
 var init_bootstrap = __esm({
   "packages/orchestrator/src/bootstrap.ts"() {
     "use strict";
-    import_fs13 = require("fs");
-    import_path17 = require("path");
+    import_fs17 = require("fs");
+    import_path21 = require("path");
     log3 = (msg) => process.stderr.write(`[gossipcat] ${msg}
 `);
     BootstrapGenerator = class {
@@ -8136,23 +8755,23 @@ var init_bootstrap = __esm({
         };
       }
       migrateConfig() {
-        const oldPath = (0, import_path17.resolve)(this.projectRoot, "gossip.agents.json");
-        const newPath = (0, import_path17.resolve)(this.projectRoot, ".gossip", "config.json");
-        if (!(0, import_fs13.existsSync)(newPath) && (0, import_fs13.existsSync)(oldPath)) {
-          (0, import_fs13.mkdirSync)((0, import_path17.resolve)(this.projectRoot, ".gossip"), { recursive: true });
-          (0, import_fs13.copyFileSync)(oldPath, newPath);
+        const oldPath = (0, import_path21.resolve)(this.projectRoot, "gossip.agents.json");
+        const newPath = (0, import_path21.resolve)(this.projectRoot, ".gossip", "config.json");
+        if (!(0, import_fs17.existsSync)(newPath) && (0, import_fs17.existsSync)(oldPath)) {
+          (0, import_fs17.mkdirSync)((0, import_path21.resolve)(this.projectRoot, ".gossip"), { recursive: true });
+          (0, import_fs17.copyFileSync)(oldPath, newPath);
           log3("Migrated config to .gossip/config.json \u2014 gossip.agents.json is now ignored.");
         }
       }
       loadConfig() {
         const paths = [
-          (0, import_path17.resolve)(this.projectRoot, ".gossip", "config.json"),
-          (0, import_path17.resolve)(this.projectRoot, "gossip.agents.json")
+          (0, import_path21.resolve)(this.projectRoot, ".gossip", "config.json"),
+          (0, import_path21.resolve)(this.projectRoot, "gossip.agents.json")
         ];
         for (const p of paths) {
-          if ((0, import_fs13.existsSync)(p)) {
+          if ((0, import_fs17.existsSync)(p)) {
             try {
-              return JSON.parse((0, import_fs13.readFileSync)(p, "utf-8"));
+              return JSON.parse((0, import_fs17.readFileSync)(p, "utf-8"));
             } catch {
               log3("Config parse error, falling back to setup mode");
               return null;
@@ -8173,9 +8792,9 @@ var init_bootstrap = __esm({
             skills: ac.skills || [],
             taskCount: 0
           };
-          const tasksPath = (0, import_path17.join)(this.projectRoot, ".gossip", "agents", id, "memory", "tasks.jsonl");
-          if ((0, import_fs13.existsSync)(tasksPath)) {
-            const lines = (0, import_fs13.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
+          const tasksPath = (0, import_path21.join)(this.projectRoot, ".gossip", "agents", id, "memory", "tasks.jsonl");
+          if ((0, import_fs17.existsSync)(tasksPath)) {
+            const lines = (0, import_fs17.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
             let count = 0;
             let lastTs = "";
             for (const line of lines) {
@@ -8189,9 +8808,9 @@ var init_bootstrap = __esm({
             summary.taskCount = count;
             if (lastTs) summary.lastActive = lastTs.split("T")[0];
           }
-          const memPath = (0, import_path17.join)(this.projectRoot, ".gossip", "agents", id, "memory", "MEMORY.md");
-          if ((0, import_fs13.existsSync)(memPath)) {
-            const content = (0, import_fs13.readFileSync)(memPath, "utf-8").slice(0, 500);
+          const memPath = (0, import_path21.join)(this.projectRoot, ".gossip", "agents", id, "memory", "MEMORY.md");
+          if ((0, import_fs17.existsSync)(memPath)) {
+            const content = (0, import_fs17.readFileSync)(memPath, "utf-8").slice(0, 500);
             const knowledgeLines = content.match(/- \[([^\]]+)\]/g);
             if (knowledgeLines?.length) {
               summary.topics = knowledgeLines.map((l) => l.replace(/- \[([^\]]+)\].*/, "$1")).join(", ");
@@ -8204,9 +8823,9 @@ var init_bootstrap = __esm({
       renderTier1() {
         let skills = "";
         try {
-          const catalogPath = (0, import_path17.resolve)(__dirname, "default-skills", "catalog.json");
-          if ((0, import_fs13.existsSync)(catalogPath)) {
-            const catalog = JSON.parse((0, import_fs13.readFileSync)(catalogPath, "utf-8"));
+          const catalogPath = (0, import_path21.resolve)(__dirname, "default-skills", "catalog.json");
+          if ((0, import_fs17.existsSync)(catalogPath)) {
+            const catalog = JSON.parse((0, import_fs17.readFileSync)(catalogPath, "utf-8"));
             skills = `
 Available skills: ${catalog.skills.map((s) => s.name).join(", ")}`;
           }
@@ -8457,6 +9076,7 @@ __export(src_exports4, {
   AgentMemoryReader: () => AgentMemoryReader,
   AgentRegistry: () => AgentRegistry,
   AnthropicProvider: () => AnthropicProvider,
+  ArchetypeCatalog: () => ArchetypeCatalog,
   BootstrapGenerator: () => BootstrapGenerator,
   ConsensusEngine: () => ConsensusEngine,
   DispatchPipeline: () => DispatchPipeline,
@@ -8472,6 +9092,7 @@ __export(src_exports4, {
   PENDING_PLAN_CHOICES: () => PENDING_PLAN_CHOICES,
   PLAN_CHOICES: () => PLAN_CHOICES,
   PerformanceWriter: () => PerformanceWriter,
+  ProjectInitializer: () => ProjectInitializer,
   ScopeTracker: () => ScopeTracker,
   SkillCatalog: () => SkillCatalog,
   SkillGapTracker: () => SkillGapTracker,
@@ -8479,6 +9100,7 @@ __export(src_exports4, {
   TaskDispatcher: () => TaskDispatcher,
   TaskGraph: () => TaskGraph,
   TaskGraphSync: () => TaskGraphSync,
+  TeamManager: () => TeamManager,
   ToolExecutor: () => ToolExecutor,
   ToolRouter: () => ToolRouter,
   WorkerAgent: () => WorkerAgent,
@@ -8520,6 +9142,9 @@ var init_src5 = __esm({
     init_consensus_engine();
     init_tool_router();
     init_tool_definitions();
+    init_archetype_catalog();
+    init_project_initializer();
+    init_team_manager();
   }
 });
 
@@ -8534,18 +9159,18 @@ __export(config_exports, {
 function findConfigPath(projectRoot) {
   const root = projectRoot || process.cwd();
   const candidates = [
-    (0, import_path18.resolve)(root, ".gossip", "config.json"),
-    (0, import_path18.resolve)(root, "gossip.agents.json"),
-    (0, import_path18.resolve)(root, "gossip.agents.yaml"),
-    (0, import_path18.resolve)(root, "gossip.agents.yml")
+    (0, import_path22.resolve)(root, ".gossip", "config.json"),
+    (0, import_path22.resolve)(root, "gossip.agents.json"),
+    (0, import_path22.resolve)(root, "gossip.agents.yaml"),
+    (0, import_path22.resolve)(root, "gossip.agents.yml")
   ];
   for (const p of candidates) {
-    if ((0, import_fs14.existsSync)(p)) return p;
+    if ((0, import_fs18.existsSync)(p)) return p;
   }
   return null;
 }
 function loadConfig(configPath) {
-  const raw = (0, import_fs14.readFileSync)(configPath, "utf-8");
+  const raw = (0, import_fs18.readFileSync)(configPath, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -8594,12 +9219,12 @@ function configToAgentConfigs(config2) {
     skills: agent.skills
   }));
 }
-var import_fs14, import_path18, VALID_PROVIDERS;
+var import_fs18, import_path22, VALID_PROVIDERS;
 var init_config = __esm({
   "apps/cli/src/config.ts"() {
     "use strict";
-    import_fs14 = require("fs");
-    import_path18 = require("path");
+    import_fs18 = require("fs");
+    import_path22 = require("path");
     VALID_PROVIDERS = ["anthropic", "openai", "google", "local"];
   }
 });
@@ -8744,17 +9369,17 @@ __export(identity_exports, {
   normalizeGitUrl: () => normalizeGitUrl
 });
 function getOrCreateSalt(projectRoot) {
-  const saltPath = (0, import_path19.join)(projectRoot, ".gossip", "local-salt");
+  const saltPath = (0, import_path23.join)(projectRoot, ".gossip", "local-salt");
   try {
-    return (0, import_fs15.readFileSync)(saltPath, "utf-8").trim();
+    return (0, import_fs19.readFileSync)(saltPath, "utf-8").trim();
   } catch {
     const salt = (0, import_crypto9.randomBytes)(16).toString("hex");
-    (0, import_fs15.mkdirSync)((0, import_path19.join)(projectRoot, ".gossip"), { recursive: true });
+    (0, import_fs19.mkdirSync)((0, import_path23.join)(projectRoot, ".gossip"), { recursive: true });
     try {
-      (0, import_fs15.writeFileSync)(saltPath, salt, { flag: "wx" });
+      (0, import_fs19.writeFileSync)(saltPath, salt, { flag: "wx" });
       return salt;
     } catch {
-      return (0, import_fs15.readFileSync)(saltPath, "utf-8").trim();
+      return (0, import_fs19.readFileSync)(saltPath, "utf-8").trim();
     }
   }
 }
@@ -8804,12 +9429,12 @@ function getProjectId(projectRoot) {
   }
   return (0, import_crypto9.createHash)("sha256").update(projectRoot).digest("hex").slice(0, 16);
 }
-var import_fs15, import_path19, import_crypto9, import_child_process5;
+var import_fs19, import_path23, import_crypto9, import_child_process5;
 var init_identity = __esm({
   "apps/cli/src/identity.ts"() {
     "use strict";
-    import_fs15 = require("fs");
-    import_path19 = require("path");
+    import_fs19 = require("fs");
+    import_path23 = require("path");
     import_crypto9 = require("crypto");
     import_child_process5 = require("child_process");
   }
@@ -22633,10 +23258,10 @@ async function doBoot() {
   for (const ac of agentConfigs) {
     const key = await keychain.getKey(ac.provider);
     const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
-    const { existsSync: existsSync14, readFileSync: readFileSync13 } = require("fs");
-    const { join: join14 } = require("path");
-    const instructionsPath = join14(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
-    const instructions = existsSync14(instructionsPath) ? readFileSync13(instructionsPath, "utf-8") : void 0;
+    const { existsSync: existsSync16, readFileSync: readFileSync17 } = require("fs");
+    const { join: join16 } = require("path");
+    const instructionsPath = join16(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
+    const instructions = existsSync16(instructionsPath) ? readFileSync17(instructionsPath, "utf-8") : void 0;
     const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS, instructions);
     await worker.start();
     workers.set(ac.id, worker);
@@ -22676,6 +23301,7 @@ async function doBoot() {
         return "";
       }
     })(),
+    keyProvider: async (provider) => keychain.getKey(provider),
     toolServer: toolServer ? {
       assignScope: (agentId, scope) => toolServer.assignScope(agentId, scope),
       assignRoot: (agentId, root) => toolServer.assignRoot(agentId, root),
@@ -23234,10 +23860,10 @@ server.tool(
     const { BootstrapGenerator: BootstrapGenerator2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
     const generator = new BootstrapGenerator2(process.cwd());
     const result = generator.generate();
-    const { writeFileSync: writeFileSync7, mkdirSync: mkdirSync8 } = require("fs");
-    const { join: join14 } = require("path");
-    mkdirSync8(join14(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync7(join14(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
+    const { writeFileSync: writeFileSync9, mkdirSync: mkdirSync10 } = require("fs");
+    const { join: join16 } = require("path");
+    mkdirSync10(join16(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync9(join16(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
     return { content: [{ type: "text", text: result.prompt }] };
   }
 );
@@ -23262,10 +23888,10 @@ server.tool(
     } catch (err) {
       return { content: [{ type: "text", text: `Invalid config: ${err.message}` }] };
     }
-    const { writeFileSync: writeFileSync7, mkdirSync: mkdirSync8 } = require("fs");
-    const { join: join14 } = require("path");
-    mkdirSync8(join14(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync7(join14(process.cwd(), ".gossip", "config.json"), JSON.stringify(config2, null, 2));
+    const { writeFileSync: writeFileSync9, mkdirSync: mkdirSync10 } = require("fs");
+    const { join: join16 } = require("path");
+    mkdirSync10(join16(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync9(join16(process.cwd(), ".gossip", "config.json"), JSON.stringify(config2, null, 2));
     const agentCount = Object.keys(config2.agents || {}).length;
     return { content: [{ type: "text", text: `Config saved. ${agentCount} agents configured. Agents will start on first dispatch \u2014 call gossip_dispatch() to begin.` }] };
   }

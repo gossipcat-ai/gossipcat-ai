@@ -40,3 +40,8 @@ export type { ConsensusEngineConfig } from './consensus-engine';
 export { ToolRouter, ToolExecutor } from './tool-router';
 export type { ToolExecutorConfig } from './tool-router';
 export { buildToolSystemPrompt, TOOL_SCHEMAS, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';
+export { ArchetypeCatalog } from './archetype-catalog';
+export { ProjectInitializer } from './project-initializer';
+export type { ProjectInitializerConfig } from './project-initializer';
+export { TeamManager } from './team-manager';
+export type { TeamManagerConfig } from './team-manager';

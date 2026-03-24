@@ -18,6 +18,8 @@ import { DispatchPipeline, ToolServerCallbacks } from './dispatch-pipeline';
 import { TaskGraphSync } from './task-graph-sync';
 import { ToolRouter, ToolExecutor } from './tool-router';
 import { buildToolSystemPrompt, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';
+import { ProjectInitializer } from './project-initializer';
+import { TeamManager } from './team-manager';
 
 const CHAT_SYSTEM_PROMPT = `You are a developer assistant powering Gossip Mesh. Be concise and direct.
 
@@ -50,6 +52,7 @@ export interface MainAgentConfig {
   bootstrapPrompt?: string;  // NEW — injected by BootstrapGenerator
   syncFactory?: () => TaskGraphSync | null;
   toolServer?: ToolServerCallbacks | null;
+  keyProvider?: (provider: string) => Promise<string | null>;
 }
 
 export class MainAgent {
@@ -64,6 +67,9 @@ export class MainAgent {
   private bootstrapPrompt: string;
   private orchestratorAgent: GossipAgent | null = null;
   private toolExecutor: ToolExecutor;
+  private projectInitializer: ProjectInitializer;
+  private teamManager: TeamManager;
+  private keyProviderFn: ((provider: string) => Promise<string | null>) | undefined;
   private conversationHistory: LLMMessage[] = [];
   private readonly MAX_HISTORY = 20; // 10 pairs of user+assistant
 
@@ -88,11 +94,24 @@ export class MainAgent {
       syncFactory: config.syncFactory,
       toolServer: config.toolServer,
     });
+    this.keyProviderFn = config.keyProvider;
+    this.projectInitializer = new ProjectInitializer({
+      llm: this.llm,
+      projectRoot: this.projectRoot,
+      keyProvider: config.keyProvider ?? (async () => null),
+    });
+    this.teamManager = new TeamManager({
+      registry: this.registry,
+      pipeline: this.pipeline,
+      projectRoot: this.projectRoot,
+    });
     this.toolExecutor = new ToolExecutor({
       pipeline: this.pipeline,
       registry: this.registry,
       projectRoot: this.projectRoot,
       dispatcher: this.dispatcher,
+      initializer: this.projectInitializer,
+      teamManager: this.teamManager,
     });
   }
 
@@ -169,6 +188,15 @@ export class MainAgent {
     return added;
   }
 
+  /** Stop a single worker agent */
+  async stopWorker(agentId: string): Promise<void> {
+    const worker = this.workers.get(agentId);
+    if (worker) {
+      await worker.stop();
+      this.workers.delete(agentId);
+    }
+  }
+
   /** Stop all worker agents */
   async stop(): Promise<void> {
     this.pipeline.flushTaskGraph();
@@ -232,6 +260,23 @@ export class MainAgent {
 
   /** Cognitive mode: LLM decides whether to chat or call tools. */
   private async handleMessageCognitive(userMessage: string | ContentBlock[]): Promise<ChatResponse> {
+    // Check if project has agents configured
+    if (this.registry.getAll().length === 0) {
+      const text = typeof userMessage === 'string'
+        ? userMessage
+        : userMessage.filter(b => b.type === 'text').map(b => (b as any).text).join(' ') || '';
+
+      const signals = this.projectInitializer.scanDirectory(this.projectRoot);
+      this.projectInitializer.pendingTask = text;
+      const proposal = await this.projectInitializer.proposeTeam(text, signals);
+
+      return {
+        text: proposal.text,
+        choices: proposal.choices,
+        status: 'done',
+      };
+    }
+
     // Extract text for LLM
     const text = typeof userMessage === 'string'
       ? userMessage
@@ -283,6 +328,76 @@ export class MainAgent {
 
   /** Handle a user's choice selection — continues the conversation with context */
   async handleChoice(originalMessage: string, choiceValue: string): Promise<ChatResponse> {
+    // Project init approval
+    if (this.projectInitializer.pendingTask) {
+      if (choiceValue === 'accept') {
+        await this.projectInitializer.writeConfig(this.projectRoot);
+        // Reload agents from new config
+        if (this.projectInitializer.pendingProposal?.agents) {
+          for (const agent of this.projectInitializer.pendingProposal.agents) {
+            this.registry.register(agent);
+          }
+        }
+        // Start workers if keyProvider available
+        if (this.keyProviderFn) {
+          await this.syncWorkers(this.keyProviderFn);
+        }
+        // Re-process original task
+        const task = this.projectInitializer.pendingTask;
+        this.projectInitializer.pendingTask = null;
+        this.projectInitializer.pendingProposal = null;
+        return this.handleMessageCognitive(task);
+      }
+      if (choiceValue === 'modify') {
+        this.projectInitializer.pendingTask = null;
+        this.projectInitializer.pendingProposal = null;
+        return { text: 'Describe what you\'d like to change and I\'ll create a new proposal.', status: 'done' };
+      }
+      if (choiceValue === 'manual') {
+        this.projectInitializer.pendingTask = null;
+        this.projectInitializer.pendingProposal = null;
+        return { text: 'Run `gossipcat setup` in your terminal to manually configure agents.', status: 'done' };
+      }
+      if (choiceValue === 'skip') {
+        this.projectInitializer.pendingTask = null;
+        this.projectInitializer.pendingProposal = null;
+        return { text: 'No agents configured. You can chat directly or run /init later.', status: 'done' };
+      }
+    }
+
+    // Team update approval
+    if (this.teamManager.pendingAction) {
+      if (choiceValue === 'confirm_add' && this.teamManager.pendingAction.action === 'add') {
+        const config = this.teamManager.pendingAction.config as any;
+        this.teamManager.applyAdd(config);
+        this.teamManager.pendingAction = null;
+        if (this.keyProviderFn) {
+          await this.syncWorkers(this.keyProviderFn);
+        }
+        return { text: `Added ${config.id} to your team.`, status: 'done' };
+      }
+      if (choiceValue === 'confirm_remove' || choiceValue === 'force_remove') {
+        const agentId = this.teamManager.pendingAction.agentId!;
+        this.teamManager.applyRemove(agentId);
+        this.teamManager.pendingAction = null;
+        await this.stopWorker(agentId);
+        return { text: `Removed ${agentId} from your team.`, status: 'done' };
+      }
+      if (choiceValue === 'wait_and_remove') {
+        // Collect pending tasks first, then remove
+        const agentId = this.teamManager.pendingAction.agentId!;
+        this.teamManager.pendingAction = null;
+        // Best effort: wait briefly then remove
+        this.teamManager.applyRemove(agentId);
+        await this.stopWorker(agentId);
+        return { text: `Waited for tasks and removed ${agentId}.`, status: 'done' };
+      }
+      if (choiceValue === 'cancel') {
+        this.teamManager.pendingAction = null;
+        return { text: 'Cancelled.', status: 'done' };
+      }
+    }
+
     // Plan approval
     if (this.toolExecutor.pendingPlan) {
       if (choiceValue === PLAN_CHOICES.EXECUTE) {

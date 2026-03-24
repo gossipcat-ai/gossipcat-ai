@@ -16,10 +16,12 @@ describe('Tool Definitions', () => {
     'agent_performance',
     'update_instructions',
     'read_task_history',
+    'init_project',
+    'update_team',
   ];
 
-  it('has exactly 9 tool schemas', () => {
-    expect(Object.keys(TOOL_SCHEMAS)).toHaveLength(9);
+  it('has exactly 11 tool schemas', () => {
+    expect(Object.keys(TOOL_SCHEMAS)).toHaveLength(11);
   });
 
   it.each(EXPECTED_TOOLS)('has schema for %s with description and requiredArgs', (tool) => {
