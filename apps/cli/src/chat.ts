@@ -18,6 +18,77 @@ const c = {
   gray:   '\x1b[90m',
 };
 
+// Module-level state for pending choices (shared between renderResponse and REPL handler)
+let pendingChoices: { options: Array<{ value: string; label: string; hint?: string }>; originalMessage: string; mainAgent: MainAgent } | null = null;
+
+/**
+ * Inline arrow-key selector — doesn't use @clack or inquirer.
+ * Temporarily takes over stdin in raw mode, renders a selectable list,
+ * returns the selected value. Restores stdin state after.
+ */
+function inlineSelect(options: Array<{ value: string; label: string; hint?: string }>): Promise<string | null> {
+  return new Promise((resolve) => {
+    let selected = 0;
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+
+    function render() {
+      // Move cursor up to redraw (clear previous render)
+      if (selected >= 0) {
+        process.stdout.write(`\x1b[${options.length}A`); // move up N lines
+      }
+      for (let i = 0; i < options.length; i++) {
+        const prefix = i === selected ? `${c.cyan}  > ` : '    ';
+        const label = i === selected ? `${c.bold}${options[i].label}${c.reset}` : `${c.dim}${options[i].label}${c.reset}`;
+        const hint = options[i].hint ? ` ${c.dim}(${options[i].hint})${c.reset}` : '';
+        process.stdout.write(`\r\x1b[K${prefix}${label}${hint}\n`);
+      }
+    }
+
+    // Initial render
+    for (const opt of options) {
+      console.log(''); // reserve lines
+    }
+    render();
+
+    stdin.setRawMode(true);
+    stdin.resume();
+
+    function onData(buf: Buffer) {
+      const key = buf.toString();
+
+      if (key === '\x1b[A') { // up arrow
+        selected = (selected - 1 + options.length) % options.length;
+        render();
+      } else if (key === '\x1b[B') { // down arrow
+        selected = (selected + 1) % options.length;
+        render();
+      } else if (key === '\r' || key === '\n') { // enter
+        cleanup();
+        resolve(options[selected].value);
+      } else if (key === '\x03' || key === '\x1b') { // ctrl-c or escape
+        cleanup();
+        resolve(null);
+      } else if (key >= '1' && key <= '9') { // number key
+        const idx = parseInt(key, 10) - 1;
+        if (idx < options.length) {
+          selected = idx;
+          render();
+          cleanup();
+          resolve(options[selected].value);
+        }
+      }
+    }
+
+    function cleanup() {
+      stdin.removeListener('data', onData);
+      stdin.setRawMode(wasRaw ?? false);
+    }
+
+    stdin.on('data', onData);
+  });
+}
+
 // ── Render a ChatResponse ───────────────────────────────────────────────────
 async function renderResponse(
   response: ChatResponse,
@@ -35,19 +106,23 @@ async function renderResponse(
     console.log(response.text);
   }
 
-  // Show interactive choices if present — use simple numbered prompt
-  // (NOT @clack/prompts which breaks readline state)
+  // Show interactive choices — inline arrow-key selector
   if (response.choices && response.choices.options.length > 0) {
-    const options = response.choices.options;
     console.log('');
-    for (let i = 0; i < options.length; i++) {
-      const hint = options[i].hint ? ` ${c.dim}(${options[i].hint})${c.reset}` : '';
-      console.log(`  ${c.cyan}${i + 1}.${c.reset} ${options[i].label}${hint}`);
-    }
-    console.log('');
+    const selectedValue = await inlineSelect(response.choices.options);
 
-    // Store choices for the next line input to resolve
-    pendingChoices = { options, originalMessage, mainAgent };
+    if (selectedValue) {
+      process.stdout.write(`${c.dim}  processing...${c.reset}`);
+      try {
+        const followUp = await mainAgent.handleChoice(originalMessage, selectedValue);
+        process.stdout.write('\r\x1b[K');
+        await renderResponse(followUp, originalMessage, mainAgent);
+      } catch (err) {
+        process.stdout.write('\r\x1b[K');
+        console.log(`${c.yellow}  Error: ${err instanceof Error ? err.message : 'Unknown'}${c.reset}`);
+      }
+    }
+    return;
   }
 
   console.log('');
@@ -412,57 +487,12 @@ ${c.dim}"exit" to quit.${c.reset}
   };
 
   let activeWriteMode: { mode: 'sequential' | 'scoped' | 'worktree'; scope?: string } | null = null;
-  let pendingChoices: { options: Array<{ value: string; label: string; hint?: string }>; originalMessage: string; mainAgent: MainAgent } | null = null;
 
   rl.on('line', async (line) => {
     const input = line.trim();
     if (!input) { rl.prompt(); return; }
     if (input === 'exit' || input === 'quit') {
       await shutdown(relay, toolServer, mainAgent, rl);
-      return;
-    }
-
-    // ── Pending choice selection (number or label) ────────────────────────
-    if (pendingChoices) {
-      const choices = pendingChoices;
-      pendingChoices = null;
-
-      // Match by number (1, 2, 3...) or by label/value
-      const num = parseInt(input, 10);
-      let selectedValue: string | undefined;
-      if (!isNaN(num) && num >= 1 && num <= choices.options.length) {
-        selectedValue = choices.options[num - 1].value;
-      } else {
-        // Match by label or value (case-insensitive)
-        const lower = input.toLowerCase();
-        const match = choices.options.find(o =>
-          o.value.toLowerCase() === lower || o.label.toLowerCase() === lower
-        );
-        selectedValue = match?.value;
-      }
-
-      if (!selectedValue) {
-        console.log(`${c.yellow}  Invalid choice. Pick a number (1-${choices.options.length}) or type the option name.${c.reset}\n`);
-        // Re-show choices
-        for (let i = 0; i < choices.options.length; i++) {
-          console.log(`  ${c.cyan}${i + 1}.${c.reset} ${choices.options[i].label}`);
-        }
-        pendingChoices = choices; // restore
-        console.log('');
-        rl.prompt();
-        return;
-      }
-
-      try {
-        process.stdout.write(`${c.dim}  processing...${c.reset}`);
-        const followUp = await choices.mainAgent.handleChoice(choices.originalMessage, selectedValue);
-        process.stdout.write('\r\x1b[K');
-        await renderResponse(followUp, choices.originalMessage, choices.mainAgent);
-      } catch (err) {
-        process.stdout.write('\r\x1b[K');
-        console.log(`${c.yellow}  Error: ${err instanceof Error ? err.message : 'Unknown'}${c.reset}\n`);
-      }
-      rl.prompt();
       return;
     }
 
