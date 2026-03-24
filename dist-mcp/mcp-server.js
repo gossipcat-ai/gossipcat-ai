@@ -7105,6 +7105,9 @@ var init_tool_router = __esm({
           if (!match) {
             match = /\[TOOL_CALL\]\s*([\s\S]*?)(?:\n\n|\n```)/.exec(text);
           }
+          if (!match) {
+            match = /\[TOOL_CALL\]\s*([\s\S]+)$/.exec(text);
+          }
           if (!match) return null;
           let content = match[1].trim();
           content = content.replace(/^```(?:json|yaml)?\s*/i, "").replace(/\s*```$/, "");
@@ -7123,6 +7126,12 @@ var init_tool_router = __esm({
             }
             tool = yamlResult.tool;
             args = yamlResult.args;
+          }
+          if (typeof tool === "string" && tool.startsWith("gossip_")) {
+            const stripped = tool.replace(/^gossip_/, "");
+            if (TOOL_SCHEMAS[stripped]) {
+              tool = stripped;
+            }
           }
           if (typeof tool !== "string" || !TOOL_SCHEMAS[tool]) {
             log2(`unknown tool: ${tool}`);
@@ -7164,6 +7173,7 @@ var init_tool_router = __esm({
         if (rawMatches) {
           result = result.replace(BLOCK_RE, "");
         }
+        result = result.replace(/\[TOOL_CALL\][\s\S]*$/, "");
         const totalMatches = (fencedMatches?.length ?? 0) + (rawMatches?.length ?? 0);
         if (totalMatches > 1) {
           log2(`warning: ${totalMatches} tool call blocks found, stripping all`);
@@ -7725,7 +7735,7 @@ Rules:
 - Pick the best archetype and customize roles for this specific project
 - Add project-specific skills beyond the defaults
 - Assign models: strongest available \u2192 hardest role, cheapest \u2192 light roles
-- Agent IDs format: provider-preset (e.g. gemini-implementer)
+- Do NOT include agent IDs \u2014 the system generates them automatically
 - Max 5 agents
 - If the description is too vague, respond with a [CHOICES] block asking what kind of project
 
@@ -7734,7 +7744,7 @@ Respond with JSON:
   "archetype": "archetype-id",
   "reason": "why this archetype fits",
   "main_agent": { "provider": "...", "model": "..." },
-  "agents": [{ "id": "...", "provider": "...", "model": "...", "preset": "...", "skills": [...] }]
+  "agents": [{ "provider": "...", "model": "...", "preset": "...", "skills": [...] }]
 }`;
         const messages = [
           { role: "system", content: systemPrompt },
@@ -7745,6 +7755,13 @@ Respond with JSON:
         if (!jsonMatch) return { text: `LLM returned unexpected format:
 ${response.text}` };
         const proposal = JSON.parse(jsonMatch[0]);
+        const idCounts = {};
+        for (const a of proposal.agents || []) {
+          const providerShort = a.provider === "anthropic" ? "claude" : a.provider === "openai" ? "gpt" : a.provider === "google" ? "gemini" : a.provider || "agent";
+          const base = `${providerShort}-${a.preset || "agent"}`;
+          idCounts[base] = (idCounts[base] || 0) + 1;
+          a.id = idCounts[base] > 1 ? `${base}-${idCounts[base]}` : base;
+        }
         this.pendingProposal = proposal;
         this.pendingTask = userMessage;
         const agentList = (proposal.agents || []).map((a) => `  - ${a.id} (${a.provider}/${a.model}) \u2014 ${a.preset}`).join("\n");

@@ -81,9 +81,14 @@ export class ToolRouter {
         match = /```[^\n]*\n\[TOOL_CALL\]([\s\S]*?)(?:\[\/TOOL_CALL\])?\s*```/.exec(text);
       }
 
-      // Fallback: [TOOL_CALL] without closing tag (LLM forgot to close)
+      // Fallback: [TOOL_CALL] without closing tag, ends at double newline or fence
       if (!match) {
         match = /\[TOOL_CALL\]\s*([\s\S]*?)(?:\n\n|\n```)/.exec(text);
+      }
+
+      // Fallback: [TOOL_CALL] at end of text (no closing tag, no trailing content)
+      if (!match) {
+        match = /\[TOOL_CALL\]\s*([\s\S]+)$/.exec(text);
       }
 
       if (!match) return null;
@@ -109,6 +114,14 @@ export class ToolRouter {
         }
         tool = yamlResult.tool;
         args = yamlResult.args;
+      }
+
+      // Normalize MCP-style tool names (gossip_plan → plan, gossip_dispatch → dispatch)
+      if (typeof tool === 'string' && tool.startsWith('gossip_')) {
+        const stripped = tool.replace(/^gossip_/, '');
+        if (TOOL_SCHEMAS[stripped]) {
+          tool = stripped;
+        }
       }
 
       if (typeof tool !== 'string' || !TOOL_SCHEMAS[tool]) {
@@ -156,6 +169,8 @@ export class ToolRouter {
     if (rawMatches) {
       result = result.replace(BLOCK_RE, '');
     }
+    // Strip [TOOL_CALL] at end of text (no closing tag)
+    result = result.replace(/\[TOOL_CALL\][\s\S]*$/, '');
     const totalMatches = (fencedMatches?.length ?? 0) + (rawMatches?.length ?? 0);
     if (totalMatches > 1) {
       log(`warning: ${totalMatches} tool call blocks found, stripping all`);

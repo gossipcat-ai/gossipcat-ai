@@ -68,6 +68,21 @@ describe('ToolRouter', () => {
       expect(result!.args.task).toContain('review this code');
     });
 
+    it('handles [TOOL_CALL] at end of text without closing tag', () => {
+      const text = 'I\'ll plan this.\n\n[TOOL_CALL]\ntool: plan\nargs:\n    task: "build a snake game"';
+      const result = ToolRouter.parseToolCall(text);
+      expect(result).not.toBeNull();
+      expect(result!.tool).toBe('plan');
+      expect(result!.args.task).toContain('snake game');
+    });
+
+    it('normalizes MCP-style tool names (gossip_plan → plan)', () => {
+      const text = '[TOOL_CALL]\ntool: gossip_plan\nargs:\n  task: "test"';
+      const result = ToolRouter.parseToolCall(text);
+      expect(result).not.toBeNull();
+      expect(result!.tool).toBe('plan');
+    });
+
     it('handles trailing commas in JSON', () => {
       const text = `[TOOL_CALL]
 {"tool": "dispatch", "args": {"agent_id": "writer", "task": "write tests",}}
