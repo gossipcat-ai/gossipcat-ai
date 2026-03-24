@@ -1,0 +1,560 @@
+/**
+ * @gossip/orchestrator — Parse and validate [TOOL_CALL] blocks from LLM responses,
+ * and execute validated tool calls via ToolExecutor.
+ */
+
+import { TOOL_SCHEMAS, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';
+import type { ToolCall, ToolResult, DispatchPlan, PlannedTask } from './types';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
+
+const log = (msg: string) => process.stderr.write(`[tool-router] ${msg}\n`);
+const AGENT_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+/**
+ * Parse YAML-like tool call format that LLMs commonly produce:
+ *   tool: dispatch
+ *   args:
+ *     agent_id: gemini-reviewer
+ *     task: "review this code"
+ */
+function parseYamlLikeToolCall(content: string): { tool: string; args: Record<string, unknown> } | null {
+  const lines = content.split('\n').map(l => l.trimEnd());
+
+  // Find tool name
+  const toolLine = lines.find(l => /^tool:\s*/.test(l));
+  if (!toolLine) return null;
+  const tool = toolLine.replace(/^tool:\s*/, '').trim().replace(/^["']|["']$/g, '');
+  if (!tool) return null;
+
+  // Find args
+  const args: Record<string, unknown> = {};
+  const argsIdx = lines.findIndex(l => /^args:\s*/.test(l));
+  if (argsIdx === -1) {
+    // No args section — check if args are inline: args: {}
+    const inlineArgs = toolLine.match(/args:\s*\{(.*)\}/);
+    if (inlineArgs) {
+      try { return { tool, args: JSON.parse(`{${inlineArgs[1]}}`) }; } catch { /* continue */ }
+    }
+    return { tool, args };
+  }
+
+  // Parse indented key-value pairs after "args:"
+  const inlineArgsMatch = lines[argsIdx].match(/^args:\s*\{(.*)\}\s*$/);
+  if (inlineArgsMatch) {
+    try { return { tool, args: JSON.parse(`{${inlineArgsMatch[1]}}`) }; } catch { /* continue */ }
+  }
+
+  for (let i = argsIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line || /^\S/.test(line)) break; // stop at non-indented line
+    const kvMatch = line.match(/^\s+(\w+):\s*(.+)/);
+    if (kvMatch) {
+      let value: unknown = kvMatch[2].trim();
+      // Strip quotes
+      if (typeof value === 'string' && /^["'].*["']$/.test(value)) {
+        value = (value as string).slice(1, -1);
+      }
+      // Parse numbers
+      if (typeof value === 'string' && /^\d+$/.test(value)) {
+        value = parseInt(value, 10);
+      }
+      args[kvMatch[1]] = value;
+    }
+  }
+
+  return { tool, args };
+}
+// Match both [TOOL_CALL]...[/TOOL_CALL] and ```\n[TOOL_CALL]...\n``` formats
+const BLOCK_RE = /\[TOOL_CALL\]([\s\S]*?)\[\/TOOL_CALL\]/g;
+const BLOCK_IN_FENCE_RE = /```[^\n]*\n\[TOOL_CALL\]([\s\S]*?)(?:\[\/TOOL_CALL\])?\s*```/g;
+
+export class ToolRouter {
+  /** Parse the FIRST [TOOL_CALL] block from LLM text. Returns null on any failure. */
+  static parseToolCall(text: string): ToolCall | null {
+    try {
+      // Try spec format first: [TOOL_CALL]...[/TOOL_CALL]
+      let match = /\[TOOL_CALL\]([\s\S]*?)\[\/TOOL_CALL\]/.exec(text);
+
+      // Fallback: [TOOL_CALL] inside markdown code fences (common LLM behavior)
+      if (!match) {
+        match = /```[^\n]*\n\[TOOL_CALL\]([\s\S]*?)(?:\[\/TOOL_CALL\])?\s*```/.exec(text);
+      }
+
+      // Fallback: [TOOL_CALL] without closing tag (LLM forgot to close)
+      if (!match) {
+        match = /\[TOOL_CALL\]\s*([\s\S]*?)(?:\n\n|\n```)/.exec(text);
+      }
+
+      if (!match) return null;
+
+      let content = match[1].trim();
+      // Strip any remaining code fences
+      content = content.replace(/^```(?:json|yaml)?\s*/i, '').replace(/\s*```$/, '');
+
+      // Try JSON parse first
+      let tool: string;
+      let args: Record<string, unknown>;
+      const jsonAttempt = content.replace(/,\s*([}\]])/g, '$1');
+      try {
+        const parsed = JSON.parse(jsonAttempt);
+        tool = parsed.tool;
+        args = parsed.args ?? {};
+      } catch {
+        // Fallback: parse YAML-like format (tool: X, args:\n  key: value)
+        const yamlResult = parseYamlLikeToolCall(content);
+        if (!yamlResult) {
+          log(`failed to parse tool call content: ${content.slice(0, 200)}`);
+          return null;
+        }
+        tool = yamlResult.tool;
+        args = yamlResult.args;
+      }
+
+      if (typeof tool !== 'string' || !TOOL_SCHEMAS[tool]) {
+        log(`unknown tool: ${tool}`);
+        return null;
+      }
+      const schema = TOOL_SCHEMAS[tool];
+      for (const req of schema.requiredArgs) {
+        if (!(req in args)) {
+          log(`missing required arg '${req}' for tool '${tool}'`);
+          return null;
+        }
+      }
+      // Validate agent_id
+      if (args.agent_id !== undefined && !AGENT_ID_RE.test(String(args.agent_id))) {
+        log(`invalid agent_id: ${args.agent_id}`);
+        return null;
+      }
+      // Validate agent_ids array
+      if (Array.isArray(args.agent_ids)) {
+        for (const id of args.agent_ids) {
+          if (!AGENT_ID_RE.test(String(id))) {
+            log(`invalid agent_id in agent_ids: ${id}`);
+            return null;
+          }
+        }
+      }
+      return { tool, args };
+    } catch (err) {
+      log(`parse error: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  /** Remove ALL [TOOL_CALL] blocks from text, collapse excess newlines. */
+  static stripToolCallBlocks(text: string): string {
+    let result = text;
+    // Strip fenced blocks containing [TOOL_CALL]
+    const fencedMatches = result.match(BLOCK_IN_FENCE_RE);
+    if (fencedMatches) {
+      result = result.replace(BLOCK_IN_FENCE_RE, '');
+    }
+    // Strip raw [TOOL_CALL]...[/TOOL_CALL] blocks
+    const rawMatches = result.match(BLOCK_RE);
+    if (rawMatches) {
+      result = result.replace(BLOCK_RE, '');
+    }
+    const totalMatches = (fencedMatches?.length ?? 0) + (rawMatches?.length ?? 0);
+    if (totalMatches > 1) {
+      log(`warning: ${totalMatches} tool call blocks found, stripping all`);
+    }
+    return result.replace(/\n{3,}/g, '\n\n').trim();
+  }
+}
+
+// ── ToolExecutor ──────────────────────────────────────────────────────────
+
+export interface ToolExecutorConfig {
+  pipeline: any;       // DispatchPipeline — use any to avoid circular imports
+  registry: any;       // AgentRegistry
+  projectRoot: string;
+  dispatcher?: any;    // TaskDispatcher
+}
+
+interface AgentLike {
+  id: string;
+  provider: string;
+  model: string;
+  skills: string[];
+}
+
+interface CollectResultLike {
+  results: Array<{ agentId: string; status: string; result?: string; error?: string }>;
+  consensus?: { summary: string };
+}
+
+/**
+ * Executes validated ToolCalls by calling the appropriate pipeline/registry
+ * methods, with auto-chaining for dispatch tools.
+ */
+export class ToolExecutor {
+  pendingPlan: { plan: DispatchPlan; tasks: PlannedTask[] } | null = null;
+  pendingInstructionUpdate: { agentIds: string[]; instruction: string } | null = null;
+
+  private readonly pipeline: any;
+  private readonly registry: any;
+  private readonly projectRoot: string;
+  private readonly dispatcher: any;
+
+  constructor(config: ToolExecutorConfig) {
+    this.pipeline = config.pipeline;
+    this.registry = config.registry;
+    this.projectRoot = config.projectRoot;
+    this.dispatcher = config.dispatcher ?? null;
+  }
+
+  async execute(toolCall: ToolCall): Promise<ToolResult> {
+    try {
+      switch (toolCall.tool) {
+        case 'dispatch':
+          return await this.handleDispatch(toolCall.args);
+        case 'dispatch_parallel':
+          return await this.handleDispatchParallel(toolCall.args);
+        case 'dispatch_consensus':
+          return await this.handleDispatchConsensus(toolCall.args);
+        case 'plan':
+          return await this.handlePlan(toolCall.args);
+        case 'agents':
+          return this.handleAgents();
+        case 'agent_status':
+          return this.handleAgentStatus(toolCall.args);
+        case 'agent_performance':
+          return this.handleAgentPerformance();
+        case 'update_instructions':
+          return this.handleUpdateInstructions(toolCall.args);
+        case 'read_task_history':
+          return this.handleReadTaskHistory(toolCall.args);
+        default:
+          return { text: `Tool error: unknown tool "${toolCall.tool}"` };
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return { text: `Tool error: ${message}` };
+    }
+  }
+
+  async executePlan(pending: { plan: DispatchPlan; tasks: PlannedTask[] }): Promise<ToolResult> {
+    try {
+      const { plan, tasks } = pending;
+      const agents: string[] = [];
+
+      if (plan.strategy === 'parallel') {
+        const taskDefs = tasks.map(t => ({
+          agentId: t.agentId,
+          task: t.task,
+          options: t.writeMode ? { writeMode: t.writeMode, scope: t.scope } : undefined,
+        }));
+        const { taskIds, errors } = await this.pipeline.dispatchParallel(taskDefs);
+        if (errors.length > 0) {
+          const taskSummary = tasks.map(t => `  - [${t.agentId}] ${t.task}`).join('\n');
+          return { text: `Plan execution failed.\n\nErrors:\n${errors.map((e: string) => `  - ${e}`).join('\n')}\n\nPlanned tasks:\n${taskSummary}` };
+        }
+        const collectResult: CollectResultLike = await this.pipeline.collect(taskIds, 120_000);
+        const lines = collectResult.results.map(r =>
+          `[${r.agentId}] ${r.status === 'completed' ? r.result : `ERROR: ${r.error}`}`
+        );
+        agents.push(...tasks.map(t => t.agentId));
+        return { text: lines.join('\n\n'), agents };
+      }
+
+      // Sequential: dispatch one by one
+      const results: string[] = [];
+      for (const t of tasks) {
+        const opts = t.writeMode ? { writeMode: t.writeMode, scope: t.scope } : undefined;
+        const { taskId } = this.pipeline.dispatch(t.agentId, t.task, opts);
+        const collectResult: CollectResultLike = await this.pipeline.collect([taskId], 120_000);
+        const entry = collectResult.results[0];
+        results.push(`[${t.agentId}] ${entry?.status === 'completed' ? entry.result : `ERROR: ${entry?.error}`}`);
+        agents.push(t.agentId);
+      }
+      return { text: results.join('\n\n'), agents };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return { text: `Tool error: ${message}` };
+    }
+  }
+
+  async applyInstructionUpdate(pending: { agentIds: string[]; instruction: string }): Promise<ToolResult> {
+    try {
+      const fsp = await import('fs/promises');
+      const updatedIds: string[] = [];
+
+      for (const id of pending.agentIds) {
+        const agentDir = join(this.projectRoot, '.gossip', 'agents', id);
+        const filePath = join(agentDir, 'instructions.md');
+
+        if (!existsSync(agentDir)) {
+          await fsp.mkdir(agentDir, { recursive: true });
+        }
+
+        if (existsSync(filePath)) {
+          await fsp.appendFile(filePath, `\n\n${pending.instruction}`, 'utf-8');
+        } else {
+          await fsp.writeFile(filePath, pending.instruction, 'utf-8');
+        }
+        updatedIds.push(id);
+      }
+
+      return { text: `Updated instructions for: ${updatedIds.join(', ')}` };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return { text: `Tool error: ${message}` };
+    }
+  }
+
+  // ── Private handlers ──────────────────────────────────────────────────
+
+  private async handleDispatch(args: Record<string, unknown>): Promise<ToolResult> {
+    const agentId = String(args.agent_id);
+    const task = String(args.task);
+
+    if (!this.registry.get(agentId)) {
+      return { text: `Tool error: agent "${agentId}" not found in registry` };
+    }
+
+    // Pass through write_mode/scope if LLM provided them
+    const options: Record<string, unknown> = {};
+    if (args.write_mode) options.writeMode = args.write_mode;
+    if (args.scope) options.scope = args.scope;
+    const dispatchOpts = Object.keys(options).length > 0 ? options : undefined;
+
+    const { taskId } = dispatchOpts
+      ? this.pipeline.dispatch(agentId, task, dispatchOpts as any)
+      : this.pipeline.dispatch(agentId, task);
+    const collectResult: CollectResultLike = await this.pipeline.collect([taskId], 120_000);
+    const entry = collectResult.results[0];
+
+    if (!entry || entry.status === 'failed') {
+      return { text: `Tool error: ${entry?.error ?? 'task failed'}`, agents: [agentId] };
+    }
+
+    return { text: entry.result ?? '', agents: [agentId] };
+  }
+
+  private async handleDispatchParallel(args: Record<string, unknown>): Promise<ToolResult> {
+    const tasks = args.tasks as Array<{ agent_id: string; task: string }>;
+    const agents: string[] = [];
+
+    // Validate all agent_ids first
+    for (const t of tasks) {
+      if (!this.registry.get(t.agent_id)) {
+        return { text: `Tool error: agent "${t.agent_id}" not found in registry` };
+      }
+      agents.push(t.agent_id);
+    }
+
+    const taskDefs = tasks.map(t => ({ agentId: t.agent_id, task: t.task }));
+    const { taskIds, errors } = await this.pipeline.dispatchParallel(taskDefs);
+
+    if (errors.length > 0) {
+      return { text: `Tool error: ${errors.join('; ')}`, agents };
+    }
+
+    const collectResult: CollectResultLike = await this.pipeline.collect(taskIds, 120_000);
+    const lines = collectResult.results.map(r =>
+      `[${r.agentId}] ${r.status === 'completed' ? r.result : `ERROR: ${r.error}`}`
+    );
+
+    return { text: lines.join('\n\n'), agents };
+  }
+
+  private async handleDispatchConsensus(args: Record<string, unknown>): Promise<ToolResult> {
+    const task = String(args.task);
+    const specifiedIds = args.agent_ids as string[] | undefined;
+
+    let agents: AgentLike[];
+    if (specifiedIds) {
+      const missing = specifiedIds.filter((id: string) => !this.registry.get(id));
+      if (missing.length > 0) {
+        return { text: `Tool error: agents not found in registry: ${missing.join(', ')}` };
+      }
+      agents = specifiedIds.map((id: string) => this.registry.get(id)!);
+    } else {
+      agents = this.registry.getAll();
+    }
+
+    if (agents.length < 2) {
+      return { text: 'Tool error: consensus requires at least 2 agents' };
+    }
+
+    const agentIds = agents.map(a => a.id);
+    const taskDefs = agentIds.map(id => ({ agentId: id, task }));
+    const { taskIds, errors } = await this.pipeline.dispatchParallel(taskDefs, { consensus: true });
+
+    if (errors.length > 0) {
+      return { text: `Tool error: ${errors.join('; ')}`, agents: agentIds };
+    }
+
+    const collectResult: CollectResultLike = await this.pipeline.collect(taskIds, 300_000, { consensus: true });
+    const lines = collectResult.results.map(r =>
+      `[${r.agentId}] ${r.status === 'completed' ? r.result : `ERROR: ${r.error}`}`
+    );
+
+    let text = lines.join('\n\n');
+    if (collectResult.consensus?.summary) {
+      text += `\n\n## Consensus Report\n${collectResult.consensus.summary}`;
+    }
+
+    return { text, agents: agentIds };
+  }
+
+  private async handlePlan(args: Record<string, unknown>): Promise<ToolResult> {
+    const task = String(args.task);
+
+    if (this.pendingPlan) {
+      return {
+        text: 'A plan is already pending approval. Choose an action:',
+        choices: {
+          message: 'A plan is already pending. What would you like to do?',
+          options: [
+            { value: PENDING_PLAN_CHOICES.EXECUTE_PENDING, label: 'Execute pending plan' },
+            { value: PENDING_PLAN_CHOICES.DISCARD, label: 'Discard and create new plan' },
+            { value: PENDING_PLAN_CHOICES.CANCEL, label: 'Cancel' },
+          ],
+        },
+      };
+    }
+
+    if (!this.dispatcher) {
+      return { text: 'Tool error: dispatcher not available for plan decomposition' };
+    }
+
+    const plan: DispatchPlan = await this.dispatcher.decompose(task);
+    const assigned: DispatchPlan = this.dispatcher.assignAgents(plan);
+    const tasks: PlannedTask[] = await this.dispatcher.classifyWriteModes(assigned);
+
+    this.pendingPlan = { plan: assigned, tasks };
+
+    const planLines = tasks.map((t, i) =>
+      `${i + 1}. [${t.agentId}] ${t.task}${t.writeMode ? ` (${t.writeMode}${t.scope ? `: ${t.scope}` : ''})` : ''}`
+    );
+
+    return {
+      text: `## Plan: ${task}\n\nStrategy: ${assigned.strategy}\n\n${planLines.join('\n')}`,
+      choices: {
+        message: 'How would you like to proceed?',
+        options: [
+          { value: PLAN_CHOICES.EXECUTE, label: 'Execute plan' },
+          { value: PLAN_CHOICES.MODIFY, label: 'Modify plan' },
+          { value: PLAN_CHOICES.CANCEL, label: 'Cancel' },
+        ],
+      },
+    };
+  }
+
+  private handleAgents(): ToolResult {
+    const agents: AgentLike[] = this.registry.getAll();
+    if (agents.length === 0) {
+      return { text: 'No agents registered.' };
+    }
+
+    const lines = agents.map(a =>
+      `- **${a.id}** (${a.provider}/${a.model}) — skills: ${a.skills.join(', ') || 'none'}`
+    );
+
+    return { text: `## Registered Agents\n\n${lines.join('\n')}` };
+  }
+
+  private handleAgentStatus(args: Record<string, unknown>): ToolResult {
+    const agentId = String(args.agent_id);
+
+    if (!this.registry.get(agentId)) {
+      return { text: `Tool error: agent "${agentId}" not found in registry` };
+    }
+
+    const tasksPath = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory', 'tasks.jsonl');
+    if (!existsSync(tasksPath)) {
+      return { text: `Agent "${agentId}" — no task history found.` };
+    }
+
+    const rawLines = readFileSync(tasksPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const last5 = rawLines.slice(-5).map(line => {
+      try { return JSON.parse(line); } catch (_e) { return null; }
+    }).filter(Boolean);
+
+    const formatted = last5.map((entry: Record<string, unknown>) =>
+      `- ${entry.task} — warmth: ${entry.warmth ?? 'n/a'}, ${entry.timestamp ?? ''}`
+    );
+
+    return { text: `## Agent Status: ${agentId}\n\nLast ${last5.length} tasks:\n${formatted.join('\n')}` };
+  }
+
+  private handleAgentPerformance(): ToolResult {
+    const perfPath = join(this.projectRoot, '.gossip', 'agent-performance.jsonl');
+    if (!existsSync(perfPath)) {
+      return { text: 'No performance data found.' };
+    }
+
+    const rawLines = readFileSync(perfPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const last20 = rawLines.slice(-20).map(line => {
+      try { return JSON.parse(line); } catch (_e) { return null; }
+    }).filter(Boolean);
+
+    // Group by agent
+    const byAgent = new Map<string, Array<Record<string, unknown>>>();
+    for (const signal of last20) {
+      const id = String(signal.agentId ?? 'unknown');
+      if (!byAgent.has(id)) byAgent.set(id, []);
+      byAgent.get(id)!.push(signal as Record<string, unknown>);
+    }
+
+    const sections = Array.from(byAgent.entries()).map(([id, signals]) =>
+      `### ${id}\n${signals.map(s => `- ${s.signal ?? s.type ?? 'signal'} (${s.outcome ?? 'n/a'})`).join('\n')}`
+    );
+
+    return { text: `## Agent Performance (last ${last20.length} signals)\n\n${sections.join('\n\n')}` };
+  }
+
+  private handleUpdateInstructions(args: Record<string, unknown>): ToolResult {
+    const agentIds = args.agent_ids as string[];
+    const instruction = String(args.instruction);
+
+    // Validate all IDs exist
+    for (const id of agentIds) {
+      if (!this.registry.get(id)) {
+        return { text: `Tool error: agent "${id}" not found in registry` };
+      }
+    }
+
+    this.pendingInstructionUpdate = { agentIds, instruction };
+
+    return {
+      text: `Instruction update staged for: ${agentIds.join(', ')}\n\nInstruction: "${instruction}"`,
+      choices: {
+        message: 'Apply this instruction update?',
+        options: [
+          { value: 'apply', label: 'Apply instruction update' },
+          { value: 'cancel', label: 'Cancel' },
+        ],
+        type: 'confirm',
+      },
+    };
+  }
+
+  private handleReadTaskHistory(args: Record<string, unknown>): ToolResult {
+    const agentId = String(args.agent_id);
+    const limit = typeof args.limit === 'number' ? args.limit : 10;
+
+    if (!this.registry.get(agentId)) {
+      return { text: `Tool error: agent "${agentId}" not found in registry` };
+    }
+
+    const tasksPath = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory', 'tasks.jsonl');
+    if (!existsSync(tasksPath)) {
+      return { text: `No task history for agent "${agentId}".` };
+    }
+
+    const rawLines = readFileSync(tasksPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const entries = rawLines.slice(-limit).map(line => {
+      try { return JSON.parse(line); } catch (_e) { return null; }
+    }).filter(Boolean);
+
+    const formatted = entries.map((e: Record<string, unknown>) =>
+      `- **${e.task}** — warmth: ${e.warmth ?? 'n/a'}, scores: ${JSON.stringify(e.scores ?? {})}, ${e.timestamp ?? ''}`
+    );
+
+    return { text: `## Task History: ${agentId} (last ${entries.length})\n\n${formatted.join('\n')}` };
+  }
+}

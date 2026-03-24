@@ -296,3 +296,24 @@ export interface GossipMessage {
   summary: string;
   timestamp: string;
 }
+
+// ── Cognitive Orchestration Types ─────────────────────────────────────────
+
+/** A parsed tool call from LLM response */
+export interface ToolCall {
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/** Result of executing a tool via ToolRouter */
+export interface ToolResult {
+  text: string;
+  agents?: string[];
+  choices?: ChatResponse['choices'];
+}
+
+/** Options for MainAgent.handleMessage() */
+export interface HandleMessageOptions {
+  /** 'cognitive' = intent detection (default), 'decompose' = old flow */
+  mode?: 'cognitive' | 'decompose';
+}

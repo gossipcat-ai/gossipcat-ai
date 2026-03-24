@@ -1,9 +1,11 @@
 import { randomUUID } from 'crypto';
+import { readFileSync } from 'fs';
+import { resolve as resolvePath } from 'path';
 import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, SessionGossipEntry, PlanState } from './types';
 import { ILLMProvider } from './llm-client';
 import { LLMMessage } from '@gossip/types';
 import { loadSkills } from './skill-loader';
-import { assemblePrompt } from './prompt-assembler';
+import { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment } from './prompt-assembler';
 import { AgentMemoryReader } from './agent-memory';
 import { MemoryWriter } from './memory-writer';
 import { MemoryCompactor } from './memory-compactor';
@@ -151,6 +153,23 @@ export class DispatchPipeline {
       }
     }
 
+    // 4b. Spec-review enrichment
+    let specReviewContext: string | undefined;
+    const specRefs = extractSpecReferences(task);
+    if (specRefs.length > 0) {
+      try {
+        const specPath = resolvePath(this.projectRoot, specRefs[0]);
+        if (specPath.startsWith(this.projectRoot)) {
+          const specContent = readFileSync(specPath, 'utf-8');
+          const implFiles = extractSpecReferences(task, specContent);
+          const enrichment = buildSpecReviewEnrichment(implFiles);
+          if (enrichment) specReviewContext = enrichment;
+        }
+      } catch {
+        // Spec file not readable — skip enrichment
+      }
+    }
+
     // 5. Assemble prompt
     const promptContent = assemblePrompt({
       memory: memory || undefined,
@@ -159,6 +178,7 @@ export class DispatchPipeline {
       sessionContext: sessionContext || undefined,
       chainContext: chainContext || undefined,
       consensusSummary: options?.consensus,
+      specReviewContext,
     });
 
     // 6. Record TaskGraph created

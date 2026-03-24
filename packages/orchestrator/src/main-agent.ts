@@ -9,13 +9,15 @@ import { ILLMProvider, createProvider } from './llm-client';
 import { AgentRegistry } from './agent-registry';
 import { TaskDispatcher } from './task-dispatcher';
 import { WorkerAgent } from './worker-agent';
-import { AgentConfig, DispatchOptions, PlanState, TaskResult, ChatResponse } from './types';
+import { AgentConfig, DispatchOptions, PlanState, TaskResult, ChatResponse, HandleMessageOptions } from './types';
 import { ALL_TOOLS } from '@gossip/tools';
-import { ContentBlock, TextContent, MessageType, MessageEnvelope, Message } from '@gossip/types';
+import { ContentBlock, TextContent, MessageType, MessageEnvelope, Message, LLMMessage } from '@gossip/types';
 import { GossipAgent } from '@gossip/client';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
 import { DispatchPipeline, ToolServerCallbacks } from './dispatch-pipeline';
 import { TaskGraphSync } from './task-graph-sync';
+import { ToolRouter, ToolExecutor } from './tool-router';
+import { buildToolSystemPrompt, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';
 
 const CHAT_SYSTEM_PROMPT = `You are a developer assistant powering Gossip Mesh. Be concise and direct.
 
@@ -61,6 +63,9 @@ export class MainAgent {
   private pipeline: DispatchPipeline;
   private bootstrapPrompt: string;
   private orchestratorAgent: GossipAgent | null = null;
+  private toolExecutor: ToolExecutor;
+  private conversationHistory: LLMMessage[] = [];
+  private readonly MAX_HISTORY = 20; // 10 pairs of user+assistant
 
   constructor(config: MainAgentConfig) {
     this.llm = config.llm ?? createProvider(config.provider, config.model, config.apiKey);
@@ -82,6 +87,12 @@ export class MainAgent {
       llm: this.llm,
       syncFactory: config.syncFactory,
       toolServer: config.toolServer,
+    });
+    this.toolExecutor = new ToolExecutor({
+      pipeline: this.pipeline,
+      registry: this.registry,
+      projectRoot: this.projectRoot,
+      dispatcher: this.dispatcher,
     });
   }
 
@@ -167,8 +178,16 @@ export class MainAgent {
     this.workers.clear();
   }
 
-  /** Handle a user message: decompose, dispatch, synthesize. Returns structured ChatResponse. */
-  async handleMessage(userMessage: string | ContentBlock[]): Promise<ChatResponse> {
+  /** Handle a user message. Default mode is cognitive (tool-calling); 'decompose' preserves the old flow. */
+  async handleMessage(userMessage: string | ContentBlock[], options?: HandleMessageOptions): Promise<ChatResponse> {
+    if (options?.mode === 'decompose') {
+      return this.handleMessageDecompose(userMessage);
+    }
+    return this.handleMessageCognitive(userMessage);
+  }
+
+  /** Original decompose → assign → dispatch → synthesize flow. */
+  private async handleMessageDecompose(userMessage: string | ContentBlock[]): Promise<ChatResponse> {
     // Extract text for task decomposition (dispatcher needs text only)
     const textForDispatch = typeof userMessage === 'string'
       ? userMessage
@@ -211,8 +230,99 @@ export class MainAgent {
     };
   }
 
+  /** Cognitive mode: LLM decides whether to chat or call tools. */
+  private async handleMessageCognitive(userMessage: string | ContentBlock[]): Promise<ChatResponse> {
+    // Extract text for LLM
+    const text = typeof userMessage === 'string'
+      ? userMessage
+      : userMessage.filter(b => b.type === 'text').map(b => (b as TextContent).text).join(' ') || 'Describe this image.';
+
+    // Build system prompt with tool definitions
+    const agents = this.registry.getAll();
+    const toolPrompt = buildToolSystemPrompt(agents);
+    const systemPrompt = [this.bootstrapPrompt, CHAT_SYSTEM_PROMPT, toolPrompt].filter(Boolean).join('\n\n');
+
+    // Call LLM with conversation history
+    const messages: LLMMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...this.conversationHistory,
+      { role: 'user', content: userMessage },  // preserve ContentBlock[] for multimodal
+    ];
+    const response = await this.llm.generate(messages, { temperature: 0 });
+
+    // Parse for tool call — [TOOL_CALL] takes precedence over [CHOICES]
+    const toolCall = ToolRouter.parseToolCall(response.text);
+
+    let result: ChatResponse;
+    if (toolCall) {
+      // Execute tool with auto-chaining
+      const toolResult = await this.toolExecutor.execute(toolCall);
+      const explanation = ToolRouter.stripToolCallBlocks(response.text);
+      result = {
+        text: explanation ? `${explanation}\n\n${toolResult.text}` : toolResult.text,
+        status: 'done',
+        agents: toolResult.agents,
+        choices: toolResult.choices,
+      };
+    } else {
+      // Plain chat response — parse for [CHOICES]
+      result = this.parseResponse(response.text);
+    }
+
+    // Update conversation history (trim to MAX_HISTORY)
+    this.conversationHistory.push(
+      { role: 'user', content: text },
+      { role: 'assistant', content: result.text.slice(0, 2000) }, // cap to prevent context overflow
+    );
+    if (this.conversationHistory.length > this.MAX_HISTORY) {
+      this.conversationHistory = this.conversationHistory.slice(-this.MAX_HISTORY);
+    }
+
+    return result;
+  }
+
   /** Handle a user's choice selection — continues the conversation with context */
   async handleChoice(originalMessage: string, choiceValue: string): Promise<ChatResponse> {
+    // Plan approval
+    if (this.toolExecutor.pendingPlan) {
+      if (choiceValue === PLAN_CHOICES.EXECUTE) {
+        const plan = this.toolExecutor.pendingPlan;
+        this.toolExecutor.pendingPlan = null;
+        const toolResult = await this.toolExecutor.executePlan(plan);
+        return { text: toolResult.text, status: 'done', agents: toolResult.agents };
+      }
+      if (choiceValue === PLAN_CHOICES.CANCEL || choiceValue === PENDING_PLAN_CHOICES.CANCEL) {
+        this.toolExecutor.pendingPlan = null;
+        return { text: 'Plan cancelled.', status: 'done' };
+      }
+      if (choiceValue === PENDING_PLAN_CHOICES.DISCARD) {
+        this.toolExecutor.pendingPlan = null;
+        return { text: 'Old plan discarded. Send your new task.', status: 'done' };
+      }
+      if (choiceValue === PENDING_PLAN_CHOICES.EXECUTE_PENDING) {
+        const plan = this.toolExecutor.pendingPlan;
+        this.toolExecutor.pendingPlan = null;
+        const toolResult = await this.toolExecutor.executePlan(plan);
+        return { text: toolResult.text, status: 'done', agents: toolResult.agents };
+      }
+      if (choiceValue === PLAN_CHOICES.MODIFY) {
+        this.toolExecutor.pendingPlan = null;
+        return { text: 'Plan discarded. Describe your modifications and I\'ll create a new plan.', status: 'done' };
+      }
+    }
+
+    // Instruction update confirmation
+    if (this.toolExecutor.pendingInstructionUpdate) {
+      if (choiceValue === 'apply') {
+        const pending = this.toolExecutor.pendingInstructionUpdate;
+        this.toolExecutor.pendingInstructionUpdate = null;
+        const toolResult = await this.toolExecutor.applyInstructionUpdate(pending);
+        return { text: toolResult.text, status: 'done' };
+      }
+      this.toolExecutor.pendingInstructionUpdate = null;
+      return { text: 'Instruction update cancelled.', status: 'done' };
+    }
+
     const systemPrompt = this.bootstrapPrompt
       ? this.bootstrapPrompt + '\n\n' + CHAT_SYSTEM_PROMPT
       : CHAT_SYSTEM_PROMPT;
