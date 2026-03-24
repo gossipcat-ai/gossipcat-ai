@@ -367,24 +367,13 @@ export class MainAgent {
         this.projectInitializer.pendingTask = null;
         this.projectInitializer.pendingProposal = null;
 
-        // Show team confirmation, then proceed with the original task
+        // Show team confirmation — user types their next command
         const agentList = newAgents.join(', ');
-        const teamMsg = `Team ready! ${newAgents.length} agents online (${agentList}).`;
-        process.stderr.write(`[gossipcat] ${teamMsg}\n`);
-
-        if (task) {
-          // Now proceed with the original task using cognitive mode
-          // Agents are registered, workers are started — cognitive mode will work
-          const taskResponse = await this.handleMessageCognitive(task);
-          return {
-            text: `${teamMsg}\n\n${taskResponse.text}`,
-            status: taskResponse.status,
-            agents: taskResponse.agents,
-            choices: taskResponse.choices,
-          };
-        }
-
-        return { text: teamMsg, status: 'done', agents: newAgents };
+        return {
+          text: `Team ready! ${newAgents.length} agents online (${agentList}).\n\nNow tell me what to build — I'll plan and dispatch to your agents.`,
+          status: 'done',
+          agents: newAgents,
+        };
       }
       if (choiceValue === 'modify') {
         // Keep pendingTask so next message re-triggers init with modifications
