@@ -134,8 +134,8 @@ describe('ProjectInitializer', () => {
       reason: 'Next.js project',
       main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
       agents: [
-        { id: 'anthropic-architect', provider: 'anthropic', model: 'claude-sonnet-4-6', preset: 'architect', skills: ['system-design'] },
-        { id: 'google-implementer', provider: 'google', model: 'gemini-2.5-flash', preset: 'implementer', skills: ['react'] },
+        { provider: 'anthropic', model: 'claude-sonnet-4-6', preset: 'architect', skills: ['system-design'] },
+        { provider: 'google', model: 'gemini-2.5-flash', preset: 'implementer', skills: ['react'] },
       ],
     };
     const llm = mockLLM(JSON.stringify(proposal));
@@ -146,11 +146,13 @@ describe('ProjectInitializer', () => {
     const result = await init.proposeTeam('build a dashboard', signals);
 
     expect(result.text).toContain('full-stack');
-    expect(result.text).toContain('anthropic-architect');
+    expect(result.text).toContain('claude-architect'); // provider-preset naming
+    expect(result.text).toContain('gemini-implementer');
     expect(result.choices).toBeDefined();
     expect(result.choices!.options).toHaveLength(4);
     expect(result.choices!.options.map(o => o.value)).toEqual(['accept', 'modify', 'manual', 'skip']);
-    expect(init.pendingProposal).toEqual(proposal);
+    expect(init.pendingProposal.agents[0].id).toBe('claude-architect');
+    expect(init.pendingProposal.agents[1].id).toBe('gemini-implementer');
     expect(init.pendingTask).toBe('build a dashboard');
   });
 

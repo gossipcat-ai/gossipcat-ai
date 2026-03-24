@@ -105,7 +105,7 @@ Rules:
 - Pick the best archetype and customize roles for this specific project
 - Add project-specific skills beyond the defaults
 - Assign models: strongest available → hardest role, cheapest → light roles
-- Agent IDs format: provider-preset (e.g. gemini-implementer)
+- Do NOT include agent IDs — the system generates them automatically
 - Max 5 agents
 - If the description is too vague, respond with a [CHOICES] block asking what kind of project
 
@@ -114,7 +114,7 @@ Respond with JSON:
   "archetype": "archetype-id",
   "reason": "why this archetype fits",
   "main_agent": { "provider": "...", "model": "..." },
-  "agents": [{ "id": "...", "provider": "...", "model": "...", "preset": "...", "skills": [...] }]
+  "agents": [{ "provider": "...", "model": "...", "preset": "...", "skills": [...] }]
 }`;
 
     const messages: LLMMessage[] = [
@@ -126,6 +126,20 @@ Respond with JSON:
     if (!jsonMatch) return { text: `LLM returned unexpected format:\n${response.text}` };
 
     const proposal = JSON.parse(jsonMatch[0]);
+
+    // Generate deterministic agent IDs: provider-preset (e.g., gemini-implementer)
+    // Handle duplicates by appending a number (e.g., gemini-reviewer-2)
+    const idCounts: Record<string, number> = {};
+    for (const a of proposal.agents || []) {
+      const providerShort = a.provider === 'anthropic' ? 'claude'
+        : a.provider === 'openai' ? 'gpt'
+        : a.provider === 'google' ? 'gemini'
+        : a.provider || 'agent';
+      const base = `${providerShort}-${a.preset || 'agent'}`;
+      idCounts[base] = (idCounts[base] || 0) + 1;
+      a.id = idCounts[base] > 1 ? `${base}-${idCounts[base]}` : base;
+    }
+
     this.pendingProposal = proposal;
     this.pendingTask = userMessage;
     const agentList = (proposal.agents || [])
