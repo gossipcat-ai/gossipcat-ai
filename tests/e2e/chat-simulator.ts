@@ -13,7 +13,7 @@
  *   await sim.teardown();
  */
 
-import { MainAgent, MainAgentConfig, createProvider, BootstrapGenerator, OverlapDetector, LensGenerator, GossipPublisher } from '../../packages/orchestrator/src';
+import { MainAgent, createProvider, OverlapDetector, LensGenerator, GossipPublisher } from '../../packages/orchestrator/src';
 import { RelayServer } from '../../packages/relay/src';
 import { ToolServer } from '../../packages/tools/src';
 import { GossipAgent } from '../../packages/client/src';
