@@ -351,10 +351,10 @@ export class MainAgent {
     // Native tool calls from providers that support function calling (Gemini, OpenAI)
     if (!toolCall && response.toolCalls?.length) {
       const native = response.toolCalls[0];
-      // Normalize: strip gossip_ prefix if present
+      // Normalize: strip gossip_ or gossip. prefix
       let toolName = native.name;
-      if (toolName.startsWith('gossip_')) {
-        toolName = toolName.replace(/^gossip_/, '');
+      if (/^gossip[._]/.test(toolName)) {
+        toolName = toolName.replace(/^gossip[._]/, '');
       }
       // Normalize args: Gemini sometimes uses description/title instead of task
       const nativeArgs = { ...native.arguments };

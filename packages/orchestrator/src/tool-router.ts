@@ -212,8 +212,8 @@ export class ToolRouter {
           tool = yamlResult.tool;
           args = yamlResult.args;
         } else {
-          // Fallback 2: function-call syntax — gossip_plan({...}) or plan({...})
-          const funcMatch = content.match(/^([\w_]+)\s*\(\s*([\s\S]*)\)\s*$/);
+          // Fallback 2: function-call syntax — gossip_plan({...}), gossip.plan({...}), plan({...})
+          const funcMatch = content.match(/^([\w._]+)\s*\(\s*([\s\S]*)\)\s*$/);
           if (funcMatch) {
             tool = funcMatch[1];
             try {
@@ -236,9 +236,9 @@ export class ToolRouter {
         }
       }
 
-      // Normalize MCP-style tool names (gossip_plan → plan, gossip_dispatch → dispatch)
-      if (typeof tool === 'string' && tool.startsWith('gossip_')) {
-        const stripped = tool.replace(/^gossip_/, '');
+      // Normalize prefixed tool names: gossip_plan, gossip.plan → plan
+      if (typeof tool === 'string' && /^gossip[._]/.test(tool)) {
+        const stripped = tool.replace(/^gossip[._]/, '');
         if (TOOL_SCHEMAS[stripped]) {
           tool = stripped;
         }

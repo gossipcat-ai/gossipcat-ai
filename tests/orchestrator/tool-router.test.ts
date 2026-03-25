@@ -242,6 +242,18 @@ args:
       expect(result!.args.task).toBe('Build a login form with validation');
     });
 
+    it('normalizes dot-notation gossip.plan → plan', () => {
+      const text = `[TOOL_CALL]
+gossip.plan({
+  "description": "Build an arcade music game"
+})
+[/TOOL_CALL]`;
+      const result = ToolRouter.parseToolCall(text);
+      expect(result).not.toBeNull();
+      expect(result!.tool).toBe('plan');
+      expect(result!.args.task).toBe('Build an arcade music game');
+    });
+
     it('normalizes MCP-style tool names (gossip_plan → plan)', () => {
       const text = '[TOOL_CALL]\ntool: gossip_plan\nargs:\n  task: "test"';
       const result = ToolRouter.parseToolCall(text);
