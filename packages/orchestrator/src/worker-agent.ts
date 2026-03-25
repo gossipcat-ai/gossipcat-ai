@@ -94,13 +94,19 @@ export class WorkerAgent {
         role: 'system',
         content: `${this.instructions}${skillsContent || ''}${context ? `\n\nContext:\n${context}` : ''}
 
-## Turn Budget
-You have ${MAX_TOOL_TURNS} tool turns to complete this task. Each tool call costs 1 turn.
-- Plan your work to fit within this budget.
-- Focus on ONE thing at a time — create/modify one file per turn.
-- Don't start work you can't finish. If the task is too large, do the most important part first.
-- Save your work frequently — don't accumulate unsaved changes across many turns.
-- When you're done, respond with a text summary (no tool call) to signal completion.`,
+## How to Work
+
+1. **Plan first.** Before making any tool calls, think through what you need to do. Break the task into concrete steps in your head. State your plan briefly.
+
+2. **Batch operations.** You can read and write MULTIPLE files in a single turn. Don't waste turns on one file at a time. For example:
+   - Turn 1: Read 3-4 existing files to understand the codebase
+   - Turn 2: Write 2-3 new files and modify 1-2 existing ones
+   - Turn 3: Verify with file_tree or file_read, fix any issues
+   That's a complete task in 3 turns. Aim for efficiency.
+
+3. **Budget: ${MAX_TOOL_TURNS} tool turns.** Each LLM response that includes tool calls costs 1 turn, regardless of how many tools you call in that response. Use multiple tool calls per turn.
+
+4. **Signal completion.** When you're done, respond with a concise summary (no tool calls) listing: files created/modified, technology choices made, and what the next step should be.`,
       },
       { role: 'user', content: task },
     ];
@@ -121,16 +127,16 @@ You have ${MAX_TOOL_TURNS} tool turns to complete this task. Each tool call cost
           });
         }
 
-        // Turn budget awareness — let the agent plan its work
+        // Turn budget awareness
         if (turn === WRAP_UP_AT) {
           messages.push({
             role: 'user',
-            content: `[System] You have ${MAX_TOOL_TURNS - turn} tool turns remaining. Start wrapping up: save any files you're working on and ensure your changes are complete. Prioritize finishing your current file over starting new work.`,
+            content: `[System] ${MAX_TOOL_TURNS - turn} turns left. Finish writing any open files now. On your next response, you can make multiple tool calls to save everything at once.`,
           });
         } else if (turn === FINAL_AT) {
           messages.push({
             role: 'user',
-            content: `[System] This is your LAST tool turn. Make your final tool call now (save file, etc.), then provide a summary of what you accomplished.`,
+            content: `[System] LAST turn. Save all remaining work in this response (use multiple tool calls). Then provide your completion summary with NO tool calls.`,
           });
         }
 

@@ -277,6 +277,7 @@ export interface ToolExecutorConfig {
   dispatcher?: any;    // TaskDispatcher
   initializer?: any;   // ProjectInitializer
   teamManager?: any;   // TeamManager
+  llm?: any;           // ILLMProvider — for result synthesis
 }
 
 interface AgentLike {
@@ -305,6 +306,7 @@ export class ToolExecutor {
   private readonly dispatcher: any;
   private readonly initializer: any;
   private readonly teamManager: any;
+  private readonly llm: any;
 
   constructor(private readonly config: ToolExecutorConfig) {
     this.pipeline = config.pipeline;
@@ -313,6 +315,7 @@ export class ToolExecutor {
     this.dispatcher = config.dispatcher ?? null;
     this.initializer = config.initializer ?? null;
     this.teamManager = config.teamManager ?? null;
+    this.llm = config.llm ?? null;
   }
 
   async execute(toolCall: ToolCall): Promise<ToolResult> {
@@ -422,7 +425,8 @@ export class ToolExecutor {
           agentId: '', taskDescription: '', status: 'finish',
         });
 
-        return { text: lines.join('\n\n'), agents: [...agentSet] };
+        const synthesized = await this.synthesizeResults(plan.originalTask, lines, tasks);
+        return { text: synthesized, agents: [...agentSet] };
       }
 
       // Sequential: dispatch one by one with progress.
@@ -487,12 +491,60 @@ export class ToolExecutor {
         agentId: '', taskDescription: '', status: 'finish',
       });
 
-      return { text: results.join('\n\n'), agents: [...agentSet] };
+      const synthesized = await this.synthesizeResults(plan.originalTask, results, tasks);
+      return { text: synthesized, agents: [...agentSet] };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return { text: `Tool error: ${message}` };
     } finally {
       this.pipeline.setTaskProgressCallback?.(null);
+    }
+  }
+
+  /**
+   * Synthesize raw agent results into a concise orchestrator summary.
+   * Instead of dumping raw output, the orchestrator reviews what agents did
+   * and presents: what was built, any issues, and suggested next steps.
+   */
+  private async synthesizeResults(
+    originalTask: string,
+    rawResults: string[],
+    tasks: PlannedTask[],
+  ): Promise<string> {
+    // If no LLM available, fall back to raw output
+    if (!this.llm) return rawResults.join('\n\n');
+
+    // If single task, skip synthesis overhead
+    if (rawResults.length === 1) return rawResults[0];
+
+    const agentOutputs = rawResults.map((r, i) =>
+      `Task ${i + 1} (${tasks[i]?.agentId || 'unknown'}): ${tasks[i]?.task || ''}\nResult: ${r.slice(0, 800)}`
+    ).join('\n\n---\n\n');
+
+    try {
+      const response = await this.llm.generate([
+        {
+          role: 'system',
+          content: `You are the orchestrator reviewing completed agent work. Synthesize the agent results into a concise report for the developer. Do NOT repeat the raw agent output.
+
+Your report should have these sections:
+## What was built
+Brief summary of what the agents created (files, features, tech stack).
+
+## Issues found
+Any errors, unfinished work, or concerns from the agents. If none, say "None."
+
+## Next steps
+1-3 concrete suggestions for what to do next (test it, add a feature, fix an issue).
+
+Be concise — 10-15 lines max. The developer has already seen the progress bars.`,
+        },
+        { role: 'user', content: `Original task: ${originalTask}\n\nAgent results:\n${agentOutputs}` },
+      ]);
+      return response.text;
+    } catch {
+      // Synthesis failed — fall back to raw output
+      return rawResults.join('\n\n');
     }
   }
 

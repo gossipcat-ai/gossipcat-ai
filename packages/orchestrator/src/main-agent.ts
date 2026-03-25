@@ -217,6 +217,7 @@ export class MainAgent {
       dispatcher: this.dispatcher,
       initializer: this.projectInitializer,
       teamManager: this.teamManager,
+      llm: this.llm,
     });
   }
 
