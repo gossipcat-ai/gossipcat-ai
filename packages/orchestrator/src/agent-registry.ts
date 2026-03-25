@@ -35,10 +35,16 @@ export class AgentRegistry {
    * Returns null if no agents are registered.
    */
   findBestMatch(requiredSkills: string[]): AgentConfig | null {
+    return this.findBestMatchExcluding(requiredSkills, new Set());
+  }
+
+  /** Find best skill match, excluding agents in the given set */
+  findBestMatchExcluding(requiredSkills: string[], exclude: Set<string>): AgentConfig | null {
     let bestMatch: AgentConfig | null = null;
     let bestScore = 0;
 
     for (const agent of this.agents.values()) {
+      if (exclude.has(agent.id)) continue;
       const score = requiredSkills.filter(s => agent.skills.includes(s)).length;
       if (score > bestScore) {
         bestScore = score;

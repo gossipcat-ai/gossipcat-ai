@@ -103,10 +103,19 @@ Use "sequential" ONLY when a later task genuinely needs output from an earlier o
    */
   assignAgents(plan: DispatchPlan): DispatchPlan {
     if (!plan.warnings) plan.warnings = [];
+    // Track assigned agents to avoid duplicates in parallel plans
+    const assigned = new Set<string>();
+
     for (const subTask of plan.subTasks) {
-      const match = this.registry.findBestMatch(subTask.requiredSkills);
+      // For parallel plans, prefer agents not yet assigned
+      const match = plan.strategy === 'parallel'
+        ? this.registry.findBestMatchExcluding(subTask.requiredSkills, assigned)
+          || this.registry.findBestMatch(subTask.requiredSkills)  // fallback: allow reuse
+        : this.registry.findBestMatch(subTask.requiredSkills);
+
       if (match) {
         subTask.assignedAgent = match.id;
+        assigned.add(match.id);
       } else {
         for (const skill of subTask.requiredSkills) {
           const hasAgent = this.registry.findBySkill(skill).length > 0;
