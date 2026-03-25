@@ -54,12 +54,10 @@ function renderStatus(state: AgentState, spinnerIdx: number): string {
       return `${c.cyan}${frame}${c.reset} ${c.dim}${tool}${c.reset}`;
     }
     case 'done': {
-      const toks = formatTokens(state.inputTokens + state.outputTokens);
       const dur = state.completedAt
         ? ((state.completedAt - state.startedAt) / 1000).toFixed(1) + 's'
         : '';
-      const parts = [toks, dur].filter(Boolean).join(' ');
-      return `${c.green}✓ done${c.reset}${parts ? `  ${c.dim}${parts}${c.reset}` : ''}`;
+      return `${c.green}✓ done${c.reset}${dur ? `  ${c.dim}${dur}${c.reset}` : ''}`;
     }
     case 'error': {
       const msg = state.error ? truncate(state.error, 40) : 'error';
