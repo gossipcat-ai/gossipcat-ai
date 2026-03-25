@@ -397,46 +397,16 @@ export class MainAgent {
 
   /** Cognitive mode: LLM decides whether to chat or call tools. */
   private async handleMessageCognitive(userMessage: string | ContentBlock[]): Promise<ChatResponse> {
-    // Check if project has agents configured
-    if (this.registry.getAll().length === 0) {
-      const text = typeof userMessage === 'string'
-        ? userMessage
-        : userMessage.filter(b => b.type === 'text').map(b => (b as any).text).join(' ') || '';
-
-      // If pendingTask exists, this is a modification of a prior proposal
-      // Combine original task + modification instruction
-      const taskForProposal = this.projectInitializer.pendingTask
-        ? `${this.projectInitializer.pendingTask}\n\nModification: ${text}`
-        : text;
-
-      const signals = this.projectInitializer.scanDirectory(this.projectRoot);
-      // Store the original task (not the modification) for re-processing after accept
-      if (!this.projectInitializer.pendingTask) {
-        this.projectInitializer.pendingTask = text;
-      }
-      const proposal = await this.projectInitializer.proposeTeam(taskForProposal, signals);
-
-      // Record this exchange in conversation history so cognitive mode has context
-      this.conversationHistory.push(
-        { role: 'user', content: text },
-        { role: 'assistant', content: proposal.text.slice(0, 1500) },
-      );
-
-      return {
-        text: proposal.text,
-        choices: proposal.choices,
-        status: 'done',
-      };
-    }
+    const hasAgents = this.registry.getAll().length > 0;
 
     // Extract text for LLM
     const text = typeof userMessage === 'string'
       ? userMessage
       : userMessage.filter(b => b.type === 'text').map(b => (b as TextContent).text).join(' ') || 'Describe this image.';
 
-    // Build system prompt with tool definitions
+    // Build system prompt — with or without tool definitions depending on agent availability
     const agents = this.registry.getAll();
-    const toolPrompt = buildToolSystemPrompt(agents);
+    const toolPrompt = hasAgents ? buildToolSystemPrompt(agents) : '';
     const systemPrompt = [this.bootstrapPrompt, CHAT_SYSTEM_PROMPT, toolPrompt].filter(Boolean).join('\n\n');
 
     // Call LLM with conversation history
@@ -445,7 +415,7 @@ export class MainAgent {
       ...this.conversationHistory,
       { role: 'user', content: userMessage },  // preserve ContentBlock[] for multimodal
     ];
-    const response = await this.llm.generate(messages, { temperature: 0 });
+    const response = await this.llm.generate(messages, hasAgents ? { temperature: 0 } : undefined);
 
     // Check for tool calls — native (Gemini/OpenAI function calling) OR text-based [TOOL_CALL]
     let toolCall = ToolRouter.parseToolCall(response.text);
@@ -459,6 +429,52 @@ export class MainAgent {
         toolName = toolName.replace(/^gossip_/, '');
       }
       toolCall = { tool: toolName, args: native.arguments };
+    }
+
+    // If the LLM wants to use tools but no agents exist yet, trigger team proposal.
+    // This happens naturally after brainstorming: the user describes a project,
+    // the orchestrator brainstorms ideas, and when it's ready to act (plan/dispatch),
+    // it discovers it needs agents. The full conversation context — including the
+    // refined idea from brainstorming — feeds into a better team proposal.
+    if (toolCall && !hasAgents) {
+      // Summarize the conversation for the team proposal
+      const conversationSummary = this.conversationHistory
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.slice(0, 300) : '[media]'}`)
+        .join('\n');
+      const taskForProposal = conversationSummary
+        ? `${text}\n\n[Brainstorming context]\n${conversationSummary}`
+        : text;
+
+      const signals = this.projectInitializer.scanDirectory(this.projectRoot);
+      this.projectInitializer.pendingTask = text;
+      const proposal = await this.projectInitializer.proposeTeam(taskForProposal, signals);
+
+      // Record in history
+      this.conversationHistory.push(
+        { role: 'user', content: text },
+        { role: 'assistant', content: proposal.text.slice(0, 1500) },
+      );
+
+      return {
+        text: ToolRouter.stripToolCallBlocks(response.text) + '\n\n' + proposal.text,
+        choices: proposal.choices,
+        status: 'done',
+      };
+    }
+
+    // No agents and no tool call — pure brainstorming chat
+    // The LLM is still exploring the idea before trying to act
+    if (!hasAgents && !toolCall) {
+      const result = this.parseResponse(response.text);
+      this.conversationHistory.push(
+        { role: 'user', content: text },
+        { role: 'assistant', content: result.text.slice(0, 2000) },
+      );
+      if (this.conversationHistory.length > this.MAX_HISTORY) {
+        this.conversationHistory = this.conversationHistory.slice(-this.MAX_HISTORY);
+      }
+      return result;
     }
 
     let result: ChatResponse;
@@ -542,28 +558,11 @@ export class MainAgent {
       if (choiceValue === 'start') {
         const task = this.projectInitializer.pendingTask || originalMessage;
 
-        // Find a researcher agent if available
-        const researcher = this.registry.getAll().find(
-          a => a.preset === 'researcher' || a.skills.includes('research')
-        );
-
-        let researchContext = '';
-        if (researcher && this.workers.has(researcher.id)) {
-          const researchTask = `Research creative ideas and approaches for this project: "${task}". Look for: similar projects for inspiration, interesting APIs or libraries that could make it special, unique features that would elevate it beyond a basic implementation. Return 3-5 concrete, specific ideas with brief explanations of why each is interesting.`;
-          const { taskId } = this.pipeline.dispatch(researcher.id, researchTask);
-          try {
-            const { results } = await this.pipeline.collect([taskId], 60_000);
-            const r = results[0];
-            if (r?.status === 'completed') {
-              researchContext = `\n\nResearch findings from my researcher agent:\n${r.result}\n\nUse these findings to inform your brainstorming.`;
-            }
-          } catch { /* research timeout — proceed without it */ }
-        }
-
-        // History already has: user's project description → proposal → accept → team confirmation
-        // Now continue naturally into brainstorming
+        // Brainstorming already happened before team init (the conversation
+        // history has the full brainstorming context). Now proceed to planning.
+        // The orchestrator will naturally call the plan tool via cognitive mode.
         return this.handleMessageCognitive(
-          `Let's brainstorm! Suggest 2-3 creative directions for this project. For each, describe specific features that would make it impressive. Present them as choices.${researchContext}`,
+          `The team is ready. Based on our earlier brainstorming, create a plan for: "${task}". Use the plan tool to decompose this into agent tasks.`,
         );
       }
       if (choiceValue === 'different') {
