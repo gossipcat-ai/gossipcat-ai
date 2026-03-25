@@ -110,7 +110,9 @@ export class WorkerAgent {
 
 5. **Don't overengineer.** Use the simplest tech that works. If the task doesn't specify TypeScript, use plain JavaScript. If it doesn't specify a bundler, use CDN scripts or plain ES modules. If it doesn't specify a framework, use vanilla code. Don't add build complexity (npm, webpack, TypeScript config) unless explicitly requested.
 
-6. **If you hit the same error twice, stop and report it.** Don't spend more turns fighting the same build/config/type error. Report what's blocking you so the orchestrator can help.`,
+6. **If you hit the same error twice, stop and report it.** Don't spend more turns fighting the same build/config/type error. Report what's blocking you so the orchestrator can help.
+
+7. **Verify your work.** After writing/modifying files, use file_read to verify the changes look correct. If you have shell_exec, run the build or open the file to check for syntax errors. Don't assume your code is correct — check it.`,
       },
       { role: 'user', content: task },
     ];

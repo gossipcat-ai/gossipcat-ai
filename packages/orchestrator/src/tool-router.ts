@@ -473,7 +473,7 @@ export class ToolExecutor {
         const opts = t.writeMode ? { writeMode: t.writeMode, scope: t.scope } : undefined;
         const { taskId } = this.pipeline.dispatch(t.agentId, taskWithContext, opts);
         taskIdToIndex.set(taskId, i);
-        const collectResult: CollectResultLike = await this.pipeline.collect([taskId], 120_000);
+        const collectResult: CollectResultLike = await this.pipeline.collect([taskId], 300_000);
         const entry = collectResult.results[0];
 
         if (entry?.status === 'completed') {
@@ -482,7 +482,7 @@ export class ToolExecutor {
           priorSummaries.push(`- Task ${i + 1} (${t.agentId}): ${(entry.result || '').slice(0, 300)}`);
         } else {
           const errorMsg = entry?.status === 'running'
-            ? `Timed out after 120s — agent may be stuck`
+            ? `Timed out after 300s — agent may be stuck`
             : (entry?.error || 'Task failed with no error message');
           this.onTaskProgress?.({ taskIndex: i, totalTasks: tasks.length, agentId: t.agentId, taskDescription: t.task, status: 'error', error: errorMsg });
           results.push(`[${t.agentId}] ERROR: ${errorMsg}`);
@@ -600,7 +600,7 @@ Be concise — 10-15 lines max. The developer has already seen the progress bars
     const { taskId } = dispatchOpts
       ? this.pipeline.dispatch(agentId, task, dispatchOpts as any)
       : this.pipeline.dispatch(agentId, task);
-    const collectResult: CollectResultLike = await this.pipeline.collect([taskId], 120_000);
+    const collectResult: CollectResultLike = await this.pipeline.collect([taskId], 300_000);
     const entry = collectResult.results[0];
 
     if (!entry) {
@@ -636,7 +636,7 @@ Be concise — 10-15 lines max. The developer has already seen the progress bars
       return { text: `Tool error: ${errors.join('; ')}`, agents };
     }
 
-    const collectResult: CollectResultLike = await this.pipeline.collect(taskIds, 120_000);
+    const collectResult: CollectResultLike = await this.pipeline.collect(taskIds, 300_000);
     const lines = collectResult.results.map(r => {
       if (r.status === 'completed') return `[${r.agentId}] ${r.result}`;
       if (r.status === 'running') return `[${r.agentId}] ERROR: Timed out — agent may be stuck`;

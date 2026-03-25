@@ -522,8 +522,44 @@ export class MainAgent {
         choices: toolResult.choices,
       };
     } else {
-      // Plain chat response — parse for [CHOICES]
-      result = this.parseResponse(response.text);
+      // Detect hallucinated dispatches — LLM claims it dispatched but didn't emit a tool call.
+      // Common pattern: "I'm dispatching..." or "I've dispatched..." without [TOOL_CALL].
+      const claimsDispatch = /(?:dispatching|dispatched|dispatch.*(?:now|immediately|right away)|sending.*(?:to|the) (?:agent|team))/i.test(response.text);
+      if (claimsDispatch && hasAgents) {
+        // Force a retry — tell the LLM to actually emit the tool call
+        try {
+          const retryMessages: LLMMessage[] = [
+            ...messages,
+            { role: 'assistant', content: response.text },
+            { role: 'user', content: 'You said you would dispatch but did NOT emit a [TOOL_CALL]. You MUST emit an actual tool call to dispatch work. Emit the [TOOL_CALL] now.' },
+          ];
+          const retry = await this.llm.generate(retryMessages, { temperature: 0 });
+          let retryToolCall = ToolRouter.parseToolCall(retry.text);
+          if (!retryToolCall && retry.toolCalls?.length) {
+            const native = retry.toolCalls[0];
+            let toolName = native.name;
+            if (toolName.startsWith('gossip_')) toolName = toolName.replace(/^gossip_/, '');
+            retryToolCall = { tool: toolName, args: native.arguments };
+          }
+          if (retryToolCall) {
+            const toolResult = await this.toolExecutor.execute(retryToolCall);
+            const explanation = ToolRouter.stripToolCallBlocks(response.text);
+            result = {
+              text: explanation ? `${explanation}\n\n${toolResult.text}` : toolResult.text,
+              status: 'done',
+              agents: toolResult.agents,
+              choices: toolResult.choices,
+            };
+          } else {
+            result = this.parseResponse(response.text);
+          }
+        } catch {
+          result = this.parseResponse(response.text);
+        }
+      } else {
+        // Plain chat response — parse for [CHOICES]
+        result = this.parseResponse(response.text);
+      }
     }
 
     // Update conversation history (trim to MAX_HISTORY)
