@@ -65,6 +65,7 @@ ${fileList}`;
  */
 export function assemblePrompt(parts: {
   memory?: string;
+  memoryDir?: string;
   lens?: string;
   skills?: string;
   context?: string;
@@ -85,6 +86,16 @@ export function assemblePrompt(parts: {
 
   if (parts.memory) {
     blocks.push(`\n\n--- MEMORY ---\n${parts.memory}\n--- END MEMORY ---`);
+  }
+
+  if (parts.memoryDir) {
+    blocks.push(`\n\n--- AGENT MEMORY ---
+Your persistent memory directory: ${parts.memoryDir}
+Save important learnings using file_write to this directory.
+What to save: technology choices, file structure, key patterns, architectural decisions, gotchas.
+Use descriptive filenames like: tech-stack.md, project-structure.md, patterns.md
+Keep entries concise (5-10 lines each). Update existing files rather than creating new ones.
+--- END AGENT MEMORY ---`);
   }
 
   if (parts.lens) {

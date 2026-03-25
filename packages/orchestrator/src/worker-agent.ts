@@ -120,7 +120,9 @@ export class WorkerAgent {
 
 8. **Never delete files to debug.** If something isn't working, read the error message and fix the code. Don't remove components or files to "isolate the issue" — that's destructive and you can't undo it.
 
-9. **Don't git commit unless asked.** The orchestrator manages git. Don't run git init, git add, or git commit on your own.`,
+9. **Don't git commit unless asked.** The orchestrator manages git. Don't run git init, git add, or git commit on your own.
+
+10. **Update your memory.** If the AGENT MEMORY section is present above, save what you learned: tech stack, file structure, patterns, gotchas. Use file_write to your memory directory. This helps you on future tasks.`,
       },
       { role: 'user', content: task },
     ];

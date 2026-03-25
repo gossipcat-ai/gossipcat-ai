@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { readFileSync } from 'fs';
-import { resolve as resolvePath } from 'path';
+import { resolve as resolvePath, join } from 'path';
 import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, SessionGossipEntry, PlanState } from './types';
 import { ILLMProvider } from './llm-client';
 import { LLMMessage } from '@gossip/types';
@@ -176,9 +176,11 @@ export class DispatchPipeline {
       }
     }
 
-    // 5. Assemble prompt
+    // 5. Assemble prompt (include memory directory path so agent can write its own memory)
+    const memoryDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory', 'knowledge');
     const promptContent = assemblePrompt({
       memory: memory || undefined,
+      memoryDir,
       lens: options?.lens,
       skills,
       sessionContext: sessionContext || undefined,
