@@ -608,8 +608,8 @@ export class MainAgent {
     }
 
     // Post-accept choices — these fire AFTER pendingTask is cleared
-    if (choiceValue === 'start' && this.lastAcceptedTask) {
-      const task = this.lastAcceptedTask;
+    if (choiceValue === 'start') {
+      const task = this.lastAcceptedTask || 'the project we discussed';
       this.lastAcceptedTask = null;
       return this.handleMessageCognitive(
         `The team is ready. Based on our earlier brainstorming, create a plan for: "${task}". Use the plan tool to decompose this into agent tasks.`,
