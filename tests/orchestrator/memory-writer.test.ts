@@ -64,6 +64,69 @@ describe('MemoryWriter', () => {
     expect(index).toContain('first task');
   });
 
+  it('writes knowledge entry from task result with file names', () => {
+    const writer = new MemoryWriter(testDir);
+    writer.writeKnowledgeFromResult(agentId, {
+      taskId: 'k1',
+      task: 'Build the login form',
+      result: 'I created `src/login.tsx` and modified `src/app.tsx` to add the route. Used React with TypeScript for the form validation.',
+    });
+
+    const knowledgePath = join(memDir, 'knowledge', 'task-k1.md');
+    expect(existsSync(knowledgePath)).toBe(true);
+
+    const content = readFileSync(knowledgePath, 'utf-8');
+    expect(content).toContain('name:');
+    expect(content).toContain('description:');
+    expect(content).toContain('importance:');
+    expect(content).toContain('src/login.tsx');
+    expect(content).toContain('react');
+    expect(content).toContain('typescript');
+  });
+
+  it('writes knowledge with technology detection', () => {
+    const writer = new MemoryWriter(testDir);
+    writer.writeKnowledgeFromResult(agentId, {
+      taskId: 'k2',
+      task: 'Set up the audio engine',
+      result: 'Created AudioEngine.js using the Web Audio API. I chose ES modules for the module system and Canvas for rendering.',
+    });
+
+    const content = readFileSync(join(memDir, 'knowledge', 'task-k2.md'), 'utf-8');
+    expect(content).toContain('web audio');
+    expect(content).toContain('canvas');
+    expect(content).toContain('es modules');
+  });
+
+  it('skips knowledge write when result has no extractable facts', () => {
+    const writer = new MemoryWriter(testDir);
+    writer.writeKnowledgeFromResult(agentId, {
+      taskId: 'k3',
+      task: 'Review code',
+      result: 'OK',
+    });
+
+    const knowledgePath = join(memDir, 'knowledge', 'task-k3.md');
+    expect(existsSync(knowledgePath)).toBe(false);
+  });
+
+  it('knowledge entry is loadable by AgentMemoryReader', () => {
+    const writer = new MemoryWriter(testDir);
+    writer.writeKnowledgeFromResult(agentId, {
+      taskId: 'k4',
+      task: 'Build the game grid',
+      result: 'Created src/grid.js with a 16x8 grid using Canvas API. I chose vanilla JavaScript with ES modules.',
+    });
+    writer.rebuildIndex(agentId);
+
+    // Verify the reader can find and load it
+    const { AgentMemoryReader } = require('@gossip/orchestrator');
+    const reader = new AgentMemoryReader(testDir);
+    const memory = reader.loadMemory(agentId, 'build the grid component');
+    expect(memory).not.toBeNull();
+    expect(memory).toContain('grid.js');
+  });
+
   it('derives importance from scores via writeTaskEntry', async () => {
     const writer = new MemoryWriter(testDir);
     await writer.writeTaskEntry('test-agent', {

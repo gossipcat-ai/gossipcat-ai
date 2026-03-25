@@ -402,7 +402,7 @@ export class DispatchPipeline {
         }
       } catch (err) { log(`TaskGraph write failed for ${t.id}: ${(err as Error).message}`); }
 
-      // 2. Write agent memory
+      // 2. Write agent memory (task log + knowledge extraction)
       if (t.status === 'completed') {
         try {
           await this.memWriter.writeTaskEntry(t.agentId, {
@@ -410,6 +410,13 @@ export class DispatchPipeline {
             skills: this.registryGet(t.agentId)?.skills || [],
             scores: { relevance: 3, accuracy: 3, uniqueness: 3 },
           });
+          // Extract and persist knowledge from the task result (files, tech, decisions)
+          // so the agent remembers what it did on subsequent tasks
+          if (t.result) {
+            this.memWriter.writeKnowledgeFromResult(t.agentId, {
+              taskId: t.id, task: t.task, result: t.result,
+            });
+          }
           this.memWriter.rebuildIndex(t.agentId);
         } catch (err) { log(`Memory write failed for ${t.agentId}/${t.id}: ${(err as Error).message}`); }
       }
