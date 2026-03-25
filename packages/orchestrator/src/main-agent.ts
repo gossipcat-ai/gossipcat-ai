@@ -356,7 +356,12 @@ export class MainAgent {
       if (toolName.startsWith('gossip_')) {
         toolName = toolName.replace(/^gossip_/, '');
       }
-      toolCall = { tool: toolName, args: native.arguments };
+      // Normalize args: Gemini sometimes uses description/title instead of task
+      const nativeArgs = { ...native.arguments };
+      if (!nativeArgs.task && (nativeArgs.description || nativeArgs.title)) {
+        nativeArgs.task = nativeArgs.description || nativeArgs.title;
+      }
+      toolCall = { tool: toolName, args: nativeArgs };
     }
 
     // If the response contains [TOOL_CALL] but parsing failed, the LLM produced

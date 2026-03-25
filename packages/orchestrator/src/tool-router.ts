@@ -248,6 +248,11 @@ export class ToolRouter {
         log(`unknown tool: ${tool}`);
         return null;
       }
+      // Normalize: if 'task' is required but missing, check for description/title
+      if (!args.task && (args.description || args.title)) {
+        args.task = args.description || args.title;
+      }
+
       const schema = TOOL_SCHEMAS[tool];
       for (const req of schema.requiredArgs) {
         if (!(req in args)) {
