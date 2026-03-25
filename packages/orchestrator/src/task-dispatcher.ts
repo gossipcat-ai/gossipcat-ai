@@ -59,6 +59,10 @@ When you DO split:
 - NEVER split implementation into sequential steps where step N depends on step N-1's exact output
 - Aim for 2-3 sub-tasks. More than 4 is almost always wrong.
 
+## Task descriptions
+
+Describe WHAT to build, not HOW. The agent decides implementation details (components, hooks, file structure). Good: "Build a music grid app with audio playback and scale selection using React + Vite." Bad: "Create an App component with useState for grid state, a Grid component using useRef for canvas..."
+
 ## Response format
 
 For each sub-task, specify required skills from: ${skillList}.
