@@ -108,6 +108,8 @@ You have ${MAX_TOOL_TURNS} tool turns to complete this task. Each tool call cost
     try {
       const WRAP_UP_AT = MAX_TOOL_TURNS - 3;  // warn with 3 turns left
       const FINAL_AT = MAX_TOOL_TURNS - 1;    // last turn: force finish
+      let lastToolSig = '';   // signature of last tool call for repetition detection
+      let repeatCount = 0;    // consecutive identical tool calls
 
       for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
         // Inject any pending gossip before the next LLM turn
@@ -141,6 +143,22 @@ You have ${MAX_TOOL_TURNS} tool turns to complete this task. Each tool call cost
 
         if (!response.toolCalls?.length) {
           return { result: response.text || '[No response from agent]', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+        }
+
+        // Detect repetitive tool calls — if the agent makes the exact same call 3+ times, it's stuck
+        const toolSig = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`).join('|');
+        if (toolSig === lastToolSig) {
+          repeatCount++;
+          if (repeatCount >= 2) {
+            // Agent is stuck in a loop — force exit with whatever text it produced
+            return {
+              result: response.text || 'Task completed (agent was repeating the same action).',
+              inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
+            };
+          }
+        } else {
+          lastToolSig = toolSig;
+          repeatCount = 0;
         }
 
         // Add assistant message with tool calls

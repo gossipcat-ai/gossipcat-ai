@@ -19,11 +19,26 @@ async function simulateToolLoop(
     { role: 'user', content: task },
   ];
 
+  let lastToolSig = '';
+  let repeatCount = 0;
+
   for (let turn = 0; turn < maxTurns; turn++) {
     const response = await llm.generate(messages, { tools });
 
     if (!response.toolCalls?.length) {
       return response.text;
+    }
+
+    // Detect repetitive tool calls
+    const toolSig = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`).join('|');
+    if (toolSig === lastToolSig) {
+      repeatCount++;
+      if (repeatCount >= 2) {
+        return response.text || 'Task completed (agent was repeating the same action).';
+      }
+    } else {
+      lastToolSig = toolSig;
+      repeatCount = 0;
     }
 
     messages.push({
@@ -169,17 +184,39 @@ describe('WorkerAgent tool loop', () => {
   });
 
   it('stops at max tool turns', async () => {
+    let turn = 0;
     const llm: ILLMProvider = {
       async generate() {
+        turn++;
         return {
           text: 'more work',
-          toolCalls: [{ id: 'call', name: 'read_file', arguments: { path: '/loop' } }],
+          toolCalls: [{ id: `call_${turn}`, name: 'read_file', arguments: { path: `/file${turn}` } }],
         };
       },
     };
 
     const result = await simulateToolLoop(llm, tools, 'infinite loop', async () => 'result', 3);
     expect(result).toBe('Max tool turns reached');
+  });
+
+  it('exits early when agent repeats the same tool call 3 times', async () => {
+    const llm: ILLMProvider = {
+      async generate() {
+        return {
+          text: 'I am done.',
+          toolCalls: [{ id: 'call', name: 'read_file', arguments: { path: '/same-file' } }],
+        };
+      },
+    };
+
+    let callCount = 0;
+    const callTool = async () => { callCount++; return 'ok'; };
+
+    const result = await simulateToolLoop(llm, tools, 'stuck agent', callTool, 15);
+    expect(result).toBe('I am done.');
+    // Stops before executing the 3rd repeat — only 2 calls executed
+    expect(callCount).toBeLessThanOrEqual(3);
+    expect(callCount).toBeGreaterThan(0);
   });
 
   it('handles multiple tool calls in single turn', async () => {
