@@ -26,21 +26,29 @@ const CHAT_SYSTEM_PROMPT = `You are the **orchestrator** of Gossip Mesh — a mu
 ## RULES
 1. NEVER output raw code — your agents write files.
 2. NEVER claim you dispatched unless you emitted a [TOOL_CALL] block.
-3. When user approves, IMMEDIATELY use the plan tool — do NOT write your own plan as text.
-4. NEVER describe file names, components, or architecture in your messages. That's the agent's job.
-5. Respect the user's tech choice exactly. If they chose "Svelte + PixiJS", use that — don't switch to something else.
+3. Respect the user's tech choice exactly. Don't switch technologies.
+4. NEVER describe file names, components, or architecture. That's the agent's job.
 
 ## Workflow
-- **New project/feature** → brainstorm creative direction → suggest tech stack → use plan tool → dispatch
-- **Bug fix / quick edit** → use plan tool → dispatch (skip brainstorm)
-- **Question** → answer directly (no dispatch)
 
-When ready to build, ALWAYS use the plan tool. Do NOT write numbered implementation steps yourself.
+**Read the user's message and decide which path to take:**
 
-## Brainstorming
-For new projects, brainstorm in TWO rounds:
-1. **Creative direction** — 2-3 approaches as [CHOICES]. Focus on what makes it special.
-2. **Tech stack** — After user picks direction, suggest 2-3 tech approaches as [CHOICES]. Include build tooling, relevant libraries, and language. Let the user decide — don't assume.
+### Path A: User knows what they want
+If the user specifies what to build and the tech stack, skip brainstorming. Go straight to the plan tool.
+
+### Path B: User is exploratory
+If the user is vague or exploring, brainstorm in ONE round:
+- Suggest 2-3 approaches, each with a recommended tech stack
+- Present as [CHOICES] so the user picks direction + tech in one step
+- After they pick, go straight to the plan tool
+
+### Path C: Bug fix / quick edit
+Use the plan tool immediately. No brainstorming.
+
+### Path D: Question
+Answer directly. No dispatch.
+
+**KEY: Minimize approval gates.** The user should go from idea to working code in 2-3 interactions max, not 6+. Don't ask "Start building?" — if the user approved a plan, execute it.
 
 ## Choices Format
 [CHOICES]
@@ -567,29 +575,31 @@ export class MainAgent {
         this.projectInitializer.pendingTask = null;
         this.projectInitializer.pendingProposal = null;
 
-        // Show team confirmation with option to start working
+        // Team accepted — skip "Start building?" gate, go straight to planning
         const agentList = newAgents.join(', ');
-        const taskHint = task ? `\nReady to start working on: "${task}"` : '';
-        const confirmText = `Team ready! ${newAgents.length} agents online (${agentList}).${taskHint}`;
+        const confirmText = `Team ready! ${newAgents.length} agents online (${agentList}). Creating plan...`;
 
-        // Record the accept exchange in history
         this.conversationHistory.push(
           { role: 'user', content: 'I accept this team configuration.' },
           { role: 'assistant', content: confirmText },
         );
 
-        return {
-          text: confirmText,
-          status: 'done',
-          agents: newAgents,
-          choices: task ? {
-            message: 'Start building?',
-            options: [
-              { value: 'start', label: `Start: ${task.slice(0, 60)}${task.length > 60 ? '...' : ''}` },
-              { value: 'different', label: 'Do something else first' },
-            ],
-          } : undefined,
-        };
+        // Auto-proceed to planning if we have a task
+        if (task) {
+          this.lastAcceptedTask = null;
+          // Return team confirmation, then the cognitive mode will create the plan
+          const planResponse = await this.handleMessageCognitive(
+            `The team is ready. Create a plan for: "${task}". Use the plan tool.`,
+          );
+          return {
+            text: `${confirmText}\n\n${planResponse.text}`,
+            status: planResponse.status,
+            agents: newAgents,
+            choices: planResponse.choices,
+          };
+        }
+
+        return { text: confirmText, status: 'done', agents: newAgents };
       }
       if (choiceValue === 'modify') {
         // Keep pendingTask so next message re-triggers init with modifications
