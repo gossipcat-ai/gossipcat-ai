@@ -17,7 +17,7 @@ import { encode as msgpackEncode } from '@msgpack/msgpack';
 import { DispatchPipeline, ToolServerCallbacks } from './dispatch-pipeline';
 import { TaskGraphSync } from './task-graph-sync';
 import { ToolRouter, ToolExecutor } from './tool-router';
-import { buildToolSystemPrompt, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';
+import { buildToolSystemPrompt, getOrchestratorToolDefinitions, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';
 import { ProjectInitializer } from './project-initializer';
 import { TeamManager } from './team-manager';
 
@@ -337,7 +337,13 @@ export class MainAgent {
       ...this.conversationHistory,
       { role: 'user', content: userMessage },  // preserve ContentBlock[] for multimodal
     ];
-    const response = await this.llm.generate(messages, hasAgents ? { temperature: 0 } : undefined);
+    // Pass orchestrator tools for native function calling when agents are available.
+    // This makes the LLM return structured tool calls instead of text-based [TOOL_CALL] blocks.
+    const orchestratorTools = hasAgents ? getOrchestratorToolDefinitions() : undefined;
+    const response = await this.llm.generate(messages, {
+      temperature: 0,
+      ...(orchestratorTools ? { tools: orchestratorTools } : {}),
+    });
 
     // Check for tool calls — native (Gemini/OpenAI function calling) OR text-based [TOOL_CALL]
     let toolCall = ToolRouter.parseToolCall(response.text);

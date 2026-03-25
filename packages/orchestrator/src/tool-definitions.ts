@@ -74,6 +74,36 @@ export const PENDING_PLAN_CHOICES = {
   CANCEL: 'cancel',
 } as const;
 
+/** Convert TOOL_SCHEMAS to native ToolDefinition[] for API function calling */
+export function getOrchestratorToolDefinitions(): import('@gossip/types').ToolDefinition[] {
+  const argType = (name: string): { type: string; description: string } => {
+    if (name === 'tasks') return { type: 'string', description: 'JSON array of {agent_id, task, write_mode?, scope?}' };
+    if (name === 'agent_ids') return { type: 'string', description: 'JSON array of agent IDs' };
+    if (name === 'task') return { type: 'string', description: 'Task description' };
+    if (name === 'agent_id') return { type: 'string', description: 'Agent ID' };
+    if (name === 'write_mode') return { type: 'string', description: 'Write mode: sequential, scoped, or worktree' };
+    if (name === 'scope') return { type: 'string', description: 'Directory scope for scoped writes' };
+    if (name === 'description') return { type: 'string', description: 'Project description' };
+    if (name === 'instruction') return { type: 'string', description: 'Instruction text' };
+    if (name === 'limit') return { type: 'string', description: 'Max entries to return' };
+    if (name === 'action') return { type: 'string', description: 'Action: add, remove, or modify' };
+    if (name === 'preset') return { type: 'string', description: 'Agent preset' };
+    if (name === 'skills') return { type: 'string', description: 'Comma-separated skills' };
+    return { type: 'string', description: name };
+  };
+
+  return Object.entries(TOOL_SCHEMAS).map(([name, schema]) => {
+    const properties: Record<string, { type: string; description: string }> = {};
+    for (const arg of schema.requiredArgs) properties[arg] = argType(arg);
+    for (const arg of schema.optionalArgs || []) properties[arg] = argType(arg);
+    return {
+      name,
+      description: schema.description,
+      parameters: { type: 'object' as const, properties, required: schema.requiredArgs },
+    };
+  });
+}
+
 /**
  * Build the system prompt section describing available tools.
  * Agent list is NOT duplicated here — the bootstrap prompt already has it.
