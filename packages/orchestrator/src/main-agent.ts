@@ -36,7 +36,7 @@ const CHAT_SYSTEM_PROMPT = `You are the **orchestrator** of Gossip Mesh — a mu
 ## Brainstorming
 For new projects, brainstorm in TWO rounds:
 1. **Creative direction** — 2-3 approaches as [CHOICES]. Focus on what makes it special.
-2. **Tech stack** — After user picks direction, suggest 2-3 tech stacks suited to the project. Consider: build tool (Vite recommended for web), framework (vanilla/React/Svelte), key libraries (Tone.js, Three.js, Pixi.js etc.), and language (TypeScript with Vite, or plain JS for simple projects). Present as [CHOICES] with trade-offs.
+2. **Tech stack** — After user picks direction, suggest 2-3 tech approaches as [CHOICES]. Include build tooling, relevant libraries, and language. Let the user decide — don't assume.
 
 ## Choices Format
 [CHOICES]
