@@ -113,6 +113,24 @@ args:
       expect(result!.args.task).toBe('review this PR');
     });
 
+    it('parses Gemini-style tool_name/tool_input JSON', () => {
+      const text = `[TOOL_CALL]
+\`\`\`json
+{
+  "tool_name": "plan",
+  "tool_input": {
+    "title": "Build a Game",
+    "description": "Build an arcade music game with Svelte and PixiJS",
+    "tasks": [{"id": "setup"}]
+  }
+}
+\`\`\``;
+      const result = ToolRouter.parseToolCall(text);
+      expect(result).not.toBeNull();
+      expect(result!.tool).toBe('plan');
+      expect(result!.args.task).toBe('Build an arcade music game with Svelte and PixiJS');
+    });
+
     it('parses function-call syntax gossip_plan({...})', () => {
       const text = `[TOOL_CALL]
 gossip_plan({

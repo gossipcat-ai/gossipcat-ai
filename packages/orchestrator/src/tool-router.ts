@@ -192,8 +192,19 @@ export class ToolRouter {
       const jsonAttempt = content.replace(/,\s*([}\]])/g, '$1');
       try {
         const parsed = JSON.parse(jsonAttempt);
-        tool = parsed.tool;
-        args = parsed.args ?? {};
+        // Handle multiple key naming conventions:
+        // Standard: { tool, args }
+        // Gemini native: { tool_name, tool_input }
+        // Other: { name, parameters } or { function, arguments }
+        tool = parsed.tool || parsed.tool_name || parsed.name || parsed.function;
+        const rawArgs = parsed.args || parsed.tool_input || parsed.parameters || parsed.arguments;
+
+        // If args contains a complex plan structure, extract task from description/title
+        if (rawArgs && typeof rawArgs === 'object' && !rawArgs.task && (rawArgs.description || rawArgs.title)) {
+          args = { task: rawArgs.description || rawArgs.title };
+        } else {
+          args = rawArgs ?? {};
+        }
       } catch {
         // Fallback 1: parse YAML-like format (tool: X, args:\n  key: value)
         const yamlResult = parseYamlLikeToolCall(content);
