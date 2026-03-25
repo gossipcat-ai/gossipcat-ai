@@ -281,9 +281,15 @@ export class GeminiProvider implements ILLMProvider {
     if (finishReason && !expectedReasons.includes(finishReason)) {
       process.stderr.write(`[GeminiProvider] Unusual finishReason: ${finishReason}\n`);
     }
-    const parts = ((candidate.content as Record<string, unknown>)?.parts || []) as Array<Record<string, unknown>>;
+    const content = candidate.content as Record<string, unknown> | undefined;
+    const parts = (content?.parts || []) as Array<Record<string, unknown>>;
     if (!parts?.length) {
-      process.stderr.write(`[GeminiProvider] Empty response parts (finishReason: ${finishReason || 'unknown'})\n`);
+      // UNEXPECTED_TOOL_CALL: Gemini tried to call a function but the call was malformed.
+      // The function call data may be in candidate.content.functionCall or similar.
+      // Log and return empty — the orchestrator's retry mechanism will handle this.
+      if (finishReason !== 'SAFETY') {
+        process.stderr.write(`[GeminiProvider] Empty response parts (finishReason: ${finishReason || 'unknown'}). Returning empty to trigger retry.\n`);
+      }
       return { text: finishReason === 'SAFETY' ? '[Response blocked by Gemini safety filter]' : '' };
     }
 

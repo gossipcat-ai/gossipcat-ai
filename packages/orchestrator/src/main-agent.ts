@@ -340,10 +340,16 @@ export class MainAgent {
     // Pass orchestrator tools for native function calling when agents are available.
     // This makes the LLM return structured tool calls instead of text-based [TOOL_CALL] blocks.
     const orchestratorTools = hasAgents ? getOrchestratorToolDefinitions() : undefined;
-    const response = await this.llm.generate(messages, {
+    let response = await this.llm.generate(messages, {
       temperature: 0,
       ...(orchestratorTools ? { tools: orchestratorTools } : {}),
     });
+
+    // Retry on empty response (UNEXPECTED_TOOL_CALL or other Gemini failures)
+    if (!response.text && !response.toolCalls?.length) {
+      process.stderr.write('[MainAgent] Empty LLM response — retrying without tools\n');
+      response = await this.llm.generate(messages, { temperature: 0 });
+    }
 
     // Check for tool calls — prefer native function calling over text-based [TOOL_CALL]
     let toolCall: { tool: string; args: Record<string, unknown> } | null = null;
