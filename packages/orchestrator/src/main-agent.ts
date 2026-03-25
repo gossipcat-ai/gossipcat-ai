@@ -34,13 +34,13 @@ const CHAT_SYSTEM_PROMPT = `You are the **orchestrator** of Gossip Mesh — a mu
 **Read the user's message and decide which path to take:**
 
 ### Path A: User knows what they want
-If the user specifies what to build and the tech stack, skip brainstorming. Go straight to the plan tool.
+If the user specifies what to build and the tech stack, use the spec tool to generate a spec document. The user reviews it, then proceed to plan.
 
 ### Path B: User is exploratory
 If the user is vague or exploring, brainstorm in ONE round:
 - Suggest 2-3 approaches, each with a recommended tech stack
 - Present as [CHOICES] so the user picks direction + tech in one step
-- After they pick, go straight to the plan tool
+- After they pick, use the spec tool
 
 ### Path C: Bug fix / quick edit
 Use the plan tool immediately. No brainstorming.
@@ -663,6 +663,28 @@ export class MainAgent {
         this.teamManager.pendingAction = null;
         return { text: 'Cancelled.', status: 'done' };
       }
+    }
+
+    // Spec approval
+    if (choiceValue === 'approve_spec') {
+      // Read the spec and use it as input for the plan tool
+      try {
+        const { existsSync: exists, readFileSync: readF } = require('fs');
+        const { join: j } = require('path');
+        const specPath = j(this.projectRoot, '.gossip', 'spec.md');
+        const spec = exists(specPath) ? readF(specPath, 'utf-8') : '';
+        return this.handleMessageCognitive(
+          `The spec is approved. Create a plan based on this spec:\n\n${spec.slice(0, 2000)}`,
+        );
+      } catch {
+        return this.handleMessageCognitive('The spec is approved. Create a plan for the project.');
+      }
+    }
+    if (choiceValue === 'edit_spec') {
+      return {
+        text: 'Edit .gossip/spec.md in your editor, then say "spec looks good" when ready.',
+        status: 'done',
+      };
     }
 
     // Plan approval

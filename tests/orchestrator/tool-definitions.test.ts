@@ -20,8 +20,8 @@ describe('Tool Definitions', () => {
     'update_team',
   ];
 
-  it('has exactly 12 tool schemas', () => {
-    expect(Object.keys(TOOL_SCHEMAS)).toHaveLength(12);
+  it('has exactly 13 tool schemas', () => {
+    expect(Object.keys(TOOL_SCHEMAS)).toHaveLength(13);
   });
 
   it.each(EXPECTED_TOOLS)('has schema for %s with description and requiredArgs', (tool) => {

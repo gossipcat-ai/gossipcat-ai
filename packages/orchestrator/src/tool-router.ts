@@ -387,6 +387,8 @@ export class ToolExecutor {
           return await this.handleDispatchParallel(toolCall.args);
         case 'dispatch_consensus':
           return await this.handleDispatchConsensus(toolCall.args);
+        case 'spec':
+          return await this.handleSpec(toolCall.args);
         case 'plan':
           return await this.handlePlan(toolCall.args);
         case 'agents':
@@ -763,7 +765,16 @@ Be concise — 10-15 lines max. The developer has already seen the progress bars
   }
 
   private async handlePlan(args: Record<string, unknown>): Promise<ToolResult> {
-    const task = String(args.task);
+    let task = String(args.task);
+
+    // If a spec exists, use it as additional context for decomposition
+    try {
+      const specPath = join(this.projectRoot, '.gossip', 'spec.md');
+      if (existsSync(specPath)) {
+        const spec = readFileSync(specPath, 'utf-8');
+        task = `${task}\n\n[Project Spec]\n${spec.slice(0, 3000)}`;
+      }
+    } catch { /* skip */ }
 
     if (this.pendingPlan) {
       return {
@@ -812,6 +823,74 @@ Be concise — 10-15 lines max. The developer has already seen the progress bars
           { value: PLAN_CHOICES.EXECUTE, label: 'Execute plan' },
           { value: PLAN_CHOICES.MODIFY, label: 'Modify plan' },
           { value: PLAN_CHOICES.CANCEL, label: 'Cancel' },
+        ],
+      },
+    };
+  }
+
+  private async handleSpec(args: Record<string, unknown>): Promise<ToolResult> {
+    const task = String(args.task);
+
+    if (!this.llm) {
+      return { text: 'Tool error: LLM not available for spec generation' };
+    }
+
+    // Check for existing spec
+    const specPath = join(this.projectRoot, '.gossip', 'spec.md');
+    let existingSpec = '';
+    try {
+      if (existsSync(specPath)) {
+        existingSpec = readFileSync(specPath, 'utf-8');
+      }
+    } catch { /* skip */ }
+
+    const response = await this.llm.generate([
+      {
+        role: 'system',
+        content: `Generate a project spec document in markdown. Be concise and actionable.
+
+Format:
+# Project Spec
+
+## Goal
+One paragraph describing what we're building and why.
+
+## Tech Stack
+- Framework/library and why
+- Key dependencies
+
+## Features (MVP)
+Numbered list of 3-5 core features for the first version.
+
+## Constraints
+Any important limitations, requirements, or decisions.
+
+${existingSpec ? `\nThe user already has a spec. Update it based on the new request:\n${existingSpec}` : ''}
+
+Keep it SHORT — under 30 lines. This is a working document, not a design doc.`,
+      },
+      { role: 'user', content: task },
+    ]);
+
+    const specContent = response.text || '';
+
+    // Save to disk
+    try {
+      const { mkdirSync, writeFileSync: writeFS } = require('fs');
+      mkdirSync(join(this.projectRoot, '.gossip'), { recursive: true });
+      writeFS(specPath, specContent, 'utf-8');
+    } catch (err) {
+      return { text: `Spec generated but failed to save: ${(err as Error).message}\n\n${specContent}` };
+    }
+
+    return {
+      text: `${specContent}\n\n*Saved to .gossip/spec.md*`,
+      choices: {
+        message: 'Review the spec. What would you like to do?',
+        options: [
+          { value: 'approve_spec', label: 'Approve and create plan' },
+          { value: 'edit_spec', label: 'Edit the spec' },
+          { value: 'cancel', label: 'Cancel' },
         ],
       },
     };

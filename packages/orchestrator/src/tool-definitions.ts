@@ -24,8 +24,12 @@ export const TOOL_SCHEMAS: Record<string, ToolSchema> = {
     requiredArgs: ['task'],
     optionalArgs: ['agent_ids'],
   },
+  spec: {
+    description: 'Generate a project spec document from the brainstorming conversation. Saves to .gossip/spec.md for user review. The spec captures: goal, tech stack, features, and constraints. Use this AFTER brainstorming and BEFORE plan. The user reviews and can edit the spec before proceeding.',
+    requiredArgs: ['task'],
+  },
   plan: {
-    description: 'Decompose a complex task into agent-dispatchable subtasks with write-mode suggestions. Returns a structured plan with task assignments, execution order (sequential/parallel), and recommended write modes. Present the plan to the developer for approval before dispatching. Use this BEFORE dispatching any non-trivial implementation work.',
+    description: 'Decompose a task into agent-dispatchable subtasks. If a spec exists (.gossip/spec.md), use it as the source of truth. Returns a structured plan for approval before dispatching.',
     requiredArgs: ['task'],
   },
   agents: {
