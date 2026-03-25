@@ -27,6 +27,23 @@ export interface TaskExecutionResult {
   outputTokens: number;
 }
 
+/** Emitted during plan execution for UI progress tracking */
+export interface TaskProgressEvent {
+  taskIndex: number;
+  totalTasks: number;
+  agentId: string;
+  taskDescription: string;
+  status: 'init' | 'start' | 'progress' | 'done' | 'error' | 'finish';
+  toolCalls?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  currentTool?: string;
+  turn?: number;
+  result?: string;
+  error?: string;
+  agents?: Array<{ agentId: string; task: string }>;
+}
+
 /** A decomposed sub-task with skill requirements and assignment */
 export interface SubTask {
   id: string;
@@ -198,6 +215,7 @@ export interface TaskEntry {
   planStep?: number;
   inputTokens?: number;
   outputTokens?: number;
+  toolCalls?: number;
 }
 
 // ── TaskGraph Event Types ────────────────────────────────────────────────
