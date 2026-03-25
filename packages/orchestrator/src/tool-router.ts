@@ -399,9 +399,8 @@ export class ToolExecutor {
         }
 
         const { taskIds, errors } = await this.pipeline.dispatchParallel(taskDefs);
-        for (let i = 0; i < taskIds.length; i++) {
-          taskIdToIndex.set(taskIds[i], i);
-        }
+        // Populate immediately — must happen before any await that could yield to worker callbacks
+        for (let i = 0; i < taskIds.length; i++) taskIdToIndex.set(taskIds[i], i);
         if (errors.length > 0) {
           return { text: `Plan execution failed.\n\nErrors:\n${errors.map((e: string) => `  - ${e}`).join('\n')}` };
         }
