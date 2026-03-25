@@ -393,9 +393,9 @@ export class ToolExecutor {
           options: t.writeMode ? { writeMode: t.writeMode, scope: t.scope } : undefined,
         }));
 
-        for (const t of tasks) {
-          agentSet.add(t.agentId);
-          this.onTaskProgress?.({ taskIndex: 0, totalTasks: tasks.length, agentId: t.agentId, taskDescription: t.task, status: 'start' });
+        for (let i = 0; i < tasks.length; i++) {
+          agentSet.add(tasks[i].agentId);
+          this.onTaskProgress?.({ taskIndex: i, totalTasks: tasks.length, agentId: tasks[i].agentId, taskDescription: tasks[i].task, status: 'start' });
         }
 
         const { taskIds, errors } = await this.pipeline.dispatchParallel(taskDefs);

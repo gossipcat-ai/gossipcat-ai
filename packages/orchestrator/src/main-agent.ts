@@ -437,7 +437,11 @@ export class MainAgent {
     // the orchestrator brainstorms ideas, and when it's ready to act (plan/dispatch),
     // it discovers it needs agents. The full conversation context — including the
     // refined idea from brainstorming — feeds into a better team proposal.
-    if (toolCall && !hasAgents) {
+    //
+    // Guard: require at least 1 prior exchange (2 history entries) before proposing team.
+    // This ensures the LLM brainstorms at least once rather than jumping straight to
+    // team proposal on the first message.
+    if (toolCall && !hasAgents && this.conversationHistory.length >= 2) {
       // Summarize the conversation for the team proposal
       const conversationSummary = this.conversationHistory
         .filter(m => m.role === 'user' || m.role === 'assistant')
@@ -464,8 +468,12 @@ export class MainAgent {
       };
     }
 
-    // No agents and no tool call — pure brainstorming chat
+    // No agents and no tool call (or tool call too early) — pure brainstorming chat
     // The LLM is still exploring the idea before trying to act
+    if (toolCall && !hasAgents && this.conversationHistory.length < 2) {
+      // LLM tried to act on the first message — strip tool call, return as brainstorming
+      toolCall = null;
+    }
     if (!hasAgents && !toolCall) {
       const result = this.parseResponse(response.text);
       this.conversationHistory.push(
