@@ -1,5 +1,5 @@
 import { MemoryWriter } from '@gossip/orchestrator';
-import { readFileSync, existsSync, rmSync } from 'fs';
+import { readFileSync, existsSync, rmSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -72,10 +72,12 @@ describe('MemoryWriter', () => {
       result: 'I created `src/login.tsx` and modified `src/app.tsx` to add the route. Used React with TypeScript for the form validation.',
     });
 
-    const knowledgePath = join(memDir, 'knowledge', 'task-k1.md');
-    expect(existsSync(knowledgePath)).toBe(true);
+    // Filename is now timestamp-prefixed: YYYY-MM-DDTHH-MM-SS-k1.md
+    const knowledgeDir = join(memDir, 'knowledge');
+    const files = readdirSync(knowledgeDir).filter(f => f.includes('k1'));
+    expect(files.length).toBe(1);
 
-    const content = readFileSync(knowledgePath, 'utf-8');
+    const content = readFileSync(join(knowledgeDir, files[0]), 'utf-8');
     expect(content).toContain('name:');
     expect(content).toContain('description:');
     expect(content).toContain('importance:');
@@ -92,7 +94,8 @@ describe('MemoryWriter', () => {
       result: 'Created AudioEngine.js using the Web Audio API. I chose ES modules for the module system and Canvas for rendering.',
     });
 
-    const content = readFileSync(join(memDir, 'knowledge', 'task-k2.md'), 'utf-8');
+    const k2Files = readdirSync(join(memDir, 'knowledge')).filter(f => f.includes('k2'));
+    const content = readFileSync(join(memDir, 'knowledge', k2Files[0]), 'utf-8');
     expect(content).toContain('web audio');
     expect(content).toContain('canvas');
     expect(content).toContain('es modules');

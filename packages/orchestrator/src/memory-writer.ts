@@ -1,4 +1,4 @@
-import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
+import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { TaskMemoryEntry } from './types';
 
@@ -66,9 +66,23 @@ export class MemoryWriter {
     const facts = this.extractFacts(data.task, data.result);
     if (!facts) return; // nothing useful to remember
 
-    // Use taskId as filename (unique, no collisions)
-    const filename = `task-${data.taskId}.md`;
-    const today = new Date().toISOString().split('T')[0];
+    // Timestamp prefix for chronological ordering + taskId for uniqueness
+    const now = new Date();
+    const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19); // 2026-03-25T12-30-45
+    const filename = `${timestamp}-${data.taskId}.md`;
+    const today = now.toISOString().split('T')[0];
+
+    // Limit knowledge files — keep only the most recent 10, remove oldest
+    try {
+      const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md')).sort();
+      const MAX_KNOWLEDGE_FILES = 10;
+      if (existing.length >= MAX_KNOWLEDGE_FILES) {
+        const toRemove = existing.slice(0, existing.length - MAX_KNOWLEDGE_FILES + 1);
+        for (const old of toRemove) {
+          unlinkSync(join(knowledgeDir, old));
+        }
+      }
+    } catch { /* skip cleanup on error */ }
 
     const content = [
       '---',
@@ -154,9 +168,10 @@ export class MemoryWriter {
 
     const knowledgeDir = join(memDir, 'knowledge');
     if (existsSync(knowledgeDir)) {
-      const files = readdirSync(knowledgeDir).filter(f => f.endsWith('.md'));
+      // Sort reverse chronologically (timestamp-prefixed filenames sort naturally)
+      const files = readdirSync(knowledgeDir).filter(f => f.endsWith('.md')).sort().reverse();
       if (files.length > 0) {
-        parts.push('## Knowledge');
+        parts.push('## Knowledge (most recent first)');
         for (const file of files) {
           const content = readFileSync(join(knowledgeDir, file), 'utf-8');
           const descMatch = content.match(/description:\s*(.+)/);
