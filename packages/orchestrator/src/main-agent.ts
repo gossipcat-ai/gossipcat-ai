@@ -158,7 +158,9 @@ export class MainAgent {
       const instructions = existsSync(instructionsPath)
         ? readFileSync(instructionsPath, 'utf-8') : undefined;
 
-      const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS, instructions);
+      // Enable web search for researcher agents (they need to look things up)
+      const enableWebSearch = config.preset === 'researcher' || config.skills.includes('research');
+      const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
       await worker.start();
       this.workers.set(config.id, worker);
     }
@@ -247,7 +249,8 @@ export class MainAgent {
       const instructions = existsSync(instructionsPath)
         ? readFileSync(instructionsPath, 'utf-8') : undefined;
 
-      const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions);
+      const enableWebSearch = ac.preset === 'researcher' || ac.skills.includes('research');
+      const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
       await worker.start();
       this.workers.set(ac.id, worker);
       added++;

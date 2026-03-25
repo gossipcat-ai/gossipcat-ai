@@ -16,6 +16,7 @@ export interface LLMGenerateOptions {
   tools?: ToolDefinition[];
   temperature?: number;
   maxTokens?: number;
+  webSearch?: boolean;  // Enable web search grounding (provider-specific)
 }
 
 export interface ILLMProvider {
@@ -38,11 +39,16 @@ export class AnthropicProvider implements ILLMProvider {
     };
     if (systemMsg) body.system = typeof systemMsg.content === 'string' ? systemMsg.content : '';
     if (options?.temperature !== undefined) body.temperature = options.temperature;
+    const anthropicTools: Array<Record<string, unknown>> = [];
     if (options?.tools?.length) {
-      body.tools = options.tools.map(t => ({
+      anthropicTools.push(...options.tools.map(t => ({
         name: t.name, description: t.description, input_schema: t.parameters,
-      }));
+      })));
     }
+    if (options?.webSearch) {
+      anthropicTools.push({ type: 'web_search_20250305', name: 'web_search' });
+    }
+    if (anthropicTools.length > 0) body.tools = anthropicTools;
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -208,15 +214,22 @@ export class GeminiProvider implements ILLMProvider {
       body.generationConfig = { temperature: options.temperature, maxOutputTokens: options?.maxTokens ?? 8192 };
     }
 
-    // Pass tools as functionDeclarations
+    // Pass tools as functionDeclarations + optional google_search grounding
+    const toolEntries: Array<Record<string, unknown>> = [];
     if (options?.tools?.length) {
-      body.tools = [{
+      toolEntries.push({
         functionDeclarations: options.tools.map(t => ({
           name: t.name,
           description: t.description,
           parameters: t.parameters,
         })),
-      }];
+      });
+    }
+    if (options?.webSearch) {
+      toolEntries.push({ google_search: {} });
+    }
+    if (toolEntries.length > 0) {
+      body.tools = toolEntries;
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;

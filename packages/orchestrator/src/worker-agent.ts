@@ -33,13 +33,17 @@ export class WorkerAgent {
     reject: (err: Error) => void;
   }> = new Map();
 
+  private webSearchEnabled: boolean;
+
   constructor(
     private agentId: string,
     private llm: ILLMProvider,
     relayUrl: string,
     private tools: ToolDefinition[],
     instructions?: string,
+    webSearch?: boolean,
   ) {
+    this.webSearchEnabled = webSearch ?? false;
     this.instructions = instructions || 'You are a skilled developer agent. Complete the assigned task using the available tools. Be concise and focused.\n\nIf you encounter a domain your skills don\'t cover, call suggest_skill(name, reason) — it helps the system learn. Don\'t stop working to suggest; note the gap and keep going.';
     this.agent = new GossipAgent({ agentId, relayUrl, reconnect: true });
   }
@@ -151,7 +155,10 @@ export class WorkerAgent {
           });
         }
 
-        const response = await this.llm.generate(messages, { tools: this.tools });
+        const response = await this.llm.generate(messages, {
+          tools: this.tools,
+          ...(this.webSearchEnabled ? { webSearch: true } : {}),
+        });
 
         if (response.usage) {
           totalInputTokens += response.usage.inputTokens;
