@@ -126,6 +126,92 @@ gossip_plan({
       expect(result!.args.task).toBe('Set up the project with Svelte and PixiJS');
     });
 
+    it('parses function-call with complex nested plan object', () => {
+      const text = `[TOOL_CALL]
+gossip_plan({
+  "title": "Build Scale Surfer",
+  "description": "Set up Svelte project with PixiJS and Tone.js",
+  "steps": [
+    {"id": "setup", "description": "Init project"},
+    {"id": "audio", "description": "Add audio"}
+  ]
+})
+[/TOOL_CALL]`;
+      const result = ToolRouter.parseToolCall(text);
+      expect(result).not.toBeNull();
+      expect(result!.tool).toBe('plan');
+      expect(result!.args.task).toBe('Set up Svelte project with PixiJS and Tone.js');
+    });
+
+    it('parses prose inside [TOOL_CALL] as null (not a valid format)', () => {
+      const text = `[TOOL_CALL]
+I will now dispatch the researcher to investigate.
+[/TOOL_CALL]`;
+      expect(ToolRouter.parseToolCall(text)).toBeNull();
+    });
+
+    it('parses dispatch with write_mode in YAML', () => {
+      const text = `[TOOL_CALL]
+tool: dispatch
+args:
+  agent_id: gemini-implementer
+  task: "Build the music game"
+  write_mode: scoped
+  scope: "./"
+`;
+      const result = ToolRouter.parseToolCall(text);
+      expect(result).not.toBeNull();
+      expect(result!.tool).toBe('dispatch');
+      expect(result!.args.agent_id).toBe('gemini-implementer');
+      expect(result!.args.write_mode).toBe('scoped');
+      expect(result!.args.scope).toBe('./');
+    });
+
+    it('parses dispatch_parallel with mixed quoted and unquoted values', () => {
+      const text = `I'll dispatch now.
+[TOOL_CALL]
+tool: dispatch_parallel
+args:
+  tasks:
+    - agent_id: "gemini-implementer"
+      task: Build the core game logic
+      write_mode: "scoped"
+      scope: ./
+    - agent_id: gemini-researcher
+      task: "Research WebAudio best practices"
+`;
+      const result = ToolRouter.parseToolCall(text);
+      expect(result).not.toBeNull();
+      expect(result!.tool).toBe('dispatch_parallel');
+      const tasks = result!.args.tasks as any[];
+      expect(tasks).toHaveLength(2);
+      expect(tasks[0].agent_id).toBe('gemini-implementer');
+      expect(tasks[0].task).toBe('Build the core game logic');
+      expect(tasks[1].agent_id).toBe('gemini-researcher');
+    });
+
+    it('parses gossip_dispatch_consensus with function-call syntax', () => {
+      const text = `[TOOL_CALL]
+gossip_dispatch_consensus({
+  "task": "Review the codebase for security issues",
+  "agent_ids": ["reviewer-1", "reviewer-2"]
+})
+[/TOOL_CALL]`;
+      const result = ToolRouter.parseToolCall(text);
+      expect(result).not.toBeNull();
+      expect(result!.tool).toBe('dispatch_consensus');
+      expect(result!.args.task).toBe('Review the codebase for security issues');
+    });
+
+    it('handles [TOOL_CALL] with only tool name on first line (no args)', () => {
+      const text = `[TOOL_CALL]
+tool: agents
+[/TOOL_CALL]`;
+      const result = ToolRouter.parseToolCall(text);
+      expect(result).not.toBeNull();
+      expect(result!.tool).toBe('agents');
+    });
+
     it('parses YAML with quoted multiword task values', () => {
       const text = `[TOOL_CALL]
 tool: dispatch
