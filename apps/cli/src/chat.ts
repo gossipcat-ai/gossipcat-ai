@@ -50,6 +50,10 @@ export async function startChat(config: GossipConfig): Promise<void> {
   mkdirSync(join(process.cwd(), '.gossip'), { recursive: true });
   writeFileSync(join(process.cwd(), '.gossip', 'bootstrap.md'), bootstrapPrompt);
 
+  // TaskGraph Supabase sync (same as MCP path)
+  const supaKey = await keychain.getKey('supabase');
+  const supaTeamSalt = await keychain.getKey('supabase-team-salt');
+
   const mainAgentConfig: MainAgentConfig = {
     provider: config.main_agent.provider,
     model: config.main_agent.model,
@@ -63,6 +67,29 @@ export async function startChat(config: GossipConfig): Promise<void> {
       assignScope: (agentId: string, scope: string) => toolServer.assignScope(agentId, scope),
       assignRoot: (agentId: string, root: string) => toolServer.assignRoot(agentId, root),
       releaseAgent: (agentId: string) => toolServer.releaseAgent(agentId),
+    },
+    syncFactory: () => {
+      try {
+        const { existsSync: exists, readFileSync: readF } = require('fs');
+        const configPath = join(process.cwd(), '.gossip', 'supabase.json');
+        if (!exists(configPath) || !supaKey) return null;
+        const supaConfig = JSON.parse(readF(configPath, 'utf-8'));
+        const { TaskGraph, TaskGraphSync } = require('@gossip/orchestrator');
+        const { getUserId, getProjectId, getTeamUserId, getGitEmail } = require('./identity');
+
+        let userId: string;
+        let displayName: string | null = null;
+        if (supaConfig.mode === 'team') {
+          const email = getGitEmail();
+          if (!supaTeamSalt || !email) return null;
+          userId = getTeamUserId(email, supaTeamSalt);
+          displayName = supaConfig.displayName || email;
+        } else {
+          userId = getUserId(process.cwd());
+        }
+
+        return new TaskGraphSync(new TaskGraph(process.cwd()), supaConfig.url, supaKey, userId, getProjectId(process.cwd()), process.cwd(), displayName);
+      } catch { return null; }
     },
   };
 
