@@ -533,9 +533,11 @@ describe('ToolExecutor', () => {
       proposeTeam: jest.fn().mockResolvedValue({ text: 'Proposed team...', choices: { message: 'Accept?', options: [] } }),
       pendingTask: null,
     };
+    // Use an empty registry so init_project doesn't return "already has agents"
+    const emptyRegistry = { get: jest.fn(), getAll: jest.fn().mockReturnValue([]) };
     const exec = new ToolExecutor({
       pipeline: mockPipeline,
-      registry: mockRegistry,
+      registry: emptyRegistry,
       projectRoot: '/tmp/test-project',
       initializer: mockInitializer,
     });

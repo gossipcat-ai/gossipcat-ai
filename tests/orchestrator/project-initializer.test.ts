@@ -100,7 +100,7 @@ describe('ProjectInitializer', () => {
 
   it('proposeTeam sends top candidates to LLM', async () => {
     const llm = mockLLM(JSON.stringify({
-      archetype: 'api-backend',
+      archetype: 'api-service',
       reason: 'Express + Prisma',
       main_agent: { provider: 'google', model: 'gemini-2.5-pro' },
       agents: [{ id: 'google-implementer', provider: 'google', model: 'gemini-2.5-pro', preset: 'implementer', skills: [] }],
@@ -114,8 +114,10 @@ describe('ProjectInitializer', () => {
     expect(llm.generate).toHaveBeenCalledTimes(1);
     const callArgs = (llm.generate as jest.Mock).mock.calls[0];
     const systemMsg = callArgs[0].find((m: any) => m.role === 'system');
-    expect(systemMsg.content).toContain('api-backend');
-    expect(systemMsg.content).toContain('google, anthropic, openai');
+    expect(systemMsg.content).toContain('api-service');
+    // Providers are listed on separate lines, not comma-separated
+    expect(systemMsg.content).toContain('google:');
+    expect(systemMsg.content).toContain('anthropic:');
   });
 
   it('proposeTeam returns error when no API keys', async () => {

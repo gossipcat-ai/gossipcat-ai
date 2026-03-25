@@ -327,23 +327,18 @@ describe('Cognitive Orchestration', () => {
     expect(result.status).toBe('done');
   });
 
-  it('should trigger init flow when no agents configured', async () => {
-    const llm = createMockLLM(() => JSON.stringify({
-      archetype: 'fullstack',
-      reason: 'Detected TypeScript project',
-      main_agent: { provider: 'anthropic', model: 'claude' },
-      agents: [{ id: 'coder', provider: 'anthropic', model: 'claude', preset: 'implementer', skills: ['typescript'] }],
-    }));
-    const keyProvider = async (p: string) => p === 'anthropic' ? 'test-key' : null;
-    const mainAgent = createMainAgent(llm, [], { keyProvider });
+  it('should brainstorm first when no agents configured', async () => {
+    // With brainstorm-before-team flow, the first message goes to cognitive mode
+    // for brainstorming (no tool call, no team proposal yet)
+    const llm = createMockLLM(() => 'Great idea! Here are some approaches for a REST API...');
+    const mainAgent = createMainAgent(llm, []);
 
     const result = await mainAgent.handleMessage('build a REST API');
 
-    expect(result.text).toContain('fullstack');
-    expect(result.choices).toBeDefined();
-    expect(result.choices!.options.some((o: any) => o.value === 'accept')).toBe(true);
-    expect(result.choices!.options.some((o: any) => o.value === 'skip')).toBe(true);
+    // Should brainstorm, not immediately propose a team
+    expect(result.text).toContain('REST API');
     expect(result.status).toBe('done');
+    // No choices on first message — brainstorming is pure text
   });
 
   it('should handle skip choice during init flow', async () => {

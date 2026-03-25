@@ -112,7 +112,7 @@ describe('MainAgent bootstrapPrompt', () => {
     const lastSystem = systemMessages[systemMessages.length - 1];
     expect(lastSystem).toContain('## Bootstrap Context');
     expect(lastSystem).toContain('Team info here.');
-    expect(lastSystem).toContain('You are a developer assistant');
+    expect(lastSystem).toContain('orchestrator'); // CHAT_SYSTEM_PROMPT identifies as orchestrator
   });
 
   it('uses CHAT_SYSTEM_PROMPT alone when bootstrapPrompt is not set', async () => {
@@ -139,7 +139,10 @@ describe('MainAgent bootstrapPrompt', () => {
     await mainAgent.handleMessage('do something', { mode: 'decompose' });
 
     const lastSystem = systemMessages[systemMessages.length - 1];
-    expect(lastSystem).toBe('You are a developer assistant powering Gossip Mesh. Be concise and direct.\n\nWhen you want to present the developer with choices, use this format in your response:\n\n[CHOICES]\nmessage: Your question here?\n- option_value | Display Label | Optional hint text\n- option_value | Display Label | Optional hint\n[/CHOICES]\n\nExamples of when to use choices:\n- Multiple approaches to a task (refactor in-place vs extract vs rewrite)\n- Confirming a destructive action (delete files, reset branch)\n- Selecting which files/modules to work on\n- Choosing between trade-offs (speed vs thoroughness)\n\nOnly present choices when there\'s a genuine decision. Don\'t use them for simple yes/no — just ask directly.\nWhen there\'s a clear best option, recommend it but still offer alternatives.');
+    // Should contain CHAT_SYSTEM_PROMPT (orchestrator prompt) without bootstrap prefix
+    expect(lastSystem).toContain('orchestrator');
+    expect(lastSystem).toContain('CRITICAL RULES');
+    expect(lastSystem).not.toContain('## Bootstrap Context');
   });
 });
 

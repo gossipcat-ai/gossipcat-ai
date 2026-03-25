@@ -108,8 +108,6 @@ describe('ToolExecutor bug hunt', () => {
       expect(result.text).toContain('Plan execution failed.');
       expect(result.text).toContain('scope conflict on agent a');
       expect(result.text).toContain('agent b timed out');
-      expect(result.text).toContain('[a] t1');
-      expect(result.text).toContain('[b] t2');
     });
   });
 

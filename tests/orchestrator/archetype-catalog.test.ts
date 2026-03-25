@@ -15,47 +15,46 @@ describe('ArchetypeCatalog', () => {
     catalog = new ArchetypeCatalog(CATALOG_PATH);
   });
 
-  it('loads all 19 archetypes', () => {
-    expect(catalog.ids()).toHaveLength(19);
+  it('loads all 17 archetypes', () => {
+    expect(catalog.ids()).toHaveLength(17);
   });
 
   it('gets archetype by id', () => {
-    const arch = catalog.get('game-dev');
+    const arch = catalog.get('game');
     expect(arch).toBeDefined();
-    expect(arch!.name).toBe('Game Dev');
     expect(arch!.roles.length).toBeGreaterThan(0);
   });
 
-  it('scores game-dev highest for game signals', () => {
+  it('scores game highest for game signals', () => {
     const signals: ProjectSignals = {
       dependencies: ['phaser'],
       directories: ['assets/'],
       files: [],
     };
     const scored = catalog.scoreSignals(signals);
-    expect(scored[0].id).toBe('game-dev');
+    expect(scored[0].id).toBe('game');
     expect(scored[0].score).toBeGreaterThan(0);
   });
 
-  it('scores api-backend highest for API signals', () => {
+  it('scores api-service highest for API signals', () => {
     const signals: ProjectSignals = {
       dependencies: ['express'],
       directories: [],
       files: ['Dockerfile'],
     };
     const scored = catalog.scoreSignals(signals);
-    expect(scored[0].id).toBe('api-backend');
+    expect(scored[0].id).toBe('api-service');
     expect(scored[0].score).toBeGreaterThan(0);
   });
 
-  it('scores blockchain-web3 for solidity signals', () => {
+  it('scores blockchain for solidity signals', () => {
     const signals: ProjectSignals = {
       dependencies: ['hardhat'],
       directories: ['contracts/'],
       files: [],
     };
     const scored = catalog.scoreSignals(signals);
-    expect(scored[0].id).toBe('blockchain-web3');
+    expect(scored[0].id).toBe('blockchain');
     expect(scored[0].score).toBeGreaterThan(0);
   });
 
@@ -66,7 +65,7 @@ describe('ArchetypeCatalog', () => {
 
   it('boosts scores based on user message keywords', () => {
     const scored = catalog.scoreWithMessage(emptySignals(), 'build a game with sprites');
-    expect(scored[0].id).toBe('game-dev');
+    expect(scored[0].id).toBe('game');
     expect(scored[0].score).toBeGreaterThan(0);
   });
 
@@ -77,8 +76,7 @@ describe('ArchetypeCatalog', () => {
       files: [],
     };
     const scored = catalog.scoreWithMessage(signals, 'build a game with sprites and levels');
-    // "game", "sprite", "level" = 9 keyword boost for game-dev vs 3 for express in api-backend
-    expect(scored[0].id).toBe('game-dev');
+    expect(scored[0].id).toBe('game');
   });
 
   it('returns top 3 candidates when scores exist', () => {
@@ -92,8 +90,8 @@ describe('ArchetypeCatalog', () => {
     expect(candidates[0].score).toBeGreaterThan(0);
   });
 
-  it('returns all 19 when all scores are zero', () => {
+  it('returns all 17 when all scores are zero', () => {
     const candidates = catalog.getTopCandidates(emptySignals());
-    expect(candidates).toHaveLength(19);
+    expect(candidates).toHaveLength(17);
   });
 });

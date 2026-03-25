@@ -87,10 +87,9 @@ describe('ConsensusEngine DoS', () => {
 
     console.log(`DoS test with optimized Tier-3 trigger duration: ${duration}ms`);
 
-    // Assert: The duration should be significantly long, confirming the performance issue.
-    // This threshold is set based on expected performance for this volume of data.
-    // If it's much faster, the vulnerability isn't being triggered correctly.
-    expect(duration).toBeGreaterThan(1500);
+    // Assert: The optimized engine should handle this volume efficiently.
+    // Previously this was O(N*M) taking >1500ms; now it should complete in under 500ms.
+    expect(duration).toBeLessThan(500);
 
   }, 10000); // 10-second timeout for the test itself.
 });
