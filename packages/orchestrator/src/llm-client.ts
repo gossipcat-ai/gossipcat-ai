@@ -214,22 +214,20 @@ export class GeminiProvider implements ILLMProvider {
       body.generationConfig = { temperature: options.temperature, maxOutputTokens: options?.maxTokens ?? 8192 };
     }
 
-    // Pass tools as functionDeclarations + optional google_search grounding
-    const toolEntries: Array<Record<string, unknown>> = [];
-    if (options?.tools?.length) {
-      toolEntries.push({
+    // Gemini API: google_search and functionDeclarations CANNOT be combined.
+    // If webSearch is enabled, use google_search only (worker agents call
+    // their tools via relay RPC, not Gemini function calling).
+    // If webSearch is not enabled, use functionDeclarations for native tool calls.
+    if (options?.webSearch) {
+      body.tools = [{ google_search: {} }];
+    } else if (options?.tools?.length) {
+      body.tools = [{
         functionDeclarations: options.tools.map(t => ({
           name: t.name,
           description: t.description,
           parameters: t.parameters,
         })),
-      });
-    }
-    if (options?.webSearch) {
-      toolEntries.push({ google_search: {} });
-    }
-    if (toolEntries.length > 0) {
-      body.tools = toolEntries;
+      }];
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
