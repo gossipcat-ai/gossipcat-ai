@@ -174,6 +174,7 @@ export class MainAgent {
   private teamManager: TeamManager;
   private keyProviderFn: ((provider: string) => Promise<string | null>) | undefined;
   private conversationHistory: LLMMessage[] = [];
+  private lastAcceptedTask: string | null = null;
   private readonly MAX_HISTORY = 20; // 10 pairs of user+assistant
 
   constructor(config: MainAgentConfig) {
@@ -538,7 +539,7 @@ export class MainAgent {
   }
 
   /** Handle a user's choice selection — continues the conversation with context */
-  async handleChoice(originalMessage: string, choiceValue: string): Promise<ChatResponse> {
+  async handleChoice(_originalMessage: string, choiceValue: string): Promise<ChatResponse> {
     // Project init approval
     if (this.projectInitializer.pendingTask) {
       if (choiceValue === 'accept') {
@@ -560,6 +561,7 @@ export class MainAgent {
           }
         }
         const task = this.projectInitializer.pendingTask;
+        this.lastAcceptedTask = task; // preserve for 'start' handler
         this.projectInitializer.pendingTask = null;
         this.projectInitializer.pendingProposal = null;
 
@@ -587,19 +589,6 @@ export class MainAgent {
           } : undefined,
         };
       }
-      if (choiceValue === 'start') {
-        const task = this.projectInitializer.pendingTask || originalMessage;
-
-        // Brainstorming already happened before team init (the conversation
-        // history has the full brainstorming context). Now proceed to planning.
-        // The orchestrator will naturally call the plan tool via cognitive mode.
-        return this.handleMessageCognitive(
-          `The team is ready. Based on our earlier brainstorming, create a plan for: "${task}". Use the plan tool to decompose this into agent tasks.`,
-        );
-      }
-      if (choiceValue === 'different') {
-        return { text: 'What would you like to do?', status: 'done' };
-      }
       if (choiceValue === 'modify') {
         // Keep pendingTask so next message re-triggers init with modifications
         // pendingProposal cleared so a fresh proposal is generated
@@ -616,6 +605,19 @@ export class MainAgent {
         this.projectInitializer.pendingProposal = null;
         return { text: 'No agents configured. You can chat directly or run /init later.', status: 'done' };
       }
+    }
+
+    // Post-accept choices — these fire AFTER pendingTask is cleared
+    if (choiceValue === 'start' && this.lastAcceptedTask) {
+      const task = this.lastAcceptedTask;
+      this.lastAcceptedTask = null;
+      return this.handleMessageCognitive(
+        `The team is ready. Based on our earlier brainstorming, create a plan for: "${task}". Use the plan tool to decompose this into agent tasks.`,
+      );
+    }
+    if (choiceValue === 'different') {
+      this.lastAcceptedTask = null;
+      return { text: 'What would you like to do?', status: 'done' };
     }
 
     // Team update approval
