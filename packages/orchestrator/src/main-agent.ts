@@ -345,23 +345,30 @@ export class MainAgent {
       ...(orchestratorTools ? { tools: orchestratorTools } : {}),
     });
 
-    // Check for tool calls — native (Gemini/OpenAI function calling) OR text-based [TOOL_CALL]
-    let toolCall = ToolRouter.parseToolCall(response.text);
+    // Check for tool calls — prefer native function calling over text-based [TOOL_CALL]
+    let toolCall: { tool: string; args: Record<string, unknown> } | null = null;
 
-    // Native tool calls from providers that support function calling (Gemini, OpenAI)
-    if (!toolCall && response.toolCalls?.length) {
+    // Native tool calls first (structured, reliable)
+    if (response.toolCalls?.length) {
       const native = response.toolCalls[0];
-      // Normalize: strip gossip_ or gossip. prefix
       let toolName = native.name;
       if (/^gossip[._]/.test(toolName)) {
         toolName = toolName.replace(/^gossip[._]/, '');
       }
-      // Normalize args: Gemini sometimes uses description/title instead of task
       const nativeArgs = { ...native.arguments };
-      if (!nativeArgs.task && (nativeArgs.description || nativeArgs.title)) {
-        nativeArgs.task = nativeArgs.description || nativeArgs.title;
+      if (!nativeArgs.task) {
+        nativeArgs.task = nativeArgs.description || nativeArgs.title || nativeArgs.query || nativeArgs.input || nativeArgs.prompt;
+        if (!nativeArgs.task) {
+          const firstStr = Object.values(nativeArgs).find(v => typeof v === 'string' && (v as string).length > 10);
+          if (firstStr) nativeArgs.task = firstStr;
+        }
       }
       toolCall = { tool: toolName, args: nativeArgs };
+    }
+
+    // Fallback: text-based [TOOL_CALL] parsing (only if native didn't fire)
+    if (!toolCall) {
+      toolCall = ToolRouter.parseToolCall(response.text);
     }
 
     // If the response contains [TOOL_CALL] but parsing failed, the LLM produced

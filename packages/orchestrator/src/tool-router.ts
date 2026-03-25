@@ -248,15 +248,21 @@ export class ToolRouter {
         log(`unknown tool: ${tool}`);
         return null;
       }
-      // Normalize: if 'task' is required but missing, check for description/title
-      if (!args.task && (args.description || args.title)) {
-        args.task = args.description || args.title;
+      // Normalize: if 'task' is required but missing, try common alternatives
+      if (!args.task) {
+        const alt = args.description || args.title || args.query || args.input || args.prompt;
+        if (alt) args.task = alt;
+        // Last resort: use first long string value in args
+        if (!args.task) {
+          const firstStr = Object.values(args).find(v => typeof v === 'string' && (v as string).length > 10);
+          if (firstStr) args.task = firstStr;
+        }
       }
 
       const schema = TOOL_SCHEMAS[tool];
       for (const req of schema.requiredArgs) {
         if (!(req in args)) {
-          log(`missing required arg '${req}' for tool '${tool}'`);
+          log(`missing required arg '${req}' for tool '${tool}'. Got args: ${JSON.stringify(Object.keys(args))}`);
           return null;
         }
       }
