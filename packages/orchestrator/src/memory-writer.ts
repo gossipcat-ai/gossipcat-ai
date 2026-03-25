@@ -91,8 +91,12 @@ export class MemoryWriter {
     const lines: string[] = [];
 
     // Extract file names mentioned (common patterns from agent output)
-    const filePatterns = combined.match(/(?:created?|modified?|updated?|wrote?|saved?)\s+[`"']?([a-zA-Z0-9_/.:-]+\.\w{1,5})[`"']?/gi) || [];
-    const files = [...new Set(filePatterns.map(m => {
+    // Allows articles/prepositions between verb and filename: "created the `index.html`"
+    const filePatterns = combined.match(/(?:created?|modified?|updated?|wrote?|saved?)\s+(?:the\s+|a\s+|an\s+)?(?:new\s+|placeholder\s+|main\s+|core\s+)?[`"']?([a-zA-Z0-9_/.:-]+\.\w{1,5})[`"']?/gi) || [];
+    // Also catch backtick-quoted filenames standalone ("`src/app.js`")
+    const backtickFiles = combined.match(/`([a-zA-Z0-9_/.:-]+\.\w{1,5})`/g) || [];
+    const allMatches = [...filePatterns, ...backtickFiles];
+    const files = [...new Set(allMatches.map(m => {
       const match = m.match(/[`"']?([a-zA-Z0-9_/.:-]+\.\w{1,5})[`"']?$/);
       return match ? match[1] : '';
     }).filter(Boolean))];

@@ -59,10 +59,23 @@ export class AgentMemoryReader {
   }
 
   private calculateRelevance(description: string, taskLower: string): number {
-    const words = description.toLowerCase().split(/[\s,]+/).filter(w => w.length > 3);
-    if (words.length === 0) return 0;
-    const matches = words.filter(w => taskLower.includes(w)).length;
-    return matches / words.length;
+    const descWords = description.toLowerCase().split(/[\s,/.]+/).filter(w => w.length > 2);
+    if (descWords.length === 0) return 0;
+
+    const taskWords = new Set(taskLower.split(/[\s,/.]+/).filter(w => w.length > 2));
+
+    // Count matches: either exact word match or substring containment (for compound terms)
+    let matches = 0;
+    for (const w of descWords) {
+      if (taskWords.has(w) || taskLower.includes(w)) matches++;
+    }
+
+    // Bonus: if description mentions a file extension present in the task, boost relevance
+    const descExts: string[] = description.match(/\.\w{1,5}/g) || [];
+    const taskExts: string[] = taskLower.match(/\.\w{1,5}/g) || [];
+    if (descExts.some(e => taskExts.includes(e))) matches += 1;
+
+    return Math.min(matches / descWords.length, 1.0);
   }
 
   private parseFrontmatter(content: string): { name: string; description: string; importance: number; lastAccessed: string; accessCount: number } | null {
