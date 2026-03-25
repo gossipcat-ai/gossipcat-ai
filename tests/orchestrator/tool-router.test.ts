@@ -622,7 +622,7 @@ describe('ToolExecutor', () => {
     const secondCall = mockPipeline.dispatch.mock.calls[1];
     expect(secondCall[0]).toBe('writer');
     expect(secondCall[1]).toContain('write second');
-    expect(secondCall[1]).toContain('Context from prior tasks'); // injected context from task 1
+    expect(secondCall[1]).toContain('What prior tasks accomplished'); // injected context from task 1
 
     // collect called once per task sequentially
     expect(mockPipeline.collect).toHaveBeenCalledTimes(2);

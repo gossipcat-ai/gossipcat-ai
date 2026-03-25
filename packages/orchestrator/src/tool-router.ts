@@ -426,19 +426,42 @@ export class ToolExecutor {
       }
 
       // Sequential: dispatch one by one with progress.
-      // Each subsequent task gets a summary of what prior tasks did, so agents
-      // don't make conflicting decisions (e.g. one picks TypeScript, another JS).
+      // Each subsequent task gets: (1) git diff from prior tasks showing exactly what
+      // files were created/modified, and (2) a text summary of what each task did.
+      // This prevents conflicting decisions (e.g. one agent picks TS, another JS).
       const results: string[] = [];
-      const priorContext: string[] = [];
+      const priorSummaries: string[] = [];
+
       for (let i = 0; i < tasks.length; i++) {
         const t = tasks[i];
         agentSet.add(t.agentId);
         this.onTaskProgress?.({ taskIndex: i, totalTasks: tasks.length, agentId: t.agentId, taskDescription: t.task, status: 'start' });
 
-        // Inject prior task results as context so sequential agents don't conflict
+        // Build context for this task from prior task results + file state
         let taskWithContext = t.task;
-        if (priorContext.length > 0) {
-          taskWithContext = `${t.task}\n\n[Context from prior tasks — follow the same technology choices and file structure]\n${priorContext.join('\n')}`;
+        if (i > 0) {
+          const contextParts: string[] = [];
+
+          // File manifest: what exists now (lightweight — just file names)
+          try {
+            const { execSync } = require('child_process');
+            const currentFiles = execSync(
+              'git status --porcelain --short 2>/dev/null || find . -maxdepth 3 -type f -not -path "./.git/*" -not -path "./node_modules/*" | head -50',
+              { cwd: this.projectRoot, encoding: 'utf-8', timeout: 5000 },
+            ).trim();
+            if (currentFiles) {
+              contextParts.push(`[Current project files]\n${currentFiles}`);
+            }
+          } catch { /* ignore */ }
+
+          // Prior task summaries
+          if (priorSummaries.length > 0) {
+            contextParts.push(`[What prior tasks accomplished]\n${priorSummaries.join('\n')}`);
+          }
+
+          if (contextParts.length > 0) {
+            taskWithContext = `${t.task}\n\n[Context — follow the same technology choices, file structure, and coding patterns]\n${contextParts.join('\n\n')}`;
+          }
         }
 
         const opts = t.writeMode ? { writeMode: t.writeMode, scope: t.scope } : undefined;
@@ -449,13 +472,12 @@ export class ToolExecutor {
 
         if (entry?.status === 'completed') {
           this.onTaskProgress?.({ taskIndex: i, totalTasks: tasks.length, agentId: t.agentId, taskDescription: t.task, status: 'done', result: entry.result });
-          const summary = (entry.result || '').slice(0, 500);
           results.push(`[${t.agentId}] ${entry.result || '(no output)'}`);
-          priorContext.push(`- Task ${i + 1} (${t.agentId}): ${summary}`);
+          priorSummaries.push(`- Task ${i + 1} (${t.agentId}): ${(entry.result || '').slice(0, 300)}`);
         } else {
           this.onTaskProgress?.({ taskIndex: i, totalTasks: tasks.length, agentId: t.agentId, taskDescription: t.task, status: 'error', error: entry?.error });
           results.push(`[${t.agentId}] ERROR: ${entry?.error || 'unknown'}`);
-          priorContext.push(`- Task ${i + 1} (${t.agentId}): FAILED — ${entry?.error || 'unknown'}`);
+          priorSummaries.push(`- Task ${i + 1} (${t.agentId}): FAILED — ${entry?.error || 'unknown'}`);
         }
       }
 
