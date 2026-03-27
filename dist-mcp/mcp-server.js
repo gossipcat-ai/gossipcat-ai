@@ -8917,7 +8917,7 @@ var init_performance_reader = __esm({
     SIGNAL_WEIGHTS = {
       agreement: { accuracy: 0.1 },
       disagreement: { accuracy: -0.15 },
-      // losing side; winning side gets +0.1 via counterpart
+      // losing side; winning side gets bonus via counterpart
       unique_confirmed: { uniqueness: 0.2 },
       unique_unconfirmed: { uniqueness: 0.05 },
       new_finding: { uniqueness: 0.15 },
@@ -8925,13 +8925,26 @@ var init_performance_reader = __esm({
     };
     PerformanceReader = class {
       filePath;
+      // Cache: avoid re-reading file on every dispatch call
+      cachedScores = null;
+      cachedMtimeMs = 0;
       constructor(projectRoot) {
         this.filePath = (0, import_path20.join)(projectRoot, ".gossip", "agent-performance.jsonl");
       }
-      /** Read all signals and compute per-agent scores */
+      /** Read all signals and compute per-agent scores (cached by file mtime) */
       getScores() {
+        let mtimeMs = 0;
+        try {
+          mtimeMs = (0, import_fs16.statSync)(this.filePath).mtimeMs;
+        } catch {
+        }
+        if (this.cachedScores && mtimeMs === this.cachedMtimeMs) {
+          return this.cachedScores;
+        }
         const signals = this.readSignals();
-        return this.computeScores(signals);
+        this.cachedScores = this.computeScores(signals);
+        this.cachedMtimeMs = mtimeMs;
+        return this.cachedScores;
       }
       /** Get score for a specific agent (returns null if no data) */
       getAgentScore(agentId) {
@@ -8943,6 +8956,11 @@ var init_performance_reader = __esm({
         if (!score || score.totalSignals < 3) return 1;
         return 0.5 + score.reliability;
       }
+      /** Invalidate cache (e.g. after writing new signals) */
+      invalidateCache() {
+        this.cachedScores = null;
+        this.cachedMtimeMs = 0;
+      }
       readSignals() {
         if (!(0, import_fs16.existsSync)(this.filePath)) return [];
         try {
@@ -8953,7 +8971,9 @@ var init_performance_reader = __esm({
             } catch {
               return null;
             }
-          }).filter((s) => s !== null);
+          }).filter(
+            (s) => s !== null && typeof s.agentId === "string" && s.agentId.length > 0
+          );
         } catch {
           return [];
         }
@@ -8995,6 +9015,7 @@ var init_performance_reader = __esm({
               agent.disagreements++;
               break;
             case "unique_confirmed":
+            case "unique_unconfirmed":
             case "new_finding":
               agent.uniqueFindings++;
               break;
@@ -9002,9 +9023,9 @@ var init_performance_reader = __esm({
               agent.hallucinations++;
               break;
           }
-          if (signal.counterpartId && (signal.signal === "agreement" || signal.signal === "unique_confirmed")) {
-            const counterpart = ensure(signal.counterpartId);
-            counterpart.accuracy = clamp(counterpart.accuracy + 0.05, 0, 1);
+          if (signal.counterpartId && signal.signal === "disagreement") {
+            const winner = ensure(signal.counterpartId);
+            winner.accuracy = clamp(winner.accuracy + 0.1, 0, 1);
           }
         }
         for (const score of scores.values()) {
@@ -25474,7 +25495,7 @@ server.tool(
     }
     let consensusReport = void 0;
     const completedResults = allResults.filter((t) => t.status === "completed" && t.result);
-    if (completedResults.length >= 2) {
+    if (completedResults.length >= 2 && relayIds.length > 0) {
       try {
         const { ConsensusEngine: ConsensusEngine2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
         const engine = new ConsensusEngine2({
@@ -25482,10 +25503,10 @@ server.tool(
           registryGet: (id) => mainAgent.getAgentList().find((a) => a.id === id)
         });
         consensusReport = await engine.run(allResults);
-        process.stderr.write(`[gossipcat] Consensus complete: ${completedResults.length} agents (${nativeIds.length} native + ${relayIds.length} relay)
+        process.stderr.write(`[gossipcat] Consensus engine: ${completedResults.length} agents cross-reviewed
 `);
       } catch (err) {
-        process.stderr.write(`[gossipcat] Consensus engine failed: ${err.message}
+        process.stderr.write(`[gossipcat] Consensus engine skipped: ${err.message}
 `);
       }
     }
@@ -25500,8 +25521,10 @@ ${t.result}`;
     let output = resultTexts.join("\n\n---\n\n");
     if (consensusReport?.summary) {
       output += "\n\n" + consensusReport.summary;
-    } else if (completedResults.length < 2) {
-      output += "\n\n\u26A0\uFE0F Consensus cross-review did not run (need \u22652 successful agents).";
+    } else if (completedResults.length >= 2) {
+      output += "\n\n---\n\nCross-reference the findings above. Identify: CONFIRMED (both agents agree), DISPUTED (they disagree), UNIQUE (only one found it), and any NEW insights from comparing their perspectives.";
+    } else {
+      output += "\n\n\u26A0\uFE0F Need \u22652 successful agents for consensus.";
     }
     return { content: [{ type: "text", text: output }] };
   }

@@ -877,10 +877,12 @@ server.tool(
       return { content: [{ type: 'text' as const, text: 'No matching tasks. Native agents may still be running — call gossip_relay_result first.' }] };
     }
 
-    // Step 3: Run consensus engine on ALL results (relay + native combined)
+    // Step 3: Try automated cross-review via ConsensusEngine (if orchestrator LLM is available).
+    // In Claude Code, the host IS Opus 4.6 — if the engine fails or isn't available,
+    // just return the results and let Claude Code synthesize them (it's the best model).
     let consensusReport: any = undefined;
     const completedResults = allResults.filter((t: any) => t.status === 'completed' && t.result);
-    if (completedResults.length >= 2) {
+    if (completedResults.length >= 2 && relayIds.length > 0) {
       try {
         const { ConsensusEngine } = await import('@gossip/orchestrator');
         const engine = new ConsensusEngine({
@@ -888,9 +890,9 @@ server.tool(
           registryGet: (id: string) => mainAgent.getAgentList().find((a: any) => a.id === id),
         });
         consensusReport = await engine.run(allResults);
-        process.stderr.write(`[gossipcat] Consensus complete: ${completedResults.length} agents (${nativeIds.length} native + ${relayIds.length} relay)\n`);
+        process.stderr.write(`[gossipcat] Consensus engine: ${completedResults.length} agents cross-reviewed\n`);
       } catch (err) {
-        process.stderr.write(`[gossipcat] Consensus engine failed: ${(err as Error).message}\n`);
+        process.stderr.write(`[gossipcat] Consensus engine skipped: ${(err as Error).message}\n`);
       }
     }
 
@@ -907,8 +909,11 @@ server.tool(
 
     if (consensusReport?.summary) {
       output += '\n\n' + consensusReport.summary;
-    } else if (completedResults.length < 2) {
-      output += '\n\n⚠️ Consensus cross-review did not run (need ≥2 successful agents).';
+    } else if (completedResults.length >= 2) {
+      // No automated cross-review — Claude Code will synthesize
+      output += '\n\n---\n\nCross-reference the findings above. Identify: CONFIRMED (both agents agree), DISPUTED (they disagree), UNIQUE (only one found it), and any NEW insights from comparing their perspectives.';
+    } else {
+      output += '\n\n⚠️ Need ≥2 successful agents for consensus.';
     }
 
     return { content: [{ type: 'text' as const, text: output }] };
