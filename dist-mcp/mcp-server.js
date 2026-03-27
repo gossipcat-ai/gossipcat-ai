@@ -6308,7 +6308,8 @@ var init_consensus_engine = __esm({
         if (successful.length < 2) return [];
         const summaries = /* @__PURE__ */ new Map();
         for (const r of successful) {
-          summaries.set(r.agentId, this.extractSummary(r.result));
+          const raw = this.extractSummary(r.result);
+          summaries.set(r.agentId, raw.replace(/<\/?data>/gi, ""));
         }
         const allEntries = await Promise.all(
           successful.map((agent) => this.crossReviewForAgent(agent, summaries))
@@ -6382,6 +6383,8 @@ Return ONLY a JSON array:
             });
           }
         }
+        const agentTaskIds = /* @__PURE__ */ new Map();
+        for (const r of successful) agentTaskIds.set(r.agentId, r.id);
         for (const entry of crossReviewEntries) {
           const now = (/* @__PURE__ */ new Date()).toISOString();
           if (entry.action === "new") {
@@ -6393,7 +6396,7 @@ Return ONLY a JSON array:
             });
             signals.push({
               type: "consensus",
-              taskId: "",
+              taskId: agentTaskIds.get(entry.agentId) ?? "",
               signal: "new_finding",
               agentId: entry.agentId,
               evidence: entry.evidence,
@@ -6409,7 +6412,7 @@ Return ONLY a JSON array:
               f.confidences.push(entry.confidence);
               signals.push({
                 type: "consensus",
-                taskId: "",
+                taskId: agentTaskIds.get(entry.agentId) ?? "",
                 signal: "agreement",
                 agentId: entry.agentId,
                 counterpartId: entry.peerAgentId,
@@ -6433,7 +6436,7 @@ Return ONLY a JSON array:
               if (isHallucination) {
                 signals.push({
                   type: "consensus",
-                  taskId: "",
+                  taskId: agentTaskIds.get(entry.peerAgentId) ?? "",
                   signal: "hallucination_caught",
                   agentId: entry.peerAgentId,
                   counterpartId: entry.agentId,
@@ -6444,7 +6447,7 @@ Return ONLY a JSON array:
               } else {
                 signals.push({
                   type: "consensus",
-                  taskId: "",
+                  taskId: agentTaskIds.get(entry.agentId) ?? "",
                   signal: "disagreement",
                   agentId: entry.agentId,
                   counterpartId: entry.peerAgentId,
@@ -6471,22 +6474,39 @@ Return ONLY a JSON array:
             disputedBy: entry.disputedBy,
             confidence: Math.round(avgConfidence)
           };
-          if (entry.disputedBy.length > 0) {
+          const now = (/* @__PURE__ */ new Date()).toISOString();
+          if (entry.disputedBy.length > 0 && entry.confirmedBy.length === 0) {
+            finding.tag = "disputed";
+            disputed.push(finding);
+          } else if (entry.disputedBy.length > 0 && entry.confirmedBy.length > 0) {
             finding.tag = "disputed";
             disputed.push(finding);
           } else if (entry.confirmedBy.length > 0) {
+            const isUniquelyDiscovered = !Array.from(findingMap.values()).some(
+              (other) => other !== entry && other.finding === entry.finding && other.originalAgentId !== entry.originalAgentId
+            );
             finding.tag = "confirmed";
             confirmed.push(finding);
+            if (isUniquelyDiscovered) {
+              signals.push({
+                type: "consensus",
+                taskId: agentTaskIds.get(entry.originalAgentId) ?? "",
+                signal: "unique_confirmed",
+                agentId: entry.originalAgentId,
+                evidence: entry.finding,
+                timestamp: now
+              });
+            }
           } else {
             finding.tag = "unique";
             unique.push(finding);
             signals.push({
               type: "consensus",
-              taskId: "",
+              taskId: agentTaskIds.get(entry.originalAgentId) ?? "",
               signal: "unique_unconfirmed",
               agentId: entry.originalAgentId,
               evidence: entry.finding,
-              timestamp: (/* @__PURE__ */ new Date()).toISOString()
+              timestamp: now
             });
           }
         }
@@ -6807,7 +6827,7 @@ var init_dispatch_pipeline = __esm({
         if (specRefs.length > 0) {
           try {
             const specPath = (0, import_path15.resolve)(this.projectRoot, specRefs[0]);
-            if (specPath.startsWith(this.projectRoot)) {
+            if (specPath.startsWith(this.projectRoot + "/") || specPath === this.projectRoot) {
               const specContent = (0, import_fs11.readFileSync)(specPath, "utf-8");
               const implFiles = extractSpecReferences(task, specContent);
               const enrichment = buildSpecReviewEnrichment(implFiles);
@@ -7019,6 +7039,7 @@ var init_dispatch_pipeline = __esm({
       }
       async collect(taskIds, timeoutMs = 12e4, options) {
         const targets = taskIds ? taskIds.map((id) => this.tasks.get(id)).filter((t) => t !== void 0) : Array.from(this.tasks.values());
+        let orphanEntries = [];
         if (taskIds && taskIds.length > 0) {
           const missingIds = taskIds.filter((id) => !this.tasks.has(id));
           if (missingIds.length > 0) {
@@ -7034,7 +7055,7 @@ var init_dispatch_pipeline = __esm({
                 } catch {
                 }
               }
-              const orphanEntries = orphaned.map((id) => {
+              orphanEntries = orphaned.map((id) => {
                 const gt = this.taskGraph.getTask(id);
                 return {
                   id,
@@ -7068,7 +7089,7 @@ var init_dispatch_pipeline = __esm({
             } else if (t.status === "failed") {
               this.taskGraph.recordFailed(t.id, t.error || "Unknown", duration3, t.inputTokens, t.outputTokens);
             } else if (t.status === "running") {
-              this.taskGraph.recordCancelled(t.id, "collect timeout", duration3);
+              this.taskGraph.recordFailed(t.id, "collect timeout", duration3);
             }
           } catch (err) {
             log2(`TaskGraph write failed for ${t.id}: ${err.message}`);
@@ -7190,24 +7211,39 @@ Worktree merge: CONFLICT
             this.scopeTracker.release(t.id);
           }
         }
-        const results = targets.map((t) => ({
-          id: t.id,
-          agentId: t.agentId,
-          task: t.task,
-          status: t.status,
-          result: t.result,
-          error: t.error,
-          startedAt: t.startedAt,
-          completedAt: t.completedAt,
-          skillWarnings: t.skillWarnings,
-          writeMode: t.writeMode,
-          scope: t.scope,
-          worktreeInfo: t.worktreeInfo,
-          planId: t.planId,
-          planStep: t.planStep,
-          inputTokens: t.inputTokens,
-          outputTokens: t.outputTokens
-        }));
+        for (const t of targets) {
+          if (t.status === "running") {
+            t.status = "failed";
+            t.error = "collect timeout";
+            t.completedAt = Date.now();
+            if (t.writeMode === "scoped") {
+              this.scopeTracker.release(t.id);
+              this.toolServer?.releaseAgent(t.agentId);
+            }
+          }
+        }
+        const results = [
+          ...targets.map((t) => ({
+            id: t.id,
+            agentId: t.agentId,
+            task: t.task,
+            status: t.status,
+            result: t.result,
+            error: t.error,
+            startedAt: t.startedAt,
+            completedAt: t.completedAt,
+            skillWarnings: t.skillWarnings,
+            writeMode: t.writeMode,
+            scope: t.scope,
+            worktreeInfo: t.worktreeInfo,
+            planId: t.planId,
+            planStep: t.planStep,
+            inputTokens: t.inputTokens,
+            outputTokens: t.outputTokens
+          })),
+          ...orphanEntries
+          // Fix 4: include orphaned task entries
+        ];
         let consensusReport;
         if (options?.consensus && this.llm && results.filter((r) => r.status === "completed").length >= 2) {
           try {
@@ -7223,11 +7259,6 @@ Worktree merge: CONFLICT
           }
         }
         for (const t of targets) {
-          if (t.status === "running") {
-            t.status = "failed";
-            t.error = "collect timeout";
-            t.completedAt = Date.now();
-          }
           this.tasks.delete(t.id);
         }
         return { results, consensus: consensusReport };
@@ -7362,6 +7393,13 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
             skills: this.registryGet(t.agentId)?.skills || [],
             scores: { relevance: 3, accuracy: 3, uniqueness: 3 }
           });
+          if (t.result) {
+            this.memWriter.writeKnowledgeFromResult(t.agentId, {
+              taskId: t.id,
+              task: t.task,
+              result: t.result
+            });
+          }
           this.memWriter.rebuildIndex(t.agentId);
           this.memCompactor.compactIfNeeded(t.agentId);
         } catch (err) {

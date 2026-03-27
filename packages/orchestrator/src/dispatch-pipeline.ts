@@ -169,7 +169,7 @@ export class DispatchPipeline {
     if (specRefs.length > 0) {
       try {
         const specPath = resolvePath(this.projectRoot, specRefs[0]);
-        if (specPath.startsWith(this.projectRoot)) {
+        if (specPath.startsWith(this.projectRoot + '/') || specPath === this.projectRoot) {
           const specContent = readFileSync(specPath, 'utf-8');
           const implFiles = extractSpecReferences(task, specContent);
           const enrichment = buildSpecReviewEnrichment(implFiles);
@@ -389,6 +389,7 @@ export class DispatchPipeline {
       : Array.from(this.tasks.values());
 
     // Detect orphaned tasks — dispatched but lost due to server restart
+    let orphanEntries: TaskEntry[] = [];
     if (taskIds && taskIds.length > 0) {
       const missingIds = taskIds.filter(id => !this.tasks.has(id));
       if (missingIds.length > 0) {
@@ -398,13 +399,11 @@ export class DispatchPipeline {
         });
         if (orphaned.length > 0) {
           log(`WARNING: ${orphaned.length} task(s) lost — dispatched but no longer tracked (server may have restarted). IDs: ${orphaned.join(', ')}`);
-          // Record failures in TaskGraph so they're not orphaned forever
           for (const id of orphaned) {
             try { this.taskGraph.recordFailed(id, 'Task lost — server restarted during execution', -1); }
             catch { /* already recorded */ }
           }
-          // Return orphaned entries alongside any found targets
-          const orphanEntries: TaskEntry[] = orphaned.map(id => {
+          orphanEntries = orphaned.map(id => {
             const gt = this.taskGraph.getTask(id)!;
             return {
               id, agentId: gt.agentId, task: gt.task,
@@ -413,7 +412,6 @@ export class DispatchPipeline {
             };
           });
           if (targets.length === 0) return { results: orphanEntries };
-          // If some targets are still live, proceed with normal collect and append orphans to results
         }
       }
     }
@@ -438,7 +436,7 @@ export class DispatchPipeline {
         } else if (t.status === 'failed') {
           this.taskGraph.recordFailed(t.id, t.error || 'Unknown', duration, t.inputTokens, t.outputTokens);
         } else if (t.status === 'running') {
-          this.taskGraph.recordCancelled(t.id, 'collect timeout', duration);
+          this.taskGraph.recordFailed(t.id, 'collect timeout', duration);
         }
       } catch (err) { log(`TaskGraph write failed for ${t.id}: ${(err as Error).message}`); }
 
@@ -563,15 +561,33 @@ export class DispatchPipeline {
     }
 
     // Build clean result entries
-    const results: TaskEntry[] = targets.map(t => ({
-      id: t.id, agentId: t.agentId, task: t.task,
-      status: t.status, result: t.result, error: t.error,
-      startedAt: t.startedAt, completedAt: t.completedAt,
-      skillWarnings: t.skillWarnings,
-      writeMode: t.writeMode, scope: t.scope, worktreeInfo: t.worktreeInfo,
-      planId: t.planId, planStep: t.planStep,
-      inputTokens: t.inputTokens, outputTokens: t.outputTokens,
-    }));
+    // Mark timed-out tasks as failed BEFORE building results (Fix 6: stale 'running' status)
+    for (const t of targets) {
+      if (t.status === 'running') {
+        t.status = 'failed';
+        t.error = 'collect timeout';
+        t.completedAt = Date.now();
+        // Fix 5: release scope for timed-out scoped tasks (prevents permanent scope leak)
+        if (t.writeMode === 'scoped') {
+          this.scopeTracker.release(t.id);
+          this.toolServer?.releaseAgent(t.agentId);
+        }
+      }
+    }
+
+    // Build results snapshot (now includes correct status for timed-out tasks)
+    const results: TaskEntry[] = [
+      ...targets.map(t => ({
+        id: t.id, agentId: t.agentId, task: t.task,
+        status: t.status, result: t.result, error: t.error,
+        startedAt: t.startedAt, completedAt: t.completedAt,
+        skillWarnings: t.skillWarnings,
+        writeMode: t.writeMode, scope: t.scope, worktreeInfo: t.worktreeInfo,
+        planId: t.planId, planStep: t.planStep,
+        inputTokens: t.inputTokens, outputTokens: t.outputTokens,
+      })),
+      ...orphanEntries, // Fix 4: include orphaned task entries
+    ];
 
     // Consensus round
     let consensusReport: import('./consensus-types').ConsensusReport | undefined;
@@ -588,13 +604,8 @@ export class DispatchPipeline {
       }
     }
 
-    // Cleanup tasks — mark timed-out tasks as failed to prevent zombies
+    // Cleanup tasks from tracking map
     for (const t of targets) {
-      if (t.status === 'running') {
-        t.status = 'failed';
-        t.error = 'collect timeout';
-        t.completedAt = Date.now();
-      }
       this.tasks.delete(t.id);
     }
 
@@ -753,6 +764,12 @@ export class DispatchPipeline {
         skills: this.registryGet(t.agentId)?.skills || [],
         scores: { relevance: 3, accuracy: 3, uniqueness: 3 },
       });
+      // Fix 8: extract knowledge from result (was missing in writeMemoryForTask path)
+      if (t.result) {
+        this.memWriter.writeKnowledgeFromResult(t.agentId, {
+          taskId: t.id, task: t.task, result: t.result,
+        });
+      }
       this.memWriter.rebuildIndex(t.agentId);
       this.memCompactor.compactIfNeeded(t.agentId);
     } catch (err) { log(`Memory write failed for ${t.agentId}/${t.id}: ${(err as Error).message}`); }

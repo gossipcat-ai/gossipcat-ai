@@ -79,10 +79,12 @@ export class ConsensusEngine {
     const successful = results.filter(r => r.status === 'completed' && r.result);
     if (successful.length < 2) return [];
 
-    // Build summary map: agentId -> extracted summary
+    // Build summary map: agentId -> extracted + sanitized summary
     const summaries = new Map<string, string>();
     for (const r of successful) {
-      summaries.set(r.agentId, this.extractSummary(r.result!));
+      const raw = this.extractSummary(r.result!);
+      // Escape </data> to prevent prompt fence escape (agent output could contain the literal tag)
+      summaries.set(r.agentId, raw.replace(/<\/?data>/gi, ''));
     }
 
     // Dispatch cross-review in parallel, each agent reviews peers
@@ -181,6 +183,10 @@ Return ONLY a JSON array:
       }
     }
 
+    // Build taskId lookup from results
+    const agentTaskIds = new Map<string, string>();
+    for (const r of successful) agentTaskIds.set(r.agentId, r.id);
+
     // (b) Apply cross-review entries
     for (const entry of crossReviewEntries) {
       const now = new Date().toISOString();
@@ -194,7 +200,7 @@ Return ONLY a JSON array:
         });
         signals.push({
           type: 'consensus',
-          taskId: '',
+          taskId: agentTaskIds.get(entry.agentId) ?? '',
           signal: 'new_finding',
           agentId: entry.agentId,
           evidence: entry.evidence,
@@ -211,7 +217,7 @@ Return ONLY a JSON array:
           f.confidences.push(entry.confidence);
           signals.push({
             type: 'consensus',
-            taskId: '',
+            taskId: agentTaskIds.get(entry.agentId) ?? '',
             signal: 'agreement',
             agentId: entry.agentId,
             counterpartId: entry.peerAgentId,
@@ -237,7 +243,7 @@ Return ONLY a JSON array:
           if (isHallucination) {
             signals.push({
               type: 'consensus',
-              taskId: '',
+              taskId: agentTaskIds.get(entry.peerAgentId) ?? '',
               signal: 'hallucination_caught',
               agentId: entry.peerAgentId,
               counterpartId: entry.agentId,
@@ -248,7 +254,7 @@ Return ONLY a JSON array:
           } else {
             signals.push({
               type: 'consensus',
-              taskId: '',
+              taskId: agentTaskIds.get(entry.agentId) ?? '',
               signal: 'disagreement',
               agentId: entry.agentId,
               counterpartId: entry.peerAgentId,
@@ -282,22 +288,44 @@ Return ONLY a JSON array:
         confidence: Math.round(avgConfidence),
       };
 
-      if (entry.disputedBy.length > 0) {
+      const now = new Date().toISOString();
+      if (entry.disputedBy.length > 0 && entry.confirmedBy.length === 0) {
+        // Pure dispute — no one confirmed
+        finding.tag = 'disputed';
+        disputed.push(finding);
+      } else if (entry.disputedBy.length > 0 && entry.confirmedBy.length > 0) {
+        // Mixed — both confirmed and disputed. Tag as disputed but note confirmations.
         finding.tag = 'disputed';
         disputed.push(finding);
       } else if (entry.confirmedBy.length > 0) {
+        // Confirmed by peers — check if this was a unique finding (only one agent originally found it)
+        const isUniquelyDiscovered = !Array.from(findingMap.values()).some(
+          other => other !== entry && other.finding === entry.finding && other.originalAgentId !== entry.originalAgentId
+        );
         finding.tag = 'confirmed';
         confirmed.push(finding);
+        // Emit unique_confirmed signal if only one agent originally found this
+        if (isUniquelyDiscovered) {
+          signals.push({
+            type: 'consensus',
+            taskId: agentTaskIds.get(entry.originalAgentId) ?? '',
+            signal: 'unique_confirmed',
+            agentId: entry.originalAgentId,
+            evidence: entry.finding,
+            timestamp: now,
+          });
+        }
       } else {
+        // No one confirmed or disputed — truly unique/unverified
         finding.tag = 'unique';
         unique.push(finding);
         signals.push({
           type: 'consensus',
-          taskId: '',
+          taskId: agentTaskIds.get(entry.originalAgentId) ?? '',
           signal: 'unique_unconfirmed',
           agentId: entry.originalAgentId,
           evidence: entry.finding,
-          timestamp: new Date().toISOString(),
+          timestamp: now,
         });
       }
     }
