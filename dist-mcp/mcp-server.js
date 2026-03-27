@@ -9262,6 +9262,13 @@ message: Your question?
       onTaskProgress(cb) {
         this.toolExecutor.onTaskProgress = cb;
       }
+      /** Publish gossip for a native agent result (so relay agents can see it) */
+      async publishNativeGossip(agentId, result) {
+        try {
+          await this.pipeline.summarizeAndStoreGossip(agentId, result);
+        } catch {
+        }
+      }
       /** Get current orchestrator model info */
       getModel() {
         return { provider: this.currentProvider, model: this.currentModel };
@@ -24741,6 +24748,16 @@ var env = detectEnvironment();
 var nativeTaskMap = /* @__PURE__ */ new Map();
 var nativeAgentConfigs = /* @__PURE__ */ new Map();
 var nativeResultMap = /* @__PURE__ */ new Map();
+var NATIVE_TASK_TTL_MS = 30 * 60 * 1e3;
+function evictStaleNativeTasks() {
+  const now = Date.now();
+  for (const [id, info] of nativeTaskMap) {
+    if (now - info.startedAt > NATIVE_TASK_TTL_MS) nativeTaskMap.delete(id);
+  }
+  for (const [id, info] of nativeResultMap) {
+    if (now - info.startedAt > NATIVE_TASK_TTL_MS) nativeResultMap.delete(id);
+  }
+}
 var booted = false;
 var bootPromise = null;
 var relay = null;
@@ -25185,6 +25202,7 @@ server.tool(
     const dispatchOptions = Object.keys(options).length > 0 ? options : void 0;
     const nativeConfig = nativeAgentConfigs.get(agent_id);
     if (nativeConfig) {
+      evictStaleNativeTasks();
       const taskId = (0, import_crypto10.randomUUID)().slice(0, 8);
       nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now() });
       const agentPrompt = nativeConfig.instructions ? `${nativeConfig.instructions}
@@ -25496,7 +25514,7 @@ server.tool(
     }
     let consensusReport = void 0;
     const completedResults = allResults.filter((t) => t.status === "completed" && t.result);
-    if (completedResults.length >= 2 && relayIds.length > 0) {
+    if (completedResults.length >= 2) {
       try {
         const { ConsensusEngine: ConsensusEngine2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
         const engine = new ConsensusEngine2({
@@ -25896,11 +25914,7 @@ server.tool(
     }
     nativeTaskMap.delete(task_id);
     const elapsed = Date.now() - taskInfo.startedAt;
-    const TTL_MS = 30 * 60 * 1e3;
-    const now = Date.now();
-    for (const [id, info] of nativeTaskMap) {
-      if (now - info.startedAt > TTL_MS) nativeTaskMap.delete(id);
-    }
+    evictStaleNativeTasks();
     const agentId = taskInfo.agentId;
     const agentSkills = (() => {
       try {
@@ -25934,12 +25948,9 @@ server.tool(
 `);
       }
     }
-    try {
-      const pipeline = mainAgent.pipeline ?? mainAgent._pipeline;
-      if (pipeline?.summarizeAndStoreGossip && !error48) {
-        pipeline.summarizeAndStoreGossip(agentId, result);
-      }
-    } catch {
+    if (!error48) {
+      await mainAgent.publishNativeGossip(agentId, result).catch(() => {
+      });
     }
     nativeResultMap.set(task_id, {
       id: task_id,

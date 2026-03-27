@@ -806,7 +806,7 @@ export class DispatchPipeline {
     return this.gapTracker.checkAndGenerate();
   }
 
-  private async summarizeAndStoreGossip(agentId: string, result: string): Promise<void> {
+  async summarizeAndStoreGossip(agentId: string, result: string): Promise<void> {
     try {
       const summary = await this.summarizeForSession(agentId, result);
       if (summary) {

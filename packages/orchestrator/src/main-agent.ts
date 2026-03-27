@@ -236,6 +236,13 @@ export class MainAgent {
     this.toolExecutor.onTaskProgress = cb;
   }
 
+  /** Publish gossip for a native agent result (so relay agents can see it) */
+  async publishNativeGossip(agentId: string, result: string): Promise<void> {
+    try {
+      await this.pipeline.summarizeAndStoreGossip(agentId, result);
+    } catch { /* gossip is best-effort */ }
+  }
+
   /** Get current orchestrator model info */
   getModel(): { provider: string; model: string } {
     return { provider: this.currentProvider, model: this.currentModel };

@@ -53,6 +53,19 @@ const nativeResultMap: Map<string, {
   startedAt: number; completedAt: number;
 }> = new Map();
 
+const NATIVE_TASK_TTL_MS = 30 * 60 * 1000; // 30 min
+
+/** Evict stale entries from nativeTaskMap and nativeResultMap */
+function evictStaleNativeTasks(): void {
+  const now = Date.now();
+  for (const [id, info] of nativeTaskMap) {
+    if (now - info.startedAt > NATIVE_TASK_TTL_MS) nativeTaskMap.delete(id);
+  }
+  for (const [id, info] of nativeResultMap) {
+    if (now - info.startedAt > NATIVE_TASK_TTL_MS) nativeResultMap.delete(id);
+  }
+}
+
 // Lazy state — populated during boot()
 let booted = false;
 let bootPromise: Promise<void> | null = null;
@@ -546,6 +559,7 @@ server.tool(
     // Native agent bridge: return Agent tool instructions instead of relay dispatch
     const nativeConfig = nativeAgentConfigs.get(agent_id);
     if (nativeConfig) {
+      evictStaleNativeTasks();
       const taskId = randomUUID().slice(0, 8);
       nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now() });
 
@@ -882,7 +896,7 @@ server.tool(
     // just return the results and let Claude Code synthesize them (it's the best model).
     let consensusReport: any = undefined;
     const completedResults = allResults.filter((t: any) => t.status === 'completed' && t.result);
-    if (completedResults.length >= 2 && relayIds.length > 0) {
+    if (completedResults.length >= 2) {
       try {
         const { ConsensusEngine } = await import('@gossip/orchestrator');
         const engine = new ConsensusEngine({
@@ -1342,13 +1356,7 @@ server.tool(
 
     nativeTaskMap.delete(task_id);
     const elapsed = Date.now() - taskInfo.startedAt;
-
-    // Evict stale entries from nativeTaskMap (TTL: 30 min) [H1 fix]
-    const TTL_MS = 30 * 60 * 1000;
-    const now = Date.now();
-    for (const [id, info] of nativeTaskMap) {
-      if (now - info.startedAt > TTL_MS) nativeTaskMap.delete(id);
-    }
+    evictStaleNativeTasks();
 
     // Run the same post-collect pipeline as custom agents:
     // 1. Memory write  2. Knowledge extraction  3. Gossip  4. Compaction
@@ -1388,12 +1396,9 @@ server.tool(
     }
 
     // 4. Publish gossip so other running agents can see this result
-    try {
-      const pipeline = (mainAgent as any).pipeline ?? (mainAgent as any)._pipeline;
-      if (pipeline?.summarizeAndStoreGossip && !error) {
-        pipeline.summarizeAndStoreGossip(agentId, result);
-      }
-    } catch { /* gossip summarization is best-effort */ }
+    if (!error) {
+      await mainAgent.publishNativeGossip(agentId, result).catch(() => {});
+    }
 
     // 5. Store in collected results map so gossip_collect can find it
     nativeResultMap.set(task_id, {
