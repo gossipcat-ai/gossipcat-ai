@@ -9115,6 +9115,10 @@ message: Your question?
       getModel() {
         return { provider: this.currentProvider, model: this.currentModel };
       }
+      /** Get orchestrator's LLM provider (for consensus engine on mixed native+relay results) */
+      getLLM() {
+        return this.llm;
+      }
       /** Switch orchestrator model at runtime */
       async setModel(provider, model, apiKey) {
         const key = apiKey || (this.keyProviderFn ? await this.keyProviderFn(provider) : void 0);
@@ -25314,19 +25318,17 @@ server.tool(
     await boot();
     const relayIds = task_ids.filter((id) => !nativeResultMap.has(id) && !nativeTaskMap.has(id));
     const nativeIds = task_ids.filter((id) => nativeResultMap.has(id) || nativeTaskMap.has(id));
-    let collected;
+    let relayResults = [];
     try {
       if (relayIds.length > 0) {
-        collected = await mainAgent.collect(relayIds, timeout_ms, { consensus: true });
-      } else {
-        collected = { results: [], consensus: void 0 };
+        const collected = await mainAgent.collect(relayIds, timeout_ms);
+        relayResults = collected.results || [];
       }
     } catch (err) {
-      collected = { results: [], consensus: void 0 };
       process.stderr.write(`[gossipcat] consensus collect failed: ${err.message}
 `);
     }
-    const allResults = [...collected.results];
+    const allResults = [...relayResults];
     for (const id of nativeIds) {
       const nr = nativeResultMap.get(id);
       if (nr) {
@@ -25339,6 +25341,23 @@ server.tool(
     if (allResults.length === 0) {
       return { content: [{ type: "text", text: "No matching tasks. Native agents may still be running \u2014 call gossip_relay_result first." }] };
     }
+    let consensusReport = void 0;
+    const completedResults = allResults.filter((t) => t.status === "completed" && t.result);
+    if (completedResults.length >= 2) {
+      try {
+        const { ConsensusEngine: ConsensusEngine2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
+        const engine = new ConsensusEngine2({
+          llm: mainAgent.getLLM(),
+          registryGet: (id) => mainAgent.getAgentList().find((a) => a.id === id)
+        });
+        consensusReport = await engine.run(allResults);
+        process.stderr.write(`[gossipcat] Consensus complete: ${completedResults.length} agents (${nativeIds.length} native + ${relayIds.length} relay)
+`);
+      } catch (err) {
+        process.stderr.write(`[gossipcat] Consensus engine failed: ${err.message}
+`);
+      }
+    }
     const resultTexts = allResults.map((t) => {
       const dur = t.completedAt && t.startedAt ? `${t.completedAt - t.startedAt}ms` : "running";
       const nativeTag = nativeAgentConfigs.has(t.agentId) ? " (native)" : "";
@@ -25348,11 +25367,9 @@ ${t.result}`;
       return `[${t.id}] ${t.agentId}${nativeTag}: still running...`;
     });
     let output = resultTexts.join("\n\n---\n\n");
-    if (collected.consensus) {
-      output += "\n\n" + collected.consensus.summary;
-    } else if (allResults.filter((t) => t.status === "completed").length >= 2) {
-      output += "\n\n\u26A0\uFE0F Consensus cross-review only runs on relay agents. Native agent results are included but not cross-reviewed by the relay engine.";
-    } else {
+    if (consensusReport?.summary) {
+      output += "\n\n" + consensusReport.summary;
+    } else if (completedResults.length < 2) {
       output += "\n\n\u26A0\uFE0F Consensus cross-review did not run (need \u22652 successful agents).";
     }
     return { content: [{ type: "text", text: output }] };

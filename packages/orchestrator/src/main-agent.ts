@@ -235,6 +235,9 @@ export class MainAgent {
     return { provider: this.currentProvider, model: this.currentModel };
   }
 
+  /** Get orchestrator's LLM provider (for consensus engine on mixed native+relay results) */
+  getLLM(): ILLMProvider { return this.llm; }
+
   /** Switch orchestrator model at runtime */
   async setModel(provider: string, model: string, apiKey?: string): Promise<void> {
     const key = apiKey || (this.keyProviderFn ? await this.keyProviderFn(provider) : undefined);
