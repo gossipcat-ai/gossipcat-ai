@@ -7439,6 +7439,18 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
       flushTaskGraph() {
         this.taskGraph.flushIndex();
       }
+      /** Record a native agent task creation in TaskGraph (for CLI/sync visibility) */
+      recordNativeTaskCreated(taskId, agentId, task, skills) {
+        this.taskGraph.recordCreated(taskId, agentId, task, skills);
+      }
+      /** Record a native agent task completion in TaskGraph */
+      recordNativeTaskCompleted(taskId, result, error48) {
+        if (error48) {
+          this.taskGraph.recordFailed(taskId, error48, -1);
+        } else {
+          this.taskGraph.recordCompleted(taskId, (result || "").slice(0, 4e3), -1);
+        }
+      }
       /** Get suggestion results for formatting in collect responses */
       getSkillSuggestions(agentId, sinceMs) {
         return this.gapTracker.getSuggestionsSince(agentId, sinceMs);
@@ -8997,11 +9009,6 @@ var init_performance_reader = __esm({
         if (!score || score.totalSignals < 3) return 1;
         return 0.5 + score.reliability;
       }
-      /** Invalidate cache (e.g. after writing new signals) */
-      invalidateCache() {
-        this.cachedScores = null;
-        this.cachedMtimeMs = 0;
-      }
       readSignals() {
         if (!(0, import_fs16.existsSync)(this.filePath)) return [];
         try {
@@ -9307,6 +9314,21 @@ message: Your question?
       async publishNativeGossip(agentId, result) {
         try {
           await this.pipeline.summarizeAndStoreGossip(agentId, result);
+        } catch {
+        }
+      }
+      /** Record a native agent task in the TaskGraph (for visibility in CLI/sync) */
+      recordNativeTask(taskId, agentId, task) {
+        try {
+          const skills = this.registry.get(agentId)?.skills || [];
+          this.pipeline.recordNativeTaskCreated(taskId, agentId, task, skills);
+        } catch {
+        }
+      }
+      /** Record a native agent task completion in the TaskGraph */
+      recordNativeTaskCompleted(taskId, result, error48) {
+        try {
+          this.pipeline.recordNativeTaskCompleted(taskId, result, error48);
         } catch {
         }
       }
@@ -25246,6 +25268,10 @@ server.tool(
       evictStaleNativeTasks();
       const taskId = (0, import_crypto10.randomUUID)().slice(0, 8);
       nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now() });
+      try {
+        mainAgent.recordNativeTask(taskId, agent_id, task);
+      } catch {
+      }
       const agentPrompt = nativeConfig.instructions ? `${nativeConfig.instructions}
 
 ---
@@ -25338,6 +25364,10 @@ server.tool(
       const nativeConfig = nativeAgentConfigs.get(def.agent_id);
       const taskId = (0, import_crypto10.randomUUID)().slice(0, 8);
       nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
+      try {
+        mainAgent.recordNativeTask(taskId, def.agent_id, def.task);
+      } catch {
+      }
       const agentPrompt = nativeConfig.instructions ? `${nativeConfig.instructions}
 
 ---
@@ -25489,6 +25519,10 @@ server.tool(
       const nativeConfig = nativeAgentConfigs.get(def.agent_id);
       const taskId = (0, import_crypto10.randomUUID)().slice(0, 8);
       nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
+      try {
+        mainAgent.recordNativeTask(taskId, def.agent_id, def.task);
+      } catch {
+      }
       allTaskIds.push(taskId);
       const agentPrompt = (nativeConfig.instructions || "") + consensusInstruction + `
 
@@ -25964,6 +25998,10 @@ server.tool(
         return [];
       }
     })();
+    try {
+      mainAgent.recordNativeTaskCompleted(task_id, result, error48 || void 0);
+    } catch {
+    }
     if (!error48) {
       try {
         const { MemoryWriter: MemoryWriter2, MemoryCompactor: MemoryCompactor2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));

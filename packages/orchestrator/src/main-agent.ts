@@ -243,6 +243,21 @@ export class MainAgent {
     } catch { /* gossip is best-effort */ }
   }
 
+  /** Record a native agent task in the TaskGraph (for visibility in CLI/sync) */
+  recordNativeTask(taskId: string, agentId: string, task: string): void {
+    try {
+      const skills = this.registry.get(agentId)?.skills || [];
+      this.pipeline.recordNativeTaskCreated(taskId, agentId, task, skills);
+    } catch { /* best-effort */ }
+  }
+
+  /** Record a native agent task completion in the TaskGraph */
+  recordNativeTaskCompleted(taskId: string, result: string, error?: string): void {
+    try {
+      this.pipeline.recordNativeTaskCompleted(taskId, result, error);
+    } catch { /* best-effort */ }
+  }
+
   /** Get current orchestrator model info */
   getModel(): { provider: string; model: string } {
     return { provider: this.currentProvider, model: this.currentModel };

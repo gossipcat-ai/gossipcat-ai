@@ -250,6 +250,26 @@ describe('ConsensusEngine', () => {
       expect(report.confirmed[0].confirmedBy).toEqual(['agent-2']);
     });
 
+    it('should emit unique_confirmed signal for confirmed unique findings', () => {
+      const crossReview: CrossReviewEntry[] = [
+        { action: 'agree', agentId: 'agent-2', peerAgentId: 'agent-1', finding: 'Finding A from agent 1', evidence: 'Confirmed', confidence: 5 },
+      ];
+      const report = engine.synthesize(results, crossReview);
+      // Finding A was only found by agent-1 and confirmed by agent-2 → unique_confirmed
+      const uniqueConfirmedSignals = report.signals.filter(s => s.signal === 'unique_confirmed');
+      expect(uniqueConfirmedSignals.length).toBe(1);
+      expect(uniqueConfirmedSignals[0].agentId).toBe('agent-1');
+      // Also check agreement signal was emitted
+      const agreementSignals = report.signals.filter(s => s.signal === 'agreement');
+      expect(agreementSignals.length).toBe(1);
+    });
+
+    it('should emit unique_unconfirmed for findings with no peer interaction', () => {
+      const report = engine.synthesize(results, []);
+      const unconfirmedSignals = report.signals.filter(s => s.signal === 'unique_unconfirmed');
+      expect(unconfirmedSignals.length).toBe(3); // all 3 findings unconfirmed
+    });
+
     it('should correctly identify disputed findings', () => {
         const crossReview: CrossReviewEntry[] = [
           { action: 'disagree', agentId: 'agent-2', peerAgentId: 'agent-1', finding: 'Finding B is also here', evidence: 'That is not correct', confidence: 1 },

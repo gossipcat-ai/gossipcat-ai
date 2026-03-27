@@ -814,6 +814,20 @@ export class DispatchPipeline {
     this.taskGraph.flushIndex();
   }
 
+  /** Record a native agent task creation in TaskGraph (for CLI/sync visibility) */
+  recordNativeTaskCreated(taskId: string, agentId: string, task: string, skills: string[]): void {
+    this.taskGraph.recordCreated(taskId, agentId, task, skills);
+  }
+
+  /** Record a native agent task completion in TaskGraph */
+  recordNativeTaskCompleted(taskId: string, result: string, error?: string): void {
+    if (error) {
+      this.taskGraph.recordFailed(taskId, error, -1);
+    } else {
+      this.taskGraph.recordCompleted(taskId, (result || '').slice(0, 4000), -1);
+    }
+  }
+
   /** Get suggestion results for formatting in collect responses */
   getSkillSuggestions(agentId: string, sinceMs: number) {
     return this.gapTracker.getSuggestionsSince(agentId, sinceMs);

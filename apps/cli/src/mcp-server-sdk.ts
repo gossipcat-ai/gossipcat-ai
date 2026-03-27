@@ -563,6 +563,9 @@ server.tool(
       const taskId = randomUUID().slice(0, 8);
       nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now() });
 
+      // Fix: register in TaskGraph so native tasks are visible to CLI/sync
+      try { mainAgent.recordNativeTask(taskId, agent_id, task); } catch { /* best-effort */ }
+
       const agentPrompt = nativeConfig.instructions
         ? `${nativeConfig.instructions}\n\n---\n\nTask: ${task}`
         : task;
@@ -662,6 +665,7 @@ server.tool(
       const nativeConfig = nativeAgentConfigs.get(def.agent_id)!;
       const taskId = randomUUID().slice(0, 8);
       nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
+      try { mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
 
       const agentPrompt = nativeConfig.instructions
         ? `${nativeConfig.instructions}\n\n---\n\nTask: ${def.task}`
@@ -828,6 +832,7 @@ server.tool(
       const nativeConfig = nativeAgentConfigs.get(def.agent_id)!;
       const taskId = randomUUID().slice(0, 8);
       nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
+      try { mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
       allTaskIds.push(taskId);
 
       const agentPrompt = (nativeConfig.instructions || '') + consensusInstruction + `\n\n---\n\nTask: ${def.task}`;
@@ -1365,6 +1370,9 @@ server.tool(
       try { return mainAgent.getAgentList().find((a: any) => a.id === agentId)?.skills || []; }
       catch { return []; }
     })();
+
+    // 0. Record in TaskGraph (makes native tasks visible to CLI + Supabase sync)
+    try { mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined); } catch { /* best-effort */ }
 
     if (!error) {
       // 1. Write task entry to memory

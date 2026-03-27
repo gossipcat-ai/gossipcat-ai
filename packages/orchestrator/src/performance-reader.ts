@@ -67,12 +67,6 @@ export class PerformanceReader {
     return 0.5 + score.reliability;
   }
 
-  /** Invalidate cache (e.g. after writing new signals) */
-  invalidateCache(): void {
-    this.cachedScores = null;
-    this.cachedMtimeMs = 0;
-  }
-
   private readSignals(): ConsensusSignal[] {
     if (!existsSync(this.filePath)) return [];
     try {
