@@ -496,12 +496,7 @@ export class DispatchPipeline {
 
     // 4. Skill gap check
     try {
-      for (const t of targets) {
-        if (t.status !== 'running') {
-          this.gapTracker.getSuggestionsSince(t.agentId, t.startedAt);
-        }
-      }
-      this.gapTracker.checkAndGenerate();
+      this.gapTracker.checkThresholds();
     } catch (err) { log(`Skill gap check failed: ${(err as Error).message}`); }
 
     // 5. Sync threshold check (every 30 events, with mutex to prevent concurrent syncs)
@@ -855,7 +850,10 @@ export class DispatchPipeline {
   }
 
   getSkeletonMessages(): string[] {
-    return this.gapTracker.checkAndGenerate();
+    const { pending } = this.gapTracker.checkThresholds();
+    return pending.length > 0
+      ? [`${pending.length} skill(s) ready to build: ${pending.join(', ')}`]
+      : [];
   }
 
   async summarizeAndStoreGossip(agentId: string, result: string): Promise<void> {

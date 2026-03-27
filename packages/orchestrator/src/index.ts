@@ -18,7 +18,7 @@ export * from './consensus-types';
 export { SkillCatalog } from './skill-catalog';
 export type { CatalogEntry } from './skill-catalog';
 export { SkillGapTracker } from './skill-gap-tracker';
-export type { GapSuggestion, GapResolution, GapEntry } from './skill-gap-tracker';
+export type { GapSuggestion, GapResolution, GapEntry, GapData } from './skill-gap-tracker';
 export { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment } from './prompt-assembler';
 export { AgentMemoryReader } from './agent-memory';
 export { MemoryWriter } from './memory-writer';
