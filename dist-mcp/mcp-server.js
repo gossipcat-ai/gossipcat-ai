@@ -4555,6 +4555,7 @@ var init_agent_registry = __esm({
     "use strict";
     AgentRegistry = class {
       agents = /* @__PURE__ */ new Map();
+      perfReader = null;
       /** Register a new agent configuration */
       register(config2) {
         this.agents.set(config2.id, config2);
@@ -4571,20 +4572,27 @@ var init_agent_registry = __esm({
       getAll() {
         return Array.from(this.agents.values());
       }
+      /** Set performance reader for dispatch weighting */
+      setPerformanceReader(reader) {
+        this.perfReader = reader;
+      }
       /**
-       * Find the agent with the most overlapping skills.
+       * Find the agent with the most overlapping skills, weighted by performance.
        * Returns null if no agents are registered.
        */
       findBestMatch(requiredSkills) {
         return this.findBestMatchExcluding(requiredSkills, /* @__PURE__ */ new Set());
       }
-      /** Find best skill match, excluding agents in the given set */
+      /** Find best skill match, excluding agents in the given set.
+       *  Score = skillOverlap × performanceWeight (0.5-1.5) */
       findBestMatchExcluding(requiredSkills, exclude) {
         let bestMatch = null;
         let bestScore = 0;
         for (const agent of this.agents.values()) {
           if (exclude.has(agent.id)) continue;
-          const score = requiredSkills.filter((s) => agent.skills.includes(s)).length;
+          const skillScore = requiredSkills.filter((s) => agent.skills.includes(s)).length;
+          const perfWeight = this.perfReader?.getDispatchWeight(agent.id) ?? 1;
+          const score = skillScore * perfWeight;
           if (score > bestScore) {
             bestScore = score;
             bestMatch = agent;
@@ -8892,6 +8900,122 @@ var init_team_manager = __esm({
   }
 });
 
+// packages/orchestrator/src/performance-reader.ts
+var performance_reader_exports = {};
+__export(performance_reader_exports, {
+  PerformanceReader: () => PerformanceReader
+});
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+var import_fs16, import_path20, SIGNAL_WEIGHTS, PerformanceReader;
+var init_performance_reader = __esm({
+  "packages/orchestrator/src/performance-reader.ts"() {
+    "use strict";
+    import_fs16 = require("fs");
+    import_path20 = require("path");
+    SIGNAL_WEIGHTS = {
+      agreement: { accuracy: 0.1 },
+      disagreement: { accuracy: -0.15 },
+      // losing side; winning side gets +0.1 via counterpart
+      unique_confirmed: { uniqueness: 0.2 },
+      unique_unconfirmed: { uniqueness: 0.05 },
+      new_finding: { uniqueness: 0.15 },
+      hallucination_caught: { accuracy: -0.3 }
+    };
+    PerformanceReader = class {
+      filePath;
+      constructor(projectRoot) {
+        this.filePath = (0, import_path20.join)(projectRoot, ".gossip", "agent-performance.jsonl");
+      }
+      /** Read all signals and compute per-agent scores */
+      getScores() {
+        const signals = this.readSignals();
+        return this.computeScores(signals);
+      }
+      /** Get score for a specific agent (returns null if no data) */
+      getAgentScore(agentId) {
+        return this.getScores().get(agentId) ?? null;
+      }
+      /** Get a reliability multiplier for dispatch weighting (0.5 to 1.5) */
+      getDispatchWeight(agentId) {
+        const score = this.getAgentScore(agentId);
+        if (!score || score.totalSignals < 3) return 1;
+        return 0.5 + score.reliability;
+      }
+      readSignals() {
+        if (!(0, import_fs16.existsSync)(this.filePath)) return [];
+        try {
+          const lines = (0, import_fs16.readFileSync)(this.filePath, "utf-8").trim().split("\n").filter(Boolean);
+          return lines.map((line) => {
+            try {
+              return JSON.parse(line);
+            } catch {
+              return null;
+            }
+          }).filter((s) => s !== null);
+        } catch {
+          return [];
+        }
+      }
+      computeScores(signals) {
+        const scores = /* @__PURE__ */ new Map();
+        const ensure = (id) => {
+          if (!scores.has(id)) {
+            scores.set(id, {
+              agentId: id,
+              accuracy: 0.5,
+              uniqueness: 0.5,
+              reliability: 0.5,
+              totalSignals: 0,
+              agreements: 0,
+              disagreements: 0,
+              uniqueFindings: 0,
+              hallucinations: 0
+            });
+          }
+          return scores.get(id);
+        };
+        for (const signal of signals) {
+          const agent = ensure(signal.agentId);
+          agent.totalSignals++;
+          const weights = SIGNAL_WEIGHTS[signal.signal];
+          if (!weights) continue;
+          if ("accuracy" in weights) {
+            agent.accuracy = clamp(agent.accuracy + weights.accuracy, 0, 1);
+          }
+          if ("uniqueness" in weights) {
+            agent.uniqueness = clamp(agent.uniqueness + weights.uniqueness, 0, 1);
+          }
+          switch (signal.signal) {
+            case "agreement":
+              agent.agreements++;
+              break;
+            case "disagreement":
+              agent.disagreements++;
+              break;
+            case "unique_confirmed":
+            case "new_finding":
+              agent.uniqueFindings++;
+              break;
+            case "hallucination_caught":
+              agent.hallucinations++;
+              break;
+          }
+          if (signal.counterpartId && (signal.signal === "agreement" || signal.signal === "unique_confirmed")) {
+            const counterpart = ensure(signal.counterpartId);
+            counterpart.accuracy = clamp(counterpart.accuracy + 0.05, 0, 1);
+          }
+        }
+        for (const score of scores.values()) {
+          score.reliability = clamp(score.accuracy * 0.7 + score.uniqueness * 0.3, 0, 1);
+        }
+        return scores;
+      }
+    };
+  }
+});
+
 // packages/orchestrator/src/main-agent.ts
 var import_msgpack5, CHAT_SYSTEM_PROMPT, MainAgent;
 var init_main_agent = __esm({
@@ -8993,6 +9117,11 @@ message: Your question?
           this.registry.register(agent);
         }
         this.projectRoot = config2.projectRoot || process.cwd();
+        try {
+          const { PerformanceReader: PerformanceReader2 } = (init_performance_reader(), __toCommonJS(performance_reader_exports));
+          this.registry.setPerformanceReader(new PerformanceReader2(this.projectRoot));
+        } catch {
+        }
         this.pipeline = new DispatchPipeline({
           projectRoot: this.projectRoot,
           workers: this.workers,
@@ -9024,8 +9153,8 @@ message: Your question?
       }
       /** Start all worker agents (connect to relay) */
       async start() {
-        const { existsSync: existsSync16, readFileSync: readFileSync17 } = await import("fs");
-        const { join: join18 } = await import("path");
+        const { existsSync: existsSync17, readFileSync: readFileSync18 } = await import("fs");
+        const { join: join19 } = await import("path");
         for (const config2 of this.registry.getAll()) {
           if (this.workers.has(config2.id)) continue;
           let apiKey = this.apiKeys[config2.provider];
@@ -9033,8 +9162,8 @@ message: Your question?
             apiKey = await this.keyProviderFn(config2.provider) ?? void 0;
           }
           const llm = createProvider(config2.provider, config2.model, apiKey);
-          const instructionsPath = join18(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
-          const instructions = existsSync16(instructionsPath) ? readFileSync17(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join19(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
+          const instructions = existsSync17(instructionsPath) ? readFileSync18(instructionsPath, "utf-8") : void 0;
           const enableWebSearch = config2.preset === "researcher" || config2.skills.includes("research");
           const worker = new WorkerAgent(config2.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
           await worker.start();
@@ -9132,15 +9261,15 @@ message: Your question?
         this.registry.register(config2);
       }
       async syncWorkers(keyProvider) {
-        const { existsSync: existsSync16, readFileSync: readFileSync17 } = await import("fs");
-        const { join: join18 } = await import("path");
+        const { existsSync: existsSync17, readFileSync: readFileSync18 } = await import("fs");
+        const { join: join19 } = await import("path");
         let added = 0;
         for (const ac of this.registry.getAll()) {
           if (this.workers.has(ac.id)) continue;
           const key = await keyProvider(ac.provider);
           const llm = createProvider(ac.provider, ac.model, key ?? void 0);
-          const instructionsPath = join18(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
-          const instructions = existsSync16(instructionsPath) ? readFileSync17(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join19(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
+          const instructions = existsSync17(instructionsPath) ? readFileSync18(instructionsPath, "utf-8") : void 0;
           const enableWebSearch = ac.preset === "researcher" || ac.skills.includes("research");
           const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
           await worker.start();
@@ -9681,12 +9810,12 @@ function safeId(value) {
   }
   return encodeURIComponent(value);
 }
-var import_fs16, import_path20, TaskGraphSync;
+var import_fs17, import_path21, TaskGraphSync;
 var init_task_graph_sync = __esm({
   "packages/orchestrator/src/task-graph-sync.ts"() {
     "use strict";
-    import_fs16 = require("fs");
-    import_path20 = require("path");
+    import_fs17 = require("fs");
+    import_path21 = require("path");
     TaskGraphSync = class {
       constructor(graph, supabaseUrl, supabaseKey, userId, projectId, projectRoot, displayName, migration) {
         this.graph = graph;
@@ -9696,7 +9825,7 @@ var init_task_graph_sync = __esm({
         this.projectId = projectId;
         this.displayName = displayName;
         this.migration = migration;
-        this.gossipDir = (0, import_path20.join)(projectRoot, ".gossip");
+        this.gossipDir = (0, import_path21.join)(projectRoot, ".gossip");
       }
       gossipDir;
       migrationDone = false;
@@ -9819,9 +9948,9 @@ var init_task_graph_sync = __esm({
         });
       }
       async syncAgentScores() {
-        const perfPath = (0, import_path20.join)(this.gossipDir, "agent-performance.jsonl");
-        if (!(0, import_fs16.existsSync)(perfPath)) return 0;
-        const content = (0, import_fs16.readFileSync)(perfPath, "utf-8");
+        const perfPath = (0, import_path21.join)(this.gossipDir, "agent-performance.jsonl");
+        if (!(0, import_fs17.existsSync)(perfPath)) return 0;
+        const content = (0, import_fs17.readFileSync)(perfPath, "utf-8");
         const lines = content.trim().split("\n").filter(Boolean);
         const meta3 = this.graph.getSyncMeta();
         let synced = 0;
@@ -9967,12 +10096,12 @@ Return JSON: { "<agentId>": "<summary>", ... }`
 });
 
 // packages/orchestrator/src/bootstrap.ts
-var import_fs17, import_path21, log4, BootstrapGenerator;
+var import_fs18, import_path22, log4, BootstrapGenerator;
 var init_bootstrap = __esm({
   "packages/orchestrator/src/bootstrap.ts"() {
     "use strict";
-    import_fs17 = require("fs");
-    import_path21 = require("path");
+    import_fs18 = require("fs");
+    import_path22 = require("path");
     log4 = (msg) => process.stderr.write(`[gossipcat] ${msg}
 `);
     BootstrapGenerator = class {
@@ -9994,23 +10123,23 @@ var init_bootstrap = __esm({
         };
       }
       migrateConfig() {
-        const oldPath = (0, import_path21.resolve)(this.projectRoot, "gossip.agents.json");
-        const newPath = (0, import_path21.resolve)(this.projectRoot, ".gossip", "config.json");
-        if (!(0, import_fs17.existsSync)(newPath) && (0, import_fs17.existsSync)(oldPath)) {
-          (0, import_fs17.mkdirSync)((0, import_path21.resolve)(this.projectRoot, ".gossip"), { recursive: true });
-          (0, import_fs17.copyFileSync)(oldPath, newPath);
+        const oldPath = (0, import_path22.resolve)(this.projectRoot, "gossip.agents.json");
+        const newPath = (0, import_path22.resolve)(this.projectRoot, ".gossip", "config.json");
+        if (!(0, import_fs18.existsSync)(newPath) && (0, import_fs18.existsSync)(oldPath)) {
+          (0, import_fs18.mkdirSync)((0, import_path22.resolve)(this.projectRoot, ".gossip"), { recursive: true });
+          (0, import_fs18.copyFileSync)(oldPath, newPath);
           log4("Migrated config to .gossip/config.json \u2014 gossip.agents.json is now ignored.");
         }
       }
       loadConfig() {
         const paths = [
-          (0, import_path21.resolve)(this.projectRoot, ".gossip", "config.json"),
-          (0, import_path21.resolve)(this.projectRoot, "gossip.agents.json")
+          (0, import_path22.resolve)(this.projectRoot, ".gossip", "config.json"),
+          (0, import_path22.resolve)(this.projectRoot, "gossip.agents.json")
         ];
         for (const p of paths) {
-          if ((0, import_fs17.existsSync)(p)) {
+          if ((0, import_fs18.existsSync)(p)) {
             try {
-              return JSON.parse((0, import_fs17.readFileSync)(p, "utf-8"));
+              return JSON.parse((0, import_fs18.readFileSync)(p, "utf-8"));
             } catch {
               log4("Config parse error, falling back to setup mode");
               return null;
@@ -10031,9 +10160,9 @@ var init_bootstrap = __esm({
             skills: ac.skills || [],
             taskCount: 0
           };
-          const tasksPath = (0, import_path21.join)(this.projectRoot, ".gossip", "agents", id, "memory", "tasks.jsonl");
-          if ((0, import_fs17.existsSync)(tasksPath)) {
-            const lines = (0, import_fs17.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
+          const tasksPath = (0, import_path22.join)(this.projectRoot, ".gossip", "agents", id, "memory", "tasks.jsonl");
+          if ((0, import_fs18.existsSync)(tasksPath)) {
+            const lines = (0, import_fs18.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
             let count = 0;
             let lastTs = "";
             for (const line of lines) {
@@ -10047,9 +10176,9 @@ var init_bootstrap = __esm({
             summary.taskCount = count;
             if (lastTs) summary.lastActive = lastTs.split("T")[0];
           }
-          const memPath = (0, import_path21.join)(this.projectRoot, ".gossip", "agents", id, "memory", "MEMORY.md");
-          if ((0, import_fs17.existsSync)(memPath)) {
-            const content = (0, import_fs17.readFileSync)(memPath, "utf-8").slice(0, 500);
+          const memPath = (0, import_path22.join)(this.projectRoot, ".gossip", "agents", id, "memory", "MEMORY.md");
+          if ((0, import_fs18.existsSync)(memPath)) {
+            const content = (0, import_fs18.readFileSync)(memPath, "utf-8").slice(0, 500);
             const knowledgeLines = content.match(/- \[([^\]]+)\]/g);
             if (knowledgeLines?.length) {
               summary.topics = knowledgeLines.map((l) => l.replace(/- \[([^\]]+)\].*/, "$1")).join(", ");
@@ -10362,6 +10491,7 @@ __export(src_exports4, {
   OverlapDetector: () => OverlapDetector,
   PENDING_PLAN_CHOICES: () => PENDING_PLAN_CHOICES,
   PLAN_CHOICES: () => PLAN_CHOICES,
+  PerformanceReader: () => PerformanceReader,
   PerformanceWriter: () => PerformanceWriter,
   ProjectInitializer: () => ProjectInitializer,
   ScopeTracker: () => ScopeTracker,
@@ -10410,6 +10540,7 @@ var init_src5 = __esm({
     init_overlap_detector();
     init_lens_generator();
     init_performance_writer();
+    init_performance_reader();
     init_consensus_engine();
     init_tool_router();
     init_tool_definitions();
@@ -10432,18 +10563,18 @@ __export(config_exports, {
 function findConfigPath(projectRoot) {
   const root = projectRoot || process.cwd();
   const candidates = [
-    (0, import_path22.resolve)(root, ".gossip", "config.json"),
-    (0, import_path22.resolve)(root, "gossip.agents.json"),
-    (0, import_path22.resolve)(root, "gossip.agents.yaml"),
-    (0, import_path22.resolve)(root, "gossip.agents.yml")
+    (0, import_path23.resolve)(root, ".gossip", "config.json"),
+    (0, import_path23.resolve)(root, "gossip.agents.json"),
+    (0, import_path23.resolve)(root, "gossip.agents.yaml"),
+    (0, import_path23.resolve)(root, "gossip.agents.yml")
   ];
   for (const p of candidates) {
-    if ((0, import_fs18.existsSync)(p)) return p;
+    if ((0, import_fs19.existsSync)(p)) return p;
   }
   return null;
 }
 function loadConfig(configPath) {
-  const raw = (0, import_fs18.readFileSync)(configPath, "utf-8");
+  const raw = (0, import_fs19.readFileSync)(configPath, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -10495,19 +10626,19 @@ function configToAgentConfigs(config2) {
 }
 function loadClaudeSubagents(projectRoot, existingIds) {
   const root = projectRoot || process.cwd();
-  const agentsDir = (0, import_path22.join)(root, ".claude", "agents");
-  if (!(0, import_fs18.existsSync)(agentsDir)) return [];
+  const agentsDir = (0, import_path23.join)(root, ".claude", "agents");
+  if (!(0, import_fs19.existsSync)(agentsDir)) return [];
   let files;
   try {
-    files = (0, import_fs18.readdirSync)(agentsDir).filter((f) => f.endsWith(".md"));
+    files = (0, import_fs19.readdirSync)(agentsDir).filter((f) => f.endsWith(".md"));
   } catch {
     return [];
   }
   const agents = [];
   for (const file2 of files) {
-    const filePath = (0, import_path22.join)(agentsDir, file2);
+    const filePath = (0, import_path23.join)(agentsDir, file2);
     try {
-      const content = (0, import_fs18.readFileSync)(filePath, "utf-8");
+      const content = (0, import_fs19.readFileSync)(filePath, "utf-8");
       const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
       if (!frontmatter) continue;
       const fm = frontmatter[1];
@@ -10569,12 +10700,12 @@ function inferSkills(description, name) {
   if (skills.length === 0) skills.push("general");
   return skills;
 }
-var import_fs18, import_path22, VALID_PROVIDERS, CLAUDE_MODEL_MAP;
+var import_fs19, import_path23, VALID_PROVIDERS, CLAUDE_MODEL_MAP;
 var init_config = __esm({
   "apps/cli/src/config.ts"() {
     "use strict";
-    import_fs18 = require("fs");
-    import_path22 = require("path");
+    import_fs19 = require("fs");
+    import_path23 = require("path");
     VALID_PROVIDERS = ["anthropic", "openai", "google", "local"];
     CLAUDE_MODEL_MAP = {
       opus: { provider: "anthropic", model: "claude-opus-4-6" },
@@ -10724,17 +10855,17 @@ __export(identity_exports, {
   normalizeGitUrl: () => normalizeGitUrl
 });
 function getOrCreateSalt(projectRoot) {
-  const saltPath = (0, import_path23.join)(projectRoot, ".gossip", "local-salt");
+  const saltPath = (0, import_path24.join)(projectRoot, ".gossip", "local-salt");
   try {
-    return (0, import_fs19.readFileSync)(saltPath, "utf-8").trim();
+    return (0, import_fs20.readFileSync)(saltPath, "utf-8").trim();
   } catch {
     const salt = (0, import_crypto9.randomBytes)(16).toString("hex");
-    (0, import_fs19.mkdirSync)((0, import_path23.join)(projectRoot, ".gossip"), { recursive: true });
+    (0, import_fs20.mkdirSync)((0, import_path24.join)(projectRoot, ".gossip"), { recursive: true });
     try {
-      (0, import_fs19.writeFileSync)(saltPath, salt, { flag: "wx" });
+      (0, import_fs20.writeFileSync)(saltPath, salt, { flag: "wx" });
       return salt;
     } catch {
-      return (0, import_fs19.readFileSync)(saltPath, "utf-8").trim();
+      return (0, import_fs20.readFileSync)(saltPath, "utf-8").trim();
     }
   }
 }
@@ -10784,12 +10915,12 @@ function getProjectId(projectRoot) {
   }
   return (0, import_crypto9.createHash)("sha256").update(projectRoot).digest("hex").slice(0, 16);
 }
-var import_fs19, import_path23, import_crypto9, import_child_process5;
+var import_fs20, import_path24, import_crypto9, import_child_process5;
 var init_identity = __esm({
   "apps/cli/src/identity.ts"() {
     "use strict";
-    import_fs19 = require("fs");
-    import_path23 = require("path");
+    import_fs20 = require("fs");
+    import_path24 = require("path");
     import_crypto9 = require("crypto");
     import_child_process5 = require("child_process");
   }
@@ -24649,10 +24780,10 @@ async function doBoot() {
     }
     const key = await keychain.getKey(ac.provider);
     const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
-    const { existsSync: existsSync16, readFileSync: readFileSync17 } = require("fs");
-    const { join: join18 } = require("path");
-    const instructionsPath = join18(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
-    const instructions = existsSync16(instructionsPath) ? readFileSync17(instructionsPath, "utf-8") : void 0;
+    const { existsSync: existsSync17, readFileSync: readFileSync18 } = require("fs");
+    const { join: join19 } = require("path");
+    const instructionsPath = join19(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
+    const instructions = existsSync17(instructionsPath) ? readFileSync18(instructionsPath, "utf-8") : void 0;
     const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS, instructions);
     await worker.start();
     workers.set(ac.id, worker);
@@ -25499,9 +25630,9 @@ server.tool(
     const generator = new BootstrapGenerator2(process.cwd());
     const result = generator.generate();
     const { writeFileSync: writeFileSync9, mkdirSync: mkdirSync10 } = require("fs");
-    const { join: join18 } = require("path");
-    mkdirSync10(join18(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync9(join18(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
+    const { join: join19 } = require("path");
+    mkdirSync10(join19(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync9(join19(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
     return { content: [{ type: "text", text: result.prompt }] };
   }
 );
@@ -25529,8 +25660,8 @@ server.tool(
     })).describe("Array of agents to create")
   },
   async ({ main_provider, main_model, agents }) => {
-    const { writeFileSync: writeFileSync9, mkdirSync: mkdirSync10, existsSync: existsSync16 } = require("fs");
-    const { join: join18 } = require("path");
+    const { writeFileSync: writeFileSync9, mkdirSync: mkdirSync10, existsSync: existsSync17 } = require("fs");
+    const { join: join19 } = require("path");
     const root = process.cwd();
     const CLAUDE_MODEL_MAP2 = {
       opus: { provider: "anthropic", model: "claude-opus-4-6" },
@@ -25563,9 +25694,9 @@ server.tool(
           "",
           body
         ].join("\n");
-        const agentsDir = join18(root, ".claude", "agents");
+        const agentsDir = join19(root, ".claude", "agents");
         mkdirSync10(agentsDir, { recursive: true });
-        writeFileSync9(join18(agentsDir, `${agent.id}.md`), md, "utf-8");
+        writeFileSync9(join19(agentsDir, `${agent.id}.md`), md, "utf-8");
         nativeCreated.push(agent.id);
         configAgents[agent.id] = {
           provider: mapped.provider,
@@ -25591,9 +25722,9 @@ server.tool(
         };
         customCreated.push(agent.id);
         if (agent.instructions) {
-          const instrDir = join18(root, ".gossip", "agents", agent.id);
+          const instrDir = join19(root, ".gossip", "agents", agent.id);
           mkdirSync10(instrDir, { recursive: true });
-          writeFileSync9(join18(instrDir, "instructions.md"), agent.instructions, "utf-8");
+          writeFileSync9(join19(instrDir, "instructions.md"), agent.instructions, "utf-8");
         }
       }
     }
@@ -25607,11 +25738,11 @@ server.tool(
     } catch (err) {
       return { content: [{ type: "text", text: `Invalid config: ${err.message}` }] };
     }
-    mkdirSync10(join18(root, ".gossip"), { recursive: true });
-    writeFileSync9(join18(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
+    mkdirSync10(join19(root, ".gossip"), { recursive: true });
+    writeFileSync9(join19(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
     const agentList = Object.entries(configAgents).map(([id, a]) => `- ${id}: ${a.provider}/${a.model} (${a.preset || "custom"})`).join("\n");
-    const rulesDir = join18(root, env.rulesDir);
-    const rulesFile = join18(root, env.rulesFile);
+    const rulesDir = join19(root, env.rulesDir);
+    const rulesFile = join19(root, env.rulesFile);
     mkdirSync10(rulesDir, { recursive: true });
     writeFileSync9(rulesFile, `# Gossipcat \u2014 Multi-Agent Orchestration
 

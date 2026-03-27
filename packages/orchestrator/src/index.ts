@@ -36,6 +36,8 @@ export type { BootstrapResult } from './bootstrap';
 export { OverlapDetector } from './overlap-detector';
 export { LensGenerator } from './lens-generator';
 export { PerformanceWriter } from './performance-writer';
+export { PerformanceReader } from './performance-reader';
+export type { AgentScore } from './performance-reader';
 export { ConsensusEngine } from './consensus-engine';
 export type { ConsensusEngineConfig } from './consensus-engine';
 export { ToolRouter, ToolExecutor } from './tool-router';

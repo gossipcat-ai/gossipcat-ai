@@ -123,6 +123,12 @@ export class MainAgent {
     }
 
     this.projectRoot = config.projectRoot || process.cwd();
+
+    // Wire performance reader for dispatch weighting (consensus signals → agent selection)
+    try {
+      const { PerformanceReader } = require('./performance-reader');
+      this.registry.setPerformanceReader(new PerformanceReader(this.projectRoot));
+    } catch { /* performance reader optional */ }
     this.pipeline = new DispatchPipeline({
       projectRoot: this.projectRoot,
       workers: this.workers,
