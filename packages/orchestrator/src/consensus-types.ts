@@ -47,6 +47,7 @@ export interface ConsensusReport {
 export interface CollectResult {
   results: import('./types').TaskEntry[];
   consensus?: ConsensusReport;
+  skillsReady?: number;
 }
 
 /** A consensus signal for agent performance tracking */

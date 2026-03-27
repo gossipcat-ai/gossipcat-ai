@@ -495,8 +495,12 @@ export class DispatchPipeline {
     }
 
     // 4. Skill gap check
+    let skillsReadyCount = 0;
     try {
-      this.gapTracker.checkThresholds();
+      const thresholds = this.gapTracker.checkThresholds();
+      if (thresholds.count > 0) {
+        skillsReadyCount = thresholds.count;
+      }
     } catch (err) { log(`Skill gap check failed: ${(err as Error).message}`); }
 
     // 5. Sync threshold check (every 30 events, with mutex to prevent concurrent syncs)
@@ -615,7 +619,11 @@ export class DispatchPipeline {
       this.tasks.delete(t.id);
     }
 
-    return { results, consensus: consensusReport };
+    const result: CollectResult = { results, consensus: consensusReport };
+    if (skillsReadyCount > 0) {
+      result.skillsReady = skillsReadyCount;
+    }
+    return result;
   }
 
   async dispatchParallel(taskDefs: Array<{ agentId: string; task: string; options?: DispatchOptions }>, pipelineOptions?: { consensus?: boolean }): Promise<{
