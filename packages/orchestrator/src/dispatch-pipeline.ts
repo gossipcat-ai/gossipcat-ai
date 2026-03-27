@@ -104,7 +104,7 @@ export class DispatchPipeline {
     this.scopeTracker = new ScopeTracker(config.projectRoot);
     this.worktreeManager = new WorktreeManager(config.projectRoot);
 
-    try { this.catalog = new SkillCatalog(); }
+    try { this.catalog = new SkillCatalog(config.projectRoot); }
     catch (err) { this.catalog = null; log(`SkillCatalog unavailable: ${(err as Error).message}`); }
 
     // Clean up orphaned worktrees from previous runs
