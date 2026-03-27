@@ -26085,59 +26085,59 @@ ${lines.join("\n\n")}` }] };
 );
 server.tool(
   "gossip_log_finding",
-  "Log an implementation quality finding against an agent. Observer-only \u2014 does NOT affect dispatch scores. Use after reviewing code written by an implementer agent. Findings are stored in .gossip/implementation-findings.jsonl for analysis.",
+  "Log implementation quality findings against agents (batch). Observer-only \u2014 does NOT affect dispatch scores. Use after reviewing code written by implementer agents. Supports multiple findings in one call.",
   {
-    implementer_id: external_exports.string().describe("Agent ID that wrote the code"),
-    reviewer_id: external_exports.string().describe('Agent ID that found the issue (or "user" if you found it yourself)'),
-    finding: external_exports.string().describe("Description of the bug or quality issue"),
-    severity: external_exports.enum(["critical", "high", "medium", "low"]).describe("Bug severity"),
-    category: external_exports.enum(["logic_error", "security", "performance", "type_safety", "missing_tests", "style", "other"]).describe("Finding category"),
-    file: external_exports.string().optional().describe("File path where the issue was found"),
-    line: external_exports.number().optional().describe("Line number"),
-    task_id: external_exports.string().optional().describe("Task ID from the implementation dispatch (for attribution)")
+    findings: external_exports.array(external_exports.object({
+      implementer_id: external_exports.string().describe("Agent ID that wrote the code"),
+      reviewer_id: external_exports.string().describe('Agent ID that found the issue (or "user")'),
+      finding: external_exports.string().describe("Description of the bug or quality issue"),
+      severity: external_exports.enum(["critical", "high", "medium", "low"]).describe("Bug severity"),
+      category: external_exports.enum(["logic_error", "security", "performance", "type_safety", "missing_tests", "style", "other"]).describe("Finding category"),
+      file: external_exports.string().optional().describe("File path"),
+      line: external_exports.number().optional().describe("Line number"),
+      task_id: external_exports.string().optional().describe("Task ID from implementation dispatch")
+    })).describe("Array of findings to log")
   },
-  async ({ implementer_id, reviewer_id, finding, severity, category, file: file2, line, task_id }) => {
+  async ({ findings }) => {
+    if (findings.length === 0) {
+      return { content: [{ type: "text", text: "No findings to log." }] };
+    }
     const { appendFileSync: appendFileSync7, mkdirSync: mkdirSync10, existsSync: existsSync17, readFileSync: readFileSync18 } = require("fs");
     const { join: join19 } = require("path");
     const root = process.cwd();
     const dir = join19(root, ".gossip");
     if (!existsSync17(dir)) mkdirSync10(dir, { recursive: true });
     const filePath = join19(dir, "implementation-findings.jsonl");
-    const entry = {
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      implementerId: implementer_id,
-      reviewerId: reviewer_id,
-      finding,
-      severity,
-      category,
-      file: file2 || null,
-      line: line || null,
-      taskId: task_id || null
-    };
-    appendFileSync7(filePath, JSON.stringify(entry) + "\n");
-    let total = 0;
-    let bySeverity = { critical: 0, high: 0, medium: 0, low: 0 };
-    try {
-      const lines = readFileSync18(filePath, "utf-8").trim().split("\n").filter(Boolean);
-      for (const l of lines) {
-        try {
-          const e = JSON.parse(l);
-          if (e.implementerId === implementer_id) {
-            total++;
-            if (e.severity) bySeverity[e.severity] = (bySeverity[e.severity] || 0) + 1;
-          }
-        } catch {
-        }
-      }
-    } catch {
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const data = findings.map((f) => JSON.stringify({
+      timestamp,
+      implementerId: f.implementer_id,
+      reviewerId: f.reviewer_id,
+      finding: f.finding,
+      severity: f.severity,
+      category: f.category,
+      file: f.file || null,
+      line: f.line || null,
+      taskId: f.task_id || null
+    })).join("\n") + "\n";
+    appendFileSync7(filePath, data);
+    const byAgent = /* @__PURE__ */ new Map();
+    for (const f of findings) {
+      const entry = byAgent.get(f.implementer_id) || { total: 0, bySeverity: {} };
+      entry.total++;
+      entry.bySeverity[f.severity] = (entry.bySeverity[f.severity] || 0) + 1;
+      byAgent.set(f.implementer_id, entry);
     }
-    const severityStr = Object.entries(bySeverity).filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(", ");
+    const summary = Array.from(byAgent.entries()).map(([id, { total, bySeverity }]) => {
+      const sev = Object.entries(bySeverity).map(([k, v]) => `${k}:${v}`).join(", ");
+      return `  ${id}: ${total} findings (${sev})`;
+    }).join("\n");
     return { content: [{
       type: "text",
-      text: `Finding logged against ${implementer_id} (${severity} ${category}).
-Total findings for ${implementer_id}: ${total} (${severityStr})
+      text: `Logged ${findings.length} findings:
+${summary}
 
-\u26A0\uFE0F Observer-only \u2014 does not affect dispatch scores. Data in .gossip/implementation-findings.jsonl.`
+\u26A0\uFE0F Observer-only \u2014 does not affect dispatch scores.`
     }] };
   }
 );

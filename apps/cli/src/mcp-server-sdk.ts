@@ -1512,19 +1512,25 @@ server.tool(
 // ── Log implementation findings (observer-only, no scoring) ──────────────
 server.tool(
   'gossip_log_finding',
-  'Log an implementation quality finding against an agent. Observer-only — does NOT affect dispatch scores. Use after reviewing code written by an implementer agent. Findings are stored in .gossip/implementation-findings.jsonl for analysis.',
+  'Log implementation quality findings against agents (batch). Observer-only — does NOT affect dispatch scores. Use after reviewing code written by implementer agents. Supports multiple findings in one call.',
   {
-    implementer_id: z.string().describe('Agent ID that wrote the code'),
-    reviewer_id: z.string().describe('Agent ID that found the issue (or "user" if you found it yourself)'),
-    finding: z.string().describe('Description of the bug or quality issue'),
-    severity: z.enum(['critical', 'high', 'medium', 'low']).describe('Bug severity'),
-    category: z.enum(['logic_error', 'security', 'performance', 'type_safety', 'missing_tests', 'style', 'other'])
-      .describe('Finding category'),
-    file: z.string().optional().describe('File path where the issue was found'),
-    line: z.number().optional().describe('Line number'),
-    task_id: z.string().optional().describe('Task ID from the implementation dispatch (for attribution)'),
+    findings: z.array(z.object({
+      implementer_id: z.string().describe('Agent ID that wrote the code'),
+      reviewer_id: z.string().describe('Agent ID that found the issue (or "user")'),
+      finding: z.string().describe('Description of the bug or quality issue'),
+      severity: z.enum(['critical', 'high', 'medium', 'low']).describe('Bug severity'),
+      category: z.enum(['logic_error', 'security', 'performance', 'type_safety', 'missing_tests', 'style', 'other'])
+        .describe('Finding category'),
+      file: z.string().optional().describe('File path'),
+      line: z.number().optional().describe('Line number'),
+      task_id: z.string().optional().describe('Task ID from implementation dispatch'),
+    })).describe('Array of findings to log'),
   },
-  async ({ implementer_id, reviewer_id, finding, severity, category, file, line, task_id }) => {
+  async ({ findings }) => {
+    if (findings.length === 0) {
+      return { content: [{ type: 'text' as const, text: 'No findings to log.' }] };
+    }
+
     const { appendFileSync, mkdirSync, existsSync, readFileSync } = require('fs');
     const { join } = require('path');
     const root = process.cwd();
@@ -1532,42 +1538,40 @@ server.tool(
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
     const filePath = join(dir, 'implementation-findings.jsonl');
+    const timestamp = new Date().toISOString();
 
-    const entry = {
-      timestamp: new Date().toISOString(),
-      implementerId: implementer_id,
-      reviewerId: reviewer_id,
-      finding,
-      severity,
-      category,
-      file: file || null,
-      line: line || null,
-      taskId: task_id || null,
-    };
+    const data = findings.map(f => JSON.stringify({
+      timestamp,
+      implementerId: f.implementer_id,
+      reviewerId: f.reviewer_id,
+      finding: f.finding,
+      severity: f.severity,
+      category: f.category,
+      file: f.file || null,
+      line: f.line || null,
+      taskId: f.task_id || null,
+    })).join('\n') + '\n';
 
-    appendFileSync(filePath, JSON.stringify(entry) + '\n');
+    appendFileSync(filePath, data);
 
-    // Count totals for this implementer
-    let total = 0;
-    let bySeverity: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0 };
-    try {
-      const lines = readFileSync(filePath, 'utf-8').trim().split('\n').filter(Boolean);
-      for (const l of lines) {
-        try {
-          const e = JSON.parse(l);
-          if (e.implementerId === implementer_id) {
-            total++;
-            if (e.severity) bySeverity[e.severity] = (bySeverity[e.severity] || 0) + 1;
-          }
-        } catch {}
-      }
-    } catch {}
+    // Summary by implementer
+    const byAgent = new Map<string, { total: number; bySeverity: Record<string, number> }>();
+    for (const f of findings) {
+      const entry = byAgent.get(f.implementer_id) || { total: 0, bySeverity: {} };
+      entry.total++;
+      entry.bySeverity[f.severity] = (entry.bySeverity[f.severity] || 0) + 1;
+      byAgent.set(f.implementer_id, entry);
+    }
 
-    const severityStr = Object.entries(bySeverity).filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(', ');
+    const summary = Array.from(byAgent.entries())
+      .map(([id, { total, bySeverity }]) => {
+        const sev = Object.entries(bySeverity).map(([k, v]) => `${k}:${v}`).join(', ');
+        return `  ${id}: ${total} findings (${sev})`;
+      }).join('\n');
+
     return { content: [{ type: 'text' as const, text:
-      `Finding logged against ${implementer_id} (${severity} ${category}).\n` +
-      `Total findings for ${implementer_id}: ${total} (${severityStr})\n\n` +
-      `⚠️ Observer-only — does not affect dispatch scores. Data in .gossip/implementation-findings.jsonl.`
+      `Logged ${findings.length} findings:\n${summary}\n\n` +
+      `⚠️ Observer-only — does not affect dispatch scores.`
     }] };
   }
 );
