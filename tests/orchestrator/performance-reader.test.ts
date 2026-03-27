@@ -143,7 +143,7 @@ describe('PerformanceReader', () => {
     expect(reader.getDispatchWeight('bad')).toBeLessThan(1.0);
   });
 
-  it('boosts winner accuracy when counterpart loses disagreement', () => {
+  it('boosts winner accuracy and totalSignals when counterpart loses disagreement', () => {
     // Agent "loser" gets disagreement signals, counterpartId points to "winner"
     writeSignals([
       { type: 'consensus', signal: 'disagreement', agentId: 'loser', taskId: 't1', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
@@ -154,9 +154,39 @@ describe('PerformanceReader', () => {
     // Loser: base 0.5 - 3 * 0.15 = 0.05
     const loserScore = reader.getAgentScore('loser')!;
     expect(loserScore.accuracy).toBeCloseTo(0.05, 2);
+    expect(loserScore.totalSignals).toBe(3);
     // Winner: base 0.5 + 3 * 0.1 = 0.8 (counterpart bonus)
     const winnerScore = reader.getAgentScore('winner')!;
     expect(winnerScore.accuracy).toBeCloseTo(0.8, 2);
+    expect(winnerScore.totalSignals).toBe(3); // FIX: now counted
+    // Winner should get boosted dispatch weight (>= 3 signals, high accuracy)
+    expect(reader.getDispatchWeight('winner')).toBeGreaterThan(1.0);
+  });
+
+  it('ignores empty counterpartId', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'disagreement', agentId: 'a', taskId: 't1', counterpartId: '', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'a', taskId: 't2', counterpartId: null, evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'a', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const scores = reader.getScores();
+    // Only agent 'a' should exist — no '' or 'null' keys
+    expect(scores.size).toBe(1);
+    expect(scores.has('')).toBe(false);
+    expect(scores.has('null')).toBe(false);
+  });
+
+  it('does not count unknown signal types toward totalSignals', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'a', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'FAKE_SIGNAL', agentId: 'a', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'garbage', agentId: 'a', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('a')!;
+    expect(score.totalSignals).toBe(1); // only the valid agreement
+    expect(score.agreements).toBe(1);
   });
 
   it('boosts uniqueness for unique_unconfirmed signals', () => {

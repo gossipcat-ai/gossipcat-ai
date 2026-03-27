@@ -8998,9 +8998,9 @@ var init_performance_reader = __esm({
         };
         for (const signal of signals) {
           const agent = ensure(signal.agentId);
-          agent.totalSignals++;
           const weights = SIGNAL_WEIGHTS[signal.signal];
           if (!weights) continue;
+          agent.totalSignals++;
           if ("accuracy" in weights) {
             agent.accuracy = clamp(agent.accuracy + weights.accuracy, 0, 1);
           }
@@ -9023,9 +9023,10 @@ var init_performance_reader = __esm({
               agent.hallucinations++;
               break;
           }
-          if (signal.counterpartId && signal.signal === "disagreement") {
+          if (signal.counterpartId && typeof signal.counterpartId === "string" && signal.counterpartId.length > 0 && signal.signal === "disagreement") {
             const winner = ensure(signal.counterpartId);
             winner.accuracy = clamp(winner.accuracy + 0.1, 0, 1);
+            winner.totalSignals++;
           }
         }
         for (const score of scores.values()) {

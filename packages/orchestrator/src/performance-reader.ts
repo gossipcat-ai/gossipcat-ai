@@ -103,10 +103,11 @@ export class PerformanceReader {
 
     for (const signal of signals) {
       const agent = ensure(signal.agentId);
-      agent.totalSignals++;
 
+      // FIX: only count known signal types toward totalSignals threshold
       const weights = SIGNAL_WEIGHTS[signal.signal];
       if (!weights) continue;
+      agent.totalSignals++;
 
       if ('accuracy' in weights) {
         agent.accuracy = clamp(agent.accuracy + weights.accuracy, 0, 1);
@@ -126,10 +127,11 @@ export class PerformanceReader {
       }
 
       // Counterpart bonus: when agent B gets a 'disagreement' signal (B lost),
-      // the counterpartId points to agent A who won. Boost A's accuracy.
-      if (signal.counterpartId && signal.signal === 'disagreement') {
+      // the counterpartId points to agent A who won. Boost A's accuracy + count.
+      if (signal.counterpartId && typeof signal.counterpartId === 'string' && signal.counterpartId.length > 0 && signal.signal === 'disagreement') {
         const winner = ensure(signal.counterpartId);
         winner.accuracy = clamp(winner.accuracy + 0.1, 0, 1);
+        winner.totalSignals++; // FIX: count so winner crosses the 3-signal dispatch threshold
       }
     }
 
