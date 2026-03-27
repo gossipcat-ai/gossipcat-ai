@@ -26084,6 +26084,127 @@ ${lines.join("\n\n")}` }] };
   }
 );
 server.tool(
+  "gossip_log_finding",
+  "Log an implementation quality finding against an agent. Observer-only \u2014 does NOT affect dispatch scores. Use after reviewing code written by an implementer agent. Findings are stored in .gossip/implementation-findings.jsonl for analysis.",
+  {
+    implementer_id: external_exports.string().describe("Agent ID that wrote the code"),
+    reviewer_id: external_exports.string().describe('Agent ID that found the issue (or "user" if you found it yourself)'),
+    finding: external_exports.string().describe("Description of the bug or quality issue"),
+    severity: external_exports.enum(["critical", "high", "medium", "low"]).describe("Bug severity"),
+    category: external_exports.enum(["logic_error", "security", "performance", "type_safety", "missing_tests", "style", "other"]).describe("Finding category"),
+    file: external_exports.string().optional().describe("File path where the issue was found"),
+    line: external_exports.number().optional().describe("Line number"),
+    task_id: external_exports.string().optional().describe("Task ID from the implementation dispatch (for attribution)")
+  },
+  async ({ implementer_id, reviewer_id, finding, severity, category, file: file2, line, task_id }) => {
+    const { appendFileSync: appendFileSync7, mkdirSync: mkdirSync10, existsSync: existsSync17, readFileSync: readFileSync18 } = require("fs");
+    const { join: join19 } = require("path");
+    const root = process.cwd();
+    const dir = join19(root, ".gossip");
+    if (!existsSync17(dir)) mkdirSync10(dir, { recursive: true });
+    const filePath = join19(dir, "implementation-findings.jsonl");
+    const entry = {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      implementerId: implementer_id,
+      reviewerId: reviewer_id,
+      finding,
+      severity,
+      category,
+      file: file2 || null,
+      line: line || null,
+      taskId: task_id || null
+    };
+    appendFileSync7(filePath, JSON.stringify(entry) + "\n");
+    let total = 0;
+    let bySeverity = { critical: 0, high: 0, medium: 0, low: 0 };
+    try {
+      const lines = readFileSync18(filePath, "utf-8").trim().split("\n").filter(Boolean);
+      for (const l of lines) {
+        try {
+          const e = JSON.parse(l);
+          if (e.implementerId === implementer_id) {
+            total++;
+            if (e.severity) bySeverity[e.severity] = (bySeverity[e.severity] || 0) + 1;
+          }
+        } catch {
+        }
+      }
+    } catch {
+    }
+    const severityStr = Object.entries(bySeverity).filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(", ");
+    return { content: [{
+      type: "text",
+      text: `Finding logged against ${implementer_id} (${severity} ${category}).
+Total findings for ${implementer_id}: ${total} (${severityStr})
+
+\u26A0\uFE0F Observer-only \u2014 does not affect dispatch scores. Data in .gossip/implementation-findings.jsonl.`
+    }] };
+  }
+);
+server.tool(
+  "gossip_findings",
+  "View implementation quality findings per agent. Shows bug counts by severity and category. Observer-only data from gossip_log_finding.",
+  {
+    agent_id: external_exports.string().optional().describe("Filter by implementer agent ID. Omit to see all.")
+  },
+  async ({ agent_id }) => {
+    const { existsSync: existsSync17, readFileSync: readFileSync18 } = require("fs");
+    const { join: join19 } = require("path");
+    const filePath = join19(process.cwd(), ".gossip", "implementation-findings.jsonl");
+    if (!existsSync17(filePath)) {
+      return { content: [{ type: "text", text: "No implementation findings yet. Use gossip_log_finding to record findings after code reviews." }] };
+    }
+    const entries = [];
+    try {
+      const lines = readFileSync18(filePath, "utf-8").trim().split("\n").filter(Boolean);
+      for (const l of lines) {
+        try {
+          entries.push(JSON.parse(l));
+        } catch {
+        }
+      }
+    } catch {
+    }
+    if (entries.length === 0) {
+      return { content: [{ type: "text", text: "No implementation findings recorded." }] };
+    }
+    const byAgent = /* @__PURE__ */ new Map();
+    for (const e of entries) {
+      if (agent_id && e.implementerId !== agent_id) continue;
+      const arr = byAgent.get(e.implementerId) || [];
+      arr.push(e);
+      byAgent.set(e.implementerId, arr);
+    }
+    if (byAgent.size === 0) {
+      return { content: [{ type: "text", text: agent_id ? `No findings for ${agent_id}.` : "No findings recorded." }] };
+    }
+    const sections = [];
+    for (const [id, findings] of byAgent) {
+      const bySeverity = {};
+      const byCategory = {};
+      for (const f of findings) {
+        bySeverity[f.severity] = (bySeverity[f.severity] || 0) + 1;
+        byCategory[f.category] = (byCategory[f.category] || 0) + 1;
+      }
+      const nativeTag = nativeAgentConfigs.has(id) ? " (native)" : "";
+      sections.push(
+        `${id}${nativeTag}: ${findings.length} findings
+  Severity: ${Object.entries(bySeverity).map(([k, v]) => `${k}=${v}`).join(", ")}
+  Category: ${Object.entries(byCategory).map(([k, v]) => `${k}=${v}`).join(", ")}
+  Recent: ${findings.slice(-3).map((f) => `${f.severity} ${f.category}: ${f.finding.slice(0, 60)}`).join("\n          ")}`
+      );
+    }
+    return { content: [{
+      type: "text",
+      text: `Implementation Findings (observer-only):
+
+${sections.join("\n\n")}
+
+Total: ${entries.length} findings across ${byAgent.size} agent(s). Data does NOT affect dispatch scores.`
+    }] };
+  }
+);
+server.tool(
   "gossip_tools",
   "List all available gossipcat MCP tools with descriptions. Call after /mcp reconnect to discover new tools.",
   {},
@@ -26102,6 +26223,8 @@ server.tool(
       { name: "gossip_relay_result", desc: "Feed native Agent tool result back into relay for consensus" },
       { name: "gossip_record_signals", desc: "Record CONFIRMED/DISPUTED/UNIQUE/NEW signals after cross-referencing" },
       { name: "gossip_scores", desc: "View agent performance scores and dispatch weights" },
+      { name: "gossip_log_finding", desc: "Log implementation quality finding (observer-only, no scoring)" },
+      { name: "gossip_findings", desc: "View implementation findings per agent" },
       { name: "gossip_tools", desc: "List available tools (this command)" },
       { name: "gossip_bootstrap", desc: "Generate team context prompt with live agent state" },
       { name: "gossip_setup", desc: "Create or update team configuration" }
