@@ -73,7 +73,7 @@ async function main(): Promise<void> {
       if (key) {
         minimalConfig.main_agent.provider = provider;
         minimalConfig.main_agent.model = provider === 'google' ? 'gemini-2.5-pro'
-          : provider === 'anthropic' ? 'claude-sonnet-4-6' : 'gpt-4o';
+          : provider === 'anthropic' ? 'claude-opus-4-6' : 'gpt-4o';
         hasKey = true;
         break;
       }

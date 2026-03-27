@@ -29,14 +29,20 @@ export class GitTools {
 
   async gitUntrackedDiff(paths: string[]): Promise<string> {
     const diffs: string[] = [];
-    for (const p of paths) {
+    // Get all untracked files under the given paths
+    let untrackedFiles: string[] = [];
+    try {
+      const status = await this.git('status', '--porcelain', '--', ...paths);
+      untrackedFiles = status.split('\n')
+        .filter(line => line.startsWith('??'))
+        .map(line => line.slice(3).trim());
+    } catch { /* no untracked files */ }
+
+    for (const file of untrackedFiles) {
       try {
-        // git status --porcelain returns '?? path' for untracked files
-        const status = await this.git('status', '--porcelain', '--', p);
-        if (!status.startsWith('??')) continue;
         // git diff --no-index exits 1 when files differ — that's expected
         const { stdout } = await execFileAsync(
-          'git', ['diff', '--no-index', '/dev/null', p],
+          'git', ['diff', '--no-index', '/dev/null', file],
           { cwd: this.cwd },
         ).catch((err: unknown) => {
           const e = err as Error & { stdout?: string };
@@ -44,7 +50,7 @@ export class GitTools {
         });
         if (stdout) diffs.push(stdout.trim());
       } catch (err) {
-        console.warn(`[GitTools] gitUntrackedDiff skipped "${p}": ${(err as Error).message}`);
+        // skip files that can't be diffed (binary, symlinks, etc.)
       }
     }
     return diffs.join('\n');
