@@ -165,6 +165,7 @@ export class MainAgent {
     const { join } = await import('path');
 
     for (const config of this.registry.getAll()) {
+      if (config.native) continue; // native agents use host's Agent tool, not relay
       if (this.workers.has(config.id)) continue; // skip if already set externally
       // Try apiKeys map first, then keyProvider callback
       let apiKey: string | undefined = this.apiKeys[config.provider];
@@ -287,6 +288,7 @@ export class MainAgent {
 
     let added = 0;
     for (const ac of this.registry.getAll()) {
+      if (ac.native) continue; // native agents use host's Agent tool, not relay
       if (this.workers.has(ac.id)) continue;
       const key = await keyProvider(ac.provider);
       const llm = createProvider(ac.provider, ac.model, key ?? undefined);

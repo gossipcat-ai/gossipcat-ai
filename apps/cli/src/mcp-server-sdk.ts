@@ -151,7 +151,7 @@ async function doBoot() {
 
   // Register Claude Code subagents from .claude/agents/*.md (native = no relay worker needed)
   const { loadClaudeSubagents, claudeSubagentsToConfigs } = await import('./config');
-  const existingIds = new Set(agentConfigs.map((a: any) => a.id));
+  const existingIds = new Set<string>(agentConfigs.map((a: any) => a.id));
   const claudeSubagents = loadClaudeSubagents(process.cwd(), existingIds);
   if (claudeSubagents.length > 0) {
     const claudeConfigs = claudeSubagentsToConfigs(claudeSubagents);
@@ -1126,7 +1126,7 @@ server.tool(
     })).describe('Array of agents to create'),
   },
   async ({ main_provider, main_model, agents }) => {
-    const { writeFileSync, mkdirSync, existsSync } = require('fs');
+    const { writeFileSync, mkdirSync } = require('fs');
     const { join } = require('path');
     const root = process.cwd();
 
@@ -1539,7 +1539,7 @@ server.tool(
       return { content: [{ type: 'text' as const, text: 'No findings to log.' }] };
     }
 
-    const { appendFileSync, mkdirSync, existsSync, readFileSync } = require('fs');
+    const { appendFileSync, mkdirSync, existsSync } = require('fs');
     const { join } = require('path');
     const root = process.cwd();
     const dir = join(root, '.gossip');
