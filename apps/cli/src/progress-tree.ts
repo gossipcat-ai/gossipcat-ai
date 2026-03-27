@@ -87,6 +87,9 @@ function renderAgentLine(state: AgentState, spinnerIdx: number, wide: boolean): 
 /**
  * Multi-line ANSI pipeline progress renderer.
  * Shows per-agent execution status with progress bars during plan execution.
+ *
+ * Intercepts stderr while active to prevent worker logs from being overwritten
+ * by ANSI cursor-up redraws. Buffered logs are flushed above the tree on each draw.
  */
 export class ProgressTree {
   private rl: ReadlineInterface;
@@ -95,6 +98,8 @@ export class ProgressTree {
   private spinnerIdx = 0;
   private startedAt = 0;
   private lineCount = 0;
+  private stderrBuffer: string[] = [];
+  private origStderrWrite: typeof process.stderr.write | null = null;
 
   constructor(rl: ReadlineInterface) {
     this.rl = rl;
@@ -115,6 +120,7 @@ export class ProgressTree {
     this.startedAt = Date.now();
     this.spinnerIdx = 0;
     this.lineCount = 0;
+    this.stderrBuffer = [];
 
     if (!process.stdout.isTTY) {
       process.stdout.write(`  Running ${agentList.length} agent${agentList.length !== 1 ? 's' : ''}...\n`);
@@ -122,6 +128,7 @@ export class ProgressTree {
     }
 
     this.rl.pause();
+    this.interceptStderr();
     this.draw();
 
     this.interval = setInterval(() => {
@@ -187,8 +194,12 @@ export class ProgressTree {
       this.interval = null;
     }
 
+    this.restoreStderr();
+
     if (process.stdout.isTTY) {
       this.draw();
+      // Flush any remaining buffered stderr after the final draw
+      this.flushStderrBuffer();
       this.rl.resume();
     } else {
       if (this.agents.length > 0) {
@@ -202,12 +213,54 @@ export class ProgressTree {
     return this.interval !== null;
   }
 
+  /** Intercept process.stderr.write to buffer logs while progress tree is active */
+  private interceptStderr(): void {
+    this.origStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: any) => {
+      const str = typeof chunk === 'string' ? chunk : chunk.toString();
+      this.stderrBuffer.push(str);
+      return true;
+    }) as typeof process.stderr.write;
+  }
+
+  /** Restore original stderr.write */
+  private restoreStderr(): void {
+    if (this.origStderrWrite) {
+      process.stderr.write = this.origStderrWrite;
+      this.origStderrWrite = null;
+    }
+  }
+
+  /** Flush buffered stderr lines above the progress tree */
+  private flushStderrBuffer(): void {
+    if (this.stderrBuffer.length === 0) return;
+    const buffered = this.stderrBuffer.splice(0);
+    for (const line of buffered) {
+      process.stderr.write(line);
+    }
+  }
+
   private draw(): void {
     const wide = (process.stdout.columns ?? 80) >= 100;
 
     // Move cursor up to overwrite previous block
     if (this.lineCount > 0) {
       process.stdout.write(`\x1b[${this.lineCount}A`);
+    }
+
+    // Flush buffered stderr ABOVE the tree (before drawing)
+    if (this.stderrBuffer.length > 0) {
+      // Clear current line, flush logs, then redraw tree below
+      process.stdout.write('\x1b[K');
+      const buffered = this.stderrBuffer.splice(0);
+      const origWrite = this.origStderrWrite;
+      if (origWrite) {
+        for (const line of buffered) {
+          origWrite(line);
+        }
+      }
+      // Reset lineCount since we pushed content above
+      this.lineCount = 0;
     }
 
     let lines = 0;
@@ -219,7 +272,9 @@ export class ProgressTree {
 
     // Footer summary
     const elapsed = ((Date.now() - this.startedAt) / 1000).toFixed(1);
-    const summary = `  ${c.dim}${this.agents.length} agent${this.agents.length !== 1 ? 's' : ''} · ${elapsed}s${c.reset}`;
+    const totalTokens = this.agents.reduce((sum, a) => sum + a.inputTokens + a.outputTokens, 0);
+    const tokenStr = totalTokens > 0 ? ` · ${formatTokens(totalTokens)}` : '';
+    const summary = `  ${c.dim}${this.agents.length} agent${this.agents.length !== 1 ? 's' : ''} · ${elapsed}s${tokenStr}${c.reset}`;
     process.stdout.write(`${summary}\x1b[K\n`);
     lines++;
 

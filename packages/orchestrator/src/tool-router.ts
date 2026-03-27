@@ -249,9 +249,11 @@ export class ToolRouter {
       if (typeof tool === 'string' && !TOOL_SCHEMAS[tool]) {
         const aliases: Record<string, string> = {
           dispatch_agent: 'dispatch', send_task: 'dispatch',
-          create_plan: 'plan', make_plan: 'plan',
-          list_agents: 'agents', show_agents: 'agents',
-          init: 'init_project', initialize: 'init_project',
+          execute_tool: 'dispatch', run_tool: 'dispatch',
+          create_plan: 'plan', make_plan: 'plan', generate_plan: 'plan',
+          create_spec: 'spec', generate_spec: 'spec', write_spec: 'spec',
+          list_agents: 'agents', show_agents: 'agents', get_agents: 'agents',
+          init: 'init_project', initialize: 'init_project', project_init: 'init_project',
         };
         if (aliases[tool]) tool = aliases[tool];
       }
@@ -474,8 +476,11 @@ export class ToolExecutor {
         // Populate immediately — must happen before any await that could yield to worker callbacks
         for (let i = 0; i < taskIds.length; i++) taskIdToIndex.set(taskIds[i], i);
         if (errors.length > 0) {
+          log(`executePlan: dispatchParallel returned ${errors.length} errors: ${errors.join('; ')}`);
+          this.onTaskProgress?.({ taskIndex: tasks.length, totalTasks: tasks.length, agentId: '', taskDescription: '', status: 'finish' });
           return { text: `Plan execution failed.\n\nErrors:\n${errors.map((e: string) => `  - ${e}`).join('\n')}` };
         }
+        log(`executePlan: dispatched ${taskIds.length} parallel tasks: [${taskIds.join(', ')}]`);
         const collectResult: CollectResultLike = await this.pipeline.collect(taskIds, 600_000);
         const lines: string[] = [];
         for (let i = 0; i < collectResult.results.length; i++) {
@@ -576,6 +581,8 @@ export class ToolExecutor {
       return { text: synthesized, agents: [...agentSet] };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
+      log(`executePlan ERROR: ${message}`);
+      this.onTaskProgress?.({ taskIndex: 0, totalTasks: 0, agentId: '', taskDescription: '', status: 'finish' });
       return { text: `Tool error: ${message}` };
     } finally {
       this.pipeline.setTaskProgressCallback?.(null);

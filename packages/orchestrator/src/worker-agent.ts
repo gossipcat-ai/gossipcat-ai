@@ -22,6 +22,83 @@ export type WorkerProgressCallback = (event: {
 
 const MAX_TOOL_TURNS = 15;
 const TOOL_CALL_TIMEOUT_MS = 60_000;
+const log = (agentId: string, msg: string) => process.stderr.write(`[worker:${agentId}] ${msg}\n`);
+
+/**
+ * Extract tool calls from LLM text when native function calling fails.
+ * Gemini frequently ignores functionDeclarations and emits text-based tool calls instead.
+ * Handles: [TOOL_CALL]...[/TOOL_CALL], [TOOL_CODE]...[/TOOL_CODE], and function_call() syntax.
+ */
+function parseTextToolCalls(text: string, validTools: Set<string>): Array<{ id: string; name: string; arguments: Record<string, unknown> }> {
+  const calls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
+
+  // Pattern 1: [TOOL_CALL] or [TOOL_CODE] blocks (most common Gemini fallback)
+  const blockRe = /\[(?:TOOL_CALL|TOOL_CODE)\]([\s\S]*?)(?:\[\/(?:TOOL_CALL|TOOL_CODE)\]|$)/g;
+  let match: RegExpExecArray | null;
+  while ((match = blockRe.exec(text)) !== null) {
+    const content = match[1].trim();
+    const parsed = parseToolContent(content, validTools);
+    if (parsed) calls.push({ id: randomUUID().slice(0, 12), ...parsed });
+  }
+
+  // Pattern 2: ```tool_call or ```json blocks with tool/args structure
+  if (calls.length === 0) {
+    const fenceRe = /```(?:tool_call|json)?\s*\n([\s\S]*?)```/g;
+    while ((match = fenceRe.exec(text)) !== null) {
+      const content = match[1].trim();
+      const parsed = parseToolContent(content, validTools);
+      if (parsed) calls.push({ id: randomUUID().slice(0, 12), ...parsed });
+    }
+  }
+
+  // Pattern 3: function_name({...}) syntax
+  if (calls.length === 0) {
+    const funcRe = /\b(file_write|file_read|file_delete|file_search|file_tree|shell_exec|git_diff|git_status|suggest_skill|verify_write)\s*\(\s*(\{[\s\S]*?\})\s*\)/g;
+    while ((match = funcRe.exec(text)) !== null) {
+      try {
+        const args = JSON.parse(match[2].replace(/,\s*([}\]])/g, '$1'));
+        calls.push({ id: randomUUID().slice(0, 12), name: match[1], arguments: args });
+      } catch { /* skip malformed */ }
+    }
+  }
+
+  return calls;
+}
+
+function parseToolContent(content: string, validTools: Set<string>): { name: string; arguments: Record<string, unknown> } | null {
+  // Try JSON first
+  try {
+    const cleaned = content.replace(/,\s*([}\]])/g, '$1');
+    const parsed = JSON.parse(cleaned);
+    const name = parsed.tool || parsed.name || parsed.function || parsed.tool_name;
+    const args = parsed.args || parsed.arguments || parsed.parameters || parsed.tool_input || {};
+    if (name && validTools.has(name)) return { name, arguments: args };
+  } catch { /* not JSON */ }
+
+  // Try YAML-like: tool: name\nargs:\n  key: value
+  const toolMatch = content.match(/^tool:\s*["']?(\w+)["']?/m);
+  if (toolMatch && validTools.has(toolMatch[1])) {
+    const name = toolMatch[1];
+    const args: Record<string, unknown> = {};
+    // Extract key: value pairs after "args:"
+    const argsSection = content.match(/args:\s*\n([\s\S]*)/);
+    if (argsSection) {
+      const lines = argsSection[1].split('\n');
+      for (const line of lines) {
+        const kv = line.match(/^\s+(\w+):\s*(.*)/);
+        if (kv) {
+          let val: unknown = kv[2].trim();
+          // Strip quotes
+          if (typeof val === 'string' && /^["'].*["']$/.test(val)) val = (val as string).slice(1, -1);
+          args[kv[1]] = val;
+        }
+      }
+    }
+    return { name, arguments: args };
+  }
+
+  return null;
+}
 
 export class WorkerAgent {
   private agent: GossipAgent;
@@ -34,6 +111,7 @@ export class WorkerAgent {
   }> = new Map();
 
   private webSearchEnabled: boolean;
+  private validToolNames: Set<string>;
 
   constructor(
     private agentId: string,
@@ -44,6 +122,7 @@ export class WorkerAgent {
     webSearch?: boolean,
   ) {
     this.webSearchEnabled = webSearch ?? false;
+    this.validToolNames = new Set(tools.map(t => t.name));
     this.instructions = instructions || 'You are a skilled developer agent. Complete the assigned task using the available tools. Be concise and focused.\n\nIf you encounter a domain your skills don\'t cover, call suggest_skill(name, reason) — it helps the system learn. Don\'t stop working to suggest; note the gap and keep going.';
     this.agent = new GossipAgent({ agentId, relayUrl, reconnect: true });
   }
@@ -68,9 +147,16 @@ export class WorkerAgent {
 
   async start(): Promise<void> {
     await this.agent.connect();
+    log(this.agentId, 'connected to relay');
     this.agent.on('message', this.handleMessage.bind(this));
-    this.agent.on('error', () => this.rejectPendingToolCalls('Relay connection error'));
-    this.agent.on('disconnect', () => this.rejectPendingToolCalls('Relay disconnected'));
+    this.agent.on('error', () => {
+      log(this.agentId, 'RELAY ERROR — rejecting pending tool calls');
+      this.rejectPendingToolCalls('Relay connection error');
+    });
+    this.agent.on('disconnect', () => {
+      log(this.agentId, 'RELAY DISCONNECTED — rejecting pending tool calls');
+      this.rejectPendingToolCalls('Relay disconnected');
+    });
   }
 
   private rejectPendingToolCalls(reason: string): void {
@@ -89,6 +175,7 @@ export class WorkerAgent {
    * Returns the final text response.
    */
   async executeTask(task: string, context?: string, skillsContent?: string, onProgress?: WorkerProgressCallback): Promise<TaskExecutionResult> {
+    log(this.agentId, `executeTask started — task: "${task.slice(0, 100)}..." webSearch=${this.webSearchEnabled} tools=${this.tools.length}`);
     this.gossipQueue = []; // clear gossip from previous task
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
@@ -157,17 +244,33 @@ export class WorkerAgent {
           });
         }
 
-        const response = await this.llm.generate(messages, {
+        log(this.agentId, `turn ${turn}/${MAX_TOOL_TURNS} — calling LLM (${messages.length} messages)`);
+        const llmStart = Date.now();
+        let response = await this.llm.generate(messages, {
           tools: this.tools,
           ...(this.webSearchEnabled ? { webSearch: true } : {}),
         });
+        const llmMs = Date.now() - llmStart;
 
         if (response.usage) {
           totalInputTokens += response.usage.inputTokens;
           totalOutputTokens += response.usage.outputTokens;
         }
 
+        log(this.agentId, `turn ${turn} — LLM returned in ${llmMs}ms: text=${response.text?.length ?? 0}chars, toolCalls=${response.toolCalls?.length ?? 0}, tokens=${response.usage?.inputTokens ?? '?'}in/${response.usage?.outputTokens ?? '?'}out`);
+
+        // Fallback: if no native tool calls, parse text for [TOOL_CALL] blocks.
+        // Gemini frequently ignores functionDeclarations and emits text-based tool calls.
+        if (!response.toolCalls?.length && response.text) {
+          const textCalls = parseTextToolCalls(response.text, this.validToolNames);
+          if (textCalls.length > 0) {
+            log(this.agentId, `turn ${turn} — no native FC, but found ${textCalls.length} text-based tool calls: ${textCalls.map(tc => tc.name).join(', ')}`);
+            response = { ...response, toolCalls: textCalls };
+          }
+        }
+
         if (!response.toolCalls?.length) {
+          log(this.agentId, `turn ${turn} — NO tool calls, exiting. Text preview: "${(response.text || '').slice(0, 200)}"`);
           return { result: response.text || '[No response from agent]', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
         }
 
@@ -176,7 +279,7 @@ export class WorkerAgent {
         if (toolSig === lastToolSig) {
           repeatCount++;
           if (repeatCount >= 2) {
-            // Agent is stuck in a loop — force exit with whatever text it produced
+            log(this.agentId, `turn ${turn} — STUCK: repeating same tool calls ${repeatCount + 1}x, exiting`);
             return {
               result: response.text || 'Task completed (agent was repeating the same action).',
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -187,21 +290,34 @@ export class WorkerAgent {
           repeatCount = 0;
         }
 
-        // Add assistant message with tool calls
+        // Add assistant message with tool calls.
+        // Strip text-based tool call blocks so the LLM doesn't see its own malformed syntax echoed back.
+        let cleanedText = response.text || '';
+        if (cleanedText.includes('[TOOL_CALL]') || cleanedText.includes('[TOOL_CODE]')) {
+          cleanedText = cleanedText
+            .replace(/\[(?:TOOL_CALL|TOOL_CODE)\][\s\S]*?(?:\[\/(?:TOOL_CALL|TOOL_CODE)\]|$)/g, '')
+            .replace(/```(?:tool_call|json)?\s*\n[\s\S]*?```/g, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+        }
         messages.push({
           role: 'assistant',
-          content: response.text || '',
+          content: cleanedText,
           toolCalls: response.toolCalls,
         });
 
         // Execute each tool call via relay RPC
+        log(this.agentId, `turn ${turn} — executing ${response.toolCalls.length} tool calls: ${response.toolCalls.map(tc => tc.name).join(', ')}`);
         let turnErrors = 0;
         for (const toolCall of response.toolCalls) {
           let result: string;
           try {
+            const toolStart = Date.now();
             result = await this.callTool(toolCall.name, toolCall.arguments);
+            log(this.agentId, `  tool ${toolCall.name} → ${Date.now() - toolStart}ms, ${result.length}chars${result.startsWith('Error:') ? ' ERROR: ' + result.slice(0, 100) : ''}`);
           } catch (err) {
             result = `Error: ${(err as Error).message}`;
+            log(this.agentId, `  tool ${toolCall.name} → THREW: ${result.slice(0, 150)}`);
           }
           if (result.startsWith('Error:')) turnErrors++;
           messages.push({
@@ -224,7 +340,9 @@ export class WorkerAgent {
         // the agent is stuck (e.g. fighting unresolvable build errors)
         if (turnErrors === response.toolCalls.length) {
           consecutiveErrors++;
+          log(this.agentId, `turn ${turn} — all ${response.toolCalls.length} tool calls errored (streak: ${consecutiveErrors})`);
           if (consecutiveErrors >= 3) {
+            log(this.agentId, `turn ${turn} — ERROR LOOP: 3 consecutive all-error turns, exiting`);
             return {
               result: response.text || 'Task incomplete — agent stuck in error loop. Simplify the approach or check the error messages above.',
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -236,6 +354,7 @@ export class WorkerAgent {
       }
 
       // Hit max turns — ask for a final summary
+      log(this.agentId, `hit max turns (${MAX_TOOL_TURNS}), requesting summary. Total tool calls: ${toolCallCount}`);
       try {
         messages.push({ role: 'user', content: 'Your turn budget is exhausted. Summarize what you accomplished and what remains unfinished. List files created/modified.' });
         const summary = await this.llm.generate(messages);
@@ -245,6 +364,7 @@ export class WorkerAgent {
         return { result: 'Task incomplete — agent exhausted its turn budget.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
       }
     } catch (err) {
+      log(this.agentId, `FATAL ERROR in executeTask: ${(err as Error).message}`);
       return { result: `Error: ${(err as Error).message}`, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
     }
   }

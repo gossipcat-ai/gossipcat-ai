@@ -388,6 +388,16 @@ export class MainAgent {
       if (/^gossip[._]/.test(toolName)) {
         toolName = toolName.replace(/^gossip[._]/, '');
       }
+      // Normalize LLM-invented aliases (Gemini hallucinates tool names like execute_tool, create_spec)
+      const NATIVE_ALIASES: Record<string, string> = {
+        execute_tool: 'dispatch', run_tool: 'dispatch',
+        create_plan: 'plan', make_plan: 'plan', generate_plan: 'plan',
+        create_spec: 'spec', generate_spec: 'spec', write_spec: 'spec',
+        list_agents: 'agents', show_agents: 'agents', get_agents: 'agents',
+        init: 'init_project', initialize: 'init_project', project_init: 'init_project',
+      };
+      if (NATIVE_ALIASES[toolName]) toolName = NATIVE_ALIASES[toolName];
+
       const nativeArgs = { ...native.arguments };
       if (!nativeArgs.task) {
         nativeArgs.task = nativeArgs.description || nativeArgs.title || nativeArgs.query || nativeArgs.input || nativeArgs.prompt;

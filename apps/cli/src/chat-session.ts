@@ -558,8 +558,7 @@ export class ChatSession {
       // Interactive selector
       const models = [
         { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', hint: 'google — best' },
-        { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', hint: 'google — fast/cheapest' },
-        { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', hint: 'google — cheapest' },
+        { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', hint: 'google — fast/cheap' },
         { value: 'anthropic/claude-opus-4-6', label: 'Claude Opus 4.6', hint: 'anthropic — best' },
         { value: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: 'anthropic — fast' },
         { value: 'anthropic/claude-haiku-4-5', label: 'Claude Haiku 4.5', hint: 'anthropic — cheapest' },
@@ -580,21 +579,21 @@ export class ChatSession {
         rl: this.rl,
       });
 
-      if (!selected) return true; // cancelled
-
-      if (selected === currentKey) {
+      if (selected && selected !== currentKey) {
+        const [provider, model] = selected.split('/');
+        try {
+          await this.mainAgent.setModel(provider, model);
+          this.renderer.info(`Switched to ${provider}/${model}`);
+        } catch (err) {
+          this.renderer.error(err);
+        }
+      } else if (selected === currentKey) {
         this.renderer.info('Already using this model.');
-        return true;
       }
 
-      const [provider, model] = selected.split('/');
-      try {
-        await this.mainAgent.setModel(provider, model);
-        this.renderer.info(`Switched to ${provider}/${model}`);
-      } catch (err) {
-        this.renderer.error(err);
-      }
-      return true; // state handled by selector
+      this.state = 'idle';
+      this.prompt();
+      return true;
     },
 
     bootstrap: async () => {

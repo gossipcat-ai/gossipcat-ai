@@ -218,6 +218,7 @@ export class GeminiProvider implements ILLMProvider {
     // If webSearch is enabled, use google_search only (worker agents call
     // their tools via relay RPC, not Gemini function calling).
     // If webSearch is not enabled, use functionDeclarations for native tool calls.
+    const toolMode = options?.webSearch ? 'google_search' : options?.tools?.length ? `functionDeclarations(${options.tools.length})` : 'none';
     if (options?.webSearch) {
       body.tools = [{ google_search: {} }];
     } else if (options?.tools?.length) {
@@ -230,6 +231,7 @@ export class GeminiProvider implements ILLMProvider {
       }];
     }
 
+    process.stderr.write(`[Gemini] ${this.model} — ${messages.length} messages, tools=${toolMode}\n`);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
     const res = await fetch(url, {
       method: 'POST',
@@ -241,7 +243,10 @@ export class GeminiProvider implements ILLMProvider {
       const errBody = (await res.text()).slice(0, 200);
       throw new Error(`Gemini API error (${res.status}): ${errBody}`);
     }
-    return this.parseGeminiResponse(await res.json() as Record<string, unknown>);
+    const data = await res.json() as Record<string, unknown>;
+    const result = this.parseGeminiResponse(data);
+    process.stderr.write(`[Gemini] → text=${result.text?.length ?? 0}chars, toolCalls=${result.toolCalls?.length ?? 0}${result.toolCalls?.length ? ` [${result.toolCalls.map(tc => tc.name).join(', ')}]` : ''}, tokens=${result.usage?.inputTokens ?? '?'}/${result.usage?.outputTokens ?? '?'}\n`);
+    return result;
   }
 
   private toGeminiMessage(m: LLMMessage): Record<string, unknown> {

@@ -118,7 +118,11 @@ export class DispatchPipeline {
       throw new Error(`Too many active tasks (${this.tasks.size}). Collect results before dispatching more.`);
     }
     const worker = this.workers.get(agentId);
-    if (!worker) throw new Error(`Agent "${agentId}" not found`);
+    if (!worker) {
+      log(`dispatch FAILED: agent "${agentId}" not found. Available: [${[...this.workers.keys()].join(', ')}]`);
+      throw new Error(`Agent "${agentId}" not found`);
+    }
+    log(`dispatch → ${agentId}: "${task.slice(0, 80)}..." writeMode=${options?.writeMode || 'default'}`);
 
     const taskId = randomUUID().slice(0, 8);
     const agentSkills = this.registryGet(agentId)?.skills || [];
@@ -601,6 +605,7 @@ export class DispatchPipeline {
     taskIds: string[];
     errors: string[];
   }> {
+    log(`dispatchParallel: ${taskDefs.length} tasks — agents: [${taskDefs.map(d => d.agentId).join(', ')}]`);
     const taskIds: string[] = [];
     const errors: string[] = [];
     const batchId = randomUUID().slice(0, 8);
@@ -609,6 +614,7 @@ export class DispatchPipeline {
     // Pre-validate: all agents must exist (all-or-nothing)
     for (const def of taskDefs) {
       if (!this.workers.has(def.agentId)) {
+        log(`dispatchParallel FAILED: agent "${def.agentId}" not found. Available: [${[...this.workers.keys()].join(', ')}]`);
         return { taskIds: [], errors: [`Agent "${def.agentId}" not found`] };
       }
     }
