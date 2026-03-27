@@ -25795,9 +25795,16 @@ gossip_dispatch(agent_id: "<id>", task: "Fix X", write_mode: "scoped", scope: ".
 
 **Consensus** (cross-review for quality):
 \`\`\`
-gossip_dispatch_consensus(task: "Review this PR for issues")
-gossip_collect_consensus(task_ids: ["..."])
+gossip_dispatch_consensus(tasks: [...])  \u2192 dispatch agents
+gossip_collect_consensus(task_ids: [...]) \u2192 get results
+// YOU cross-reference the findings, then:
+gossip_record_signals(signals: [
+  { signal: "agreement", agent_id: "reviewer", finding: "Both found XSS" },
+  { signal: "unique_confirmed", agent_id: "researcher", finding: "Only researcher found SQL injection" },
+])
 \`\`\`
+This records which agents were accurate, driving future dispatch preferences.
+Use \`gossip_scores\` to view current agent performance.
 
 **Plan \u2192 Execute** (structured multi-step):
 \`\`\`
@@ -25951,6 +25958,83 @@ The result is now available for gossip_collect and consensus cross-review.` }] }
   }
 );
 server.tool(
+  "gossip_record_signals",
+  "Record consensus performance signals after cross-referencing agent findings. Call this after gossip_collect_consensus when YOU (Claude Code) synthesize the results. Maps your CONFIRMED/DISPUTED/UNIQUE/NEW tags to agent performance scores that improve future dispatch decisions.",
+  {
+    signals: external_exports.array(external_exports.object({
+      signal: external_exports.enum(["agreement", "disagreement", "unique_confirmed", "unique_unconfirmed", "new_finding", "hallucination_caught"]).describe("Signal type: agreement (both agree), disagreement (one wrong), unique_confirmed (only one found it + verified), unique_unconfirmed (only one found it, unverified), new_finding (discovered during cross-review), hallucination_caught (fabricated finding)"),
+      agent_id: external_exports.string().describe("Agent being evaluated"),
+      counterpart_id: external_exports.string().optional().describe("The other agent involved (e.g., who won the disagreement)"),
+      finding: external_exports.string().describe("Brief description of the finding"),
+      evidence: external_exports.string().optional().describe("Supporting evidence or reasoning")
+    })).describe("Array of consensus signals from your cross-referencing of agent results")
+  },
+  async ({ signals }) => {
+    await boot();
+    if (signals.length === 0) {
+      return { content: [{ type: "text", text: "No signals to record." }] };
+    }
+    try {
+      const { PerformanceWriter: PerformanceWriter2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
+      const writer = new PerformanceWriter2(process.cwd());
+      const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+      const formatted = signals.map((s) => ({
+        type: "consensus",
+        taskId: "",
+        signal: s.signal,
+        agentId: s.agent_id,
+        counterpartId: s.counterpart_id,
+        evidence: s.evidence || s.finding,
+        timestamp
+      }));
+      writer.appendSignals(formatted);
+      const byAgent = /* @__PURE__ */ new Map();
+      for (const s of signals) {
+        const entry = byAgent.get(s.agent_id) || { pos: 0, neg: 0 };
+        if (["agreement", "unique_confirmed", "new_finding"].includes(s.signal)) entry.pos++;
+        else entry.neg++;
+        byAgent.set(s.agent_id, entry);
+      }
+      const summary = Array.from(byAgent.entries()).map(([id, { pos, neg }]) => `  ${id}: +${pos} / -${neg}`).join("\n");
+      return { content: [{ type: "text", text: `Recorded ${signals.length} consensus signals:
+${summary}
+
+These will influence future agent selection via dispatch weighting.` }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Failed to record signals: ${err.message}` }] };
+    }
+  }
+);
+server.tool(
+  "gossip_scores",
+  "View agent performance scores from consensus signals. Shows accuracy, uniqueness, reliability, and dispatch weight for each agent. Use to understand which agents are performing well and which need improvement.",
+  {},
+  async () => {
+    await boot();
+    try {
+      const { PerformanceReader: PerformanceReader2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
+      const reader = new PerformanceReader2(process.cwd());
+      const scores = reader.getScores();
+      if (scores.size === 0) {
+        return { content: [{ type: "text", text: "No performance data yet. Run gossip_dispatch_consensus + gossip_record_signals to generate signals." }] };
+      }
+      const lines = Array.from(scores.values()).sort((a, b) => b.reliability - a.reliability).map((s) => {
+        const w = reader.getDispatchWeight(s.agentId);
+        const nativeTag = nativeAgentConfigs.has(s.agentId) ? " (native)" : "";
+        return `  ${s.agentId}${nativeTag}:
+    accuracy=${s.accuracy.toFixed(2)} uniqueness=${s.uniqueness.toFixed(2)} reliability=${s.reliability.toFixed(2)}
+    signals=${s.totalSignals} agree=${s.agreements} disagree=${s.disagreements} unique=${s.uniqueFindings} hallucinate=${s.hallucinations}
+    dispatch weight=${w.toFixed(2)}${s.totalSignals < 3 ? " (neutral \u2014 <3 signals)" : ""}`;
+      });
+      return { content: [{ type: "text", text: `Agent Performance Scores (${scores.size} agents):
+
+${lines.join("\n\n")}` }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error reading scores: ${err.message}` }] };
+    }
+  }
+);
+server.tool(
   "gossip_tools",
   "List all available gossipcat MCP tools with descriptions. Call after /mcp reconnect to discover new tools.",
   {},
@@ -25967,6 +26051,8 @@ server.tool(
       { name: "gossip_status", desc: "Check relay, tool-server, workers status" },
       { name: "gossip_update_instructions", desc: "Update agent instructions (single or batch). Modes: append/replace" },
       { name: "gossip_relay_result", desc: "Feed native Agent tool result back into relay for consensus" },
+      { name: "gossip_record_signals", desc: "Record CONFIRMED/DISPUTED/UNIQUE/NEW signals after cross-referencing" },
+      { name: "gossip_scores", desc: "View agent performance scores and dispatch weights" },
       { name: "gossip_tools", desc: "List available tools (this command)" },
       { name: "gossip_bootstrap", desc: "Generate team context prompt with live agent state" },
       { name: "gossip_setup", desc: "Create or update team configuration" }
