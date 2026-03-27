@@ -117,34 +117,69 @@ export class BootstrapGenerator {
   }
 
   private renderTier1(): string {
-    let skills = '';
-    try {
-      const catalogPath = resolve(__dirname, 'default-skills', 'catalog.json');
-      if (existsSync(catalogPath)) {
-        const catalog = JSON.parse(readFileSync(catalogPath, 'utf-8')) as { skills: Array<{ name: string }> };
-        skills = `\nAvailable skills: ${catalog.skills.map(s => s.name).join(', ')}`;
-      }
-    } catch { /* catalog unavailable */ }
+    // Detect host environment for setup guidance
+    const isClaude = process.env.CLAUDECODE === '1' || !!process.env.CLAUDE_CODE_ENTRYPOINT;
+    const isCursor = !!process.env.CURSOR_TRACE_ID || !!process.env.CURSOR_SESSION_ID;
+    const host = isClaude ? 'Claude Code' : isCursor ? 'Cursor' : 'your IDE';
 
     return `# Gossipcat — Multi-Agent Orchestration
 
-Gossipcat is not configured yet. To set up your multi-agent team:
+Gossipcat is not configured yet. Set up a multi-agent team for this project.
 
-1. Decide which LLM providers you have API keys for (google, openai, anthropic, local)
-2. Call gossip_setup() with your desired team configuration
+**Host:** ${host}${isClaude ? ' (native agents supported)' : ''}
 
-Example:
+## Quick Setup
+
+Call \`gossip_setup\` with your team. Each agent can be:
+- **type: "native"** — Creates a ${isClaude ? 'Claude Code subagent (.claude/agents/*.md) ' : ''}that also connects to the gossipcat relay. Supports consensus cross-review.${isClaude ? ' Works both as a native Agent() and via gossip_dispatch().' : ''}
+- **type: "custom"** — Any provider (anthropic, openai, google, local). Only accessible via gossip_dispatch().
+
+### Example: Mixed team (native + custom)
 \`\`\`
 gossip_setup({
-  main_agent: { provider: "anthropic", model: "claude-sonnet-4-6" },
-  agents: {
-    "gemini-reviewer": { provider: "google", model: "gemini-2.5-pro", preset: "reviewer", skills: ["code_review", "security_audit"] },
-    "gemini-tester": { provider: "google", model: "gemini-2.5-flash", preset: "tester", skills: ["testing", "debugging"] }
-  }
+  main_provider: "google",
+  main_model: "gemini-2.5-flash",
+  agents: [
+    { id: "claude-reviewer", type: "native", model: "sonnet", preset: "reviewer", skills: ["code_review", "security"], description: "Code reviewer" },
+    { id: "gemini-impl", type: "custom", provider: "google", custom_model: "gemini-2.5-pro", preset: "implementer", skills: ["typescript", "react"] }
+  ]
 })
 \`\`\`
 
-Available presets: reviewer, researcher, implementer, tester, debugger${skills}`;
+### Example: All native (Anthropic API only)
+\`\`\`
+gossip_setup({
+  main_provider: "anthropic",
+  main_model: "claude-sonnet-4-6",
+  agents: [
+    { id: "reviewer", type: "native", model: "sonnet", preset: "reviewer", skills: ["code_review"] },
+    { id: "researcher", type: "native", model: "haiku", preset: "researcher", skills: ["research"] }
+  ]
+})
+\`\`\`
+
+### Example: All custom (multi-provider)
+\`\`\`
+gossip_setup({
+  main_provider: "google",
+  main_model: "gemini-2.5-pro",
+  agents: [
+    { id: "gemini-reviewer", type: "custom", provider: "google", custom_model: "gemini-2.5-pro", preset: "reviewer", skills: ["code_review"] },
+    { id: "gpt-researcher", type: "custom", provider: "openai", custom_model: "gpt-4o", preset: "researcher", skills: ["research"] }
+  ]
+})
+\`\`\`
+
+Available presets: reviewer, researcher, implementer, tester
+Available native models: opus, sonnet, haiku
+
+## Permissions for Native Agents
+
+Native agents run via Claude Code's Agent tool and may prompt for file write permissions.
+To auto-allow writes, add to \`.claude/settings.local.json\`:
+\`\`\`json
+{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"] } }
+\`\`\``;
   }
 
   private renderTeamPrompt(agents: AgentSummary[]): string {
@@ -175,7 +210,7 @@ ${teamSection}
 | \`gossip_dispatch_consensus(tasks)\` | Dispatch with consensus summary instruction. Returns task IDs. |
 | \`gossip_collect_consensus(task_ids, timeout_ms?)\` | Collect + cross-review. Returns tagged consensus report. |
 | \`gossip_bootstrap()\` | Refresh this prompt with latest team state. |
-| \`gossip_setup(config)\` | Create or update team configuration. |
+| \`gossip_setup(main_provider, main_model, agents)\` | Create team with native + custom agents. |
 | \`gossip_orchestrate(task)\` | Auto-decompose task via MainAgent. |
 | \`gossip_agents()\` | List current agents. |
 | \`gossip_status()\` | Check system status. |

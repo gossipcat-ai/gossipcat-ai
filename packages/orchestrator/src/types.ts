@@ -9,6 +9,10 @@ export interface AgentConfig {
   model: string;
   preset?: string;
   skills: string[];
+  /** If true, agent is a native Claude Code subagent (.claude/agents/*.md).
+   *  Dispatched via Claude Code's Agent tool instead of the gossipcat relay.
+   *  Results are fed back via gossip_relay_result for consensus/gossip. */
+  native?: boolean;
 }
 
 /** Result of a worker agent completing a sub-task */
