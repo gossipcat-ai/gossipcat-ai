@@ -25,14 +25,10 @@ import { DispatchDifferentiator } from './dispatch-differentiator';
 import { CollectResult } from './consensus-types';
 import { extractCategories } from './category-extractor';
 import { WorkerProgressCallback } from './worker-agent';
+import { WorkerLike } from './worker-like';
+import { IConsensusJudge } from './consensus-judge';
 
 const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
-
-interface WorkerLike {
-  executeTask(task: string, lens?: string, promptContent?: string, onProgress?: WorkerProgressCallback): Promise<TaskExecutionResult>;
-  subscribeToBatch?(batchId: string): Promise<void>;
-  unsubscribeFromBatch?(batchId: string): Promise<void>;
-}
 
 export interface ToolServerCallbacks {
   assignScope: (agentId: string, scope: string) => void;
@@ -86,6 +82,7 @@ export class DispatchPipeline {
 
   private competencyProfiler: CompetencyProfiler | null = null;
   private dispatchDifferentiator: DispatchDifferentiator | null = null;
+  private consensusJudge: IConsensusJudge | null = null;
 
   private taskProgressCallback: ((taskId: string, event: { toolCalls: number; inputTokens: number; outputTokens: number; currentTool: string; turn: number }) => void) | null = null;
 
@@ -463,7 +460,11 @@ export class DispatchPipeline {
           await this.memWriter.writeTaskEntry(t.agentId, {
             taskId: t.id, task: t.task,
             skills: this.registryGet(t.agentId)?.skills || [],
-            scores: { relevance: 3, accuracy: 3, uniqueness: 3 },
+            scores: {
+              relevance: (t.result && t.result.length > 200) ? 4 : 3,
+              accuracy: t.status === 'completed' ? 4 : 2,
+              uniqueness: 3,
+            },
           });
           // Extract and persist knowledge from the task result (files, tech, decisions)
           // so the agent remembers what it did on subsequent tasks
@@ -612,6 +613,56 @@ export class DispatchPipeline {
         const engine = new ConsensusEngine({ llm: this.llm, registryGet: this.registryGet, projectRoot: this.projectRoot });
         consensusReport = await engine.run(results);
         const perfWriter = new PerformanceWriter(this.projectRoot);
+
+        // START: Consensus Judge Integration
+        if (consensusReport.confirmed.length > 0 && this.consensusJudge) {
+          try {
+            const verdicts = await this.consensusJudge.verify(consensusReport.confirmed);
+            const now = new Date().toISOString();
+
+            // Sort verdicts descending by index to avoid splice issues
+            verdicts.sort((a, b) => b.index - a.index);
+
+            for (const v of verdicts) {
+              const findingIndex = v.index - 1;
+              const finding = consensusReport.confirmed[findingIndex];
+              if (!finding) continue;
+
+              if (v.verdict === 'REFUTED') {
+                // Demote from confirmed → disputed
+                consensusReport.confirmed.splice(findingIndex, 1);
+                finding.tag = 'disputed';
+                consensusReport.disputed.push(finding);
+
+                // Signal: originating agent hallucinated
+                consensusReport.signals.push({
+                  type: 'consensus', signal: 'hallucination_caught',
+                  agentId: finding.originalAgentId, outcome: 'judge_refuted',
+                  evidence: v.evidence, timestamp: now, taskId: finding.id || '',
+                });
+                // Signal: each confirming agent also penalized
+                for (const confirmerId of finding.confirmedBy) {
+                  consensusReport.signals.push({
+                    type: 'consensus', signal: 'hallucination_caught',
+                    agentId: confirmerId, outcome: 'confirmed_hallucination',
+                    evidence: `Confirmed refuted finding: ${v.evidence}`,
+                    timestamp: now, taskId: finding.id || '',
+                  });
+                }
+              } else if (v.verdict === 'VERIFIED') {
+                consensusReport.signals.push({
+                  type: 'consensus', signal: 'consensus_verified',
+                  agentId: finding.originalAgentId,
+                  evidence: v.evidence, timestamp: now, taskId: finding.id || '',
+                });
+              }
+            }
+          } catch (err) {
+            log(`Consensus judge failed: ${(err as Error).message}`);
+          }
+        }
+        // END: Consensus Judge Integration
+
         if (consensusReport.signals.length > 0) {
           perfWriter.appendSignals(consensusReport.signals);
         }
@@ -815,7 +866,11 @@ export class DispatchPipeline {
       await this.memWriter.writeTaskEntry(t.agentId, {
         taskId: t.id, task: t.task,
         skills: this.registryGet(t.agentId)?.skills || [],
-        scores: { relevance: 3, accuracy: 3, uniqueness: 3 },
+        scores: {
+          relevance: (t.result && t.result.length > 200) ? 4 : 3,
+          accuracy: t.status === 'completed' ? 4 : 2,
+          uniqueness: 3,
+        },
       });
       // Fix 8: extract knowledge from result (was missing in writeMemoryForTask path)
       if (t.result) {
@@ -868,6 +923,10 @@ export class DispatchPipeline {
 
   setDispatchDifferentiator(differ: DispatchDifferentiator): void {
     this.dispatchDifferentiator = differ;
+  }
+
+  setConsensusJudge(judge: IConsensusJudge): void {
+    this.consensusJudge = judge;
   }
 
   /** Flush TaskGraph index on shutdown */

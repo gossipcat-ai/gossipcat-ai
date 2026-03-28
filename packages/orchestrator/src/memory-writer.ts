@@ -138,6 +138,13 @@ export class MemoryWriter {
       lines.push(`Decisions: ${decisions.slice(0, 5).map(d => d.trim()).join('; ')}`);
     }
 
+    // Extract error/failure patterns — knowing what went wrong is valuable
+    const failurePatterns = /(?:error|failed|couldn't|unable to|rejected|threw|exception|not supported|bug|broke|crash)[^.]{5,100}/gi;
+    const failures = (combined.match(failurePatterns) || []).slice(0, 3);
+    if (failures.length > 0) {
+      lines.push(`Failures: ${failures.map(f => f.trim()).join('; ')}`);
+    }
+
     // Extract task summary (first 2 meaningful sentences of result)
     const sentences = result.split(/[.!]\s+/).filter(s => s.trim().length > 20).slice(0, 2);
     if (sentences.length > 0) {
@@ -145,6 +152,7 @@ export class MemoryWriter {
     }
 
     if (lines.length === 0) return null;
+    const hasFailures = failures.length > 0;
 
     // Build description from files + tech for keyword matching
     const descParts = [...files.slice(0, 3), ...foundTech.slice(0, 3)];
@@ -154,7 +162,7 @@ export class MemoryWriter {
 
     return {
       description,
-      importance: files.length > 3 ? 0.9 : files.length > 0 ? 0.7 : 0.5,
+      importance: (files.length > 3 ? 0.9 : files.length > 0 ? 0.7 : 0.5) + (hasFailures ? 0.1 : 0),
       body: lines.join('\n'),
     };
   }

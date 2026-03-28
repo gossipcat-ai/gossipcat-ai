@@ -50,8 +50,12 @@ export class AgentMemoryReader {
         // File with frontmatter: score by warmth × relevance
         const warmth = this.calculateWarmth(frontmatter.importance, frontmatter.lastAccessed);
         const relevance = this.calculateRelevance(frontmatter.description, lower);
-        if (relevance > 0) {
-          scored.push({ path: filePath, score: warmth * relevance });
+        // Also score body content (first 200 chars after frontmatter)
+        const bodyStart = content.replace(/^---[\s\S]*?---\n*/, '').slice(0, 200).toLowerCase();
+        const bodyRelevance = this.calculateRelevance(bodyStart, lower);
+        const combinedRelevance = relevance * 0.7 + bodyRelevance * 0.3;
+        if (combinedRelevance > 0) {
+          scored.push({ path: filePath, score: warmth * combinedRelevance });
         }
       } else {
         // Agent-written file without frontmatter: score by content relevance
