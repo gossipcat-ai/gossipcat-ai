@@ -2185,14 +2185,23 @@ server.tool(
       ).join('\n');
     } catch { /* no perf data */ }
 
-    // 4. Git log since session start
+    // 4. Git log since session start (fall back to last 24h if session start is too recent)
     let gitLog = '';
     try {
+      const { execSync } = require('child_process');
       const since = mainAgent.getSessionStartTime().toISOString();
-      gitLog = require('child_process').execSync(
+      gitLog = execSync(
         `git log --oneline --max-count=50 --since="${since}"`,
         { cwd: process.cwd(), encoding: 'utf-8' }
       ).trim();
+      // If empty (likely reconnect with wrong start time), fall back to last 24h
+      if (!gitLog) {
+        const yesterday = new Date(Date.now() - 86400000).toISOString();
+        gitLog = execSync(
+          `git log --oneline --max-count=50 --since="${yesterday}"`,
+          { cwd: process.cwd(), encoding: 'utf-8' }
+        ).trim();
+      }
     } catch { /* no git */ }
 
     // 5. Write session summary

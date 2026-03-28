@@ -117,15 +117,26 @@ export class DispatchPipeline {
     // Clean up orphaned worktrees from previous runs
     this.worktreeManager.pruneOrphans().catch(err => log(`Orphan cleanup failed: ${(err as Error).message}`));
 
-    // Clear session gossip file on boot (new session)
+    // Ensure _project memory directory exists (don't clear gossip — it survives reconnects)
     try {
-      const gossipPath = join(config.projectRoot, '.gossip', 'agents', '_project', 'memory', 'session-gossip.jsonl');
-      mkdirSync(dirname(gossipPath), { recursive: true });
-      require('fs').writeFileSync(gossipPath, '');
+      const projectMemDir = join(config.projectRoot, '.gossip', 'agents', '_project', 'memory');
+      mkdirSync(projectMemDir, { recursive: true });
     } catch { /* best-effort */ }
 
-    // Track session start time for git log range
-    this.sessionStartTime = new Date();
+    // Track session start time for git log range.
+    // Check if gossip file has entries — if so, this is a reconnect within an existing session.
+    // Use the oldest gossip entry's timestamp as the real session start.
+    try {
+      const gossipPath = join(config.projectRoot, '.gossip', 'agents', '_project', 'memory', 'session-gossip.jsonl');
+      const { existsSync: ex, readFileSync: rf } = require('fs');
+      if (ex(gossipPath)) {
+        const lines = rf(gossipPath, 'utf-8').trim().split('\n').filter(Boolean);
+        if (lines.length > 0) {
+          const first = JSON.parse(lines[0]);
+          if (first.timestamp) this.sessionStartTime = new Date(first.timestamp);
+        }
+      }
+    } catch { /* best-effort — fall back to now */ }
   }
 
   /** Build chain context string for a plan step (used by native agent bridge) */

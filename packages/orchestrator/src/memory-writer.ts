@@ -215,6 +215,7 @@ Rules:
 - Cite file paths when referencing code or specs
 - Include specific numbers (commit count, finding count, test count)
 - Warnings > accomplishments — what NOT to do is more useful
+- NEVER fabricate file paths — only cite paths that appear in the Git Log or Task Summaries data. If no paths are available, describe features by name without paths.
 - If ANY section has a "never do this again" lesson, respond with PINNED:true on the first line, then the summary`,
           },
           {

@@ -5722,6 +5722,7 @@ Rules:
 - Cite file paths when referencing code or specs
 - Include specific numbers (commit count, finding count, test count)
 - Warnings > accomplishments \u2014 what NOT to do is more useful
+- NEVER fabricate file paths \u2014 only cite paths that appear in the Git Log or Task Summaries data. If no paths are available, describe features by name without paths.
 - If ANY section has a "never do this again" lesson, respond with PINNED:true on the first line, then the summary`
               },
               {
@@ -7702,12 +7703,22 @@ var init_dispatch_pipeline = __esm({
         }
         this.worktreeManager.pruneOrphans().catch((err) => log2(`Orphan cleanup failed: ${err.message}`));
         try {
-          const gossipPath = (0, import_path16.join)(config2.projectRoot, ".gossip", "agents", "_project", "memory", "session-gossip.jsonl");
-          (0, import_fs11.mkdirSync)((0, import_path16.dirname)(gossipPath), { recursive: true });
-          require("fs").writeFileSync(gossipPath, "");
+          const projectMemDir = (0, import_path16.join)(config2.projectRoot, ".gossip", "agents", "_project", "memory");
+          (0, import_fs11.mkdirSync)(projectMemDir, { recursive: true });
         } catch {
         }
-        this.sessionStartTime = /* @__PURE__ */ new Date();
+        try {
+          const gossipPath = (0, import_path16.join)(config2.projectRoot, ".gossip", "agents", "_project", "memory", "session-gossip.jsonl");
+          const { existsSync: ex, readFileSync: rf } = require("fs");
+          if (ex(gossipPath)) {
+            const lines = rf(gossipPath, "utf-8").trim().split("\n").filter(Boolean);
+            if (lines.length > 0) {
+              const first = JSON.parse(lines[0]);
+              if (first.timestamp) this.sessionStartTime = new Date(first.timestamp);
+            }
+          }
+        } catch {
+        }
       }
       /** Build chain context string for a plan step (used by native agent bridge) */
       getChainContext(planId, step) {
@@ -28811,11 +28822,19 @@ server.tool(
     }
     let gitLog = "";
     try {
+      const { execSync } = require("child_process");
       const since = mainAgent.getSessionStartTime().toISOString();
-      gitLog = require("child_process").execSync(
+      gitLog = execSync(
         `git log --oneline --max-count=50 --since="${since}"`,
         { cwd: process.cwd(), encoding: "utf-8" }
       ).trim();
+      if (!gitLog) {
+        const yesterday = new Date(Date.now() - 864e5).toISOString();
+        gitLog = execSync(
+          `git log --oneline --max-count=50 --since="${yesterday}"`,
+          { cwd: process.cwd(), encoding: "utf-8" }
+        ).trim();
+      }
     } catch {
     }
     const { MemoryWriter: MemoryWriter2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
