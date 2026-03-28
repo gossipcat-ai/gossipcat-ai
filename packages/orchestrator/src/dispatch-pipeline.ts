@@ -129,6 +129,12 @@ export class DispatchPipeline {
 
   private static readonly MAX_TASKS = 500;
 
+  /** Derive memory compaction cap from task result content */
+  private static deriveMaxEntries(result: string | undefined): number {
+    const findingsCount = (result || '').split('\n').filter(l => /^\s*[-*•]\s|^#{1,3}\s.*\[/.test(l)).length;
+    return findingsCount >= 8 ? 30 : findingsCount <= 1 ? 12 : 20;
+  }
+
   dispatch(agentId: string, task: string, options?: DispatchOptions): { taskId: string; promise: Promise<string> } {
     if (this.tasks.size >= DispatchPipeline.MAX_TASKS) {
       throw new Error(`Too many active tasks (${this.tasks.size}). Collect results before dispatching more.`);
@@ -498,9 +504,7 @@ export class DispatchPipeline {
 
       // 3. Compact memory (dynamic cap based on findings count)
       try {
-        const findingsCount = (t.result || '').split('\n').filter(l => /^\s*[-*•]\s|^#{1,3}\s.*\[/.test(l)).length;
-        const maxEntries = findingsCount >= 8 ? 30 : findingsCount <= 1 ? 12 : 20;
-        const compactResult = this.memCompactor.compactIfNeeded(t.agentId, maxEntries);
+        const compactResult = this.memCompactor.compactIfNeeded(t.agentId, DispatchPipeline.deriveMaxEntries(t.result));
         if (compactResult.message) log(compactResult.message);
       } catch (err) { log(`Memory compact failed for ${t.agentId}: ${(err as Error).message}`); }
     }
@@ -806,9 +810,7 @@ export class DispatchPipeline {
         });
       }
       this.memWriter.rebuildIndex(t.agentId);
-      const findingsCount = (t.result || '').split('\n').filter(l => /^\s*[-*•]\s|^#{1,3}\s.*\[/.test(l)).length;
-      const maxEntries = findingsCount >= 8 ? 30 : findingsCount <= 1 ? 12 : 20;
-      this.memCompactor.compactIfNeeded(t.agentId, maxEntries);
+      this.memCompactor.compactIfNeeded(t.agentId, DispatchPipeline.deriveMaxEntries(t.result));
     } catch (err) { log(`Memory write failed for ${t.agentId}/${t.id}: ${(err as Error).message}`); }
 
     this.tasks.delete(t.id);

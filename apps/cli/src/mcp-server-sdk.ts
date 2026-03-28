@@ -793,6 +793,10 @@ server.tool(
       }
     }
 
+    if (pendingNativeIds.length > 0 && !consensus) {
+      process.stderr.write(`[gossipcat] ${pendingNativeIds.length} native agent(s) still running — results will show as 'running'. Use consensus: true to wait.\n`);
+    }
+
     if (pendingNativeIds.length > 0 && consensus) {
       const POLL_INTERVAL = 2000;
       const nativeTimeout = Math.min(timeout_ms, 120000); // cap native wait at 2min

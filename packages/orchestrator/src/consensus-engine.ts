@@ -523,6 +523,14 @@ Return only valid JSON.` },
       return join(root, fileRef);
     } catch { /* not found at root */ }
 
+    // Try bare filename at project root (covers eslint.config.ts, vite.config.ts, etc.)
+    if (fileName !== fileRef) {
+      try {
+        await stat(join(root, fileName));
+        return join(root, fileName);
+      } catch { /* not at root */ }
+    }
+
     // Recursive search in common source directories (including tests, tools, lib)
     const searchDirs = ['packages', 'src', 'apps', 'tests', 'test', 'tools', 'scripts', 'lib'];
     for (const dir of searchDirs) {

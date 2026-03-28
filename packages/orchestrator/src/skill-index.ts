@@ -61,6 +61,7 @@ export class SkillIndex {
 
   /** Unbind a skill from an agent (removes the slot entirely) */
   unbind(agentId: string, skill: string): boolean {
+    this.validateAgentId(agentId);
     const name = normalizeSkillName(skill);
     if (!this.data[agentId]?.[name]) return false;
 
@@ -73,6 +74,7 @@ export class SkillIndex {
 
   /** Enable a previously disabled skill slot */
   enable(agentId: string, skill: string): boolean {
+    this.validateAgentId(agentId);
     const name = normalizeSkillName(skill);
     const slot = this.data[agentId]?.[name];
     if (!slot) return false;
@@ -85,6 +87,7 @@ export class SkillIndex {
 
   /** Disable a skill slot without removing it */
   disable(agentId: string, skill: string): boolean {
+    this.validateAgentId(agentId);
     const name = normalizeSkillName(skill);
     const slot = this.data[agentId]?.[name];
     if (!slot) return false;
@@ -173,6 +176,10 @@ export class SkillIndex {
       const parsed = JSON.parse(raw);
       // Structural validation: must be a non-null, non-array object
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        // Sanitize: remove prototype-polluting keys from disk JSON
+        for (const key of Object.keys(parsed)) {
+          if (DANGEROUS_KEYS.has(key)) delete parsed[key];
+        }
         this.data = parsed as SkillIndexData;
         this._exists = true;
       }

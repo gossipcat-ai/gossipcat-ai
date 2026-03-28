@@ -7119,6 +7119,13 @@ ${snippet}`);
           return (0, import_path14.join)(root, fileRef);
         } catch {
         }
+        if (fileName !== fileRef) {
+          try {
+            await (0, import_promises3.stat)((0, import_path14.join)(root, fileName));
+            return (0, import_path14.join)(root, fileName);
+          } catch {
+          }
+        }
         const searchDirs = ["packages", "src", "apps", "tests", "test", "tools", "scripts", "lib"];
         for (const dir of searchDirs) {
           const found = await this.findFile((0, import_path14.join)(root, dir), fileName);
@@ -7527,6 +7534,11 @@ var init_dispatch_pipeline = __esm({
         return "[Chain Context \u2014 results from prior steps in this plan]\n" + priorSteps.map((s) => `Step ${s.step} (${s.agentId}): ${s.result.slice(0, 1e3)}`).join("\n\n");
       }
       static MAX_TASKS = 500;
+      /** Derive memory compaction cap from task result content */
+      static deriveMaxEntries(result) {
+        const findingsCount = (result || "").split("\n").filter((l) => /^\s*[-*•]\s|^#{1,3}\s.*\[/.test(l)).length;
+        return findingsCount >= 8 ? 30 : findingsCount <= 1 ? 12 : 20;
+      }
       dispatch(agentId, task, options) {
         if (this.tasks.size >= _DispatchPipeline.MAX_TASKS) {
           throw new Error(`Too many active tasks (${this.tasks.size}). Collect results before dispatching more.`);
@@ -7871,9 +7883,7 @@ var init_dispatch_pipeline = __esm({
             }
           }
           try {
-            const findingsCount = (t.result || "").split("\n").filter((l) => /^\s*[-*•]\s|^#{1,3}\s.*\[/.test(l)).length;
-            const maxEntries = findingsCount >= 8 ? 30 : findingsCount <= 1 ? 12 : 20;
-            const compactResult = this.memCompactor.compactIfNeeded(t.agentId, maxEntries);
+            const compactResult = this.memCompactor.compactIfNeeded(t.agentId, _DispatchPipeline.deriveMaxEntries(t.result));
             if (compactResult.message) log2(compactResult.message);
           } catch (err) {
             log2(`Memory compact failed for ${t.agentId}: ${err.message}`);
@@ -8154,9 +8164,7 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
             });
           }
           this.memWriter.rebuildIndex(t.agentId);
-          const findingsCount = (t.result || "").split("\n").filter((l) => /^\s*[-*•]\s|^#{1,3}\s.*\[/.test(l)).length;
-          const maxEntries = findingsCount >= 8 ? 30 : findingsCount <= 1 ? 12 : 20;
-          this.memCompactor.compactIfNeeded(t.agentId, maxEntries);
+          this.memCompactor.compactIfNeeded(t.agentId, _DispatchPipeline.deriveMaxEntries(t.result));
         } catch (err) {
           log2(`Memory write failed for ${t.agentId}/${t.id}: ${err.message}`);
         }
@@ -11200,6 +11208,7 @@ var init_skill_index = __esm({
       }
       /** Unbind a skill from an agent (removes the slot entirely) */
       unbind(agentId, skill) {
+        this.validateAgentId(agentId);
         const name = normalizeSkillName(skill);
         if (!this.data[agentId]?.[name]) return false;
         delete this.data[agentId][name];
@@ -11210,6 +11219,7 @@ var init_skill_index = __esm({
       }
       /** Enable a previously disabled skill slot */
       enable(agentId, skill) {
+        this.validateAgentId(agentId);
         const name = normalizeSkillName(skill);
         const slot = this.data[agentId]?.[name];
         if (!slot) return false;
@@ -11221,6 +11231,7 @@ var init_skill_index = __esm({
       }
       /** Disable a skill slot without removing it */
       disable(agentId, skill) {
+        this.validateAgentId(agentId);
         const name = normalizeSkillName(skill);
         const slot = this.data[agentId]?.[name];
         if (!slot) return false;
@@ -11300,6 +11311,9 @@ var init_skill_index = __esm({
           const raw = (0, import_fs18.readFileSync)(this.filePath, "utf-8");
           const parsed = JSON.parse(raw);
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            for (const key of Object.keys(parsed)) {
+              if (DANGEROUS_KEYS.has(key)) delete parsed[key];
+            }
             this.data = parsed;
             this._exists = true;
           }
@@ -27260,6 +27274,10 @@ server.tool(
           pendingNativeIds.push(id);
         }
       }
+    }
+    if (pendingNativeIds.length > 0 && !consensus) {
+      process.stderr.write(`[gossipcat] ${pendingNativeIds.length} native agent(s) still running \u2014 results will show as 'running'. Use consensus: true to wait.
+`);
     }
     if (pendingNativeIds.length > 0 && consensus) {
       const POLL_INTERVAL = 2e3;
