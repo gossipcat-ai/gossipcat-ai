@@ -6540,6 +6540,16 @@ var init_consensus_engine = __esm({
           peerLines.push(`Agent "${peerId}" (${preset}):
 <data>${peerSummary}</data>`);
         }
+        let codeContext = "";
+        if (this.config.projectRoot) {
+          const snippets = await this.extractCodeSnippets(peerLines.join("\n"));
+          if (snippets) {
+            codeContext = `
+REFERENCED CODE (verify claims against this):
+${snippets}
+`;
+          }
+        }
         const userContent = `You previously reviewed code and produced findings. Now review your peers' findings.
 
 YOUR FINDINGS (Phase 1):
@@ -6547,18 +6557,32 @@ YOUR FINDINGS (Phase 1):
 
 PEER FINDINGS:
 ${peerLines.join("\n\n")}
+${codeContext}
+For each peer finding, you MUST:
+1. If the finding cites a file:line, check the REFERENCED CODE section above to verify the claim
+2. Only AGREE if the claim is factually accurate based on the actual code
+3. DISAGREE if the code contradicts the claim (e.g., finding says "no validation" but code has validation)
 
-For each peer finding, respond with one of:
-- AGREE: You independently confirm this finding is correct. Cite your evidence.
-- DISAGREE: You believe this finding is incorrect. Explain why with evidence (file:line references).
+Respond with one of:
+- AGREE: The finding is factually correct \u2014 you verified it against the code. Cite your evidence.
+- DISAGREE: The finding is factually incorrect \u2014 the code shows otherwise. Cite file:line and what the code actually does.
 - NEW: Something ALL agents missed that you now realize after seeing peer work.
 
 Return ONLY a JSON array:
 [
-  { "action": "agree"|"disagree"|"new", "agentId": "peer_id", "finding": "summary", "evidence": "your reasoning", "confidence": 1-5 }
+  { "action": "agree"|"disagree"|"new", "agentId": "peer_id", "finding": "summary", "evidence": "your reasoning with file:line references", "confidence": 1-5 }
 ]`;
         const messages = [
-          { role: "system", content: "You are a code reviewer performing cross-review. Return only valid JSON." },
+          { role: "system", content: `You are a code reviewer performing cross-review. You are a SKEPTIC \u2014 your job is to catch errors in peer findings, not rubber-stamp them.
+
+CRITICAL RULES:
+- Do NOT agree with a finding just because it sounds plausible
+- If a finding claims code "does not validate", "lacks sanitization", "has no check" \u2014 verify this is actually true before agreeing
+- If a finding cites a specific file:line, your evidence MUST reference what the code actually does at that location
+- Agreeing without verification is WORSE than disagreeing \u2014 a false confirmation poisons the system
+- When in doubt, respond with DISAGREE and explain what you couldn't verify
+
+Return only valid JSON.` },
           { role: "user", content: userContent }
         ];
         try {
@@ -6746,6 +6770,40 @@ Return ONLY a JSON array:
           signals,
           summary
         };
+      }
+      /**
+       * Extract code snippets for file:line references found in text.
+       * Returns formatted snippets for inclusion in cross-review prompts.
+       */
+      async extractCodeSnippets(text) {
+        if (!this.config.projectRoot) return null;
+        const citationPattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,4}):(\d+)/g;
+        const seen = /* @__PURE__ */ new Set();
+        const snippets = [];
+        let match;
+        while ((match = citationPattern.exec(text)) !== null) {
+          const file2 = match[1];
+          const line = parseInt(match[2], 10);
+          const key = `${file2}:${line}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          try {
+            const filePath = await this.resolveFilePath(file2);
+            if (!filePath) continue;
+            const content = await (0, import_promises3.readFile)(filePath, "utf-8");
+            const lines = content.split("\n");
+            if (line > lines.length) continue;
+            const start = Math.max(0, line - 4);
+            const end = Math.min(lines.length, line + 6);
+            const snippet = lines.slice(start, end).map((l, i) => `  ${start + i + 1}: ${l}`).join("\n");
+            snippets.push(`${file2}:${line}:
+${snippet}`);
+          } catch {
+            continue;
+          }
+          if (snippets.length >= 5) break;
+        }
+        return snippets.length > 0 ? snippets.join("\n\n") : null;
       }
       /**
        * Verify file:line citations in disagreement evidence against actual source code.
