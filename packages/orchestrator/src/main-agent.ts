@@ -129,6 +129,7 @@ export class MainAgent {
       const { PerformanceReader } = require('./performance-reader');
       this.registry.setPerformanceReader(new PerformanceReader(this.projectRoot));
     } catch { /* performance reader optional */ }
+
     this.pipeline = new DispatchPipeline({
       projectRoot: this.projectRoot,
       workers: this.workers,
@@ -137,6 +138,17 @@ export class MainAgent {
       syncFactory: config.syncFactory,
       toolServer: config.toolServer,
     });
+
+    // Wire ATI competency profiler + dispatch differentiator (after pipeline creation)
+    try {
+      const { CompetencyProfiler } = require('./competency-profiler');
+      const { DispatchDifferentiator } = require('./dispatch-differentiator');
+      const profiler = new CompetencyProfiler(this.projectRoot);
+      this.registry.setCompetencyProfiler(profiler);
+      this.pipeline.setCompetencyProfiler(profiler);
+      this.pipeline.setDispatchDifferentiator(new DispatchDifferentiator());
+    } catch { /* ATI components optional */ }
+
     this.keyProviderFn = config.keyProvider;
     this.projectInitializer = new ProjectInitializer({
       llm: this.llm,
