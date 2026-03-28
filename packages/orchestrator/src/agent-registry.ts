@@ -6,6 +6,7 @@
 
 import { AgentConfig } from './types';
 import { PerformanceReader } from './performance-reader';
+import { CompetencyProfiler } from './competency-profiler';
 import { normalizeSkillName } from './skill-name';
 import type { SkillCatalog } from './skill-catalog';
 
@@ -17,6 +18,7 @@ export interface FindBestMatchOptions {
 export class AgentRegistry {
   private agents: Map<string, AgentConfig> = new Map();
   private perfReader: PerformanceReader | null = null;
+  private competencyProfiler: CompetencyProfiler | null = null;
   private suggesterCache: Map<string, Set<string>> = new Map();
 
   register(config: AgentConfig): void {
@@ -37,6 +39,10 @@ export class AgentRegistry {
 
   setPerformanceReader(reader: PerformanceReader): void {
     this.perfReader = reader;
+  }
+
+  setCompetencyProfiler(profiler: CompetencyProfiler): void {
+    this.competencyProfiler = profiler;
   }
 
   setSuggesterCache(cache: Map<string, Set<string>>): void {
@@ -90,7 +96,13 @@ export class AgentRegistry {
       }
 
       // 4. Performance weight
-      const perfWeight = this.perfReader?.getDispatchWeight(agent.id) ?? 1.0;
+      // Prefer competency profiler if available (richer scoring)
+      let perfWeight = 1.0;
+      if (this.competencyProfiler) {
+        perfWeight = this.competencyProfiler.getProfileMultiplier(agent.id, 'review');
+      } else if (this.perfReader) {
+        perfWeight = this.perfReader.getDispatchWeight(agent.id);
+      }
 
       const score = (staticOverlap + projectMatchBoost + suggesterBoost) * perfWeight;
       // Tiebreaker: prefer agent with higher overlap ratio (more specialized)
