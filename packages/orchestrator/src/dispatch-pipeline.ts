@@ -684,6 +684,21 @@ export class DispatchPipeline {
             }
           }
         }
+
+        // Cross-agent learning: write confirmed findings to each agent's memory
+        if (consensusReport.confirmed.length > 0) {
+          try {
+            const findings = consensusReport.confirmed.map(f => ({
+              originalAgentId: f.originalAgentId,
+              finding: f.finding,
+            }));
+            // Write to each participating agent's memory
+            const participants = new Set(results.filter(r => r.status === 'completed').map(r => r.agentId));
+            for (const agentId of participants) {
+              this.memWriter.writeConsensusKnowledge(agentId, findings);
+            }
+          } catch { /* best-effort cross-agent learning */ }
+        }
       } catch (err) {
         process.stderr.write(`[gossipcat] Consensus failed: ${(err as Error).message}\n`);
       }

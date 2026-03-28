@@ -171,6 +171,37 @@ export class MemoryWriter {
     return (scores.relevance + scores.accuracy + scores.uniqueness) / 15;
   }
 
+  writeConsensusKnowledge(agentId: string, findings: Array<{ originalAgentId: string; finding: string }>): void {
+    if (findings.length === 0) return;
+    const memDir = this.ensureDirs(agentId);
+    const knowledgeDir = join(memDir, 'knowledge');
+    const today = new Date().toISOString().split('T')[0];
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `${timestamp}-consensus.md`;
+
+    const peerFindings = findings
+      .filter(f => f.originalAgentId !== agentId) // only learn from peers, not own findings
+      .slice(0, 10);
+
+    if (peerFindings.length === 0) return;
+
+    const content = [
+      '---',
+      `name: Peer findings from consensus review`,
+      `description: ${peerFindings.length} findings from peer agents`,
+      `importance: 0.8`,
+      `lastAccessed: ${today}`,
+      `accessCount: 0`,
+      '---',
+      '',
+      '## Peer Findings (learn from these)',
+      '',
+      ...peerFindings.map(f => `- [${f.originalAgentId}] ${f.finding}`),
+    ].join('\n');
+
+    writeFileSync(join(knowledgeDir, filename), content);
+  }
+
   rebuildIndex(agentId: string): void {
     const memDir = this.getMemDir(agentId);
     const parts: string[] = [`# Agent Memory — ${agentId}\n`];
@@ -218,6 +249,25 @@ export class MemoryWriter {
         parts.push('');
       }
     }
+
+    // Recent Patterns section — summarize decisions from recent knowledge files
+    try {
+      const knowledgeDir = join(memDir, 'knowledge');
+      if (existsSync(knowledgeDir)) {
+        const knowledgeFiles = readdirSync(knowledgeDir).filter(f => f.endsWith('.md')).sort().reverse().slice(0, 5);
+        const patterns: string[] = [];
+        for (const kf of knowledgeFiles) {
+          const kContent = readFileSync(join(knowledgeDir, kf), 'utf-8');
+          const decisionsMatch = kContent.match(/Decisions: (.+)/);
+          if (decisionsMatch) patterns.push(decisionsMatch[1].trim());
+          const failuresMatch = kContent.match(/Failures: (.+)/);
+          if (failuresMatch) patterns.push(`⚠️ ${failuresMatch[1].trim()}`);
+        }
+        if (patterns.length > 0) {
+          parts.push('', '## Recent Patterns', '', ...patterns.slice(0, 5).map(p => `- ${p}`));
+        }
+      }
+    } catch { /* best-effort patterns */ }
 
     writeFileSync(join(memDir, 'MEMORY.md'), parts.join('\n'));
   }

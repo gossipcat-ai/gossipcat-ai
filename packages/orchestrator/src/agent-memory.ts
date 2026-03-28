@@ -62,7 +62,16 @@ export class AgentMemoryReader {
         // These are plain .md files written by agents managing their own memory
         const relevance = this.calculateRelevance(content.slice(0, 500), lower);
         // Always include recent agent-written files (high base score)
-        scored.push({ path: filePath, score: Math.max(relevance, 0.3) });
+        // Apply age-based decay to unindexed files using filesystem mtime
+        const { statSync } = require('fs');
+        try {
+          const mtime = statSync(filePath).mtimeMs;
+          const ageDays = (Date.now() - mtime) / 86400000;
+          const ageFactor = 1 / (1 + ageDays / 30);
+          scored.push({ path: filePath, score: Math.max(relevance * ageFactor, 0.05) });
+        } catch {
+          scored.push({ path: filePath, score: relevance });
+        }
       }
     }
 
@@ -75,15 +84,16 @@ export class AgentMemoryReader {
   }
 
   private calculateRelevance(description: string, taskLower: string): number {
-    const descWords = description.toLowerCase().split(/[\s,/.]+/).filter(w => w.length > 2);
+    const descWords = description.toLowerCase().split(/[\s,/.]+/).filter(w => w.length > 3);
     if (descWords.length === 0) return 0;
 
-    const taskWords = new Set(taskLower.split(/[\s,/.]+/).filter(w => w.length > 2));
+    const taskWords = new Set(taskLower.split(/[\s,/.]+/).filter(w => w.length > 3));
 
-    // Count matches: either exact word match or substring containment (for compound terms)
+    // Count matches: exact word match scores full, substring containment scores half
     let matches = 0;
     for (const w of descWords) {
-      if (taskWords.has(w) || taskLower.includes(w)) matches++;
+        if (taskWords.has(w)) { matches += 1.0; }
+        else if (taskLower.includes(w)) { matches += 0.5; }
     }
 
     // Bonus: if description mentions a file extension present in the task, boost relevance
