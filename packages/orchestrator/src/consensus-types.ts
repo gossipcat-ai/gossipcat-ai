@@ -54,11 +54,26 @@ export interface CollectResult {
 export interface ConsensusSignal {
   type: 'consensus';
   taskId: string;
-  signal: 'agreement' | 'disagreement' | 'unique_confirmed' | 'unique_unconfirmed' | 'new_finding' | 'hallucination_caught' | 'category_confirmed';
+  signal:
+    | 'agreement'
+    | 'disagreement'
+    | 'unique_confirmed'
+    | 'unique_unconfirmed'
+    | 'new_finding'
+    | 'hallucination_caught'
+    | 'category_confirmed'
+    | 'consensus_verified';
   agentId: string;
   counterpartId?: string;
   skill?: string;
-  outcome?: 'correct' | 'incorrect' | 'unresolved' | 'fabricated_citation' | 'false_negative_claim';
+  outcome?:
+    | 'correct'
+    | 'incorrect'
+    | 'unresolved'
+    | 'fabricated_citation'
+    | 'false_negative_claim'
+    | 'judge_refuted'
+    | 'confirmed_hallucination';
   category?: string;
   evidence: string;
   timestamp: string;

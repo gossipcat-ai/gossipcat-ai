@@ -6401,8 +6401,8 @@ var init_worktree_manager = __esm({
       }
       async merge(taskId) {
         const branch = `gossip-${taskId}`;
-        const log5 = await execFileAsync3("git", ["log", `HEAD..${branch}`, "--oneline"], { cwd: this.projectRoot });
-        if (!log5.stdout.trim()) return { merged: true };
+        const log6 = await execFileAsync3("git", ["log", `HEAD..${branch}`, "--oneline"], { cwd: this.projectRoot });
+        if (!log6.stdout.trim()) return { merged: true };
         try {
           await execFileAsync3("git", ["-c", "core.hooksPath=/dev/null", "merge", branch, "--no-edit"], { cwd: this.projectRoot });
           return { merged: true };
@@ -6688,35 +6688,30 @@ Return ONLY a JSON array:
             confidence: Math.round(avgConfidence)
           };
           const now = (/* @__PURE__ */ new Date()).toISOString();
-          if (entry.disputedBy.length > 0 && entry.confirmedBy.length === 0) {
-            finding.tag = "disputed";
-            disputed.push(finding);
-          } else if (entry.disputedBy.length > 0 && entry.confirmedBy.length > 0) {
+          if (entry.disputedBy.length > 0) {
             finding.tag = "disputed";
             disputed.push(finding);
           } else if (entry.confirmedBy.length > 0) {
-            const findingHasFabricatedCitation = await this.verifyCitations(entry.finding);
-            const findingHasFalseNegative = !findingHasFabricatedCitation ? await this.verifyNegativeClaim(entry.finding) : false;
-            if (findingHasFabricatedCitation || findingHasFalseNegative) {
+            const hasFabricatedCitation = await this.verifyCitations(entry.finding);
+            if (hasFabricatedCitation) {
               finding.tag = "unique";
               unique.push(finding);
-              const reason = findingHasFabricatedCitation ? "fabricated_citation" : "false_negative_claim";
               signals.push({
                 type: "consensus",
                 taskId: agentTaskIds.get(entry.originalAgentId) ?? "",
                 signal: "hallucination_caught",
                 agentId: entry.originalAgentId,
-                outcome: reason,
-                evidence: `Confirmed finding contains false claim: "${entry.finding.slice(0, 200)}"`,
+                outcome: "fabricated_citation",
+                evidence: `Confirmed finding cites non-existent code: "${entry.finding.slice(0, 200)}"`,
                 timestamp: now
               });
               continue;
             }
+            finding.tag = "confirmed";
+            confirmed.push(finding);
             const isUniquelyDiscovered = !Array.from(findingMap.values()).some(
               (other) => other !== entry && other.finding === entry.finding && other.originalAgentId !== entry.originalAgentId
             );
-            finding.tag = "confirmed";
-            confirmed.push(finding);
             if (isUniquelyDiscovered) {
               signals.push({
                 type: "consensus",
@@ -6765,30 +6760,6 @@ Return ONLY a JSON array:
           citations.push({ file: match[1], line: parseInt(match[2], 10) });
         }
         if (citations.length === 0) return false;
-        const claimPatterns = [
-          /(?:explicitly |directly )?(?:throws?|throw new)\b/,
-          /(?:explicitly |directly )?(?:checks?|validates?|verifies?)\b/,
-          /(?:explicitly |directly )?(?:returns?|calls?|invokes?)\b/,
-          /(?:explicitly |directly )?(?:prevents?|blocks?|rejects?)\b/
-        ];
-        const lowerEvidence = evidence.toLowerCase();
-        const citationClaims = [];
-        for (const citation of citations) {
-          const citRef = `${citation.file}:${citation.line}`.toLowerCase();
-          const citIdx = lowerEvidence.indexOf(citRef);
-          if (citIdx === -1) continue;
-          const contextStart = Math.max(0, citIdx - 30);
-          const contextEnd = Math.min(lowerEvidence.length, citIdx + citRef.length + 100);
-          const context = lowerEvidence.slice(contextStart, contextEnd);
-          for (const pattern of claimPatterns) {
-            const match2 = context.match(pattern);
-            if (match2) {
-              const beforeMatch = context.slice(0, match2.index);
-              if (/\b(not?|doesn'?t|don'?t|never|isn'?t|just a|without)\s*$/.test(beforeMatch)) continue;
-              citationClaims.push(match2[0]);
-            }
-          }
-        }
         for (const citation of citations) {
           try {
             const filePath = await this.resolveFilePath(citation.file);
@@ -6796,55 +6767,8 @@ Return ONLY a JSON array:
             const content = await (0, import_promises3.readFile)(filePath, "utf-8");
             const lines = content.split("\n");
             if (citation.line > lines.length) return true;
-            const start = Math.max(0, citation.line - 6);
-            const end = Math.min(lines.length, citation.line + 5);
-            const window = lines.slice(start, end).join("\n").toLowerCase();
-            if (citationClaims.length > 0) {
-              const hasAnyClaim = citationClaims.some((claim) => window.includes(claim));
-              if (!hasAnyClaim) return true;
-            }
           } catch {
             return true;
-          }
-        }
-        return false;
-      }
-      /**
-       * Verify negative claims in findings (e.g., "no validation", "no sanitization").
-       * CONSERVATIVE: only returns true when there is HIGH CONFIDENCE the claim is false.
-       * Requires: (1) finding cites a specific file:line, (2) the claimed-missing stem
-       * appears as a function/method name near that line (not in comments or strings).
-       */
-      async verifyNegativeClaim(finding) {
-        if (!this.config.projectRoot) return false;
-        const negativeClaims = /\b(?:no |lacks? |missing |without |does not |doesn'?t )(sanitiz|validat)/i;
-        const match = finding.match(negativeClaims);
-        if (!match) return false;
-        const claimedMissing = match[1].toLowerCase();
-        const citationPattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,4}):(\d+)/g;
-        const citations = [];
-        let citMatch;
-        while ((citMatch = citationPattern.exec(finding)) !== null) {
-          citations.push({ file: citMatch[1], line: parseInt(citMatch[2], 10) });
-        }
-        if (citations.length === 0) return false;
-        for (const citation of citations) {
-          try {
-            const filePath = await this.resolveFilePath(citation.file);
-            if (!filePath) continue;
-            const content = await (0, import_promises3.readFile)(filePath, "utf-8");
-            const lines = content.split("\n");
-            if (citation.line > lines.length) continue;
-            const start = Math.max(0, citation.line - 11);
-            const end = Math.min(lines.length, citation.line + 10);
-            const window = lines.slice(start, end);
-            const codeOnly = window.map((l) => l.replace(/\/\/.*$/, "").replace(/\/\*[\s\S]*?\*\//g, "")).join("\n").toLowerCase();
-            const funcPattern = new RegExp(`\\b\\w*${claimedMissing}\\w*\\s*[.(]`, "i");
-            if (funcPattern.test(codeOnly)) {
-              return true;
-            }
-          } catch {
-            continue;
           }
         }
         return false;
@@ -7162,6 +7086,7 @@ var init_dispatch_pipeline = __esm({
       bootWarningShown = false;
       competencyProfiler = null;
       dispatchDifferentiator = null;
+      consensusJudge = null;
       taskProgressCallback = null;
       setTaskProgressCallback(cb) {
         this.taskProgressCallback = cb;
@@ -7660,6 +7585,54 @@ Worktree merge: CONFLICT
             const engine = new ConsensusEngine({ llm: this.llm, registryGet: this.registryGet, projectRoot: this.projectRoot });
             consensusReport = await engine.run(results);
             const perfWriter = new PerformanceWriter(this.projectRoot);
+            if (consensusReport.confirmed.length > 0 && this.consensusJudge) {
+              try {
+                const verdicts = await this.consensusJudge.verify(consensusReport.confirmed);
+                const now = (/* @__PURE__ */ new Date()).toISOString();
+                verdicts.sort((a, b) => b.index - a.index);
+                for (const v of verdicts) {
+                  const findingIndex = v.index - 1;
+                  const finding = consensusReport.confirmed[findingIndex];
+                  if (!finding) continue;
+                  if (v.verdict === "REFUTED") {
+                    consensusReport.confirmed.splice(findingIndex, 1);
+                    finding.tag = "disputed";
+                    consensusReport.disputed.push(finding);
+                    consensusReport.signals.push({
+                      type: "consensus",
+                      signal: "hallucination_caught",
+                      agentId: finding.originalAgentId,
+                      outcome: "judge_refuted",
+                      evidence: v.evidence,
+                      timestamp: now,
+                      taskId: finding.id || ""
+                    });
+                    for (const confirmerId of finding.confirmedBy) {
+                      consensusReport.signals.push({
+                        type: "consensus",
+                        signal: "hallucination_caught",
+                        agentId: confirmerId,
+                        outcome: "confirmed_hallucination",
+                        evidence: `Confirmed refuted finding: ${v.evidence}`,
+                        timestamp: now,
+                        taskId: finding.id || ""
+                      });
+                    }
+                  } else if (v.verdict === "VERIFIED") {
+                    consensusReport.signals.push({
+                      type: "consensus",
+                      signal: "consensus_verified",
+                      agentId: finding.originalAgentId,
+                      evidence: v.evidence,
+                      timestamp: now,
+                      taskId: finding.id || ""
+                    });
+                  }
+                }
+              } catch (err) {
+                log2(`Consensus judge failed: ${err.message}`);
+              }
+            }
             if (consensusReport.signals.length > 0) {
               perfWriter.appendSignals(consensusReport.signals);
             }
@@ -7879,6 +7852,9 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
       }
       setDispatchDifferentiator(differ) {
         this.dispatchDifferentiator = differ;
+      }
+      setConsensusJudge(judge) {
+        this.consensusJudge = judge;
       }
       /** Flush TaskGraph index on shutdown */
       flushTaskGraph() {
@@ -9432,7 +9408,9 @@ var init_performance_reader = __esm({
       unique_unconfirmed: { uniqueness: 0.05 },
       new_finding: { uniqueness: 0.15 },
       hallucination_caught: { accuracy: -0.3 },
-      category_confirmed: { accuracy: 0.1 }
+      category_confirmed: { accuracy: 0.1 },
+      consensus_verified: { accuracy: 0.15 }
+      // Judge confirmed a finding
     };
     PerformanceReader = class {
       filePath;
@@ -9507,10 +9485,10 @@ var init_performance_reader = __esm({
           const weights = SIGNAL_WEIGHTS[signal.signal];
           if (!weights) continue;
           agent.totalSignals++;
-          if ("accuracy" in weights) {
+          if ("accuracy" in weights && weights.accuracy) {
             agent.accuracy = clamp(agent.accuracy + weights.accuracy, 0, 1);
           }
-          if ("uniqueness" in weights) {
+          if ("uniqueness" in weights && weights.uniqueness) {
             agent.uniqueness = clamp(agent.uniqueness + weights.uniqueness, 0, 1);
           }
           switch (signal.signal) {
@@ -9527,6 +9505,11 @@ var init_performance_reader = __esm({
               break;
             case "hallucination_caught":
               agent.hallucinations++;
+              break;
+            case "consensus_verified":
+              break;
+            // just a score change
+            case "category_confirmed":
               break;
           }
           if (signal.counterpartId && typeof signal.counterpartId === "string" && signal.counterpartId.length > 0 && signal.signal === "disagreement") {
@@ -9988,8 +9971,8 @@ message: Your question?
       }
       /** Start all worker agents (connect to relay) */
       async start() {
-        const { existsSync: existsSync20, readFileSync: readFileSync21 } = await import("fs");
-        const { join: join23 } = await import("path");
+        const { existsSync: existsSync21, readFileSync: readFileSync22 } = await import("fs");
+        const { join: join24 } = await import("path");
         for (const config2 of this.registry.getAll()) {
           if (config2.native) continue;
           if (this.workers.has(config2.id)) continue;
@@ -9998,8 +9981,8 @@ message: Your question?
             apiKey = await this.keyProviderFn(config2.provider) ?? void 0;
           }
           const llm = createProvider(config2.provider, config2.model, apiKey);
-          const instructionsPath = join23(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
-          const instructions = existsSync20(instructionsPath) ? readFileSync21(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join24(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
+          const instructions = existsSync21(instructionsPath) ? readFileSync22(instructionsPath, "utf-8") : void 0;
           const enableWebSearch = config2.preset === "researcher" || config2.skills.includes("research");
           const worker = new WorkerAgent(config2.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
           await worker.start();
@@ -10048,6 +10031,9 @@ message: Your question?
       }
       setOverlapDetector(detector) {
         this.pipeline.setOverlapDetector(detector);
+      }
+      setConsensusJudge(judge) {
+        this.pipeline.setConsensusJudge(judge);
       }
       setLensGenerator(generator) {
         this.pipeline.setLensGenerator(generator);
@@ -10125,16 +10111,16 @@ message: Your question?
         this.registry.register(config2);
       }
       async syncWorkers(keyProvider) {
-        const { existsSync: existsSync20, readFileSync: readFileSync21 } = await import("fs");
-        const { join: join23 } = await import("path");
+        const { existsSync: existsSync21, readFileSync: readFileSync22 } = await import("fs");
+        const { join: join24 } = await import("path");
         let added = 0;
         for (const ac of this.registry.getAll()) {
           if (ac.native) continue;
           if (this.workers.has(ac.id)) continue;
           const key = await keyProvider(ac.provider);
           const llm = createProvider(ac.provider, ac.model, key ?? void 0);
-          const instructionsPath = join23(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
-          const instructions = existsSync20(instructionsPath) ? readFileSync21(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join24(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
+          const instructions = existsSync21(instructionsPath) ? readFileSync22(instructionsPath, "utf-8") : void 0;
           const enableWebSearch = ac.preset === "researcher" || ac.skills.includes("research");
           const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
           await worker.start();
@@ -11543,6 +11529,125 @@ Requirements:
   }
 });
 
+// packages/orchestrator/src/consensus-judge.ts
+var import_fs21, import_path26, log5, ConsensusJudge;
+var init_consensus_judge = __esm({
+  "packages/orchestrator/src/consensus-judge.ts"() {
+    "use strict";
+    import_fs21 = require("fs");
+    import_path26 = require("path");
+    log5 = (msg) => process.stderr.write(`[consensus-judge] ${msg}
+`);
+    ConsensusJudge = class {
+      constructor(llm, projectRoot) {
+        this.llm = llm;
+        this.projectRoot = projectRoot;
+      }
+      async verify(confirmed) {
+        if (confirmed.length === 0) return [];
+        const findingLines = [];
+        for (let i = 0; i < confirmed.length; i++) {
+          const f = confirmed[i];
+          const safeFinding = f.finding.replace(/<\/?confirmed_findings>/gi, "");
+          let codeSnippet = "";
+          const citMatch = safeFinding.match(/(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,4}):(\d+)/);
+          if (citMatch) {
+            const snippet = this.readCodeSnippet(citMatch[1], parseInt(citMatch[2], 10));
+            if (snippet) codeSnippet = `
+   Code at ${citMatch[1]}:${citMatch[2]}:
+   ${snippet}`;
+          }
+          findingLines.push(`${i + 1}. [agent: ${f.originalAgentId}] "${safeFinding}"${codeSnippet}`);
+        }
+        const messages = [
+          {
+            role: "system",
+            content: `You are a code verification judge. Your ONLY job is to check whether confirmed findings about code are factually accurate. You are NOT reviewing the code \u2014 you are verifying other agents' claims.
+
+For each finding, check the code snippet provided and determine if the claim is true.
+
+Be skeptical. Agents frequently:
+- Claim code "does not validate" when validation exists nearby
+- Cite line numbers that don't match their claim
+- Describe regex/logic incorrectly (confuse whitelist with blacklist)
+- Say something is "missing" when it exists in a different form
+
+Return ONLY a JSON array. No other text.`
+          },
+          {
+            role: "user",
+            content: `Verify these confirmed findings:
+
+<confirmed_findings>
+${findingLines.join("\n")}
+</confirmed_findings>
+
+For each, return: [{"index": 1, "verdict": "VERIFIED|REFUTED|UNVERIFIABLE", "evidence": "brief reason"}]`
+          }
+        ];
+        try {
+          const response = await this.llm.generate(messages, { temperature: 0 });
+          const text = response.text || "";
+          const jsonMatch = text.match(/\[[\s\S]*\]/);
+          if (!jsonMatch) {
+            log5("Judge returned no JSON array");
+            return [];
+          }
+          const parsed = JSON.parse(jsonMatch[0]);
+          return parsed.filter(
+            (v) => typeof v.index === "number" && typeof v.evidence === "string" && ["VERIFIED", "REFUTED", "UNVERIFIABLE"].includes(v.verdict)
+          );
+        } catch (err) {
+          log5(`Judge failed: ${err.message}`);
+          return [];
+        }
+      }
+      readCodeSnippet(fileRef, line) {
+        const fileName = fileRef.split("/").pop();
+        let filePath = null;
+        const direct = (0, import_path26.join)(this.projectRoot, fileRef);
+        if ((0, import_fs21.existsSync)(direct)) {
+          filePath = direct;
+        } else {
+          for (const dir of ["packages", "src", "apps"]) {
+            const found = this.findFileSync((0, import_path26.join)(this.projectRoot, dir), fileName);
+            if (found) {
+              filePath = found;
+              break;
+            }
+          }
+        }
+        if (!filePath) return null;
+        try {
+          const content = (0, import_fs21.readFileSync)(filePath, "utf-8");
+          const lines = content.split("\n");
+          if (line > lines.length) return null;
+          const start = Math.max(0, line - 4);
+          const end = Math.min(lines.length, line + 6);
+          return lines.slice(start, end).map((l, i) => `${start + i + 1}: ${l}`).join("\n   ");
+        } catch {
+          return null;
+        }
+      }
+      findFileSync(dir, fileName) {
+        try {
+          const entries = (0, import_fs21.readdirSync)(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = (0, import_path26.join)(dir, entry.name);
+            if (entry.isFile() && entry.name === fileName) return fullPath;
+            if (entry.isDirectory() && entry.name !== "node_modules" && entry.name !== ".git") {
+              const found = this.findFileSync(fullPath, fileName);
+              if (found) return found;
+            }
+          }
+        } catch {
+        }
+        return null;
+      }
+    };
+  }
+});
+
 // packages/orchestrator/src/index.ts
 var src_exports4 = {};
 __export(src_exports4, {
@@ -11553,6 +11658,7 @@ __export(src_exports4, {
   BootstrapGenerator: () => BootstrapGenerator,
   CompetencyProfiler: () => CompetencyProfiler,
   ConsensusEngine: () => ConsensusEngine,
+  ConsensusJudge: () => ConsensusJudge,
   DispatchDifferentiator: () => DispatchDifferentiator,
   DispatchPipeline: () => DispatchPipeline,
   GeminiProvider: () => GeminiProvider,
@@ -11634,6 +11740,7 @@ var init_src5 = __esm({
     init_dispatch_differentiator();
     init_dispatch_pipeline();
     init_skill_generator();
+    init_consensus_judge();
   }
 });
 
@@ -11650,18 +11757,18 @@ __export(config_exports, {
 function findConfigPath(projectRoot) {
   const root = projectRoot || process.cwd();
   const candidates = [
-    (0, import_path26.resolve)(root, ".gossip", "config.json"),
-    (0, import_path26.resolve)(root, "gossip.agents.json"),
-    (0, import_path26.resolve)(root, "gossip.agents.yaml"),
-    (0, import_path26.resolve)(root, "gossip.agents.yml")
+    (0, import_path27.resolve)(root, ".gossip", "config.json"),
+    (0, import_path27.resolve)(root, "gossip.agents.json"),
+    (0, import_path27.resolve)(root, "gossip.agents.yaml"),
+    (0, import_path27.resolve)(root, "gossip.agents.yml")
   ];
   for (const p of candidates) {
-    if ((0, import_fs21.existsSync)(p)) return p;
+    if ((0, import_fs22.existsSync)(p)) return p;
   }
   return null;
 }
 function loadConfig(configPath) {
-  const raw = (0, import_fs21.readFileSync)(configPath, "utf-8");
+  const raw = (0, import_fs22.readFileSync)(configPath, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -11713,19 +11820,19 @@ function configToAgentConfigs(config2) {
 }
 function loadClaudeSubagents(projectRoot, existingIds) {
   const root = projectRoot || process.cwd();
-  const agentsDir = (0, import_path26.join)(root, ".claude", "agents");
-  if (!(0, import_fs21.existsSync)(agentsDir)) return [];
+  const agentsDir = (0, import_path27.join)(root, ".claude", "agents");
+  if (!(0, import_fs22.existsSync)(agentsDir)) return [];
   let files;
   try {
-    files = (0, import_fs21.readdirSync)(agentsDir).filter((f) => f.endsWith(".md"));
+    files = (0, import_fs22.readdirSync)(agentsDir).filter((f) => f.endsWith(".md"));
   } catch {
     return [];
   }
   const agents = [];
   for (const file2 of files) {
-    const filePath = (0, import_path26.join)(agentsDir, file2);
+    const filePath = (0, import_path27.join)(agentsDir, file2);
     try {
-      const content = (0, import_fs21.readFileSync)(filePath, "utf-8");
+      const content = (0, import_fs22.readFileSync)(filePath, "utf-8");
       const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
       if (!frontmatter) continue;
       const fm = frontmatter[1];
@@ -11787,12 +11894,12 @@ function inferSkills(description, name) {
   if (skills.length === 0) skills.push("general");
   return skills;
 }
-var import_fs21, import_path26, VALID_PROVIDERS, CLAUDE_MODEL_MAP;
+var import_fs22, import_path27, VALID_PROVIDERS, CLAUDE_MODEL_MAP;
 var init_config = __esm({
   "apps/cli/src/config.ts"() {
     "use strict";
-    import_fs21 = require("fs");
-    import_path26 = require("path");
+    import_fs22 = require("fs");
+    import_path27 = require("path");
     VALID_PROVIDERS = ["anthropic", "openai", "google", "local"];
     CLAUDE_MODEL_MAP = {
       opus: { provider: "anthropic", model: "claude-opus-4-6" },
@@ -11942,17 +12049,17 @@ __export(identity_exports, {
   normalizeGitUrl: () => normalizeGitUrl
 });
 function getOrCreateSalt(projectRoot) {
-  const saltPath = (0, import_path27.join)(projectRoot, ".gossip", "local-salt");
+  const saltPath = (0, import_path28.join)(projectRoot, ".gossip", "local-salt");
   try {
-    return (0, import_fs22.readFileSync)(saltPath, "utf-8").trim();
+    return (0, import_fs23.readFileSync)(saltPath, "utf-8").trim();
   } catch {
     const salt = (0, import_crypto9.randomBytes)(16).toString("hex");
-    (0, import_fs22.mkdirSync)((0, import_path27.join)(projectRoot, ".gossip"), { recursive: true });
+    (0, import_fs23.mkdirSync)((0, import_path28.join)(projectRoot, ".gossip"), { recursive: true });
     try {
-      (0, import_fs22.writeFileSync)(saltPath, salt, { flag: "wx" });
+      (0, import_fs23.writeFileSync)(saltPath, salt, { flag: "wx" });
       return salt;
     } catch {
-      return (0, import_fs22.readFileSync)(saltPath, "utf-8").trim();
+      return (0, import_fs23.readFileSync)(saltPath, "utf-8").trim();
     }
   }
 }
@@ -12002,12 +12109,12 @@ function getProjectId(projectRoot) {
   }
   return (0, import_crypto9.createHash)("sha256").update(projectRoot).digest("hex").slice(0, 16);
 }
-var import_fs22, import_path27, import_crypto9, import_child_process5;
+var import_fs23, import_path28, import_crypto9, import_child_process5;
 var init_identity = __esm({
   "apps/cli/src/identity.ts"() {
     "use strict";
-    import_fs22 = require("fs");
-    import_path27 = require("path");
+    import_fs23 = require("fs");
+    import_path28 = require("path");
     import_crypto9 = require("crypto");
     import_child_process5 = require("child_process");
   }
@@ -25881,10 +25988,10 @@ async function doBoot() {
     }
     const key = await keychain.getKey(ac.provider);
     const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
-    const { existsSync: existsSync20, readFileSync: readFileSync21 } = require("fs");
-    const { join: join23 } = require("path");
-    const instructionsPath = join23(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
-    const instructions = existsSync20(instructionsPath) ? readFileSync21(instructionsPath, "utf-8") : void 0;
+    const { existsSync: existsSync21, readFileSync: readFileSync22 } = require("fs");
+    const { join: join24 } = require("path");
+    const instructionsPath = join24(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
+    const instructions = existsSync21(instructionsPath) ? readFileSync22(instructionsPath, "utf-8") : void 0;
     const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS, instructions);
     worker.setOnTaskComplete?.((event) => {
       try {
@@ -26006,6 +26113,17 @@ async function doBoot() {
 `);
   } catch (err) {
     process.stderr.write(`[gossipcat] Adaptive team intelligence failed: ${err.message}
+`);
+  }
+  try {
+    const { ConsensusJudge: ConsensusJudge2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
+    const judgeLlm = m.createProvider(mainProvider, mainModel, mainKey ?? void 0);
+    const judge = new ConsensusJudge2(judgeLlm, process.cwd());
+    mainAgent.setConsensusJudge(judge);
+    process.stderr.write(`[gossipcat] Consensus Judge ready (${mainProvider}/${mainModel})
+`);
+  } catch (err) {
+    process.stderr.write(`[gossipcat] Consensus Judge failed to initialize: ${err.message}
 `);
   }
   try {
@@ -26789,9 +26907,9 @@ server.tool(
     const generator = new BootstrapGenerator2(process.cwd());
     const result = generator.generate();
     const { writeFileSync: writeFileSync11, mkdirSync: mkdirSync11 } = require("fs");
-    const { join: join23 } = require("path");
-    mkdirSync11(join23(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync11(join23(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
+    const { join: join24 } = require("path");
+    mkdirSync11(join24(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync11(join24(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
     return { content: [{ type: "text", text: result.prompt }] };
   }
 );
@@ -26820,7 +26938,7 @@ server.tool(
   },
   async ({ main_provider, main_model, agents }) => {
     const { writeFileSync: writeFileSync11, mkdirSync: mkdirSync11 } = require("fs");
-    const { join: join23 } = require("path");
+    const { join: join24 } = require("path");
     const root = process.cwd();
     const CLAUDE_MODEL_MAP2 = {
       opus: { provider: "anthropic", model: "claude-opus-4-6" },
@@ -26853,9 +26971,9 @@ server.tool(
           "",
           body
         ].join("\n");
-        const agentsDir = join23(root, ".claude", "agents");
+        const agentsDir = join24(root, ".claude", "agents");
         mkdirSync11(agentsDir, { recursive: true });
-        writeFileSync11(join23(agentsDir, `${agent.id}.md`), md, "utf-8");
+        writeFileSync11(join24(agentsDir, `${agent.id}.md`), md, "utf-8");
         nativeCreated.push(agent.id);
         configAgents[agent.id] = {
           provider: mapped.provider,
@@ -26881,9 +26999,9 @@ server.tool(
         };
         customCreated.push(agent.id);
         if (agent.instructions) {
-          const instrDir = join23(root, ".gossip", "agents", agent.id);
+          const instrDir = join24(root, ".gossip", "agents", agent.id);
           mkdirSync11(instrDir, { recursive: true });
-          writeFileSync11(join23(instrDir, "instructions.md"), agent.instructions, "utf-8");
+          writeFileSync11(join24(instrDir, "instructions.md"), agent.instructions, "utf-8");
         }
       }
     }
@@ -26897,11 +27015,11 @@ server.tool(
     } catch (err) {
       return { content: [{ type: "text", text: `Invalid config: ${err.message}` }] };
     }
-    mkdirSync11(join23(root, ".gossip"), { recursive: true });
-    writeFileSync11(join23(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
+    mkdirSync11(join24(root, ".gossip"), { recursive: true });
+    writeFileSync11(join24(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
     const agentList = Object.entries(configAgents).map(([id, a]) => `- ${id}: ${a.provider}/${a.model} (${a.preset || "custom"})`).join("\n");
-    const rulesDir = join23(root, env.rulesDir);
-    const rulesFile = join23(root, env.rulesFile);
+    const rulesDir = join24(root, env.rulesDir);
+    const rulesFile = join24(root, env.rulesFile);
     mkdirSync11(rulesDir, { recursive: true });
     writeFileSync11(rulesFile, `# Gossipcat \u2014 Multi-Agent Orchestration
 
@@ -27191,12 +27309,12 @@ server.tool(
     if (findings.length === 0) {
       return { content: [{ type: "text", text: "No findings to log." }] };
     }
-    const { appendFileSync: appendFileSync6, mkdirSync: mkdirSync11, existsSync: existsSync20 } = require("fs");
-    const { join: join23 } = require("path");
+    const { appendFileSync: appendFileSync6, mkdirSync: mkdirSync11, existsSync: existsSync21 } = require("fs");
+    const { join: join24 } = require("path");
     const root = process.cwd();
-    const dir = join23(root, ".gossip");
-    if (!existsSync20(dir)) mkdirSync11(dir, { recursive: true });
-    const filePath = join23(dir, "implementation-findings.jsonl");
+    const dir = join24(root, ".gossip");
+    if (!existsSync21(dir)) mkdirSync11(dir, { recursive: true });
+    const filePath = join24(dir, "implementation-findings.jsonl");
     const timestamp = (/* @__PURE__ */ new Date()).toISOString();
     const data = findings.map((f) => JSON.stringify({
       timestamp,
@@ -27237,15 +27355,15 @@ server.tool(
     agent_id: external_exports.string().optional().describe("Filter by implementer agent ID. Omit to see all.")
   },
   async ({ agent_id }) => {
-    const { existsSync: existsSync20, readFileSync: readFileSync21 } = require("fs");
-    const { join: join23 } = require("path");
-    const filePath = join23(process.cwd(), ".gossip", "implementation-findings.jsonl");
-    if (!existsSync20(filePath)) {
+    const { existsSync: existsSync21, readFileSync: readFileSync22 } = require("fs");
+    const { join: join24 } = require("path");
+    const filePath = join24(process.cwd(), ".gossip", "implementation-findings.jsonl");
+    if (!existsSync21(filePath)) {
       return { content: [{ type: "text", text: "No implementation findings yet. Use gossip_log_finding to record findings after code reviews." }] };
     }
     const entries = [];
     try {
-      const lines = readFileSync21(filePath, "utf-8").trim().split("\n").filter(Boolean);
+      const lines = readFileSync22(filePath, "utf-8").trim().split("\n").filter(Boolean);
       for (const l of lines) {
         try {
           entries.push(JSON.parse(l));
@@ -27308,16 +27426,16 @@ server.tool(
     const { SkillGapTracker: SkillGapTracker2, parseSkillFrontmatter: parseSkillFrontmatter2, normalizeSkillName: normalizeSkillName2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
     const tracker = new SkillGapTracker2(process.cwd());
     if (skills && skills.length > 0) {
-      const { writeFileSync: writeFileSync11, mkdirSync: mkdirSync11, existsSync: existsSync20, readFileSync: readFileSync21 } = require("fs");
-      const { join: join23 } = require("path");
-      const dir = join23(process.cwd(), ".gossip", "skills");
+      const { writeFileSync: writeFileSync11, mkdirSync: mkdirSync11, existsSync: existsSync21, readFileSync: readFileSync22 } = require("fs");
+      const { join: join24 } = require("path");
+      const dir = join24(process.cwd(), ".gossip", "skills");
       mkdirSync11(dir, { recursive: true });
       const results = [];
       for (const skill of skills) {
         const name = normalizeSkillName2(skill.name);
-        const filePath = join23(dir, `${name}.md`);
-        if (existsSync20(filePath)) {
-          const existing = readFileSync21(filePath, "utf-8");
+        const filePath = join24(dir, `${name}.md`);
+        if (existsSync21(filePath)) {
+          const existing = readFileSync22(filePath, "utf-8");
           const fm = parseSkillFrontmatter2(existing);
           if (fm) {
             if (fm.generated_by === "manual") {

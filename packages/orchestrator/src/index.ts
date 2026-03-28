@@ -59,3 +59,5 @@ export type { CompetencyProfile } from './competency-profiler';
 export { DispatchDifferentiator } from './dispatch-differentiator';
 export { shouldSkipConsensus } from './dispatch-pipeline';
 export { SkillGenerator } from './skill-generator';
+export { ConsensusJudge } from './consensus-judge';
+export type { IConsensusJudge, JudgeVerdict } from './consensus-judge';

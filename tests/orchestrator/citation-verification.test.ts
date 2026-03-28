@@ -58,22 +58,22 @@ describe('ConsensusEngine.verifyCitations', () => {
     });
   });
 
-  test('detects fabricated citation — claims throw that does not exist', async () => {
+  test('accepts citation when file and line exist (structural check only)', async () => {
+    // verifyCitations now only checks structural validity (file exists, line in range)
+    // Behavioral claim verification is handled by ConsensusJudge
     const evidence =
-      'The code at task-dispatcher.ts:14 explicitly throws an error if no agent is available. ' +
-      'This prevents a task from being dispatched to a null agent.';
+      'The code at task-dispatcher.ts:14 explicitly throws an error if no agent is available.';
 
     const result = await engine.verifyCitations(evidence);
-    expect(result).toBe(true); // fabricated — line 14 is "if (match) {", no throw
+    expect(result).toBe(false); // file exists, line in range → structurally valid
   });
 
-  test('accepts valid citation — code matches claim', async () => {
+  test('accepts valid citation — file and line exist', async () => {
     const evidence =
-      'The code at task-dispatcher.ts:17 pushes a warning when no agent is found. ' +
-      'This is just a warning, not a guard.';
+      'The code at task-dispatcher.ts:17 pushes a warning when no agent is found.';
 
     const result = await engine.verifyCitations(evidence);
-    expect(result).toBe(false); // valid — line 17 does push a warning
+    expect(result).toBe(false); // file exists, line in range → structurally valid
   });
 
   test('detects fabricated citation — file does not exist', async () => {
@@ -112,21 +112,21 @@ describe('ConsensusEngine.verifyCitations', () => {
     expect(result).toBe(false); // can't verify without projectRoot
   });
 
-  test('handles multiple citations — fails if any is fabricated', async () => {
+  test('handles multiple citations — all exist structurally', async () => {
     const evidence =
       'The code at task-dispatcher.ts:13 calls findBestMatch which validates input, ' +
-      'and task-dispatcher.ts:14 explicitly throws an error to prevent invalid dispatch.';
+      'and task-dispatcher.ts:14 handles the result.';
 
     const result = await engine.verifyCitations(evidence);
-    expect(result).toBe(true); // line 14 doesn't throw
+    expect(result).toBe(false); // both lines exist in file → structurally valid
   });
 
   test('handles citation with full path', async () => {
     const evidence =
-      'At packages/orchestrator/src/task-dispatcher.ts:14 the code explicitly throws an error.';
+      'At packages/orchestrator/src/task-dispatcher.ts:14 the code handles agent assignment.';
 
     const result = await engine.verifyCitations(evidence);
-    expect(result).toBe(true); // fabricated — no throw at line 14
+    expect(result).toBe(false); // file exists at full path, line in range
   });
 });
 
@@ -164,7 +164,7 @@ describe('ConsensusEngine.synthesize — citation verification integration', () 
     });
   });
 
-  test('fabricated dispute does not suppress a valid finding', async () => {
+  test('fabricated dispute citing non-existent file does not suppress valid finding', async () => {
     const results = [
       { id: 'task-1', agentId: 'agent-a', task: 'review', status: 'completed' as const, result: '## Consensus Summary\n- Empty agentId allows invalid dispatch', startedAt: Date.now() },
       { id: 'task-2', agentId: 'agent-b', task: 'review', status: 'completed' as const, result: '## Consensus Summary\n- Some other finding', startedAt: Date.now() },
@@ -176,115 +176,27 @@ describe('ConsensusEngine.synthesize — citation verification integration', () 
         agentId: 'agent-b',
         peerAgentId: 'agent-a',
         finding: 'Empty agentId allows invalid dispatch',
-        evidence: 'The code at task-dispatcher.ts:3 explicitly throws an error if no agent is available.',
+        evidence: 'The code at nonexistent-module.ts:3 explicitly throws an error.',
         confidence: 4,
       },
     ];
 
     const report = await engine.synthesize(results, crossReviewEntries);
 
-    // The finding should NOT be tagged as disputed — the dispute was fabricated
+    // The finding should NOT be tagged as disputed — the dispute cites a non-existent file
     const finding = report.confirmed.find(f => f.finding.includes('Empty agentId'))
       || report.unique.find(f => f.finding.includes('Empty agentId'));
 
     expect(finding).toBeDefined();
     expect(report.disputed.find(f => f.finding.includes('Empty agentId'))).toBeUndefined();
 
-    // Should emit a hallucination_caught signal with fabricated_citation outcome
+    // Should emit a hallucination_caught signal
     const hallucinationSignal = report.signals.find(
-      s => s.signal === 'hallucination_caught' && s.outcome === 'fabricated_citation',
-    );
-    expect(hallucinationSignal).toBeDefined();
-    expect(hallucinationSignal!.counterpartId).toBe('agent-b');
-  });
-});
-
-describe('ConsensusEngine.verifyNegativeClaim — false negative detection', () => {
-  const testDir = resolve(tmpdir(), 'gossip-negclaim-test-' + Date.now());
-  let engine: ConsensusEngine;
-
-  beforeAll(() => {
-    mkdirSync(resolve(testDir, 'packages/orchestrator/src'), { recursive: true });
-    // File that HAS validation
-    writeFileSync(
-      resolve(testDir, 'packages/orchestrator/src/skill-generator.ts'),
-      [
-        'export class SkillGenerator {',
-        '  async generate(agentId: string, category: string) {',
-        '    this.validateInputs(agentId, category);',
-        '    if (!SAFE_NAME.test(agentId)) {',
-        '      throw new Error("Invalid agent_id");',
-        '    }',
-        '    if (!KNOWN_CATEGORIES.has(category)) {',
-        '      throw new Error("Unknown category");',
-        '    }',
-        '    const template = this.loadTemplate();',
-        '  }',
-        '  private validateInputs(id: string, cat: string) {',
-        '    // sanitize and validate both inputs',
-        '  }',
-        '}',
-      ].join('\n'),
-    );
-  });
-
-  afterAll(() => rmSync(testDir, { recursive: true, force: true }));
-
-  beforeEach(() => {
-    engine = new ConsensusEngine({
-      llm: mockLlm,
-      registryGet: mockRegistryGet,
-      projectRoot: testDir,
-    });
-  });
-
-  test('detects false negative claim — says no validation but validation exists', async () => {
-    const finding = 'No validation on agent_id and category parameters (skill-generator.ts:3)';
-    const result = await engine.verifyNegativeClaim(finding);
-    expect(result).toBe(true); // claim is false — validation exists
-  });
-
-  test('accepts true negative claim — code genuinely lacks the feature', async () => {
-    const finding = 'No authentication on relay connection (nonexistent-file.ts:10)';
-    const result = await engine.verifyNegativeClaim(finding);
-    expect(result).toBe(false); // can't find the file, so can't disprove the claim
-  });
-
-  test('ignores findings without negative claims', async () => {
-    const finding = 'The sanitization at consensus-engine.ts:87 strips data tags';
-    const result = await engine.verifyNegativeClaim(finding);
-    expect(result).toBe(false); // no negative claim detected
-  });
-
-  test('mass-agreed false finding gets demoted from confirmed to unique', async () => {
-    const results = [
-      { id: 'task-1', agentId: 'agent-a', task: 'review', status: 'completed' as const, result: '## Consensus Summary\n- No validation on inputs (skill-generator.ts:3)', startedAt: Date.now() },
-      { id: 'task-2', agentId: 'agent-b', task: 'review', status: 'completed' as const, result: '## Consensus Summary\n- Other finding', startedAt: Date.now() },
-    ];
-
-    const crossReviewEntries = [
-      {
-        action: 'agree' as const,
-        agentId: 'agent-b',
-        peerAgentId: 'agent-a',
-        finding: 'No validation on inputs (skill-generator.ts:3)',
-        evidence: 'I confirm there is no validation on the inputs.',
-        confidence: 4,
-      },
-    ];
-
-    const report = await engine.synthesize(results, crossReviewEntries);
-
-    // The false finding should NOT be confirmed
-    expect(report.confirmed.find(f => f.finding.includes('No validation'))).toBeUndefined();
-
-    // It should be demoted to unique
-    expect(report.unique.find(f => f.finding.includes('No validation'))).toBeDefined();
-
-    // Should emit hallucination signal
-    const hallucinationSignal = report.signals.find(
-      s => s.signal === 'hallucination_caught' && s.outcome === 'false_negative_claim',
+      s => s.signal === 'hallucination_caught',
     );
     expect(hallucinationSignal).toBeDefined();
   });
 });
+
+// verifyNegativeClaim tests removed — replaced by ConsensusJudge (consensus-judge.test.ts)
+// verifyCitations on confirmed findings is tested via the synthesize integration test above

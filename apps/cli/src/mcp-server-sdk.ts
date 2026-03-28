@@ -280,6 +280,18 @@ async function doBoot() {
     process.stderr.write(`[gossipcat] Adaptive team intelligence failed: ${(err as Error).message}\n`);
   }
 
+  // Wire Consensus Judge (uses dedicated LLM call, not a worker)
+  try {
+    const { ConsensusJudge } = await import('@gossip/orchestrator');
+    const judgeLlm = m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined);
+    const judge = new ConsensusJudge(judgeLlm, process.cwd());
+    mainAgent.setConsensusJudge(judge);
+    process.stderr.write(`[gossipcat] Consensus Judge ready (${mainProvider}/${mainModel})\n`);
+  } catch (err) {
+    process.stderr.write(`[gossipcat] Consensus Judge failed to initialize: ${(err as Error).message}\n`);
+  }
+
+
   // Create skill generator for gossip_develop_skill tool
   try {
     const { CompetencyProfiler: CP, SkillGenerator: SG } = await import('@gossip/orchestrator');

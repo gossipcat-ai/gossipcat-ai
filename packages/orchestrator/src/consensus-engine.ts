@@ -299,47 +299,33 @@ Return ONLY a JSON array:
       };
 
       const now = new Date().toISOString();
-      if (entry.disputedBy.length > 0 && entry.confirmedBy.length === 0) {
-        // Pure dispute — no one confirmed
-        finding.tag = 'disputed';
-        disputed.push(finding);
-      } else if (entry.disputedBy.length > 0 && entry.confirmedBy.length > 0) {
-        // Mixed — both confirmed and disputed. Tag as disputed but note confirmations.
+
+      if (entry.disputedBy.length > 0) {
         finding.tag = 'disputed';
         disputed.push(finding);
       } else if (entry.confirmedBy.length > 0) {
-        // Confirmed by peers — verify finding is real before accepting
-        // Check 1: citations reference real code
-        const findingHasFabricatedCitation = await this.verifyCitations(entry.finding);
-        // Check 2: negative claims ("no validation") are verified against actual code
-        const findingHasFalseNegative = !findingHasFabricatedCitation
-          ? await this.verifyNegativeClaim(entry.finding)
-          : false;
-
-        if (findingHasFabricatedCitation || findingHasFalseNegative) {
-          // Finding claims something about code that isn't true — demote to unique, flag
+        // Pre-filter: check if finding cites non-existent code (cheap structural check)
+        const hasFabricatedCitation = await this.verifyCitations(entry.finding);
+        if (hasFabricatedCitation) {
           finding.tag = 'unique';
           unique.push(finding);
-          const reason = findingHasFabricatedCitation ? 'fabricated_citation' : 'false_negative_claim';
           signals.push({
             type: 'consensus',
             taskId: agentTaskIds.get(entry.originalAgentId) ?? '',
             signal: 'hallucination_caught',
             agentId: entry.originalAgentId,
-            outcome: reason as any,
-            evidence: `Confirmed finding contains false claim: "${entry.finding.slice(0, 200)}"`,
+            outcome: 'fabricated_citation',
+            evidence: `Confirmed finding cites non-existent code: "${entry.finding.slice(0, 200)}"`,
             timestamp: now,
           });
           continue;
         }
-
-        // Check if this was a unique finding (only one agent originally found it)
-        const isUniquelyDiscovered = !Array.from(findingMap.values()).some(
-          other => other !== entry && other.finding === entry.finding && other.originalAgentId !== entry.originalAgentId
-        );
         finding.tag = 'confirmed';
         confirmed.push(finding);
         // Emit unique_confirmed signal if only one agent originally found this
+        const isUniquelyDiscovered = !Array.from(findingMap.values()).some(
+          other => other !== entry && other.finding === entry.finding && other.originalAgentId !== entry.originalAgentId
+        );
         if (isUniquelyDiscovered) {
           signals.push({
             type: 'consensus',
@@ -351,7 +337,6 @@ Return ONLY a JSON array:
           });
         }
       } else {
-        // No one confirmed or disputed — truly unique/unverified
         finding.tag = 'unique';
         unique.push(finding);
         signals.push({
@@ -397,43 +382,8 @@ Return ONLY a JSON array:
 
     if (citations.length === 0) return false;
 
-    // Extract positive code-behavior claims tied to citations.
-    // Pattern: "[code/file] explicitly throws" or "at line X, throws" etc.
-    // Only match positive assertions, not negations like "not a guard" or "doesn't throw".
-    const claimPatterns = [
-      /(?:explicitly |directly )?(?:throws?|throw new)\b/,
-      /(?:explicitly |directly )?(?:checks?|validates?|verifies?)\b/,
-      /(?:explicitly |directly )?(?:returns?|calls?|invokes?)\b/,
-      /(?:explicitly |directly )?(?:prevents?|blocks?|rejects?)\b/,
-    ];
-
-    // Find claims near citation references (within ~50 chars of the file:line mention)
-    const lowerEvidence = evidence.toLowerCase();
-    const citationClaims: string[] = [];
-    for (const citation of citations) {
-      const citRef = `${citation.file}:${citation.line}`.toLowerCase();
-      const citIdx = lowerEvidence.indexOf(citRef);
-      if (citIdx === -1) continue;
-
-      // Look at surrounding context for positive claims (not preceded by "not", "no", "doesn't", "don't")
-      const contextStart = Math.max(0, citIdx - 30);
-      const contextEnd = Math.min(lowerEvidence.length, citIdx + citRef.length + 100);
-      const context = lowerEvidence.slice(contextStart, contextEnd);
-
-      for (const pattern of claimPatterns) {
-        const match = context.match(pattern);
-        if (match) {
-          // Skip if preceded by negation
-          const beforeMatch = context.slice(0, match.index);
-          if (/\b(not?|doesn'?t|don'?t|never|isn'?t|just a|without)\s*$/.test(beforeMatch)) continue;
-          citationClaims.push(match[0]);
-        }
-      }
-    }
-
     for (const citation of citations) {
       try {
-        // Resolve file path — try direct, then search common locations
         const filePath = await this.resolveFilePath(citation.file);
         if (!filePath) return true; // File doesn't exist — fabricated citation
 
@@ -441,81 +391,11 @@ Return ONLY a JSON array:
         const lines = content.split('\n');
 
         if (citation.line > lines.length) return true; // Line number beyond file length
-
-        // Check a window around the cited line (±5 lines) for claimed behavior
-        const start = Math.max(0, citation.line - 6);
-        const end = Math.min(lines.length, citation.line + 5);
-        const window = lines.slice(start, end).join('\n').toLowerCase();
-
-        // If the agent makes positive claims about what the code does, verify those keywords exist nearby
-        if (citationClaims.length > 0) {
-          const hasAnyClaim = citationClaims.some(claim => window.includes(claim));
-          if (!hasAnyClaim) return true; // Claims behavior that doesn't exist at the cited location
-        }
       } catch {
         // File read failed — treat as fabricated
         return true;
       }
     }
-
-    return false;
-  }
-
-  /**
-   * Verify negative claims in findings (e.g., "no validation", "no sanitization").
-   * CONSERVATIVE: only returns true when there is HIGH CONFIDENCE the claim is false.
-   * Requires: (1) finding cites a specific file:line, (2) the claimed-missing stem
-   * appears as a function/method name near that line (not in comments or strings).
-   */
-  async verifyNegativeClaim(finding: string): Promise<boolean> {
-    if (!this.config.projectRoot) return false;
-
-    // Only detect strong negative claims with file:line citations
-    const negativeClaims = /\b(?:no |lacks? |missing |without |does not |doesn'?t )(sanitiz|validat)/i;
-    const match = finding.match(negativeClaims);
-    if (!match) return false;
-
-    const claimedMissing = match[1].toLowerCase(); // "sanitiz" or "validat"
-
-    // Require a specific file:line citation — without it, we can't verify
-    const citationPattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,4}):(\d+)/g;
-    const citations: Array<{ file: string; line: number }> = [];
-    let citMatch;
-    while ((citMatch = citationPattern.exec(finding)) !== null) {
-      citations.push({ file: citMatch[1], line: parseInt(citMatch[2], 10) });
-    }
-
-    if (citations.length === 0) return false; // No file:line — can't verify with confidence
-
-    for (const citation of citations) {
-      try {
-        const filePath = await this.resolveFilePath(citation.file);
-        if (!filePath) continue;
-
-        const content = await readFile(filePath, 'utf-8');
-        const lines = content.split('\n');
-        if (citation.line > lines.length) continue;
-
-        // Check a ±10 line window around the cited line
-        const start = Math.max(0, citation.line - 11);
-        const end = Math.min(lines.length, citation.line + 10);
-        const window = lines.slice(start, end);
-
-        // Strip comments (single-line // and block /* */) before checking
-        const codeOnly = window
-          .map(l => l.replace(/\/\/.*$/, '').replace(/\/\*[\s\S]*?\*\//g, ''))
-          .join('\n')
-          .toLowerCase();
-
-        // Only match the stem as part of a function/method call pattern
-        // e.g., "validate(", "sanitize(", "this.validate", "SAFE_NAME.test("
-        const funcPattern = new RegExp(`\\b\\w*${claimedMissing}\\w*\\s*[.(]`, 'i');
-        if (funcPattern.test(codeOnly)) {
-          return true; // Found a function/method call with the stem near the cited line
-        }
-      } catch { continue; }
-    }
-
     return false;
   }
 
