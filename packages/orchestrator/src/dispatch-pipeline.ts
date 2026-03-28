@@ -27,6 +27,7 @@ import { extractCategories } from './category-extractor';
 import { WorkerProgressCallback } from './worker-agent';
 import { WorkerLike } from './worker-like';
 import { IConsensusJudge } from './consensus-judge';
+import { SkillIndex } from './skill-index';
 
 const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
 
@@ -83,6 +84,7 @@ export class DispatchPipeline {
   private competencyProfiler: CompetencyProfiler | null = null;
   private dispatchDifferentiator: DispatchDifferentiator | null = null;
   private consensusJudge: IConsensusJudge | null = null;
+  private skillIndex: SkillIndex | null = null;
 
   private taskProgressCallback: ((taskId: string, event: { toolCalls: number; inputTokens: number; outputTokens: number; currentTool: string; turn: number }) => void) | null = null;
 
@@ -141,8 +143,8 @@ export class DispatchPipeline {
     const taskId = randomUUID().slice(0, 8);
     const agentSkills = this.registryGet(agentId)?.skills || [];
 
-    // 1. Load skills
-    const skills = loadSkills(agentId, agentSkills, this.projectRoot);
+    // 1. Load skills (index takes precedence when available)
+    const skills = loadSkills(agentId, agentSkills, this.projectRoot, this.skillIndex ?? undefined);
 
     // 2. Load memory
     const memory = this.memReader.loadMemory(agentId, task);
@@ -609,114 +611,7 @@ export class DispatchPipeline {
     // Consensus round
     let consensusReport: import('./consensus-types').ConsensusReport | undefined;
     if (options?.consensus && this.llm && results.filter(r => r.status === 'completed').length >= 2) {
-      try {
-        const engine = new ConsensusEngine({ llm: this.llm, registryGet: this.registryGet, projectRoot: this.projectRoot });
-        consensusReport = await engine.run(results);
-        const perfWriter = new PerformanceWriter(this.projectRoot);
-
-        // START: Consensus Judge Integration
-        // Build agent → taskId mapping for signal scoring
-        const agentTaskIdMap = new Map<string, string>();
-        for (const r of results) agentTaskIdMap.set(r.agentId, r.id);
-
-        if (consensusReport.confirmed.length > 0 && this.consensusJudge) {
-          try {
-            const verdicts = await this.consensusJudge.verify(consensusReport.confirmed);
-            const now = new Date().toISOString();
-
-            // Sort verdicts descending by index to avoid splice issues
-            verdicts.sort((a, b) => b.index - a.index);
-
-            for (const v of verdicts) {
-              const findingIndex = v.index - 1;
-              const finding = consensusReport.confirmed[findingIndex];
-              if (!finding) continue;
-
-              if (v.verdict === 'REFUTED') {
-                // Demote from confirmed → disputed
-                consensusReport.confirmed.splice(findingIndex, 1);
-                finding.tag = 'disputed';
-                consensusReport.disputed.push(finding);
-
-                // Signal: originating agent hallucinated
-                consensusReport.signals.push({
-                  type: 'consensus', signal: 'hallucination_caught',
-                  agentId: finding.originalAgentId, outcome: 'judge_refuted',
-                  evidence: v.evidence, timestamp: now, taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || '',
-                });
-                // Signal: each confirming agent also penalized
-                for (const confirmerId of finding.confirmedBy) {
-                  consensusReport.signals.push({
-                    type: 'consensus', signal: 'hallucination_caught',
-                    agentId: confirmerId, outcome: 'confirmed_hallucination',
-                    evidence: `Confirmed refuted finding: ${v.evidence}`,
-                    timestamp: now, taskId: agentTaskIdMap.get(confirmerId) || finding.id || '',
-                  });
-                }
-              } else if (v.verdict === 'VERIFIED') {
-                consensusReport.signals.push({
-                  type: 'consensus', signal: 'consensus_verified',
-                  agentId: finding.originalAgentId,
-                  evidence: v.evidence, timestamp: now, taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || '',
-                });
-              }
-            }
-          } catch (err) {
-            log(`Consensus judge failed: ${(err as Error).message}`);
-          }
-        }
-        // END: Consensus Judge Integration
-
-        if (consensusReport.signals.length > 0) {
-          perfWriter.appendSignals(consensusReport.signals);
-
-          // Feed consensus signals back into memory importance
-          try {
-            this.memWriter.updateImportanceFromSignals(
-              consensusReport.signals.map(s => ({ signal: s.signal, agentId: s.agentId, taskId: s.taskId }))
-            );
-          } catch { /* best-effort */ }
-        }
-        // Post-consensus: extract categories from confirmed findings
-        if (consensusReport.confirmed.length > 0) {
-          const now = new Date().toISOString();
-          for (const finding of consensusReport.confirmed) {
-            const categories = extractCategories(finding.finding);
-            for (const category of categories) {
-              perfWriter.appendSignal({
-                type: 'consensus',
-                signal: 'category_confirmed',
-                agentId: finding.originalAgentId,
-                taskId: finding.id || '',
-                category,
-                evidence: finding.finding,
-                timestamp: now,
-              } as any);
-            }
-          }
-        }
-
-        // Cross-agent learning: write confirmed findings to each agent's memory
-        if (consensusReport.confirmed.length > 0) {
-          try {
-            const findings = consensusReport.confirmed.map(f => ({
-              originalAgentId: f.originalAgentId,
-              finding: f.finding,
-            }));
-            // Write to each participating agent's memory
-            const participants = new Set(results.filter(r => r.status === 'completed').map(r => r.agentId));
-            for (const agentId of participants) {
-              this.memWriter.writeConsensusKnowledge(agentId, findings);
-            }
-            // Rebuild index to include consensus knowledge
-            for (const agentId of participants) {
-              try { this.memWriter.rebuildIndex(agentId); } catch { /* best-effort */ }
-            }
-          } catch { /* best-effort cross-agent learning */ }
-        }
-      } catch (err) {
-        process.stderr.write(`[gossipcat] Consensus failed: ${(err as Error).message}\n`);
-      }
+      consensusReport = await this.runConsensus(results);
     }
 
     // Cleanup tasks from tracking map
@@ -951,12 +846,133 @@ export class DispatchPipeline {
     this.competencyProfiler = profiler;
   }
 
+  setSkillIndex(index: SkillIndex): void {
+    this.skillIndex = index;
+  }
+
+  getSkillIndex(): SkillIndex | null {
+    return this.skillIndex;
+  }
+
   setDispatchDifferentiator(differ: DispatchDifferentiator): void {
     this.dispatchDifferentiator = differ;
   }
 
   setConsensusJudge(judge: IConsensusJudge): void {
     this.consensusJudge = judge;
+  }
+
+  /**
+   * Run consensus cross-review + judge verification + signal pipeline on any set of results.
+   * Extracted so MCP handlers can call this after merging relay + native agent results.
+   */
+  async runConsensus(results: TaskEntry[]): Promise<import('./consensus-types').ConsensusReport | undefined> {
+    if (!this.llm || results.filter(r => r.status === 'completed').length < 2) return undefined;
+
+    try {
+      const engine = new ConsensusEngine({ llm: this.llm, registryGet: this.registryGet, projectRoot: this.projectRoot });
+      const consensusReport = await engine.run(results);
+      const perfWriter = new PerformanceWriter(this.projectRoot);
+
+      // Consensus Judge Integration
+      const agentTaskIdMap = new Map<string, string>();
+      for (const r of results) agentTaskIdMap.set(r.agentId, r.id);
+
+      if (consensusReport.confirmed.length > 0 && this.consensusJudge) {
+        try {
+          const verdicts = await this.consensusJudge.verify(consensusReport.confirmed);
+          const now = new Date().toISOString();
+
+          verdicts.sort((a, b) => b.index - a.index);
+
+          for (const v of verdicts) {
+            const findingIndex = v.index - 1;
+            const finding = consensusReport.confirmed[findingIndex];
+            if (!finding) continue;
+
+            if (v.verdict === 'REFUTED') {
+              consensusReport.confirmed.splice(findingIndex, 1);
+              finding.tag = 'disputed';
+              consensusReport.disputed.push(finding);
+
+              consensusReport.signals.push({
+                type: 'consensus', signal: 'hallucination_caught',
+                agentId: finding.originalAgentId, outcome: 'judge_refuted',
+                evidence: v.evidence, timestamp: now, taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || '',
+              });
+              for (const confirmerId of finding.confirmedBy) {
+                consensusReport.signals.push({
+                  type: 'consensus', signal: 'hallucination_caught',
+                  agentId: confirmerId, outcome: 'confirmed_hallucination',
+                  evidence: `Confirmed refuted finding: ${v.evidence}`,
+                  timestamp: now, taskId: agentTaskIdMap.get(confirmerId) || finding.id || '',
+                });
+              }
+            } else if (v.verdict === 'VERIFIED') {
+              consensusReport.signals.push({
+                type: 'consensus', signal: 'consensus_verified',
+                agentId: finding.originalAgentId,
+                evidence: v.evidence, timestamp: now, taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || '',
+              });
+            }
+          }
+        } catch (err) {
+          log(`Consensus judge failed: ${(err as Error).message}`);
+        }
+      }
+
+      // Write performance signals
+      if (consensusReport.signals.length > 0) {
+        perfWriter.appendSignals(consensusReport.signals);
+
+        try {
+          this.memWriter.updateImportanceFromSignals(
+            consensusReport.signals.map(s => ({ signal: s.signal, agentId: s.agentId, taskId: s.taskId }))
+          );
+        } catch { /* best-effort */ }
+      }
+
+      // Extract categories from confirmed findings
+      if (consensusReport.confirmed.length > 0) {
+        const now = new Date().toISOString();
+        for (const finding of consensusReport.confirmed) {
+          const categories = extractCategories(finding.finding);
+          for (const category of categories) {
+            perfWriter.appendSignal({
+              type: 'consensus',
+              signal: 'category_confirmed',
+              agentId: finding.originalAgentId,
+              taskId: finding.id || '',
+              category,
+              evidence: finding.finding,
+              timestamp: now,
+            } as any);
+          }
+        }
+      }
+
+      // Cross-agent learning: write confirmed findings to each agent's memory
+      if (consensusReport.confirmed.length > 0) {
+        try {
+          const findings = consensusReport.confirmed.map(f => ({
+            originalAgentId: f.originalAgentId,
+            finding: f.finding,
+          }));
+          const participants = new Set(results.filter(r => r.status === 'completed').map(r => r.agentId));
+          for (const agentId of participants) {
+            this.memWriter.writeConsensusKnowledge(agentId, findings);
+          }
+          for (const agentId of participants) {
+            try { this.memWriter.rebuildIndex(agentId); } catch { /* best-effort */ }
+          }
+        } catch { /* best-effort cross-agent learning */ }
+      }
+
+      return consensusReport;
+    } catch (err) {
+      process.stderr.write(`[gossipcat] Consensus failed: ${(err as Error).message}\n`);
+      return undefined;
+    }
   }
 
   /** Flush TaskGraph index on shutdown */
@@ -998,6 +1014,49 @@ export class DispatchPipeline {
     return pending.length > 0
       ? [`${pending.length} skill(s) ready to build: ${pending.join(', ')}`]
       : [];
+  }
+
+  /**
+   * Detect agents weak in categories where peers are strong.
+   * Returns suggestions like: "sonnet-reviewer needs a skill in error_handling (score: 0.2, team median: 0.7)"
+   */
+  getSkillGapSuggestions(): string[] {
+    if (!this.competencyProfiler) return [];
+
+    const profiles = this.competencyProfiler.getProfiles();
+    if (profiles.size < 2) return [];
+
+    // Collect all category scores across agents
+    const categoryScores = new Map<string, number[]>();
+    for (const [, profile] of profiles) {
+      for (const [cat, score] of Object.entries(profile.reviewStrengths)) {
+        if (!categoryScores.has(cat)) categoryScores.set(cat, []);
+        categoryScores.get(cat)!.push(score);
+      }
+    }
+
+    // Compute medians
+    const categoryMedians = new Map<string, number>();
+    for (const [cat, scores] of categoryScores) {
+      if (scores.length < 2) continue;
+      const sorted = [...scores].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      categoryMedians.set(cat, sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2);
+    }
+
+    const suggestions: string[] = [];
+    for (const [, profile] of profiles) {
+      for (const [cat, median] of categoryMedians) {
+        if (median < 0.6) continue; // peers aren't strong enough to justify suggestion
+        const agentScore = profile.reviewStrengths[cat] ?? 0;
+        if (agentScore < 0.3) {
+          suggestions.push(
+            `${profile.agentId} needs a skill in "${cat}" (score: ${agentScore.toFixed(2)}, team median: ${median.toFixed(2)}) — call gossip_develop_skill(agent_id: "${profile.agentId}", category: "${cat}")`
+          );
+        }
+      }
+    }
+    return suggestions;
   }
 
   async summarizeAndStoreGossip(agentId: string, result: string): Promise<void> {

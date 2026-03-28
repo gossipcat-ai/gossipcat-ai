@@ -337,4 +337,101 @@ describe('DispatchPipeline', () => {
       expect(errors).toHaveLength(0);
     });
   });
+
+  describe('runConsensus()', () => {
+    it('returns undefined when no LLM configured', async () => {
+      const result = await pipeline.runConsensus([
+        { id: 't1', agentId: 'a', task: 'review', status: 'completed', result: 'found bug', startedAt: 0, completedAt: 1 },
+        { id: 't2', agentId: 'b', task: 'review', status: 'completed', result: 'found bug', startedAt: 0, completedAt: 1 },
+      ]);
+      expect(result).toBeUndefined();
+    });
+
+    it('returns undefined when fewer than 2 completed results', async () => {
+      const result = await pipeline.runConsensus([
+        { id: 't1', agentId: 'a', task: 'review', status: 'completed', result: 'found bug', startedAt: 0, completedAt: 1 },
+        { id: 't2', agentId: 'b', task: 'review', status: 'failed', error: 'timeout', startedAt: 0, completedAt: 1 },
+      ]);
+      expect(result).toBeUndefined();
+    });
+
+    it('runs consensus with LLM and returns report', async () => {
+      const mockLlm = {
+        generate: jest.fn().mockResolvedValue('[]'),
+        provider: 'test',
+        model: 'test',
+      };
+      const llmPipeline = new DispatchPipeline({
+        projectRoot: '/tmp/gossip-test-' + Date.now(),
+        workers,
+        registryGet: (id) => ({ id, provider: 'local' as const, model: 'mock', skills: [] }),
+        llm: mockLlm as any,
+      });
+
+      const results = [
+        { id: 't1', agentId: 'agent-a', task: 'review', status: 'completed' as const, result: '## Consensus Summary\nfound a bug in auth', startedAt: 0, completedAt: 1 },
+        { id: 't2', agentId: 'agent-b', task: 'review', status: 'completed' as const, result: '## Consensus Summary\nfound a bug in auth', startedAt: 0, completedAt: 1 },
+      ];
+      const report = await llmPipeline.runConsensus(results);
+      expect(report).toBeDefined();
+      expect(mockLlm.generate).toHaveBeenCalled();
+    });
+
+    it('includes native + relay results when called with merged set', async () => {
+      const mockLlm = {
+        generate: jest.fn().mockResolvedValue('[]'),
+        provider: 'test',
+        model: 'test',
+      };
+      const llmPipeline = new DispatchPipeline({
+        projectRoot: '/tmp/gossip-test-' + Date.now(),
+        workers,
+        registryGet: (id) => ({ id, provider: 'local' as const, model: 'mock', skills: [] }),
+        llm: mockLlm as any,
+      });
+
+      // Simulates merged relay + native results
+      const results = [
+        { id: 'relay-1', agentId: 'gemini-reviewer', task: 'review', status: 'completed' as const, result: '## Consensus Summary\nSQL injection in query builder', startedAt: 0, completedAt: 100 },
+        { id: 'relay-2', agentId: 'gemini-tester', task: 'review', status: 'completed' as const, result: '## Consensus Summary\nNo issues found', startedAt: 0, completedAt: 200 },
+        { id: 'native-1', agentId: 'sonnet-reviewer', task: 'review', status: 'completed' as const, result: '## Consensus Summary\nSQL injection in query builder + XSS in template', startedAt: 0, completedAt: 300 },
+      ];
+      const report = await llmPipeline.runConsensus(results);
+      expect(report).toBeDefined();
+      // All 3 agents should participate in cross-review (3 generate calls)
+      expect(mockLlm.generate.mock.calls.length).toBe(3);
+    });
+  });
+
+  describe('getSkillGapSuggestions()', () => {
+    it('returns empty when no profiler configured', () => {
+      expect(pipeline.getSkillGapSuggestions()).toEqual([]);
+    });
+
+    it('detects agents weak in categories where peers are strong', () => {
+      const mockProfiler = {
+        getProfiles: jest.fn().mockReturnValue(new Map([
+          ['agent-a', { agentId: 'agent-a', reviewStrengths: { injection: 0.8, xss: 0.75 } }],
+          ['agent-b', { agentId: 'agent-b', reviewStrengths: { injection: 0.1, xss: 0.05 } }],
+          ['agent-c', { agentId: 'agent-c', reviewStrengths: { injection: 0.9, xss: 0.8 } }],
+        ])),
+      };
+      pipeline.setCompetencyProfiler(mockProfiler as any);
+      const suggestions = pipeline.getSkillGapSuggestions();
+      expect(suggestions.length).toBeGreaterThan(0);
+      expect(suggestions.some(s => s.includes('agent-b') && s.includes('injection'))).toBe(true);
+      expect(suggestions.some(s => s.includes('agent-b') && s.includes('xss'))).toBe(true);
+    });
+
+    it('returns empty when all agents are strong', () => {
+      const mockProfiler = {
+        getProfiles: jest.fn().mockReturnValue(new Map([
+          ['agent-a', { agentId: 'agent-a', reviewStrengths: { injection: 0.8 } }],
+          ['agent-b', { agentId: 'agent-b', reviewStrengths: { injection: 0.7 } }],
+        ])),
+      };
+      pipeline.setCompetencyProfiler(mockProfiler as any);
+      expect(pipeline.getSkillGapSuggestions()).toEqual([]);
+    });
+  });
 });

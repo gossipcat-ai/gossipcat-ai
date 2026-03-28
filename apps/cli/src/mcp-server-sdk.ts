@@ -306,6 +306,21 @@ async function doBoot() {
     process.stderr.write(`[gossipcat] Skill generator failed: ${(err as Error).message}\n`);
   }
 
+  // Initialize per-agent skill index
+  try {
+    const { SkillIndex: SI } = await import('@gossip/orchestrator');
+    const skillIndex = new SI(process.cwd());
+    if (!skillIndex.exists()) {
+      // First time: seed from config.skills[] arrays
+      skillIndex.seedFromConfigs(agentConfigs.map((ac: any) => ({ id: ac.id, skills: ac.skills || [] })));
+      process.stderr.write(`[gossipcat] Skill index created (seeded from ${agentConfigs.length} agent configs)\n`);
+    }
+    mainAgent.setSkillIndex(skillIndex);
+    process.stderr.write(`[gossipcat] Skill index loaded (${skillIndex.getAgentIds().length} agents)\n`);
+  } catch (err) {
+    process.stderr.write(`[gossipcat] Skill index failed: ${(err as Error).message}\n`);
+  }
+
   // Create gossip publisher and wire into pipeline
   try {
     const { GossipAgent: GossipAgentPub } = await import('@gossip/client');
@@ -750,48 +765,65 @@ server.tool(
   async ({ task_ids, timeout_ms, consensus }) => {
     await boot();
 
-    // Collect relay tasks
-    let collected;
     const requestedIds = task_ids.length > 0 ? task_ids : undefined;
     // Split requested IDs into relay vs native
     const relayIds = requestedIds?.filter(id => !nativeResultMap.has(id) && !nativeTaskMap.has(id));
     const nativeIds = requestedIds?.filter(id => nativeResultMap.has(id) || nativeTaskMap.has(id));
 
+    // Step 1: Collect relay results (WITHOUT consensus — we run it after merging natives)
+    let relayResults: any[] = [];
     try {
       const idsForRelay = relayIds && relayIds.length > 0 ? relayIds : (!requestedIds ? undefined : []);
       if (!idsForRelay || idsForRelay.length > 0) {
-        collected = await mainAgent.collect(idsForRelay, timeout_ms, consensus ? { consensus: true } : undefined);
-      } else {
-        collected = { results: [], consensus: undefined };
+        const collected = await mainAgent.collect(idsForRelay, timeout_ms);
+        relayResults = collected.results || [];
       }
     } catch (err) {
       process.stderr.write(`[gossipcat] collect failed: ${(err as Error).message}\n`);
-      collected = { results: [], consensus: undefined };
     }
 
-    const { results: taskResults, consensus: consensusReport } = collected;
-
-    // Include native results
-    const allResults = [...taskResults];
-    if (nativeIds && nativeIds.length > 0) {
-      for (const id of nativeIds) {
-        const nr = nativeResultMap.get(id);
-        if (nr) {
-          allResults.push(nr);
-          nativeResultMap.delete(id); // consumed
-        } else if (nativeTaskMap.has(id)) {
-          allResults.push({ id, agentId: nativeTaskMap.get(id)!.agentId, task: nativeTaskMap.get(id)!.task, status: 'running' });
+    // Step 2: Wait for pending native tasks (poll until they arrive or timeout)
+    const pendingNativeIds = (nativeIds || []).filter(id => nativeTaskMap.has(id) && !nativeResultMap.has(id));
+    if (!requestedIds) {
+      // Also wait for any unspecified pending native tasks
+      for (const [id] of nativeTaskMap) {
+        if (!nativeResultMap.has(id) && !pendingNativeIds.includes(id)) {
+          pendingNativeIds.push(id);
         }
       }
-    } else if (!requestedIds) {
-      // No specific IDs — include all collected native results
-      for (const [id, nr] of nativeResultMap) {
-        allResults.push(nr);
-        nativeResultMap.delete(id);
+    }
+
+    if (pendingNativeIds.length > 0 && consensus) {
+      const POLL_INTERVAL = 2000;
+      const nativeTimeout = Math.min(timeout_ms, 120000); // cap native wait at 2min
+      const deadline = Date.now() + nativeTimeout;
+      process.stderr.write(`[gossipcat] Waiting for ${pendingNativeIds.length} native agent(s) before consensus...\n`);
+
+      while (Date.now() < deadline) {
+        const stillPending = pendingNativeIds.filter(id => !nativeResultMap.has(id) && nativeTaskMap.has(id));
+        if (stillPending.length === 0) break;
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
       }
-      // Include pending native tasks
-      for (const [id, info] of nativeTaskMap) {
-        allResults.push({ id, agentId: info.agentId, task: info.task, status: 'running' as const });
+
+      const arrived = pendingNativeIds.filter(id => nativeResultMap.has(id)).length;
+      const timedOut = pendingNativeIds.length - arrived;
+      if (timedOut > 0) {
+        process.stderr.write(`[gossipcat] ${timedOut} native agent(s) timed out, proceeding with ${arrived} arrived\n`);
+      } else {
+        process.stderr.write(`[gossipcat] All ${arrived} native agent(s) arrived\n`);
+      }
+    }
+
+    // Step 3: Merge relay + native results
+    const allResults = [...relayResults];
+    const collectNativeIds = nativeIds || (!requestedIds ? [...nativeResultMap.keys(), ...nativeTaskMap.keys()].filter((id, i, arr) => arr.indexOf(id) === i) : []);
+    for (const id of collectNativeIds) {
+      const nr = nativeResultMap.get(id);
+      if (nr) {
+        allResults.push(nr);
+        nativeResultMap.delete(id); // consumed
+      } else if (nativeTaskMap.has(id)) {
+        allResults.push({ id, agentId: nativeTaskMap.get(id)!.agentId, task: nativeTaskMap.get(id)!.task, status: 'running' as const });
       }
     }
 
@@ -799,6 +831,13 @@ server.tool(
       return { content: [{ type: 'text' as const, text: requestedIds ? 'No matching tasks.' : 'No pending tasks.' }] };
     }
 
+    // Step 4: Run consensus on merged results (relay + native together)
+    let consensusReport: any = undefined;
+    if (consensus && allResults.filter((r: any) => r.status === 'completed').length >= 2) {
+      consensusReport = await mainAgent.runConsensus(allResults);
+    }
+
+    // Step 5: Format output
     const resultTexts = allResults.map((t: any) => {
       const dur = t.completedAt && t.startedAt ? `${t.completedAt - t.startedAt}ms` : 'running';
       const modeTag = t.writeMode ? ` [${t.writeMode}${t.scope ? `:${t.scope}` : ''}]` : '';
@@ -819,7 +858,7 @@ server.tool(
 
     let output = resultTexts.join('\n\n---\n\n');
 
-    if (consensusReport) {
+    if (consensusReport?.summary) {
       output += '\n\n' + consensusReport.summary;
     }
 
@@ -829,6 +868,14 @@ server.tool(
       const thresholds = tracker.checkThresholds();
       if (thresholds.count > 0) {
         output += `\n\n🔧 ${thresholds.count} skill(s) ready to build. Call gossip_build_skills() to generate them.`;
+      }
+    } catch { /* best-effort */ }
+
+    // Auto skill gap suggestions: detect agents weak in categories where peers are strong
+    try {
+      const suggestions = mainAgent.getSkillGapSuggestions();
+      if (suggestions.length > 0) {
+        output += `\n\n📊 Skill gap detected:\n${suggestions.map(s => `  - ${s}`).join('\n')}`;
       }
     } catch { /* best-effort */ }
 
@@ -928,7 +975,7 @@ server.tool(
     const relayIds = task_ids.filter(id => !nativeResultMap.has(id) && !nativeTaskMap.has(id));
     const nativeIds = task_ids.filter(id => nativeResultMap.has(id) || nativeTaskMap.has(id));
 
-    // Step 1: Collect relay results WITHOUT consensus (we'll run it ourselves with combined results)
+    // Step 1: Collect relay results WITHOUT consensus
     let relayResults: any[] = [];
     try {
       if (relayIds.length > 0) {
@@ -939,7 +986,30 @@ server.tool(
       process.stderr.write(`[gossipcat] consensus collect failed: ${(err as Error).message}\n`);
     }
 
-    // Step 2: Merge native results
+    // Step 2: Wait for pending native tasks before consensus
+    const pendingNativeIds = nativeIds.filter(id => nativeTaskMap.has(id) && !nativeResultMap.has(id));
+    if (pendingNativeIds.length > 0) {
+      const POLL_INTERVAL = 2000;
+      const nativeTimeout = Math.min(timeout_ms, 120000);
+      const deadline = Date.now() + nativeTimeout;
+      process.stderr.write(`[gossipcat] Waiting for ${pendingNativeIds.length} native agent(s) before consensus...\n`);
+
+      while (Date.now() < deadline) {
+        const stillPending = pendingNativeIds.filter(id => !nativeResultMap.has(id) && nativeTaskMap.has(id));
+        if (stillPending.length === 0) break;
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+      }
+
+      const arrived = pendingNativeIds.filter(id => nativeResultMap.has(id)).length;
+      const timedOut = pendingNativeIds.length - arrived;
+      if (timedOut > 0) {
+        process.stderr.write(`[gossipcat] ${timedOut} native agent(s) timed out, proceeding with ${arrived} arrived\n`);
+      } else {
+        process.stderr.write(`[gossipcat] All ${arrived} native agent(s) arrived\n`);
+      }
+    }
+
+    // Step 3: Merge relay + native results
     const allResults = [...relayResults];
     for (const id of nativeIds) {
       const nr = nativeResultMap.get(id);
@@ -955,26 +1025,14 @@ server.tool(
       return { content: [{ type: 'text' as const, text: 'No matching tasks. Native agents may still be running — call gossip_relay_result first.' }] };
     }
 
-    // Step 3: Try automated cross-review via ConsensusEngine (if orchestrator LLM is available).
-    // In Claude Code, the host IS Opus 4.6 — if the engine fails or isn't available,
-    // just return the results and let Claude Code synthesize them (it's the best model).
+    // Step 4: Run full consensus pipeline (engine + judge + signals + cross-agent learning)
     let consensusReport: any = undefined;
     const completedResults = allResults.filter((t: any) => t.status === 'completed' && t.result);
     if (completedResults.length >= 2) {
-      try {
-        const { ConsensusEngine } = await import('@gossip/orchestrator');
-        const engine = new ConsensusEngine({
-          llm: mainAgent.getLLM(),
-          registryGet: (id: string) => mainAgent.getAgentList().find((a: any) => a.id === id),
-        });
-        consensusReport = await engine.run(allResults);
-        process.stderr.write(`[gossipcat] Consensus engine: ${completedResults.length} agents cross-reviewed\n`);
-      } catch (err) {
-        process.stderr.write(`[gossipcat] Consensus engine skipped: ${(err as Error).message}\n`);
-      }
+      consensusReport = await mainAgent.runConsensus(allResults);
     }
 
-    // Step 4: Format output
+    // Step 5: Format output
     const resultTexts = allResults.map((t: any) => {
       const dur = t.completedAt && t.startedAt ? `${t.completedAt - t.startedAt}ms` : 'running';
       const nativeTag = nativeAgentConfigs.has(t.agentId) ? ' (native)' : '';
@@ -993,6 +1051,14 @@ server.tool(
     } else {
       output += '\n\n⚠️ Need ≥2 successful agents for consensus.';
     }
+
+    // Auto skill gap suggestions
+    try {
+      const suggestions = mainAgent.getSkillGapSuggestions();
+      if (suggestions.length > 0) {
+        output += `\n\n📊 Skill gap detected:\n${suggestions.map(s => `  - ${s}`).join('\n')}`;
+      }
+    } catch { /* best-effort */ }
 
     return { content: [{ type: 'text' as const, text: output }] };
   }
@@ -1990,6 +2056,76 @@ server.tool(
   },
 );
 
+// ── Skill Index: per-agent skill slot management ─────────────────────────
+server.tool(
+  'gossip_skill_index',
+  'Show the per-agent skill index. Each agent has skill "slots" that can be enabled/disabled. Like smart contract storage slots — deterministic addressing, O(1) lookup.',
+  {},
+  async () => {
+    await boot();
+    const index = mainAgent.getSkillIndex();
+    if (!index) return { content: [{ type: 'text' as const, text: 'Skill index not initialized.' }] };
+
+    const data = index.getIndex();
+    const agentIds = Object.keys(data);
+    if (agentIds.length === 0) return { content: [{ type: 'text' as const, text: 'Skill index is empty. Skills will be indexed on next dispatch.' }] };
+
+    const sections = agentIds.map((agentId: string) => {
+      const slots = Object.values(data[agentId]);
+      const lines = slots.map((s: any) =>
+        `  [${s.enabled ? '✓' : '✗'}] ${s.skill} (v${s.version}, ${s.source})`
+      );
+      return `${agentId} (${slots.filter((s: any) => s.enabled).length}/${slots.length} enabled):\n${lines.join('\n')}`;
+    });
+
+    return { content: [{ type: 'text' as const, text: `Skill Index (${agentIds.length} agents):\n\n${sections.join('\n\n')}` }] };
+  }
+);
+
+server.tool(
+  'gossip_skill_bind',
+  'Bind a skill to an agent (creates or updates the slot). Can also enable/disable existing slots. Skills are shared — one skill file, many agents.',
+  {
+    agent_id: z.string().describe('Agent to bind skill to'),
+    skill: z.string().describe('Skill name (e.g. "security-audit", "typescript")'),
+    enabled: z.boolean().default(true).describe('Set to false to disable the slot without removing it'),
+  },
+  async ({ agent_id, skill, enabled }) => {
+    await boot();
+    const index = mainAgent.getSkillIndex();
+    if (!index) return { content: [{ type: 'text' as const, text: 'Skill index not initialized.' }] };
+
+    const existing = index.getSlot(agent_id, skill);
+    const slot = index.bind(agent_id, skill, { enabled });
+
+    const action = existing
+      ? (existing.enabled !== enabled ? (enabled ? 'enabled' : 'disabled') : 'updated')
+      : 'bound';
+
+    return { content: [{ type: 'text' as const, text: `Skill "${slot.skill}" ${action} for ${agent_id} (v${slot.version}, ${slot.enabled ? 'enabled' : 'disabled'})` }] };
+  }
+);
+
+server.tool(
+  'gossip_skill_unbind',
+  'Remove a skill slot from an agent entirely. Use gossip_skill_bind with enabled: false to disable without removing.',
+  {
+    agent_id: z.string().describe('Agent to unbind skill from'),
+    skill: z.string().describe('Skill name to remove'),
+  },
+  async ({ agent_id, skill }) => {
+    await boot();
+    const index = mainAgent.getSkillIndex();
+    if (!index) return { content: [{ type: 'text' as const, text: 'Skill index not initialized.' }] };
+
+    const removed = index.unbind(agent_id, skill);
+    return { content: [{ type: 'text' as const, text: removed
+      ? `Skill "${skill}" unbound from ${agent_id}`
+      : `No slot found for "${skill}" on ${agent_id}`
+    }] };
+  }
+);
+
 // ── Tool: list available gossipcat tools ──────────────────────────────────
 server.tool(
   'gossip_tools',
@@ -2016,6 +2152,9 @@ server.tool(
       { name: 'gossip_findings', desc: 'View implementation findings per agent' },
       { name: 'gossip_build_skills', desc: 'Build skill files from agent gap suggestions' },
       { name: 'gossip_develop_skill', desc: 'Generate agent-specific skill from ATI competency data' },
+      { name: 'gossip_skill_index', desc: 'Show per-agent skill slots (enabled/disabled/version)' },
+      { name: 'gossip_skill_bind', desc: 'Bind/enable/disable a skill slot on an agent' },
+      { name: 'gossip_skill_unbind', desc: 'Remove a skill slot from an agent' },
       { name: 'gossip_tools', desc: 'List available tools (this command)' },
       { name: 'gossip_bootstrap', desc: 'Generate team context prompt with live agent state' },
       { name: 'gossip_setup', desc: 'Create or update team configuration' },
