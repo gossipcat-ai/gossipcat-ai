@@ -58,3 +58,4 @@ export { CompetencyProfiler } from './competency-profiler';
 export type { CompetencyProfile } from './competency-profiler';
 export { DispatchDifferentiator } from './dispatch-differentiator';
 export { shouldSkipConsensus } from './dispatch-pipeline';
+export { SkillGenerator } from './skill-generator';
