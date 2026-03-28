@@ -54,11 +54,35 @@ export interface CollectResult {
 export interface ConsensusSignal {
   type: 'consensus';
   taskId: string;
-  signal: 'agreement' | 'disagreement' | 'unique_confirmed' | 'unique_unconfirmed' | 'new_finding' | 'hallucination_caught';
+  signal: 'agreement' | 'disagreement' | 'unique_confirmed' | 'unique_unconfirmed' | 'new_finding' | 'hallucination_caught' | 'category_confirmed';
   agentId: string;
   counterpartId?: string;
   skill?: string;
   outcome?: 'correct' | 'incorrect' | 'unresolved' | 'fabricated_citation';
+  category?: string;
   evidence: string;
   timestamp: string;
 }
+
+/** Implementation quality signal from verify_write */
+export interface ImplSignal {
+  type: 'impl';
+  signal: 'impl_test_pass' | 'impl_test_fail' | 'impl_peer_approved' | 'impl_peer_rejected';
+  agentId: string;
+  taskId: string;
+  evidence?: string;
+  timestamp: string;
+}
+
+/** Meta signal from worker-agent telemetry */
+export interface MetaSignal {
+  type: 'meta';
+  signal: 'task_completed' | 'task_tool_turns';
+  agentId: string;
+  taskId: string;
+  value?: number;
+  timestamp: string;
+}
+
+/** Union of all performance signal types */
+export type PerformanceSignal = ConsensusSignal | ImplSignal | MetaSignal;

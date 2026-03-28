@@ -28,6 +28,7 @@ const SIGNAL_WEIGHTS = {
   unique_unconfirmed: { uniqueness: 0.05 },
   new_finding: { uniqueness: 0.15 },
   hallucination_caught: { accuracy: -0.3 },
+  category_confirmed: { accuracy: 0.1 },
 };
 
 export class PerformanceReader {
