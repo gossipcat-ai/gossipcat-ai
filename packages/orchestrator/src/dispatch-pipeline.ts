@@ -615,6 +615,10 @@ export class DispatchPipeline {
         const perfWriter = new PerformanceWriter(this.projectRoot);
 
         // START: Consensus Judge Integration
+        // Build agent → taskId mapping for signal scoring
+        const agentTaskIdMap = new Map<string, string>();
+        for (const r of results) agentTaskIdMap.set(r.agentId, r.id);
+
         if (consensusReport.confirmed.length > 0 && this.consensusJudge) {
           try {
             const verdicts = await this.consensusJudge.verify(consensusReport.confirmed);
@@ -638,7 +642,7 @@ export class DispatchPipeline {
                 consensusReport.signals.push({
                   type: 'consensus', signal: 'hallucination_caught',
                   agentId: finding.originalAgentId, outcome: 'judge_refuted',
-                  evidence: v.evidence, timestamp: now, taskId: finding.id || '',
+                  evidence: v.evidence, timestamp: now, taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || '',
                 });
                 // Signal: each confirming agent also penalized
                 for (const confirmerId of finding.confirmedBy) {
@@ -646,14 +650,14 @@ export class DispatchPipeline {
                     type: 'consensus', signal: 'hallucination_caught',
                     agentId: confirmerId, outcome: 'confirmed_hallucination',
                     evidence: `Confirmed refuted finding: ${v.evidence}`,
-                    timestamp: now, taskId: finding.id || '',
+                    timestamp: now, taskId: agentTaskIdMap.get(confirmerId) || finding.id || '',
                   });
                 }
               } else if (v.verdict === 'VERIFIED') {
                 consensusReport.signals.push({
                   type: 'consensus', signal: 'consensus_verified',
                   agentId: finding.originalAgentId,
-                  evidence: v.evidence, timestamp: now, taskId: finding.id || '',
+                  evidence: v.evidence, timestamp: now, taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || '',
                 });
               }
             }

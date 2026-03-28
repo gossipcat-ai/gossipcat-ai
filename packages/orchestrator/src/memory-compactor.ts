@@ -8,8 +8,9 @@ export class MemoryCompactor {
   constructor(private projectRoot: string) {}
 
   calculateWarmth(importance: number, timestamp: string): number {
-    const days = (Date.now() - new Date(timestamp).getTime()) / 86400000;
-    return importance * (1 / (1 + days / 30));
+    const raw = (Date.now() - new Date(timestamp).getTime()) / 86400000;
+    const days = Math.max(0, raw); // Clamp: future timestamps don't produce Infinity/negative
+    return (importance || 0.5) * (1 / (1 + days / 30)); // Default importance if missing
   }
 
   compactIfNeeded(agentId: string, maxEntries: number = 20): { archived: number; message?: string } {
@@ -68,7 +69,7 @@ export class MemoryCompactor {
         if (existsSync(archivePath)) {
           const archiveLines = readFileSync(archivePath, 'utf-8').trim().split('\n');
           if (archiveLines.length > MAX_ARCHIVE_LINES) {
-            writeFileSync(archivePath, archiveLines.slice(-MAX_ARCHIVE_LINES / 2).join('\n') + '\n');
+            writeFileSync(archivePath, archiveLines.slice(-MAX_ARCHIVE_LINES).join('\n') + '\n');
           }
         }
       } catch { /* best-effort archive truncation */ }

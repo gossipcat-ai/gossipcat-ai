@@ -5440,7 +5440,9 @@ var init_agent_memory = __esm({
             parts.push(`<agent-memory>
 ${content}
 </agent-memory>`);
-            this.touchKnowledgeFile(file2.path, content);
+            if (file2.score > 0.5) {
+              this.touchKnowledgeFile(file2.path, content);
+            }
           }
         }
         const calPath = (0, import_path6.join)(memDir, "calibration", "accuracy.md");
@@ -5460,12 +5462,22 @@ ${content}
           if (frontmatter) {
             const warmth = this.calculateWarmth(frontmatter.importance, frontmatter.lastAccessed);
             const relevance = this.calculateRelevance(frontmatter.description, lower);
-            if (relevance > 0) {
-              scored.push({ path: filePath, score: warmth * relevance });
+            const bodyStart = content.replace(/^---[\s\S]*?---\n*/, "").slice(0, 200).toLowerCase();
+            const bodyRelevance = this.calculateRelevance(bodyStart, lower);
+            const combinedRelevance = relevance * 0.7 + bodyRelevance * 0.3;
+            if (combinedRelevance > 0) {
+              scored.push({ path: filePath, score: warmth * combinedRelevance });
             }
           } else {
             const relevance = this.calculateRelevance(content.slice(0, 500), lower);
-            scored.push({ path: filePath, score: Math.max(relevance, 0.3) });
+            try {
+              const mtime = (0, import_fs4.statSync)(filePath).mtimeMs;
+              const ageDays = (Date.now() - mtime) / 864e5;
+              const ageFactor = 1 / (1 + ageDays / 30);
+              scored.push({ path: filePath, score: Math.max(relevance * ageFactor, 0.05) });
+            } catch {
+              scored.push({ path: filePath, score: relevance });
+            }
           }
         }
         return scored.sort((a, b) => b.score - a.score).slice(0, 5);
@@ -5475,12 +5487,16 @@ ${content}
         return importance * (1 / (1 + days / 30));
       }
       calculateRelevance(description, taskLower) {
-        const descWords = description.toLowerCase().split(/[\s,/.]+/).filter((w) => w.length > 2);
+        const descWords = description.toLowerCase().split(/[\s,/.]+/).filter((w) => w.length > 3);
         if (descWords.length === 0) return 0;
-        const taskWords = new Set(taskLower.split(/[\s,/.]+/).filter((w) => w.length > 2));
+        const taskWords = new Set(taskLower.split(/[\s,/.]+/).filter((w) => w.length > 3));
         let matches = 0;
         for (const w of descWords) {
-          if (taskWords.has(w) || taskLower.includes(w)) matches++;
+          if (taskWords.has(w)) {
+            matches += 1;
+          } else if (taskLower.includes(w)) {
+            matches += 0.5;
+          }
         }
         const descExts = description.match(/\.\w{1,5}/g) || [];
         const taskExts = taskLower.match(/\.\w{1,5}/g) || [];
@@ -5668,21 +5684,112 @@ ${result}`;
         if (decisions.length > 0) {
           lines.push(`Decisions: ${decisions.slice(0, 5).map((d) => d.trim()).join("; ")}`);
         }
+        const failurePatterns = /(?:error|failed|couldn't|unable to|rejected|threw|exception|not supported|bug|broke|crash)[^.]{5,100}/gi;
+        const failures = (combined.match(failurePatterns) || []).slice(0, 3);
+        if (failures.length > 0) {
+          lines.push(`Failures: ${failures.map((f) => f.trim()).join("; ")}`);
+        }
         const sentences = result.split(/[.!]\s+/).filter((s) => s.trim().length > 20).slice(0, 2);
         if (sentences.length > 0) {
           lines.push(`Summary: ${sentences.join(". ")}.`);
         }
         if (lines.length === 0) return null;
+        const hasFailures = failures.length > 0;
         const descParts = [...files.slice(0, 3), ...foundTech.slice(0, 3)];
         const description = descParts.length > 0 ? descParts.join(", ") : truncateAtWord(task, 80).replace(/\n/g, " ");
         return {
           description,
-          importance: files.length > 3 ? 0.9 : files.length > 0 ? 0.7 : 0.5,
+          importance: (files.length > 3 ? 0.9 : files.length > 0 ? 0.7 : 0.5) + (hasFailures ? 0.1 : 0),
           body: lines.join("\n")
         };
       }
       deriveImportance(scores) {
         return (scores.relevance + scores.accuracy + scores.uniqueness) / 15;
+      }
+      writeConsensusKnowledge(agentId, findings) {
+        if (findings.length === 0) return;
+        const memDir = this.ensureDirs(agentId);
+        const knowledgeDir = (0, import_path7.join)(memDir, "knowledge");
+        const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+        const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const filename = `${timestamp}-consensus.md`;
+        const peerFindings = findings.filter((f) => f.originalAgentId !== agentId).slice(0, 10);
+        if (peerFindings.length === 0) return;
+        const content = [
+          "---",
+          `name: Peer findings from consensus review`,
+          `description: ${peerFindings.length} findings from peer agents`,
+          `importance: 0.8`,
+          `lastAccessed: ${today}`,
+          `accessCount: 0`,
+          "---",
+          "",
+          "## Peer Findings (learn from these)",
+          "",
+          ...peerFindings.map((f) => `- [${f.originalAgentId}] ${f.finding}`)
+        ].join("\n");
+        try {
+          const existing = (0, import_fs5.readdirSync)(knowledgeDir).filter((f) => f.endsWith(".md")).sort();
+          const MAX_KNOWLEDGE_FILES = 10;
+          if (existing.length >= MAX_KNOWLEDGE_FILES) {
+            const toRemove = existing.slice(0, existing.length - MAX_KNOWLEDGE_FILES + 1);
+            for (const old of toRemove) {
+              (0, import_fs5.unlinkSync)((0, import_path7.join)(knowledgeDir, old));
+            }
+          }
+        } catch {
+        }
+        (0, import_fs5.writeFileSync)((0, import_path7.join)(knowledgeDir, filename), content);
+      }
+      /**
+       * Update task memory importance based on consensus signals.
+       * High-quality findings get boosted, hallucinations get reduced.
+       */
+      updateImportanceFromSignals(signals) {
+        const IMPORTANCE_ADJUSTMENTS = {
+          consensus_verified: 0.15,
+          unique_confirmed: 0.2,
+          agreement: 0.05,
+          hallucination_caught: -0.25,
+          disagreement: -0.1
+        };
+        const adjustments = /* @__PURE__ */ new Map();
+        for (const s of signals) {
+          const weight = IMPORTANCE_ADJUSTMENTS[s.signal];
+          if (weight === void 0) continue;
+          if (!adjustments.has(s.agentId)) adjustments.set(s.agentId, /* @__PURE__ */ new Map());
+          const taskAdj = adjustments.get(s.agentId);
+          taskAdj.set(s.taskId, (taskAdj.get(s.taskId) ?? 0) + weight);
+        }
+        for (const [agentId, taskAdjustments] of adjustments) {
+          const memDir = (0, import_path7.join)(this.projectRoot, ".gossip", "agents", agentId, "memory");
+          const tasksPath = (0, import_path7.join)(memDir, "tasks.jsonl");
+          const lockPath = (0, import_path7.join)(memDir, "tasks.jsonl.lock");
+          if (!(0, import_fs5.existsSync)(tasksPath)) continue;
+          if ((0, import_fs5.existsSync)(lockPath)) continue;
+          try {
+            const lines = (0, import_fs5.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
+            let modified = false;
+            const updated = lines.map((line) => {
+              try {
+                const entry = JSON.parse(line);
+                const adj = taskAdjustments.get(entry.taskId);
+                if (adj !== void 0) {
+                  entry.importance = Math.max(0.1, Math.min(1, (entry.importance || 0.5) + adj));
+                  modified = true;
+                  return JSON.stringify(entry);
+                }
+                return line;
+              } catch {
+                return line;
+              }
+            });
+            if (modified) {
+              (0, import_fs5.writeFileSync)(tasksPath, updated.join("\n") + "\n");
+            }
+          } catch {
+          }
+        }
       }
       rebuildIndex(agentId) {
         const memDir = this.getMemDir(agentId);
@@ -5728,6 +5835,24 @@ ${result}`;
             parts.push("");
           }
         }
+        try {
+          const knowledgeDir2 = (0, import_path7.join)(memDir, "knowledge");
+          if ((0, import_fs5.existsSync)(knowledgeDir2)) {
+            const knowledgeFiles = (0, import_fs5.readdirSync)(knowledgeDir2).filter((f) => f.endsWith(".md")).sort().reverse().slice(0, 5);
+            const patterns = [];
+            for (const kf of knowledgeFiles) {
+              const kContent = (0, import_fs5.readFileSync)((0, import_path7.join)(knowledgeDir2, kf), "utf-8");
+              const decisionsMatch = kContent.match(/Decisions: (.+)/);
+              if (decisionsMatch) patterns.push(decisionsMatch[1].trim());
+              const failuresMatch = kContent.match(/Failures: (.+)/);
+              if (failuresMatch) patterns.push(`\u26A0\uFE0F ${failuresMatch[1].trim()}`);
+            }
+            if (patterns.length > 0) {
+              parts.push("", "## Recent Patterns", "", ...patterns.slice(0, 5).map((p) => `- ${p}`));
+            }
+          }
+        } catch {
+        }
         (0, import_fs5.writeFileSync)((0, import_path7.join)(memDir, "MEMORY.md"), parts.join("\n"));
       }
     };
@@ -5747,15 +5872,28 @@ var init_memory_compactor = __esm({
         this.projectRoot = projectRoot;
       }
       calculateWarmth(importance, timestamp) {
-        const days = (Date.now() - new Date(timestamp).getTime()) / 864e5;
-        return importance * (1 / (1 + days / 30));
+        const raw = (Date.now() - new Date(timestamp).getTime()) / 864e5;
+        const days = Math.max(0, raw);
+        return (importance || 0.5) * (1 / (1 + days / 30));
       }
       compactIfNeeded(agentId, maxEntries = 20) {
         const memDir = (0, import_path8.join)(this.projectRoot, ".gossip", "agents", agentId, "memory");
         const tasksPath = (0, import_path8.join)(memDir, "tasks.jsonl");
         const lockPath = (0, import_path8.join)(memDir, "tasks.jsonl.lock");
         if (!(0, import_fs6.existsSync)(tasksPath)) return { archived: 0 };
-        if ((0, import_fs6.existsSync)(lockPath)) return { archived: 0 };
+        if ((0, import_fs6.existsSync)(lockPath)) {
+          try {
+            const lockAge = Date.now() - parseInt((0, import_fs6.readFileSync)(lockPath, "utf-8"), 10);
+            if (lockAge < 6e4) return { archived: 0 };
+            (0, import_fs6.unlinkSync)(lockPath);
+          } catch {
+            try {
+              (0, import_fs6.unlinkSync)(lockPath);
+            } catch {
+              return { archived: 0 };
+            }
+          }
+        }
         try {
           (0, import_fs6.writeFileSync)(lockPath, `${Date.now()}`);
         } catch {
@@ -5790,7 +5928,7 @@ var init_memory_compactor = __esm({
             if ((0, import_fs6.existsSync)(archivePath)) {
               const archiveLines = (0, import_fs6.readFileSync)(archivePath, "utf-8").trim().split("\n");
               if (archiveLines.length > MAX_ARCHIVE_LINES) {
-                (0, import_fs6.writeFileSync)(archivePath, archiveLines.slice(-MAX_ARCHIVE_LINES / 2).join("\n") + "\n");
+                (0, import_fs6.writeFileSync)(archivePath, archiveLines.slice(-MAX_ARCHIVE_LINES).join("\n") + "\n");
               }
             }
           } catch {
@@ -7522,7 +7660,11 @@ var init_dispatch_pipeline = __esm({
                 taskId: t.id,
                 task: t.task,
                 skills: this.registryGet(t.agentId)?.skills || [],
-                scores: { relevance: 3, accuracy: 3, uniqueness: 3 }
+                scores: {
+                  relevance: t.result && t.result.length > 200 ? 4 : 3,
+                  accuracy: t.status === "completed" ? 4 : 2,
+                  uniqueness: 3
+                }
               });
               if (t.result) {
                 this.memWriter.writeKnowledgeFromResult(t.agentId, {
@@ -7671,6 +7813,8 @@ Worktree merge: CONFLICT
             const engine = new ConsensusEngine({ llm: this.llm, registryGet: this.registryGet, projectRoot: this.projectRoot });
             consensusReport = await engine.run(results);
             const perfWriter = new PerformanceWriter(this.projectRoot);
+            const agentTaskIdMap = /* @__PURE__ */ new Map();
+            for (const r of results) agentTaskIdMap.set(r.agentId, r.id);
             if (consensusReport.confirmed.length > 0 && this.consensusJudge) {
               try {
                 const verdicts = await this.consensusJudge.verify(consensusReport.confirmed);
@@ -7691,7 +7835,7 @@ Worktree merge: CONFLICT
                       outcome: "judge_refuted",
                       evidence: v.evidence,
                       timestamp: now,
-                      taskId: finding.id || ""
+                      taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || ""
                     });
                     for (const confirmerId of finding.confirmedBy) {
                       consensusReport.signals.push({
@@ -7701,7 +7845,7 @@ Worktree merge: CONFLICT
                         outcome: "confirmed_hallucination",
                         evidence: `Confirmed refuted finding: ${v.evidence}`,
                         timestamp: now,
-                        taskId: finding.id || ""
+                        taskId: agentTaskIdMap.get(confirmerId) || finding.id || ""
                       });
                     }
                   } else if (v.verdict === "VERIFIED") {
@@ -7711,7 +7855,7 @@ Worktree merge: CONFLICT
                       agentId: finding.originalAgentId,
                       evidence: v.evidence,
                       timestamp: now,
-                      taskId: finding.id || ""
+                      taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || ""
                     });
                   }
                 }
@@ -7721,6 +7865,12 @@ Worktree merge: CONFLICT
             }
             if (consensusReport.signals.length > 0) {
               perfWriter.appendSignals(consensusReport.signals);
+              try {
+                this.memWriter.updateImportanceFromSignals(
+                  consensusReport.signals.map((s) => ({ signal: s.signal, agentId: s.agentId, taskId: s.taskId }))
+                );
+              } catch {
+              }
             }
             if (consensusReport.confirmed.length > 0) {
               const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -7737,6 +7887,25 @@ Worktree merge: CONFLICT
                     timestamp: now
                   });
                 }
+              }
+            }
+            if (consensusReport.confirmed.length > 0) {
+              try {
+                const findings = consensusReport.confirmed.map((f) => ({
+                  originalAgentId: f.originalAgentId,
+                  finding: f.finding
+                }));
+                const participants = new Set(results.filter((r) => r.status === "completed").map((r) => r.agentId));
+                for (const agentId of participants) {
+                  this.memWriter.writeConsensusKnowledge(agentId, findings);
+                }
+                for (const agentId of participants) {
+                  try {
+                    this.memWriter.rebuildIndex(agentId);
+                  } catch {
+                  }
+                }
+              } catch {
               }
             }
           } catch (err) {
@@ -7892,7 +8061,11 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
             taskId: t.id,
             task: t.task,
             skills: this.registryGet(t.agentId)?.skills || [],
-            scores: { relevance: 3, accuracy: 3, uniqueness: 3 }
+            scores: {
+              relevance: t.result && t.result.length > 200 ? 4 : 3,
+              accuracy: t.status === "completed" ? 4 : 2,
+              uniqueness: 3
+            }
           });
           if (t.result) {
             this.memWriter.writeKnowledgeFromResult(t.agentId, {
