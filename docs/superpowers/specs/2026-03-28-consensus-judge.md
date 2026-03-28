@@ -65,50 +65,61 @@ For each finding, read the cited code, then return ONLY a JSON array:
 In `dispatch-pipeline.ts`, inside `collect()`, after `ConsensusEngine.run()` returns:
 
 ```typescript
-// After consensus signals are written...
+// Inside the existing try block where perfWriter is scoped...
+// After category extraction, before task cleanup:
+
 if (consensusReport.confirmed.length > 0 && this.consensusJudge) {
   try {
     const verdicts = await this.consensusJudge.verify(consensusReport.confirmed);
-    for (const v of verdicts) {
-      const finding = consensusReport.confirmed[v.index - 1];
+    const now = new Date().toISOString();
+
+    // FIX: Process refuted verdicts in descending index order to avoid splice corruption
+    const refuted = verdicts
+      .filter(v => v.verdict === 'REFUTED')
+      .sort((a, b) => b.index - a.index); // descending
+
+    for (const v of refuted) {
+      const idx = v.index - 1;
+      const finding = consensusReport.confirmed[idx];
       if (!finding) continue;
 
-      if (v.verdict === 'REFUTED') {
-        // Demote from confirmed → disputed
-        consensusReport.confirmed.splice(v.index - 1, 1);
-        finding.tag = 'disputed';
-        consensusReport.disputed.push(finding);
+      consensusReport.confirmed.splice(idx, 1);
+      finding.tag = 'disputed';
+      consensusReport.disputed.push(finding);
 
-        // Signal: originating agent hallucinated
+      perfWriter.appendSignal({
+        type: 'consensus', signal: 'hallucination_caught',
+        agentId: finding.originalAgentId, outcome: 'judge_refuted',
+        evidence: v.evidence, timestamp: now, taskId: finding.id,
+      } as any);
+      for (const confirmerId of finding.confirmedBy) {
         perfWriter.appendSignal({
           type: 'consensus', signal: 'hallucination_caught',
-          agentId: finding.originalAgentId, outcome: 'judge_refuted',
-          evidence: v.evidence, timestamp: now, taskId: finding.id,
-        });
-        // Signal: each confirming agent also penalized
-        for (const confirmerId of finding.confirmedBy) {
-          perfWriter.appendSignal({
-            type: 'consensus', signal: 'hallucination_caught',
-            agentId: confirmerId, outcome: 'confirmed_hallucination',
-            evidence: `Confirmed refuted finding: ${v.evidence}`,
-            timestamp: now, taskId: finding.id,
-          });
-        }
-      } else if (v.verdict === 'VERIFIED') {
-        perfWriter.appendSignal({
-          type: 'consensus', signal: 'consensus_verified',
-          agentId: finding.originalAgentId,
-          evidence: v.evidence, timestamp: now, taskId: finding.id,
-        });
+          agentId: confirmerId, outcome: 'confirmed_hallucination',
+          evidence: `Confirmed refuted finding: ${v.evidence}`,
+          timestamp: now, taskId: finding.id,
+        } as any);
       }
-      // UNVERIFIABLE: no action, finding stays confirmed
+    }
+
+    // Emit verified signals (no array mutation needed)
+    for (const v of verdicts.filter(v => v.verdict === 'VERIFIED')) {
+      const finding = consensusReport.confirmed.find((_, i) => i === v.index - 1 - refuted.filter(r => r.index <= v.index).length);
+      if (!finding) continue;
+      perfWriter.appendSignal({
+        type: 'consensus', signal: 'consensus_verified',
+        agentId: finding.originalAgentId,
+        evidence: v.evidence, timestamp: now, taskId: finding.id,
+      } as any);
     }
   } catch (err) {
-    // Judge failed — don't block pipeline, keep all findings as confirmed
     log(`Consensus judge failed: ${(err as Error).message}`);
   }
 }
 ```
+
+> **Review fix (H1):** Refuted verdicts processed in descending index order to prevent splice corruption.
+> **Review fix (M1):** perfWriter is used inside the existing try block where it's already scoped.
 
 ### Signals Emitted
 
@@ -119,9 +130,13 @@ if (consensusReport.confirmed.length > 0 && this.consensusJudge) {
 | REFUTED | `hallucination_caught` (outcome: `confirmed_hallucination`) | each confirming agent | -accuracy (confirmed a hallucination) |
 | UNVERIFIABLE | (none) | — | Finding stays confirmed, no signal |
 
-### Replace verifyNegativeClaim
+### Keep verifyCitations, Remove verifyNegativeClaim
 
-Remove `verifyNegativeClaim` from `consensus-engine.ts` and the confirmed-finding verification block in `synthesize()`. The judge replaces both that and the `verifyCitations` call on confirmed findings. Keep `verifyCitations` on disagreements only (cheap, no LLM call needed).
+> **Review fix (M2, L1):** `verifyCitations` on confirmed findings is a cheap structural check (no LLM call). The judge is a semantic check. Keep both — they're complementary, not redundant. When judge is disabled, `verifyCitations` is the only defense.
+
+- **Remove** `verifyNegativeClaim` from `consensus-engine.ts` — replaced by the judge (proven too imprecise via regex)
+- **Keep** `verifyCitations` on confirmed findings in `synthesize()` — cheap pre-filter that catches file-not-found, line-beyond-length, keyword-mismatch
+- **Add** judge as a post-consensus step in `dispatch-pipeline.ts` — runs AFTER `verifyCitations` has already caught the obvious structural issues
 
 ---
 
@@ -139,9 +154,9 @@ Remove `verifyNegativeClaim` from `consensus-engine.ts` and the confirmed-findin
 | File | Change |
 |------|--------|
 | `packages/orchestrator/src/dispatch-pipeline.ts` | Call judge after consensus in `collect()` |
-| `packages/orchestrator/src/consensus-engine.ts` | Remove `verifyNegativeClaim` and confirmed-finding verification block from `synthesize()` |
+| `packages/orchestrator/src/consensus-engine.ts` | Remove `verifyNegativeClaim` only. Keep `verifyCitations` on confirmed findings. |
 | `packages/orchestrator/src/consensus-types.ts` | Add `consensus_verified` signal, `judge_refuted` and `confirmed_hallucination` outcomes |
-| `packages/orchestrator/src/performance-reader.ts` | Add `consensus_verified` to `SIGNAL_WEIGHTS` |
+| `packages/orchestrator/src/performance-reader.ts` | Add `consensus_verified` to `SIGNAL_WEIGHTS` with `{ accuracy: 0.1 }` (same weight as `agreement`) |
 | `apps/cli/src/mcp-server-sdk.ts` | Wire judge at boot (create Sonnet worker for judge role) |
 
 ### How the Judge Dispatches
@@ -159,17 +174,28 @@ export class ConsensusJudge {
 }
 ```
 
-The `WorkerLike` is the existing `sonnet-reviewer` native agent — dispatched via Agent tool in Claude Code, or via relay worker in other hosts. The judge reuses whatever Sonnet worker is available; it doesn't create a new one.
+> **Review fix (H2):** The judge does NOT reuse an existing worker. `WorkerAgent.executeTask` is not reentrant — concurrent calls corrupt state. Instead, the judge uses a **dedicated LLM call** via `ILLMProvider.generate()` directly (no worker needed). The judge only needs to read files and reason about code — it sends findings in the prompt and asks for verdicts. File reading is done by the judge class itself (same pattern as `verifyCitations`), not via tool calls.
+
+```typescript
+export class ConsensusJudge {
+  constructor(
+    private llm: ILLMProvider,
+    private projectRoot: string,
+  ) {}
+
+  async verify(confirmed: ConsensusFinding[]): Promise<JudgeVerdict[]>;
+}
+```
 
 In the MCP server, after boot:
 ```typescript
-// Wire consensus judge using the sonnet-reviewer worker
-const sonnetWorker = workers.get('sonnet-reviewer');
-if (sonnetWorker) {
-  const judge = new ConsensusJudge(sonnetWorker);
-  mainAgent.pipeline.setConsensusJudge(judge);
-}
+// Wire consensus judge with a dedicated LLM (Sonnet preferred, falls back to main)
+const judgeLlm = /* create Sonnet provider if key available, else use main LLM */;
+const judge = new ConsensusJudge(judgeLlm, process.cwd());
+mainAgent.pipeline.setConsensusJudge(judge);
 ```
+
+> **Review fix (M3):** The judge reads cited files directly via `fs.readFileSync` and includes relevant code snippets in the prompt. Finding text is escaped: `finding.replace(/<\/?confirmed_findings>/gi, '')` before injection into the prompt (same pattern as consensus-engine.ts:89 which escapes `<data>` tags).
 
 ---
 
