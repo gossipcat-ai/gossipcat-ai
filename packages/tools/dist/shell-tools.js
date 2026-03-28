@@ -49,7 +49,14 @@ class ShellTools {
         }
         // Check allowlist
         if (!this.allowedCommands.includes(cmd)) {
-            throw new Error(`Command "${cmd}" is not in the allowed commands list`);
+            const alternatives = {
+                cat: 'Use file_read instead', head: 'Use file_read with startLine/endLine',
+                tail: 'Use file_read with startLine/endLine', grep: 'Use file_grep instead',
+                find: 'Use file_search instead', curl: 'Not available — describe what you need in your output',
+                wget: 'Not available', rm: 'Use file_delete instead', mkdir: 'file_write auto-creates directories',
+            };
+            const hint = alternatives[cmd] ? `. ${alternatives[cmd]}` : `. Allowed: ${this.allowedCommands.join(', ')}`;
+            throw new Error(`Command "${cmd}" is not allowed${hint}`);
         }
         // Check for blocked patterns against full command (including args)
         const fullCommand = [cmd, ...cmdArgs].join(' ');

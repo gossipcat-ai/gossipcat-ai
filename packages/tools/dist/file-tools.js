@@ -10,14 +10,24 @@ class FileTools {
     }
     async fileRead(args) {
         const absPath = this.sandbox.validatePath(args.path);
-        const content = await (0, promises_1.readFile)(absPath, 'utf-8');
-        if (args.startLine !== undefined || args.endLine !== undefined) {
-            const lines = content.split('\n');
-            const start = (args.startLine || 1) - 1;
-            const end = args.endLine || lines.length;
-            return lines.slice(start, end).join('\n');
+        try {
+            const content = await (0, promises_1.readFile)(absPath, 'utf-8');
+            if (args.startLine !== undefined || args.endLine !== undefined) {
+                const lines = content.split('\n');
+                const start = (args.startLine || 1) - 1;
+                const end = args.endLine || lines.length;
+                return lines.slice(start, end).join('\n');
+            }
+            return content;
         }
-        return content;
+        catch (err) {
+            const msg = err.message;
+            if (msg.includes('ENOENT'))
+                throw new Error(`File not found: ${args.path}`);
+            if (msg.includes('encoding') || msg.includes('invalid'))
+                throw new Error(`Cannot read ${args.path} — it may be a binary file`);
+            throw err;
+        }
     }
     async fileWrite(args) {
         const absPath = this.sandbox.validatePath(args.path);
@@ -25,6 +35,11 @@ class FileTools {
         await (0, promises_1.mkdir)(dir, { recursive: true });
         await (0, promises_1.writeFile)(absPath, args.content, 'utf-8');
         return `Written ${args.content.length} bytes to ${args.path}`;
+    }
+    async fileDelete(args) {
+        const absPath = this.sandbox.validatePath(args.path);
+        await (0, promises_1.unlink)(absPath);
+        return `Deleted ${args.path}`;
     }
     async fileSearch(args) {
         const results = [];

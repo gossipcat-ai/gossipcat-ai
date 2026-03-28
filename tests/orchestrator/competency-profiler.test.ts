@@ -110,10 +110,11 @@ describe('CompetencyProfiler', () => {
     for (let i = 0; i < 12; i++) {
       signals.push({ type: 'meta', signal: 'task_completed', agentId: 'a', taskId: `t${i}`, value: 3000, timestamp: '2026-01-01T00:00:00Z' });
     }
-    // Add other agents to the pool so team size > 1 peer
+    // Add other agents with consensus signals so they count as consensus participants
     const otherAgents = ['b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'];
     for (const agent of otherAgents) {
       signals.push({ type: 'meta', signal: 'task_completed', agentId: agent, taskId: `${agent}-t0`, value: 3000, timestamp: '2026-01-01T00:00:00Z' });
+      signals.push({ type: 'consensus', signal: 'unique_unconfirmed', agentId: agent, taskId: `${agent}-t0`, evidence: 'finding', timestamp: '2026-01-01T00:00:00Z' });
     }
     // All agreements with same peer 'b' (low diversity: 1/10 = 0.3 after min clamp)
     for (let i = 0; i < 10; i++) {
@@ -129,6 +130,7 @@ describe('CompetencyProfiler', () => {
     }
     for (const agent of otherAgents) {
       signals2.push({ type: 'meta', signal: 'task_completed', agentId: agent, taskId: `${agent}-t0`, value: 3000, timestamp: '2026-01-01T00:00:00Z' });
+      signals2.push({ type: 'consensus', signal: 'unique_unconfirmed', agentId: agent, taskId: `${agent}-t0`, evidence: 'finding', timestamp: '2026-01-01T00:00:00Z' });
     }
     for (let i = 0; i < 10; i++) {
       signals2.push({ type: 'consensus', signal: 'agreement', agentId: 'a', counterpartId: otherAgents[i], evidence: 'ok', timestamp: '2026-01-01T00:00:00Z', taskId: `t${i}` });

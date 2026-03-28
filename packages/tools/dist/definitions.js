@@ -9,8 +9,8 @@ exports.FILE_TOOLS = [
             type: 'object',
             properties: {
                 path: { type: 'string', description: 'File path relative to project root' },
-                startLine: { type: 'string', description: 'Optional start line number' },
-                endLine: { type: 'string', description: 'Optional end line number' }
+                startLine: { type: 'number', description: 'Optional start line number' },
+                endLine: { type: 'number', description: 'Optional end line number' }
             },
             required: ['path']
         }
@@ -25,6 +25,17 @@ exports.FILE_TOOLS = [
                 content: { type: 'string', description: 'Content to write to the file' }
             },
             required: ['path', 'content']
+        }
+    },
+    {
+        name: 'file_delete',
+        description: 'Delete a file',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'File path relative to project root' }
+            },
+            required: ['path']
         }
     },
     {
@@ -66,7 +77,7 @@ exports.FILE_TOOLS = [
 exports.SHELL_TOOLS = [
     {
         name: 'shell_exec',
-        description: 'Execute a shell command in the project directory',
+        description: 'Execute a shell command (60s timeout). Use for: npm install, npm run build, npx tsc --noEmit, etc. NEVER run dev servers (npm run dev, npm start) — they run forever and will timeout.',
         parameters: {
             type: 'object',
             properties: {
@@ -93,7 +104,7 @@ exports.GIT_TOOLS = [
         parameters: {
             type: 'object',
             properties: {
-                staged: { type: 'string', description: 'If "true", show staged differences' }
+                staged: { type: 'boolean', description: 'Show staged differences' }
             },
             required: []
         }

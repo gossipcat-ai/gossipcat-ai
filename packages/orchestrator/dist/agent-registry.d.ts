@@ -1,27 +1,34 @@
 /**
  * AgentRegistry — tracks available agents and their skills.
  *
- * Skill matching: count overlapping skills between required and agent's skills.
- * Agent with highest overlap wins.
+ * Dispatch matching: (staticOverlap + projectMatchBoost + suggesterBoost) × perfWeight.
  */
 import { AgentConfig } from './types';
+import { PerformanceReader } from './performance-reader';
+import { CompetencyProfiler } from './competency-profiler';
+import type { SkillCatalog } from './skill-catalog';
+export interface FindBestMatchOptions {
+    taskText?: string;
+    catalog?: SkillCatalog;
+}
 export declare class AgentRegistry {
     private agents;
-    /** Register a new agent configuration */
+    private perfReader;
+    private competencyProfiler;
+    private suggesterCache;
     register(config: AgentConfig): void;
-    /** Remove an agent by ID */
     unregister(id: string): void;
-    /** Get agent config by ID */
     get(id: string): AgentConfig | undefined;
-    /** Get all registered agents */
     getAll(): AgentConfig[];
+    setPerformanceReader(reader: PerformanceReader): void;
+    setCompetencyProfiler(profiler: CompetencyProfiler): void;
+    setSuggesterCache(cache: Map<string, Set<string>>): void;
+    findBestMatch(requiredSkills: string[], options?: FindBestMatchOptions): AgentConfig | null;
     /**
-     * Find the agent with the most overlapping skills.
-     * Returns null if no agents are registered.
+     * Find best skill match with additive boosts for project skills.
+     * Score = (staticOverlap + projectMatchBoost + suggesterBoost) × perfWeight
      */
-    findBestMatch(requiredSkills: string[]): AgentConfig | null;
-    /** Find all agents that have a given skill */
+    findBestMatchExcluding(requiredSkills: string[], exclude: Set<string>, options?: FindBestMatchOptions): AgentConfig | null;
     findBySkill(skill: string): AgentConfig[];
-    /** Number of registered agents */
     get count(): number;
 }

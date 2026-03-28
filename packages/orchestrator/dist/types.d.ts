@@ -8,6 +8,10 @@ export interface AgentConfig {
     model: string;
     preset?: string;
     skills: string[];
+    /** If true, agent is a native Claude Code subagent (.claude/agents/*.md).
+     *  Dispatched via Claude Code's Agent tool instead of the gossipcat relay.
+     *  Results are fed back via gossip_relay_result for consensus/gossip. */
+    native?: boolean;
 }
 /** Result of a worker agent completing a sub-task */
 export interface TaskResult {
@@ -22,6 +26,25 @@ export interface TaskExecutionResult {
     result: string;
     inputTokens: number;
     outputTokens: number;
+}
+/** Emitted during plan execution for UI progress tracking */
+export interface TaskProgressEvent {
+    taskIndex: number;
+    totalTasks: number;
+    agentId: string;
+    taskDescription: string;
+    status: 'init' | 'start' | 'progress' | 'done' | 'error' | 'finish';
+    toolCalls?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    currentTool?: string;
+    turn?: number;
+    result?: string;
+    error?: string;
+    agents?: Array<{
+        agentId: string;
+        task: string;
+    }>;
 }
 /** A decomposed sub-task with skill requirements and assignment */
 export interface SubTask {
@@ -192,6 +215,7 @@ export interface TaskEntry {
     planStep?: number;
     inputTokens?: number;
     outputTokens?: number;
+    toolCalls?: number;
 }
 export interface TaskCreatedEvent {
     type: 'task.created';
@@ -271,4 +295,59 @@ export interface GossipMessage {
     forAgentId: string;
     summary: string;
     timestamp: string;
+}
+/** A parsed tool call from LLM response */
+export interface ToolCall {
+    tool: string;
+    args: Record<string, unknown>;
+}
+/** Result of executing a tool via ToolRouter */
+export interface ToolResult {
+    text: string;
+    agents?: string[];
+    choices?: ChatResponse['choices'];
+}
+/** Options for MainAgent.handleMessage() */
+export interface HandleMessageOptions {
+    /** 'cognitive' = intent detection (default), 'decompose' = old flow */
+    mode?: 'cognitive' | 'decompose';
+}
+/** Project metadata stored in .gossip/config.json */
+export interface ProjectConfig {
+    description: string;
+    archetype: string;
+    initialized: string;
+}
+/** An archetype role definition */
+export interface ArchetypeRole {
+    preset: string;
+    focus: string;
+}
+/** Signal patterns for archetype detection */
+export interface ArchetypeSignals {
+    keywords: string[];
+    files: string[];
+    packages: string[];
+}
+/** A single archetype from the catalog */
+export interface Archetype {
+    name: string;
+    description: string;
+    roles: ArchetypeRole[];
+    signals: ArchetypeSignals;
+}
+/** Action for team modification */
+export interface TeamChangeAction {
+    action: 'add' | 'remove' | 'modify';
+    agentId?: string;
+    config?: Partial<AgentConfig>;
+    reason?: string;
+}
+/** Detected project signals from directory scan */
+export interface ProjectSignals {
+    language?: string;
+    framework?: string;
+    dependencies: string[];
+    directories: string[];
+    files: string[];
 }

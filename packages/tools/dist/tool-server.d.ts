@@ -3,6 +3,9 @@ export interface ToolServerConfig {
     projectRoot: string;
     agentId?: string;
     allowedCallers?: string[];
+    perfWriter?: {
+        appendSignal(signal: unknown): void;
+    };
 }
 export declare class ToolServer {
     private agent;
@@ -18,6 +21,7 @@ export declare class ToolServer {
     private pendingReviews;
     private agentWrittenFiles;
     private static readonly MAX_WRITTEN_FILES_PER_AGENT;
+    private perfWriter?;
     constructor(config: ToolServerConfig);
     start(): Promise<void>;
     stop(): Promise<void>;

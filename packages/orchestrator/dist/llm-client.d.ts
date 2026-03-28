@@ -13,6 +13,7 @@ export interface LLMGenerateOptions {
     tools?: ToolDefinition[];
     temperature?: number;
     maxTokens?: number;
+    webSearch?: boolean;
 }
 export interface ILLMProvider {
     generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse>;

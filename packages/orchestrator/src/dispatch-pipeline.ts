@@ -611,18 +611,17 @@ export class DispatchPipeline {
       try {
         const engine = new ConsensusEngine({ llm: this.llm, registryGet: this.registryGet, projectRoot: this.projectRoot });
         consensusReport = await engine.run(results);
+        const perfWriter = new PerformanceWriter(this.projectRoot);
         if (consensusReport.signals.length > 0) {
-          const perfWriter = new PerformanceWriter(this.projectRoot);
           perfWriter.appendSignals(consensusReport.signals);
         }
         // Post-consensus: extract categories from confirmed findings
         if (consensusReport.confirmed.length > 0) {
-          const perfWriter2 = new PerformanceWriter(this.projectRoot);
           const now = new Date().toISOString();
           for (const finding of consensusReport.confirmed) {
             const categories = extractCategories(finding.finding);
             for (const category of categories) {
-              perfWriter2.appendSignal({
+              perfWriter.appendSignal({
                 type: 'consensus',
                 signal: 'category_confirmed',
                 agentId: finding.originalAgentId,

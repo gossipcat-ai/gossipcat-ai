@@ -7,6 +7,19 @@
 import { ToolDefinition } from '@gossip/types';
 import { ILLMProvider } from './llm-client';
 import { TaskExecutionResult } from './types';
+export type WorkerProgressCallback = (event: {
+    toolCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    currentTool: string;
+    turn: number;
+}) => void;
+export type TaskCompleteCallback = (event: {
+    agentId: string;
+    taskId: string;
+    toolCalls: number;
+    durationMs: number;
+}) => void;
 export declare class WorkerAgent {
     private agentId;
     private llm;
@@ -16,7 +29,11 @@ export declare class WorkerAgent {
     private gossipQueue;
     private static readonly MAX_GOSSIP_QUEUE;
     private pendingToolCalls;
-    constructor(agentId: string, llm: ILLMProvider, relayUrl: string, tools: ToolDefinition[], instructions?: string);
+    private webSearchEnabled;
+    private validToolNames;
+    private onTaskComplete?;
+    constructor(agentId: string, llm: ILLMProvider, relayUrl: string, tools: ToolDefinition[], instructions?: string, webSearch?: boolean);
+    setOnTaskComplete(cb: TaskCompleteCallback): void;
     setInstructions(instructions: string): void;
     getInstructions(): string;
     subscribeToBatch(batchId: string): Promise<void>;
@@ -28,7 +45,7 @@ export declare class WorkerAgent {
      * Execute a task with the LLM, using multi-turn tool calling.
      * Returns the final text response.
      */
-    executeTask(task: string, context?: string, skillsContent?: string): Promise<TaskExecutionResult>;
+    executeTask(task: string, context?: string, skillsContent?: string, onProgress?: WorkerProgressCallback): Promise<TaskExecutionResult>;
     /** Send RPC_REQUEST to tool-server via relay */
     private callTool;
     /** Handle incoming messages — resolve pending RPC tool calls */

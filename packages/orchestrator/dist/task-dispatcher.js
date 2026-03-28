@@ -25,14 +25,36 @@ class TaskDispatcher {
         const messages = [
             {
                 role: 'system',
-                content: `You are a task decomposition engine. Break the user's task into sub-tasks.
-For each sub-task, specify required skills from: ${skillList}.
-Respond in JSON format:
+                content: `You are a task decomposition engine. Break work into tasks that use the FULL team.
+
+## Available skills: ${skillList}
+
+## Rules
+
+1. **Implementation is always ONE task.** Never split a cohesive project into sequential implementation steps. One implementer builds the whole thing.
+
+2. **Use the full team in parallel.** If researchers and reviewers are available, give them work alongside the implementer:
+   - Researcher: investigate APIs, find examples, check docs — runs in parallel with implementation
+   - Reviewer: review the completed code — runs after implementation (sequential)
+
+3. **Describe WHAT, not HOW.** The agent decides file structure, components, architecture.
+
+4. **2-3 tasks max.** Typical patterns:
+   - Implementation only → single
+   - Implementation + research → parallel (2 tasks)
+   - Implementation then review → sequential (2 tasks)
+   - Implementation + research, then review → mixed (3 tasks)
+
+## Response format
+
+Respond in JSON:
 {
   "strategy": "single" | "parallel" | "sequential",
   "subTasks": [{ "description": "...", "requiredSkills": ["..."] }]
 }
-If the task is simple enough for one agent, use strategy "single" with one sub-task.`,
+
+"single" = one task. "parallel" = all tasks run at same time. "sequential" = tasks run in order.
+Use "sequential" ONLY when a later task genuinely needs output from an earlier one AND they need different skills.`,
             },
             { role: 'user', content: task },
         ];
@@ -77,10 +99,17 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
     assignAgents(plan) {
         if (!plan.warnings)
             plan.warnings = [];
+        // Track assigned agents to avoid duplicates in parallel plans
+        const assigned = new Set();
         for (const subTask of plan.subTasks) {
-            const match = this.registry.findBestMatch(subTask.requiredSkills);
+            // For parallel plans, prefer agents not yet assigned
+            const match = plan.strategy === 'parallel'
+                ? this.registry.findBestMatchExcluding(subTask.requiredSkills, assigned)
+                    || this.registry.findBestMatch(subTask.requiredSkills) // fallback: allow reuse
+                : this.registry.findBestMatch(subTask.requiredSkills);
             if (match) {
                 subTask.assignedAgent = match.id;
+                assigned.add(match.id);
             }
             else {
                 for (const skill of subTask.requiredSkills) {
@@ -111,12 +140,14 @@ If the task is simple enough for one agent, use strategy "single" with one sub-t
 Rules:
 - Tasks with action verbs (fix, implement, add, create, refactor, update, delete, write, build, migrate) → write
 - Tasks with observation verbs (review, analyze, check, verify, list, explain, summarize, audit, trace) → read
-- If the task mentions a specific directory or package path → write_mode: scoped, scope: that path
-- If the task is broad with no clear directory boundary → write_mode: sequential
-- If the task says "experiment", "try", "prototype", or "spike" → write_mode: worktree
+- Research/investigation tasks → read (even if they save a report)
+- If the task mentions a specific directory → write_mode: scoped, scope: that directory
+- If the task is broad (full project) → write_mode: scoped, scope: "./"
+- NEVER use write_mode: sequential for parallel plans — it will fail
+- NEVER use write_mode: worktree
 
 Respond as JSON array:
-[{ "index": 0, "access": "write", "write_mode": "scoped", "scope": "packages/tools/" }, { "index": 1, "access": "read" }]`,
+[{ "index": 0, "access": "write", "write_mode": "scoped", "scope": "./" }, { "index": 1, "access": "read" }]`,
                 },
                 { role: 'user', content: `Sub-tasks:\n${subTaskList}` },
             ];

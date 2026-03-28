@@ -24,10 +24,11 @@ describe('AgentRegistry — profile-aware dispatch', () => {
       signals.push({ type: 'meta', signal: 'task_completed', agentId: 'deep-agent', taskId: `d${i}`, value: 5000, timestamp: '2026-01-01T00:00:00Z' });
       signals.push({ type: 'meta', signal: 'task_completed', agentId: 'fast-agent', taskId: `f${i}`, value: 1000, timestamp: '2026-01-01T00:00:00Z' });
     }
-    // deep-agent has many agreements from diverse peers
+    // deep-agent has many agreements from diverse peers (peers need consensus signals to count)
     const peers = ['p1', 'p2', 'p3', 'p4', 'p5'];
     for (const peer of peers) {
       signals.push({ type: 'meta', signal: 'task_completed', agentId: peer, taskId: `${peer}-t`, value: 1000, timestamp: '2026-01-01T00:00:00Z' });
+      signals.push({ type: 'consensus', signal: 'unique_unconfirmed', agentId: peer, taskId: `${peer}-t`, evidence: 'finding', timestamp: '2026-01-01T00:00:00Z' });
     }
     for (let i = 0; i < 10; i++) {
       signals.push({ type: 'consensus', signal: 'agreement', agentId: 'deep-agent', counterpartId: peers[i % peers.length], evidence: 'ok', timestamp: '2026-01-01T00:00:00Z', taskId: `d${i}` });

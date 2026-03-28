@@ -31,6 +31,7 @@ class ToolServer {
     pendingReviews = new Map();
     agentWrittenFiles = new Map(); // agentId → written file paths
     static MAX_WRITTEN_FILES_PER_AGENT = 1024;
+    perfWriter;
     constructor(config) {
         this.allowedCallers = config.allowedCallers ? new Set(config.allowedCallers) : null;
         this.sandbox = new sandbox_1.Sandbox(config.projectRoot);
@@ -38,6 +39,7 @@ class ToolServer {
         this.shellTools = new shell_tools_1.ShellTools();
         this.gitTools = new git_tools_1.GitTools(config.projectRoot);
         this.skillTools = new skill_tools_1.SkillTools(config.projectRoot);
+        this.perfWriter = config.perfWriter;
         this.agent = new client_1.GossipAgent({
             agentId: config.agentId || 'tool-server',
             relayUrl: config.relayUrl,
@@ -147,7 +149,7 @@ class ToolServer {
         if (toolName === 'shell_exec') {
             // Block shell entirely for scoped agents (can't constrain arbitrary commands)
             if (scope) {
-                throw new Error('Shell execution blocked for scoped write agents');
+                throw new Error('shell_exec is permanently unavailable in scoped write mode. Use file_read to verify your work instead. Do not retry.');
             }
             // Worktree agents: block dangerous patterns
             if (root) {
@@ -184,7 +186,7 @@ class ToolServer {
             if (!this.agentScopes.has(callerId) && !this.agentRoots.has(callerId)) {
                 throw new Error(`Agent ${callerId} is a write agent but has no scope/root registered — rejecting (fail-closed)`);
             }
-            const writableTools = ['file_write', 'shell_exec', 'git_commit', 'git_branch'];
+            const writableTools = ['file_write', 'file_delete', 'shell_exec', 'git_commit', 'git_branch'];
             if (writableTools.includes(name)) {
                 this.enforceWriteScope(name, args, callerId);
             }
@@ -210,6 +212,8 @@ class ToolServer {
                 }
                 return result;
             }
+            case 'file_delete':
+                return this.fileTools.fileDelete(args);
             case 'file_search':
                 return this.fileTools.fileSearch(args);
             case 'file_grep':
@@ -252,8 +256,9 @@ class ToolServer {
             const untracked = paths ? await this.gitTools.gitUntrackedDiff(paths) : '';
             fullDiff = [diff, staged, untracked].filter(Boolean).join('\n');
         }
-        catch (err) {
-            console.warn(`[ToolServer] verify_write git diff failed: ${err.message}`);
+        catch {
+            // Silently skip — git diff can fail on new projects with no commits,
+            // untracked directories, or other edge cases. Not critical for verify_write.
         }
         if (!fullDiff.trim()) {
             return 'No changes detected. Nothing to verify.';
@@ -287,8 +292,31 @@ class ToolServer {
         catch (err) {
             reviewResult = `Peer review unavailable: ${err.message}`;
         }
-        // 4. Format result
+        // Emit impl signals
         const testStatus = testResult.includes('FAIL') ? 'FAIL' : 'PASS';
+        if (this.perfWriter) {
+            const now = new Date().toISOString();
+            this.perfWriter.appendSignal({
+                type: 'impl',
+                signal: testStatus === 'PASS' ? 'impl_test_pass' : 'impl_test_fail',
+                agentId: callerId,
+                taskId: callerId,
+                evidence: testStatus === 'FAIL' ? testResult.slice(-500) : undefined,
+                timestamp: now,
+            });
+            if (reviewResult && !reviewResult.includes('unavailable')) {
+                const approved = !reviewResult.toLowerCase().includes('reject') && !reviewResult.toLowerCase().includes('fail');
+                this.perfWriter.appendSignal({
+                    type: 'impl',
+                    signal: approved ? 'impl_peer_approved' : 'impl_peer_rejected',
+                    agentId: callerId,
+                    taskId: callerId,
+                    evidence: reviewResult.slice(0, 500),
+                    timestamp: now,
+                });
+            }
+        }
+        // 4. Format result
         return `## Verification Result\n\n### Tests: ${testStatus}\n${testResult.slice(-2000)}\n\n### Peer Review\n${reviewResult || 'No reviewer available'}\n\n### Diff Summary\n${truncateAtLine(fullDiff, 3000)}`;
     }
     async requestPeerReview(callerId, diff, testResult) {

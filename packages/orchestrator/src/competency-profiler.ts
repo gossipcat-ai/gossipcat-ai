@@ -60,6 +60,10 @@ export class CompetencyProfiler {
       const raw = profile.reviewReliability * (1 - profile.hallucinationRate);
       return clamp(raw * 2, 0.5, 1.5);
     }
+    // If agent has no impl data, return neutral — don't penalize review-only agents
+    if (profile.implPassRate === 0.5 && profile.implPeerApproval === 0.5 && profile.implReliability === 0.5) {
+      return 1.0;
+    }
     const raw = profile.implReliability * profile.implPassRate;
     return clamp(raw * 2, 0.5, 1.5);
   }
@@ -68,13 +72,16 @@ export class CompetencyProfiler {
     const signals = this.readSignals();
     const profiles = new Map<string, CompetencyProfile>();
 
-    // Count tasks per agent (for decay ordering and threshold)
-    const tasksByAgent = new Map<string, string[]>();
+    // Build task index per agent (for decay ordering and threshold)
+    // Uses Map<taskId, index> for O(1) lookup instead of Array.indexOf O(n)
+    const taskCountByAgent = new Map<string, number>();
+    const taskIndexByAgent = new Map<string, Map<string, number>>();
     for (const s of signals) {
       if (s.type === 'meta' && s.signal === 'task_completed') {
-        const tasks = tasksByAgent.get(s.agentId) || [];
-        tasks.push(s.taskId);
-        tasksByAgent.set(s.agentId, tasks);
+        const count = taskCountByAgent.get(s.agentId) ?? 0;
+        if (!taskIndexByAgent.has(s.agentId)) taskIndexByAgent.set(s.agentId, new Map());
+        taskIndexByAgent.get(s.agentId)!.set(s.taskId, count);
+        taskCountByAgent.set(s.agentId, count + 1);
       }
     }
 
@@ -91,17 +98,23 @@ export class CompetencyProfiler {
     };
 
     // Pass 1: count tasks and compute meta stats
+    const iterationCounts = new Map<string, number>();
     for (const s of signals) {
       if (s.type === 'meta') {
         const p = ensure(s.agentId);
         if (s.signal === 'task_completed') {
+          const prevCount = p.totalTasks;
           p.totalTasks++;
           if (s.value) {
-            p.speed = p.speed === 0 ? s.value : (p.speed * (p.totalTasks - 1) + s.value) / p.totalTasks;
+            p.speed = prevCount === 0 ? s.value : (p.speed * prevCount + s.value) / p.totalTasks;
           }
         }
         if (s.signal === 'task_tool_turns' && s.value) {
-          p.implIterations = p.implIterations === 0 ? s.value : (p.implIterations + s.value) / 2;
+          // Running average using count of tool_turns signals seen
+          if (!iterationCounts.has(s.agentId)) iterationCounts.set(s.agentId, 0);
+          const count = iterationCounts.get(s.agentId)!;
+          p.implIterations = count === 0 ? s.value : (p.implIterations * count + s.value) / (count + 1);
+          iterationCounts.set(s.agentId, count + 1);
         }
       }
     }
@@ -112,15 +125,16 @@ export class CompetencyProfiler {
 
     const accuracy = new Map<string, number>();
     const uniqueness = new Map<string, number>();
-    const hallucinations = new Map<string, { caught: number; total: number }>();
+    const hallucinations = new Map<string, { caught: number }>();
 
     for (const s of signals) {
       if (s.type !== 'consensus') continue;
       const cs = s as ConsensusSignal;
       const p = ensure(cs.agentId);
-      const totalTasks = tasksByAgent.get(cs.agentId)?.length ?? 0;
-      const taskIndex = tasksByAgent.get(cs.agentId)?.indexOf(cs.taskId) ?? -1;
-      const tasksSince = taskIndex >= 0 ? totalTasks - taskIndex - 1 : 0;
+      const totalTasks = taskCountByAgent.get(cs.agentId) ?? 0;
+      const taskIndex = taskIndexByAgent.get(cs.agentId)?.get(cs.taskId) ?? -1;
+      // Missing taskId gets half-life decay (conservative default) instead of max weight
+      const tasksSince = taskIndex >= 0 ? totalTasks - taskIndex - 1 : DECAY_HALF_LIFE;
       const decay = Math.pow(0.5, tasksSince / DECAY_HALF_LIFE);
 
       if (!roundChanges.has(cs.agentId)) roundChanges.set(cs.agentId, new Map());
@@ -158,7 +172,8 @@ export class CompetencyProfiler {
       }
 
       if (cs.signal === 'hallucination_caught') {
-        const h = hallucinations.get(cs.agentId) ?? { caught: 0, total: 0 };
+        // agentId on hallucination_caught = the agent whose finding was challenged
+        const h = hallucinations.get(cs.agentId) ?? { caught: 0 };
         h.caught++;
         hallucinations.set(cs.agentId, h);
       }
@@ -190,10 +205,12 @@ export class CompetencyProfiler {
 
       const h = hallucinations.get(id);
       if (h && h.caught > 0) {
-        const totalDisputes = signals.filter(s =>
-          s.type === 'consensus' && (s as ConsensusSignal).signal === 'disagreement' && s.agentId === id
+        // Denominator = total findings this agent produced (unique_confirmed + unique_unconfirmed + new_finding)
+        const totalFindings = signals.filter(s =>
+          s.type === 'consensus' && s.agentId === id &&
+          ['unique_confirmed', 'unique_unconfirmed', 'new_finding'].includes((s as ConsensusSignal).signal)
         ).length;
-        p.hallucinationRate = totalDisputes > 0 ? h.caught / totalDisputes : 0;
+        p.hallucinationRate = totalFindings > 0 ? clamp(h.caught / totalFindings, 0, 1) : 0;
       }
 
       const impl = implStats.get(id);
@@ -211,9 +228,10 @@ export class CompetencyProfiler {
 
   private computePeerDiversity(signals: PerformanceSignal[]): Map<string, number> {
     const peerSets = new Map<string, Set<string>>();
-    const allAgents = new Set<string>();
+    // Only count agents that participated in consensus (not impl/meta-only agents)
+    const consensusAgents = new Set<string>();
     for (const s of signals) {
-      allAgents.add(s.agentId);
+      if (s.type === 'consensus') consensusAgents.add(s.agentId);
       if (s.type === 'consensus' && (s as ConsensusSignal).signal === 'agreement' && (s as ConsensusSignal).counterpartId) {
         const peers = peerSets.get(s.agentId) || new Set();
         peers.add((s as ConsensusSignal).counterpartId!);
@@ -222,7 +240,7 @@ export class CompetencyProfiler {
     }
     const result = new Map<string, number>();
     for (const [agentId, peers] of peerSets) {
-      const teamSize = Math.max(allAgents.size - 1, 1);
+      const teamSize = Math.max(consensusAgents.size - 1, 1);
       result.set(agentId, Math.max(0.3, peers.size / teamSize));
     }
     return result;

@@ -32,11 +32,17 @@ class AnthropicProvider {
             body.system = typeof systemMsg.content === 'string' ? systemMsg.content : '';
         if (options?.temperature !== undefined)
             body.temperature = options.temperature;
+        const anthropicTools = [];
         if (options?.tools?.length) {
-            body.tools = options.tools.map(t => ({
+            anthropicTools.push(...options.tools.map(t => ({
                 name: t.name, description: t.description, input_schema: t.parameters,
-            }));
+            })));
         }
+        if (options?.webSearch) {
+            anthropicTools.push({ type: 'web_search_20250305', name: 'web_search' });
+        }
+        if (anthropicTools.length > 0)
+            body.tools = anthropicTools;
         const res = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: {
@@ -200,8 +206,15 @@ class GeminiProvider {
         if (options?.temperature !== undefined) {
             body.generationConfig = { temperature: options.temperature, maxOutputTokens: options?.maxTokens ?? 8192 };
         }
-        // Pass tools as functionDeclarations
-        if (options?.tools?.length) {
+        // Gemini API: google_search and functionDeclarations CANNOT be combined.
+        // If webSearch is enabled, use google_search only (worker agents call
+        // their tools via relay RPC, not Gemini function calling).
+        // If webSearch is not enabled, use functionDeclarations for native tool calls.
+        const toolMode = options?.webSearch ? 'google_search' : options?.tools?.length ? `functionDeclarations(${options.tools.length})` : 'none';
+        if (options?.webSearch) {
+            body.tools = [{ google_search: {} }];
+        }
+        else if (options?.tools?.length) {
             body.tools = [{
                     functionDeclarations: options.tools.map(t => ({
                         name: t.name,
@@ -210,6 +223,7 @@ class GeminiProvider {
                     })),
                 }];
         }
+        process.stderr.write(`[Gemini] ${this.model} — ${messages.length} messages, tools=${toolMode}\n`);
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
         const res = await fetch(url, {
             method: 'POST',
@@ -220,7 +234,10 @@ class GeminiProvider {
             const errBody = (await res.text()).slice(0, 200);
             throw new Error(`Gemini API error (${res.status}): ${errBody}`);
         }
-        return this.parseGeminiResponse(await res.json());
+        const data = await res.json();
+        const result = this.parseGeminiResponse(data);
+        process.stderr.write(`[Gemini] → text=${result.text?.length ?? 0}chars, toolCalls=${result.toolCalls?.length ?? 0}${result.toolCalls?.length ? ` [${result.toolCalls.map(tc => tc.name).join(', ')}]` : ''}, tokens=${result.usage?.inputTokens ?? '?'}/${result.usage?.outputTokens ?? '?'}\n`);
+        return result;
     }
     toGeminiMessage(m) {
         // Tool result → functionResponse part
@@ -263,12 +280,20 @@ class GeminiProvider {
         }
         const candidate = candidates[0];
         const finishReason = candidate.finishReason;
-        if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+        // STOP = normal, MAX_TOKENS = truncated, tool call reasons = function calling (expected)
+        const expectedReasons = ['STOP', 'MAX_TOKENS', 'TOOL_CALL', 'UNEXPECTED_TOOL_CALL'];
+        if (finishReason && !expectedReasons.includes(finishReason)) {
             process.stderr.write(`[GeminiProvider] Unusual finishReason: ${finishReason}\n`);
         }
-        const parts = (candidate.content?.parts || []);
+        const content = candidate.content;
+        const parts = (content?.parts || []);
         if (!parts?.length) {
-            process.stderr.write(`[GeminiProvider] Empty response parts (finishReason: ${finishReason || 'unknown'})\n`);
+            // UNEXPECTED_TOOL_CALL: Gemini tried to call a function but the call was malformed.
+            // The function call data may be in candidate.content.functionCall or similar.
+            // Log and return empty — the orchestrator's retry mechanism will handle this.
+            if (finishReason !== 'SAFETY') {
+                process.stderr.write(`[GeminiProvider] Empty response parts (finishReason: ${finishReason || 'unknown'}). Returning empty to trigger retry.\n`);
+            }
             return { text: finishReason === 'SAFETY' ? '[Response blocked by Gemini safety filter]' : '' };
         }
         const textParts = [];
@@ -286,9 +311,14 @@ class GeminiProvider {
                 });
             }
         }
+        const usage = data.usageMetadata;
         return {
             text: textParts.join(''),
             toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+            usage: usage?.promptTokenCount != null ? {
+                inputTokens: usage.promptTokenCount ?? 0,
+                outputTokens: usage.candidatesTokenCount ?? 0,
+            } : undefined,
         };
     }
 }

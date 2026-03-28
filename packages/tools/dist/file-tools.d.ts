@@ -11,6 +11,9 @@ export declare class FileTools {
         path: string;
         content: string;
     }): Promise<string>;
+    fileDelete(args: {
+        path: string;
+    }): Promise<string>;
     fileSearch(args: {
         pattern: string;
     }): Promise<string>;
