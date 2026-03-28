@@ -62,8 +62,9 @@ export class MemoryWriter {
     const memDir = this.ensureDirs(agentId);
     const knowledgeDir = join(memDir, 'knowledge');
 
-    // Extract structured facts from the result text
-    const facts = this.extractFacts(data.task, data.result);
+    // Truncate result before processing to prevent resource exhaustion
+    const safeResult = data.result.length > 50000 ? data.result.slice(0, 50000) : data.result;
+    const facts = this.extractFacts(data.task, safeResult);
     if (!facts) return; // nothing useful to remember
 
     // Timestamp prefix for chronological ordering + taskId for uniqueness

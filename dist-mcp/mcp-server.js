@@ -5435,8 +5435,11 @@ var init_agent_memory = __esm({
         if ((0, import_fs4.existsSync)(knowledgeDir)) {
           const files = this.selectKnowledgeFiles(knowledgeDir, taskText);
           for (const file2 of files) {
-            const content = (0, import_fs4.readFileSync)(file2.path, "utf-8");
-            parts.push(content);
+            let content = (0, import_fs4.readFileSync)(file2.path, "utf-8");
+            content = content.replace(/<\/?(?:agent-memory|system|instructions)>/gi, "");
+            parts.push(`<agent-memory>
+${content}
+</agent-memory>`);
             this.touchKnowledgeFile(file2.path, content);
           }
         }
@@ -5566,7 +5569,8 @@ var init_memory_writer = __esm({
       writeKnowledgeFromResult(agentId, data) {
         const memDir = this.ensureDirs(agentId);
         const knowledgeDir = (0, import_path7.join)(memDir, "knowledge");
-        const facts = this.extractFacts(data.task, data.result);
+        const safeResult = data.result.length > 5e4 ? data.result.slice(0, 5e4) : data.result;
+        const facts = this.extractFacts(data.task, safeResult);
         if (!facts) return;
         const now = /* @__PURE__ */ new Date();
         const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -5731,12 +5735,13 @@ ${result}`;
 });
 
 // packages/orchestrator/src/memory-compactor.ts
-var import_fs6, import_path8, MemoryCompactor;
+var import_fs6, import_path8, MAX_ARCHIVE_LINES, MemoryCompactor;
 var init_memory_compactor = __esm({
   "packages/orchestrator/src/memory-compactor.ts"() {
     "use strict";
     import_fs6 = require("fs");
     import_path8 = require("path");
+    MAX_ARCHIVE_LINES = 5e3;
     MemoryCompactor = class {
       constructor(projectRoot) {
         this.projectRoot = projectRoot;
@@ -5748,33 +5753,56 @@ var init_memory_compactor = __esm({
       compactIfNeeded(agentId, maxEntries = 20) {
         const memDir = (0, import_path8.join)(this.projectRoot, ".gossip", "agents", agentId, "memory");
         const tasksPath = (0, import_path8.join)(memDir, "tasks.jsonl");
+        const lockPath = (0, import_path8.join)(memDir, "tasks.jsonl.lock");
         if (!(0, import_fs6.existsSync)(tasksPath)) return { archived: 0 };
-        const lines = (0, import_fs6.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
-        if (lines.length <= maxEntries) return { archived: 0 };
-        const entries = [];
-        for (const line of lines) {
+        if ((0, import_fs6.existsSync)(lockPath)) return { archived: 0 };
+        try {
+          (0, import_fs6.writeFileSync)(lockPath, `${Date.now()}`);
+        } catch {
+          return { archived: 0 };
+        }
+        try {
+          const lines = (0, import_fs6.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean);
+          if (lines.length <= maxEntries) return { archived: 0 };
+          const entries = [];
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line);
+              const warmth = this.calculateWarmth(entry.importance, entry.timestamp);
+              entries.push({ entry, warmth, line });
+            } catch {
+            }
+          }
+          entries.sort((a, b) => a.warmth - b.warmth);
+          const toArchive = entries.slice(0, entries.length - maxEntries);
+          const toKeep = entries.slice(entries.length - maxEntries);
+          const archivePath = (0, import_path8.join)(memDir, "archive.jsonl");
+          for (const item of toArchive) {
+            const archived = {
+              archivedAt: (/* @__PURE__ */ new Date()).toISOString(),
+              reason: "warmth_below_threshold",
+              warmth: item.warmth,
+              entry: item.entry
+            };
+            (0, import_fs6.appendFileSync)(archivePath, JSON.stringify(archived) + "\n");
+          }
           try {
-            const entry = JSON.parse(line);
-            const warmth = this.calculateWarmth(entry.importance, entry.timestamp);
-            entries.push({ entry, warmth, line });
+            if ((0, import_fs6.existsSync)(archivePath)) {
+              const archiveLines = (0, import_fs6.readFileSync)(archivePath, "utf-8").trim().split("\n");
+              if (archiveLines.length > MAX_ARCHIVE_LINES) {
+                (0, import_fs6.writeFileSync)(archivePath, archiveLines.slice(-MAX_ARCHIVE_LINES / 2).join("\n") + "\n");
+              }
+            }
+          } catch {
+          }
+          (0, import_fs6.writeFileSync)(tasksPath, toKeep.map((e) => e.line).join("\n") + "\n");
+          return { archived: toArchive.length, message: `Compacted ${toArchive.length} memories for ${agentId}` };
+        } finally {
+          try {
+            (0, import_fs6.unlinkSync)(lockPath);
           } catch {
           }
         }
-        entries.sort((a, b) => a.warmth - b.warmth);
-        const toArchive = entries.slice(0, entries.length - maxEntries);
-        const toKeep = entries.slice(entries.length - maxEntries);
-        const archivePath = (0, import_path8.join)(memDir, "archive.jsonl");
-        for (const item of toArchive) {
-          const archived = {
-            archivedAt: (/* @__PURE__ */ new Date()).toISOString(),
-            reason: "warmth_below_threshold",
-            warmth: item.warmth,
-            entry: item.entry
-          };
-          (0, import_fs6.appendFileSync)(archivePath, JSON.stringify(archived) + "\n");
-        }
-        (0, import_fs6.writeFileSync)(tasksPath, toKeep.map((e) => e.line).join("\n") + "\n");
-        return { archived: toArchive.length, message: `Compacted ${toArchive.length} memories for ${agentId}` };
       }
     };
   }

@@ -20,8 +20,10 @@ export class AgentMemoryReader {
     if (existsSync(knowledgeDir)) {
       const files = this.selectKnowledgeFiles(knowledgeDir, taskText);
       for (const file of files) {
-        const content = readFileSync(file.path, 'utf-8');
-        parts.push(content);
+        let content = readFileSync(file.path, 'utf-8');
+        // Sanitize: strip potential prompt injection delimiters from agent-generated memory
+        content = content.replace(/<\/?(?:agent-memory|system|instructions)>/gi, '');
+        parts.push(`<agent-memory>\n${content}\n</agent-memory>`);
         this.touchKnowledgeFile(file.path, content);
       }
     }
