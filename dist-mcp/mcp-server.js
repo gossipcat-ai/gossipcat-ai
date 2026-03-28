@@ -4585,7 +4585,8 @@ var init_llm_client = __esm({
 
 // packages/orchestrator/src/skill-name.ts
 function normalizeSkillName(name) {
-  return name.toLowerCase().replace(/[_\s]+/g, "-").replace(/[^a-z0-9-]/g, "");
+  if (!name || typeof name !== "string") return "";
+  return name.slice(0, 128).toLowerCase().replace(/[_\s]+/g, "-").replace(/[^a-z0-9-]/g, "").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
 }
 var init_skill_name = __esm({
   "packages/orchestrator/src/skill-name.ts"() {
