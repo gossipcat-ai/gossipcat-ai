@@ -2815,7 +2815,7 @@ var init_server = __esm({
         return `ws://localhost:${this._port}`;
       }
       async start() {
-        return new Promise((resolve11) => {
+        return new Promise((resolve12) => {
           this.httpServer = (0, import_http.createServer)(this.handleHttp.bind(this));
           this.wss = new import_ws2.WebSocketServer({
             server: this.httpServer,
@@ -2826,7 +2826,7 @@ var init_server = __esm({
           this.httpServer.listen(this.config.port, this.config.host || "0.0.0.0", () => {
             const addr = this.httpServer.address();
             this._port = addr.port;
-            resolve11();
+            resolve12();
           });
         });
       }
@@ -2835,9 +2835,9 @@ var init_server = __esm({
         for (const client of this.wss.clients) {
           client.close(1001, "Server shutting down");
         }
-        return new Promise((resolve11) => {
+        return new Promise((resolve12) => {
           this.wss.close(() => {
-            this.httpServer.close(() => resolve11());
+            this.httpServer.close(() => resolve12());
           });
         });
       }
@@ -3043,7 +3043,7 @@ var init_gossip_agent = __esm({
       }
       // ─── Public API ─────────────────────────────────────────────────────────────
       connect() {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve12, reject) => {
           const ws = new import_ws3.default(this.config.relayUrl);
           const timeout = setTimeout(() => {
             ws.removeAllListeners();
@@ -3076,7 +3076,7 @@ var init_gossip_agent = __esm({
                   ws.on("error", (err) => this.emit("error", err));
                   this.startKeepAlive();
                   this.emit("connect", msg.sessionId);
-                  resolve11();
+                  resolve12();
                 } else if (msg.type === "error") {
                   clearTimeout(timeout);
                   ws.removeAllListeners();
@@ -3102,7 +3102,7 @@ var init_gossip_agent = __esm({
           this.reconnectTimer = null;
         }
         if (!this.ws) return;
-        return new Promise((resolve11) => {
+        return new Promise((resolve12) => {
           this.intentionalDisconnect = true;
           this._connected = false;
           const ws = this.ws;
@@ -3113,7 +3113,7 @@ var init_gossip_agent = __esm({
             settled = true;
             this.intentionalDisconnect = false;
             this.emit("disconnect", code);
-            resolve11();
+            resolve12();
           };
           const timer = setTimeout(() => done(1e3), 2e3);
           ws.once("close", (code) => {
@@ -3152,8 +3152,8 @@ var init_gossip_agent = __esm({
           throw new Error("Not connected to relay");
         }
         const encoded = Buffer.from(this.codec.encode(envelope));
-        return new Promise((resolve11, reject) => {
-          this.ws.send(encoded, (err) => err ? reject(err) : resolve11());
+        return new Promise((resolve12, reject) => {
+          this.ws.send(encoded, (err) => err ? reject(err) : resolve12());
         });
       }
       // ─── Internal ────────────────────────────────────────────────────────────────
@@ -3996,7 +3996,7 @@ ${truncateAtLine(fullDiff, 3e3)}`;
       }
       async requestPeerReview(callerId, diff, testResult) {
         const requestId = (0, import_crypto4.randomUUID)();
-        const reviewPromise = new Promise((resolve11, reject) => {
+        const reviewPromise = new Promise((resolve12, reject) => {
           const timer = setTimeout(() => {
             this.pendingReviews.delete(requestId);
             reject(new Error("Review timed out"));
@@ -4005,7 +4005,7 @@ ${truncateAtLine(fullDiff, 3e3)}`;
           this.pendingReviews.set(requestId, {
             resolve: (r) => {
               clearTimeout(timer);
-              resolve11(r);
+              resolve12(r);
             },
             reject: (e) => {
               clearTimeout(timer);
@@ -5173,7 +5173,7 @@ ${context}` : ""}
       /** Send RPC_REQUEST to tool-server via relay */
       async callTool(name, args) {
         const requestId = (0, import_crypto7.randomUUID)();
-        const resultPromise = new Promise((resolve11, reject) => {
+        const resultPromise = new Promise((resolve12, reject) => {
           const timer = setTimeout(() => {
             if (this.pendingToolCalls.has(requestId)) {
               this.pendingToolCalls.delete(requestId);
@@ -5184,7 +5184,7 @@ ${context}` : ""}
           this.pendingToolCalls.set(requestId, {
             resolve: (r) => {
               clearTimeout(timer);
-              resolve11(r);
+              resolve12(r);
             },
             reject: (e) => {
               clearTimeout(timer);
@@ -7323,10 +7323,10 @@ var init_dispatch_pipeline = __esm({
         if (this.writeActive && this.writeQueue.length >= _DispatchPipeline.MAX_WRITE_QUEUE) {
           throw new Error("Sequential write queue full (20 tasks). Collect results before dispatching more.");
         }
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve12, reject) => {
           const run = () => {
             this.writeActive = true;
-            fn().then(resolve11, reject).finally(() => {
+            fn().then(resolve12, reject).finally(() => {
               this.writeActive = false;
               const next = this.writeQueue.shift();
               if (next) next();
@@ -8754,8 +8754,8 @@ Keep it SHORT \u2014 under 30 lines. This is a working document, not a design do
         ]);
         const specContent = response.text || "";
         try {
-          const { mkdirSync: mkdirSync10, writeFileSync: writeFS } = require("fs");
-          mkdirSync10((0, import_path17.join)(this.projectRoot, ".gossip"), { recursive: true });
+          const { mkdirSync: mkdirSync11, writeFileSync: writeFS } = require("fs");
+          mkdirSync11((0, import_path17.join)(this.projectRoot, ".gossip"), { recursive: true });
           writeFS(specPath, specContent, "utf-8");
         } catch (err) {
           return { text: `Spec generated but failed to save: ${err.message}
@@ -9931,8 +9931,8 @@ message: Your question?
       }
       /** Start all worker agents (connect to relay) */
       async start() {
-        const { existsSync: existsSync19, readFileSync: readFileSync20 } = await import("fs");
-        const { join: join22 } = await import("path");
+        const { existsSync: existsSync20, readFileSync: readFileSync21 } = await import("fs");
+        const { join: join23 } = await import("path");
         for (const config2 of this.registry.getAll()) {
           if (config2.native) continue;
           if (this.workers.has(config2.id)) continue;
@@ -9941,8 +9941,8 @@ message: Your question?
             apiKey = await this.keyProviderFn(config2.provider) ?? void 0;
           }
           const llm = createProvider(config2.provider, config2.model, apiKey);
-          const instructionsPath = join22(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
-          const instructions = existsSync19(instructionsPath) ? readFileSync20(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join23(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
+          const instructions = existsSync20(instructionsPath) ? readFileSync21(instructionsPath, "utf-8") : void 0;
           const enableWebSearch = config2.preset === "researcher" || config2.skills.includes("research");
           const worker = new WorkerAgent(config2.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
           await worker.start();
@@ -10068,16 +10068,16 @@ message: Your question?
         this.registry.register(config2);
       }
       async syncWorkers(keyProvider) {
-        const { existsSync: existsSync19, readFileSync: readFileSync20 } = await import("fs");
-        const { join: join22 } = await import("path");
+        const { existsSync: existsSync20, readFileSync: readFileSync21 } = await import("fs");
+        const { join: join23 } = await import("path");
         let added = 0;
         for (const ac of this.registry.getAll()) {
           if (ac.native) continue;
           if (this.workers.has(ac.id)) continue;
           const key = await keyProvider(ac.provider);
           const llm = createProvider(ac.provider, ac.model, key ?? void 0);
-          const instructionsPath = join22(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
-          const instructions = existsSync19(instructionsPath) ? readFileSync20(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join23(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
+          const instructions = existsSync20(instructionsPath) ? readFileSync21(instructionsPath, "utf-8") : void 0;
           const enableWebSearch = ac.preset === "researcher" || ac.skills.includes("research");
           const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
           await worker.start();
@@ -11278,6 +11278,214 @@ Return ONLY the JSON array, no other text.`
   }
 });
 
+// packages/orchestrator/src/skill-generator.ts
+var import_fs20, import_path25, SAFE_NAME, KNOWN_CATEGORIES, REQUIRED_SECTIONS, BUNDLED_TEMPLATE, SkillGenerator;
+var init_skill_generator = __esm({
+  "packages/orchestrator/src/skill-generator.ts"() {
+    "use strict";
+    import_fs20 = require("fs");
+    import_path25 = require("path");
+    init_skill_name();
+    SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+    KNOWN_CATEGORIES = /* @__PURE__ */ new Set([
+      "trust_boundaries",
+      "injection_vectors",
+      "input_validation",
+      "concurrency",
+      "resource_exhaustion",
+      "type_safety",
+      "error_handling",
+      "data_integrity"
+    ]);
+    REQUIRED_SECTIONS = ["## Iron Law", "## When This Skill Activates", "## Methodology", "## Anti-Patterns", "## Quality Gate"];
+    BUNDLED_TEMPLATE = `---
+name: systematic-debugging
+description: Use when encountering any bug or unexpected behavior
+---
+
+# Systematic Debugging
+
+## Iron Law
+
+NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
+
+## When This Skill Activates
+
+- Test failures, bugs, unexpected behavior
+
+## Methodology
+
+1. Read error messages carefully \u2014 they often contain the solution
+2. Reproduce consistently \u2014 if not reproducible, gather more data
+3. Check recent changes \u2014 git diff, recent commits
+4. Form hypothesis and verify with evidence
+5. Fix the root cause, not the symptom
+
+## Anti-Patterns
+
+| Thought | Reality |
+|---------|---------|
+| "Just one quick fix" | Quick fixes mask root causes |
+| "I know what's wrong" | Verify before acting |
+
+## Quality Gate
+
+- [ ] Root cause identified with evidence
+- [ ] Fix addresses root cause, not symptom
+- [ ] Tests verify the fix
+`;
+    SkillGenerator = class {
+      constructor(llm, profiler, projectRoot) {
+        this.llm = llm;
+        this.profiler = profiler;
+        this.projectRoot = projectRoot;
+      }
+      async generate(agentId, category) {
+        if (!SAFE_NAME.test(agentId)) {
+          throw new Error(`Invalid agent_id: "${agentId}". Must be lowercase alphanumeric with hyphens/underscores.`);
+        }
+        if (!KNOWN_CATEGORIES.has(category)) {
+          throw new Error(`Unknown category: "${category}". Known: ${[...KNOWN_CATEGORIES].join(", ")}`);
+        }
+        const template = this.loadTemplate();
+        const findings = this.loadCategoryFindings(category);
+        const profiles = this.profiler.getProfiles();
+        const agentProfile = profiles.get(agentId);
+        const agentScore = agentProfile?.reviewStrengths[category] ?? 0;
+        const peerScores = [];
+        for (const [id, p] of profiles) {
+          if (id === agentId) continue;
+          const score = p.reviewStrengths[category];
+          if (score !== void 0 && score > 0.5) {
+            peerScores.push(`${id}: ${score.toFixed(2)}`);
+          }
+        }
+        let projectContext = "";
+        const bootstrapPath = (0, import_path25.join)(this.projectRoot, ".gossip", "bootstrap.md");
+        if ((0, import_fs20.existsSync)(bootstrapPath)) {
+          projectContext = (0, import_fs20.readFileSync)(bootstrapPath, "utf-8").slice(0, 2e3);
+        }
+        const totalDispatches = agentProfile?.totalTasks ?? 0;
+        const categoryConfirmations = findings.filter((f) => f.agentId === agentId).length;
+        const baselineRate = totalDispatches > 0 ? categoryConfirmations / totalDispatches : 0;
+        const messages = [
+          {
+            role: "system",
+            content: `You are a prompt engineer specializing in AI agent skill files. You produce structured, opinionated methodology documents that dramatically improve an agent's performance on specific review tasks.
+
+Study this reference skill \u2014 it represents the quality bar:
+
+<reference_skill>
+${template}
+</reference_skill>`
+          },
+          {
+            role: "user",
+            content: `Generate a skill file for agent "${agentId}" to improve its "${category}" review performance.
+
+<project_context>
+${projectContext || "No project context available."}
+</project_context>
+
+<findings_in_category>
+${findings.length > 0 ? findings.slice(0, 20).map((f) => `- [${f.agentId}] ${f.evidence}`).join("\n") : "No findings yet in this category."}
+</findings_in_category>
+
+<agent_performance>
+Agent: ${agentId}
+Current ${category} score: ${agentScore.toFixed(2)}
+Peer scores: ${peerScores.length > 0 ? peerScores.join(", ") : "no peer data"}
+</agent_performance>
+
+Output a skill markdown file with this exact structure:
+
+1. YAML frontmatter with fields: name, category, agent, generated, effectiveness (0.0), baseline_rate (${baselineRate.toFixed(3)}), baseline_dispatches (${totalDispatches}), post_skill_dispatches (0), version (1)
+2. ## Iron Law \u2014 one absolute rule (MUST/NEVER language)
+3. ## When This Skill Activates \u2014 task patterns that trigger it
+4. ## Methodology \u2014 5-8 step checklist, actionable not vague
+5. ## Key Patterns \u2014 important code patterns to look for
+6. ## Anti-Patterns \u2014 table with columns "Thought" and "Reality"
+7. ## Quality Gate \u2014 pre-report checklist with checkboxes
+
+Requirements:
+- Write with authority \u2014 MUST, NEVER, NO EXCEPTIONS
+- Keep under 150 lines
+- Methodology must be universal (works on any codebase)
+- Key Patterns can include project-specific examples from findings`
+          }
+        ];
+        const response = await this.llm.generate(messages, { temperature: 0.3 });
+        const content = response.text || "";
+        this.validateSkillContent(content);
+        const skillName = normalizeSkillName(category);
+        const skillDir = (0, import_path25.join)(this.projectRoot, ".gossip", "agents", agentId, "skills");
+        (0, import_fs20.mkdirSync)(skillDir, { recursive: true });
+        const skillPath = (0, import_path25.join)(skillDir, `${skillName}.md`);
+        (0, import_fs20.writeFileSync)(skillPath, content);
+        return { path: skillPath, content };
+      }
+      validateSkillContent(content) {
+        if (!content.match(/^---\n[\s\S]*?\n---/)) {
+          throw new Error("Generated skill missing frontmatter. LLM output did not follow the required format.");
+        }
+        for (const section of REQUIRED_SECTIONS) {
+          if (!content.includes(section)) {
+            throw new Error(`Generated skill missing required section: "${section}". LLM output did not follow the required format.`);
+          }
+        }
+        const lines = content.split("\n").length;
+        if (lines > 200) {
+          throw new Error(`Generated skill is ${lines} lines (max 200). LLM output too verbose.`);
+        }
+      }
+      loadTemplate() {
+        const userDir = (0, import_path25.join)(this.projectRoot, ".gossip", "skill-templates");
+        if ((0, import_fs20.existsSync)(userDir)) {
+          const files = (0, import_fs20.readdirSync)(userDir).filter((f) => f.endsWith(".md"));
+          if (files.length > 0) {
+            return (0, import_fs20.readFileSync)((0, import_path25.join)(userDir, files[0]), "utf-8");
+          }
+        }
+        const home = process.env.HOME || process.env.USERPROFILE || "";
+        const cacheBase = (0, import_path25.join)(home, ".claude", "plugins", "cache", "claude-plugins-official", "superpowers");
+        if ((0, import_fs20.existsSync)(cacheBase)) {
+          try {
+            const versions = (0, import_fs20.readdirSync)(cacheBase).sort().reverse();
+            for (const ver of versions) {
+              const skillPath = (0, import_path25.join)(cacheBase, ver, "skills", "systematic-debugging", "SKILL.md");
+              if ((0, import_fs20.existsSync)(skillPath)) {
+                const realPath = (0, import_fs20.realpathSync)(skillPath);
+                if (realPath.startsWith((0, import_path25.resolve)(cacheBase))) {
+                  return (0, import_fs20.readFileSync)(realPath, "utf-8");
+                }
+              }
+            }
+          } catch {
+          }
+        }
+        return BUNDLED_TEMPLATE;
+      }
+      loadCategoryFindings(category) {
+        const filePath = (0, import_path25.join)(this.projectRoot, ".gossip", "agent-performance.jsonl");
+        if (!(0, import_fs20.existsSync)(filePath)) return [];
+        try {
+          return (0, import_fs20.readFileSync)(filePath, "utf-8").trim().split("\n").filter(Boolean).map((line) => {
+            try {
+              return JSON.parse(line);
+            } catch {
+              return null;
+            }
+          }).filter(
+            (s) => s !== null && s.type === "consensus" && s.signal === "category_confirmed" && s.category === category
+          ).map((s) => ({ agentId: s.agentId, evidence: s.evidence || "" }));
+        } catch {
+          return [];
+        }
+      }
+    };
+  }
+});
+
 // packages/orchestrator/src/index.ts
 var src_exports4 = {};
 __export(src_exports4, {
@@ -11307,6 +11515,7 @@ __export(src_exports4, {
   ScopeTracker: () => ScopeTracker,
   SkillCatalog: () => SkillCatalog,
   SkillGapTracker: () => SkillGapTracker,
+  SkillGenerator: () => SkillGenerator,
   TOOL_SCHEMAS: () => TOOL_SCHEMAS,
   TaskDispatcher: () => TaskDispatcher,
   TaskGraph: () => TaskGraph,
@@ -11367,6 +11576,7 @@ var init_src5 = __esm({
     init_competency_profiler();
     init_dispatch_differentiator();
     init_dispatch_pipeline();
+    init_skill_generator();
   }
 });
 
@@ -11383,18 +11593,18 @@ __export(config_exports, {
 function findConfigPath(projectRoot) {
   const root = projectRoot || process.cwd();
   const candidates = [
-    (0, import_path25.resolve)(root, ".gossip", "config.json"),
-    (0, import_path25.resolve)(root, "gossip.agents.json"),
-    (0, import_path25.resolve)(root, "gossip.agents.yaml"),
-    (0, import_path25.resolve)(root, "gossip.agents.yml")
+    (0, import_path26.resolve)(root, ".gossip", "config.json"),
+    (0, import_path26.resolve)(root, "gossip.agents.json"),
+    (0, import_path26.resolve)(root, "gossip.agents.yaml"),
+    (0, import_path26.resolve)(root, "gossip.agents.yml")
   ];
   for (const p of candidates) {
-    if ((0, import_fs20.existsSync)(p)) return p;
+    if ((0, import_fs21.existsSync)(p)) return p;
   }
   return null;
 }
 function loadConfig(configPath) {
-  const raw = (0, import_fs20.readFileSync)(configPath, "utf-8");
+  const raw = (0, import_fs21.readFileSync)(configPath, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -11446,19 +11656,19 @@ function configToAgentConfigs(config2) {
 }
 function loadClaudeSubagents(projectRoot, existingIds) {
   const root = projectRoot || process.cwd();
-  const agentsDir = (0, import_path25.join)(root, ".claude", "agents");
-  if (!(0, import_fs20.existsSync)(agentsDir)) return [];
+  const agentsDir = (0, import_path26.join)(root, ".claude", "agents");
+  if (!(0, import_fs21.existsSync)(agentsDir)) return [];
   let files;
   try {
-    files = (0, import_fs20.readdirSync)(agentsDir).filter((f) => f.endsWith(".md"));
+    files = (0, import_fs21.readdirSync)(agentsDir).filter((f) => f.endsWith(".md"));
   } catch {
     return [];
   }
   const agents = [];
   for (const file2 of files) {
-    const filePath = (0, import_path25.join)(agentsDir, file2);
+    const filePath = (0, import_path26.join)(agentsDir, file2);
     try {
-      const content = (0, import_fs20.readFileSync)(filePath, "utf-8");
+      const content = (0, import_fs21.readFileSync)(filePath, "utf-8");
       const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
       if (!frontmatter) continue;
       const fm = frontmatter[1];
@@ -11520,12 +11730,12 @@ function inferSkills(description, name) {
   if (skills.length === 0) skills.push("general");
   return skills;
 }
-var import_fs20, import_path25, VALID_PROVIDERS, CLAUDE_MODEL_MAP;
+var import_fs21, import_path26, VALID_PROVIDERS, CLAUDE_MODEL_MAP;
 var init_config = __esm({
   "apps/cli/src/config.ts"() {
     "use strict";
-    import_fs20 = require("fs");
-    import_path25 = require("path");
+    import_fs21 = require("fs");
+    import_path26 = require("path");
     VALID_PROVIDERS = ["anthropic", "openai", "google", "local"];
     CLAUDE_MODEL_MAP = {
       opus: { provider: "anthropic", model: "claude-opus-4-6" },
@@ -11675,17 +11885,17 @@ __export(identity_exports, {
   normalizeGitUrl: () => normalizeGitUrl
 });
 function getOrCreateSalt(projectRoot) {
-  const saltPath = (0, import_path26.join)(projectRoot, ".gossip", "local-salt");
+  const saltPath = (0, import_path27.join)(projectRoot, ".gossip", "local-salt");
   try {
-    return (0, import_fs21.readFileSync)(saltPath, "utf-8").trim();
+    return (0, import_fs22.readFileSync)(saltPath, "utf-8").trim();
   } catch {
     const salt = (0, import_crypto9.randomBytes)(16).toString("hex");
-    (0, import_fs21.mkdirSync)((0, import_path26.join)(projectRoot, ".gossip"), { recursive: true });
+    (0, import_fs22.mkdirSync)((0, import_path27.join)(projectRoot, ".gossip"), { recursive: true });
     try {
-      (0, import_fs21.writeFileSync)(saltPath, salt, { flag: "wx" });
+      (0, import_fs22.writeFileSync)(saltPath, salt, { flag: "wx" });
       return salt;
     } catch {
-      return (0, import_fs21.readFileSync)(saltPath, "utf-8").trim();
+      return (0, import_fs22.readFileSync)(saltPath, "utf-8").trim();
     }
   }
 }
@@ -11735,12 +11945,12 @@ function getProjectId(projectRoot) {
   }
   return (0, import_crypto9.createHash)("sha256").update(projectRoot).digest("hex").slice(0, 16);
 }
-var import_fs21, import_path26, import_crypto9, import_child_process5;
+var import_fs22, import_path27, import_crypto9, import_child_process5;
 var init_identity = __esm({
   "apps/cli/src/identity.ts"() {
     "use strict";
-    import_fs21 = require("fs");
-    import_path26 = require("path");
+    import_fs22 = require("fs");
+    import_path27 = require("path");
     import_crypto9 = require("crypto");
     import_child_process5 = require("child_process");
   }
@@ -25556,6 +25766,7 @@ var toolServer = null;
 var workers = /* @__PURE__ */ new Map();
 var mainAgent = null;
 var keychain = null;
+var skillGenerator = null;
 var _modules = null;
 async function getModules() {
   if (_modules) return _modules;
@@ -25567,6 +25778,7 @@ async function getModules() {
     WorkerAgent: (await Promise.resolve().then(() => (init_src5(), src_exports4))).WorkerAgent,
     createProvider: (await Promise.resolve().then(() => (init_src5(), src_exports4))).createProvider,
     PerformanceWriter: (await Promise.resolve().then(() => (init_src5(), src_exports4))).PerformanceWriter,
+    SkillGenerator: (await Promise.resolve().then(() => (init_src5(), src_exports4))).SkillGenerator,
     ...await Promise.resolve().then(() => (init_config(), config_exports)),
     Keychain: (await Promise.resolve().then(() => (init_keychain(), keychain_exports))).Keychain
   };
@@ -25612,10 +25824,10 @@ async function doBoot() {
     }
     const key = await keychain.getKey(ac.provider);
     const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
-    const { existsSync: existsSync19, readFileSync: readFileSync20 } = require("fs");
-    const { join: join22 } = require("path");
-    const instructionsPath = join22(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
-    const instructions = existsSync19(instructionsPath) ? readFileSync20(instructionsPath, "utf-8") : void 0;
+    const { existsSync: existsSync20, readFileSync: readFileSync21 } = require("fs");
+    const { join: join23 } = require("path");
+    const instructionsPath = join23(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
+    const instructions = existsSync20(instructionsPath) ? readFileSync21(instructionsPath, "utf-8") : void 0;
     const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS, instructions);
     worker.setOnTaskComplete?.((event) => {
       try {
@@ -25737,6 +25949,19 @@ async function doBoot() {
 `);
   } catch (err) {
     process.stderr.write(`[gossipcat] Adaptive team intelligence failed: ${err.message}
+`);
+  }
+  try {
+    const { CompetencyProfiler: CP, SkillGenerator: SG } = await Promise.resolve().then(() => (init_src5(), src_exports4));
+    const skillProfiler = new CP(process.cwd());
+    skillGenerator = new SG(
+      m.createProvider(mainProvider, mainModel, mainKey ?? void 0),
+      skillProfiler,
+      process.cwd()
+    );
+    process.stderr.write("[gossipcat] Skill generator ready\n");
+  } catch (err) {
+    process.stderr.write(`[gossipcat] Skill generator failed: ${err.message}
 `);
   }
   try {
@@ -26506,10 +26731,10 @@ server.tool(
     const { BootstrapGenerator: BootstrapGenerator2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
     const generator = new BootstrapGenerator2(process.cwd());
     const result = generator.generate();
-    const { writeFileSync: writeFileSync10, mkdirSync: mkdirSync10 } = require("fs");
-    const { join: join22 } = require("path");
-    mkdirSync10(join22(process.cwd(), ".gossip"), { recursive: true });
-    writeFileSync10(join22(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
+    const { writeFileSync: writeFileSync11, mkdirSync: mkdirSync11 } = require("fs");
+    const { join: join23 } = require("path");
+    mkdirSync11(join23(process.cwd(), ".gossip"), { recursive: true });
+    writeFileSync11(join23(process.cwd(), ".gossip", "bootstrap.md"), result.prompt);
     return { content: [{ type: "text", text: result.prompt }] };
   }
 );
@@ -26537,8 +26762,8 @@ server.tool(
     })).describe("Array of agents to create")
   },
   async ({ main_provider, main_model, agents }) => {
-    const { writeFileSync: writeFileSync10, mkdirSync: mkdirSync10 } = require("fs");
-    const { join: join22 } = require("path");
+    const { writeFileSync: writeFileSync11, mkdirSync: mkdirSync11 } = require("fs");
+    const { join: join23 } = require("path");
     const root = process.cwd();
     const CLAUDE_MODEL_MAP2 = {
       opus: { provider: "anthropic", model: "claude-opus-4-6" },
@@ -26571,9 +26796,9 @@ server.tool(
           "",
           body
         ].join("\n");
-        const agentsDir = join22(root, ".claude", "agents");
-        mkdirSync10(agentsDir, { recursive: true });
-        writeFileSync10(join22(agentsDir, `${agent.id}.md`), md, "utf-8");
+        const agentsDir = join23(root, ".claude", "agents");
+        mkdirSync11(agentsDir, { recursive: true });
+        writeFileSync11(join23(agentsDir, `${agent.id}.md`), md, "utf-8");
         nativeCreated.push(agent.id);
         configAgents[agent.id] = {
           provider: mapped.provider,
@@ -26599,9 +26824,9 @@ server.tool(
         };
         customCreated.push(agent.id);
         if (agent.instructions) {
-          const instrDir = join22(root, ".gossip", "agents", agent.id);
-          mkdirSync10(instrDir, { recursive: true });
-          writeFileSync10(join22(instrDir, "instructions.md"), agent.instructions, "utf-8");
+          const instrDir = join23(root, ".gossip", "agents", agent.id);
+          mkdirSync11(instrDir, { recursive: true });
+          writeFileSync11(join23(instrDir, "instructions.md"), agent.instructions, "utf-8");
         }
       }
     }
@@ -26615,13 +26840,13 @@ server.tool(
     } catch (err) {
       return { content: [{ type: "text", text: `Invalid config: ${err.message}` }] };
     }
-    mkdirSync10(join22(root, ".gossip"), { recursive: true });
-    writeFileSync10(join22(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
+    mkdirSync11(join23(root, ".gossip"), { recursive: true });
+    writeFileSync11(join23(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
     const agentList = Object.entries(configAgents).map(([id, a]) => `- ${id}: ${a.provider}/${a.model} (${a.preset || "custom"})`).join("\n");
-    const rulesDir = join22(root, env.rulesDir);
-    const rulesFile = join22(root, env.rulesFile);
-    mkdirSync10(rulesDir, { recursive: true });
-    writeFileSync10(rulesFile, `# Gossipcat \u2014 Multi-Agent Orchestration
+    const rulesDir = join23(root, env.rulesDir);
+    const rulesFile = join23(root, env.rulesFile);
+    mkdirSync11(rulesDir, { recursive: true });
+    writeFileSync11(rulesFile, `# Gossipcat \u2014 Multi-Agent Orchestration
 
 This project uses gossipcat for multi-agent orchestration via MCP.
 
@@ -26909,12 +27134,12 @@ server.tool(
     if (findings.length === 0) {
       return { content: [{ type: "text", text: "No findings to log." }] };
     }
-    const { appendFileSync: appendFileSync6, mkdirSync: mkdirSync10, existsSync: existsSync19 } = require("fs");
-    const { join: join22 } = require("path");
+    const { appendFileSync: appendFileSync6, mkdirSync: mkdirSync11, existsSync: existsSync20 } = require("fs");
+    const { join: join23 } = require("path");
     const root = process.cwd();
-    const dir = join22(root, ".gossip");
-    if (!existsSync19(dir)) mkdirSync10(dir, { recursive: true });
-    const filePath = join22(dir, "implementation-findings.jsonl");
+    const dir = join23(root, ".gossip");
+    if (!existsSync20(dir)) mkdirSync11(dir, { recursive: true });
+    const filePath = join23(dir, "implementation-findings.jsonl");
     const timestamp = (/* @__PURE__ */ new Date()).toISOString();
     const data = findings.map((f) => JSON.stringify({
       timestamp,
@@ -26955,15 +27180,15 @@ server.tool(
     agent_id: external_exports.string().optional().describe("Filter by implementer agent ID. Omit to see all.")
   },
   async ({ agent_id }) => {
-    const { existsSync: existsSync19, readFileSync: readFileSync20 } = require("fs");
-    const { join: join22 } = require("path");
-    const filePath = join22(process.cwd(), ".gossip", "implementation-findings.jsonl");
-    if (!existsSync19(filePath)) {
+    const { existsSync: existsSync20, readFileSync: readFileSync21 } = require("fs");
+    const { join: join23 } = require("path");
+    const filePath = join23(process.cwd(), ".gossip", "implementation-findings.jsonl");
+    if (!existsSync20(filePath)) {
       return { content: [{ type: "text", text: "No implementation findings yet. Use gossip_log_finding to record findings after code reviews." }] };
     }
     const entries = [];
     try {
-      const lines = readFileSync20(filePath, "utf-8").trim().split("\n").filter(Boolean);
+      const lines = readFileSync21(filePath, "utf-8").trim().split("\n").filter(Boolean);
       for (const l of lines) {
         try {
           entries.push(JSON.parse(l));
@@ -27026,16 +27251,16 @@ server.tool(
     const { SkillGapTracker: SkillGapTracker2, parseSkillFrontmatter: parseSkillFrontmatter2, normalizeSkillName: normalizeSkillName2 } = await Promise.resolve().then(() => (init_src5(), src_exports4));
     const tracker = new SkillGapTracker2(process.cwd());
     if (skills && skills.length > 0) {
-      const { writeFileSync: writeFileSync10, mkdirSync: mkdirSync10, existsSync: existsSync19, readFileSync: readFileSync20 } = require("fs");
-      const { join: join22 } = require("path");
-      const dir = join22(process.cwd(), ".gossip", "skills");
-      mkdirSync10(dir, { recursive: true });
+      const { writeFileSync: writeFileSync11, mkdirSync: mkdirSync11, existsSync: existsSync20, readFileSync: readFileSync21 } = require("fs");
+      const { join: join23 } = require("path");
+      const dir = join23(process.cwd(), ".gossip", "skills");
+      mkdirSync11(dir, { recursive: true });
       const results = [];
       for (const skill of skills) {
         const name = normalizeSkillName2(skill.name);
-        const filePath = join22(dir, `${name}.md`);
-        if (existsSync19(filePath)) {
-          const existing = readFileSync20(filePath, "utf-8");
+        const filePath = join23(dir, `${name}.md`);
+        if (existsSync20(filePath)) {
+          const existing = readFileSync21(filePath, "utf-8");
           const fm = parseSkillFrontmatter2(existing);
           if (fm) {
             if (fm.generated_by === "manual") {
@@ -27052,7 +27277,7 @@ server.tool(
             }
           }
         }
-        writeFileSync10(filePath, skill.content);
+        writeFileSync11(filePath, skill.content);
         tracker.recordResolution(name);
         results.push(`\u2705 Created .gossip/skills/${name}.md`);
       }
@@ -27092,6 +27317,42 @@ server.tool(
   }
 );
 server.tool(
+  "gossip_develop_skill",
+  "Generate a superpowers-quality skill file for an agent to improve performance in a specific review category. Uses ATI profiler data + reference templates.",
+  {
+    agent_id: external_exports.string().describe('Agent to develop skill for (e.g., "gemini-reviewer")'),
+    category: external_exports.string().describe("Category to improve. One of: trust_boundaries, injection_vectors, input_validation, concurrency, resource_exhaustion, type_safety, error_handling, data_integrity")
+  },
+  async ({ agent_id, category }) => {
+    await boot();
+    if (!skillGenerator) {
+      return { content: [{ type: "text", text: "Skill generator not available. Check boot logs." }] };
+    }
+    try {
+      const result = await skillGenerator.generate(agent_id, category);
+      if (mainAgent) {
+        const registry2 = mainAgent.registry;
+        const config2 = registry2?.get(agent_id);
+        if (config2 && !config2.skills.includes(category)) {
+          config2.skills.push(category);
+        }
+      }
+      const preview = result.content.length > 1e3 ? result.content.slice(0, 1e3) + "\n\n... (truncated)" : result.content;
+      return {
+        content: [{ type: "text", text: `\u2705 Skill generated and saved:
+
+Path: ${result.path}
+
+${preview}` }]
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `\u274C Skill generation failed: ${err.message}` }]
+      };
+    }
+  }
+);
+server.tool(
   "gossip_tools",
   "List all available gossipcat MCP tools with descriptions. Call after /mcp reconnect to discover new tools.",
   {},
@@ -27113,6 +27374,7 @@ server.tool(
       { name: "gossip_log_finding", desc: "Log implementation quality finding (observer-only, no scoring)" },
       { name: "gossip_findings", desc: "View implementation findings per agent" },
       { name: "gossip_build_skills", desc: "Build skill files from agent gap suggestions" },
+      { name: "gossip_develop_skill", desc: "Generate agent-specific skill from ATI competency data" },
       { name: "gossip_tools", desc: "List available tools (this command)" },
       { name: "gossip_bootstrap", desc: "Generate team context prompt with live agent state" },
       { name: "gossip_setup", desc: "Create or update team configuration" }

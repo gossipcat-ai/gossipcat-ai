@@ -74,6 +74,7 @@ let toolServer: any = null;
 let workers: Map<string, any> = new Map();
 let mainAgent: any = null;
 let keychain: any = null;
+let skillGenerator: any = null;
 
 // Cache modules after first import
 let _modules: any = null;
@@ -88,6 +89,7 @@ async function getModules() {
     WorkerAgent: (await import('@gossip/orchestrator')).WorkerAgent,
     createProvider: (await import('@gossip/orchestrator')).createProvider,
     PerformanceWriter: (await import('@gossip/orchestrator')).PerformanceWriter,
+    SkillGenerator: (await import('@gossip/orchestrator')).SkillGenerator,
     ...(await import('./config')),
     Keychain: (await import('./keychain')).Keychain,
   };
@@ -276,6 +278,20 @@ async function doBoot() {
     process.stderr.write(`[gossipcat] Adaptive team intelligence ready (utility: ${utilityModelId})\n`);
   } catch (err) {
     process.stderr.write(`[gossipcat] Adaptive team intelligence failed: ${(err as Error).message}\n`);
+  }
+
+  // Create skill generator for gossip_develop_skill tool
+  try {
+    const { CompetencyProfiler: CP, SkillGenerator: SG } = await import('@gossip/orchestrator');
+    const skillProfiler = new CP(process.cwd());
+    skillGenerator = new SG(
+      m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined),
+      skillProfiler,
+      process.cwd(),
+    );
+    process.stderr.write('[gossipcat] Skill generator ready\n');
+  } catch (err) {
+    process.stderr.write(`[gossipcat] Skill generator failed: ${(err as Error).message}\n`);
   }
 
   // Create gossip publisher and wire into pipeline
@@ -1779,6 +1795,48 @@ server.tool(
   }
 );
 
+// ── Generate agent-specific skill from ATI competency data ──────────────
+server.tool(
+  'gossip_develop_skill',
+  'Generate a superpowers-quality skill file for an agent to improve performance in a specific review category. Uses ATI profiler data + reference templates.',
+  {
+    agent_id: z.string().describe('Agent to develop skill for (e.g., "gemini-reviewer")'),
+    category: z.string().describe('Category to improve. One of: trust_boundaries, injection_vectors, input_validation, concurrency, resource_exhaustion, type_safety, error_handling, data_integrity'),
+  },
+  async ({ agent_id, category }) => {
+    await boot();
+
+    if (!skillGenerator) {
+      return { content: [{ type: 'text' as const, text: 'Skill generator not available. Check boot logs.' }] };
+    }
+
+    try {
+      const result = await skillGenerator.generate(agent_id, category);
+
+      // Register skill on agent config so loadSkills picks it up
+      if (mainAgent) {
+        const registry = (mainAgent as any).registry;
+        const config = registry?.get(agent_id);
+        if (config && !config.skills.includes(category)) {
+          config.skills.push(category);
+        }
+      }
+
+      const preview = result.content.length > 1000
+        ? result.content.slice(0, 1000) + '\n\n... (truncated)'
+        : result.content;
+
+      return {
+        content: [{ type: 'text' as const, text: `✅ Skill generated and saved:\n\nPath: ${result.path}\n\n${preview}` }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `❌ Skill generation failed: ${(err as Error).message}` }],
+      };
+    }
+  },
+);
+
 // ── Tool: list available gossipcat tools ──────────────────────────────────
 server.tool(
   'gossip_tools',
@@ -1802,6 +1860,7 @@ server.tool(
       { name: 'gossip_log_finding', desc: 'Log implementation quality finding (observer-only, no scoring)' },
       { name: 'gossip_findings', desc: 'View implementation findings per agent' },
       { name: 'gossip_build_skills', desc: 'Build skill files from agent gap suggestions' },
+      { name: 'gossip_develop_skill', desc: 'Generate agent-specific skill from ATI competency data' },
       { name: 'gossip_tools', desc: 'List available tools (this command)' },
       { name: 'gossip_bootstrap', desc: 'Generate team context prompt with live agent state' },
       { name: 'gossip_setup', desc: 'Create or update team configuration' },
