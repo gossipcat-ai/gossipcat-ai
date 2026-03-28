@@ -12,6 +12,13 @@ function truncateAtWord(text: string, maxLen: number): string {
   return (lastSpace > maxLen * 0.8 ? truncated.slice(0, lastSpace) : truncated) + '...';
 }
 
+/** Truncate by keeping start + end — preserves conclusions/errors at the tail */
+function truncateStartAndEnd(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const half = Math.floor(maxLen / 2);
+  return `${text.slice(0, half)}\n\n[... truncated ${text.length - maxLen} chars ...]\n\n${text.slice(-half)}`;
+}
+
 export class MemoryWriter {
   private summaryLlm: ILLMProvider | null = null;
 
@@ -146,7 +153,7 @@ Rules:
       },
       {
         role: 'user',
-        content: `Task: ${task.slice(0, 500)}\n\nResult:\n${result.slice(0, 4000)}`,
+        content: `Task: ${task.slice(0, 500)}\n\nResult:\n${truncateStartAndEnd(result, 4000)}`,
       },
     ];
 

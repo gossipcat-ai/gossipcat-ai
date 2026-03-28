@@ -5542,6 +5542,15 @@ function truncateAtWord(text, maxLen) {
   const lastSpace = truncated.lastIndexOf(" ");
   return (lastSpace > maxLen * 0.8 ? truncated.slice(0, lastSpace) : truncated) + "...";
 }
+function truncateStartAndEnd(text, maxLen) {
+  if (text.length <= maxLen) return text;
+  const half = Math.floor(maxLen / 2);
+  return `${text.slice(0, half)}
+
+[... truncated ${text.length - maxLen} chars ...]
+
+${text.slice(-half)}`;
+}
 var import_fs5, import_path7, MemoryWriter;
 var init_memory_writer = __esm({
   "packages/orchestrator/src/memory-writer.ts"() {
@@ -5659,7 +5668,7 @@ Rules:
             content: `Task: ${task.slice(0, 500)}
 
 Result:
-${result.slice(0, 4e3)}`
+${truncateStartAndEnd(result, 4e3)}`
           }
         ];
         const response = await this.summaryLlm.generate(messages, { temperature: 0 });
