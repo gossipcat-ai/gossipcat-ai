@@ -2,7 +2,7 @@ export { MainAgent } from './main-agent';
 export { loadSkills } from './skill-loader';
 export type { MainAgentConfig } from './main-agent';
 export { WorkerAgent } from './worker-agent';
-export type { WorkerProgressCallback } from './worker-agent';
+export type { WorkerProgressCallback, TaskCompleteCallback } from './worker-agent';
 export { AgentRegistry } from './agent-registry';
 export type { FindBestMatchOptions } from './agent-registry';
 export { TaskDispatcher } from './task-dispatcher';

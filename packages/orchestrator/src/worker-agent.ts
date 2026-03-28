@@ -20,6 +20,13 @@ export type WorkerProgressCallback = (event: {
   turn: number;
 }) => void;
 
+export type TaskCompleteCallback = (event: {
+  agentId: string;
+  taskId: string;
+  toolCalls: number;
+  durationMs: number;
+}) => void;
+
 const MAX_TOOL_TURNS = 15;
 const TOOL_CALL_TIMEOUT_MS = 60_000;
 const log = (agentId: string, msg: string) => process.stderr.write(`[worker:${agentId}] ${msg}\n`);
@@ -116,6 +123,7 @@ export class WorkerAgent {
 
   private webSearchEnabled: boolean;
   private validToolNames: Set<string>;
+  private onTaskComplete?: TaskCompleteCallback;
 
   constructor(
     private agentId: string,
@@ -129,6 +137,10 @@ export class WorkerAgent {
     this.validToolNames = new Set(tools.map(t => t.name));
     this.instructions = instructions || 'You are a skilled developer agent. Complete the assigned task using the available tools. Be concise and focused.\n\nIf you encounter a domain your skills don\'t cover, call suggest_skill(name, reason) — it helps the system learn. Don\'t stop working to suggest; note the gap and keep going.';
     this.agent = new GossipAgent({ agentId, relayUrl, reconnect: true });
+  }
+
+  setOnTaskComplete(cb: TaskCompleteCallback): void {
+    this.onTaskComplete = cb;
   }
 
   setInstructions(instructions: string): void {
@@ -181,6 +193,7 @@ export class WorkerAgent {
   async executeTask(task: string, context?: string, skillsContent?: string, onProgress?: WorkerProgressCallback): Promise<TaskExecutionResult> {
     log(this.agentId, `executeTask started — task: "${task.slice(0, 100)}..." webSearch=${this.webSearchEnabled} tools=${this.tools.length}`);
     this.gossipQueue = []; // clear gossip from previous task
+    const startTime = Date.now();
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let toolCallCount = 0;
@@ -275,6 +288,7 @@ export class WorkerAgent {
 
         if (!response.toolCalls?.length) {
           log(this.agentId, `turn ${turn} — NO tool calls, exiting. Text preview: "${(response.text || '').slice(0, 200)}"`);
+          this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
           return { result: response.text || '[No response from agent]', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
         }
 
@@ -285,6 +299,7 @@ export class WorkerAgent {
           repeatCount++;
           if (repeatCount >= 2) {
             log(this.agentId, `turn ${turn} — STUCK: repeating same tool calls ${repeatCount + 1}x, exiting`);
+            this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
             return {
               result: response.text || 'Task completed (agent was repeating the same action).',
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -348,6 +363,7 @@ export class WorkerAgent {
           log(this.agentId, `turn ${turn} — all ${response.toolCalls.length} tool calls errored (streak: ${consecutiveErrors})`);
           if (consecutiveErrors >= 3) {
             log(this.agentId, `turn ${turn} — ERROR LOOP: 3 consecutive all-error turns, exiting`);
+            this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
             return {
               result: response.text || 'Task incomplete — agent stuck in error loop. Simplify the approach or check the error messages above.',
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -364,12 +380,15 @@ export class WorkerAgent {
         messages.push({ role: 'user', content: 'Your turn budget is exhausted. Summarize what you accomplished and what remains unfinished. List files created/modified.' });
         const summary = await this.llm.generate(messages);
         if (summary.usage) { totalInputTokens += summary.usage.inputTokens; totalOutputTokens += summary.usage.outputTokens; }
+        this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
         return { result: summary.text || 'Task completed (turn budget exhausted).', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
       } catch {
+        this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
         return { result: 'Task incomplete — agent exhausted its turn budget.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
       }
     } catch (err) {
       log(this.agentId, `FATAL ERROR in executeTask: ${(err as Error).message}`);
+      this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
       return { result: `Error: ${(err as Error).message}`, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
     }
   }
