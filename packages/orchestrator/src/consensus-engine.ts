@@ -308,7 +308,32 @@ Return ONLY a JSON array:
         finding.tag = 'disputed';
         disputed.push(finding);
       } else if (entry.confirmedBy.length > 0) {
-        // Confirmed by peers — check if this was a unique finding (only one agent originally found it)
+        // Confirmed by peers — verify finding is real before accepting
+        // Check 1: citations reference real code
+        const findingHasFabricatedCitation = await this.verifyCitations(entry.finding);
+        // Check 2: negative claims ("no validation") are verified against actual code
+        const findingHasFalseNegative = !findingHasFabricatedCitation
+          ? await this.verifyNegativeClaim(entry.finding)
+          : false;
+
+        if (findingHasFabricatedCitation || findingHasFalseNegative) {
+          // Finding claims something about code that isn't true — demote to unique, flag
+          finding.tag = 'unique';
+          unique.push(finding);
+          const reason = findingHasFabricatedCitation ? 'fabricated_citation' : 'false_negative_claim';
+          signals.push({
+            type: 'consensus',
+            taskId: agentTaskIds.get(entry.originalAgentId) ?? '',
+            signal: 'hallucination_caught',
+            agentId: entry.originalAgentId,
+            outcome: reason as any,
+            evidence: `Confirmed finding contains false claim: "${entry.finding.slice(0, 200)}"`,
+            timestamp: now,
+          });
+          continue;
+        }
+
+        // Check if this was a unique finding (only one agent originally found it)
         const isUniquelyDiscovered = !Array.from(findingMap.values()).some(
           other => other !== entry && other.finding === entry.finding && other.originalAgentId !== entry.originalAgentId
         );
@@ -363,11 +388,11 @@ Return ONLY a JSON array:
     if (!this.config.projectRoot) return false;
 
     // Extract file:line patterns like "task-dispatcher.ts:146" or "consensus-engine.ts:113"
-    const citationPattern = /(?:[\w./-]+\/)?(\S+\.[a-z]{1,4}):(\d+)/g;
+    const citationPattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,4}):(\d+)/g;
     const citations: Array<{ file: string; line: number }> = [];
     let match;
     while ((match = citationPattern.exec(evidence)) !== null) {
-      citations.push({ file: match[0].split(':')[0], line: parseInt(match[2], 10) });
+      citations.push({ file: match[1], line: parseInt(match[2], 10) });
     }
 
     if (citations.length === 0) return false;
@@ -431,6 +456,67 @@ Return ONLY a JSON array:
         // File read failed — treat as fabricated
         return true;
       }
+    }
+
+    return false;
+  }
+
+  /**
+   * Verify negative claims in findings (e.g., "no validation", "no sanitization").
+   * Searches cited files for evidence that the claimed-missing code actually exists.
+   * Returns true if the negative claim is false (code exists but finding says it doesn't).
+   */
+  async verifyNegativeClaim(finding: string): Promise<boolean> {
+    if (!this.config.projectRoot) return false;
+
+    // Detect negative claims about code
+    const negativeClaims = /\b(?:no |lacks? |missing |without |does not |doesn'?t |absent|never )(sanitiz|validat|check|verif|guard|filter|escap|authenti)/i;
+    const match = finding.match(negativeClaims);
+    if (!match) return false; // No negative claim detected
+
+    const claimedMissing = match[1].toLowerCase(); // e.g., "validat", "sanitiz"
+
+    // Map claimed-missing stems to code patterns that would indicate the behavior exists
+    const codeIndicators: Record<string, string[]> = {
+      sanitiz: ['sanitiz', 'replace(', 'strip', 'escape', 'filter'],
+      validat: ['validat', '.test(', 'throw new error', 'reject', 'invalid', 'known_', 'safe_name'],
+      check: ['check', '.test(', 'if (', 'throw', 'assert'],
+      verif: ['verif', '.test(', 'assert', 'throw'],
+      guard: ['guard', '.test(', 'if (!', 'throw'],
+      filter: ['filter', 'replace(', 'strip', 'sanitiz'],
+      escap: ['escap', 'replace(', 'encode'],
+      authenti: ['authenti', 'auth', 'token', 'credential', 'login'],
+    };
+
+    const indicators = codeIndicators[claimedMissing] || [claimedMissing];
+
+    // Extract file references from the finding
+    const filePattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,4})(?::(\d+))?/g;
+    const files: string[] = [];
+    let fileMatch;
+    while ((fileMatch = filePattern.exec(finding)) !== null) {
+      files.push(fileMatch[1]); // capture group 1 = clean filename
+    }
+
+    if (files.length === 0) return false; // No files cited — can't verify
+
+    // Search cited files for code that contradicts the negative claim
+    for (const fileRef of files) {
+      try {
+        const filePath = await this.resolveFilePath(fileRef);
+        if (!filePath) continue;
+
+        const content = (await readFile(filePath, 'utf-8')).toLowerCase();
+        const lines = content.split('\n');
+        const codeLines = lines.filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*'));
+        const codeContent = codeLines.join('\n');
+
+        // If the file contains indicators of the behavior the finding says is missing, the claim is false
+        const hasIndicator = indicators.some(ind => codeContent.includes(ind));
+        if (hasIndicator) {
+          return true; // Code contradicts the negative claim
+        }
+      } catch { continue; }
     }
 
     return false;

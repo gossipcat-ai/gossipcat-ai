@@ -198,3 +198,90 @@ describe('ConsensusEngine.synthesize — citation verification integration', () 
     expect(hallucinationSignal!.counterpartId).toBe('agent-b');
   });
 });
+
+describe('ConsensusEngine.verifyNegativeClaim — false negative detection', () => {
+  const testDir = resolve(tmpdir(), 'gossip-negclaim-test-' + Date.now());
+  let engine: ConsensusEngine;
+
+  beforeAll(() => {
+    mkdirSync(resolve(testDir, 'packages/orchestrator/src'), { recursive: true });
+    // File that HAS validation
+    writeFileSync(
+      resolve(testDir, 'packages/orchestrator/src/skill-generator.ts'),
+      [
+        'export class SkillGenerator {',
+        '  async generate(agentId: string, category: string) {',
+        '    if (!SAFE_NAME.test(agentId)) {',
+        '      throw new Error("Invalid agent_id");',
+        '    }',
+        '    if (!KNOWN_CATEGORIES.has(category)) {',
+        '      throw new Error("Unknown category");',
+        '    }',
+        '    // validation passed, proceed',
+        '    const template = this.loadTemplate();',
+        '  }',
+        '}',
+      ].join('\n'),
+    );
+  });
+
+  afterAll(() => rmSync(testDir, { recursive: true, force: true }));
+
+  beforeEach(() => {
+    engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+  });
+
+  test('detects false negative claim — says no validation but validation exists', async () => {
+    const finding = 'No validation on agent_id and category parameters (skill-generator.ts:2)';
+    const result = await engine.verifyNegativeClaim(finding);
+    expect(result).toBe(true); // claim is false — validation exists
+  });
+
+  test('accepts true negative claim — code genuinely lacks the feature', async () => {
+    const finding = 'No authentication on relay connection (nonexistent-file.ts:10)';
+    const result = await engine.verifyNegativeClaim(finding);
+    expect(result).toBe(false); // can't find the file, so can't disprove the claim
+  });
+
+  test('ignores findings without negative claims', async () => {
+    const finding = 'The sanitization at consensus-engine.ts:87 strips data tags';
+    const result = await engine.verifyNegativeClaim(finding);
+    expect(result).toBe(false); // no negative claim detected
+  });
+
+  test('mass-agreed false finding gets demoted from confirmed to unique', async () => {
+    const results = [
+      { id: 'task-1', agentId: 'agent-a', task: 'review', status: 'completed' as const, result: '## Consensus Summary\n- No validation on inputs (skill-generator.ts:2)', startedAt: Date.now() },
+      { id: 'task-2', agentId: 'agent-b', task: 'review', status: 'completed' as const, result: '## Consensus Summary\n- Other finding', startedAt: Date.now() },
+    ];
+
+    const crossReviewEntries = [
+      {
+        action: 'agree' as const,
+        agentId: 'agent-b',
+        peerAgentId: 'agent-a',
+        finding: 'No validation on inputs (skill-generator.ts:2)',
+        evidence: 'I confirm there is no validation on the inputs.',
+        confidence: 4,
+      },
+    ];
+
+    const report = await engine.synthesize(results, crossReviewEntries);
+
+    // The false finding should NOT be confirmed
+    expect(report.confirmed.find(f => f.finding.includes('No validation'))).toBeUndefined();
+
+    // It should be demoted to unique
+    expect(report.unique.find(f => f.finding.includes('No validation'))).toBeDefined();
+
+    // Should emit hallucination signal
+    const hallucinationSignal = report.signals.find(
+      s => s.signal === 'hallucination_caught' && s.outcome === 'false_negative_claim',
+    );
+    expect(hallucinationSignal).toBeDefined();
+  });
+});

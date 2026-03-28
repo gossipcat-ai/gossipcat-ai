@@ -6695,6 +6695,23 @@ Return ONLY a JSON array:
             finding.tag = "disputed";
             disputed.push(finding);
           } else if (entry.confirmedBy.length > 0) {
+            const findingHasFabricatedCitation = await this.verifyCitations(entry.finding);
+            const findingHasFalseNegative = !findingHasFabricatedCitation ? await this.verifyNegativeClaim(entry.finding) : false;
+            if (findingHasFabricatedCitation || findingHasFalseNegative) {
+              finding.tag = "unique";
+              unique.push(finding);
+              const reason = findingHasFabricatedCitation ? "fabricated_citation" : "false_negative_claim";
+              signals.push({
+                type: "consensus",
+                taskId: agentTaskIds.get(entry.originalAgentId) ?? "",
+                signal: "hallucination_caught",
+                agentId: entry.originalAgentId,
+                outcome: reason,
+                evidence: `Confirmed finding contains false claim: "${entry.finding.slice(0, 200)}"`,
+                timestamp: now
+              });
+              continue;
+            }
             const isUniquelyDiscovered = !Array.from(findingMap.values()).some(
               (other) => other !== entry && other.finding === entry.finding && other.originalAgentId !== entry.originalAgentId
             );
@@ -6741,11 +6758,11 @@ Return ONLY a JSON array:
        */
       async verifyCitations(evidence) {
         if (!this.config.projectRoot) return false;
-        const citationPattern = /(?:[\w./-]+\/)?(\S+\.[a-z]{1,4}):(\d+)/g;
+        const citationPattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,4}):(\d+)/g;
         const citations = [];
         let match;
         while ((match = citationPattern.exec(evidence)) !== null) {
-          citations.push({ file: match[0].split(":")[0], line: parseInt(match[2], 10) });
+          citations.push({ file: match[1], line: parseInt(match[2], 10) });
         }
         if (citations.length === 0) return false;
         const claimPatterns = [
@@ -6788,6 +6805,53 @@ Return ONLY a JSON array:
             }
           } catch {
             return true;
+          }
+        }
+        return false;
+      }
+      /**
+       * Verify negative claims in findings (e.g., "no validation", "no sanitization").
+       * Searches cited files for evidence that the claimed-missing code actually exists.
+       * Returns true if the negative claim is false (code exists but finding says it doesn't).
+       */
+      async verifyNegativeClaim(finding) {
+        if (!this.config.projectRoot) return false;
+        const negativeClaims = /\b(?:no |lacks? |missing |without |does not |doesn'?t |absent|never )(sanitiz|validat|check|verif|guard|filter|escap|authenti)/i;
+        const match = finding.match(negativeClaims);
+        if (!match) return false;
+        const claimedMissing = match[1].toLowerCase();
+        const codeIndicators = {
+          sanitiz: ["sanitiz", "replace(", "strip", "escape", "filter"],
+          validat: ["validat", ".test(", "throw new error", "reject", "invalid", "known_", "safe_name"],
+          check: ["check", ".test(", "if (", "throw", "assert"],
+          verif: ["verif", ".test(", "assert", "throw"],
+          guard: ["guard", ".test(", "if (!", "throw"],
+          filter: ["filter", "replace(", "strip", "sanitiz"],
+          escap: ["escap", "replace(", "encode"],
+          authenti: ["authenti", "auth", "token", "credential", "login"]
+        };
+        const indicators = codeIndicators[claimedMissing] || [claimedMissing];
+        const filePattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,4})(?::(\d+))?/g;
+        const files = [];
+        let fileMatch;
+        while ((fileMatch = filePattern.exec(finding)) !== null) {
+          files.push(fileMatch[1]);
+        }
+        if (files.length === 0) return false;
+        for (const fileRef of files) {
+          try {
+            const filePath = await this.resolveFilePath(fileRef);
+            if (!filePath) continue;
+            const content = (await (0, import_promises3.readFile)(filePath, "utf-8")).toLowerCase();
+            const lines = content.split("\n");
+            const codeLines = lines.filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*"));
+            const codeContent = codeLines.join("\n");
+            const hasIndicator = indicators.some((ind) => codeContent.includes(ind));
+            if (hasIndicator) {
+              return true;
+            }
+          } catch {
+            continue;
           }
         }
         return false;

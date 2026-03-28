@@ -58,7 +58,7 @@ export interface ConsensusSignal {
   agentId: string;
   counterpartId?: string;
   skill?: string;
-  outcome?: 'correct' | 'incorrect' | 'unresolved' | 'fabricated_citation';
+  outcome?: 'correct' | 'incorrect' | 'unresolved' | 'fabricated_citation' | 'false_negative_claim';
   category?: string;
   evidence: string;
   timestamp: string;
