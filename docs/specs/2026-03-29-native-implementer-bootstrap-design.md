@@ -203,8 +203,9 @@ The remaining tools (`gossip_record_signals`, `gossip_log_finding`, `gossip_find
 | `.claude/agents/opus-implementer.md` | **New** — native opus implementer agent definition |
 | `.gossip/config.json` | **Modify** — add sonnet-implementer and opus-implementer to agents (manual edit, not gossip_setup) |
 | `packages/orchestrator/src/bootstrap.ts` | **Modify** — add `verifyToolClaims()`, update tools table, call verify in `readNextSessionNotes()` |
-| `apps/cli/src/mcp-server-sdk.ts` | **Modify** — inject scope into native dispatch prompt when `write_mode: 'scoped'` |
+| `apps/cli/src/mcp-server-sdk.ts` | **Modify** — inject scope into native dispatch prompt when `write_mode: 'scoped'`; hot-reload config on agent miss in `gossip_run` |
 | `tests/orchestrator/bootstrap.test.ts` | **Modify** — add tests for tool claim verification |
+| `.claude/rules/gossipcat.md` | **Modify** — document native agent dual-file requirement, mid-session reload behavior, updated agent list |
 
 ## Non-Goals
 
