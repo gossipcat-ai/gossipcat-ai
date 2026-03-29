@@ -515,30 +515,53 @@ body::after {
   </div>
 
   <script>
-// packages/dashboard/src/app.js
+// packages/dashboard/src/app.js — Router, API, Auth, WebSocket, Hub orchestration
 
-// ── Shared Utilities ────────────────────────────────────────────────────────
+// ── Utilities ──────────────────────────────────────────────────────────
 function escapeHtml(str) {
   if (str == null) return '';
-  return String(str).replace(/[&<>"']/g, (m) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[m]));
+  return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 }
 
-// ── API Helper ──────────────────────────────────────────────────────────────
+function formatTokens(n) {
+  if (n == null || n === 0) return '0';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (diff < 0) return 'just now';
+  if (diff < 60) return diff + 's ago';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function agentInitials(id) {
+  return id.split('-').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+}
+
+function agentColor(agent) {
+  if (!agent || (!agent.online && agent.scores?.signals === 0)) return 'var(--text-3)';
+  if (agent.provider === 'google') return 'var(--blue)';
+  return 'var(--accent)';
+}
+
+// ── API Helper ─────────────────────────────────────────────────────────
 async function api(path) {
-  const res = await fetch(`/dashboard/api/${path}`, { credentials: 'include' });
-  if (res.status === 401) {
-    throw new Error('Unauthorized');
-  }
+  const res = await fetch('/dashboard/api/' + path, { credentials: 'include' });
+  if (res.status === 401) { showAuth(); throw new Error('Unauthorized'); }
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `API error: ${res.status}`);
+    const b = await res.json().catch(() => ({}));
+    throw new Error(b.error || 'API error: ' + res.status);
   }
   return res.json();
 }
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+// ── Auth ───────────────────────────────────────────────────────────────
 const authGate = document.getElementById('auth-gate');
 const dashboard = document.getElementById('dashboard');
 const authForm = document.getElementById('auth-form');
@@ -547,7 +570,6 @@ const authError = document.getElementById('auth-error');
 function showAuth() {
   authGate.hidden = false;
   dashboard.hidden = true;
-  // Close WebSocket if open
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
 
@@ -555,13 +577,12 @@ function showDashboard() {
   authGate.hidden = true;
   dashboard.hidden = false;
   connectWs();
-  loadTab('overview');
 }
 
 authForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const submitBtn = authForm.querySelector('button');
-  submitBtn.disabled = true;
+  const btn = authForm.querySelector('button');
+  btn.disabled = true;
   const key = document.getElementById('auth-key').value.trim();
   try {
     const res = await fetch('/dashboard/api/auth', {
@@ -570,67 +591,80 @@ authForm.addEventListener('submit', async (e) => {
       body: JSON.stringify({ key }),
       credentials: 'include',
     });
-    if (!res.ok) {
-      authError.hidden = false;
-      return;
-    }
-    // Verify the cookie was actually set by making an authenticated call
+    if (!res.ok) { authError.hidden = false; return; }
     const verify = await fetch('/dashboard/api/overview', { credentials: 'include' });
-    if (verify.ok) {
-      authError.hidden = true;
-      showDashboard();
-    } else {
-      authError.hidden = false;
-    }
-  } catch {
-    authError.hidden = false;
-  } finally {
-    submitBtn.disabled = false;
-  }
+    if (verify.ok) { authError.hidden = true; showDashboard(); route(); }
+    else { authError.hidden = false; }
+  } catch { authError.hidden = false; }
+  finally { btn.disabled = false; }
 });
 
-// ── Tab Routing ──────────────────────────────────────────────────────────────
-const tabs = document.querySelectorAll('.nav-tab');
-const tabContents = document.querySelectorAll('.tab-content');
+// ── Router ─────────────────────────────────────────────────────────────
+function getRoute() {
+  const hash = location.hash.slice(1) || '/';
+  const parts = hash.split('/').filter(Boolean);
+  return { path: '/' + parts.join('/'), parts };
+}
 
-tabs.forEach(tab => {
-  tab.addEventListener('click', () => {
-    if (tab.disabled) return;
-    tabs.forEach(t => t.classList.remove('active'));
-    tabContents.forEach(c => c.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
-    loadTab(tab.dataset.tab);
-  });
-});
+function navigate(path) { location.hash = path; }
 
-// ── WebSocket ────────────────────────────────────────────────────────────────
+let currentCleanup = null;
+
+async function route() {
+  // Clean up previous view's event listeners
+  if (currentCleanup) { currentCleanup(); currentCleanup = null; }
+
+  const { path, parts } = getRoute();
+  const app = document.getElementById('app');
+  updateBreadcrumb(parts);
+
+  // Hub
+  if (path === '/' || path === '/overview') return renderHub(app);
+
+  // Detail views
+  if (path === '/team') return renderAllAgents(app);
+  if (parts[0] === 'team' && parts[1]) return renderAgentDetail(app, decodeURIComponent(parts[1]));
+  if (path === '/tasks') return renderTasksDetail(app);
+  if (parts[0] === 'consensus' && parts[1]) return renderConsensusDetail(app, decodeURIComponent(parts[1]));
+  if (path === '/signals') return renderSignalsDetail(app);
+  if (parts[0] === 'knowledge' && parts[1]) return renderKnowledgeDetail(app, decodeURIComponent(parts[1]));
+
+  app.innerHTML = '<div class="empty-state">Page not found</div>';
+}
+
+function updateBreadcrumb(parts) {
+  const el = document.getElementById('breadcrumb-page');
+  if (!el) return;
+  if (parts.length === 0) { el.textContent = 'Overview'; return; }
+  el.textContent = parts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' / ');
+}
+
+window.addEventListener('hashchange', route);
+
+// ── WebSocket ──────────────────────────────────────────────────────────
 let ws = null;
 const wsStatus = document.getElementById('ws-status');
 const wsLabel = document.getElementById('ws-label');
 const eventListeners = new Set();
 
-function onDashboardEvent(fn) { eventListeners.add(fn); }
+function onDashboardEvent(fn) { eventListeners.add(fn); return fn; }
 function offDashboardEvent(fn) { eventListeners.delete(fn); }
 
 function connectWs() {
-  if (ws) return; // already connected
+  if (ws) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/dashboard/ws`);
+  ws = new WebSocket(proto + '://' + location.host + '/dashboard/ws');
 
   ws.onopen = () => {
-    wsStatus.className = 'status-dot online';
-    wsLabel.textContent = 'Connected';
+    if (wsStatus) wsStatus.className = 'ws-dot online';
+    if (wsLabel) wsLabel.textContent = 'Connected';
   };
 
   ws.onclose = () => {
-    wsStatus.className = 'status-dot offline';
-    wsLabel.textContent = 'Disconnected';
+    if (wsStatus) wsStatus.className = 'ws-dot offline';
+    if (wsLabel) wsLabel.textContent = 'Disconnected';
     ws = null;
-    // Only reconnect if dashboard is visible (not on auth gate)
-    if (!dashboard.hidden) {
-      setTimeout(connectWs, 3000);
-    }
+    if (!dashboard.hidden) setTimeout(connectWs, 3000);
   };
 
   ws.onerror = () => ws.close();
@@ -643,690 +677,92 @@ function connectWs() {
   };
 }
 
-// ── Tab Loading ──────────────────────────────────────────────────────────────
-async function loadTab(name) {
-  // Clean up overview event handler when switching away
-  if (name !== 'overview' && typeof _overviewEventHandler !== 'undefined' && _overviewEventHandler) {
-    offDashboardEvent(_overviewEventHandler);
-    _overviewEventHandler = null;
-  }
-  switch (name) {
-    case 'overview': return renderOverview();
-    case 'agents': return renderAgents();
-    case 'tasks': return renderTasks();
-    case 'skills': return renderSkills();
-    case 'consensus': return renderConsensus();
-    case 'memory': return renderMemory();
-  }
-}
-
-// ── Init ─────────────────────────────────────────────────────────────────────
-// Check if already authenticated (valid cookie from previous session)
-api('overview').then(() => showDashboard()).catch(() => showAuth());
-
-// Make helpers available to tab modules
-window._dash = { api, onDashboardEvent, offDashboardEvent };
-
-// packages/dashboard/src/tabs/overview.js
-
-let _overviewEventHandler = null;
-
-async function renderOverview() {
-  if (_overviewEventHandler) {
-    window._dash.offDashboardEvent(_overviewEventHandler);
-    _overviewEventHandler = null;
-  }
-
-  const container = document.getElementById('tab-overview');
-  container.innerHTML = '<div class="empty-state">Loading...</div>';
-
+// ── Hub Renderer ───────────────────────────────────────────────────────
+async function renderHub(app) {
+  app.innerHTML = '<div class="loading">Loading...</div>';
   try {
-    const [overview, agents, tasksData] = await Promise.all([
-      window._dash.api('overview'),
-      window._dash.api('agents'),
-      window._dash.api('tasks'),
+    const [overview, agents, tasks, consensus, signals] = await Promise.all([
+      api('overview'), api('agents'), api('tasks'),
+      api('consensus'), api('signals'),
     ]);
+    app.innerHTML = '';
 
-    const successRate = overview.tasksCompleted + overview.tasksFailed > 0
-      ? ((overview.tasksCompleted / (overview.tasksCompleted + overview.tasksFailed)) * 100).toFixed(0)
-      : '—';
+    // Build sections
+    app.appendChild(renderOverviewSection(overview));
+    app.appendChild(renderTeamSection(agents));
+    app.appendChild(renderPerformanceSection(tasks, agents));
+    app.appendChild(renderActivitySection(tasks, consensus, signals));
+    app.appendChild(renderKnowledgeSection(agents));
 
-    container.innerHTML = `
-      <div class="stat-cards">
-        <div class="stat-card">
-          <div class="label">Team</div>
-          <div class="value">${overview.agentsOnline}</div>
-          <div class="detail">${overview.relayCount} relay, ${overview.nativeCount} native</div>
-        </div>
-        <div class="stat-card">
-          <div class="label">Tasks</div>
-          <div class="value">${overview.tasksCompleted + overview.tasksFailed}</div>
-          <div class="detail">${successRate}% success${overview.avgDurationMs > 0 ? ', ' + (overview.avgDurationMs / 1000).toFixed(1) + 's avg' : ''}</div>
-        </div>
-        <div class="stat-card">
-          <div class="label">Consensus</div>
-          <div class="value">${overview.totalSignals}</div>
-          <div class="detail">${overview.consensusRuns} runs, ${overview.confirmedFindings} confirmed</div>
-        </div>
-      </div>
-
-      <div class="panels">
-        <div class="panel">
-          <div class="panel-title">Agent Performance</div>
-          <div id="agent-scores">
-            ${agents.length === 0 ? '<div class="empty-state">No agents configured</div>' :
-              agents
-                .sort((a, b) => b.scores.dispatchWeight - a.scores.dispatchWeight)
-                .map(a => {
-                  const s = a.scores;
-                  return `
-                  <div class="agent-score-card">
-                    <div class="agent-score-header">
-                      <span class="agent-score-name">
-                        ${escapeHtml(a.id)}
-                        ${a.native ? '<span class="agent-badge">native</span>' : ''}
-                      </span>
-                      <span class="weight-badge">${s.dispatchWeight.toFixed(2)}</span>
-                    </div>
-                    <div class="agent-score-metrics">
-                      <div class="metric">
-                        <div class="metric-bar"><div class="bar-fill accuracy" style="width:${(s.accuracy * 100).toFixed(0)}%"></div></div>
-                        <span class="metric-val">${(s.accuracy * 100).toFixed(0)}%</span>
-                        <span class="metric-lbl">accuracy</span>
-                      </div>
-                      <div class="metric">
-                        <div class="metric-bar"><div class="bar-fill uniqueness" style="width:${(s.uniqueness * 100).toFixed(0)}%"></div></div>
-                        <span class="metric-val">${(s.uniqueness * 100).toFixed(0)}%</span>
-                        <span class="metric-lbl">unique</span>
-                      </div>
-                    </div>
-                    <div class="agent-score-stats">
-                      <span>${s.signals} signals</span>
-                      <span>${s.agreements} agrees</span>
-                      <span>${s.disagreements} disagrees</span>
-                      ${s.hallucinations > 0 ? `<span class="halluc">${s.hallucinations} halluc.</span>` : ''}
-                    </div>
-                  </div>`;
-                }).join('')}
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-title">Recent Activity</div>
-          <div id="activity-timeline" class="timeline">
-            ${tasksData.tasks.length === 0
-              ? '<div class="empty-state">No tasks yet</div>'
-              : tasksData.tasks.slice(0, 20).map(t => {
-                  const time = new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                  const color = t.status === 'completed' ? 'green' : t.status === 'failed' ? 'red' : 'purple';
-                  const dur = t.duration > 0 ? ` (${(t.duration / 1000).toFixed(1)}s)` : '';
-                  // Extract first sentence or truncate cleanly
-                  const desc = t.task.replace(/\n.*/s, '').slice(0, 60);
-                  return `<div class="timeline-entry">
-                    <div class="timeline-dot ${color}"></div>
-                    <div class="timeline-time">${time}</div>
-                    <div class="timeline-text"><span class="timeline-agent">${escapeHtml(t.agentId)}</span>${dur} — ${escapeHtml(desc)}</div>
-                  </div>`;
-                }).join('')}
-          </div>
-        </div>
-      </div>
-    `;
-
-    // Wire up live WebSocket events
-    const timeline = document.getElementById('activity-timeline');
-    _overviewEventHandler = (event) => {
-      const colors = {
-        task_completed: 'green', consensus_complete: 'green',
-        task_dispatched: 'purple', agent_connected: 'purple', agent_disconnected: 'purple',
-        skill_changed: 'yellow', consensus_started: 'yellow',
-        task_failed: 'red',
-      };
-      const time = new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const color = colors[event.type] || 'purple';
-      const text = formatEvent(event);
-      const entry = document.createElement('div');
-      entry.className = 'timeline-entry';
-      entry.innerHTML = `
-        <div class="timeline-dot ${color}"></div>
-        <div class="timeline-time">${time}</div>
-        <div class="timeline-text"></div>
-      `;
-      entry.querySelector('.timeline-text').textContent = text;
-      // Remove "No tasks yet" placeholder
-      const placeholder = timeline.querySelector('.empty-state');
-      if (placeholder) placeholder.remove();
-      timeline.prepend(entry);
-      while (timeline.children.length > 100) timeline.removeChild(timeline.lastChild);
-    };
-    window._dash.onDashboardEvent(_overviewEventHandler);
-  } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
-  }
-}
-
-function formatEvent(event) {
-  const d = event.data || {};
-  switch (event.type) {
-    case 'task_dispatched': return `Task dispatched to ${d.agentId || '?'}`;
-    case 'task_completed': return `Task completed by ${d.agentId || '?'}`;
-    case 'task_failed': return `Task failed on ${d.agentId || '?'}`;
-    case 'consensus_started': return `Consensus started (${d.agentCount || '?'} agents)`;
-    case 'consensus_complete': return `Consensus complete — ${d.confirmed || 0} confirmed`;
-    case 'agent_connected': return `${d.agentId || '?'} connected`;
-    case 'agent_disconnected': return `${d.agentId || '?'} disconnected`;
-    case 'skill_changed': return `Skill ${d.skill || '?'} toggled for ${d.agentId || '?'}`;
-    default: return event.type;
-  }
-}
-
-// packages/dashboard/src/tabs/agents.js
-
-async function renderAgents() {
-  const container = document.getElementById('tab-agents');
-  container.innerHTML = '<div class="empty-state">Loading...</div>';
-
-  try {
-    const agents = await window._dash.api('agents');
-
-    if (agents.length === 0) {
-      container.innerHTML = '<div class="empty-state">No agents configured. Run gossip_setup to create your team.</div>';
-      return;
-    }
-
-    container.innerHTML = `<div class="agent-cards">${agents.map(renderAgentCard).join('')}</div>`;
-  } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
-  }
-}
-
-function renderAgentCard(agent) {
-  const s = agent.scores;
-  const totalTasks = s.agreements + s.disagreements + s.hallucinations;
-
-  return `
-    <div class="agent-detail-card">
-      <div class="agent-header">
-        <div>
-          <div class="agent-title">
-            <strong>${escapeHtml(agent.id)}</strong>
-            ${agent.native ? '<span class="agent-badge">native</span>' : '<span class="agent-badge relay">relay</span>'}
-          </div>
-          <div class="agent-meta">${escapeHtml(agent.provider)} / ${escapeHtml(agent.model)}${agent.preset ? ` &middot; ${escapeHtml(agent.preset)}` : ''}</div>
-        </div>
-        <div class="weight-badge lg">${s.dispatchWeight.toFixed(2)}</div>
-      </div>
-
-      <div class="agent-metrics-grid">
-        <div class="agent-metric-card">
-          <div class="agent-metric-ring accuracy" style="--pct:${(s.accuracy * 100).toFixed(0)}">
-            <span>${(s.accuracy * 100).toFixed(0)}%</span>
-          </div>
-          <div class="agent-metric-label">Accuracy</div>
-        </div>
-        <div class="agent-metric-card">
-          <div class="agent-metric-ring uniqueness" style="--pct:${(s.uniqueness * 100).toFixed(0)}">
-            <span>${(s.uniqueness * 100).toFixed(0)}%</span>
-          </div>
-          <div class="agent-metric-label">Uniqueness</div>
-        </div>
-        <div class="agent-metric-card">
-          <div class="agent-metric-ring reliability" style="--pct:${(s.reliability * 100).toFixed(0)}">
-            <span>${(s.reliability * 100).toFixed(0)}%</span>
-          </div>
-          <div class="agent-metric-label">Reliability</div>
-        </div>
-      </div>
-
-      <div class="agent-signal-row">
-        <div class="agent-signal"><span class="signal-num">${s.signals}</span> signals</div>
-        <div class="agent-signal good"><span class="signal-num">${s.agreements}</span> agrees</div>
-        <div class="agent-signal bad"><span class="signal-num">${s.disagreements}</span> disagrees</div>
-        <div class="agent-signal ${s.hallucinations > 0 ? 'warn' : ''}"><span class="signal-num">${s.hallucinations}</span> halluc.</div>
-      </div>
-
-      ${agent.skills.length > 0 ? `
-        <div class="agent-skills-row">
-          ${agent.skills.map(sk => `<span class="agent-badge skill">${escapeHtml(sk)}</span>`).join('')}
-        </div>
-      ` : ''}
-    </div>
-  `;
-}
-
-// packages/dashboard/src/tabs/tasks.js
-
-async function renderTasks() {
-  const container = document.getElementById('tab-tasks');
-  container.innerHTML = '<div class="empty-state">Loading...</div>';
-
-  try {
-    const data = await window._dash.api('tasks');
-
-    if (data.tasks.length === 0) {
-      container.innerHTML = '<div class="empty-state">No tasks yet. Dispatch agents to generate task history.</div>';
-      return;
-    }
-
-    container.innerHTML = `
-      <div class="panel" style="margin-bottom:1rem">
-        <div class="panel-title">Task History (${data.total} total, showing last ${data.tasks.length})</div>
-        <div class="tasks-list">
-          ${data.tasks.map(t => {
-            const time = new Date(t.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-            const dur = t.duration > 0 ? `${(t.duration / 1000).toFixed(1)}s` : '—';
-            const statusCls = t.status === 'completed' ? 'confirmed' : t.status === 'failed' ? 'disputed' : 'unverified';
-            return `
-              <div class="task-row">
-                <span class="task-status ${statusCls}">${t.status}</span>
-                <span class="task-agent">${escapeHtml(t.agentId)}</span>
-                <span class="task-dur">${dur}</span>
-                <span class="task-time">${time}</span>
-                <span class="task-desc">${escapeHtml(t.task)}</span>
-              </div>`;
-          }).join('')}
-        </div>
-      </div>
-    `;
-  } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
-  }
-}
-
-// packages/dashboard/src/tabs/skills.js
-
-async function renderSkills() {
-  const container = document.getElementById('tab-skills');
-  container.innerHTML = '<div class="empty-state">Loading...</div>';
-
-  try {
-    const [skillsData, agents] = await Promise.all([
-      window._dash.api('skills'),
-      window._dash.api('agents'),
-    ]);
-
-    const index = skillsData.index;
-    const agentIds = agents.map(a => a.id);
-
-    // Collect all unique skill names across all agents
-    const allSkills = new Set();
-    for (const agentId of Object.keys(index)) {
-      for (const skill of Object.keys(index[agentId])) {
-        allSkills.add(skill);
+    // Wire WS live updates for the hub
+    const wsHandler = onDashboardEvent((event) => {
+      const refreshEvents = ['task_completed', 'task_failed', 'consensus_complete', 'agent_connected', 'agent_disconnected'];
+      if (refreshEvents.includes(event.type)) {
+        // Re-fetch and re-render on significant events
+        renderHub(app);
       }
-    }
-    const skillNames = [...allSkills].sort();
-
-    if (agentIds.length === 0) {
-      container.innerHTML = '<div class="empty-state">No agents configured. Run gossip_setup to create your team.</div>';
-      return;
-    }
-
-    if (skillNames.length === 0) {
-      container.innerHTML = '<div class="empty-state">No skills bound yet. Skills are assigned when agents run tasks.</div>';
-      return;
-    }
-
-    container.innerHTML = `
-      <div class="panels">
-        <div class="panel" style="grid-column:1/-1">
-          <div class="panel-title">Skill Index</div>
-          <div class="skills-grid-wrap">
-            <table class="skills-grid">
-              <thead>
-                <tr>
-                  <th class="skills-grid-corner"></th>
-                  ${agentIds.map(id => `<th class="skills-grid-agent">${escapeHtml(id)}</th>`).join('')}
-                </tr>
-              </thead>
-              <tbody>
-                ${skillNames.map(skill => `
-                  <tr>
-                    <td class="skills-grid-skill">${escapeHtml(skill)}</td>
-                    ${agentIds.map(agentId => {
-                      const slot = index[agentId]?.[skill];
-                      if (!slot) return '<td class="skills-grid-cell unbound"></td>';
-                      const cls = slot.enabled ? 'enabled' : 'disabled';
-                      return `<td class="skills-grid-cell ${cls}" data-agent="${escapeHtml(agentId)}" data-skill="${escapeHtml(skill)}" data-enabled="${slot.enabled}">${slot.enabled ? '&#10003;' : '&#10005;'}</td>`;
-                    }).join('')}
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    `;
-
-    // Click handlers for toggle cells
-    container.querySelectorAll('.skills-grid-cell[data-agent]').forEach(cell => {
-      cell.addEventListener('click', async () => {
-        const agentId = cell.dataset.agent;
-        const skill = cell.dataset.skill;
-        const currentlyEnabled = cell.dataset.enabled === 'true';
-        const newEnabled = !currentlyEnabled;
-
-        cell.classList.add('toggling');
-        try {
-          const res = await fetch('/dashboard/api/skills/bind', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agent_id: agentId, skill, enabled: newEnabled }),
-            credentials: 'include',
-          });
-          const result = await res.json();
-          if (result.success) {
-            cell.dataset.enabled = String(newEnabled);
-            cell.className = `skills-grid-cell ${newEnabled ? 'enabled' : 'disabled'}`;
-            cell.innerHTML = newEnabled ? '&#10003;' : '&#10005;';
-          } else {
-            cell.title = result.error || 'Toggle failed';
-            cell.style.outline = '2px solid var(--status-disputed)';
-            setTimeout(() => { cell.style.outline = ''; cell.title = ''; }, 2000);
-          }
-        } catch {
-          cell.style.outline = '2px solid var(--status-disputed)';
-          setTimeout(() => { cell.style.outline = ''; }, 2000);
-        }
-        cell.classList.remove('toggling');
-      });
     });
+    currentCleanup = () => offDashboardEvent(wsHandler);
+
   } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
+    app.innerHTML = '<div class="empty-state">Failed to load dashboard: ' + escapeHtml(err.message) + '</div>';
   }
 }
 
-// packages/dashboard/src/tabs/consensus.js
+// ── Section Helper ─────────────────────────────────────────────────────
+function makeSection(title, count, actionText, actionTarget) {
+  const section = document.createElement('div');
+  section.className = 'section';
 
-async function renderConsensus() {
-  const container = document.getElementById('tab-consensus');
-  container.innerHTML = '<div class="empty-state">Loading...</div>';
+  const header = document.createElement('div');
+  header.className = 'sh';
+  header.innerHTML =
+    '<div class="sh-left">' +
+      '<span class="sh-title">' + escapeHtml(title) + '</span>' +
+      (count != null ? '<span class="sh-count">' + escapeHtml(String(count)) + '</span>' : '') +
+    '</div>' +
+    (actionText ? '<button class="sh-action" role="link">' + escapeHtml(actionText) + '</button>' : '');
 
-  try {
-    const data = await window._dash.api('consensus');
-
-    if (data.runs.length === 0) {
-      container.innerHTML = '<div class="empty-state">No consensus runs yet. Run gossip_dispatch_consensus to generate data.</div>';
-      return;
-    }
-
-    container.innerHTML = `
-      <div class="stat-cards" style="margin-bottom:1.5rem">
-        <div class="stat-card">
-          <div class="label">Runs</div>
-          <div class="value">${data.runs.length}</div>
-        </div>
-        <div class="stat-card">
-          <div class="label">Signals</div>
-          <div class="value">${data.totalSignals}</div>
-        </div>
-      </div>
-      <div class="consensus-runs">${data.runs.map(renderConsensusRun).join('')}</div>
-    `;
-
-    container.querySelectorAll('.consensus-run-header').forEach(header => {
-      header.addEventListener('click', () => {
-        const body = header.nextElementSibling;
-        body.hidden = !body.hidden;
-        header.querySelector('.expand-icon').textContent = body.hidden ? '+' : '-';
-      });
-    });
-  } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
+  if (actionTarget) {
+    const btn = header.querySelector('.sh-action');
+    if (btn) btn.addEventListener('click', () => navigate(actionTarget));
   }
+
+  section.appendChild(header);
+  return section;
 }
 
-function renderConsensusRun(run) {
-  const c = run.counts;
-  const time = new Date(run.timestamp).toLocaleString([], {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-  });
-  const total = c.agreement + c.disagreement + c.unverified + c.unique + c.hallucination + c.new;
+// ── Init ───────────────────────────────────────────────────────────────
+api('overview')
+  .then(() => { showDashboard(); route(); })
+  .catch(() => showAuth());
 
-  const signalRows = run.signals.map(s => {
-    const colorClass = {
-      agreement: 'confirmed', disagreement: 'disputed',
-      unverified: 'unverified', unique_confirmed: 'confirmed',
-      unique_unconfirmed: 'unique', hallucination_caught: 'disputed',
-      new_finding: 'new', consensus_verified: 'confirmed',
-      category_confirmed: 'confirmed',
-    }[s.signal] || 'unique';
+// Export for hub/detail modules
+window._dash = { api, navigate, escapeHtml, formatTokens, timeAgo, agentInitials, agentColor, onDashboardEvent, offDashboardEvent, makeSection };
 
-    return `
-      <div class="consensus-signal">
-        <span class="consensus-tag ${colorClass}">${escapeHtml(s.signal.replace(/_/g, ' '))}</span>
-        <span class="consensus-agent">${escapeHtml(s.agentId)}</span>
-        ${s.counterpartId ? `<span class="consensus-arrow">&rarr;</span><span class="consensus-agent">${escapeHtml(s.counterpartId)}</span>` : ''}
-        ${s.evidence ? `<div class="consensus-evidence">${escapeHtml(s.evidence.slice(0, 200))}${s.evidence.length > 200 ? '...' : ''}</div>` : ''}
-      </div>`;
-  }).join('');
+// packages/dashboard/src/lib/chart.js — stub
 
-  return `
-    <div class="consensus-run">
-      <div class="consensus-run-header">
-        <span class="expand-icon">+</span>
-        <div class="consensus-run-info">
-          <span class="consensus-task-id">${escapeHtml(run.taskId)}</span>
-          <span class="consensus-meta">${run.agents.length} agents &middot; ${total} signals &middot; ${time}</span>
-        </div>
-        <div class="consensus-counts">
-          ${c.agreement ? `<span class="consensus-tag confirmed">${c.agreement}</span>` : ''}
-          ${c.disagreement ? `<span class="consensus-tag disputed">${c.disagreement}</span>` : ''}
-          ${c.unverified ? `<span class="consensus-tag unverified">${c.unverified}</span>` : ''}
-          ${c.hallucination ? `<span class="consensus-tag disputed">${c.hallucination} H</span>` : ''}
-        </div>
-      </div>
-      <div class="consensus-run-body" hidden>${signalRows}</div>
-    </div>`;
-}
+// packages/dashboard/src/lib/markdown.js — stub
 
-// packages/dashboard/src/tabs/memory.js
+// packages/dashboard/src/hub/overview.js — stub
 
-async function renderMemory() {
-  const container = document.getElementById('tab-memory');
-  container.innerHTML = '<div class="empty-state">Loading...</div>';
+// packages/dashboard/src/hub/team.js — stub
 
-  try {
-    const agents = await window._dash.api('agents');
+// packages/dashboard/src/hub/performance.js — stub
 
-    if (agents.length === 0) {
-      container.innerHTML = '<div class="empty-state">No agents configured.</div>';
-      return;
-    }
+// packages/dashboard/src/hub/activity.js — stub
 
-    container.innerHTML = `
-      <div class="memory-agent-pills">
-        <button class="memory-agent-pill" data-agent="_project">
-          _project <span class="agent-badge">shared</span>
-        </button>
-        ${agents.map(a => `<button class="memory-agent-pill" data-agent="${escapeHtml(a.id)}">
-          ${escapeHtml(a.id)}
-          ${a.native ? '<span class="agent-badge">native</span>' : ''}
-        </button>`).join('')}
-      </div>
-      <div id="memory-content"><div class="empty-state">Select an agent above</div></div>
-    `;
+// packages/dashboard/src/hub/knowledge.js — stub
 
-    container.querySelectorAll('.memory-agent-pill').forEach(pill => {
-      pill.addEventListener('click', () => {
-        container.querySelectorAll('.memory-agent-pill').forEach(p => p.classList.remove('active'));
-        pill.classList.add('active');
-        loadAgentMemory(pill.dataset.agent);
-      });
-    });
-  } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
-  }
-}
+// packages/dashboard/src/detail/agent.js — stub
 
-async function loadAgentMemory(agentId) {
-  const content = document.getElementById('memory-content');
-  content.innerHTML = '<div class="empty-state">Loading...</div>';
+// packages/dashboard/src/detail/tasks.js — stub
 
-  try {
-    const data = await window._dash.api(`memory/${encodeURIComponent(agentId)}`);
+// packages/dashboard/src/detail/consensus.js — stub
 
-    const sections = [];
+// packages/dashboard/src/detail/signals.js — stub
 
-    // Build knowledge lookup for inline expansion
-    const knowledgeMap = {};
-    for (const k of data.knowledge) {
-      knowledgeMap[k.filename] = k;
-    }
-
-    // MEMORY.md index
-    if (data.index) {
-      sections.push(`
-        <div class="panel">
-          <div class="panel-title">MEMORY.md</div>
-          <div class="memory-md" id="memory-md-content">${renderMarkdown(data.index)}</div>
-        </div>
-      `);
-    }
-
-    // Knowledge files
-    if (data.knowledge.length > 0) {
-      const files = data.knowledge.map(k => {
-        const desc = k.frontmatter.description || k.frontmatter.name || k.filename;
-        const isCognitive = k.content.includes('You reviewed') || k.content.includes('cognitive');
-        return `
-          <div class="memory-file ${isCognitive ? 'cognitive' : ''}">
-            <div class="memory-file-header" onclick="this.nextElementSibling.hidden = !this.nextElementSibling.hidden">
-              <span class="expand-icon">+</span>
-              <span class="memory-filename">${escapeHtml(k.filename)}</span>
-              <span class="memory-desc">${escapeHtml(desc)}</span>
-              ${isCognitive ? '<span class="agent-badge">cognitive</span>' : ''}
-            </div>
-            <pre class="memory-file-content" hidden>${escapeHtml(k.content)}</pre>
-          </div>
-        `;
-      }).join('');
-
-      sections.push(`
-        <div class="panel">
-          <div class="panel-title">Knowledge Files (${data.knowledge.length})</div>
-          ${files}
-        </div>
-      `);
-    }
-
-    // Tasks
-    if (data.tasks.length > 0) {
-      const rows = data.tasks.slice(-50).reverse().map(t => `
-        <tr>
-          <td class="memory-task-date">${t.timestamp ? new Date(t.timestamp).toLocaleDateString() : '-'}</td>
-          <td>${escapeHtml(String(t.task || t.result || '-').slice(0, 120))}</td>
-          <td>${t.importance != null ? t.importance : '-'}</td>
-        </tr>
-      `).join('');
-
-      sections.push(`
-        <div class="panel">
-          <div class="panel-title">Recent Tasks (${data.tasks.length})</div>
-          <div class="skills-grid-wrap">
-            <table class="skills-grid">
-              <thead><tr><th>Date</th><th>Summary</th><th>Imp.</th></tr></thead>
-              <tbody>${rows}</tbody>
-            </table>
-          </div>
-        </div>
-      `);
-    }
-
-    if (sections.length === 0) {
-      content.innerHTML = '<div class="empty-state">No memory data for this agent.</div>';
-    } else {
-      content.innerHTML = `<div class="memory-panels">${sections.join('')}</div>`;
-
-      // Wire up knowledge/ links in MEMORY.md to expand inline
-      const mdContent = document.getElementById('memory-md-content');
-      if (mdContent) {
-        mdContent.querySelectorAll('a').forEach(link => {
-          const href = link.getAttribute('href');
-          // Prevent all local links from navigating
-          if (href && !href.startsWith('http')) {
-            link.href = '#';
-          }
-          if (!href || !href.startsWith('knowledge/')) return;
-          const filename = href.replace('knowledge/', '');
-          const entry = knowledgeMap[filename];
-          if (!entry) { link.style.opacity = '0.5'; return; }
-          link.style.cursor = 'pointer';
-          link.addEventListener('click', (e) => {
-            e.preventDefault();
-            let detail = link.nextElementSibling;
-            if (detail && detail.classList.contains('memory-inline-detail')) {
-              detail.hidden = !detail.hidden;
-              return;
-            }
-            detail = document.createElement('pre');
-            detail.className = 'memory-file-content memory-inline-detail';
-            detail.textContent = entry.content;
-            link.parentNode.insertBefore(detail, link.nextSibling);
-          });
-        });
-      }
-    }
-  } catch (err) {
-    content.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
-  }
-}
-
-function renderMarkdown(md) {
-  // Extract code blocks BEFORE escaping to prevent double-encoding
-  const codeBlocks = [];
-  let processed = md.replace(/```[\s\S]*?```/g, (m) => {
-    const content = m.slice(3, -3).replace(/^[^\n]*\n/, ''); // strip language hint
-    const placeholder = `\x00CODE${codeBlocks.length}\x00`;
-    codeBlocks.push('<pre class="memory-code">' + escapeHtml(content) + '</pre>');
-    return placeholder;
-  });
-
-  const inlineCodes = [];
-  processed = processed.replace(/`([^`]+)`/g, (_, code) => {
-    const placeholder = `\x00INLINE${inlineCodes.length}\x00`;
-    inlineCodes.push('<code>' + escapeHtml(code) + '</code>');
-    return placeholder;
-  });
-
-  // Now escape the rest
-  let html = escapeHtml(processed);
-
-  // Headers
-  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-  // Bold and italic
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-
-  // Links: [text](url) — only allow safe schemes
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
-    if (/^(https?:\/\/|knowledge\/|#)/.test(url)) return `<a href="${url}">${text}</a>`;
-    return text; // strip unsafe links (javascript:, data:, etc.)
-  });
-
-  // Unordered lists
-  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-
-  // Paragraphs: double newlines
-  html = html.replace(/\n\n+/g, '</p><p>');
-  html = '<p>' + html + '</p>';
-
-  // Clean up empty paragraphs around block elements
-  html = html.replace(/<p>\s*(<(?:h[1-4]|ul|pre|li)[^>]*>)/g, '$1');
-  html = html.replace(/(<\/(?:h[1-4]|ul|pre|li)>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*<\/p>/g, '');
-
-  // Restore code blocks and inline code from placeholders
-  codeBlocks.forEach((block, i) => { html = html.replace(`\x00CODE${i}\x00`, block); });
-  inlineCodes.forEach((code, i) => { html = html.replace(`\x00INLINE${i}\x00`, code); });
-
-  return html;
-}
+// packages/dashboard/src/detail/knowledge.js — stub
 
 </script>
 </body>

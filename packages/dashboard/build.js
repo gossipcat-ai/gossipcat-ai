@@ -10,12 +10,18 @@ async function build() {
   // Concatenate JS files (no bundling needed — vanilla JS, no imports)
   const jsParts = [
     join(srcDir, 'app.js'),
-    join(srcDir, 'tabs', 'overview.js'),
-    join(srcDir, 'tabs', 'agents.js'),
-    join(srcDir, 'tabs', 'tasks.js'),
-    join(srcDir, 'tabs', 'skills.js'),
-    join(srcDir, 'tabs', 'consensus.js'),
-    join(srcDir, 'tabs', 'memory.js'),
+    join(srcDir, 'lib', 'chart.js'),
+    join(srcDir, 'lib', 'markdown.js'),
+    join(srcDir, 'hub', 'overview.js'),
+    join(srcDir, 'hub', 'team.js'),
+    join(srcDir, 'hub', 'performance.js'),
+    join(srcDir, 'hub', 'activity.js'),
+    join(srcDir, 'hub', 'knowledge.js'),
+    join(srcDir, 'detail', 'agent.js'),
+    join(srcDir, 'detail', 'tasks.js'),
+    join(srcDir, 'detail', 'consensus.js'),
+    join(srcDir, 'detail', 'signals.js'),
+    join(srcDir, 'detail', 'knowledge.js'),
   ].map(f => readFileSync(f, 'utf-8'));
 
   let jsBundle = jsParts.join('\n');
