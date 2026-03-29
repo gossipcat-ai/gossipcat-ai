@@ -12,6 +12,10 @@ async function build() {
     join(srcDir, 'app.js'),
     join(srcDir, 'tabs', 'overview.js'),
     join(srcDir, 'tabs', 'agents.js'),
+    join(srcDir, 'tabs', 'tasks.js'),
+    join(srcDir, 'tabs', 'skills.js'),
+    join(srcDir, 'tabs', 'consensus.js'),
+    join(srcDir, 'tabs', 'memory.js'),
   ].map(f => readFileSync(f, 'utf-8'));
 
   let jsBundle = jsParts.join('\n');

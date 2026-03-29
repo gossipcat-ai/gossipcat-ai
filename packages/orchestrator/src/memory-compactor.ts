@@ -39,12 +39,12 @@ export class MemoryCompactor {
       const lines = readFileSync(tasksPath, 'utf-8').trim().split('\n').filter(Boolean);
       if (lines.length <= maxEntries) return { archived: 0 };
 
-      const entries: Array<{ entry: TaskMemoryEntry; warmth: number; line: string }> = [];
-      for (const line of lines) {
+      const entries: Array<{ entry: TaskMemoryEntry; warmth: number; line: string; idx: number }> = [];
+      for (let i = 0; i < lines.length; i++) {
         try {
-          const entry = JSON.parse(line) as TaskMemoryEntry;
+          const entry = JSON.parse(lines[i]) as TaskMemoryEntry;
           const warmth = this.calculateWarmth(entry.importance, entry.timestamp);
-          entries.push({ entry, warmth, line });
+          entries.push({ entry, warmth, line: lines[i], idx: i });
         } catch { /* skip malformed */ }
       }
 
@@ -52,6 +52,8 @@ export class MemoryCompactor {
 
       const toArchive = entries.slice(0, entries.length - maxEntries);
       const toKeep = entries.slice(entries.length - maxEntries);
+      // Restore chronological order so rebuildIndex reads most recent tasks last
+      toKeep.sort((a, b) => a.idx - b.idx);
 
       const archivePath = join(memDir, 'archive.jsonl');
       for (const item of toArchive) {

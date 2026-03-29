@@ -42,6 +42,126 @@ function detectEnvironment(): EnvironmentInfo {
 
 const env = detectEnvironment();
 
+// Generate the rules file content for the orchestrator
+function generateRulesContent(agentList: string): string {
+  return `# Gossipcat — Multi-Agent Orchestration
+
+This project uses gossipcat for multi-agent orchestration via MCP.
+
+## Team Setup
+When the user asks to set up agents, review code with multiple agents, or build with a team, use the gossipcat MCP tools.
+
+### Creating agents
+Use \`gossip_setup\` with an agents array. Each agent can be:
+- **type: "native"** — Creates a Claude Code subagent (.claude/agents/*.md) that ALSO connects to the gossipcat relay. Works both as a native Agent() and via gossip_dispatch(). Supports consensus cross-review.
+- **type: "custom"** — Any provider (anthropic, openai, google, local). Only accessible via gossip_dispatch().
+
+**Native agent requirements:** Native agents need TWO files to work fully:
+1. \`.gossip/config.json\` entry — with explicit \`skills\` array and \`"native": true\`
+2. \`.claude/agents/<id>.md\` — with frontmatter (name, model, description, tools) and prompt
+
+\`gossip_setup\` creates both automatically. Mid-session agent changes require \`/mcp\` reconnect.
+
+### Dispatching work
+
+**Single-agent tasks** (default):
+\`\`\`
+gossip_run(agent_id: "<id>", task: "Implement X")
+\`\`\`
+\`gossip_run\` is the preferred dispatch. Do NOT use raw Agent() for gossipcat tasks.
+
+**Write modes:** \`gossip_run(agent_id, task, write_mode: "scoped", scope: "./src")\`
+**Parallel:** \`gossip_dispatch_parallel(tasks) → gossip_collect(task_ids)\`
+**Plan → Execute:** \`gossip_plan(task) → gossip_dispatch_parallel(plan) → gossip_collect(ids)\`
+
+## Available Agents
+${agentList}
+
+## When to Use Multi-Agent vs Single Agent
+
+**Use consensus (3+ agents) for:**
+| Task | Why | Split Strategy |
+|------|-----|----------------|
+| Security review | Different agents catch different vuln classes | Split by package/concern |
+| Code review | Cross-validation catches what single reviewers miss | Split by concern |
+| Bug investigation | Competing hypotheses tested in parallel | One hypothesis per agent |
+| Architecture review | Multiple perspectives on trade-offs | Split by dimension |
+| Pre-ship verification | Catch regressions before merge | Split by area changed |
+
+**Single agent is fine for:** quick lookups, simple implementations, running tests.
+
+## Consensus Workflow — The Complete Flow
+
+### Step 1: Dispatch
+\`\`\`
+gossip_dispatch_consensus(tasks: [
+  { agent_id: "<reviewer>", task: "Review X for security" },
+  { agent_id: "<researcher>", task: "Review X for architecture" },
+  { agent_id: "<tester>", task: "Review X for test coverage" },
+])
+\`\`\`
+
+### Step 2: Execute native agents, then relay results
+\`gossip_relay_result(task_id: "<id>", result: "<agent output>")\`
+
+### Step 3: Collect with cross-review
+\`gossip_collect_consensus(task_ids, timeout_ms: 300000)\`
+Returns: CONFIRMED, DISPUTED, UNIQUE, UNVERIFIED, NEW tagged findings.
+
+### Step 4: Verify and record signals IMMEDIATELY
+For EACH finding, read the actual code. Record signals AS YOU VERIFY:
+\`\`\`
+gossip_record_signals(signals: [
+  { signal: "unique_confirmed", agent_id: "reviewer", finding: "XSS in template" },
+  { signal: "hallucination_caught", agent_id: "reviewer", finding: "Claimed X but code shows Y" },
+  { signal: "agreement", agent_id: "reviewer", counterpart_id: "researcher", finding: "Both found it" },
+])
+\`\`\`
+**CRITICAL:** Record \`hallucination_caught\` IMMEDIATELY when a finding is wrong. Don't batch — record inline as you verify. This keeps agent scores accurate.
+
+### Step 5: Fix confirmed issues (only after all signals recorded).
+
+## Performance Signals & Agent Scores
+
+Call \`gossip_scores()\` to see: accuracy (0-1), uniqueness (0-1), dispatchWeight (0.5-1.5).
+- High-accuracy agents → solo tasks, primary reviewers
+- High-uniqueness, low-accuracy → always use in consensus, never solo
+- Check scores periodically to track improvement
+
+## Memory System
+
+Memory persists across sessions automatically:
+- \`.gossip/agents/<id>/memory/knowledge/*.md\` — cognitive summaries
+- \`.gossip/agents/_project/memory/knowledge/\` — shared cross-agent context
+- \`.gossip/next-session.md\` — session continuity priorities
+
+**Call \`gossip_session_save()\` before ending your session.** Without it, the next session starts cold.
+
+## Dashboard
+
+Use \`gossip_status()\` for URL and key. Tabs: Overview, Agents, Consensus, Skills, Memory.
+
+## Native Agent Relay Rule
+
+When dispatching native agents: gossip_dispatch → Agent() → gossip_relay_result. Never skip the relay call.
+
+## Permissions
+
+Auto-allow writes: \`{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"] } }\`
+`;
+}
+
+// Preset-aware importance scores — reviewers value accuracy, implementers value relevance
+function presetScores(preset: string): { relevance: number; accuracy: number; uniqueness: number } {
+  switch (preset) {
+    case 'reviewer':   return { relevance: 3, accuracy: 5, uniqueness: 4 };
+    case 'tester':     return { relevance: 3, accuracy: 4, uniqueness: 4 };
+    case 'researcher': return { relevance: 4, accuracy: 3, uniqueness: 5 };
+    case 'implementer': return { relevance: 5, accuracy: 3, uniqueness: 2 };
+    default:           return { relevance: 3, accuracy: 3, uniqueness: 3 };
+  }
+}
+
 // Native agent task tracking — results fed back via gossip_relay_result
 const nativeTaskMap: Map<string, { agentId: string; task: string; startedAt: number; planId?: string; step?: number }> = new Map();
 const nativeAgentConfigs: Map<string, { model: string; instructions: string; description: string }> = new Map();
@@ -1263,12 +1383,14 @@ server.tool(
 // ── Tool: setup — create or update team config ────────────────────────────
 server.tool(
   'gossip_setup',
-  `Create or update gossipcat team. Detects host environment (${env.host}) and supports both native Claude Code subagents (.claude/agents/*.md) and custom provider agents (Anthropic, OpenAI, Google Gemini). Pass agents array — each agent specifies its type.`,
+  `Create or update gossipcat team. Default mode is "merge" — adds/updates specified agents while keeping existing ones. Use "replace" to overwrite entire config. Detects host environment (${env.host}) and supports both native Claude Code subagents (.claude/agents/*.md) and custom provider agents (Anthropic, OpenAI, Google Gemini).`,
   {
     main_provider: z.enum(['anthropic', 'openai', 'google']).default('google')
       .describe('Provider for the orchestrator LLM'),
     main_model: z.string().default('gemini-2.5-pro')
       .describe('Model ID for orchestrator (e.g. gemini-2.5-pro, claude-sonnet-4-6, gpt-4o)'),
+    mode: z.enum(['merge', 'replace']).default('merge')
+      .describe('"merge" (default) keeps existing agents and adds/updates the ones specified. "replace" overwrites entire config.'),
     agents: z.array(z.object({
       id: z.string().describe('Agent ID (lowercase, hyphens). e.g. "claude-reviewer", "gemini-impl"'),
       type: z.enum(['native', 'custom']).describe(
@@ -1294,8 +1416,8 @@ server.tool(
         .describe('Skill tags (e.g. ["typescript", "code_review"])'),
     })).describe('Array of agents to create'),
   },
-  async ({ main_provider, main_model, agents }) => {
-    const { writeFileSync, mkdirSync } = require('fs');
+  async ({ main_provider, main_model, mode, agents }) => {
+    const { writeFileSync, mkdirSync, existsSync } = require('fs');
     const { join } = require('path');
     const root = process.cwd();
 
@@ -1363,6 +1485,13 @@ server.tool(
           errors.push(`${agent.id}: custom agent requires "custom_model" field`);
           continue;
         }
+        // Prevent split-brain: warn if this ID was previously a native agent
+        const nativeFile = join(root, '.claude', 'agents', `${agent.id}.md`);
+        const wasNative = existingAgents[agent.id]?.native || existsSync(nativeFile);
+        if (wasNative) {
+          errors.push(`${agent.id}: cannot re-register native agent as custom — .claude/agents/${agent.id}.md exists. Remove the file first or keep it as native.`);
+          continue;
+        }
         configAgents[agent.id] = {
           provider: agent.provider,
           model: agent.custom_model,
@@ -1380,10 +1509,19 @@ server.tool(
       }
     }
 
-    // Write gossipcat config
+    // Write gossipcat config — merge with existing or replace
+    let existingAgents: Record<string, any> = {};
+    if (mode === 'merge') {
+      try {
+        const { readFileSync } = require('fs');
+        const existing = JSON.parse(readFileSync(join(root, '.gossip', 'config.json'), 'utf-8'));
+        existingAgents = existing.agents || {};
+      } catch { /* no existing config — start fresh */ }
+    }
+
     const config = {
       main_agent: { provider: main_provider, model: main_model },
-      agents: configAgents,
+      agents: { ...existingAgents, ...configAgents },
     };
 
     try {
@@ -1397,98 +1535,13 @@ server.tool(
     writeFileSync(join(root, '.gossip', 'config.json'), JSON.stringify(config, null, 2));
 
     // Generate host-appropriate rules file so the IDE knows about the team
-    const agentList = Object.entries(configAgents)
-      .map(([id, a]: [string, any]) => `- ${id}: ${a.provider}/${a.model} (${a.preset || 'custom'})`)
+    const agentList = Object.entries(config.agents)
+      .map(([id, a]: [string, any]) => `- ${id}: ${a.provider}/${a.model} (${a.preset || 'custom'})${a.native ? ' — native' : ''}`)
       .join('\n');
     const rulesDir = join(root, env.rulesDir);
     const rulesFile = join(root, env.rulesFile);
     mkdirSync(rulesDir, { recursive: true });
-    writeFileSync(rulesFile, `# Gossipcat — Multi-Agent Orchestration
-
-This project uses gossipcat for multi-agent orchestration via MCP.
-
-## Team Setup
-When the user asks to set up agents, review code with multiple agents, or build with a team, use the gossipcat MCP tools.
-
-### Creating agents
-Use \`gossip_setup\` with an agents array. Each agent can be:
-- **type: "native"** — Creates a Claude Code subagent (.claude/agents/*.md) that ALSO connects to the gossipcat relay. Works both as a native Agent() and via gossip_dispatch(). Supports consensus cross-review.
-- **type: "custom"** — Any provider (anthropic, openai, google, local). Only accessible via gossip_dispatch().
-
-### Dispatching work
-**READ tasks** (review, research, analysis):
-\`\`\`
-gossip_dispatch(agent_id: "<id>", task: "Review X for security issues")
-gossip_dispatch_parallel(tasks: [{agent_id: "<id>", task: "..."}, ...])
-gossip_collect(task_ids: ["..."])
-\`\`\`
-
-**WRITE tasks** (implementation, bug fixes):
-\`\`\`
-gossip_dispatch(agent_id: "<id>", task: "Fix X", write_mode: "scoped", scope: "./src")
-\`\`\`
-
-**Consensus** (cross-review for quality):
-\`\`\`
-gossip_dispatch_consensus(tasks: [...])  → dispatch agents
-gossip_collect_consensus(task_ids: [...]) → get results
-// YOU cross-reference the findings, then:
-gossip_record_signals(signals: [
-  { signal: "agreement", agent_id: "reviewer", finding: "Both found XSS" },
-  { signal: "unique_confirmed", agent_id: "researcher", finding: "Only researcher found SQL injection" },
-])
-\`\`\`
-This records which agents were accurate, driving future dispatch preferences.
-Use \`gossip_scores\` to view current agent performance.
-
-**Plan → Execute** (structured multi-step):
-\`\`\`
-gossip_plan(task: "Build feature X")  → returns dispatch-ready JSON
-gossip_dispatch_parallel(tasks: <plan JSON>)
-gossip_collect(task_ids: [...])
-\`\`\`
-
-## Available Agents
-${agentList}
-
-## When to Use Multi-Agent Dispatch
-| Task | Why Multi-Agent | Split Strategy |
-|------|----------------|----------------|
-| Security review | Different agents catch different vuln classes | Split by package/concern |
-| Code review | Cross-validation catches what single reviewers miss | Split by concern |
-| Bug investigation | Competing hypotheses tested in parallel | One hypothesis per agent |
-| Feature implementation | Parallel modules, faster delivery | Split by module with scoped writes |
-
-Single agent is fine for: quick lookups, simple tasks, running tests.
-
-## CRITICAL: Native Agent Relay Rule
-
-When you dispatch a native agent via \`gossip_dispatch\`, you get back a NATIVE_DISPATCH response
-with a task_id. You MUST follow this exact flow:
-
-1. Call \`gossip_dispatch(agent_id, task)\` → get task_id
-2. Run \`Agent(model, prompt)\` as instructed
-3. **ALWAYS** call \`gossip_relay_result(task_id, result)\` after the agent completes
-
-Never call Agent() directly for gossipcat agents — always go through gossip_dispatch first
-so the task is tracked. Never skip gossip_relay_result — without it, the result is invisible
-to memory, gossip, and consensus.
-
-## Permissions for Native Agents
-
-Native agents run via Claude Code's Agent tool. Subagents may prompt for file write permissions.
-To auto-allow, add to \`.claude/settings.local.json\`:
-
-\`\`\`json
-{
-  "permissions": {
-    "allow": ["Edit", "Write", "Bash(npm *)"]
-  }
-}
-\`\`\`
-
-You can scope permissions to specific directories: \`"Edit(src/**)"\`, \`"Write(plans/**)"\`.
-`);
+    writeFileSync(rulesFile, generateRulesContent(agentList));
 
     // Summary
     const lines: string[] = [`Host: ${env.host}`, ''];
@@ -1504,7 +1557,12 @@ You can scope permissions to specific directories: \`"Edit(src/**)"\`, \`"Write(
       lines.push(`\nErrors (${errors.length}):`);
       lines.push(...errors.map(e => `  ✗ ${e}`));
     }
-    lines.push(`\nConfig: .gossip/config.json (${Object.keys(configAgents).length} agents)`);
+    const preservedIds = Object.keys(existingAgents).filter(id => !configAgents[id]);
+    if (preservedIds.length > 0) {
+      lines.push(`Preserved from existing config (${preservedIds.length}):`);
+      lines.push(...preservedIds.map(id => `  • ${id} → ${existingAgents[id].provider}/${existingAgents[id].model}`));
+    }
+    lines.push(`\nMode: ${mode} | Config: .gossip/config.json (${Object.keys(config.agents).length} agents total)`);
     lines.push(`Rules: ${env.rulesFile} (${env.host} will read this on next session)`);
     lines.push('Agents will connect to relay on first gossip_dispatch() call.');
     if (nativeCreated.length > 0) {
@@ -1540,9 +1598,11 @@ server.tool(
     // Run the same post-collect pipeline as custom agents:
     // 1. Memory write  2. Knowledge extraction  3. Gossip  4. Compaction
     const agentId = taskInfo.agentId;
-    const agentSkills = (() => {
-      try { return mainAgent.getAgentList().find((a: any) => a.id === agentId)?.skills || []; }
-      catch { return []; }
+    const agentMeta = (() => {
+      try {
+        const a = mainAgent.getAgentList().find((a: any) => a.id === agentId);
+        return { skills: a?.skills || [], preset: a?.preset || '' };
+      } catch { return { skills: [] as string[], preset: '' }; }
     })();
 
     // 0. Record in TaskGraph (makes native tasks visible to CLI + Supabase sync)
@@ -1558,17 +1618,20 @@ server.tool(
       try {
         const { MemoryWriter, MemoryCompactor } = await import('@gossip/orchestrator');
         const memWriter = new MemoryWriter(process.cwd());
+        // Wire LLM for cognitive summaries — same as relay agents get
+        try { if (mainAgent.getLLM()) memWriter.setSummaryLlm(mainAgent.getLLM()); } catch {}
+        const scores = presetScores(agentMeta.preset);
         await memWriter.writeTaskEntry(agentId, {
           taskId: task_id,
           task: taskInfo.task,
-          skills: agentSkills,
-          scores: { relevance: 3, accuracy: 3, uniqueness: 3 },
+          skills: agentMeta.skills,
+          scores,
         });
 
         // 2. Extract knowledge from result (files, tech, decisions)
         if (result) {
-          memWriter.writeKnowledgeFromResult(agentId, {
-            taskId: task_id, task: taskInfo.task, result: result.slice(0, 4000),
+          await memWriter.writeKnowledgeFromResult(agentId, {
+            taskId: task_id, task: taskInfo.task, result,
           });
         }
 
@@ -1584,16 +1647,17 @@ server.tool(
 
     // 4. Publish gossip so other running agents can see this result
     if (!error) {
-      await mainAgent.publishNativeGossip(agentId, result).catch(() => {});
+      await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {});
     }
 
     // 5. Store in collected results map so gossip_collect can find it
+    const cappedResult = result ? result.slice(0, 50000) : result;
     nativeResultMap.set(task_id, {
       id: task_id,
       agentId,
       task: taskInfo.task,
       status: error ? 'failed' : 'completed',
-      result: error ? undefined : result,
+      result: error ? undefined : cappedResult,
       error: error || undefined,
       startedAt: taskInfo.startedAt,
       completedAt: Date.now(),
@@ -1702,9 +1766,11 @@ server.tool(
     evictStaleNativeTasks();
 
     const agentId = taskInfo.agentId;
-    const agentSkills = (() => {
-      try { return mainAgent.getAgentList().find((a: any) => a.id === agentId)?.skills || []; }
-      catch { return []; }
+    const agentMeta = (() => {
+      try {
+        const a = mainAgent.getAgentList().find((a: any) => a.id === agentId);
+        return { skills: a?.skills || [], preset: a?.preset || '' };
+      } catch { return { skills: [] as string[], preset: '' }; }
     })();
 
     try { mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined); } catch { /* best-effort */ }
@@ -1717,13 +1783,16 @@ server.tool(
       try {
         const { MemoryWriter, MemoryCompactor } = await import('@gossip/orchestrator');
         const memWriter = new MemoryWriter(process.cwd());
+        // Wire LLM for cognitive summaries — same as relay agents get
+        try { if (mainAgent.getLLM()) memWriter.setSummaryLlm(mainAgent.getLLM()); } catch {}
+        const scores = presetScores(agentMeta.preset);
         await memWriter.writeTaskEntry(agentId, {
-          taskId: task_id, task: taskInfo.task, skills: agentSkills,
-          scores: { relevance: 3, accuracy: 3, uniqueness: 3 },
+          taskId: task_id, task: taskInfo.task, skills: agentMeta.skills,
+          scores,
         });
         if (result) {
-          memWriter.writeKnowledgeFromResult(agentId, {
-            taskId: task_id, task: taskInfo.task, result: result.slice(0, 4000),
+          await memWriter.writeKnowledgeFromResult(agentId, {
+            taskId: task_id, task: taskInfo.task, result,
           });
         }
         memWriter.rebuildIndex(agentId);
@@ -1735,13 +1804,14 @@ server.tool(
     }
 
     if (!error) {
-      await mainAgent.publishNativeGossip(agentId, result).catch(() => {});
+      await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {});
     }
 
+    const cappedResult = result ? result.slice(0, 50000) : result;
     nativeResultMap.set(task_id, {
       id: task_id, agentId, task: taskInfo.task,
       status: error ? 'failed' : 'completed',
-      result: error ? undefined : result, error: error || undefined,
+      result: error ? undefined : cappedResult, error: error || undefined,
       startedAt: taskInfo.startedAt, completedAt: Date.now(),
     });
 
@@ -1753,7 +1823,7 @@ server.tool(
 // ── Record consensus signals from Claude Code synthesis ───────────────────
 server.tool(
   'gossip_record_signals',
-  'Record consensus performance signals after cross-referencing agent findings. Call this after gossip_collect_consensus when YOU (Claude Code) synthesize the results. Maps your CONFIRMED/DISPUTED/UNIQUE/NEW tags to agent performance scores that improve future dispatch decisions.',
+  'Record consensus performance signals after cross-referencing agent findings. Call IMMEDIATELY when you verify a finding against code — don\'t batch or defer. If you read the code and the finding is wrong, record hallucination_caught right away. If confirmed, record unique_confirmed/agreement right away. Maps signals to agent performance scores that improve future dispatch decisions.',
   {
     signals: z.array(z.object({
       signal: z.enum(['agreement', 'disagreement', 'unique_confirmed', 'unique_unconfirmed', 'new_finding', 'hallucination_caught'])

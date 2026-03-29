@@ -1002,14 +1002,24 @@ export class DispatchPipeline {
       }
 
       // Cache consensus for session save + write project knowledge (fire-and-forget)
-      this.sessionConsensusHistory.push({
+      const historyEntry = {
         timestamp: new Date().toISOString(),
         confirmed: consensusReport.confirmed.length,
         disputed: consensusReport.disputed.length,
         unverified: consensusReport.unverified.length,
         unique: consensusReport.unique.length,
+        newFindings: consensusReport.newFindings?.length ?? 0,
+        agents: results.filter(r => r.status === 'completed').map(r => r.agentId),
         summary: consensusReport.summary.slice(0, 2000),
-      });
+      };
+      this.sessionConsensusHistory.push(historyEntry);
+
+      // Persist to consensus-history.jsonl for dashboard
+      try {
+        const historyPath = join(this.projectRoot, '.gossip', 'consensus-history.jsonl');
+        mkdirSync(join(this.projectRoot, '.gossip'), { recursive: true });
+        appendFileSync(historyPath, JSON.stringify(historyEntry) + '\n');
+      } catch { /* best-effort */ }
 
       // Auto-write consensus knowledge to _project (fire-and-forget)
       if (this.memWriter && consensusReport.confirmed.length + consensusReport.disputed.length > 0) {

@@ -31,6 +31,20 @@ export class AgentMemoryReader {
       }
     }
 
+    // Load shared project knowledge (cross-agent context)
+    const projectKnowledgeDir = join(this.projectRoot, '.gossip', 'agents', '_project', 'memory', 'knowledge');
+    if (existsSync(projectKnowledgeDir)) {
+      const projectFiles = this.selectKnowledgeFiles(projectKnowledgeDir, taskText, 3);
+      for (const file of projectFiles) {
+        let content = readFileSync(file.path, 'utf-8');
+        content = content.replace(/<\/?(?:agent-memory|system|instructions)>/gi, '');
+        parts.push(`<project-context>\n${content}\n</project-context>`);
+        if (file.score > 0.5) {
+          this.touchKnowledgeFile(file.path, content);
+        }
+      }
+    }
+
     const calPath = join(memDir, 'calibration', 'accuracy.md');
     if (existsSync(calPath)) {
       parts.push(readFileSync(calPath, 'utf-8'));
@@ -39,7 +53,7 @@ export class AgentMemoryReader {
     return parts.join('\n\n');
   }
 
-  private selectKnowledgeFiles(knowledgeDir: string, taskText: string): Array<{ path: string; score: number }> {
+  private selectKnowledgeFiles(knowledgeDir: string, taskText: string, maxFiles = 5): Array<{ path: string; score: number }> {
     const files = readdirSync(knowledgeDir).filter(f => f.endsWith('.md'));
     const scored: Array<{ path: string; score: number }> = [];
     const lower = taskText.toLowerCase();
@@ -77,11 +91,11 @@ export class AgentMemoryReader {
       }
     }
 
-    return scored.sort((a, b) => b.score - a.score).slice(0, 5);
+    return scored.sort((a, b) => b.score - a.score).slice(0, maxFiles);
   }
 
   calculateWarmth(importance: number, lastAccessed: string): number {
-    const days = (Date.now() - new Date(lastAccessed).getTime()) / 86400000;
+    const days = Math.max(0, (Date.now() - new Date(lastAccessed).getTime()) / 86400000);
     return importance * (1 / (1 + days / 30));
   }
 
@@ -103,7 +117,9 @@ export class AgentMemoryReader {
     const taskExts: string[] = taskLower.match(/\.\w{1,5}/g) || [];
     if (descExts.some(e => taskExts.includes(e))) matches += 1;
 
-    return Math.min(matches / descWords.length, 1.0);
+    // Normalize by the smaller word count so verbose descriptions aren't penalized
+    const denominator = Math.min(descWords.length, taskWords.size) || 1;
+    return Math.min(matches / denominator, 1.0);
   }
 
   private parseFrontmatter(content: string): { name: string; description: string; importance: number; lastAccessed: string; accessCount: number } | null {

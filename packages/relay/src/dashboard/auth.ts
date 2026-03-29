@@ -4,6 +4,7 @@ import { join, dirname } from 'path';
 
 const KEY_LENGTH = 16; // 16 bytes = 32 hex chars
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_SESSIONS = 50;
 
 interface Session {
   token: string;
@@ -51,8 +52,18 @@ export class DashboardAuth {
     const b = createHash('sha256').update(this.key).digest();
     if (!timingSafeEqual(a, b)) return null;
 
+    // Evict expired sessions before creating new one
+    const now = Date.now();
+    for (const [t, s] of this.sessions) {
+      if (now > s.expiresAt) this.sessions.delete(t);
+    }
+    // Cap active sessions
+    if (this.sessions.size >= MAX_SESSIONS) {
+      const oldest = [...this.sessions.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt)[0];
+      if (oldest) this.sessions.delete(oldest[0]);
+    }
     const token = randomBytes(32).toString('hex');
-    this.sessions.set(token, { token, expiresAt: Date.now() + SESSION_TTL_MS });
+    this.sessions.set(token, { token, expiresAt: now + SESSION_TTL_MS });
     return token;
   }
 

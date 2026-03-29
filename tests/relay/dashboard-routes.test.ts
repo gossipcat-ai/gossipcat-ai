@@ -65,7 +65,7 @@ describe('DashboardRouter', () => {
     expect(res._status).toBe(200);
     expect(res._headers['Set-Cookie']).toContain('dashboard_session=');
     expect(res._headers['Set-Cookie']).toContain('HttpOnly');
-    expect(res._headers['Set-Cookie']).toContain('SameSite=Strict');
+    expect(res._headers['Set-Cookie']).toContain('SameSite=Lax');
   });
 
   it('POST /dashboard/api/auth rejects invalid key', async () => {
@@ -78,6 +78,57 @@ describe('DashboardRouter', () => {
     req.emit('end');
     await handled;
 
+    expect(res._status).toBe(401);
+  });
+
+  it('POST /dashboard/api/auth handles malformed JSON body', async () => {
+    const req = mockReq('POST', '/dashboard/api/auth');
+    const res = mockRes();
+    const handled = router.handle(req, res);
+    req.emit('data', Buffer.from('not json at all'));
+    req.emit('end');
+    await handled;
+    expect(res._status).toBe(400);
+  });
+
+  it('POST /dashboard/api/auth handles empty body', async () => {
+    const req = mockReq('POST', '/dashboard/api/auth');
+    const res = mockRes();
+    const handled = router.handle(req, res);
+    req.emit('data', Buffer.from(''));
+    req.emit('end');
+    await handled;
+    expect(res._status).toBe(400);
+  });
+
+  it('POST /dashboard/api/auth handles body missing key field', async () => {
+    const req = mockReq('POST', '/dashboard/api/auth');
+    const res = mockRes();
+    const handled = router.handle(req, res);
+    req.emit('data', Buffer.from(JSON.stringify({ password: 'wrong-field' })));
+    req.emit('end');
+    await handled;
+    expect(res._status).toBe(401);
+  });
+
+  it('rejects expired session token', async () => {
+    // Test with a non-existent token (simulates expired/evicted session)
+    const req = mockReq('GET', '/dashboard/api/overview', {
+      cookie: 'dashboard_session=expired_fake_token_that_does_not_exist',
+    });
+    const res = mockRes();
+    await router.handle(req, res);
+    expect(res._status).toBe(401);
+  });
+
+  it('rejects tampered session cookie', async () => {
+    const token = auth.createSession(auth.getKey())!;
+    const tampered = token.slice(0, -4) + 'XXXX'; // corrupt last 4 chars
+    const req = mockReq('GET', '/dashboard/api/overview', {
+      cookie: `dashboard_session=${tampered}`,
+    });
+    const res = mockRes();
+    await router.handle(req, res);
     expect(res._status).toBe(401);
   });
 

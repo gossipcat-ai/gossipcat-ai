@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, readdirSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, sep } from 'path';
 import type { SkillIndex } from './skill-index';
 
 /**
@@ -50,7 +50,7 @@ function resolveSkill(agentId: string, skill: string, projectRoot: string): stri
   for (const base of bases) {
     for (const fname of [filename, hyphenFilename]) {
       const candidate = resolve(base, fname);
-      if (!candidate.startsWith(base + '/')) continue;
+      if (!candidate.startsWith(base + sep)) continue;
       if (existsSync(candidate)) return readFileSync(candidate, 'utf-8');
     }
   }

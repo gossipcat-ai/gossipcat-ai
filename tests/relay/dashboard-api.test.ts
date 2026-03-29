@@ -17,8 +17,9 @@ describe('Overview API', () => {
   it('returns zero counts for fresh project', async () => {
     const result = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0 });
     expect(result).toEqual({
-      agentsOnline: 0, relayCount: 0, nativeCount: 0,
+      agentsOnline: 0, relayCount: 0, relayConnected: 0, nativeCount: 0,
       consensusRuns: 0, totalFindings: 0, confirmedFindings: 0, totalSignals: 0,
+      tasksCompleted: 0, tasksFailed: 0, avgDurationMs: 0,
     });
   });
 

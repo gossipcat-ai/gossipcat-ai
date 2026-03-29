@@ -4,6 +4,8 @@ import { overviewHandler } from './api-overview';
 import { agentsHandler } from './api-agents';
 import { skillsGetHandler, skillsBindHandler } from './api-skills';
 import { memoryHandler } from './api-memory';
+import { consensusHandler } from './api-consensus';
+import { tasksHandler } from './api-tasks';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
@@ -21,7 +23,12 @@ interface DashboardContext {
   relayConnections: number;
 }
 
+const AUTH_MAX_ATTEMPTS = 10;
+const AUTH_LOCKOUT_MS = 60_000; // 1 minute lockout after max attempts
+
 export class DashboardRouter {
+  private authAttempts = new Map<string, { count: number; lockedUntil: number }>();
+
   constructor(
     private auth: DashboardAuth,
     private projectRoot: string,
@@ -72,14 +79,31 @@ export class DashboardRouter {
   }
 
   private async handleAuth(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    // Rate limiting per IP
+    const ip = req.socket?.remoteAddress || 'unknown';
+    const attempt = this.authAttempts.get(ip);
+    if (attempt && attempt.lockedUntil > Date.now()) {
+      this.json(res, 429, { error: 'Too many attempts. Try again later.' });
+      return true;
+    }
+
     const body = await readBody(req);
     try {
       const { key } = JSON.parse(body);
       const token = this.auth.createSession(key);
       if (!token) {
+        const current = this.authAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+        current.count++;
+        if (current.count >= AUTH_MAX_ATTEMPTS) {
+          current.lockedUntil = Date.now() + AUTH_LOCKOUT_MS;
+          current.count = 0;
+        }
+        this.authAttempts.set(ip, current);
         this.json(res, 401, { error: 'Invalid key' });
         return true;
       }
+      // Successful auth — clear attempts
+      this.authAttempts.delete(ip);
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'Set-Cookie': `dashboard_session=${token}; HttpOnly; SameSite=Lax; Path=/dashboard; Max-Age=86400`,
@@ -105,6 +129,18 @@ export class DashboardRouter {
         return true;
       }
 
+      if (url === '/dashboard/api/tasks' && req.method === 'GET') {
+        const data = await tasksHandler(this.projectRoot);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      if (url === '/dashboard/api/consensus' && req.method === 'GET') {
+        const data = await consensusHandler(this.projectRoot);
+        this.json(res, 200, data);
+        return true;
+      }
+
       if (url === '/dashboard/api/skills' && req.method === 'GET') {
         const data = await skillsGetHandler(this.projectRoot);
         this.json(res, 200, data);
@@ -112,8 +148,10 @@ export class DashboardRouter {
       }
 
       if (url === '/dashboard/api/skills/bind' && req.method === 'POST') {
-        const body = JSON.parse(await readBody(req));
-        const data = await skillsBindHandler(this.projectRoot, body);
+        let body: unknown;
+        try { body = JSON.parse(await readBody(req)); }
+        catch { this.json(res, 400, { error: 'Invalid JSON body' }); return true; }
+        const data = await skillsBindHandler(this.projectRoot, body as any);
         this.json(res, data.success ? 200 : 400, data);
         return true;
       }
@@ -176,16 +214,18 @@ function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let tooLarge = false;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_BODY_SIZE) {
+        tooLarge = true;
         req.destroy();
         reject(new Error('Request body too large'));
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-    req.on('error', reject);
+    req.on('end', () => { if (!tooLarge) resolve(Buffer.concat(chunks).toString('utf-8')); });
+    req.on('error', (err) => { if (!tooLarge) reject(err); });
   });
 }

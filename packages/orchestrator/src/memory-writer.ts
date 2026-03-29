@@ -12,11 +12,12 @@ function truncateAtWord(text: string, maxLen: number): string {
   return (lastSpace > maxLen * 0.8 ? truncated.slice(0, lastSpace) : truncated) + '...';
 }
 
-/** Truncate by keeping start + end — preserves conclusions/errors at the tail */
+/** Truncate by keeping start + end — tail-biased (25/75) since conclusions are at the end */
 function truncateStartAndEnd(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
-  const half = Math.floor(maxLen / 2);
-  return `${text.slice(0, half)}\n\n[... truncated ${text.length - maxLen} chars ...]\n\n${text.slice(-half)}`;
+  const head = Math.floor(maxLen * 0.25);
+  const tail = maxLen - head;
+  return `${text.slice(0, head)}\n\n[... truncated ${text.length - maxLen} chars ...]\n\n${text.slice(-tail)}`;
 }
 
 export class MemoryWriter {
@@ -80,10 +81,8 @@ export class MemoryWriter {
 
     // Truncate result before processing to prevent resource exhaustion
     const safeResult = data.result.length > 50000 ? data.result.slice(0, 50000) : data.result;
-    const facts = this.extractFacts(data.task, safeResult);
-    if (!facts) return; // nothing useful to remember
 
-    // Generate cognitive summary via LLM (fire-and-forget if fails)
+    // Generate cognitive summary via LLM (attempt even if extractFacts would return null)
     let cognitiveSummary: string | null = null;
     if (this.summaryLlm) {
       try {
@@ -91,34 +90,52 @@ export class MemoryWriter {
       } catch { /* fall back to regex extraction */ }
     }
 
+    const facts = this.extractFacts(data.task, safeResult);
+    // Skip only when both LLM and regex extraction failed
+    if (!facts && !cognitiveSummary) return;
+
     // Timestamp prefix for chronological ordering + taskId for uniqueness
     const now = new Date();
     const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const filename = `${timestamp}-${data.taskId}.md`;
     const today = now.toISOString().split('T')[0];
 
-    // Limit knowledge files — keep only the most recent 10, remove oldest
-    try {
-      const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md')).sort();
-      const MAX_KNOWLEDGE_FILES = 10;
-      if (existing.length >= MAX_KNOWLEDGE_FILES) {
-        const toRemove = existing.slice(0, existing.length - MAX_KNOWLEDGE_FILES + 1);
-        for (const old of toRemove) {
-          unlinkSync(join(knowledgeDir, old));
-        }
-      }
-    } catch { /* skip cleanup on error */ }
+    // Warmth-aware pruning — evict lowest-warmth files, not just oldest
+    this.pruneKnowledgeDir(knowledgeDir, 25);
 
     // Build knowledge body: metadata (regex) + understanding (LLM or regex fallback)
-    const body = cognitiveSummary
-      ? `${facts.metadata}\n\n${cognitiveSummary}`
-      : facts.body;
+    let body: string;
+    let description = facts?.description || truncateAtWord(data.task, 100).replace(/\n/g, ' ');
+    let importance = facts?.importance || 0.6;
+    if (cognitiveSummary) {
+      // Extract LLM-generated metadata lines and strip from summary body
+      // Use (?:^|\n) anchor to handle first-line placement
+      const techMatch = cognitiveSummary.match(/(?:^|\n)TECHNOLOGIES:\s*(.+)/i);
+      const descMatch = cognitiveSummary.match(/(?:^|\n)DESCRIPTION:\s*(.+)/i);
+      const llmTech = techMatch ? techMatch[1].trim() : null;
+      if (descMatch) description = descMatch[1].trim().slice(0, 120);
+      const cleanSummary = cognitiveSummary
+        .replace(/^TECHNOLOGIES:\s*.+/gim, '')
+        .replace(/^DESCRIPTION:\s*.+/gim, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trimEnd();
+
+      // Replace regex technology with LLM-detected technology in metadata
+      let metadata = facts?.metadata || '';
+      if (llmTech) {
+        metadata = metadata.replace(/Technology: .+/, `Technology: ${llmTech}`);
+        if (!metadata.includes('Technology:')) metadata += `${metadata ? '\n' : ''}Technology: ${llmTech}`;
+      }
+      body = metadata ? `${metadata}\n\n${cleanSummary}` : cleanSummary;
+    } else {
+      body = facts!.body;
+    }
 
     const content = [
       '---',
       `name: ${truncateAtWord(data.task, 80).replace(/\n/g, ' ')}`,
-      `description: ${facts.description}`,
-      `importance: ${facts.importance}`,
+      `description: ${description.replace(/\n/g, ' ')}`,
+      `importance: ${importance}`,
       `lastAccessed: ${today}`,
       `accessCount: 0`,
       '---',
@@ -149,7 +166,10 @@ Rules:
 - No preamble, no "Here is the summary"
 - Cite specific file:line when referencing code
 - If the task found bugs, name them concretely
-- If the task confirmed something works, say what and why it matters`,
+- If the task confirmed something works, say what and why it matters
+- End with exactly two metadata lines:
+  DESCRIPTION: one sentence (max 100 chars) summarizing what was learned, not what files were touched
+  TECHNOLOGIES: comma-separated list of languages/frameworks actually used (e.g. typescript, jest, esbuild). Only include technologies that appear in the code, not ones merely mentioned.`,
       },
       {
         role: 'user',
@@ -232,13 +252,14 @@ Rules:
           pinned = true;
           summaryBody = summaryBody.replace(/^PINNED:true\s*\n?/, '');
         }
-      } catch {
-        // Fallback: save raw data as structured markdown
-        summaryBody = rawInput.slice(0, 3000);
+      } catch (err) {
+        // Fallback: save raw data with warning header
+        process.stderr.write(`[gossipcat] Session summary LLM failed: ${(err as Error).message}\n`);
+        summaryBody = `> ⚠️ LLM summary failed — raw data below. Review and restructure manually.\n\n${rawInput.slice(0, 3000)}`;
       }
     } else {
-      // No LLM available — save raw data
-      summaryBody = rawInput.slice(0, 3000);
+      // No LLM available — save raw data with note
+      summaryBody = `> ⚠️ No summary LLM configured — raw data below.\n\n${rawInput.slice(0, 3000)}`;
     }
 
     const content = [
@@ -275,20 +296,22 @@ Rules:
     return summaryBody;
   }
 
-  /** Warmth-aware pruning for _project knowledge files (respects pinned) */
+  /** Warmth-aware pruning for _project knowledge files */
   private pruneProjectKnowledge(knowledgeDir: string): void {
+    this.pruneKnowledgeDir(knowledgeDir, 10);
+  }
+
+  /** Shared warmth-aware pruning — evicts lowest-warmth files, respects pinned */
+  private pruneKnowledgeDir(knowledgeDir: string, maxFiles: number): void {
     try {
       const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md')).sort();
-      const MAX_KNOWLEDGE_FILES = 10;
-      if (existing.length < MAX_KNOWLEDGE_FILES) return;
+      if (existing.length < maxFiles) return;
 
-      // Score each file by warmth, skip pinned
       const scored = existing.map(f => {
         const content = readFileSync(join(knowledgeDir, f), 'utf-8');
         const importance = parseFloat(content.match(/importance:\s*([\d.]+)/)?.[1] ?? '0.5');
         const isPinned = /pinned:\s*true/i.test(content);
-        // Approximate timestamp from filename (YYYY-MM-DDTHH-MM-SS)
-        const ts = f.slice(0, 19).replace(/T/, 'T').replace(/-(\d\d)-(\d\d)-/, ':$1:$2:');
+        const ts = f.slice(0, 19).replace(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/, '$1T$2:$3:$4');
         const days = Math.max(0, (Date.now() - new Date(ts).getTime()) / 86400000);
         const warmth = isPinned ? Infinity : importance * (1 / (1 + days / 30));
         return { file: f, warmth, isPinned };
@@ -296,10 +319,9 @@ Rules:
 
       scored.sort((a, b) => a.warmth - b.warmth);
 
-      // Remove lowest-warmth files until we're under the cap
-      const toRemove = scored.slice(0, existing.length - MAX_KNOWLEDGE_FILES + 1);
+      const toRemove = scored.slice(0, existing.length - maxFiles + 1);
       for (const item of toRemove) {
-        if (item.isPinned) continue; // never delete pinned
+        if (item.isPinned) continue;
         unlinkSync(join(knowledgeDir, item.file));
       }
     } catch { /* best-effort */ }
@@ -358,13 +380,22 @@ Rules:
       metadataLines.push(fileLine);
     }
 
-    // Extract technology mentions
-    const techKeywords = ['typescript', 'javascript', 'react', 'vue', 'angular', 'svelte', 'next.js', 'node.js',
-      'express', 'fastify', 'python', 'django', 'flask', 'rust', 'go', 'java', 'kotlin', 'swift',
-      'html', 'css', 'tailwind', 'canvas', 'web audio', 'webgl', 'three.js', 'tone.js',
+    // Extract technology mentions — use word boundaries to avoid false positives
+    // (e.g. "go" matching in "category", "orchestrator", "ago")
+    const techKeywords = ['typescript', 'javascript', 'react', 'vue', 'angular', 'svelte', 'next\\.js', 'node\\.js',
+      'express', 'fastify', 'python', 'django', 'flask', 'rust', 'golang', 'java', 'kotlin', 'swift',
+      'html', 'css', 'tailwind', 'canvas', 'web audio', 'webgl', 'three\\.js', 'tone\\.js',
       'es modules', 'commonjs', 'webpack', 'vite', 'esbuild', 'rollup',
       'jest', 'vitest', 'mocha', 'postgresql', 'mysql', 'mongodb', 'redis', 'supabase', 'firebase'];
-    const foundTech = techKeywords.filter(kw => combined.toLowerCase().includes(kw));
+    const lowerCombined = combined.toLowerCase();
+    const foundTech = techKeywords
+      .filter(kw => new RegExp(`\\b${kw}\\b`).test(lowerCombined))
+      .map(kw => kw.replace(/\\\./g, '.')); // unescape dots for output
+    // Detect languages from file extensions when keyword matching misses them
+    const extMap: Record<string, string> = { '.go': 'golang', '.py': 'python', '.rs': 'rust', '.kt': 'kotlin', '.swift': 'swift' };
+    for (const [ext, tech] of Object.entries(extMap)) {
+      if (!foundTech.includes(tech) && files.some(f => f.endsWith(ext))) foundTech.push(tech);
+    }
     if (foundTech.length > 0) {
       const techLine = `Technology: ${foundTech.join(', ')}`;
       lines.push(techLine);
@@ -394,11 +425,11 @@ Rules:
     if (lines.length === 0) return null;
     const hasFailures = failures.length > 0;
 
-    // Build description from files + tech for keyword matching
+    // Build description: prefer summary sentence, fall back to files + tech
+    const firstSentence = sentences.length > 0 ? truncateAtWord(sentences[0], 100) : '';
     const descParts = [...files.slice(0, 3), ...foundTech.slice(0, 3)];
-    const description = descParts.length > 0
-      ? descParts.join(', ')
-      : truncateAtWord(task, 80).replace(/\n/g, ' ');
+    const description = firstSentence
+      || (descParts.length > 0 ? descParts.join(', ') : truncateAtWord(task, 80).replace(/\n/g, ' '));
 
     return {
       description,
@@ -440,17 +471,8 @@ Rules:
       ...peerFindings.map(f => `- [${f.originalAgentId}] ${f.finding}`),
     ].join('\n');
 
-    // Enforce knowledge file cap
-    try {
-      const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md')).sort();
-      const MAX_KNOWLEDGE_FILES = 10;
-      if (existing.length >= MAX_KNOWLEDGE_FILES) {
-        const toRemove = existing.slice(0, existing.length - MAX_KNOWLEDGE_FILES + 1);
-        for (const old of toRemove) {
-          unlinkSync(join(knowledgeDir, old));
-        }
-      }
-    } catch { /* skip cleanup on error */ }
+    // Warmth-aware pruning — same as writeKnowledgeFromResult
+    this.pruneKnowledgeDir(knowledgeDir, 25);
 
     writeFileSync(join(knowledgeDir, filename), content);
   }
@@ -488,6 +510,9 @@ Rules:
       if (existsSync(lockPath)) continue; // locked by compactor, skip
 
       try {
+        // Acquire lock to prevent race with concurrent signal updates or compaction
+        writeFileSync(lockPath, `${Date.now()}`);
+
         const lines = readFileSync(tasksPath, 'utf-8').trim().split('\n').filter(Boolean);
         let modified = false;
 
@@ -507,7 +532,9 @@ Rules:
         if (modified) {
           writeFileSync(tasksPath, updated.join('\n') + '\n');
         }
-      } catch { /* best-effort */ }
+      } catch { /* best-effort */ } finally {
+        try { unlinkSync(lockPath); } catch { /* already deleted */ }
+      }
     }
   }
 

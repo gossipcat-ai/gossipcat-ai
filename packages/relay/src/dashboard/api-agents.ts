@@ -35,7 +35,8 @@ const DEFAULT_SCORE: AgentScore = {
 
 export async function agentsHandler(projectRoot: string, configs: AgentConfigLike[]): Promise<AgentResponse[]> {
   const reader = new PerformanceReader(projectRoot);
-  const scores = reader.getScores();
+  let scores: Map<string, AgentScore>;
+  try { scores = reader.getScores(); } catch { scores = new Map(); }
 
   return configs.map(config => {
     const score = scores.get(config.id) ?? { ...DEFAULT_SCORE, agentId: config.id };

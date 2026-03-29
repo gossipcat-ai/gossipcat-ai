@@ -91,6 +91,7 @@ export class RelayServer {
           this.dashboardUpgrader.handleUpgrade(req, socket, head, (ws) => {
             this.dashboardWs!.addClient(ws);
             ws.on('close', () => this.dashboardWs!.removeClient(ws));
+            ws.on('error', () => this.dashboardWs!.removeClient(ws));
           });
         } else {
           // Agent WebSocket — existing logic
@@ -110,6 +111,17 @@ export class RelayServer {
 
   async stop(): Promise<void> {
     this.router.stop();  // stop presence tracker interval
+    // Close dashboard clients and upgrader
+    if (this.dashboardWs) {
+      for (const client of this.dashboardWs.getClients()) {
+        client.close(1001, 'Server shutting down');
+      }
+    }
+    if (this.dashboardUpgrader) {
+      this.dashboardUpgrader.close();
+    }
+    this.connectionsByIp.clear();
+    // Close agent clients
     for (const client of this.wss.clients) {
       client.close(1001, 'Server shutting down');
     }

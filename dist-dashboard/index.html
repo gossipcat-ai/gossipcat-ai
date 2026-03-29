@@ -8,12 +8,12 @@
 /* Design tokens from spec */
 :root {
   --bg-primary: #09090f;
-  --bg-card: linear-gradient(135deg, #1a1a2e, #16132e);
+  --bg-card: #13122b;
   --bg-nav: #12122a;
   --border: #2d2b55;
   --text-primary: #f8fafc;
   --text-secondary: #7c7c9e;
-  --text-muted: #6b7280;
+  --text-muted: #757d8a; /* Brightened for AA compliance (4.58:1) */
   --accent-primary: #a78bfa;
   --accent-secondary: #818cf8;
   --status-confirmed: #4ade80;
@@ -47,7 +47,7 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
-  padding: 2.5rem;
+  padding: 1.5rem; /* Normalized padding */
   text-align: center;
   max-width: 380px;
   width: 100%;
@@ -107,7 +107,7 @@ body {
   margin-right: 2rem;
 }
 
-.nav-tabs { display: flex; gap: 0.25rem; flex: 1; }
+.nav-tabs { display: flex; gap: 0.25rem; flex: 1; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
 .nav-tab {
   background: none;
@@ -117,9 +117,11 @@ body {
   font-size: 0.8125rem;
   cursor: pointer;
   border-radius: var(--radius-button);
+  white-space: nowrap;
 }
 .nav-tab:hover:not(:disabled) { color: var(--text-primary); background: rgba(255,255,255,0.05); }
-.nav-tab.active { color: var(--accent-primary); background: rgba(167, 139, 250, 0.1); }
+.nav-tab:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+.nav-tab.active { color: var(--accent-primary); background: rgba(167, 139, 250, 0.1); box-shadow: inset 0 -2px 0 var(--accent-primary); }
 .nav-tab:disabled { opacity: 0.35; cursor: default; }
 
 .nav-status {
@@ -140,58 +142,86 @@ body {
 .status-dot.offline { background: var(--status-disputed); }
 
 /* Main */
-.main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
+.main { padding: 2rem 2.5rem; margin: 0 auto; }
 
 .tab-content { display: none; }
 .tab-content.active { display: block; }
 
 /* Cards */
-.stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.25rem; margin-bottom: 2rem; }
 
 .stat-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
-  padding: 1.25rem;
+  padding: 1.5rem 1.75rem;
 }
-.stat-card .label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
-.stat-card .value { font-size: 1.75rem; font-weight: 700; margin-top: 0.25rem; }
-.stat-card .detail { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+.stat-card .label { font-size: 0.6875rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.stat-card .value { font-size: 2.25rem; font-weight: 700; margin-top: 0.375rem; line-height: 1; }
+.stat-card .detail { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem; }
 
-/* Panels */
-.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-
+/* Panels - Vertical stack */
+.panels { display: flex; flex-direction: column; gap: 1.5rem; }
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
-  padding: 1.25rem;
+  padding: 1.5rem;
 }
-.panel-title { font-size: 0.875rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-secondary); }
+.panel-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 1.25rem;
+  color: var(--text-muted);
+}
 
-/* Agent Scores */
-.agent-row {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-}
-.agent-row:last-child { border-bottom: none; }
-.agent-name { font-weight: 500; min-width: 140px; font-size: 0.8125rem; }
+/* Badges - Increased font size */
 .agent-badge {
-  font-size: 0.625rem;
-  padding: 0.125rem 0.375rem;
+  font-size: 0.75rem; /* Increased from 0.625rem */
+  padding: 0.125rem 0.5rem;
   border-radius: 3px;
   background: rgba(167, 139, 250, 0.15);
   color: var(--accent-primary);
-  margin-left: 0.5rem;
+  margin-left: 0.375rem;
 }
+.agent-badge.relay { background: rgba(96,165,250,0.15); color: var(--status-new); }
+.agent-badge.skill { background: rgba(255,255,255,0.06); color: var(--text-secondary); margin-left: 0; }
 
-.bar-group { display: flex; gap: 0.5rem; flex: 1; align-items: center; }
-.bar-container {
+.weight-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+.weight-badge.lg { font-size: 1.5rem; }
+
+/* Agent Score Cards (Overview) */
+.agent-score-card {
+  padding: 1rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.agent-score-card:last-child { border-bottom: none; }
+.agent-score-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.375rem;
+}
+.agent-score-name { font-size: 0.875rem; font-weight: 500; }
+.agent-score-metrics {
+  display: flex;
+  gap: 1rem;
+}
+.metric {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
   flex: 1;
-  height: 6px;
+}
+.metric-bar {
+  flex: 1;
+  height: 5px;
   background: rgba(255,255,255,0.08);
   border-radius: 3px;
   overflow: hidden;
@@ -200,18 +230,109 @@ body {
 .bar-fill.accuracy { background: var(--accent-primary); }
 .bar-fill.uniqueness { background: var(--accent-secondary); }
 .bar-fill.reliability { background: var(--status-confirmed); }
-.bar-label { font-size: 0.625rem; color: var(--text-muted); min-width: 60px; }
+.metric-val { font-size: 0.6875rem; font-weight: 600; color: var(--text-primary); min-width: 28px; }
+.metric-lbl { font-size: 0.75rem; color: var(--text-muted); } /* Increased font size */
+.agent-score-stats {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+.agent-score-stats .halluc { color: var(--status-disputed); font-weight: 600; }
 
-.weight-badge {
+/* Agent Detail Cards (Agents tab) */
+.agent-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 1rem; }
+.agent-detail-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 1.25rem;
+}
+.agent-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+.agent-title { display: flex; align-items: center; gap: 0.25rem; }
+.agent-meta { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+.agent-metrics-grid {
+  display: flex;
+  gap: 1.5rem;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+.agent-metric-card { text-align: center; }
+.agent-metric-ring {
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.875rem; font-weight: 700;
+  margin: 0 auto 0.25rem;
+}
+.agent-metric-ring.accuracy {
+  background: conic-gradient(var(--accent-primary) calc(var(--pct) * 1%), rgba(255,255,255,0.08) 0);
+}
+.agent-metric-ring.uniqueness {
+  background: conic-gradient(var(--accent-secondary) calc(var(--pct) * 1%), rgba(255,255,255,0.08) 0);
+}
+.agent-metric-ring.reliability {
+  background: conic-gradient(var(--status-confirmed) calc(var(--pct) * 1%), rgba(255,255,255,0.08) 0);
+}
+.agent-metric-ring span {
+  background: var(--bg-primary);
+  width: 50px; height: 50px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.agent-metric-label { font-size: 0.6875rem; color: var(--text-muted); }
+.agent-signal-row {
+  display: flex;
+  gap: 1rem;
   font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--accent-primary);
-  min-width: 40px;
-  text-align: right;
+  color: var(--text-muted);
+  padding: 0.75rem 0;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+.agent-signal .signal-num { font-weight: 600; color: var(--text-secondary); }
+.agent-signal.good .signal-num { color: var(--status-confirmed); }
+.agent-signal.bad .signal-num { color: var(--status-disputed); }
+.agent-signal.warn { color: var(--status-disputed); }
+.agent-signal.warn .signal-num { color: var(--status-disputed); font-weight: 700; }
+.agent-skills-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255,255,255,0.05);
 }
 
+/* Tasks Tab */
+.tasks-list { max-height: 600px; overflow-y: auto; }
+.task-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 0.8125rem;
+}
+.task-status {
+  font-size: 0.75rem; /* Increased font size */
+  padding: 0.125rem 0.5rem;
+  border-radius: 3px;
+  font-weight: 500;
+  min-width: 65px;
+  text-align: center;
+}
+.task-agent { color: var(--accent-primary); font-size: 0.75rem; min-width: 120px; }
+.task-dur { color: var(--text-muted); font-size: 0.75rem; min-width: 45px; text-align: right; }
+.task-time { color: var(--text-muted); font-size: 0.6875rem; min-width: 90px; }
+.task-desc { color: var(--text-secondary); font-size: 0.75rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Activity Timeline */
-.timeline { max-height: 400px; overflow-y: auto; }
+.timeline { max-height: 500px; overflow-y: auto; }
 .timeline-entry {
   display: flex;
   gap: 0.75rem;
@@ -231,31 +352,204 @@ body {
 .timeline-dot.yellow { background: var(--status-unverified); }
 .timeline-dot.red { background: var(--status-disputed); }
 .timeline-time { color: var(--text-muted); font-size: 0.6875rem; min-width: 55px; }
-.timeline-text { color: var(--text-secondary); }
+.timeline-text { color: var(--text-secondary); font-size: 0.8125rem; }
+.timeline-agent { color: var(--accent-primary); font-weight: 500; }
 
-/* Agents Tab */
-.agent-cards { display: grid; gap: 1rem; }
-.agent-detail-card {
+/* Skills Grid */
+.skills-grid-wrap { overflow-x: auto; }
+.skills-grid {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.8125rem;
+}
+.skills-grid th, .skills-grid td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.skills-grid-corner { width: 160px; }
+.skills-grid-agent {
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: center;
+  font-size: 0.75rem;
+  min-width: 100px;
+}
+.skills-grid-skill {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.skills-grid-cell {
+  text-align: center;
+  cursor: default;
+  font-size: 0.875rem;
+  transition: background 0.15s;
+}
+.skills-grid-cell.enabled {
+  color: var(--accent-primary);
+  cursor: pointer;
+}
+.skills-grid-cell.enabled:hover { background: rgba(167, 139, 250, 0.1); }
+.skills-grid-cell.disabled {
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.skills-grid-cell.disabled:hover { background: rgba(255,255,255,0.05); }
+.skills-grid-cell.unbound { color: transparent; }
+.skills-grid-cell.toggling { opacity: 0.5; pointer-events: none; }
+
+/* Consensus Tab */
+.consensus-runs { display: flex; flex-direction: column; gap: 0.5rem; }
+.consensus-run {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
-  padding: 1.25rem;
+  overflow: hidden;
 }
-.agent-header {
+.consensus-run-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 1rem;
-}
-.agent-meta { font-size: 0.75rem; color: var(--text-muted); }
-.agent-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  font-size: 0.8125rem;
 }
-.agent-stat { text-align: center; }
-.agent-stat .num { font-size: 1.25rem; font-weight: 700; }
-.agent-stat .lbl { font-size: 0.6875rem; color: var(--text-secondary); }
+.consensus-run-header:hover { background: rgba(255,255,255,0.03); }
+.expand-icon {
+  font-family: monospace;
+  font-size: 1rem;
+  color: var(--text-muted);
+  width: 1rem;
+  text-align: center;
+}
+.consensus-run-info { flex: 1; }
+.consensus-task-id { color: var(--text-primary); font-family: monospace; font-size: 0.75rem; font-weight: 500; }
+.consensus-meta { color: var(--text-muted); font-size: 0.6875rem; margin-left: 0.75rem; }
+.consensus-counts { display: flex; gap: 0.375rem; }
+.consensus-tag {
+  font-size: 0.75rem; /* Increased font size */
+  padding: 0.125rem 0.5rem;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.consensus-tag.confirmed { background: rgba(74,222,128,0.15); color: var(--status-confirmed); }
+.consensus-tag.disputed { background: rgba(239,68,68,0.15); color: var(--status-disputed); }
+.consensus-tag.unverified { background: rgba(251,191,36,0.15); color: var(--status-unverified); }
+.consensus-tag.unique { background: rgba(107,114,128,0.15); color: var(--status-unique); }
+.consensus-tag.new { background: rgba(96,165,250,0.15); color: var(--status-new); }
+.consensus-run-body { padding: 0 1rem 1rem; }
+.consensus-signal {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 0.8125rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.consensus-signal:last-child { border-bottom: none; }
+.consensus-agent { color: var(--accent-primary); font-size: 0.75rem; }
+.consensus-arrow { color: var(--text-muted); font-size: 0.75rem; }
+.consensus-evidence {
+  width: 100%;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin-top: 0.25rem;
+  line-height: 1.4;
+}
+
+/* Memory Tab */
+.memory-agent-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+.memory-agent-pill {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  color: var(--text-secondary);
+  padding: 0.5rem 1rem;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.memory-agent-pill:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+.memory-agent-pill.active { background: rgba(167,139,250,0.15); border-color: var(--accent-primary); color: var(--accent-primary); }
+.memory-controls { margin-bottom: 1.5rem; }
+.memory-select {
+  padding: 0.5rem 1rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  min-width: 250px;
+}
+.memory-select:focus { border-color: var(--accent-primary); outline: none; }
+.memory-panels { display: flex; flex-direction: column; gap: 1rem; }
+.memory-md {
+  padding: 1rem;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.memory-md h1 { font-size: 1.125rem; color: var(--text-primary); margin: 1rem 0 0.5rem; font-weight: 600; }
+.memory-md h2 { font-size: 0.9375rem; color: var(--text-primary); margin: 1rem 0 0.5rem; font-weight: 600; }
+.memory-md h3 { font-size: 0.8125rem; color: var(--text-primary); margin: 0.75rem 0 0.375rem; font-weight: 600; }
+.memory-md h4 { font-size: 0.8125rem; color: var(--text-secondary); margin: 0.5rem 0 0.25rem; font-weight: 600; }
+.memory-md ul { padding-left: 1.25rem; margin: 0.375rem 0; }
+.memory-md li { margin: 0.25rem 0; }
+.memory-md a { color: var(--accent-primary); text-decoration: none; }
+.memory-md a:hover { text-decoration: underline; }
+.memory-md strong { color: var(--text-primary); }
+.memory-md code {
+  background: rgba(255,255,255,0.08);
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+}
+.memory-md p { margin: 0.375rem 0; }
+.memory-code {
+  background: rgba(0,0,0,0.3);
+  border-radius: var(--radius-button);
+  padding: 0.75rem;
+  font-size: 0.75rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.memory-file {
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  padding: 0.25rem 0;
+}
+.memory-file:last-child { border-bottom: none; }
+.memory-file.cognitive { border-left: 2px solid var(--accent-primary); padding-left: 0.75rem; }
+.memory-file-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  padding: 0.375rem 0;
+  font-size: 0.8125rem;
+}
+.memory-file-header:hover { color: var(--accent-primary); }
+.memory-filename { font-family: monospace; color: var(--text-primary); font-size: 0.75rem; }
+.memory-desc { color: var(--text-muted); font-size: 0.75rem; }
+.memory-file-content {
+  background: rgba(0,0,0,0.3);
+  border-radius: var(--radius-button);
+  padding: 0.75rem;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+  margin: 0.25rem 0 0.5rem;
+}
+.memory-task-date { white-space: nowrap; color: var(--text-muted); font-size: 0.75rem; }
 
 /* Empty state */
 .empty-state {
@@ -266,9 +560,15 @@ body {
 }
 
 /* Responsive */
+@media (max-width: 1024px) {
+  .main { padding: 1.5rem; }
+  .agent-cards { grid-template-columns: 1fr; }
+}
 @media (max-width: 768px) {
-  .panels { grid-template-columns: 1fr; }
-  .stat-cards { grid-template-columns: repeat(2, 1fr); }
+  .stat-cards { grid-template-columns: 1fr; }
+  .agent-score-metrics { display: none; }
+  .agent-signal-row { flex-wrap: wrap; }
+  .nav-tabs { gap: 0; }
 }
 
 </style>
@@ -294,9 +594,10 @@ body {
       <div class="nav-tabs">
         <button class="nav-tab active" data-tab="overview">Overview</button>
         <button class="nav-tab" data-tab="agents">Agents</button>
-        <button class="nav-tab" data-tab="consensus" disabled title="Phase 3">Consensus</button>
-        <button class="nav-tab" data-tab="skills" disabled title="Phase 2">Skills</button>
-        <button class="nav-tab" data-tab="memory" disabled title="Phase 4">Memory</button>
+        <button class="nav-tab" data-tab="tasks">Tasks</button>
+        <button class="nav-tab" data-tab="consensus">Consensus</button>
+        <button class="nav-tab" data-tab="skills">Skills</button>
+        <button class="nav-tab" data-tab="memory">Memory</button>
       </div>
       <div class="nav-status">
         <span id="ws-status" class="status-dot offline"></span>
@@ -307,6 +608,7 @@ body {
     <main class="main">
       <div id="tab-overview" class="tab-content active"></div>
       <div id="tab-agents" class="tab-content"></div>
+      <div id="tab-tasks" class="tab-content"></div>
       <div id="tab-consensus" class="tab-content"></div>
       <div id="tab-skills" class="tab-content"></div>
       <div id="tab-memory" class="tab-content"></div>
@@ -316,11 +618,23 @@ body {
   <script>
 // packages/dashboard/src/app.js
 
+// ── Shared Utilities ────────────────────────────────────────────────────────
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/[&<>"']/g, (m) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[m]));
+}
+
 // ── API Helper ──────────────────────────────────────────────────────────────
 async function api(path) {
   const res = await fetch(`/dashboard/api/${path}`, { credentials: 'include' });
   if (res.status === 401) {
     throw new Error('Unauthorized');
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `API error: ${res.status}`);
   }
   return res.json();
 }
@@ -347,6 +661,8 @@ function showDashboard() {
 
 authForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const submitBtn = authForm.querySelector('button');
+  submitBtn.disabled = true;
   const key = document.getElementById('auth-key').value.trim();
   try {
     const res = await fetch('/dashboard/api/auth', {
@@ -369,6 +685,8 @@ authForm.addEventListener('submit', async (e) => {
     }
   } catch {
     authError.hidden = false;
+  } finally {
+    submitBtn.disabled = false;
   }
 });
 
@@ -391,9 +709,10 @@ tabs.forEach(tab => {
 let ws = null;
 const wsStatus = document.getElementById('ws-status');
 const wsLabel = document.getElementById('ws-label');
-const eventListeners = [];
+const eventListeners = new Set();
 
-function onDashboardEvent(fn) { eventListeners.push(fn); }
+function onDashboardEvent(fn) { eventListeners.add(fn); }
+function offDashboardEvent(fn) { eventListeners.delete(fn); }
 
 function connectWs() {
   if (ws) return; // already connected
@@ -427,9 +746,18 @@ function connectWs() {
 
 // ── Tab Loading ──────────────────────────────────────────────────────────────
 async function loadTab(name) {
+  // Clean up overview event handler when switching away
+  if (name !== 'overview' && typeof _overviewEventHandler !== 'undefined' && _overviewEventHandler) {
+    offDashboardEvent(_overviewEventHandler);
+    _overviewEventHandler = null;
+  }
   switch (name) {
     case 'overview': return renderOverview();
     case 'agents': return renderAgents();
+    case 'tasks': return renderTasks();
+    case 'skills': return renderSkills();
+    case 'consensus': return renderConsensus();
+    case 'memory': return renderMemory();
   }
 }
 
@@ -438,129 +766,157 @@ async function loadTab(name) {
 api('overview').then(() => showDashboard()).catch(() => showAuth());
 
 // Make helpers available to tab modules
-window._dash = { api, onDashboardEvent };
+window._dash = { api, onDashboardEvent, offDashboardEvent };
 
 // packages/dashboard/src/tabs/overview.js
 
+let _overviewEventHandler = null;
+
 async function renderOverview() {
+  if (_overviewEventHandler) {
+    window._dash.offDashboardEvent(_overviewEventHandler);
+    _overviewEventHandler = null;
+  }
+
   const container = document.getElementById('tab-overview');
   container.innerHTML = '<div class="empty-state">Loading...</div>';
 
   try {
-    const [overview, agents] = await Promise.all([
+    const [overview, agents, tasksData] = await Promise.all([
       window._dash.api('overview'),
       window._dash.api('agents'),
+      window._dash.api('tasks'),
     ]);
+
+    const successRate = overview.tasksCompleted + overview.tasksFailed > 0
+      ? ((overview.tasksCompleted / (overview.tasksCompleted + overview.tasksFailed)) * 100).toFixed(0)
+      : '—';
 
     container.innerHTML = `
       <div class="stat-cards">
         <div class="stat-card">
-          <div class="label">Agents Online</div>
+          <div class="label">Team</div>
           <div class="value">${overview.agentsOnline}</div>
           <div class="detail">${overview.relayCount} relay, ${overview.nativeCount} native</div>
         </div>
         <div class="stat-card">
-          <div class="label">Consensus Runs</div>
-          <div class="value">${overview.consensusRuns}</div>
+          <div class="label">Tasks</div>
+          <div class="value">${overview.tasksCompleted + overview.tasksFailed}</div>
+          <div class="detail">${successRate}% success${overview.avgDurationMs > 0 ? ', ' + (overview.avgDurationMs / 1000).toFixed(1) + 's avg' : ''}</div>
         </div>
         <div class="stat-card">
-          <div class="label">Total Findings</div>
-          <div class="value">${overview.totalFindings}</div>
-          <div class="detail">${overview.confirmedFindings} confirmed</div>
-        </div>
-        <div class="stat-card">
-          <div class="label">Performance Signals</div>
+          <div class="label">Consensus</div>
           <div class="value">${overview.totalSignals}</div>
+          <div class="detail">${overview.consensusRuns} runs, ${overview.confirmedFindings} confirmed</div>
         </div>
       </div>
 
       <div class="panels">
         <div class="panel">
-          <div class="panel-title">Agent Scores</div>
+          <div class="panel-title">Agent Performance</div>
           <div id="agent-scores">
             ${agents.length === 0 ? '<div class="empty-state">No agents configured</div>' :
               agents
                 .sort((a, b) => b.scores.dispatchWeight - a.scores.dispatchWeight)
-                .map(a => `
-                  <div class="agent-row">
-                    <div class="agent-name">
-                      ${a.id}
-                      ${a.native ? '<span class="agent-badge">native</span>' : ''}
+                .map(a => {
+                  const s = a.scores;
+                  return `
+                  <div class="agent-score-card">
+                    <div class="agent-score-header">
+                      <span class="agent-score-name">
+                        ${escapeHtml(a.id)}
+                        ${a.native ? '<span class="agent-badge">native</span>' : ''}
+                      </span>
+                      <span class="weight-badge">${s.dispatchWeight.toFixed(2)}</span>
                     </div>
-                    <div class="bar-group">
-                      <div class="bar-label">acc</div>
-                      <div class="bar-container"><div class="bar-fill accuracy" style="width:${(a.scores.accuracy * 100).toFixed(0)}%"></div></div>
-                      <div class="bar-label">uniq</div>
-                      <div class="bar-container"><div class="bar-fill uniqueness" style="width:${(a.scores.uniqueness * 100).toFixed(0)}%"></div></div>
-                      <div class="bar-label">rel</div>
-                      <div class="bar-container"><div class="bar-fill reliability" style="width:${(a.scores.reliability * 100).toFixed(0)}%"></div></div>
+                    <div class="agent-score-metrics">
+                      <div class="metric">
+                        <div class="metric-bar"><div class="bar-fill accuracy" style="width:${(s.accuracy * 100).toFixed(0)}%"></div></div>
+                        <span class="metric-val">${(s.accuracy * 100).toFixed(0)}%</span>
+                        <span class="metric-lbl">accuracy</span>
+                      </div>
+                      <div class="metric">
+                        <div class="metric-bar"><div class="bar-fill uniqueness" style="width:${(s.uniqueness * 100).toFixed(0)}%"></div></div>
+                        <span class="metric-val">${(s.uniqueness * 100).toFixed(0)}%</span>
+                        <span class="metric-lbl">unique</span>
+                      </div>
                     </div>
-                    <div class="weight-badge">${a.scores.dispatchWeight.toFixed(2)}</div>
-                  </div>
-                `).join('')}
+                    <div class="agent-score-stats">
+                      <span>${s.signals} signals</span>
+                      <span>${s.agreements} agrees</span>
+                      <span>${s.disagreements} disagrees</span>
+                      ${s.hallucinations > 0 ? `<span class="halluc">${s.hallucinations} halluc.</span>` : ''}
+                    </div>
+                  </div>`;
+                }).join('')}
           </div>
         </div>
 
         <div class="panel">
-          <div class="panel-title">Live Activity</div>
+          <div class="panel-title">Recent Activity</div>
           <div id="activity-timeline" class="timeline">
-            <div class="empty-state">Waiting for events...</div>
+            ${tasksData.tasks.length === 0
+              ? '<div class="empty-state">No tasks yet</div>'
+              : tasksData.tasks.slice(0, 20).map(t => {
+                  const time = new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                  const color = t.status === 'completed' ? 'green' : t.status === 'failed' ? 'red' : 'purple';
+                  const dur = t.duration > 0 ? ` (${(t.duration / 1000).toFixed(1)}s)` : '';
+                  // Extract first sentence or truncate cleanly
+                  const desc = t.task.replace(/\n.*/s, '').slice(0, 60);
+                  return `<div class="timeline-entry">
+                    <div class="timeline-dot ${color}"></div>
+                    <div class="timeline-time">${time}</div>
+                    <div class="timeline-text"><span class="timeline-agent">${escapeHtml(t.agentId)}</span>${dur} — ${escapeHtml(desc)}</div>
+                  </div>`;
+                }).join('')}
           </div>
         </div>
       </div>
     `;
 
-    // Wire up live activity from WebSocket
+    // Wire up live WebSocket events
     const timeline = document.getElementById('activity-timeline');
-    let hasEvents = false;
-
-    window._dash.onDashboardEvent((event) => {
-      if (!hasEvents) {
-        timeline.innerHTML = '';
-        hasEvents = true;
-      }
-
+    _overviewEventHandler = (event) => {
       const colors = {
         task_completed: 'green', consensus_complete: 'green',
         task_dispatched: 'purple', agent_connected: 'purple', agent_disconnected: 'purple',
         skill_changed: 'yellow', consensus_started: 'yellow',
         task_failed: 'red',
       };
-
       const time = new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const color = colors[event.type] || 'purple';
       const text = formatEvent(event);
-
       const entry = document.createElement('div');
       entry.className = 'timeline-entry';
       entry.innerHTML = `
         <div class="timeline-dot ${color}"></div>
         <div class="timeline-time">${time}</div>
-        <div class="timeline-text">${text}</div>
+        <div class="timeline-text"></div>
       `;
+      entry.querySelector('.timeline-text').textContent = text;
+      // Remove "No tasks yet" placeholder
+      const placeholder = timeline.querySelector('.empty-state');
+      if (placeholder) placeholder.remove();
       timeline.prepend(entry);
-
-      // Cap timeline entries
-      while (timeline.children.length > 100) {
-        timeline.removeChild(timeline.lastChild);
-      }
-    });
+      while (timeline.children.length > 100) timeline.removeChild(timeline.lastChild);
+    };
+    window._dash.onDashboardEvent(_overviewEventHandler);
   } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to load: ${err.message}</div>`;
+    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
   }
 }
 
 function formatEvent(event) {
   const d = event.data || {};
   switch (event.type) {
-    case 'task_dispatched': return `Task dispatched to <strong>${d.agentId || '?'}</strong>`;
-    case 'task_completed': return `Task completed by <strong>${d.agentId || '?'}</strong>`;
-    case 'task_failed': return `Task failed on <strong>${d.agentId || '?'}</strong>`;
+    case 'task_dispatched': return `Task dispatched to ${d.agentId || '?'}`;
+    case 'task_completed': return `Task completed by ${d.agentId || '?'}`;
+    case 'task_failed': return `Task failed on ${d.agentId || '?'}`;
     case 'consensus_started': return `Consensus started (${d.agentCount || '?'} agents)`;
     case 'consensus_complete': return `Consensus complete — ${d.confirmed || 0} confirmed`;
-    case 'agent_connected': return `<strong>${d.agentId || '?'}</strong> connected`;
-    case 'agent_disconnected': return `<strong>${d.agentId || '?'}</strong> disconnected`;
-    case 'skill_changed': return `Skill <strong>${d.skill || '?'}</strong> toggled for ${d.agentId || '?'}`;
+    case 'agent_connected': return `${d.agentId || '?'} connected`;
+    case 'agent_disconnected': return `${d.agentId || '?'} disconnected`;
+    case 'skill_changed': return `Skill ${d.skill || '?'} toggled for ${d.agentId || '?'}`;
     default: return event.type;
   }
 }
@@ -581,64 +937,496 @@ async function renderAgents() {
 
     container.innerHTML = `<div class="agent-cards">${agents.map(renderAgentCard).join('')}</div>`;
   } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to load: ${err.message}</div>`;
+    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
   }
 }
 
 function renderAgentCard(agent) {
   const s = agent.scores;
+  const totalTasks = s.agreements + s.disagreements + s.hallucinations;
+
   return `
     <div class="agent-detail-card">
       <div class="agent-header">
         <div>
-          <strong>${agent.id}</strong>
-          ${agent.native ? '<span class="agent-badge">native</span>' : ''}
-          <div class="agent-meta">${agent.provider} / ${agent.model}${agent.preset ? ` (${agent.preset})` : ''}</div>
+          <div class="agent-title">
+            <strong>${escapeHtml(agent.id)}</strong>
+            ${agent.native ? '<span class="agent-badge">native</span>' : '<span class="agent-badge relay">relay</span>'}
+          </div>
+          <div class="agent-meta">${escapeHtml(agent.provider)} / ${escapeHtml(agent.model)}${agent.preset ? ` &middot; ${escapeHtml(agent.preset)}` : ''}</div>
         </div>
-        <div class="weight-badge" style="font-size:1.25rem">${s.dispatchWeight.toFixed(2)}</div>
+        <div class="weight-badge lg">${s.dispatchWeight.toFixed(2)}</div>
       </div>
 
-      <div class="agent-stats">
-        <div class="agent-stat">
-          <div class="num" style="color:var(--accent-primary)">${(s.accuracy * 100).toFixed(0)}%</div>
-          <div class="lbl">Accuracy</div>
+      <div class="agent-metrics-grid">
+        <div class="agent-metric-card">
+          <div class="agent-metric-ring accuracy" style="--pct:${(s.accuracy * 100).toFixed(0)}">
+            <span>${(s.accuracy * 100).toFixed(0)}%</span>
+          </div>
+          <div class="agent-metric-label">Accuracy</div>
         </div>
-        <div class="agent-stat">
-          <div class="num" style="color:var(--accent-secondary)">${(s.uniqueness * 100).toFixed(0)}%</div>
-          <div class="lbl">Uniqueness</div>
+        <div class="agent-metric-card">
+          <div class="agent-metric-ring uniqueness" style="--pct:${(s.uniqueness * 100).toFixed(0)}">
+            <span>${(s.uniqueness * 100).toFixed(0)}%</span>
+          </div>
+          <div class="agent-metric-label">Uniqueness</div>
         </div>
-        <div class="agent-stat">
-          <div class="num" style="color:var(--status-confirmed)">${(s.reliability * 100).toFixed(0)}%</div>
-          <div class="lbl">Reliability</div>
+        <div class="agent-metric-card">
+          <div class="agent-metric-ring reliability" style="--pct:${(s.reliability * 100).toFixed(0)}">
+            <span>${(s.reliability * 100).toFixed(0)}%</span>
+          </div>
+          <div class="agent-metric-label">Reliability</div>
         </div>
-        <div class="agent-stat">
-          <div class="num">${s.signals}</div>
-          <div class="lbl">Signals</div>
-        </div>
-        <div class="agent-stat">
-          <div class="num">${s.agreements}</div>
-          <div class="lbl">Agrees</div>
-        </div>
-        <div class="agent-stat">
-          <div class="num">${s.disagreements}</div>
-          <div class="lbl">Disagrees</div>
-        </div>
-        <div class="agent-stat">
-          <div class="num" style="color:var(--status-disputed)">${s.hallucinations}</div>
-          <div class="lbl">Hallucinations</div>
-        </div>
+      </div>
+
+      <div class="agent-signal-row">
+        <div class="agent-signal"><span class="signal-num">${s.signals}</span> signals</div>
+        <div class="agent-signal good"><span class="signal-num">${s.agreements}</span> agrees</div>
+        <div class="agent-signal bad"><span class="signal-num">${s.disagreements}</span> disagrees</div>
+        <div class="agent-signal ${s.hallucinations > 0 ? 'warn' : ''}"><span class="signal-num">${s.hallucinations}</span> halluc.</div>
       </div>
 
       ${agent.skills.length > 0 ? `
-        <div style="margin-top:1rem">
-          <div class="panel-title" style="margin-bottom:0.5rem">Skills</div>
-          <div style="display:flex;flex-wrap:wrap;gap:0.375rem">
-            ${agent.skills.map(sk => `<span class="agent-badge">${sk}</span>`).join('')}
-          </div>
+        <div class="agent-skills-row">
+          ${agent.skills.map(sk => `<span class="agent-badge skill">${escapeHtml(sk)}</span>`).join('')}
         </div>
       ` : ''}
     </div>
   `;
+}
+
+// packages/dashboard/src/tabs/tasks.js
+
+async function renderTasks() {
+  const container = document.getElementById('tab-tasks');
+  container.innerHTML = '<div class="empty-state">Loading...</div>';
+
+  try {
+    const data = await window._dash.api('tasks');
+
+    if (data.tasks.length === 0) {
+      container.innerHTML = '<div class="empty-state">No tasks yet. Dispatch agents to generate task history.</div>';
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title">Task History (${data.total} total, showing last ${data.tasks.length})</div>
+        <div class="tasks-list">
+          ${data.tasks.map(t => {
+            const time = new Date(t.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            const dur = t.duration > 0 ? `${(t.duration / 1000).toFixed(1)}s` : '—';
+            const statusCls = t.status === 'completed' ? 'confirmed' : t.status === 'failed' ? 'disputed' : 'unverified';
+            return `
+              <div class="task-row">
+                <span class="task-status ${statusCls}">${t.status}</span>
+                <span class="task-agent">${escapeHtml(t.agentId)}</span>
+                <span class="task-dur">${dur}</span>
+                <span class="task-time">${time}</span>
+                <span class="task-desc">${escapeHtml(t.task)}</span>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// packages/dashboard/src/tabs/skills.js
+
+async function renderSkills() {
+  const container = document.getElementById('tab-skills');
+  container.innerHTML = '<div class="empty-state">Loading...</div>';
+
+  try {
+    const [skillsData, agents] = await Promise.all([
+      window._dash.api('skills'),
+      window._dash.api('agents'),
+    ]);
+
+    const index = skillsData.index;
+    const agentIds = agents.map(a => a.id);
+
+    // Collect all unique skill names across all agents
+    const allSkills = new Set();
+    for (const agentId of Object.keys(index)) {
+      for (const skill of Object.keys(index[agentId])) {
+        allSkills.add(skill);
+      }
+    }
+    const skillNames = [...allSkills].sort();
+
+    if (agentIds.length === 0) {
+      container.innerHTML = '<div class="empty-state">No agents configured. Run gossip_setup to create your team.</div>';
+      return;
+    }
+
+    if (skillNames.length === 0) {
+      container.innerHTML = '<div class="empty-state">No skills bound yet. Skills are assigned when agents run tasks.</div>';
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="panels">
+        <div class="panel" style="grid-column:1/-1">
+          <div class="panel-title">Skill Index</div>
+          <div class="skills-grid-wrap">
+            <table class="skills-grid">
+              <thead>
+                <tr>
+                  <th class="skills-grid-corner"></th>
+                  ${agentIds.map(id => `<th class="skills-grid-agent">${escapeHtml(id)}</th>`).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                ${skillNames.map(skill => `
+                  <tr>
+                    <td class="skills-grid-skill">${escapeHtml(skill)}</td>
+                    ${agentIds.map(agentId => {
+                      const slot = index[agentId]?.[skill];
+                      if (!slot) return '<td class="skills-grid-cell unbound"></td>';
+                      const cls = slot.enabled ? 'enabled' : 'disabled';
+                      return `<td class="skills-grid-cell ${cls}" data-agent="${escapeHtml(agentId)}" data-skill="${escapeHtml(skill)}" data-enabled="${slot.enabled}">${slot.enabled ? '&#10003;' : '&#10005;'}</td>`;
+                    }).join('')}
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Click handlers for toggle cells
+    container.querySelectorAll('.skills-grid-cell[data-agent]').forEach(cell => {
+      cell.addEventListener('click', async () => {
+        const agentId = cell.dataset.agent;
+        const skill = cell.dataset.skill;
+        const currentlyEnabled = cell.dataset.enabled === 'true';
+        const newEnabled = !currentlyEnabled;
+
+        cell.classList.add('toggling');
+        try {
+          const res = await fetch('/dashboard/api/skills/bind', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent_id: agentId, skill, enabled: newEnabled }),
+            credentials: 'include',
+          });
+          const result = await res.json();
+          if (result.success) {
+            cell.dataset.enabled = String(newEnabled);
+            cell.className = `skills-grid-cell ${newEnabled ? 'enabled' : 'disabled'}`;
+            cell.innerHTML = newEnabled ? '&#10003;' : '&#10005;';
+          } else {
+            cell.title = result.error || 'Toggle failed';
+            cell.style.outline = '2px solid var(--status-disputed)';
+            setTimeout(() => { cell.style.outline = ''; cell.title = ''; }, 2000);
+          }
+        } catch {
+          cell.style.outline = '2px solid var(--status-disputed)';
+          setTimeout(() => { cell.style.outline = ''; }, 2000);
+        }
+        cell.classList.remove('toggling');
+      });
+    });
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// packages/dashboard/src/tabs/consensus.js
+
+async function renderConsensus() {
+  const container = document.getElementById('tab-consensus');
+  container.innerHTML = '<div class="empty-state">Loading...</div>';
+
+  try {
+    const data = await window._dash.api('consensus');
+
+    if (data.runs.length === 0) {
+      container.innerHTML = '<div class="empty-state">No consensus runs yet. Run gossip_dispatch_consensus to generate data.</div>';
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="stat-cards" style="margin-bottom:1.5rem">
+        <div class="stat-card">
+          <div class="label">Runs</div>
+          <div class="value">${data.runs.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Signals</div>
+          <div class="value">${data.totalSignals}</div>
+        </div>
+      </div>
+      <div class="consensus-runs">${data.runs.map(renderConsensusRun).join('')}</div>
+    `;
+
+    container.querySelectorAll('.consensus-run-header').forEach(header => {
+      header.addEventListener('click', () => {
+        const body = header.nextElementSibling;
+        body.hidden = !body.hidden;
+        header.querySelector('.expand-icon').textContent = body.hidden ? '+' : '-';
+      });
+    });
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderConsensusRun(run) {
+  const c = run.counts;
+  const time = new Date(run.timestamp).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+  });
+  const total = c.agreement + c.disagreement + c.unverified + c.unique + c.hallucination + c.new;
+
+  const signalRows = run.signals.map(s => {
+    const colorClass = {
+      agreement: 'confirmed', disagreement: 'disputed',
+      unverified: 'unverified', unique_confirmed: 'confirmed',
+      unique_unconfirmed: 'unique', hallucination_caught: 'disputed',
+      new_finding: 'new', consensus_verified: 'confirmed',
+      category_confirmed: 'confirmed',
+    }[s.signal] || 'unique';
+
+    return `
+      <div class="consensus-signal">
+        <span class="consensus-tag ${colorClass}">${escapeHtml(s.signal.replace(/_/g, ' '))}</span>
+        <span class="consensus-agent">${escapeHtml(s.agentId)}</span>
+        ${s.counterpartId ? `<span class="consensus-arrow">&rarr;</span><span class="consensus-agent">${escapeHtml(s.counterpartId)}</span>` : ''}
+        ${s.evidence ? `<div class="consensus-evidence">${escapeHtml(s.evidence.slice(0, 200))}${s.evidence.length > 200 ? '...' : ''}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="consensus-run">
+      <div class="consensus-run-header">
+        <span class="expand-icon">+</span>
+        <div class="consensus-run-info">
+          <span class="consensus-task-id">${escapeHtml(run.taskId)}</span>
+          <span class="consensus-meta">${run.agents.length} agents &middot; ${total} signals &middot; ${time}</span>
+        </div>
+        <div class="consensus-counts">
+          ${c.agreement ? `<span class="consensus-tag confirmed">${c.agreement}</span>` : ''}
+          ${c.disagreement ? `<span class="consensus-tag disputed">${c.disagreement}</span>` : ''}
+          ${c.unverified ? `<span class="consensus-tag unverified">${c.unverified}</span>` : ''}
+          ${c.hallucination ? `<span class="consensus-tag disputed">${c.hallucination} H</span>` : ''}
+        </div>
+      </div>
+      <div class="consensus-run-body" hidden>${signalRows}</div>
+    </div>`;
+}
+
+// packages/dashboard/src/tabs/memory.js
+
+async function renderMemory() {
+  const container = document.getElementById('tab-memory');
+  container.innerHTML = '<div class="empty-state">Loading...</div>';
+
+  try {
+    const agents = await window._dash.api('agents');
+
+    if (agents.length === 0) {
+      container.innerHTML = '<div class="empty-state">No agents configured.</div>';
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="memory-agent-pills">
+        <button class="memory-agent-pill" data-agent="_project">
+          _project <span class="agent-badge">shared</span>
+        </button>
+        ${agents.map(a => `<button class="memory-agent-pill" data-agent="${escapeHtml(a.id)}">
+          ${escapeHtml(a.id)}
+          ${a.native ? '<span class="agent-badge">native</span>' : ''}
+        </button>`).join('')}
+      </div>
+      <div id="memory-content"><div class="empty-state">Select an agent above</div></div>
+    `;
+
+    container.querySelectorAll('.memory-agent-pill').forEach(pill => {
+      pill.addEventListener('click', () => {
+        container.querySelectorAll('.memory-agent-pill').forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        loadAgentMemory(pill.dataset.agent);
+      });
+    });
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function loadAgentMemory(agentId) {
+  const content = document.getElementById('memory-content');
+  content.innerHTML = '<div class="empty-state">Loading...</div>';
+
+  try {
+    const data = await window._dash.api(`memory/${encodeURIComponent(agentId)}`);
+
+    const sections = [];
+
+    // Build knowledge lookup for inline expansion
+    const knowledgeMap = {};
+    for (const k of data.knowledge) {
+      knowledgeMap[k.filename] = k;
+    }
+
+    // MEMORY.md index
+    if (data.index) {
+      sections.push(`
+        <div class="panel">
+          <div class="panel-title">MEMORY.md</div>
+          <div class="memory-md" id="memory-md-content">${renderMarkdown(data.index)}</div>
+        </div>
+      `);
+    }
+
+    // Knowledge files
+    if (data.knowledge.length > 0) {
+      const files = data.knowledge.map(k => {
+        const desc = k.frontmatter.description || k.frontmatter.name || k.filename;
+        const isCognitive = k.content.includes('You reviewed') || k.content.includes('cognitive');
+        return `
+          <div class="memory-file ${isCognitive ? 'cognitive' : ''}">
+            <div class="memory-file-header" onclick="this.nextElementSibling.hidden = !this.nextElementSibling.hidden">
+              <span class="expand-icon">+</span>
+              <span class="memory-filename">${escapeHtml(k.filename)}</span>
+              <span class="memory-desc">${escapeHtml(desc)}</span>
+              ${isCognitive ? '<span class="agent-badge">cognitive</span>' : ''}
+            </div>
+            <pre class="memory-file-content" hidden>${escapeHtml(k.content)}</pre>
+          </div>
+        `;
+      }).join('');
+
+      sections.push(`
+        <div class="panel">
+          <div class="panel-title">Knowledge Files (${data.knowledge.length})</div>
+          ${files}
+        </div>
+      `);
+    }
+
+    // Tasks
+    if (data.tasks.length > 0) {
+      const rows = data.tasks.slice(-50).reverse().map(t => `
+        <tr>
+          <td class="memory-task-date">${t.timestamp ? new Date(t.timestamp).toLocaleDateString() : '-'}</td>
+          <td>${escapeHtml(String(t.task || t.result || '-').slice(0, 120))}</td>
+          <td>${t.importance != null ? t.importance : '-'}</td>
+        </tr>
+      `).join('');
+
+      sections.push(`
+        <div class="panel">
+          <div class="panel-title">Recent Tasks (${data.tasks.length})</div>
+          <div class="skills-grid-wrap">
+            <table class="skills-grid">
+              <thead><tr><th>Date</th><th>Summary</th><th>Imp.</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      `);
+    }
+
+    if (sections.length === 0) {
+      content.innerHTML = '<div class="empty-state">No memory data for this agent.</div>';
+    } else {
+      content.innerHTML = `<div class="memory-panels">${sections.join('')}</div>`;
+
+      // Wire up knowledge/ links in MEMORY.md to expand inline
+      const mdContent = document.getElementById('memory-md-content');
+      if (mdContent) {
+        mdContent.querySelectorAll('a').forEach(link => {
+          const href = link.getAttribute('href');
+          // Prevent all local links from navigating
+          if (href && !href.startsWith('http')) {
+            link.href = '#';
+          }
+          if (!href || !href.startsWith('knowledge/')) return;
+          const filename = href.replace('knowledge/', '');
+          const entry = knowledgeMap[filename];
+          if (!entry) { link.style.opacity = '0.5'; return; }
+          link.style.cursor = 'pointer';
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            let detail = link.nextElementSibling;
+            if (detail && detail.classList.contains('memory-inline-detail')) {
+              detail.hidden = !detail.hidden;
+              return;
+            }
+            detail = document.createElement('pre');
+            detail.className = 'memory-file-content memory-inline-detail';
+            detail.textContent = entry.content;
+            link.parentNode.insertBefore(detail, link.nextSibling);
+          });
+        });
+      }
+    }
+  } catch (err) {
+    content.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderMarkdown(md) {
+  // Extract code blocks BEFORE escaping to prevent double-encoding
+  const codeBlocks = [];
+  let processed = md.replace(/```[\s\S]*?```/g, (m) => {
+    const content = m.slice(3, -3).replace(/^[^\n]*\n/, ''); // strip language hint
+    const placeholder = `\x00CODE${codeBlocks.length}\x00`;
+    codeBlocks.push('<pre class="memory-code">' + escapeHtml(content) + '</pre>');
+    return placeholder;
+  });
+
+  const inlineCodes = [];
+  processed = processed.replace(/`([^`]+)`/g, (_, code) => {
+    const placeholder = `\x00INLINE${inlineCodes.length}\x00`;
+    inlineCodes.push('<code>' + escapeHtml(code) + '</code>');
+    return placeholder;
+  });
+
+  // Now escape the rest
+  let html = escapeHtml(processed);
+
+  // Headers
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Bold and italic
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Links: [text](url) — only allow safe schemes
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
+    if (/^(https?:\/\/|knowledge\/|#)/.test(url)) return `<a href="${url}">${text}</a>`;
+    return text; // strip unsafe links (javascript:, data:, etc.)
+  });
+
+  // Unordered lists
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+  // Paragraphs: double newlines
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+
+  // Clean up empty paragraphs around block elements
+  html = html.replace(/<p>\s*(<(?:h[1-4]|ul|pre|li)[^>]*>)/g, '$1');
+  html = html.replace(/(<\/(?:h[1-4]|ul|pre|li)>)\s*<\/p>/g, '$1');
+  html = html.replace(/<p>\s*<\/p>/g, '');
+
+  // Restore code blocks and inline code from placeholders
+  codeBlocks.forEach((block, i) => { html = html.replace(`\x00CODE${i}\x00`, block); });
+  inlineCodes.forEach((code, i) => { html = html.replace(`\x00INLINE${i}\x00`, code); });
+
+  return html;
 }
 
 </script>

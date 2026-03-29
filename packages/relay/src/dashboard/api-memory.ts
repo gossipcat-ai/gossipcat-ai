@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 
 const AGENT_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
-const DANGEROUS_IDS = new Set(['__proto__', 'constructor', 'prototype', '_project']);
+const DANGEROUS_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 
 interface KnowledgeFile { filename: string; frontmatter: Record<string, string>; content: string; }
 export interface MemoryResponse { index: string; knowledge: KnowledgeFile[]; tasks: Record<string, unknown>[]; }
@@ -16,12 +16,16 @@ export async function memoryHandler(projectRoot: string, agentId: string): Promi
   if (existsSync(indexPath)) { try { index = readFileSync(indexPath, 'utf-8'); } catch {} }
 
   const knowledge: KnowledgeFile[] = [];
-  if (existsSync(memDir)) {
+  // Knowledge files live in memory/knowledge/ subdirectory
+  const knowledgeDir = join(memDir, 'knowledge');
+  const knowledgeDirs = [knowledgeDir, memDir]; // check subdirectory first, fallback to root
+  for (const dir of knowledgeDirs) {
+    if (!existsSync(dir)) continue;
     try {
-      const files = readdirSync(memDir).filter(f => f.endsWith('.md') && f !== 'MEMORY.md');
+      const files = readdirSync(dir).filter(f => f.endsWith('.md') && f !== 'MEMORY.md');
       for (const filename of files) {
         try {
-          const raw = readFileSync(join(memDir, filename), 'utf-8');
+          const raw = readFileSync(join(dir, filename), 'utf-8');
           const { frontmatter, content } = parseFrontmatter(raw);
           knowledge.push({ filename, frontmatter, content });
         } catch {}

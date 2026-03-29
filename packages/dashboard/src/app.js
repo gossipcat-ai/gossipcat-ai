@@ -1,10 +1,22 @@
 // packages/dashboard/src/app.js
 
+// ── Shared Utilities ────────────────────────────────────────────────────────
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/[&<>"']/g, (m) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[m]));
+}
+
 // ── API Helper ──────────────────────────────────────────────────────────────
 async function api(path) {
   const res = await fetch(`/dashboard/api/${path}`, { credentials: 'include' });
   if (res.status === 401) {
     throw new Error('Unauthorized');
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `API error: ${res.status}`);
   }
   return res.json();
 }
@@ -31,6 +43,8 @@ function showDashboard() {
 
 authForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const submitBtn = authForm.querySelector('button');
+  submitBtn.disabled = true;
   const key = document.getElementById('auth-key').value.trim();
   try {
     const res = await fetch('/dashboard/api/auth', {
@@ -53,6 +67,8 @@ authForm.addEventListener('submit', async (e) => {
     }
   } catch {
     authError.hidden = false;
+  } finally {
+    submitBtn.disabled = false;
   }
 });
 
@@ -75,9 +91,10 @@ tabs.forEach(tab => {
 let ws = null;
 const wsStatus = document.getElementById('ws-status');
 const wsLabel = document.getElementById('ws-label');
-const eventListeners = [];
+const eventListeners = new Set();
 
-function onDashboardEvent(fn) { eventListeners.push(fn); }
+function onDashboardEvent(fn) { eventListeners.add(fn); }
+function offDashboardEvent(fn) { eventListeners.delete(fn); }
 
 function connectWs() {
   if (ws) return; // already connected
@@ -111,9 +128,18 @@ function connectWs() {
 
 // ── Tab Loading ──────────────────────────────────────────────────────────────
 async function loadTab(name) {
+  // Clean up overview event handler when switching away
+  if (name !== 'overview' && typeof _overviewEventHandler !== 'undefined' && _overviewEventHandler) {
+    offDashboardEvent(_overviewEventHandler);
+    _overviewEventHandler = null;
+  }
   switch (name) {
     case 'overview': return renderOverview();
     case 'agents': return renderAgents();
+    case 'tasks': return renderTasks();
+    case 'skills': return renderSkills();
+    case 'consensus': return renderConsensus();
+    case 'memory': return renderMemory();
   }
 }
 
@@ -122,4 +148,4 @@ async function loadTab(name) {
 api('overview').then(() => showDashboard()).catch(() => showAuth());
 
 // Make helpers available to tab modules
-window._dash = { api, onDashboardEvent };
+window._dash = { api, onDashboardEvent, offDashboardEvent };

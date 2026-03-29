@@ -23,6 +23,10 @@ export class DashboardWs {
     return this.clients.size;
   }
 
+  getClients(): Set<WebSocket> {
+    return this.clients;
+  }
+
   broadcast(event: DashboardEvent): void {
     const payload = JSON.stringify(event);
     for (const ws of this.clients) {

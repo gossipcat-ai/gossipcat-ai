@@ -14,60 +14,58 @@ async function renderAgents() {
 
     container.innerHTML = `<div class="agent-cards">${agents.map(renderAgentCard).join('')}</div>`;
   } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to load: ${err.message}</div>`;
+    container.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
   }
 }
 
 function renderAgentCard(agent) {
   const s = agent.scores;
+  const totalTasks = s.agreements + s.disagreements + s.hallucinations;
+
   return `
     <div class="agent-detail-card">
       <div class="agent-header">
         <div>
-          <strong>${agent.id}</strong>
-          ${agent.native ? '<span class="agent-badge">native</span>' : ''}
-          <div class="agent-meta">${agent.provider} / ${agent.model}${agent.preset ? ` (${agent.preset})` : ''}</div>
+          <div class="agent-title">
+            <strong>${escapeHtml(agent.id)}</strong>
+            ${agent.native ? '<span class="agent-badge">native</span>' : '<span class="agent-badge relay">relay</span>'}
+          </div>
+          <div class="agent-meta">${escapeHtml(agent.provider)} / ${escapeHtml(agent.model)}${agent.preset ? ` &middot; ${escapeHtml(agent.preset)}` : ''}</div>
         </div>
-        <div class="weight-badge" style="font-size:1.25rem">${s.dispatchWeight.toFixed(2)}</div>
+        <div class="weight-badge lg">${s.dispatchWeight.toFixed(2)}</div>
       </div>
 
-      <div class="agent-stats">
-        <div class="agent-stat">
-          <div class="num" style="color:var(--accent-primary)">${(s.accuracy * 100).toFixed(0)}%</div>
-          <div class="lbl">Accuracy</div>
+      <div class="agent-metrics-grid">
+        <div class="agent-metric-card">
+          <div class="agent-metric-ring accuracy" style="--pct:${(s.accuracy * 100).toFixed(0)}">
+            <span>${(s.accuracy * 100).toFixed(0)}%</span>
+          </div>
+          <div class="agent-metric-label">Accuracy</div>
         </div>
-        <div class="agent-stat">
-          <div class="num" style="color:var(--accent-secondary)">${(s.uniqueness * 100).toFixed(0)}%</div>
-          <div class="lbl">Uniqueness</div>
+        <div class="agent-metric-card">
+          <div class="agent-metric-ring uniqueness" style="--pct:${(s.uniqueness * 100).toFixed(0)}">
+            <span>${(s.uniqueness * 100).toFixed(0)}%</span>
+          </div>
+          <div class="agent-metric-label">Uniqueness</div>
         </div>
-        <div class="agent-stat">
-          <div class="num" style="color:var(--status-confirmed)">${(s.reliability * 100).toFixed(0)}%</div>
-          <div class="lbl">Reliability</div>
+        <div class="agent-metric-card">
+          <div class="agent-metric-ring reliability" style="--pct:${(s.reliability * 100).toFixed(0)}">
+            <span>${(s.reliability * 100).toFixed(0)}%</span>
+          </div>
+          <div class="agent-metric-label">Reliability</div>
         </div>
-        <div class="agent-stat">
-          <div class="num">${s.signals}</div>
-          <div class="lbl">Signals</div>
-        </div>
-        <div class="agent-stat">
-          <div class="num">${s.agreements}</div>
-          <div class="lbl">Agrees</div>
-        </div>
-        <div class="agent-stat">
-          <div class="num">${s.disagreements}</div>
-          <div class="lbl">Disagrees</div>
-        </div>
-        <div class="agent-stat">
-          <div class="num" style="color:var(--status-disputed)">${s.hallucinations}</div>
-          <div class="lbl">Hallucinations</div>
-        </div>
+      </div>
+
+      <div class="agent-signal-row">
+        <div class="agent-signal"><span class="signal-num">${s.signals}</span> signals</div>
+        <div class="agent-signal good"><span class="signal-num">${s.agreements}</span> agrees</div>
+        <div class="agent-signal bad"><span class="signal-num">${s.disagreements}</span> disagrees</div>
+        <div class="agent-signal ${s.hallucinations > 0 ? 'warn' : ''}"><span class="signal-num">${s.hallucinations}</span> halluc.</div>
       </div>
 
       ${agent.skills.length > 0 ? `
-        <div style="margin-top:1rem">
-          <div class="panel-title" style="margin-bottom:0.5rem">Skills</div>
-          <div style="display:flex;flex-wrap:wrap;gap:0.375rem">
-            ${agent.skills.map(sk => `<span class="agent-badge">${sk}</span>`).join('')}
-          </div>
+        <div class="agent-skills-row">
+          ${agent.skills.map(sk => `<span class="agent-badge skill">${escapeHtml(sk)}</span>`).join('')}
         </div>
       ` : ''}
     </div>
