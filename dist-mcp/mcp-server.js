@@ -27956,11 +27956,22 @@ function persistNativeTaskMap() {
     const { join: j } = require("path");
     const dir = j(projectRoot, ".gossip");
     md(dir, { recursive: true });
+    const slimResults = {};
+    for (const [id, info] of nativeResultMap) {
+      slimResults[id] = {
+        id: info.id,
+        agentId: info.agentId,
+        task: info.task.slice(0, 200),
+        status: info.status,
+        startedAt: info.startedAt,
+        completedAt: info.completedAt
+      };
+    }
     const data = {
       tasks: Object.fromEntries([...nativeTaskMap]),
-      results: Object.fromEntries([...nativeResultMap])
+      results: slimResults
     };
-    wf(j(dir, "native-tasks.json"), JSON.stringify(data, null, 2));
+    wf(j(dir, "native-tasks.json"), JSON.stringify(data));
   } catch {
   }
 }
@@ -29269,8 +29280,19 @@ server.tool(
     if (!taskInfo) {
       return { content: [{ type: "text", text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch?` }] };
     }
-    nativeTaskMap.delete(task_id);
     const elapsed = Date.now() - taskInfo.startedAt;
+    nativeTaskMap.delete(task_id);
+    nativeResultMap.set(task_id, {
+      id: task_id,
+      agentId: taskInfo.agentId,
+      task: taskInfo.task,
+      status: error48 ? "failed" : "completed",
+      result: error48 ? void 0 : result ? result.slice(0, 5e4) : result,
+      error: error48 || void 0,
+      startedAt: taskInfo.startedAt,
+      completedAt: Date.now()
+    });
+    persistNativeTaskMap();
     evictStaleNativeTasks();
     const agentId = taskInfo.agentId;
     const agentMeta = (() => {
@@ -29325,18 +29347,6 @@ server.tool(
       await mainAgent.publishNativeGossip(agentId, result.slice(0, 5e4)).catch(() => {
       });
     }
-    const cappedResult = result ? result.slice(0, 5e4) : result;
-    nativeResultMap.set(task_id, {
-      id: task_id,
-      agentId,
-      task: taskInfo.task,
-      status: error48 ? "failed" : "completed",
-      result: error48 ? void 0 : cappedResult,
-      error: error48 || void 0,
-      startedAt: taskInfo.startedAt,
-      completedAt: Date.now()
-    });
-    persistNativeTaskMap();
     const status = error48 ? `failed (${elapsed}ms): ${error48}` : `completed (${elapsed}ms)`;
     return { content: [{ type: "text", text: `Result relayed for ${agentId} [${task_id}]: ${status}
 
@@ -29425,8 +29435,19 @@ server.tool(
     if (!taskInfo) {
       return { content: [{ type: "text", text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_run?` }] };
     }
-    nativeTaskMap.delete(task_id);
     const elapsed = Date.now() - taskInfo.startedAt;
+    nativeTaskMap.delete(task_id);
+    nativeResultMap.set(task_id, {
+      id: task_id,
+      agentId: taskInfo.agentId,
+      task: taskInfo.task,
+      status: error48 ? "failed" : "completed",
+      result: error48 ? void 0 : result ? result.slice(0, 5e4) : result,
+      error: error48 || void 0,
+      startedAt: taskInfo.startedAt,
+      completedAt: Date.now()
+    });
+    persistNativeTaskMap();
     evictStaleNativeTasks();
     const agentId = taskInfo.agentId;
     const agentMeta = (() => {
@@ -29481,18 +29502,6 @@ server.tool(
       await mainAgent.publishNativeGossip(agentId, result.slice(0, 5e4)).catch(() => {
       });
     }
-    const cappedResult = result ? result.slice(0, 5e4) : result;
-    nativeResultMap.set(task_id, {
-      id: task_id,
-      agentId,
-      task: taskInfo.task,
-      status: error48 ? "failed" : "completed",
-      result: error48 ? void 0 : cappedResult,
-      error: error48 || void 0,
-      startedAt: taskInfo.startedAt,
-      completedAt: Date.now()
-    });
-    persistNativeTaskMap();
     const status = error48 ? `failed (${elapsed}ms): ${error48}` : `completed (${elapsed}ms)`;
     return { content: [{ type: "text", text: `\u2705 Result relayed for ${agentId} [${task_id}]: ${status}` }] };
   }

@@ -197,11 +197,19 @@ function persistNativeTaskMap(): void {
     const { join: j } = require('path');
     const dir = j(projectRoot, '.gossip');
     md(dir, { recursive: true });
+    // Strip full result/error text from results to keep file small — only persist metadata
+    const slimResults: Record<string, any> = {};
+    for (const [id, info] of nativeResultMap) {
+      slimResults[id] = {
+        id: info.id, agentId: info.agentId, task: info.task.slice(0, 200),
+        status: info.status, startedAt: info.startedAt, completedAt: info.completedAt,
+      };
+    }
     const data = {
       tasks: Object.fromEntries([...nativeTaskMap]),
-      results: Object.fromEntries([...nativeResultMap]),
+      results: slimResults,
     };
-    wf(j(dir, 'native-tasks.json'), JSON.stringify(data, null, 2));
+    wf(j(dir, 'native-tasks.json'), JSON.stringify(data));
   } catch { /* best-effort */ }
 }
 
@@ -1642,8 +1650,17 @@ server.tool(
       return { content: [{ type: 'text' as const, text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch?` }] };
     }
 
-    nativeTaskMap.delete(task_id);
+    // Move to result map BEFORE running pipeline — prevents data loss if pipeline crashes
     const elapsed = Date.now() - taskInfo.startedAt;
+    nativeTaskMap.delete(task_id);
+    nativeResultMap.set(task_id, {
+      id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
+      status: error ? 'failed' : 'completed',
+      result: error ? undefined : (result ? result.slice(0, 50000) : result),
+      error: error || undefined,
+      startedAt: taskInfo.startedAt, completedAt: Date.now(),
+    });
+    persistNativeTaskMap();
     evictStaleNativeTasks();
 
     // Run the same post-collect pipeline as custom agents:
@@ -1701,19 +1718,7 @@ server.tool(
       await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {});
     }
 
-    // 5. Store in collected results map so gossip_collect can find it
-    const cappedResult = result ? result.slice(0, 50000) : result;
-    nativeResultMap.set(task_id, {
-      id: task_id,
-      agentId,
-      task: taskInfo.task,
-      status: error ? 'failed' : 'completed',
-      result: error ? undefined : cappedResult,
-      error: error || undefined,
-      startedAt: taskInfo.startedAt,
-      completedAt: Date.now(),
-    });
-    persistNativeTaskMap();
+    // Result already stored in nativeResultMap at top of handler (crash-safe)
 
     const status = error ? `failed (${elapsed}ms): ${error}` : `completed (${elapsed}ms)`;
     return { content: [{ type: 'text' as const, text: `Result relayed for ${agentId} [${task_id}]: ${status}\n\nThe result is now available for gossip_collect and consensus cross-review.` }] };
@@ -1813,9 +1818,17 @@ server.tool(
       return { content: [{ type: 'text' as const, text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_run?` }] };
     }
 
-    // Reuse the same post-collect pipeline as gossip_relay_result
-    nativeTaskMap.delete(task_id);
+    // Move to result map BEFORE running pipeline — prevents data loss if pipeline crashes
     const elapsed = Date.now() - taskInfo.startedAt;
+    nativeTaskMap.delete(task_id);
+    nativeResultMap.set(task_id, {
+      id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
+      status: error ? 'failed' : 'completed',
+      result: error ? undefined : (result ? result.slice(0, 50000) : result),
+      error: error || undefined,
+      startedAt: taskInfo.startedAt, completedAt: Date.now(),
+    });
+    persistNativeTaskMap();
     evictStaleNativeTasks();
 
     const agentId = taskInfo.agentId;
@@ -1860,14 +1873,7 @@ server.tool(
       await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {});
     }
 
-    const cappedResult = result ? result.slice(0, 50000) : result;
-    nativeResultMap.set(task_id, {
-      id: task_id, agentId, task: taskInfo.task,
-      status: error ? 'failed' : 'completed',
-      result: error ? undefined : cappedResult, error: error || undefined,
-      startedAt: taskInfo.startedAt, completedAt: Date.now(),
-    });
-    persistNativeTaskMap();
+    // Result already stored in nativeResultMap at top of handler (crash-safe)
 
     const status = error ? `failed (${elapsed}ms): ${error}` : `completed (${elapsed}ms)`;
     return { content: [{ type: 'text' as const, text: `✅ Result relayed for ${agentId} [${task_id}]: ${status}` }] };
