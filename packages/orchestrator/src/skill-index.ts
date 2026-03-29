@@ -75,8 +75,7 @@ export class SkillIndex {
   /** Enable a previously disabled skill slot */
   enable(agentId: string, skill: string): boolean {
     this.validateAgentId(agentId);
-    const name = normalizeSkillName(skill);
-    const slot = this.data[agentId]?.[name];
+    const slot = this.resolveSlot(agentId, skill);
     if (!slot) return false;
     slot.enabled = true;
     slot.version++;
@@ -88,14 +87,29 @@ export class SkillIndex {
   /** Disable a skill slot without removing it */
   disable(agentId: string, skill: string): boolean {
     this.validateAgentId(agentId);
-    const name = normalizeSkillName(skill);
-    const slot = this.data[agentId]?.[name];
+    const slot = this.resolveSlot(agentId, skill);
     if (!slot) return false;
     slot.enabled = false;
     slot.version++;
     this.dirty = true;
     this.save();
     return true;
+  }
+
+  /**
+   * Resolve a skill slot by normalized name, falling back to raw key lookup.
+   * This handles on-disk data that was written without normalization.
+   */
+  private resolveSlot(agentId: string, skill: string): SkillSlot | undefined {
+    const agentSlots = this.data[agentId];
+    if (!agentSlots) return undefined;
+    const name = normalizeSkillName(skill);
+    if (agentSlots[name]) return agentSlots[name];
+    // Fallback: search by matching normalized value of stored key
+    for (const key of Object.keys(agentSlots)) {
+      if (normalizeSkillName(key) === name) return agentSlots[key];
+    }
+    return undefined;
   }
 
   /** Get all enabled skill names for an agent */

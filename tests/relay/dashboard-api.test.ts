@@ -1,5 +1,6 @@
 import { overviewHandler } from '@gossip/relay/dashboard/api-overview';
 import { agentsHandler } from '@gossip/relay/dashboard/api-agents';
+import { skillsGetHandler, skillsBindHandler } from '@gossip/relay/dashboard/api-skills';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -86,5 +87,44 @@ describe('Agents API', () => {
   it('returns empty array when no agents configured', async () => {
     const result = await agentsHandler(projectRoot, []);
     expect(result).toEqual([]);
+  });
+});
+
+describe('Skills API', () => {
+  let projectRoot: string;
+  beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'gossip-dash-'));
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+  });
+
+  it('returns empty index for fresh project', async () => {
+    const result = await skillsGetHandler(projectRoot);
+    expect(result.index).toEqual({});
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('returns skill index data when populated', async () => {
+    writeFileSync(join(projectRoot, '.gossip', 'skill-index.json'), JSON.stringify({
+      'agent-a': { code_review: { skill: 'code_review', enabled: true, source: 'config', version: 1, boundAt: '2026-01-01' } }
+    }));
+    const result = await skillsGetHandler(projectRoot);
+    expect(result.index['agent-a']).toBeDefined();
+    expect(result.index['agent-a']['code_review'].enabled).toBe(true);
+  });
+
+  it('toggles skill enabled state', async () => {
+    writeFileSync(join(projectRoot, '.gossip', 'skill-index.json'), JSON.stringify({
+      'agent-a': { code_review: { skill: 'code_review', enabled: true, source: 'config', version: 1, boundAt: '2026-01-01' } }
+    }));
+    const result = await skillsBindHandler(projectRoot, { agent_id: 'agent-a', skill: 'code_review', enabled: false });
+    expect(result.success).toBe(true);
+    const updated = await skillsGetHandler(projectRoot);
+    expect(updated.index['agent-a']['code_review'].enabled).toBe(false);
+  });
+
+  it('rejects invalid agent_id', async () => {
+    const result = await skillsBindHandler(projectRoot, { agent_id: '../etc', skill: 'x', enabled: true });
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
   });
 });
