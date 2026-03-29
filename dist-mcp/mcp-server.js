@@ -6885,7 +6885,11 @@ Write as a briefing for a new team lead taking over. Focus on:
 5. USER PREFERENCES \u2014 how the user works (e.g., "always runs multi-agent review before merging").
 
 Rules:
-- Max 500 words. No preamble. Start with "## What shipped"
+- Start with EXACTLY one line: SUMMARY: <one-line description of the entire session, max 80 chars, no colons>
+  Example: SUMMARY: Shipped auth module, fixed 3 race conditions, added 40 tests
+  Example: SUMMARY: Dashboard redesign phases 1-4, persistence fix, dispatch rules
+- Then a blank line, then start with "## What shipped"
+- Max 500 words after the SUMMARY line. No other preamble.
 - Cite file paths when referencing code or specs
 - Include specific numbers (commit count, finding count, test count)
 - Warnings > accomplishments \u2014 what NOT to do is more useful
@@ -6903,12 +6907,18 @@ Rules:
               pinned = true;
               summaryBody = summaryBody.replace(/^PINNED:true\s*\n?/, "");
             }
-            const firstBullet = summaryBody.match(/[-*]\s+\*\*([^*\n]+)\*\*/);
-            const firstSentence = summaryBody.replace(/^#+\s+.+$/gm, "").trim().split("\n").find((l) => l.trim().length > 10);
-            if (firstBullet) {
-              summaryOneLiner = sanitizeYamlValue(firstBullet[1].replace(/[:(].*/, "").trim().slice(0, 80));
-            } else if (firstSentence) {
-              summaryOneLiner = sanitizeYamlValue(firstSentence.replace(/^[-*]\s+/, "").replace(/\*\*/g, "").trim().slice(0, 80));
+            const summaryMatch = summaryBody.match(/^SUMMARY:\s*(.+)$/m);
+            if (summaryMatch) {
+              summaryOneLiner = sanitizeYamlValue(summaryMatch[1].trim().slice(0, 100));
+              summaryBody = summaryBody.replace(/^SUMMARY:.*\n?\n?/m, "").trim();
+            } else {
+              const firstBullet = summaryBody.match(/[-*]\s+\*\*([^*\n]+)\*\*/);
+              const firstSentence = summaryBody.replace(/^#+\s+.+$/gm, "").trim().split("\n").find((l) => l.trim().length > 10);
+              if (firstBullet) {
+                summaryOneLiner = sanitizeYamlValue(firstBullet[1].replace(/[:(].*/, "").trim().slice(0, 80));
+              } else if (firstSentence) {
+                summaryOneLiner = sanitizeYamlValue(firstSentence.replace(/^[-*]\s+/, "").replace(/\*\*/g, "").trim().slice(0, 80));
+              }
             }
           } catch (err) {
             process.stderr.write(`[gossipcat] Session summary LLM failed: ${err.message}
