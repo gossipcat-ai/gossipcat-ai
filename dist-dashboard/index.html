@@ -740,29 +740,1024 @@ api('overview')
 // Export for hub/detail modules
 window._dash = { api, navigate, escapeHtml, formatTokens, timeAgo, agentInitials, agentColor, onDashboardEvent, offDashboardEvent, makeSection };
 
-// packages/dashboard/src/lib/chart.js — stub
+// packages/dashboard/src/lib/chart.js — Pure SVG chart generators
 
-// packages/dashboard/src/lib/markdown.js — stub
+/**
+ * Generate an area chart SVG string.
+ * @param {Array<{label: string, value: number, failed?: number}>} data
+ * @param {{width?: number, height?: number, color?: string, failedColor?: string}} opts
+ * @returns {string} SVG markup
+ */
+function renderAreaChart(data, opts = {}) {
+  const W = opts.width || 480;
+  const H = opts.height || 120;
+  const color = opts.color || 'var(--green)';
+  const failedColor = opts.failedColor || 'var(--red)';
+  const pad = { left: 40, right: 10, top: 10, bottom: 25 };
 
-// packages/dashboard/src/hub/overview.js — stub
+  if (!data || data.length === 0) return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg"></svg>';
 
-// packages/dashboard/src/hub/team.js — stub
+  const maxVal = Math.max(...data.map(d => d.value), ...data.map(d => d.failed || 0), 1);
+  const yMax = Math.ceil(maxVal / 10) * 10 || 10;
+  const xStep = (W - pad.left - pad.right) / Math.max(data.length - 1, 1);
 
-// packages/dashboard/src/hub/performance.js — stub
+  function y(v) { return pad.top + (1 - v / yMax) * (H - pad.top - pad.bottom); }
+  function x(i) { return pad.left + i * xStep; }
 
-// packages/dashboard/src/hub/activity.js — stub
+  // Grid lines
+  const gridCount = 4;
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg">';
 
-// packages/dashboard/src/hub/knowledge.js — stub
+  // Gradient def
+  svg += '<defs><linearGradient id="acg" x1="0" y1="0" x2="0" y2="1">';
+  svg += '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.1"/>';
+  svg += '<stop offset="100%" stop-color="' + color + '" stop-opacity="0"/>';
+  svg += '</linearGradient></defs>';
 
-// packages/dashboard/src/detail/agent.js — stub
+  for (let i = 0; i < gridCount; i++) {
+    const gy = pad.top + i * (H - pad.top - pad.bottom) / (gridCount - 1);
+    const label = Math.round(yMax - (yMax * i / (gridCount - 1)));
+    svg += '<line x1="' + pad.left + '" y1="' + gy + '" x2="' + (W - pad.right) + '" y2="' + gy + '" class="grid-ln"/>';
+    svg += '<text x="' + (pad.left - 4) + '" y="' + (gy + 4) + '" class="ax-txt" text-anchor="end">' + label + '</text>';
+  }
 
-// packages/dashboard/src/detail/tasks.js — stub
+  // X-axis labels
+  for (let i = 0; i < data.length; i++) {
+    svg += '<text x="' + x(i) + '" y="' + (H - 4) + '" class="ax-txt" text-anchor="middle">' + data[i].label + '</text>';
+  }
 
-// packages/dashboard/src/detail/consensus.js — stub
+  // Area fill
+  const points = data.map((d, i) => x(i) + ',' + y(d.value)).join(' ');
+  const areaPath = 'M' + x(0) + ',' + y(data[0].value) + ' ' +
+    data.slice(1).map((d, i) => 'L' + x(i + 1) + ',' + y(d.value)).join(' ') +
+    ' L' + x(data.length - 1) + ',' + y(0) + ' L' + x(0) + ',' + y(0) + 'Z';
+  svg += '<path d="' + areaPath + '" fill="url(#acg)"/>';
+  svg += '<polyline points="' + points + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
 
-// packages/dashboard/src/detail/signals.js — stub
+  // Failed line (dashed)
+  if (data.some(d => d.failed > 0)) {
+    const failedPts = data.map((d, i) => x(i) + ',' + y(d.failed || 0)).join(' ');
+    svg += '<polyline points="' + failedPts + '" fill="none" stroke="' + failedColor + '" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4,4" opacity="0.6"/>';
+    svg += '<circle cx="' + x(data.length - 1) + '" cy="' + y(data[data.length - 1].failed || 0) + '" r="2.5" fill="' + failedColor + '" opacity="0.6"/>';
+  }
 
-// packages/dashboard/src/detail/knowledge.js — stub
+  // Endpoint dot
+  svg += '<circle cx="' + x(data.length - 1) + '" cy="' + y(data[data.length - 1].value) + '" r="3" fill="' + color + '"/>';
+  svg += '</svg>';
+  return svg;
+}
+
+/**
+ * Generate a horizontal bar chart SVG string.
+ * @param {Array<{label: string, value: number, secondary?: number}>} data
+ * @param {{width?: number, height?: number, color?: string, secondaryColor?: string}} opts
+ * @returns {string} SVG markup
+ */
+function renderBarChart(data, opts = {}) {
+  const W = opts.width || 480;
+  const color = opts.color || 'var(--accent)';
+  const secColor = opts.secondaryColor || 'var(--blue)';
+  const labelWidth = 120;
+  const barStart = labelWidth + 5;
+  const barMaxWidth = W - barStart - 50;
+  const rowHeight = 24;
+  const H = Math.max(data.length * rowHeight + 30, 60);
+
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg">';
+
+  for (let i = 0; i < data.length; i++) {
+    const yy = i * rowHeight + 6;
+    const barW = (data[i].value / 100) * barMaxWidth;
+    const secW = data[i].secondary != null ? (data[i].secondary / 100) * barMaxWidth : 0;
+
+    svg += '<text x="' + (labelWidth - 5) + '" y="' + (yy + 14) + '" class="ax-txt" text-anchor="end" style="font-size:10px;fill:var(--text-2)">' + data[i].label + '</text>';
+    svg += '<rect x="' + barStart + '" y="' + (yy + 4) + '" width="' + barW + '" height="10" rx="3" fill="' + color + '" opacity="0.6"/>';
+    if (secW > 0) {
+      svg += '<rect x="' + barStart + '" y="' + (yy + 4) + '" width="' + secW + '" height="10" rx="3" fill="' + secColor + '" opacity="0.2"/>';
+    }
+    svg += '<text x="' + (barStart + barW + 6) + '" y="' + (yy + 14) + '" class="ax-txt" style="fill:' + color + ';font-weight:600">' + data[i].value + '%</text>';
+  }
+
+  // Scale
+  const scaleY = data.length * rowHeight + 10;
+  svg += '<text x="' + barStart + '" y="' + scaleY + '" class="ax-txt" text-anchor="middle">0%</text>';
+  svg += '<text x="' + (barStart + barMaxWidth / 2) + '" y="' + scaleY + '" class="ax-txt" text-anchor="middle">50%</text>';
+  svg += '<text x="' + (barStart + barMaxWidth) + '" y="' + scaleY + '" class="ax-txt" text-anchor="middle">100%</text>';
+
+  svg += '</svg>';
+  return svg;
+}
+
+// packages/dashboard/src/lib/markdown.js — Simple markdown renderer (extracted from Phase 1)
+
+function renderMarkdown(md) {
+  const esc = window._dash.escapeHtml;
+
+  // Extract code blocks BEFORE escaping
+  const codeBlocks = [];
+  let processed = md.replace(/```[\s\S]*?```/g, (m) => {
+    const content = m.slice(3, -3).replace(/^[^\n]*\n/, '');
+    const placeholder = '\x00CODE' + codeBlocks.length + '\x00';
+    codeBlocks.push('<pre class="memory-code">' + esc(content) + '</pre>');
+    return placeholder;
+  });
+
+  const inlineCodes = [];
+  processed = processed.replace(/`([^`]+)`/g, (_, code) => {
+    const placeholder = '\x00INLINE' + inlineCodes.length + '\x00';
+    inlineCodes.push('<code>' + esc(code) + '</code>');
+    return placeholder;
+  });
+
+  let html = esc(processed);
+
+  // Headers
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Bold and italic
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Links: safe schemes only, escape URL
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
+    if (/^(https?:\/\/|knowledge\/|#)/.test(url)) return '<a href="' + esc(url) + '">' + text + '</a>';
+    return text;
+  });
+
+  // Lists
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+  // Paragraphs
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+
+  // Clean up empty paragraphs
+  html = html.replace(/<p>\s*(<(?:h[1-4]|ul|pre|li)[^>]*>)/g, '$1');
+  html = html.replace(/(<\/(?:h[1-4]|ul|pre|li)>)\s*<\/p>/g, '$1');
+  html = html.replace(/<p>\s*<\/p>/g, '');
+
+  // Restore placeholders
+  codeBlocks.forEach((block, i) => { html = html.replace('\x00CODE' + i + '\x00', block); });
+  inlineCodes.forEach((code, i) => { html = html.replace('\x00INLINE' + i + '\x00', code); });
+
+  return html;
+}
+
+// packages/dashboard/src/hub/overview.js — Metric cards with icons
+
+function renderOverviewSection(overview) {
+  const { escapeHtml: e, makeSection } = window._dash;
+  const section = makeSection('Overview');
+
+  const grid = document.createElement('div');
+  grid.className = 'metric-grid';
+
+  const totalTasks = overview.tasksCompleted + overview.tasksFailed;
+  const successPct = totalTasks > 0 ? Math.round(overview.tasksCompleted / totalTasks * 100) : 0;
+  const agreePct = overview.totalSignals > 0 ? Math.round(overview.confirmedFindings / overview.totalSignals * 100) : 0;
+
+  const cards = [
+    {
+      label: 'Agents', value: overview.agentsOnline,
+      detail: '<strong style="color:var(--green)">' + overview.nativeCount + '</strong> native &middot; ' + overview.relayCount + ' relay',
+      iconBg: 'rgba(167,139,250,0.08)', iconColor: 'var(--accent)',
+      icon: '<rect x="6" y="4" width="12" height="9" rx="2"/><circle cx="9.5" cy="9" r="1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="9" r="1" fill="currentColor" stroke="none"/><path d="M9 16v2a2 2 0 002 2h2a2 2 0 002-2v-2"/><path d="M12 2v2"/>',
+    },
+    {
+      label: 'Tasks', value: totalTasks,
+      detail: totalTasks > 0
+        ? '<strong style="color:var(--green)">' + successPct + '%</strong> success' + (overview.avgDurationMs > 0 ? ' &middot; ' + (overview.avgDurationMs / 1000).toFixed(1) + 's avg' : '')
+        : 'No tasks yet',
+      iconBg: 'rgba(52,211,153,0.08)', iconColor: 'var(--green)',
+      icon: '<path d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12l2 2 4-4"/>',
+    },
+    {
+      label: 'Consensus', value: overview.consensusRuns,
+      detail: '<strong style="color:var(--green)">' + overview.confirmedFindings + '</strong> confirmed &middot; ' + (overview.totalFindings - overview.confirmedFindings) + ' other',
+      iconBg: 'rgba(96,165,250,0.08)', iconColor: 'var(--blue)',
+      icon: '<path d="M12 3v1"/><path d="M5 8l7-4 7 4"/><path d="M5 8v2a3 3 0 003 3"/><path d="M19 8v2a3 3 0 01-3 3"/><circle cx="8" cy="14.5" r="1.5"/><circle cx="16" cy="14.5" r="1.5"/><path d="M8 16v3h8v-3"/><path d="M12 13v6"/>',
+    },
+    {
+      label: 'Signals', value: overview.totalSignals,
+      detail: overview.totalSignals > 0
+        ? '<strong style="color:var(--accent)">' + agreePct + '%</strong> agreement rate'
+        : 'No signals yet',
+      iconBg: 'rgba(167,139,250,0.08)', iconColor: 'var(--accent)',
+      icon: '<path d="M2 12h3l3-9 4 18 3-9h3"/><circle cx="20" cy="12" r="1" fill="currentColor" stroke="none"/>',
+    },
+  ];
+
+  for (const card of cards) {
+    const mc = document.createElement('div');
+    mc.className = 'mc';
+    mc.innerHTML =
+      '<div class="mc-row"><div>' +
+        '<div class="mc-label">' + e(card.label) + '</div>' +
+        '<div class="mc-val">' + card.value + '</div>' +
+        '<div class="mc-detail">' + card.detail + '</div>' +
+      '</div>' +
+      '<div class="mc-icon" style="background:' + card.iconBg + '">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="' + card.iconColor + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + card.icon + '</svg>' +
+      '</div></div>';
+    grid.appendChild(mc);
+  }
+
+  section.appendChild(grid);
+  return section;
+}
+
+// packages/dashboard/src/hub/team.js — Agent cards (3 + overflow)
+
+function renderTeamSection(agents) {
+  const { escapeHtml: e, navigate, formatTokens, agentInitials, agentColor, makeSection } = window._dash;
+  const section = makeSection('Team', agents.length + ' agents', 'manage →', '#/team');
+
+  if (agents.length === 0) {
+    section.innerHTML += '<div class="empty-state">No agents configured. Run gossip_setup to create your team.</div>';
+    return section;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'agent-grid';
+
+  // Sort by dispatch weight descending, show top 3
+  const sorted = [...agents].sort((a, b) => (b.scores?.dispatchWeight || 0) - (a.scores?.dispatchWeight || 0));
+  const shown = sorted.slice(0, 3);
+  const overflow = sorted.slice(3);
+
+  for (const agent of shown) {
+    const s = agent.scores || {};
+    const isIdle = !agent.online && s.signals === 0;
+    const color = agentColor(agent);
+
+    const card = document.createElement('button');
+    card.className = 'ag' + (isIdle ? ' idle' : '');
+    card.style.setProperty('--card-color', color);
+    card.setAttribute('role', 'link');
+    card.setAttribute('aria-label', 'View ' + agent.id);
+    card.addEventListener('click', () => navigate('#/team/' + encodeURIComponent(agent.id)));
+
+    const statusColor = agent.online ? 'var(--green)' : 'var(--text-3)';
+    const statusText = agent.online ? 'online' : 'idle';
+    const dotStyle = agent.online ? 'background:var(--green);box-shadow:0 0 6px rgba(52,211,153,0.4)' : 'background:var(--text-3)';
+
+    const provider = (agent.provider || '').replace(/^anthropic$/, 'Anthropic').replace(/^google$/, 'Google');
+    const preset = (agent.preset || '').charAt(0).toUpperCase() + (agent.preset || '').slice(1);
+
+    card.innerHTML =
+      '<div class="ag-top"><div>' +
+        '<div class="ag-name">' + e(agent.id) + '</div>' +
+        '<div class="ag-role">' + e(provider) + ' &middot; ' + e(preset) + '</div>' +
+      '</div>' +
+      '<div class="ag-status" style="color:' + statusColor + '">' +
+        '<span class="ag-dot" style="' + dotStyle + '"></span>' + statusText +
+      '</div></div>' +
+      '<div class="ag-metrics">' +
+        '<div class="ag-m"><div class="ag-m-val" style="color:var(--accent)">' + (isIdle ? '&mdash;' : Math.round(s.accuracy * 100) + '%') + '</div><div class="ag-m-lbl">Accuracy</div></div>' +
+        '<div class="ag-m"><div class="ag-m-val" style="color:var(--blue)">' + (isIdle ? '&mdash;' : Math.round(s.uniqueness * 100) + '%') + '</div><div class="ag-m-lbl">Unique</div></div>' +
+        '<div class="ag-m"><div class="ag-m-val">' + (s.signals || 0) + '</div><div class="ag-m-lbl">Signals</div></div>' +
+        '<div class="ag-m"><div class="ag-m-val" style="color:var(--green)">' + formatTokens(agent.totalTokens) + '</div><div class="ag-m-lbl">Tokens</div></div>' +
+      '</div>';
+
+    grid.appendChild(card);
+  }
+
+  // Overflow card
+  if (overflow.length > 0) {
+    const more = document.createElement('button');
+    more.className = 'ag-more';
+    more.setAttribute('role', 'link');
+    more.setAttribute('aria-label', 'View all agents');
+    more.addEventListener('click', () => navigate('#/team'));
+
+    const avatars = overflow.slice(0, 4).map(a => {
+      const c = agentColor(a);
+      return '<div class="ag-more-pip" style="background:' + c.replace('var(--', 'rgba(').replace(')', ',0.12)') + ';color:' + c + '">' + agentInitials(a.id) + '</div>';
+    }).join('');
+
+    more.innerHTML =
+      '<div class="ag-more-avatars">' + avatars + '</div>' +
+      '<div class="ag-more-count">+' + overflow.length + '</div>' +
+      '<div class="ag-more-label">more agents</div>';
+
+    grid.appendChild(more);
+  }
+
+  section.appendChild(grid);
+  return section;
+}
+
+// packages/dashboard/src/hub/performance.js — SVG charts (task volume + agent accuracy)
+
+function renderPerformanceSection(tasksData, agents) {
+  const { makeSection } = window._dash;
+  const section = makeSection('Performance', 'last 7 days');
+
+  const grid = document.createElement('div');
+  grid.className = 'chart-grid';
+
+  // ── Task Volume (area chart) ───────────────────
+  const volCard = document.createElement('div');
+  volCard.className = 'chart-card';
+
+  // Bucket tasks by day
+  const dayBuckets = {};
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const key = d.toDateString();
+    dayBuckets[key] = { label: d.toLocaleDateString([], { weekday: 'short' }), value: 0, failed: 0 };
+  }
+
+  for (const t of (tasksData.tasks || [])) {
+    if (!t.timestamp) continue;
+    const key = new Date(t.timestamp).toDateString();
+    if (dayBuckets[key]) {
+      if (t.status === 'completed') dayBuckets[key].value++;
+      else if (t.status === 'failed') dayBuckets[key].failed++;
+    }
+  }
+
+  const chartData = Object.values(dayBuckets);
+  // Replace today's label
+  if (chartData.length > 0) chartData[chartData.length - 1].label = 'Today';
+
+  volCard.innerHTML =
+    '<div class="chart-head">' +
+      '<span class="chart-title">Task Volume</span>' +
+      '<div class="chart-legend">' +
+        '<span><span class="lg-dot" style="background:var(--green)"></span>OK</span>' +
+        '<span><span class="lg-dot" style="background:var(--red)"></span>Failed</span>' +
+      '</div>' +
+    '</div>' + renderAreaChart(chartData);
+
+  grid.appendChild(volCard);
+
+  // ── Agent Accuracy (bar chart) ─────────────────
+  const accCard = document.createElement('div');
+  accCard.className = 'chart-card';
+
+  const activeAgents = agents
+    .filter(a => a.scores && a.scores.signals > 0)
+    .sort((a, b) => b.scores.accuracy - a.scores.accuracy)
+    .slice(0, 6);
+
+  const barData = activeAgents.map(a => ({
+    label: a.id.length > 12 ? a.id.slice(0, 11) + '.' : a.id,
+    value: Math.round(a.scores.accuracy * 100),
+    secondary: Math.round(a.scores.uniqueness * 100),
+  }));
+
+  accCard.innerHTML =
+    '<div class="chart-head">' +
+      '<span class="chart-title">Agent Accuracy</span>' +
+      '<div class="chart-legend">' +
+        '<span><span class="lg-dot" style="background:var(--accent)"></span>Accuracy</span>' +
+        '<span><span class="lg-dot" style="background:var(--blue);opacity:0.5"></span>Unique</span>' +
+      '</div>' +
+    '</div>' + (barData.length > 0 ? renderBarChart(barData) : '<div class="empty-state">No agent data yet</div>');
+
+  grid.appendChild(accCard);
+
+  section.appendChild(grid);
+  return section;
+}
+
+// packages/dashboard/src/hub/activity.js — 3-column: tasks + consensus + signals
+
+function renderActivitySection(tasksData, consensusData, signalsData) {
+  const { escapeHtml: e, navigate, makeSection } = window._dash;
+  const totalToday = tasksData.tasks?.length || 0;
+  const section = makeSection('Activity', totalToday + ' tasks', 'all tasks →', '#/tasks');
+
+  const cols = document.createElement('div');
+  cols.className = 'three-col';
+
+  // ── Recent Tasks panel ─────────────────────────
+  const tasksPanel = document.createElement('div');
+  tasksPanel.className = 'panel';
+  tasksPanel.innerHTML = '<div class="panel-head"><span class="panel-title">Recent Tasks</span></div>';
+  const tasksBody = document.createElement('div');
+  tasksBody.className = 'panel-body';
+
+  const tasks = (tasksData.tasks || []).slice(0, 20);
+  if (tasks.length === 0) {
+    tasksBody.innerHTML = '<div class="empty-state">No tasks yet</div>';
+  } else {
+    for (const t of tasks) {
+      const time = t.timestamp ? new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      const color = t.status === 'completed' ? 'var(--green)' : t.status === 'failed' ? 'var(--red)' : 'var(--accent)';
+      const dur = t.duration > 0 ? '<span class="fr-dur">' + (t.duration / 1000).toFixed(1) + 's</span>' : '';
+      const desc = e((t.task || '').replace(/\n.*/s, '').slice(0, 50));
+
+      const row = document.createElement('div');
+      row.className = 'fr';
+      row.innerHTML =
+        '<span class="fr-dot" style="background:' + color + '"></span>' +
+        '<span class="fr-time">' + time + '</span>' +
+        '<span><span class="fr-agent">' + e(t.agentId) + '</span> ' + desc + dur + '</span>';
+      tasksBody.appendChild(row);
+    }
+  }
+  tasksPanel.appendChild(tasksBody);
+  cols.appendChild(tasksPanel);
+
+  // ── Consensus Runs panel ───────────────────────
+  const cxPanel = document.createElement('div');
+  cxPanel.className = 'panel';
+  cxPanel.innerHTML =
+    '<div class="panel-head"><span class="panel-title">Consensus</span>' +
+    '<button class="sh-action" role="link">details →</button></div>';
+  cxPanel.querySelector('.sh-action')?.addEventListener('click', () => navigate('#/signals'));
+
+  const cxBody = document.createElement('div');
+  cxBody.className = 'panel-body';
+
+  const runs = (consensusData.runs || []).slice(0, 10);
+  if (runs.length === 0) {
+    cxBody.innerHTML = '<div class="empty-state">No consensus runs yet</div>';
+  } else {
+    for (const run of runs) {
+      const time = run.timestamp ? new Date(run.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      const c = run.counts || {};
+      const pills = [];
+      if (c.agreement) pills.push('<span class="pill pill-g">&#10003; ' + c.agreement + '</span>');
+      if (c.disagreement || c.hallucination) pills.push('<span class="pill pill-r">' + ((c.disagreement || 0) + (c.hallucination || 0)) + '</span>');
+      if (c.unverified) pills.push('<span class="pill pill-y">' + c.unverified + '</span>');
+
+      const row = document.createElement('div');
+      row.className = 'cr';
+      row.addEventListener('click', () => navigate('#/consensus/' + encodeURIComponent(run.taskId)));
+      row.innerHTML =
+        '<span class="cr-time">' + time + '</span>' +
+        '<span class="cr-info">' + run.agents.length + ' agents</span>' +
+        '<div class="cr-pills">' + pills.join('') + '</div>';
+      cxBody.appendChild(row);
+    }
+  }
+  cxPanel.appendChild(cxBody);
+  cols.appendChild(cxPanel);
+
+  // ── Signals panel ──────────────────────────────
+  const sigPanel = document.createElement('div');
+  sigPanel.className = 'panel';
+  sigPanel.innerHTML =
+    '<div class="panel-head"><span class="panel-title">Signals</span>' +
+    '<button class="sh-action" role="link">all →</button></div>';
+  sigPanel.querySelector('.sh-action')?.addEventListener('click', () => navigate('#/signals'));
+
+  const sigBody = document.createElement('div');
+  sigBody.className = 'panel-body';
+
+  const sigs = (signalsData.signals || []).slice(0, 15);
+  if (sigs.length === 0) {
+    sigBody.innerHTML = '<div class="empty-state">No signals yet</div>';
+  } else {
+    for (const s of sigs) {
+      const typeClass = (s.signal || '').includes('agreement') ? 'agreement'
+        : (s.signal || '').includes('hallucination') ? 'hallucination'
+        : (s.signal || '').includes('unique') ? 'unique'
+        : (s.signal || '').includes('disagree') ? 'disagreement' : 'unique';
+      const typeLabel = (s.signal || '').replace(/_/g, ' ').replace(/caught$/, '').trim().slice(0, 10);
+      const finding = e((s.evidence || s.finding || '').slice(0, 40));
+      const arrow = s.counterpartId ? '<span class="sig-arrow">→</span><span class="sig-agent">' + e(s.counterpartId).slice(0, 12) + '</span>' : '';
+
+      const row = document.createElement('div');
+      row.className = 'sig-row';
+      row.innerHTML =
+        '<span class="sig-type ' + typeClass + '">' + e(typeLabel) + '</span>' +
+        '<span class="sig-agent">' + e((s.agentId || '').slice(0, 12)) + '</span>' +
+        arrow +
+        '<span class="sig-finding">' + finding + '</span>';
+      sigBody.appendChild(row);
+    }
+  }
+  sigPanel.appendChild(sigBody);
+  cols.appendChild(sigPanel);
+
+  section.appendChild(cols);
+  return section;
+}
+
+// packages/dashboard/src/hub/knowledge.js — 2-column: agent memory chips + recent learnings
+
+function renderKnowledgeSection(agents) {
+  const { escapeHtml: e, navigate, agentInitials, agentColor, makeSection } = window._dash;
+  const section = makeSection('Knowledge', null, 'browse →', '#/knowledge/_project');
+
+  const grid = document.createElement('div');
+  grid.className = 'know-grid';
+
+  // ── Left: Agent memory chips ───────────────────
+  const memPanel = document.createElement('div');
+  memPanel.className = 'panel';
+  memPanel.innerHTML = '<div class="panel-head"><span class="panel-title">Agent Memory</span></div>';
+
+  const chips = document.createElement('div');
+  chips.className = 'know-agents';
+
+  // _project shared first
+  const projectChip = document.createElement('button');
+  projectChip.className = 'ka';
+  projectChip.addEventListener('click', () => navigate('#/knowledge/_project'));
+  projectChip.innerHTML =
+    '<div class="ka-avatar" style="background:rgba(167,139,250,0.1);color:var(--accent)">P</div>' +
+    '<div class="ka-info"><div class="ka-name">_project (shared)</div><div class="ka-stats">shared context</div></div>';
+  chips.appendChild(projectChip);
+
+  for (const agent of agents) {
+    const color = agentColor(agent);
+    const chip = document.createElement('button');
+    chip.className = 'ka';
+    if (!agent.online && (agent.scores?.signals || 0) === 0) chip.style.opacity = '0.4';
+    chip.addEventListener('click', () => navigate('#/knowledge/' + encodeURIComponent(agent.id)));
+    chip.innerHTML =
+      '<div class="ka-avatar" style="background:' + color.replace('var(--', 'rgba(').replace(')', ',0.1)') + ';color:' + color + '">' + agentInitials(agent.id) + '</div>' +
+      '<div class="ka-info"><div class="ka-name">' + e(agent.id) + '</div><div class="ka-stats">' + (agent.scores?.signals || 0) + ' signals</div></div>';
+    chips.appendChild(chip);
+  }
+
+  memPanel.appendChild(chips);
+  grid.appendChild(memPanel);
+
+  // ── Right: Recent learnings (placeholder — requires per-agent memory API calls) ──
+  const learnPanel = document.createElement('div');
+  learnPanel.className = 'panel';
+  learnPanel.innerHTML = '<div class="panel-head"><span class="panel-title">Recent Learnings</span></div>';
+
+  const learnBody = document.createElement('div');
+  learnBody.className = 'panel-body';
+  learnBody.innerHTML = '<div class="empty-state">Click an agent to browse their memory</div>';
+
+  learnPanel.appendChild(learnBody);
+  grid.appendChild(learnPanel);
+
+  section.appendChild(grid);
+  return section;
+}
+
+// packages/dashboard/src/detail/agent.js — Agent detail view
+
+async function renderAgentDetail(app, agentId) {
+  const { api, escapeHtml: e, formatTokens, agentInitials, agentColor, navigate, makeSection } = window._dash;
+  app.innerHTML = '<div class="loading">Loading agent...</div>';
+
+  try {
+    const [agents, memData] = await Promise.all([api('agents'), api('memory/' + encodeURIComponent(agentId))]);
+    const agent = agents.find(a => a.id === agentId);
+    if (!agent) { app.innerHTML = '<div class="empty-state">Agent not found: ' + e(agentId) + '</div>'; return; }
+
+    const s = agent.scores || {};
+    const color = agentColor(agent);
+    app.innerHTML = '';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'detail-header';
+    header.innerHTML =
+      '<div class="detail-avatar" style="background:' + color.replace('var(--', 'rgba(').replace(')', ',0.12)') + ';color:' + color + '">' + agentInitials(agentId) + '</div>' +
+      '<div><div class="detail-title">' + e(agentId) + '</div>' +
+      '<div class="detail-subtitle">' + e(agent.provider || '') + ' &middot; ' + e(agent.model || '') + (agent.preset ? ' &middot; ' + e(agent.preset) : '') + '</div></div>';
+    app.appendChild(header);
+
+    // Stats
+    const stats = document.createElement('div');
+    stats.className = 'detail-stats';
+    const metrics = [
+      { label: 'Accuracy', value: Math.round(s.accuracy * 100) + '%', color: 'var(--accent)' },
+      { label: 'Uniqueness', value: Math.round(s.uniqueness * 100) + '%', color: 'var(--blue)' },
+      { label: 'Signals', value: String(s.signals || 0) },
+      { label: 'Tokens', value: formatTokens(agent.totalTokens), color: 'var(--green)' },
+      { label: 'Weight', value: (s.dispatchWeight || 1).toFixed(2) },
+    ];
+    for (const m of metrics) {
+      const stat = document.createElement('div');
+      stat.className = 'detail-stat';
+      stat.innerHTML = '<div class="detail-stat-val"' + (m.color ? ' style="color:' + m.color + '"' : '') + '>' + m.value + '</div><div class="detail-stat-lbl">' + m.label + '</div>';
+      stats.appendChild(stat);
+    }
+    app.appendChild(stats);
+
+    // Memory section
+    if (memData.knowledge && memData.knowledge.length > 0) {
+      const memSection = makeSection('Knowledge', memData.fileCount + ' files');
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.innerHTML = '<div class="panel-head"><span class="panel-title">Knowledge Files</span></div>';
+      const body = document.createElement('div');
+      body.className = 'panel-body';
+      for (const k of memData.knowledge.slice(0, 20)) {
+        const isCognitive = (k.frontmatter && k.frontmatter.type === 'cognitive') || (k.content || '').includes('You reviewed');
+        const desc = e((k.frontmatter && (k.frontmatter.description || k.frontmatter.name)) || k.filename);
+        const row = document.createElement('div');
+        row.className = 'memory-file' + (isCognitive ? ' cognitive' : '');
+        row.innerHTML =
+          '<div class="memory-file-header" onclick="this.nextElementSibling.hidden=!this.nextElementSibling.hidden">' +
+          '<span style="font-family:monospace;color:var(--text-3);width:1rem;text-align:center">+</span>' +
+          '<span class="memory-filename">' + e(k.filename) + '</span>' +
+          '<span class="memory-desc">' + desc + '</span></div>' +
+          '<pre class="memory-file-content" hidden>' + e(k.content) + '</pre>';
+        body.appendChild(row);
+      }
+      panel.appendChild(body);
+      memSection.appendChild(panel);
+      app.appendChild(memSection);
+    }
+
+  } catch (err) {
+    app.innerHTML = '<div class="empty-state">Failed to load agent: ' + e(err.message) + '</div>';
+  }
+}
+
+// packages/dashboard/src/detail/tasks.js — Full task list with filters + search + tokens
+
+async function renderTasksDetail(app) {
+  const { api, escapeHtml: e, formatTokens, makeSection } = window._dash;
+  app.innerHTML = '<div class="loading">Loading tasks...</div>';
+
+  try {
+    const data = await api('tasks');
+    app.innerHTML = '';
+
+    const section = makeSection('Tasks', data.total + ' total');
+
+    // Filters
+    const filters = document.createElement('div');
+    filters.className = 'filters';
+    const statuses = ['all', 'completed', 'failed', 'running', 'cancelled'];
+    let activeFilter = 'all';
+
+    for (const s of statuses) {
+      const btn = document.createElement('button');
+      btn.className = 'filter-btn' + (s === 'all' ? ' active' : '');
+      btn.textContent = s;
+      btn.addEventListener('click', () => {
+        activeFilter = s;
+        filters.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderRows();
+      });
+      filters.appendChild(btn);
+    }
+    section.appendChild(filters);
+
+    // Search
+    const search = document.createElement('input');
+    search.className = 'search-input';
+    search.placeholder = 'Search by agent or task description...';
+    search.addEventListener('input', renderRows);
+    section.appendChild(search);
+
+    // Table
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.innerHTML = '<div class="panel-body" style="max-height:500px"></div>';
+    const body = panel.querySelector('.panel-body');
+    section.appendChild(panel);
+
+    function renderRows() {
+      body.innerHTML = '';
+      const q = search.value.toLowerCase();
+      const filtered = (data.tasks || []).filter(t => {
+        if (activeFilter !== 'all' && t.status !== activeFilter) return false;
+        if (q && !t.agentId.toLowerCase().includes(q) && !(t.task || '').toLowerCase().includes(q)) return false;
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        body.innerHTML = '<div class="empty-state">No matching tasks</div>';
+        return;
+      }
+
+      for (const t of filtered) {
+        const time = t.timestamp ? new Date(t.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+        const color = t.status === 'completed' ? 'var(--green)' : t.status === 'failed' ? 'var(--red)' : t.status === 'cancelled' ? 'var(--amber)' : 'var(--accent)';
+        const dur = t.duration > 0 ? (t.duration / 1000).toFixed(1) + 's' : '—';
+        const tokens = (t.inputTokens || t.outputTokens) ? formatTokens((t.inputTokens || 0) + (t.outputTokens || 0)) : '—';
+        const desc = e((t.task || '').replace(/\n.*/s, '').slice(0, 80));
+
+        const row = document.createElement('div');
+        row.className = 'fr';
+        row.innerHTML =
+          '<span class="fr-dot" style="background:' + color + '"></span>' +
+          '<span class="fr-time" style="min-width:80px">' + time + '</span>' +
+          '<span class="fr-agent" style="min-width:120px">' + e(t.agentId) + '</span>' +
+          '<span style="color:var(--text-2);flex:1">' + desc + '</span>' +
+          '<span class="fr-dur" style="min-width:45px">' + dur + '</span>' +
+          '<span class="fr-dur" style="min-width:45px">' + tokens + '</span>';
+        body.appendChild(row);
+      }
+    }
+
+    renderRows();
+    app.appendChild(section);
+  } catch (err) {
+    app.innerHTML = '<div class="empty-state">Failed to load tasks: ' + e(err.message) + '</div>';
+  }
+}
+
+// packages/dashboard/src/detail/consensus.js — Single consensus run detail
+
+async function renderConsensusDetail(app, taskId) {
+  const { api, escapeHtml: e, makeSection } = window._dash;
+  app.innerHTML = '<div class="loading">Loading consensus run...</div>';
+
+  try {
+    const data = await api('consensus');
+    const run = (data.runs || []).find(r => r.taskId === taskId);
+    if (!run) { app.innerHTML = '<div class="empty-state">Consensus run not found: ' + e(taskId) + '</div>'; return; }
+
+    app.innerHTML = '';
+    const section = makeSection('Consensus Run', run.agents.length + ' agents');
+
+    // Run info
+    const info = document.createElement('div');
+    info.className = 'detail-stats';
+    const c = run.counts || {};
+    const statItems = [
+      { label: 'Agreements', value: c.agreement || 0, color: 'var(--green)' },
+      { label: 'Disagreements', value: c.disagreement || 0, color: 'var(--red)' },
+      { label: 'Hallucinations', value: c.hallucination || 0, color: 'var(--red)' },
+      { label: 'Unverified', value: c.unverified || 0, color: 'var(--amber)' },
+      { label: 'Unique', value: c.unique || 0, color: 'var(--blue)' },
+    ];
+    for (const s of statItems) {
+      const stat = document.createElement('div');
+      stat.className = 'detail-stat';
+      stat.innerHTML = '<div class="detail-stat-val" style="color:' + s.color + '">' + s.value + '</div><div class="detail-stat-lbl">' + s.label + '</div>';
+      info.appendChild(stat);
+    }
+    section.appendChild(info);
+
+    // Signals list
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.innerHTML = '<div class="panel-head"><span class="panel-title">Signals</span></div>';
+    const body = document.createElement('div');
+    body.className = 'panel-body';
+    body.style.maxHeight = '500px';
+
+    for (const s of (run.signals || [])) {
+      const typeClass = (s.signal || '').includes('agreement') ? 'agreement'
+        : (s.signal || '').includes('hallucination') ? 'hallucination'
+        : (s.signal || '').includes('unique') ? 'unique'
+        : (s.signal || '').includes('disagree') ? 'disagreement' : 'unique';
+      const typeLabel = (s.signal || '').replace(/_/g, ' ').replace(/caught$/, '').trim();
+      const arrow = s.counterpartId ? '<span class="sig-arrow">→</span><span class="sig-agent">' + e(s.counterpartId) + '</span>' : '';
+      const evidence = s.evidence ? '<div style="color:var(--text-3);font-size:11px;margin-top:4px;padding-left:72px">' + e(s.evidence.slice(0, 200)) + '</div>' : '';
+
+      const row = document.createElement('div');
+      row.className = 'sig-row';
+      row.style.flexWrap = 'wrap';
+      row.innerHTML =
+        '<span class="sig-type ' + typeClass + '">' + e(typeLabel) + '</span>' +
+        '<span class="sig-agent">' + e(s.agentId || '') + '</span>' +
+        arrow + evidence;
+      body.appendChild(row);
+    }
+
+    panel.appendChild(body);
+    section.appendChild(panel);
+    app.appendChild(section);
+  } catch (err) {
+    app.innerHTML = '<div class="empty-state">Failed to load consensus: ' + e(err.message) + '</div>';
+  }
+}
+
+// packages/dashboard/src/detail/signals.js — Full signal feed with type/agent filters
+
+async function renderSignalsDetail(app) {
+  const { api, escapeHtml: e, makeSection } = window._dash;
+  app.innerHTML = '<div class="loading">Loading signals...</div>';
+
+  try {
+    const data = await api('signals');
+    app.innerHTML = '';
+
+    const section = makeSection('Signals', data.total + ' total');
+
+    // Type filters
+    const filters = document.createElement('div');
+    filters.className = 'filters';
+    const types = ['all', 'agreement', 'disagreement', 'unique', 'hallucination'];
+    let activeType = 'all';
+
+    for (const t of types) {
+      const btn = document.createElement('button');
+      btn.className = 'filter-btn' + (t === 'all' ? ' active' : '');
+      btn.textContent = t === 'hallucination' ? 'halluc.' : t;
+      btn.addEventListener('click', () => {
+        activeType = t;
+        filters.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderRows();
+      });
+      filters.appendChild(btn);
+    }
+    section.appendChild(filters);
+
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.innerHTML = '<div class="panel-body" style="max-height:600px"></div>';
+    const body = panel.querySelector('.panel-body');
+    section.appendChild(panel);
+
+    function renderRows() {
+      body.innerHTML = '';
+      const filtered = (data.signals || []).filter(s => {
+        if (activeType === 'all') return true;
+        return (s.signal || '').includes(activeType);
+      });
+
+      if (filtered.length === 0) {
+        body.innerHTML = '<div class="empty-state">No matching signals</div>';
+        return;
+      }
+
+      for (const s of filtered) {
+        const typeClass = (s.signal || '').includes('agreement') ? 'agreement'
+          : (s.signal || '').includes('hallucination') ? 'hallucination'
+          : (s.signal || '').includes('unique') ? 'unique'
+          : (s.signal || '').includes('disagree') ? 'disagreement' : 'unique';
+        const typeLabel = (s.signal || '').replace(/_/g, ' ').replace(/caught$/, '').trim();
+        const finding = e((s.evidence || s.finding || '').slice(0, 120));
+        const arrow = s.counterpartId ? '<span class="sig-arrow">→</span><span class="sig-agent">' + e(s.counterpartId) + '</span>' : '';
+        const time = s.timestamp ? new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+        const row = document.createElement('div');
+        row.className = 'sig-row';
+        row.innerHTML =
+          '<span class="fr-time">' + time + '</span>' +
+          '<span class="sig-type ' + typeClass + '">' + e(typeLabel) + '</span>' +
+          '<span class="sig-agent">' + e(s.agentId || '') + '</span>' +
+          arrow +
+          '<span class="sig-finding">' + finding + '</span>';
+        body.appendChild(row);
+      }
+    }
+
+    renderRows();
+    app.appendChild(section);
+  } catch (err) {
+    app.innerHTML = '<div class="empty-state">Failed to load signals: ' + e(err.message) + '</div>';
+  }
+}
+
+// packages/dashboard/src/detail/knowledge.js — Memory browser with markdown rendering
+
+async function renderKnowledgeDetail(app, agentId) {
+  const { api, escapeHtml: e, agentInitials, agentColor, makeSection } = window._dash;
+  app.innerHTML = '<div class="loading">Loading memory...</div>';
+
+  try {
+    const data = await api('memory/' + encodeURIComponent(agentId));
+    app.innerHTML = '';
+
+    const section = makeSection(agentId + ' Memory', (data.fileCount || data.knowledge?.length || 0) + ' files');
+
+    // MEMORY.md index
+    if (data.index) {
+      const indexPanel = document.createElement('div');
+      indexPanel.className = 'panel';
+      indexPanel.innerHTML =
+        '<div class="panel-head"><span class="panel-title">MEMORY.md</span></div>' +
+        '<div class="panel-body"><div class="memory-md">' + renderMarkdown(data.index) + '</div></div>';
+      section.appendChild(indexPanel);
+    }
+
+    // Knowledge files
+    if (data.knowledge && data.knowledge.length > 0) {
+      const filesPanel = document.createElement('div');
+      filesPanel.className = 'panel';
+      filesPanel.style.marginTop = '10px';
+      filesPanel.innerHTML =
+        '<div class="panel-head"><span class="panel-title">Knowledge Files (' + data.knowledge.length + ')</span></div>';
+
+      const filesBody = document.createElement('div');
+      filesBody.className = 'panel-body';
+      filesBody.style.maxHeight = '500px';
+
+      for (const k of data.knowledge) {
+        const isCognitive = (k.frontmatter && k.frontmatter.type === 'cognitive') || (k.content || '').includes('You reviewed') || (k.content || '').includes('## What I Learned');
+        const desc = e((k.frontmatter && (k.frontmatter.description || k.frontmatter.name)) || k.filename);
+
+        const file = document.createElement('div');
+        file.className = 'memory-file' + (isCognitive ? ' cognitive' : '');
+        file.innerHTML =
+          '<div class="memory-file-header" onclick="this.nextElementSibling.hidden=!this.nextElementSibling.hidden">' +
+          '<span style="font-family:var(--mono);color:var(--text-3);width:1rem;text-align:center">+</span>' +
+          '<span class="memory-filename">' + e(k.filename) + '</span>' +
+          '<span class="memory-desc">' + desc + '</span>' +
+          (isCognitive ? '<span style="font-size:9px;font-family:var(--mono);color:var(--accent);margin-left:auto">cognitive</span>' : '') +
+          '</div>' +
+          '<pre class="memory-file-content" hidden>' + e(k.content) + '</pre>';
+        filesBody.appendChild(file);
+      }
+
+      filesPanel.appendChild(filesBody);
+      section.appendChild(filesPanel);
+    }
+
+    // Task history
+    if (data.tasks && data.tasks.length > 0) {
+      const taskPanel = document.createElement('div');
+      taskPanel.className = 'panel';
+      taskPanel.style.marginTop = '10px';
+      taskPanel.innerHTML =
+        '<div class="panel-head"><span class="panel-title">Task History (' + data.tasks.length + ')</span></div>';
+
+      const taskBody = document.createElement('div');
+      taskBody.className = 'panel-body';
+      taskBody.style.maxHeight = '300px';
+
+      for (const t of data.tasks.slice(-50).reverse()) {
+        const row = document.createElement('div');
+        row.className = 'fr';
+        row.innerHTML =
+          '<span class="fr-time" style="min-width:70px">' + (t.timestamp ? new Date(t.timestamp).toLocaleDateString() : '—') + '</span>' +
+          '<span style="color:var(--text-2);flex:1">' + e(String(t.task || t.result || '—').slice(0, 120)) + '</span>';
+        taskBody.appendChild(row);
+      }
+
+      taskPanel.appendChild(taskBody);
+      section.appendChild(taskPanel);
+    }
+
+    if (!data.index && (!data.knowledge || data.knowledge.length === 0)) {
+      section.innerHTML += '<div class="empty-state">No memory data for this agent.</div>';
+    }
+
+    app.appendChild(section);
+  } catch (err) {
+    app.innerHTML = '<div class="empty-state">Failed to load memory: ' + e(err.message) + '</div>';
+  }
+}
+
+// All agents view (team detail)
+async function renderAllAgents(app) {
+  const { api, escapeHtml: e, navigate, formatTokens, agentInitials, agentColor, makeSection } = window._dash;
+  app.innerHTML = '<div class="loading">Loading agents...</div>';
+
+  try {
+    const agents = await api('agents');
+    app.innerHTML = '';
+    const section = makeSection('All Agents', agents.length + ' total');
+
+    if (agents.length === 0) {
+      section.innerHTML += '<div class="empty-state">No agents configured.</div>';
+      app.appendChild(section);
+      return;
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'agent-grid';
+    grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(260px, 1fr))';
+
+    const sorted = [...agents].sort((a, b) => (b.scores?.dispatchWeight || 0) - (a.scores?.dispatchWeight || 0));
+    for (const agent of sorted) {
+      const s = agent.scores || {};
+      const isIdle = !agent.online && s.signals === 0;
+      const color = agentColor(agent);
+
+      const card = document.createElement('button');
+      card.className = 'ag' + (isIdle ? ' idle' : '');
+      card.style.setProperty('--card-color', color);
+      card.addEventListener('click', () => navigate('#/team/' + encodeURIComponent(agent.id)));
+
+      const statusColor = agent.online ? 'var(--green)' : 'var(--text-3)';
+      const statusText = agent.online ? 'online' : 'idle';
+      const dotStyle = agent.online ? 'background:var(--green);box-shadow:0 0 6px rgba(52,211,153,0.4)' : 'background:var(--text-3)';
+      const provider = (agent.provider || '').replace(/^anthropic$/, 'Anthropic').replace(/^google$/, 'Google');
+      const preset = (agent.preset || '').charAt(0).toUpperCase() + (agent.preset || '').slice(1);
+
+      card.innerHTML =
+        '<div class="ag-top"><div>' +
+          '<div class="ag-name">' + e(agent.id) + '</div>' +
+          '<div class="ag-role">' + e(provider) + ' &middot; ' + e(preset) + '</div>' +
+        '</div><div class="ag-status" style="color:' + statusColor + '">' +
+          '<span class="ag-dot" style="' + dotStyle + '"></span>' + statusText +
+        '</div></div>' +
+        '<div class="ag-metrics">' +
+          '<div class="ag-m"><div class="ag-m-val" style="color:var(--accent)">' + (isIdle ? '&mdash;' : Math.round(s.accuracy * 100) + '%') + '</div><div class="ag-m-lbl">Accuracy</div></div>' +
+          '<div class="ag-m"><div class="ag-m-val" style="color:var(--blue)">' + (isIdle ? '&mdash;' : Math.round(s.uniqueness * 100) + '%') + '</div><div class="ag-m-lbl">Unique</div></div>' +
+          '<div class="ag-m"><div class="ag-m-val">' + (s.signals || 0) + '</div><div class="ag-m-lbl">Signals</div></div>' +
+          '<div class="ag-m"><div class="ag-m-val" style="color:var(--green)">' + formatTokens(agent.totalTokens) + '</div><div class="ag-m-lbl">Tokens</div></div>' +
+        '</div>';
+
+      grid.appendChild(card);
+    }
+
+    section.appendChild(grid);
+    app.appendChild(section);
+  } catch (err) {
+    app.innerHTML = '<div class="empty-state">Failed to load agents: ' + e(err.message) + '</div>';
+  }
+}
 
 </script>
 </body>
