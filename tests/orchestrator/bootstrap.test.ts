@@ -110,4 +110,84 @@ describe('BootstrapGenerator', () => {
       expect(content).toContain('"new"');
     });
   });
+
+  describe('tool claim verification', () => {
+    it('annotates TODO lines when tool exists in MCP server', () => {
+      const dir = join(testDir, 'verify-tools');
+      mkdirSync(join(dir, '.gossip'), { recursive: true });
+      mkdirSync(join(dir, 'apps', 'cli', 'src'), { recursive: true });
+
+      // Write a config so bootstrap generates a full prompt
+      writeFileSync(join(dir, '.gossip', 'config.json'), JSON.stringify({
+        main_agent: { provider: 'local', model: 'q' },
+        agents: { 'a1': { provider: 'local', model: 'q', skills: ['t'] } }
+      }));
+
+      // Write next-session.md with a TODO mentioning a tool
+      writeFileSync(join(dir, '.gossip', 'next-session.md'),
+        '## Remaining\n- gossip_foo — TODO: needs implementation\n- gossip_bar — pending feature\n'
+      );
+
+      // Write a fake MCP server source that registers gossip_foo but not gossip_bar
+      writeFileSync(join(dir, 'apps', 'cli', 'src', 'mcp-server-sdk.ts'),
+        "server.tool('gossip_foo', 'does stuff', {}, async () => {});\n" +
+        "// gossip_bar is just mentioned in a comment\n"
+      );
+
+      const gen = new BootstrapGenerator(dir);
+      const result = gen.generate();
+
+      // gossip_foo should be annotated as shipped
+      expect(result.prompt).toContain('verified: gossip_foo exists');
+      // gossip_bar should NOT be annotated (only in a comment)
+      expect(result.prompt).not.toContain('verified: gossip_bar');
+      // gossip_bar line should still be present unmodified
+      expect(result.prompt).toContain('gossip_bar — pending feature');
+    });
+
+    it('passes through content unchanged when MCP source is missing', () => {
+      const dir = join(testDir, 'verify-no-mcp');
+      mkdirSync(join(dir, '.gossip'), { recursive: true });
+
+      writeFileSync(join(dir, '.gossip', 'config.json'), JSON.stringify({
+        main_agent: { provider: 'local', model: 'q' },
+        agents: { 'a1': { provider: 'local', model: 'q', skills: ['t'] } }
+      }));
+
+      writeFileSync(join(dir, '.gossip', 'next-session.md'),
+        '- gossip_missing — TODO: build this\n'
+      );
+      // No apps/cli/src/mcp-server-sdk.ts — should pass through unchanged
+
+      const gen = new BootstrapGenerator(dir);
+      const result = gen.generate();
+      expect(result.prompt).toContain('gossip_missing — TODO: build this');
+      expect(result.prompt).not.toContain('verified');
+    });
+
+    it('does not annotate lines without TODO/remaining/pending keywords', () => {
+      const dir = join(testDir, 'verify-no-keyword');
+      mkdirSync(join(dir, '.gossip'), { recursive: true });
+      mkdirSync(join(dir, 'apps', 'cli', 'src'), { recursive: true });
+
+      writeFileSync(join(dir, '.gossip', 'config.json'), JSON.stringify({
+        main_agent: { provider: 'local', model: 'q' },
+        agents: { 'a1': { provider: 'local', model: 'q', skills: ['t'] } }
+      }));
+
+      writeFileSync(join(dir, '.gossip', 'next-session.md'),
+        '- SHIPPED: gossip_run works great\n'
+      );
+
+      writeFileSync(join(dir, 'apps', 'cli', 'src', 'mcp-server-sdk.ts'),
+        "server.tool('gossip_run', 'run stuff', {}, async () => {});\n"
+      );
+
+      const gen = new BootstrapGenerator(dir);
+      const result = gen.generate();
+      // No TODO keyword, so no annotation even though tool exists
+      expect(result.prompt).not.toContain('verified');
+      expect(result.prompt).toContain('SHIPPED: gossip_run works great');
+    });
+  });
 });

@@ -214,6 +214,9 @@ ${sessionSection}
 | \`gossip_collect(task_ids?, timeout_ms?)\` | Collect results. Waits for completion. |
 | \`gossip_dispatch_consensus(tasks)\` | Dispatch with consensus summary instruction. Returns task IDs. |
 | \`gossip_collect_consensus(task_ids, timeout_ms?)\` | Collect + cross-review. Returns tagged consensus report. |
+| \`gossip_run(agent_id, task)\` | Single-agent dispatch. Relay: returns result. Native: returns Agent() instructions + callback. |
+| \`gossip_run_complete(task_id, result)\` | Complete a native agent gossip_run — relays result, writes memory, emits signals. |
+| \`gossip_relay_result(task_id, result)\` | Feed native Agent() result back into relay for consensus. |
 | \`gossip_bootstrap()\` | Refresh this prompt with latest team state. |
 | \`gossip_setup(main_provider, main_model, agents)\` | Create team with native + custom agents. |
 | \`gossip_orchestrate(task)\` | Auto-decompose task via MainAgent. |
@@ -334,13 +337,42 @@ Skills are auto-injected from agent config. Project-wide skills in .gossip/skill
     return combined.slice(0, 2500) || null;
   }
 
+  /**
+   * Verify tool-related claims in session notes against MCP server source.
+   * Annotates TODO/remaining lines where the referenced tool actually exists.
+   */
+  private verifyToolClaims(content: string): string {
+    const mcpPath = join(this.projectRoot, 'apps', 'cli', 'src', 'mcp-server-sdk.ts');
+    if (!existsSync(mcpPath)) return content;
+
+    const rawSource = readFileSync(mcpPath, 'utf-8');
+    // Strip comments once — avoids false positives from gossip_tools() listing
+    const source = rawSource.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '');
+
+    const keywordRe = /TODO|remaining|deferred|needed|pending/i;
+    const toolRe = /gossip_\w+/;
+
+    return content.split('\n').map(line => {
+      if (!keywordRe.test(line)) return line;
+      const toolMatch = line.match(toolRe);
+      if (!toolMatch) return line;
+      const toolName = toolMatch[0];
+      const pattern = new RegExp(`server\\.tool\\(\\s*['"]${toolName}['"]`);
+      if (pattern.test(source)) {
+        return `~~${line.trim()}~~ *(verified: ${toolName} exists in MCP server)*`;
+      }
+      return line;
+    }).join('\n');
+  }
+
   /** Read .gossip/next-session.md if it exists — user/orchestrator notes for the next session */
   private readNextSessionNotes(): string | null {
     const notesPath = join(this.projectRoot, '.gossip', 'next-session.md');
     if (!existsSync(notesPath)) return null;
     try {
       const content = readFileSync(notesPath, 'utf-8').trim();
-      return content.length > 0 ? content.slice(0, 2000) : null;
+      if (content.length === 0) return null;
+      return this.verifyToolClaims(content.slice(0, 2000));
     } catch { return null; }
   }
 }
