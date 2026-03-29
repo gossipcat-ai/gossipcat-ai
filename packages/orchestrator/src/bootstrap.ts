@@ -225,6 +225,8 @@ ${sessionSection}
 | \`gossip_update_instructions(agent_ids, instruction_update, mode)\` | Update agent instructions at runtime. |
 | \`gossip_tools()\` | List all available tools. |
 | \`gossip_plan(task)\` | Plan task with write-mode suggestions. Returns dispatch-ready JSON. |
+| \`gossip_session_save()\` | Save session summary for next session context. Call before ending session. |
+| \`gossip_scores()\` | View agent performance scores and dispatch weights. |
 
 ## Dispatch Rules
 
