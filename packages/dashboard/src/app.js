@@ -172,7 +172,7 @@ async function renderHub(app) {
     // Build sections
     app.appendChild(renderOverviewSection(overview));
     app.appendChild(renderTeamSection(agents));
-    app.appendChild(renderActivitySection({tasks:[]}, consensus, {signals:[]}));
+    app.appendChild(renderActivitySection(consensus));
     app.appendChild(renderKnowledgeSection(agents));
 
     // Wire WS live updates — selective section refresh, debounced
@@ -218,7 +218,7 @@ async function renderHub(app) {
           const sections = app.querySelectorAll('.section');
           if (ov && sections[0]) { const el = renderOverviewSection(ov); sections[0].replaceWith(el); }
           if (ag && sections[1]) { const el = renderTeamSection(ag); sections[1].replaceWith(el); }
-          if (cx && sections[2]) { const el = renderActivitySection({tasks:[]}, cx, {signals:[]}); sections[2].replaceWith(el); }
+          if (cx && sections[2]) { const el = renderActivitySection(cx); sections[2].replaceWith(el); }
           if (ag && sections[3]) { const el = renderKnowledgeSection(ag); sections[3].replaceWith(el); }
         } catch { /* best-effort live update */ }
       }, 500);

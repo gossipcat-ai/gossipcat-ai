@@ -231,32 +231,6 @@ body::after {
 .panel-title { font-size: 13px; font-weight: 600; }
 .panel-body { flex: 1; overflow-y: auto; max-height: 280px; }
 
-/* ── Feed Rows ──────────────────────────────────── */
-.fr {
-  display: flex; align-items: baseline; gap: 10px;
-  padding: 9px 16px; font-size: 13px; color: var(--text-2);
-  transition: background 0.1s; border-bottom: 1px solid rgba(255,255,255,0.02);
-}
-.fr:last-child { border-bottom: none; }
-.fr:hover { background: rgba(255,255,255,0.012); }
-.fr-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; position: relative; top: 1px; }
-.fr-time { font-family: var(--mono); font-size: 11px; color: var(--text-3); min-width: 36px; }
-.fr-agent { color: var(--accent); font-weight: 500; }
-.fr-dur { font-family: var(--mono); font-size: 10px; color: var(--text-3); margin-left: 3px; }
-
-/* ── Consensus Rows ─────────────────────────────── */
-.cr {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 16px; font-size: 13px; color: var(--text-2);
-  cursor: pointer; transition: background 0.1s;
-  border-bottom: 1px solid rgba(255,255,255,0.02);
-}
-.cr:last-child { border-bottom: none; }
-.cr:hover { background: rgba(255,255,255,0.012); }
-.cr-time { font-family: var(--mono); font-size: 11px; color: var(--text-3); min-width: 36px; }
-.cr-info { flex: 1; }
-.cr-pills { display: flex; gap: 3px; }
-
 /* ── Pills ──────────────────────────────────────── */
 .pill {
   display: inline-flex; align-items: center; gap: 2px;
@@ -267,25 +241,34 @@ body::after {
 .pill-r { background: var(--red-glow); color: var(--red); }
 .pill-y { background: var(--amber-glow); color: var(--amber); }
 
-/* ── Signal Rows ────────────────────────────────── */
-.sig-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 16px; font-size: 12px; color: var(--text-2);
-  transition: background 0.1s; border-bottom: 1px solid rgba(255,255,255,0.02);
-}
-.sig-row:last-child { border-bottom: none; }
-.sig-row:hover { background: rgba(255,255,255,0.012); }
-.sig-type {
-  font-size: 10px; font-family: var(--mono); font-weight: 600;
-  padding: 2px 7px; border-radius: 4px; min-width: 64px; text-align: center; flex-shrink: 0;
-}
-.sig-type.agreement { background: var(--green-glow); color: var(--green); }
-.sig-type.hallucination { background: var(--red-glow); color: var(--red); }
-.sig-type.unique { background: var(--blue-glow); color: var(--blue); }
-.sig-type.disagreement { background: var(--amber-glow); color: var(--amber); }
-.sig-agent { color: var(--accent); font-weight: 500; font-size: 12px; }
-.sig-arrow { color: var(--text-3); font-size: 10px; }
-.sig-finding { flex: 1; color: var(--text-2); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ── Run Timeline ──────────────────────────────────── */
+.run-list { display: flex; flex-direction: column; gap: 8px; }
+.run-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.run-card.run-open { border-color: rgba(167,139,250,0.3); }
+.run-header { padding: 12px 16px; cursor: pointer; transition: background 0.1s; }
+.run-header:hover { background: var(--surface-raised); }
+.run-top { display: flex; align-items: center; gap: 10px; }
+.run-expand { color: var(--text-3); font-size: 10px; width: 14px; transition: color 0.15s; }
+.run-card.run-open .run-expand { color: var(--accent); }
+.run-title { font-size: 14px; font-weight: 600; color: var(--text); flex: 1; }
+.run-agents { display: flex; gap: 4px; }
+.run-agent-chip { background: var(--surface-raised); color: var(--text-2); font-size: 10px; font-family: var(--mono); font-weight: 600; padding: 2px 6px; border-radius: 4px; }
+.run-agent-more { color: var(--text-3); font-size: 10px; padding: 2px 4px; }
+.run-time { color: var(--text-3); font-size: 12px; font-family: var(--mono); white-space: nowrap; }
+.run-pills { display: flex; gap: 6px; margin-top: 6px; padding-left: 24px; }
+.pill-b { background: rgba(167,139,250,0.15); color: var(--accent); }
+
+/* ── Findings ──────────────────────────────────────── */
+.run-findings { padding: 0 16px 12px; }
+.finding-row { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+.finding-tag { font-size: 10px; font-family: var(--mono); font-weight: 700; padding: 2px 8px; border-radius: 4px; white-space: nowrap; height: fit-content; margin-top: 2px; }
+.tag-g { background: rgba(52,211,153,0.15); color: var(--green); }
+.tag-r { background: rgba(248,113,113,0.15); color: var(--red); }
+.tag-y { background: rgba(251,191,36,0.15); color: var(--amber); }
+.tag-b { background: rgba(167,139,250,0.15); color: var(--accent); }
+.finding-body { flex: 1; min-width: 0; }
+.finding-text { font-size: 13px; color: var(--text); line-height: 1.4; }
+.finding-attr { font-size: 11px; color: var(--text-3); margin-top: 2px; font-family: var(--mono); }
 
 /* ── Knowledge ──────────────────────────────────── */
 .know-agents { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 16px; }
@@ -390,7 +373,6 @@ body::after {
 .search-input::placeholder { color: var(--text-3); }
 
 /* ── Layout Grids ───────────────────────────────── */
-.three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .know-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
@@ -415,7 +397,6 @@ body::after {
 }
 @media (max-width: 1000px) {
   .agent-grid { grid-template-columns: repeat(2, 1fr); }
-  .three-col { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 900px) {
   .two-col { grid-template-columns: 1fr; }
@@ -425,7 +406,6 @@ body::after {
   .topbar { padding: 0 16px; }
   .page { padding: 16px; }
   .agent-grid { grid-template-columns: 1fr; }
-  .three-col { grid-template-columns: 1fr; }
 }
 
 </style>
@@ -638,7 +618,7 @@ async function renderHub(app) {
     // Build sections
     app.appendChild(renderOverviewSection(overview));
     app.appendChild(renderTeamSection(agents));
-    app.appendChild(renderActivitySection({tasks:[]}, consensus, {signals:[]}));
+    app.appendChild(renderActivitySection(consensus));
     app.appendChild(renderKnowledgeSection(agents));
 
     // Wire WS live updates — selective section refresh, debounced
@@ -684,7 +664,7 @@ async function renderHub(app) {
           const sections = app.querySelectorAll('.section');
           if (ov && sections[0]) { const el = renderOverviewSection(ov); sections[0].replaceWith(el); }
           if (ag && sections[1]) { const el = renderTeamSection(ag); sections[1].replaceWith(el); }
-          if (cx && sections[2]) { const el = renderActivitySection({tasks:[]}, cx, {signals:[]}); sections[2].replaceWith(el); }
+          if (cx && sections[2]) { const el = renderActivitySection(cx); sections[2].replaceWith(el); }
           if (ag && sections[3]) { const el = renderKnowledgeSection(ag); sections[3].replaceWith(el); }
         } catch { /* best-effort live update */ }
       }, 500);
@@ -889,119 +869,96 @@ function renderTeamSection(agents) {
   return section;
 }
 
-// packages/dashboard/src/hub/activity.js — 3-column: tasks + consensus + signals
+// packages/dashboard/src/hub/activity.js — Consensus run timeline with expandable findings
 
-function renderActivitySection(tasksData, consensusData, signalsData) {
-  const { escapeHtml: e, navigate, makeSection } = window._dash;
-  const totalToday = tasksData.tasks?.length || 0;
-  const section = makeSection('Activity', totalToday + ' tasks', 'all tasks →', '#/tasks');
+function renderActivitySection(consensusData) {
+  const { escapeHtml: e, navigate, makeSection, timeAgo, agentInitials } = window._dash;
+  // Handle both old signature (3 args) and new (1 arg)
+  if (arguments.length === 3) consensusData = arguments[1];
 
-  const cols = document.createElement('div');
-  cols.className = 'three-col';
+  const runs = consensusData.runs || [];
+  const section = makeSection('Recent Runs', runs.length + ' runs', 'all signals →', '#/signals');
 
-  // ── Recent Tasks panel ─────────────────────────
-  const tasksPanel = document.createElement('div');
-  tasksPanel.className = 'panel';
-  tasksPanel.innerHTML = '<div class="panel-head"><span class="panel-title">Recent Tasks</span></div>';
-  const tasksBody = document.createElement('div');
-  tasksBody.className = 'panel-body';
+  const list = document.createElement('div');
+  list.className = 'run-list';
 
-  const tasks = (tasksData.tasks || []).slice(0, 20);
-  if (tasks.length === 0) {
-    tasksBody.innerHTML = '<div class="empty-state">No tasks yet</div>';
-  } else {
-    for (const t of tasks) {
-      const time = t.timestamp ? new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-      const color = t.status === 'completed' ? 'var(--green)' : t.status === 'failed' ? 'var(--red)' : 'var(--accent)';
-      const dur = t.duration > 0 ? '<span class="fr-dur">' + (t.duration / 1000).toFixed(1) + 's</span>' : '';
-      const desc = e((t.task || '').replace(/\n.*/s, '').slice(0, 50));
-
-      const row = document.createElement('div');
-      row.className = 'fr';
-      row.innerHTML =
-        '<span class="fr-dot" style="background:' + color + '"></span>' +
-        '<span class="fr-time">' + time + '</span>' +
-        '<span><span class="fr-agent">' + e(t.agentId) + '</span> ' + desc + dur + '</span>';
-      tasksBody.appendChild(row);
-    }
-  }
-  tasksPanel.appendChild(tasksBody);
-  cols.appendChild(tasksPanel);
-
-  // ── Consensus Runs panel ───────────────────────
-  const cxPanel = document.createElement('div');
-  cxPanel.className = 'panel';
-  cxPanel.innerHTML =
-    '<div class="panel-head"><span class="panel-title">Consensus</span>' +
-    '<button class="sh-action" role="link">details →</button></div>';
-  cxPanel.querySelector('.sh-action')?.addEventListener('click', () => navigate('#/signals'));
-
-  const cxBody = document.createElement('div');
-  cxBody.className = 'panel-body';
-
-  const runs = (consensusData.runs || []).slice(0, 10);
   if (runs.length === 0) {
-    cxBody.innerHTML = '<div class="empty-state">No consensus runs yet</div>';
-  } else {
-    for (const run of runs) {
-      const time = run.timestamp ? new Date(run.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-      const c = run.counts || {};
-      const pills = [];
-      if (c.agreement) pills.push('<span class="pill pill-g">&#10003; ' + c.agreement + '</span>');
-      if (c.disagreement || c.hallucination) pills.push('<span class="pill pill-r">' + ((c.disagreement || 0) + (c.hallucination || 0)) + '</span>');
-      if (c.unverified) pills.push('<span class="pill pill-y">' + c.unverified + '</span>');
+    list.innerHTML = '<div class="empty-state">No consensus runs yet. Dispatch agents with gossip_dispatch_consensus.</div>';
+    section.appendChild(list);
+    return section;
+  }
+
+  for (const run of runs.slice(0, 10)) {
+    const card = document.createElement('div');
+    card.className = 'run-card';
+
+    const c = run.counts || {};
+    const total = (c.agreement || 0) + (c.disagreement || 0) + (c.hallucination || 0) + (c.unverified || 0) + (c.unique || 0) + (c.new || 0);
+
+    const pills = [];
+    if (c.agreement) pills.push('<span class="pill pill-g">' + c.agreement + ' confirmed</span>');
+    if (c.disagreement || c.hallucination) pills.push('<span class="pill pill-r">' + ((c.disagreement || 0) + (c.hallucination || 0)) + ' disputed</span>');
+    if (c.unverified) pills.push('<span class="pill pill-y">' + c.unverified + ' unverified</span>');
+    if (c.unique) pills.push('<span class="pill pill-b">' + c.unique + ' unique</span>');
+
+    const agentChips = run.agents.slice(0, 4).map(a =>
+      '<span class="run-agent-chip">' + agentInitials(a) + '</span>'
+    ).join('');
+    const moreAgents = run.agents.length > 4 ? '<span class="run-agent-more">+' + (run.agents.length - 4) + '</span>' : '';
+
+    const header = document.createElement('div');
+    header.className = 'run-header';
+    header.innerHTML =
+      '<div class="run-top">' +
+        '<span class="run-expand">&#9654;</span>' +
+        '<span class="run-title">' + total + ' findings</span>' +
+        '<span class="run-agents">' + agentChips + moreAgents + '</span>' +
+        '<span class="run-time">' + timeAgo(run.timestamp) + '</span>' +
+      '</div>' +
+      '<div class="run-pills">' + pills.join('') + '</div>';
+
+    const findings = document.createElement('div');
+    findings.className = 'run-findings';
+    findings.hidden = true;
+
+    for (const sig of run.signals) {
+      if (sig.signal === 'signal_retracted') continue;
+      let tag = '', tagClass = '';
+      if (sig.signal === 'agreement' || sig.signal === 'unique_confirmed') { tag = 'CONFIRMED'; tagClass = 'tag-g'; }
+      else if (sig.signal === 'disagreement' || sig.signal === 'hallucination_caught') { tag = 'DISPUTED'; tagClass = 'tag-r'; }
+      else if (sig.signal === 'unverified' || sig.signal === 'unique_unconfirmed') { tag = 'UNVERIFIED'; tagClass = 'tag-y'; }
+      else if (sig.signal === 'new_finding') { tag = 'NEW'; tagClass = 'tag-b'; }
+      else continue;
+
+      const evidence = e((sig.evidence || '').slice(0, 200));
+      const attribution = sig.counterpartId
+        ? e(sig.agentId) + ' & ' + e(sig.counterpartId)
+        : e(sig.agentId);
 
       const row = document.createElement('div');
-      row.className = 'cr';
-      row.addEventListener('click', () => navigate('#/consensus/' + encodeURIComponent(run.taskId)));
+      row.className = 'finding-row';
       row.innerHTML =
-        '<span class="cr-time">' + time + '</span>' +
-        '<span class="cr-info">' + run.agents.length + ' agents</span>' +
-        '<div class="cr-pills">' + pills.join('') + '</div>';
-      cxBody.appendChild(row);
+        '<span class="finding-tag ' + tagClass + '">' + tag + '</span>' +
+        '<div class="finding-body">' +
+          '<div class="finding-text">' + evidence + '</div>' +
+          '<div class="finding-attr">' + attribution + '</div>' +
+        '</div>';
+      findings.appendChild(row);
     }
+
+    header.addEventListener('click', () => {
+      const isOpen = !findings.hidden;
+      findings.hidden = isOpen;
+      header.querySelector('.run-expand').innerHTML = isOpen ? '&#9654;' : '&#9660;';
+      card.classList.toggle('run-open', !isOpen);
+    });
+
+    card.appendChild(header);
+    card.appendChild(findings);
+    list.appendChild(card);
   }
-  cxPanel.appendChild(cxBody);
-  cols.appendChild(cxPanel);
 
-  // ── Signals panel ──────────────────────────────
-  const sigPanel = document.createElement('div');
-  sigPanel.className = 'panel';
-  sigPanel.innerHTML =
-    '<div class="panel-head"><span class="panel-title">Signals</span>' +
-    '<button class="sh-action" role="link">all →</button></div>';
-  sigPanel.querySelector('.sh-action')?.addEventListener('click', () => navigate('#/signals'));
-
-  const sigBody = document.createElement('div');
-  sigBody.className = 'panel-body';
-
-  const sigs = (signalsData.signals || []).slice(0, 15);
-  if (sigs.length === 0) {
-    sigBody.innerHTML = '<div class="empty-state">No signals yet</div>';
-  } else {
-    for (const s of sigs) {
-      const typeClass = (s.signal || '').includes('agreement') ? 'agreement'
-        : (s.signal || '').includes('hallucination') ? 'hallucination'
-        : (s.signal || '').includes('unique') ? 'unique'
-        : (s.signal || '').includes('disagree') ? 'disagreement' : 'unique';
-      const typeLabel = (s.signal || '').replace(/_/g, ' ').replace(/caught$/, '').trim().slice(0, 10);
-      const finding = e((s.evidence || s.finding || '').slice(0, 40));
-      const arrow = s.counterpartId ? '<span class="sig-arrow">→</span><span class="sig-agent">' + e(s.counterpartId).slice(0, 12) + '</span>' : '';
-
-      const row = document.createElement('div');
-      row.className = 'sig-row';
-      row.innerHTML =
-        '<span class="sig-type ' + typeClass + '">' + e(typeLabel) + '</span>' +
-        '<span class="sig-agent">' + e((s.agentId || '').slice(0, 12)) + '</span>' +
-        arrow +
-        '<span class="sig-finding">' + finding + '</span>';
-      sigBody.appendChild(row);
-    }
-  }
-  sigPanel.appendChild(sigBody);
-  cols.appendChild(sigPanel);
-
-  section.appendChild(cols);
+  section.appendChild(list);
   return section;
 }
 
