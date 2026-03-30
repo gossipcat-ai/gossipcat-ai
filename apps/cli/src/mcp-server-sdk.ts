@@ -1327,16 +1327,31 @@ server.tool(
   }
 );
 
-// ── Info: list agents ─────────────────────────────────────────────────────
+// ── Info: status + agents (merged) ────────────────────────────────────────
 server.tool(
-  'gossip_agents',
-  'List all available agents: gossipcat workers AND Claude Code subagents (.claude/agents/) connected to the relay. All agents support gossip_dispatch and consensus.',
+  'gossip_status',
+  'Check Gossip Mesh system status, host environment, available agents, dashboard URL/key, and agent list with provider/model/skills.',
   {},
   async () => {
     const { findConfigPath, loadConfig, configToAgentConfigs, loadClaudeSubagents } = await import('./config');
-    const sections: string[] = [];
 
-    // Gossipcat agents from config
+    // System status
+    const claudeSubagentsList = loadClaudeSubagents(process.cwd());
+    const lines = [
+      'Gossip Mesh Status:',
+      `  Host: ${env.host}${env.supportsNativeAgents ? ' (native agents supported)' : ''}`,
+      `  Native agent dir: ${env.nativeAgentDir || 'n/a'}`,
+      `  Relay: ${relay ? `running :${relay.port}` : 'not started'}`,
+      `  Tool Server: ${toolServer ? 'running' : 'not started'}`,
+      `  Workers: ${workers.size} (${Array.from(workers.keys()).join(', ') || 'none'})`,
+      `  Claude subagents found: ${claudeSubagentsList.length}`,
+    ];
+    if (relay?.dashboardUrl) {
+      lines.push(`  Dashboard: ${relay.dashboardUrl} (key: ${relay.dashboardKeyPrefix}...)`);
+    }
+
+    // Agent list (formerly gossip_agents)
+    const agentSections: string[] = [];
     const configPath = findConfigPath();
     const gossipAgents: string[] = [];
     const existingIds = new Set<string>();
@@ -1347,7 +1362,7 @@ server.tool(
         existingIds.add(a.id);
         gossipAgents.push(`  - ${a.id}: ${a.provider}/${a.model} (${a.preset || 'custom'}) — skills: ${a.skills.join(', ')}`);
       }
-      sections.push(`Orchestrator: ${config.main_agent.model} (${config.main_agent.provider})`);
+      agentSections.push(`Orchestrator: ${config.main_agent.model} (${config.main_agent.provider})`);
     }
 
     // Claude Code subagents loaded into relay
@@ -1357,41 +1372,17 @@ server.tool(
     }
 
     if (gossipAgents.length > 0) {
-      sections.push(`\nAgents on relay (${gossipAgents.length}):\n${gossipAgents.join('\n')}`);
+      agentSections.push(`\nAgents on relay (${gossipAgents.length}):\n${gossipAgents.join('\n')}`);
     } else {
-      sections.push('\nNo agents configured. Run gossip_setup or add .claude/agents/*.md files.');
+      agentSections.push('\nNo agents configured. Run gossip_setup or add .claude/agents/*.md files.');
     }
 
     // Show runtime worker status if booted
     if (booted && workers.size > 0) {
-      sections.push(`\nRelay workers online: ${workers.size} — [${Array.from(workers.keys()).join(', ')}]`);
+      agentSections.push(`\nRelay workers online: ${workers.size} — [${Array.from(workers.keys()).join(', ')}]`);
     }
 
-    return { content: [{ type: 'text' as const, text: sections.join('\n') }] };
-  }
-);
-
-// ── Info: status ──────────────────────────────────────────────────────────
-server.tool(
-  'gossip_status',
-  'Check Gossip Mesh system status, host environment, available agents, and dashboard URL/key',
-  {},
-  async () => {
-    const { loadClaudeSubagents } = await import('./config');
-    const claudeCount = loadClaudeSubagents(process.cwd()).length;
-    const lines = [
-      'Gossip Mesh Status:',
-      `  Host: ${env.host}${env.supportsNativeAgents ? ' (native agents supported)' : ''}`,
-      `  Native agent dir: ${env.nativeAgentDir || 'n/a'}`,
-      `  Relay: ${relay ? `running :${relay.port}` : 'not started'}`,
-      `  Tool Server: ${toolServer ? 'running' : 'not started'}`,
-      `  Workers: ${workers.size} (${Array.from(workers.keys()).join(', ') || 'none'})`,
-      `  Claude subagents found: ${claudeCount}`,
-    ];
-    if (relay?.dashboardUrl) {
-      lines.push(`  Dashboard: ${relay.dashboardUrl} (key: ${relay.dashboardKeyPrefix}...)`);
-    }
-    return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    return { content: [{ type: 'text' as const, text: lines.join('\n') + '\n\n' + agentSections.join('\n') }] };
   }
 );
 
@@ -2443,8 +2434,7 @@ server.tool(
       { name: 'gossip_dispatch_consensus', desc: 'Dispatch with consensus summary instruction. Returns task IDs.' },
       { name: 'gossip_collect_consensus', desc: 'Collect + cross-review. Returns tagged CONFIRMED/DISPUTED/UNIQUE/NEW report.' },
       { name: 'gossip_orchestrate', desc: 'Submit task for multi-agent execution via MainAgent' },
-      { name: 'gossip_agents', desc: 'List configured agents with provider, model, role, skills' },
-      { name: 'gossip_status', desc: 'Check relay, tool-server, workers, and dashboard URL/key' },
+      { name: 'gossip_status', desc: 'Check system status, agents, relay, workers, and dashboard URL/key' },
       { name: 'gossip_update_instructions', desc: 'Update agent instructions (single or batch). Modes: append/replace' },
       { name: 'gossip_run', desc: 'Single-call dispatch — run a task on one agent and get the result (1 call for relay, 2 for native)' },
       { name: 'gossip_relay', desc: 'Feed native Agent tool result back into relay for consensus + memory + gossip' },
