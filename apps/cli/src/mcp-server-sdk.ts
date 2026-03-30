@@ -1074,7 +1074,7 @@ server.tool(
           // Use disagreement for empty/timeout (reliability failure), hallucination only for actual errors
           signal: (r.status === 'failed' ? 'disagreement' : 'disagreement') as const,
           agentId: r.agentId,
-          evidence: r.status === 'failed' ? `Task failed: ${(r.error || '').slice(0, 100)}`
+          evidence: r.status === 'failed' ? `Task failed: ${r.error || 'unknown error'}`
             : r.status === 'timeout' ? 'Task timed out — no response'
             : 'Empty response — agent produced no output',
           timestamp,
