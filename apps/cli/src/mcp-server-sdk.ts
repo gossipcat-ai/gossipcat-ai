@@ -980,7 +980,7 @@ server.tool(
   'Collect results from dispatched tasks. Waits for completion by default. Use consensus: true for cross-review round.',
   {
     task_ids: z.array(z.string()).default([]).describe('Task IDs to collect. Empty array for all.'),
-    timeout_ms: z.number().default(120000).describe('Max wait time in ms.'),
+    timeout_ms: z.number().default(300000).describe('Max wait time in ms. Default 5 minutes.'),
     consensus: z.boolean().default(false).describe('Enable cross-review consensus. Agents review each others findings.'),
   },
   async ({ task_ids, timeout_ms, consensus }) => {
@@ -1020,7 +1020,7 @@ server.tool(
 
     if (pendingNativeIds.length > 0 && consensus) {
       const POLL_INTERVAL = 2000;
-      const nativeTimeout = Math.min(timeout_ms, 120000); // cap native wait at 2min
+      const nativeTimeout = timeout_ms;
       const deadline = Date.now() + nativeTimeout;
       process.stderr.write(`[gossipcat] Waiting for ${pendingNativeIds.length} native agent(s) before consensus...\n`);
 
@@ -1253,7 +1253,7 @@ server.tool(
     const pendingNativeIds = nativeIds.filter(id => nativeTaskMap.has(id) && !nativeResultMap.has(id));
     if (pendingNativeIds.length > 0) {
       const POLL_INTERVAL = 2000;
-      const nativeTimeout = Math.min(timeout_ms, 120000);
+      const nativeTimeout = timeout_ms;
       const deadline = Date.now() + nativeTimeout;
       process.stderr.write(`[gossipcat] Waiting for ${pendingNativeIds.length} native agent(s) before consensus...\n`);
 
@@ -1822,7 +1822,7 @@ server.tool(
     // Relay worker — dispatch and collect in one call
     try {
       const { taskId } = mainAgent.dispatch(agent_id, task, options);
-      const collectResult = await mainAgent.collect([taskId], 120000);
+      const collectResult = await mainAgent.collect([taskId], 300000);
       const entry = collectResult.results[0];
 
       if (!entry) {
