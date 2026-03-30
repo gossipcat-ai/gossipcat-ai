@@ -33,26 +33,54 @@ function agentColor(agent) {
   return 'var(--accent)';
 }
 
-// ── Live Task Strip ────────────────────────────────────────────────────
-async function renderLiveStrip(container) {
+// ── Task Strip — active tasks when working, recent completed when idle ──
+async function renderTaskStrip(container) {
   try {
-    const data = await api('active-tasks');
-    // Filter to genuinely active tasks (started < 30 min ago — older ones are orphaned)
+    // Try active tasks first
+    const activeData = await api('active-tasks');
     const MAX_AGE_MS = 30 * 60 * 1000;
     const now = Date.now();
-    const tasks = (data.tasks || []).filter(t => now - new Date(t.startedAt).getTime() < MAX_AGE_MS);
+    const active = (activeData.tasks || []).filter(t => now - new Date(t.startedAt).getTime() < MAX_AGE_MS);
+
     container.innerHTML = '';
-    if (tasks.length === 0) { container.hidden = true; return; }
     container.hidden = false;
-    for (const t of tasks) {
+
+    if (active.length > 0) {
+      // Live mode: agents are working
+      container.className = 'section live-strip live-active';
+      for (const t of active) {
+        const desc = escapeHtml((t.task || '').replace(/\n.*/s, '').slice(0, 60));
+        const row = document.createElement('div');
+        row.className = 'live-task';
+        row.innerHTML =
+          '<span class="live-icon">&#9889;</span>' +
+          '<span class="live-agent">' + escapeHtml(t.agentId) + '</span>' +
+          '<span class="live-desc">' + desc + '</span>' +
+          '<span class="live-elapsed">' + timeAgo(t.startedAt) + '</span>';
+        container.appendChild(row);
+      }
+      return;
+    }
+
+    // Idle mode: show recent completed tasks
+    const taskData = await api('tasks');
+    const recent = (taskData.tasks || []).slice(0, 10);
+    if (recent.length === 0) { container.hidden = true; return; }
+
+    container.className = 'section live-strip';
+    for (const t of recent) {
+      const color = t.status === 'completed' ? 'var(--green)' : t.status === 'failed' ? 'var(--red)' : 'var(--text-3)';
+      const icon = t.status === 'completed' ? '&#10003;' : t.status === 'failed' ? '&#10007;' : '&#8943;';
       const desc = escapeHtml((t.task || '').replace(/\n.*/s, '').slice(0, 60));
+      const dur = t.duration > 0 ? (t.duration / 1000).toFixed(1) + 's' : '';
       const row = document.createElement('div');
       row.className = 'live-task';
       row.innerHTML =
-        '<span class="live-icon">&#9889;</span>' +
+        '<span class="live-icon" style="color:' + color + '">' + icon + '</span>' +
         '<span class="live-agent">' + escapeHtml(t.agentId) + '</span>' +
         '<span class="live-desc">' + desc + '</span>' +
-        '<span class="live-elapsed">' + timeAgo(t.startedAt) + '</span>';
+        (dur ? '<span class="live-elapsed" style="color:var(--text-3)">' + dur + '</span>' : '') +
+        '<span class="live-elapsed">' + timeAgo(t.timestamp) + '</span>';
       container.appendChild(row);
     }
   } catch { container.hidden = true; }
@@ -201,7 +229,7 @@ async function renderHub(app) {
     liveStrip.className = 'section live-strip';
     liveStrip.hidden = true;
     app.appendChild(liveStrip);
-    renderLiveStrip(liveStrip);
+    renderTaskStrip(liveStrip);
 
     app.appendChild(renderTeamSection(agents));
     app.appendChild(renderActivitySection(consensus));
@@ -225,7 +253,7 @@ async function renderHub(app) {
     const wsHandler = onDashboardEvent((event) => {
       if (event.type === 'task_dispatched' || event.type === 'task_completed' || event.type === 'task_failed') {
         const strip = app.querySelector('.live-strip');
-        if (strip) renderLiveStrip(strip);
+        if (strip) renderTaskStrip(strip);
       }
 
       const sections = sectionMap[event.type];
