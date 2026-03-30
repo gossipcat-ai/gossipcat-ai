@@ -1040,6 +1040,34 @@ server.tool(
       return { content: [{ type: 'text' as const, text: requestedIds ? 'No matching tasks.' : 'No pending tasks.' }] };
     }
 
+    // Step 3.5: Auto-signal on failed/timeout/empty results
+    // Only flag truly empty responses (no content at all), not valid short answers
+    try {
+      const failedResults = allResults.filter((r: any) =>
+        r.status === 'failed' ||
+        r.status === 'timeout' ||
+        (r.status === 'completed' && (!r.result || r.result.trim().length === 0))
+      );
+      if (failedResults.length > 0) {
+        const { PerformanceWriter } = await import('@gossip/orchestrator');
+        const writer = new PerformanceWriter(process.cwd());
+        const timestamp = new Date().toISOString();
+        const autoSignals = failedResults.map((r: any) => ({
+          type: 'consensus' as const,
+          taskId: r.id || '',
+          // Use disagreement for empty/timeout (reliability failure), hallucination only for actual errors
+          signal: (r.status === 'failed' ? 'disagreement' : 'disagreement') as const,
+          agentId: r.agentId,
+          evidence: r.status === 'failed' ? `Task failed: ${(r.error || '').slice(0, 100)}`
+            : r.status === 'timeout' ? 'Task timed out — no response'
+            : 'Empty response — agent produced no output',
+          timestamp,
+        }));
+        writer.appendSignals(autoSignals);
+        process.stderr.write(`[gossipcat] Auto-recorded ${autoSignals.length} failure signal(s): ${autoSignals.map((s: any) => s.agentId).join(', ')}\n`);
+      }
+    } catch { /* best-effort */ }
+
     // Step 4: Run consensus on merged results (relay + native together)
     let consensusReport: any = undefined;
     if (consensus && allResults.filter((r: any) => r.status === 'completed').length >= 2) {
@@ -1885,6 +1913,7 @@ server.tool(
   'gossip_record_signals',
   'Record consensus performance signals after cross-referencing agent findings. Call IMMEDIATELY when you verify a finding against code — don\'t batch or defer. If you read the code and the finding is wrong, record hallucination_caught right away. If confirmed, record unique_confirmed/agreement right away. Maps signals to agent performance scores that improve future dispatch decisions.',
   {
+    task_id: z.string().optional().describe('Real task ID to link manual signals to the triggering task. If omitted, a synthetic manual-* ID is generated.'),
     signals: z.array(z.object({
       signal: z.enum(['agreement', 'disagreement', 'unique_confirmed', 'unique_unconfirmed', 'new_finding', 'hallucination_caught'])
         .describe('Signal type: agreement (both agree), disagreement (one wrong), unique_confirmed (only one found it + verified), unique_unconfirmed (only one found it, unverified), new_finding (discovered during cross-review), hallucination_caught (fabricated finding)'),
@@ -1894,7 +1923,7 @@ server.tool(
       evidence: z.string().optional().describe('Supporting evidence or reasoning'),
     })).describe('Array of consensus signals from your cross-referencing of agent results'),
   },
-  async ({ signals }) => {
+  async ({ task_id, signals }) => {
     await boot();
 
     if (signals.length === 0) {
@@ -1905,14 +1934,27 @@ server.tool(
       const { PerformanceWriter } = await import('@gossip/orchestrator');
       const writer = new PerformanceWriter(process.cwd());
       const timestamp = new Date().toISOString();
+      const MAX_EVIDENCE_LENGTH = 2000;
+      const PUNITIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement']);
+      const COUNTERPART_REQUIRED = new Set(['agreement', 'disagreement']);
 
-      const formatted = signals.map(s => ({
+      // Validate: punitive signals require evidence
+      for (const s of signals) {
+        if (PUNITIVE_SIGNALS.has(s.signal) && (!s.evidence || s.evidence.trim().length === 0)) {
+          return { content: [{ type: 'text' as const, text: `Error: ${s.signal} signals require non-empty evidence for audit trail. Agent: ${s.agent_id}` }] };
+        }
+        if (COUNTERPART_REQUIRED.has(s.signal) && (!s.counterpart_id || s.counterpart_id.trim().length === 0)) {
+          return { content: [{ type: 'text' as const, text: `Error: ${s.signal} signals require counterpart_id. Agent: ${s.agent_id}` }] };
+        }
+      }
+
+      const formatted = signals.map((s, i) => ({
         type: 'consensus' as const,
-        taskId: '',
+        taskId: task_id || `manual-${timestamp.replace(/[:.]/g, '')}-${i}`,
         signal: s.signal,
         agentId: s.agent_id,
         counterpartId: s.counterpart_id,
-        evidence: s.evidence || s.finding,
+        evidence: ((s.evidence || s.finding) ?? '').slice(0, MAX_EVIDENCE_LENGTH),
         timestamp,
       }));
 
@@ -1931,9 +1973,42 @@ server.tool(
         .map(([id, { pos, neg }]) => `  ${id}: +${pos} / -${neg}`)
         .join('\n');
 
-      return { content: [{ type: 'text' as const, text: `Recorded ${signals.length} consensus signals:\n${summary}\n\nThese will influence future agent selection via dispatch weighting.` }] };
+      const taskIdList = formatted.map(f => `  ${f.agentId}: ${f.taskId}`).join('\n');
+      return { content: [{ type: 'text' as const, text: `Recorded ${signals.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\nThese will influence future agent selection via dispatch weighting.` }] };
     } catch (err) {
       return { content: [{ type: 'text' as const, text: `Failed to record signals: ${(err as Error).message}` }] };
+    }
+  }
+);
+
+// ── Retract signals ───────────────────────────────────────────────────────
+server.tool(
+  'gossip_retract_signal',
+  'Retract a previously recorded signal for an agent. Use when a signal was recorded incorrectly (e.g., hallucination_caught for a minor citation error that should have been unverified). The retraction is append-only — the original signal stays in the audit log but is excluded from scoring.',
+  {
+    agent_id: z.string().describe('Agent whose signal to retract'),
+    task_id: z.string().describe('Task ID of the signal to retract (from the original signal)'),
+    reason: z.string().describe('Why this signal is being retracted'),
+  },
+  async ({ agent_id, task_id, reason }) => {
+    await boot();
+    if (!task_id || task_id.trim().length === 0) {
+      return { content: [{ type: 'text' as const, text: 'Error: task_id is required for retraction. Use the task ID from the original signal.' }] };
+    }
+    try {
+      const { PerformanceWriter } = await import('@gossip/orchestrator');
+      const writer = new PerformanceWriter(process.cwd());
+      writer.appendSignals([{
+        type: 'consensus' as const,
+        taskId: task_id,
+        signal: 'signal_retracted',
+        agentId: agent_id,
+        evidence: `Retracted: ${reason}`,
+        timestamp: new Date().toISOString(),
+      }]);
+      return { content: [{ type: 'text' as const, text: `Retracted signal for ${agent_id} on task ${task_id}.\nReason: ${reason}\n\nThe original signal remains in the audit log but will be excluded from scoring.` }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Failed to retract: ${(err as Error).message}` }] };
     }
   }
 );
@@ -2394,6 +2469,18 @@ server.tool(
       const { join: j } = require('path');
       wf(j(process.cwd(), '.gossip', 'agents', '_project', 'memory', 'session-gossip.jsonl'), '');
     } catch {}
+
+    // 7. Regenerate bootstrap.md so next session/reconnect gets fresh context
+    try {
+      const { BootstrapGenerator } = await import('@gossip/orchestrator');
+      const generator = new BootstrapGenerator(process.cwd());
+      const result = generator.generate();
+      const { writeFileSync: wf, mkdirSync: md } = require('fs');
+      const { join: j } = require('path');
+      md(j(process.cwd(), '.gossip'), { recursive: true });
+      wf(j(process.cwd(), '.gossip', 'bootstrap.md'), result.prompt);
+      process.stderr.write('[gossipcat] Bootstrap regenerated with new session context\n');
+    } catch { /* best-effort */ }
 
     let output = `Session saved to .gossip/agents/_project/memory/\n\n${summary}`;
     output += '\n\n---\nNext session: gossip_bootstrap() will load this context automatically.';
