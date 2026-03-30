@@ -469,12 +469,14 @@ function agentColor(agent) {
 async function renderLiveStrip(container) {
   try {
     const data = await api('active-tasks');
-    const tasks = data.tasks || [];
+    // Filter to genuinely active tasks (started < 30 min ago — older ones are orphaned)
+    const MAX_AGE_MS = 30 * 60 * 1000;
+    const now = Date.now();
+    const tasks = (data.tasks || []).filter(t => now - new Date(t.startedAt).getTime() < MAX_AGE_MS);
     container.innerHTML = '';
     if (tasks.length === 0) { container.hidden = true; return; }
     container.hidden = false;
     for (const t of tasks) {
-      const elapsed = Math.floor((Date.now() - new Date(t.startedAt).getTime()) / 1000);
       const desc = escapeHtml((t.task || '').replace(/\n.*/s, '').slice(0, 60));
       const row = document.createElement('div');
       row.className = 'live-task';
@@ -482,7 +484,7 @@ async function renderLiveStrip(container) {
         '<span class="live-icon">&#9889;</span>' +
         '<span class="live-agent">' + escapeHtml(t.agentId) + '</span>' +
         '<span class="live-desc">' + desc + '</span>' +
-        '<span class="live-elapsed">' + elapsed + 's</span>';
+        '<span class="live-elapsed">' + timeAgo(t.startedAt) + '</span>';
       container.appendChild(row);
     }
   } catch { container.hidden = true; }
