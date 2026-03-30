@@ -102,7 +102,7 @@ gossip_dispatch_consensus(tasks: [
 \`\`\`
 
 ### Step 2: Execute native agents, then relay results
-\`gossip_relay_result(task_id: "<id>", result: "<agent output>")\`
+\`gossip_relay(task_id: "<id>", result: "<agent output>")\`
 
 ### Step 3: Collect with cross-review
 \`gossip_collect_consensus(task_ids, timeout_ms: 300000)\`
@@ -149,7 +149,7 @@ instead. This ensures tasks appear in the dashboard, agent memory is written, an
 performance signals are recorded.
 
 **Flow:** \`gossip_run(agent_id, task)\` → returns Agent() instructions for native agents →
-execute the Agent() → \`gossip_run_complete(task_id, result)\` to close the loop.
+execute the Agent() → \`gossip_relay(task_id, result)\` to close the loop.
 
 **Exception:** \`gossip_dispatch_consensus\` already handles its own native Agent() calls —
 don't double-wrap those.
@@ -159,7 +159,7 @@ feed, no memory is written, no signals recorded. The agent effectively works off
 
 ## Native Agent Relay Rule
 
-When dispatching native agents: gossip_dispatch → Agent() → gossip_relay_result. Never skip the relay call.
+When dispatching native agents: gossip_dispatch → Agent() → gossip_relay. Never skip the relay call.
 
 ## Permissions
 
@@ -178,7 +178,7 @@ function presetScores(preset: string): { relevance: number; accuracy: number; un
   }
 }
 
-// Native agent task tracking — results fed back via gossip_relay_result
+// Native agent task tracking — results fed back via gossip_relay
 const nativeTaskMap: Map<string, { agentId: string; task: string; startedAt: number; planId?: string; step?: number }> = new Map();
 const nativeAgentConfigs: Map<string, { model: string; instructions: string; description: string }> = new Map();
 // Collected native results — so gossip_collect can return them alongside relay results
@@ -874,8 +874,8 @@ server.tool(
         `Step 1 — Run:\n` +
         `Agent(model: "${nativeConfig.model}", prompt: ${JSON.stringify(agentPrompt)}${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n` +
         `Step 2 — REQUIRED after agent completes:\n` +
-        `gossip_relay_result(task_id: "${taskId}", result: "<agent output>")\n\n` +
-        `⚠️ You MUST call gossip_relay_result for every native dispatch. Without it, the result is lost — no memory, no gossip, no consensus. Never skip this step.`
+        `gossip_relay(task_id: "${taskId}", result: "<agent output>")\n\n` +
+        `⚠️ You MUST call gossip_relay for every native dispatch. Without it, the result is lost — no memory, no gossip, no consensus. Never skip this step.`
       }] };
     }
 
@@ -960,7 +960,7 @@ server.tool(
       lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
       nativeInstructions.push(
         `Agent(model: "${nativeConfig.model}", prompt: ${JSON.stringify(agentPrompt)}${def.write_mode === 'worktree' ? ', isolation: "worktree"' : ''}, run_in_background: true)` +
-        `\n  → then: gossip_relay_result(task_id: "${taskId}", result: "<output>")`
+        `\n  → then: gossip_relay(task_id: "${taskId}", result: "<output>")`
       );
     }
 
@@ -968,7 +968,7 @@ server.tool(
     if (consensus) msg += '\n\n📋 Consensus mode enabled.';
     if (nativeInstructions.length > 0) {
       msg += `\n\nNATIVE_DISPATCH: Execute these ${nativeInstructions.length} Agent calls in parallel, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
-      msg += `\n\n⚠️ You MUST call gossip_relay_result for EVERY native agent after it completes. Without it, results are lost — no memory, no gossip, no consensus.`;
+      msg += `\n\n⚠️ You MUST call gossip_relay for EVERY native agent after it completes. Without it, results are lost — no memory, no gossip, no consensus.`;
     }
     return { content: [{ type: 'text' as const, text: msg }] };
   }
@@ -1208,7 +1208,7 @@ server.tool(
       lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
       nativeInstructions.push(
         `Agent(model: "${nativeConfig.model}", prompt: ${JSON.stringify(agentPrompt)}, run_in_background: true)` +
-        `\n  → then: gossip_relay_result(task_id: "${taskId}", result: "<output>")`
+        `\n  → then: gossip_relay(task_id: "${taskId}", result: "<output>")`
       );
     }
 
@@ -1217,7 +1217,7 @@ server.tool(
     msg += `\nCall gossip_collect_consensus with task IDs: [${allTaskIds.map(id => `"${id}"`).join(', ')}]`;
     if (nativeInstructions.length > 0) {
       msg += `\n\nNATIVE_DISPATCH: Execute these ${nativeInstructions.length} Agent calls, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
-      msg += `\n\n⚠️ You MUST call gossip_relay_result for EVERY native agent after it completes. Without it, results are lost — no memory, no consensus cross-review.`;
+      msg += `\n\n⚠️ You MUST call gossip_relay for EVERY native agent after it completes. Without it, results are lost — no memory, no consensus cross-review.`;
     }
     return { content: [{ type: 'text' as const, text: msg }] };
   }
@@ -1285,7 +1285,7 @@ server.tool(
     }
 
     if (allResults.length === 0) {
-      return { content: [{ type: 'text' as const, text: 'No matching tasks. Native agents may still be running — call gossip_relay_result first.' }] };
+      return { content: [{ type: 'text' as const, text: 'No matching tasks. Native agents may still be running — call gossip_relay first.' }] };
     }
 
     // Step 4: Run full consensus pipeline (engine + judge + signals + cross-agent learning)
@@ -1677,102 +1677,105 @@ server.tool(
   }
 );
 
+// ── Shared handler for native agent relay ────────────────────────────────
+async function handleNativeRelay(task_id: string, result: string, error?: string) {
+  await boot(); // [H3 fix] ensure mainAgent/pipeline are available
+
+  const taskInfo = nativeTaskMap.get(task_id);
+  if (!taskInfo) {
+    return { content: [{ type: 'text' as const, text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch or gossip_run?` }] };
+  }
+
+  // Move to result map BEFORE running pipeline — prevents data loss if pipeline crashes
+  const elapsed = Date.now() - taskInfo.startedAt;
+  nativeTaskMap.delete(task_id);
+  nativeResultMap.set(task_id, {
+    id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
+    status: error ? 'failed' : 'completed',
+    result: error ? undefined : (result ? result.slice(0, 50000) : result), // intentional 50k cap — memory protection
+    error: error || undefined,
+    startedAt: taskInfo.startedAt, completedAt: Date.now(),
+  });
+  persistNativeTaskMap();
+  evictStaleNativeTasks();
+
+  // Run the same post-collect pipeline as custom agents:
+  // 1. Memory write  2. Knowledge extraction  3. Gossip  4. Compaction
+  const agentId = taskInfo.agentId;
+  const agentMeta = (() => {
+    try {
+      const a = mainAgent.getAgentList().find((a: any) => a.id === agentId);
+      return { skills: a?.skills || [], preset: a?.preset || '' };
+    } catch { return { skills: [] as string[], preset: '' }; }
+  })();
+
+  // 0. Record in TaskGraph (makes native tasks visible to CLI + Supabase sync)
+  try { mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined); } catch { /* best-effort */ }
+
+  // 0b. Record plan step result so subsequent steps get chain context
+  if (taskInfo.planId && taskInfo.step && !error) {
+    try { mainAgent.recordPlanStepResult(taskInfo.planId, taskInfo.step, result); } catch { /* best-effort */ }
+  }
+
+  if (!error) {
+    // 1. Write task entry to memory
+    try {
+      const { MemoryWriter, MemoryCompactor } = await import('@gossip/orchestrator');
+      const memWriter = new MemoryWriter(process.cwd());
+      // Wire LLM for cognitive summaries — same as relay agents get
+      try { if (mainAgent.getLLM()) memWriter.setSummaryLlm(mainAgent.getLLM()); } catch {}
+      const scores = presetScores(agentMeta.preset);
+      await memWriter.writeTaskEntry(agentId, {
+        taskId: task_id,
+        task: taskInfo.task,
+        skills: agentMeta.skills,
+        scores,
+      });
+
+      // 2. Extract knowledge from result (files, tech, decisions)
+      if (result) {
+        await memWriter.writeKnowledgeFromResult(agentId, {
+          taskId: task_id, task: taskInfo.task, result,
+        });
+      }
+
+      memWriter.rebuildIndex(agentId);
+
+      // 3. Compact memory if needed
+      const compactor = new MemoryCompactor(process.cwd());
+      compactor.compactIfNeeded(agentId);
+    } catch (err) {
+      process.stderr.write(`[gossipcat] Memory write failed for ${agentId}: ${(err as Error).message}\n`);
+    }
+  }
+
+  // 4. Publish gossip so other running agents can see this result
+  if (!error) {
+    await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {}); // intentional 50k cap — memory protection
+  }
+
+  // Result already stored in nativeResultMap at top of handler (crash-safe)
+
+  const status = error ? `failed (${elapsed}ms): ${error}` : `completed (${elapsed}ms)`;
+  return { content: [{ type: 'text' as const, text: `Result relayed for ${agentId} [${task_id}]: ${status}\n\nThe result is now available for gossip_collect and consensus cross-review.` }] };
+}
+
 // ── Native agent bridge: feed Agent tool results back into relay ──────────
 server.tool(
-  'gossip_relay_result',
-  'Feed a native agent result back into the gossipcat relay. Call this after a Claude Code Agent() completes a task dispatched via gossip_dispatch for a native agent. Enables consensus cross-review and gossip for native agents.',
+  'gossip_relay',
+  'Feed a native agent result back into the gossipcat relay. Call this after a Claude Code Agent() completes a task dispatched via gossip_dispatch or gossip_run. Enables consensus cross-review and gossip for native agents.',
   {
-    task_id: z.string().describe('Task ID returned by gossip_dispatch'),
+    task_id: z.string().describe('Task ID returned by gossip_dispatch or gossip_run'),
     result: z.string().describe('The agent output/result text'),
     error: z.string().optional().describe('Error message if the agent failed'),
   },
-  async ({ task_id, result, error }) => {
-    await boot(); // [H3 fix] ensure mainAgent/pipeline are available
-
-    const taskInfo = nativeTaskMap.get(task_id);
-    if (!taskInfo) {
-      return { content: [{ type: 'text' as const, text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch?` }] };
-    }
-
-    // Move to result map BEFORE running pipeline — prevents data loss if pipeline crashes
-    const elapsed = Date.now() - taskInfo.startedAt;
-    nativeTaskMap.delete(task_id);
-    nativeResultMap.set(task_id, {
-      id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
-      status: error ? 'failed' : 'completed',
-      result: error ? undefined : (result ? result.slice(0, 50000) : result), // intentional 50k cap — memory protection
-      error: error || undefined,
-      startedAt: taskInfo.startedAt, completedAt: Date.now(),
-    });
-    persistNativeTaskMap();
-    evictStaleNativeTasks();
-
-    // Run the same post-collect pipeline as custom agents:
-    // 1. Memory write  2. Knowledge extraction  3. Gossip  4. Compaction
-    const agentId = taskInfo.agentId;
-    const agentMeta = (() => {
-      try {
-        const a = mainAgent.getAgentList().find((a: any) => a.id === agentId);
-        return { skills: a?.skills || [], preset: a?.preset || '' };
-      } catch { return { skills: [] as string[], preset: '' }; }
-    })();
-
-    // 0. Record in TaskGraph (makes native tasks visible to CLI + Supabase sync)
-    try { mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined); } catch { /* best-effort */ }
-
-    // 0b. Record plan step result so subsequent steps get chain context
-    if (taskInfo.planId && taskInfo.step && !error) {
-      try { mainAgent.recordPlanStepResult(taskInfo.planId, taskInfo.step, result); } catch { /* best-effort */ }
-    }
-
-    if (!error) {
-      // 1. Write task entry to memory
-      try {
-        const { MemoryWriter, MemoryCompactor } = await import('@gossip/orchestrator');
-        const memWriter = new MemoryWriter(process.cwd());
-        // Wire LLM for cognitive summaries — same as relay agents get
-        try { if (mainAgent.getLLM()) memWriter.setSummaryLlm(mainAgent.getLLM()); } catch {}
-        const scores = presetScores(agentMeta.preset);
-        await memWriter.writeTaskEntry(agentId, {
-          taskId: task_id,
-          task: taskInfo.task,
-          skills: agentMeta.skills,
-          scores,
-        });
-
-        // 2. Extract knowledge from result (files, tech, decisions)
-        if (result) {
-          await memWriter.writeKnowledgeFromResult(agentId, {
-            taskId: task_id, task: taskInfo.task, result,
-          });
-        }
-
-        memWriter.rebuildIndex(agentId);
-
-        // 3. Compact memory if needed
-        const compactor = new MemoryCompactor(process.cwd());
-        compactor.compactIfNeeded(agentId);
-      } catch (err) {
-        process.stderr.write(`[gossipcat] Memory write failed for ${agentId}: ${(err as Error).message}\n`);
-      }
-    }
-
-    // 4. Publish gossip so other running agents can see this result
-    if (!error) {
-      await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {}); // intentional 50k cap — memory protection
-    }
-
-    // Result already stored in nativeResultMap at top of handler (crash-safe)
-
-    const status = error ? `failed (${elapsed}ms): ${error}` : `completed (${elapsed}ms)`;
-    return { content: [{ type: 'text' as const, text: `Result relayed for ${agentId} [${task_id}]: ${status}\n\nThe result is now available for gossip_collect and consensus cross-review.` }] };
-  }
+  async ({ task_id, result, error }) => handleNativeRelay(task_id, result, error)
 );
 
 // ── gossip_run — single-call dispatch (reduces friction) ─────────────────
 server.tool(
   'gossip_run',
-  'Run a task on a single agent and return the result. For relay agents (Gemini), this is a single call — dispatches, waits, returns. For native agents (Sonnet/Haiku), returns dispatch instructions with gossip_run_complete callback.',
+  'Run a task on a single agent and return the result. For relay agents (Gemini), this is a single call — dispatches, waits, returns. For native agents (Sonnet/Haiku), returns dispatch instructions with gossip_relay callback.',
   {
     agent_id: z.string().describe('Agent to run the task on'),
     task: z.string().describe('Task description. Reference file paths — the agent will read them.'),
@@ -1814,7 +1817,7 @@ server.tool(
           `Dispatched to ${agent_id} (native). Task ID: ${taskId}\n\n` +
           `NATIVE_DISPATCH:\n\n` +
           `Agent(model: "${config.model}", prompt: ${JSON.stringify(`${scopePrefix}${presetPrompt}\n\n---\n\nTask: ${task}`)})\n` +
-          `  → then: gossip_run_complete(task_id: "${taskId}", result: "<output>")\n`
+          `  → then: gossip_relay(task_id: "${taskId}", result: "<output>")\n`
         }],
       };
     }
@@ -1845,84 +1848,7 @@ server.tool(
   }
 );
 
-// ── gossip_run_complete — native agent callback ──────────────────────────
-server.tool(
-  'gossip_run_complete',
-  'Complete a native agent task dispatched via gossip_run. Relays the result to the mesh, writes memory, and emits signals. Call this after the Agent() tool returns.',
-  {
-    task_id: z.string().describe('Task ID from gossip_run response'),
-    result: z.string().describe('The agent output/result text'),
-    error: z.string().optional().describe('Error message if the agent failed'),
-  },
-  async ({ task_id, result, error }) => {
-    await boot();
-
-    const taskInfo = nativeTaskMap.get(task_id);
-    if (!taskInfo) {
-      return { content: [{ type: 'text' as const, text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_run?` }] };
-    }
-
-    // Move to result map BEFORE running pipeline — prevents data loss if pipeline crashes
-    const elapsed = Date.now() - taskInfo.startedAt;
-    nativeTaskMap.delete(task_id);
-    nativeResultMap.set(task_id, {
-      id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
-      status: error ? 'failed' : 'completed',
-      result: error ? undefined : (result ? result.slice(0, 50000) : result), // intentional 50k cap — memory protection
-      error: error || undefined,
-      startedAt: taskInfo.startedAt, completedAt: Date.now(),
-    });
-    persistNativeTaskMap();
-    evictStaleNativeTasks();
-
-    const agentId = taskInfo.agentId;
-    const agentMeta = (() => {
-      try {
-        const a = mainAgent.getAgentList().find((a: any) => a.id === agentId);
-        return { skills: a?.skills || [], preset: a?.preset || '' };
-      } catch { return { skills: [] as string[], preset: '' }; }
-    })();
-
-    try { mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined); } catch { /* best-effort */ }
-
-    if (taskInfo.planId && taskInfo.step && !error) {
-      try { mainAgent.recordPlanStepResult(taskInfo.planId, taskInfo.step, result); } catch { /* best-effort */ }
-    }
-
-    if (!error) {
-      try {
-        const { MemoryWriter, MemoryCompactor } = await import('@gossip/orchestrator');
-        const memWriter = new MemoryWriter(process.cwd());
-        // Wire LLM for cognitive summaries — same as relay agents get
-        try { if (mainAgent.getLLM()) memWriter.setSummaryLlm(mainAgent.getLLM()); } catch {}
-        const scores = presetScores(agentMeta.preset);
-        await memWriter.writeTaskEntry(agentId, {
-          taskId: task_id, task: taskInfo.task, skills: agentMeta.skills,
-          scores,
-        });
-        if (result) {
-          await memWriter.writeKnowledgeFromResult(agentId, {
-            taskId: task_id, task: taskInfo.task, result,
-          });
-        }
-        memWriter.rebuildIndex(agentId);
-        const compactor = new MemoryCompactor(process.cwd());
-        compactor.compactIfNeeded(agentId);
-      } catch (err) {
-        process.stderr.write(`[gossipcat] Memory write failed for ${agentId}: ${(err as Error).message}\n`);
-      }
-    }
-
-    if (!error) {
-      await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {}); // intentional 50k cap — memory protection
-    }
-
-    // Result already stored in nativeResultMap at top of handler (crash-safe)
-
-    const status = error ? `failed (${elapsed}ms): ${error}` : `completed (${elapsed}ms)`;
-    return { content: [{ type: 'text' as const, text: `✅ Result relayed for ${agentId} [${task_id}]: ${status}` }] };
-  }
-);
+// gossip_run_complete removed — merged into gossip_relay
 
 // ── Record consensus signals from Claude Code synthesis ───────────────────
 server.tool(
@@ -2521,8 +2447,7 @@ server.tool(
       { name: 'gossip_status', desc: 'Check relay, tool-server, workers, and dashboard URL/key' },
       { name: 'gossip_update_instructions', desc: 'Update agent instructions (single or batch). Modes: append/replace' },
       { name: 'gossip_run', desc: 'Single-call dispatch — run a task on one agent and get the result (1 call for relay, 2 for native)' },
-      { name: 'gossip_run_complete', desc: 'Complete a native agent gossip_run — relays result + signals in one call' },
-      { name: 'gossip_relay_result', desc: 'Feed native Agent tool result back into relay for consensus' },
+      { name: 'gossip_relay', desc: 'Feed native Agent tool result back into relay for consensus + memory + gossip' },
       { name: 'gossip_record_signals', desc: 'Record CONFIRMED/DISPUTED/UNIQUE/NEW signals after cross-referencing' },
       { name: 'gossip_scores', desc: 'View agent performance scores and dispatch weights' },
       { name: 'gossip_log_finding', desc: 'Log implementation quality finding (observer-only, no scoring)' },
