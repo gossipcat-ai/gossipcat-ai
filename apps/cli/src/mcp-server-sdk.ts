@@ -217,7 +217,7 @@ function persistNativeTaskMap(): void {
     const slimResults: Record<string, any> = {};
     for (const [id, info] of nativeResultMap) {
       slimResults[id] = {
-        id: info.id, agentId: info.agentId, task: info.task.slice(0, 200),
+        id: info.id, agentId: info.agentId, task: info.task,
         status: info.status, startedAt: info.startedAt, completedAt: info.completedAt,
       };
     }
@@ -1700,7 +1700,7 @@ server.tool(
     nativeResultMap.set(task_id, {
       id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
       status: error ? 'failed' : 'completed',
-      result: error ? undefined : (result ? result.slice(0, 50000) : result),
+      result: error ? undefined : (result ? result.slice(0, 50000) : result), // intentional 50k cap — memory protection
       error: error || undefined,
       startedAt: taskInfo.startedAt, completedAt: Date.now(),
     });
@@ -1759,7 +1759,7 @@ server.tool(
 
     // 4. Publish gossip so other running agents can see this result
     if (!error) {
-      await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {});
+      await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {}); // intentional 50k cap — memory protection
     }
 
     // Result already stored in nativeResultMap at top of handler (crash-safe)
@@ -1813,7 +1813,7 @@ server.tool(
         content: [{ type: 'text' as const, text:
           `Dispatched to ${agent_id} (native). Task ID: ${taskId}\n\n` +
           `NATIVE_DISPATCH:\n\n` +
-          `Agent(model: "${config.model}", prompt: "${scopePrefix}${presetPrompt}\\n\\n---\\n\\nTask: ${task.slice(0, 200)}...")\n` +
+          `Agent(model: "${config.model}", prompt: "${scopePrefix}${presetPrompt}\\n\\n---\\n\\nTask: ${task}")\n` +
           `  → then: gossip_run_complete(task_id: "${taskId}", result: "<output>")\n`
         }],
       };
@@ -1868,7 +1868,7 @@ server.tool(
     nativeResultMap.set(task_id, {
       id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
       status: error ? 'failed' : 'completed',
-      result: error ? undefined : (result ? result.slice(0, 50000) : result),
+      result: error ? undefined : (result ? result.slice(0, 50000) : result), // intentional 50k cap — memory protection
       error: error || undefined,
       startedAt: taskInfo.startedAt, completedAt: Date.now(),
     });
@@ -1914,7 +1914,7 @@ server.tool(
     }
 
     if (!error) {
-      await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {});
+      await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {}); // intentional 50k cap — memory protection
     }
 
     // Result already stored in nativeResultMap at top of handler (crash-safe)
