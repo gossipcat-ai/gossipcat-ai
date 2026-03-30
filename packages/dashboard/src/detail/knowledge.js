@@ -32,7 +32,8 @@ async function renderKnowledgeDetail(app, agentId) {
       filesBody.className = 'panel-body';
       filesBody.style.maxHeight = '500px';
 
-      for (const k of data.knowledge) {
+      const knowledgeSorted = [...data.knowledge].reverse();
+      for (const k of knowledgeSorted) {
         const isCognitive = (k.frontmatter && k.frontmatter.type === 'cognitive') || (k.content || '').includes('You reviewed') || (k.content || '').includes('## What I Learned');
         const desc = e((k.frontmatter && (k.frontmatter.description || k.frontmatter.name)) || k.filename);
 

@@ -11,7 +11,7 @@
   --border-active: rgba(167,139,250,0.25);
   --text: #e4e6ef;
   --text-2: #a0a4b8;
-  --text-3: #6c7089;
+  --text-3: #7c8099;
   --accent: #a78bfa;
   --green: #34d399;
   --green-glow: rgba(52,211,153,0.12);
@@ -205,6 +205,7 @@ body::after {
 .ag {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 14px 16px; cursor: pointer; transition: all 0.2s; position: relative;
+  color: var(--text);
 }
 .ag:hover {
   border-color: var(--border-active); background: var(--surface-raised);
@@ -226,14 +227,14 @@ body::after {
 .ag-metrics { display: flex; gap: 2px; }
 .ag-m { flex: 1; background: var(--surface-raised); border-radius: 6px; padding: 7px 8px; text-align: center; }
 .ag-m-val { font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
-.ag-m-lbl { font-size: 9px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 1px; }
+.ag-m-lbl { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 1px; }
 
 /* Overflow card */
 .ag-more {
   background: var(--surface); border: 1px dashed rgba(255,255,255,0.08); border-radius: 12px;
   padding: 14px 16px; cursor: pointer; transition: all 0.2s;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 6px; min-height: 120px;
+  gap: 6px; min-height: 120px; color: var(--text);
 }
 .ag-more:hover { border-color: var(--accent); background: var(--surface-raised); }
 .ag-more-count { font-family: var(--mono); font-size: 20px; font-weight: 600; color: var(--text-2); }
@@ -246,6 +247,8 @@ body::after {
   border: 1.5px solid var(--bg); margin-left: -6px;
 }
 .ag-more-pip:first-child { margin-left: 0; }
+.ag-more-names { display: flex; flex-direction: column; gap: 1px; margin: 2px 0; }
+.ag-more-name { font-size: 11px; font-family: var(--mono); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; text-align: center; }
 
 /* ── Charts ─────────────────────────────────────── */
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -324,7 +327,7 @@ body::after {
 .sig-type.disagreement { background: var(--amber-glow); color: var(--amber); }
 .sig-agent { color: var(--accent); font-weight: 500; font-size: 12px; }
 .sig-arrow { color: var(--text-3); font-size: 10px; }
-.sig-finding { flex: 1; color: var(--text-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sig-finding { flex: 1; color: var(--text-2); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Knowledge ──────────────────────────────────── */
 .know-agents { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 16px; }

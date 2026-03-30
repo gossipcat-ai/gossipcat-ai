@@ -19,7 +19,7 @@
   --border-active: rgba(167,139,250,0.25);
   --text: #e4e6ef;
   --text-2: #a0a4b8;
-  --text-3: #6c7089;
+  --text-3: #7c8099;
   --accent: #a78bfa;
   --green: #34d399;
   --green-glow: rgba(52,211,153,0.12);
@@ -213,6 +213,7 @@ body::after {
 .ag {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 14px 16px; cursor: pointer; transition: all 0.2s; position: relative;
+  color: var(--text);
 }
 .ag:hover {
   border-color: var(--border-active); background: var(--surface-raised);
@@ -234,14 +235,14 @@ body::after {
 .ag-metrics { display: flex; gap: 2px; }
 .ag-m { flex: 1; background: var(--surface-raised); border-radius: 6px; padding: 7px 8px; text-align: center; }
 .ag-m-val { font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
-.ag-m-lbl { font-size: 9px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 1px; }
+.ag-m-lbl { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 1px; }
 
 /* Overflow card */
 .ag-more {
   background: var(--surface); border: 1px dashed rgba(255,255,255,0.08); border-radius: 12px;
   padding: 14px 16px; cursor: pointer; transition: all 0.2s;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 6px; min-height: 120px;
+  gap: 6px; min-height: 120px; color: var(--text);
 }
 .ag-more:hover { border-color: var(--accent); background: var(--surface-raised); }
 .ag-more-count { font-family: var(--mono); font-size: 20px; font-weight: 600; color: var(--text-2); }
@@ -254,6 +255,8 @@ body::after {
   border: 1.5px solid var(--bg); margin-left: -6px;
 }
 .ag-more-pip:first-child { margin-left: 0; }
+.ag-more-names { display: flex; flex-direction: column; gap: 1px; margin: 2px 0; }
+.ag-more-name { font-size: 11px; font-family: var(--mono); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; text-align: center; }
 
 /* ── Charts ─────────────────────────────────────── */
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -332,7 +335,7 @@ body::after {
 .sig-type.disagreement { background: var(--amber-glow); color: var(--amber); }
 .sig-agent { color: var(--accent); font-weight: 500; font-size: 12px; }
 .sig-arrow { color: var(--text-3); font-size: 10px; }
-.sig-finding { flex: 1; color: var(--text-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sig-finding { flex: 1; color: var(--text-2); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Knowledge ──────────────────────────────────── */
 .know-agents { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 16px; }
@@ -1083,8 +1086,13 @@ function renderTeamSection(agents) {
       return '<div class="ag-more-pip" style="background:' + c.replace('var(--', 'rgba(').replace(')', ',0.12)') + ';color:' + c + '">' + agentInitials(a.id) + '</div>';
     }).join('');
 
+    const names = overflow.map(a => {
+      return '<div class="ag-more-name">' + e(a.id) + '</div>';
+    }).join('');
+
     more.innerHTML =
       '<div class="ag-more-avatars">' + avatars + '</div>' +
+      '<div class="ag-more-names">' + names + '</div>' +
       '<div class="ag-more-count">+' + overflow.length + '</div>' +
       '<div class="ag-more-label">more agents</div>';
 
@@ -1318,7 +1326,7 @@ function renderKnowledgeSection(agents) {
     const color = agentColor(agent);
     const chip = document.createElement('button');
     chip.className = 'ka';
-    if (!agent.online && (agent.scores?.signals || 0) === 0) chip.style.opacity = '0.4';
+    if (!agent.online && (agent.scores?.signals || 0) === 0) chip.style.opacity = '0.6';
     chip.addEventListener('click', () => navigate('#/knowledge/' + encodeURIComponent(agent.id)));
     chip.innerHTML =
       '<div class="ka-avatar" style="background:' + color.replace('var(--', 'rgba(').replace(')', ',0.1)') + ';color:' + color + '">' + agentInitials(agent.id) + '</div>' +
@@ -1329,17 +1337,39 @@ function renderKnowledgeSection(agents) {
   memPanel.appendChild(chips);
   grid.appendChild(memPanel);
 
-  // ── Right: Recent learnings (placeholder — requires per-agent memory API calls) ──
+  // ── Right: Recent learnings ──────────────────────
   const learnPanel = document.createElement('div');
   learnPanel.className = 'panel';
   learnPanel.innerHTML = '<div class="panel-head"><span class="panel-title">Recent Learnings</span></div>';
 
   const learnBody = document.createElement('div');
   learnBody.className = 'panel-body';
-  learnBody.innerHTML = '<div class="empty-state">Click an agent to browse their memory</div>';
-
+  learnBody.innerHTML = '<div class="empty-state">Loading...</div>';
   learnPanel.appendChild(learnBody);
   grid.appendChild(learnPanel);
+
+  // Fetch learnings async — don't block hub render
+  window._dash.api('learnings').then(data => {
+    const items = (data.learnings || []);
+    if (items.length === 0) {
+      learnBody.innerHTML = '<div class="empty-state">No learnings yet</div>';
+      return;
+    }
+    learnBody.innerHTML = '';
+    for (const item of items) {
+      const color = agentColor(agents.find(a => a.id === item.agentId) || { provider: '', online: false, scores: {} });
+      const row = document.createElement('div');
+      row.className = 'learn-row';
+      row.addEventListener('click', () => navigate('#/knowledge/' + encodeURIComponent(item.agentId)));
+      row.innerHTML =
+        '<div class="learn-avatar" style="background:' + color.replace('var(--', 'rgba(').replace(')', ',0.1)') + ';color:' + color + '">' + agentInitials(item.agentId) + '</div>' +
+        '<span class="learn-text">' + e(item.description).slice(0, 60) + '</span>' +
+        '<span class="learn-type">' + e(item.type) + '</span>';
+      learnBody.appendChild(row);
+    }
+  }).catch(() => {
+    learnBody.innerHTML = '<div class="empty-state">Failed to load learnings</div>';
+  });
 
   section.appendChild(grid);
   return section;
@@ -1686,7 +1716,8 @@ async function renderKnowledgeDetail(app, agentId) {
       filesBody.className = 'panel-body';
       filesBody.style.maxHeight = '500px';
 
-      for (const k of data.knowledge) {
+      const knowledgeSorted = [...data.knowledge].reverse();
+      for (const k of knowledgeSorted) {
         const isCognitive = (k.frontmatter && k.frontmatter.type === 'cognitive') || (k.content || '').includes('You reviewed') || (k.content || '').includes('## What I Learned');
         const desc = e((k.frontmatter && (k.frontmatter.description || k.frontmatter.name)) || k.filename);
 
