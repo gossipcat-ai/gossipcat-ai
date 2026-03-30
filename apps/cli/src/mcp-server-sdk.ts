@@ -111,7 +111,7 @@ Returns: CONFIRMED, DISPUTED, UNIQUE, UNVERIFIED, NEW tagged findings.
 ### Step 4: Verify and record signals IMMEDIATELY
 For EACH finding, read the actual code. Record signals AS YOU VERIFY:
 \`\`\`
-gossip_record_signals(signals: [
+gossip_signals(signals: [
   { signal: "unique_confirmed", agent_id: "reviewer", finding: "XSS in template" },
   { signal: "hallucination_caught", agent_id: "reviewer", finding: "Claimed X but code shows Y" },
   { signal: "agreement", agent_id: "reviewer", counterpart_id: "researcher", finding: "Both found it" },
@@ -1843,10 +1843,12 @@ server.tool(
 
 // ── Record consensus signals from Claude Code synthesis ───────────────────
 server.tool(
-  'gossip_record_signals',
-  'Record consensus performance signals after cross-referencing agent findings. Call IMMEDIATELY when you verify a finding against code — don\'t batch or defer. If you read the code and the finding is wrong, record hallucination_caught right away. If confirmed, record unique_confirmed/agreement right away. Maps signals to agent performance scores that improve future dispatch decisions.',
+  'gossip_signals',
+  'Record or retract consensus performance signals. Use action "record" (default) to record signals after cross-referencing agent findings — call IMMEDIATELY when you verify. Use action "retract" to undo a previously recorded signal.',
   {
-    task_id: z.string().optional().describe('Real task ID to link manual signals to the triggering task. If omitted, a synthetic manual-* ID is generated.'),
+    action: z.enum(['record', 'retract']).default('record').describe('Action: "record" to add signals, "retract" to undo a previous signal'),
+    // record params
+    task_id: z.string().optional().describe('Task ID to link signals to. For record: optional (synthetic ID if omitted). For retract: required.'),
     signals: z.array(z.object({
       signal: z.enum(['agreement', 'disagreement', 'unique_confirmed', 'unique_unconfirmed', 'new_finding', 'hallucination_caught'])
         .describe('Signal type: agreement (both agree), disagreement (one wrong), unique_confirmed (only one found it + verified), unique_unconfirmed (only one found it, unverified), new_finding (discovered during cross-review), hallucination_caught (fabricated finding)'),
@@ -1854,13 +1856,45 @@ server.tool(
       counterpart_id: z.string().optional().describe('The other agent involved (e.g., who won the disagreement)'),
       finding: z.string().describe('Brief description of the finding'),
       evidence: z.string().optional().describe('Supporting evidence or reasoning'),
-    })).describe('Array of consensus signals from your cross-referencing of agent results'),
+    })).optional().describe('Array of consensus signals (required for action: "record")'),
+    // retract params
+    agent_id: z.string().optional().describe('Agent whose signal to retract (required for action: "retract")'),
+    reason: z.string().optional().describe('Why this signal is being retracted (required for action: "retract")'),
   },
-  async ({ task_id, signals }) => {
+  async ({ action, task_id, signals, agent_id, reason }) => {
     await boot();
 
-    if (signals.length === 0) {
-      return { content: [{ type: 'text' as const, text: 'No signals to record.' }] };
+    if (action === 'retract') {
+      // Validate retract params
+      if (!agent_id || agent_id.trim().length === 0) {
+        return { content: [{ type: 'text' as const, text: 'Error: agent_id is required for retraction.' }] };
+      }
+      if (!task_id || task_id.trim().length === 0) {
+        return { content: [{ type: 'text' as const, text: 'Error: task_id is required for retraction. Use the task ID from the original signal.' }] };
+      }
+      if (!reason || reason.trim().length === 0) {
+        return { content: [{ type: 'text' as const, text: 'Error: reason is required for retraction.' }] };
+      }
+      try {
+        const { PerformanceWriter } = await import('@gossip/orchestrator');
+        const writer = new PerformanceWriter(process.cwd());
+        writer.appendSignals([{
+          type: 'consensus' as const,
+          taskId: task_id,
+          signal: 'signal_retracted',
+          agentId: agent_id,
+          evidence: `Retracted: ${reason}`,
+          timestamp: new Date().toISOString(),
+        }]);
+        return { content: [{ type: 'text' as const, text: `Retracted signal for ${agent_id} on task ${task_id}.\nReason: ${reason}\n\nThe original signal remains in the audit log but will be excluded from scoring.` }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Failed to retract: ${(err as Error).message}` }] };
+      }
+    }
+
+    // action === 'record'
+    if (!signals || signals.length === 0) {
+      return { content: [{ type: 'text' as const, text: 'No signals to record. Provide a signals array.' }] };
     }
 
     try {
@@ -1914,38 +1948,6 @@ server.tool(
   }
 );
 
-// ── Retract signals ───────────────────────────────────────────────────────
-server.tool(
-  'gossip_retract_signal',
-  'Retract a previously recorded signal for an agent. Use when a signal was recorded incorrectly (e.g., hallucination_caught for a minor citation error that should have been unverified). The retraction is append-only — the original signal stays in the audit log but is excluded from scoring.',
-  {
-    agent_id: z.string().describe('Agent whose signal to retract'),
-    task_id: z.string().describe('Task ID of the signal to retract (from the original signal)'),
-    reason: z.string().describe('Why this signal is being retracted'),
-  },
-  async ({ agent_id, task_id, reason }) => {
-    await boot();
-    if (!task_id || task_id.trim().length === 0) {
-      return { content: [{ type: 'text' as const, text: 'Error: task_id is required for retraction. Use the task ID from the original signal.' }] };
-    }
-    try {
-      const { PerformanceWriter } = await import('@gossip/orchestrator');
-      const writer = new PerformanceWriter(process.cwd());
-      writer.appendSignals([{
-        type: 'consensus' as const,
-        taskId: task_id,
-        signal: 'signal_retracted',
-        agentId: agent_id,
-        evidence: `Retracted: ${reason}`,
-        timestamp: new Date().toISOString(),
-      }]);
-      return { content: [{ type: 'text' as const, text: `Retracted signal for ${agent_id} on task ${task_id}.\nReason: ${reason}\n\nThe original signal remains in the audit log but will be excluded from scoring.` }] };
-    } catch (err) {
-      return { content: [{ type: 'text' as const, text: `Failed to retract: ${(err as Error).message}` }] };
-    }
-  }
-);
-
 // ── Tool: view agent performance scores ───────────────────────────────────
 server.tool(
   'gossip_scores',
@@ -1959,7 +1961,7 @@ server.tool(
       const scores = reader.getScores();
 
       if (scores.size === 0) {
-        return { content: [{ type: 'text' as const, text: 'No performance data yet. Run gossip_dispatch_consensus + gossip_record_signals to generate signals.' }] };
+        return { content: [{ type: 'text' as const, text: 'No performance data yet. Run gossip_dispatch_consensus + gossip_signals to generate signals.' }] };
       }
 
       const lines = Array.from(scores.values())
@@ -2438,7 +2440,7 @@ server.tool(
       { name: 'gossip_update_instructions', desc: 'Update agent instructions (single or batch). Modes: append/replace' },
       { name: 'gossip_run', desc: 'Single-call dispatch — run a task on one agent and get the result (1 call for relay, 2 for native)' },
       { name: 'gossip_relay', desc: 'Feed native Agent tool result back into relay for consensus + memory + gossip' },
-      { name: 'gossip_record_signals', desc: 'Record CONFIRMED/DISPUTED/UNIQUE/NEW signals after cross-referencing' },
+      { name: 'gossip_signals', desc: 'Record or retract consensus signals after cross-referencing' },
       { name: 'gossip_scores', desc: 'View agent performance scores and dispatch weights' },
       { name: 'gossip_log_finding', desc: 'Log implementation quality finding (observer-only, no scoring)' },
       { name: 'gossip_findings', desc: 'View implementation findings per agent' },
@@ -2451,7 +2453,6 @@ server.tool(
       { name: 'gossip_tools', desc: 'List available tools (this command)' },
       { name: 'gossip_bootstrap', desc: 'Generate team context prompt with live agent state' },
       { name: 'gossip_setup', desc: 'Create or update team configuration' },
-      { name: 'gossip_retract_signal', desc: 'Retract a previously recorded signal (e.g., hallucination_caught for a minor citation error). Append-only — excluded from scoring.' },
     ];
     const list = tools.map(t => `- ${t.name}: ${t.desc}`).join('\n');
     return { content: [{ type: 'text' as const, text: `Gossipcat Tools (${tools.length}):\n\n${list}` }] };
