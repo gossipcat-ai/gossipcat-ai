@@ -258,17 +258,6 @@ body::after {
 .ag-more-names { display: flex; flex-direction: column; gap: 1px; margin: 2px 0; }
 .ag-more-name { font-size: 11px; font-family: var(--mono); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; text-align: center; }
 
-/* ── Charts ─────────────────────────────────────── */
-.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
-.chart-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-.chart-title { font-size: 13px; font-weight: 600; }
-.chart-legend { display: flex; gap: 12px; font-size: 10px; color: var(--text-3); font-family: var(--mono); }
-.lg-dot { width: 8px; height: 3px; border-radius: 2px; display: inline-block; margin-right: 4px; vertical-align: middle; }
-.chart-svg { width: 100%; display: block; }
-.grid-ln { stroke: rgba(255,255,255,0.03); stroke-width: 0.5; }
-.ax-txt { fill: var(--text-3); font-family: var(--mono); font-size: 9px; }
-
 /* ── Panels ─────────────────────────────────────── */
 .panel {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
@@ -469,7 +458,6 @@ body::after {
 }
 @media (max-width: 900px) {
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
-  .chart-grid { grid-template-columns: 1fr; }
   .two-col { grid-template-columns: 1fr; }
   .know-grid { grid-template-columns: 1fr; }
 }
@@ -684,17 +672,15 @@ function connectWs() {
 async function renderHub(app) {
   app.innerHTML = '<div class="loading">Loading...</div>';
   try {
-    const [overview, agents, tasks, consensus, signals] = await Promise.all([
-      api('overview'), api('agents'), api('tasks'),
-      api('consensus'), api('signals'),
+    const [overview, agents, consensus] = await Promise.all([
+      api('overview'), api('agents'), api('consensus'),
     ]);
     app.innerHTML = '';
 
     // Build sections
     app.appendChild(renderOverviewSection(overview));
     app.appendChild(renderTeamSection(agents));
-    app.appendChild(renderPerformanceSection(tasks, agents));
-    app.appendChild(renderActivitySection(tasks, consensus, signals));
+    app.appendChild(renderActivitySection({tasks:[]}, consensus, {signals:[]}));
     app.appendChild(renderKnowledgeSection(agents));
 
     // Wire WS live updates — selective section refresh, debounced
@@ -703,7 +689,7 @@ async function renderHub(app) {
 
     const sectionMap = {
       task_dispatched:      ['activity'],
-      task_completed:       ['overview', 'activity', 'performance'],
+      task_completed:       ['overview', 'activity'],
       task_failed:          ['overview', 'activity'],
       consensus_started:    ['activity'],
       consensus_complete:   ['overview', 'activity'],
@@ -726,26 +712,22 @@ async function renderHub(app) {
         try {
           // Only fetch APIs needed for the sections being refreshed
           const needsOverview = toRefresh.has('overview');
-          const needsAgents = toRefresh.has('team') || toRefresh.has('performance') || toRefresh.has('knowledge');
-          const needsTasks = toRefresh.has('activity') || toRefresh.has('performance');
+          const needsAgents = toRefresh.has('team') || toRefresh.has('knowledge');
           const needsConsensus = toRefresh.has('activity');
-          const needsSignals = toRefresh.has('activity');
 
-          const [ov, ag, tk, cx, sg] = await Promise.all([
+          const [ov, ag, cx] = await Promise.all([
             needsOverview ? api('overview') : null,
             needsAgents ? api('agents') : null,
-            needsTasks ? api('tasks') : null,
             needsConsensus ? api('consensus') : null,
-            needsSignals ? api('signals') : null,
           ]);
 
           // Replace only the affected section DOM nodes
+          // sections: [0]=overview, [1]=team, [2]=activity, [3]=knowledge
           const sections = app.querySelectorAll('.section');
           if (ov && sections[0]) { const el = renderOverviewSection(ov); sections[0].replaceWith(el); }
           if (ag && sections[1]) { const el = renderTeamSection(ag); sections[1].replaceWith(el); }
-          if ((tk || ag) && sections[2]) { const el = renderPerformanceSection(tk || tasks, ag || agents); sections[2].replaceWith(el); }
-          if ((tk || cx || sg) && sections[3]) { const el = renderActivitySection(tk || tasks, cx || consensus, sg || signals); sections[3].replaceWith(el); }
-          if (ag && sections[4]) { const el = renderKnowledgeSection(ag); sections[4].replaceWith(el); }
+          if (cx && sections[2]) { const el = renderActivitySection({tasks:[]}, cx, {signals:[]}); sections[2].replaceWith(el); }
+          if (ag && sections[3]) { const el = renderKnowledgeSection(ag); sections[3].replaceWith(el); }
         } catch { /* best-effort live update */ }
       }, 500);
     });
@@ -786,114 +768,6 @@ api('overview')
 
 // Export for hub/detail modules
 window._dash = { api, navigate, escapeHtml, formatTokens, timeAgo, agentInitials, agentColor, onDashboardEvent, offDashboardEvent, makeSection };
-
-// packages/dashboard/src/lib/chart.js — Pure SVG chart generators
-
-/**
- * Generate an area chart SVG string.
- * @param {Array<{label: string, value: number, failed?: number}>} data
- * @param {{width?: number, height?: number, color?: string, failedColor?: string}} opts
- * @returns {string} SVG markup
- */
-function renderAreaChart(data, opts = {}) {
-  const W = opts.width || 480;
-  const H = opts.height || 120;
-  const color = opts.color || 'var(--green)';
-  const failedColor = opts.failedColor || 'var(--red)';
-  const pad = { left: 40, right: 10, top: 10, bottom: 25 };
-
-  if (!data || data.length === 0) return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg"></svg>';
-
-  const maxVal = Math.max(...data.map(d => d.value), ...data.map(d => d.failed || 0), 1);
-  const yMax = Math.ceil(maxVal / 10) * 10 || 10;
-  const xStep = (W - pad.left - pad.right) / Math.max(data.length - 1, 1);
-
-  function y(v) { return pad.top + (1 - v / yMax) * (H - pad.top - pad.bottom); }
-  function x(i) { return pad.left + i * xStep; }
-
-  // Grid lines
-  const gridCount = 4;
-  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg">';
-
-  // Gradient def
-  svg += '<defs><linearGradient id="acg" x1="0" y1="0" x2="0" y2="1">';
-  svg += '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.1"/>';
-  svg += '<stop offset="100%" stop-color="' + color + '" stop-opacity="0"/>';
-  svg += '</linearGradient></defs>';
-
-  for (let i = 0; i < gridCount; i++) {
-    const gy = pad.top + i * (H - pad.top - pad.bottom) / (gridCount - 1);
-    const label = Math.round(yMax - (yMax * i / (gridCount - 1)));
-    svg += '<line x1="' + pad.left + '" y1="' + gy + '" x2="' + (W - pad.right) + '" y2="' + gy + '" class="grid-ln"/>';
-    svg += '<text x="' + (pad.left - 4) + '" y="' + (gy + 4) + '" class="ax-txt" text-anchor="end">' + label + '</text>';
-  }
-
-  // X-axis labels
-  for (let i = 0; i < data.length; i++) {
-    svg += '<text x="' + x(i) + '" y="' + (H - 4) + '" class="ax-txt" text-anchor="middle">' + data[i].label + '</text>';
-  }
-
-  // Area fill
-  const points = data.map((d, i) => x(i) + ',' + y(d.value)).join(' ');
-  const areaPath = 'M' + x(0) + ',' + y(data[0].value) + ' ' +
-    data.slice(1).map((d, i) => 'L' + x(i + 1) + ',' + y(d.value)).join(' ') +
-    ' L' + x(data.length - 1) + ',' + y(0) + ' L' + x(0) + ',' + y(0) + 'Z';
-  svg += '<path d="' + areaPath + '" fill="url(#acg)"/>';
-  svg += '<polyline points="' + points + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
-
-  // Failed line (dashed)
-  if (data.some(d => d.failed > 0)) {
-    const failedPts = data.map((d, i) => x(i) + ',' + y(d.failed || 0)).join(' ');
-    svg += '<polyline points="' + failedPts + '" fill="none" stroke="' + failedColor + '" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4,4" opacity="0.6"/>';
-    svg += '<circle cx="' + x(data.length - 1) + '" cy="' + y(data[data.length - 1].failed || 0) + '" r="2.5" fill="' + failedColor + '" opacity="0.6"/>';
-  }
-
-  // Endpoint dot
-  svg += '<circle cx="' + x(data.length - 1) + '" cy="' + y(data[data.length - 1].value) + '" r="3" fill="' + color + '"/>';
-  svg += '</svg>';
-  return svg;
-}
-
-/**
- * Generate a horizontal bar chart SVG string.
- * @param {Array<{label: string, value: number, secondary?: number}>} data
- * @param {{width?: number, height?: number, color?: string, secondaryColor?: string}} opts
- * @returns {string} SVG markup
- */
-function renderBarChart(data, opts = {}) {
-  const W = opts.width || 480;
-  const color = opts.color || 'var(--accent)';
-  const secColor = opts.secondaryColor || 'var(--blue)';
-  const labelWidth = 120;
-  const barStart = labelWidth + 5;
-  const barMaxWidth = W - barStart - 50;
-  const rowHeight = 24;
-  const H = Math.max(data.length * rowHeight + 30, 60);
-
-  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg">';
-
-  for (let i = 0; i < data.length; i++) {
-    const yy = i * rowHeight + 6;
-    const barW = (data[i].value / 100) * barMaxWidth;
-    const secW = data[i].secondary != null ? (data[i].secondary / 100) * barMaxWidth : 0;
-
-    svg += '<text x="' + (labelWidth - 5) + '" y="' + (yy + 14) + '" class="ax-txt" text-anchor="end" style="font-size:10px;fill:var(--text-2)">' + data[i].label + '</text>';
-    svg += '<rect x="' + barStart + '" y="' + (yy + 4) + '" width="' + barW + '" height="10" rx="3" fill="' + color + '" opacity="0.6"/>';
-    if (secW > 0) {
-      svg += '<rect x="' + barStart + '" y="' + (yy + 4) + '" width="' + secW + '" height="10" rx="3" fill="' + secColor + '" opacity="0.2"/>';
-    }
-    svg += '<text x="' + (barStart + barW + 6) + '" y="' + (yy + 14) + '" class="ax-txt" style="fill:' + color + ';font-weight:600">' + data[i].value + '%</text>';
-  }
-
-  // Scale
-  const scaleY = data.length * rowHeight + 10;
-  svg += '<text x="' + barStart + '" y="' + scaleY + '" class="ax-txt" text-anchor="middle">0%</text>';
-  svg += '<text x="' + (barStart + barMaxWidth / 2) + '" y="' + scaleY + '" class="ax-txt" text-anchor="middle">50%</text>';
-  svg += '<text x="' + (barStart + barMaxWidth) + '" y="' + scaleY + '" class="ax-txt" text-anchor="middle">100%</text>';
-
-  svg += '</svg>';
-  return svg;
-}
 
 // packages/dashboard/src/lib/markdown.js — Simple markdown renderer (extracted from Phase 1)
 
@@ -1098,83 +972,6 @@ function renderTeamSection(agents) {
 
     grid.appendChild(more);
   }
-
-  section.appendChild(grid);
-  return section;
-}
-
-// packages/dashboard/src/hub/performance.js — SVG charts (task volume + agent accuracy)
-
-function renderPerformanceSection(tasksData, agents) {
-  const { makeSection } = window._dash;
-  const section = makeSection('Performance', 'last 7 days');
-
-  const grid = document.createElement('div');
-  grid.className = 'chart-grid';
-
-  // ── Task Volume (area chart) ───────────────────
-  const volCard = document.createElement('div');
-  volCard.className = 'chart-card';
-
-  // Bucket tasks by day
-  const dayBuckets = {};
-  const now = new Date();
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const key = d.toDateString();
-    dayBuckets[key] = { label: d.toLocaleDateString([], { weekday: 'short' }), value: 0, failed: 0 };
-  }
-
-  for (const t of (tasksData.tasks || [])) {
-    if (!t.timestamp) continue;
-    const key = new Date(t.timestamp).toDateString();
-    if (dayBuckets[key]) {
-      if (t.status === 'completed') dayBuckets[key].value++;
-      else if (t.status === 'failed') dayBuckets[key].failed++;
-    }
-  }
-
-  const chartData = Object.values(dayBuckets);
-  // Replace today's label
-  if (chartData.length > 0) chartData[chartData.length - 1].label = 'Today';
-
-  volCard.innerHTML =
-    '<div class="chart-head">' +
-      '<span class="chart-title">Task Volume</span>' +
-      '<div class="chart-legend">' +
-        '<span><span class="lg-dot" style="background:var(--green)"></span>OK</span>' +
-        '<span><span class="lg-dot" style="background:var(--red)"></span>Failed</span>' +
-      '</div>' +
-    '</div>' + renderAreaChart(chartData);
-
-  grid.appendChild(volCard);
-
-  // ── Agent Accuracy (bar chart) ─────────────────
-  const accCard = document.createElement('div');
-  accCard.className = 'chart-card';
-
-  const activeAgents = agents
-    .filter(a => a.scores && a.scores.signals > 0)
-    .sort((a, b) => b.scores.accuracy - a.scores.accuracy)
-    .slice(0, 6);
-
-  const barData = activeAgents.map(a => ({
-    label: a.id.length > 12 ? a.id.slice(0, 11) + '.' : a.id,
-    value: Math.round(a.scores.accuracy * 100),
-    secondary: Math.round(a.scores.uniqueness * 100),
-  }));
-
-  accCard.innerHTML =
-    '<div class="chart-head">' +
-      '<span class="chart-title">Agent Accuracy</span>' +
-      '<div class="chart-legend">' +
-        '<span><span class="lg-dot" style="background:var(--accent)"></span>Accuracy</span>' +
-        '<span><span class="lg-dot" style="background:var(--blue);opacity:0.5"></span>Unique</span>' +
-      '</div>' +
-    '</div>' + (barData.length > 0 ? renderBarChart(barData) : '<div class="empty-state">No agent data yet</div>');
-
-  grid.appendChild(accCard);
 
   section.appendChild(grid);
   return section;

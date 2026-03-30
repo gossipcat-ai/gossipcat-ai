@@ -67,8 +67,13 @@ function renderTeamSection(agents) {
       return '<div class="ag-more-pip" style="background:' + c.replace('var(--', 'rgba(').replace(')', ',0.12)') + ';color:' + c + '">' + agentInitials(a.id) + '</div>';
     }).join('');
 
+    const names = overflow.map(a => {
+      return '<div class="ag-more-name">' + e(a.id) + '</div>';
+    }).join('');
+
     more.innerHTML =
       '<div class="ag-more-avatars">' + avatars + '</div>' +
+      '<div class="ag-more-names">' + names + '</div>' +
       '<div class="ag-more-count">+' + overflow.length + '</div>' +
       '<div class="ag-more-label">more agents</div>';
 

@@ -10,11 +10,9 @@ async function build() {
   // Concatenate JS files (no bundling needed — vanilla JS, no imports)
   const jsParts = [
     join(srcDir, 'app.js'),
-    join(srcDir, 'lib', 'chart.js'),
     join(srcDir, 'lib', 'markdown.js'),
     join(srcDir, 'hub', 'overview.js'),
     join(srcDir, 'hub', 'team.js'),
-    join(srcDir, 'hub', 'performance.js'),
     join(srcDir, 'hub', 'activity.js'),
     join(srcDir, 'hub', 'knowledge.js'),
     join(srcDir, 'detail', 'agent.js'),

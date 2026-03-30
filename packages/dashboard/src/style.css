@@ -250,17 +250,6 @@ body::after {
 .ag-more-names { display: flex; flex-direction: column; gap: 1px; margin: 2px 0; }
 .ag-more-name { font-size: 11px; font-family: var(--mono); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; text-align: center; }
 
-/* ── Charts ─────────────────────────────────────── */
-.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
-.chart-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-.chart-title { font-size: 13px; font-weight: 600; }
-.chart-legend { display: flex; gap: 12px; font-size: 10px; color: var(--text-3); font-family: var(--mono); }
-.lg-dot { width: 8px; height: 3px; border-radius: 2px; display: inline-block; margin-right: 4px; vertical-align: middle; }
-.chart-svg { width: 100%; display: block; }
-.grid-ln { stroke: rgba(255,255,255,0.03); stroke-width: 0.5; }
-.ax-txt { fill: var(--text-3); font-family: var(--mono); font-size: 9px; }
-
 /* ── Panels ─────────────────────────────────────── */
 .panel {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
@@ -461,7 +450,6 @@ body::after {
 }
 @media (max-width: 900px) {
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
-  .chart-grid { grid-template-columns: 1fr; }
   .two-col { grid-template-columns: 1fr; }
   .know-grid { grid-template-columns: 1fr; }
 }

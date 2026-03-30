@@ -28,7 +28,7 @@ function renderKnowledgeSection(agents) {
     const color = agentColor(agent);
     const chip = document.createElement('button');
     chip.className = 'ka';
-    if (!agent.online && (agent.scores?.signals || 0) === 0) chip.style.opacity = '0.4';
+    if (!agent.online && (agent.scores?.signals || 0) === 0) chip.style.opacity = '0.6';
     chip.addEventListener('click', () => navigate('#/knowledge/' + encodeURIComponent(agent.id)));
     chip.innerHTML =
       '<div class="ka-avatar" style="background:' + color.replace('var(--', 'rgba(').replace(')', ',0.1)') + ';color:' + color + '">' + agentInitials(agent.id) + '</div>' +
@@ -39,17 +39,39 @@ function renderKnowledgeSection(agents) {
   memPanel.appendChild(chips);
   grid.appendChild(memPanel);
 
-  // ── Right: Recent learnings (placeholder — requires per-agent memory API calls) ──
+  // ── Right: Recent learnings ──────────────────────
   const learnPanel = document.createElement('div');
   learnPanel.className = 'panel';
   learnPanel.innerHTML = '<div class="panel-head"><span class="panel-title">Recent Learnings</span></div>';
 
   const learnBody = document.createElement('div');
   learnBody.className = 'panel-body';
-  learnBody.innerHTML = '<div class="empty-state">Click an agent to browse their memory</div>';
-
+  learnBody.innerHTML = '<div class="empty-state">Loading...</div>';
   learnPanel.appendChild(learnBody);
   grid.appendChild(learnPanel);
+
+  // Fetch learnings async — don't block hub render
+  window._dash.api('learnings').then(data => {
+    const items = (data.learnings || []);
+    if (items.length === 0) {
+      learnBody.innerHTML = '<div class="empty-state">No learnings yet</div>';
+      return;
+    }
+    learnBody.innerHTML = '';
+    for (const item of items) {
+      const color = agentColor(agents.find(a => a.id === item.agentId) || { provider: '', online: false, scores: {} });
+      const row = document.createElement('div');
+      row.className = 'learn-row';
+      row.addEventListener('click', () => navigate('#/knowledge/' + encodeURIComponent(item.agentId)));
+      row.innerHTML =
+        '<div class="learn-avatar" style="background:' + color.replace('var(--', 'rgba(').replace(')', ',0.1)') + ';color:' + color + '">' + agentInitials(item.agentId) + '</div>' +
+        '<span class="learn-text">' + e(item.description).slice(0, 60) + '</span>' +
+        '<span class="learn-type">' + e(item.type) + '</span>';
+      learnBody.appendChild(row);
+    }
+  }).catch(() => {
+    learnBody.innerHTML = '<div class="empty-state">Failed to load learnings</div>';
+  });
 
   section.appendChild(grid);
   return section;

@@ -164,17 +164,15 @@ function connectWs() {
 async function renderHub(app) {
   app.innerHTML = '<div class="loading">Loading...</div>';
   try {
-    const [overview, agents, tasks, consensus, signals] = await Promise.all([
-      api('overview'), api('agents'), api('tasks'),
-      api('consensus'), api('signals'),
+    const [overview, agents, consensus] = await Promise.all([
+      api('overview'), api('agents'), api('consensus'),
     ]);
     app.innerHTML = '';
 
     // Build sections
     app.appendChild(renderOverviewSection(overview));
     app.appendChild(renderTeamSection(agents));
-    app.appendChild(renderPerformanceSection(tasks, agents));
-    app.appendChild(renderActivitySection(tasks, consensus, signals));
+    app.appendChild(renderActivitySection({tasks:[]}, consensus, {signals:[]}));
     app.appendChild(renderKnowledgeSection(agents));
 
     // Wire WS live updates — selective section refresh, debounced
@@ -183,7 +181,7 @@ async function renderHub(app) {
 
     const sectionMap = {
       task_dispatched:      ['activity'],
-      task_completed:       ['overview', 'activity', 'performance'],
+      task_completed:       ['overview', 'activity'],
       task_failed:          ['overview', 'activity'],
       consensus_started:    ['activity'],
       consensus_complete:   ['overview', 'activity'],
@@ -206,26 +204,22 @@ async function renderHub(app) {
         try {
           // Only fetch APIs needed for the sections being refreshed
           const needsOverview = toRefresh.has('overview');
-          const needsAgents = toRefresh.has('team') || toRefresh.has('performance') || toRefresh.has('knowledge');
-          const needsTasks = toRefresh.has('activity') || toRefresh.has('performance');
+          const needsAgents = toRefresh.has('team') || toRefresh.has('knowledge');
           const needsConsensus = toRefresh.has('activity');
-          const needsSignals = toRefresh.has('activity');
 
-          const [ov, ag, tk, cx, sg] = await Promise.all([
+          const [ov, ag, cx] = await Promise.all([
             needsOverview ? api('overview') : null,
             needsAgents ? api('agents') : null,
-            needsTasks ? api('tasks') : null,
             needsConsensus ? api('consensus') : null,
-            needsSignals ? api('signals') : null,
           ]);
 
           // Replace only the affected section DOM nodes
+          // sections: [0]=overview, [1]=team, [2]=activity, [3]=knowledge
           const sections = app.querySelectorAll('.section');
           if (ov && sections[0]) { const el = renderOverviewSection(ov); sections[0].replaceWith(el); }
           if (ag && sections[1]) { const el = renderTeamSection(ag); sections[1].replaceWith(el); }
-          if ((tk || ag) && sections[2]) { const el = renderPerformanceSection(tk || tasks, ag || agents); sections[2].replaceWith(el); }
-          if ((tk || cx || sg) && sections[3]) { const el = renderActivitySection(tk || tasks, cx || consensus, sg || signals); sections[3].replaceWith(el); }
-          if (ag && sections[4]) { const el = renderKnowledgeSection(ag); sections[4].replaceWith(el); }
+          if (cx && sections[2]) { const el = renderActivitySection({tasks:[]}, cx, {signals:[]}); sections[2].replaceWith(el); }
+          if (ag && sections[3]) { const el = renderKnowledgeSection(ag); sections[3].replaceWith(el); }
         } catch { /* best-effort live update */ }
       }, 500);
     });
