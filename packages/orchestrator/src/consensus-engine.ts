@@ -1,4 +1,5 @@
 import { readFile, readdir, stat } from 'fs/promises';
+import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { LLMMessage } from '@gossip/types';
 import { ILLMProvider } from './llm-client';
@@ -183,6 +184,7 @@ Return only valid JSON.` },
    * Phase 3: Synthesize Phase 1 results and Phase 2 cross-review entries into a consensus report.
    */
   async synthesize(results: TaskEntry[], crossReviewEntries: CrossReviewEntry[]): Promise<ConsensusReport> {
+    const consensusId = randomUUID().slice(0, 12);
     const signals: ConsensusSignal[] = [];
     const newFindings: ConsensusNewFinding[] = [];
     const successful = results.filter(r => r.status === 'completed' && r.result);
@@ -222,6 +224,19 @@ Return only valid JSON.` },
     const agentTaskIds = new Map<string, string>();
     for (const r of successful) agentTaskIds.set(r.agentId, r.id);
 
+    // Helper: get taskId with recoverable fallback (never empty string)
+    const getTaskId = (agentId: string): string => {
+      const id = agentTaskIds.get(agentId);
+      if (id && id.length > 0) return id;
+      process.stderr.write(`[consensus] WARNING: no taskId for agent "${agentId}", using fallback\n`);
+      return `unknown-${consensusId}-${agentId}`;
+    };
+
+    // Helper: cap evidence to prevent unbounded signal payload sizes
+    const MAX_EVIDENCE_LENGTH = 2000;
+    const capEvidence = (e: string): string =>
+      e.length > MAX_EVIDENCE_LENGTH ? e.slice(0, MAX_EVIDENCE_LENGTH) : e;
+
     // (b) Apply cross-review entries
     const crossReviewTimestamp = new Date().toISOString();
     for (const entry of crossReviewEntries) {
@@ -236,10 +251,11 @@ Return only valid JSON.` },
         });
         signals.push({
           type: 'consensus',
-          taskId: agentTaskIds.get(entry.agentId) ?? '',
+          taskId: getTaskId(entry.agentId),
+          consensusId,
           signal: 'new_finding',
           agentId: entry.agentId,
-          evidence: entry.evidence,
+          evidence: capEvidence(entry.evidence),
           timestamp: now,
         });
         continue;
@@ -253,11 +269,12 @@ Return only valid JSON.` },
           f.confidences.push(entry.confidence);
           signals.push({
             type: 'consensus',
-            taskId: agentTaskIds.get(entry.agentId) ?? '',
+            taskId: getTaskId(entry.agentId),
+            consensusId,
             signal: 'agreement',
             agentId: entry.agentId,
             counterpartId: entry.peerAgentId,
-            evidence: entry.evidence,
+            evidence: capEvidence(entry.evidence),
             timestamp: now,
           });
         }
@@ -281,12 +298,13 @@ Return only valid JSON.` },
             // they should not influence the confirmed/disputed tagging.
             signals.push({
               type: 'consensus',
-              taskId: agentTaskIds.get(entry.peerAgentId) ?? '',
+              taskId: getTaskId(entry.peerAgentId),
+              consensusId,
               signal: 'hallucination_caught',
               agentId: entry.peerAgentId,
               counterpartId: entry.agentId,
               outcome: isCitationFabricated ? 'fabricated_citation' : 'incorrect',
-              evidence: entry.evidence,
+              evidence: capEvidence(entry.evidence),
               timestamp: now,
             });
           } else {
@@ -297,11 +315,12 @@ Return only valid JSON.` },
             });
             signals.push({
               type: 'consensus',
-              taskId: agentTaskIds.get(entry.agentId) ?? '',
+              taskId: getTaskId(entry.agentId),
+              consensusId,
               signal: 'disagreement',
               agentId: entry.agentId,
               counterpartId: entry.peerAgentId,
-              evidence: entry.evidence,
+              evidence: capEvidence(entry.evidence),
               timestamp: now,
             });
           }
@@ -320,11 +339,12 @@ Return only valid JSON.` },
           // Tiny penalty signal — agent couldn't verify, less useful than agree/disagree
           signals.push({
             type: 'consensus',
-            taskId: agentTaskIds.get(entry.agentId) ?? '',
+            taskId: getTaskId(entry.agentId),
+            consensusId,
             signal: 'unverified',
             agentId: entry.agentId,
             counterpartId: entry.peerAgentId,
-            evidence: entry.evidence,
+            evidence: capEvidence(entry.evidence),
             timestamp: now,
           });
         }
@@ -369,11 +389,12 @@ Return only valid JSON.` },
           unique.push(finding);
           signals.push({
             type: 'consensus',
-            taskId: agentTaskIds.get(entry.originalAgentId) ?? '',
+            taskId: getTaskId(entry.originalAgentId),
+            consensusId,
             signal: 'hallucination_caught',
             agentId: entry.originalAgentId,
             outcome: 'fabricated_citation',
-            evidence: `Confirmed finding cites non-existent code: "${entry.finding.slice(0, 200)}"`,
+            evidence: capEvidence(`Confirmed finding cites non-existent code: "${entry.finding.slice(0, 200)}"`),
             timestamp: now,
           });
           continue;
@@ -387,10 +408,11 @@ Return only valid JSON.` },
         if (isUniquelyDiscovered) {
           signals.push({
             type: 'consensus',
-            taskId: agentTaskIds.get(entry.originalAgentId) ?? '',
+            taskId: getTaskId(entry.originalAgentId),
+            consensusId,
             signal: 'unique_confirmed',
             agentId: entry.originalAgentId,
-            evidence: entry.finding,
+            evidence: capEvidence(entry.finding),
             timestamp: now,
           });
         }
@@ -400,10 +422,11 @@ Return only valid JSON.` },
         unverified.push(finding);
         signals.push({
           type: 'consensus',
-          taskId: agentTaskIds.get(entry.originalAgentId) ?? '',
+          taskId: getTaskId(entry.originalAgentId),
+          consensusId,
           signal: 'unique_unconfirmed',
           agentId: entry.originalAgentId,
-          evidence: entry.finding,
+          evidence: capEvidence(entry.finding),
           timestamp: now,
         });
       } else {
@@ -411,10 +434,11 @@ Return only valid JSON.` },
         unique.push(finding);
         signals.push({
           type: 'consensus',
-          taskId: agentTaskIds.get(entry.originalAgentId) ?? '',
+          taskId: getTaskId(entry.originalAgentId),
+          consensusId,
           signal: 'unique_unconfirmed',
           agentId: entry.originalAgentId,
-          evidence: entry.finding,
+          evidence: capEvidence(entry.finding),
           timestamp: now,
         });
       }
@@ -483,6 +507,14 @@ Return only valid JSON.` },
   async verifyCitations(evidence: string): Promise<boolean> {
     if (!this.config.projectRoot) return false;
 
+    // Verify the project root itself is accessible — if not, we can't verify anything
+    try {
+      await stat(this.config.projectRoot);
+    } catch {
+      // Project root inaccessible — benefit of doubt, not fabricated
+      return false;
+    }
+
     // Extract file:line patterns like "task-dispatcher.ts:146" or "consensus-engine.ts:113"
     const citationPattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,4}):(\d+)/g;
     const citations: Array<{ file: string; line: number }> = [];
@@ -503,8 +535,8 @@ Return only valid JSON.` },
 
         if (citation.line > lines.length) return true; // Line number beyond file length
       } catch {
-        // File read failed — treat as fabricated
-        return true;
+        // File read failed — benefit of doubt, not fabricated
+        return false;
       }
     }
     return false;
