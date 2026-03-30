@@ -49,7 +49,7 @@ async function renderTaskStrip(container) {
       // Live mode: agents are working
       container.className = 'section live-strip live-active';
       for (const t of active) {
-        const desc = escapeHtml((t.task || '').replace(/\n.*/s, '').slice(0, 60));
+        const desc = escapeHtml((t.task || '').replace(/\n.*/s, ''));
         const row = document.createElement('div');
         row.className = 'live-task';
         row.innerHTML =
@@ -71,7 +71,7 @@ async function renderTaskStrip(container) {
     for (const t of recent) {
       const color = t.status === 'completed' ? 'var(--green)' : t.status === 'failed' ? 'var(--red)' : 'var(--text-3)';
       const icon = t.status === 'completed' ? '&#10003;' : t.status === 'failed' ? '&#10007;' : '&#8943;';
-      const desc = escapeHtml((t.task || '').replace(/\n.*/s, '').slice(0, 60));
+      const desc = escapeHtml((t.task || '').replace(/\n.*/s, ''));
       const dur = t.duration > 0 ? (t.duration / 1000).toFixed(1) + 's' : '';
       const row = document.createElement('div');
       row.className = 'live-task';
