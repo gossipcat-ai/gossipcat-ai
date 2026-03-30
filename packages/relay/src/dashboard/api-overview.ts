@@ -24,6 +24,8 @@ export interface OverviewResponse {
   tasksCompleted: number;
   tasksFailed: number;
   avgDurationMs: number;
+  lastConsensusTimestamp: string;
+  unverifiedFindings: number;
 }
 
 export async function overviewHandler(projectRoot: string, ctx: OverviewContext): Promise<OverviewResponse> {
@@ -36,6 +38,8 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
   let consensusRuns = 0;
   let totalFindings = 0;
   let confirmedFindings = 0;
+  let lastConsensusTimestamp = '';
+  let unverifiedFindings = 0;
   const consensusTaskIds = new Set<string>();
 
   const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
@@ -50,6 +54,10 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
           if (entry.type === 'consensus' && (entry.consensusId || entry.taskId)) {
             consensusTaskIds.add(entry.consensusId ?? entry.taskId);
           }
+          // Track last consensus timestamp
+          if (entry.consensusId && entry.timestamp > lastConsensusTimestamp) {
+            lastConsensusTimestamp = entry.timestamp;
+          }
           // Count findings by signal type
           if (entry.signal === 'agreement' || entry.signal === 'unique_confirmed' || entry.signal === 'consensus_verified') {
             totalFindings++;
@@ -58,6 +66,7 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
             totalFindings++;
           } else if (entry.signal === 'unverified' || entry.signal === 'unique_unconfirmed') {
             totalFindings++;
+            unverifiedFindings++;
           }
         } catch { /* skip malformed */ }
       }
@@ -93,5 +102,5 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
   }
   const avgDurationMs = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
 
-  return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs };
+  return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs, lastConsensusTimestamp, unverifiedFindings };
 }

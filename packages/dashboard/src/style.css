@@ -169,36 +169,17 @@ body::after {
 }
 .sh-action:hover { color: var(--accent); }
 
-/* ── Metric Cards ───────────────────────────────── */
-.metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-.mc {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-  padding: 16px 18px; transition: border-color 0.2s;
-  position: relative; overflow: hidden;
-}
-.mc:hover { border-color: var(--border-active); }
-.mc::after {
-  content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
-  background: var(--accent); opacity: 0; transition: opacity 0.2s;
-}
-.mc:hover::after { opacity: 0.4; }
-.mc-row { display: flex; justify-content: space-between; align-items: flex-start; }
-.mc-label {
-  font-size: 11px; font-family: var(--mono); font-weight: 500;
-  color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em;
-}
-.mc-val {
-  font-family: var(--mono); font-size: 26px; font-weight: 600;
-  letter-spacing: -0.04em; line-height: 1; margin-top: 5px;
-}
-.mc-detail { font-size: 12px; color: var(--text-3); margin-top: 5px; }
-.mc-detail strong { font-weight: 600; }
-.mc-icon {
-  width: 40px; height: 40px; border-radius: 10px;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.mc-icon svg { width: 20px; height: 20px; }
+/* ── Status Bar ────────────────────────────────── */
+.status-bar { padding: 14px 20px !important; margin-bottom: 16px; }
+.status-bar .sh { display: none; }
+.status-bar { display: flex; justify-content: space-between; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.sb-left, .sb-right { display: flex; align-items: center; gap: 10px; }
+.sb-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
+.sb-dot.online { background: var(--green); box-shadow: 0 0 8px rgba(52,211,153,0.4); }
+.sb-stat { color: var(--text-2); font-size: 13px; font-family: var(--mono); }
+.sb-sep { color: var(--text-3); }
+.sb-action { color: var(--amber); font-size: 13px; font-weight: 600; font-family: var(--mono); }
+.sb-clear { color: var(--green); font-size: 13px; font-family: var(--mono); }
 
 /* ── Agent Cards ────────────────────────────────── */
 .agent-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
@@ -449,14 +430,12 @@ body::after {
   .three-col { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 900px) {
-  .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .two-col { grid-template-columns: 1fr; }
   .know-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
   .topbar { padding: 0 16px; }
   .page { padding: 16px; }
-  .metric-grid { grid-template-columns: 1fr; }
   .agent-grid { grid-template-columns: 1fr; }
   .three-col { grid-template-columns: 1fr; }
   .ag-metrics { flex-wrap: wrap; }
