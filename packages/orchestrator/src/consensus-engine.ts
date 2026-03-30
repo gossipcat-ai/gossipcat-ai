@@ -1,6 +1,6 @@
 import { readFile, readdir, stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { LLMMessage } from '@gossip/types';
 import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
@@ -118,7 +118,7 @@ export class ConsensusEngine {
     for (const r of successful) {
       const raw = this.extractSummary(r.result!);
       // Escape </data> to prevent prompt fence escape (agent output could contain the literal tag)
-      summaries.set(r.agentId, raw.replace(/<\/?data>/gi, ''));
+      summaries.set(r.agentId, raw.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, ''));
     }
 
     // Dispatch cross-review in parallel, each agent reviews peers
@@ -540,7 +540,7 @@ Return only valid JSON.` },
                 if (snippet.length > MAX_SNIPPET_CHARS) {
                   snippet = snippet.slice(0, MAX_SNIPPET_CHARS) + '\n  [truncated]';
                 }
-                const safeSnippet = snippet.replace(/<\/?(data|code)>/gi, '');
+                const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
                 codeBlock = `\n<code src="${fullRef}:${lineNum}">\n${safeSnippet}\n</code>`;
               }
             }
@@ -691,7 +691,7 @@ Return ONLY a JSON array:
           .map((l, i) => `  ${start + i + 1}: ${l}`)
           .join('\n');
         // Sanitize snippet to prevent </data> fence escape
-        const safeSnippet = snippet.replace(/<\/?(data|anchor)>/gi, '');
+        const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
         result.push(`<anchor src="${fullRef}:${lineNum}">\n${safeSnippet}\n</anchor>`);
         anchorCount++;
       } catch { /* file unreadable, skip */ }
@@ -750,21 +750,32 @@ Return ONLY a JSON array:
   /**
    * Resolve a relative file reference to an absolute path within the project.
    */
+  /** Guard: resolved path must stay within project root */
+  private isInsideRoot(candidate: string, root: string): boolean {
+    const normalized = resolve(candidate);
+    const normalizedRoot = resolve(root);
+    return normalized === normalizedRoot || normalized.startsWith(normalizedRoot + '/');
+  }
+
   private async resolveFilePath(fileRef: string): Promise<string | null> {
     const root = this.config.projectRoot!;
     const fileName = fileRef.split('/').pop()!;
 
     // Try the reference as-is (could be a full relative path)
     try {
-      await stat(join(root, fileRef));
-      return join(root, fileRef);
+      const candidate = join(root, fileRef);
+      if (!this.isInsideRoot(candidate, root)) return null; // path traversal guard
+      await stat(candidate);
+      return candidate;
     } catch { /* not found at root */ }
 
     // Try bare filename at project root (covers eslint.config.ts, vite.config.ts, etc.)
     if (fileName !== fileRef) {
       try {
-        await stat(join(root, fileName));
-        return join(root, fileName);
+        const candidate = join(root, fileName);
+        if (!this.isInsideRoot(candidate, root)) return null;
+        await stat(candidate);
+        return candidate;
       } catch { /* not at root */ }
     }
 
