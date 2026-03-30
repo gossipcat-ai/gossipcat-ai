@@ -4,6 +4,7 @@ import { join } from 'path';
 interface ConsensusSignal {
   type: string;
   taskId: string;
+  consensusId?: string;
   signal: string;
   agentId: string;
   counterpartId?: string;
@@ -41,15 +42,16 @@ export async function consensusHandler(projectRoot: string): Promise<ConsensusRe
     }
   } catch { return { runs: [], totalSignals: 0 }; }
 
-  // Group by taskId
-  const byTask = new Map<string, ConsensusSignal[]>();
+  // Group by consensusId (falls back to taskId for old signals)
+  const byRun = new Map<string, ConsensusSignal[]>();
   for (const sig of signals) {
-    if (!byTask.has(sig.taskId)) byTask.set(sig.taskId, []);
-    byTask.get(sig.taskId)!.push(sig);
+    const runId = sig.consensusId ?? sig.taskId;
+    if (!byRun.has(runId)) byRun.set(runId, []);
+    byRun.get(runId)!.push(sig);
   }
 
   const runs: ConsensusRun[] = [];
-  for (const [taskId, taskSignals] of byTask) {
+  for (const [taskId, taskSignals] of byRun) {
     const agents = new Set<string>();
     const counts = { agreement: 0, disagreement: 0, unverified: 0, unique: 0, hallucination: 0, new: 0 };
 

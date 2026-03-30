@@ -41,6 +41,7 @@ export interface AgentResponse {
 const DEFAULT_SCORE: AgentScore = {
   agentId: '', accuracy: 0.5, uniqueness: 0.5, reliability: 0.5,
   totalSignals: 0, agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
+  consecutiveFailures: 0, circuitOpen: false,
 };
 
 interface TaskGraphEntry {

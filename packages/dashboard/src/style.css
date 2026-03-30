@@ -353,6 +353,15 @@ body::after {
 .section:nth-child(4) { animation: fadeUp 0.35s ease-out 0.12s both; }
 .section:nth-child(5) { animation: fadeUp 0.35s ease-out 0.16s both; }
 
+/* ── Live Task Strip ───────────────────────────────────────────────────── */
+.live-strip { padding: 8px 20px !important; background: rgba(251,191,36,0.04); border: 1px solid rgba(251,191,36,0.12); border-radius: 10px; margin-bottom: 12px; }
+.live-strip .sh { display: none; }
+.live-task { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
+.live-icon { font-size: 14px; }
+.live-agent { color: var(--accent); font-weight: 600; font-family: var(--mono); font-size: 12px; min-width: 140px; }
+.live-desc { color: var(--text-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-elapsed { color: var(--amber); font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+
 /* ── Responsive ─────────────────────────────────── */
 @media (max-width: 1200px) {
   .page { padding: 20px 24px; }

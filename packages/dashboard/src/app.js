@@ -33,6 +33,29 @@ function agentColor(agent) {
   return 'var(--accent)';
 }
 
+// ── Live Task Strip ────────────────────────────────────────────────────
+async function renderLiveStrip(container) {
+  try {
+    const data = await api('active-tasks');
+    const tasks = data.tasks || [];
+    container.innerHTML = '';
+    if (tasks.length === 0) { container.hidden = true; return; }
+    container.hidden = false;
+    for (const t of tasks) {
+      const elapsed = Math.floor((Date.now() - new Date(t.startedAt).getTime()) / 1000);
+      const desc = escapeHtml((t.task || '').replace(/\n.*/s, '').slice(0, 60));
+      const row = document.createElement('div');
+      row.className = 'live-task';
+      row.innerHTML =
+        '<span class="live-icon">&#9889;</span>' +
+        '<span class="live-agent">' + escapeHtml(t.agentId) + '</span>' +
+        '<span class="live-desc">' + desc + '</span>' +
+        '<span class="live-elapsed">' + elapsed + 's</span>';
+      container.appendChild(row);
+    }
+  } catch { container.hidden = true; }
+}
+
 // ── API Helper ─────────────────────────────────────────────────────────
 async function api(path) {
   const res = await fetch('/dashboard/api/' + path, { credentials: 'include' });
@@ -171,6 +194,13 @@ async function renderHub(app) {
 
     // Build sections
     app.appendChild(renderOverviewSection(overview));
+
+    const liveStrip = document.createElement('div');
+    liveStrip.className = 'section live-strip';
+    liveStrip.hidden = true;
+    app.appendChild(liveStrip);
+    renderLiveStrip(liveStrip);
+
     app.appendChild(renderTeamSection(agents));
     app.appendChild(renderActivitySection(consensus));
     app.appendChild(renderKnowledgeSection(agents));
@@ -191,6 +221,11 @@ async function renderHub(app) {
     };
 
     const wsHandler = onDashboardEvent((event) => {
+      if (event.type === 'task_dispatched' || event.type === 'task_completed' || event.type === 'task_failed') {
+        const strip = app.querySelector('.live-strip');
+        if (strip) renderLiveStrip(strip);
+      }
+
       const sections = sectionMap[event.type];
       if (!sections || sections.length === 0) return;
       for (const s of sections) pendingSections.add(s);

@@ -8,6 +8,7 @@ import { consensusHandler } from './api-consensus';
 import { signalsHandler } from './api-signals';
 import { learningsHandler } from './api-learnings';
 import { tasksHandler } from './api-tasks';
+import { activeTasksHandler } from './api-active-tasks';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
@@ -145,6 +146,12 @@ export class DashboardRouter {
 
       if (url === '/dashboard/api/tasks' && req.method === 'GET') {
         const data = await tasksHandler(this.projectRoot);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      if (url === '/dashboard/api/active-tasks' && req.method === 'GET') {
+        const data = await activeTasksHandler(this.projectRoot);
         this.json(res, 200, data);
         return true;
       }

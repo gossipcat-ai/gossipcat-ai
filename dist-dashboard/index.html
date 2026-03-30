@@ -361,6 +361,15 @@ body::after {
 .section:nth-child(4) { animation: fadeUp 0.35s ease-out 0.12s both; }
 .section:nth-child(5) { animation: fadeUp 0.35s ease-out 0.16s both; }
 
+/* ── Live Task Strip ───────────────────────────────────────────────────── */
+.live-strip { padding: 8px 20px !important; background: rgba(251,191,36,0.04); border: 1px solid rgba(251,191,36,0.12); border-radius: 10px; margin-bottom: 12px; }
+.live-strip .sh { display: none; }
+.live-task { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
+.live-icon { font-size: 14px; }
+.live-agent { color: var(--accent); font-weight: 600; font-family: var(--mono); font-size: 12px; min-width: 140px; }
+.live-desc { color: var(--text-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-elapsed { color: var(--amber); font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+
 /* ── Responsive ─────────────────────────────────── */
 @media (max-width: 1200px) {
   .page { padding: 20px 24px; }
@@ -446,6 +455,29 @@ function agentColor(agent) {
   if (!agent || (!agent.online && agent.scores?.signals === 0)) return 'var(--text-3)';
   if (agent.provider === 'google') return 'var(--blue)';
   return 'var(--accent)';
+}
+
+// ── Live Task Strip ────────────────────────────────────────────────────
+async function renderLiveStrip(container) {
+  try {
+    const data = await api('active-tasks');
+    const tasks = data.tasks || [];
+    container.innerHTML = '';
+    if (tasks.length === 0) { container.hidden = true; return; }
+    container.hidden = false;
+    for (const t of tasks) {
+      const elapsed = Math.floor((Date.now() - new Date(t.startedAt).getTime()) / 1000);
+      const desc = escapeHtml((t.task || '').replace(/\n.*/s, '').slice(0, 60));
+      const row = document.createElement('div');
+      row.className = 'live-task';
+      row.innerHTML =
+        '<span class="live-icon">&#9889;</span>' +
+        '<span class="live-agent">' + escapeHtml(t.agentId) + '</span>' +
+        '<span class="live-desc">' + desc + '</span>' +
+        '<span class="live-elapsed">' + elapsed + 's</span>';
+      container.appendChild(row);
+    }
+  } catch { container.hidden = true; }
 }
 
 // ── API Helper ─────────────────────────────────────────────────────────
@@ -586,6 +618,13 @@ async function renderHub(app) {
 
     // Build sections
     app.appendChild(renderOverviewSection(overview));
+
+    const liveStrip = document.createElement('div');
+    liveStrip.className = 'section live-strip';
+    liveStrip.hidden = true;
+    app.appendChild(liveStrip);
+    renderLiveStrip(liveStrip);
+
     app.appendChild(renderTeamSection(agents));
     app.appendChild(renderActivitySection(consensus));
     app.appendChild(renderKnowledgeSection(agents));
@@ -606,6 +645,11 @@ async function renderHub(app) {
     };
 
     const wsHandler = onDashboardEvent((event) => {
+      if (event.type === 'task_dispatched' || event.type === 'task_completed' || event.type === 'task_failed') {
+        const strip = app.querySelector('.live-strip');
+        if (strip) renderLiveStrip(strip);
+      }
+
       const sections = sectionMap[event.type];
       if (!sections || sections.length === 0) return;
       for (const s of sections) pendingSections.add(s);
