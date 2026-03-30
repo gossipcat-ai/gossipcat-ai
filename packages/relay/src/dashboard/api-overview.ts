@@ -9,6 +9,7 @@ interface AgentConfigLike {
 interface OverviewContext {
   agentConfigs: AgentConfigLike[];
   relayConnections: number;
+  connectedAgentIds: string[];
 }
 
 export interface OverviewResponse {
@@ -27,9 +28,9 @@ export interface OverviewResponse {
 
 export async function overviewHandler(projectRoot: string, ctx: OverviewContext): Promise<OverviewResponse> {
   const nativeCount = ctx.agentConfigs.filter(a => a.native).length;
-  const relayConnected = ctx.relayConnections;
+  const relayConnected = ctx.connectedAgentIds.length;
   const relayCount = ctx.agentConfigs.filter(a => !a.native).length;
-  const agentsOnline = ctx.agentConfigs.length;
+  const agentsOnline = relayConnected + nativeCount;
 
   let totalSignals = 0;
   let consensusRuns = 0;
@@ -45,9 +46,9 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
         try {
           const entry = JSON.parse(line);
           totalSignals++;
-          // Count consensus runs from unique taskIds in consensus signals
-          if (entry.type === 'consensus' && entry.taskId) {
-            consensusTaskIds.add(entry.taskId);
+          // Count consensus runs (group by consensusId, fall back to taskId)
+          if (entry.type === 'consensus' && (entry.consensusId || entry.taskId)) {
+            consensusTaskIds.add(entry.consensusId ?? entry.taskId);
           }
           // Count findings by signal type
           if (entry.signal === 'agreement' || entry.signal === 'unique_confirmed' || entry.signal === 'consensus_verified') {

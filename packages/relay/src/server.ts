@@ -69,6 +69,7 @@ export class RelayServer {
           {
             agentConfigs: this.config.dashboard.agentConfigs,
             relayConnections: this.connectionManager.count,
+            connectedAgentIds: this.connectionManager.getAll().map(c => c.agentId),
           },
         );
       }
@@ -287,6 +288,9 @@ export class RelayServer {
 
   /** Call from handleConnection cleanup to keep relay count current */
   private updateDashboardConnectionCount(): void {
-    this.dashboardRouter?.updateContext({ relayConnections: this.connectionManager.count });
+    this.dashboardRouter?.updateContext({
+      relayConnections: this.connectionManager.count,
+      connectedAgentIds: this.connectionManager.getAll().map(c => c.agentId),
+    });
   }
 }

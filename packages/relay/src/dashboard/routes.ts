@@ -5,6 +5,8 @@ import { agentsHandler } from './api-agents';
 import { skillsGetHandler, skillsBindHandler } from './api-skills';
 import { memoryHandler } from './api-memory';
 import { consensusHandler } from './api-consensus';
+import { signalsHandler } from './api-signals';
+import { learningsHandler } from './api-learnings';
 import { tasksHandler } from './api-tasks';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -21,6 +23,7 @@ interface AgentConfigLike {
 interface DashboardContext {
   agentConfigs: AgentConfigLike[];
   relayConnections: number;
+  connectedAgentIds: string[];
 }
 
 const AUTH_MAX_ATTEMPTS = 10;
@@ -39,6 +42,7 @@ export class DashboardRouter {
   updateContext(ctx: Partial<DashboardContext>): void {
     if (ctx.agentConfigs !== undefined) this.ctx.agentConfigs = ctx.agentConfigs;
     if (ctx.relayConnections !== undefined) this.ctx.relayConnections = ctx.relayConnections;
+    if (ctx.connectedAgentIds !== undefined) this.ctx.connectedAgentIds = ctx.connectedAgentIds;
   }
 
   /**
@@ -134,7 +138,7 @@ export class DashboardRouter {
       }
 
       if (url === '/dashboard/api/agents' && req.method === 'GET') {
-        const data = await agentsHandler(this.projectRoot, this.ctx.agentConfigs);
+        const data = await agentsHandler(this.projectRoot, this.ctx.agentConfigs, this.ctx.connectedAgentIds);
         this.json(res, 200, data);
         return true;
       }
@@ -153,7 +157,14 @@ export class DashboardRouter {
 
       if (url === '/dashboard/api/signals' && req.method === 'GET') {
         const agentFilter = query?.get('agent') ?? null;
-        this.json(res, 200, { signals: [], total: 0, agentFilter });
+        const data = await signalsHandler(this.projectRoot, agentFilter);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      if (url === '/dashboard/api/learnings' && req.method === 'GET') {
+        const data = await learningsHandler(this.projectRoot);
+        this.json(res, 200, data);
         return true;
       }
 
