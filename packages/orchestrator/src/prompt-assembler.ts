@@ -73,8 +73,13 @@ export function assemblePrompt(parts: {
   chainContext?: string;
   consensusSummary?: boolean;
   specReviewContext?: string;
+  projectStructure?: string;
 }): string {
   const blocks: string[] = [];
+
+  if (parts.projectStructure) {
+    blocks.push(`\n\n--- PROJECT ---\n${parts.projectStructure}\n--- END PROJECT ---`);
+  }
 
   if (parts.chainContext) {
     blocks.push(`\n\n${parts.chainContext}`);

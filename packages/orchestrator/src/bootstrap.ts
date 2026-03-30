@@ -227,6 +227,8 @@ ${sessionSection}
 | \`gossip_plan(task)\` | Plan task with write-mode suggestions. Returns dispatch-ready JSON. |
 | \`gossip_session_save()\` | Save session summary for next session context. Call before ending session. |
 | \`gossip_scores()\` | View agent performance scores and dispatch weights. |
+| \`gossip_record_signals(signals)\` | Record consensus signals after verifying agent findings. Call IMMEDIATELY on verify. |
+| \`gossip_retract_signal(agent_id, task_id, reason)\` | Retract a previously recorded signal (e.g., wrong severity). Append-only — excluded from scoring. |
 
 ## Dispatch Rules
 
@@ -256,8 +258,8 @@ When multiple agents review the same work, use **consensus review** for structur
 
 \`\`\`
 gossip_dispatch_consensus(tasks: [
-  { agent_id: "gemini-reviewer", task: "Security review X" },
-  { agent_id: "gemini-tester", task: "Security review X" },
+  { agent_id: "<reviewer-1>", task: "Security review X" },
+  { agent_id: "<reviewer-2>", task: "Security review X" },
 ])
 // then:
 gossip_collect_consensus(task_ids, 300000)
@@ -291,6 +293,14 @@ Agents can modify files when dispatched with a write mode:
 
 For read-only tasks (reviews, analysis), use \`gossip_dispatch\` or \`gossip_orchestrate\` directly — no write mode needed.
 
+## Scoring System
+
+Agents are scored by ratio-based accuracy with recency decay. Key behaviors:
+- **Auto-signals**: \`gossip_collect\` automatically records failure signals for empty/timeout/failed results.
+- **Circuit breaker**: 3 consecutive failures → agent demoted to minimum weight (0.3). Resets on any positive signal.
+- **Signal expiry**: Signals older than 30 days are excluded from scoring.
+- **Retraction**: Use \`gossip_retract_signal\` to correct a wrongly recorded signal (e.g., minor citation error recorded as hallucination).
+
 ## Memory
 
 Agent memory is auto-managed:
@@ -309,7 +319,8 @@ Skills are auto-injected from agent config. Project-wide skills in .gossip/skill
     const knowledgeDir = join(this.projectRoot, '.gossip', 'agents', '_project', 'memory', 'knowledge');
     if (!existsSync(knowledgeDir)) return null;
 
-    const files = readdirSync(knowledgeDir).filter(f => f.endsWith('.md'));
+    // Exclude session files — they're already in next-session.md via writeSessionSummary()
+    const files = readdirSync(knowledgeDir).filter(f => f.endsWith('.md') && !f.endsWith('-session.md'));
     if (files.length === 0) return null;
 
     // Score by warmth (importance × recency decay). Pinned files get warmth = Infinity.
