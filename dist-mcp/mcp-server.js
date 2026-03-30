@@ -2948,7 +2948,7 @@ var init_performance_reader = __esm({
     import_fs3 = require("fs");
     import_path3 = require("path");
     CIRCUIT_BREAKER_THRESHOLD = 3;
-    NEGATIVE_SIGNALS = /* @__PURE__ */ new Set(["hallucination_caught", "disagreement"]);
+    NEGATIVE_SIGNALS = /* @__PURE__ */ new Set(["hallucination_caught", "disagreement", "unique_unconfirmed"]);
     KNOWN_SIGNALS = {
       agreement: true,
       disagreement: true,
@@ -3024,7 +3024,7 @@ var init_performance_reader = __esm({
           return all.filter((s) => {
             if (s.signal === "signal_retracted") return false;
             const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
-            if (!isFinite(ts) || ts > 0 && ts < expiryMs) return false;
+            if (!isFinite(ts) || ts === 0 || ts < expiryMs) return false;
             const key = s.agentId + ":" + (s.taskId || s.timestamp);
             if (retracted.has(key)) return false;
             return true;
@@ -3152,9 +3152,9 @@ var init_performance_reader = __esm({
           const rawAccuracy = a.weightedTotal > 0 ? clamp(a.weightedCorrect / a.weightedTotal, 0, 1) : 0.5;
           const hallucinationMultiplier = Math.pow(0.75, a.weightedHallucinations);
           const accuracy = clamp(rawAccuracy * hallucinationMultiplier, 0, 1);
-          const uniqueness = clamp(0.5 + a.weightedUnique, 0, 1);
+          const uniqueness = clamp(0.5 + 0.5 * (1 - Math.exp(-a.weightedUnique * 1.5)), 0, 1);
           let reliability = clamp(accuracy * 0.8 + uniqueness * 0.2, 0, 1);
-          if (a.lastSignalMs > 0) {
+          if (a.lastSignalMs > 0 && reliability >= 0.5) {
             const daysSinceLastSignal = (now - a.lastSignalMs) / 864e5;
             const timeFreshness = Math.pow(0.5, daysSinceLastSignal / TIME_DECAY_HALF_LIFE_DAYS);
             reliability = 0.5 + (reliability - 0.5) * timeFreshness;
@@ -8602,11 +8602,11 @@ Return only valid JSON.` },
               if (isHallucination) {
                 signals.push({
                   type: "consensus",
-                  taskId: getTaskId(entry.peerAgentId),
+                  taskId: getTaskId(entry.agentId),
                   consensusId,
                   signal: "hallucination_caught",
-                  agentId: entry.peerAgentId,
-                  counterpartId: entry.agentId,
+                  agentId: entry.agentId,
+                  counterpartId: entry.peerAgentId,
                   outcome: isCitationFabricated ? "fabricated_citation" : "incorrect",
                   evidence: capEvidence(entry.evidence),
                   timestamp: now
@@ -8799,18 +8799,25 @@ ${snippet}`);
           citations.push({ file: match[1], line: parseInt(match[2], 10) });
         }
         if (citations.length === 0) return false;
+        let failed = 0;
         for (const citation of citations) {
           try {
             const filePath = await this.resolveFilePath(citation.file);
-            if (!filePath) return true;
+            if (!filePath) {
+              failed++;
+              continue;
+            }
             const content = await (0, import_promises3.readFile)(filePath, "utf-8");
             const lines = content.split("\n");
-            if (citation.line > lines.length) return true;
+            if (citation.line > lines.length) {
+              failed++;
+              continue;
+            }
           } catch {
-            return false;
+            continue;
           }
         }
-        return false;
+        return failed > citations.length / 2;
       }
       /**
        * Resolve a relative file reference to an absolute path within the project.
@@ -8856,39 +8863,29 @@ ${snippet}`);
        * Detect if disagreement evidence indicates a hallucination.
        */
       detectHallucination(evidence) {
-        const indicators = [
-          "does not exist",
-          "doesn't exist",
-          "no such file",
-          "no such function",
-          "no such method",
-          "no such variable",
-          "file not found",
-          "function not found",
-          "method not found",
-          "line is a comment",
-          // tightened: was 'is a comment'
-          "file only has",
-          // tightened: was 'only has'
-          "no line \\d",
-          // tightened: was 'no line' — require digit after
-          "nonexistent",
-          "non-existent",
-          "never defined",
-          "is not defined in",
-          // tightened: was 'not defined'
-          "not defined anywhere",
-          // tightened: was 'not defined'
-          "fabricated",
-          "hallucinated"
+        const patterns = [
+          /\bdoes not exist\b/,
+          /\bdoesn'?t exist\b/,
+          /\bno such file\b/,
+          /\bno such function\b/,
+          /\bno such method\b/,
+          /\bno such variable\b/,
+          /\bfile not found\b/,
+          /\bfunction not found\b/,
+          /\bmethod not found\b/,
+          /\bline is a comment\b/,
+          /\bfile only has \d/,
+          /\bno line \d/,
+          /\bnonexistent\b/,
+          /\bnon-existent\b/,
+          /\bnever defined\b/,
+          /\bis not defined in\b/,
+          /\bnot defined anywhere\b/,
+          /\bfabricated\b/,
+          /\bhallucinated\b/
         ];
         const lower = evidence.toLowerCase();
-        return indicators.some((phrase) => {
-          if (phrase.includes("\\d")) {
-            return new RegExp(phrase).test(lower);
-          }
-          return lower.includes(phrase);
-        });
+        return patterns.some((re) => re.test(lower));
       }
       /**
        * Find a matching finding in the map for a given peer agent and finding text.

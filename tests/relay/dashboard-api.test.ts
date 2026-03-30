@@ -17,11 +17,12 @@ describe('Overview API', () => {
   });
 
   it('returns zero counts for fresh project', async () => {
-    const result = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0 });
+    const result = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
     expect(result).toEqual({
       agentsOnline: 0, relayCount: 0, relayConnected: 0, nativeCount: 0,
       consensusRuns: 0, totalFindings: 0, confirmedFindings: 0, totalSignals: 0,
       tasksCompleted: 0, tasksFailed: 0, avgDurationMs: 0,
+      lastConsensusTimestamp: '', actionableFindings: 0,
     });
   });
 
@@ -31,8 +32,8 @@ describe('Overview API', () => {
       { id: 'b', provider: 'google', model: 'm', skills: [] },
       { id: 'c', provider: 'google', model: 'm', skills: [] },
     ];
-    const result = await overviewHandler(projectRoot, { agentConfigs: configs as any, relayConnections: 2 });
-    expect(result.agentsOnline).toBe(3);
+    const result = await overviewHandler(projectRoot, { agentConfigs: configs as any, relayConnections: 2, connectedAgentIds: [] });
+    expect(result.agentsOnline).toBe(1); // connectedAgentIds(0) + nativeCount(1)
     expect(result.nativeCount).toBe(1);
     expect(result.relayCount).toBe(2);
   });
@@ -47,7 +48,7 @@ describe('Overview API', () => {
       join(projectRoot, '.gossip', 'agent-performance.jsonl'),
       signals.map(s => JSON.stringify(s)).join('\n') + '\n'
     );
-    const result = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0 });
+    const result = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
     expect(result.totalSignals).toBe(3);
   });
 });

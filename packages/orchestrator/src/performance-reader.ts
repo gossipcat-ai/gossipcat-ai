@@ -19,18 +19,25 @@ export interface AgentScore {
   disagreements: number;
   uniqueFindings: number;
   hallucinations: number;
+  consecutiveFailures: number; // circuit breaker: consecutive negative signals at tail
+  circuitOpen: boolean;        // true when consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD
 }
 
-const SIGNAL_WEIGHTS: Record<ConsensusSignal['signal'], { accuracy?: number; uniqueness?: number }> = {
-  agreement: { accuracy: 0.1 },
-  disagreement: { accuracy: -0.15 },  // losing side; winning side gets bonus via counterpart
-  unverified: { accuracy: -0.03 },    // tiny penalty — couldn't verify, less useful than agree/disagree
-  unique_confirmed: { uniqueness: 0.2 },
-  unique_unconfirmed: { uniqueness: 0.05 },
-  new_finding: { uniqueness: 0.15 },
-  hallucination_caught: { accuracy: -0.3 },
-  category_confirmed: { accuracy: 0.1 },
-  consensus_verified: { accuracy: 0.15 }, // Judge confirmed a finding
+const CIRCUIT_BREAKER_THRESHOLD = 3; // consecutive failures → open circuit
+const NEGATIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement', 'unique_unconfirmed']);
+
+/** Known consensus signal types — used to filter valid signals in computeScores */
+const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
+  agreement: true,
+  disagreement: true,
+  unverified: true,
+  unique_confirmed: true,
+  unique_unconfirmed: true,
+  new_finding: true,
+  hallucination_caught: true,
+  category_confirmed: true,
+  consensus_verified: true,
+  signal_retracted: true,
 };
 
 export class PerformanceReader {
@@ -62,81 +69,243 @@ export class PerformanceReader {
     return this.getScores().get(agentId) ?? null;
   }
 
-  /** Get a reliability multiplier for dispatch weighting (0.5 to 1.5) */
+  /** Get a reliability multiplier for dispatch weighting (0.3 to 2.0) */
   getDispatchWeight(agentId: string): number {
     const score = this.getAgentScore(agentId);
     if (!score || score.totalSignals < 3) return 1.0; // not enough data, neutral
-    // Map reliability (0-1) to weight (0.5-1.5)
-    return 0.5 + score.reliability;
+    // Circuit breaker: 3+ consecutive failures → minimum weight
+    if (score.circuitOpen) return 0.3;
+    // Map reliability (0-1) to weight (0.3-2.0): best agent is ~6.7x worst
+    return clamp(0.3 + score.reliability * 1.7, 0.3, 2.0);
+  }
+
+  /** Check if an agent's circuit breaker is open (3+ consecutive failures) */
+  isCircuitOpen(agentId: string): boolean {
+    const score = this.getAgentScore(agentId);
+    return score?.circuitOpen ?? false;
   }
 
   private readSignals(): ConsensusSignal[] {
     if (!existsSync(this.filePath)) return [];
     try {
+      const SIGNAL_EXPIRY_DAYS = 30;
+      const expiryMs = Date.now() - SIGNAL_EXPIRY_DAYS * 86400000;
+
       const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
-      return lines.map(line => {
+      const all = lines.map(line => {
         try { return JSON.parse(line) as ConsensusSignal; }
         catch { return null; }
       }).filter((s): s is ConsensusSignal =>
-        s !== null && typeof s.agentId === 'string' && s.agentId.length > 0
+        s !== null && s.type === 'consensus' && typeof s.agentId === 'string' && s.agentId.length > 0
       );
+
+      // Collect retraction keys: agentId + taskId combos that have been retracted
+      const retracted = new Set<string>();
+      for (const s of all) {
+        if (s.signal === 'signal_retracted') {
+          retracted.add(s.agentId + ':' + (s.taskId || s.timestamp));
+        }
+      }
+
+      // Filter: exclude expired, retracted, and retraction signals themselves
+      return all.filter(s => {
+        if (s.signal === 'signal_retracted') return false;
+        // Expire old signals — missing/bad timestamps are treated as expired
+        const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
+        if (!isFinite(ts) || ts === 0 || ts < expiryMs) return false;
+        // Skip retracted signals
+        const key = s.agentId + ':' + (s.taskId || s.timestamp);
+        if (retracted.has(key)) return false;
+        return true;
+      });
     } catch {
       return [];
     }
   }
 
   private computeScores(signals: ConsensusSignal[]): Map<string, AgentScore> {
-    const scores = new Map<string, AgentScore>();
+    const DECAY_HALF_LIFE = 50; // tasks; match CompetencyProfiler
 
-    const ensure = (id: string): AgentScore => {
-      if (!scores.has(id)) {
-        scores.set(id, {
-          agentId: id, accuracy: 0.5, uniqueness: 0.5, reliability: 0.5,
-          totalSignals: 0, agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
-        });
-      }
-      return scores.get(id)!;
+    const TIME_DECAY_HALF_LIFE_DAYS = 7; // scores drift toward neutral after a week of inactivity
+    const now = Date.now();
+
+    // Per-agent accumulators for ratio-based scoring
+    const acc = new Map<string, {
+      weightedCorrect: number;
+      weightedTotal: number;
+      weightedUnique: number;
+      weightedHallucinations: number;
+      tasksSeen: Map<string, number>;
+      taskCounter: number;
+      agreements: number;
+      disagreements: number;
+      uniqueFindings: number;
+      hallucinations: number;
+      totalSignals: number;
+      lastSignalMs: number;
+    }>();
+
+    const ensure = (id: string) => {
+      if (!acc.has(id)) acc.set(id, {
+        weightedCorrect: 0, weightedTotal: 0,
+        weightedUnique: 0, weightedHallucinations: 0,
+        tasksSeen: new Map(), taskCounter: 0,
+        agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
+        totalSignals: 0, lastSignalMs: 0,
+      });
+      return acc.get(id)!;
     };
 
+    // Index task order per agent for decay calculation
+    // Index both agentId and counterpartId so winners get correct decay
     for (const signal of signals) {
-      const agent = ensure(signal.agentId);
-
-      // FIX: only count known signal types toward totalSignals threshold
-      const weights = SIGNAL_WEIGHTS[signal.signal];
-      if (!weights) continue;
-      agent.totalSignals++;
-
-      if ('accuracy' in weights && weights.accuracy) {
-        agent.accuracy = clamp(agent.accuracy + weights.accuracy, 0, 1);
+      const taskKey = signal.taskId || signal.timestamp;
+      const a = ensure(signal.agentId);
+      if (!a.tasksSeen.has(taskKey)) {
+        a.tasksSeen.set(taskKey, a.taskCounter++);
       }
-      if ('uniqueness' in weights && weights.uniqueness) {
-        agent.uniqueness = clamp(agent.uniqueness + weights.uniqueness, 0, 1);
-      }
-
-      // Track counts
-      switch (signal.signal) {
-        case 'agreement': agent.agreements++; break;
-        case 'disagreement': agent.disagreements++; break;
-        case 'unique_confirmed':
-        case 'unique_unconfirmed':
-        case 'new_finding': agent.uniqueFindings++; break;
-        case 'hallucination_caught': agent.hallucinations++; break;
-        case 'consensus_verified': break; // just a score change
-        case 'category_confirmed': break; // just a score change
-      }
-
-      // Counterpart bonus: when agent B gets a 'disagreement' signal (B lost),
-      // the counterpartId points to agent A who won. Boost A's accuracy + count.
-      if (signal.counterpartId && typeof signal.counterpartId === 'string' && signal.counterpartId.length > 0 && signal.signal === 'disagreement') {
-        const winner = ensure(signal.counterpartId);
-        winner.accuracy = clamp(winner.accuracy + 0.1, 0, 1);
-        winner.totalSignals++; // FIX: count so winner crosses the 3-signal dispatch threshold
+      if (signal.counterpartId && signal.counterpartId.length > 0) {
+        const c = ensure(signal.counterpartId);
+        if (!c.tasksSeen.has(taskKey)) {
+          c.tasksSeen.set(taskKey, c.taskCounter++);
+        }
       }
     }
 
-    // Compute reliability as weighted average
-    for (const score of scores.values()) {
-      score.reliability = clamp(score.accuracy * 0.7 + score.uniqueness * 0.3, 0, 1);
+    for (const signal of signals) {
+      const isKnown = KNOWN_SIGNALS[signal.signal];
+      if (!isKnown) continue;
+
+      const a = ensure(signal.agentId);
+      a.totalSignals++;
+
+      // Track most recent signal timestamp for time-based decay
+      const signalMs = signal.timestamp ? new Date(signal.timestamp).getTime() : 0;
+      if (signalMs > a.lastSignalMs) a.lastSignalMs = signalMs;
+
+      const taskKey = signal.taskId || signal.timestamp;
+      const taskIndex = a.tasksSeen.get(taskKey) ?? a.taskCounter - 1;
+      const tasksSince = a.taskCounter - taskIndex - 1;
+      const decay = Math.pow(0.5, tasksSince / DECAY_HALF_LIFE);
+
+      switch (signal.signal) {
+        case 'agreement':
+        case 'category_confirmed':
+        case 'consensus_verified': {
+          a.weightedCorrect += decay;
+          a.weightedTotal += decay;
+          a.agreements++;
+          break;
+        }
+        case 'disagreement': {
+          a.weightedTotal += decay;
+          a.disagreements++;
+          if (signal.counterpartId && signal.counterpartId.length > 0) {
+            const winner = ensure(signal.counterpartId);
+            const wi = winner.tasksSeen.get(taskKey) ?? winner.taskCounter - 1;
+            const wd = Math.pow(0.5, Math.max(0, winner.taskCounter - wi - 1) / DECAY_HALF_LIFE);
+            winner.weightedCorrect += wd;
+            winner.weightedTotal += wd;
+            winner.totalSignals++;
+          }
+          break;
+        }
+        case 'unverified': {
+          // Small denominator cost — couldn't verify, not confirmed wrong
+          a.weightedTotal += decay * 0.1;
+          break;
+        }
+        case 'unique_confirmed': {
+          a.weightedUnique += 0.2 * decay;
+          a.uniqueFindings++;
+          break;
+        }
+        case 'unique_unconfirmed': {
+          a.weightedUnique += 0.05 * decay;
+          a.uniqueFindings++;
+          break;
+        }
+        case 'new_finding': {
+          a.weightedUnique += 0.15 * decay;
+          a.uniqueFindings++;
+          break;
+        }
+        case 'hallucination_caught': {
+          const severity = (
+            signal.outcome === 'fabricated_citation' ||
+            signal.outcome === 'confirmed_hallucination'
+          ) ? 3.0 : 1.0;
+          a.weightedHallucinations += severity * decay;
+          a.weightedTotal += decay;
+          a.hallucinations++;
+          break;
+        }
+      }
+    }
+
+    // Circuit breaker: count consecutive trailing failures per agent
+    const consecutiveFailures = new Map<string, number>();
+    // Group signals by agent in order, then count trailing negatives
+    const signalsByAgent = new Map<string, ConsensusSignal[]>();
+    for (const signal of signals) {
+      if (!KNOWN_SIGNALS[signal.signal]) continue;
+      if (signal.type !== 'consensus') continue;
+      const list = signalsByAgent.get(signal.agentId) || [];
+      list.push(signal);
+      signalsByAgent.set(signal.agentId, list);
+    }
+    for (const [agentId, agentSignals] of signalsByAgent) {
+      // Sort chronologically so "tail" means most recent
+      agentSignals.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+      let streak = 0;
+      // Walk from newest to oldest — count consecutive negatives at tail
+      for (let i = agentSignals.length - 1; i >= 0; i--) {
+        if (NEGATIVE_SIGNALS.has(agentSignals[i].signal)) streak++;
+        else break;
+      }
+      consecutiveFailures.set(agentId, streak);
+    }
+
+    const scores = new Map<string, AgentScore>();
+    for (const [id, a] of acc) {
+      // Ratio-based accuracy: correct / total evaluated
+      const rawAccuracy = a.weightedTotal > 0
+        ? clamp(a.weightedCorrect / a.weightedTotal, 0, 1)
+        : 0.5;
+
+      // Multiplicative hallucination penalty — each severity point reduces by 25%
+      const hallucinationMultiplier = Math.pow(0.75, a.weightedHallucinations);
+      const accuracy = clamp(rawAccuracy * hallucinationMultiplier, 0, 1);
+
+      // Diminishing returns: log scale so early findings matter most but more always helps
+      // 1 unique_confirmed (0.2) → 0.5 + 0.18 = 0.68
+      // 3 unique_confirmed (0.6) → 0.5 + 0.36 = 0.86
+      // 10 unique_confirmed (2.0) → 0.5 + 0.45 = 0.95
+      const uniqueness = clamp(0.5 + 0.5 * (1 - Math.exp(-a.weightedUnique * 1.5)), 0, 1);
+
+      // Accuracy dominates (0.8), uniqueness is minor modifier (0.2)
+      let reliability = clamp(accuracy * 0.8 + uniqueness * 0.2, 0, 1);
+
+      // Time-based decay: pull reliability toward neutral (0.5) based on inactivity.
+      // Only applied to GOOD agents (reliability >= 0.5) — they lose their edge over time.
+      // Bad agents (reliability < 0.5) keep their penalty — no free rehab through inactivity.
+      if (a.lastSignalMs > 0 && reliability >= 0.5) {
+        const daysSinceLastSignal = (now - a.lastSignalMs) / 86400000;
+        const timeFreshness = Math.pow(0.5, daysSinceLastSignal / TIME_DECAY_HALF_LIFE_DAYS);
+        reliability = 0.5 + (reliability - 0.5) * timeFreshness;
+      }
+
+      const consec = consecutiveFailures.get(id) || 0;
+      scores.set(id, {
+        agentId: id, accuracy, uniqueness, reliability,
+        totalSignals: a.totalSignals,
+        agreements: a.agreements,
+        disagreements: a.disagreements,
+        uniqueFindings: a.uniqueFindings,
+        hallucinations: a.hallucinations,
+        consecutiveFailures: consec,
+        circuitOpen: consec >= CIRCUIT_BREAKER_THRESHOLD,
+      });
     }
 
     return scores;

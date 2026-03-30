@@ -41,7 +41,7 @@ describe('DashboardRouter', () => {
     mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
     auth = new DashboardAuth(projectRoot);
     auth.init();
-    router = new DashboardRouter(auth, projectRoot, { agentConfigs: [], relayConnections: 0 });
+    router = new DashboardRouter(auth, projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
   });
 
   it('returns 404 for non-dashboard routes', async () => {
@@ -163,7 +163,7 @@ describe('URL query string handling', () => {
     mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
     auth = new DashboardAuth(projectRoot);
     auth.init();
-    router = new DashboardRouter(auth, projectRoot, { agentConfigs: [], relayConnections: 0 });
+    router = new DashboardRouter(auth, projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
     const token = auth.createSession(auth.getKey())!;
     validCookie = { cookie: `dashboard_session=${token}` };
   });
@@ -202,7 +202,7 @@ describe('SPA catch-all routing', () => {
     mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
     auth = new DashboardAuth(projectRoot);
     auth.init();
-    router = new DashboardRouter(auth, projectRoot, { agentConfigs: [], relayConnections: 0 });
+    router = new DashboardRouter(auth, projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
   });
 
   it('serves /dashboard (no trailing slash) as SPA', async () => {

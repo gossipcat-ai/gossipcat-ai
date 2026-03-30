@@ -296,13 +296,14 @@ Return only valid JSON.` },
           if (isHallucination) {
             // Don't add fabricated disputes to the finding's disputedBy list —
             // they should not influence the confirmed/disputed tagging.
+            // Penalize the REVIEWER who fabricated the disagreement, not the original author.
             signals.push({
               type: 'consensus',
-              taskId: getTaskId(entry.peerAgentId),
+              taskId: getTaskId(entry.agentId),
               consensusId,
               signal: 'hallucination_caught',
-              agentId: entry.peerAgentId,
-              counterpartId: entry.agentId,
+              agentId: entry.agentId,
+              counterpartId: entry.peerAgentId,
               outcome: isCitationFabricated ? 'fabricated_citation' : 'incorrect',
               evidence: capEvidence(entry.evidence),
               timestamp: now,
@@ -525,21 +526,25 @@ Return only valid JSON.` },
 
     if (citations.length === 0) return false;
 
+    // Require majority of citations to be unresolvable before calling it fabricated.
+    // One bad filename out of 5 correct ones shouldn't discard a valid dispute.
+    let failed = 0;
     for (const citation of citations) {
       try {
         const filePath = await this.resolveFilePath(citation.file);
-        if (!filePath) return true; // File doesn't exist — fabricated citation
+        if (!filePath) { failed++; continue; }
 
         const content = await readFile(filePath, 'utf-8');
         const lines = content.split('\n');
 
-        if (citation.line > lines.length) return true; // Line number beyond file length
+        if (citation.line > lines.length) { failed++; continue; }
       } catch {
-        // File read failed — benefit of doubt, not fabricated
-        return false;
+        // File read failed — benefit of doubt, don't count as failed
+        continue;
       }
     }
-    return false;
+    // Fabricated if more than half of citations are invalid
+    return failed > citations.length / 2;
   }
 
   /**
@@ -592,34 +597,31 @@ Return only valid JSON.` },
    * Detect if disagreement evidence indicates a hallucination.
    */
   private detectHallucination(evidence: string): boolean {
-    const indicators = [
-      'does not exist',
-      "doesn't exist",
-      'no such file',
-      'no such function',
-      'no such method',
-      'no such variable',
-      'file not found',
-      'function not found',
-      'method not found',
-      'line is a comment',      // tightened: was 'is a comment'
-      'file only has',          // tightened: was 'only has'
-      'no line \\d',            // tightened: was 'no line' — require digit after
-      'nonexistent',
-      'non-existent',
-      'never defined',
-      'is not defined in',      // tightened: was 'not defined'
-      'not defined anywhere',   // tightened: was 'not defined'
-      'fabricated',
-      'hallucinated',
+    // Use word-boundary regex to avoid false positives on legitimate text.
+    // Each pattern must match as a complete phrase, not a substring of a larger sentence.
+    const patterns = [
+      /\bdoes not exist\b/,
+      /\bdoesn'?t exist\b/,
+      /\bno such file\b/,
+      /\bno such function\b/,
+      /\bno such method\b/,
+      /\bno such variable\b/,
+      /\bfile not found\b/,
+      /\bfunction not found\b/,
+      /\bmethod not found\b/,
+      /\bline is a comment\b/,
+      /\bfile only has \d/,
+      /\bno line \d/,
+      /\bnonexistent\b/,
+      /\bnon-existent\b/,
+      /\bnever defined\b/,
+      /\bis not defined in\b/,
+      /\bnot defined anywhere\b/,
+      /\bfabricated\b/,
+      /\bhallucinated\b/,
     ];
     const lower = evidence.toLowerCase();
-    return indicators.some(phrase => {
-      if (phrase.includes('\\d')) {
-        return new RegExp(phrase).test(lower);
-      }
-      return lower.includes(phrase);
-    });
+    return patterns.some(re => re.test(lower));
   }
 
   /**

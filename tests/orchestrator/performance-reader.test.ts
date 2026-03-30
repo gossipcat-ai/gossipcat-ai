@@ -107,12 +107,12 @@ describe('PerformanceReader', () => {
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     const score = reader.getAgentScore('rev')!;
-    // Ratio-based: rawAccuracy = 2/2 = 1.0 (2 agreements, each adds 1 to correct & total)
-    // hallucinationMultiplier = 1.0 (no hallucinations), accuracy = 1.0
-    // uniqueness = 0.5 + 0.2 = 0.7
-    // reliability = 1.0 * 0.8 + 0.7 * 0.2 = 0.94 (before time decay, ~1.0 for recent signals)
+    // Ratio-based: rawAccuracy = 2/2 = 1.0, accuracy = 1.0
+    // Uniqueness: exponential diminishing returns. 1 unique_confirmed (0.2 weighted)
+    //   = 0.5 + 0.5 * (1 - exp(-0.2 * 1.5)) ≈ 0.63
     expect(score.accuracy).toBeCloseTo(1.0, 1);
-    expect(score.uniqueness).toBeCloseTo(0.7, 1);
+    expect(score.uniqueness).toBeGreaterThan(0.6);
+    expect(score.uniqueness).toBeLessThan(0.75);
     expect(score.reliability).toBeGreaterThan(0.9);
   });
 
@@ -193,13 +193,16 @@ describe('PerformanceReader', () => {
 
   it('boosts uniqueness for unique_unconfirmed signals', () => {
     writeSignals([
-        { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'a', taskId: 't1' },
-        { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'a', taskId: 't2' },
-        { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'a', taskId: 't3' },
+        { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'a', taskId: 't1', timestamp: new Date().toISOString() },
+        { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'a', taskId: 't2', timestamp: new Date().toISOString() },
+        { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'a', taskId: 't3', timestamp: new Date().toISOString() },
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     const scoreA = reader.getAgentScore('a')!;
-    expect(scoreA.uniqueness).toBeCloseTo(0.5 + 3 * 0.05, 2);
+    // 3 unique_unconfirmed: weightedUnique = 3 * 0.05 = 0.15
+    // uniqueness = 0.5 + 0.5 * (1 - exp(-0.15 * 1.5)) ≈ 0.60
+    expect(scoreA.uniqueness).toBeGreaterThan(0.55);
+    expect(scoreA.uniqueness).toBeLessThan(0.65);
     expect(scoreA.accuracy).toBe(0.5);
   });
 });

@@ -27,7 +27,7 @@ describe('Dashboard API: Edge Cases', () => {
         JSON.stringify({ type: 'consensus', taskId: 'task-2', signal: 'disagreement', agentId: 'a', timestamp: new Date().toISOString() }),
       ].join('\n');
       writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), signals);
-      const data = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0 });
+      const data = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
       expect(data.consensusRuns).toBe(2); // 2 unique taskIds
       expect(data.totalSignals).toBe(3);
       expect(data.confirmedFindings).toBe(2); // agreement + unique_confirmed
@@ -36,7 +36,7 @@ describe('Dashboard API: Edge Cases', () => {
 
     it('should not throw on malformed agent-performance.jsonl', async () => {
       writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), '{"foo":\nnot json\n{"bar": 1}');
-      const data = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0 });
+      const data = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
       // Resilient: skips invalid lines, counts valid ones ({"bar": 1} parses OK)
       expect(data.totalSignals).toBe(1);
     });
@@ -45,7 +45,7 @@ describe('Dashboard API: Edge Cases', () => {
       // NOTE: This is synchronous and will block. A better implementation would stream.
       const largeFileContent = Array.from({ length: 10000 }, (_, i) => JSON.stringify({ i })).join('\n');
       writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), largeFileContent);
-      const data = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0 });
+      const data = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
       expect(data.totalSignals).toBe(10000);
     });
   });
