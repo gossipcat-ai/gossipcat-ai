@@ -2,8 +2,7 @@
 
 function renderTeamSection(agents) {
   const { escapeHtml: e, navigate, makeSection, timeAgo, agentInitials } = window._dash;
-  const online = agents.filter(a => a.online).length;
-  const section = makeSection('Team', online + '/' + agents.length + ' online', 'all agents →', '#/team');
+  const section = makeSection('Team', agents.length + ' agents', 'all agents →', '#/team');
 
   const grid = document.createElement('div');
   grid.className = 'agent-grid';

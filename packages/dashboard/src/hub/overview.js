@@ -12,20 +12,20 @@ function renderOverviewSection(data) {
   const lastRun = data.lastConsensusTimestamp;
   const lastRunText = lastRun ? timeAgo(lastRun) : 'never';
 
-  const unverified = data.unverifiedFindings || 0;
+  const actionable = data.actionableFindings || 0;
 
   const dot = '<span class="sb-dot' + (totalOnline > 0 ? ' online' : '') + '"></span>';
 
   section.innerHTML =
     '<div class="sb-left">' +
       dot +
-      '<span class="sb-stat">' + totalOnline + ' connected</span>' +
+      '<span class="sb-stat">' + data.nativeCount + ' native &middot; ' + data.relayCount + ' relay</span>' +
       '<span class="sb-sep">&middot;</span>' +
       '<span class="sb-stat">last run ' + lastRunText + '</span>' +
     '</div>' +
     '<div class="sb-right">' +
-      (unverified > 0
-        ? '<span class="sb-action">' + unverified + ' findings to review</span>'
+      (actionable > 0
+        ? '<span class="sb-action">' + actionable + ' findings need attention</span>'
         : '<span class="sb-clear">all clear</span>') +
     '</div>';
 

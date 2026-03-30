@@ -25,7 +25,7 @@ export interface OverviewResponse {
   tasksFailed: number;
   avgDurationMs: number;
   lastConsensusTimestamp: string;
-  unverifiedFindings: number;
+  actionableFindings: number;
 }
 
 export async function overviewHandler(projectRoot: string, ctx: OverviewContext): Promise<OverviewResponse> {
@@ -39,7 +39,7 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
   let totalFindings = 0;
   let confirmedFindings = 0;
   let lastConsensusTimestamp = '';
-  let unverifiedFindings = 0;
+  let actionableFindings = 0;
   const consensusTaskIds = new Set<string>();
 
   const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
@@ -64,9 +64,12 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
             confirmedFindings++;
           } else if (entry.signal === 'disagreement' || entry.signal === 'hallucination_caught') {
             totalFindings++;
+            actionableFindings++;
+          } else if (entry.signal === 'new_finding') {
+            totalFindings++;
+            actionableFindings++;
           } else if (entry.signal === 'unverified' || entry.signal === 'unique_unconfirmed') {
             totalFindings++;
-            unverifiedFindings++;
           }
         } catch { /* skip malformed */ }
       }
@@ -102,5 +105,5 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
   }
   const avgDurationMs = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
 
-  return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs, lastConsensusTimestamp, unverifiedFindings };
+  return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs, lastConsensusTimestamp, actionableFindings };
 }

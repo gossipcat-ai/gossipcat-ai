@@ -2860,7 +2860,7 @@ async function overviewHandler(projectRoot, ctx) {
   let totalFindings = 0;
   let confirmedFindings = 0;
   let lastConsensusTimestamp = "";
-  let unverifiedFindings = 0;
+  let actionableFindings = 0;
   const consensusTaskIds = /* @__PURE__ */ new Set();
   const perfPath = (0, import_path2.join)(projectRoot, ".gossip", "agent-performance.jsonl");
   if ((0, import_fs2.existsSync)(perfPath)) {
@@ -2881,9 +2881,12 @@ async function overviewHandler(projectRoot, ctx) {
             confirmedFindings++;
           } else if (entry.signal === "disagreement" || entry.signal === "hallucination_caught") {
             totalFindings++;
+            actionableFindings++;
+          } else if (entry.signal === "new_finding") {
+            totalFindings++;
+            actionableFindings++;
           } else if (entry.signal === "unverified" || entry.signal === "unique_unconfirmed") {
             totalFindings++;
-            unverifiedFindings++;
           }
         } catch {
         }
@@ -2919,7 +2922,7 @@ async function overviewHandler(projectRoot, ctx) {
     }
   }
   const avgDurationMs = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
-  return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs, lastConsensusTimestamp, unverifiedFindings };
+  return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs, lastConsensusTimestamp, actionableFindings };
 }
 var import_fs2, import_path2;
 var init_api_overview = __esm({
