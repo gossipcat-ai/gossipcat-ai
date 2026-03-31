@@ -557,6 +557,31 @@ Return only valid JSON.` },
             }
           }
         } catch { /* skip code context on error */ }
+      } else {
+        // Fallback: try to find a bare filename in the finding text and load first 30 lines
+        const bareFilePattern = /(?:[\s`"'(]|^)(([\w./-]+\/)?([a-zA-Z][\w.-]+\.(jsonl?|md|ts|tsx|js|jsx|yaml|yml|toml)))(?:[\s`"',.):]|$)/;
+        const bareMatch = bareFilePattern.exec(f.finding);
+        if (bareMatch) {
+          try {
+            const fileRef = bareMatch[1];
+            const filePath = await this.cachedResolve(fileRef);
+            if (filePath) {
+              const content = await this.cachedRead(filePath);
+              if (content) {
+                const fileLines = content.split('\n');
+                const headEnd = Math.min(fileLines.length, 30);
+                let snippet = fileLines.slice(0, headEnd)
+                  .map((l, j) => `  ${j + 1}: ${l}`)
+                  .join('\n');
+                if (snippet.length > MAX_SNIPPET_CHARS) {
+                  snippet = snippet.slice(0, MAX_SNIPPET_CHARS) + '\n  [truncated]';
+                }
+                const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
+                codeBlock = `\n<code type="file-head" src="${fileRef}" lines="${fileLines.length}">\n${safeSnippet}\n</code>`;
+              }
+            }
+          } catch { /* skip */ }
+        }
       }
 
       findingBlocks.push({
@@ -669,43 +694,74 @@ Return ONLY a JSON array:
     const CONTEXT_LINES = 2; // ±2 lines around the cited line = 5 lines total
     const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB — skip generated/dist files
 
+    // Also match bare filenames without line numbers (e.g., "implementation-findings.jsonl", "next-session.md")
+    const bareFilePattern = /(?:^|[\s`"'(])(([\w./-]+\/)?([a-zA-Z][\w.-]+\.(jsonl?|md|ts|tsx|js|jsx|yaml|yml|toml|cfg)))(?:[\s`"',.):]|$)/;
+    const FILE_HEAD_LINES = 20; // for bare-filename anchors, show first 20 lines
+
     for (const line of lines) {
       result.push(line);
       if (anchorCount >= MAX_ANCHORS) continue;
 
       // Process any line with a file:line citation (bullets, numbered lists, prose)
       const match = citationPattern.exec(line);
-      if (!match) continue;
+      if (match) {
+        const fullRef = match[1];  // e.g. "packages/orchestrator/src/index.ts"
+        const bareFile = match[2]; // e.g. "index.ts"
+        const lineNum = parseInt(match[3], 10);
+        // Dedup on full reference to avoid cross-package collisions (index.ts in different packages)
+        const key = `${fullRef}:${lineNum}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
 
-      const fullRef = match[1];  // e.g. "packages/orchestrator/src/index.ts"
-      const bareFile = match[2]; // e.g. "index.ts"
-      const lineNum = parseInt(match[3], 10);
-      // Dedup on full reference to avoid cross-package collisions (index.ts in different packages)
-      const key = `${fullRef}:${lineNum}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+        try {
+          // Try full path first, fall back to bare filename for resolution
+          const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
+          if (!filePath) continue;
+          const fileStat = await stat(filePath);
+          if (fileStat.size > MAX_FILE_SIZE) continue;
+          const content = await this.cachedRead(filePath);
+          if (!content) continue;
+          const fileLines = content.split('\n');
+          if (lineNum > fileLines.length) continue;
 
-      try {
-        // Try full path first, fall back to bare filename for resolution
-        const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
-        if (!filePath) continue;
-        const fileStat = await stat(filePath);
-        if (fileStat.size > MAX_FILE_SIZE) continue;
-        const content = await this.cachedRead(filePath);
-        if (!content) continue;
-        const fileLines = content.split('\n');
-        if (lineNum > fileLines.length) continue;
+          const start = Math.max(0, lineNum - 1 - CONTEXT_LINES);
+          const end = Math.min(fileLines.length, lineNum + CONTEXT_LINES);
+          const snippet = fileLines.slice(start, end)
+            .map((l, i) => `  ${start + i + 1}: ${l}`)
+            .join('\n');
+          // Sanitize snippet to prevent </data> fence escape
+          const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
+          result.push(`<anchor src="${fullRef}:${lineNum}">\n${safeSnippet}\n</anchor>`);
+          anchorCount++;
+        } catch { /* file unreadable, skip */ }
+        continue;
+      }
 
-        const start = Math.max(0, lineNum - 1 - CONTEXT_LINES);
-        const end = Math.min(fileLines.length, lineNum + CONTEXT_LINES);
-        const snippet = fileLines.slice(start, end)
-          .map((l, i) => `  ${start + i + 1}: ${l}`)
-          .join('\n');
-        // Sanitize snippet to prevent </data> fence escape
-        const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
-        result.push(`<anchor src="${fullRef}:${lineNum}">\n${safeSnippet}\n</anchor>`);
-        anchorCount++;
-      } catch { /* file unreadable, skip */ }
+      // Bare filename match (no line number) — inject file head as context
+      const bareMatch = bareFilePattern.exec(line);
+      if (bareMatch) {
+        const fileRef = bareMatch[1];
+        const key = `file:${fileRef}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        try {
+          const filePath = await this.cachedResolve(fileRef);
+          if (!filePath) continue;
+          const fileStat = await stat(filePath);
+          if (fileStat.size > MAX_FILE_SIZE) continue;
+          const content = await this.cachedRead(filePath);
+          if (!content) continue;
+          const fileLines = content.split('\n');
+          const headEnd = Math.min(fileLines.length, FILE_HEAD_LINES);
+          const snippet = fileLines.slice(0, headEnd)
+            .map((l, i) => `  ${i + 1}: ${l}`)
+            .join('\n');
+          const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
+          result.push(`<anchor type="file-head" src="${fileRef}" lines="${fileLines.length}">\n${safeSnippet}\n</anchor>`);
+          anchorCount++;
+        } catch { /* file unreadable, skip */ }
+      }
     }
 
     return result.join('\n');
@@ -801,11 +857,16 @@ Return ONLY a JSON array:
   }
 
   private async findFile(dir: string, fileName: string): Promise<string | null> {
+    const root = this.config.projectRoot;
     try {
       const entries = await readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = join(dir, entry.name);
-        if (entry.isFile() && entry.name === fileName) return fullPath;
+        if (entry.isFile() && entry.name === fileName) {
+          // Path traversal guard — findFile results must be inside project root
+          if (root && !this.isInsideRoot(fullPath, root)) return null;
+          return fullPath;
+        }
         if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
           const found = await this.findFile(fullPath, fileName);
           if (found) return found;
