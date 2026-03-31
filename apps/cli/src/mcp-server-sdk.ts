@@ -1294,94 +1294,6 @@ server.tool(
   }
 );
 
-// ── Tool: update agent instructions (supports batch) ─────────────────────
-server.tool(
-  'gossip_update_instructions',
-  'Update one or more worker agents\' instructions. Accepts a single agent_id or an array of agent_ids for batch updates.',
-  {
-    agent_ids: z.union([z.string(), z.array(z.string())]).describe('Single agent ID or array of agent IDs to update'),
-    instruction_update: z.string().describe('New instructions content (max 5000 chars)'),
-    mode: z.enum(['append', 'replace']).describe('"append" to add to existing, "replace" to overwrite'),
-  },
-  async ({ agent_ids, instruction_update, mode }) => {
-    await boot();
-
-    // Size limit
-    if (instruction_update.length > 5000) {
-      return { content: [{ type: 'text' as const, text: 'Instruction update exceeds 5000 char limit.' }] };
-    }
-
-    // Block shell commands and code execution patterns (case-insensitive, whitespace-flexible)
-    const blockedPatterns = [
-      /rm\s+(-\w*[rf]|--force|--recursive)/i,
-      /curl\s/i, /wget\s/i,
-      /\beval\s*\(/i, /\bexec\s*\(/i, /\bspawn\s*\(/i,
-      /\bimport\s*\(/i, /\brequire\s*\(/i,
-      /process\.(env|exit|kill)/i,
-      /child_process/i,
-    ];
-    if (blockedPatterns.some(p => p.test(instruction_update))) {
-      return { content: [{ type: 'text' as const, text: 'Instruction update contains blocked content.' }] };
-    }
-
-    const ids = Array.isArray(agent_ids) ? agent_ids : [agent_ids];
-    const results: string[] = [];
-    const { writeFileSync: writeFS, mkdirSync: mkdirFS } = require('fs');
-    const { join: joinPath } = require('path');
-
-    for (const agent_id of ids) {
-      if (!/^[a-zA-Z0-9_-]+$/.test(agent_id)) {
-        results.push(`${agent_id}: invalid ID format`);
-        continue;
-      }
-
-      const worker = mainAgent.getWorker(agent_id);
-      if (!worker) {
-        results.push(`${agent_id}: not found`);
-        continue;
-      }
-
-      // Backup before replace
-      if (mode === 'replace') {
-        const agentDir = joinPath(process.cwd(), '.gossip', 'agents', agent_id);
-        mkdirFS(agentDir, { recursive: true });
-        writeFS(joinPath(agentDir, 'instructions-backup.md'), worker.getInstructions());
-      }
-
-      if (mode === 'replace') {
-        worker.setInstructions(instruction_update);
-      } else {
-        worker.setInstructions(worker.getInstructions() + '\n\n' + instruction_update);
-      }
-
-      // Persist
-      const agentDir = joinPath(process.cwd(), '.gossip', 'agents', agent_id);
-      mkdirFS(agentDir, { recursive: true });
-      writeFS(joinPath(agentDir, 'instructions.md'), worker.getInstructions());
-      results.push(`${agent_id}: updated (${mode})`);
-    }
-
-    return { content: [{ type: 'text' as const, text: results.join('\n') }] };
-  }
-);
-
-// ── Tool: bootstrap — generate team context prompt ────────────────────────
-server.tool(
-  'gossip_bootstrap',
-  'Generate team context prompt with live agent state. Refreshes .gossip/bootstrap.md.',
-  {},
-  async () => {
-    const { BootstrapGenerator } = await import('@gossip/orchestrator');
-    const generator = new BootstrapGenerator(process.cwd());
-    const result = generator.generate();
-    const { writeFileSync, mkdirSync } = require('fs');
-    const { join } = require('path');
-    mkdirSync(join(process.cwd(), '.gossip'), { recursive: true });
-    writeFileSync(join(process.cwd(), '.gossip', 'bootstrap.md'), result.prompt);
-    return { content: [{ type: 'text' as const, text: result.prompt }] };
-  }
-);
-
 // ── Tool: setup — create or update team config ────────────────────────────
 server.tool(
   'gossip_setup',
@@ -1391,8 +1303,11 @@ server.tool(
       .describe('Provider for the orchestrator LLM'),
     main_model: z.string().default('gemini-2.5-pro')
       .describe('Model ID for orchestrator (e.g. gemini-2.5-pro, claude-sonnet-4-6, gpt-4o)'),
-    mode: z.enum(['merge', 'replace']).default('merge')
-      .describe('"merge" (default) keeps existing agents and adds/updates the ones specified. "replace" overwrites entire config.'),
+    mode: z.enum(['merge', 'replace', 'update_instructions']).default('merge')
+      .describe('"merge" (default) keeps existing agents and adds/updates the ones specified. "replace" overwrites entire config. "update_instructions" updates agent instructions without touching the config.'),
+    instruction_agent_ids: z.union([z.string(), z.array(z.string())]).optional().describe('Agent IDs for instruction update'),
+    instruction_update: z.string().optional().describe('Instruction text to append/replace'),
+    instruction_mode: z.enum(['append', 'replace']).optional().describe('How to apply instruction update'),
     agents: z.array(z.object({
       id: z.string().describe('Agent ID (lowercase, hyphens). e.g. "claude-reviewer", "gemini-impl"'),
       type: z.enum(['native', 'custom']).describe(
@@ -1418,7 +1333,73 @@ server.tool(
         .describe('Skill tags (e.g. ["typescript", "code_review"])'),
     })).describe('Array of agents to create'),
   },
-  async ({ main_provider, main_model, mode, agents }) => {
+  async ({ main_provider, main_model, mode, agents, instruction_agent_ids, instruction_update, instruction_mode }) => {
+    if (mode === 'update_instructions') {
+      if (!instruction_agent_ids || !instruction_update) {
+        return { content: [{ type: 'text' as const, text: 'Error: update_instructions mode requires instruction_agent_ids and instruction_update' }] };
+      }
+
+      await boot();
+
+      // Size limit
+      if (instruction_update.length > 5000) {
+        return { content: [{ type: 'text' as const, text: 'Instruction update exceeds 5000 char limit.' }] };
+      }
+
+      // Block shell commands and code execution patterns (case-insensitive, whitespace-flexible)
+      const blockedPatterns = [
+        /rm\s+(-\w*[rf]|--force|--recursive)/i,
+        /curl\s/i, /wget\s/i,
+        /\beval\s*\(/i, /\bexec\s*\(/i, /\bspawn\s*\(/i,
+        /\bimport\s*\(/i, /\brequire\s*\(/i,
+        /process\.(env|exit|kill)/i,
+        /child_process/i,
+      ];
+      if (blockedPatterns.some(p => p.test(instruction_update))) {
+        return { content: [{ type: 'text' as const, text: 'Instruction update contains blocked content.' }] };
+      }
+
+      const ids = Array.isArray(instruction_agent_ids) ? instruction_agent_ids : [instruction_agent_ids];
+      const applyMode = instruction_mode || 'append';
+      const results: string[] = [];
+      const { writeFileSync: writeFS, mkdirSync: mkdirFS } = require('fs');
+      const { join: joinPath } = require('path');
+
+      for (const agent_id of ids) {
+        if (!/^[a-zA-Z0-9_-]+$/.test(agent_id)) {
+          results.push(`${agent_id}: invalid ID format`);
+          continue;
+        }
+
+        const worker = mainAgent.getWorker(agent_id);
+        if (!worker) {
+          results.push(`${agent_id}: not found`);
+          continue;
+        }
+
+        // Backup before replace
+        if (applyMode === 'replace') {
+          const agentDir = joinPath(process.cwd(), '.gossip', 'agents', agent_id);
+          mkdirFS(agentDir, { recursive: true });
+          writeFS(joinPath(agentDir, 'instructions-backup.md'), worker.getInstructions());
+        }
+
+        if (applyMode === 'replace') {
+          worker.setInstructions(instruction_update);
+        } else {
+          worker.setInstructions(worker.getInstructions() + '\n\n' + instruction_update);
+        }
+
+        // Persist
+        const agentDir = joinPath(process.cwd(), '.gossip', 'agents', agent_id);
+        mkdirFS(agentDir, { recursive: true });
+        writeFS(joinPath(agentDir, 'instructions.md'), worker.getInstructions());
+        results.push(`${agent_id}: updated (${applyMode})`);
+      }
+
+      return { content: [{ type: 'text' as const, text: results.join('\n') }] };
+    }
+
     const { writeFileSync, mkdirSync, existsSync } = require('fs');
     const { join } = require('path');
     const root = process.cwd();
@@ -1897,138 +1878,6 @@ server.tool(
   }
 );
 
-// ── Log implementation findings (observer-only, no scoring) ──────────────
-server.tool(
-  'gossip_log_finding',
-  'Log implementation quality findings against agents (batch). Observer-only — does NOT affect dispatch scores. Use after reviewing code written by implementer agents. Supports multiple findings in one call.',
-  {
-    findings: z.array(z.object({
-      implementer_id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).describe('Agent ID that wrote the code'),
-      reviewer_id: z.string().min(1).describe('Agent ID that found the issue (or "user")'),
-      finding: z.string().min(1).max(2000).describe('Description of the bug or quality issue'),
-      severity: z.enum(['critical', 'high', 'medium', 'low']).describe('Bug severity'),
-      category: z.enum(['logic_error', 'security', 'performance', 'type_safety', 'missing_tests', 'style', 'other'])
-        .describe('Finding category'),
-      file: z.string().optional().describe('File path'),
-      line: z.number().optional().describe('Line number'),
-      task_id: z.string().optional().describe('Task ID from implementation dispatch'),
-    })).describe('Array of findings to log'),
-  },
-  async ({ findings }) => {
-    if (findings.length === 0) {
-      return { content: [{ type: 'text' as const, text: 'No findings to log.' }] };
-    }
-
-    const { appendFileSync, mkdirSync, existsSync } = require('fs');
-    const { join } = require('path');
-    const root = process.cwd();
-    const dir = join(root, '.gossip');
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-    const filePath = join(dir, 'implementation-findings.jsonl');
-    const timestamp = new Date().toISOString();
-
-    const data = findings.map(f => JSON.stringify({
-      timestamp,
-      implementerId: f.implementer_id,
-      reviewerId: f.reviewer_id,
-      finding: f.finding,
-      severity: f.severity,
-      category: f.category,
-      file: f.file || null,
-      line: f.line ?? null,
-      taskId: f.task_id || null,
-    })).join('\n') + '\n';
-
-    appendFileSync(filePath, data);
-
-    // Summary by implementer
-    const byAgent = new Map<string, { total: number; bySeverity: Record<string, number> }>();
-    for (const f of findings) {
-      const entry = byAgent.get(f.implementer_id) || { total: 0, bySeverity: {} };
-      entry.total++;
-      entry.bySeverity[f.severity] = (entry.bySeverity[f.severity] || 0) + 1;
-      byAgent.set(f.implementer_id, entry);
-    }
-
-    const summary = Array.from(byAgent.entries())
-      .map(([id, { total, bySeverity }]) => {
-        const sev = Object.entries(bySeverity).map(([k, v]) => `${k}:${v}`).join(', ');
-        return `  ${id}: ${total} findings (${sev})`;
-      }).join('\n');
-
-    return { content: [{ type: 'text' as const, text:
-      `Logged ${findings.length} findings:\n${summary}\n\n` +
-      `⚠️ Observer-only — does not affect dispatch scores.`
-    }] };
-  }
-);
-
-// ── View implementation findings ──────────────────────────────────────────
-server.tool(
-  'gossip_findings',
-  'View implementation quality findings per agent. Shows bug counts by severity and category. Observer-only data from gossip_log_finding.',
-  {
-    agent_id: z.string().optional().describe('Filter by implementer agent ID. Omit to see all.'),
-  },
-  async ({ agent_id }) => {
-    const { existsSync, readFileSync } = require('fs');
-    const { join } = require('path');
-    const filePath = join(process.cwd(), '.gossip', 'implementation-findings.jsonl');
-
-    if (!existsSync(filePath)) {
-      return { content: [{ type: 'text' as const, text: 'No implementation findings yet. Use gossip_log_finding to record findings after code reviews.' }] };
-    }
-
-    const entries: any[] = [];
-    try {
-      const lines = readFileSync(filePath, 'utf-8').trim().split('\n').filter(Boolean);
-      for (const l of lines) {
-        try { entries.push(JSON.parse(l)); } catch {}
-      }
-    } catch {}
-
-    if (entries.length === 0) {
-      return { content: [{ type: 'text' as const, text: 'No implementation findings recorded.' }] };
-    }
-
-    // Group by implementer
-    const byAgent = new Map<string, any[]>();
-    for (const e of entries) {
-      if (agent_id && e.implementerId !== agent_id) continue;
-      const arr = byAgent.get(e.implementerId) || [];
-      arr.push(e);
-      byAgent.set(e.implementerId, arr);
-    }
-
-    if (byAgent.size === 0) {
-      return { content: [{ type: 'text' as const, text: agent_id ? `No findings for ${agent_id}.` : 'No findings recorded.' }] };
-    }
-
-    const sections: string[] = [];
-    for (const [id, findings] of byAgent) {
-      const bySeverity: Record<string, number> = {};
-      const byCategory: Record<string, number> = {};
-      for (const f of findings) {
-        bySeverity[f.severity] = (bySeverity[f.severity] || 0) + 1;
-        byCategory[f.category] = (byCategory[f.category] || 0) + 1;
-      }
-      const nativeTag = nativeAgentConfigs.has(id) ? ' (native)' : '';
-      sections.push(
-        `${id}${nativeTag}: ${findings.length} findings\n` +
-        `  Severity: ${Object.entries(bySeverity).map(([k, v]) => `${k}=${v}`).join(', ')}\n` +
-        `  Category: ${Object.entries(byCategory).map(([k, v]) => `${k}=${v}`).join(', ')}\n` +
-        `  Recent: ${findings.slice(-3).map(f => `${f.severity} ${f.category}: ${(f.finding || 'N/A').slice(0, 60)}`).join('\n          ')}`
-      );
-    }
-
-    return { content: [{ type: 'text' as const, text:
-      `Implementation Findings (observer-only):\n\n${sections.join('\n\n')}\n\n` +
-      `Total: ${Array.from(byAgent.values()).reduce((s, arr) => s + arr.length, 0)} findings across ${byAgent.size} agent(s). Data does NOT affect dispatch scores.`
-    }] };
-  }
-);
-
 // ── Unified skill management ─────────────────────────────────────────────
 server.tool(
   'gossip_skills',
@@ -2222,7 +2071,7 @@ server.tool(
 // ── Session Memory: save session context for next session ────────────────
 server.tool(
   'gossip_session_save',
-  'Save a cognitive session summary to project memory. The next session will load this context via gossip_bootstrap(). Call before ending your session to preserve what was learned.',
+  'Save a cognitive session summary to project memory. The next session will load this context automatically on MCP connect. Call before ending your session to preserve what was learned.',
   {
     notes: z.string().optional().describe('Optional freeform user context (e.g., "focusing on security hardening")'),
   },
@@ -2316,7 +2165,7 @@ server.tool(
     } catch { /* best-effort */ }
 
     let output = `Session saved to .gossip/agents/_project/memory/\n\n${summary}`;
-    output += '\n\n---\nNext session: gossip_bootstrap() will load this context automatically.';
+    output += '\n\n---\nNext session: bootstrap context will load automatically on MCP connect.';
     return { content: [{ type: 'text' as const, text: output }] };
   }
 );
@@ -2331,18 +2180,14 @@ server.tool(
       { name: 'gossip_dispatch', desc: 'Dispatch tasks — mode:"single" (one agent), "parallel" (fan-out), "consensus" (cross-review)' },
       { name: 'gossip_collect', desc: 'Collect results from dispatched tasks. Use consensus:true for cross-review.' },
       { name: 'gossip_status', desc: 'Check system status, agents, relay, workers, and dashboard URL/key' },
-      { name: 'gossip_update_instructions', desc: 'Update agent instructions (single or batch). Modes: append/replace' },
       { name: 'gossip_run', desc: 'Single-call dispatch — run a task on one agent (or "auto" for orchestrator decomposition)' },
       { name: 'gossip_relay', desc: 'Feed native Agent tool result back into relay for consensus + memory + gossip' },
       { name: 'gossip_signals', desc: 'Record or retract consensus signals after cross-referencing' },
       { name: 'gossip_scores', desc: 'View agent performance scores and dispatch weights' },
-      { name: 'gossip_log_finding', desc: 'Log implementation quality finding (observer-only, no scoring)' },
-      { name: 'gossip_findings', desc: 'View implementation findings per agent' },
       { name: 'gossip_skills', desc: 'Manage skills: list, bind, unbind, build, develop' },
       { name: 'gossip_session_save', desc: 'Save cognitive session summary for next session context' },
       { name: 'gossip_tools', desc: 'List available tools (this command)' },
-      { name: 'gossip_bootstrap', desc: 'Generate team context prompt with live agent state' },
-      { name: 'gossip_setup', desc: 'Create or update team configuration' },
+      { name: 'gossip_setup', desc: 'Create or update team configuration. Use mode:"update_instructions" to update agent instructions.' },
     ];
     const list = tools.map(t => `- ${t.name}: ${t.desc}`).join('\n');
     return { content: [{ type: 'text' as const, text: `Gossipcat Tools (${tools.length}):\n\n${list}` }] };
