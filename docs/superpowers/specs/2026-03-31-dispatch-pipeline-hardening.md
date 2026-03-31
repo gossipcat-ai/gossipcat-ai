@@ -147,19 +147,120 @@ try {
 } catch { /* best-effort */ }
 ```
 
+## Batch C: Auto-Record Provisional Signals
+
+**Source:** Consensus review (3 agents, 8 confirmed findings) on signal enforcement architecture.
+
+### Problem
+
+After `gossip_collect` returns consensus findings, the orchestrator must call `gossip_signals` for each finding it verifies or invalidates. In practice, it gets absorbed in downstream work (writing specs, planning) and forgets. Text instructions don't change behavior — the rule exists in CLAUDE.md but gets overridden by task focus.
+
+### Why the obvious options don't work
+
+- **Hooks** (scan Write/Edit for "not a bug" patterns) — high false positive rate, fires after the fact, no link to preceding collect
+- **Structured checklist** from collect — still advisory text the orchestrator can ignore
+- **gossip_verify tool** — MCP can't gate tool calls, orchestrator ignores new tools same as old
+
+### Fix: Auto-record provisional signals at collect time
+
+Follow the auto-persistence pattern that already works for failures (`collect.ts:118-144`). After consensus, auto-record a provisional signal for every finding:
+
+| Finding tag | Auto-signal | Meaning |
+|------------|-------------|---------|
+| confirmed | `unique_confirmed` | Peers agreed — provisionally credited (conservative: not `agreement` until orchestrator verifies) |
+| disputed | `disagreement` | Peers disagreed — provisionally penalized |
+| unverified | `unique_unconfirmed` | Can't verify — conservative default |
+| unique | `unique_unconfirmed` | One agent only — conservative default |
+
+The orchestrator then only needs to **retract** wrong signals via `gossip_signals(action: "retract")` — lower friction than proactively recording. Forgetting to verify = provisional scores stand (closer to ground truth than silence).
+
+**File:** `apps/cli/src/handlers/collect.ts:152-184`
+
+After the auto-persist block, add provisional signal recording:
+```typescript
+// Auto-record provisional signals for all consensus findings
+try {
+  const { PerformanceWriter } = await import('@gossip/orchestrator');
+  const writer = new PerformanceWriter(process.cwd());
+  const timestamp = new Date().toISOString();
+
+  const tagToSignal: Record<string, string> = {
+    confirmed: 'unique_confirmed',
+    disputed: 'disagreement',
+    unverified: 'unique_unconfirmed',
+    unique: 'unique_unconfirmed',
+  };
+
+  const allFindings = [
+    ...(consensusReport.confirmed || []),
+    ...(consensusReport.disputed || []),
+    ...(consensusReport.unverified || []),
+    ...(consensusReport.unique || []),
+  ];
+
+  const provisionalSignals = allFindings.map((f: any) => ({
+    type: 'consensus' as const,
+    taskId: f.id || '',
+    signal: tagToSignal[f.tag] || 'unique_unconfirmed',
+    agentId: f.originalAgentId,
+    evidence: `[provisional] ${f.finding?.slice(0, 200) || 'no description'}`,
+    timestamp,
+  }));
+
+  if (provisionalSignals.length > 0) {
+    writer.appendSignals(provisionalSignals);
+    process.stderr.write(`[gossipcat] Auto-recorded ${provisionalSignals.length} provisional signal(s). Retract incorrect ones with gossip_signals(action: "retract").\n`);
+  }
+} catch { /* best-effort */ }
+```
+
+Add a note in the collect output:
+```typescript
+if (provisionalSignalCount > 0) {
+  output += `\n\n📊 ${provisionalSignalCount} provisional signals auto-recorded. Retract incorrect ones with gossip_signals(action: "retract", agent_id, reason).`;
+}
+```
+
+### C2: Fix dead branch bug in auto-failure signals
+
+**File:** `apps/cli/src/handlers/collect.ts:134`
+
+**Current:**
+```typescript
+signal: (r.status === 'failed' ? 'disagreement' : 'disagreement') as const,
+```
+Both branches identical — dead code.
+
+**Fix:** Use appropriate signal types:
+```typescript
+signal: (r.status === 'failed' ? 'disagreement' : 'unique_unconfirmed') as const,
+```
+- `failed` → `disagreement` (agent produced an error — reliability failure)
+- `timed_out` / empty → `unique_unconfirmed` (agent didn't respond — less severe than active failure)
+
 ## What This Does NOT Change
 
-- Race conditions on entry.status (Batch C — deferred, needs broader refactoring)
-- Task removal timing vs memory writes (Batch C — deferred)
+- Race conditions on entry.status (deferred — needs broader refactoring)
+- Task removal timing vs memory writes (deferred)
 - The `collect()` method structure (confirmed as complex but functional)
 - Path traversal guard (already patched in commit 15c2b40)
 
 ## Test Plan
 
+### Batch A
 - `cancelRunningTasks()` with scoped task → verify `scopeTracker.release()` called
 - `cancelRunningTasks()` with worktree task → verify `worktreeManager.cleanup()` called
 - Timeout in `collect()` with worktree task → verify `releaseAgent()` called
 - Worktree task where executeTask fails → verify worktree cleaned up
+
+### Batch B
 - `consensus-history.jsonl` with >200 entries → verify truncated to 100
 - `session-gossip.jsonl` with >100 entries → verify truncated to 50
+
+### Batch C
+- `handleCollect` with consensus report → verify provisional signals written for all finding tags
+- Provisional signal for confirmed finding uses `unique_confirmed`, not `agreement`
+- Provisional signal for unverified finding uses `unique_unconfirmed`
+- Auto-failure signal for timeout uses `unique_unconfirmed`, not `disagreement`
+- Collect output includes provisional signal count and retract instructions
 - Existing consensus and dispatch tests still pass
