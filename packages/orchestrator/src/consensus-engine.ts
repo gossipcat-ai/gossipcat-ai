@@ -86,11 +86,21 @@ export class ConsensusEngine {
       };
     }
 
+    const consensusStart = Date.now();
     process.stderr.write(`[consensus] Starting cross-review for ${successful.length} agents\n`);
+    const crossReviewStart = Date.now();
     const crossReviewEntries = await this.dispatchCrossReview(results);
-    process.stderr.write(`[consensus] Cross-review complete: ${crossReviewEntries.length} entries\n`);
+    const crossReviewMs = Date.now() - crossReviewStart;
+    process.stderr.write(`[consensus] Cross-review complete: ${crossReviewEntries.length} entries (${Math.round(crossReviewMs / 1000)}s)\n`);
 
     const report = await this.synthesize(results, crossReviewEntries);
+    // Build per-agent timing from task results
+    const perAgent = successful.map(r => ({
+      agentId: r.agentId,
+      durationMs: (r.completedAt && r.startedAt) ? r.completedAt - r.startedAt : 0,
+    }));
+    const totalMs = Date.now() - consensusStart;
+    const timing = { totalMs, perAgent, crossReviewMs };
     process.stderr.write(`[consensus] ${report.confirmed.length} confirmed, ${report.disputed.length} disputed, ${report.unverified.length} unverified, ${report.unique.length} unique, ${report.newFindings.length} new\n`);
 
     // Phase 3: Orchestrator verification of UNVERIFIED findings
@@ -98,9 +108,10 @@ export class ConsensusEngine {
       process.stderr.write(`[consensus] Phase 3: verifying ${report.unverified.length} unverified findings\n`);
       await this.verifyUnverified(report, successful);
       process.stderr.write(`[consensus] After verification: ${report.confirmed.length} confirmed, ${report.disputed.length} disputed, ${report.unverified.length} unverified\n`);
-      // Re-generate formatted report with updated tags
-      report.summary = this.formatReport(report.confirmed, report.disputed, report.unverified, report.unique, report.newFindings, successful.length, report.rounds);
     }
+
+    // Always regenerate report with timing data
+    report.summary = this.formatReport(report.confirmed, report.disputed, report.unverified, report.unique, report.newFindings, successful.length, report.rounds, timing);
 
     return report;
   }
@@ -974,12 +985,19 @@ Return ONLY a JSON array:
     newFindings: ConsensusNewFinding[],
     agentCount: number,
     rounds = 2,
+    timing?: { totalMs?: number; perAgent?: Array<{ agentId: string; durationMs: number }>; crossReviewMs?: number },
   ): string {
     const bar = '═══════════════════════════════════════════';
     const lines: string[] = [];
 
     lines.push(bar);
-    lines.push(`CONSENSUS REPORT (${agentCount} agents, ${rounds} rounds)`);
+    const timingStr = timing?.totalMs ? `, ${Math.round(timing.totalMs / 1000)}s` : '';
+    lines.push(`CONSENSUS REPORT (${agentCount} agents, ${rounds} rounds${timingStr})`);
+    if (timing?.perAgent?.length) {
+      const agentTimes = timing.perAgent.map(a => `${a.agentId}: ${Math.round(a.durationMs / 1000)}s`).join(' | ');
+      const crossReview = timing.crossReviewMs ? ` | cross-review: ${Math.round(timing.crossReviewMs / 1000)}s` : '';
+      lines.push(`  ${agentTimes}${crossReview}`);
+    }
     lines.push(bar);
     lines.push('');
 
@@ -1013,6 +1031,7 @@ Return ONLY a JSON array:
         const origPreset = this.config.registryGet(f.originalAgentId)?.preset || f.originalAgentId;
         const unvNames = f.unverifiedBy?.map(u => this.config.registryGet(u.agentId)?.preset || u.agentId).join(', ') || '?';
         lines.push(`  ◇ [${origPreset}, unverified by ${unvNames}] "${f.finding}"`);
+        lines.push(`    → To verify: re-dispatch to a second agent, or read the code directly`);
       }
       lines.push('');
     }
