@@ -30,14 +30,19 @@ export async function handleCollect(
       relayResults = collected.results || [];
     }
   } catch (err) {
-    process.stderr.write(`[gossipcat] collect failed: ${(err as Error).message}\n`);
+    const message = (err as Error).message;
+    process.stderr.write(`[gossipcat] collect failed: ${message}\n`);
+    const hasNativeTasks = (nativeIds && nativeIds.length > 0) || (!requestedIds && ctx.nativeTaskMap.size > 0);
+    if (!hasNativeTasks) {
+      return { content: [{ type: 'text' as const, text: `[ERROR] Failed to collect results: ${message}\n\nRelay may be down. Check gossip_status() for connection state.` }] };
+    }
   }
 
   // Step 2: Wait for pending native tasks (poll until they arrive or timeout)
   const pendingNativeIds = (nativeIds || []).filter(id => ctx.nativeTaskMap.has(id) && !ctx.nativeResultMap.has(id));
   if (!requestedIds) {
     // Also wait for any unspecified pending native tasks
-    for (const [id] of ctx.nativeTaskMap) {
+    for (const id of [...ctx.nativeTaskMap.keys()]) {
       if (!ctx.nativeResultMap.has(id) && !pendingNativeIds.includes(id)) {
         pendingNativeIds.push(id);
       }
@@ -61,11 +66,15 @@ export async function handleCollect(
     }
 
     const arrived = pendingNativeIds.filter(id => ctx.nativeResultMap.has(id)).length;
-    const timedOut = pendingNativeIds.length - arrived;
-    if (timedOut > 0) {
-      process.stderr.write(`[gossipcat] ${timedOut} native agent(s) timed out, proceeding with ${arrived} arrived\n`);
+    const timedOutCount = pendingNativeIds.filter(id => {
+      const r = ctx.nativeResultMap.get(id);
+      return r?.status === 'timed_out';
+    }).length;
+    const stillPending = pendingNativeIds.length - arrived;
+    if (stillPending > 0) {
+      process.stderr.write(`[gossipcat] ${stillPending} native agent(s) didn't respond, ${timedOutCount} timed out, ${arrived - timedOutCount} arrived\n`);
     } else {
-      process.stderr.write(`[gossipcat] All ${arrived} native agent(s) arrived\n`);
+      process.stderr.write(`[gossipcat] All ${arrived} native agent(s) arrived${timedOutCount > 0 ? ` (${timedOutCount} via timeout)` : ''}\n`);
     }
   }
 
@@ -77,6 +86,7 @@ export async function handleCollect(
     if (nr) {
       allResults.push(nr);
       ctx.nativeResultMap.delete(id); // consumed
+      ctx.nativeTaskMap.delete(id); // clean up — result has been delivered
     } else if (ctx.nativeTaskMap.has(id)) {
       allResults.push({ id, agentId: ctx.nativeTaskMap.get(id)!.agentId, task: ctx.nativeTaskMap.get(id)!.task, status: 'running' as const });
     }
@@ -91,7 +101,7 @@ export async function handleCollect(
   try {
     const failedResults = allResults.filter((r: any) =>
       r.status === 'failed' ||
-      r.status === 'timeout' ||
+      r.status === 'timed_out' ||
       (r.status === 'completed' && (!r.result || r.result.trim().length === 0))
     );
     if (failedResults.length > 0) {
@@ -128,6 +138,7 @@ export async function handleCollect(
     let text: string;
     if (t.status === 'completed') text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag} (${dur}):\n${t.result}`;
     else if (t.status === 'failed') text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag} (${dur}): ERROR: ${t.error}`;
+    else if (t.status === 'timed_out') text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag} (timed out): ${t.error}\n  → Re-dispatch with gossip_run to retry.`;
     else text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag}: still running...`;
 
     if (t.worktreeInfo) {
