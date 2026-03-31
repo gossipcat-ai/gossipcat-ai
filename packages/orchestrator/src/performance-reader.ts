@@ -224,6 +224,8 @@ export class PerformanceReader {
           break;
         }
         case 'unique_confirmed': {
+          a.weightedCorrect += decay;
+          a.weightedTotal += decay;
           a.weightedUnique += 0.2 * decay;
           a.uniqueFindings++;
           break;
