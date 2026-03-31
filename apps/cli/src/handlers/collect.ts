@@ -183,8 +183,7 @@ export async function handleCollect(
       }
     } catch { /* best-effort */ }
 
-    // Auto-record provisional signals for all consensus findings
-    // This makes signal recording the default — orchestrator retracts incorrect ones
+    // Auto-record provisional signals for consensus findings NOT already covered by engine signals
     try {
       const { PerformanceWriter } = await import('@gossip/orchestrator');
       const writer = new PerformanceWriter(process.cwd());
@@ -197,6 +196,12 @@ export async function handleCollect(
         unique: 'unique_unconfirmed',
       };
 
+      // Build set of agents already signaled by the consensus engine
+      const alreadySignaled = new Set<string>();
+      for (const s of (consensusReport.signals || [])) {
+        alreadySignaled.add(s.agentId);
+      }
+
       const allFindings = [
         ...(consensusReport.confirmed || []),
         ...(consensusReport.disputed || []),
@@ -204,14 +209,17 @@ export async function handleCollect(
         ...(consensusReport.unique || []),
       ];
 
-      const provisionalSignals = allFindings.map((f: any) => ({
-        type: 'consensus' as const,
-        taskId: f.id || '',
-        signal: tagToSignal[f.tag] || 'unique_unconfirmed',
-        agentId: f.originalAgentId,
-        evidence: `[provisional] ${(f.finding || '').slice(0, 200)}`,
-        timestamp,
-      }));
+      // Only record provisional signals for finding authors NOT already covered
+      const provisionalSignals = allFindings
+        .filter((f: any) => !alreadySignaled.has(f.originalAgentId))
+        .map((f: any) => ({
+          type: 'consensus' as const,
+          taskId: f.id || '',
+          signal: tagToSignal[f.tag] || 'unique_unconfirmed',
+          agentId: f.originalAgentId,
+          evidence: `[provisional] ${(f.finding || '').slice(0, 200)}`,
+          timestamp,
+        }));
 
       if (provisionalSignals.length > 0) {
         writer.appendSignals(provisionalSignals);
