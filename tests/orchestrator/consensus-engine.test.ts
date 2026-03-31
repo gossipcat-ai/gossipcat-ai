@@ -436,6 +436,21 @@ describe('ConsensusEngine', () => {
         const key = find(findingMap, 'peer-1', 'The API call fails.');
         expect(key).toBe(null);
     });
+
+    it('should match with normalized text (trailing period difference)', () => {
+      const key = find(findingMap, 'peer-1', 'The button is blue');
+      expect(key).toBe('peer-1::The button is blue.');
+    });
+
+    it('should match with normalized text (casing + punctuation difference)', () => {
+      const key = find(findingMap, 'peer-2', 'the api call fails!');
+      expect(key).toBe('peer-2::The API call fails.');
+    });
+
+    it('should not false-match normalized text across different agents', () => {
+      const key = find(findingMap, 'peer-1', 'the api call fails.');
+      expect(key).toBe(null);
+    });
   });
 
   describe('security hardening', () => {

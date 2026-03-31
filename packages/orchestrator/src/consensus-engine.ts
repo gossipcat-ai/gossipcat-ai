@@ -916,6 +916,14 @@ Return ONLY a JSON array:
     peerAgentId: string,
     findingText: string,
   ): string | null {
+    // Tier 0: Normalized match (lowercase, strip punctuation, collapse whitespace)
+    const normalize = (s: string) => s.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+    const normalizedText = normalize(findingText);
+    for (const [key, entry] of findingMap) {
+      if (entry.originalAgentId !== peerAgentId) continue;
+      if (normalize(entry.finding) === normalizedText) return key;
+    }
+
     // Tier 1: Exact match
     const exactKey = `${peerAgentId}::${findingText}`;
     if (findingMap.has(exactKey)) return exactKey;
