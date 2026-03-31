@@ -672,6 +672,7 @@ Return ONLY a JSON array:
           report.signals.push({
             type: 'consensus', signal: 'hallucination_caught', consensusId,
             agentId: fb.finding.originalAgentId,
+            outcome: 'orchestrator_disputed',
             evidence: `Phase 3 orchestrator disputed: ${(v.evidence || '').slice(0, 200)}`,
             timestamp: now, taskId: getTaskId(fb.finding.originalAgentId),
           });

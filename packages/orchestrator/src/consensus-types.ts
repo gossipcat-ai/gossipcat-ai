@@ -81,7 +81,8 @@ export interface ConsensusSignal {
     | 'fabricated_citation'
     | 'false_negative_claim'
     | 'judge_refuted'
-    | 'confirmed_hallucination';
+    | 'confirmed_hallucination'
+    | 'orchestrator_disputed';
   category?: string;
   retractedSignal?: string;
   evidence: string;
