@@ -131,7 +131,7 @@ export async function handleCollect(
         type: 'consensus' as const,
         taskId: r.id || '',
         // Use disagreement for empty/timeout (reliability failure), hallucination only for actual errors
-        signal: (r.status === 'failed' ? 'disagreement' : 'disagreement') as const,
+        signal: (r.status === 'failed' ? 'disagreement' : 'unique_unconfirmed') as const,
         agentId: r.agentId,
         evidence: r.status === 'failed' ? `Task failed: ${r.error || 'unknown error'}`
           : r.status === 'timed_out' ? 'Task timed out — no response'
@@ -150,6 +150,7 @@ export async function handleCollect(
   }
 
   // Auto-persist confirmed findings to implementation-findings.jsonl
+  let provisionalSignalCount = 0;
   if (consensusReport) {
     try {
       const { appendFileSync: af, mkdirSync: md } = require('fs');
@@ -181,6 +182,43 @@ export async function handleCollect(
         process.stderr.write(`[gossipcat] Auto-persisted ${findingsToSave.length} consensus findings to implementation-findings.jsonl\n`);
       }
     } catch { /* best-effort */ }
+
+    // Auto-record provisional signals for all consensus findings
+    // This makes signal recording the default — orchestrator retracts incorrect ones
+    try {
+      const { PerformanceWriter } = await import('@gossip/orchestrator');
+      const writer = new PerformanceWriter(process.cwd());
+      const timestamp = new Date().toISOString();
+
+      const tagToSignal: Record<string, string> = {
+        confirmed: 'unique_confirmed',
+        disputed: 'disagreement',
+        unverified: 'unique_unconfirmed',
+        unique: 'unique_unconfirmed',
+      };
+
+      const allFindings = [
+        ...(consensusReport.confirmed || []),
+        ...(consensusReport.disputed || []),
+        ...(consensusReport.unverified || []),
+        ...(consensusReport.unique || []),
+      ];
+
+      const provisionalSignals = allFindings.map((f: any) => ({
+        type: 'consensus' as const,
+        taskId: f.id || '',
+        signal: tagToSignal[f.tag] || 'unique_unconfirmed',
+        agentId: f.originalAgentId,
+        evidence: `[provisional] ${(f.finding || '').slice(0, 200)}`,
+        timestamp,
+      }));
+
+      if (provisionalSignals.length > 0) {
+        writer.appendSignals(provisionalSignals);
+        provisionalSignalCount = provisionalSignals.length;
+        process.stderr.write(`[gossipcat] Auto-recorded ${provisionalSignalCount} provisional signal(s). Retract incorrect ones with gossip_signals(action: "retract").\n`);
+      }
+    } catch { /* best-effort */ }
   }
 
   // Step 5: Format output
@@ -207,7 +245,13 @@ export async function handleCollect(
 
   if (consensusReport?.summary) {
     output += '\n\n' + consensusReport.summary;
-  } else if (consensus) {
+  }
+
+  if (provisionalSignalCount > 0) {
+    output += `\n\n📊 ${provisionalSignalCount} provisional signals auto-recorded. Retract incorrect ones with gossip_signals(action: "retract", agent_id, reason).`;
+  }
+
+  if (!consensusReport?.summary && consensus) {
     const completedCount = allResults.filter((r: any) => r.status === 'completed' && r.result).length;
     if (completedCount >= 2) {
       // No automated cross-review — Claude Code will synthesize
