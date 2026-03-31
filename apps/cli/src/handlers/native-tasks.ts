@@ -178,7 +178,14 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       try {
         const { PerformanceWriter } = require('@gossip/orchestrator');
         const writer = new PerformanceWriter(process.cwd());
-        writer.retractSignal(taskInfo.agentId, task_id, 'Late relay arrived — agent completed successfully after timeout');
+        writer.appendSignals([{
+          type: 'consensus' as const,
+          signal: 'signal_retracted' as const,
+          agentId: taskInfo.agentId,
+          taskId: task_id,
+          evidence: 'Late relay arrived — agent completed successfully after timeout',
+          timestamp: new Date().toISOString(),
+        }]);
         process.stderr.write(`[gossipcat] Retracted timeout signal for ${taskInfo.agentId} [${task_id}]\n`);
       } catch { /* best-effort */ }
     } else {
