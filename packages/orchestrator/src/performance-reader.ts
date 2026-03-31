@@ -221,8 +221,8 @@ export class PerformanceReader {
           break;
         }
         case 'unverified': {
-          // Small denominator cost — couldn't verify, not confirmed wrong
-          a.weightedTotal += decay * 0.1;
+          // Near-neutral cost — "I don't know" is not evidence of incorrectness
+          a.weightedTotal += decay * 0.02;
           break;
         }
         case 'unique_confirmed': {
@@ -285,8 +285,9 @@ export class PerformanceReader {
         ? clamp(a.weightedCorrect / a.weightedTotal, 0, 1)
         : 0.5;
 
-      // Multiplicative hallucination penalty — each severity point reduces by 25%
-      const hallucinationMultiplier = Math.pow(0.75, a.weightedHallucinations);
+      // Multiplicative hallucination penalty — each severity point reduces by 20%
+      // 1 hallu (1x): 0.80, 2 hallu: 0.64, 1 fabricated (3x): 0.51, 2 fabricated: 0.26
+      const hallucinationMultiplier = Math.pow(0.80, a.weightedHallucinations);
       const accuracy = clamp(rawAccuracy * hallucinationMultiplier, 0, 1);
 
       // Diminishing returns: log scale so early findings matter most but more always helps

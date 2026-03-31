@@ -110,10 +110,10 @@ Keep entries concise (5-10 lines each). Update existing files rather than creati
   if (parts.consensusSummary) {
     blocks.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---
 End your response with a section titled "## Consensus Summary".
-EVERY finding MUST include a file:line citation. Without a citation, peers cannot verify your claim and it will be marked UNVERIFIED.
-Format: "- <finding description> (file.ts:123)"
+EVERY finding MUST include a citation. Use file:line for specific issues, or just the filename for file-level concerns. Without a citation, peers cannot verify your claim and it will be marked UNVERIFIED.
+Format: "- <finding description> (file.ts:123)" or "- <finding description> (file.ts)"
 
-If you cannot identify a specific file and line for a finding, do NOT fabricate one — omit the finding entirely. Uncited findings cannot be confirmed and waste review capacity.
+Do NOT fabricate file paths or line numbers. If you cannot identify a specific file, omit the finding — uncited findings waste review capacity.
 
 IMPORTANT: Only list actual issues — bugs, security concerns, design problems.
 Do NOT include confirmations like "X is correct", "Y works as expected", or
