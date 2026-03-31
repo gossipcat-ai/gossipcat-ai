@@ -154,11 +154,15 @@ export class TaskGraphSync {
       try {
         const entry = JSON.parse(line);
         if (meta.lastSync && entry.timestamp <= meta.lastSync) continue;
+        if (!entry.agentId || !entry.signal) continue; // skip malformed
         await this.post('/rest/v1/agent_scores', {
-          user_id: this.userId, agent_id: entry.agentId, task_id: entry.taskId,
-          skills: entry.skills || [], relevance: entry.scores?.relevance,
-          accuracy: entry.scores?.accuracy, uniqueness: entry.scores?.uniqueness,
-          source: 'judgment', created_at: entry.timestamp,
+          user_id: this.userId,
+          agent_id: entry.agentId,
+          task_id: entry.taskId || null,
+          signal: entry.signal,
+          evidence: (entry.evidence || '').slice(0, 500),
+          source: 'consensus',
+          created_at: entry.timestamp,
           project_id: this.projectId,
           display_name: this.displayName || null,
         });
