@@ -28478,16 +28478,73 @@ function presetScores(preset) {
 }
 
 // apps/cli/src/handlers/native-tasks.ts
+var timeoutWatchers = /* @__PURE__ */ new Map();
+function spawnTimeoutWatcher(taskId, info) {
+  const timeoutMs = info.timeoutMs ?? NATIVE_TASK_TTL_MS;
+  const elapsed = Date.now() - info.startedAt;
+  const remaining = Math.max(timeoutMs - elapsed, 0);
+  const existing = timeoutWatchers.get(taskId);
+  if (existing) clearTimeout(existing);
+  if (remaining <= 0) {
+    markTimedOut(taskId, info, timeoutMs);
+    return;
+  }
+  const timer = setTimeout(() => {
+    timeoutWatchers.delete(taskId);
+    if (ctx.nativeTaskMap.has(taskId) && !ctx.nativeResultMap.has(taskId)) {
+      markTimedOut(taskId, info, timeoutMs);
+    }
+  }, remaining);
+  if (timer.unref) timer.unref();
+  timeoutWatchers.set(taskId, timer);
+}
+function markTimedOut(taskId, info, timeoutMs) {
+  ctx.nativeResultMap.set(taskId, {
+    id: taskId,
+    agentId: info.agentId,
+    task: info.task,
+    status: "timed_out",
+    error: `Timed out after ${timeoutMs}ms \u2014 agent may have crashed or forgotten gossip_relay. Re-dispatch with gossip_run to retry.`,
+    startedAt: info.startedAt,
+    completedAt: Date.now()
+  });
+  persistNativeTaskMap();
+  recordTimeoutSignal(taskId, info.agentId);
+}
+function cancelTimeoutWatcher(taskId) {
+  const timer = timeoutWatchers.get(taskId);
+  if (timer) {
+    clearTimeout(timer);
+    timeoutWatchers.delete(taskId);
+  }
+}
+function recordTimeoutSignal(taskId, agentId) {
+  try {
+    const { PerformanceWriter: PerformanceWriter2 } = (init_src4(), __toCommonJS(src_exports3));
+    const writer = new PerformanceWriter2(process.cwd());
+    writer.appendSignals([{
+      type: "consensus",
+      taskId,
+      signal: "disagreement",
+      agentId,
+      evidence: "Native agent timed out \u2014 no gossip_relay call received",
+      timestamp: (/* @__PURE__ */ new Date()).toISOString()
+    }]);
+    process.stderr.write(`[gossipcat] Auto-recorded timeout signal for ${agentId} [${taskId}]
+`);
+  } catch {
+  }
+}
 function evictStaleNativeTasks() {
   const now = Date.now();
   let changed = false;
-  for (const [id, info] of ctx.nativeTaskMap) {
+  for (const [id, info] of [...ctx.nativeTaskMap]) {
     if (now - info.startedAt > NATIVE_TASK_TTL_MS) {
       ctx.nativeTaskMap.delete(id);
       changed = true;
     }
   }
-  for (const [id, info] of ctx.nativeResultMap) {
+  for (const [id, info] of [...ctx.nativeResultMap]) {
     if (now - info.startedAt > NATIVE_TASK_TTL_MS) {
       ctx.nativeResultMap.delete(id);
       changed = true;
@@ -28512,7 +28569,8 @@ function persistNativeTaskMap() {
         // cap on-disk only — full task stays in memory
         status: info.status,
         startedAt: info.startedAt,
-        completedAt: info.completedAt
+        completedAt: info.completedAt,
+        error: info.error
       };
     }
     const data = {
@@ -28533,8 +28591,28 @@ function restoreNativeTaskMap(projectRoot) {
     const now = Date.now();
     if (raw.tasks) {
       for (const [id, info] of Object.entries(raw.tasks)) {
-        if (now - info.startedAt < NATIVE_TASK_TTL_MS && !ctx.nativeTaskMap.has(id)) {
-          ctx.nativeTaskMap.set(id, info);
+        if (now - info.startedAt >= NATIVE_TASK_TTL_MS) continue;
+        if (ctx.nativeTaskMap.has(id)) continue;
+        if (ctx.nativeResultMap.has(id)) continue;
+        ctx.nativeTaskMap.set(id, info);
+        const timeoutMs = info.timeoutMs ?? NATIVE_TASK_TTL_MS;
+        const elapsed = now - info.startedAt;
+        if (elapsed >= timeoutMs) {
+          ctx.nativeResultMap.set(id, {
+            id,
+            agentId: info.agentId,
+            task: info.task,
+            status: "timed_out",
+            error: `Timed out after MCP reconnect \u2014 ${elapsed}ms elapsed, limit was ${timeoutMs}ms`,
+            startedAt: info.startedAt,
+            completedAt: now
+          });
+          process.stderr.write(`[gossipcat] Restored task ${id} already expired \u2014 marked timed_out
+`);
+        } else {
+          spawnTimeoutWatcher(id, { agentId: info.agentId, task: info.task, startedAt: info.startedAt, timeoutMs });
+          process.stderr.write(`[gossipcat] Restored task ${id} \u2014 re-armed timeout (${Math.round((timeoutMs - elapsed) / 1e3)}s remaining)
+`);
         }
       }
     }
@@ -28550,9 +28628,19 @@ function restoreNativeTaskMap(projectRoot) {
 }
 async function handleNativeRelay(task_id, result, error48) {
   await ctx.boot();
-  const taskInfo = ctx.nativeTaskMap.get(task_id);
+  cancelTimeoutWatcher(task_id);
+  let taskInfo = ctx.nativeTaskMap.get(task_id);
+  let lateRelay = false;
   if (!taskInfo) {
-    return { content: [{ type: "text", text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch or gossip_run?` }] };
+    const timedOutResult = ctx.nativeResultMap.get(task_id);
+    if (timedOutResult && timedOutResult.status === "timed_out") {
+      taskInfo = { agentId: timedOutResult.agentId, task: timedOutResult.task, startedAt: timedOutResult.startedAt };
+      lateRelay = true;
+      process.stderr.write(`[gossipcat] Late relay for ${task_id} \u2014 overwriting timed_out result with real data
+`);
+    } else {
+      return { content: [{ type: "text", text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch or gossip_run?` }] };
+    }
   }
   const elapsed = Date.now() - taskInfo.startedAt;
   ctx.nativeTaskMap.delete(task_id);
@@ -28654,7 +28742,9 @@ async function handleDispatchSingle(agent_id, task, write_mode, scope, timeout_m
   if (nativeConfig) {
     evictStaleNativeTasks();
     const taskId = (0, import_crypto8.randomUUID)().slice(0, 8);
-    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), planId: plan_id, step });
+    const timeoutMs = timeout_ms ?? NATIVE_TASK_TTL_MS;
+    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step });
+    spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId));
     persistNativeTaskMap();
     try {
       ctx.mainAgent.recordNativeTask(taskId, agent_id, task);
@@ -28747,7 +28837,8 @@ async function handleDispatchParallel(taskDefs, consensus) {
   for (const def of nativeTasks) {
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id);
     const taskId = (0, import_crypto8.randomUUID)().slice(0, 8);
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS });
+    spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId));
     try {
       ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task);
     } catch {
@@ -28815,7 +28906,8 @@ async function handleDispatchConsensus(taskDefs) {
   for (const def of nativeTasks) {
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id);
     const taskId = (0, import_crypto8.randomUUID)().slice(0, 8);
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS });
+    spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId));
     try {
       ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task);
     } catch {
@@ -28868,12 +28960,19 @@ async function handleCollect(task_ids, timeout_ms, consensus) {
       relayResults = collected.results || [];
     }
   } catch (err) {
-    process.stderr.write(`[gossipcat] collect failed: ${err.message}
+    const message = err.message;
+    process.stderr.write(`[gossipcat] collect failed: ${message}
 `);
+    const hasNativeTasks = nativeIds && nativeIds.length > 0 || !requestedIds && ctx.nativeTaskMap.size > 0;
+    if (!hasNativeTasks) {
+      return { content: [{ type: "text", text: `[ERROR] Failed to collect results: ${message}
+
+Relay may be down. Check gossip_status() for connection state.` }] };
+    }
   }
   const pendingNativeIds = (nativeIds || []).filter((id) => ctx.nativeTaskMap.has(id) && !ctx.nativeResultMap.has(id));
   if (!requestedIds) {
-    for (const [id] of ctx.nativeTaskMap) {
+    for (const id of [...ctx.nativeTaskMap.keys()]) {
       if (!ctx.nativeResultMap.has(id) && !pendingNativeIds.includes(id)) {
         pendingNativeIds.push(id);
       }
@@ -28890,17 +28989,21 @@ async function handleCollect(task_ids, timeout_ms, consensus) {
     process.stderr.write(`[gossipcat] Waiting for ${pendingNativeIds.length} native agent(s) before consensus...
 `);
     while (Date.now() < deadline) {
-      const stillPending = pendingNativeIds.filter((id) => !ctx.nativeResultMap.has(id) && ctx.nativeTaskMap.has(id));
-      if (stillPending.length === 0) break;
+      const stillPending2 = pendingNativeIds.filter((id) => !ctx.nativeResultMap.has(id) && ctx.nativeTaskMap.has(id));
+      if (stillPending2.length === 0) break;
       await new Promise((resolve13) => setTimeout(resolve13, POLL_INTERVAL));
     }
     const arrived = pendingNativeIds.filter((id) => ctx.nativeResultMap.has(id)).length;
-    const timedOut = pendingNativeIds.length - arrived;
-    if (timedOut > 0) {
-      process.stderr.write(`[gossipcat] ${timedOut} native agent(s) timed out, proceeding with ${arrived} arrived
+    const timedOutCount = pendingNativeIds.filter((id) => {
+      const r = ctx.nativeResultMap.get(id);
+      return r?.status === "timed_out";
+    }).length;
+    const stillPending = pendingNativeIds.length - arrived;
+    if (stillPending > 0) {
+      process.stderr.write(`[gossipcat] ${stillPending} native agent(s) didn't respond, ${timedOutCount} timed out, ${arrived - timedOutCount} arrived
 `);
     } else {
-      process.stderr.write(`[gossipcat] All ${arrived} native agent(s) arrived
+      process.stderr.write(`[gossipcat] All ${arrived} native agent(s) arrived${timedOutCount > 0 ? ` (${timedOutCount} via timeout)` : ""}
 `);
     }
   }
@@ -28911,6 +29014,7 @@ async function handleCollect(task_ids, timeout_ms, consensus) {
     if (nr) {
       allResults.push(nr);
       ctx.nativeResultMap.delete(id);
+      ctx.nativeTaskMap.delete(id);
     } else if (ctx.nativeTaskMap.has(id)) {
       allResults.push({ id, agentId: ctx.nativeTaskMap.get(id).agentId, task: ctx.nativeTaskMap.get(id).task, status: "running" });
     }
@@ -28920,7 +29024,7 @@ async function handleCollect(task_ids, timeout_ms, consensus) {
   }
   try {
     const failedResults = allResults.filter(
-      (r) => r.status === "failed" || r.status === "timeout" || r.status === "completed" && (!r.result || r.result.trim().length === 0)
+      (r) => r.status === "failed" || r.status === "timed_out" || r.status === "completed" && (!r.result || r.result.trim().length === 0)
     );
     if (failedResults.length > 0) {
       const { PerformanceWriter: PerformanceWriter2 } = await Promise.resolve().then(() => (init_src4(), src_exports3));
@@ -28953,6 +29057,8 @@ async function handleCollect(task_ids, timeout_ms, consensus) {
     if (t.status === "completed") text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag} (${dur}):
 ${t.result}`;
     else if (t.status === "failed") text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag} (${dur}): ERROR: ${t.error}`;
+    else if (t.status === "timed_out") text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag} (timed out): ${t.error}
+  \u2192 Re-dispatch with gossip_run to retry.`;
     else text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag}: still running...`;
     if (t.worktreeInfo) {
       text += `
@@ -29975,7 +30081,8 @@ server.tool(
     if (isNative) {
       evictStaleNativeTasks();
       const taskId = require("crypto").randomUUID().slice(0, 8);
-      ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now() });
+      ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS });
+      spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId));
       persistNativeTaskMap();
       try {
         ctx.mainAgent.recordNativeTask(taskId, agent_id, task);
