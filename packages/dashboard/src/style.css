@@ -270,7 +270,7 @@ body::after {
 .know-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; padding-top: 4px; }
 .know-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; transition: all 0.15s; text-align: center; }
 .know-card:hover { background: var(--surface-raised); border-color: var(--accent); }
-.know-card-icon { font-size: 24px; }
+.know-card-initials { font-size: 16px; font-weight: 700; font-family: var(--mono); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-hover); }
 .know-card-name { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); }
 .know-card-desc { font-size: 11px; color: var(--text-3); }
 

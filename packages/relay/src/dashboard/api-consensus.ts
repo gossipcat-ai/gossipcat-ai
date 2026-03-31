@@ -66,8 +66,8 @@ export async function consensusHandler(projectRoot: string): Promise<ConsensusRe
       else if (s.signal === 'new_finding') counts.new++;
     }
 
-    // Only show multi-agent consensus runs, not individual manual signal recordings
-    if (agents.size >= 2) {
+    // Only show real consensus runs (multiple signals from cross-review), not manual recordings
+    if (agents.size >= 2 && taskSignals.length >= 3) {
       runs.push({
         taskId,
         timestamp: taskSignals[0].timestamp,
