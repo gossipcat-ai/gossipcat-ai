@@ -8,6 +8,7 @@ export interface NativeTaskInfo {
   agentId: string;
   task: string;
   startedAt: number;
+  timeoutMs?: number;
   planId?: string;
   step?: number;
 }
@@ -16,7 +17,7 @@ export interface NativeResultInfo {
   id: string;
   agentId: string;
   task: string;
-  status: 'completed' | 'failed';
+  status: 'completed' | 'failed' | 'timed_out';
   result?: string;
   error?: string;
   startedAt: number;

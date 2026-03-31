@@ -8,10 +8,10 @@ import { ctx, NATIVE_TASK_TTL_MS, presetScores } from '../mcp-context';
 export function evictStaleNativeTasks(): void {
   const now = Date.now();
   let changed = false;
-  for (const [id, info] of ctx.nativeTaskMap) {
+  for (const [id, info] of [...ctx.nativeTaskMap]) {
     if (now - info.startedAt > NATIVE_TASK_TTL_MS) { ctx.nativeTaskMap.delete(id); changed = true; }
   }
-  for (const [id, info] of ctx.nativeResultMap) {
+  for (const [id, info] of [...ctx.nativeResultMap]) {
     if (now - info.startedAt > NATIVE_TASK_TTL_MS) { ctx.nativeResultMap.delete(id); changed = true; }
   }
   if (changed) persistNativeTaskMap();
@@ -31,7 +31,7 @@ export function persistNativeTaskMap(): void {
     for (const [id, info] of ctx.nativeResultMap) {
       slimResults[id] = {
         id: info.id, agentId: info.agentId, task: info.task.slice(0, 5000), // cap on-disk only — full task stays in memory
-        status: info.status, startedAt: info.startedAt, completedAt: info.completedAt,
+        status: info.status, startedAt: info.startedAt, completedAt: info.completedAt, error: info.error,
       };
     }
     const data = {
