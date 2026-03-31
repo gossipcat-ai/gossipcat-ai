@@ -159,13 +159,18 @@ export class ConsensusEngine {
       // Split summary into individual findings and attach code snippets to each
       const summaryLines = peerSummary.split('\n');
       const annotatedLines: string[] = [];
+      const MAX_ANCHORS_PER_SUMMARY = 15; // bound token growth per peer
+      let anchorCount = 0;
       for (const line of summaryLines) {
         annotatedLines.push(line);
         // Only fetch snippets for non-empty lines that might contain citations
         const trimmed = line.trim();
-        if (trimmed && this.config.projectRoot) {
+        if (trimmed && this.config.projectRoot && anchorCount < MAX_ANCHORS_PER_SUMMARY) {
           const snippets = await this.snippetsForFinding(trimmed);
-          if (snippets) annotatedLines.push(snippets);
+          if (snippets) {
+            annotatedLines.push(snippets);
+            anchorCount += (snippets.match(/<anchor /g) || []).length;
+          }
         }
       }
 
@@ -727,7 +732,8 @@ Return ONLY a JSON array:
           .map((l, i) => `  ${start + i + 1}: ${l}`)
           .join('\n');
         const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
-        anchors.push(`<anchor src="${fullRef}:${lineNum}">\n${safeSnippet}\n</anchor>`);
+        const safeRef = fullRef.replace(/["<>]/g, '');
+        anchors.push(`<anchor src="${safeRef}:${lineNum}">\n${safeSnippet}\n</anchor>`);
       } catch { /* file unreadable, skip */ }
     }
 
