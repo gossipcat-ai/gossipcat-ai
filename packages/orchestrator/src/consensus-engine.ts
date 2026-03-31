@@ -212,7 +212,7 @@ VERIFICATION RULES:
 - If a finding has an <anchor> block, use the code shown to verify the claim
 - AGREE only if you can confirm the claim is factually correct — cite your evidence
 - DISAGREE only if you have concrete evidence the finding is WRONG — the code contradicts the claim
-- UNVERIFIED if an anchor is missing for a cited file, the line number is wrong, or the code in the anchor is insufficient to verify the claim. First try to reason about the claim's plausibility from what you CAN see. Only use UNVERIFIED as a last resort when you truly cannot assess the claim.
+- UNVERIFIED if an anchor is missing for a cited file, the line number is wrong, or the code in the anchor is insufficient to verify the claim. UNVERIFIED is the correct default when you lack context — it is NOT a failure. Use it freely whenever you cannot confidently verify or refute.
 - Do NOT agree with a finding just because it sounds plausible — verify it
 - Agreeing without verification is WORSE than disagreeing — a false confirmation poisons the system
 
@@ -436,9 +436,12 @@ Return only valid JSON.` },
         finding.tag = 'disputed';
         disputed.push(finding);
       } else if (entry.confirmedBy.length > 0) {
-        // Pre-filter: check if finding cites non-existent code (cheap structural check)
+        // Pre-filter: check if finding cites non-existent code
+        // Requires BOTH keyword hallucination AND fabricated citation (AND gate)
+        // to avoid false positives from stale/moved files after refactoring
         const hasFabricatedCitation = await this.verifyCitations(entry.finding);
-        if (hasFabricatedCitation) {
+        const hasHallucinationKeywords = this.detectHallucination(entry.finding);
+        if (hasFabricatedCitation && hasHallucinationKeywords) {
           finding.tag = 'unique';
           unique.push(finding);
           signals.push({
@@ -449,6 +452,21 @@ Return only valid JSON.` },
             agentId: entry.originalAgentId,
             outcome: 'fabricated_citation',
             evidence: capEvidence(`Confirmed finding cites non-existent code: "${entry.finding.slice(0, 200)}"`),
+            timestamp: now,
+          });
+          continue;
+        } else if (hasFabricatedCitation) {
+          // Citation failed but no hallucination keywords — likely stale/moved file
+          // Downgrade to unique with softer signal instead of hallucination penalty
+          finding.tag = 'unique';
+          unique.push(finding);
+          signals.push({
+            type: 'consensus',
+            taskId: getTaskId(entry.originalAgentId),
+            consensusId,
+            signal: 'unique_unconfirmed',
+            agentId: entry.originalAgentId,
+            evidence: capEvidence(`Confirmed finding has unresolvable citation (stale?): "${entry.finding.slice(0, 200)}"`),
             timestamp: now,
           });
           continue;
@@ -904,11 +922,14 @@ Return ONLY a JSON array:
     if (findingMap.has(exactKey)) return exactKey;
 
     // Tier 2: Case-insensitive substring match (either direction)
+    // Require minimum length to prevent short phrases ("race condition") from matching everything
+    const MIN_SUBSTRING_LENGTH = 25;
     const lowerText = findingText.toLowerCase();
     for (const [key, entry] of findingMap) {
       if (entry.originalAgentId !== peerAgentId) continue;
       const lowerFinding = entry.finding.toLowerCase();
-      if (lowerFinding.includes(lowerText) || lowerText.includes(lowerFinding)) {
+      const shorter = Math.min(lowerText.length, lowerFinding.length);
+      if (shorter >= MIN_SUBSTRING_LENGTH && (lowerFinding.includes(lowerText) || lowerText.includes(lowerFinding))) {
         return key;
       }
     }
