@@ -222,7 +222,7 @@ describe('PerformanceReader', () => {
     expect(score.reliability).toBeLessThan(0.8);
   });
 
-  it('time decay does NOT rehabilitate bad agents', () => {
+  it('time decay slowly rehabilitates bad agents (21-day half-life)', () => {
     const threeWeeksAgo = new Date(Date.now() - 21 * 86400000).toISOString();
     writeSignals([
       { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't1', evidence: '', timestamp: threeWeeksAgo },
@@ -231,8 +231,9 @@ describe('PerformanceReader', () => {
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     const score = reader.getAgentScore('bad')!;
-    // 3 hallucinations = low reliability. Time decay should NOT pull it up toward 0.5.
-    // Reliability should stay below 0.5 regardless of how old the signals are.
+    // 3 hallucinations = low reliability. Bad agents DO decay toward 0.5, but at 3x slower
+    // rate than good agents (21-day half-life vs 7-day). After exactly 21 days (1 half-life),
+    // they are halfway back to neutral — still below 0.5 but measurably higher than raw score.
     expect(score.reliability).toBeLessThan(0.5);
   });
 

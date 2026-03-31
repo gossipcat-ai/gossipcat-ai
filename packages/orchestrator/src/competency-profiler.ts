@@ -158,12 +158,22 @@ export class CompetencyProfiler {
           accuracy.set(cs.agentId, clamp(acc + change, 0, 1));
           agentRounds.set(cs.taskId, currentRoundChange + change);
         }
+        // Reward the winner (counterpart)
+        if (cs.counterpartId && cs.counterpartId.length > 0) {
+          const winnerAcc = accuracy.get(cs.counterpartId) ?? 0.5;
+          accuracy.set(cs.counterpartId, clamp(winnerAcc + Math.abs(change), 0, 1));
+        }
       }
 
       if (cs.signal === 'unique_confirmed' || cs.signal === 'new_finding') {
         const boost = cs.signal === 'unique_confirmed' ? 0.2 : 0.15;
         const u = uniqueness.get(cs.agentId) ?? 0.5;
         uniqueness.set(cs.agentId, clamp(u + boost * decay, 0, 1));
+        // unique_confirmed should also boost accuracy (matching performance-reader)
+        if (cs.signal === 'unique_confirmed') {
+          const acc = accuracy.get(cs.agentId) ?? 0.5;
+          accuracy.set(cs.agentId, clamp(acc + 0.1 * decay, 0, 1));
+        }
       }
 
       if (cs.signal === 'unique_unconfirmed') {
@@ -263,7 +273,13 @@ export class CompetencyProfiler {
       for (const s of all) {
         if ((s as any).signal === 'signal_retracted') {
           const taskKey = s.taskId || s.timestamp;
-          retracted.add(s.agentId + ':' + taskKey + ':*');
+          if ((s as any).retractedSignal) {
+            // Scoped retraction: only retract the specific signal type
+            retracted.add(s.agentId + ':' + taskKey + ':' + (s as any).retractedSignal);
+          } else {
+            // Legacy/unscoped retraction: retract all signals for this agent+task
+            retracted.add(s.agentId + ':' + taskKey + ':*');
+          }
         }
       }
 
@@ -273,6 +289,7 @@ export class CompetencyProfiler {
         const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
         if (!isFinite(ts) || ts === 0 || ts < expiryMs) return false;
         const taskKey = s.taskId || s.timestamp;
+        if (retracted.has(s.agentId + ':' + taskKey + ':' + (s as any).signal)) return false;
         if (retracted.has(s.agentId + ':' + taskKey + ':*')) return false;
         return true;
       });

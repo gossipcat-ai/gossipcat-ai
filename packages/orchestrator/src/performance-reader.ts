@@ -216,6 +216,7 @@ export class PerformanceReader {
             const wd = Math.pow(0.5, Math.max(0, winner.taskCounter - wi - 1) / DECAY_HALF_LIFE);
             winner.weightedCorrect += wd;
             winner.weightedTotal += wd;
+            if (signalMs > winner.lastSignalMs) winner.lastSignalMs = signalMs;
           }
           break;
         }
