@@ -123,8 +123,26 @@ export function restoreNativeTaskMap(projectRoot: string): void {
     const now = Date.now();
     if (raw.tasks) {
       for (const [id, info] of Object.entries(raw.tasks) as [string, any][]) {
-        if (now - info.startedAt < NATIVE_TASK_TTL_MS && !ctx.nativeTaskMap.has(id)) {
-          ctx.nativeTaskMap.set(id, info);
+        if (now - info.startedAt >= NATIVE_TASK_TTL_MS) continue;
+        if (ctx.nativeTaskMap.has(id)) continue;
+        if (ctx.nativeResultMap.has(id)) continue;
+
+        ctx.nativeTaskMap.set(id, info);
+
+        const timeoutMs = info.timeoutMs ?? NATIVE_TASK_TTL_MS;
+        const elapsed = now - info.startedAt;
+
+        if (elapsed >= timeoutMs) {
+          ctx.nativeResultMap.set(id, {
+            id, agentId: info.agentId, task: info.task,
+            status: 'timed_out' as const,
+            error: `Timed out after MCP reconnect — ${elapsed}ms elapsed, limit was ${timeoutMs}ms`,
+            startedAt: info.startedAt, completedAt: now,
+          });
+          process.stderr.write(`[gossipcat] Restored task ${id} already expired — marked timed_out\n`);
+        } else {
+          spawnTimeoutWatcher(id, { agentId: info.agentId, task: info.task, startedAt: info.startedAt, timeoutMs });
+          process.stderr.write(`[gossipcat] Restored task ${id} — re-armed timeout (${Math.round((timeoutMs - elapsed) / 1000)}s remaining)\n`);
         }
       }
     }
