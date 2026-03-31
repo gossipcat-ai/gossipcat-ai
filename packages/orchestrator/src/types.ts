@@ -386,3 +386,6 @@ export interface ProjectSignals {
   directories: string[];
   files: string[];
 }
+
+/** Minimum number of completed agent results needed to run consensus cross-review */
+export const MIN_AGENTS_FOR_CONSENSUS = 2;

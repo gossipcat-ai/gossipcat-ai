@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { readFileSync, appendFileSync, mkdirSync, writeFileSync } from 'fs';
 import { resolve as resolvePath, join, dirname } from 'path';
-import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, SessionGossipEntry, PlanState } from './types';
+import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, SessionGossipEntry, PlanState, MIN_AGENTS_FOR_CONSENSUS } from './types';
 import { ILLMProvider } from './llm-client';
 import { LLMMessage } from '@gossip/types';
 import { loadSkills } from './skill-loader';
@@ -487,38 +487,20 @@ export class DispatchPipeline {
     for (const t of targets) {
       const duration = t.completedAt ? t.completedAt - t.startedAt : -1;
 
-      // 1. TaskGraph
-      try {
-        if (t.status === 'completed') {
-          this.taskGraph.recordCompleted(t.id, (t.result || '').slice(0, 4000), duration, t.inputTokens, t.outputTokens);
-        } else if (t.status === 'failed') {
-          this.taskGraph.recordFailed(t.id, t.error || 'Unknown', duration, t.inputTokens, t.outputTokens);
-        } else if (t.status === 'running') {
-          this.taskGraph.recordFailed(t.id, 'collect timeout', duration);
-        }
-      } catch (err) { log(`TaskGraph write failed for ${t.id}: ${(err as Error).message}`); }
-
-      // 2. Write agent memory (task log + knowledge extraction)
-      if (t.status === 'completed') {
+      // 1. TaskGraph (non-completed paths)
+      if (t.status === 'failed') {
         try {
-          await this.memWriter.writeTaskEntry(t.agentId, {
-            taskId: t.id, task: t.task,
-            skills: this.registryGet(t.agentId)?.skills || [],
-            scores: {
-              relevance: (t.result && t.result.length > 200) ? 4 : 3,
-              accuracy: t.status === 'completed' ? 4 : 2,
-              uniqueness: 3,
-            },
-          });
-          // Extract and persist knowledge from the task result (files, tech, decisions)
-          // so the agent remembers what it did on subsequent tasks
-          if (t.result) {
-            await this.memWriter.writeKnowledgeFromResult(t.agentId, {
-              taskId: t.id, task: t.task, result: t.result,
-            });
-          }
-          this.memWriter.rebuildIndex(t.agentId);
-        } catch (err) { log(`Memory write failed for ${t.agentId}/${t.id}: ${(err as Error).message}`); }
+          this.taskGraph.recordFailed(t.id, t.error || 'Unknown', duration, t.inputTokens, t.outputTokens);
+        } catch (err) { log(`TaskGraph write failed for ${t.id}: ${(err as Error).message}`); }
+      } else if (t.status === 'running') {
+        try {
+          this.taskGraph.recordFailed(t.id, 'collect timeout', duration);
+        } catch (err) { log(`TaskGraph write failed for ${t.id}: ${(err as Error).message}`); }
+      }
+
+      // 2. Post-completion pipeline: TaskGraph + memory + compact
+      if (t.status === 'completed') {
+        await this._postTaskComplete(t);
       }
 
       // 2b. Session gossip summarization (fire-and-forget — don't block collect)
@@ -537,12 +519,6 @@ export class DispatchPipeline {
           }
         }
       }
-
-      // 3. Compact memory (dynamic cap based on findings count)
-      try {
-        const compactResult = this.memCompactor.compactIfNeeded(t.agentId, DispatchPipeline.deriveMaxEntries(t.result));
-        if (compactResult.message) log(compactResult.message);
-      } catch (err) { log(`Memory compact failed for ${t.agentId}: ${(err as Error).message}`); }
     }
 
     // 4. Skill gap check
@@ -655,7 +631,7 @@ export class DispatchPipeline {
 
     // Consensus round
     let consensusReport: import('./consensus-types').ConsensusReport | undefined;
-    if (options?.consensus && this.llm && results.filter(r => r.status === 'completed').length >= 2) {
+    if (options?.consensus && this.llm && results.filter(r => r.status === 'completed').length >= MIN_AGENTS_FOR_CONSENSUS) {
       consensusReport = await this.runConsensus(results);
     }
 
@@ -827,32 +803,44 @@ export class DispatchPipeline {
     const t = this.tasks.get(taskId);
     if (!t || t.status !== 'completed') return;
 
+    await this._postTaskComplete(t);
+
+    this.tasks.delete(t.id);
+  }
+
+  /** Shared post-completion pipeline: TaskGraph + memory write + compact */
+  private async _postTaskComplete(t: TaskEntry): Promise<void> {
     const duration = t.completedAt ? t.completedAt - t.startedAt : -1;
+
+    // 1. TaskGraph
     try {
       this.taskGraph.recordCompleted(t.id, (t.result || '').slice(0, 4000), duration, t.inputTokens, t.outputTokens);
     } catch (err) { log(`TaskGraph write failed for ${t.id}: ${(err as Error).message}`); }
 
+    // 2. Write agent memory (task log + knowledge extraction)
     try {
       await this.memWriter.writeTaskEntry(t.agentId, {
         taskId: t.id, task: t.task,
         skills: this.registryGet(t.agentId)?.skills || [],
         scores: {
           relevance: (t.result && t.result.length > 200) ? 4 : 3,
-          accuracy: t.status === 'completed' ? 4 : 2,
+          accuracy: 4,
           uniqueness: 3,
         },
       });
-      // Fix 8: extract knowledge from result (was missing in writeMemoryForTask path)
       if (t.result) {
         await this.memWriter.writeKnowledgeFromResult(t.agentId, {
           taskId: t.id, task: t.task, result: t.result,
         });
       }
       this.memWriter.rebuildIndex(t.agentId);
-      this.memCompactor.compactIfNeeded(t.agentId, DispatchPipeline.deriveMaxEntries(t.result));
     } catch (err) { log(`Memory write failed for ${t.agentId}/${t.id}: ${(err as Error).message}`); }
 
-    this.tasks.delete(t.id);
+    // 3. Compact memory (dynamic cap based on findings count)
+    try {
+      const compactResult = this.memCompactor.compactIfNeeded(t.agentId, DispatchPipeline.deriveMaxEntries(t.result));
+      if (compactResult.message) log(compactResult.message);
+    } catch (err) { log(`Memory compact failed for ${t.agentId}: ${(err as Error).message}`); }
   }
 
   /** Re-register write task state with ToolServer after reconnect */

@@ -145,6 +145,7 @@ export async function handleCollect(
 
   // Step 4: Run consensus on merged results (relay + native together)
   let consensusReport: any = undefined;
+  // MIN_AGENTS_FOR_CONSENSUS = 2 (see @gossip/orchestrator/types)
   if (consensus && allResults.filter((r: any) => r.status === 'completed').length >= 2) {
     consensusReport = await ctx.mainAgent.runConsensus(allResults);
   }
