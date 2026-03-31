@@ -142,9 +142,21 @@ export function restoreNativeTaskMap(projectRoot: string): void {
 export async function handleNativeRelay(task_id: string, result: string, error?: string) {
   await ctx.boot(); // [H3 fix] ensure mainAgent/pipeline are available
 
-  const taskInfo = ctx.nativeTaskMap.get(task_id);
+  // Cancel timeout watcher if still running
+  cancelTimeoutWatcher(task_id);
+
+  // Late relay wins: check nativeTaskMap first, then fall back to timed_out result
+  let taskInfo = ctx.nativeTaskMap.get(task_id);
+  let lateRelay = false;
   if (!taskInfo) {
-    return { content: [{ type: 'text' as const, text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch or gossip_run?` }] };
+    const timedOutResult = ctx.nativeResultMap.get(task_id);
+    if (timedOutResult && timedOutResult.status === 'timed_out') {
+      taskInfo = { agentId: timedOutResult.agentId, task: timedOutResult.task, startedAt: timedOutResult.startedAt };
+      lateRelay = true;
+      process.stderr.write(`[gossipcat] Late relay for ${task_id} — overwriting timed_out result with real data\n`);
+    } else {
+      return { content: [{ type: 'text' as const, text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch or gossip_run?` }] };
+    }
   }
 
   // Move to result map BEFORE running pipeline — prevents data loss if pipeline crashes
