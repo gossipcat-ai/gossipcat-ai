@@ -23,6 +23,8 @@ function renderTeamSection(agents) {
     const w = agent.scores?.dispatchWeight ?? 1;
     const signals = agent.scores?.signals ?? 0;
     const accuracy = agent.scores?.accuracy ?? 0.5;
+    const reliability = agent.scores?.reliability ?? 0.5;
+    const uniqueness = agent.scores?.uniqueness ?? 0.5;
     const ringColor = signals === 0 ? 'var(--text-3)'
       : w >= 1.5 ? 'var(--green)'
       : w >= 0.8 ? 'var(--amber)'
@@ -47,6 +49,11 @@ function renderTeamSection(agents) {
         '<span class="ag-initials" style="color:' + ringColor + '">' + agentInitials(agent.id) + '</span>' +
       '</div>' +
       '<span class="ag-name">' + e(agent.id) + '</span>' +
+      '<div class="ag-stats">' +
+        '<div class="ag-stat"><span class="ag-stat-label">acc</span><div class="ag-stat-bar"><div class="ag-stat-fill" style="width:' + (accuracy * 100) + '%;background:' + ringColor + '"></div></div></div>' +
+        '<div class="ag-stat"><span class="ag-stat-label">rel</span><div class="ag-stat-bar"><div class="ag-stat-fill" style="width:' + (reliability * 100) + '%;background:' + ringColor + '"></div></div></div>' +
+        '<div class="ag-stat"><span class="ag-stat-label">uniq</span><div class="ag-stat-bar"><div class="ag-stat-fill" style="width:' + (uniqueness * 100) + '%;background:' + ringColor + '"></div></div></div>' +
+      '</div>' +
       '<span class="ag-last">' + lastText +
         (lastTime ? ' <span class="ag-time">' + lastTime + '</span>' : '') +
       '</span>';

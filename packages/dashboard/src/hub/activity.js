@@ -30,6 +30,15 @@ function renderActivitySection(consensusData) {
     if (c.unverified) pills.push('<span class="pill pill-y">' + c.unverified + ' unverified</span>');
     if (c.unique) pills.push('<span class="pill pill-b">' + c.unique + ' unique</span>');
 
+    const segments = [];
+    if (total > 0) {
+      if (c.agreement) segments.push('<div class="bar-seg bar-seg-g" style="width:' + ((c.agreement / total) * 100) + '%"></div>');
+      if (c.disagreement || c.hallucination) segments.push('<div class="bar-seg bar-seg-r" style="width:' + (((c.disagreement || 0) + (c.hallucination || 0)) / total * 100) + '%"></div>');
+      if (c.unverified) segments.push('<div class="bar-seg bar-seg-y" style="width:' + ((c.unverified / total) * 100) + '%"></div>');
+      if (c.unique) segments.push('<div class="bar-seg bar-seg-b" style="width:' + ((c.unique / total) * 100) + '%"></div>');
+    }
+    const barHtml = segments.length > 0 ? '<div class="run-bar">' + segments.join('') + '</div>' : '';
+
     const agentChips = run.agents.slice(0, 4).map(a =>
       '<span class="run-agent-chip">' + agentInitials(a) + '</span>'
     ).join('');
@@ -39,12 +48,13 @@ function renderActivitySection(consensusData) {
     header.className = 'run-header';
     header.innerHTML =
       '<div class="run-top">' +
-        '<span class="run-expand">&#9654;</span>' +
+        '<span class="run-expand">&#8250;</span>' +
         '<span class="run-title">' + total + ' findings</span>' +
         '<span class="run-agents">' + agentChips + moreAgents + '</span>' +
         '<span class="run-time">' + timeAgo(run.timestamp) + '</span>' +
       '</div>' +
-      '<div class="run-pills">' + pills.join('') + '</div>';
+      '<div class="run-pills">' + pills.join('') + '</div>' +
+      barHtml;
 
     const findings = document.createElement('div');
     findings.className = 'run-findings';
@@ -78,7 +88,7 @@ function renderActivitySection(consensusData) {
     header.addEventListener('click', () => {
       const isOpen = !findings.hidden;
       findings.hidden = isOpen;
-      header.querySelector('.run-expand').innerHTML = isOpen ? '&#9654;' : '&#9660;';
+      header.querySelector('.run-expand').innerHTML = isOpen ? '&#8250;' : '&#8964;';
       card.classList.toggle('run-open', !isOpen);
     });
 

@@ -386,3 +386,24 @@ body::after {
   .page { padding: 16px; }
   .agent-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Agent stat bars ──────────────────────────────── */
+.ag-stats { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 2px 4px 0; }
+.ag-stat { display: flex; align-items: center; gap: 4px; }
+.ag-stat-label { font-size: 9px; color: var(--text-3); width: 24px; text-align: right; }
+.ag-stat-bar { flex: 1; height: 3px; background: var(--bg-2, rgba(255,255,255,0.06)); border-radius: 2px; overflow: hidden; }
+.ag-stat-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+
+/* ── Consensus run stacked bar ────────────────────── */
+.run-bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.bar-seg { min-width: 2px; }
+.bar-seg-g { background: var(--green); }
+.bar-seg-r { background: var(--red); }
+.bar-seg-y { background: var(--amber); }
+.bar-seg-b { background: var(--blue, #5b9bd5); }
+
+/* ── Signal sparkline ─────────────────────────────── */
+.signal-sparkline { display: flex; gap: 2px; align-items: flex-end; height: 28px; margin-bottom: 12px; padding: 0 4px; }
+.spark-col { display: flex; flex-direction: column; align-items: center; width: 8px; cursor: help; }
+.spark-pos { width: 6px; background: var(--green); border-radius: 1px; }
+.spark-neg { width: 6px; background: var(--red); border-radius: 1px; margin-top: 1px; }

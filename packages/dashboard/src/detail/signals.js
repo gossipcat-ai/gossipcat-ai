@@ -30,6 +30,34 @@ async function renderSignalsDetail(app) {
     }
     section.appendChild(filters);
 
+    // Sparkline: group by day, show positive vs negative trend
+    const byDay = new Map();
+    for (const s of (data.signals || [])) {
+      const day = (s.timestamp || '').slice(0, 10);
+      if (!day) continue;
+      const d = byDay.get(day) || { pos: 0, neg: 0 };
+      if (['agreement', 'unique_confirmed', 'new_finding', 'consensus_verified'].includes(s.signal)) d.pos++;
+      else if (['disagreement', 'hallucination_caught'].includes(s.signal)) d.neg++;
+      byDay.set(day, d);
+    }
+
+    if (byDay.size > 1) {
+      const spark = document.createElement('div');
+      spark.className = 'signal-sparkline';
+      const maxCount = Math.max(...[...byDay.values()].map(d => d.pos + d.neg), 1);
+      let sparkHtml = '';
+      for (const [day, counts] of [...byDay.entries()].sort().slice(-14)) {
+        const posH = (counts.pos / maxCount) * 24;
+        const negH = (counts.neg / maxCount) * 24;
+        sparkHtml += '<div class="spark-col" title="' + day + ': +' + counts.pos + ' -' + counts.neg + '">' +
+          '<div class="spark-pos" style="height:' + posH + 'px"></div>' +
+          '<div class="spark-neg" style="height:' + negH + 'px"></div>' +
+        '</div>';
+      }
+      spark.innerHTML = sparkHtml;
+      section.appendChild(spark);
+    }
+
     const list = document.createElement('div');
     list.className = 'run-list';
     section.appendChild(list);
@@ -87,6 +115,6 @@ async function renderSignalsDetail(app) {
     renderRows();
     app.appendChild(section);
   } catch (err) {
-    app.innerHTML = '<div class="empty-state">Failed to load signals: ' + err.message + '</div>';
+    app.innerHTML = '<div class="empty-state">Failed to load signals: ' + e(err.message) + '</div>';
   }
 }
