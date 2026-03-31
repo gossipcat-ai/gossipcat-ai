@@ -68,16 +68,24 @@ async function renderTaskStrip(container) {
     if (recent.length === 0) { container.hidden = true; return; }
 
     container.className = 'section live-strip';
+    // Add section title
+    const title = document.createElement('div');
+    title.className = 'section-header';
+    title.innerHTML = '<h2>Recent Tasks</h2><span class="section-count">' + recent.length + ' tasks</span>';
+    container.appendChild(title);
+
     for (const t of recent) {
       const color = t.status === 'completed' ? 'var(--green)' : t.status === 'failed' ? 'var(--red)' : 'var(--text-3)';
       const icon = t.status === 'completed' ? '&#10003;' : t.status === 'failed' ? '&#10007;' : '&#8943;';
       const desc = escapeHtml((t.task || '').replace(/\n.*/s, ''));
       const dur = t.duration > 0 ? (t.duration / 1000).toFixed(1) + 's' : '';
+      const taskId = t.taskId ? escapeHtml(t.taskId.slice(0, 8)) : '';
       const row = document.createElement('div');
       row.className = 'live-task';
       row.innerHTML =
         '<span class="live-icon" style="color:' + color + '">' + icon + '</span>' +
         '<span class="live-agent">' + escapeHtml(t.agentId) + '</span>' +
+        (taskId ? '<span class="live-taskid">' + taskId + '</span>' : '') +
         '<span class="live-desc">' + desc + '</span>' +
         (dur ? '<span class="live-elapsed" style="color:var(--text-3)">' + dur + '</span>' : '') +
         '<span class="live-elapsed">' + timeAgo(t.timestamp) + '</span>';

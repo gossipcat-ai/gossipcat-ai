@@ -17,6 +17,38 @@ function renderActivitySection(consensusData) {
     return section;
   }
 
+  // Finding type filter pills
+  const filters = document.createElement('div');
+  filters.className = 'run-filters';
+  const types = [
+    { key: 'all', label: 'All', cls: 'f-all' },
+    { key: 'confirmed', label: 'Confirmed', cls: 'f-confirmed' },
+    { key: 'disputed', label: 'Disputed', cls: 'f-disputed' },
+    { key: 'unverified', label: 'Unverified', cls: 'f-unverified' },
+    { key: 'unique', label: 'Unique', cls: 'f-unique' },
+  ];
+  let activeFilter = 'all';
+  for (const t of types) {
+    const btn = document.createElement('button');
+    btn.className = 'run-filter ' + t.cls + (t.key === 'all' ? ' active' : '');
+    btn.textContent = t.label;
+    btn.addEventListener('click', () => {
+      activeFilter = t.key;
+      filters.querySelectorAll('.run-filter').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      // Show/hide finding rows based on filter
+      list.querySelectorAll('.finding-row').forEach(row => {
+        if (t.key === 'all') { row.hidden = false; return; }
+        const tag = row.querySelector('.finding-tag');
+        if (!tag) { row.hidden = true; return; }
+        const tagText = tag.textContent.toLowerCase();
+        row.hidden = !tagText.includes(t.key);
+      });
+    });
+    filters.appendChild(btn);
+  }
+  list.appendChild(filters);
+
   for (const run of runs.slice(0, 10)) {
     const card = document.createElement('div');
     card.className = 'run-card';

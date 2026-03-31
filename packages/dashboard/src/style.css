@@ -371,6 +371,18 @@ body::after {
 .live-agent { color: var(--accent); font-weight: 600; font-family: var(--mono); font-size: 12px; min-width: 140px; }
 .live-desc { color: var(--text-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .live-elapsed { color: var(--amber); font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+.live-taskid { color: var(--text-3); font-family: var(--mono); font-size: 11px; background: var(--surface); padding: 1px 5px; border-radius: 3px; }
+
+/* ── Finding Filters ───────────────────────────── */
+.run-filters { display: flex; gap: 4px; margin-bottom: 8px; }
+.run-filter { cursor: pointer; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; border: 1px solid var(--border); background: transparent; color: var(--text-3); transition: all 0.15s; }
+.run-filter:hover { border-color: var(--text-2); color: var(--text-2); }
+.run-filter.active { border-color: currentColor; }
+.run-filter.f-all.active { color: var(--text); background: rgba(255,255,255,0.05); }
+.run-filter.f-confirmed.active { color: var(--green); background: rgba(52,211,153,0.1); }
+.run-filter.f-disputed.active { color: var(--red); background: rgba(248,113,113,0.1); }
+.run-filter.f-unverified.active { color: var(--amber); background: rgba(251,191,36,0.1); }
+.run-filter.f-unique.active { color: var(--accent); background: rgba(167,139,250,0.1); }
 
 /* ── Responsive ─────────────────────────────────── */
 @media (max-width: 1200px) {
