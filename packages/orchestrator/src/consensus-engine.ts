@@ -768,6 +768,53 @@ Return ONLY a JSON array:
   }
 
   /**
+   * Extract code snippets for a single finding's file:line citations.
+   * Returns formatted anchor blocks as a string, or '' if no citations found.
+   */
+  protected async snippetsForFinding(findingText: string, maxSnippets = 3): Promise<string> {
+    if (!this.config.projectRoot) return '';
+
+    const citationPattern = /((?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)/g;
+    const CONTEXT_LINES = 2;
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;
+    const anchors: string[] = [];
+    const seen = new Set<string>();
+
+    let match: RegExpExecArray | null;
+    while ((match = citationPattern.exec(findingText)) !== null) {
+      if (anchors.length >= maxSnippets) break;
+
+      const fullRef = match[1];
+      const bareFile = match[2];
+      const lineNum = parseInt(match[3], 10);
+      const key = `${fullRef}:${lineNum}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      try {
+        const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
+        if (!filePath) continue;
+        const fileStat = await stat(filePath);
+        if (fileStat.size > MAX_FILE_SIZE) continue;
+        const content = await this.cachedRead(filePath);
+        if (!content) continue;
+        const fileLines = content.split('\n');
+        if (lineNum > fileLines.length) continue;
+
+        const start = Math.max(0, lineNum - 1 - CONTEXT_LINES);
+        const end = Math.min(fileLines.length, lineNum + CONTEXT_LINES);
+        const snippet = fileLines.slice(start, end)
+          .map((l, i) => `  ${start + i + 1}: ${l}`)
+          .join('\n');
+        const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
+        anchors.push(`<anchor src="${fullRef}:${lineNum}">\n${safeSnippet}\n</anchor>`);
+      } catch { /* file unreadable, skip */ }
+    }
+
+    return anchors.join('\n');
+  }
+
+  /**
    * Verify file:line citations in disagreement evidence against actual source code.
    * Returns true if any citation is fabricated (file doesn't exist, line doesn't match claim).
    */
