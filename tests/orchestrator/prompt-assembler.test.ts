@@ -50,7 +50,7 @@ describe('assemblePrompt', () => {
   it('includes consensus summary instruction when consensusSummary is true', () => {
     const result = assemblePrompt({ consensusSummary: true });
     expect(result).toContain('## Consensus Summary');
-    expect(result).toContain('one line per finding');
+    expect(result).toContain('MUST include a file:line citation');
   });
 
   it('does not include consensus instruction when consensusSummary is false', () => {
