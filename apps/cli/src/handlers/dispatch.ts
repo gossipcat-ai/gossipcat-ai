@@ -3,8 +3,8 @@
  * All state accessed via the shared context object.
  */
 import { randomUUID } from 'crypto';
-import { ctx, generateTaskId } from '../mcp-context';
-import { evictStaleNativeTasks, persistNativeTaskMap } from './native-tasks';
+import { ctx, generateTaskId, NATIVE_TASK_TTL_MS } from '../mcp-context';
+import { evictStaleNativeTasks, persistNativeTaskMap, spawnTimeoutWatcher } from './native-tasks';
 
 export async function handleDispatchSingle(
   agent_id: string, task: string,
@@ -39,7 +39,9 @@ export async function handleDispatchSingle(
   if (nativeConfig) {
     evictStaleNativeTasks();
     const taskId = randomUUID().slice(0, 8);
-    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), planId: plan_id, step });
+    const timeoutMs = timeout_ms ?? NATIVE_TASK_TTL_MS;
+    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step });
+    spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     persistNativeTaskMap();
 
     // Fix: register in TaskGraph so native tasks are visible to CLI/sync
@@ -140,7 +142,8 @@ export async function handleDispatchParallel(
   for (const def of nativeTasks) {
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id)!;
     const taskId = randomUUID().slice(0, 8);
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS });
+    spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     persistNativeTaskMap();
 
@@ -210,7 +213,8 @@ export async function handleDispatchConsensus(
   for (const def of nativeTasks) {
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id)!;
     const taskId = randomUUID().slice(0, 8);
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS });
+    spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     allTaskIds.push(taskId);
     persistNativeTaskMap();

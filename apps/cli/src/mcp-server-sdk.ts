@@ -8,8 +8,8 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 
 // ── Extracted modules ────────────────────────────────────────────────────
-import { ctx, presetScores } from './mcp-context';
-import { evictStaleNativeTasks, persistNativeTaskMap, restoreNativeTaskMap, handleNativeRelay } from './handlers/native-tasks';
+import { ctx, presetScores, NATIVE_TASK_TTL_MS } from './mcp-context';
+import { evictStaleNativeTasks, persistNativeTaskMap, restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';
 
@@ -1113,7 +1113,8 @@ server.tool(
       // Native agent — record task and return instructions for host
       evictStaleNativeTasks();
       const taskId = require('crypto').randomUUID().slice(0, 8);
-      ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now() });
+      ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS });
+      spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
       persistNativeTaskMap();
       try { ctx.mainAgent.recordNativeTask(taskId, agent_id, task); } catch { /* best-effort */ }
       const config = ctx.nativeAgentConfigs.get(agent_id)!;
