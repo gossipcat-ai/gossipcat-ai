@@ -7,6 +7,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 
+// ── Extracted modules ────────────────────────────────────────────────────
+import { ctx, presetScores } from './mcp-context';
+import { evictStaleNativeTasks, persistNativeTaskMap, restoreNativeTaskMap, handleNativeRelay } from './handlers/native-tasks';
+import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
+import { handleCollect } from './handlers/collect';
+
 // ── Environment detection ────────────────────────────────────────────────
 
 type HostEnvironment = 'claude-code' | 'cursor' | 'vscode' | 'windsurf' | 'unknown';
@@ -167,103 +173,9 @@ Auto-allow writes: \`{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"
 `;
 }
 
-// Preset-aware importance scores — reviewers value accuracy, implementers value relevance
-function presetScores(preset: string): { relevance: number; accuracy: number; uniqueness: number } {
-  switch (preset) {
-    case 'reviewer':   return { relevance: 3, accuracy: 5, uniqueness: 4 };
-    case 'tester':     return { relevance: 3, accuracy: 4, uniqueness: 4 };
-    case 'researcher': return { relevance: 4, accuracy: 3, uniqueness: 5 };
-    case 'implementer': return { relevance: 5, accuracy: 3, uniqueness: 2 };
-    default:           return { relevance: 3, accuracy: 3, uniqueness: 3 };
-  }
-}
-
-// Native agent task tracking — results fed back via gossip_relay
-const nativeTaskMap: Map<string, { agentId: string; task: string; startedAt: number; planId?: string; step?: number }> = new Map();
-const nativeAgentConfigs: Map<string, { model: string; instructions: string; description: string }> = new Map();
-// Collected native results — so gossip_collect can return them alongside relay results
-const nativeResultMap: Map<string, {
-  id: string; agentId: string; task: string;
-  status: 'completed' | 'failed';
-  result?: string; error?: string;
-  startedAt: number; completedAt: number;
-}> = new Map();
-
-const NATIVE_TASK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours — implementation tasks can run long
-
-/** Evict stale entries from nativeTaskMap and nativeResultMap */
-function evictStaleNativeTasks(): void {
-  const now = Date.now();
-  let changed = false;
-  for (const [id, info] of nativeTaskMap) {
-    if (now - info.startedAt > NATIVE_TASK_TTL_MS) { nativeTaskMap.delete(id); changed = true; }
-  }
-  for (const [id, info] of nativeResultMap) {
-    if (now - info.startedAt > NATIVE_TASK_TTL_MS) { nativeResultMap.delete(id); changed = true; }
-  }
-  if (changed) persistNativeTaskMap();
-}
-
-/** Persist nativeTaskMap to disk so /mcp reconnects don't lose task IDs */
-function persistNativeTaskMap(): void {
-  try {
-    const projectRoot = mainAgent?.projectRoot;
-    if (!projectRoot) return;
-    const { writeFileSync: wf, mkdirSync: md } = require('fs');
-    const { join: j } = require('path');
-    const dir = j(projectRoot, '.gossip');
-    md(dir, { recursive: true });
-    // Strip full result/error text from results to keep file small — only persist metadata
-    const slimResults: Record<string, any> = {};
-    for (const [id, info] of nativeResultMap) {
-      slimResults[id] = {
-        id: info.id, agentId: info.agentId, task: info.task.slice(0, 5000), // cap on-disk only — full task stays in memory
-        status: info.status, startedAt: info.startedAt, completedAt: info.completedAt,
-      };
-    }
-    const data = {
-      tasks: Object.fromEntries([...nativeTaskMap]),
-      results: slimResults,
-    };
-    wf(j(dir, 'native-tasks.json'), JSON.stringify(data));
-  } catch { /* best-effort */ }
-}
-
-/** Restore nativeTaskMap from disk (called on boot) */
-function restoreNativeTaskMap(projectRoot: string): void {
-  try {
-    const { existsSync: ex, readFileSync: rf } = require('fs');
-    const { join: j } = require('path');
-    const filePath = j(projectRoot, '.gossip', 'native-tasks.json');
-    if (!ex(filePath)) return;
-    const raw = JSON.parse(rf(filePath, 'utf-8'));
-    const now = Date.now();
-    if (raw.tasks) {
-      for (const [id, info] of Object.entries(raw.tasks) as [string, any][]) {
-        if (now - info.startedAt < NATIVE_TASK_TTL_MS && !nativeTaskMap.has(id)) {
-          nativeTaskMap.set(id, info);
-        }
-      }
-    }
-    if (raw.results) {
-      for (const [id, info] of Object.entries(raw.results) as [string, any][]) {
-        if (now - info.startedAt < NATIVE_TASK_TTL_MS && !nativeResultMap.has(id)) {
-          nativeResultMap.set(id, info);
-        }
-      }
-    }
-  } catch { /* best-effort — corrupt file is fine, just start fresh */ }
-}
-
-// Lazy state — populated during boot()
+// ── Lazy state — populated during boot() ─────────────────────────────────
 let booted = false;
 let bootPromise: Promise<void> | null = null;
-let relay: any = null;
-let toolServer: any = null;
-let workers: Map<string, any> = new Map();
-let mainAgent: any = null;
-let keychain: any = null;
-let skillGenerator: any = null;
 
 // Cache modules after first import
 let _modules: any = null;
@@ -302,26 +214,26 @@ async function doBoot() {
 
   const config = m.loadConfig(configPath);
   const agentConfigs = m.configToAgentConfigs(config);
-  keychain = new m.Keychain();
+  ctx.keychain = new m.Keychain();
 
-  relay = new m.RelayServer({
+  ctx.relay = new m.RelayServer({
     port: 24420,
     dashboard: {
       projectRoot: process.cwd(),
       agentConfigs: agentConfigs,
     },
   });
-  await relay.start();
+  await ctx.relay.start();
 
-  if (relay.dashboardUrl) {
-    process.stderr.write(`[gossipcat] Dashboard: ${relay.dashboardUrl} (key: ${relay.dashboardKeyPrefix}...)\n`);
+  if (ctx.relay.dashboardUrl) {
+    process.stderr.write(`[gossipcat] Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKeyPrefix}...)\n`);
   }
 
   // Create performance writer for ATI signal collection
   const perfWriter = new m.PerformanceWriter(process.cwd());
 
-  toolServer = new m.ToolServer({ relayUrl: relay.url, projectRoot: process.cwd(), perfWriter });
-  await toolServer.start();
+  ctx.toolServer = new m.ToolServer({ relayUrl: ctx.relay.url, projectRoot: process.cwd(), perfWriter });
+  await ctx.toolServer.start();
 
   // Create workers before MainAgent to avoid duplicate relay connections.
   // Native agents skip worker creation — they're dispatched via Claude Code's Agent tool.
@@ -339,17 +251,17 @@ async function doBoot() {
         instructions = rf(instrPath, 'utf-8');
       }
       const modelTier = ac.model.includes('opus') ? 'opus' : ac.model.includes('haiku') ? 'haiku' : 'sonnet';
-      nativeAgentConfigs.set(ac.id, { model: modelTier, instructions, description: ac.preset || '' });
+      ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions, description: ac.preset || '' });
       process.stderr.write(`[gossipcat] ${ac.id}: native agent (${modelTier}, dispatched via Agent tool)\n`);
       continue;
     }
-    const key = await keychain.getKey(ac.provider);
+    const key = await ctx.keychain.getKey(ac.provider);
     const llm = m.createProvider(ac.provider, ac.model, key ?? undefined);
     const { existsSync, readFileSync } = require('fs');
     const { join } = require('path');
     const instructionsPath = join(process.cwd(), '.gossip', 'agents', ac.id, 'instructions.md');
     const instructions = existsSync(instructionsPath) ? readFileSync(instructionsPath, 'utf-8') : undefined;
-    const worker = new m.WorkerAgent(ac.id, llm, relay.url, m.ALL_TOOLS, instructions);
+    const worker = new m.WorkerAgent(ac.id, llm, ctx.relay.url, m.ALL_TOOLS, instructions);
     // Wire meta signal emission for ATI profiling
     worker.setOnTaskComplete?.((event: { agentId: string; taskId: string; toolCalls: number; durationMs: number }) => {
       try {
@@ -361,7 +273,7 @@ async function doBoot() {
       } catch { /* ATI signal emission is best-effort */ }
     });
     await worker.start();
-    workers.set(ac.id, worker);
+    ctx.workers.set(ac.id, worker);
   }
 
   // Register Claude Code subagents from .claude/agents/*.md (native = no relay worker needed)
@@ -376,7 +288,7 @@ async function doBoot() {
       agentConfigs.push(ac);
       // Map model tier for Agent tool dispatch
       const modelTier = sa.model.includes('opus') ? 'opus' : sa.model.includes('haiku') ? 'haiku' : 'sonnet';
-      nativeAgentConfigs.set(ac.id, { model: modelTier, instructions: sa.instructions, description: sa.description });
+      ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions: sa.instructions, description: sa.description });
       process.stderr.write(`[gossipcat] Registered native agent: ${sa.id} (${modelTier}) — dispatched via Agent tool\n`);
     }
   }
@@ -384,10 +296,10 @@ async function doBoot() {
   // Try main agent key first, fall back to any available provider key
   let mainProvider = config.main_agent.provider;
   let mainModel = config.main_agent.model;
-  let mainKey = await keychain.getKey(config.main_agent.provider);
+  let mainKey = await ctx.keychain.getKey(config.main_agent.provider);
   if (!mainKey) {
     for (const ac of agentConfigs) {
-      const key = await keychain.getKey(ac.provider);
+      const key = await ctx.keychain.getKey(ac.provider);
       if (key) {
         mainProvider = ac.provider;
         mainModel = ac.model;
@@ -397,13 +309,13 @@ async function doBoot() {
       }
     }
   }
-  const supaKey = await keychain.getKey('supabase');
-  const supaTeamSalt = await keychain.getKey('supabase-team-salt');
-  mainAgent = new m.MainAgent({
+  const supaKey = await ctx.keychain.getKey('supabase');
+  const supaTeamSalt = await ctx.keychain.getKey('supabase-team-salt');
+  ctx.mainAgent = new m.MainAgent({
     provider: mainProvider,
     model: mainModel,
     apiKey: mainKey ?? undefined,
-    relayUrl: relay.url,
+    relayUrl: ctx.relay.url,
     agents: agentConfigs,
     projectRoot: process.cwd(),
     bootstrapPrompt: (() => {
@@ -414,11 +326,11 @@ async function doBoot() {
         return e(bp) ? r(bp, 'utf-8') : '';
       } catch { return ''; }
     })(),
-    keyProvider: async (provider: string) => keychain.getKey(provider),
-    toolServer: toolServer ? {
-      assignScope: (agentId: string, scope: string) => toolServer.assignScope(agentId, scope),
-      assignRoot: (agentId: string, root: string) => toolServer.assignRoot(agentId, root),
-      releaseAgent: (agentId: string) => toolServer.releaseAgent(agentId),
+    keyProvider: async (provider: string) => ctx.keychain.getKey(provider),
+    toolServer: ctx.toolServer ? {
+      assignScope: (agentId: string, scope: string) => ctx.toolServer.assignScope(agentId, scope),
+      assignRoot: (agentId: string, root: string) => ctx.toolServer.assignRoot(agentId, root),
+      releaseAgent: (agentId: string) => ctx.toolServer.releaseAgent(agentId),
     } : null,
     syncFactory: () => {
       try {
@@ -449,8 +361,8 @@ async function doBoot() {
     },
   });
   // Pass existing workers so MainAgent doesn't create duplicates
-  mainAgent.setWorkers(workers);
-  await mainAgent.start();
+  ctx.mainAgent.setWorkers(ctx.workers);
+  await ctx.mainAgent.start();
 
   // Restore native task tracking from disk (survives /mcp reconnects)
   restoreNativeTaskMap(process.cwd());
@@ -458,13 +370,13 @@ async function doBoot() {
   // Wire adaptive team intelligence (overlap detection + lens generation)
   try {
     const { OverlapDetector, LensGenerator } = await import('@gossip/orchestrator');
-    
+
     // Default to the main agent's model
     let utilityLlm = m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined);
     let utilityModelId = `${mainProvider}/${mainModel}`;
 
     if (config.utility_model) {
-      const utilityKey = await keychain.getKey(config.utility_model.provider);
+      const utilityKey = await ctx.keychain.getKey(config.utility_model.provider);
       if (utilityKey) {
         // If a utility model is configured AND its key exists, override the default
         utilityLlm = m.createProvider(config.utility_model.provider, config.utility_model.model, utilityKey);
@@ -474,10 +386,10 @@ async function doBoot() {
         process.stderr.write(`[gossipcat] Utility model key for "${config.utility_model.provider}" not found, falling back to main agent model for lens generation.\n`);
       }
     }
-    
-    mainAgent.setOverlapDetector(new OverlapDetector());
-    mainAgent.setLensGenerator(new LensGenerator(utilityLlm));
-    mainAgent.setSummaryLlm(utilityLlm);
+
+    ctx.mainAgent.setOverlapDetector(new OverlapDetector());
+    ctx.mainAgent.setLensGenerator(new LensGenerator(utilityLlm));
+    ctx.mainAgent.setSummaryLlm(utilityLlm);
     process.stderr.write(`[gossipcat] Adaptive team intelligence ready (utility: ${utilityModelId})\n`);
   } catch (err) {
     process.stderr.write(`[gossipcat] Adaptive team intelligence failed: ${(err as Error).message}\n`);
@@ -488,18 +400,17 @@ async function doBoot() {
     const { ConsensusJudge } = await import('@gossip/orchestrator');
     const judgeLlm = m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined);
     const judge = new ConsensusJudge(judgeLlm, process.cwd());
-    mainAgent.setConsensusJudge(judge);
+    ctx.mainAgent.setConsensusJudge(judge);
     process.stderr.write(`[gossipcat] Consensus Judge ready (${mainProvider}/${mainModel})\n`);
   } catch (err) {
     process.stderr.write(`[gossipcat] Consensus Judge failed to initialize: ${(err as Error).message}\n`);
   }
 
-
   // Create skill generator for gossip_skills develop action
   try {
     const { CompetencyProfiler: CP, SkillGenerator: SG } = await import('@gossip/orchestrator');
     const skillProfiler = new CP(process.cwd());
-    skillGenerator = new SG(
+    ctx.skillGenerator = new SG(
       m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined),
       skillProfiler,
       process.cwd(),
@@ -518,7 +429,7 @@ async function doBoot() {
       skillIndex.seedFromConfigs(agentConfigs.map((ac: any) => ({ id: ac.id, skills: ac.skills || [] })));
       process.stderr.write(`[gossipcat] Skill index created (seeded from ${agentConfigs.length} agent configs)\n`);
     }
-    mainAgent.setSkillIndex(skillIndex);
+    ctx.mainAgent.setSkillIndex(skillIndex);
     process.stderr.write(`[gossipcat] Skill index loaded (${skillIndex.getAgentIds().length} agents)\n`);
   } catch (err) {
     process.stderr.write(`[gossipcat] Skill index failed: ${(err as Error).message}\n`);
@@ -529,7 +440,7 @@ async function doBoot() {
     const { GossipAgent: GossipAgentPub } = await import('@gossip/client');
     const publisherAgent = new GossipAgentPub({
       agentId: 'gossip-publisher',
-      relayUrl: relay.url,
+      relayUrl: ctx.relay.url,
       reconnect: true,
     });
     await publisherAgent.connect();
@@ -539,7 +450,7 @@ async function doBoot() {
       m.createProvider(config.main_agent.provider, config.main_agent.model, mainKey ?? undefined),
       { publishToChannel: (channel: string, data: unknown) => publisherAgent.sendChannel(channel, data as Record<string, unknown>) }
     );
-    mainAgent.setGossipPublisher(gossipPublisher);
+    ctx.mainAgent.setGossipPublisher(gossipPublisher);
     process.stderr.write(`[gossipcat] Gossip publisher ready\n`);
   } catch (err) {
     process.stderr.write(`[gossipcat] Gossip publisher failed: ${(err as Error).message}\n`);
@@ -562,7 +473,8 @@ async function doBoot() {
   }
 
   booted = true;
-  process.stderr.write(`[gossipcat] Booted: relay :${relay.port}, ${workers.size} workers\n`);
+  ctx.booted = true;
+  process.stderr.write(`[gossipcat] Booted: relay :${ctx.relay.port}, ${ctx.workers.size} workers\n`);
 }
 
 /**
@@ -589,9 +501,9 @@ async function doSyncWorkers() {
 
     // Register any new agent configs (including native flag)
     for (const ac of agentConfigs) {
-      mainAgent.registerAgent(ac);
+      ctx.mainAgent.registerAgent(ac);
       // [H2 fix] Populate nativeAgentConfigs for config-defined native agents
-      if (ac.native && !nativeAgentConfigs.has(ac.id)) {
+      if (ac.native && !ctx.nativeAgentConfigs.has(ac.id)) {
         const { existsSync: ex, readFileSync: rf } = require('fs');
         const { join: j } = require('path');
         const claudeAgentPath = j(process.cwd(), '.claude', 'agents', `${ac.id}.md`);
@@ -603,41 +515,46 @@ async function doSyncWorkers() {
           instructions = rf(instrPath, 'utf-8');
         }
         const modelTier = ac.model.includes('opus') ? 'opus' : ac.model.includes('haiku') ? 'haiku' : 'sonnet';
-        nativeAgentConfigs.set(ac.id, { model: modelTier, instructions, description: ac.preset || '' });
+        ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions, description: ac.preset || '' });
       }
     }
 
     // Also register Claude Code subagents discovered from .claude/agents/
-    const existingIds = new Set([...agentConfigs.map((a: any) => a.id), ...workers.keys(), ...nativeAgentConfigs.keys()]);
+    const existingIds = new Set([...agentConfigs.map((a: any) => a.id), ...ctx.workers.keys(), ...ctx.nativeAgentConfigs.keys()]);
     const claudeSubagents = loadClaudeSubagents(process.cwd(), existingIds);
     if (claudeSubagents.length > 0) {
       const claudeConfigs = claudeSubagentsToConfigs(claudeSubagents);
       for (let i = 0; i < claudeSubagents.length; i++) {
         const sa = claudeSubagents[i];
         const ac = claudeConfigs[i];
-        mainAgent.registerAgent(ac);
+        ctx.mainAgent.registerAgent(ac);
         // [H2 fix] Populate nativeAgentConfigs for hot-reloaded subagents
         const modelTier = sa.model.includes('opus') ? 'opus' : sa.model.includes('haiku') ? 'haiku' : 'sonnet';
-        nativeAgentConfigs.set(ac.id, { model: modelTier, instructions: sa.instructions, description: sa.description });
+        ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions: sa.instructions, description: sa.description });
       }
     }
 
     // Sync only non-native workers (native agents use Agent tool, not relay)
-    const added = await mainAgent.syncWorkers((provider: string) => keychain.getKey(provider));
+    const added = await ctx.mainAgent.syncWorkers((provider: string) => ctx.keychain.getKey(provider));
     if (added > 0) {
       const allConfigs = [...agentConfigs, ...claudeSubagentsToConfigs(claudeSubagents)];
       for (const ac of allConfigs) {
-        if (!ac.native && !workers.has(ac.id)) {
-          const w = mainAgent.getWorker(ac.id);
-          if (w) workers.set(ac.id, w);
+        if (!ac.native && !ctx.workers.has(ac.id)) {
+          const w = ctx.mainAgent.getWorker(ac.id);
+          if (w) ctx.workers.set(ac.id, w);
         }
       }
-      process.stderr.write(`[gossipcat] Synced: ${workers.size} relay workers + ${nativeAgentConfigs.size} native agents\n`);
+      process.stderr.write(`[gossipcat] Synced: ${ctx.workers.size} relay workers + ${ctx.nativeAgentConfigs.size} native agents\n`);
     }
   } catch (err) {
     process.stderr.write(`[gossipcat] syncWorkers failed: ${(err as Error).message}\n`);
   }
 }
+
+// Wire context functions so handlers can call boot/sync
+ctx.boot = boot;
+ctx.syncWorkersViaKeychain = syncWorkersViaKeychain;
+ctx.getModules = getModules;
 
 // ── Create MCP Server ─────────────────────────────────────────────────────
 const server = new McpServer({
@@ -674,13 +591,13 @@ server.tool(
 
       // Try main agent first, fall back to any agent with a working key
       let llm: any;
-      const mainKey = await keychain.getKey(config.main_agent.provider);
+      const mainKey = await ctx.keychain.getKey(config.main_agent.provider);
       if (mainKey) {
         llm = createProvider(config.main_agent.provider, config.main_agent.model, mainKey);
       } else {
         // Fallback: use the first agent that has a working key
         for (const ac of agentConfigs) {
-          const key = await keychain.getKey(ac.provider);
+          const key = await ctx.keychain.getKey(ac.provider);
           if (key) {
             llm = createProvider(ac.provider, ac.model, key);
             process.stderr.write(`[gossipcat] gossip_plan: main agent key unavailable, using ${ac.provider}/${ac.model} for planning\n`);
@@ -731,7 +648,7 @@ server.tool(
         })),
         createdAt: Date.now(),
       };
-      mainAgent.registerPlan(planState);
+      ctx.mainAgent.registerPlan(planState);
 
       const planJson = {
         strategy: plan.strategy,
@@ -778,235 +695,6 @@ server.tool(
     }
   }
 );
-
-// ── Dispatch handler functions ───────────────────────────────────────────
-
-async function handleDispatchSingle(
-  agent_id: string, task: string,
-  write_mode?: 'sequential' | 'scoped' | 'worktree',
-  scope?: string, timeout_ms?: number,
-  plan_id?: string, step?: number,
-) {
-  await boot();
-  await syncWorkersViaKeychain();
-
-  if (!/^[a-zA-Z0-9_-]+$/.test(agent_id)) {
-    return { content: [{ type: 'text' as const, text: `Invalid agent ID format: "${agent_id}"` }] };
-  }
-
-  const options: Record<string, unknown> = {};
-  if (write_mode) {
-    options.writeMode = write_mode as 'sequential' | 'scoped' | 'worktree';
-    if (scope) options.scope = scope;
-    if (timeout_ms) options.timeoutMs = timeout_ms;
-  }
-  if (plan_id) {
-    if (!step) {
-      return { content: [{ type: 'text' as const, text: 'plan_id requires step (1-indexed step number in the plan).' }] };
-    }
-    options.planId = plan_id;
-    options.step = step;
-  }
-  const dispatchOptions = Object.keys(options).length > 0 ? options : undefined;
-
-  // Native agent bridge: return Agent tool instructions instead of relay dispatch
-  const nativeConfig = nativeAgentConfigs.get(agent_id);
-  if (nativeConfig) {
-    evictStaleNativeTasks();
-    const taskId = randomUUID().slice(0, 8);
-    nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), planId: plan_id, step });
-    persistNativeTaskMap();
-
-    // Fix: register in TaskGraph so native tasks are visible to CLI/sync
-    try { mainAgent.recordNativeTask(taskId, agent_id, task); } catch { /* best-effort */ }
-
-    // Inject chain context from prior plan steps (same as relay agents get)
-    let chainContext = '';
-    if (plan_id && step && step > 1) {
-      chainContext = mainAgent.getChainContext(plan_id, step);
-    }
-
-    const agentPrompt = [
-      nativeConfig.instructions || '',
-      chainContext ? `\n${chainContext}\n` : '',
-      `\n---\n\nTask: ${task}`,
-    ].filter(Boolean).join('').trim();
-
-    // Only use worktree if explicitly requested AND project is a git repo
-    let useWorktree = write_mode === 'worktree';
-    if (useWorktree) {
-      try {
-        const { execSync } = require('child_process');
-        execSync('git rev-parse --git-dir', { cwd: process.cwd(), stdio: 'ignore' });
-      } catch {
-        useWorktree = false; // not a git repo, skip worktree
-      }
-    }
-
-    return { content: [{ type: 'text' as const, text:
-      `NATIVE_DISPATCH: Execute this via Claude Code Agent tool, then relay the result.\n\n` +
-      `Task ID: ${taskId}\n` +
-      `Agent: ${agent_id}\n` +
-      `Model: ${nativeConfig.model}\n\n` +
-      `Step 1 — Run:\n` +
-      `Agent(model: "${nativeConfig.model}", prompt: ${JSON.stringify(agentPrompt)}${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n` +
-      `Step 2 — REQUIRED after agent completes:\n` +
-      `gossip_relay(task_id: "${taskId}", result: "<agent output>")\n\n` +
-      `⚠️ You MUST call gossip_relay for every native dispatch. Without it, the result is lost — no memory, no gossip, no consensus. Never skip this step.`
-    }] };
-  }
-
-  try {
-    const { taskId } = mainAgent.dispatch(agent_id, task, dispatchOptions as any);
-    const modeLabel = write_mode ? ` [${write_mode}${scope ? `:${scope}` : ''}]` : '';
-    return { content: [{ type: 'text' as const, text: `Dispatched to ${agent_id}${modeLabel}. Task ID: ${taskId}` }] };
-  } catch (err: any) {
-    process.stderr.write(`[gossipcat] dispatch failed: ${err.message}\n`);
-    return { content: [{ type: 'text' as const, text: err.message }] };
-  }
-}
-
-async function handleDispatchParallel(
-  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }>,
-  consensus: boolean,
-) {
-  await boot();
-  await syncWorkersViaKeychain();
-
-  // Validate all agent IDs before dispatching
-  for (const def of taskDefs) {
-    if (!/^[a-zA-Z0-9_-]+$/.test(def.agent_id)) {
-      return { content: [{ type: 'text' as const, text: `Invalid agent ID format: "${def.agent_id}"` }] };
-    }
-  }
-
-  // [C2 fix] Split native vs custom tasks — native agents have no relay worker
-  const nativeTasks: Array<{ agent_id: string; task: string; write_mode?: string }> = [];
-  const relayTasks: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }> = [];
-  for (const def of taskDefs) {
-    if (nativeAgentConfigs.has(def.agent_id)) {
-      nativeTasks.push(def);
-    } else {
-      relayTasks.push(def);
-    }
-  }
-
-  const lines: string[] = [];
-
-  // Dispatch relay tasks normally
-  if (relayTasks.length > 0) {
-    const { taskIds, errors } = await mainAgent.dispatchParallel(
-      relayTasks.map((d: any) => ({
-        agentId: d.agent_id,
-        task: d.task,
-        options: d.write_mode ? { writeMode: d.write_mode, scope: d.scope } : undefined,
-      })),
-      consensus ? { consensus: true } : undefined,
-    );
-    for (const tid of taskIds) {
-      const t = mainAgent.getTask(tid);
-      lines.push(`  ${tid} → ${t?.agentId || 'unknown'} (relay)`);
-    }
-    if (errors.length) lines.push(`Relay errors: ${errors.join(', ')}`);
-  }
-
-  // Create native dispatch instructions for Claude Code Agent tool
-  const nativeInstructions: string[] = [];
-  for (const def of nativeTasks) {
-    const nativeConfig = nativeAgentConfigs.get(def.agent_id)!;
-    const taskId = randomUUID().slice(0, 8);
-    nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
-    try { mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
-    persistNativeTaskMap();
-
-    const agentPrompt = nativeConfig.instructions
-      ? `${nativeConfig.instructions}\n\n---\n\nTask: ${def.task}`
-      : def.task;
-
-    lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
-    nativeInstructions.push(
-      `Agent(model: "${nativeConfig.model}", prompt: ${JSON.stringify(agentPrompt)}${def.write_mode === 'worktree' ? ', isolation: "worktree"' : ''}, run_in_background: true)` +
-      `\n  → then: gossip_relay(task_id: "${taskId}", result: "<output>")`
-    );
-  }
-
-  let msg = `Dispatched ${taskDefs.length} tasks:\n${lines.join('\n')}`;
-  if (consensus) msg += '\n\n📋 Consensus mode enabled.';
-  if (nativeInstructions.length > 0) {
-    msg += `\n\nNATIVE_DISPATCH: Execute these ${nativeInstructions.length} Agent calls in parallel, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
-    msg += `\n\n⚠️ You MUST call gossip_relay for EVERY native agent after it completes. Without it, results are lost — no memory, no gossip, no consensus.`;
-  }
-  return { content: [{ type: 'text' as const, text: msg }] };
-}
-
-async function handleDispatchConsensus(
-  taskDefs: Array<{ agent_id: string; task: string }>,
-) {
-  await boot();
-  await syncWorkersViaKeychain();
-
-  for (const def of taskDefs) {
-    if (!/^[a-zA-Z0-9_-]+$/.test(def.agent_id)) {
-      return { content: [{ type: 'text' as const, text: `Invalid agent ID format: "${def.agent_id}"` }] };
-    }
-  }
-
-  // Split native vs custom tasks (same pattern as parallel)
-  const nativeTasks: Array<{ agent_id: string; task: string }> = [];
-  const relayTasks: Array<{ agent_id: string; task: string }> = [];
-  for (const def of taskDefs) {
-    if (nativeAgentConfigs.has(def.agent_id)) {
-      nativeTasks.push(def);
-    } else {
-      relayTasks.push(def);
-    }
-  }
-
-  const lines: string[] = [];
-  const allTaskIds: string[] = [];
-
-  // Dispatch relay tasks with consensus
-  if (relayTasks.length > 0) {
-    const { taskIds, errors } = await mainAgent.dispatchParallel(
-      relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task })),
-      { consensus: true },
-    );
-    for (const tid of taskIds) {
-      const t = mainAgent.getTask(tid);
-      lines.push(`  ${tid} → ${t?.agentId || 'unknown'} (relay)`);
-      allTaskIds.push(tid);
-    }
-    if (errors.length) lines.push(`Relay errors: ${errors.join(', ')}`);
-  }
-
-  // Native tasks — inject consensus instruction into the prompt
-  const consensusInstruction = '\n\n## Required Output Format\nInclude a "## Consensus Summary" section at the end with:\n- Key findings (bulleted)\n- Confidence level (high/medium/low) for each\n- Areas of uncertainty';
-  const nativeInstructions: string[] = [];
-  for (const def of nativeTasks) {
-    const nativeConfig = nativeAgentConfigs.get(def.agent_id)!;
-    const taskId = randomUUID().slice(0, 8);
-    nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now() });
-    try { mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
-    allTaskIds.push(taskId);
-    persistNativeTaskMap();
-
-    const agentPrompt = (nativeConfig.instructions || '') + consensusInstruction + `\n\n---\n\nTask: ${def.task}`;
-    lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
-    nativeInstructions.push(
-      `Agent(model: "${nativeConfig.model}", prompt: ${JSON.stringify(agentPrompt)}, run_in_background: true)` +
-      `\n  → then: gossip_relay(task_id: "${taskId}", result: "<output>")`
-    );
-  }
-
-  let msg = `Dispatched ${taskDefs.length} tasks with consensus:\n${lines.join('\n')}`;
-  msg += '\n\nAgents will include ## Consensus Summary in output.';
-  msg += `\nCall gossip_collect with task IDs: [${allTaskIds.map(id => `"${id}"`).join(', ')}] and consensus: true`;
-  if (nativeInstructions.length > 0) {
-    msg += `\n\nNATIVE_DISPATCH: Execute these ${nativeInstructions.length} Agent calls, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
-    msg += `\n\n⚠️ You MUST call gossip_relay for EVERY native agent after it completes. Without it, results are lost — no memory, no consensus cross-review.`;
-  }
-  return { content: [{ type: 'text' as const, text: msg }] };
-}
 
 // ── Low-level: dispatch to specific agent ─────────────────────────────────
 server.tool(
@@ -1060,179 +748,7 @@ server.tool(
     timeout_ms: z.number().default(300000).describe('Max wait time in ms. Default 5 minutes.'),
     consensus: z.boolean().default(false).describe('Enable cross-review consensus. Agents review each others findings.'),
   },
-  async ({ task_ids, timeout_ms, consensus }) => {
-    await boot();
-
-    // Consensus mode requires explicit task IDs
-    if (consensus && (!task_ids || task_ids.length === 0)) {
-      return { content: [{ type: 'text' as const, text: 'Error: consensus mode requires explicit task_ids. Pass the IDs returned by gossip_dispatch.' }] };
-    }
-
-    const requestedIds = task_ids.length > 0 ? task_ids : undefined;
-    // Split requested IDs into relay vs native
-    const relayIds = requestedIds?.filter(id => !nativeResultMap.has(id) && !nativeTaskMap.has(id));
-    const nativeIds = requestedIds?.filter(id => nativeResultMap.has(id) || nativeTaskMap.has(id));
-
-    // Step 1: Collect relay results (WITHOUT consensus — we run it after merging natives)
-    let relayResults: any[] = [];
-    try {
-      const idsForRelay = relayIds && relayIds.length > 0 ? relayIds : (!requestedIds ? undefined : []);
-      if (!idsForRelay || idsForRelay.length > 0) {
-        const collected = await mainAgent.collect(idsForRelay, timeout_ms);
-        relayResults = collected.results || [];
-      }
-    } catch (err) {
-      process.stderr.write(`[gossipcat] collect failed: ${(err as Error).message}\n`);
-    }
-
-    // Step 2: Wait for pending native tasks (poll until they arrive or timeout)
-    const pendingNativeIds = (nativeIds || []).filter(id => nativeTaskMap.has(id) && !nativeResultMap.has(id));
-    if (!requestedIds) {
-      // Also wait for any unspecified pending native tasks
-      for (const [id] of nativeTaskMap) {
-        if (!nativeResultMap.has(id) && !pendingNativeIds.includes(id)) {
-          pendingNativeIds.push(id);
-        }
-      }
-    }
-
-    if (pendingNativeIds.length > 0 && !consensus) {
-      process.stderr.write(`[gossipcat] ${pendingNativeIds.length} native agent(s) still running — results will show as 'running'. Use consensus: true to wait.\n`);
-    }
-
-    if (pendingNativeIds.length > 0 && consensus) {
-      const POLL_INTERVAL = 2000;
-      const nativeTimeout = timeout_ms;
-      const deadline = Date.now() + nativeTimeout;
-      process.stderr.write(`[gossipcat] Waiting for ${pendingNativeIds.length} native agent(s) before consensus...\n`);
-
-      while (Date.now() < deadline) {
-        const stillPending = pendingNativeIds.filter(id => !nativeResultMap.has(id) && nativeTaskMap.has(id));
-        if (stillPending.length === 0) break;
-        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
-      }
-
-      const arrived = pendingNativeIds.filter(id => nativeResultMap.has(id)).length;
-      const timedOut = pendingNativeIds.length - arrived;
-      if (timedOut > 0) {
-        process.stderr.write(`[gossipcat] ${timedOut} native agent(s) timed out, proceeding with ${arrived} arrived\n`);
-      } else {
-        process.stderr.write(`[gossipcat] All ${arrived} native agent(s) arrived\n`);
-      }
-    }
-
-    // Step 3: Merge relay + native results
-    const allResults = [...relayResults];
-    const collectNativeIds = nativeIds || (!requestedIds ? [...nativeResultMap.keys(), ...nativeTaskMap.keys()].filter((id, i, arr) => arr.indexOf(id) === i) : []);
-    for (const id of collectNativeIds) {
-      const nr = nativeResultMap.get(id);
-      if (nr) {
-        allResults.push(nr);
-        nativeResultMap.delete(id); // consumed
-      } else if (nativeTaskMap.has(id)) {
-        allResults.push({ id, agentId: nativeTaskMap.get(id)!.agentId, task: nativeTaskMap.get(id)!.task, status: 'running' as const });
-      }
-    }
-
-    if (allResults.length === 0) {
-      return { content: [{ type: 'text' as const, text: requestedIds ? 'No matching tasks.' : 'No pending tasks.' }] };
-    }
-
-    // Step 3.5: Auto-signal on failed/timeout/empty results
-    // Only flag truly empty responses (no content at all), not valid short answers
-    try {
-      const failedResults = allResults.filter((r: any) =>
-        r.status === 'failed' ||
-        r.status === 'timeout' ||
-        (r.status === 'completed' && (!r.result || r.result.trim().length === 0))
-      );
-      if (failedResults.length > 0) {
-        const { PerformanceWriter } = await import('@gossip/orchestrator');
-        const writer = new PerformanceWriter(process.cwd());
-        const timestamp = new Date().toISOString();
-        const autoSignals = failedResults.map((r: any) => ({
-          type: 'consensus' as const,
-          taskId: r.id || '',
-          // Use disagreement for empty/timeout (reliability failure), hallucination only for actual errors
-          signal: (r.status === 'failed' ? 'disagreement' : 'disagreement') as const,
-          agentId: r.agentId,
-          evidence: r.status === 'failed' ? `Task failed: ${r.error || 'unknown error'}`
-            : r.status === 'timeout' ? 'Task timed out — no response'
-            : 'Empty response — agent produced no output',
-          timestamp,
-        }));
-        writer.appendSignals(autoSignals);
-        process.stderr.write(`[gossipcat] Auto-recorded ${autoSignals.length} failure signal(s): ${autoSignals.map((s: any) => s.agentId).join(', ')}\n`);
-      }
-    } catch { /* best-effort */ }
-
-    // Step 4: Run consensus on merged results (relay + native together)
-    let consensusReport: any = undefined;
-    if (consensus && allResults.filter((r: any) => r.status === 'completed').length >= 2) {
-      consensusReport = await mainAgent.runConsensus(allResults);
-    }
-
-    // Step 5: Format output
-    const resultTexts = allResults.map((t: any) => {
-      const dur = t.completedAt && t.startedAt ? `${t.completedAt - t.startedAt}ms` : 'running';
-      const modeTag = t.writeMode ? ` [${t.writeMode}${t.scope ? `:${t.scope}` : ''}]` : '';
-      const nativeTag = nativeAgentConfigs.has(t.agentId) ? ' (native)' : '';
-      let text: string;
-      if (t.status === 'completed') text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag} (${dur}):\n${t.result}`;
-      else if (t.status === 'failed') text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag} (${dur}): ERROR: ${t.error}`;
-      else text = `[${t.id}] ${t.agentId}${nativeTag}${modeTag}: still running...`;
-
-      if (t.worktreeInfo) {
-        text += `\n📁 Worktree: ${t.worktreeInfo.path} (branch: ${t.worktreeInfo.branch})`;
-      }
-      if (t.skillWarnings?.length) {
-        text += `\n\n⚠️ Skill coverage gaps:\n${t.skillWarnings.map((w: string) => `  - ${w}`).join('\n')}`;
-      }
-      return text;
-    });
-
-    let output = resultTexts.join('\n\n---\n\n');
-
-    if (consensusReport?.summary) {
-      output += '\n\n' + consensusReport.summary;
-    } else if (consensus) {
-      const completedCount = allResults.filter((r: any) => r.status === 'completed' && r.result).length;
-      if (completedCount >= 2) {
-        // No automated cross-review — Claude Code will synthesize
-        output += '\n\n---\n\nCross-reference the findings above. Identify: CONFIRMED (both agents agree), DISPUTED (they disagree), UNIQUE (only one found it), and any NEW insights from comparing their perspectives.';
-      } else {
-        output += '\n\n⚠️ Need ≥2 successful agents for consensus.';
-      }
-    }
-
-    try {
-      const { SkillGapTracker } = await import('@gossip/orchestrator');
-      const tracker = new SkillGapTracker(process.cwd());
-      const thresholds = tracker.checkThresholds();
-      if (thresholds.count > 0) {
-        output += `\n\n🔧 ${thresholds.count} skill(s) ready to build. Call gossip_skills(action: "build") to generate them.`;
-      }
-    } catch { /* best-effort */ }
-
-    // Auto skill gap suggestions: detect agents weak in categories where peers are strong
-    try {
-      const suggestions = mainAgent.getSkillGapSuggestions();
-      if (suggestions.length > 0) {
-        output += `\n\n📊 Skill gap detected:\n${suggestions.map(s => `  - ${s}`).join('\n')}`;
-      }
-    } catch { /* best-effort */ }
-
-    // Session save reminder after enough activity
-    try {
-      const gossipCount = mainAgent.getSessionGossip().length;
-      const consensusCount = mainAgent.getSessionConsensusHistory().length;
-      if (gossipCount >= 5 || consensusCount >= 1) {
-        output += `\n\n💡 Active session (${gossipCount} tasks, ${consensusCount} consensus runs). Call gossip_session_save() before ending to preserve what you've learned.`;
-      }
-    } catch { /* best-effort */ }
-
-    return { content: [{ type: 'text' as const, text: output }] };
-  }
+  async ({ task_ids, timeout_ms, consensus }) => handleCollect(task_ids, timeout_ms, consensus)
 );
 
 // ── Info: status + agents (merged) ────────────────────────────────────────
@@ -1249,13 +765,13 @@ server.tool(
       'Gossip Mesh Status:',
       `  Host: ${env.host}${env.supportsNativeAgents ? ' (native agents supported)' : ''}`,
       `  Native agent dir: ${env.nativeAgentDir || 'n/a'}`,
-      `  Relay: ${relay ? `running :${relay.port}` : 'not started'}`,
-      `  Tool Server: ${toolServer ? 'running' : 'not started'}`,
-      `  Workers: ${workers.size} (${Array.from(workers.keys()).join(', ') || 'none'})`,
+      `  Relay: ${ctx.relay ? `running :${ctx.relay.port}` : 'not started'}`,
+      `  Tool Server: ${ctx.toolServer ? 'running' : 'not started'}`,
+      `  Workers: ${ctx.workers.size} (${Array.from(ctx.workers.keys()).join(', ') || 'none'})`,
       `  Claude subagents found: ${claudeSubagentsList.length}`,
     ];
-    if (relay?.dashboardUrl) {
-      lines.push(`  Dashboard: ${relay.dashboardUrl} (key: ${relay.dashboardKeyPrefix}...)`);
+    if (ctx.relay?.dashboardUrl) {
+      lines.push(`  Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKeyPrefix}...)`);
     }
 
     // Agent list (formerly gossip_agents)
@@ -1286,8 +802,8 @@ server.tool(
     }
 
     // Show runtime worker status if booted
-    if (booted && workers.size > 0) {
-      agentSections.push(`\nRelay workers online: ${workers.size} — [${Array.from(workers.keys()).join(', ')}]`);
+    if (booted && ctx.workers.size > 0) {
+      agentSections.push(`\nRelay workers online: ${ctx.workers.size} — [${Array.from(ctx.workers.keys()).join(', ')}]`);
     }
 
     return { content: [{ type: 'text' as const, text: lines.join('\n') + '\n\n' + agentSections.join('\n') }] };
@@ -1371,7 +887,7 @@ server.tool(
           continue;
         }
 
-        const worker = mainAgent.getWorker(agent_id);
+        const worker = ctx.mainAgent.getWorker(agent_id);
         if (!worker) {
           results.push(`${agent_id}: not found`);
           continue;
@@ -1557,89 +1073,6 @@ server.tool(
   }
 );
 
-// ── Shared handler for native agent relay ────────────────────────────────
-async function handleNativeRelay(task_id: string, result: string, error?: string) {
-  await boot(); // [H3 fix] ensure mainAgent/pipeline are available
-
-  const taskInfo = nativeTaskMap.get(task_id);
-  if (!taskInfo) {
-    return { content: [{ type: 'text' as const, text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch or gossip_run?` }] };
-  }
-
-  // Move to result map BEFORE running pipeline — prevents data loss if pipeline crashes
-  const elapsed = Date.now() - taskInfo.startedAt;
-  nativeTaskMap.delete(task_id);
-  nativeResultMap.set(task_id, {
-    id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
-    status: error ? 'failed' : 'completed',
-    result: error ? undefined : (result ? result.slice(0, 50000) : result), // intentional 50k cap — memory protection
-    error: error || undefined,
-    startedAt: taskInfo.startedAt, completedAt: Date.now(),
-  });
-  persistNativeTaskMap();
-  evictStaleNativeTasks();
-
-  // Run the same post-collect pipeline as custom agents:
-  // 1. Memory write  2. Knowledge extraction  3. Gossip  4. Compaction
-  const agentId = taskInfo.agentId;
-  const agentMeta = (() => {
-    try {
-      const a = mainAgent.getAgentList().find((a: any) => a.id === agentId);
-      return { skills: a?.skills || [], preset: a?.preset || '' };
-    } catch { return { skills: [] as string[], preset: '' }; }
-  })();
-
-  // 0. Record in TaskGraph (makes native tasks visible to CLI + Supabase sync)
-  try { mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined); } catch { /* best-effort */ }
-
-  // 0b. Record plan step result so subsequent steps get chain context
-  if (taskInfo.planId && taskInfo.step && !error) {
-    try { mainAgent.recordPlanStepResult(taskInfo.planId, taskInfo.step, result); } catch { /* best-effort */ }
-  }
-
-  if (!error) {
-    // 1. Write task entry to memory
-    try {
-      const { MemoryWriter, MemoryCompactor } = await import('@gossip/orchestrator');
-      const memWriter = new MemoryWriter(process.cwd());
-      // Wire LLM for cognitive summaries — same as relay agents get
-      try { if (mainAgent.getLLM()) memWriter.setSummaryLlm(mainAgent.getLLM()); } catch {}
-      const scores = presetScores(agentMeta.preset);
-      await memWriter.writeTaskEntry(agentId, {
-        taskId: task_id,
-        task: taskInfo.task,
-        skills: agentMeta.skills,
-        scores,
-      });
-
-      // 2. Extract knowledge from result (files, tech, decisions)
-      if (result) {
-        await memWriter.writeKnowledgeFromResult(agentId, {
-          taskId: task_id, task: taskInfo.task, result,
-        });
-      }
-
-      memWriter.rebuildIndex(agentId);
-
-      // 3. Compact memory if needed
-      const compactor = new MemoryCompactor(process.cwd());
-      compactor.compactIfNeeded(agentId);
-    } catch (err) {
-      process.stderr.write(`[gossipcat] Memory write failed for ${agentId}: ${(err as Error).message}\n`);
-    }
-  }
-
-  // 4. Publish gossip so other running agents can see this result
-  if (!error) {
-    await mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {}); // intentional 50k cap — memory protection
-  }
-
-  // Result already stored in nativeResultMap at top of handler (crash-safe)
-
-  const status = error ? `failed (${elapsed}ms): ${error}` : `completed (${elapsed}ms)`;
-  return { content: [{ type: 'text' as const, text: `Result relayed for ${agentId} [${task_id}]: ${status}\n\nThe result is now available for gossip_collect and consensus cross-review.` }] };
-}
-
 // ── Native agent bridge: feed Agent tool results back into relay ──────────
 server.tool(
   'gossip_relay',
@@ -1667,11 +1100,11 @@ server.tool(
 
     // Auto mode: orchestrator decomposes and assigns agents
     if (agent_id === 'auto') {
-      const result = await mainAgent.handleMessage(task, { mode: 'decompose' });
+      const result = await ctx.mainAgent.handleMessage(task, { mode: 'decompose' });
       return { content: [{ type: 'text' as const, text: typeof result === 'string' ? result : JSON.stringify(result) }] };
     }
 
-    const isNative = nativeAgentConfigs.has(agent_id);
+    const isNative = ctx.nativeAgentConfigs.has(agent_id);
     const options: any = {};
     if (write_mode) options.writeMode = write_mode;
     if (scope) options.scope = scope;
@@ -1680,11 +1113,11 @@ server.tool(
       // Native agent — record task and return instructions for host
       evictStaleNativeTasks();
       const taskId = require('crypto').randomUUID().slice(0, 8);
-      nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now() });
+      ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now() });
       persistNativeTaskMap();
-      try { mainAgent.recordNativeTask(taskId, agent_id, task); } catch { /* best-effort */ }
-      const config = nativeAgentConfigs.get(agent_id)!;
-      const agentConfig = mainAgent.getAgentList?.()?.find((a: any) => a.id === agent_id);
+      try { ctx.mainAgent.recordNativeTask(taskId, agent_id, task); } catch { /* best-effort */ }
+      const config = ctx.nativeAgentConfigs.get(agent_id)!;
+      const agentConfig = ctx.mainAgent.getAgentList?.()?.find((a: any) => a.id === agent_id);
       const preset = agentConfig?.preset || config.description || '';
       const presetPrompts: Record<string, string> = {
         reviewer: 'You are a senior code reviewer. Focus on logic errors, security vulnerabilities, TypeScript type safety, and performance. Cite file:line for every finding.',
@@ -1711,8 +1144,8 @@ server.tool(
 
     // Relay worker — dispatch and collect in one call
     try {
-      const { taskId } = mainAgent.dispatch(agent_id, task, options);
-      const collectResult = await mainAgent.collect([taskId], 300000);
+      const { taskId } = ctx.mainAgent.dispatch(agent_id, task, options);
+      const collectResult = await ctx.mainAgent.collect([taskId], 300000);
       const entry = collectResult.results[0];
 
       if (!entry) {
@@ -1864,7 +1297,7 @@ server.tool(
         .sort((a, b) => b.reliability - a.reliability)
         .map(s => {
           const w = reader.getDispatchWeight(s.agentId);
-          const nativeTag = nativeAgentConfigs.has(s.agentId) ? ' (native)' : '';
+          const nativeTag = ctx.nativeAgentConfigs.has(s.agentId) ? ' (native)' : '';
           return `  ${s.agentId}${nativeTag}:\n` +
             `    accuracy=${s.accuracy.toFixed(2)} uniqueness=${s.uniqueness.toFixed(2)} reliability=${s.reliability.toFixed(2)}\n` +
             `    signals=${s.totalSignals} agree=${s.agreements} disagree=${s.disagreements} unique=${s.uniqueFindings} hallucinate=${s.hallucinations}\n` +
@@ -1902,7 +1335,7 @@ server.tool(
 
     // ── list ──
     if (action === 'list') {
-      const index = mainAgent.getSkillIndex();
+      const index = ctx.mainAgent.getSkillIndex();
       if (!index) return { content: [{ type: 'text' as const, text: 'Skill index not initialized.' }] };
 
       const data = index.getIndex();
@@ -1924,7 +1357,7 @@ server.tool(
     if (action === 'bind') {
       if (!agent_id) return { content: [{ type: 'text' as const, text: 'Error: agent_id is required for bind.' }] };
       if (!skill) return { content: [{ type: 'text' as const, text: 'Error: skill is required for bind.' }] };
-      const index = mainAgent.getSkillIndex();
+      const index = ctx.mainAgent.getSkillIndex();
       if (!index) return { content: [{ type: 'text' as const, text: 'Skill index not initialized.' }] };
 
       const existing = index.getSlot(agent_id, skill);
@@ -1941,7 +1374,7 @@ server.tool(
     if (action === 'unbind') {
       if (!agent_id) return { content: [{ type: 'text' as const, text: 'Error: agent_id is required for unbind.' }] };
       if (!skill) return { content: [{ type: 'text' as const, text: 'Error: skill is required for unbind.' }] };
-      const index = mainAgent.getSkillIndex();
+      const index = ctx.mainAgent.getSkillIndex();
       if (!index) return { content: [{ type: 'text' as const, text: 'Skill index not initialized.' }] };
 
       const removed = index.unbind(agent_id, skill);
@@ -1956,16 +1389,16 @@ server.tool(
       if (!agent_id) return { content: [{ type: 'text' as const, text: 'Error: agent_id is required for develop.' }] };
       if (!category) return { content: [{ type: 'text' as const, text: 'Error: category is required for develop.' }] };
 
-      if (!skillGenerator) {
+      if (!ctx.skillGenerator) {
         return { content: [{ type: 'text' as const, text: 'Skill generator not available. Check boot logs.' }] };
       }
 
       try {
-        const result = await skillGenerator.generate(agent_id, category);
+        const result = await ctx.skillGenerator.generate(agent_id, category);
 
         // Register skill on agent config so loadSkills picks it up
-        if (mainAgent) {
-          const registry = (mainAgent as any).registry;
+        if (ctx.mainAgent) {
+          const registry = (ctx.mainAgent as any).registry;
           const config = registry?.get(agent_id);
           if (config && !config.skills.includes(category)) {
             config.skills.push(category);
@@ -2093,14 +1526,14 @@ server.tool(
     } catch { /* no gossip */ }
 
     if (!gossipText) {
-      const memGossip = mainAgent.getSessionGossip();
+      const memGossip = ctx.mainAgent.getSessionGossip();
       if (memGossip.length > 0) {
         gossipText = memGossip.map((g: any) => `- ${g.agentId}: ${g.taskSummary}`).join('\n');
       }
     }
 
     // 2. Consensus history
-    const consensusHistory = mainAgent.getSessionConsensusHistory();
+    const consensusHistory = ctx.mainAgent.getSessionConsensusHistory();
     const consensusText = consensusHistory.length > 0
       ? consensusHistory.map((c: any) => `- ${c.timestamp.split('T')[0]}: ${c.confirmed} confirmed, ${c.disputed} disputed, ${c.unverified} unverified`).join('\n')
       : '';
@@ -2120,7 +1553,7 @@ server.tool(
     let gitLog = '';
     try {
       const { execSync } = require('child_process');
-      const since = mainAgent.getSessionStartTime().toISOString();
+      const since = ctx.mainAgent.getSessionStartTime().toISOString();
       gitLog = execSync(
         `git log --oneline --max-count=50 --since="${since}"`,
         { cwd: process.cwd(), encoding: 'utf-8' }
@@ -2138,7 +1571,7 @@ server.tool(
     // 5. Write session summary
     const { MemoryWriter } = await import('@gossip/orchestrator');
     const writer = new MemoryWriter(process.cwd());
-    try { if (mainAgent.getLLM()) writer.setSummaryLlm(mainAgent.getLLM()); } catch {}
+    try { if (ctx.mainAgent.getLLM()) writer.setSummaryLlm(ctx.mainAgent.getLLM()); } catch {}
 
     const summary = await writer.writeSessionSummary({
       gossip: gossipText, consensus: consensusText,
