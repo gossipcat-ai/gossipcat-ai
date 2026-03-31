@@ -267,6 +267,24 @@ body::after {
 .know-list { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
 .know-item { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 12px; font-family: var(--mono); color: var(--text-2); cursor: pointer; transition: all 0.15s; }
 .know-item:hover { background: var(--surface-raised); color: var(--text); border-color: var(--accent); }
+.know-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; padding-top: 4px; }
+.know-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; transition: all 0.15s; text-align: center; }
+.know-card:hover { background: var(--surface-raised); border-color: var(--accent); }
+.know-card-icon { font-size: 24px; }
+.know-card-name { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); }
+.know-card-desc { font-size: 11px; color: var(--text-3); }
+
+/* ── Task History ──────────────────────────────── */
+.task-history-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.task-history-row:last-child { border-bottom: none; }
+.task-history-date { color: var(--accent); font-family: var(--mono); font-size: 11px; min-width: 50px; font-weight: 600; }
+.task-history-time { color: var(--text-3); font-family: var(--mono); font-size: 11px; min-width: 55px; }
+.task-history-desc { color: var(--text-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Pill Filters ──────────────────────────────── */
+.pill-filter { cursor: pointer; transition: all 0.15s; }
+.pill-filter:hover { opacity: 0.8; transform: scale(1.05); }
+.pill-active { outline: 2px solid currentColor; outline-offset: 1px; }
 
 /* ── Memory Browser (detail view) ───────────────── */
 .memory-md { padding: 1rem; font-size: 13px; line-height: 1.6; color: var(--text-2); }
@@ -373,16 +391,6 @@ body::after {
 .live-elapsed { color: var(--amber); font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
 .live-taskid { color: var(--text-3); font-family: var(--mono); font-size: 11px; background: var(--surface); padding: 1px 5px; border-radius: 3px; }
 
-/* ── Finding Filters ───────────────────────────── */
-.run-filters { display: flex; gap: 4px; margin-bottom: 8px; }
-.run-filter { cursor: pointer; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; border: 1px solid var(--border); background: transparent; color: var(--text-3); transition: all 0.15s; }
-.run-filter:hover { border-color: var(--text-2); color: var(--text-2); }
-.run-filter.active { border-color: currentColor; }
-.run-filter.f-all.active { color: var(--text); background: rgba(255,255,255,0.05); }
-.run-filter.f-confirmed.active { color: var(--green); background: rgba(52,211,153,0.1); }
-.run-filter.f-disputed.active { color: var(--red); background: rgba(248,113,113,0.1); }
-.run-filter.f-unverified.active { color: var(--amber); background: rgba(251,191,36,0.1); }
-.run-filter.f-unique.active { color: var(--accent); background: rgba(167,139,250,0.1); }
 
 /* ── Responsive ─────────────────────────────────── */
 @media (max-width: 1200px) {

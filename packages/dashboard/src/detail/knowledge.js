@@ -46,7 +46,7 @@ async function renderKnowledgeDetail(app, agentId) {
           '<span class="memory-desc">' + desc + '</span>' +
           (isCognitive ? '<span style="font-size:9px;font-family:var(--mono);color:var(--accent);margin-left:auto">cognitive</span>' : '') +
           '</div>' +
-          '<pre class="memory-file-content" hidden>' + e(k.content) + '</pre>';
+          '<div class="memory-file-content memory-md" hidden>' + renderMarkdown(k.content || '') + '</div>';
         filesBody.appendChild(file);
       }
 
@@ -67,11 +67,16 @@ async function renderKnowledgeDetail(app, agentId) {
       taskBody.style.maxHeight = '300px';
 
       for (const t of data.tasks.slice(-50).reverse()) {
+        const date = t.timestamp ? new Date(t.timestamp) : null;
+        const dateStr = date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+        const timeStr = date ? date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+        const taskText = String(t.task || t.result || '—').replace(/\n.*/s, '').slice(0, 140);
         const row = document.createElement('div');
-        row.className = 'fr';
+        row.className = 'task-history-row';
         row.innerHTML =
-          '<span class="fr-time" style="min-width:70px">' + (t.timestamp ? new Date(t.timestamp).toLocaleDateString() : '—') + '</span>' +
-          '<span style="color:var(--text-2);flex:1">' + e(String(t.task || t.result || '—').slice(0, 120)) + '</span>';
+          '<span class="task-history-date">' + e(dateStr) + '</span>' +
+          '<span class="task-history-time">' + e(timeStr) + '</span>' +
+          '<span class="task-history-desc">' + e(taskText) + '</span>';
         taskBody.appendChild(row);
       }
 

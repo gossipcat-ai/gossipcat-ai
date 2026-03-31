@@ -17,38 +17,6 @@ function renderActivitySection(consensusData) {
     return section;
   }
 
-  // Finding type filter pills
-  const filters = document.createElement('div');
-  filters.className = 'run-filters';
-  const types = [
-    { key: 'all', label: 'All', cls: 'f-all' },
-    { key: 'confirmed', label: 'Confirmed', cls: 'f-confirmed' },
-    { key: 'disputed', label: 'Disputed', cls: 'f-disputed' },
-    { key: 'unverified', label: 'Unverified', cls: 'f-unverified' },
-    { key: 'unique', label: 'Unique', cls: 'f-unique' },
-  ];
-  let activeFilter = 'all';
-  for (const t of types) {
-    const btn = document.createElement('button');
-    btn.className = 'run-filter ' + t.cls + (t.key === 'all' ? ' active' : '');
-    btn.textContent = t.label;
-    btn.addEventListener('click', () => {
-      activeFilter = t.key;
-      filters.querySelectorAll('.run-filter').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      // Show/hide finding rows based on filter
-      list.querySelectorAll('.finding-row').forEach(row => {
-        if (t.key === 'all') { row.hidden = false; return; }
-        const tag = row.querySelector('.finding-tag');
-        if (!tag) { row.hidden = true; return; }
-        const tagText = tag.textContent.toLowerCase();
-        row.hidden = !tagText.includes(t.key);
-      });
-    });
-    filters.appendChild(btn);
-  }
-  list.appendChild(filters);
-
   for (const run of runs.slice(0, 10)) {
     const card = document.createElement('div');
     card.className = 'run-card';
@@ -57,10 +25,10 @@ function renderActivitySection(consensusData) {
     const total = (c.agreement || 0) + (c.disagreement || 0) + (c.hallucination || 0) + (c.unverified || 0) + (c.unique || 0) + (c.new || 0);
 
     const pills = [];
-    if (c.agreement) pills.push('<span class="pill pill-g">' + c.agreement + ' confirmed</span>');
-    if (c.disagreement || c.hallucination) pills.push('<span class="pill pill-r">' + ((c.disagreement || 0) + (c.hallucination || 0)) + ' disputed</span>');
-    if (c.unverified) pills.push('<span class="pill pill-y">' + c.unverified + ' unverified</span>');
-    if (c.unique) pills.push('<span class="pill pill-b">' + c.unique + ' unique</span>');
+    if (c.agreement) pills.push('<span class="pill pill-g pill-filter" data-filter="confirmed">' + c.agreement + ' confirmed</span>');
+    if (c.disagreement || c.hallucination) pills.push('<span class="pill pill-r pill-filter" data-filter="disputed">' + ((c.disagreement || 0) + (c.hallucination || 0)) + ' disputed</span>');
+    if (c.unverified) pills.push('<span class="pill pill-y pill-filter" data-filter="unverified">' + c.unverified + ' unverified</span>');
+    if (c.unique) pills.push('<span class="pill pill-b pill-filter" data-filter="unique">' + c.unique + ' unique</span>');
 
     const segments = [];
     if (total > 0) {
@@ -119,7 +87,33 @@ function renderActivitySection(consensusData) {
       findings.appendChild(row);
     }
 
-    header.addEventListener('click', () => {
+    header.addEventListener('click', (evt) => {
+      // If clicking a filter pill, filter findings instead of toggling
+      const filterPill = evt.target.closest('.pill-filter');
+      if (filterPill) {
+        evt.stopPropagation();
+        const filterType = filterPill.dataset.filter;
+        // Ensure findings are visible
+        findings.hidden = false;
+        header.querySelector('.run-expand').innerHTML = '&#8964;';
+        card.classList.add('run-open');
+        // Toggle: if same filter clicked again, show all
+        const isActive = filterPill.classList.contains('pill-active');
+        card.querySelectorAll('.pill-filter').forEach(p => p.classList.remove('pill-active'));
+        if (isActive) {
+          // Show all
+          findings.querySelectorAll('.finding-row').forEach(r => { r.hidden = false; });
+        } else {
+          filterPill.classList.add('pill-active');
+          findings.querySelectorAll('.finding-row').forEach(r => {
+            const tag = r.querySelector('.finding-tag');
+            if (!tag) { r.hidden = true; return; }
+            const tagText = tag.textContent.toLowerCase();
+            r.hidden = !tagText.includes(filterType);
+          });
+        }
+        return;
+      }
       const isOpen = !findings.hidden;
       findings.hidden = isOpen;
       header.querySelector('.run-expand').innerHTML = isOpen ? '&#8250;' : '&#8964;';
