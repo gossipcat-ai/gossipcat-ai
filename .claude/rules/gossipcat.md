@@ -33,8 +33,10 @@ Before committing, work through these in order. Stop at the first match.
 
 ## Tier 1: Mandatory Consensus (3 agents, ~10-15 min)
 
-Use `gossip_dispatch_consensus` with agents split by concern (security, logic/concurrency,
-edge-cases/persistence). Do NOT commit until consensus report is verified and signals recorded.
+Use `gossip_dispatch(mode: "consensus", tasks: [...])` with agents split by concern
+(security, logic/concurrency, edge-cases/persistence). Then collect with
+`gossip_collect(task_ids: [...], consensus: true)`. Do NOT commit until consensus report
+is verified and signals recorded.
 
 **Triggers — ANY of these:**
 
@@ -123,10 +125,10 @@ instead. This ensures tasks appear in the dashboard, agent memory is written, an
 performance signals are recorded.
 
 **Flow:** `gossip_run(agent_id, task)` → returns Agent() instructions for native agents →
-execute the Agent() → `gossip_run_complete(task_id, result)` to close the loop.
+execute the Agent() → `gossip_relay(task_id, result)` to close the loop.
 
-**Exception:** `gossip_dispatch_consensus` already handles its own native Agent() calls —
-don't double-wrap those.
+**Exception:** `gossip_dispatch(mode: "consensus", ...)` already handles its own native
+Agent() calls — don't double-wrap those.
 
 **Why:** Raw Agent() bypasses the gossipcat pipeline. Tasks won't appear in the activity
 feed, no memory is written, no signals recorded. The agent effectively works off-grid.
@@ -138,7 +140,7 @@ feed, no memory is written, no signals recorded. The agent effectively works off
 **Record signals IMMEDIATELY when you verify an agent's output — findings OR actions.**
 
 This is not optional. The moment you confirm or invalidate an agent's work, call
-`gossip_record_signals` before doing anything else.
+`gossip_signals(action: "record", ...)` before doing anything else.
 
 | Trigger | Signal | Example |
 |---------|--------|---------|

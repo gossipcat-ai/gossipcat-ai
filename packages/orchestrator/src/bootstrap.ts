@@ -209,26 +209,18 @@ ${sessionSection}
 
 | Tool | Description |
 |------|-------------|
-| \`gossip_dispatch(agent_id, task)\` | Send task to one agent. Returns task ID. |
-| \`gossip_dispatch_parallel(tasks)\` | Fan out to multiple agents simultaneously. |
-| \`gossip_collect(task_ids?, timeout_ms?)\` | Collect results. Waits for completion. |
-| \`gossip_dispatch_consensus(tasks)\` | Dispatch with consensus summary instruction. Returns task IDs. |
-| \`gossip_collect_consensus(task_ids, timeout_ms?)\` | Collect + cross-review. Returns tagged consensus report. |
-| \`gossip_run(agent_id, task)\` | Single-agent dispatch. Relay: returns result. Native: returns Agent() instructions + callback. |
-| \`gossip_run_complete(task_id, result)\` | Complete a native agent gossip_run — relays result, writes memory, emits signals. |
-| \`gossip_relay_result(task_id, result)\` | Feed native Agent() result back into relay for consensus. |
-| \`gossip_bootstrap()\` | Refresh this prompt with latest team state. |
-| \`gossip_setup(main_provider, main_model, agents)\` | Create team with native + custom agents. |
-| \`gossip_orchestrate(task)\` | Auto-decompose task via MainAgent. |
-| \`gossip_agents()\` | List current agents. |
-| \`gossip_status()\` | Check system status. |
-| \`gossip_update_instructions(agent_ids, instruction_update, mode)\` | Update agent instructions at runtime. |
-| \`gossip_tools()\` | List all available tools. |
-| \`gossip_plan(task)\` | Plan task with write-mode suggestions. Returns dispatch-ready JSON. |
-| \`gossip_session_save()\` | Save session summary for next session context. Call before ending session. |
+| \`gossip_run(agent_id, task, write_mode?, scope?)\` | Run task on one agent. Use agent_id:\`"auto"\` for orchestrator decomposition. |
+| \`gossip_dispatch(mode, ...)\` | Dispatch tasks. mode:\`"single"\` (agent_id + task), \`"parallel"\` (tasks array), \`"consensus"\` (tasks array + cross-review). |
+| \`gossip_collect(task_ids?, timeout_ms?, consensus?)\` | Collect results. Use \`consensus:true\` with explicit task_ids for cross-review. |
+| \`gossip_relay(task_id, result, error?)\` | Feed native Agent() result back into relay for consensus, memory, and gossip. |
+| \`gossip_signals(action, ...)\` | Record or retract consensus signals. action:\`"record"\` or \`"retract"\`. Call IMMEDIATELY on verify. |
+| \`gossip_status()\` | Show system status + agent list. |
+| \`gossip_setup(mode, agents, ...)\` | Create/update team. mode:\`"merge"\`, \`"replace"\`, or \`"update_instructions"\`. |
+| \`gossip_session_save(notes?)\` | Save session summary for next session context. Call before ending session. |
+| \`gossip_plan(task, strategy?)\` | Plan task with write-mode suggestions. Returns dispatch-ready JSON. |
 | \`gossip_scores()\` | View agent performance scores and dispatch weights. |
-| \`gossip_record_signals(signals)\` | Record consensus signals after verifying agent findings. Call IMMEDIATELY on verify. |
-| \`gossip_retract_signal(agent_id, task_id, reason)\` | Retract a previously recorded signal (e.g., wrong severity). Append-only — excluded from scoring. |
+| \`gossip_skills(action, ...)\` | Manage skills. action: \`list\`, \`bind\`, \`unbind\`, \`build\`, \`develop\`. |
+| \`gossip_tools()\` | List all available tools. |
 
 ## Dispatch Rules
 
@@ -245,7 +237,7 @@ ${sessionSection}
 
 ### Pattern:
 \`\`\`
-gossip_dispatch_parallel(tasks: [
+gossip_dispatch(mode: "parallel", tasks: [
   { agent_id: "<reviewer>", task: "Review X for <concern>" },
   { agent_id: "<tester>", task: "Review Y for <concern>" }
 ])
@@ -257,12 +249,12 @@ Then collect and synthesize results.
 When multiple agents review the same work, use **consensus review** for structured cross-review:
 
 \`\`\`
-gossip_dispatch_consensus(tasks: [
+gossip_dispatch(mode: "consensus", tasks: [
   { agent_id: "<reviewer-1>", task: "Security review X" },
   { agent_id: "<reviewer-2>", task: "Security review X" },
 ])
 // then:
-gossip_collect_consensus(task_ids, 300000)
+gossip_collect(task_ids: [...], consensus: true, timeout_ms: 300000)
 \`\`\`
 
 **What happens:** Dispatches all agents, waits for results, then runs a cross-review round where each agent reviews peer findings. Results are tagged:
@@ -289,9 +281,9 @@ Agents can modify files when dispatched with a write mode:
 **Workflow for implementation tasks:**
 1. Call \`gossip_plan(task)\` to get a decomposed plan with write-mode suggestions
 2. Review the plan — adjust write modes or agents if needed
-3. Call \`gossip_dispatch_parallel\` with the plan's task array to execute
+3. Call \`gossip_dispatch(mode: "parallel", tasks: [...])\` with the plan's task array to execute
 
-For read-only tasks (reviews, analysis), use \`gossip_dispatch\` or \`gossip_orchestrate\` directly — no write mode needed.
+For read-only tasks (reviews, analysis), use \`gossip_dispatch(mode: "single", ...)\` or \`gossip_run(agent_id: "auto", ...)\` directly — no write mode needed.
 
 ## Scoring System
 
@@ -299,7 +291,7 @@ Agents are scored by ratio-based accuracy with recency decay. Key behaviors:
 - **Auto-signals**: \`gossip_collect\` automatically records failure signals for empty/timeout/failed results.
 - **Circuit breaker**: 3 consecutive failures → agent demoted to minimum weight (0.3). Resets on any positive signal.
 - **Signal expiry**: Signals older than 30 days are excluded from scoring.
-- **Retraction**: Use \`gossip_retract_signal\` to correct a wrongly recorded signal (e.g., minor citation error recorded as hallucination).
+- **Retraction**: Use \`gossip_signals(action: "retract", ...)\` to correct a wrongly recorded signal (e.g., minor citation error recorded as hallucination).
 
 ## Memory
 

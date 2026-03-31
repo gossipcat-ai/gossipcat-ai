@@ -2176,18 +2176,20 @@ server.tool(
   {},
   async () => {
     const tools = [
-      { name: 'gossip_plan', desc: 'Plan a task with write-mode suggestions. Returns dispatch-ready JSON for approval before execution.' },
-      { name: 'gossip_dispatch', desc: 'Dispatch tasks — mode:"single" (one agent), "parallel" (fan-out), "consensus" (cross-review)' },
-      { name: 'gossip_collect', desc: 'Collect results from dispatched tasks. Use consensus:true for cross-review.' },
-      { name: 'gossip_status', desc: 'Check system status, agents, relay, workers, and dashboard URL/key' },
-      { name: 'gossip_run', desc: 'Single-call dispatch — run a task on one agent (or "auto" for orchestrator decomposition)' },
-      { name: 'gossip_relay', desc: 'Feed native Agent tool result back into relay for consensus + memory + gossip' },
-      { name: 'gossip_signals', desc: 'Record or retract consensus signals after cross-referencing' },
-      { name: 'gossip_scores', desc: 'View agent performance scores and dispatch weights' },
-      { name: 'gossip_skills', desc: 'Manage skills: list, bind, unbind, build, develop' },
-      { name: 'gossip_session_save', desc: 'Save cognitive session summary for next session context' },
-      { name: 'gossip_tools', desc: 'List available tools (this command)' },
-      { name: 'gossip_setup', desc: 'Create or update team configuration. Use mode:"update_instructions" to update agent instructions.' },
+      // Core (8)
+      { name: 'gossip_run', desc: 'Run task on one agent. Use agent_id:"auto" for orchestrator decomposition. Supports write_mode and scope.' },
+      { name: 'gossip_dispatch', desc: 'Dispatch tasks — mode:"single" (one agent), "parallel" (fan-out), "consensus" (cross-review).' },
+      { name: 'gossip_collect', desc: 'Collect results from dispatched tasks. Use consensus:true with explicit task_ids for cross-review.' },
+      { name: 'gossip_relay', desc: 'Feed native Agent() result back into gossipcat relay for consensus, memory, and gossip.' },
+      { name: 'gossip_signals', desc: 'Record or retract consensus signals. action:"record" or "retract".' },
+      { name: 'gossip_status', desc: 'Show system status, agent list, relay, workers, and dashboard URL/key.' },
+      { name: 'gossip_setup', desc: 'Create or update team. mode:"merge", "replace", or "update_instructions".' },
+      { name: 'gossip_session_save', desc: 'Save cognitive session summary for next session context. Call before ending session.' },
+      // Power-user (4)
+      { name: 'gossip_plan', desc: 'Plan a task with write-mode suggestions. Returns dispatch-ready JSON for approval.' },
+      { name: 'gossip_scores', desc: 'View agent performance scores and dispatch weights.' },
+      { name: 'gossip_skills', desc: 'Manage skills. action: list, bind, unbind, build, develop.' },
+      { name: 'gossip_tools', desc: 'List available tools (this command).' },
     ];
     const list = tools.map(t => `- ${t.name}: ${t.desc}`).join('\n');
     return { content: [{ type: 'text' as const, text: `Gossipcat Tools (${tools.length}):\n\n${list}` }] };
