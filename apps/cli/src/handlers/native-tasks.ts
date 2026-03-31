@@ -4,6 +4,76 @@
  */
 import { ctx, NATIVE_TASK_TTL_MS, presetScores } from '../mcp-context';
 
+/** Active timeout watchers — keyed by task ID */
+const timeoutWatchers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+/**
+ * Spawn a timeout watcher for a native task.
+ * INVARIANT: On timeout, writes timed_out to nativeResultMap. Does NOT delete from nativeTaskMap.
+ * The collect polling loop depends on nativeTaskMap entries persisting until real relay or TTL eviction.
+ */
+export function spawnTimeoutWatcher(taskId: string, info: { agentId: string; task: string; startedAt: number; timeoutMs?: number }): void {
+  const timeoutMs = info.timeoutMs ?? NATIVE_TASK_TTL_MS;
+  const elapsed = Date.now() - info.startedAt;
+  const remaining = Math.max(timeoutMs - elapsed, 0);
+
+  const existing = timeoutWatchers.get(taskId);
+  if (existing) clearTimeout(existing);
+
+  if (remaining <= 0) {
+    markTimedOut(taskId, info, timeoutMs);
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    timeoutWatchers.delete(taskId);
+    if (ctx.nativeTaskMap.has(taskId) && !ctx.nativeResultMap.has(taskId)) {
+      markTimedOut(taskId, info, timeoutMs);
+    }
+  }, remaining);
+
+  if (timer.unref) timer.unref();
+  timeoutWatchers.set(taskId, timer);
+}
+
+function markTimedOut(taskId: string, info: { agentId: string; task: string; startedAt: number }, timeoutMs: number): void {
+  ctx.nativeResultMap.set(taskId, {
+    id: taskId,
+    agentId: info.agentId,
+    task: info.task,
+    status: 'timed_out',
+    error: `Timed out after ${timeoutMs}ms — agent may have crashed or forgotten gossip_relay. Re-dispatch with gossip_run to retry.`,
+    startedAt: info.startedAt,
+    completedAt: Date.now(),
+  });
+  persistNativeTaskMap();
+  recordTimeoutSignal(taskId, info.agentId);
+}
+
+export function cancelTimeoutWatcher(taskId: string): void {
+  const timer = timeoutWatchers.get(taskId);
+  if (timer) {
+    clearTimeout(timer);
+    timeoutWatchers.delete(taskId);
+  }
+}
+
+function recordTimeoutSignal(taskId: string, agentId: string): void {
+  try {
+    const { PerformanceWriter } = require('@gossip/orchestrator');
+    const writer = new PerformanceWriter(process.cwd());
+    writer.appendSignals([{
+      type: 'consensus' as const,
+      taskId,
+      signal: 'disagreement' as const,
+      agentId,
+      evidence: 'Native agent timed out — no gossip_relay call received',
+      timestamp: new Date().toISOString(),
+    }]);
+    process.stderr.write(`[gossipcat] Auto-recorded timeout signal for ${agentId} [${taskId}]\n`);
+  } catch { /* best-effort */ }
+}
+
 /** Evict stale entries from nativeTaskMap and nativeResultMap */
 export function evictStaleNativeTasks(): void {
   const now = Date.now();
