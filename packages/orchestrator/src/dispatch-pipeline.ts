@@ -629,6 +629,9 @@ export class DispatchPipeline {
           this.scopeTracker.release(t.id);
           this.toolServer?.releaseAgent(t.agentId);
         }
+        if (t.writeMode === 'worktree') {
+          this.toolServer?.releaseAgent(t.agentId);
+        }
       }
     }
 

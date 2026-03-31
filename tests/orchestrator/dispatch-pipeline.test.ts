@@ -495,4 +495,32 @@ describe('DispatchPipeline', () => {
       expect(pipeline.getSkillGapSuggestions()).toEqual([]);
     });
   });
+
+  describe('collect() timeout cleanup', () => {
+    it('releases toolServer agent for timed-out worktree tasks', async () => {
+      const releaseAgent = jest.fn();
+      const hangingWorker = {
+        executeTask: jest.fn().mockReturnValue(new Promise(() => {})),
+        subscribeToBatch: jest.fn().mockResolvedValue(undefined),
+        unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
+      };
+      const ws = new Map([['hang-agent', hangingWorker]]);
+      const p = new DispatchPipeline({
+        projectRoot: '/tmp/gossip-timeout-test-' + Date.now(),
+        workers: ws,
+        registryGet: (id) => ({ id, provider: 'local' as const, model: 'mock', skills: [] }),
+        toolServer: { assignScope: jest.fn(), assignRoot: jest.fn(), releaseAgent },
+      });
+
+      const { taskId } = p.dispatch('hang-agent', 'slow worktree task');
+      const task = p.getTask(taskId)!;
+      (task as any).writeMode = 'worktree';
+      (task as any).worktreeInfo = { path: '/tmp/wt-timeout', branch: 'gossip-timeout' };
+      (p as any).worktreeManager = { cleanup: jest.fn().mockResolvedValue(undefined), create: jest.fn(), merge: jest.fn(), pruneOrphans: jest.fn() };
+
+      // Collect with very short timeout — task will still be running
+      await p.collect([taskId], 50);
+      expect(releaseAgent).toHaveBeenCalledWith('hang-agent');
+    });
+  });
 });
