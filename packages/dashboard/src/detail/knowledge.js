@@ -56,32 +56,34 @@ async function renderKnowledgeDetail(app, agentId) {
 
     // Task history
     if (data.tasks && data.tasks.length > 0) {
-      const taskPanel = document.createElement('div');
-      taskPanel.className = 'panel';
-      taskPanel.style.marginTop = '10px';
-      taskPanel.innerHTML =
-        '<div class="panel-head"><span class="panel-title">Task History (' + data.tasks.length + ')</span></div>';
+      const taskSection = document.createElement('div');
+      taskSection.innerHTML = '<div class="sh" style="margin-top:24px">Task History <span class="sh-count">' + data.tasks.length + '</span></div>';
 
-      const taskBody = document.createElement('div');
-      taskBody.className = 'panel-body';
-      taskBody.style.maxHeight = '300px';
+      const TASK_GRID = '100px 1fr 80px';
+      const taskView = _dataRows.createDataView({
+        columns: [
+          { key: 'timestamp', label: 'Date', width: '100px' },
+          { key: 'task', label: 'Task', width: '1fr', sortable: false },
+          { key: 'importance', label: 'Importance', width: '80px', align: 'right', sortable: false },
+        ],
+        defaultSort: 'timestamp',
+        defaultOrder: 'desc',
+        gridTemplateColumns: TASK_GRID,
+      });
 
-      for (const t of data.tasks.slice(-50).reverse()) {
-        const date = t.timestamp ? new Date(t.timestamp) : null;
-        const dateStr = date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
-        const timeStr = date ? date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
-        const taskText = String(t.task || t.result || '—').replace(/\n.*/s, '').slice(0, 140);
-        const row = document.createElement('div');
-        row.className = 'task-history-row';
-        row.innerHTML =
-          '<span class="task-history-date">' + e(dateStr) + '</span>' +
-          '<span class="task-history-time">' + e(timeStr) + '</span>' +
-          '<span class="task-history-desc">' + e(taskText) + '</span>';
-        taskBody.appendChild(row);
-      }
+      const { rows } = taskView._dataView;
+      data.tasks.forEach(t => {
+        const row = _dataRows.createDataRow([
+          { content: '<span data-timestamp="' + (t.timestamp || '') + '">' + _dash.timeAgo(t.timestamp) + '</span>', className: 'data-cell--muted' },
+          { content: _dash.escapeHtml((t.task || t.result || '').split('\n')[0].slice(0, 100)) },
+          { content: t.importance != null ? String(t.importance) : '—', className: 'data-cell--right' },
+        ], null, TASK_GRID);
+        rows.appendChild(row);
+      });
 
-      taskPanel.appendChild(taskBody);
-      section.appendChild(taskPanel);
+      taskSection.appendChild(taskView);
+      taskView.style.maxHeight = '400px';
+      app.appendChild(taskSection);
     }
 
     if (!data.index && (!data.knowledge || data.knowledge.length === 0)) {
