@@ -10674,7 +10674,15 @@ message: Your question?
         }
         return this.handleMessageCognitive(userMessage);
       }
-      /** Classify whether a task needs single-agent or multi-agent handling. */
+      /**
+       * Classifies a task's complexity to determine if it can be handled by a single agent
+       * or requires decomposition for multiple agents. This is a preliminary step to decide
+       * between a simple dispatch and a multi-agent plan.
+       *
+       * @param task The natural language description of the task.
+       * @returns A promise that resolves to either 'single' for simple, self-contained tasks
+       *          or 'multi' for complex tasks requiring a coordinated effort.
+       */
       async classifyTaskComplexity(task) {
         const agentSummary = this.registry.getAll().map((a) => `${a.id}: ${a.preset ?? "agent"} (${a.skills.join(", ")})`).join("\n");
         const response = await this.llm.generate([
@@ -30317,6 +30325,8 @@ Then review the plan and dispatch with gossip_dispatch(mode: "parallel", tasks: 
       if (!selectedId) {
         return { content: [{ type: "text", text: "No agents available. Run gossip_setup first." }] };
       }
+      process.stderr.write(`[gossipcat] Auto-dispatch: single-agent \u2192 ${selectedId}
+`);
       agent_id = selectedId;
     }
     const isNative = ctx.nativeAgentConfigs.has(agent_id);

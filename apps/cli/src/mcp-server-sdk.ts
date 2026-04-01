@@ -1159,6 +1159,7 @@ server.tool(
       }
 
       // Fall through to the normal dispatch below with the selected agent
+      process.stderr.write(`[gossipcat] Auto-dispatch: single-agent → ${selectedId}\n`);
       agent_id = selectedId;
     }
 
