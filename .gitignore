@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-mcp/
+dist-dashboard/
 *.js.map
 .env
 .env.local
@@ -10,3 +12,4 @@ coverage/
 .gossip/
 .superpowers/
 .gstack/
+.agents/
