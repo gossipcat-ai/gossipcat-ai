@@ -265,6 +265,7 @@ body::after {
 .tag-g { background: rgba(52,211,153,0.15); color: var(--green); }
 .tag-r { background: rgba(248,113,113,0.15); color: var(--red); }
 .tag-y { background: rgba(251,191,36,0.15); color: var(--amber); }
+.tag-u { background: rgba(167,139,250,0.15); color: var(--accent); }
 .tag-b { background: rgba(167,139,250,0.15); color: var(--accent); }
 .finding-body { flex: 1; min-width: 0; }
 .finding-text { font-size: 13px; color: var(--text); line-height: 1.4; }
@@ -274,6 +275,24 @@ body::after {
 .know-list { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
 .know-item { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 12px; font-family: var(--mono); color: var(--text-2); cursor: pointer; transition: all 0.15s; }
 .know-item:hover { background: var(--surface-raised); color: var(--text); border-color: var(--accent); }
+.know-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; padding-top: 4px; }
+.know-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; transition: all 0.15s; text-align: center; }
+.know-card:hover { background: var(--surface-raised); border-color: var(--accent); }
+.know-card-initials { font-size: 16px; font-weight: 700; font-family: var(--mono); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-hover); }
+.know-card-name { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); }
+.know-card-desc { font-size: 11px; color: var(--text-3); }
+
+/* ── Task History ──────────────────────────────── */
+.task-history-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.task-history-row:last-child { border-bottom: none; }
+.task-history-date { color: var(--accent); font-family: var(--mono); font-size: 11px; min-width: 50px; font-weight: 600; }
+.task-history-time { color: var(--text-3); font-family: var(--mono); font-size: 11px; min-width: 55px; }
+.task-history-desc { color: var(--text-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Pill Filters ──────────────────────────────── */
+.pill-filter { cursor: pointer; transition: all 0.15s; }
+.pill-filter:hover { opacity: 0.8; transform: scale(1.05); }
+.pill-active { outline: 2px solid currentColor; outline-offset: 1px; }
 
 /* ── Memory Browser (detail view) ───────────────── */
 .memory-md { padding: 1rem; font-size: 13px; line-height: 1.6; color: var(--text-2); }
@@ -378,6 +397,8 @@ body::after {
 .live-agent { color: var(--accent); font-weight: 600; font-family: var(--mono); font-size: 12px; min-width: 140px; }
 .live-desc { color: var(--text-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .live-elapsed { color: var(--amber); font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+.live-taskid { color: var(--text-3); font-family: var(--mono); font-size: 11px; background: var(--surface); padding: 1px 5px; border-radius: 3px; }
+
 
 /* ── Responsive ─────────────────────────────────── */
 @media (max-width: 1200px) {
@@ -393,6 +414,237 @@ body::after {
   .topbar { padding: 0 16px; }
   .page { padding: 16px; }
   .agent-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Agent stat bars ──────────────────────────────── */
+.ag-stats { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 2px 4px 0; }
+.ag-stat { display: flex; align-items: center; gap: 4px; }
+.ag-stat-label { font-size: 9px; color: var(--text-3); width: 24px; text-align: right; }
+.ag-stat-bar { flex: 1; height: 3px; background: var(--bg-2, rgba(255,255,255,0.06)); border-radius: 2px; overflow: hidden; }
+.ag-stat-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+
+/* ── Consensus run stacked bar ────────────────────── */
+.run-bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.bar-seg { min-width: 2px; }
+.bar-seg-g { background: var(--green); }
+.bar-seg-r { background: var(--red); }
+.bar-seg-y { background: var(--amber); }
+.bar-seg-b { background: var(--accent, #a78bfa); }
+
+/* ── Signal sparkline ─────────────────────────────── */
+.signal-sparkline { display: flex; gap: 2px; align-items: flex-end; height: 28px; margin-bottom: 12px; padding: 0 4px; }
+.spark-col { display: flex; flex-direction: column; align-items: center; width: 8px; cursor: help; }
+.spark-pos { width: 6px; background: var(--green); border-radius: 1px; }
+.spark-neg { width: 6px; background: var(--red); border-radius: 1px; margin-top: 1px; }
+
+/* ═══ Data Row System (v4) ═══ */
+
+.data-view {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 50px);
+  overflow: hidden;
+}
+
+.data-header {
+  display: grid;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 0 12px;
+  height: 36px;
+  align-items: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  user-select: none;
+}
+
+.data-header [data-sort] {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.data-header [data-sort]:hover {
+  color: var(--text-2);
+}
+
+.data-sort {
+  font-size: 10px;
+  opacity: 0.5;
+}
+
+.data-sort--active {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.data-rows {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.data-row {
+  display: grid;
+  padding: 0 12px;
+  min-height: 40px;
+  align-items: center;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.15s;
+}
+
+.data-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.data-row--expanded {
+  border-left-color: var(--accent);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.data-cell {
+  padding: 8px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.data-cell--right {
+  text-align: right;
+  font-family: var(--mono);
+}
+
+.data-cell--center {
+  text-align: center;
+}
+
+.data-cell--muted {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.data-expand {
+  grid-column: 1 / -1;
+  padding: 12px 24px 16px;
+  border-top: 1px solid var(--border);
+  animation: data-expand-in 0.15s ease-out;
+}
+
+@keyframes data-expand-in {
+  from { opacity: 0; max-height: 0; }
+  to { opacity: 1; max-height: 400px; }
+}
+
+.data-group {
+  padding: 6px 24px;
+  font-size: 11px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.data-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.data-bar {
+  display: inline-block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  vertical-align: middle;
+}
+
+.data-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+}
+
+.data-load-more button {
+  background: var(--surface);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 20px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.data-load-more button:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.data-empty {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 48px 24px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.data-empty a {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.data-error {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 48px 24px;
+  color: var(--red);
+  font-size: 13px;
+}
+
+.data-error a {
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: 8px;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-left-color: var(--amber); }
+  50% { border-left-color: transparent; }
+}
+
+.data-row--running {
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+/* ═══ Hub Grid (v4) ═══ */
+
+.hub-grid {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .hub-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 </style>
@@ -501,16 +753,24 @@ async function renderTaskStrip(container) {
     if (recent.length === 0) { container.hidden = true; return; }
 
     container.className = 'section live-strip';
+    // Add section title
+    const title = document.createElement('div');
+    title.className = 'section-header';
+    title.innerHTML = '<h2>Recent Tasks</h2><span class="section-count">' + recent.length + ' tasks</span>';
+    container.appendChild(title);
+
     for (const t of recent) {
       const color = t.status === 'completed' ? 'var(--green)' : t.status === 'failed' ? 'var(--red)' : 'var(--text-3)';
       const icon = t.status === 'completed' ? '&#10003;' : t.status === 'failed' ? '&#10007;' : '&#8943;';
       const desc = escapeHtml((t.task || '').replace(/\n.*/s, ''));
       const dur = t.duration > 0 ? (t.duration / 1000).toFixed(1) + 's' : '';
+      const taskId = t.taskId ? escapeHtml(t.taskId.slice(0, 8)) : '';
       const row = document.createElement('div');
       row.className = 'live-task';
       row.innerHTML =
         '<span class="live-icon" style="color:' + color + '">' + icon + '</span>' +
         '<span class="live-agent">' + escapeHtml(t.agentId) + '</span>' +
+        (taskId ? '<span class="live-taskid">' + taskId + '</span>' : '') +
         '<span class="live-desc">' + desc + '</span>' +
         (dur ? '<span class="live-elapsed" style="color:var(--text-3)">' + dur + '</span>' : '') +
         '<span class="live-elapsed">' + timeAgo(t.timestamp) + '</span>';
@@ -877,6 +1137,8 @@ function renderTeamSection(agents) {
     const w = agent.scores?.dispatchWeight ?? 1;
     const signals = agent.scores?.signals ?? 0;
     const accuracy = agent.scores?.accuracy ?? 0.5;
+    const reliability = agent.scores?.reliability ?? 0.5;
+    const uniqueness = agent.scores?.uniqueness ?? 0.5;
     const ringColor = signals === 0 ? 'var(--text-3)'
       : w >= 1.5 ? 'var(--green)'
       : w >= 0.8 ? 'var(--amber)'
@@ -901,6 +1163,11 @@ function renderTeamSection(agents) {
         '<span class="ag-initials" style="color:' + ringColor + '">' + agentInitials(agent.id) + '</span>' +
       '</div>' +
       '<span class="ag-name">' + e(agent.id) + '</span>' +
+      '<div class="ag-stats">' +
+        '<div class="ag-stat"><span class="ag-stat-label">acc</span><div class="ag-stat-bar"><div class="ag-stat-fill" style="width:' + (accuracy * 100) + '%;background:' + ringColor + '"></div></div></div>' +
+        '<div class="ag-stat"><span class="ag-stat-label">rel</span><div class="ag-stat-bar"><div class="ag-stat-fill" style="width:' + (reliability * 100) + '%;background:' + ringColor + '"></div></div></div>' +
+        '<div class="ag-stat"><span class="ag-stat-label">uniq</span><div class="ag-stat-bar"><div class="ag-stat-fill" style="width:' + (uniqueness * 100) + '%;background:' + ringColor + '"></div></div></div>' +
+      '</div>' +
       '<span class="ag-last">' + lastText +
         (lastTime ? ' <span class="ag-time">' + lastTime + '</span>' : '') +
       '</span>';
@@ -947,10 +1214,19 @@ function renderActivitySection(consensusData) {
     const total = (c.agreement || 0) + (c.disagreement || 0) + (c.hallucination || 0) + (c.unverified || 0) + (c.unique || 0) + (c.new || 0);
 
     const pills = [];
-    if (c.agreement) pills.push('<span class="pill pill-g">' + c.agreement + ' confirmed</span>');
-    if (c.disagreement || c.hallucination) pills.push('<span class="pill pill-r">' + ((c.disagreement || 0) + (c.hallucination || 0)) + ' disputed</span>');
-    if (c.unverified) pills.push('<span class="pill pill-y">' + c.unverified + ' unverified</span>');
-    if (c.unique) pills.push('<span class="pill pill-b">' + c.unique + ' unique</span>');
+    if (c.agreement) pills.push('<span class="pill pill-g pill-filter" data-filter="confirmed">' + c.agreement + ' confirmed</span>');
+    if (c.disagreement || c.hallucination) pills.push('<span class="pill pill-r pill-filter" data-filter="disputed">' + ((c.disagreement || 0) + (c.hallucination || 0)) + ' disputed</span>');
+    if (c.unverified) pills.push('<span class="pill pill-y pill-filter" data-filter="unverified">' + c.unverified + ' unverified</span>');
+    if (c.unique) pills.push('<span class="pill pill-b pill-filter" data-filter="unique">' + c.unique + ' unique</span>');
+
+    const segments = [];
+    if (total > 0) {
+      if (c.agreement) segments.push('<div class="bar-seg bar-seg-g" style="width:' + ((c.agreement / total) * 100) + '%"></div>');
+      if (c.disagreement || c.hallucination) segments.push('<div class="bar-seg bar-seg-r" style="width:' + (((c.disagreement || 0) + (c.hallucination || 0)) / total * 100) + '%"></div>');
+      if (c.unverified) segments.push('<div class="bar-seg bar-seg-y" style="width:' + ((c.unverified / total) * 100) + '%"></div>');
+      if (c.unique) segments.push('<div class="bar-seg bar-seg-b" style="width:' + ((c.unique / total) * 100) + '%"></div>');
+    }
+    const barHtml = segments.length > 0 ? '<div class="run-bar">' + segments.join('') + '</div>' : '';
 
     const agentChips = run.agents.slice(0, 4).map(a =>
       '<span class="run-agent-chip">' + agentInitials(a) + '</span>'
@@ -961,12 +1237,13 @@ function renderActivitySection(consensusData) {
     header.className = 'run-header';
     header.innerHTML =
       '<div class="run-top">' +
-        '<span class="run-expand">&#9654;</span>' +
+        '<span class="run-expand">&#8250;</span>' +
         '<span class="run-title">' + total + ' findings</span>' +
         '<span class="run-agents">' + agentChips + moreAgents + '</span>' +
         '<span class="run-time">' + timeAgo(run.timestamp) + '</span>' +
       '</div>' +
-      '<div class="run-pills">' + pills.join('') + '</div>';
+      '<div class="run-pills">' + pills.join('') + '</div>' +
+      barHtml;
 
     const findings = document.createElement('div');
     findings.className = 'run-findings';
@@ -975,9 +1252,11 @@ function renderActivitySection(consensusData) {
     for (const sig of run.signals) {
       if (sig.signal === 'signal_retracted') continue;
       let tag = '', tagClass = '';
-      if (sig.signal === 'agreement' || sig.signal === 'unique_confirmed') { tag = 'CONFIRMED'; tagClass = 'tag-g'; }
+      if (sig.signal === 'agreement' || sig.signal === 'consensus_verified') { tag = 'CONFIRMED'; tagClass = 'tag-g'; }
       else if (sig.signal === 'disagreement' || sig.signal === 'hallucination_caught') { tag = 'DISPUTED'; tagClass = 'tag-r'; }
-      else if (sig.signal === 'unverified' || sig.signal === 'unique_unconfirmed') { tag = 'UNVERIFIED'; tagClass = 'tag-y'; }
+      else if (sig.signal === 'unverified') { tag = 'UNVERIFIED'; tagClass = 'tag-y'; }
+      else if (sig.signal === 'unique_confirmed') { tag = 'UNIQUE'; tagClass = 'tag-u'; }
+      else if (sig.signal === 'unique_unconfirmed') { tag = 'UNIQUE'; tagClass = 'tag-u'; }
       else if (sig.signal === 'new_finding') { tag = 'NEW'; tagClass = 'tag-b'; }
       else continue;
 
@@ -997,10 +1276,36 @@ function renderActivitySection(consensusData) {
       findings.appendChild(row);
     }
 
-    header.addEventListener('click', () => {
+    header.addEventListener('click', (evt) => {
+      // If clicking a filter pill, filter findings instead of toggling
+      const filterPill = evt.target.closest('.pill-filter');
+      if (filterPill) {
+        evt.stopPropagation();
+        const filterType = filterPill.dataset.filter;
+        // Ensure findings are visible
+        findings.hidden = false;
+        header.querySelector('.run-expand').innerHTML = '&#8964;';
+        card.classList.add('run-open');
+        // Toggle: if same filter clicked again, show all
+        const isActive = filterPill.classList.contains('pill-active');
+        card.querySelectorAll('.pill-filter').forEach(p => p.classList.remove('pill-active'));
+        if (isActive) {
+          // Show all
+          findings.querySelectorAll('.finding-row').forEach(r => { r.hidden = false; });
+        } else {
+          filterPill.classList.add('pill-active');
+          findings.querySelectorAll('.finding-row').forEach(r => {
+            const tag = r.querySelector('.finding-tag');
+            if (!tag) { r.hidden = true; return; }
+            const tagText = tag.textContent.toLowerCase();
+            r.hidden = !tagText.includes(filterType);
+          });
+        }
+        return;
+      }
       const isOpen = !findings.hidden;
       findings.hidden = isOpen;
-      header.querySelector('.run-expand').innerHTML = isOpen ? '&#9654;' : '&#9660;';
+      header.querySelector('.run-expand').innerHTML = isOpen ? '&#8250;' : '&#8964;';
       card.classList.toggle('run-open', !isOpen);
     });
 
@@ -1013,34 +1318,50 @@ function renderActivitySection(consensusData) {
   return section;
 }
 
-// packages/dashboard/src/hub/knowledge.js — Flat text list of agent memories
+// packages/dashboard/src/hub/knowledge.js — Agent knowledge overview cards
 
-function renderKnowledgeSection(agents) {
-  const { escapeHtml: e, navigate, makeSection } = window._dash;
+function renderKnowledgeSection(agents, knowledgeData) {
+  const { escapeHtml: e, navigate, makeSection, timeAgo, agentInitials } = window._dash;
   const section = makeSection('Knowledge', agents.length + ' agents');
 
-  const list = document.createElement('div');
-  list.className = 'know-list';
+  const grid = document.createElement('div');
+  grid.className = 'know-grid';
 
-  const projLink = document.createElement('button');
-  projLink.className = 'know-item';
-  projLink.textContent = '_project (shared)';
-  projLink.addEventListener('click', () => navigate('#/knowledge/_project'));
-  list.appendChild(projLink);
+  // Project shared memory first
+  const projCard = document.createElement('button');
+  projCard.className = 'know-card';
+  projCard.addEventListener('click', () => navigate('#/knowledge/_project'));
+  projCard.innerHTML =
+    '<div class="know-card-initials" style="color:var(--accent)">P</div>' +
+    '<span class="know-card-name">_project</span>' +
+    '<span class="know-card-desc">Shared team memory</span>';
+  grid.appendChild(projCard);
 
   const sorted = [...agents].sort((a, b) =>
     (b.scores?.dispatchWeight || 0) - (a.scores?.dispatchWeight || 0)
   );
 
   for (const agent of sorted) {
-    const btn = document.createElement('button');
-    btn.className = 'know-item';
-    btn.textContent = agent.id;
-    btn.addEventListener('click', () => navigate('#/knowledge/' + encodeURIComponent(agent.id)));
-    list.appendChild(btn);
+    const card = document.createElement('button');
+    card.className = 'know-card';
+    card.addEventListener('click', () => navigate('#/knowledge/' + encodeURIComponent(agent.id)));
+
+    const signals = agent.scores?.signals ?? 0;
+    const w = agent.scores?.dispatchWeight ?? 1;
+    const preset = agent.preset || '';
+    const color = signals === 0 ? 'var(--text-3)'
+      : w >= 1.5 ? 'var(--green)'
+      : w >= 0.8 ? 'var(--amber)'
+      : 'var(--red)';
+
+    card.innerHTML =
+      '<div class="know-card-initials" style="color:' + color + '">' + agentInitials(agent.id) + '</div>' +
+      '<span class="know-card-name">' + e(agent.id) + '</span>' +
+      '<span class="know-card-desc">' + e(preset) + (signals > 0 ? ' &middot; ' + signals + ' signals' : '') + '</span>';
+    grid.appendChild(card);
   }
 
-  section.appendChild(list);
+  section.appendChild(grid);
   return section;
 }
 
@@ -1318,6 +1639,34 @@ async function renderSignalsDetail(app) {
     }
     section.appendChild(filters);
 
+    // Sparkline: group by day, show positive vs negative trend
+    const byDay = new Map();
+    for (const s of (data.signals || [])) {
+      const day = (s.timestamp || '').slice(0, 10);
+      if (!day) continue;
+      const d = byDay.get(day) || { pos: 0, neg: 0 };
+      if (['agreement', 'unique_confirmed', 'new_finding', 'consensus_verified'].includes(s.signal)) d.pos++;
+      else if (['disagreement', 'hallucination_caught'].includes(s.signal)) d.neg++;
+      byDay.set(day, d);
+    }
+
+    if (byDay.size > 1) {
+      const spark = document.createElement('div');
+      spark.className = 'signal-sparkline';
+      const maxCount = Math.max(...[...byDay.values()].map(d => d.pos + d.neg), 1);
+      let sparkHtml = '';
+      for (const [day, counts] of [...byDay.entries()].sort().slice(-14)) {
+        const posH = (counts.pos / maxCount) * 24;
+        const negH = (counts.neg / maxCount) * 24;
+        sparkHtml += '<div class="spark-col" title="' + day + ': +' + counts.pos + ' -' + counts.neg + '">' +
+          '<div class="spark-pos" style="height:' + posH + 'px"></div>' +
+          '<div class="spark-neg" style="height:' + negH + 'px"></div>' +
+        '</div>';
+      }
+      spark.innerHTML = sparkHtml;
+      section.appendChild(spark);
+    }
+
     const list = document.createElement('div');
     list.className = 'run-list';
     section.appendChild(list);
@@ -1375,7 +1724,7 @@ async function renderSignalsDetail(app) {
     renderRows();
     app.appendChild(section);
   } catch (err) {
-    app.innerHTML = '<div class="empty-state">Failed to load signals: ' + err.message + '</div>';
+    app.innerHTML = '<div class="empty-state">Failed to load signals: ' + e(err.message) + '</div>';
   }
 }
 
@@ -1427,7 +1776,7 @@ async function renderKnowledgeDetail(app, agentId) {
           '<span class="memory-desc">' + desc + '</span>' +
           (isCognitive ? '<span style="font-size:9px;font-family:var(--mono);color:var(--accent);margin-left:auto">cognitive</span>' : '') +
           '</div>' +
-          '<pre class="memory-file-content" hidden>' + e(k.content) + '</pre>';
+          '<div class="memory-file-content memory-md" hidden>' + renderMarkdown(k.content || '') + '</div>';
         filesBody.appendChild(file);
       }
 
@@ -1448,11 +1797,16 @@ async function renderKnowledgeDetail(app, agentId) {
       taskBody.style.maxHeight = '300px';
 
       for (const t of data.tasks.slice(-50).reverse()) {
+        const date = t.timestamp ? new Date(t.timestamp) : null;
+        const dateStr = date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+        const timeStr = date ? date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+        const taskText = String(t.task || t.result || '—').replace(/\n.*/s, '').slice(0, 140);
         const row = document.createElement('div');
-        row.className = 'fr';
+        row.className = 'task-history-row';
         row.innerHTML =
-          '<span class="fr-time" style="min-width:70px">' + (t.timestamp ? new Date(t.timestamp).toLocaleDateString() : '—') + '</span>' +
-          '<span style="color:var(--text-2);flex:1">' + e(String(t.task || t.result || '—').slice(0, 120)) + '</span>';
+          '<span class="task-history-date">' + e(dateStr) + '</span>' +
+          '<span class="task-history-time">' + e(timeStr) + '</span>' +
+          '<span class="task-history-desc">' + e(taskText) + '</span>';
         taskBody.appendChild(row);
       }
 
