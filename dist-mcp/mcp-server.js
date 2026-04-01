@@ -4441,6 +4441,15 @@ var init_src3 = __esm({
   }
 });
 
+// packages/orchestrator/src/types.ts
+var MIN_AGENTS_FOR_CONSENSUS;
+var init_types = __esm({
+  "packages/orchestrator/src/types.ts"() {
+    "use strict";
+    MIN_AGENTS_FOR_CONSENSUS = 2;
+  }
+});
+
 // packages/orchestrator/src/skill-loader.ts
 function loadSkills(agentId, skills, projectRoot, index) {
   const effectiveSkills = index && index.getAgentSlots(agentId).length > 0 ? index.getEnabledSkills(agentId) : skills;
@@ -4570,8 +4579,10 @@ ${parts.lens}
 
 --- CONSENSUS OUTPUT FORMAT ---
 End your response with a section titled "## Consensus Summary".
-List one line per finding with file:line references where applicable.
-Format: "- <finding description> (file:line)"
+EVERY finding MUST include a citation. Use file:line for specific issues, or just the filename for file-level concerns. Without a citation, peers cannot verify your claim and it will be marked UNVERIFIED.
+Format: "- <finding description> (file.ts:123)" or "- <finding description> (file.ts)"
+
+Do NOT fabricate file paths or line numbers. If you cannot identify a specific file, omit the finding \u2014 uncited findings waste review capacity.
 
 IMPORTANT: Only list actual issues \u2014 bugs, security concerns, design problems.
 Do NOT include confirmations like "X is correct", "Y works as expected", or
@@ -6315,9 +6326,23 @@ var init_consensus_engine = __esm({
           if (peerId === agent.agentId) continue;
           const peerConfig = this.config.registryGet(peerId);
           const preset = peerConfig?.preset ?? "unknown";
-          const annotated = this.config.projectRoot ? await this.inlineCodeAnchors(peerSummary) : peerSummary;
+          const summaryLines = peerSummary.split("\n");
+          const annotatedLines = [];
+          const MAX_ANCHORS_PER_SUMMARY = 15;
+          let anchorCount = 0;
+          for (const line of summaryLines) {
+            annotatedLines.push(line);
+            const trimmed = line.trim();
+            if (trimmed && this.config.projectRoot && anchorCount < MAX_ANCHORS_PER_SUMMARY) {
+              const snippets = await this.snippetsForFinding(trimmed);
+              if (snippets) {
+                annotatedLines.push(snippets);
+                anchorCount += (snippets.match(/<anchor /g) || []).length;
+              }
+            }
+          }
           const peerBlock = `Agent "${peerId}" (${preset}):
-<data>${annotated}</data>`;
+<data>${annotatedLines.join("\n")}</data>`;
           peerLines.push(peerBlock);
         }
         const userContent = `You previously reviewed code and produced findings. Now review your peers' findings.
@@ -6352,7 +6377,7 @@ VERIFICATION RULES:
 - If a finding has an <anchor> block, use the code shown to verify the claim
 - AGREE only if you can confirm the claim is factually correct \u2014 cite your evidence
 - DISAGREE only if you have concrete evidence the finding is WRONG \u2014 the code contradicts the claim
-- UNVERIFIED if an anchor is missing for a cited file, the line number is wrong, or the code in the anchor is insufficient to verify the claim. First try to reason about the claim's plausibility from what you CAN see. Only use UNVERIFIED as a last resort when you truly cannot assess the claim.
+- UNVERIFIED if an anchor is missing for a cited file, the line number is wrong, or the code in the anchor is insufficient to verify the claim. UNVERIFIED is the correct default when you lack context \u2014 it is NOT a failure. Use it freely whenever you cannot confidently verify or refute.
 - Do NOT agree with a finding just because it sounds plausible \u2014 verify it
 - Agreeing without verification is WORSE than disagreeing \u2014 a false confirmation poisons the system
 
@@ -6452,8 +6477,8 @@ Return only valid JSON.` },
               const f = findingMap.get(matchKey);
               f.confidences.push(entry.confidence);
               const isKeywordHallucination = this.detectHallucination(entry.evidence);
-              const isCitationFabricated = !isKeywordHallucination ? await this.verifyCitations(entry.evidence) : false;
-              const isHallucination = isKeywordHallucination || isCitationFabricated;
+              const isCitationFabricated = await this.verifyCitations(entry.evidence);
+              const isHallucination = isKeywordHallucination && isCitationFabricated;
               if (isHallucination) {
                 signals.push({
                   type: "consensus",
@@ -6532,7 +6557,8 @@ Return only valid JSON.` },
             disputed.push(finding);
           } else if (entry.confirmedBy.length > 0) {
             const hasFabricatedCitation = await this.verifyCitations(entry.finding);
-            if (hasFabricatedCitation) {
+            const hasHallucinationKeywords = this.detectHallucination(entry.finding);
+            if (hasFabricatedCitation && hasHallucinationKeywords) {
               finding.tag = "unique";
               unique.push(finding);
               signals.push({
@@ -6543,6 +6569,19 @@ Return only valid JSON.` },
                 agentId: entry.originalAgentId,
                 outcome: "fabricated_citation",
                 evidence: capEvidence(`Confirmed finding cites non-existent code: "${entry.finding.slice(0, 200)}"`),
+                timestamp: now
+              });
+              continue;
+            } else if (hasFabricatedCitation) {
+              finding.tag = "unique";
+              unique.push(finding);
+              signals.push({
+                type: "consensus",
+                taskId: getTaskId(entry.originalAgentId),
+                consensusId,
+                signal: "unique_unconfirmed",
+                agentId: entry.originalAgentId,
+                evidence: capEvidence(`Confirmed finding has unresolvable citation (stale?): "${entry.finding.slice(0, 200)}"`),
                 timestamp: now
               });
               continue;
@@ -6754,6 +6793,7 @@ ${findingBlocks.map((fb) => fb.block).join("\n\n---\n\n")}`
                 signal: "hallucination_caught",
                 consensusId,
                 agentId: fb.finding.originalAgentId,
+                outcome: "orchestrator_disputed",
                 evidence: `Phase 3 orchestrator disputed: ${(v.evidence || "").slice(0, 200)}`,
                 timestamp: now,
                 taskId: getTaskId(fb.finding.originalAgentId)
@@ -6769,79 +6809,47 @@ ${findingBlocks.map((fb) => fb.block).join("\n\n---\n\n")}`
         }
       }
       /**
-       * Inline short code anchors into a peer summary. For each finding that cites file:line,
-       * append a 5-line snippet (cited line ±2) so cross-reviewers can verify without bulk code blocks.
-       * Cap: 15 anchors per summary to bound token growth (~105 extra lines max).
+       /**
+       * Extract code snippets for a single finding's file:line citations.
+       * Returns formatted anchor blocks as a string, or '' if no citations found.
        */
-      async inlineCodeAnchors(summary) {
-        const citationPattern = /((?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)/;
-        const lines = summary.split("\n");
-        const result = [];
-        const seen = /* @__PURE__ */ new Set();
-        let anchorCount = 0;
-        const MAX_ANCHORS = 15;
+      async snippetsForFinding(findingText, maxSnippets = 3) {
+        if (!this.config.projectRoot) return "";
+        const citationPattern = /((?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)/g;
         const CONTEXT_LINES = 2;
         const MAX_FILE_SIZE = 10 * 1024 * 1024;
-        const bareFilePattern = /(?:^|[\s`"'(])(([\w./-]+\/)?([a-zA-Z][\w.-]+\.(jsonl?|md|ts|tsx|js|jsx|yaml|yml|toml|cfg)))(?:[\s`"',.):]|$)/;
-        const FILE_HEAD_LINES = 20;
-        for (const line of lines) {
-          result.push(line);
-          if (anchorCount >= MAX_ANCHORS) continue;
-          const match = citationPattern.exec(line);
-          if (match) {
-            const fullRef = match[1];
-            const bareFile = match[2];
-            const lineNum = parseInt(match[3], 10);
-            const key = `${fullRef}:${lineNum}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            try {
-              const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
-              if (!filePath) continue;
-              const fileStat = await (0, import_promises3.stat)(filePath);
-              if (fileStat.size > MAX_FILE_SIZE) continue;
-              const content = await this.cachedRead(filePath);
-              if (!content) continue;
-              const fileLines = content.split("\n");
-              if (lineNum > fileLines.length) continue;
-              const start = Math.max(0, lineNum - 1 - CONTEXT_LINES);
-              const end = Math.min(fileLines.length, lineNum + CONTEXT_LINES);
-              const snippet = fileLines.slice(start, end).map((l, i) => `  ${start + i + 1}: ${l}`).join("\n");
-              const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, "");
-              result.push(`<anchor src="${fullRef}:${lineNum}">
+        const anchors = [];
+        const seen = /* @__PURE__ */ new Set();
+        let match;
+        while ((match = citationPattern.exec(findingText)) !== null) {
+          if (anchors.length >= maxSnippets) break;
+          const fullRef = match[1];
+          const bareFile = match[2];
+          const lineNum = parseInt(match[3], 10);
+          const key = `${fullRef}:${lineNum}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          try {
+            const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
+            if (!filePath) continue;
+            const fileStat = await (0, import_promises3.stat)(filePath);
+            if (fileStat.size > MAX_FILE_SIZE) continue;
+            const content = await this.cachedRead(filePath);
+            if (!content) continue;
+            const fileLines = content.split("\n");
+            if (lineNum > fileLines.length) continue;
+            const start = Math.max(0, lineNum - 1 - CONTEXT_LINES);
+            const end = Math.min(fileLines.length, lineNum + CONTEXT_LINES);
+            const snippet = fileLines.slice(start, end).map((l, i) => `  ${start + i + 1}: ${l}`).join("\n");
+            const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, "");
+            const safeRef = fullRef.replace(/["<>]/g, "");
+            anchors.push(`<anchor src="${safeRef}:${lineNum}">
 ${safeSnippet}
 </anchor>`);
-              anchorCount++;
-            } catch {
-            }
-            continue;
-          }
-          const bareMatch = bareFilePattern.exec(line);
-          if (bareMatch) {
-            const fileRef = bareMatch[1];
-            const key = `file:${fileRef}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            try {
-              const filePath = await this.cachedResolve(fileRef);
-              if (!filePath) continue;
-              const fileStat = await (0, import_promises3.stat)(filePath);
-              if (fileStat.size > MAX_FILE_SIZE) continue;
-              const content = await this.cachedRead(filePath);
-              if (!content) continue;
-              const fileLines = content.split("\n");
-              const headEnd = Math.min(fileLines.length, FILE_HEAD_LINES);
-              const snippet = fileLines.slice(0, headEnd).map((l, i) => `  ${i + 1}: ${l}`).join("\n");
-              const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, "");
-              result.push(`<anchor type="file-head" src="${fileRef}" lines="${fileLines.length}">
-${safeSnippet}
-</anchor>`);
-              anchorCount++;
-            } catch {
-            }
+          } catch {
           }
         }
-        return result.join("\n");
+        return anchors.join("\n");
       }
       /**
        * Verify file:line citations in disagreement evidence against actual source code.
@@ -6972,13 +6980,21 @@ ${safeSnippet}
        * 3-tier matching: exact, substring, word overlap.
        */
       findMatchingFinding(findingMap, peerAgentId, findingText) {
+        const normalize = (s) => s.toLowerCase().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim();
+        const normalizedText = normalize(findingText);
+        for (const [key, entry] of findingMap) {
+          if (entry.originalAgentId !== peerAgentId) continue;
+          if (normalize(entry.finding) === normalizedText) return key;
+        }
         const exactKey = `${peerAgentId}::${findingText}`;
         if (findingMap.has(exactKey)) return exactKey;
+        const MIN_SUBSTRING_LENGTH = 25;
         const lowerText = findingText.toLowerCase();
         for (const [key, entry] of findingMap) {
           if (entry.originalAgentId !== peerAgentId) continue;
           const lowerFinding = entry.finding.toLowerCase();
-          if (lowerFinding.includes(lowerText) || lowerText.includes(lowerFinding)) {
+          const shorter = Math.min(lowerText.length, lowerFinding.length);
+          if (shorter >= MIN_SUBSTRING_LENGTH && (lowerFinding.includes(lowerText) || lowerText.includes(lowerFinding))) {
             return key;
           }
         }
@@ -7296,6 +7312,7 @@ var init_dispatch_pipeline = __esm({
     import_crypto7 = require("crypto");
     import_fs12 = require("fs");
     import_path17 = require("path");
+    init_types();
     init_skill_loader();
     init_prompt_assembler();
     init_agent_memory();
@@ -7562,6 +7579,10 @@ var init_dispatch_pipeline = __esm({
             entry.error = err.message;
             entry.completedAt = Date.now();
             this.toolServer?.releaseAgent(agentId);
+            if (entry.worktreeInfo) {
+              this.worktreeManager.cleanup(taskId, entry.worktreeInfo.path).catch(() => {
+              });
+            }
             throw err;
           });
         } else {
@@ -7610,26 +7631,7 @@ var init_dispatch_pipeline = __esm({
         });
       }
       getTask(taskId) {
-        const t = this.tasks.get(taskId);
-        if (!t) return void 0;
-        return {
-          id: t.id,
-          agentId: t.agentId,
-          task: t.task,
-          status: t.status,
-          result: t.result,
-          error: t.error,
-          startedAt: t.startedAt,
-          completedAt: t.completedAt,
-          skillWarnings: t.skillWarnings,
-          writeMode: t.writeMode,
-          scope: t.scope,
-          worktreeInfo: t.worktreeInfo,
-          planId: t.planId,
-          planStep: t.planStep,
-          inputTokens: t.inputTokens,
-          outputTokens: t.outputTokens
-        };
+        return this.tasks.get(taskId);
       }
       /** Get a health summary of all active tasks — for diagnostics when user asks "is it working?" */
       getActiveTasksHealth() {
@@ -7653,6 +7655,15 @@ var init_dispatch_pipeline = __esm({
             task.status = "failed";
             task.error = "Cancelled by user";
             task.completedAt = Date.now();
+            if (task.writeMode === "scoped") {
+              this.scopeTracker.release(task.id);
+              this.toolServer?.releaseAgent(task.agentId);
+            }
+            if (task.writeMode === "worktree" && task.worktreeInfo) {
+              this.worktreeManager.cleanup(task.id, task.worktreeInfo.path).catch(() => {
+              });
+              this.toolServer?.releaseAgent(task.agentId);
+            }
             cancelled++;
           }
         }
@@ -7707,40 +7718,21 @@ var init_dispatch_pipeline = __esm({
         ]).finally(() => clearTimeout(timer));
         for (const t of targets) {
           const duration3 = t.completedAt ? t.completedAt - t.startedAt : -1;
-          try {
-            if (t.status === "completed") {
-              this.taskGraph.recordCompleted(t.id, (t.result || "").slice(0, 4e3), duration3, t.inputTokens, t.outputTokens);
-            } else if (t.status === "failed") {
+          if (t.status === "failed") {
+            try {
               this.taskGraph.recordFailed(t.id, t.error || "Unknown", duration3, t.inputTokens, t.outputTokens);
-            } else if (t.status === "running") {
-              this.taskGraph.recordFailed(t.id, "collect timeout", duration3);
+            } catch (err) {
+              log2(`TaskGraph write failed for ${t.id}: ${err.message}`);
             }
-          } catch (err) {
-            log2(`TaskGraph write failed for ${t.id}: ${err.message}`);
+          } else if (t.status === "running") {
+            try {
+              this.taskGraph.recordFailed(t.id, "collect timeout", duration3);
+            } catch (err) {
+              log2(`TaskGraph write failed for ${t.id}: ${err.message}`);
+            }
           }
           if (t.status === "completed") {
-            try {
-              await this.memWriter.writeTaskEntry(t.agentId, {
-                taskId: t.id,
-                task: t.task,
-                skills: this.registryGet(t.agentId)?.skills || [],
-                scores: {
-                  relevance: t.result && t.result.length > 200 ? 4 : 3,
-                  accuracy: t.status === "completed" ? 4 : 2,
-                  uniqueness: 3
-                }
-              });
-              if (t.result) {
-                await this.memWriter.writeKnowledgeFromResult(t.agentId, {
-                  taskId: t.id,
-                  task: t.task,
-                  result: t.result
-                });
-              }
-              this.memWriter.rebuildIndex(t.agentId);
-            } catch (err) {
-              log2(`Memory write failed for ${t.agentId}/${t.id}: ${err.message}`);
-            }
+            await this._postTaskComplete(t);
           }
           if (t.status === "completed" && t.result && this.llm) {
             this.summarizeAndStoreGossip(t.agentId, t.result);
@@ -7754,12 +7746,6 @@ var init_dispatch_pipeline = __esm({
                 step.completedAt = Date.now();
               }
             }
-          }
-          try {
-            const compactResult = this.memCompactor.compactIfNeeded(t.agentId, _DispatchPipeline.deriveMaxEntries(t.result));
-            if (compactResult.message) log2(compactResult.message);
-          } catch (err) {
-            log2(`Memory compact failed for ${t.agentId}: ${err.message}`);
           }
         }
         let skillsReadyCount = 0;
@@ -7847,6 +7833,9 @@ Worktree merge: CONFLICT
               this.scopeTracker.release(t.id);
               this.toolServer?.releaseAgent(t.agentId);
             }
+            if (t.writeMode === "worktree") {
+              this.toolServer?.releaseAgent(t.agentId);
+            }
           }
         }
         const results = [
@@ -7872,7 +7861,7 @@ Worktree merge: CONFLICT
           // Fix 4: include orphaned task entries
         ];
         let consensusReport;
-        if (options?.consensus && this.llm && results.filter((r) => r.status === "completed").length >= 2) {
+        if (options?.consensus && this.llm && results.filter((r) => r.status === "completed").length >= MIN_AGENTS_FOR_CONSENSUS) {
           consensusReport = await this.runConsensus(results);
         }
         for (const t of targets) {
@@ -8012,6 +8001,11 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
       async writeMemoryForTask(taskId) {
         const t = this.tasks.get(taskId);
         if (!t || t.status !== "completed") return;
+        await this._postTaskComplete(t);
+        this.tasks.delete(t.id);
+      }
+      /** Shared post-completion pipeline: TaskGraph + memory write + compact */
+      async _postTaskComplete(t) {
         const duration3 = t.completedAt ? t.completedAt - t.startedAt : -1;
         try {
           this.taskGraph.recordCompleted(t.id, (t.result || "").slice(0, 4e3), duration3, t.inputTokens, t.outputTokens);
@@ -8025,7 +8019,7 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
             skills: this.registryGet(t.agentId)?.skills || [],
             scores: {
               relevance: t.result && t.result.length > 200 ? 4 : 3,
-              accuracy: t.status === "completed" ? 4 : 2,
+              accuracy: 4,
               uniqueness: 3
             }
           });
@@ -8037,11 +8031,15 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
             });
           }
           this.memWriter.rebuildIndex(t.agentId);
-          this.memCompactor.compactIfNeeded(t.agentId, _DispatchPipeline.deriveMaxEntries(t.result));
         } catch (err) {
           log2(`Memory write failed for ${t.agentId}/${t.id}: ${err.message}`);
         }
-        this.tasks.delete(t.id);
+        try {
+          const compactResult = this.memCompactor.compactIfNeeded(t.agentId, _DispatchPipeline.deriveMaxEntries(t.result));
+          if (compactResult.message) log2(compactResult.message);
+        } catch (err) {
+          log2(`Memory compact failed for ${t.agentId}: ${err.message}`);
+        }
       }
       /** Re-register write task state with ToolServer after reconnect */
       async reRegisterWriteTaskState(assignScope, assignRoot) {
@@ -8211,6 +8209,7 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
             const historyPath = (0, import_path17.join)(this.projectRoot, ".gossip", "consensus-history.jsonl");
             (0, import_fs12.mkdirSync)((0, import_path17.join)(this.projectRoot, ".gossip"), { recursive: true });
             (0, import_fs12.appendFileSync)(historyPath, JSON.stringify(historyEntry) + "\n");
+            this.rotateJsonlFile(historyPath, 200, 100);
           } catch {
           }
           if (this.memWriter && consensusReport.confirmed.length + consensusReport.disputed.length > 0) {
@@ -8324,6 +8323,7 @@ ${topFindings}`;
               const gossipPath = (0, import_path17.join)(this.projectRoot, ".gossip", "agents", "_project", "memory", "session-gossip.jsonl");
               (0, import_fs12.mkdirSync)((0, import_path17.dirname)(gossipPath), { recursive: true });
               (0, import_fs12.appendFileSync)(gossipPath, JSON.stringify({ agentId, taskSummary: summary, timestamp: Date.now() }) + "\n");
+              this.rotateJsonlFile(gossipPath, 100, 50);
             } catch {
             }
           }
@@ -8339,6 +8339,17 @@ ${result.slice(0, 2e3)}` }
         ];
         const response = await this.llm.generate(messages, { temperature: 0 });
         return (response.text || "").slice(0, 400);
+      }
+      /** Rotate a JSONL file: if over maxEntries lines, keep only the last keepEntries. */
+      rotateJsonlFile(filePath, maxEntries, keepEntries) {
+        try {
+          const content = (0, import_fs12.readFileSync)(filePath, "utf-8");
+          const lines = content.trim().split("\n").filter((l) => l.length > 0);
+          if (lines.length > maxEntries) {
+            (0, import_fs12.writeFileSync)(filePath, lines.slice(-keepEntries).join("\n") + "\n");
+          }
+        } catch {
+        }
       }
     };
     SECURITY_KEYWORDS = /security|vulnerab|auth|inject|exploit|breach|attack|malicious/i;
@@ -9875,7 +9886,9 @@ var init_performance_reader = __esm({
         const score = this.getAgentScore(agentId);
         if (!score || score.totalSignals < 3) return 1;
         if (score.circuitOpen) return 0.3;
-        return clamp(0.3 + score.reliability * 1.7, 0.3, 2);
+        const confidence = 1 - Math.exp(-score.totalSignals / 10);
+        const adjusted = 0.5 + (score.reliability - 0.5) * confidence;
+        return clamp(0.3 + adjusted * 1.7, 0.3, 2);
       }
       /** Check if an agent's circuit breaker is open (3+ consecutive failures) */
       isCircuitOpen(agentId) {
@@ -9985,15 +9998,17 @@ var init_performance_reader = __esm({
                 const wd = Math.pow(0.5, Math.max(0, winner.taskCounter - wi - 1) / DECAY_HALF_LIFE2);
                 winner.weightedCorrect += wd;
                 winner.weightedTotal += wd;
-                winner.totalSignals++;
+                if (signalMs > winner.lastSignalMs) winner.lastSignalMs = signalMs;
               }
               break;
             }
             case "unverified": {
-              a.weightedTotal += decay * 0.1;
+              a.weightedTotal += decay * 0.02;
               break;
             }
             case "unique_confirmed": {
+              a.weightedCorrect += decay;
+              a.weightedTotal += decay;
               a.weightedUnique += 0.2 * decay;
               a.uniqueFindings++;
               break;
@@ -10038,13 +10053,14 @@ var init_performance_reader = __esm({
         const scores = /* @__PURE__ */ new Map();
         for (const [id, a] of acc) {
           const rawAccuracy = a.weightedTotal > 0 ? clamp(a.weightedCorrect / a.weightedTotal, 0, 1) : 0.5;
-          const hallucinationMultiplier = Math.pow(0.75, a.weightedHallucinations);
+          const hallucinationMultiplier = Math.pow(0.8, a.weightedHallucinations);
           const accuracy = clamp(rawAccuracy * hallucinationMultiplier, 0, 1);
           const uniqueness = clamp(0.5 + 0.5 * (1 - Math.exp(-a.weightedUnique * 1.5)), 0, 1);
           let reliability = clamp(accuracy * 0.8 + uniqueness * 0.2, 0, 1);
-          if (a.lastSignalMs > 0 && reliability >= 0.5) {
+          if (a.lastSignalMs > 0) {
             const daysSinceLastSignal = (now - a.lastSignalMs) / 864e5;
-            const timeFreshness = Math.pow(0.5, daysSinceLastSignal / TIME_DECAY_HALF_LIFE_DAYS);
+            const halfLife = reliability >= 0.5 ? TIME_DECAY_HALF_LIFE_DAYS : TIME_DECAY_HALF_LIFE_DAYS * 3;
+            const timeFreshness = Math.pow(0.5, daysSinceLastSignal / halfLife);
             reliability = 0.5 + (reliability - 0.5) * timeFreshness;
           }
           const consec = consecutiveFailures.get(id) || 0;
@@ -10207,11 +10223,19 @@ var init_competency_profiler = __esm({
               accuracy.set(cs.agentId, clamp2(acc + change, 0, 1));
               agentRounds.set(cs.taskId, currentRoundChange + change);
             }
+            if (cs.counterpartId && cs.counterpartId.length > 0) {
+              const winnerAcc = accuracy.get(cs.counterpartId) ?? 0.5;
+              accuracy.set(cs.counterpartId, clamp2(winnerAcc + Math.abs(change), 0, 1));
+            }
           }
           if (cs.signal === "unique_confirmed" || cs.signal === "new_finding") {
             const boost = cs.signal === "unique_confirmed" ? 0.2 : 0.15;
             const u = uniqueness.get(cs.agentId) ?? 0.5;
             uniqueness.set(cs.agentId, clamp2(u + boost * decay, 0, 1));
+            if (cs.signal === "unique_confirmed") {
+              const acc = accuracy.get(cs.agentId) ?? 0.5;
+              accuracy.set(cs.agentId, clamp2(acc + 0.1 * decay, 0, 1));
+            }
           }
           if (cs.signal === "unique_unconfirmed") {
             const u = uniqueness.get(cs.agentId) ?? 0.5;
@@ -10241,7 +10265,7 @@ var init_competency_profiler = __esm({
         for (const [id, p] of profiles) {
           const acc = accuracy.get(id) ?? 0.5;
           const uniq = uniqueness.get(id) ?? 0.5;
-          p.reviewReliability = clamp2(acc * 0.7 + uniq * 0.3, 0, 1);
+          p.reviewReliability = clamp2(acc * 0.8 + uniq * 0.2, 0, 1);
           const h = hallucinations.get(id);
           if (h && h.caught > 0) {
             const totalFindings = signals.filter(
@@ -10281,13 +10305,36 @@ var init_competency_profiler = __esm({
       readSignals() {
         if (!(0, import_fs18.existsSync)(this.filePath)) return [];
         try {
-          return (0, import_fs18.readFileSync)(this.filePath, "utf-8").trim().split("\n").filter(Boolean).map((line) => {
+          const SIGNAL_EXPIRY_DAYS = 30;
+          const expiryMs = Date.now() - SIGNAL_EXPIRY_DAYS * 864e5;
+          const lines = (0, import_fs18.readFileSync)(this.filePath, "utf-8").trim().split("\n").filter(Boolean);
+          const all = lines.map((line) => {
             try {
               return JSON.parse(line);
             } catch {
               return null;
             }
           }).filter((s) => s !== null && typeof s.agentId === "string" && s.agentId.length > 0);
+          const retracted = /* @__PURE__ */ new Set();
+          for (const s of all) {
+            if (s.signal === "signal_retracted") {
+              const taskKey = s.taskId || s.timestamp;
+              if (s.retractedSignal) {
+                retracted.add(s.agentId + ":" + taskKey + ":" + s.retractedSignal);
+              } else {
+                retracted.add(s.agentId + ":" + taskKey + ":*");
+              }
+            }
+          }
+          return all.filter((s) => {
+            if (s.signal === "signal_retracted") return false;
+            const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
+            if (!isFinite(ts) || ts === 0 || ts < expiryMs) return false;
+            const taskKey = s.taskId || s.timestamp;
+            if (retracted.has(s.agentId + ":" + taskKey + ":" + s.signal)) return false;
+            if (retracted.has(s.agentId + ":" + taskKey + ":*")) return false;
+            return true;
+          });
         } catch {
           return [];
         }
@@ -11205,13 +11252,6 @@ ${summaryPrompt}` }
   }
 });
 
-// packages/orchestrator/src/types.ts
-var init_types = __esm({
-  "packages/orchestrator/src/types.ts"() {
-    "use strict";
-  }
-});
-
 // packages/orchestrator/src/consensus-types.ts
 var init_consensus_types = __esm({
   "packages/orchestrator/src/consensus-types.ts"() {
@@ -11548,15 +11588,14 @@ var init_task_graph_sync = __esm({
           try {
             const entry = JSON.parse(line);
             if (meta3.lastSync && entry.timestamp <= meta3.lastSync) continue;
+            if (!entry.agentId || !entry.signal) continue;
             await this.post("/rest/v1/agent_scores", {
               user_id: this.userId,
               agent_id: entry.agentId,
-              task_id: entry.taskId,
-              skills: entry.skills || [],
-              relevance: entry.scores?.relevance,
-              accuracy: entry.scores?.accuracy,
-              uniqueness: entry.scores?.uniqueness,
-              source: "judgment",
+              task_id: entry.taskId || null,
+              signal: entry.signal,
+              evidence: (entry.evidence || "").slice(0, 500),
+              source: "consensus",
               created_at: entry.timestamp,
               project_id: this.projectId,
               display_name: this.displayName || null
@@ -12488,6 +12527,7 @@ __export(src_exports3, {
   GeminiProvider: () => GeminiProvider,
   GossipPublisher: () => GossipPublisher,
   LensGenerator: () => LensGenerator,
+  MIN_AGENTS_FOR_CONSENSUS: () => MIN_AGENTS_FOR_CONSENSUS,
   MainAgent: () => MainAgent,
   MemoryCompactor: () => MemoryCompactor,
   MemoryWriter: () => MemoryWriter,
@@ -13386,9 +13426,26 @@ async function agentsHandler(projectRoot, configs, onlineAgents = []) {
     scores = /* @__PURE__ */ new Map();
   }
   const taskDataByAgent = readTaskGraphByAgent(projectRoot);
+  let skillIndex = null;
+  try {
+    skillIndex = new SkillIndex(projectRoot);
+  } catch {
+  }
   return configs.map((config2) => {
     const score = scores.get(config2.id) ?? { ...DEFAULT_SCORE, agentId: config2.id };
     const agentTask = taskDataByAgent.get(config2.id) ?? { totalTokens: 0, lastTask: null };
+    let skillSlots = [];
+    try {
+      if (skillIndex) {
+        skillSlots = skillIndex.getAgentSlots(config2.id).map((slot) => ({
+          name: slot.skill,
+          enabled: slot.enabled,
+          source: slot.source,
+          boundAt: slot.boundAt
+        }));
+      }
+    } catch {
+    }
     return {
       id: config2.id,
       provider: config2.provider,
@@ -13396,6 +13453,7 @@ async function agentsHandler(projectRoot, configs, onlineAgents = []) {
       preset: config2.preset,
       native: config2.native ?? false,
       skills: config2.skills,
+      skillSlots,
       online: onlineAgents.includes(config2.id),
       totalTokens: agentTask.totalTokens,
       lastTask: agentTask.lastTask,
@@ -13417,6 +13475,7 @@ var init_api_agents = __esm({
   "packages/relay/src/dashboard/api-agents.ts"() {
     "use strict";
     init_performance_reader();
+    init_skill_index();
     import_fs26 = require("fs");
     import_path31 = require("path");
     DEFAULT_SCORE = {
@@ -13589,18 +13648,20 @@ async function consensusHandler(projectRoot) {
       else if (s.signal === "hallucination_caught") counts.hallucination++;
       else if (s.signal === "new_finding") counts.new++;
     }
-    runs.push({
-      taskId,
-      timestamp: taskSignals[0].timestamp,
-      agents: [...agents].sort(),
-      signals: taskSignals.map((s) => ({
-        signal: s.signal,
-        agentId: s.agentId,
-        counterpartId: s.counterpartId,
-        evidence: s.evidence
-      })),
-      counts
-    });
+    if (agents.size >= 2 && taskSignals.length >= 3) {
+      runs.push({
+        taskId,
+        timestamp: taskSignals[0].timestamp,
+        agents: [...agents].sort(),
+        signals: taskSignals.map((s) => ({
+          signal: s.signal,
+          agentId: s.agentId,
+          counterpartId: s.counterpartId,
+          evidence: s.evidence
+        })),
+        counts
+      });
+    }
   }
   runs.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   return { runs, totalSignals: signals.length };
@@ -13615,9 +13676,12 @@ var init_api_consensus = __esm({
 });
 
 // packages/relay/src/dashboard/api-signals.ts
-async function signalsHandler(projectRoot, agentFilter) {
+async function signalsHandler(projectRoot, query) {
+  const agentFilter = query?.get("agent") ?? null;
+  const limit = Math.min(Math.max(parseInt(query?.get("limit") ?? "", 10) || DEFAULT_LIMIT, 1), MAX_LIMIT);
+  const offset = Math.max(parseInt(query?.get("offset") ?? "", 10) || 0, 0);
   const perfPath = (0, import_path35.join)(projectRoot, ".gossip", "agent-performance.jsonl");
-  if (!(0, import_fs30.existsSync)(perfPath)) return { signals: [], total: 0 };
+  if (!(0, import_fs30.existsSync)(perfPath)) return { items: [], total: 0, offset, limit };
   const all = [];
   try {
     const lines = (0, import_fs30.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
@@ -13631,18 +13695,19 @@ async function signalsHandler(projectRoot, agentFilter) {
       }
     }
   } catch {
-    return { signals: [], total: 0 };
+    return { items: [], total: 0, offset, limit };
   }
   all.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-  return { signals: all.slice(0, MAX_SIGNALS), total: all.length };
+  return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
 }
-var import_fs30, import_path35, MAX_SIGNALS;
+var import_fs30, import_path35, MAX_LIMIT, DEFAULT_LIMIT;
 var init_api_signals = __esm({
   "packages/relay/src/dashboard/api-signals.ts"() {
     "use strict";
     import_fs30 = require("fs");
     import_path35 = require("path");
-    MAX_SIGNALS = 100;
+    MAX_LIMIT = 200;
+    DEFAULT_LIMIT = 50;
   }
 });
 
@@ -13708,9 +13773,13 @@ var init_api_learnings = __esm({
 });
 
 // packages/relay/src/dashboard/api-tasks.ts
-async function tasksHandler(projectRoot) {
+async function tasksHandler(projectRoot, query) {
+  const rawLimit = parseInt(query?.get("limit") ?? "50", 10);
+  const rawOffset = parseInt(query?.get("offset") ?? "0", 10);
+  const limit = isNaN(rawLimit) || rawLimit < 1 ? 50 : Math.min(rawLimit, 200);
+  const offset = isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
   const graphPath = (0, import_path37.join)(projectRoot, ".gossip", "task-graph.jsonl");
-  if (!(0, import_fs32.existsSync)(graphPath)) return { tasks: [], total: 0 };
+  if (!(0, import_fs32.existsSync)(graphPath)) return { items: [], total: 0, offset, limit };
   const created = /* @__PURE__ */ new Map();
   const completed = /* @__PURE__ */ new Map();
   try {
@@ -13748,7 +13817,7 @@ async function tasksHandler(projectRoot) {
       }
     }
   } catch {
-    return { tasks: [], total: 0 };
+    return { items: [], total: 0, offset, limit };
   }
   const tasks = [];
   for (const [taskId, info] of created) {
@@ -13765,7 +13834,7 @@ async function tasksHandler(projectRoot) {
     });
   }
   tasks.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-  return { tasks: tasks.slice(0, 100), total: tasks.length };
+  return { items: tasks.slice(offset, offset + limit), total: tasks.length, offset, limit };
 }
 var import_fs32, import_path37;
 var init_api_tasks = __esm({
@@ -13951,7 +14020,7 @@ var init_routes = __esm({
             return true;
           }
           if (url2 === "/dashboard/api/tasks" && req.method === "GET") {
-            const data = await tasksHandler(this.projectRoot);
+            const data = await tasksHandler(this.projectRoot, query ?? void 0);
             this.json(res, 200, data);
             return true;
           }
@@ -13966,8 +14035,7 @@ var init_routes = __esm({
             return true;
           }
           if (url2 === "/dashboard/api/signals" && req.method === "GET") {
-            const agentFilter = query?.get("agent") ?? null;
-            const data = await signalsHandler(this.projectRoot, agentFilter);
+            const data = await signalsHandler(this.projectRoot, query ?? void 0);
             this.json(res, 200, data);
             return true;
           }
@@ -28717,7 +28785,14 @@ async function handleNativeRelay(task_id, result, error48) {
       try {
         const { PerformanceWriter: PerformanceWriter2 } = (init_src4(), __toCommonJS(src_exports3));
         const writer = new PerformanceWriter2(process.cwd());
-        writer.retractSignal(taskInfo.agentId, task_id, "Late relay arrived \u2014 agent completed successfully after timeout");
+        writer.appendSignals([{
+          type: "consensus",
+          signal: "signal_retracted",
+          agentId: taskInfo.agentId,
+          taskId: task_id,
+          evidence: "Late relay arrived \u2014 agent completed successfully after timeout",
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        }]);
         process.stderr.write(`[gossipcat] Retracted timeout signal for ${taskInfo.agentId} [${task_id}]
 `);
       } catch {
@@ -29135,7 +29210,7 @@ Relay may be down. Check gossip_status() for connection state.` }] };
         type: "consensus",
         taskId: r.id || "",
         // Use disagreement for empty/timeout (reliability failure), hallucination only for actual errors
-        signal: r.status === "failed" ? "disagreement" : "disagreement",
+        signal: r.status === "failed" ? "disagreement" : "unique_unconfirmed",
         agentId: r.agentId,
         evidence: r.status === "failed" ? `Task failed: ${r.error || "unknown error"}` : r.status === "timed_out" ? "Task timed out \u2014 no response" : "Empty response \u2014 agent produced no output",
         timestamp
@@ -29150,6 +29225,7 @@ Relay may be down. Check gossip_status() for connection state.` }] };
   if (consensus && allResults.filter((r) => r.status === "completed").length >= 2) {
     consensusReport = await ctx.mainAgent.runConsensus(allResults);
   }
+  let provisionalSignalCount = 0;
   if (consensusReport) {
     try {
       const { appendFileSync: af, mkdirSync: md } = require("fs");
@@ -29176,6 +29252,42 @@ Relay may be down. Check gossip_status() for connection state.` }] };
       }
       if (findingsToSave.length > 0) {
         process.stderr.write(`[gossipcat] Auto-persisted ${findingsToSave.length} consensus findings to implementation-findings.jsonl
+`);
+      }
+    } catch {
+    }
+    try {
+      const { PerformanceWriter: PerformanceWriter2 } = await Promise.resolve().then(() => (init_src4(), src_exports3));
+      const writer = new PerformanceWriter2(process.cwd());
+      const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+      const tagToSignal = {
+        confirmed: "unique_confirmed",
+        disputed: "disagreement",
+        unverified: "unique_unconfirmed",
+        unique: "unique_unconfirmed"
+      };
+      const alreadySignaled = /* @__PURE__ */ new Set();
+      for (const s of consensusReport.signals || []) {
+        alreadySignaled.add(s.agentId);
+      }
+      const allFindings = [
+        ...consensusReport.confirmed || [],
+        ...consensusReport.disputed || [],
+        ...consensusReport.unverified || [],
+        ...consensusReport.unique || []
+      ];
+      const provisionalSignals = allFindings.filter((f) => !alreadySignaled.has(f.originalAgentId)).map((f) => ({
+        type: "consensus",
+        taskId: f.id || "",
+        signal: tagToSignal[f.tag] || "unique_unconfirmed",
+        agentId: f.originalAgentId,
+        evidence: `[provisional] ${(f.finding || "").slice(0, 200)}`,
+        timestamp
+      }));
+      if (provisionalSignals.length > 0) {
+        writer.appendSignals(provisionalSignals);
+        provisionalSignalCount = provisionalSignals.length;
+        process.stderr.write(`[gossipcat] Auto-recorded ${provisionalSignalCount} provisional signal(s). Retract incorrect ones with gossip_signals(action: "retract").
 `);
       }
     } catch {
@@ -29208,7 +29320,13 @@ ${t.skillWarnings.map((w) => `  - ${w}`).join("\n")}`;
   let output = resultTexts.join("\n\n---\n\n");
   if (consensusReport?.summary) {
     output += "\n\n" + consensusReport.summary;
-  } else if (consensus) {
+  }
+  if (provisionalSignalCount > 0) {
+    output += `
+
+\u{1F4CA} ${provisionalSignalCount} provisional signals auto-recorded. Retract incorrect ones with gossip_signals(action: "retract", agent_id, reason).`;
+  }
+  if (!consensusReport?.summary && consensus) {
     const completedCount = allResults.filter((r) => r.status === "completed" && r.result).length;
     if (completedCount >= 2) {
       output += "\n\n---\n\nCross-reference the findings above. Identify: CONFIRMED (both agents agree), DISPUTED (they disagree), UNIQUE (only one found it), and any NEW insights from comparing their perspectives.";
@@ -30046,7 +30164,7 @@ server.tool(
       }
       return { content: [{ type: "text", text: results.join("\n") }] };
     }
-    const { writeFileSync: writeFileSync13, mkdirSync: mkdirSync14, existsSync: existsSync32 } = require("fs");
+    const { writeFileSync: writeFileSync14, mkdirSync: mkdirSync14, existsSync: existsSync32 } = require("fs");
     const { join: join37 } = require("path");
     const root = process.cwd();
     const CLAUDE_MODEL_MAP2 = {
@@ -30087,7 +30205,7 @@ server.tool(
         ].join("\n");
         const agentsDir = join37(root, ".claude", "agents");
         mkdirSync14(agentsDir, { recursive: true });
-        writeFileSync13(join37(agentsDir, `${agent.id}.md`), md, "utf-8");
+        writeFileSync14(join37(agentsDir, `${agent.id}.md`), md, "utf-8");
         nativeCreated.push(agent.id);
         configAgents[agent.id] = {
           provider: mapped.provider,
@@ -30121,7 +30239,7 @@ server.tool(
         if (agent.instructions) {
           const instrDir = join37(root, ".gossip", "agents", agent.id);
           mkdirSync14(instrDir, { recursive: true });
-          writeFileSync13(join37(instrDir, "instructions.md"), agent.instructions, "utf-8");
+          writeFileSync14(join37(instrDir, "instructions.md"), agent.instructions, "utf-8");
         }
       }
     }
@@ -30145,12 +30263,12 @@ server.tool(
       return { content: [{ type: "text", text: `Invalid config: ${err.message}` }] };
     }
     mkdirSync14(join37(root, ".gossip"), { recursive: true });
-    writeFileSync13(join37(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
+    writeFileSync14(join37(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
     const agentList = Object.entries(config2.agents).map(([id, a]) => `- ${id}: ${a.provider}/${a.model} (${a.preset || "custom"})${a.native ? " \u2014 native" : ""}`).join("\n");
     const rulesDir = join37(root, env.rulesDir);
     const rulesFile = join37(root, env.rulesFile);
     mkdirSync14(rulesDir, { recursive: true });
-    writeFileSync13(rulesFile, generateRulesContent(agentList));
+    writeFileSync14(rulesFile, generateRulesContent(agentList));
     const lines = [`Host: ${env.host}`, ""];
     if (nativeCreated.length > 0) {
       lines.push(`Native agents created (${nativeCreated.length}):`);
@@ -30489,7 +30607,7 @@ ${preview}` }]
     const { SkillGapTracker: SkillGapTracker2, parseSkillFrontmatter: parseSkillFrontmatter2, normalizeSkillName: normalizeSkillName2 } = await Promise.resolve().then(() => (init_src4(), src_exports3));
     const tracker = new SkillGapTracker2(process.cwd());
     if (skills && skills.length > 0) {
-      const { writeFileSync: writeFileSync13, mkdirSync: mkdirSync14, existsSync: existsSync32, readFileSync: readFileSync33 } = require("fs");
+      const { writeFileSync: writeFileSync14, mkdirSync: mkdirSync14, existsSync: existsSync32, readFileSync: readFileSync33 } = require("fs");
       const { join: join37 } = require("path");
       const dir = join37(process.cwd(), ".gossip", "skills");
       mkdirSync14(dir, { recursive: true });
@@ -30515,7 +30633,7 @@ ${preview}` }]
             }
           }
         }
-        writeFileSync13(filePath, sk.content);
+        writeFileSync14(filePath, sk.content);
         tracker.recordResolution(name);
         results.push(`Created .gossip/skills/${name}.md`);
       }
