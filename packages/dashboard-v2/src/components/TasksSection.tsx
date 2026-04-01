@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import type { TasksData } from '@/lib/types';
 import { TaskRow } from './TaskRow';
 
@@ -9,15 +8,24 @@ interface TasksSectionProps {
 }
 
 export function TasksSection({ tasks }: TasksSectionProps) {
-  const [showAll, setShowAll] = useState(false);
-  const visible = showAll ? tasks.items : tasks.items.slice(0, PAGE_SIZE);
-  const remaining = tasks.items.length - PAGE_SIZE;
+  const visible = tasks.items.slice(0, PAGE_SIZE);
+  const hasMore = tasks.items.length > PAGE_SIZE;
 
   return (
     <section>
-      <h2 className="mb-4 font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-        Tasks <span className="text-primary">{tasks.total}</span>
-      </h2>
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
+          Tasks <span className="text-primary">{tasks.total}</span>
+        </h2>
+        {hasMore && (
+          <a
+            href="#/tasks"
+            className="font-mono text-xs text-muted-foreground transition hover:text-primary"
+          >
+            view all →
+          </a>
+        )}
+      </div>
       <div className="overflow-hidden rounded-md border border-border">
         <table className="w-full text-left">
           <thead>
@@ -40,14 +48,6 @@ export function TasksSection({ tasks }: TasksSectionProps) {
           <div className="py-8 text-center text-sm text-muted-foreground">No tasks yet.</div>
         )}
       </div>
-      {remaining > 0 && !showAll && (
-        <button
-          onClick={() => setShowAll(true)}
-          className="mt-3 w-full rounded-md border border-dashed border-border py-2 font-mono text-xs text-muted-foreground transition hover:border-primary hover:text-primary"
-        >
-          show more ({remaining} remaining)
-        </button>
-      )}
     </section>
   );
 }
