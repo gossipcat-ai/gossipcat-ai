@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 
 // ── Extracted modules ────────────────────────────────────────────────────
-import { ctx, presetScores, NATIVE_TASK_TTL_MS } from './mcp-context';
+import { ctx, defaultImportanceScores, NATIVE_TASK_TTL_MS } from './mcp-context';
 import { evictStaleNativeTasks, persistNativeTaskMap, restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';

@@ -2,7 +2,7 @@
  * Native task lifecycle — eviction, persistence, restore, relay handling.
  * All state accessed via the shared context object.
  */
-import { ctx, NATIVE_TASK_TTL_MS, presetScores } from '../mcp-context';
+import { ctx, NATIVE_TASK_TTL_MS, defaultImportanceScores } from '../mcp-context';
 
 /** Active timeout watchers — keyed by task ID */
 const timeoutWatchers: Map<string, ReturnType<typeof setTimeout>> = new Map();
@@ -231,7 +231,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       const memWriter = new MemoryWriter(process.cwd());
       // Wire LLM for cognitive summaries — same as relay agents get
       try { if (ctx.mainAgent.getLLM()) memWriter.setSummaryLlm(ctx.mainAgent.getLLM()); } catch {}
-      const scores = presetScores(agentMeta.preset);
+      const scores = defaultImportanceScores();
       await memWriter.writeTaskEntry(agentId, {
         taskId: task_id,
         task: taskInfo.task,

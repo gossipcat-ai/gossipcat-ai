@@ -62,13 +62,6 @@ export function generateTaskId(): string {
   return randomUUID().slice(0, 8);
 }
 
-// Preset-aware importance scores — reviewers value accuracy, implementers value relevance
-export function presetScores(preset: string): { relevance: number; accuracy: number; uniqueness: number } {
-  switch (preset) {
-    case 'reviewer':   return { relevance: 3, accuracy: 5, uniqueness: 4 };
-    case 'tester':     return { relevance: 3, accuracy: 4, uniqueness: 4 };
-    case 'researcher': return { relevance: 4, accuracy: 3, uniqueness: 5 };
-    case 'implementer': return { relevance: 5, accuracy: 3, uniqueness: 2 };
-    default:           return { relevance: 3, accuracy: 3, uniqueness: 3 };
-  }
+export function defaultImportanceScores(): { relevance: number; accuracy: number; uniqueness: number } {
+  return { relevance: 3, accuracy: 3, uniqueness: 3 };
 }
