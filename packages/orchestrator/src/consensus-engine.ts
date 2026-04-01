@@ -213,6 +213,7 @@ VERIFICATION RULES:
 - AGREE only if you can confirm the claim is factually correct — cite your evidence
 - DISAGREE only if you have concrete evidence the finding is WRONG — the code contradicts the claim
 - UNVERIFIED if an anchor is missing for a cited file, the line number is wrong, or the code in the anchor is insufficient to verify the claim. UNVERIFIED is the correct default when you lack context — it is NOT a failure. Use it freely whenever you cannot confidently verify or refute.
+- ⚠ warnings mean the agent's citation is unresolvable (file not found, line out of range, or blank line). Treat these as UNVERIFIED — do NOT agree with findings that have broken citations.
 - Do NOT agree with a finding just because it sounds plausible — verify it
 - Agreeing without verification is WORSE than disagreeing — a false confirmation poisons the system
 
@@ -739,14 +740,25 @@ Return ONLY a JSON array:
       seen.add(key);
 
       try {
+        const safeRef = fullRef.replace(/["<>]/g, '');
         const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
-        if (!filePath) continue;
+        if (!filePath) {
+          anchors.push(`⚠ Agent cited \`${safeRef}:${lineNum}\` but file not found`);
+          continue;
+        }
         const fileStat = await stat(filePath);
         if (fileStat.size > MAX_FILE_SIZE) continue;
         const content = await this.cachedRead(filePath);
         if (!content) continue;
         const fileLines = content.split('\n');
-        if (lineNum > fileLines.length) continue;
+        if (lineNum > fileLines.length) {
+          anchors.push(`⚠ Agent cited \`${safeRef}:${lineNum}\` but file has only ${fileLines.length} lines`);
+          continue;
+        }
+        if (fileLines[lineNum - 1].trim() === '') {
+          anchors.push(`⚠ Agent cited \`${safeRef}:${lineNum}\` but line is blank`);
+          continue;
+        }
 
         const start = Math.max(0, lineNum - 1 - CONTEXT_LINES);
         const end = Math.min(fileLines.length, lineNum + CONTEXT_LINES);
@@ -754,7 +766,6 @@ Return ONLY a JSON array:
           .map((l, i) => `  ${start + i + 1}: ${l}`)
           .join('\n');
         const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
-        const safeRef = fullRef.replace(/["<>]/g, '');
         anchors.push(`<anchor src="${safeRef}:${lineNum}">\n${safeSnippet}\n</anchor>`);
       } catch { /* file unreadable, skip */ }
     }
