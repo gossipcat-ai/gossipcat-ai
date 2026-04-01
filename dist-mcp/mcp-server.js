@@ -4584,14 +4584,17 @@ ${parts.lens}
 
 --- CONSENSUS OUTPUT FORMAT ---
 End your response with a section titled "## Consensus Summary".
-EVERY finding MUST include a citation. Use file:line for specific issues, or just the filename for file-level concerns. Without a citation, peers cannot verify your claim and it will be marked UNVERIFIED.
-Format: "- <finding description> (file.ts:123)" or "- <finding description> (file.ts)"
 
-Do NOT fabricate file paths or line numbers. If you cannot identify a specific file, omit the finding \u2014 uncited findings waste review capacity.
+CITATION RULES:
+- Every FACTUAL claim about code MUST include a file:line citation
+  Format: "- <finding> (file.ts:123)" or "- <finding> (file.ts)"
+- Claims without citations receive LOW confidence and will likely be marked UNVERIFIED
+- Do NOT fabricate file paths or line numbers \u2014 broken citations are worse than no citation
+- If you cannot identify a specific file for a factual claim, omit the finding
 
-IMPORTANT: Only list actual issues \u2014 bugs, security concerns, design problems.
-Do NOT include confirmations like "X is correct", "Y works as expected", or
-"no bug found". These cannot be cross-verified and waste review capacity.
+FINDING TYPES:
+- Factual issues (bugs, security, design problems) \u2014 REQUIRE file:line citation
+- Do NOT include confirmations ("X is correct", "Y works as expected")
 
 This section will be used for cross-review with peer agents.
 --- END CONSENSUS OUTPUT FORMAT ---`);
@@ -6383,6 +6386,7 @@ VERIFICATION RULES:
 - AGREE only if you can confirm the claim is factually correct \u2014 cite your evidence
 - DISAGREE only if you have concrete evidence the finding is WRONG \u2014 the code contradicts the claim
 - UNVERIFIED if an anchor is missing for a cited file, the line number is wrong, or the code in the anchor is insufficient to verify the claim. UNVERIFIED is the correct default when you lack context \u2014 it is NOT a failure. Use it freely whenever you cannot confidently verify or refute.
+- \u26A0 warnings mean the agent's citation is unresolvable (file not found, line out of range, or blank line). Treat these as UNVERIFIED \u2014 do NOT agree with findings that have broken citations.
 - Do NOT agree with a finding just because it sounds plausible \u2014 verify it
 - Agreeing without verification is WORSE than disagreeing \u2014 a false confirmation poisons the system
 
@@ -6414,13 +6418,15 @@ Return only valid JSON.` },
             const finding = line.replace(/^\s*-\s*/, "").trim();
             if (!finding) continue;
             const key = `${r.agentId}::${finding}`;
+            const hasAnchor = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/.test(finding);
             findingMap.set(key, {
               originalAgentId: r.agentId,
               finding,
               confirmedBy: [],
               disputedBy: [],
               unverifiedBy: [],
-              confidences: []
+              confidences: hasAnchor ? [] : [2]
+              // pre-load low confidence for anchorless findings
             });
           }
         }
@@ -6835,19 +6841,29 @@ ${findingBlocks.map((fb) => fb.block).join("\n\n---\n\n")}`
           if (seen.has(key)) continue;
           seen.add(key);
           try {
+            const safeRef = fullRef.replace(/["<>]/g, "");
             const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
-            if (!filePath) continue;
+            if (!filePath) {
+              anchors.push(`\u26A0 Agent cited \`${safeRef}:${lineNum}\` but file not found`);
+              continue;
+            }
             const fileStat = await (0, import_promises3.stat)(filePath);
             if (fileStat.size > MAX_FILE_SIZE) continue;
             const content = await this.cachedRead(filePath);
             if (!content) continue;
             const fileLines = content.split("\n");
-            if (lineNum > fileLines.length) continue;
+            if (lineNum > fileLines.length) {
+              anchors.push(`\u26A0 Agent cited \`${safeRef}:${lineNum}\` but file has only ${fileLines.length} lines`);
+              continue;
+            }
+            if (fileLines[lineNum - 1].trim() === "") {
+              anchors.push(`\u26A0 Agent cited \`${safeRef}:${lineNum}\` but line is blank`);
+              continue;
+            }
             const start = Math.max(0, lineNum - 1 - CONTEXT_LINES);
             const end = Math.min(fileLines.length, lineNum + CONTEXT_LINES);
             const snippet = fileLines.slice(start, end).map((l, i) => `  ${start + i + 1}: ${l}`).join("\n");
             const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, "");
-            const safeRef = fullRef.replace(/["<>]/g, "");
             anchors.push(`<anchor src="${safeRef}:${lineNum}">
 ${safeSnippet}
 </anchor>`);
