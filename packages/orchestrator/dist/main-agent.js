@@ -232,7 +232,15 @@ class MainAgent {
     setGossipPublisher(publisher) { this.pipeline.setGossipPublisher(publisher); }
     setOverlapDetector(detector) { this.pipeline.setOverlapDetector(detector); }
     setConsensusJudge(judge) { this.pipeline.setConsensusJudge(judge); }
+    async runConsensus(results) { return this.pipeline.runConsensus(results); }
     setLensGenerator(generator) { this.pipeline.setLensGenerator(generator); }
+    getSkillGapSuggestions() { return this.pipeline.getSkillGapSuggestions(); }
+    setSkillIndex(index) { this.pipeline.setSkillIndex(index); }
+    setSummaryLlm(llm) { this.pipeline.setSummaryLlm(llm); }
+    getSessionConsensusHistory() { return this.pipeline.getSessionConsensusHistory(); }
+    getSessionStartTime() { return this.pipeline.getSessionStartTime(); }
+    getSessionGossip() { return this.pipeline.getSessionGossip(); }
+    getSkillIndex() { return this.pipeline.getSkillIndex(); }
     /** Health check for active tasks — diagnostics for "is it working?" */
     getActiveTasksHealth() { return this.pipeline.getActiveTasksHealth(); }
     cancelRunningTasks() { return this.pipeline.cancelRunningTasks(); }
@@ -335,6 +343,29 @@ class MainAgent {
             return this.handleMessageDecompose(userMessage);
         }
         return this.handleMessageCognitive(userMessage);
+    }
+    /** Classify whether a task needs single-agent or multi-agent handling. */
+    async classifyTaskComplexity(task) {
+        const agentSummary = this.registry.getAll()
+            .map(a => `${a.id}: ${a.preset ?? 'agent'} (${a.skills.join(', ')})`)
+            .join('\n');
+        const response = await this.llm.generate([
+            {
+                role: 'system',
+                content: `You classify tasks as "single" or "multi". Respond with ONLY one word.
+
+"single" = one agent can handle the entire task (clear scope, one concern, no conflicting file ownership)
+"multi" = needs decomposition (multiple independent concerns, parallel workstreams, or unclear scope)
+
+Available agents:
+${agentSummary}`,
+            },
+            { role: 'user', content: task },
+        ]);
+        const answer = response.text.trim().toLowerCase();
+        if (answer === 'multi')
+            return 'multi';
+        return 'single';
     }
     /** Original decompose → assign → dispatch → synthesize flow. */
     async handleMessageDecompose(userMessage) {

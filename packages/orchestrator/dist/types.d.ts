@@ -10,7 +10,7 @@ export interface AgentConfig {
     skills: string[];
     /** If true, agent is a native Claude Code subagent (.claude/agents/*.md).
      *  Dispatched via Claude Code's Agent tool instead of the gossipcat relay.
-     *  Results are fed back via gossip_relay_result for consensus/gossip. */
+     *  Results are fed back via gossip_relay for consensus/gossip. */
     native?: boolean;
 }
 /** Result of a worker agent completing a sub-task */
@@ -351,3 +351,5 @@ export interface ProjectSignals {
     directories: string[];
     files: string[];
 }
+/** Minimum number of completed agent results needed to run consensus cross-review */
+export declare const MIN_AGENTS_FOR_CONSENSUS = 2;

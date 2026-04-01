@@ -67,10 +67,12 @@ class AgentRegistry {
                     break;
                 }
             }
-            // 4. Performance weight
-            // Prefer competency profiler if available (richer scoring)
+            // 4. Performance weight (circuit breaker → profiler → reader → neutral)
             let perfWeight = 1.0;
-            if (this.competencyProfiler) {
+            if (this.perfReader?.isCircuitOpen(agent.id)) {
+                perfWeight = 0.3; // circuit breaker overrides all scoring
+            }
+            else if (this.competencyProfiler) {
                 perfWeight = this.competencyProfiler.getProfileMultiplier(agent.id, 'review');
             }
             else if (this.perfReader) {

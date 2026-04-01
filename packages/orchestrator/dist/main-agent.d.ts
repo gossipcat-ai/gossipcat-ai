@@ -74,7 +74,22 @@ export declare class MainAgent {
     setGossipPublisher(publisher: any): void;
     setOverlapDetector(detector: any): void;
     setConsensusJudge(judge: any): void;
+    runConsensus(results: any[]): Promise<any>;
     setLensGenerator(generator: any): void;
+    getSkillGapSuggestions(): string[];
+    setSkillIndex(index: any): void;
+    setSummaryLlm(llm: any): void;
+    getSessionConsensusHistory(): {
+        timestamp: string;
+        confirmed: number;
+        disputed: number;
+        unverified: number;
+        unique: number;
+        summary: string;
+    }[];
+    getSessionStartTime(): Date;
+    getSessionGossip(): import("./types").SessionGossipEntry[];
+    getSkillIndex(): any;
     /** Health check for active tasks — diagnostics for "is it working?" */
     getActiveTasksHealth(): {
         id: string;
@@ -120,6 +135,8 @@ export declare class MainAgent {
     stop(): Promise<void>;
     /** Handle a user message. Default mode is cognitive (tool-calling); 'decompose' preserves the old flow. */
     handleMessage(userMessage: string | ContentBlock[], options?: HandleMessageOptions): Promise<ChatResponse>;
+    /** Classify whether a task needs single-agent or multi-agent handling. */
+    classifyTaskComplexity(task: string): Promise<'single' | 'multi'>;
     /** Original decompose → assign → dispatch → synthesize flow. */
     private handleMessageDecompose;
     /** Cognitive mode: LLM decides whether to chat or call tools. */

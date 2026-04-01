@@ -9227,8 +9227,8 @@ Keep it SHORT \u2014 under 30 lines. This is a working document, not a design do
         ]);
         const specContent = response.text || "";
         try {
-          const { mkdirSync: mkdirSync14, writeFileSync: writeFS } = require("fs");
-          mkdirSync14((0, import_path18.join)(this.projectRoot, ".gossip"), { recursive: true });
+          const { mkdirSync: mkdirSync13, writeFileSync: writeFS } = require("fs");
+          mkdirSync13((0, import_path18.join)(this.projectRoot, ".gossip"), { recursive: true });
           writeFS(specPath, specContent, "utf-8");
         } catch (err) {
           return { text: `Spec generated but failed to save: ${err.message}
@@ -10559,8 +10559,8 @@ message: Your question?
       }
       /** Start all worker agents (connect to relay) */
       async start() {
-        const { existsSync: existsSync32, readFileSync: readFileSync33 } = await import("fs");
-        const { join: join37 } = await import("path");
+        const { existsSync: existsSync31, readFileSync: readFileSync32 } = await import("fs");
+        const { join: join36 } = await import("path");
         for (const config2 of this.registry.getAll()) {
           if (config2.native) continue;
           if (this.workers.has(config2.id)) continue;
@@ -10569,8 +10569,8 @@ message: Your question?
             apiKey = await this.keyProviderFn(config2.provider) ?? void 0;
           }
           const llm = createProvider(config2.provider, config2.model, apiKey);
-          const instructionsPath = join37(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
-          const instructions = existsSync32(instructionsPath) ? readFileSync33(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join36(this.projectRoot, ".gossip", "agents", config2.id, "instructions.md");
+          const instructions = existsSync31(instructionsPath) ? readFileSync32(instructionsPath, "utf-8") : void 0;
           const enableWebSearch = config2.preset === "researcher" || config2.skills.includes("research");
           const worker = new WorkerAgent(config2.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
           await worker.start();
@@ -10723,16 +10723,16 @@ message: Your question?
         this.registry.register(config2);
       }
       async syncWorkers(keyProvider) {
-        const { existsSync: existsSync32, readFileSync: readFileSync33 } = await import("fs");
-        const { join: join37 } = await import("path");
+        const { existsSync: existsSync31, readFileSync: readFileSync32 } = await import("fs");
+        const { join: join36 } = await import("path");
         let added = 0;
         for (const ac of this.registry.getAll()) {
           if (ac.native) continue;
           if (this.workers.has(ac.id)) continue;
           const key = await keyProvider(ac.provider);
           const llm = createProvider(ac.provider, ac.model, key ?? void 0);
-          const instructionsPath = join37(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
-          const instructions = existsSync32(instructionsPath) ? readFileSync33(instructionsPath, "utf-8") : void 0;
+          const instructionsPath = join36(this.projectRoot, ".gossip", "agents", ac.id, "instructions.md");
+          const instructions = existsSync31(instructionsPath) ? readFileSync32(instructionsPath, "utf-8") : void 0;
           const enableWebSearch = ac.preset === "researcher" || ac.skills.includes("research");
           const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
           await worker.start();
@@ -10763,6 +10763,26 @@ message: Your question?
           return this.handleMessageDecompose(userMessage);
         }
         return this.handleMessageCognitive(userMessage);
+      }
+      /** Classify whether a task needs single-agent or multi-agent handling. */
+      async classifyTaskComplexity(task) {
+        const agentSummary = this.registry.getAll().map((a) => `${a.id}: ${a.preset ?? "agent"} (${a.skills.join(", ")})`).join("\n");
+        const response = await this.llm.generate([
+          {
+            role: "system",
+            content: `You classify tasks as "single" or "multi". Respond with ONLY one word.
+
+"single" = one agent can handle the entire task (clear scope, one concern, no conflicting file ownership)
+"multi" = needs decomposition (multiple independent concerns, parallel workstreams, or unclear scope)
+
+Available agents:
+${agentSummary}`
+          },
+          { role: "user", content: task }
+        ]);
+        const answer = response.text.trim().toLowerCase();
+        if (answer === "multi") return "multi";
+        return "single";
       }
       /** Original decompose → assign → dispatch → synthesize flow. */
       async handleMessageDecompose(userMessage) {
@@ -13218,35 +13238,23 @@ var init_agent_connection = __esm({
 });
 
 // packages/relay/src/dashboard/auth.ts
-var import_crypto10, import_fs24, import_path29, KEY_LENGTH, SESSION_TTL_MS, MAX_SESSIONS, DashboardAuth;
+var import_crypto10, KEY_LENGTH, SESSION_TTL_MS, MAX_SESSIONS, DashboardAuth;
 var init_auth = __esm({
   "packages/relay/src/dashboard/auth.ts"() {
     "use strict";
     import_crypto10 = require("crypto");
-    import_fs24 = require("fs");
-    import_path29 = require("path");
     KEY_LENGTH = 16;
     SESSION_TTL_MS = 24 * 60 * 60 * 1e3;
     MAX_SESSIONS = 50;
     DashboardAuth = class {
-      keyPath;
       key = "";
       sessions = /* @__PURE__ */ new Map();
-      constructor(projectRoot) {
-        this.keyPath = (0, import_path29.join)(projectRoot, ".gossip", "dashboard-key");
-      }
       init() {
-        if ((0, import_fs24.existsSync)(this.keyPath)) {
-          this.key = (0, import_fs24.readFileSync)(this.keyPath, "utf-8").trim();
-          if (this.key.length === KEY_LENGTH * 2) return;
-        }
-        this.regenerateKey();
+        this.key = (0, import_crypto10.randomBytes)(KEY_LENGTH).toString("hex");
+        this.sessions.clear();
       }
       regenerateKey() {
         this.key = (0, import_crypto10.randomBytes)(KEY_LENGTH).toString("hex");
-        const dir = (0, import_path29.dirname)(this.keyPath);
-        (0, import_fs24.mkdirSync)(dir, { recursive: true });
-        (0, import_fs24.writeFileSync)(this.keyPath, this.key + "\n", { mode: 384 });
         this.sessions.clear();
       }
       getKey() {
@@ -13300,10 +13308,10 @@ async function overviewHandler(projectRoot, ctx2) {
   let lastConsensusTimestamp = "";
   let actionableFindings = 0;
   const consensusTaskIds = /* @__PURE__ */ new Set();
-  const perfPath = (0, import_path30.join)(projectRoot, ".gossip", "agent-performance.jsonl");
-  if ((0, import_fs25.existsSync)(perfPath)) {
+  const perfPath = (0, import_path29.join)(projectRoot, ".gossip", "agent-performance.jsonl");
+  if ((0, import_fs24.existsSync)(perfPath)) {
     try {
-      const lines = (0, import_fs25.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
+      const lines = (0, import_fs24.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);
@@ -13337,10 +13345,10 @@ async function overviewHandler(projectRoot, ctx2) {
   let tasksFailed = 0;
   let totalDuration = 0;
   let durationCount = 0;
-  const graphPath = (0, import_path30.join)(projectRoot, ".gossip", "task-graph.jsonl");
-  if ((0, import_fs25.existsSync)(graphPath)) {
+  const graphPath = (0, import_path29.join)(projectRoot, ".gossip", "task-graph.jsonl");
+  if ((0, import_fs24.existsSync)(graphPath)) {
     try {
-      const lines = (0, import_fs25.readFileSync)(graphPath, "utf-8").trim().split("\n").filter(Boolean);
+      const lines = (0, import_fs24.readFileSync)(graphPath, "utf-8").trim().split("\n").filter(Boolean);
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);
@@ -13362,23 +13370,23 @@ async function overviewHandler(projectRoot, ctx2) {
   const avgDurationMs = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
   return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs, lastConsensusTimestamp, actionableFindings };
 }
-var import_fs25, import_path30;
+var import_fs24, import_path29;
 var init_api_overview = __esm({
   "packages/relay/src/dashboard/api-overview.ts"() {
     "use strict";
-    import_fs25 = require("fs");
-    import_path30 = require("path");
+    import_fs24 = require("fs");
+    import_path29 = require("path");
   }
 });
 
 // packages/relay/src/dashboard/api-agents.ts
 function readTaskGraphByAgent(projectRoot) {
-  const taskGraphPath = (0, import_path31.join)(projectRoot, ".gossip", "task-graph.jsonl");
+  const taskGraphPath = (0, import_path30.join)(projectRoot, ".gossip", "task-graph.jsonl");
   const result = /* @__PURE__ */ new Map();
-  if (!(0, import_fs26.existsSync)(taskGraphPath)) return result;
+  if (!(0, import_fs25.existsSync)(taskGraphPath)) return result;
   let lines;
   try {
-    lines = (0, import_fs26.readFileSync)(taskGraphPath, "utf-8").trim().split("\n").filter(Boolean);
+    lines = (0, import_fs25.readFileSync)(taskGraphPath, "utf-8").trim().split("\n").filter(Boolean);
   } catch {
     return result;
   }
@@ -13470,14 +13478,14 @@ async function agentsHandler(projectRoot, configs, onlineAgents = []) {
     };
   });
 }
-var import_fs26, import_path31, DEFAULT_SCORE;
+var import_fs25, import_path30, DEFAULT_SCORE;
 var init_api_agents = __esm({
   "packages/relay/src/dashboard/api-agents.ts"() {
     "use strict";
     init_performance_reader();
     init_skill_index();
-    import_fs26 = require("fs");
-    import_path31 = require("path");
+    import_fs25 = require("fs");
+    import_path30 = require("path");
     DEFAULT_SCORE = {
       agentId: "",
       accuracy: 0.5,
@@ -13496,7 +13504,7 @@ var init_api_agents = __esm({
 
 // packages/relay/src/dashboard/api-skills.ts
 function isCorrupt(projectRoot, index) {
-  return (0, import_fs27.existsSync)((0, import_path32.join)(projectRoot, ".gossip", "skill-index.json")) && !index.exists();
+  return (0, import_fs26.existsSync)((0, import_path31.join)(projectRoot, ".gossip", "skill-index.json")) && !index.exists();
 }
 async function skillsGetHandler(projectRoot) {
   try {
@@ -13525,13 +13533,13 @@ async function skillsBindHandler(projectRoot, body) {
     return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
   }
 }
-var import_fs27, import_path32, AGENT_ID_RE2;
+var import_fs26, import_path31, AGENT_ID_RE2;
 var init_api_skills = __esm({
   "packages/relay/src/dashboard/api-skills.ts"() {
     "use strict";
     init_skill_index();
-    import_fs27 = require("fs");
-    import_path32 = require("path");
+    import_fs26 = require("fs");
+    import_path31 = require("path");
     AGENT_ID_RE2 = /^[a-zA-Z0-9_-]{1,64}$/;
   }
 });
@@ -13539,25 +13547,25 @@ var init_api_skills = __esm({
 // packages/relay/src/dashboard/api-memory.ts
 async function memoryHandler(projectRoot, agentId) {
   if (!agentId || !AGENT_ID_RE3.test(agentId) || DANGEROUS_IDS.has(agentId)) throw new Error("Invalid agent ID");
-  const memDir = (0, import_path33.join)(projectRoot, ".gossip", "agents", agentId, "memory");
+  const memDir = (0, import_path32.join)(projectRoot, ".gossip", "agents", agentId, "memory");
   let index = "";
-  const indexPath = (0, import_path33.join)(memDir, "MEMORY.md");
-  if ((0, import_fs28.existsSync)(indexPath)) {
+  const indexPath = (0, import_path32.join)(memDir, "MEMORY.md");
+  if ((0, import_fs27.existsSync)(indexPath)) {
     try {
-      index = (0, import_fs28.readFileSync)(indexPath, "utf-8");
+      index = (0, import_fs27.readFileSync)(indexPath, "utf-8");
     } catch {
     }
   }
   const knowledge = [];
-  const knowledgeDir = (0, import_path33.join)(memDir, "knowledge");
+  const knowledgeDir = (0, import_path32.join)(memDir, "knowledge");
   const knowledgeDirs = [knowledgeDir, memDir];
   for (const dir of knowledgeDirs) {
-    if (!(0, import_fs28.existsSync)(dir)) continue;
+    if (!(0, import_fs27.existsSync)(dir)) continue;
     try {
-      const files = (0, import_fs28.readdirSync)(dir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md");
+      const files = (0, import_fs27.readdirSync)(dir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md");
       for (const filename of files) {
         try {
-          const raw = (0, import_fs28.readFileSync)((0, import_path33.join)(dir, filename), "utf-8");
+          const raw = (0, import_fs27.readFileSync)((0, import_path32.join)(dir, filename), "utf-8");
           const { frontmatter, content } = parseFrontmatter(raw);
           knowledge.push({ filename, frontmatter, content });
         } catch {
@@ -13567,10 +13575,10 @@ async function memoryHandler(projectRoot, agentId) {
     }
   }
   const tasks = [];
-  const tasksPath = (0, import_path33.join)(memDir, "tasks.jsonl");
-  if ((0, import_fs28.existsSync)(tasksPath)) {
+  const tasksPath = (0, import_path32.join)(memDir, "tasks.jsonl");
+  if ((0, import_fs27.existsSync)(tasksPath)) {
     try {
-      const lines = (0, import_fs28.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean).slice(-200);
+      const lines = (0, import_fs27.readFileSync)(tasksPath, "utf-8").trim().split("\n").filter(Boolean).slice(-200);
       for (const line of lines) {
         try {
           tasks.push(JSON.parse(line));
@@ -13598,12 +13606,12 @@ function parseFrontmatter(raw) {
   }
   return { frontmatter: fm, content: raw.slice(end + 3).trim() };
 }
-var import_fs28, import_path33, AGENT_ID_RE3, DANGEROUS_IDS;
+var import_fs27, import_path32, AGENT_ID_RE3, DANGEROUS_IDS;
 var init_api_memory = __esm({
   "packages/relay/src/dashboard/api-memory.ts"() {
     "use strict";
-    import_fs28 = require("fs");
-    import_path33 = require("path");
+    import_fs27 = require("fs");
+    import_path32 = require("path");
     AGENT_ID_RE3 = /^[a-zA-Z0-9_-]{1,64}$/;
     DANGEROUS_IDS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
   }
@@ -13611,11 +13619,11 @@ var init_api_memory = __esm({
 
 // packages/relay/src/dashboard/api-consensus.ts
 async function consensusHandler(projectRoot) {
-  const perfPath = (0, import_path34.join)(projectRoot, ".gossip", "agent-performance.jsonl");
-  if (!(0, import_fs29.existsSync)(perfPath)) return { runs: [], totalSignals: 0 };
+  const perfPath = (0, import_path33.join)(projectRoot, ".gossip", "agent-performance.jsonl");
+  if (!(0, import_fs28.existsSync)(perfPath)) return { runs: [], totalSignals: 0 };
   const signals = [];
   try {
-    const lines = (0, import_fs29.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
+    const lines = (0, import_fs28.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
     for (const line of lines) {
       try {
         const parsed = JSON.parse(line);
@@ -13666,12 +13674,12 @@ async function consensusHandler(projectRoot) {
   runs.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   return { runs, totalSignals: signals.length };
 }
-var import_fs29, import_path34;
+var import_fs28, import_path33;
 var init_api_consensus = __esm({
   "packages/relay/src/dashboard/api-consensus.ts"() {
     "use strict";
-    import_fs29 = require("fs");
-    import_path34 = require("path");
+    import_fs28 = require("fs");
+    import_path33 = require("path");
   }
 });
 
@@ -13680,11 +13688,11 @@ async function signalsHandler(projectRoot, query) {
   const agentFilter = query?.get("agent") ?? null;
   const limit = Math.min(Math.max(parseInt(query?.get("limit") ?? "", 10) || DEFAULT_LIMIT, 1), MAX_LIMIT);
   const offset = Math.max(parseInt(query?.get("offset") ?? "", 10) || 0, 0);
-  const perfPath = (0, import_path35.join)(projectRoot, ".gossip", "agent-performance.jsonl");
-  if (!(0, import_fs30.existsSync)(perfPath)) return { items: [], total: 0, offset, limit };
+  const perfPath = (0, import_path34.join)(projectRoot, ".gossip", "agent-performance.jsonl");
+  if (!(0, import_fs29.existsSync)(perfPath)) return { items: [], total: 0, offset, limit };
   const all = [];
   try {
-    const lines = (0, import_fs30.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
+    const lines = (0, import_fs29.readFileSync)(perfPath, "utf-8").trim().split("\n").filter(Boolean);
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
@@ -13700,12 +13708,12 @@ async function signalsHandler(projectRoot, query) {
   all.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
 }
-var import_fs30, import_path35, MAX_LIMIT, DEFAULT_LIMIT;
+var import_fs29, import_path34, MAX_LIMIT, DEFAULT_LIMIT;
 var init_api_signals = __esm({
   "packages/relay/src/dashboard/api-signals.ts"() {
     "use strict";
-    import_fs30 = require("fs");
-    import_path35 = require("path");
+    import_fs29 = require("fs");
+    import_path34 = require("path");
     MAX_LIMIT = 200;
     DEFAULT_LIMIT = 50;
   }
@@ -13713,29 +13721,29 @@ var init_api_signals = __esm({
 
 // packages/relay/src/dashboard/api-learnings.ts
 async function learningsHandler(projectRoot) {
-  const agentsDir = (0, import_path36.join)(projectRoot, ".gossip", "agents");
-  if (!(0, import_fs31.existsSync)(agentsDir)) return { learnings: [] };
+  const agentsDir = (0, import_path35.join)(projectRoot, ".gossip", "agents");
+  if (!(0, import_fs30.existsSync)(agentsDir)) return { learnings: [] };
   const all = [];
   let agentIds;
   try {
-    agentIds = (0, import_fs31.readdirSync)(agentsDir).filter((f) => !f.startsWith("."));
+    agentIds = (0, import_fs30.readdirSync)(agentsDir).filter((f) => !f.startsWith("."));
   } catch {
     return { learnings: [] };
   }
   for (const agentId of agentIds) {
-    const knowledgeDir = (0, import_path36.join)(agentsDir, agentId, "memory", "knowledge");
-    if (!(0, import_fs31.existsSync)(knowledgeDir)) continue;
+    const knowledgeDir = (0, import_path35.join)(agentsDir, agentId, "memory", "knowledge");
+    if (!(0, import_fs30.existsSync)(knowledgeDir)) continue;
     let files;
     try {
-      files = (0, import_fs31.readdirSync)(knowledgeDir).filter((f) => f.endsWith(".md"));
+      files = (0, import_fs30.readdirSync)(knowledgeDir).filter((f) => f.endsWith(".md"));
     } catch {
       continue;
     }
     for (const filename of files) {
-      const filepath = (0, import_path36.join)(knowledgeDir, filename);
+      const filepath = (0, import_path35.join)(knowledgeDir, filename);
       try {
-        const stat3 = (0, import_fs31.statSync)(filepath);
-        const raw = (0, import_fs31.readFileSync)(filepath, "utf-8");
+        const stat3 = (0, import_fs30.statSync)(filepath);
+        const raw = (0, import_fs30.readFileSync)(filepath, "utf-8");
         const fm = parseFrontmatter2(raw);
         all.push({
           agentId,
@@ -13762,12 +13770,12 @@ function parseFrontmatter2(raw) {
   }
   return fm;
 }
-var import_fs31, import_path36, MAX_LEARNINGS;
+var import_fs30, import_path35, MAX_LEARNINGS;
 var init_api_learnings = __esm({
   "packages/relay/src/dashboard/api-learnings.ts"() {
     "use strict";
-    import_fs31 = require("fs");
-    import_path36 = require("path");
+    import_fs30 = require("fs");
+    import_path35 = require("path");
     MAX_LEARNINGS = 10;
   }
 });
@@ -13778,12 +13786,12 @@ async function tasksHandler(projectRoot, query) {
   const rawOffset = parseInt(query?.get("offset") ?? "0", 10);
   const limit = isNaN(rawLimit) || rawLimit < 1 ? 50 : Math.min(rawLimit, 200);
   const offset = isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
-  const graphPath = (0, import_path37.join)(projectRoot, ".gossip", "task-graph.jsonl");
-  if (!(0, import_fs32.existsSync)(graphPath)) return { items: [], total: 0, offset, limit };
+  const graphPath = (0, import_path36.join)(projectRoot, ".gossip", "task-graph.jsonl");
+  if (!(0, import_fs31.existsSync)(graphPath)) return { items: [], total: 0, offset, limit };
   const created = /* @__PURE__ */ new Map();
   const completed = /* @__PURE__ */ new Map();
   try {
-    const lines = (0, import_fs32.readFileSync)(graphPath, "utf-8").trim().split("\n").filter(Boolean);
+    const lines = (0, import_fs31.readFileSync)(graphPath, "utf-8").trim().split("\n").filter(Boolean);
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
@@ -13836,23 +13844,23 @@ async function tasksHandler(projectRoot, query) {
   tasks.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   return { items: tasks.slice(offset, offset + limit), total: tasks.length, offset, limit };
 }
-var import_fs32, import_path37;
+var import_fs31, import_path36;
 var init_api_tasks = __esm({
   "packages/relay/src/dashboard/api-tasks.ts"() {
     "use strict";
-    import_fs32 = require("fs");
-    import_path37 = require("path");
+    import_fs31 = require("fs");
+    import_path36 = require("path");
   }
 });
 
 // packages/relay/src/dashboard/api-active-tasks.ts
 async function activeTasksHandler(projectRoot) {
-  const taskGraphPath = (0, import_path38.join)(projectRoot, ".gossip", "task-graph.jsonl");
-  if (!(0, import_fs33.existsSync)(taskGraphPath)) return { tasks: [] };
+  const taskGraphPath = (0, import_path37.join)(projectRoot, ".gossip", "task-graph.jsonl");
+  if (!(0, import_fs32.existsSync)(taskGraphPath)) return { tasks: [] };
   const created = /* @__PURE__ */ new Map();
   const finished = /* @__PURE__ */ new Set();
   try {
-    const lines = (0, import_fs33.readFileSync)(taskGraphPath, "utf-8").trim().split("\n").filter(Boolean);
+    const lines = (0, import_fs32.readFileSync)(taskGraphPath, "utf-8").trim().split("\n").filter(Boolean);
     for (const line of lines) {
       try {
         const ev = JSON.parse(line);
@@ -13875,12 +13883,12 @@ async function activeTasksHandler(projectRoot) {
   active.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   return { tasks: active.slice(0, 10) };
 }
-var import_fs33, import_path38;
+var import_fs32, import_path37;
 var init_api_active_tasks = __esm({
   "packages/relay/src/dashboard/api-active-tasks.ts"() {
     "use strict";
-    import_fs33 = require("fs");
-    import_path38 = require("path");
+    import_fs32 = require("fs");
+    import_path37 = require("path");
   }
 });
 
@@ -13908,7 +13916,7 @@ function readBody(req) {
     });
   });
 }
-var import_fs34, import_path39, AUTH_MAX_ATTEMPTS, AUTH_LOCKOUT_MS, DashboardRouter, MAX_BODY_SIZE;
+var import_fs33, import_path38, AUTH_MAX_ATTEMPTS, AUTH_LOCKOUT_MS, DashboardRouter, MAX_BODY_SIZE;
 var init_routes = __esm({
   "packages/relay/src/dashboard/routes.ts"() {
     "use strict";
@@ -13921,8 +13929,8 @@ var init_routes = __esm({
     init_api_learnings();
     init_api_tasks();
     init_api_active_tasks();
-    import_fs34 = require("fs");
-    import_path39 = require("path");
+    import_fs33 = require("fs");
+    import_path38 = require("path");
     AUTH_MAX_ATTEMPTS = 10;
     AUTH_LOCKOUT_MS = 6e4;
     DashboardRouter = class {
@@ -13959,10 +13967,12 @@ var init_routes = __esm({
           }
           return this.handleApi(req, res, url2, query);
         }
-        if (url2.startsWith("/dashboard/assets/")) {
-          return this.serveAsset(res, url2);
+        if (url2.startsWith("/dashboard/") && !url2.startsWith("/dashboard/api/")) {
+          const served = this.serveStaticFile(res, url2);
+          if (served) return true;
+          return this.serveDashboard(res);
         }
-        if (url2 === "/dashboard" || url2 === "/dashboard/" || url2.startsWith("/dashboard") && !url2.startsWith("/dashboard/api/") && !url2.startsWith("/dashboard/assets/")) {
+        if (url2 === "/dashboard") {
           return this.serveDashboard(res);
         }
         this.json(res, 404, { error: "Not found" });
@@ -14078,21 +14088,46 @@ var init_routes = __esm({
         return true;
       }
       serveDashboard(res) {
-        const htmlPath = (0, import_path39.join)(this.projectRoot, "dist-dashboard", "index.html");
-        if (!(0, import_fs34.existsSync)(htmlPath)) {
+        const htmlPath = (0, import_path38.join)(this.projectRoot, "dist-dashboard", "index.html");
+        if (!(0, import_fs33.existsSync)(htmlPath)) {
           res.writeHead(503, { "Content-Type": "text/plain" });
           res.end("Dashboard not built. Run: npm run build:dashboard");
           return true;
         }
-        const html = (0, import_fs34.readFileSync)(htmlPath, "utf-8");
+        const html = (0, import_fs33.readFileSync)(htmlPath, "utf-8");
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(html);
         return true;
       }
-      serveAsset(res, _url2) {
-        res.writeHead(404);
-        res.end();
-        return true;
+      serveStaticFile(res, url2) {
+        const relativePath = url2.replace(/^\/dashboard\//, "");
+        if (relativePath.includes("..")) {
+          res.writeHead(404);
+          res.end();
+          return true;
+        }
+        const MIME = {
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".svg": "image/svg+xml",
+          ".css": "text/css",
+          ".js": "application/javascript",
+          ".ico": "image/x-icon",
+          ".woff": "font/woff",
+          ".woff2": "font/woff2"
+        };
+        const ext = "." + (relativePath.split(".").pop() || "");
+        const mime = MIME[ext];
+        if (!mime) return false;
+        const filePath = (0, import_path38.join)(this.projectRoot, "dist-dashboard", relativePath);
+        try {
+          const data = (0, import_fs33.readFileSync)(filePath);
+          res.writeHead(200, { "Content-Type": mime, "Cache-Control": "public, max-age=86400" });
+          res.end(data);
+          return true;
+        } catch {
+          return false;
+        }
       }
       extractSessionToken(req) {
         const cookie = req.headers.cookie;
@@ -14191,7 +14226,7 @@ var init_server = __esm({
         return new Promise((resolve13) => {
           this.httpServer = (0, import_http.createServer)(this.handleHttp.bind(this));
           if (this.config.dashboard) {
-            this.dashboardAuth = new DashboardAuth(this.config.dashboard.projectRoot);
+            this.dashboardAuth = new DashboardAuth();
             this.dashboardAuth.init();
             this.dashboardWs = new DashboardWs();
             this.dashboardUpgrader = new import_ws4.WebSocketServer({ noServer: true });
@@ -14375,6 +14410,9 @@ var init_server = __esm({
         res.writeHead(404);
         res.end();
       }
+      get dashboardKey() {
+        return this.dashboardAuth?.getKey() ?? "";
+      }
       get dashboardKeyPrefix() {
         return this.dashboardAuth?.getKeyPrefix() ?? "";
       }
@@ -14444,18 +14482,18 @@ __export(config_exports, {
 function findConfigPath(projectRoot) {
   const root = projectRoot || process.cwd();
   const candidates = [
-    (0, import_path40.resolve)(root, ".gossip", "config.json"),
-    (0, import_path40.resolve)(root, "gossip.agents.json"),
-    (0, import_path40.resolve)(root, "gossip.agents.yaml"),
-    (0, import_path40.resolve)(root, "gossip.agents.yml")
+    (0, import_path39.resolve)(root, ".gossip", "config.json"),
+    (0, import_path39.resolve)(root, "gossip.agents.json"),
+    (0, import_path39.resolve)(root, "gossip.agents.yaml"),
+    (0, import_path39.resolve)(root, "gossip.agents.yml")
   ];
   for (const p of candidates) {
-    if ((0, import_fs35.existsSync)(p)) return p;
+    if ((0, import_fs34.existsSync)(p)) return p;
   }
   return null;
 }
 function loadConfig(configPath) {
-  const raw = (0, import_fs35.readFileSync)(configPath, "utf-8");
+  const raw = (0, import_fs34.readFileSync)(configPath, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -14507,19 +14545,19 @@ function configToAgentConfigs(config2) {
 }
 function loadClaudeSubagents(projectRoot, existingIds) {
   const root = projectRoot || process.cwd();
-  const agentsDir = (0, import_path40.join)(root, ".claude", "agents");
-  if (!(0, import_fs35.existsSync)(agentsDir)) return [];
+  const agentsDir = (0, import_path39.join)(root, ".claude", "agents");
+  if (!(0, import_fs34.existsSync)(agentsDir)) return [];
   let files;
   try {
-    files = (0, import_fs35.readdirSync)(agentsDir).filter((f) => f.endsWith(".md"));
+    files = (0, import_fs34.readdirSync)(agentsDir).filter((f) => f.endsWith(".md"));
   } catch {
     return [];
   }
   const agents = [];
   for (const file2 of files) {
-    const filePath = (0, import_path40.join)(agentsDir, file2);
+    const filePath = (0, import_path39.join)(agentsDir, file2);
     try {
-      const content = (0, import_fs35.readFileSync)(filePath, "utf-8");
+      const content = (0, import_fs34.readFileSync)(filePath, "utf-8");
       const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
       if (!frontmatter) continue;
       const fm = frontmatter[1];
@@ -14581,12 +14619,12 @@ function inferSkills(description, name) {
   if (skills.length === 0) skills.push("general");
   return skills;
 }
-var import_fs35, import_path40, VALID_PROVIDERS, CLAUDE_MODEL_MAP;
+var import_fs34, import_path39, VALID_PROVIDERS, CLAUDE_MODEL_MAP;
 var init_config = __esm({
   "apps/cli/src/config.ts"() {
     "use strict";
-    import_fs35 = require("fs");
-    import_path40 = require("path");
+    import_fs34 = require("fs");
+    import_path39 = require("path");
     VALID_PROVIDERS = ["anthropic", "openai", "google", "local"];
     CLAUDE_MODEL_MAP = {
       opus: { provider: "anthropic", model: "claude-opus-4-6" },
@@ -14736,17 +14774,17 @@ __export(identity_exports, {
   normalizeGitUrl: () => normalizeGitUrl
 });
 function getOrCreateSalt(projectRoot) {
-  const saltPath = (0, import_path41.join)(projectRoot, ".gossip", "local-salt");
+  const saltPath = (0, import_path40.join)(projectRoot, ".gossip", "local-salt");
   try {
-    return (0, import_fs36.readFileSync)(saltPath, "utf-8").trim();
+    return (0, import_fs35.readFileSync)(saltPath, "utf-8").trim();
   } catch {
     const salt = (0, import_crypto12.randomBytes)(16).toString("hex");
-    (0, import_fs36.mkdirSync)((0, import_path41.join)(projectRoot, ".gossip"), { recursive: true });
+    (0, import_fs35.mkdirSync)((0, import_path40.join)(projectRoot, ".gossip"), { recursive: true });
     try {
-      (0, import_fs36.writeFileSync)(saltPath, salt, { flag: "wx" });
+      (0, import_fs35.writeFileSync)(saltPath, salt, { flag: "wx" });
       return salt;
     } catch {
-      return (0, import_fs36.readFileSync)(saltPath, "utf-8").trim();
+      return (0, import_fs35.readFileSync)(saltPath, "utf-8").trim();
     }
   }
 }
@@ -14796,12 +14834,12 @@ function getProjectId(projectRoot) {
   }
   return (0, import_crypto12.createHash)("sha256").update(projectRoot).digest("hex").slice(0, 16);
 }
-var import_fs36, import_path41, import_crypto12, import_child_process5;
+var import_fs35, import_path40, import_crypto12, import_child_process5;
 var init_identity = __esm({
   "apps/cli/src/identity.ts"() {
     "use strict";
-    import_fs36 = require("fs");
-    import_path41 = require("path");
+    import_fs35 = require("fs");
+    import_path40 = require("path");
     import_crypto12 = require("crypto");
     import_child_process5 = require("child_process");
   }
@@ -29430,7 +29468,7 @@ ${agentList}
 | Architecture review | Multiple perspectives on trade-offs | Split by dimension |
 | Pre-ship verification | Catch regressions before merge | Split by area changed |
 
-**Single agent is fine for:** quick lookups, simple implementations, running tests.
+**Single agent is fine for:** quick lookups, running tests, file reads.
 
 ## Consensus Workflow \u2014 The Complete Flow
 
@@ -29503,6 +29541,18 @@ feed, no memory is written, no signals recorded. The agent effectively works off
 
 When dispatching native agents: gossip_dispatch \u2192 Agent() \u2192 gossip_relay. Never skip the relay call.
 
+## Implementation Tasks \u2014 Auto-Dispatch
+
+Check Tier 1/2 triggers first (see .claude/rules/gossipcat.md). If no match, call
+gossip_run(agent_id: "auto", task: "<description>") BEFORE writing any code.
+
+Exceptions: (direct) in user message, Tier 3 changes (docs, CSS, tests), or already
+executing inside a dispatched plan step.
+
+gossip_run auto classifies single vs multi and routes appropriately:
+- Single: selects best-fit agent by dispatch weight, dispatches directly
+- Multi: calls gossip_plan for decomposition, presents for approval, then dispatches
+
 ## Permissions
 
 Auto-allow writes: \`{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"] } }\`
@@ -29510,6 +29560,7 @@ Auto-allow writes: \`{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"
 }
 var booted = false;
 var bootPromise = null;
+var planExecutionDepth = 0;
 var _modules = null;
 async function getModules() {
   if (_modules) return _modules;
@@ -29551,7 +29602,7 @@ async function doBoot() {
   });
   await ctx.relay.start();
   if (ctx.relay.dashboardUrl) {
-    process.stderr.write(`[gossipcat] Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKeyPrefix}...)
+    process.stderr.write(`[gossipcat] Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKey})
 `);
   }
   const perfWriter = new m.PerformanceWriter(process.cwd());
@@ -29577,10 +29628,10 @@ async function doBoot() {
     }
     const key = await ctx.keychain.getKey(ac.provider);
     const llm = m.createProvider(ac.provider, ac.model, key ?? void 0);
-    const { existsSync: existsSync32, readFileSync: readFileSync33 } = require("fs");
-    const { join: join37 } = require("path");
-    const instructionsPath = join37(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
-    const instructions = existsSync32(instructionsPath) ? readFileSync33(instructionsPath, "utf-8") : void 0;
+    const { existsSync: existsSync31, readFileSync: readFileSync32 } = require("fs");
+    const { join: join36 } = require("path");
+    const instructionsPath = join36(process.cwd(), ".gossip", "agents", ac.id, "instructions.md");
+    const instructions = existsSync31(instructionsPath) ? readFileSync32(instructionsPath, "utf-8") : void 0;
     const worker = new m.WorkerAgent(ac.id, llm, ctx.relay.url, m.ALL_TOOLS, instructions);
     worker.setOnTaskComplete?.((event) => {
       try {
@@ -29866,6 +29917,9 @@ server.tool(
   async ({ task, strategy }) => {
     await boot();
     await syncWorkersViaKeychain();
+    if (planExecutionDepth > 0) {
+      return { content: [{ type: "text", text: "Skipped: already inside a plan step. Execute the task directly instead of re-planning." }] };
+    }
     try {
       const { TaskDispatcher: TaskDispatcher2, AgentRegistry: AgentRegistry2 } = await Promise.resolve().then(() => (init_src4(), src_exports3));
       const { findConfigPath: findConfigPath2, loadConfig: loadConfig2, configToAgentConfigs: configToAgentConfigs2 } = await Promise.resolve().then(() => (init_config(), config_exports));
@@ -30000,25 +30054,30 @@ server.tool(
     step: external_exports.number().optional().describe("Step number in the plan (1-indexed).")
   },
   async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step }) => {
-    if (mode === "single") {
-      if (!agent_id || !task) {
-        return { content: [{ type: "text", text: 'Error: mode:"single" requires agent_id and task.' }] };
+    planExecutionDepth++;
+    try {
+      if (mode === "single") {
+        if (!agent_id || !task) {
+          return { content: [{ type: "text", text: 'Error: mode:"single" requires agent_id and task.' }] };
+        }
+        return handleDispatchSingle(agent_id, task, write_mode, scope, timeout_ms, plan_id, step);
       }
-      return handleDispatchSingle(agent_id, task, write_mode, scope, timeout_ms, plan_id, step);
-    }
-    if (mode === "parallel") {
-      if (!tasks || tasks.length === 0) {
-        return { content: [{ type: "text", text: 'Error: mode:"parallel" requires a non-empty tasks array.' }] };
+      if (mode === "parallel") {
+        if (!tasks || tasks.length === 0) {
+          return { content: [{ type: "text", text: 'Error: mode:"parallel" requires a non-empty tasks array.' }] };
+        }
+        return handleDispatchParallel(tasks, false);
       }
-      return handleDispatchParallel(tasks, false);
-    }
-    if (mode === "consensus") {
-      if (!tasks || tasks.length === 0) {
-        return { content: [{ type: "text", text: 'Error: mode:"consensus" requires a non-empty tasks array.' }] };
+      if (mode === "consensus") {
+        if (!tasks || tasks.length === 0) {
+          return { content: [{ type: "text", text: 'Error: mode:"consensus" requires a non-empty tasks array.' }] };
+        }
+        return handleDispatchConsensus(tasks);
       }
-      return handleDispatchConsensus(tasks);
+      return { content: [{ type: "text", text: `Unknown mode: ${mode}` }] };
+    } finally {
+      planExecutionDepth--;
     }
-    return { content: [{ type: "text", text: `Unknown mode: ${mode}` }] };
   }
 );
 server.tool(
@@ -30048,7 +30107,7 @@ server.tool(
       `  Claude subagents found: ${claudeSubagentsList.length}`
     ];
     if (ctx.relay?.dashboardUrl) {
-      lines.push(`  Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKeyPrefix}...)`);
+      lines.push(`  Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKey})`);
     }
     const agentSections = [];
     const configPath = findConfigPath2();
@@ -30164,8 +30223,8 @@ server.tool(
       }
       return { content: [{ type: "text", text: results.join("\n") }] };
     }
-    const { writeFileSync: writeFileSync14, mkdirSync: mkdirSync14, existsSync: existsSync32 } = require("fs");
-    const { join: join37 } = require("path");
+    const { writeFileSync: writeFileSync13, mkdirSync: mkdirSync13, existsSync: existsSync31 } = require("fs");
+    const { join: join36 } = require("path");
     const root = process.cwd();
     const CLAUDE_MODEL_MAP2 = {
       opus: { provider: "anthropic", model: "claude-opus-4-6" },
@@ -30203,9 +30262,9 @@ server.tool(
           "",
           body
         ].join("\n");
-        const agentsDir = join37(root, ".claude", "agents");
-        mkdirSync14(agentsDir, { recursive: true });
-        writeFileSync14(join37(agentsDir, `${agent.id}.md`), md, "utf-8");
+        const agentsDir = join36(root, ".claude", "agents");
+        mkdirSync13(agentsDir, { recursive: true });
+        writeFileSync13(join36(agentsDir, `${agent.id}.md`), md, "utf-8");
         nativeCreated.push(agent.id);
         configAgents[agent.id] = {
           provider: mapped.provider,
@@ -30223,8 +30282,8 @@ server.tool(
           errors.push(`${agent.id}: custom agent requires "custom_model" field`);
           continue;
         }
-        const nativeFile = join37(root, ".claude", "agents", `${agent.id}.md`);
-        const wasNative = existingAgents[agent.id]?.native || existsSync32(nativeFile);
+        const nativeFile = join36(root, ".claude", "agents", `${agent.id}.md`);
+        const wasNative = existingAgents[agent.id]?.native || existsSync31(nativeFile);
         if (wasNative) {
           errors.push(`${agent.id}: cannot re-register native agent as custom \u2014 .claude/agents/${agent.id}.md exists. Remove the file first or keep it as native.`);
           continue;
@@ -30237,17 +30296,17 @@ server.tool(
         };
         customCreated.push(agent.id);
         if (agent.instructions) {
-          const instrDir = join37(root, ".gossip", "agents", agent.id);
-          mkdirSync14(instrDir, { recursive: true });
-          writeFileSync14(join37(instrDir, "instructions.md"), agent.instructions, "utf-8");
+          const instrDir = join36(root, ".gossip", "agents", agent.id);
+          mkdirSync13(instrDir, { recursive: true });
+          writeFileSync13(join36(instrDir, "instructions.md"), agent.instructions, "utf-8");
         }
       }
     }
     let existingAgents = {};
     if (mode === "merge") {
       try {
-        const { readFileSync: readFileSync33 } = require("fs");
-        const existing = JSON.parse(readFileSync33(join37(root, ".gossip", "config.json"), "utf-8"));
+        const { readFileSync: readFileSync32 } = require("fs");
+        const existing = JSON.parse(readFileSync32(join36(root, ".gossip", "config.json"), "utf-8"));
         existingAgents = existing.agents || {};
       } catch {
       }
@@ -30262,13 +30321,13 @@ server.tool(
     } catch (err) {
       return { content: [{ type: "text", text: `Invalid config: ${err.message}` }] };
     }
-    mkdirSync14(join37(root, ".gossip"), { recursive: true });
-    writeFileSync14(join37(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
+    mkdirSync13(join36(root, ".gossip"), { recursive: true });
+    writeFileSync13(join36(root, ".gossip", "config.json"), JSON.stringify(config2, null, 2));
     const agentList = Object.entries(config2.agents).map(([id, a]) => `- ${id}: ${a.provider}/${a.model} (${a.preset || "custom"})${a.native ? " \u2014 native" : ""}`).join("\n");
-    const rulesDir = join37(root, env.rulesDir);
-    const rulesFile = join37(root, env.rulesFile);
-    mkdirSync14(rulesDir, { recursive: true });
-    writeFileSync14(rulesFile, generateRulesContent(agentList));
+    const rulesDir = join36(root, env.rulesDir);
+    const rulesFile = join36(root, env.rulesFile);
+    mkdirSync13(rulesDir, { recursive: true });
+    writeFileSync13(rulesFile, generateRulesContent(agentList));
     const lines = [`Host: ${env.host}`, ""];
     if (nativeCreated.length > 0) {
       lines.push(`Native agents created (${nativeCreated.length}):`);
@@ -30322,8 +30381,34 @@ server.tool(
   async ({ agent_id, task, write_mode, scope }) => {
     await boot();
     if (agent_id === "auto") {
-      const result = await ctx.mainAgent.handleMessage(task, { mode: "decompose" });
-      return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }] };
+      const complexity = await ctx.mainAgent.classifyTaskComplexity(task);
+      if (complexity === "multi") {
+        const result = await ctx.mainAgent.handleMessage(task, { mode: "decompose" });
+        return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }] };
+      }
+      const { AgentRegistry: AgentRegistry2 } = await Promise.resolve().then(() => (init_src4(), src_exports3));
+      const { findConfigPath: findConfigPath2, loadConfig: loadConfig2, configToAgentConfigs: configToAgentConfigs2 } = await Promise.resolve().then(() => (init_config(), config_exports));
+      const configPath = findConfigPath2();
+      if (!configPath) return { content: [{ type: "text", text: "No config found. Run gossip_setup first." }] };
+      const config2 = loadConfig2(configPath);
+      const agentConfigs = configToAgentConfigs2(config2);
+      const registry2 = new AgentRegistry2();
+      for (const ac of agentConfigs) registry2.register(ac);
+      const implSkills = ["implementation", "typescript"];
+      const bestAgent = registry2.findBestMatch(implSkills);
+      const selectedId = bestAgent?.id || agentConfigs[0]?.id;
+      if (!selectedId) {
+        return { content: [{ type: "text", text: "No agents available. Run gossip_setup first." }] };
+      }
+      return { content: [{
+        type: "text",
+        text: `Auto-dispatch: classified as single-agent task.
+Selected: ${selectedId} (best match by dispatch weight)
+
+Dispatching via: gossip_run(agent_id: "${selectedId}", task: "${task.slice(0, 80)}...")
+
+Call gossip_run(agent_id: "${selectedId}", task: <your task>) to execute.`
+      }] };
     }
     const isNative = ctx.nativeAgentConfigs.has(agent_id);
     const options = {};
@@ -30352,20 +30437,24 @@ server.tool(
       const scopePrefix = write_mode === "scoped" && scope ? `SCOPE RESTRICTION: Only modify files within ${scope}. Do not edit files outside this directory.
 
 ` : "";
+      const agentPrompt = `${scopePrefix}${presetPrompt}
+
+---
+
+Task: ${task}`;
+      const modelMap = { "claude-sonnet-4-6": "sonnet", "claude-opus-4-6": "opus", "claude-haiku-4-5": "haiku" };
+      const modelShort = modelMap[config2.model] || "sonnet";
       return {
         content: [{
           type: "text",
           text: `Dispatched to ${agent_id} (native). Task ID: ${taskId}
 
-NATIVE_DISPATCH:
+\u26A0\uFE0F EXECUTE NOW \u2014 launch this Agent and relay the result:
 
-Agent(model: "${config2.model}", prompt: ${JSON.stringify(`${scopePrefix}${presetPrompt}
+1. Agent(model: "${modelShort}", prompt: ${JSON.stringify(agentPrompt)}, run_in_background: true)
+2. When agent completes \u2192 gossip_relay(task_id: "${taskId}", result: "<full agent output>")
 
----
-
-Task: ${task}`)})
-  \u2192 then: gossip_relay(task_id: "${taskId}", result: "<output>")
-`
+Do BOTH steps in your next response. Do not wait for user input between them.`
         }]
       };
     }
@@ -30607,16 +30696,16 @@ ${preview}` }]
     const { SkillGapTracker: SkillGapTracker2, parseSkillFrontmatter: parseSkillFrontmatter2, normalizeSkillName: normalizeSkillName2 } = await Promise.resolve().then(() => (init_src4(), src_exports3));
     const tracker = new SkillGapTracker2(process.cwd());
     if (skills && skills.length > 0) {
-      const { writeFileSync: writeFileSync14, mkdirSync: mkdirSync14, existsSync: existsSync32, readFileSync: readFileSync33 } = require("fs");
-      const { join: join37 } = require("path");
-      const dir = join37(process.cwd(), ".gossip", "skills");
-      mkdirSync14(dir, { recursive: true });
+      const { writeFileSync: writeFileSync13, mkdirSync: mkdirSync13, existsSync: existsSync31, readFileSync: readFileSync32 } = require("fs");
+      const { join: join36 } = require("path");
+      const dir = join36(process.cwd(), ".gossip", "skills");
+      mkdirSync13(dir, { recursive: true });
       const results = [];
       for (const sk of skills) {
         const name = normalizeSkillName2(sk.name);
-        const filePath = join37(dir, `${name}.md`);
-        if (existsSync32(filePath)) {
-          const existing = readFileSync33(filePath, "utf-8");
+        const filePath = join36(dir, `${name}.md`);
+        if (existsSync31(filePath)) {
+          const existing = readFileSync32(filePath, "utf-8");
           const fm = parseSkillFrontmatter2(existing);
           if (fm) {
             if (fm.generated_by === "manual") {
@@ -30633,7 +30722,7 @@ ${preview}` }]
             }
           }
         }
-        writeFileSync14(filePath, sk.content);
+        writeFileSync13(filePath, sk.content);
         tracker.recordResolution(name);
         results.push(`Created .gossip/skills/${name}.md`);
       }
