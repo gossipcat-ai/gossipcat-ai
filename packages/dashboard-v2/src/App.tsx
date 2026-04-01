@@ -3,6 +3,8 @@ import { AuthGate } from '@/components/AuthGate';
 import { TopBar } from '@/components/TopBar';
 import { FindingsMetrics } from '@/components/FindingsMetrics';
 import { TeamSection } from '@/components/TeamSection';
+import { TasksSection } from '@/components/TasksSection';
+import { RecentMemories } from '@/components/RecentMemories';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useDashboardData } from '@/hooks/useDashboardData';
@@ -41,7 +43,8 @@ export function App() {
       <main className="mx-auto max-w-6xl space-y-8 px-6 py-6">
         <FindingsMetrics overview={overview} consensus={consensus} />
         {agents && <TeamSection agents={agents} />}
-        {/* Tasks and Memories sections will be added next */}
+        {tasks && <TasksSection tasks={tasks} />}
+        {memories && <RecentMemories memories={memories} />}
       </main>
     </div>
   );
