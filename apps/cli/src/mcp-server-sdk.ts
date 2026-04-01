@@ -177,6 +177,9 @@ Auto-allow writes: \`{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"
 let booted = false;
 let bootPromise: Promise<void> | null = null;
 
+// Re-entrant guard: prevents gossip_plan from being called inside a plan step
+let planExecutionDepth = 0;
+
 // Cache modules after first import
 let _modules: any = null;
 
@@ -575,6 +578,12 @@ server.tool(
     await boot();
     await syncWorkersViaKeychain();
 
+    // Re-entrant guard: if already inside a plan execution, don't re-decompose
+    if (planExecutionDepth > 0) {
+      return { content: [{ type: 'text' as const, text:
+        'Skipped: already inside a plan step. Execute the task directly instead of re-planning.' }] };
+    }
+
     try {
       const { TaskDispatcher, AgentRegistry } = await import('@gossip/orchestrator');
 
@@ -717,25 +726,31 @@ server.tool(
     step: z.number().optional().describe('Step number in the plan (1-indexed).'),
   },
   async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step }) => {
-    if (mode === 'single') {
-      if (!agent_id || !task) {
-        return { content: [{ type: 'text' as const, text: 'Error: mode:"single" requires agent_id and task.' }] };
+    // Track plan execution depth for re-entrant guard
+    planExecutionDepth++;
+    try {
+      if (mode === 'single') {
+        if (!agent_id || !task) {
+          return { content: [{ type: 'text' as const, text: 'Error: mode:"single" requires agent_id and task.' }] };
+        }
+        return handleDispatchSingle(agent_id, task, write_mode, scope, timeout_ms, plan_id, step);
       }
-      return handleDispatchSingle(agent_id, task, write_mode, scope, timeout_ms, plan_id, step);
-    }
-    if (mode === 'parallel') {
-      if (!tasks || tasks.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'Error: mode:"parallel" requires a non-empty tasks array.' }] };
+      if (mode === 'parallel') {
+        if (!tasks || tasks.length === 0) {
+          return { content: [{ type: 'text' as const, text: 'Error: mode:"parallel" requires a non-empty tasks array.' }] };
+        }
+        return handleDispatchParallel(tasks, false);
       }
-      return handleDispatchParallel(tasks, false);
-    }
-    if (mode === 'consensus') {
-      if (!tasks || tasks.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'Error: mode:"consensus" requires a non-empty tasks array.' }] };
+      if (mode === 'consensus') {
+        if (!tasks || tasks.length === 0) {
+          return { content: [{ type: 'text' as const, text: 'Error: mode:"consensus" requires a non-empty tasks array.' }] };
+        }
+        return handleDispatchConsensus(tasks);
       }
-      return handleDispatchConsensus(tasks);
+      return { content: [{ type: 'text' as const, text: `Unknown mode: ${mode}` }] };
+    } finally {
+      planExecutionDepth--;
     }
-    return { content: [{ type: 'text' as const, text: `Unknown mode: ${mode}` }] };
   }
 );
 
