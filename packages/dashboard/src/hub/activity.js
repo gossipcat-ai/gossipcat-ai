@@ -29,6 +29,7 @@ function renderActivitySection(consensusData) {
     if (c.disagreement || c.hallucination) pills.push('<span class="pill pill-r pill-filter" data-filter="disputed">' + ((c.disagreement || 0) + (c.hallucination || 0)) + ' disputed</span>');
     if (c.unverified) pills.push('<span class="pill pill-y pill-filter" data-filter="unverified">' + c.unverified + ' unverified</span>');
     if (c.unique) pills.push('<span class="pill pill-b pill-filter" data-filter="unique">' + c.unique + ' unique</span>');
+    if (c.new > 0) pills.push('<span class="pill pill-b pill-filter" data-filter="new">' + c.new + ' new</span>');
 
     const segments = [];
     if (total > 0) {
@@ -36,6 +37,7 @@ function renderActivitySection(consensusData) {
       if (c.disagreement || c.hallucination) segments.push('<div class="bar-seg bar-seg-r" style="width:' + (((c.disagreement || 0) + (c.hallucination || 0)) / total * 100) + '%"></div>');
       if (c.unverified) segments.push('<div class="bar-seg bar-seg-y" style="width:' + ((c.unverified / total) * 100) + '%"></div>');
       if (c.unique) segments.push('<div class="bar-seg bar-seg-b" style="width:' + ((c.unique / total) * 100) + '%"></div>');
+      if (c.new) segments.push('<div class="bar-seg bar-seg-b" style="width:' + ((c.new / total) * 100) + '%"></div>');
     }
     const barHtml = segments.length > 0 ? '<div class="run-bar">' + segments.join('') + '</div>' : '';
 

@@ -14,7 +14,18 @@ function renderOverviewSection(data) {
 
   const actionable = data.actionableFindings || 0;
 
+  const totalTasks = data.totalTasks != null ? data.totalTasks : null;
+  const confirmedFindings = data.confirmedFindings != null ? data.confirmedFindings : null;
+  const totalFindings = data.totalFindings != null ? data.totalFindings : null;
+  const consensusRate = (confirmedFindings != null && totalFindings != null && totalFindings > 0)
+    ? Math.round((confirmedFindings / totalFindings) * 100) + '%'
+    : null;
+
   const dot = '<span class="sb-dot' + (totalOnline > 0 ? ' online' : '') + '"></span>';
+
+  const extraStats = [];
+  if (totalTasks != null) extraStats.push('<span class="sb-sep">&middot;</span><span class="sb-stat">' + totalTasks + ' tasks</span>');
+  if (consensusRate != null) extraStats.push('<span class="sb-sep">&middot;</span><span class="sb-stat">' + consensusRate + ' consensus</span>');
 
   section.innerHTML =
     '<div class="sb-left">' +
@@ -22,6 +33,7 @@ function renderOverviewSection(data) {
       '<span class="sb-stat">' + data.nativeCount + ' native &middot; ' + data.relayCount + ' relay</span>' +
       '<span class="sb-sep">&middot;</span>' +
       '<span class="sb-stat">last run ' + lastRunText + '</span>' +
+      extraStats.join('') +
     '</div>' +
     '<div class="sb-right">' +
       (actionable > 0

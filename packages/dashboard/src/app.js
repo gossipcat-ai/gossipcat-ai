@@ -231,17 +231,52 @@ async function renderHub(app) {
     app.innerHTML = '';
 
     // Build sections
-    app.appendChild(renderOverviewSection(overview));
+    const overviewEl = renderOverviewSection(overview);
+    overviewEl.dataset.section = 'overview';
+    app.appendChild(overviewEl);
 
     const liveStrip = document.createElement('div');
     liveStrip.className = 'section live-strip';
+    liveStrip.dataset.section = 'taskstrip';
     liveStrip.hidden = true;
     app.appendChild(liveStrip);
     renderTaskStrip(liveStrip);
 
-    app.appendChild(renderTeamSection(agents));
-    app.appendChild(renderActivitySection(consensus));
-    app.appendChild(renderKnowledgeSection(agents));
+    const hubGrid = document.createElement('div');
+    hubGrid.className = 'hub-grid';
+
+    const teamEl = renderTeamSection(agents);
+    teamEl.dataset.section = 'team';
+    hubGrid.appendChild(teamEl);
+
+    const activityEl = renderActivitySection(consensus);
+    activityEl.dataset.section = 'activity';
+    hubGrid.appendChild(activityEl);
+
+    app.appendChild(hubGrid);
+
+    const knowledgeEl = renderKnowledgeSection(agents);
+    knowledgeEl.dataset.section = 'knowledge';
+    app.appendChild(knowledgeEl);
+
+    // Live timestamp intervals
+    if (window._timestampInterval) clearInterval(window._timestampInterval);
+    if (window._elapsedInterval) clearInterval(window._elapsedInterval);
+
+    window._timestampInterval = setInterval(() => {
+      document.querySelectorAll('[data-timestamp]').forEach(el => {
+        const ts = el.getAttribute('data-timestamp');
+        if (ts) el.textContent = _dash.timeAgo(ts);
+      });
+    }, 30000);
+
+    window._elapsedInterval = setInterval(() => {
+      document.querySelectorAll('[data-started]').forEach(el => {
+        const started = new Date(el.getAttribute('data-started')).getTime();
+        const elapsed = Math.round((Date.now() - started) / 1000);
+        el.textContent = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm' + (elapsed % 60) + 's';
+      });
+    }, 1000);
 
     // Wire WS live updates — selective section refresh, debounced
     let refreshTimer = null;
@@ -286,17 +321,35 @@ async function renderHub(app) {
             needsConsensus ? api('consensus') : null,
           ]);
 
-          // Replace only the affected section DOM nodes
-          // sections: [0]=overview, [1]=team, [2]=activity, [3]=knowledge
-          const sections = app.querySelectorAll('.section');
-          if (ov && sections[0]) { const el = renderOverviewSection(ov); sections[0].replaceWith(el); }
-          if (ag && sections[1]) { const el = renderTeamSection(ag); sections[1].replaceWith(el); }
-          if (cx && sections[2]) { const el = renderActivitySection(cx); sections[2].replaceWith(el); }
-          if (ag && sections[3]) { const el = renderKnowledgeSection(ag); sections[3].replaceWith(el); }
+          // Replace only the affected section DOM nodes using data-section selectors
+          if (ov) {
+            const el = renderOverviewSection(ov); el.dataset.section = 'overview';
+            const old = app.querySelector('[data-section="overview"]');
+            if (old) old.replaceWith(el);
+          }
+          if (ag) {
+            const teamEl = renderTeamSection(ag); teamEl.dataset.section = 'team';
+            const oldTeam = app.querySelector('[data-section="team"]');
+            if (oldTeam) oldTeam.replaceWith(teamEl);
+
+            const knowledgeEl = renderKnowledgeSection(ag); knowledgeEl.dataset.section = 'knowledge';
+            const oldKnowledge = app.querySelector('[data-section="knowledge"]');
+            if (oldKnowledge) oldKnowledge.replaceWith(knowledgeEl);
+          }
+          if (cx) {
+            const el = renderActivitySection(cx); el.dataset.section = 'activity';
+            const old = app.querySelector('[data-section="activity"]');
+            if (old) old.replaceWith(el);
+          }
         } catch { /* best-effort live update */ }
       }, 500);
     });
-    currentCleanup = () => { offDashboardEvent(wsHandler); if (refreshTimer) clearTimeout(refreshTimer); };
+    currentCleanup = () => {
+      offDashboardEvent(wsHandler);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (window._timestampInterval) { clearInterval(window._timestampInterval); window._timestampInterval = null; }
+      if (window._elapsedInterval) { clearInterval(window._elapsedInterval); window._elapsedInterval = null; }
+    };
 
   } catch (err) {
     app.innerHTML = '<div class="empty-state">Failed to load dashboard: ' + escapeHtml(err.message) + '</div>';

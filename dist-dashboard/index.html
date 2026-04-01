@@ -916,17 +916,52 @@ async function renderHub(app) {
     app.innerHTML = '';
 
     // Build sections
-    app.appendChild(renderOverviewSection(overview));
+    const overviewEl = renderOverviewSection(overview);
+    overviewEl.dataset.section = 'overview';
+    app.appendChild(overviewEl);
 
     const liveStrip = document.createElement('div');
     liveStrip.className = 'section live-strip';
+    liveStrip.dataset.section = 'taskstrip';
     liveStrip.hidden = true;
     app.appendChild(liveStrip);
     renderTaskStrip(liveStrip);
 
-    app.appendChild(renderTeamSection(agents));
-    app.appendChild(renderActivitySection(consensus));
-    app.appendChild(renderKnowledgeSection(agents));
+    const hubGrid = document.createElement('div');
+    hubGrid.className = 'hub-grid';
+
+    const teamEl = renderTeamSection(agents);
+    teamEl.dataset.section = 'team';
+    hubGrid.appendChild(teamEl);
+
+    const activityEl = renderActivitySection(consensus);
+    activityEl.dataset.section = 'activity';
+    hubGrid.appendChild(activityEl);
+
+    app.appendChild(hubGrid);
+
+    const knowledgeEl = renderKnowledgeSection(agents);
+    knowledgeEl.dataset.section = 'knowledge';
+    app.appendChild(knowledgeEl);
+
+    // Live timestamp intervals
+    if (window._timestampInterval) clearInterval(window._timestampInterval);
+    if (window._elapsedInterval) clearInterval(window._elapsedInterval);
+
+    window._timestampInterval = setInterval(() => {
+      document.querySelectorAll('[data-timestamp]').forEach(el => {
+        const ts = el.getAttribute('data-timestamp');
+        if (ts) el.textContent = _dash.timeAgo(ts);
+      });
+    }, 30000);
+
+    window._elapsedInterval = setInterval(() => {
+      document.querySelectorAll('[data-started]').forEach(el => {
+        const started = new Date(el.getAttribute('data-started')).getTime();
+        const elapsed = Math.round((Date.now() - started) / 1000);
+        el.textContent = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm' + (elapsed % 60) + 's';
+      });
+    }, 1000);
 
     // Wire WS live updates — selective section refresh, debounced
     let refreshTimer = null;
@@ -971,17 +1006,35 @@ async function renderHub(app) {
             needsConsensus ? api('consensus') : null,
           ]);
 
-          // Replace only the affected section DOM nodes
-          // sections: [0]=overview, [1]=team, [2]=activity, [3]=knowledge
-          const sections = app.querySelectorAll('.section');
-          if (ov && sections[0]) { const el = renderOverviewSection(ov); sections[0].replaceWith(el); }
-          if (ag && sections[1]) { const el = renderTeamSection(ag); sections[1].replaceWith(el); }
-          if (cx && sections[2]) { const el = renderActivitySection(cx); sections[2].replaceWith(el); }
-          if (ag && sections[3]) { const el = renderKnowledgeSection(ag); sections[3].replaceWith(el); }
+          // Replace only the affected section DOM nodes using data-section selectors
+          if (ov) {
+            const el = renderOverviewSection(ov); el.dataset.section = 'overview';
+            const old = app.querySelector('[data-section="overview"]');
+            if (old) old.replaceWith(el);
+          }
+          if (ag) {
+            const teamEl = renderTeamSection(ag); teamEl.dataset.section = 'team';
+            const oldTeam = app.querySelector('[data-section="team"]');
+            if (oldTeam) oldTeam.replaceWith(teamEl);
+
+            const knowledgeEl = renderKnowledgeSection(ag); knowledgeEl.dataset.section = 'knowledge';
+            const oldKnowledge = app.querySelector('[data-section="knowledge"]');
+            if (oldKnowledge) oldKnowledge.replaceWith(knowledgeEl);
+          }
+          if (cx) {
+            const el = renderActivitySection(cx); el.dataset.section = 'activity';
+            const old = app.querySelector('[data-section="activity"]');
+            if (old) old.replaceWith(el);
+          }
         } catch { /* best-effort live update */ }
       }, 500);
     });
-    currentCleanup = () => { offDashboardEvent(wsHandler); if (refreshTimer) clearTimeout(refreshTimer); };
+    currentCleanup = () => {
+      offDashboardEvent(wsHandler);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (window._timestampInterval) { clearInterval(window._timestampInterval); window._timestampInterval = null; }
+      if (window._elapsedInterval) { clearInterval(window._elapsedInterval); window._elapsedInterval = null; }
+    };
 
   } catch (err) {
     app.innerHTML = '<div class="empty-state">Failed to load dashboard: ' + escapeHtml(err.message) + '</div>';
@@ -1301,7 +1354,18 @@ function renderOverviewSection(data) {
 
   const actionable = data.actionableFindings || 0;
 
+  const totalTasks = data.totalTasks != null ? data.totalTasks : null;
+  const confirmedFindings = data.confirmedFindings != null ? data.confirmedFindings : null;
+  const totalFindings = data.totalFindings != null ? data.totalFindings : null;
+  const consensusRate = (confirmedFindings != null && totalFindings != null && totalFindings > 0)
+    ? Math.round((confirmedFindings / totalFindings) * 100) + '%'
+    : null;
+
   const dot = '<span class="sb-dot' + (totalOnline > 0 ? ' online' : '') + '"></span>';
+
+  const extraStats = [];
+  if (totalTasks != null) extraStats.push('<span class="sb-sep">&middot;</span><span class="sb-stat">' + totalTasks + ' tasks</span>');
+  if (consensusRate != null) extraStats.push('<span class="sb-sep">&middot;</span><span class="sb-stat">' + consensusRate + ' consensus</span>');
 
   section.innerHTML =
     '<div class="sb-left">' +
@@ -1309,6 +1373,7 @@ function renderOverviewSection(data) {
       '<span class="sb-stat">' + data.nativeCount + ' native &middot; ' + data.relayCount + ' relay</span>' +
       '<span class="sb-sep">&middot;</span>' +
       '<span class="sb-stat">last run ' + lastRunText + '</span>' +
+      extraStats.join('') +
     '</div>' +
     '<div class="sb-right">' +
       (actionable > 0
@@ -1425,6 +1490,7 @@ function renderActivitySection(consensusData) {
     if (c.disagreement || c.hallucination) pills.push('<span class="pill pill-r pill-filter" data-filter="disputed">' + ((c.disagreement || 0) + (c.hallucination || 0)) + ' disputed</span>');
     if (c.unverified) pills.push('<span class="pill pill-y pill-filter" data-filter="unverified">' + c.unverified + ' unverified</span>');
     if (c.unique) pills.push('<span class="pill pill-b pill-filter" data-filter="unique">' + c.unique + ' unique</span>');
+    if (c.new > 0) pills.push('<span class="pill pill-b pill-filter" data-filter="new">' + c.new + ' new</span>');
 
     const segments = [];
     if (total > 0) {
@@ -1432,6 +1498,7 @@ function renderActivitySection(consensusData) {
       if (c.disagreement || c.hallucination) segments.push('<div class="bar-seg bar-seg-r" style="width:' + (((c.disagreement || 0) + (c.hallucination || 0)) / total * 100) + '%"></div>');
       if (c.unverified) segments.push('<div class="bar-seg bar-seg-y" style="width:' + ((c.unverified / total) * 100) + '%"></div>');
       if (c.unique) segments.push('<div class="bar-seg bar-seg-b" style="width:' + ((c.unique / total) * 100) + '%"></div>');
+      if (c.new) segments.push('<div class="bar-seg bar-seg-b" style="width:' + ((c.new / total) * 100) + '%"></div>');
     }
     const barHtml = segments.length > 0 ? '<div class="run-bar">' + segments.join('') + '</div>' : '';
 
