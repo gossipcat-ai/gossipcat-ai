@@ -54,8 +54,8 @@ export interface ConsensusRun {
   taskId: string;
   timestamp: string;
   agents: string[];
-  signals: { signal: string; agentId: string; counterpartId?: string; evidence?: string }[];
-  counts: { agreement: number; disagreement: number; unverified: number; unique: number; hallucination: number; new: number };
+  signals: { signal: string; agentId: string; counterpartId?: string; findingId?: string; evidence?: string }[];
+  counts: { agreement: number; disagreement: number; unverified: number; unique: number; hallucination: number; new: number; insights: number };
 }
 
 export interface ConsensusData {
