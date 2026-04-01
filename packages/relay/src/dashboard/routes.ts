@@ -145,7 +145,7 @@ export class DashboardRouter {
       }
 
       if (url === '/dashboard/api/tasks' && req.method === 'GET') {
-        const data = await tasksHandler(this.projectRoot);
+        const data = await tasksHandler(this.projectRoot, query ?? undefined);
         this.json(res, 200, data);
         return true;
       }

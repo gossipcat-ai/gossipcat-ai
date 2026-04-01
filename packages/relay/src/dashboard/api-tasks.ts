@@ -13,13 +13,20 @@ interface TaskEntry {
 }
 
 export interface TasksResponse {
-  tasks: TaskEntry[];
+  items: TaskEntry[];
   total: number;
+  offset: number;
+  limit: number;
 }
 
-export async function tasksHandler(projectRoot: string): Promise<TasksResponse> {
+export async function tasksHandler(projectRoot: string, query?: URLSearchParams): Promise<TasksResponse> {
+  const rawLimit = parseInt(query?.get('limit') ?? '50', 10);
+  const rawOffset = parseInt(query?.get('offset') ?? '0', 10);
+  const limit = isNaN(rawLimit) || rawLimit < 1 ? 50 : Math.min(rawLimit, 200);
+  const offset = isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
+
   const graphPath = join(projectRoot, '.gossip', 'task-graph.jsonl');
-  if (!existsSync(graphPath)) return { tasks: [], total: 0 };
+  if (!existsSync(graphPath)) return { items: [], total: 0, offset, limit };
 
   const created = new Map<string, { agentId: string; task: string; timestamp: string }>();
   const completed = new Map<string, { duration?: number; timestamp: string; failed: boolean; cancelled?: boolean; inputTokens?: number; outputTokens?: number }>();
@@ -57,7 +64,7 @@ export async function tasksHandler(projectRoot: string): Promise<TasksResponse> 
         }
       } catch { /* skip malformed */ }
     }
-  } catch { return { tasks: [], total: 0 }; }
+  } catch { return { items: [], total: 0, offset, limit }; }
 
   const tasks: TaskEntry[] = [];
   for (const [taskId, info] of created) {
@@ -77,5 +84,5 @@ export async function tasksHandler(projectRoot: string): Promise<TasksResponse> 
   // Most recent first
   tasks.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
-  return { tasks: tasks.slice(0, 100), total: tasks.length };
+  return { items: tasks.slice(offset, offset + limit), total: tasks.length, offset, limit };
 }
