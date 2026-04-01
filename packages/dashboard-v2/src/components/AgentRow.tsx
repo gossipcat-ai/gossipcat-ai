@@ -15,7 +15,7 @@ export function AgentRow({ agent, onClick }: AgentRowProps) {
   return (
     <button
       onClick={onClick}
-      className="group flex w-[180px] shrink-0 flex-col items-center rounded-lg border border-border bg-card p-4 text-center transition hover:border-primary/30 hover:bg-accent"
+      className="group flex min-w-0 flex-1 flex-col items-center rounded-lg border border-border bg-card p-3 text-center transition hover:border-primary/30 hover:bg-accent"
     >
       {/* Avatar with portal glow */}
       <div className="relative mb-3">
