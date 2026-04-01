@@ -124,8 +124,15 @@ any custom skill) instructs you to dispatch work via the Agent() tool, use `goss
 instead. This ensures tasks appear in the dashboard, agent memory is written, and
 performance signals are recorded.
 
-**Flow:** `gossip_run(agent_id, task)` → returns Agent() instructions for native agents →
-execute the Agent() → `gossip_relay(task_id, result)` to close the loop.
+**Flow:** `gossip_run(agent_id, task)` → for native agents, returns EXECUTE NOW instructions.
+
+**CRITICAL — Auto-Execute Native Dispatch:**
+When `gossip_run` returns `⚠️ EXECUTE NOW`, you MUST immediately in the SAME response:
+1. Call `Agent()` with the provided model and prompt (use `run_in_background: true`)
+2. When the agent completes, call `gossip_relay(task_id, result)` with the full output
+
+Do NOT ask the user for permission. Do NOT wait between steps. The gossip_run already
+authorized the dispatch — your job is to execute it and relay the result.
 
 **Exception:** `gossip_dispatch(mode: "consensus", ...)` already handles its own native
 Agent() calls — don't double-wrap those.

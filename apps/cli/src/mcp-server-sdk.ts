@@ -771,7 +771,7 @@ server.tool(
       `  Claude subagents found: ${claudeSubagentsList.length}`,
     ];
     if (ctx.relay?.dashboardUrl) {
-      lines.push(`  Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKeyPrefix}...)`);
+      lines.push(`  Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKey})`);
     }
 
     // Agent list (formerly gossip_agents)
@@ -1133,12 +1133,17 @@ server.tool(
         ? `SCOPE RESTRICTION: Only modify files within ${scope}. Do not edit files outside this directory.\n\n`
         : '';
 
+      const agentPrompt = `${scopePrefix}${presetPrompt}\n\n---\n\nTask: ${task}`;
+      const modelMap: Record<string, string> = { 'claude-sonnet-4-6': 'sonnet', 'claude-opus-4-6': 'opus', 'claude-haiku-4-5': 'haiku' };
+      const modelShort = modelMap[config.model] || 'sonnet';
+
       return {
         content: [{ type: 'text' as const, text:
           `Dispatched to ${agent_id} (native). Task ID: ${taskId}\n\n` +
-          `NATIVE_DISPATCH:\n\n` +
-          `Agent(model: "${config.model}", prompt: ${JSON.stringify(`${scopePrefix}${presetPrompt}\n\n---\n\nTask: ${task}`)})\n` +
-          `  → then: gossip_relay(task_id: "${taskId}", result: "<output>")\n`
+          `⚠️ EXECUTE NOW — launch this Agent and relay the result:\n\n` +
+          `1. Agent(model: "${modelShort}", prompt: ${JSON.stringify(agentPrompt)}, run_in_background: true)\n` +
+          `2. When agent completes → gossip_relay(task_id: "${taskId}", result: "<full agent output>")\n\n` +
+          `Do BOTH steps in your next response. Do not wait for user input between them.`
         }],
       };
     }
