@@ -86,6 +86,7 @@ export interface ConsensusSignal {
     | 'confirmed_hallucination'
     | 'orchestrator_disputed';
   category?: string;
+  findingId?: string;
   retractedSignal?: string;
   evidence: string;
   timestamp: string;

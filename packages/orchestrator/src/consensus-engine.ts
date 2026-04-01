@@ -433,6 +433,7 @@ Return only valid JSON.` },
         id: `f${findingIdx}`,
         originalAgentId: entry.originalAgentId,
         finding: entry.finding,
+        findingType: entry.findingType,
         tag: 'unique',
         confirmedBy: entry.confirmedBy,
         disputedBy: entry.disputedBy,
@@ -922,7 +923,7 @@ Return ONLY a JSON array:
     if (!root) return null;
 
     const CONTEXT_LINES = 2;
-    const searchDirs = ['packages', 'src', 'apps'];
+    const searchDirs = ['packages', 'src', 'apps', 'tests', 'test', 'tools', 'scripts', 'lib'];
     const sourceExts = new Set(['.ts', '.tsx', '.js', '.jsx']);
 
     for (const dir of searchDirs) {
@@ -1063,6 +1064,7 @@ Return ONLY a JSON array:
     findingMap: Map<string, {
       originalAgentId: string;
       finding: string;
+      findingType?: 'finding' | 'suggestion' | 'insight';
       confirmedBy: string[];
       disputedBy: Array<{ agentId: string; reason: string; evidence: string }>;
       unverifiedBy: Array<{ agentId: string; reason: string }>;
@@ -1118,6 +1120,8 @@ Return ONLY a JSON array:
             // B is more precise — swap: merge A into B
             entryB.confirmedBy.push(entryA.originalAgentId);
             entryB.confidences.push(4);
+            // Preserve findingType: suggestion/insight wins over finding (more specific)
+            if (entryA.findingType && entryA.findingType !== 'finding') entryB.findingType = entryA.findingType;
             toRemove.add(keyA);
             process.stderr.write(
               `[consensus] Dedup: merged "${entryA.finding.slice(0, 60)}..." (${entryA.originalAgentId}) into "${entryB.finding.slice(0, 60)}..." (${entryB.originalAgentId}) [B more precise]\n`
@@ -1127,6 +1131,7 @@ Return ONLY a JSON array:
           // Default: merge B into A
           entryA.confirmedBy.push(entryB.originalAgentId);
           entryA.confidences.push(4); // high confidence — independent discovery
+          if (entryB.findingType && entryB.findingType !== 'finding') entryA.findingType = entryB.findingType;
           toRemove.add(keyB);
           process.stderr.write(
             `[consensus] Dedup: merged "${entryB.finding.slice(0, 60)}..." (${entryB.originalAgentId}) into "${entryA.finding.slice(0, 60)}..." (${entryA.originalAgentId})\n`
