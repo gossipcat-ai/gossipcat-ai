@@ -166,7 +166,7 @@ export class OrbAvatarEngine {
 
     const evo = Math.max(0, Math.min(1, evolution));
     this.glowIntensity = 1.0 + evo * 0.8;
-    this.pulseRate = 0.06 + evo * 0.1;
+    this.pulseRate = 0.12 + evo * 0.15;
 
     const seed = hashString(agentId);
     const rng = new SeededRNG(seed);
@@ -184,14 +184,14 @@ export class OrbAvatarEngine {
       brightness: n.brightness,
       currentBrightness: n.brightness,
       phase: rng.next() * Math.PI * 2,
-      breathSpeed: rng.range(0.4, 1.8),
-      breathDepth: rng.range(0.2, 0.45),
+      breathSpeed: rng.range(0.8, 2.5),
+      breathDepth: rng.range(0.35, 0.6),
       driftAngle: rng.next() * Math.PI * 2,
-      driftSpeed: rng.range(0.1, 0.4),
-      driftRadius: rng.range(0.3, 1.2),
+      driftSpeed: rng.range(0.2, 0.6),
+      driftRadius: rng.range(0.6, 2.0),
       glimpsePhase: rng.next() * Math.PI * 2,
-      glimpseSpeed: rng.range(0.05, 0.2),
-      glimpseIntensity: rng.range(0.3, 0.7),
+      glimpseSpeed: rng.range(0.1, 0.35),
+      glimpseIntensity: rng.range(0.4, 0.9),
     }));
 
     // Connections — generous like crab-language
@@ -274,11 +274,12 @@ export class OrbAvatarEngine {
     // 1. Clear + ring background + subtle ambient
     ctx.clearRect(0, 0, size, size);
 
-    // Ring background — dark disc with colored ring border
+    // Ring background — dark disc with breathing colored ring border
+    const ringBreath = 0.7 + 0.3 * Math.sin(time * 0.5);
     ctx.beginPath(); ctx.arc(cx, cy, size * 0.46, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(10,10,16,0.7)'; ctx.fill();
     ctx.beginPath(); ctx.arc(cx, cy, size * 0.46, 0, Math.PI * 2);
-    ctx.strokeStyle = rgba(color.primary, 0.2);
+    ctx.strokeStyle = rgba(color.primary, 0.15 + 0.12 * ringBreath);
     ctx.lineWidth = 1.5; ctx.stroke();
 
     // Minimal ambient — almost none
