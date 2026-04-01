@@ -73,33 +73,49 @@ body::after {
 .auth-gate {
   display: flex; align-items: center; justify-content: center;
   min-height: 100vh;
+  background: radial-gradient(ellipse at 50% 30%, rgba(167,139,250,0.08) 0%, transparent 60%);
 }
 .auth-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 2rem;
+  background: linear-gradient(135deg, rgba(14,16,23,0.95), rgba(22,19,46,0.9));
+  border: 1px solid rgba(167,139,250,0.15);
+  border-radius: 16px;
+  padding: 3rem 2.5rem;
   text-align: center;
-  max-width: 380px; width: 100%;
+  max-width: 400px; width: 100%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 80px rgba(167,139,250,0.06);
+  backdrop-filter: blur(12px);
 }
-.auth-card h1 { color: var(--accent); font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; letter-spacing: -0.02em; }
-.auth-subtitle { color: var(--text-3); margin-bottom: 1.5rem; font-size: 0.875rem; }
+.auth-card h1 {
+  color: var(--accent); font-size: 1.75rem; font-weight: 700;
+  margin-bottom: 0.25rem; letter-spacing: -0.03em;
+}
+.auth-subtitle { color: var(--text-3); margin-bottom: 2rem; font-size: 0.8rem; letter-spacing: 0.02em; }
 .auth-card input {
-  width: 100%; padding: 0.75rem 1rem;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid var(--border); border-radius: 8px;
-  color: var(--text); font-size: 0.875rem; font-family: var(--mono);
-  margin-bottom: 1rem; outline: none;
+  width: 100%; padding: 0.875rem 1rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+  color: var(--text); font-size: 0.9rem; font-family: var(--mono);
+  margin-bottom: 1.25rem; outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
-.auth-card input:focus { border-color: var(--accent); }
+.auth-card input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(167,139,250,0.15);
+}
 .auth-card button {
-  width: 100%; padding: 0.75rem;
-  background: var(--accent); color: var(--bg);
-  border: none; border-radius: 8px;
-  font-weight: 600; font-size: 0.875rem; cursor: pointer;
-  transition: opacity 0.15s;
+  width: 100%; padding: 0.875rem;
+  background: linear-gradient(135deg, var(--accent), #818cf8);
+  color: #fff; font-weight: 600; font-size: 0.875rem;
+  border: none; border-radius: 10px; cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.2s;
+  box-shadow: 0 2px 12px rgba(167,139,250,0.3);
+  letter-spacing: 0.02em;
 }
-.auth-card button:hover { opacity: 0.9; }
+.auth-card button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(167,139,250,0.4);
+}
+.auth-card button:active { transform: translateY(0); }
 .auth-error { color: var(--red); font-size: 0.8rem; margin-top: 0.75rem; }
 
 /* ── Topbar ─────────────────────────────────────── */

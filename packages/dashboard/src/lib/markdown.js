@@ -33,7 +33,7 @@ function renderMarkdown(md) {
 
   // Links: safe schemes only, escape URL
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
-    if (/^(https?:\/\/|knowledge\/|#)/.test(url)) return '<a href="' + esc(url) + '">' + text + '</a>';
+    if (/^(https?:\/\/|#)/.test(url)) return '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + text + '</a>';
     return text;
   });
 

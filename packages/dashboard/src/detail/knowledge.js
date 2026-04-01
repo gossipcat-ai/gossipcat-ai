@@ -10,8 +10,8 @@ async function renderKnowledgeDetail(app, agentId) {
 
     const section = makeSection(agentId + ' Memory', (data.fileCount || data.knowledge?.length || 0) + ' files');
 
-    // MEMORY.md index
-    if (data.index) {
+    // MEMORY.md index — only show when no knowledge files (avoids duplicate listing)
+    if (data.index && (!data.knowledge || data.knowledge.length === 0)) {
       const indexPanel = document.createElement('div');
       indexPanel.className = 'panel';
       indexPanel.innerHTML =

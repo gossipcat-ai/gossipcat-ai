@@ -64,7 +64,7 @@ async function renderTaskStrip(container) {
 
     // Idle mode: show recent completed tasks
     const taskData = await api('tasks');
-    const recent = (taskData.tasks || []).slice(0, 10);
+    const recent = (taskData.items || taskData.tasks || []).slice(0, 10);
     if (recent.length === 0) { container.hidden = true; return; }
 
     container.className = 'section live-strip';
