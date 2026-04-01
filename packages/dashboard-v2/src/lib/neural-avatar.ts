@@ -1,5 +1,5 @@
-// NeuralAvatar Engine — Glowing Orb with distinct topologies
-// Fewer nodes, stronger glows and lines, slower evolution for gossipcat
+// NeuralAvatar Engine — Redesigned with crab-language-quality rendering
+// Transparent background, particles, strong glows, 7-layer draw pipeline
 
 export function hashString(str: string): number {
   let hash = 0;
@@ -31,10 +31,10 @@ function hslToHex(h: number, s: number, l: number): string {
 export interface AvatarColors { primary: string; secondary: string; }
 
 export function colorFromAgent(agentId: string): AvatarColors {
-  const h = hashString(agentId), hue = h % 360, sat = 65 + (h >> 8) % 20;
+  const h = hashString(agentId), hue = h % 360, sat = 70 + (h >> 8) % 15;
   return {
-    primary: hslToHex(hue, sat, 65 + (h >> 16) % 10),
-    secondary: hslToHex(hue, Math.min(95, sat + 10), 80 + (h >> 16) % 8),
+    primary: hslToHex(hue, sat, 60 + (h >> 16) % 10),
+    secondary: hslToHex(hue, Math.min(95, sat + 10), 78 + (h >> 16) % 8),
   };
 }
 
@@ -45,125 +45,102 @@ function rgba(hex: string, a: number): string {
 // ---- Types ----
 
 interface RawNode { x: number; y: number; size: number; brightness: number; }
-interface OrbNode {
+
+interface AnimNode {
   x: number; y: number; originX: number; originY: number;
-  size: number; baseSize: number; brightness: number;
-  phase: number; breathSpeed: number;
+  baseSize: number; size: number;
+  brightness: number; currentBrightness: number;
+  phase: number; breathSpeed: number; breathDepth: number;
   driftAngle: number; driftSpeed: number; driftRadius: number;
+  glimpsePhase: number; glimpseSpeed: number; glimpseIntensity: number;
 }
-interface OrbConnection { from: number; to: number; strength: number; }
-interface Pulse { connIdx: number; progress: number; speed: number; brightness: number; forward: boolean; }
 
-// ---- 6 Topology Generators (fewer nodes, smaller) ----
+interface Connection {
+  from: number; to: number; strength: number;
+  pulsePhase: number; pulseSpeed: number;
+}
 
-function topoHub(size: number, rng: SeededRNG, n: number): RawNode[] {
-  const cx = size / 2, cy = size / 2, nodes: RawNode[] = [];
+interface Pulse {
+  connIdx: number; progress: number; speed: number;
+  brightness: number; forward: boolean; trailLength: number;
+}
+
+interface Particle {
+  orbitRadius: number; orbitAngle: number; orbitSpeed: number;
+  size: number; twinkleSpeed: number; twinklePhase: number;
+}
+
+// ---- 6 Topology Generators ----
+
+function topoHub(s: number, rng: SeededRNG, n: number): RawNode[] {
+  const cx = s / 2, cy = s / 2, nd: RawNode[] = [];
   const core = Math.max(2, Math.floor(n * 0.3));
   for (let i = 0; i < core; i++) {
-    const a = rng.next() * Math.PI * 2, d = rng.range(2, size * 0.06);
-    nodes.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, size: rng.range(1.5, 2.5), brightness: rng.range(0.8, 1) });
+    const a = rng.next() * Math.PI * 2, d = rng.range(2, s * 0.06);
+    nd.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, size: rng.range(1.8, 2.8), brightness: rng.range(0.8, 1) });
   }
   const arms = rng.int(3, 5), rem = n - core;
   for (let arm = 0; arm < arms; arm++) {
     const ba = (arm / arms) * Math.PI * 2 + rng.range(-0.3, 0.3);
     const cnt = Math.floor(rem / arms) + (arm === 0 ? rem % arms : 0);
     for (let i = 0; i < cnt; i++) {
-      const t = (i + 1) / cnt, dist = size * 0.08 + t * size * 0.32;
-      const a = ba + rng.range(-0.15, 0.15) * (1 + t);
-      nodes.push({ x: cx + Math.cos(a) * dist, y: cy + Math.sin(a) * dist, size: rng.range(0.8, 2) * (1 - t * 0.3), brightness: rng.range(0.5, 0.9) * (1 - t * 0.2) });
+      const t = (i + 1) / cnt, dist = s * 0.08 + t * s * 0.32;
+      nd.push({ x: cx + Math.cos(ba + rng.range(-0.15, 0.15) * (1 + t)) * dist, y: cy + Math.sin(ba + rng.range(-0.15, 0.15) * (1 + t)) * dist, size: rng.range(1, 2.2) * (1 - t * 0.3), brightness: rng.range(0.5, 0.85) * (1 - t * 0.15) });
     }
   }
-  return nodes;
+  return nd;
 }
 
-function topoSpiral(size: number, rng: SeededRNG, n: number): RawNode[] {
-  const cx = size / 2, cy = size / 2, nodes: RawNode[] = [];
+function topoSpiral(s: number, rng: SeededRNG, n: number): RawNode[] {
+  const cx = s / 2, cy = s / 2, nd: RawNode[] = [];
   const arms = rng.int(2, 3), perArm = Math.floor(n / arms);
   for (let arm = 0; arm < arms; arm++) {
-    const ba = (arm / arms) * Math.PI * 2;
-    const cnt = perArm + (arm === 0 ? n % arms : 0);
+    const ba = (arm / arms) * Math.PI * 2, cnt = perArm + (arm === 0 ? n % arms : 0);
     for (let i = 0; i < cnt; i++) {
-      const t = i / perArm;
-      const a = ba + t * Math.PI * 2.5 + rng.range(-0.1, 0.1);
-      const d = 3 + t * size * 0.36;
-      nodes.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, size: rng.range(0.9, 2.2) * (1 - t * 0.3), brightness: rng.range(0.5, 1) * (1 - t * 0.15) });
+      const t = i / perArm, a = ba + t * Math.PI * 2.5 + rng.range(-0.1, 0.1), d = 3 + t * s * 0.36;
+      nd.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, size: rng.range(1, 2.2) * (1 - t * 0.3), brightness: rng.range(0.5, 1) * (1 - t * 0.1) });
     }
   }
-  return nodes;
+  return nd;
 }
 
-function topoCluster(size: number, rng: SeededRNG, n: number): RawNode[] {
-  const cx = size / 2, cy = size / 2, nodes: RawNode[] = [];
-  const cc = rng.int(3, 4);
-  const centers: { x: number; y: number }[] = [];
-  for (let c = 0; c < cc; c++) {
-    const a = rng.next() * Math.PI * 2, d = rng.range(size * 0.1, size * 0.25);
-    centers.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d });
-  }
-  for (let i = 0; i < n; i++) {
-    const ctr = centers[i % cc];
-    const a = rng.next() * Math.PI * 2, d = rng.range(2, size * 0.09);
-    nodes.push({ x: ctr.x + Math.cos(a) * d, y: ctr.y + Math.sin(a) * d, size: rng.range(0.9, 2), brightness: rng.range(0.5, 1) });
-  }
-  return nodes;
+function topoCluster(s: number, rng: SeededRNG, n: number): RawNode[] {
+  const cx = s / 2, cy = s / 2, nd: RawNode[] = [];
+  const cc = rng.int(3, 4), centers: { x: number; y: number }[] = [];
+  for (let c = 0; c < cc; c++) { const a = rng.next() * Math.PI * 2, d = rng.range(s * 0.1, s * 0.25); centers.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d }); }
+  for (let i = 0; i < n; i++) { const ctr = centers[i % cc], a = rng.next() * Math.PI * 2, d = rng.range(2, s * 0.09); nd.push({ x: ctr.x + Math.cos(a) * d, y: ctr.y + Math.sin(a) * d, size: rng.range(1, 2.2), brightness: rng.range(0.5, 1) }); }
+  return nd;
 }
 
-function topoStar(size: number, rng: SeededRNG, n: number): RawNode[] {
-  const cx = size / 2, cy = size / 2, nodes: RawNode[] = [];
-  nodes.push({ x: cx, y: cy, size: 2.5, brightness: 1.0 });
+function topoStar(s: number, rng: SeededRNG, n: number): RawNode[] {
+  const cx = s / 2, cy = s / 2, nd: RawNode[] = [{ x: cx, y: cy, size: 2.8, brightness: 1.0 }];
   const rays = rng.int(5, 7), rem = n - 1, perRay = Math.floor(rem / rays);
-  for (let r = 0; r < rays; r++) {
-    const ba = (r / rays) * Math.PI * 2;
-    const cnt = perRay + (r === 0 ? rem % rays : 0);
-    for (let i = 0; i < cnt; i++) {
-      const t = (i + 1) / cnt, a = ba + rng.range(-0.06, 0.06), d = t * size * 0.38;
-      nodes.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, size: rng.range(0.8, 1.8) * (1 - t * 0.3), brightness: rng.range(0.5, 0.9) * (1 - t * 0.2) });
-    }
-  }
-  return nodes;
+  for (let r = 0; r < rays; r++) { const ba = (r / rays) * Math.PI * 2, cnt = perRay + (r === 0 ? rem % rays : 0); for (let i = 0; i < cnt; i++) { const t = (i + 1) / cnt; nd.push({ x: cx + Math.cos(ba + rng.range(-0.06, 0.06)) * t * s * 0.38, y: cy + Math.sin(ba + rng.range(-0.06, 0.06)) * t * s * 0.38, size: rng.range(0.8, 1.8) * (1 - t * 0.3), brightness: rng.range(0.5, 0.9) * (1 - t * 0.15) }); } }
+  return nd;
 }
 
-function topoChain(size: number, rng: SeededRNG, n: number): RawNode[] {
-  const cx = size / 2, cy = size / 2, nodes: RawNode[] = [];
+function topoChain(s: number, rng: SeededRNG, n: number): RawNode[] {
+  const cx = s / 2, cy = s / 2, nd: RawNode[] = [];
   const main = Math.floor(n * 0.7);
-  for (let i = 0; i < main; i++) {
-    const t = i / (main - 1);
-    const x = cx + (t - 0.5) * size * 0.65;
-    const y = cy + Math.sin(t * Math.PI * 1.8) * size * 0.18 + rng.range(-2, 2);
-    nodes.push({ x, y, size: rng.range(1.2, 2.2) * (0.7 + 0.3 * Math.sin(t * Math.PI)), brightness: rng.range(0.5, 1) });
-  }
-  for (let i = 0; i < n - main; i++) {
-    const par = nodes[rng.int(0, main - 1)];
-    const a = rng.next() * Math.PI * 2, d = rng.range(5, size * 0.08);
-    nodes.push({ x: par.x + Math.cos(a) * d, y: par.y + Math.sin(a) * d, size: rng.range(0.7, 1.5), brightness: rng.range(0.4, 0.7) });
-  }
-  return nodes;
+  for (let i = 0; i < main; i++) { const t = i / (main - 1); nd.push({ x: cx + (t - 0.5) * s * 0.65, y: cy + Math.sin(t * Math.PI * 1.8) * s * 0.18 + rng.range(-2, 2), size: rng.range(1.2, 2.2) * (0.7 + 0.3 * Math.sin(t * Math.PI)), brightness: rng.range(0.5, 1) }); }
+  for (let i = 0; i < n - main; i++) { const par = nd[rng.int(0, main - 1)]; nd.push({ x: par.x + Math.cos(rng.next() * Math.PI * 2) * rng.range(5, s * 0.08), y: par.y + Math.sin(rng.next() * Math.PI * 2) * rng.range(5, s * 0.08), size: rng.range(0.7, 1.5), brightness: rng.range(0.4, 0.7) }); }
+  return nd;
 }
 
-function topoMesh(size: number, rng: SeededRNG, n: number): RawNode[] {
-  const cx = size / 2, cy = size / 2, nodes: RawNode[] = [];
-  const cols = Math.ceil(Math.sqrt(n * 1.2)), sp = size * 0.65 / cols;
+function topoMesh(s: number, rng: SeededRNG, n: number): RawNode[] {
+  const cx = s / 2, cy = s / 2, nd: RawNode[] = [];
+  const cols = Math.ceil(Math.sqrt(n * 1.2)), sp = s * 0.65 / cols;
   const ox = cx - (cols - 1) * sp / 2, oy = cy - (cols - 1) * sp / 2;
   let p = 0;
-  for (let r = 0; r < cols && p < n; r++) {
-    for (let c = 0; c < cols && p < n; c++) {
-      const x = ox + c * sp + rng.range(-sp * 0.3, sp * 0.3);
-      const y = oy + r * sp + rng.range(-sp * 0.3, sp * 0.3);
-      const dx = x - cx, dy = y - cy;
-      if (Math.sqrt(dx * dx + dy * dy) < size * 0.4) {
-        nodes.push({ x, y, size: rng.range(1, 2), brightness: rng.range(0.5, 0.9) });
-        p++;
-      }
-    }
+  for (let r = 0; r < cols && p < n; r++) for (let c = 0; c < cols && p < n; c++) {
+    const x = ox + c * sp + rng.range(-sp * 0.3, sp * 0.3), y = oy + r * sp + rng.range(-sp * 0.3, sp * 0.3);
+    if (Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) < s * 0.4) { nd.push({ x, y, size: rng.range(1, 2), brightness: rng.range(0.5, 0.9) }); p++; }
   }
-  while (nodes.length < n) {
-    const a = rng.next() * Math.PI * 2, d = rng.range(4, size * 0.35);
-    nodes.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, size: rng.range(1, 1.8), brightness: rng.range(0.4, 0.8) });
-  }
-  return nodes;
+  while (nd.length < n) { const a = rng.next() * Math.PI * 2, d = rng.range(4, s * 0.35); nd.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, size: rng.range(1, 1.8), brightness: rng.range(0.5, 0.8) }); }
+  return nd;
 }
 
-type TopoFn = (size: number, rng: SeededRNG, n: number) => RawNode[];
+type TopoFn = (s: number, rng: SeededRNG, n: number) => RawNode[];
 const TOPOLOGIES: TopoFn[] = [topoHub, topoSpiral, topoCluster, topoStar, topoChain, topoMesh];
 
 // ---- Engine ----
@@ -172,11 +149,13 @@ export class OrbAvatarEngine {
   private ctx: CanvasRenderingContext2D;
   private size: number;
   private color: AvatarColors;
-  private nodes: OrbNode[] = [];
-  private connections: OrbConnection[] = [];
+  private nodes: AnimNode[] = [];
+  private connections: Connection[] = [];
   private pulses: Pulse[] = [];
+  private particles: Particle[] = [];
   private time = 0;
-  private evolution: number;
+  private glowIntensity: number;
+  private pulseRate: number;
 
   constructor(canvas: HTMLCanvasElement, agentId: string, evolution = 0.15) {
     const ctx = canvas.getContext('2d');
@@ -184,43 +163,66 @@ export class OrbAvatarEngine {
     this.ctx = ctx;
     this.size = canvas.width / 2;
     this.color = colorFromAgent(agentId);
-    this.evolution = Math.max(0, Math.min(1, evolution));
+
+    const evo = Math.max(0, Math.min(1, evolution));
+    this.glowIntensity = 1.0 + evo * 0.8;
+    this.pulseRate = 0.06 + evo * 0.1;
 
     const seed = hashString(agentId);
     const rng = new SeededRNG(seed);
-    const sc = this.size / 64;
     const topoFn = TOPOLOGIES[seed % TOPOLOGIES.length];
-
-    // Evolution controls node count: 4 at evo=0, up to 12 at evo=1
-    const nodeCount = Math.round(4 + this.evolution * 8);
+    const nodeCount = Math.round(5 + evo * 7);
+    const sizeRatio = this.size / 160; // topology generators target ~160px
 
     const rawNodes = topoFn(this.size, rng, nodeCount);
 
-    // Evolution scales node sizes down — less evolved = smaller, cleaner
-    const sizeScale = 0.6 + this.evolution * 0.4;
-
     this.nodes = rawNodes.map(n => ({
       x: n.x, y: n.y, originX: n.x, originY: n.y,
-      size: n.size * sc * sizeScale, baseSize: n.size * sc * sizeScale,
+      baseSize: n.size * sizeRatio,
+      size: n.size * sizeRatio,
       brightness: n.brightness,
+      currentBrightness: n.brightness,
       phase: rng.next() * Math.PI * 2,
-      breathSpeed: rng.range(0.4, 1.5),
+      breathSpeed: rng.range(0.4, 1.8),
+      breathDepth: rng.range(0.2, 0.45),
       driftAngle: rng.next() * Math.PI * 2,
-      driftSpeed: rng.range(0.1, 0.35),
-      driftRadius: rng.range(0.3, 1.0) * sc,
+      driftSpeed: rng.range(0.1, 0.4),
+      driftRadius: rng.range(0.3, 1.2),
+      glimpsePhase: rng.next() * Math.PI * 2,
+      glimpseSpeed: rng.range(0.05, 0.2),
+      glimpseIntensity: rng.range(0.3, 0.7),
     }));
 
-    // Connections — more generous threshold, keep more
-    const maxDist = this.size * 0.4;
+    // Connections — generous like crab-language
+    const maxDist = this.size * (0.16 + evo * 0.19);
+    const connDens = 0.3 + evo * 0.5;
     for (let i = 0; i < this.nodes.length; i++) {
       for (let j = i + 1; j < this.nodes.length; j++) {
         const dx = this.nodes[i].originX - this.nodes[j].originX;
         const dy = this.nodes[i].originY - this.nodes[j].originY;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < maxDist && rng.next() < (1 - dist / maxDist) * 0.8) {
-          this.connections.push({ from: i, to: j, strength: 1 - dist / maxDist });
+        if (dist < maxDist && rng.next() < (1 - dist / maxDist) * connDens) {
+          this.connections.push({
+            from: i, to: j,
+            strength: (1 - dist / maxDist) * (0.5 + evo * 0.5),
+            pulsePhase: rng.next() * Math.PI * 2,
+            pulseSpeed: rng.range(0.3, 0.8),
+          });
         }
       }
+    }
+
+    // Particles — twinkling ambient dots (like crab-language)
+    const pCount = Math.round(8 + evo * 25);
+    for (let i = 0; i < pCount; i++) {
+      this.particles.push({
+        orbitRadius: 10 + rng.next() * this.size * 0.42,
+        orbitAngle: rng.next() * Math.PI * 2,
+        orbitSpeed: (rng.next() - 0.5) * 0.003,
+        size: 0.3 + rng.next() * 0.5,
+        twinkleSpeed: rng.range(1, 4),
+        twinklePhase: rng.next() * Math.PI * 2,
+      });
     }
 
     this.time = rng.next() * 100;
@@ -229,124 +231,143 @@ export class OrbAvatarEngine {
   update(dt: number): void {
     this.time += dt;
 
-    // Spawn pulses — rate scales with evolution
-    const pulseRate = 0.08 + this.evolution * 0.12;
-    if (this.connections.length > 0 && Math.random() < dt * pulseRate) {
-      if (this.pulses.length < 4 + Math.round(this.evolution * 4)) {
+    // Spawn pulses
+    if (this.connections.length > 0 && Math.random() < dt * this.pulseRate) {
+      if (this.pulses.length < 6) {
         const idx = Math.floor(Math.random() * this.connections.length);
         this.pulses.push({
           connIdx: idx, progress: 0,
-          speed: 0.006 + Math.random() * 0.012,
-          brightness: 0.6 + Math.random() * 0.4,
+          speed: 0.004 + Math.random() * 0.012,
+          brightness: 0.5 + Math.random() * 0.5,
           forward: Math.random() > 0.5,
+          trailLength: 0.12 + Math.random() * 0.08,
         });
       }
     }
 
+    // Update pulses
     for (let i = this.pulses.length - 1; i >= 0; i--) {
       this.pulses[i].progress += this.pulses[i].speed;
       if (this.pulses[i].progress > 1) this.pulses.splice(i, 1);
     }
 
+    // Node animation — breathing, drift, glimpsing
     for (const n of this.nodes) {
       const breath = Math.sin(this.time * n.breathSpeed + n.phase);
-      n.size = n.baseSize * (1 + breath * 0.25);
+      n.size = n.baseSize * (1 + breath * n.breathDepth);
       n.x = n.originX + Math.cos(this.time * n.driftSpeed + n.driftAngle) * n.driftRadius;
       n.y = n.originY + Math.sin(this.time * n.driftSpeed * 0.7 + n.driftAngle) * n.driftRadius;
+      const glimpse = Math.pow(Math.max(0, Math.sin(this.time * n.glimpseSpeed + n.glimpsePhase)), 8);
+      n.currentBrightness = n.brightness + glimpse * n.glimpseIntensity;
     }
+
+    // Particle orbits
+    for (const p of this.particles) { p.orbitAngle += p.orbitSpeed; }
   }
 
   draw(): void {
-    const { ctx, size, color, nodes, connections, pulses, time } = this;
-    const cx = size / 2, cy = size / 2, sc = size / 64;
+    const { ctx, size, color, nodes, connections, pulses, particles, time } = this;
+    const cx = size / 2, cy = size / 2;
+    const gi = this.glowIntensity;
+
+    // 1. Clear + background glow (NO opaque disc — transparent like crab-language)
     ctx.clearRect(0, 0, size, size);
-
-    // Background disc
-    ctx.beginPath(); ctx.arc(cx, cy, size * 0.46, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(12,12,18,0.85)'; ctx.fill();
-
-    // Ambient glow — STRONGER
     const bgBreath = 0.85 + 0.15 * Math.sin(time * 0.3);
-    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.45);
-    bg.addColorStop(0, rgba(color.primary, 0.35 * bgBreath));
-    bg.addColorStop(0.35, rgba(color.primary, 0.12 * bgBreath));
+    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.48);
+    bg.addColorStop(0, rgba(color.primary, 0.08 * gi * bgBreath));
+    bg.addColorStop(0.5, rgba(color.primary, 0.025 * gi * bgBreath));
     bg.addColorStop(1, 'transparent');
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, size, size);
 
-    // Connections — MUCH STRONGER lines
-    for (const c of connections) {
-      const f = nodes[c.from], t = nodes[c.to];
-      const connBreath = 0.7 + 0.3 * Math.sin(time * 0.5 + c.from);
-
-      // Glow line (wide, soft)
-      ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(t.x, t.y);
-      ctx.strokeStyle = rgba(color.primary, c.strength * 0.2 * connBreath);
-      ctx.lineWidth = 3 * sc; ctx.stroke();
-
-      // Core line (thin, bright)
-      ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(t.x, t.y);
-      ctx.strokeStyle = rgba(color.primary, c.strength * 0.6 * connBreath);
-      ctx.lineWidth = 1 * sc; ctx.stroke();
+    // 2. Particles — tiny twinkling dots
+    for (const p of particles) {
+      const px = cx + Math.cos(p.orbitAngle) * p.orbitRadius;
+      const py = cy + Math.sin(p.orbitAngle) * p.orbitRadius;
+      const twinkle = 0.4 + 0.6 * Math.pow((Math.sin(time * p.twinkleSpeed + p.twinklePhase) + 1) / 2, 2);
+      ctx.beginPath();
+      ctx.arc(px, py, p.size * (0.8 + twinkle * 0.4), 0, Math.PI * 2);
+      ctx.fillStyle = rgba(color.primary, twinkle * 0.25);
+      ctx.fill();
     }
 
-    // Pulses
+    // 3. Connections — strong alpha like crab-language
+    for (const c of connections) {
+      const f = nodes[c.from], t = nodes[c.to];
+      const connBreath = 0.7 + 0.3 * Math.sin(time * c.pulseSpeed + c.pulsePhase);
+      const alpha = (c.strength * 0.5 + 0.18) * connBreath;
+      ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(t.x, t.y);
+      ctx.strokeStyle = rgba(color.primary, alpha);
+      ctx.lineWidth = (0.7 + c.strength * 1.0) * (0.85 + connBreath * 0.15);
+      ctx.stroke();
+    }
+
+    // 4. Pulses — glowing dots with trails
     for (const p of pulses) {
       const c = connections[p.connIdx];
       if (!c) continue;
       const f = nodes[c.from], t = nodes[c.to];
       const prog = p.forward ? p.progress : 1 - p.progress;
-      const px = f.x + (t.x - f.x) * prog;
-      const py = f.y + (t.y - f.y) * prog;
-      const fade = 1 - Math.abs(p.progress - 0.5) * 2;
+      const headX = f.x + (t.x - f.x) * prog;
+      const headY = f.y + (t.y - f.y) * prog;
 
-      // Pulse glow — bigger and brighter
-      const pg = ctx.createRadialGradient(px, py, 0, px, py, 8 * sc);
-      pg.addColorStop(0, rgba(color.secondary, p.brightness * fade * 0.6));
-      pg.addColorStop(0.4, rgba(color.primary, p.brightness * fade * 0.2));
-      pg.addColorStop(1, 'transparent');
-      ctx.fillStyle = pg; ctx.beginPath(); ctx.arc(px, py, 8 * sc, 0, Math.PI * 2); ctx.fill();
+      // Trail
+      const trailSteps = 6;
+      for (let s = trailSteps; s >= 0; s--) {
+        const tp = prog - (s / trailSteps) * p.trailLength;
+        if (tp < 0) continue;
+        const tx = f.x + (t.x - f.x) * tp;
+        const ty = f.y + (t.y - f.y) * tp;
+        const fade = 1 - s / trailSteps;
+        ctx.beginPath(); ctx.arc(tx, ty, 0.8 + fade * 1.2, 0, Math.PI * 2);
+        ctx.fillStyle = rgba(color.secondary, p.brightness * fade * 0.5);
+        ctx.fill();
+      }
 
-      // Pulse core
-      ctx.beginPath(); ctx.arc(px, py, 1.8 * sc, 0, Math.PI * 2);
-      ctx.fillStyle = rgba('#ffffff', p.brightness * fade * 0.7); ctx.fill();
+      // Head bloom
+      const bloom = ctx.createRadialGradient(headX, headY, 0, headX, headY, 10);
+      bloom.addColorStop(0, rgba(color.secondary, p.brightness * 0.6));
+      bloom.addColorStop(0.3, rgba(color.primary, p.brightness * 0.2));
+      bloom.addColorStop(1, 'transparent');
+      ctx.fillStyle = bloom;
+      ctx.fillRect(headX - 12, headY - 12, 24, 24);
+
+      // Bright core
+      ctx.beginPath(); ctx.arc(headX, headY, 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = rgba('#ffffff', p.brightness * 0.5);
+      ctx.fill();
     }
 
-    // Node halos — STRONGER
+    // 5. Node halos
     for (const n of nodes) {
-      const breath = 0.8 + 0.2 * Math.sin(time * n.breathSpeed * 0.5 + n.phase);
-      const b = n.brightness * breath;
-      const hr = n.size * 5;
+      const b = n.currentBrightness;
+      const breathGlow = 0.8 + 0.2 * Math.sin(time * n.breathSpeed * 0.5 + n.phase);
+      const hr = n.size * 5 * gi * breathGlow;
       const hg = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, hr);
-      hg.addColorStop(0, rgba(color.primary, b * 0.35));
-      hg.addColorStop(0.5, rgba(color.primary, b * 0.1));
+      hg.addColorStop(0, rgba(color.primary, b * 0.18 * breathGlow));
+      hg.addColorStop(0.4, rgba(color.primary, b * 0.06 * breathGlow));
       hg.addColorStop(1, 'transparent');
-      ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(n.x, n.y, hr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = hg;
+      ctx.beginPath(); ctx.arc(n.x, n.y, hr, 0, Math.PI * 2); ctx.fill();
     }
 
-    // Nodes
+    // 6. Nodes
     for (const n of nodes) {
-      const breath = 0.85 + 0.15 * Math.sin(time * n.breathSpeed + n.phase);
-      const b = n.brightness * breath;
+      const b = n.currentBrightness;
       ctx.beginPath(); ctx.arc(n.x, n.y, n.size, 0, Math.PI * 2);
-      ctx.fillStyle = rgba(color.primary, b); ctx.fill();
-      // White hot core
-      if (n.baseSize > 1.2 * sc) {
+      ctx.fillStyle = rgba(color.primary, b * 0.9);
+      ctx.fill();
+    }
+
+    // 7. Hot cores
+    for (const n of nodes) {
+      if (n.size > 1.2) {
+        const b = n.currentBrightness;
+        const coreGlow = 0.7 + 0.3 * Math.sin(time * n.breathSpeed + n.phase + 1);
         ctx.beginPath(); ctx.arc(n.x, n.y, n.size * 0.35, 0, Math.PI * 2);
-        ctx.fillStyle = rgba('#ffffff', b * 0.45); ctx.fill();
+        ctx.fillStyle = rgba('#ffffff', b * 0.35 * coreGlow);
+        ctx.fill();
       }
     }
-
-    // Center core — STRONGER
-    const coreBreath = 0.9 + 0.1 * Math.sin(time * 0.4);
-    const coreR = size * 0.1 + this.evolution * size * 0.04;
-    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-    core.addColorStop(0, rgba(color.secondary, 0.55 * coreBreath));
-    core.addColorStop(0.4, rgba(color.primary, 0.2 * coreBreath));
-    core.addColorStop(1, 'transparent');
-    ctx.fillStyle = core; ctx.beginPath(); ctx.arc(cx, cy, coreR, 0, Math.PI * 2); ctx.fill();
-
-    // Center dot
-    ctx.beginPath(); ctx.arc(cx, cy, 1.5 * sc, 0, Math.PI * 2);
-    ctx.fillStyle = rgba('#ffffff', 0.6 * coreBreath); ctx.fill();
   }
 }
