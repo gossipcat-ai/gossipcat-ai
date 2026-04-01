@@ -252,14 +252,16 @@ export class OrbAvatarEngine {
       if (this.pulses[i].progress > 1) this.pulses.splice(i, 1);
     }
 
-    // Node animation — breathing, drift, glimpsing
+    // Node animation — breathing, drift, glimpsing (dramatic)
     for (const n of this.nodes) {
       const breath = Math.sin(this.time * n.breathSpeed + n.phase);
       n.size = n.baseSize * (1 + breath * n.breathDepth);
       n.x = n.originX + Math.cos(this.time * n.driftSpeed + n.driftAngle) * n.driftRadius;
       n.y = n.originY + Math.sin(this.time * n.driftSpeed * 0.7 + n.driftAngle) * n.driftRadius;
-      const glimpse = Math.pow(Math.max(0, Math.sin(this.time * n.glimpseSpeed + n.glimpsePhase)), 8);
-      n.currentBrightness = n.brightness + glimpse * n.glimpseIntensity;
+      // Brightness also breathes — nodes dim and brighten
+      const brightBreath = 0.7 + 0.3 * Math.sin(this.time * n.breathSpeed * 0.8 + n.phase + 0.5);
+      const glimpse = Math.pow(Math.max(0, Math.sin(this.time * n.glimpseSpeed + n.glimpsePhase)), 6);
+      n.currentBrightness = n.brightness * brightBreath + glimpse * n.glimpseIntensity;
     }
 
     // Particle orbits
@@ -282,10 +284,10 @@ export class OrbAvatarEngine {
     ctx.strokeStyle = rgba(color.primary, 0.15 + 0.12 * ringBreath);
     ctx.lineWidth = 1.5; ctx.stroke();
 
-    // Minimal ambient — almost none
-    const bgBreath = 0.9 + 0.1 * Math.sin(time * 0.3);
-    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.35);
-    bg.addColorStop(0, rgba(color.primary, 0.015 * gi * bgBreath));
+    // Ambient breathes with the whole organism
+    const bgBreath = 0.7 + 0.3 * Math.sin(time * 0.6);
+    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * (0.35 + 0.05 * bgBreath));
+    bg.addColorStop(0, rgba(color.primary, 0.03 * gi * bgBreath));
     bg.addColorStop(1, 'transparent');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, size, size);
@@ -301,10 +303,10 @@ export class OrbAvatarEngine {
       ctx.fill();
     }
 
-    // 3. Connections — thick and visible
+    // 3. Connections — thick, visible, breathing
     for (const c of connections) {
       const f = nodes[c.from], t = nodes[c.to];
-      const connBreath = 0.7 + 0.3 * Math.sin(time * c.pulseSpeed + c.pulsePhase);
+      const connBreath = 0.5 + 0.5 * Math.sin(time * c.pulseSpeed + c.pulsePhase);
       const alpha = (c.strength * 0.6 + 0.3) * connBreath;
       ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(t.x, t.y);
       ctx.strokeStyle = rgba(color.primary, alpha);

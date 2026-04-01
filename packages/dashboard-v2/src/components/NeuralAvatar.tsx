@@ -29,8 +29,7 @@ export function NeuralAvatar({ agentId, size = 64, animate = true, evolution = 0
     engineRef.current = engine;
     engine.draw();
 
-    if (!animate) return;
-
+    // Always animate — even "offline" agents breathe, just dimmed
     const loop = () => {
       if (visibleRef.current) {
         engine.update(0.016);
@@ -48,7 +47,7 @@ export function NeuralAvatar({ agentId, size = 64, animate = true, evolution = 0
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !animate) return;
+    if (!canvas) return;
 
     const observer = new IntersectionObserver(
       ([entry]) => { visibleRef.current = entry.isIntersecting; },
