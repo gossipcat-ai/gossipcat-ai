@@ -95,7 +95,75 @@ receive low confidence. Subjective recommendations do NOT need anchors — but f
 assertions (missing validation, wrong type, race condition, etc.) always do.
 ```
 
-### Batch 2: Finding Type Classification (ships second, targets 20%)
+### Batch 2A: Active Identifier Search in Cross-Review (ships second, high impact)
+
+The single biggest improvement to cross-review quality. Currently, `snippetsForFinding` only resolves explicit `file:line` citations. When a finding says "planExecutionDepth is not incremented in gossip_run" but has no `file:line`, the cross-reviewer says "I can't verify" even though the identifier `planExecutionDepth` is right there.
+
+**The fix:** When `snippetsForFinding` finds no `file:line` citations in a finding, extract identifiers (camelCase/snake_case tokens that look like code) and grep the codebase for them. Inject the found code as anchor blocks.
+
+#### Change 2A-1: Identifier Extraction
+
+In `snippetsForFinding` (~line 719), after the existing citation loop, add a fallback:
+
+```typescript
+// If no file:line citations found, try identifier-based search
+if (anchors.length === 0 && this.config.projectRoot) {
+  // Extract code identifiers: camelCase, snake_case, or dotted paths
+  const identifierPattern = /\b([a-z][a-zA-Z0-9]{4,}(?:\.[a-z][a-zA-Z0-9]+)*)\b/g;
+  const identifiers = new Set<string>();
+  let idMatch: RegExpExecArray | null;
+  while ((idMatch = identifierPattern.exec(findingText)) !== null) {
+    const id = idMatch[1];
+    // Filter common English words that look like identifiers
+    if (!COMMON_WORDS.has(id) && id.length < 40) {
+      identifiers.add(id);
+    }
+  }
+
+  // Search for top 3 identifiers in source files
+  for (const id of [...identifiers].slice(0, 3)) {
+    const results = await this.grepIdentifier(id);
+    if (results) {
+      anchors.push(`<anchor src="${results.file}:${results.line}" via="identifier-search: ${id}">\n${results.snippet}\n</anchor>`);
+      if (anchors.length >= maxSnippets) break;
+    }
+  }
+}
+```
+
+#### Change 2A-2: Grep Helper
+
+Add a `grepIdentifier` method to `ConsensusEngine`:
+
+```typescript
+private async grepIdentifier(identifier: string): Promise<{ file: string; line: number; snippet: string } | null> {
+  // Search .ts/.js files in the project for the identifier
+  // Use the existing file cache and search dirs
+  // Return the first match with surrounding context
+}
+```
+
+This reuses the existing `searchDirs` and `cachedRead` infrastructure already in the engine. No new dependencies.
+
+#### Change 2A-3: Common Words Filter
+
+A small set of English words that match the identifier regex but aren't code:
+
+```typescript
+const COMMON_WORDS = new Set([
+  'should', 'could', 'would', 'about', 'after', 'before', 'being',
+  'between', 'cannot', 'check', 'class', 'clear', 'close', 'change',
+  'const', 'every', 'false', 'first', 'found', 'handle', 'import',
+  'index', 'match', 'never', 'other', 'point', 'quite', 'return',
+  'right', 'since', 'state', 'still', 'their', 'there', 'these',
+  'think', 'those', 'throw', 'under', 'using', 'value', 'where',
+  'which', 'while', 'write',
+]);
+```
+
+**Why this matters more than anchor enforcement:** Anchor enforcement (Batch 1) pressures agents to produce better citations. Active search means the cross-reviewer can verify findings even when the original agent was sloppy. It's defense in depth — one improves input quality, the other improves verification capability.
+
+### Batch 2B: Finding Type Classification (targets 20%)
 
 #### Change 2A: Add `findingType` to `ConsensusFinding`
 
@@ -177,19 +245,22 @@ Process meta-findings (5%) are handled by agents tagging them `[INSIGHT]`. No se
 | `packages/orchestrator/src/consensus-engine.ts:747-757` | Surface invalid anchors in snippetsForFinding | 1 |
 | `packages/orchestrator/src/consensus-engine.ts:209-219` | Cross-review prompt: anchor warning instruction | 1 |
 | Phase 1 agent prompts (prompt-assembler or dispatch) | Require file:line for factual claims | 1 |
-| `packages/orchestrator/src/consensus-types.ts:2-18` | Add `findingType` to ConsensusFinding | 2 |
-| `packages/orchestrator/src/consensus-engine.ts:254-270` | Parse [FINDING]/[SUGGESTION]/[INSIGHT] tags, strip before map | 2 |
-| `packages/orchestrator/src/consensus-engine.ts:491` | Route suggestions/insights to separate array | 2 |
-| `packages/orchestrator/src/consensus-engine.ts:1003` | formatReport: add INSIGHT section | 2 |
-| Dashboard consensus view | Render INSIGHT badge, filter toggle | 2 |
+| `packages/orchestrator/src/consensus-engine.ts:719` | Active identifier search fallback in snippetsForFinding | 2A |
+| `packages/orchestrator/src/consensus-engine.ts` | New `grepIdentifier()` helper method | 2A |
+| `packages/orchestrator/src/consensus-types.ts:2-18` | Add `findingType` to ConsensusFinding | 2B |
+| `packages/orchestrator/src/consensus-engine.ts:254-270` | Parse [FINDING]/[SUGGESTION]/[INSIGHT] tags, strip before map | 2B |
+| `packages/orchestrator/src/consensus-engine.ts:491` | Route suggestions/insights to separate array | 2B |
+| `packages/orchestrator/src/consensus-engine.ts:1003` | formatReport: add INSIGHT section | 2B |
+| Dashboard consensus view | Render INSIGHT badge, filter toggle | 2B |
 
 ## Ship Order
 
 | Batch | Impact | Effort | Risk |
 |-------|--------|--------|------|
-| **Batch 1:** Anchor enforcement + validation | 75% reduction | ~20 lines + prompt | Low |
-| **Batch 2:** Finding type classification | 20% reduction | Type change + tagging + prompt | Medium |
-| **Batch 3:** INSIGHT badge | 5% reduction | Free with Batch 2 | None |
+| **Batch 1:** Anchor enforcement + validation | 75% reduction | ~20 lines + prompt | Low — SHIPPED |
+| **Batch 2A:** Active identifier search in cross-review | High — verifies findings that currently get UNVERIFIED | ~40 lines + grep helper | Medium |
+| **Batch 2B:** Finding type classification | 20% reduction | Type change + tagging + prompt | Medium |
+| **Batch 3:** INSIGHT badge | 5% reduction | Free with Batch 2B | None |
 
 ## Risks
 
@@ -199,6 +270,8 @@ Process meta-findings (5%) are handled by agents tagging them `[INSIGHT]`. No se
 | Agents misuse [SUGGESTION] to soften real findings | Medium | Cross-review still verifies [FINDING] tags; misuse is detectable |
 | Citation regex false positives (node:18, http:443) | Low | Restricted to known source extensions |
 | Tag stripped by findMatchingFinding normalization | High | Strip tag BEFORE inserting into findingMap — explicit in spec |
+| Identifier search finds wrong definition (common name) | Medium | Common words filter + limit to 3 identifiers + prefer exact matches |
+| Identifier search adds latency to cross-review | Low | Capped at 3 searches, reuses existing file cache |
 
 ## Success Criteria
 
