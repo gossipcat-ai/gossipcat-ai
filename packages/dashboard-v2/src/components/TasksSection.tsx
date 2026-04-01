@@ -1,7 +1,7 @@
 import type { TasksData } from '@/lib/types';
 import { TaskRow } from './TaskRow';
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 20;
 
 interface TasksSectionProps {
   tasks: TasksData;
