@@ -244,7 +244,7 @@ html::after {
 .sb-dot.online { background: var(--green); box-shadow: 0 0 8px rgba(52,211,153,0.4); }
 .sb-stat { color: var(--text-2); font-size: 13px; font-family: var(--mono); }
 .sb-sep { color: var(--text-3); }
-.sb-action { color: var(--amber); font-size: 13px; font-weight: 600; font-family: var(--mono); }
+.sb-action { color: var(--amber); font-size: 13px; font-weight: 600; font-family: var(--mono); background: var(--amber-glow); padding: 2px 8px; border-radius: 3px; }
 .sb-clear { color: var(--green); font-size: 13px; font-family: var(--mono); }
 
 /* ── Agent Roster ──────────────────────────────── */
