@@ -1130,9 +1130,13 @@ server.tool(
       const complexity = await ctx.mainAgent.classifyTaskComplexity(task);
 
       if (complexity === 'multi') {
-        // Multi-agent: delegate to full gossip_plan flow
-        const result = await ctx.mainAgent.handleMessage(task, { mode: 'decompose' });
-        return { content: [{ type: 'text' as const, text: typeof result === 'string' ? result : JSON.stringify(result) }] };
+        // Multi-agent: return instructions to call gossip_plan for decomposition
+        return { content: [{ type: 'text' as const, text:
+          `Auto-dispatch: classified as multi-agent task.\n\n` +
+          `This task needs decomposition. Call:\n` +
+          `  gossip_plan(task: <full task description>)\n\n` +
+          `Then review the plan and dispatch with gossip_dispatch(mode: "parallel", tasks: <plan tasks>).`
+        }] };
       }
 
       // Single-agent: find best match and dispatch directly
@@ -1157,8 +1161,7 @@ server.tool(
       return { content: [{ type: 'text' as const, text:
         `Auto-dispatch: classified as single-agent task.\n` +
         `Selected: ${selectedId} (best match by dispatch weight)\n\n` +
-        `Dispatching via: gossip_run(agent_id: "${selectedId}", task: "${task.slice(0, 80)}...")\n\n` +
-        `Call gossip_run(agent_id: "${selectedId}", task: <your task>) to execute.`
+        `Call gossip_run(agent_id: "${selectedId}", task: <full task description>) to execute.`
       }] };
     }
 

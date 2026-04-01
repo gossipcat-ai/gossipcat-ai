@@ -3056,6 +3056,13 @@ var init_src2 = __esm({
   }
 });
 
+// packages/orchestrator/src/task-stream.ts
+var init_task_stream = __esm({
+  "packages/orchestrator/src/task-stream.ts"() {
+    "use strict";
+  }
+});
+
 // packages/orchestrator/src/worker-agent.ts
 function parseTextToolCalls(text, validTools) {
   const calls = [];
@@ -3125,6 +3132,7 @@ var init_worker_agent = __esm({
     init_src2();
     init_src();
     import_msgpack3 = __toESM(require_dist());
+    init_task_stream();
     MAX_TOOL_TURNS = 15;
     TOOL_CALL_TIMEOUT_MS = 6e4;
     log = (agentId, msg) => process.stderr.write(`[worker:${agentId}] ${msg}
@@ -3191,8 +3199,12 @@ var init_worker_agent = __esm({
        * Execute a task with the LLM, using multi-turn tool calling.
        * Returns the final text response.
        */
-      async executeTask(task, context, skillsContent, onProgress) {
-        log(this.agentId, `executeTask started \u2014 task: "${task.slice(0, 100)}..." webSearch=${this.webSearchEnabled} tools=${this.tools.length}`);
+      async *executeTask(task, context, skillsContent) {
+        const logAndYield = (message) => {
+          log(this.agentId, message);
+          return { type: "log" /* LOG */, payload: message, timestamp: Date.now() };
+        };
+        yield logAndYield(`executeTask started \u2014 task: "${task.slice(0, 100)}..." webSearch=${this.webSearchEnabled} tools=${this.tools.length}`);
         this.gossipQueue = [];
         const startTime = Date.now();
         let totalInputTokens = 0;
@@ -3260,7 +3272,7 @@ ${context}` : ""}
                 content: `[System] LAST turn. Save all remaining work in this response (use multiple tool calls). Then provide your completion summary with NO tool calls.`
               });
             }
-            log(this.agentId, `turn ${turn}/${MAX_TOOL_TURNS} \u2014 calling LLM (${messages.length} messages)`);
+            yield logAndYield(`turn ${turn}/${MAX_TOOL_TURNS} \u2014 calling LLM (${messages.length} messages)`);
             const llmStart = Date.now();
             let response = await this.llm.generate(messages, {
               tools: this.tools,
@@ -3271,30 +3283,31 @@ ${context}` : ""}
               totalInputTokens += response.usage.inputTokens;
               totalOutputTokens += response.usage.outputTokens;
             }
-            log(this.agentId, `turn ${turn} \u2014 LLM returned in ${llmMs}ms: text=${response.text?.length ?? 0}chars, toolCalls=${response.toolCalls?.length ?? 0}, tokens=${response.usage?.inputTokens ?? "?"}in/${response.usage?.outputTokens ?? "?"}out`);
+            yield logAndYield(`turn ${turn} \u2014 LLM returned in ${llmMs}ms: text=${response.text?.length ?? 0}chars, toolCalls=${response.toolCalls?.length ?? 0}, tokens=${response.usage?.inputTokens ?? "?"}in/${response.usage?.outputTokens ?? "?"}out`);
             if (!response.toolCalls?.length && response.text) {
               const textCalls = parseTextToolCalls(response.text, this.validToolNames);
               if (textCalls.length > 0) {
-                log(this.agentId, `turn ${turn} \u2014 no native FC, but found ${textCalls.length} text-based tool calls: ${textCalls.map((tc) => tc.name).join(", ")}`);
+                yield logAndYield(`turn ${turn} \u2014 no native FC, but found ${textCalls.length} text-based tool calls: ${textCalls.map((tc) => tc.name).join(", ")}`);
                 response = { ...response, toolCalls: textCalls };
               }
             }
+            if (response.text) {
+              yield { type: "partial_result" /* PARTIAL_RESULT */, payload: { text: response.text }, timestamp: Date.now() };
+            }
             if (!response.toolCalls?.length) {
-              log(this.agentId, `turn ${turn} \u2014 NO tool calls, exiting. Text preview: "${(response.text || "").slice(0, 200)}"`);
+              yield logAndYield(`turn ${turn} \u2014 NO tool calls, exiting. Text preview: "${(response.text || "").slice(0, 200)}"`);
               this.onTaskComplete?.({ agentId: this.agentId, taskId: "", toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-              return { result: response.text || "[No response from agent]", inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+              yield { type: "final_result" /* FINAL_RESULT */, payload: { result: response.text || "[No response from agent]", inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+              return;
             }
             const toolSig = response.toolCalls.map((tc) => `${tc.name}:${JSON.stringify(tc.arguments, Object.keys(tc.arguments || {}).sort())}`).join("|");
             if (toolSig === lastToolSig) {
               repeatCount++;
               if (repeatCount >= 2) {
-                log(this.agentId, `turn ${turn} \u2014 STUCK: repeating same tool calls ${repeatCount + 1}x, exiting`);
+                yield logAndYield(`turn ${turn} \u2014 STUCK: repeating same tool calls ${repeatCount + 1}x, exiting`);
                 this.onTaskComplete?.({ agentId: this.agentId, taskId: "", toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-                return {
-                  result: response.text || "Task completed (agent was repeating the same action).",
-                  inputTokens: totalInputTokens,
-                  outputTokens: totalOutputTokens
-                };
+                yield { type: "final_result" /* FINAL_RESULT */, payload: { result: response.text || "Task completed (agent was repeating the same action).", inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+                return;
               }
             } else {
               lastToolSig = toolSig;
@@ -3309,17 +3322,17 @@ ${context}` : ""}
               content: cleanedText,
               toolCalls: response.toolCalls
             });
-            log(this.agentId, `turn ${turn} \u2014 executing ${response.toolCalls.length} tool calls: ${response.toolCalls.map((tc) => tc.name).join(", ")}`);
+            yield logAndYield(`turn ${turn} \u2014 executing ${response.toolCalls.length} tool calls: ${response.toolCalls.map((tc) => tc.name).join(", ")}`);
             let turnErrors = 0;
             for (const toolCall of response.toolCalls) {
               let result;
               try {
                 const toolStart = Date.now();
                 result = await this.callTool(toolCall.name, toolCall.arguments);
-                log(this.agentId, `  tool ${toolCall.name} \u2192 ${Date.now() - toolStart}ms, ${result.length}chars${result.startsWith("Error:") ? " ERROR: " + result.slice(0, 100) : ""}`);
+                yield logAndYield(`  tool ${toolCall.name} \u2192 ${Date.now() - toolStart}ms, ${result.length}chars${result.startsWith("Error:") ? " ERROR: " + result.slice(0, 100) : ""}`);
               } catch (err) {
                 result = `Error: ${err.message}`;
-                log(this.agentId, `  tool ${toolCall.name} \u2192 THREW: ${result.slice(0, 150)}`);
+                yield logAndYield(`  tool ${toolCall.name} \u2192 THREW: ${result.slice(0, 150)}`);
               }
               if (result.startsWith("Error:")) turnErrors++;
               messages.push({
@@ -3329,31 +3342,22 @@ ${context}` : ""}
                 name: toolCall.name
               });
               toolCallCount++;
-              onProgress?.({
-                toolCalls: toolCallCount,
-                inputTokens: totalInputTokens,
-                outputTokens: totalOutputTokens,
-                currentTool: toolCall.name,
-                turn
-              });
+              yield { type: "progress" /* PROGRESS */, payload: { toolCalls: toolCallCount, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, currentTool: toolCall.name, turn }, timestamp: Date.now() };
             }
             if (turnErrors === response.toolCalls.length) {
               consecutiveErrors++;
-              log(this.agentId, `turn ${turn} \u2014 all ${response.toolCalls.length} tool calls errored (streak: ${consecutiveErrors})`);
+              yield logAndYield(`turn ${turn} \u2014 all ${response.toolCalls.length} tool calls errored (streak: ${consecutiveErrors})`);
               if (consecutiveErrors >= 3) {
-                log(this.agentId, `turn ${turn} \u2014 ERROR LOOP: 3 consecutive all-error turns, exiting`);
+                yield logAndYield(`turn ${turn} \u2014 ERROR LOOP: 3 consecutive all-error turns, exiting`);
                 this.onTaskComplete?.({ agentId: this.agentId, taskId: "", toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-                return {
-                  result: response.text || "Task incomplete \u2014 agent stuck in error loop. Simplify the approach or check the error messages above.",
-                  inputTokens: totalInputTokens,
-                  outputTokens: totalOutputTokens
-                };
+                yield { type: "final_result" /* FINAL_RESULT */, payload: { result: response.text || "Task incomplete \u2014 agent stuck in error loop. Simplify the approach or check the error messages above.", inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+                return;
               }
             } else {
               consecutiveErrors = 0;
             }
           }
-          log(this.agentId, `hit max turns (${MAX_TOOL_TURNS}), requesting summary. Total tool calls: ${toolCallCount}`);
+          yield logAndYield(`hit max turns (${MAX_TOOL_TURNS}), requesting summary. Total tool calls: ${toolCallCount}`);
           try {
             messages.push({ role: "user", content: "Your turn budget is exhausted. Summarize what you accomplished and what remains unfinished. List files created/modified." });
             const summary = await this.llm.generate(messages);
@@ -3362,15 +3366,16 @@ ${context}` : ""}
               totalOutputTokens += summary.usage.outputTokens;
             }
             this.onTaskComplete?.({ agentId: this.agentId, taskId: "", toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-            return { result: summary.text || "Task completed (turn budget exhausted).", inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+            yield { type: "final_result" /* FINAL_RESULT */, payload: { result: summary.text || "Task completed (turn budget exhausted).", inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
           } catch {
             this.onTaskComplete?.({ agentId: this.agentId, taskId: "", toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-            return { result: "Task incomplete \u2014 agent exhausted its turn budget.", inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+            yield { type: "final_result" /* FINAL_RESULT */, payload: { result: "Task incomplete \u2014 agent exhausted its turn budget.", inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
           }
         } catch (err) {
-          log(this.agentId, `FATAL ERROR in executeTask: ${err.message}`);
+          const errorMessage = `FATAL ERROR in executeTask: ${err.message}`;
+          yield logAndYield(errorMessage);
           this.onTaskComplete?.({ agentId: this.agentId, taskId: "", toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-          return { result: `Error: ${err.message}`, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+          yield { type: "error" /* ERROR */, payload: { error: errorMessage }, timestamp: Date.now() };
         }
       }
       /** Send RPC_REQUEST to tool-server via relay */
@@ -7327,6 +7332,7 @@ var init_dispatch_pipeline = __esm({
     init_consensus_engine();
     init_performance_writer();
     init_category_extractor();
+    init_task_stream();
     log2 = (msg) => process.stderr.write(`[gossipcat] ${msg}
 `);
     DispatchPipeline = class _DispatchPipeline {
@@ -7362,7 +7368,7 @@ var init_dispatch_pipeline = __esm({
       skillIndex = null;
       sessionStartTime = /* @__PURE__ */ new Date();
       sessionConsensusHistory = [];
-      taskProgressCallback = null;
+      onTaskUpdate = null;
       projectStructureCache = null;
       getProjectStructure() {
         if (this.projectStructureCache !== null) return this.projectStructureCache || void 0;
@@ -7370,8 +7376,8 @@ var init_dispatch_pipeline = __esm({
         this.projectStructureCache = parts.length > 0 ? parts.join("\n") : "";
         return this.projectStructureCache || void 0;
       }
-      setTaskProgressCallback(cb) {
-        this.taskProgressCallback = cb;
+      setTaskUpdateCallback(cb) {
+        this.onTaskUpdate = cb;
       }
       constructor(config2) {
         this.projectRoot = config2.projectRoot;
@@ -7496,140 +7502,44 @@ var init_dispatch_pipeline = __esm({
           status: "running",
           startedAt: Date.now(),
           skillWarnings,
-          promise: null
+          stream: null,
+          finalResultPromise: null
         };
         entry.writeMode = options?.writeMode;
         entry.scope = options?.scope;
         entry.planId = options?.planId;
         entry.planStep = options?.step;
-        if (options?.writeMode === "sequential") {
-          const progressCb = (evt) => {
-            entry.toolCalls = evt.toolCalls;
-            entry.inputTokens = evt.inputTokens;
-            entry.outputTokens = evt.outputTokens;
-            this.taskProgressCallback?.(taskId, evt);
-          };
-          entry.promise = this.enqueueSequential(
-            () => worker.executeTask(task, void 0, promptContent, progressCb)
-          ).then((execResult) => {
-            entry.status = "completed";
-            entry.result = execResult.result;
-            entry.inputTokens = execResult.inputTokens;
-            entry.outputTokens = execResult.outputTokens;
-            entry.completedAt = Date.now();
-            return execResult.result;
-          }).catch((err) => {
-            entry.status = "failed";
-            entry.error = err.message;
-            entry.completedAt = Date.now();
-            throw err;
-          });
-        } else if (options?.writeMode === "scoped") {
-          if (!options.scope) throw new Error("scoped write mode requires a scope path");
-          const overlap = this.scopeTracker.hasOverlap(options.scope);
-          if (overlap.overlaps) {
-            throw new Error(`Scope "${options.scope}" overlaps with task ${overlap.conflictTaskId} at "${overlap.conflictScope}"`);
-          }
-          this.scopeTracker.register(options.scope, taskId);
-          this.toolServer?.assignScope(agentId, options.scope);
-          const progressCb = (evt) => {
-            entry.toolCalls = evt.toolCalls;
-            entry.inputTokens = evt.inputTokens;
-            entry.outputTokens = evt.outputTokens;
-            this.taskProgressCallback?.(taskId, evt);
-          };
-          entry.promise = worker.executeTask(task, void 0, promptContent, progressCb).then((execResult) => {
-            entry.status = "completed";
-            entry.result = execResult.result;
-            entry.inputTokens = execResult.inputTokens;
-            entry.outputTokens = execResult.outputTokens;
-            entry.completedAt = Date.now();
-            this.scopeTracker.release(taskId);
-            this.toolServer?.releaseAgent(agentId);
-            return execResult.result;
-          }).catch((err) => {
-            entry.status = "failed";
-            entry.error = err.message;
-            entry.completedAt = Date.now();
-            this.scopeTracker.release(taskId);
-            this.toolServer?.releaseAgent(agentId);
-            throw err;
-          });
-        } else if (options?.writeMode === "worktree") {
-          const progressCb = (evt) => {
-            entry.toolCalls = evt.toolCalls;
-            entry.inputTokens = evt.inputTokens;
-            entry.outputTokens = evt.outputTokens;
-            this.taskProgressCallback?.(taskId, evt);
-          };
-          entry.promise = this.worktreeManager.create(taskId).then(({ path: path2, branch }) => {
-            entry.worktreeInfo = { path: path2, branch };
-            this.toolServer?.assignRoot(agentId, path2);
-            return worker.executeTask(task, void 0, promptContent, progressCb);
-          }).then((execResult) => {
-            entry.status = "completed";
-            entry.result = execResult.result;
-            entry.inputTokens = execResult.inputTokens;
-            entry.outputTokens = execResult.outputTokens;
-            entry.completedAt = Date.now();
-            this.toolServer?.releaseAgent(agentId);
-            return execResult.result;
-          }).catch((err) => {
-            entry.status = "failed";
-            entry.error = err.message;
-            entry.completedAt = Date.now();
-            this.toolServer?.releaseAgent(agentId);
-            if (entry.worktreeInfo) {
-              this.worktreeManager.cleanup(taskId, entry.worktreeInfo.path).catch(() => {
-              });
+        const stream = worker.executeTask(task, options?.lens, promptContent);
+        entry.stream = stream;
+        entry.finalResultPromise = (async () => {
+          for await (const event of stream) {
+            this.onTaskUpdate?.(taskId, event);
+            switch (event.type) {
+              case "progress" /* PROGRESS */:
+                entry.toolCalls = event.payload.toolCalls;
+                entry.inputTokens = event.payload.inputTokens;
+                entry.outputTokens = event.payload.outputTokens;
+                break;
+              case "final_result" /* FINAL_RESULT */:
+                entry.status = "completed";
+                entry.result = event.payload.result;
+                entry.inputTokens = event.payload.inputTokens;
+                entry.outputTokens = event.payload.outputTokens;
+                entry.completedAt = Date.now();
+                return event.payload;
+              case "error" /* ERROR */:
+                entry.status = "failed";
+                entry.error = event.payload.error;
+                entry.completedAt = Date.now();
+                throw new Error(event.payload.error);
             }
-            throw err;
-          });
-        } else {
-          const progressCb = (evt) => {
-            entry.toolCalls = evt.toolCalls;
-            entry.inputTokens = evt.inputTokens;
-            entry.outputTokens = evt.outputTokens;
-            this.taskProgressCallback?.(taskId, evt);
-          };
-          entry.promise = worker.executeTask(task, void 0, promptContent, progressCb).then((execResult) => {
-            entry.status = "completed";
-            entry.result = execResult.result;
-            entry.inputTokens = execResult.inputTokens;
-            entry.outputTokens = execResult.outputTokens;
-            entry.completedAt = Date.now();
-            return execResult.result;
-          }).catch((err) => {
-            entry.status = "failed";
-            entry.error = err.message;
-            entry.completedAt = Date.now();
-            throw err;
-          });
-        }
+          }
+          throw new Error("Task stream ended without a final result or error.");
+        })();
         this.tasks.set(taskId, entry);
-        return { taskId, promise: entry.promise };
+        return { taskId, finalResultPromise: entry.finalResultPromise };
       }
       static MAX_WRITE_QUEUE = 20;
-      enqueueSequential(fn) {
-        if (this.writeActive && this.writeQueue.length >= _DispatchPipeline.MAX_WRITE_QUEUE) {
-          throw new Error("Sequential write queue full (20 tasks). Collect results before dispatching more.");
-        }
-        return new Promise((resolve13, reject) => {
-          const run = () => {
-            this.writeActive = true;
-            fn().then(resolve13, reject).finally(() => {
-              this.writeActive = false;
-              const next = this.writeQueue.shift();
-              if (next) next();
-            });
-          };
-          if (this.writeActive) {
-            this.writeQueue.push(run);
-          } else {
-            run();
-          }
-        });
-      }
       getTask(taskId) {
         return this.tasks.get(taskId);
       }
@@ -7709,7 +7619,7 @@ var init_dispatch_pipeline = __esm({
         if (targets.length === 0) return { results: [] };
         let timer;
         await Promise.race([
-          Promise.all(targets.map((t) => t.promise.catch(() => {
+          Promise.all(targets.map((t) => t.finalResultPromise.catch(() => {
           }))),
           new Promise((r) => {
             timer = setTimeout(r, timeoutMs);
@@ -7964,7 +7874,7 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
         for (const def of taskDefs) {
           try {
             const lens = lensMap?.get(def.agentId);
-            const { taskId, promise: promise2 } = this.dispatch(def.agentId, def.task, {
+            const { taskId, finalResultPromise } = this.dispatch(def.agentId, def.task, {
               ...def.options,
               ...lens ? { lens } : {},
               ...pipelineOptions?.consensus ? { consensus: true } : {}
@@ -7972,13 +7882,13 @@ ${lenses.map((l) => `  ${l.agentId} \u2192 ${l.focus.slice(0, 80)}`).join("\n")}
             taskIds.push(taskId);
             batchTaskIds.add(taskId);
             if (this.gossipPublisher) {
-              promise2.then(async (result) => {
+              finalResultPromise.then(async (result) => {
                 const remaining = Array.from(batchTaskIds).map((tid) => this.tasks.get(tid)).filter((t) => t !== void 0 && t.status === "running" && t.agentId !== def.agentId).map((t) => this.registryGet(t.agentId)).filter((ac) => ac !== void 0);
                 if (remaining.length > 0) {
                   this.gossipPublisher.publishGossip({
                     batchId,
                     completedAgentId: def.agentId,
-                    completedResult: result,
+                    completedResult: result.result,
                     remainingSiblings: remaining.map((ac) => ({
                       agentId: ac.id,
                       preset: ac.preset || "custom",
@@ -30383,8 +30293,15 @@ server.tool(
     if (agent_id === "auto") {
       const complexity = await ctx.mainAgent.classifyTaskComplexity(task);
       if (complexity === "multi") {
-        const result = await ctx.mainAgent.handleMessage(task, { mode: "decompose" });
-        return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }] };
+        return { content: [{
+          type: "text",
+          text: `Auto-dispatch: classified as multi-agent task.
+
+This task needs decomposition. Call:
+  gossip_plan(task: <full task description>)
+
+Then review the plan and dispatch with gossip_dispatch(mode: "parallel", tasks: <plan tasks>).`
+        }] };
       }
       const { AgentRegistry: AgentRegistry2 } = await Promise.resolve().then(() => (init_src4(), src_exports3));
       const { findConfigPath: findConfigPath2, loadConfig: loadConfig2, configToAgentConfigs: configToAgentConfigs2 } = await Promise.resolve().then(() => (init_config(), config_exports));
@@ -30405,9 +30322,7 @@ server.tool(
         text: `Auto-dispatch: classified as single-agent task.
 Selected: ${selectedId} (best match by dispatch weight)
 
-Dispatching via: gossip_run(agent_id: "${selectedId}", task: "${task.slice(0, 80)}...")
-
-Call gossip_run(agent_id: "${selectedId}", task: <your task>) to execute.`
+Call gossip_run(agent_id: "${selectedId}", task: <full task description>) to execute.`
       }] };
     }
     const isNative = ctx.nativeAgentConfigs.has(agent_id);
