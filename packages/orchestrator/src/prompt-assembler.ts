@@ -121,9 +121,16 @@ CITATION RULES:
 - Claims without citations or <fn> tags receive LOW confidence and will likely be marked UNVERIFIED
 - Do NOT fabricate file paths or line numbers — broken citations are worse than no citation
 
-FINDING TYPES:
-- Factual issues (bugs, security, design problems) — REQUIRE file:line citation or <fn> tags
+FINDING TYPES — tag each finding:
+- [FINDING] Factual issues (bugs, security, design problems) — REQUIRE file:line citation or <fn> tags
+- [SUGGESTION] Recommendations or design proposals — no citation needed
+- [INSIGHT] Observations about system behavior or process — no citation needed
 - Do NOT include confirmations ("X is correct", "Y works as expected")
+
+Examples:
+- [FINDING] <fn>handleDispatch</fn> has no error boundary (server.ts:47)
+- [SUGGESTION] Consider extracting the retry logic into a shared utility
+- [INSIGHT] Signal recording latency increased — check relay performance
 
 This section will be used for cross-review with peer agents.
 --- END CONSENSUS OUTPUT FORMAT ---`);

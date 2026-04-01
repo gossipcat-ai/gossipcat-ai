@@ -1252,6 +1252,7 @@ server.tool(
       agent_id: z.string().describe('Agent being evaluated'),
       counterpart_id: z.string().optional().describe('The other agent involved (e.g., who won the disagreement)'),
       finding: z.string().describe('Brief description of the finding'),
+      finding_id: z.string().optional().describe('Consensus finding ID — links this signal to a specific finding in a consensus report. Enables dashboard to resolve UNVERIFIED findings.'),
       evidence: z.string().optional().describe('Supporting evidence or reasoning'),
     })).optional().describe('Array of consensus signals (required for action: "record")'),
     // retract params
@@ -1318,6 +1319,7 @@ server.tool(
         signal: s.signal,
         agentId: s.agent_id,
         counterpartId: s.counterpart_id,
+        findingId: s.finding_id,
         evidence: ((s.evidence || s.finding) ?? '').slice(0, MAX_EVIDENCE_LENGTH),
         timestamp,
       }));

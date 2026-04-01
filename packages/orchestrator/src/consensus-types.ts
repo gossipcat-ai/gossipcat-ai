@@ -3,6 +3,7 @@ export interface ConsensusFinding {
   id: string;
   originalAgentId: string;
   finding: string;
+  findingType?: 'finding' | 'suggestion' | 'insight';
   tag: 'confirmed' | 'disputed' | 'unverified' | 'unique';
   confirmedBy: string[];
   disputedBy: Array<{
@@ -43,6 +44,7 @@ export interface ConsensusReport {
   disputed: ConsensusFinding[];
   unverified: ConsensusFinding[];
   unique: ConsensusFinding[];
+  insights: ConsensusFinding[];
   newFindings: ConsensusNewFinding[];
   signals: ConsensusSignal[];
   summary: string;       // formatted text report

@@ -4602,9 +4602,16 @@ CITATION RULES:
 - Claims without citations or <fn> tags receive LOW confidence and will likely be marked UNVERIFIED
 - Do NOT fabricate file paths or line numbers \u2014 broken citations are worse than no citation
 
-FINDING TYPES:
-- Factual issues (bugs, security, design problems) \u2014 REQUIRE file:line citation or <fn> tags
+FINDING TYPES \u2014 tag each finding:
+- [FINDING] Factual issues (bugs, security, design problems) \u2014 REQUIRE file:line citation or <fn> tags
+- [SUGGESTION] Recommendations or design proposals \u2014 no citation needed
+- [INSIGHT] Observations about system behavior or process \u2014 no citation needed
 - Do NOT include confirmations ("X is correct", "Y works as expected")
+
+Examples:
+- [FINDING] <fn>handleDispatch</fn> has no error boundary (server.ts:47)
+- [SUGGESTION] Consider extracting the retry logic into a shared utility
+- [INSIGHT] Signal recording latency increased \u2014 check relay performance
 
 This section will be used for cross-review with peer agents.
 --- END CONSENSUS OUTPUT FORMAT ---`);
@@ -6285,6 +6292,7 @@ var init_consensus_engine = __esm({
             disputed: [],
             unverified: [],
             unique: [],
+            insights: [],
             newFindings: [],
             signals: [],
             summary: "Consensus skipped: insufficient agents (need \u22652 successful)."
@@ -6314,7 +6322,7 @@ var init_consensus_engine = __esm({
           process.stderr.write(`[consensus] After verification: ${report.confirmed.length} confirmed, ${report.disputed.length} disputed, ${report.unverified.length} unverified
 `);
         }
-        report.summary = this.formatReport(report.confirmed, report.disputed, report.unverified, report.unique, report.newFindings, successful.length, report.rounds, timing);
+        report.summary = this.formatReport(report.confirmed, report.disputed, report.unverified, report.unique, report.newFindings, successful.length, report.rounds, timing, report.insights);
         return report;
       }
       /**
@@ -6425,13 +6433,17 @@ Return only valid JSON.` },
           const summary2 = this.extractSummary(r.result);
           const lines = summary2.split("\n").filter((l) => l.trimStart().startsWith("-"));
           for (const line of lines) {
-            const finding = line.replace(/^\s*-\s*/, "").trim();
+            let finding = line.replace(/^\s*-\s*/, "").trim();
             if (!finding) continue;
+            const tagMatch = finding.match(/^\[(FINDING|SUGGESTION|INSIGHT)\]\s*/i);
+            const findingType = tagMatch ? tagMatch[1].toLowerCase() : "finding";
+            if (tagMatch) finding = finding.slice(tagMatch[0].length).trim();
             const key = `${r.agentId}::${finding}`;
             const hasAnchor = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/.test(finding);
             findingMap.set(key, {
               originalAgentId: r.agentId,
               finding,
+              findingType,
               confirmedBy: [],
               disputedBy: [],
               unverifiedBy: [],
@@ -6557,6 +6569,7 @@ Return only valid JSON.` },
         const disputed = [];
         const unverified = [];
         const unique = [];
+        const insights = [];
         let findingIdx = 0;
         const taggingTimestamp = (/* @__PURE__ */ new Date()).toISOString();
         for (const [, entry] of findingMap) {
@@ -6624,6 +6637,12 @@ Return only valid JSON.` },
               });
             }
           } else if (entry.unverifiedBy.length > 0) {
+            if (entry.findingType === "suggestion" || entry.findingType === "insight") {
+              finding.tag = "unique";
+              finding.findingType = entry.findingType;
+              insights.push(finding);
+              continue;
+            }
             finding.tag = "unverified";
             unverified.push(finding);
             signals.push({
@@ -6649,7 +6668,7 @@ Return only valid JSON.` },
             });
           }
         }
-        const summary = this.formatReport(confirmed, disputed, unverified, unique, newFindings, successful.length);
+        const summary = this.formatReport(confirmed, disputed, unverified, unique, newFindings, successful.length, 2, void 0, insights);
         return {
           agentCount: successful.length,
           rounds: 2,
@@ -6657,6 +6676,7 @@ Return only valid JSON.` },
           disputed,
           unverified,
           unique,
+          insights,
           newFindings,
           signals,
           summary
@@ -7165,7 +7185,7 @@ ${safeSnippet}
       /**
        * Format the consensus report as a human-readable string.
        */
-      formatReport(confirmed, disputed, unverified, unique, newFindings, agentCount, rounds = 2, timing) {
+      formatReport(confirmed, disputed, unverified, unique, newFindings, agentCount, rounds = 2, timing, insights) {
         const bar = "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550";
         const lines = [];
         lines.push(bar);
@@ -7226,8 +7246,16 @@ ${safeSnippet}
           }
           lines.push("");
         }
+        if (insights && insights.length > 0) {
+          lines.push("");
+          lines.push("INSIGHTS (suggestions and observations \u2014 not code-verifiable):");
+          for (const f of insights) {
+            const type = f.findingType === "suggestion" ? "\u{1F4A1}" : "\u{1F50D}";
+            lines.push(`  ${type} [${f.originalAgentId}] ${f.finding}`);
+          }
+        }
         lines.push(bar);
-        lines.push(`Summary: ${confirmed.length} confirmed, ${disputed.length} disputed, ${unverified.length} unverified, ${unique.length} unique, ${newFindings.length} new`);
+        lines.push(`Summary: ${confirmed.length} confirmed, ${disputed.length} disputed, ${unverified.length} unverified, ${unique.length} unique, ${insights?.length ?? 0} insights, ${newFindings.length} new`);
         lines.push(bar);
         return lines.join("\n");
       }
@@ -30503,6 +30531,7 @@ server.tool(
       agent_id: external_exports.string().describe("Agent being evaluated"),
       counterpart_id: external_exports.string().optional().describe("The other agent involved (e.g., who won the disagreement)"),
       finding: external_exports.string().describe("Brief description of the finding"),
+      finding_id: external_exports.string().optional().describe("Consensus finding ID \u2014 links this signal to a specific finding in a consensus report. Enables dashboard to resolve UNVERIFIED findings."),
       evidence: external_exports.string().optional().describe("Supporting evidence or reasoning")
     })).optional().describe('Array of consensus signals (required for action: "record")'),
     // retract params
@@ -30564,6 +30593,7 @@ The original signal remains in the audit log but will be excluded from scoring.`
         signal: s.signal,
         agentId: s.agent_id,
         counterpartId: s.counterpart_id,
+        findingId: s.finding_id,
         evidence: ((s.evidence || s.finding) ?? "").slice(0, MAX_EVIDENCE_LENGTH),
         timestamp
       }));

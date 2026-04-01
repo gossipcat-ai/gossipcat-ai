@@ -81,7 +81,7 @@ export class ConsensusEngine {
     if (successful.length < 2) {
       return {
         agentCount: 0, rounds: 0,
-        confirmed: [], disputed: [], unverified: [], unique: [], newFindings: [], signals: [],
+        confirmed: [], disputed: [], unverified: [], unique: [], insights: [], newFindings: [], signals: [],
         summary: 'Consensus skipped: insufficient agents (need ≥2 successful).',
       };
     }
@@ -111,7 +111,7 @@ export class ConsensusEngine {
     }
 
     // Always regenerate report with timing data
-    report.summary = this.formatReport(report.confirmed, report.disputed, report.unverified, report.unique, report.newFindings, successful.length, report.rounds, timing);
+    report.summary = this.formatReport(report.confirmed, report.disputed, report.unverified, report.unique, report.newFindings, successful.length, report.rounds, timing, report.insights);
 
     return report;
   }
@@ -246,6 +246,7 @@ Return only valid JSON.` },
     const findingMap = new Map<string, {
       originalAgentId: string;
       finding: string;
+      findingType?: 'finding' | 'suggestion' | 'insight';
       confirmedBy: string[];
       disputedBy: Array<{ agentId: string; reason: string; evidence: string }>;
       unverifiedBy: Array<{ agentId: string; reason: string }>;
@@ -256,14 +257,19 @@ Return only valid JSON.` },
       const summary = this.extractSummary(r.result!);
       const lines = summary.split('\n').filter(l => l.trimStart().startsWith('-'));
       for (const line of lines) {
-        const finding = line.replace(/^\s*-\s*/, '').trim();
+        let finding = line.replace(/^\s*-\s*/, '').trim();
         if (!finding) continue;
+        // Parse [FINDING]/[SUGGESTION]/[INSIGHT] tags — strip before map insertion
+        const tagMatch = finding.match(/^\[(FINDING|SUGGESTION|INSIGHT)\]\s*/i);
+        const findingType = tagMatch ? tagMatch[1].toLowerCase() as 'finding' | 'suggestion' | 'insight' : 'finding';
+        if (tagMatch) finding = finding.slice(tagMatch[0].length).trim();
         const key = `${r.agentId}::${finding}`;
         // Detect source file anchors — restrict to known extensions to avoid false matches (node:18, http:443)
         const hasAnchor = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/.test(finding);
         findingMap.set(key, {
           originalAgentId: r.agentId,
           finding,
+          findingType,
           confirmedBy: [],
           disputedBy: [],
           unverifiedBy: [],
@@ -413,6 +419,7 @@ Return only valid JSON.` },
     const disputed: ConsensusFinding[] = [];
     const unverified: ConsensusFinding[] = [];
     const unique: ConsensusFinding[] = [];
+    const insights: ConsensusFinding[] = [];
     let findingIdx = 0;
     const taggingTimestamp = new Date().toISOString();
 
@@ -492,6 +499,13 @@ Return only valid JSON.` },
           });
         }
       } else if (entry.unverifiedBy.length > 0) {
+        // Route suggestions/insights to insights array instead of unverified
+        if (entry.findingType === 'suggestion' || entry.findingType === 'insight') {
+          finding.tag = 'unique'; // reuse unique tag for dashboard compat
+          finding.findingType = entry.findingType;
+          insights.push(finding);
+          continue; // skip unverified signal — these aren't failures
+        }
         // Peers couldn't verify (wrong line number, missing context) — not a refutation
         finding.tag = 'unverified';
         unverified.push(finding);
@@ -520,7 +534,7 @@ Return only valid JSON.` },
     }
 
     // (d) Generate formatted report
-    const summary = this.formatReport(confirmed, disputed, unverified, unique, newFindings, successful.length);
+    const summary = this.formatReport(confirmed, disputed, unverified, unique, newFindings, successful.length, 2, undefined, insights);
 
     return {
       agentCount: successful.length,
@@ -529,6 +543,7 @@ Return only valid JSON.` },
       disputed,
       unverified,
       unique,
+      insights,
       newFindings,
       signals,
       summary,
@@ -1137,6 +1152,7 @@ Return ONLY a JSON array:
     agentCount: number,
     rounds = 2,
     timing?: { totalMs?: number; perAgent?: Array<{ agentId: string; durationMs: number }>; crossReviewMs?: number },
+    insights?: ConsensusFinding[],
   ): string {
     const bar = '═══════════════════════════════════════════';
     const lines: string[] = [];
@@ -1205,8 +1221,17 @@ Return ONLY a JSON array:
       lines.push('');
     }
 
+    if (insights && insights.length > 0) {
+      lines.push('');
+      lines.push('INSIGHTS (suggestions and observations — not code-verifiable):');
+      for (const f of insights) {
+        const type = f.findingType === 'suggestion' ? '💡' : '🔍';
+        lines.push(`  ${type} [${f.originalAgentId}] ${f.finding}`);
+      }
+    }
+
     lines.push(bar);
-    lines.push(`Summary: ${confirmed.length} confirmed, ${disputed.length} disputed, ${unverified.length} unverified, ${unique.length} unique, ${newFindings.length} new`);
+    lines.push(`Summary: ${confirmed.length} confirmed, ${disputed.length} disputed, ${unverified.length} unverified, ${unique.length} unique, ${insights?.length ?? 0} insights, ${newFindings.length} new`);
     lines.push(bar);
 
     return lines.join('\n');
