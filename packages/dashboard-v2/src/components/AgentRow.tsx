@@ -4,17 +4,16 @@ import { NeuralAvatar } from './NeuralAvatar';
 
 interface AgentRowProps {
   agent: AgentData;
-  onClick: () => void;
 }
 
-export function AgentRow({ agent, onClick }: AgentRowProps) {
+export function AgentRow({ agent }: AgentRowProps) {
   const color = agentColor(agent.id);
   const s = agent.scores;
   const lastTime = agent.lastTask?.timestamp ? timeAgo(agent.lastTask.timestamp) : '—';
 
   return (
     <button
-      onClick={onClick}
+      onClick={() => { window.location.hash = '#/agent/' + encodeURIComponent(agent.id); }}
       className="group flex min-w-0 flex-1 flex-col items-center rounded-lg border border-border bg-card p-4 text-center transition hover:border-primary/30 hover:bg-accent"
     >
       {/* Avatar with portal glow */}

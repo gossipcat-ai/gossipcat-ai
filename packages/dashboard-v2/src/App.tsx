@@ -6,7 +6,7 @@ import { TeamSection } from '@/components/TeamSection';
 import { TasksSection } from '@/components/TasksSection';
 import { RecentMemories } from '@/components/RecentMemories';
 import { AgentRow } from '@/components/AgentRow';
-import { AgentDetailModal } from '@/components/AgentDetailModal';
+import { AgentPage } from '@/components/AgentPage';
 import { TaskRow } from '@/components/TaskRow';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/useWebSocket';
@@ -25,7 +25,6 @@ function useRoute() {
 }
 
 function TeamPage({ agents }: { agents: AgentData[] }) {
-  const [selected, setSelected] = useState<AgentData | null>(null);
   const sorted = [...agents].sort((a, b) =>
     (b.scores?.dispatchWeight || 0) - (a.scores?.dispatchWeight || 0)
   );
@@ -40,12 +39,9 @@ function TeamPage({ agents }: { agents: AgentData[] }) {
       </div>
       <div className="flex flex-wrap gap-3">
         {sorted.map((agent) => (
-          <AgentRow key={agent.id} agent={agent} onClick={() => setSelected(agent)} />
+          <AgentRow key={agent.id} agent={agent} />
         ))}
       </div>
-      {selected && (
-        <AgentDetailModal agent={selected} open={!!selected} onClose={() => setSelected(null)} />
-      )}
     </>
   );
 }
@@ -184,7 +180,11 @@ function Dashboard() {
   }
 
   let content;
-  if (route === '#/team' && agents) {
+  const agentMatch = route.match(/^#\/agent\/(.+)$/);
+  if (agentMatch && agents) {
+    const agentId = decodeURIComponent(agentMatch[1]);
+    content = <AgentPage agentId={agentId} agents={agents} tasks={tasks} consensus={consensus} />;
+  } else if (route === '#/team' && agents) {
     content = <TeamPage agents={agents} />;
   } else if (route === '#/tasks' && tasks) {
     content = <TasksPage tasks={tasks} />;

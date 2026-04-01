@@ -1,15 +1,11 @@
-import { useState } from 'react';
 import type { AgentData } from '@/lib/types';
 import { AgentRow } from './AgentRow';
-import { AgentDetailModal } from './AgentDetailModal';
 
 interface TeamSectionProps {
   agents: AgentData[];
 }
 
 export function TeamSection({ agents }: TeamSectionProps) {
-  const [selected, setSelected] = useState<AgentData | null>(null);
-
   const sorted = [...agents].sort((a, b) => {
     const aTime = a.lastTask?.timestamp ? new Date(a.lastTask.timestamp).getTime() : 0;
     const bTime = b.lastTask?.timestamp ? new Date(b.lastTask.timestamp).getTime() : 0;
@@ -36,13 +32,9 @@ export function TeamSection({ agents }: TeamSectionProps) {
 
       <div className="flex gap-3 overflow-x-auto pb-2">
         {visible.map((agent) => (
-          <AgentRow key={agent.id} agent={agent} onClick={() => setSelected(agent)} />
+          <AgentRow key={agent.id} agent={agent} />
         ))}
       </div>
-
-      {selected && (
-        <AgentDetailModal agent={selected} open={!!selected} onClose={() => setSelected(null)} />
-      )}
     </section>
   );
 }
