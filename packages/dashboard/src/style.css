@@ -34,8 +34,9 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--body);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.55;
+  font-feature-settings: "zero";
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
   overflow-x: hidden;
@@ -208,7 +209,7 @@ html::after {
 
 /* ── Main Content ───────────────────────────────── */
 .page {
-  max-width: 1200px; margin: 0 auto;
+  max-width: 1400px; margin: 0 auto;
   padding: 24px 32px;
   height: calc(100vh - 50px); overflow-y: auto;
 }
@@ -221,11 +222,10 @@ html::after {
   border-bottom: 1px solid var(--border);
 }
 .sh-left { display: flex; align-items: center; gap: 10px; }
-.sh-title { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: 0.01em; }
+.sh-title { font-size: 11px; font-weight: 700; color: var(--text); letter-spacing: 0.08em; text-transform: uppercase; }
 .sh-count {
   font-size: 10px; font-family: var(--mono); font-weight: 500;
-  color: var(--text-3); background: var(--surface-raised);
-  padding: 2px 8px; border-radius: 4px;
+  color: var(--accent);
 }
 .sh-action {
   font-size: 11px; font-family: var(--mono); font-weight: 500;
@@ -238,7 +238,7 @@ html::after {
 /* ── Status Bar ────────────────────────────────── */
 .status-bar { padding: 14px 20px !important; margin-bottom: 16px; }
 .status-bar .sh { display: none; }
-.status-bar { display: flex; justify-content: space-between; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.status-bar { display: flex; justify-content: space-between; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; }
 .sb-left, .sb-right { display: flex; align-items: center; gap: 10px; }
 .sb-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
 .sb-dot.online { background: var(--green); box-shadow: 0 0 8px rgba(52,211,153,0.4); }
@@ -250,7 +250,7 @@ html::after {
 /* ── Agent Cards ────────────────────────────────── */
 .agent-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .ag {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
   padding: 16px 12px; cursor: pointer; transition: all 0.2s; position: relative;
   color: var(--text); text-align: center;
 }
@@ -279,7 +279,7 @@ html::after {
 
 /* ── Panels ─────────────────────────────────────── */
 .panel {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
   overflow: hidden; display: flex; flex-direction: column;
 }
 .panel-head {
@@ -293,7 +293,7 @@ html::after {
 .pill {
   display: inline-flex; align-items: center; gap: 2px;
   font-size: 10.5px; font-family: var(--mono); font-weight: 600;
-  padding: 3px 7px; border-radius: 5px;
+  padding: 3px 7px; border-radius: 3px;
 }
 .pill-g { background: var(--green-glow); color: var(--green); }
 .pill-r { background: var(--red-glow); color: var(--red); }
@@ -301,7 +301,7 @@ html::after {
 
 /* ── Run Timeline ──────────────────────────────────── */
 .run-list { display: flex; flex-direction: column; gap: 8px; }
-.run-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.run-card { background: var(--surface); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
 .run-card.run-open { border-color: rgba(255,179,71,0.3); }
 .run-header { padding: 12px 16px; cursor: pointer; transition: background 0.1s; }
 .run-header:hover { background: var(--surface-raised); }
@@ -334,7 +334,7 @@ html::after {
 .know-item { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 12px; font-family: var(--mono); color: var(--text-2); cursor: pointer; transition: all 0.15s; }
 .know-item:hover { background: var(--surface-raised); color: var(--text); border-color: var(--accent); }
 .know-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; padding-top: 4px; }
-.know-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; transition: all 0.15s; text-align: center; }
+.know-card { background: var(--surface); border: 1px solid var(--border); border-radius: 3px; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; transition: all 0.15s; text-align: center; }
 .know-card:hover { background: var(--surface-raised); border-color: var(--accent); }
 .know-card-initials { font-size: 16px; font-weight: 700; font-family: var(--mono); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-hover); }
 .know-card-name { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); }
@@ -394,7 +394,7 @@ html::after {
 .detail-subtitle { font-size: 13px; color: var(--text-3); margin-top: 2px; }
 .detail-stats { display: flex; gap: 10px; margin-bottom: 24px; }
 .detail-stat {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
   padding: 14px 18px; flex: 1; text-align: center;
 }
 .detail-stat-val { font-family: var(--mono); font-size: 20px; font-weight: 600; }
@@ -403,7 +403,7 @@ html::after {
 /* Filter buttons */
 .filters { display: flex; gap: 4px; margin-bottom: 14px; }
 .filter-btn {
-  background: var(--surface-raised); border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-raised); border: 1px solid var(--border); border-radius: 3px;
   padding: 5px 12px; font-size: 12px; font-family: var(--mono); color: var(--text-3);
   cursor: pointer; transition: all 0.15s;
 }
@@ -447,7 +447,7 @@ html::after {
 .task-meta { color: var(--text-3); font-family: var(--mono); font-size: 11px; min-width: 50px; text-align: right; }
 
 /* ── Live Task Strip ───────────────────────────────────────────────────── */
-.live-strip { padding: 8px 20px !important; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; }
+.live-strip { padding: 8px 20px !important; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; margin-bottom: 12px; }
 .live-strip.live-active { background: rgba(251,191,36,0.04); border-color: rgba(251,191,36,0.12); }
 .live-strip .sh { display: none; }
 .live-task { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
