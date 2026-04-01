@@ -114,12 +114,15 @@ End your response with a section titled "## Consensus Summary".
 CITATION RULES:
 - Every FACTUAL claim about code MUST include a file:line citation
   Format: "- <finding> (file.ts:123)" or "- <finding> (file.ts)"
-- Claims without citations receive LOW confidence and will likely be marked UNVERIFIED
+- When referencing function names, variables, or methods, wrap them in <fn> tags:
+  Example: "- <fn>planExecutionDepth</fn> is not incremented in <fn>gossip_run</fn>"
+  This enables cross-reviewers to locate the code automatically via search.
+  Use <fn> tags alongside file:line when possible, or standalone when you can't identify the exact line.
+- Claims without citations or <fn> tags receive LOW confidence and will likely be marked UNVERIFIED
 - Do NOT fabricate file paths or line numbers — broken citations are worse than no citation
-- If you cannot identify a specific file for a factual claim, omit the finding
 
 FINDING TYPES:
-- Factual issues (bugs, security, design problems) — REQUIRE file:line citation
+- Factual issues (bugs, security, design problems) — REQUIRE file:line citation or <fn> tags
 - Do NOT include confirmations ("X is correct", "Y works as expected")
 
 This section will be used for cross-review with peer agents.

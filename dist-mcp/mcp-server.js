@@ -4588,12 +4588,15 @@ End your response with a section titled "## Consensus Summary".
 CITATION RULES:
 - Every FACTUAL claim about code MUST include a file:line citation
   Format: "- <finding> (file.ts:123)" or "- <finding> (file.ts)"
-- Claims without citations receive LOW confidence and will likely be marked UNVERIFIED
+- When referencing function names, variables, or methods, wrap them in <fn> tags:
+  Example: "- <fn>planExecutionDepth</fn> is not incremented in <fn>gossip_run</fn>"
+  This enables cross-reviewers to locate the code automatically via search.
+  Use <fn> tags alongside file:line when possible, or standalone when you can't identify the exact line.
+- Claims without citations or <fn> tags receive LOW confidence and will likely be marked UNVERIFIED
 - Do NOT fabricate file paths or line numbers \u2014 broken citations are worse than no citation
-- If you cannot identify a specific file for a factual claim, omit the finding
 
 FINDING TYPES:
-- Factual issues (bugs, security, design problems) \u2014 REQUIRE file:line citation
+- Factual issues (bugs, security, design problems) \u2014 REQUIRE file:line citation or <fn> tags
 - Do NOT include confirmations ("X is correct", "Y works as expected")
 
 This section will be used for cross-review with peer agents.
@@ -6870,6 +6873,22 @@ ${safeSnippet}
           } catch {
           }
         }
+        if (anchors.length === 0 && this.config.projectRoot) {
+          const fnPattern = /<fn>([^<]+)<\/fn>/g;
+          let fnMatch;
+          while ((fnMatch = fnPattern.exec(findingText)) !== null) {
+            if (anchors.length >= maxSnippets) break;
+            const identifier = fnMatch[1].trim();
+            if (!identifier || identifier.length > 60) continue;
+            const result = await this.grepIdentifier(identifier);
+            if (result) {
+              const safeSnippet = result.snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, "");
+              anchors.push(`<anchor src="${result.file}:${result.line}" via="fn:${identifier}">
+${safeSnippet}
+</anchor>`);
+            }
+          }
+        }
         return anchors.join("\n");
       }
       /**
@@ -6962,6 +6981,52 @@ ${safeSnippet}
             if (entry.isDirectory() && entry.name !== "node_modules" && entry.name !== ".git") {
               const found = await this.findFile(fullPath, fileName);
               if (found) return found;
+            }
+          }
+        } catch {
+        }
+        return null;
+      }
+      /**
+       * Search source files for an identifier (function name, variable, class).
+       * Returns the first definition-like match with surrounding context.
+       */
+      async grepIdentifier(identifier) {
+        const root = this.config.projectRoot;
+        if (!root) return null;
+        const CONTEXT_LINES = 2;
+        const searchDirs = ["packages", "src", "apps"];
+        const sourceExts = /* @__PURE__ */ new Set([".ts", ".tsx", ".js", ".jsx"]);
+        for (const dir of searchDirs) {
+          const result = await this.grepDir((0, import_path15.join)(root, dir), identifier, sourceExts, CONTEXT_LINES);
+          if (result) return result;
+        }
+        return null;
+      }
+      async grepDir(dir, identifier, exts, contextLines) {
+        const root = this.config.projectRoot;
+        try {
+          const entries = await (0, import_promises3.readdir)(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = (0, import_path15.join)(dir, entry.name);
+            if (entry.isDirectory() && entry.name !== "node_modules" && entry.name !== ".git" && entry.name !== "dist") {
+              const found = await this.grepDir(fullPath, identifier, exts, contextLines);
+              if (found) return found;
+            }
+            if (!entry.isFile()) continue;
+            const ext = entry.name.slice(entry.name.lastIndexOf("."));
+            if (!exts.has(ext)) continue;
+            const content = await this.cachedRead(fullPath);
+            if (!content) continue;
+            const lines = content.split("\n");
+            for (let i = 0; i < lines.length; i++) {
+              if (lines[i].includes(identifier)) {
+                const start = Math.max(0, i - contextLines);
+                const end = Math.min(lines.length, i + 1 + contextLines);
+                const snippet = lines.slice(start, end).map((l, idx) => `  ${start + idx + 1}: ${l}`).join("\n");
+                const relPath = root ? fullPath.replace(root + "/", "") : fullPath;
+                return { file: relPath, line: i + 1, snippet };
+              }
             }
           }
         } catch {

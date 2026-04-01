@@ -770,6 +770,22 @@ Return ONLY a JSON array:
       } catch { /* file unreadable, skip */ }
     }
 
+    // Fallback: if no file:line anchors found, try <fn> tag-based identifier search
+    if (anchors.length === 0 && this.config.projectRoot) {
+      const fnPattern = /<fn>([^<]+)<\/fn>/g;
+      let fnMatch: RegExpExecArray | null;
+      while ((fnMatch = fnPattern.exec(findingText)) !== null) {
+        if (anchors.length >= maxSnippets) break;
+        const identifier = fnMatch[1].trim();
+        if (!identifier || identifier.length > 60) continue;
+        const result = await this.grepIdentifier(identifier);
+        if (result) {
+          const safeSnippet = result.snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
+          anchors.push(`<anchor src="${result.file}:${result.line}" via="fn:${identifier}">\n${safeSnippet}\n</anchor>`);
+        }
+      }
+    }
+
     return anchors.join('\n');
   }
 
@@ -879,6 +895,63 @@ Return ONLY a JSON array:
         }
       }
     } catch { /* directory doesn't exist or not readable */ }
+    return null;
+  }
+
+  /**
+   * Search source files for an identifier (function name, variable, class).
+   * Returns the first definition-like match with surrounding context.
+   */
+  private async grepIdentifier(identifier: string): Promise<{ file: string; line: number; snippet: string } | null> {
+    const root = this.config.projectRoot;
+    if (!root) return null;
+
+    const CONTEXT_LINES = 2;
+    const searchDirs = ['packages', 'src', 'apps'];
+    const sourceExts = new Set(['.ts', '.tsx', '.js', '.jsx']);
+
+    for (const dir of searchDirs) {
+      const result = await this.grepDir(join(root, dir), identifier, sourceExts, CONTEXT_LINES);
+      if (result) return result;
+    }
+    return null;
+  }
+
+  private async grepDir(
+    dir: string,
+    identifier: string,
+    exts: Set<string>,
+    contextLines: number,
+  ): Promise<{ file: string; line: number; snippet: string } | null> {
+    const root = this.config.projectRoot;
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git' && entry.name !== 'dist') {
+          const found = await this.grepDir(fullPath, identifier, exts, contextLines);
+          if (found) return found;
+        }
+        if (!entry.isFile()) continue;
+        const ext = entry.name.slice(entry.name.lastIndexOf('.'));
+        if (!exts.has(ext)) continue;
+
+        const content = await this.cachedRead(fullPath);
+        if (!content) continue;
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].includes(identifier)) {
+            const start = Math.max(0, i - contextLines);
+            const end = Math.min(lines.length, i + 1 + contextLines);
+            const snippet = lines.slice(start, end)
+              .map((l, idx) => `  ${start + idx + 1}: ${l}`)
+              .join('\n');
+            const relPath = root ? fullPath.replace(root + '/', '') : fullPath;
+            return { file: relPath, line: i + 1, snippet };
+          }
+        }
+      }
+    } catch { /* directory not readable */ }
     return null;
   }
 
