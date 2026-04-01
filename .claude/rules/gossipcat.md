@@ -117,6 +117,36 @@ Still must run `npx jest` for the affected module.
 
 ---
 
+## Auto-Dispatch Rule
+
+**Precedence:** The Tier 1/2/3 rules above take priority over auto-dispatch.
+If a task matches a Tier 1 trigger (shared mutable state, auth, persistence, etc.), use
+`gossip_dispatch(mode: "consensus")` as before. If it matches Tier 2, use `gossip_run`
+with the appropriate reviewer. Auto-dispatch applies to implementation tasks that don't
+match Tier 1 or Tier 2 triggers.
+
+Before writing implementation code, call `gossip_run(agent_id: "auto", task: "<description>")`.
+
+This applies when the user asks to implement, build, add, create, refactor, or fix any
+non-trivial code change. The orchestrator's role is to coordinate — dispatch to agents,
+verify results, record signals — not to implement directly.
+
+**Exceptions (orchestrator may implement directly):**
+- User includes `(direct)` in their message
+- Change matches Tier 3 (docs, CSS, test additions, log strings)
+- Change is under 10 lines with no side effects on shared state (existing `(quick-fix)` rules)
+- Orchestrator is already executing inside a dispatched plan step
+
+**Flow:**
+1. Check Tier 1/2 triggers first — if matched, follow existing dispatch rules
+2. Call `gossip_run(agent_id: "auto", task: "<what user asked>")`
+3. gossip_run classifies → single-agent or multi-agent
+4. Single: selects best-fit agent via dispatch weights, dispatches directly
+5. Multi: calls gossip_plan, presents decomposition, dispatches on approval
+6. Orchestrator collects results, verifies, records signals
+
+---
+
 ## Subagent Override (IMPORTANT)
 
 When ANY skill or workflow (including subagent-driven-development, executing-plans, or
