@@ -10,34 +10,45 @@ interface AgentRowProps {
 export function AgentRow({ agent, onClick }: AgentRowProps) {
   const color = agentColor(agent.id);
   const s = agent.scores;
-  const lastTaskId = agent.lastTask
-    ? agent.lastTask.task.match(/task[_-]?([a-f0-9]{4,8})/i)?.[0] ?? '—'
-    : '—';
   const lastTime = agent.lastTask?.timestamp ? timeAgo(agent.lastTask.timestamp) : '—';
 
   return (
     <button
       onClick={onClick}
-      className="group flex w-full items-center gap-4 rounded-md border border-border bg-card p-3 text-left transition hover:border-primary/30 hover:bg-accent"
+      className="group flex w-[180px] shrink-0 flex-col items-center rounded-lg border border-border bg-card p-4 text-center transition hover:border-primary/30 hover:bg-accent"
     >
-      <NeuralAvatar agentId={agent.id} size={64} animate={agent.online} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-sm font-semibold text-foreground">{agent.id}</span>
-          <span className={`rounded-sm px-1.5 py-0.5 font-mono text-[10px] font-semibold ${agent.native ? 'text-primary bg-primary/10' : 'text-confirmed bg-confirmed/10'}`}>
-            {agent.native ? 'NATIVE' : 'RELAY'}
-          </span>
-        </div>
-        <div className="mt-0.5 text-xs text-muted-foreground">{agent.provider}/{agent.model}</div>
-        <div className="mt-1 flex items-center gap-3 font-mono text-xs">
-          <span className="text-confirmed">Acc: {Math.round(s.accuracy * 100)}%</span>
-          <span className="text-primary">Rel: {Math.round(s.reliability * 100)}%</span>
-          <span className="text-unique">Uniq: {Math.round(s.uniqueness * 100)}%</span>
-        </div>
-        <div className="mt-1 font-mono text-xs text-muted-foreground">
-          Last: <span className="text-foreground/70">{lastTaskId}</span> · {lastTime}
-        </div>
+      {/* Avatar with portal glow */}
+      <div className="relative mb-3">
+        {/* Ambient halo */}
+        <div
+          className="absolute -inset-3 rounded-full opacity-30 blur-xl transition group-hover:opacity-50"
+          style={{ background: color }}
+        />
+        <NeuralAvatar agentId={agent.id} size={96} animate={agent.online} />
       </div>
+
+      {/* Agent name */}
+      <span className="font-mono text-xs font-semibold text-foreground">{agent.id}</span>
+
+      {/* Badge */}
+      <span className={`mt-1 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-semibold ${agent.native ? 'text-primary bg-primary/10' : 'text-confirmed bg-confirmed/10'}`}>
+        {agent.native ? 'NATIVE' : 'RELAY'}
+      </span>
+
+      {/* Model */}
+      <span className="mt-1 text-[10px] text-muted-foreground">{agent.model.split('/').pop()}</span>
+
+      {/* Metrics */}
+      <div className="mt-2 flex gap-2 font-mono text-[10px]">
+        <span className="text-confirmed">{Math.round(s.accuracy * 100)}%</span>
+        <span className="text-muted-foreground">·</span>
+        <span className="text-primary">{Math.round(s.reliability * 100)}%</span>
+        <span className="text-muted-foreground">·</span>
+        <span className="text-unique">{Math.round(s.uniqueness * 100)}%</span>
+      </div>
+
+      {/* Last activity */}
+      <span className="mt-1 font-mono text-[10px] text-muted-foreground">{lastTime}</span>
     </button>
   );
 }

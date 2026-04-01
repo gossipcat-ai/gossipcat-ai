@@ -38,7 +38,7 @@ function TeamPage({ agents }: { agents: AgentData[] }) {
           Team <span className="text-primary">{agents.length} agents</span>
         </h2>
       </div>
-      <div className="space-y-2">
+      <div className="flex flex-wrap gap-3">
         {sorted.map((agent) => (
           <AgentRow key={agent.id} agent={agent} onClick={() => setSelected(agent)} />
         ))}

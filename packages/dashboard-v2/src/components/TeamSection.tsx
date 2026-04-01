@@ -14,7 +14,7 @@ export function TeamSection({ agents }: TeamSectionProps) {
     (b.scores?.dispatchWeight || 0) - (a.scores?.dispatchWeight || 0)
   );
   const visible = sorted.slice(0, 5);
-  const remaining = sorted.length - 5;
+  const hasMore = sorted.length > 5;
 
   return (
     <section>
@@ -22,7 +22,7 @@ export function TeamSection({ agents }: TeamSectionProps) {
         <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
           Team <span className="text-primary">{agents.length} agents</span>
         </h2>
-        {remaining > 0 && (
+        {hasMore && (
           <a
             href="#/team"
             className="font-mono text-xs text-muted-foreground transition hover:text-primary"
@@ -31,11 +31,13 @@ export function TeamSection({ agents }: TeamSectionProps) {
           </a>
         )}
       </div>
-      <div className="space-y-2">
+
+      <div className="flex gap-3 overflow-x-auto pb-2">
         {visible.map((agent) => (
           <AgentRow key={agent.id} agent={agent} onClick={() => setSelected(agent)} />
         ))}
       </div>
+
       {selected && (
         <AgentDetailModal agent={selected} open={!!selected} onClose={() => setSelected(null)} />
       )}
