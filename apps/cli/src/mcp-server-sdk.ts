@@ -1327,7 +1327,7 @@ server.tool(
       writer.appendSignals(formatted);
 
       // Resolve findings in implementation-findings.jsonl when signal has finding_id
-      const RESOLUTION_SIGNALS = new Set(['agreement', 'unique_confirmed', 'consensus_verified']);
+      const RESOLUTION_SIGNALS = new Set(['agreement', 'unique_confirmed']);
       const findingsWithId = signals.filter(s => s.finding_id && RESOLUTION_SIGNALS.has(s.signal));
       if (findingsWithId.length > 0) {
         try {
@@ -1337,26 +1337,26 @@ server.tool(
           if (exs(findingsPath)) {
             const lines = rfs(findingsPath, 'utf-8').trim().split('\n').filter(Boolean);
             const resolveIds = new Set(findingsWithId.map(s => s.finding_id));
-            let updated = false;
+            let resolvedCount = 0;
             const resolved = lines.map(line => {
               try {
                 const entry = JSON.parse(line);
-                if (entry.taskId && resolveIds.has(entry.taskId) && entry.tag === 'unverified') {
+                // Match on taskId (which stores f.id from consensus findings) — check both unverified and unique tags
+                if (entry.taskId && resolveIds.has(entry.taskId) && (entry.tag === 'unverified' || entry.tag === 'unique')) {
                   entry.tag = 'confirmed';
                   entry.status = 'resolved';
                   entry.resolvedAt = new Date().toISOString();
-                  updated = true;
+                  resolvedCount++;
                   return JSON.stringify(entry);
                 }
                 return line;
               } catch { return line; }
             });
-            if (updated) {
-              // Atomic write: temp file + rename to avoid race with concurrent appenders
+            if (resolvedCount > 0) {
               const tmpPath = findingsPath + '.tmp.' + Date.now();
               wfs(tmpPath, resolved.join('\n') + '\n');
               require('fs').renameSync(tmpPath, findingsPath);
-              process.stderr.write(`[gossipcat] Resolved ${resolveIds.size} UNVERIFIED finding(s) in implementation-findings.jsonl\n`);
+              process.stderr.write(`[gossipcat] Resolved ${resolvedCount} finding(s) in implementation-findings.jsonl\n`);
             }
           }
         } catch { /* best-effort */ }
