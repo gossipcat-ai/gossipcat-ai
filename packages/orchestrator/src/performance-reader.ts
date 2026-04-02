@@ -196,6 +196,8 @@ export class PerformanceReader {
       }
     }
 
+    const peerDiversity = this.computePeerDiversity(signals);
+
     for (const signal of signals) {
       const isKnown = KNOWN_SIGNALS[signal.signal];
       if (!isKnown) continue;
@@ -217,7 +219,9 @@ export class PerformanceReader {
         case 'agreement':
         case 'category_confirmed':
         case 'consensus_verified': {
-          a.weightedCorrect += sevMul * decay;
+          const diversityMul = (signal.signal === 'agreement')
+            ? (peerDiversity.get(signal.agentId) ?? 1) : 1;
+          a.weightedCorrect += sevMul * decay * diversityMul;
           a.weightedTotal += sevMul * decay;
           a.agreements++;
           if (signal.signal === 'category_confirmed' && signal.category) {
@@ -344,6 +348,52 @@ export class PerformanceReader {
     }
 
     return scores;
+  }
+
+  private computePeerDiversity(signals: ConsensusSignal[]): Map<string, number> {
+    const SIGNAL_EXPIRY_DAYS = 30;
+    const expiryMs = Date.now() - SIGNAL_EXPIRY_DAYS * 86400000;
+    const peerSets = new Map<string, Set<string>>();
+    const recentAgents = new Set<string>();
+    for (const s of signals) {
+      const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
+      if (ts > expiryMs) recentAgents.add(s.agentId);
+      if (s.signal === 'agreement' && s.counterpartId) {
+        const peers = peerSets.get(s.agentId) || new Set();
+        peers.add(s.counterpartId);
+        peerSets.set(s.agentId, peers);
+      }
+    }
+    const result = new Map<string, number>();
+    const teamSize = Math.max(recentAgents.size - 1, 1);
+    for (const [agentId, peers] of peerSets) {
+      result.set(agentId, Math.min(1.5, Math.max(0.3, peers.size / teamSize)));
+    }
+    return result;
+  }
+
+  getImplScore(agentId: string): { passRate: number; peerApproval: number; reliability: number } | null {
+    if (!existsSync(this.filePath)) return null;
+    try {
+      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      let pass = 0, fail = 0, approved = 0, rejected = 0;
+      for (const line of lines) {
+        try {
+          const s = JSON.parse(line);
+          if (s.type !== 'impl' || s.agentId !== agentId) continue;
+          if (s.signal === 'impl_test_pass') pass++;
+          if (s.signal === 'impl_test_fail') fail++;
+          if (s.signal === 'impl_peer_approved') approved++;
+          if (s.signal === 'impl_peer_rejected') rejected++;
+        } catch { continue; }
+      }
+      const total = pass + fail;
+      const peerTotal = approved + rejected;
+      if (total === 0 && peerTotal === 0) return null;
+      const passRate = total > 0 ? pass / total : 0.5;
+      const peerApproval = peerTotal > 0 ? approved / peerTotal : 0.5;
+      return { passRate, peerApproval, reliability: clamp(passRate * 0.6 + peerApproval * 0.4, 0, 1) };
+    } catch { return null; }
   }
 }
 
