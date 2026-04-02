@@ -261,6 +261,8 @@ Return only valid JSON.` },
       for (const line of lines) {
         let finding = line.replace(/^\s*-\s*/, '').trim();
         if (!finding) continue;
+        // Basic noise filter: very short lines are never findings
+        if (finding.length < 20) continue;
         // Parse [FINDING]/[SUGGESTION]/[INSIGHT] tags — strip before map insertion
         const tagMatch = finding.match(/^\[(FINDING|SUGGESTION|INSIGHT)\]\s*/i);
         const findingType = tagMatch ? tagMatch[1].toLowerCase() as 'finding' | 'suggestion' | 'insight' : 'finding';
