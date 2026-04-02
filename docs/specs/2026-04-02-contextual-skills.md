@@ -211,6 +211,102 @@ No breaking changes — missing `mode` defaults to `'permanent'` (current behavi
 | `tests/orchestrator/skill-loader.test.ts` | Test word-boundary matching, 2-hit minimum, budget, permanent vs contextual |
 | `tests/orchestrator/skill-index.test.ts` | Test mode field, migration, promotion |
 
+## Orchestrator Behavior
+
+The main orchestrator (Claude Code session) interacts with the contextual skill system
+at three points: skill development, dispatch-time awareness, and lifecycle management.
+
+### When to develop skills
+
+The orchestrator should develop skills when:
+
+1. **`gossip_collect` reports auto-developed skills** — the system handled it automatically.
+   Verify the generated skill makes sense; if not, unbind and re-develop manually.
+2. **`gossip_scores()` shows accuracy < 0.3 for an agent** — check which categories are
+   weak (visible in competency profiles), then develop skills for those categories.
+3. **A hallucination is caught during verification** — if the error maps to a known
+   category (e.g., agent missed a path traversal → `trust_boundaries`), develop immediately.
+
+The orchestrator should NOT:
+- Develop skills preemptively for categories that haven't failed yet
+- Stack multiple skills in the same category for one agent (one per category is enough)
+- Develop skills for agents that are already high-accuracy (> 0.7)
+
+### Category selection guide
+
+| Symptom | Category |
+|---------|----------|
+| Agent misses auth/permission issues | `trust_boundaries` |
+| Agent misses XSS/SQL injection | `injection_vectors` |
+| Agent doesn't validate external input | `input_validation` |
+| Agent misses race conditions | `concurrency` |
+| Agent misses unbounded growth/leaks | `resource_exhaustion` |
+| Agent has wrong type assertions | `type_safety` |
+| Agent misses error handling gaps | `error_handling` |
+| Agent misses data corruption/schema issues | `data_integrity` |
+
+### Dispatch-time behavior
+
+The orchestrator does NOT manually select skills per dispatch. The system handles it:
+
+1. Permanent skills are always injected (agent's role skills)
+2. Contextual skills activate automatically based on task keywords
+3. If the orchestrator notices a relevant contextual skill was NOT activated (visible
+   in `LoadSkillsResult.dropped`), it can re-dispatch with more specific task wording
+   that includes the skill's keywords
+
+### Lifecycle management
+
+At session end or during `gossip_scores()` review:
+
+1. Check `gossip_skills(action: "list")` — look for contextual skills with low activation
+2. If a skill was auto-disabled (stale), decide: re-develop with better keywords, or leave disabled
+3. If a skill was auto-promoted to permanent, verify it belongs there — demote if the
+   promotion was driven by false-positive keyword matches
+4. Keep permanent skills to ≤ 3 per agent to leave room for contextual activation
+
+## Agent Instructions
+
+Agents receive skills as part of their prompt (injected between MEMORY and CONTEXT sections).
+The following rules apply to how agents should interpret injected skills:
+
+### Skill priority
+
+1. **Agent instructions** (`instructions.md`) — highest priority, defines role and base rules
+2. **Permanent skills** — always present, extends the agent's core capabilities
+3. **Contextual skills** — task-specific, provides domain expertise for the current task
+
+If a contextual skill contradicts the agent's base instructions, the instructions win.
+If two contextual skills contradict each other (shouldn't happen with proper keyword
+matching, but possible), the agent should follow the one most relevant to the task.
+
+### What agents should do with skills
+
+- Follow the skill's `## Methodology` section as a checklist
+- Use the skill's `## Quality Gate` before submitting findings
+- If a skill's `## When This Skill Activates` section doesn't match the current task,
+  the agent should note this and skip the skill's methodology (false activation)
+
+### What agents should NOT do
+
+- Cite skill content as evidence (skills are instructions, not code)
+- Apply a skill's rules to code outside the skill's domain
+- Ignore their base instructions because a skill says otherwise
+
+### Instruction updates needed
+
+When this feature ships, update each agent's `instructions.md` to include:
+
+```markdown
+## Skills
+
+You may receive contextual skills injected into your prompt. These provide domain-specific
+methodology for the current task. Follow their ## Methodology as a checklist. If a skill
+doesn't match your current task (false activation), skip it and focus on your base review.
+```
+
+This is a one-time addition, not per-skill.
+
 ## Non-Goals
 
 - No LLM-based skill matching (too slow, adds latency to every dispatch)
