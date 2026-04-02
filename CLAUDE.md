@@ -14,6 +14,24 @@ Call `gossip_session_save()` before ending your session to preserve context.
 results. UNVERIFIED means the cross-reviewer couldn't check — you can and must. Do not
 show raw consensus results with unexamined UNVERIFIED findings.
 
+**Resolving findings in the dashboard:** When you verify an UNVERIFIED finding, pass
+`finding_id` in your `gossip_signals` call so the consensus report is updated. The
+finding ID is the `id` field shown in the consensus report (e.g., `f9`, `f12`). This
+moves the finding from UNVERIFIED → CONFIRMED in the report JSON, so the dashboard
+displays the resolved status.
+
+```
+gossip_signals(action: "record", signals: [{
+  signal: "unique_confirmed",  // or "hallucination_caught"
+  agent_id: "<who found it>",
+  finding: "<description>",
+  finding_id: "<id from consensus report>"  // ← THIS resolves it in dashboard
+}])
+```
+
+Without `finding_id`, signals update agent scores but the dashboard still shows the
+finding as UNVERIFIED.
+
 ## Agent Accuracy — Skill Development
 
 When an agent has low accuracy or repeated hallucinations, **use the skill system, not
