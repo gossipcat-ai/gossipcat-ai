@@ -23,11 +23,11 @@ const TAG_MAP: Record<string, { label: string; filter: FilterType; cls: string }
 };
 
 const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: string }[] = [
-  { key: 'all', label: 'All', cls: 'text-muted-foreground', activeCls: 'text-foreground bg-muted' },
-  { key: 'confirmed', label: 'Confirmed', cls: 'text-confirmed/60', activeCls: 'text-confirmed bg-confirmed/10' },
-  { key: 'disputed', label: 'Disputed', cls: 'text-disputed/60', activeCls: 'text-disputed bg-disputed/10' },
-  { key: 'unverified', label: 'Unverified', cls: 'text-unverified/60', activeCls: 'text-unverified bg-unverified/10' },
-  { key: 'unique', label: 'Unique', cls: 'text-unique/60', activeCls: 'text-unique bg-unique/10' },
+  { key: 'all', label: 'All', cls: 'text-muted-foreground border-border/40 hover:border-border/60', activeCls: 'text-foreground bg-muted border-border' },
+  { key: 'confirmed', label: 'Confirmed', cls: 'text-confirmed/50 border-confirmed/20 hover:border-confirmed/40', activeCls: 'text-confirmed bg-confirmed/10 border-confirmed/40' },
+  { key: 'disputed', label: 'Disputed', cls: 'text-disputed/50 border-disputed/20 hover:border-disputed/40', activeCls: 'text-disputed bg-disputed/10 border-disputed/40' },
+  { key: 'unverified', label: 'Unverified', cls: 'text-unverified/50 border-unverified/20 hover:border-unverified/40', activeCls: 'text-unverified bg-unverified/10 border-unverified/40' },
+  { key: 'unique', label: 'Unique', cls: 'text-unique/50 border-unique/20 hover:border-unique/40', activeCls: 'text-unique bg-unique/10 border-unique/40' },
 ];
 
 const SEVERITY_CLS: Record<string, string> = {
@@ -146,7 +146,7 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
                     <div className="mb-2 flex gap-2">
                       {FILTER_CHIPS.map(tab => (
                         <button key={tab.key} onClick={() => setFilter(tab.key)}
-                          className={`font-mono text-[10px] ${filter === tab.key ? tab.activeCls : tab.cls}`}>
+                          className={`rounded-full border px-2.5 py-1 font-mono text-[10px] font-medium transition ${filter === tab.key ? tab.activeCls : tab.cls}`}>
                           {tab.label}
                         </button>
                       ))}
