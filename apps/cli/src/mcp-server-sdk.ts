@@ -428,11 +428,11 @@ async function doBoot() {
 
   // Create skill generator for gossip_skills develop action
   try {
-    const { CompetencyProfiler: CP, SkillGenerator: SG } = await import('@gossip/orchestrator');
-    const skillProfiler = new CP(process.cwd());
+    const { PerformanceReader: PR, SkillGenerator: SG } = await import('@gossip/orchestrator');
+    const skillPerfReader = new PR(process.cwd());
     ctx.skillGenerator = new SG(
       m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined),
-      skillProfiler,
+      skillPerfReader,
       process.cwd(),
     );
     process.stderr.write('[gossipcat] Skill generator ready\n');

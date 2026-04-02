@@ -1,4 +1,4 @@
-import { SkillGenerator, CompetencyProfiler, PerformanceWriter } from '@gossip/orchestrator';
+import { SkillGenerator, PerformanceReader, PerformanceWriter } from '@gossip/orchestrator';
 import { loadSkills } from '../../packages/orchestrator/src/skill-loader';
 import { ILLMProvider } from '@gossip/orchestrator';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
@@ -15,6 +15,8 @@ baseline_rate: 0.1
 baseline_dispatches: 12
 post_skill_dispatches: 0
 version: 1
+mode: contextual
+keywords: [injection, xss, sql, sanitize]
 ---
 
 # Injection Audit
@@ -76,7 +78,7 @@ describe('Skill Development — Integration', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (mockLlm.generate as jest.Mock).mockResolvedValue({ text: VALID_SKILL, toolCalls: [] });
-    const profiler = new CompetencyProfiler(testDir);
+    const profiler = new PerformanceReader(testDir);
     generator = new SkillGenerator(mockLlm as any, profiler, testDir);
   });
 
@@ -89,8 +91,8 @@ describe('Skill Development — Integration', () => {
     // loadSkills can find it when category is in skills array
     // normalizeSkillName converts injection_vectors → injection-vectors
     const skills = loadSkills('test-agent', ['injection-vectors'], testDir);
-    expect(skills).toContain('Iron Law');
-    expect(skills).toContain('Methodology');
+    expect(skills.content).toContain('Iron Law');
+    expect(skills.content).toContain('Methodology');
   });
 
   test('generated skill file has correct frontmatter', async () => {
@@ -116,7 +118,7 @@ describe('Skill Development — Integration', () => {
       writer.appendSignal({ type: 'consensus', signal: 'category_confirmed', agentId: 'strong-peer', taskId: `sp${i}`, category: 'injection_vectors', evidence: 'Peer finding', timestamp: new Date().toISOString() } as any);
     }
 
-    const freshProfiler = new CompetencyProfiler(testDir);
+    const freshProfiler = new PerformanceReader(testDir);
     const freshGenerator = new SkillGenerator(mockLlm as any, freshProfiler, testDir);
     await freshGenerator.generate('test-agent', 'injection_vectors');
 

@@ -1,13 +1,14 @@
 import { DispatchDifferentiator } from '@gossip/orchestrator';
-import { CompetencyProfile } from '@gossip/orchestrator';
+import { AgentScore } from '@gossip/orchestrator';
 
-function makeProfile(id: string, strengths: Record<string, number>): CompetencyProfile {
+function makeProfile(id: string, strengths: Record<string, number>): AgentScore {
   return {
     agentId: id,
-    reviewStrengths: strengths,
-    implPassRate: 0.5, implIterations: 5, implPeerApproval: 0.5,
-    speed: 3000, hallucinationRate: 0, avgTokenCost: 0,
-    totalTasks: 20, reviewReliability: 0.7, implReliability: 0.5,
+    categoryStrengths: strengths,
+    accuracy: 0.7, uniqueness: 0.5, reliability: 0.7,
+    totalSignals: 20, agreements: 10, disagreements: 2,
+    uniqueFindings: 3, hallucinations: 0,
+    consecutiveFailures: 0, circuitOpen: false,
   };
 }
 

@@ -5,7 +5,7 @@
  * Privacy rule: prompts never reveal peer names, scores, or weaknesses.
  */
 
-import { CompetencyProfile } from './competency-profiler';
+import { AgentScore } from './performance-reader';
 
 const CATEGORY_LABELS: Record<string, string> = {
   trust_boundaries: 'trust boundaries and authentication',
@@ -25,13 +25,13 @@ export class DispatchDifferentiator {
    *   - single agent (no differentiation needed)
    *   - all profiles have empty strengths (cold start — caller should fall back to lens-generator)
    */
-  differentiate(profiles: CompetencyProfile[], _task: string): Map<string, string> {
+  differentiate(profiles: AgentScore[], _task: string): Map<string, string> {
     if (profiles.length < 2) return new Map();
 
     // Get top strengths per agent
     const agentStrengths = new Map<string, string[]>();
     for (const p of profiles) {
-      const sorted = Object.entries(p.reviewStrengths)
+      const sorted = Object.entries(p.categoryStrengths)
         .filter(([, score]) => score > 0.5)
         .sort(([, a], [, b]) => b - a)
         .slice(0, 3)

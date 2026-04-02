@@ -139,15 +139,11 @@ export class MainAgent {
       toolServer: config.toolServer,
     });
 
-    // Wire ATI competency profiler + dispatch differentiator (after pipeline creation)
+    // Wire dispatch differentiator (after pipeline creation)
     try {
-      const { CompetencyProfiler } = require('./competency-profiler');
       const { DispatchDifferentiator } = require('./dispatch-differentiator');
-      const profiler = new CompetencyProfiler(this.projectRoot);
-      this.registry.setCompetencyProfiler(profiler);
-      this.pipeline.setCompetencyProfiler(profiler);
       this.pipeline.setDispatchDifferentiator(new DispatchDifferentiator());
-    } catch { /* ATI components optional */ }
+    } catch { /* dispatch differentiator optional */ }
 
     this.keyProviderFn = config.keyProvider;
     this.projectInitializer = new ProjectInitializer({

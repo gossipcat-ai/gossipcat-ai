@@ -6,7 +6,6 @@
 
 import { AgentConfig } from './types';
 import { PerformanceReader } from './performance-reader';
-import { CompetencyProfiler } from './competency-profiler';
 import { normalizeSkillName } from './skill-name';
 import type { SkillCatalog } from './skill-catalog';
 
@@ -19,7 +18,6 @@ export interface FindBestMatchOptions {
 export class AgentRegistry {
   private agents: Map<string, AgentConfig> = new Map();
   private perfReader: PerformanceReader | null = null;
-  private competencyProfiler: CompetencyProfiler | null = null;
   private suggesterCache: Map<string, Set<string>> = new Map();
 
   register(config: AgentConfig): void {
@@ -42,17 +40,12 @@ export class AgentRegistry {
     this.perfReader = reader;
   }
 
-  setCompetencyProfiler(profiler: CompetencyProfiler): void {
-    this.competencyProfiler = profiler;
-  }
-
   setSuggesterCache(cache: Map<string, Set<string>>): void {
     this.suggesterCache = cache;
   }
 
   getDispatchWeight(agentId: string): number {
     if (this.perfReader?.isCircuitOpen(agentId)) return 0.3;
-    if (this.competencyProfiler) return this.competencyProfiler.getProfileMultiplier(agentId, 'review');
     if (this.perfReader) return this.perfReader.getDispatchWeight(agentId);
     return 1.0;
   }
@@ -104,12 +97,10 @@ export class AgentRegistry {
         }
       }
 
-      // 4. Performance weight (circuit breaker → profiler → reader → neutral)
+      // 4. Performance weight (circuit breaker → reader → neutral)
       let perfWeight = 1.0;
       if (this.perfReader?.isCircuitOpen(agent.id)) {
         perfWeight = 0.3; // circuit breaker overrides all scoring
-      } else if (this.competencyProfiler) {
-        perfWeight = this.competencyProfiler.getProfileMultiplier(agent.id, options?.taskType ?? 'review');
       } else if (this.perfReader) {
         perfWeight = this.perfReader.getDispatchWeight(agent.id);
       }

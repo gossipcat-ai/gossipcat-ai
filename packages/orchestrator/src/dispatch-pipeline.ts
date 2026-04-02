@@ -21,7 +21,7 @@ import { OverlapDetector } from './overlap-detector';
 import { LensGenerator } from './lens-generator';
 import { ConsensusEngine } from './consensus-engine';
 import { PerformanceWriter } from './performance-writer';
-import { CompetencyProfiler } from './competency-profiler';
+import { PerformanceReader } from './performance-reader';
 import { DispatchDifferentiator } from './dispatch-differentiator';
 import { CollectResult } from './consensus-types';
 import { extractCategories } from './category-extractor';
@@ -95,8 +95,8 @@ export class DispatchPipeline {
   private lensGenerator: LensGenerator | null = null;
   private bootWarningShown = false;
 
-  private competencyProfiler: CompetencyProfiler | null = null;
   private dispatchDifferentiator: DispatchDifferentiator | null = null;
+  private perfReader: PerformanceReader | null = null;
   private consensusJudge: IConsensusJudge | null = null;
   private skillIndex: SkillIndex | null = null;
   private skillCounters: SkillCounterTracker | null = null;
@@ -133,6 +133,7 @@ export class DispatchPipeline {
     this.gapTracker = new SkillGapTracker(config.projectRoot);
     this.scopeTracker = new ScopeTracker(config.projectRoot);
     this.worktreeManager = new WorktreeManager(config.projectRoot);
+    this.perfReader = new PerformanceReader(config.projectRoot);
 
     try { this.catalog = new SkillCatalog(config.projectRoot); }
     catch (err) { this.catalog = null; log(`SkillCatalog unavailable: ${(err as Error).message}`); }
@@ -652,15 +653,15 @@ export class DispatchPipeline {
       }
     }
 
-    // Profile-based differentiation (preferred — uses learned competency profiles)
+    // Profile-based differentiation (preferred — uses learned agent scores)
     let lensMap: Map<string, string> | null = null;
-    if (this.competencyProfiler && this.dispatchDifferentiator) {
-      const profiles = taskDefs
-        .map(d => this.competencyProfiler!.getProfile(d.agentId))
-        .filter((p): p is NonNullable<typeof p> => p !== null);
+    if (this.perfReader && this.dispatchDifferentiator) {
+      const scores = taskDefs
+        .map(d => this.perfReader!.getAgentScore(d.agentId))
+        .filter((s): s is NonNullable<typeof s> => s !== null);
 
-      if (profiles.length >= 2) {
-        const diffMap = this.dispatchDifferentiator.differentiate(profiles, taskDefs[0]?.task || '');
+      if (scores.length >= 2) {
+        const diffMap = this.dispatchDifferentiator.differentiate(scores, taskDefs[0]?.task || '');
         if (diffMap.size > 0) {
           lensMap = diffMap;
           log(`Applied profile-based differentiation:\n${[...diffMap].map(([id, focus]) => `  ${id} → ${focus.slice(0, 80)}`).join('\n')}`);
@@ -780,7 +781,7 @@ export class DispatchPipeline {
         },
       });
       if (t.result) {
-        const agentAccuracy = this.competencyProfiler?.getProfile(t.agentId)?.reviewReliability;
+        const agentAccuracy = this.perfReader?.getAgentScore(t.agentId)?.reliability;
         await this.memWriter.writeKnowledgeFromResult(t.agentId, {
           taskId: t.id, task: t.task, result: t.result,
           ...(agentAccuracy !== undefined ? { agentAccuracy } : {}),
@@ -826,10 +827,6 @@ export class DispatchPipeline {
 
   setLensGenerator(generator: LensGenerator | null): void {
     this.lensGenerator = generator;
-  }
-
-  setCompetencyProfiler(profiler: CompetencyProfiler): void {
-    this.competencyProfiler = profiler;
   }
 
   setSkillIndex(index: SkillIndex): void {
@@ -1073,43 +1070,43 @@ export class DispatchPipeline {
   }
 
   getSkillGapSuggestions(): SkillGapSuggestionResult[] {
-    if (!this.competencyProfiler) return [];
+    if (!this.perfReader) return [];
 
-    const profiles = this.competencyProfiler.getProfiles();
-    if (profiles.size < 2) return [];
+    const agentScores = this.perfReader.getScores();
+    if (agentScores.size < 2) return [];
 
     // Collect ALL categories seen across agents
     const allCategories = new Set<string>();
-    for (const [, profile] of profiles) {
-      for (const cat of Object.keys(profile.reviewStrengths)) {
+    for (const [, score] of agentScores) {
+      for (const cat of Object.keys(score.categoryStrengths)) {
         allCategories.add(cat);
       }
     }
 
-    // Compute medians — include ALL agents (use 0.5 neutral for missing categories)
+    // Compute medians — include ALL agents (use 0 neutral for missing categories)
     const categoryMedians = new Map<string, number>();
     for (const cat of allCategories) {
-      const scores: number[] = [];
-      for (const [, profile] of profiles) {
-        scores.push(profile.reviewStrengths[cat] ?? 0.5); // neutral, not zero
+      const values: number[] = [];
+      for (const [, score] of agentScores) {
+        values.push(score.categoryStrengths[cat] ?? 0);
       }
-      if (scores.length < 2) continue;
-      const sorted = [...scores].sort((a, b) => a - b);
+      if (values.length < 2) continue;
+      const sorted = [...values].sort((a, b) => a - b);
       const mid = Math.floor(sorted.length / 2);
       categoryMedians.set(cat, sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2);
     }
 
     const suggestions: SkillGapSuggestionResult[] = [];
-    for (const [, profile] of profiles) {
+    for (const [, score] of agentScores) {
       for (const [cat, median] of categoryMedians) {
         if (median < 0.6) continue; // peers aren't strong enough to justify suggestion
-        const agentScore = profile.reviewStrengths[cat] ?? 0.5; // neutral, not zero
-        if (agentScore < 0.3) {
+        const catScore = score.categoryStrengths[cat] ?? 0;
+        if (catScore < 0.3) {
           // Suppress if already suggested this session
-          const key = `${profile.agentId}::${cat}`;
+          const key = `${score.agentId}::${cat}`;
           if (this.suggestedSkillGaps.has(key)) continue;
           // NOTE: do NOT suppress here — caller must suppress after successful action
-          suggestions.push({ agentId: profile.agentId, category: cat, score: agentScore, median });
+          suggestions.push({ agentId: score.agentId, category: cat, score: catScore, median });
         }
       }
     }

@@ -6,7 +6,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { ILLMProvider } from './llm-client';
-import { CompetencyProfiler } from './competency-profiler';
+import { PerformanceReader } from './performance-reader';
 import { LLMMessage } from '@gossip/types';
 import { ConsensusSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
@@ -16,6 +16,7 @@ const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const KNOWN_CATEGORIES = new Set([
   'trust_boundaries', 'injection_vectors', 'input_validation', 'concurrency',
   'resource_exhaustion', 'type_safety', 'error_handling', 'data_integrity',
+  'severity_calibration',
 ]);
 
 /** Default keywords per category for contextual skill activation */
@@ -28,6 +29,7 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
   type_safety: ['type guard', 'generic', 'cast', 'assertion', 'narrowing', 'discriminated', 'satisfies'],
   error_handling: ['error handling', 'catch', 'throw', 'exception', 'retry', 'fallback', 'recovery', 'graceful'],
   data_integrity: ['data integrity', 'migration', 'serialize', 'deserialize', 'corrupt', 'consistency', 'invariant', 'transaction', 'rollback', 'idempotent'],
+  severity_calibration: ['severity', 'critical', 'high', 'medium', 'low', 'impact', 'risk', 'priority', 'triage', 'cvss'],
 };
 
 const REQUIRED_SECTIONS = ['## Iron Law', '## When This Skill Activates', '## Methodology', '## Anti-Patterns', '## Quality Gate'];
@@ -72,7 +74,7 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
 export class SkillGenerator {
   constructor(
     private llm: ILLMProvider,
-    private profiler: CompetencyProfiler,
+    private perfReader: PerformanceReader,
     private projectRoot: string,
   ) {}
 
@@ -86,15 +88,15 @@ export class SkillGenerator {
 
     const template = this.loadTemplate();
     const findings = this.loadCategoryFindings(category);
-    const profiles = this.profiler.getProfiles();
-    const agentProfile = profiles.get(agentId);
-    const agentScore = agentProfile?.reviewStrengths[category] ?? 0;
+    const scores = this.perfReader.getScores();
+    const agentScoreData = scores.get(agentId);
+    const agentCatScore = agentScoreData?.categoryStrengths[category] ?? 0;
     const peerScores: string[] = [];
-    for (const [id, p] of profiles) {
+    for (const [id, s] of scores) {
       if (id === agentId) continue;
-      const score = p.reviewStrengths[category];
-      if (score !== undefined && score > 0.5) {
-        peerScores.push(`${id}: ${score.toFixed(2)}`);
+      const catVal = s.categoryStrengths[category];
+      if (catVal !== undefined && catVal > 0.5) {
+        peerScores.push(`${id}: ${catVal.toFixed(2)}`);
       }
     }
 
@@ -104,7 +106,7 @@ export class SkillGenerator {
       projectContext = readFileSync(bootstrapPath, 'utf-8').slice(0, 2000);
     }
 
-    const totalDispatches = agentProfile?.totalTasks ?? 0;
+    const totalDispatches = agentScoreData?.totalSignals ?? 0;
     const categoryConfirmations = findings.filter(f => f.agentId === agentId).length;
     const baselineRate = totalDispatches > 0 ? categoryConfirmations / totalDispatches : 0;
 
@@ -133,7 +135,7 @@ ${findings.length > 0 ? findings.slice(0, 20).map(f => `- [${f.agentId}] ${f.evi
 
 <agent_performance>
 Agent: ${agentId}
-Current ${category} score: ${agentScore.toFixed(2)}
+Current ${category} score: ${agentCatScore.toFixed(2)}
 Peer scores: ${peerScores.length > 0 ? peerScores.join(', ') : 'no peer data'}
 </agent_performance>
 

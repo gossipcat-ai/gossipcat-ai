@@ -147,7 +147,7 @@ export class PerformanceReader {
   }
 
   private computeScores(signals: ConsensusSignal[]): Map<string, AgentScore> {
-    const DECAY_HALF_LIFE = 50; // tasks; match CompetencyProfiler
+    const DECAY_HALF_LIFE = 50; // tasks
 
     const TIME_DECAY_HALF_LIFE_DAYS = 7; // scores drift toward neutral after a week of inactivity
     const now = Date.now();

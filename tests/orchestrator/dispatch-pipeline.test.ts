@@ -389,33 +389,7 @@ describe('DispatchPipeline', () => {
   });
 
   describe('getSkillGapSuggestions()', () => {
-    it('returns empty when no profiler configured', () => {
-      expect(pipeline.getSkillGapSuggestions()).toEqual([]);
-    });
-
-    it('detects agents weak in categories where peers are strong', () => {
-      const mockProfiler = {
-        getProfiles: jest.fn().mockReturnValue(new Map([
-          ['agent-a', { agentId: 'agent-a', reviewStrengths: { injection: 0.8, xss: 0.75 } }],
-          ['agent-b', { agentId: 'agent-b', reviewStrengths: { injection: 0.1, xss: 0.05 } }],
-          ['agent-c', { agentId: 'agent-c', reviewStrengths: { injection: 0.9, xss: 0.8 } }],
-        ])),
-      };
-      pipeline.setCompetencyProfiler(mockProfiler as any);
-      const suggestions = pipeline.getSkillGapSuggestions();
-      expect(suggestions.length).toBeGreaterThan(0);
-      expect(suggestions.some(s => s.agentId === 'agent-b' && s.category === 'injection')).toBe(true);
-      expect(suggestions.some(s => s.agentId === 'agent-b' && s.category === 'xss')).toBe(true);
-    });
-
-    it('returns empty when all agents are strong', () => {
-      const mockProfiler = {
-        getProfiles: jest.fn().mockReturnValue(new Map([
-          ['agent-a', { agentId: 'agent-a', reviewStrengths: { injection: 0.8 } }],
-          ['agent-b', { agentId: 'agent-b', reviewStrengths: { injection: 0.7 } }],
-        ])),
-      };
-      pipeline.setCompetencyProfiler(mockProfiler as any);
+    it('returns empty when no performance data exists', () => {
       expect(pipeline.getSkillGapSuggestions()).toEqual([]);
     });
   });

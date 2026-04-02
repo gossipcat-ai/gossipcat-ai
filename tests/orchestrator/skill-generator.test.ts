@@ -1,4 +1,4 @@
-import { SkillGenerator, CompetencyProfiler, ILLMProvider } from '@gossip/orchestrator';
+import { SkillGenerator, PerformanceReader, ILLMProvider } from '@gossip/orchestrator';
 import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -105,23 +105,23 @@ describe('SkillGenerator', () => {
   afterAll(() => rmSync(testDir, { recursive: true, force: true }));
 
   test('rejects unknown category', async () => {
-    const gen = new SkillGenerator(mockLLM(''), new CompetencyProfiler(testDir), testDir);
+    const gen = new SkillGenerator(mockLLM(''), new PerformanceReader(testDir), testDir);
     await expect(gen.generate('agent-a', 'unknown_cat')).rejects.toThrow('Unknown category');
   });
 
   test('rejects agent_id with path traversal', async () => {
-    const gen = new SkillGenerator(mockLLM(''), new CompetencyProfiler(testDir), testDir);
+    const gen = new SkillGenerator(mockLLM(''), new PerformanceReader(testDir), testDir);
     await expect(gen.generate('../evil', 'injection_vectors')).rejects.toThrow('Invalid agent_id');
   });
 
   test('rejects agent_id with uppercase', async () => {
-    const gen = new SkillGenerator(mockLLM(''), new CompetencyProfiler(testDir), testDir);
+    const gen = new SkillGenerator(mockLLM(''), new PerformanceReader(testDir), testDir);
     await expect(gen.generate('Agent-A', 'injection_vectors')).rejects.toThrow('Invalid agent_id');
   });
 
   test('generates skill with valid frontmatter and all required sections', async () => {
     const llm = mockLLM(VALID_SKILL);
-    const gen = new SkillGenerator(llm, new CompetencyProfiler(testDir), testDir);
+    const gen = new SkillGenerator(llm, new PerformanceReader(testDir), testDir);
     const result = await gen.generate('agent-a', 'injection_vectors');
 
     expect(result.content).toContain('## Iron Law');
@@ -145,7 +145,7 @@ name: test
 
 Do stuff.
 `;
-    const gen = new SkillGenerator(mockLLM(badContent), new CompetencyProfiler(testDir), testDir);
+    const gen = new SkillGenerator(mockLLM(badContent), new PerformanceReader(testDir), testDir);
     await expect(gen.generate('agent-a', 'injection_vectors')).rejects.toThrow('missing required section');
   });
 
@@ -173,13 +173,13 @@ Rule.
 
 - [ ] done
 `;
-    const gen = new SkillGenerator(mockLLM(noFrontmatter), new CompetencyProfiler(testDir), testDir);
+    const gen = new SkillGenerator(mockLLM(noFrontmatter), new PerformanceReader(testDir), testDir);
     await expect(gen.generate('agent-a', 'injection_vectors')).rejects.toThrow('missing frontmatter');
   });
 
   test('uses bundled template when no external templates exist', async () => {
     const llm = mockLLM(VALID_SKILL);
-    const gen = new SkillGenerator(llm, new CompetencyProfiler(testDir), testDir);
+    const gen = new SkillGenerator(llm, new PerformanceReader(testDir), testDir);
     await gen.generate('agent-a', 'injection_vectors');
 
     const call = (llm.generate as jest.Mock).mock.calls[0];
@@ -190,7 +190,7 @@ Rule.
 
   test('assembles prompt with profiler data and project context', async () => {
     const llm = mockLLM(VALID_SKILL);
-    const gen = new SkillGenerator(llm, new CompetencyProfiler(testDir), testDir);
+    const gen = new SkillGenerator(llm, new PerformanceReader(testDir), testDir);
     await gen.generate('agent-a', 'injection_vectors');
 
     const call = (llm.generate as jest.Mock).mock.calls[0];
