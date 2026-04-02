@@ -591,6 +591,64 @@ describe('ConsensusEngine', () => {
       expect(result.length).toBe(50);
     });
   });
+
+  describe('per-agent LLM routing', () => {
+    it('uses each agent\'s own LLM for cross-review when agentLlm is provided', async () => {
+      const agentALlm: jest.Mocked<ILLMProvider> = { generate: jest.fn() };
+      const agentBLlm: jest.Mocked<ILLMProvider> = { generate: jest.fn() };
+
+      const agentLlm = jest.fn((agentId: string): ILLMProvider | undefined => {
+        if (agentId === 'agent-a') return agentALlm;
+        if (agentId === 'agent-b') return agentBLlm;
+        return undefined;
+      });
+
+      const engineWithAgentLlm = new ConsensusEngine({ ...baseConfig, agentLlm });
+
+      agentALlm.generate.mockResolvedValue({
+        text: JSON.stringify([
+          { action: 'agree', agentId: 'agent-b', finding: 'Finding B', evidence: 'Confirmed.', confidence: 3 },
+        ]),
+      });
+      agentBLlm.generate.mockResolvedValue({
+        text: JSON.stringify([
+          { action: 'agree', agentId: 'agent-a', finding: 'Finding A', evidence: 'Confirmed.', confidence: 3 },
+        ]),
+      });
+
+      const results: TaskEntry[] = [
+        createTaskEntry('agent-a', 'completed', '- Finding A'),
+        createTaskEntry('agent-b', 'completed', '- Finding B'),
+      ];
+
+      await engineWithAgentLlm.run(results);
+
+      expect(agentALlm.generate).toHaveBeenCalledTimes(1);
+      expect(agentBLlm.generate).toHaveBeenCalledTimes(1);
+      expect(mockLlm.generate).not.toHaveBeenCalled();
+    });
+
+    it('falls back to default llm when agentLlm returns undefined', async () => {
+      const agentLlm = jest.fn((_agentId: string): ILLMProvider | undefined => undefined);
+
+      const engineWithFallback = new ConsensusEngine({ ...baseConfig, agentLlm });
+
+      mockLlm.generate.mockResolvedValue({
+        text: JSON.stringify([
+          { action: 'agree', agentId: 'agent-b', finding: 'Finding B', evidence: 'Confirmed.', confidence: 3 },
+        ]),
+      });
+
+      const results: TaskEntry[] = [
+        createTaskEntry('agent-a', 'completed', '- Finding A'),
+        createTaskEntry('agent-b', 'completed', '- Finding B'),
+      ];
+
+      await engineWithFallback.run(results);
+
+      expect(mockLlm.generate).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 describe('snippetsForFinding()', () => {

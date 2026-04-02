@@ -30,6 +30,7 @@ export interface ConsensusEngineConfig {
   llm: ILLMProvider;
   registryGet: (agentId: string) => AgentConfig | undefined;
   projectRoot?: string;
+  agentLlm?: (agentId: string) => ILLMProvider | undefined;
 }
 
 export class ConsensusEngine {
@@ -230,7 +231,8 @@ Return only valid JSON.` },
     ];
 
     try {
-      const response = await this.config.llm.generate(messages, { temperature: 0 });
+      const llm = this.config.agentLlm?.(agent.agentId) ?? this.config.llm;
+      const response = await llm.generate(messages, { temperature: 0 });
       const validPeerIds = new Set(summaries.keys());
       const entries = this.parseCrossReviewResponse(agent.agentId, response.text, MAX_CROSS_REVIEW_ENTRIES);
       // Filter: no self-references, peerAgentId must be a real agent in this batch
