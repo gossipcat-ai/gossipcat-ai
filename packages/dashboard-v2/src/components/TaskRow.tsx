@@ -28,8 +28,8 @@ export function TaskRow({ task }: TaskRowProps) {
           {task.agentId}
         </a>
       </td>
-      <td className="max-w-md truncate py-2.5 pr-3 text-sm text-foreground/80">
-        {task.task.replace(/\n.*/s, '').slice(0, 80)}
+      <td className="py-2.5 pr-3 text-sm text-foreground/80">
+        {(() => { const line = task.task.replace(/\n.*/s, ''); return line.length > 100 ? line.slice(0, 100) + '…' : line; })()}
       </td>
       <td className="py-2.5 pr-3 font-mono text-xs text-muted-foreground">
         {task.status === 'running' ? 'running' : formatDuration(task.duration)}

@@ -109,6 +109,11 @@ export async function handleRelayCrossReview(
     };
   }
 
+  // Delete from pending set BEFORE any await — closes TOCTOU window where duplicate
+  // MCP calls could both pass the has() check above and double-process entries
+  round.pendingNativeAgents.delete(agent_id);
+  process.stderr.write(`[gossipcat] Cross-review received from ${agent_id}. Remaining: ${round.pendingNativeAgents.size}\n`);
+
   // Parse the cross-review response (parseCrossReviewResponse is stateless, llm not used)
   try {
     const { ConsensusEngine } = await import('@gossip/orchestrator');
@@ -127,10 +132,6 @@ export async function handleRelayCrossReview(
   } catch (err) {
     process.stderr.write(`[gossipcat] Failed to parse cross-review from ${agent_id}: ${(err as Error).message}\n`);
   }
-
-  // Mark agent as done
-  round.pendingNativeAgents.delete(agent_id);
-  process.stderr.write(`[gossipcat] Cross-review received from ${agent_id}. Remaining: ${round.pendingNativeAgents.size}\n`);
 
   // Check if all native agents have responded
   if (round.pendingNativeAgents.size > 0) {

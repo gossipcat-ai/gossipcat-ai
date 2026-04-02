@@ -226,7 +226,10 @@ export async function handleCollect(
             { temperature: 0 },
           );
           const parsed = engine.parseCrossReviewResponse(p.agentId, response.text, 50);
-          relayEntries.push(...parsed);
+          // Filter to round members only — same guard as native path in relay-cross-review.ts
+          const validPeerIds = new Set(allResults.filter((r: any) => r.status === 'completed').map((r: any) => r.agentId));
+          const filtered = parsed.filter((e: any) => e.peerAgentId !== p.agentId && validPeerIds.has(e.peerAgentId));
+          relayEntries.push(...filtered);
         } catch { /* graceful degradation */ }
       }));
 
