@@ -170,6 +170,12 @@ export class DashboardRouter {
         return true;
       }
 
+      if (url === '/dashboard/api/findings/archive' && req.method === 'POST') {
+        const result = this.archiveFindings();
+        this.json(res, 200, result);
+        return true;
+      }
+
       if (url === '/dashboard/api/signals' && req.method === 'GET') {
         const data = await signalsHandler(this.projectRoot, query ?? undefined);
         this.json(res, 200, data);
@@ -295,6 +301,59 @@ export class DashboardRouter {
 
       return { reports };
     } catch { return { reports: [] }; }
+  }
+
+  private archiveFindings(): { archived: number; remaining: number; findingsCleared: number } {
+    const { readdirSync, readFileSync, renameSync, writeFileSync, mkdirSync, existsSync } = require('fs');
+
+    // Archive old consensus reports (keep last 5, move rest to archive/)
+    const reportsDir = join(this.projectRoot, '.gossip', 'consensus-reports');
+    const archiveDir = join(this.projectRoot, '.gossip', 'consensus-reports-archive');
+    let archived = 0;
+
+    if (existsSync(reportsDir)) {
+      const files = readdirSync(reportsDir)
+        .filter((f: string) => f.endsWith('.json'))
+        .sort()
+        .reverse();
+
+      if (files.length > 5) {
+        mkdirSync(archiveDir, { recursive: true });
+        const toArchive = files.slice(5);
+        for (const f of toArchive) {
+          try {
+            renameSync(join(reportsDir, f), join(archiveDir, f));
+            archived++;
+          } catch { /* skip */ }
+        }
+      }
+    }
+
+    // Clear resolved findings from implementation-findings.jsonl
+    const findingsPath = join(this.projectRoot, '.gossip', 'implementation-findings.jsonl');
+    let findingsCleared = 0;
+    if (existsSync(findingsPath)) {
+      try {
+        const lines = readFileSync(findingsPath, 'utf-8').trim().split('\n').filter(Boolean);
+        const kept = lines.filter((line: string) => {
+          try {
+            const entry = JSON.parse(line);
+            if (entry.status === 'resolved' || entry.tag === 'confirmed') {
+              findingsCleared++;
+              return false;
+            }
+            return true;
+          } catch { return true; }
+        });
+        writeFileSync(findingsPath, kept.join('\n') + (kept.length > 0 ? '\n' : ''));
+      } catch { /* skip */ }
+    }
+
+    const remaining = existsSync(reportsDir)
+      ? readdirSync(reportsDir).filter((f: string) => f.endsWith('.json')).length
+      : 0;
+
+    return { archived, remaining, findingsCleared };
   }
 
   private json(res: ServerResponse, status: number, data: unknown): void {
