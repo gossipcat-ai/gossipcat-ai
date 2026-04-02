@@ -208,6 +208,8 @@ Return ONLY a JSON array:
     const messages: LLMMessage[] = [
       { role: 'system', content: `You are a code reviewer performing cross-review. Your job is to verify peer findings against actual code — catch errors, but also confirm good work.
 
+SOURCE FILES: Always cite original source files, not compiled/bundled build output (dist/, build/, out/). Build artifacts have different line numbers — citing them causes false verification failures.
+
 VERIFICATION RULES:
 - If a finding has an <anchor> block, use the code shown to verify the claim
 - AGREE only if you can confirm the claim is factually correct — cite your evidence

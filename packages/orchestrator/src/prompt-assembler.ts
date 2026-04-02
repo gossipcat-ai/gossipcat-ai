@@ -111,6 +111,11 @@ Keep entries concise (5-10 lines each). Update existing files rather than creati
     blocks.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---
 End your response with a section titled "## Consensus Summary".
 
+SOURCE FILES:
+- Always cite original source files, NOT compiled/bundled build output (dist/, build/, out/, *.min.js)
+- Build artifacts have different line numbers than source — citing them causes false verification failures
+- When in doubt, look for the file with the original extension (.ts, .tsx, .py, .go) not the compiled one (.js, .d.ts)
+
 CITATION RULES:
 - Use <cite> tags to reference code. The system resolves these for cross-reviewers automatically.
   Two modes:
