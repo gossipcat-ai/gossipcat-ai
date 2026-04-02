@@ -474,7 +474,7 @@ Return only valid JSON.` },
         : 3;
 
       const finding: ConsensusFinding = {
-        id: `f${findingIdx}`,
+        id: `${consensusId}:f${findingIdx}`,
         originalAgentId: entry.originalAgentId,
         finding: entry.finding,
         findingType: entry.findingType,
@@ -1305,7 +1305,7 @@ Return ONLY a JSON array:
         const unvNames = f.unverifiedBy?.map(u => this.config.registryGet(u.agentId)?.preset || u.agentId).join(', ') || '?';
         const sevU = f.severity ? ` [${f.severity.toUpperCase()}]` : '';
         lines.push(`  ◇ [${origPreset}, unverified by ${unvNames}]${sevU} "${f.finding}"`);
-        lines.push(`    → To verify: re-dispatch to a second agent, or read the code directly`);
+        lines.push(`    → finding_id: "${f.id}" — pass to gossip_signals when resolving`);
       }
       lines.push('');
     }

@@ -1362,21 +1362,51 @@ server.tool(
         } catch { /* best-effort */ }
 
         // Also resolve in consensus report files
+        // Finding IDs are scoped: "reportId:fN" (new) or "fN" (legacy)
+        // Scoped IDs only match within the correct report; legacy IDs match any report
         try {
           const { readdirSync: rds } = require('fs');
           const reportsDir = jp(process.cwd(), '.gossip', 'consensus-reports');
           if (exs(reportsDir)) {
-            const resolveIds = new Set(findingsWithId.map(s => s.finding_id));
+            // Group finding_ids by report prefix (scoped) vs unscoped (legacy)
+            const scopedByReport = new Map<string, Set<string>>();
+            const unscopedIds = new Set<string>();
+            for (const s of findingsWithId) {
+              const fid = s.finding_id as string;
+              if (fid.includes(':')) {
+                const [reportPrefix, localId] = fid.split(':', 2);
+                if (!scopedByReport.has(reportPrefix)) scopedByReport.set(reportPrefix, new Set());
+                scopedByReport.get(reportPrefix)!.add(fid);
+              } else {
+                unscopedIds.add(fid);
+              }
+            }
+
             for (const file of rds(reportsDir).filter((f: string) => f.endsWith('.json'))) {
               try {
                 const reportPath = jp(reportsDir, file);
                 const report = JSON.parse(rfs(reportPath, 'utf-8'));
+                // Determine which IDs apply to this report
+                const reportId = report.id || '';
+                const idsForThisReport = new Set<string>();
+                // Add scoped IDs that target this report
+                const reportPrefix = reportId.split('-')[0]; // first 8 chars
+                if (scopedByReport.has(reportPrefix)) {
+                  for (const id of scopedByReport.get(reportPrefix)!) idsForThisReport.add(id);
+                }
+                if (scopedByReport.has(reportId)) {
+                  for (const id of scopedByReport.get(reportId)!) idsForThisReport.add(id);
+                }
+                // Legacy unscoped IDs match any report (backwards compat)
+                for (const id of unscopedIds) idsForThisReport.add(id);
+
+                if (idsForThisReport.size === 0) continue;
+
                 let changed = false;
-                // Move unverified findings with matching IDs to confirmed
                 if (report.unverified) {
                   const remaining: any[] = [];
                   for (const f of report.unverified) {
-                    if (f.id && resolveIds.has(f.id)) {
+                    if (f.id && (idsForThisReport.has(f.id) || unscopedIds.has(f.id))) {
                       f.tag = 'confirmed';
                       report.confirmed = report.confirmed || [];
                       report.confirmed.push(f);
