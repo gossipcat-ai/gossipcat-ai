@@ -71,6 +71,7 @@ export interface ConsensusReportFinding {
   severity?: 'critical' | 'high' | 'medium' | 'low';
   tag: string;
   confirmedBy: string[];
+  disputedBy?: Array<{ agentId: string; reason: string; evidence: string }>;
   confidence: number;
 }
 

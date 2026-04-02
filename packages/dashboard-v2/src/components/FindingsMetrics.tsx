@@ -81,10 +81,28 @@ function ReportFinding({ f }: { f: ConsensusReportFinding }) {
         )}
         <span className="ml-auto font-mono text-[10px] text-muted-foreground/40">{f.originalAgentId}</span>
         {f.confirmedBy && f.confirmedBy.length > 0 && (
-          <span className="font-mono text-[10px] text-confirmed/50">+{f.confirmedBy.length}</span>
+          <span className="font-mono text-[10px] text-confirmed/50 cursor-help" title={`Verified by: ${f.confirmedBy.join(', ')}`}>
+            +{f.confirmedBy.length} ✓
+          </span>
+        )}
+        {f.disputedBy && f.disputedBy.length > 0 && (
+          <span className="font-mono text-[10px] text-disputed/50 cursor-help" title={`Disputed by: ${f.disputedBy.map(d => d.agentId).join(', ')}`}>
+            {f.disputedBy.length} ⚡
+          </span>
         )}
       </div>
-      {/* Row 2: Finding text */}
+      {/* Row 2: Disputed by details (if disputed) */}
+      {f.disputedBy && f.disputedBy.length > 0 && (
+        <div className="mt-1.5 mb-1 rounded border border-disputed/10 bg-disputed/5 px-2.5 py-1.5">
+          {f.disputedBy.map((d, di) => (
+            <div key={di} className="text-[11px]">
+              <span className="font-mono font-bold text-disputed/70">{d.agentId}</span>
+              <span className="text-muted-foreground/60"> — {d.reason || d.evidence || 'No reason given'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* Finding text */}
       <div className={`text-xs leading-relaxed text-muted-foreground ${CITE_STYLES}`}
         dangerouslySetInnerHTML={{ __html: cleanFindingTags(f.finding) }} />
     </div>
