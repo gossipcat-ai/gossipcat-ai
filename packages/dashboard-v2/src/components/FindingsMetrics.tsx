@@ -38,32 +38,55 @@ const SEVERITY_CLS: Record<string, string> = {
   low: 'text-muted-foreground bg-muted/50',
 };
 
+const CITE_STYLES = '[&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400';
+
 function ReportFinding({ f }: { f: ConsensusReportFinding }) {
-  const tagCls = f.tag === 'confirmed' ? 'text-confirmed bg-confirmed/10'
-    : f.tag === 'disputed' ? 'text-disputed bg-disputed/10'
-    : f.tag === 'unverified' ? 'text-unverified bg-unverified/10'
-    : 'text-unique bg-unique/10';
+  const tagCls = f.tag === 'confirmed' ? 'text-confirmed bg-confirmed/10 border-confirmed/20'
+    : f.tag === 'disputed' ? 'text-disputed bg-disputed/10 border-disputed/20'
+    : f.tag === 'unverified' ? 'text-unverified bg-unverified/10 border-unverified/20'
+    : 'text-unique bg-unique/10 border-unique/20';
   const sevCls = f.severity ? SEVERITY_CLS[f.severity] || '' : '';
+  const typeLabel = f.findingType === 'suggestion' ? '💡 SUGGESTION'
+    : f.findingType === 'insight' ? 'INSIGHT'
+    : null;
+  const typeCls = f.findingType === 'suggestion' ? 'text-blue-400 bg-blue-500/10'
+    : f.findingType === 'insight' ? 'text-zinc-400 bg-zinc-500/10'
+    : '';
+
+  // Extract first cite as identifier
+  const citeMatch = f.finding.match(/<cite\s+tag="file">([^<]+)<\/cite>/);
+  const identifier = citeMatch ? citeMatch[1] : null;
+
   return (
-    <div className="flex items-start gap-2">
-      <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold ${tagCls}`}>
-        {f.tag.toUpperCase()}
-      </span>
-      {f.findingType && f.findingType !== 'finding' && (
-        <span className={`shrink-0 rounded-sm px-1 py-0.5 font-mono text-[8px] font-bold ${f.findingType === 'suggestion' ? 'text-blue-400 bg-blue-500/10' : 'text-zinc-400 bg-zinc-500/10'}`}>
-          {f.findingType === 'suggestion' ? '💡' : 'INSIGHT'}
+    <div className="rounded-md border border-border/30 bg-card/30 px-3 py-2.5">
+      {/* Row 1: Tags + Identifier + Agent */}
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold ${tagCls}`}>
+          {f.tag.toUpperCase()}
         </span>
-      )}
-      {f.severity && (
-        <span className={`shrink-0 rounded-sm px-1 py-0.5 font-mono text-[8px] font-bold ${sevCls}`}>
-          {f.severity.toUpperCase()}
-        </span>
-      )}
-      <div className="min-w-0 flex-1">
-        <span className="text-xs text-muted-foreground [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400"
-          dangerouslySetInnerHTML={{ __html: cleanFindingTags(f.finding) }} />
-        <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">{f.originalAgentId}</span>
+        {f.severity && (
+          <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold ${sevCls}`}>
+            {f.severity.toUpperCase()}
+          </span>
+        )}
+        {typeLabel && (
+          <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold ${typeCls}`}>
+            {typeLabel}
+          </span>
+        )}
+        {identifier && (
+          <span className="rounded bg-blue-500/10 px-1.5 py-0.5 font-mono text-[9px] text-blue-400">
+            {identifier}
+          </span>
+        )}
+        <span className="ml-auto font-mono text-[10px] text-muted-foreground/40">{f.originalAgentId}</span>
+        {f.confirmedBy && f.confirmedBy.length > 0 && (
+          <span className="font-mono text-[10px] text-confirmed/50">+{f.confirmedBy.length}</span>
+        )}
       </div>
+      {/* Row 2: Finding text */}
+      <div className={`text-xs leading-relaxed text-muted-foreground ${CITE_STYLES}`}
+        dangerouslySetInnerHTML={{ __html: cleanFindingTags(f.finding) }} />
     </div>
   );
 }
@@ -153,7 +176,7 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
                         </button>
                       ))}
                     </div>
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                       {filteredFindings.length === 0 ? (
                         <div className="py-4 text-center text-xs text-muted-foreground">No findings match this filter.</div>
                       ) : (
@@ -256,7 +279,7 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
                     {filteredSignals.length === 0 ? (
                       <div className="py-4 text-center text-xs text-muted-foreground">No findings match this filter.</div>
                     ) : (
-                      <div className="space-y-1.5">
+                      <div className="space-y-2">
                         {filteredSignals.map((sig, j) => {
                           const tag = TAG_MAP[sig.signal];
                           if (!tag) return null;
