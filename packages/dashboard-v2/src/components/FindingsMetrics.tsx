@@ -80,14 +80,17 @@ function ReportFinding({ f }: { f: ConsensusReportFinding }) {
           </span>
         )}
         <span className="ml-auto font-mono text-[10px] text-muted-foreground/40">{f.originalAgentId}</span>
-        {f.confirmedBy && f.confirmedBy.length > 0 && (
-          <span className="group relative cursor-help font-mono text-[10px] text-confirmed/50 px-1 py-0.5 rounded hover:bg-confirmed/10 transition">
-            +{f.confirmedBy.length} ✓
-            <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 font-mono text-[10px] text-foreground shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity">
-              Verified by: {f.confirmedBy.join(', ')}
+        {f.confirmedBy && f.confirmedBy.length > 0 && (() => {
+          const unique = [...new Set(f.confirmedBy)];
+          return (
+            <span className="group relative cursor-help font-mono text-[10px] text-confirmed/50 px-1 py-0.5 rounded hover:bg-confirmed/10 transition">
+              +{unique.length} ✓
+              <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 font-mono text-[10px] text-foreground shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity">
+                Verified by: {unique.join(', ')}
+              </span>
             </span>
-          </span>
-        )}
+          );
+        })()}
         {f.disputedBy && f.disputedBy.length > 0 && (
           <span className="group relative cursor-help font-mono text-[10px] text-disputed/50 px-1 py-0.5 rounded hover:bg-disputed/10 transition">
             {f.disputedBy.length} ⚡
