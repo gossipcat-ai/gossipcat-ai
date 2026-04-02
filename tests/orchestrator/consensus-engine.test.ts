@@ -649,6 +649,44 @@ describe('ConsensusEngine', () => {
       expect(mockLlm.generate).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('generateCrossReviewPrompts()', () => {
+    it('should return prompts for each successful agent without calling LLM', async () => {
+      const engine = new ConsensusEngine(baseConfig);
+      const results: TaskEntry[] = [
+        createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- Finding A at file.ts:10'),
+        createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- Finding B at other.ts:20'),
+      ];
+
+      const { prompts, summaries, consensusId } = await engine.generateCrossReviewPrompts(results);
+
+      expect(prompts).toHaveLength(2);
+      expect(prompts[0].agentId).toBe('agent-a');
+      expect(prompts[1].agentId).toBe('agent-b');
+      expect(prompts[0].system).toContain('cross-review');
+      expect(prompts[0].user).toContain('Finding B'); // agent-a reviews agent-b's findings
+      expect(prompts[1].user).toContain('Finding A');
+      expect(summaries.size).toBe(2);
+      expect(consensusId).toMatch(/^[a-f0-9]{8}-[a-f0-9]{8}$/);
+      expect(mockLlm.generate).not.toHaveBeenCalled();
+    });
+
+    it('should mark agents as native based on nativeAgentIds set', async () => {
+      const engine = new ConsensusEngine(baseConfig);
+      const results: TaskEntry[] = [
+        createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- Finding A'),
+        createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- Finding B'),
+      ];
+
+      const nativeAgentIds = new Set(['agent-a']);
+      const { prompts } = await engine.generateCrossReviewPrompts(results, nativeAgentIds);
+
+      const agentAPrompt = prompts.find(p => p.agentId === 'agent-a')!;
+      const agentBPrompt = prompts.find(p => p.agentId === 'agent-b')!;
+      expect(agentAPrompt.isNative).toBe(true);
+      expect(agentBPrompt.isNative).toBe(false);
+    });
+  });
 });
 
 describe('snippetsForFinding()', () => {

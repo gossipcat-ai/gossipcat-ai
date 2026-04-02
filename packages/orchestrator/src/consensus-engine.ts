@@ -148,12 +148,12 @@ export class ConsensusEngine {
   }
 
   /**
-   * Build the cross-review prompt for a single agent and call the LLM.
+   * Build the cross-review prompt for a single agent without calling the LLM.
    */
-  private async crossReviewForAgent(
+  private async buildCrossReviewPrompt(
     agent: TaskEntry,
     summaries: Map<string, string>,
-  ): Promise<CrossReviewEntry[]> {
+  ): Promise<{ system: string; user: string }> {
     const ownSummary = summaries.get(agent.agentId) ?? '';
 
     // Build peer findings section with per-finding inline code snippets
@@ -186,7 +186,7 @@ export class ConsensusEngine {
       peerLines.push(peerBlock);
     }
 
-    const userContent = `You previously reviewed code and produced findings. Now review your peers' findings.
+    const user = `You previously reviewed code and produced findings. Now review your peers' findings.
 
 YOUR FINDINGS (Phase 1):
 <data>${ownSummary}</data>
@@ -212,8 +212,7 @@ Return ONLY a JSON array:
   { "action": "agree"|"disagree"|"unverified"|"new", "agentId": "peer_id", "finding": "summary", "evidence": "your reasoning with file:line references", "confidence": 1-5 }
 ]`;
 
-    const messages: LLMMessage[] = [
-      { role: 'system', content: `You are a code reviewer performing cross-review. Your job is to verify peer findings against actual code — catch errors, but also confirm good work.
+    const system = `You are a code reviewer performing cross-review. Your job is to verify peer findings against actual code — catch errors, but also confirm good work.
 
 SOURCE FILES: Always cite original source files, not compiled/bundled build output (dist/, build/, out/). Build artifacts have different line numbers — citing them causes false verification failures.
 
@@ -226,8 +225,22 @@ VERIFICATION RULES:
 - Do NOT agree with a finding just because it sounds plausible — verify it
 - Agreeing without verification is WORSE than disagreeing — a false confirmation poisons the system
 
-Return only valid JSON.` },
-      { role: 'user', content: userContent },
+Return only valid JSON.`;
+
+    return { system, user };
+  }
+
+  /**
+   * Build the cross-review prompt for a single agent and call the LLM.
+   */
+  private async crossReviewForAgent(
+    agent: TaskEntry,
+    summaries: Map<string, string>,
+  ): Promise<CrossReviewEntry[]> {
+    const { system, user } = await this.buildCrossReviewPrompt(agent, summaries);
+    const messages: LLMMessage[] = [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
     ];
 
     try {
@@ -241,6 +254,41 @@ Return only valid JSON.` },
       // Graceful degradation: skip agents whose LLM call fails
       return [];
     }
+  }
+
+  /**
+   * Generate cross-review prompts for all successful agents without calling any LLM.
+   * Used in the two-phase consensus flow where native agents handle their own LLM calls.
+   */
+  async generateCrossReviewPrompts(
+    results: TaskEntry[],
+    nativeAgentIds?: Set<string>,
+  ): Promise<{
+    prompts: Array<{ agentId: string; system: string; user: string; isNative: boolean }>;
+    summaries: Map<string, string>;
+    consensusId: string;
+  }> {
+    const successful = results.filter(r => r.status === 'completed' && r.result);
+    const consensusId = shortConsensusId();
+
+    const summaries = new Map<string, string>();
+    for (const r of successful) {
+      const raw = this.extractSummary(r.result!);
+      summaries.set(r.agentId, raw.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, ''));
+    }
+
+    const prompts: Array<{ agentId: string; system: string; user: string; isNative: boolean }> = [];
+    for (const agent of successful) {
+      const { system, user } = await this.buildCrossReviewPrompt(agent, summaries);
+      prompts.push({
+        agentId: agent.agentId,
+        system,
+        user,
+        isNative: nativeAgentIds?.has(agent.agentId) ?? false,
+      });
+    }
+
+    return { prompts, summaries, consensusId };
   }
 
   /**
@@ -1362,7 +1410,7 @@ Return ONLY a JSON array:
    * Parse LLM cross-review response into structured entries.
    * Handles markdown code fences, invalid JSON, and confidence clamping.
    */
-  private parseCrossReviewResponse(reviewerAgentId: string, text: string, limit: number): CrossReviewEntry[] {
+  parseCrossReviewResponse(reviewerAgentId: string, text: string, limit: number): CrossReviewEntry[] {
     // Strip markdown code fences if present
     let cleaned = text.trim();
     const fenceMatch = cleaned.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
