@@ -24,8 +24,8 @@ export class AgentMemoryReader {
         // Sanitize: strip potential prompt injection delimiters from agent-generated memory
         content = content.replace(/<\/?(?:agent-memory|system|instructions)>/gi, '');
         parts.push(`<agent-memory>\n${content}\n</agent-memory>`);
-        // Only touch files with high relevance to avoid corrupting low-value memories
-        if (file.score > 0.5) {
+        // Touch files with moderate+ relevance to track access patterns
+        if (file.score > 0.3) {
           this.touchKnowledgeFile(file.path, content);
         }
       }
@@ -39,7 +39,7 @@ export class AgentMemoryReader {
         let content = readFileSync(file.path, 'utf-8');
         content = content.replace(/<\/?(?:agent-memory|system|instructions)>/gi, '');
         parts.push(`<project-context>\n${content}\n</project-context>`);
-        if (file.score > 0.5) {
+        if (file.score > 0.3) {
           this.touchKnowledgeFile(file.path, content);
         }
       }

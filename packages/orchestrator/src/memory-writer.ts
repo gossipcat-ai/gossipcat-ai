@@ -81,6 +81,7 @@ export class MemoryWriter {
     taskId: string;
     task: string;
     result: string;
+    agentAccuracy?: number;
   }): Promise<void> {
     const memDir = this.ensureDirs(agentId);
     const knowledgeDir = join(memDir, 'knowledge');
@@ -137,15 +138,22 @@ export class MemoryWriter {
       body = facts!.body;
     }
 
+    const accuracyLine = data.agentAccuracy !== undefined
+      ? `agentAccuracy: ${data.agentAccuracy.toFixed(2)}`
+      : null;
     const content = [
       '---',
       `name: ${truncateAtWord(data.task, 80).replace(/\n/g, ' ')}`,
       `description: ${description.replace(/\n/g, ' ')}`,
       `importance: ${importance}`,
+      ...(accuracyLine ? [accuracyLine] : []),
       `lastAccessed: ${today}`,
       `accessCount: 0`,
       '---',
       '',
+      ...(data.agentAccuracy !== undefined && data.agentAccuracy < 0.4
+        ? ['> ⚠ This agent has low accuracy (' + (data.agentAccuracy * 100).toFixed(0) + '%). Treat factual claims as unverified.\n']
+        : []),
       body,
     ].join('\n');
 
@@ -479,7 +487,7 @@ Rules:
     return (scores.relevance + scores.accuracy + scores.uniqueness) / 15;
   }
 
-  writeConsensusKnowledge(agentId: string, findings: Array<{ originalAgentId: string; finding: string }>): void {
+  writeConsensusKnowledge(agentId: string, findings: Array<{ originalAgentId: string; finding: string; tag?: string }>): void {
     if (findings.length === 0) return;
     const memDir = this.ensureDirs(agentId);
     const knowledgeDir = join(memDir, 'knowledge');
@@ -493,6 +501,10 @@ Rules:
 
     if (peerFindings.length === 0) return;
 
+    const tagEmoji: Record<string, string> = {
+      confirmed: '✓', disputed: '⚡', unverified: '?', unique: '◇',
+    };
+
     const content = [
       '---',
       `name: Peer findings from consensus review`,
@@ -504,7 +516,11 @@ Rules:
       '',
       '## Peer Findings (learn from these)',
       '',
-      ...peerFindings.map(f => `- [${f.originalAgentId}] ${f.finding}`),
+      ...peerFindings.map(f => {
+        const emoji = tagEmoji[f.tag || ''] || '';
+        const status = f.tag ? ` [${f.tag.toUpperCase()}]` : '';
+        return `- ${emoji} [${f.originalAgentId}]${status} ${f.finding}`;
+      }),
     ].join('\n');
 
     // Warmth-aware pruning — same as writeKnowledgeFromResult

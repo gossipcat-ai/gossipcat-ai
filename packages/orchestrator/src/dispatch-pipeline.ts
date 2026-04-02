@@ -744,8 +744,10 @@ export class DispatchPipeline {
         },
       });
       if (t.result) {
+        const agentAccuracy = this.competencyProfiler?.getProfile(t.agentId)?.reviewReliability;
         await this.memWriter.writeKnowledgeFromResult(t.agentId, {
           taskId: t.id, task: t.task, result: t.result,
+          ...(agentAccuracy !== undefined ? { agentAccuracy } : {}),
         });
       }
       this.memWriter.rebuildIndex(t.agentId);
@@ -905,12 +907,19 @@ export class DispatchPipeline {
         }
       }
 
-      // Cross-agent learning: write confirmed findings to each agent's memory
-      if (consensusReport.confirmed.length > 0) {
+      // Cross-agent learning: write all tagged findings to each agent's memory
+      const allFindings = [
+        ...(consensusReport.confirmed || []).map(f => ({ ...f, tag: 'confirmed' as const })),
+        ...(consensusReport.disputed || []).map(f => ({ ...f, tag: 'disputed' as const })),
+        ...(consensusReport.unverified || []).map(f => ({ ...f, tag: 'unverified' as const })),
+        ...(consensusReport.unique || []).map(f => ({ ...f, tag: 'unique' as const })),
+      ];
+      if (allFindings.length > 0) {
         try {
-          const findings = consensusReport.confirmed.map(f => ({
+          const findings = allFindings.map(f => ({
             originalAgentId: f.originalAgentId,
             finding: f.finding,
+            tag: f.tag,
           }));
           const participants = new Set(results.filter(r => r.status === 'completed').map(r => r.agentId));
           for (const agentId of participants) {
