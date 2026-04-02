@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "performance-reader": ["dist/performance-reader.d.ts"],
+      "skill-index": ["dist/skill-index.d.ts"],
+      "consensus-types": ["dist/consensus-types.d.ts"],
+      "bootstrap": ["dist/bootstrap.d.ts"],
+      "*": ["dist/*"]
+    }
+  },
   "scripts": { "build": "tsc" },
   "dependencies": {
     "@gossip/types": "*",

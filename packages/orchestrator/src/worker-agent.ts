@@ -10,15 +10,10 @@ import { GossipAgent } from '@gossip/client';
 import { MessageType, MessageEnvelope, Message, ToolDefinition, LLMMessage } from '@gossip/types';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
 import { ILLMProvider } from './llm-client';
-import { TaskExecutionResult } from './types';
-
-export type WorkerProgressCallback = (event: {
-  toolCalls: number;
-  inputTokens: number;
-  outputTokens: number;
-  currentTool: string;
-  turn: number;
-}) => void;
+import {
+  TaskStreamEvent,
+  TaskStreamEventType,
+} from './task-stream';
 
 export type TaskCompleteCallback = (event: {
   agentId: string;
@@ -190,8 +185,13 @@ export class WorkerAgent {
    * Execute a task with the LLM, using multi-turn tool calling.
    * Returns the final text response.
    */
-  async executeTask(task: string, context?: string, skillsContent?: string, onProgress?: WorkerProgressCallback): Promise<TaskExecutionResult> {
-    log(this.agentId, `executeTask started — task: "${task.slice(0, 100)}..." webSearch=${this.webSearchEnabled} tools=${this.tools.length}`);
+  async *executeTask(task: string, context?: string, skillsContent?: string): AsyncGenerator<TaskStreamEvent, void, undefined> {
+    const logAndYield = (message: string): TaskStreamEvent => {
+        log(this.agentId, message);
+        return { type: TaskStreamEventType.LOG, payload: message, timestamp: Date.now() };
+    };
+
+    yield logAndYield(`executeTask started — task: "${task.slice(0, 100)}..." webSearch=${this.webSearchEnabled} tools=${this.tools.length}`);
     this.gossipQueue = []; // clear gossip from previous task
     const startTime = Date.now();
     let totalInputTokens = 0;
@@ -261,7 +261,7 @@ export class WorkerAgent {
           });
         }
 
-        log(this.agentId, `turn ${turn}/${MAX_TOOL_TURNS} — calling LLM (${messages.length} messages)`);
+        yield logAndYield(`turn ${turn}/${MAX_TOOL_TURNS} — calling LLM (${messages.length} messages)`);
         const llmStart = Date.now();
         let response = await this.llm.generate(messages, {
           tools: this.tools,
@@ -274,44 +274,43 @@ export class WorkerAgent {
           totalOutputTokens += response.usage.outputTokens;
         }
 
-        log(this.agentId, `turn ${turn} — LLM returned in ${llmMs}ms: text=${response.text?.length ?? 0}chars, toolCalls=${response.toolCalls?.length ?? 0}, tokens=${response.usage?.inputTokens ?? '?'}in/${response.usage?.outputTokens ?? '?'}out`);
+        yield logAndYield(`turn ${turn} — LLM returned in ${llmMs}ms: text=${response.text?.length ?? 0}chars, toolCalls=${response.toolCalls?.length ?? 0}, tokens=${response.usage?.inputTokens ?? '?'}in/${response.usage?.outputTokens ?? '?'}out`);
 
         // Fallback: if no native tool calls, parse text for [TOOL_CALL] blocks.
-        // Gemini frequently ignores functionDeclarations and emits text-based tool calls.
         if (!response.toolCalls?.length && response.text) {
           const textCalls = parseTextToolCalls(response.text, this.validToolNames);
           if (textCalls.length > 0) {
-            log(this.agentId, `turn ${turn} — no native FC, but found ${textCalls.length} text-based tool calls: ${textCalls.map(tc => tc.name).join(', ')}`);
+            yield logAndYield(`turn ${turn} — no native FC, but found ${textCalls.length} text-based tool calls: ${textCalls.map(tc => tc.name).join(', ')}`);
             response = { ...response, toolCalls: textCalls };
           }
         }
 
-        if (!response.toolCalls?.length) {
-          log(this.agentId, `turn ${turn} — NO tool calls, exiting. Text preview: "${(response.text || '').slice(0, 200)}"`);
-          this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-          return { result: response.text || '[No response from agent]', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+        if (response.text) {
+            yield { type: TaskStreamEventType.PARTIAL_RESULT, payload: { text: response.text }, timestamp: Date.now() };
         }
 
-        // Detect repetitive tool calls — if the agent makes the exact same call 3+ times, it's stuck
-        // Fix: sort keys for stable signature (JSON.stringify key order is not guaranteed)
+        if (!response.toolCalls?.length) {
+          yield logAndYield(`turn ${turn} — NO tool calls, exiting. Text preview: "${(response.text || '').slice(0, 200)}"`);
+          this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
+          yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: response.text || '[No response from agent]', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+          return;
+        }
+
+        // Detect repetitive tool calls
         const toolSig = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments, Object.keys(tc.arguments || {}).sort())}`).join('|');
         if (toolSig === lastToolSig) {
           repeatCount++;
           if (repeatCount >= 2) {
-            log(this.agentId, `turn ${turn} — STUCK: repeating same tool calls ${repeatCount + 1}x, exiting`);
+            yield logAndYield(`turn ${turn} — STUCK: repeating same tool calls ${repeatCount + 1}x, exiting`);
             this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-            return {
-              result: response.text || 'Task completed (agent was repeating the same action).',
-              inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
-            };
+            yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: response.text || 'Task completed (agent was repeating the same action).', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+            return;
           }
         } else {
           lastToolSig = toolSig;
           repeatCount = 0;
         }
 
-        // Add assistant message with tool calls.
-        // Strip text-based tool call blocks so the LLM doesn't see its own malformed syntax echoed back.
         let cleanedText = response.text || '';
         if (cleanedText.includes('[TOOL_CALL]') || cleanedText.includes('[TOOL_CODE]')) {
           cleanedText = cleanedText
@@ -326,18 +325,17 @@ export class WorkerAgent {
           toolCalls: response.toolCalls,
         });
 
-        // Execute each tool call via relay RPC
-        log(this.agentId, `turn ${turn} — executing ${response.toolCalls.length} tool calls: ${response.toolCalls.map(tc => tc.name).join(', ')}`);
+        yield logAndYield(`turn ${turn} — executing ${response.toolCalls.length} tool calls: ${response.toolCalls.map(tc => tc.name).join(', ')}`);
         let turnErrors = 0;
         for (const toolCall of response.toolCalls) {
           let result: string;
           try {
             const toolStart = Date.now();
             result = await this.callTool(toolCall.name, toolCall.arguments);
-            log(this.agentId, `  tool ${toolCall.name} → ${Date.now() - toolStart}ms, ${result.length}chars${result.startsWith('Error:') ? ' ERROR: ' + result.slice(0, 100) : ''}`);
+            yield logAndYield(`  tool ${toolCall.name} → ${Date.now() - toolStart}ms, ${result.length}chars${result.startsWith('Error:') ? ' ERROR: ' + result.slice(0, 100) : ''}`);
           } catch (err) {
             result = `Error: ${(err as Error).message}`;
-            log(this.agentId, `  tool ${toolCall.name} → THREW: ${result.slice(0, 150)}`);
+            yield logAndYield(`  tool ${toolCall.name} → THREW: ${result.slice(0, 150)}`);
           }
           if (result.startsWith('Error:')) turnErrors++;
           messages.push({
@@ -347,49 +345,39 @@ export class WorkerAgent {
             name: toolCall.name,
           });
           toolCallCount++;
-          onProgress?.({
-            toolCalls: toolCallCount,
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            currentTool: toolCall.name,
-            turn,
-          });
+          yield { type: TaskStreamEventType.PROGRESS, payload: { toolCalls: toolCallCount, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, currentTool: toolCall.name, turn, }, timestamp: Date.now() };
         }
 
-        // Detect error loops — if 3 consecutive turns have ALL tool calls failing,
-        // the agent is stuck (e.g. fighting unresolvable build errors)
         if (turnErrors === response.toolCalls.length) {
           consecutiveErrors++;
-          log(this.agentId, `turn ${turn} — all ${response.toolCalls.length} tool calls errored (streak: ${consecutiveErrors})`);
+          yield logAndYield(`turn ${turn} — all ${response.toolCalls.length} tool calls errored (streak: ${consecutiveErrors})`);
           if (consecutiveErrors >= 3) {
-            log(this.agentId, `turn ${turn} — ERROR LOOP: 3 consecutive all-error turns, exiting`);
+            yield logAndYield(`turn ${turn} — ERROR LOOP: 3 consecutive all-error turns, exiting`);
             this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-            return {
-              result: response.text || 'Task incomplete — agent stuck in error loop. Simplify the approach or check the error messages above.',
-              inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
-            };
+            yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: response.text || 'Task incomplete — agent stuck in error loop. Simplify the approach or check the error messages above.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+            return;
           }
         } else {
           consecutiveErrors = 0;
         }
       }
 
-      // Hit max turns — ask for a final summary
-      log(this.agentId, `hit max turns (${MAX_TOOL_TURNS}), requesting summary. Total tool calls: ${toolCallCount}`);
+      yield logAndYield(`hit max turns (${MAX_TOOL_TURNS}), requesting summary. Total tool calls: ${toolCallCount}`);
       try {
         messages.push({ role: 'user', content: 'Your turn budget is exhausted. Summarize what you accomplished and what remains unfinished. List files created/modified.' });
         const summary = await this.llm.generate(messages);
         if (summary.usage) { totalInputTokens += summary.usage.inputTokens; totalOutputTokens += summary.usage.outputTokens; }
         this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-        return { result: summary.text || 'Task completed (turn budget exhausted).', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: summary.text || 'Task completed (turn budget exhausted).', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
       } catch {
         this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-        return { result: 'Task incomplete — agent exhausted its turn budget.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'Task incomplete — agent exhausted its turn budget.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
       }
     } catch (err) {
-      log(this.agentId, `FATAL ERROR in executeTask: ${(err as Error).message}`);
+      const errorMessage = `FATAL ERROR in executeTask: ${(err as Error).message}`;
+      yield logAndYield(errorMessage);
       this.onTaskComplete?.({ agentId: this.agentId, taskId: '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-      return { result: `Error: ${(err as Error).message}`, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+      yield { type: TaskStreamEventType.ERROR, payload: { error: errorMessage }, timestamp: Date.now() };
     }
   }
 

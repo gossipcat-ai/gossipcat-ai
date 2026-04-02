@@ -1,13 +1,11 @@
-import { TaskExecutionResult } from './types';
-import { WorkerProgressCallback } from './worker-agent';
+import { TaskStreamEvent } from './task-stream';
 
 export interface WorkerLike {
   executeTask(
     task: string,
     lens?: string,
     promptContent?: string,
-    onProgress?: WorkerProgressCallback,
-  ): Promise<TaskExecutionResult>;
+  ): AsyncGenerator<TaskStreamEvent, void, undefined>;
   subscribeToBatch?(batchId: string): Promise<void>;
   unsubscribeFromBatch?(batchId: string): Promise<void>;
 }
