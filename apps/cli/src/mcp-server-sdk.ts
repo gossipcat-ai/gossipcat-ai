@@ -1326,8 +1326,43 @@ server.tool(
 
       writer.appendSignals(formatted);
 
-      // Resolve findings in implementation-findings.jsonl when signal has finding_id
+      // Auto-match signals without finding_id to unverified findings in recent consensus reports
+      // This closes the gap where the orchestrator verifies a finding but forgets to pass finding_id
       const RESOLUTION_SIGNALS = new Set(['agreement', 'unique_confirmed']);
+      try {
+        const { readdirSync: rdsAuto, readFileSync: rfsAuto, existsSync: exsAuto } = require('fs');
+        const { join: jpAuto } = require('path');
+        const reportsDir = jpAuto(process.cwd(), '.gossip', 'consensus-reports');
+        if (exsAuto(reportsDir)) {
+          const signalsWithoutId = signals.filter(s => !s.finding_id && RESOLUTION_SIGNALS.has(s.signal) && s.finding);
+          if (signalsWithoutId.length > 0) {
+            // Load recent reports (last 5)
+            const reportFiles = rdsAuto(reportsDir).filter((f: string) => f.endsWith('.json')).sort().reverse().slice(0, 5);
+            for (const s of signalsWithoutId) {
+              const findingLower = (s.finding || '').toLowerCase().slice(0, 100);
+              if (findingLower.length < 10) continue; // too short to match reliably
+              for (const file of reportFiles) {
+                try {
+                  const report = JSON.parse(rfsAuto(jpAuto(reportsDir, file), 'utf-8'));
+                  if (!report.unverified || report.unverified.length === 0) continue;
+                  for (const f of report.unverified) {
+                    const uLower = (f.finding || '').toLowerCase().slice(0, 100);
+                    // Match if the signal finding text is a significant substring of the unverified finding (or vice versa)
+                    if (uLower.length >= 10 && (uLower.includes(findingLower) || findingLower.includes(uLower))) {
+                      s.finding_id = f.id; // Attach the finding_id for resolution below
+                      process.stderr.write(`[gossipcat] Auto-matched signal to unverified finding ${f.id} in ${file}\n`);
+                      break;
+                    }
+                  }
+                } catch { /* skip */ }
+                if (s.finding_id) break; // found a match, stop searching reports
+              }
+            }
+          }
+        }
+      } catch { /* best-effort */ }
+
+      // Resolve findings in implementation-findings.jsonl when signal has finding_id
       const findingsWithId = signals.filter(s => s.finding_id && RESOLUTION_SIGNALS.has(s.signal));
       if (findingsWithId.length > 0) {
         try {
