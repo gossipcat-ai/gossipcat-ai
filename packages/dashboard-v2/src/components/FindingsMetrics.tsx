@@ -9,7 +9,7 @@ interface FindingsMetricsProps {
 
 const MAX_RUNS = 5;
 
-type FilterType = 'all' | 'confirmed' | 'disputed' | 'unverified' | 'unique';
+type FilterType = 'all' | 'confirmed' | 'disputed' | 'unverified' | 'unique' | 'insight';
 
 const TAG_MAP: Record<string, { label: string; filter: FilterType; cls: string }> = {
   agreement: { label: 'CONFIRMED', filter: 'confirmed', cls: 'text-confirmed bg-confirmed/10' },
@@ -25,9 +25,10 @@ const TAG_MAP: Record<string, { label: string; filter: FilterType; cls: string }
 const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: string }[] = [
   { key: 'all', label: 'All', cls: 'text-muted-foreground border-border/40 hover:border-border/60', activeCls: 'text-foreground bg-muted border-border' },
   { key: 'confirmed', label: 'Confirmed', cls: 'text-confirmed/50 border-confirmed/20 hover:border-confirmed/40', activeCls: 'text-confirmed bg-confirmed/10 border-confirmed/40' },
+  { key: 'unique', label: 'Unique', cls: 'text-unique/50 border-unique/20 hover:border-unique/40', activeCls: 'text-unique bg-unique/10 border-unique/40' },
   { key: 'disputed', label: 'Disputed', cls: 'text-disputed/50 border-disputed/20 hover:border-disputed/40', activeCls: 'text-disputed bg-disputed/10 border-disputed/40' },
   { key: 'unverified', label: 'Unverified', cls: 'text-unverified/50 border-unverified/20 hover:border-unverified/40', activeCls: 'text-unverified bg-unverified/10 border-unverified/40' },
-  { key: 'unique', label: 'Unique', cls: 'text-unique/50 border-unique/20 hover:border-unique/40', activeCls: 'text-unique bg-unique/10 border-unique/40' },
+  { key: 'insight', label: 'Insight', cls: 'text-zinc-500 border-zinc-500/20 hover:border-zinc-500/40', activeCls: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/40' },
 ];
 
 const SEVERITY_CLS: Record<string, string> = {
@@ -102,7 +103,8 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
               ...(report.insights || []),
             ];
             const filteredFindings = filter === 'all' ? allFindings
-              : allFindings.filter(f => f.tag === filter || (filter === 'unique' && f.findingType === 'insight'));
+              : filter === 'insight' ? allFindings.filter(f => f.findingType === 'insight' || f.findingType === 'suggestion')
+              : allFindings.filter(f => f.tag === filter);
             const isExpanded = expandedId === report.id;
 
             const total = allFindings.length || 1;
