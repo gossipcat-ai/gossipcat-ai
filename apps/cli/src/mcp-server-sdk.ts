@@ -1326,6 +1326,39 @@ server.tool(
 
       writer.appendSignals(formatted);
 
+      // Resolve findings in implementation-findings.jsonl when signal has finding_id
+      const RESOLUTION_SIGNALS = new Set(['agreement', 'unique_confirmed', 'consensus_verified']);
+      const findingsWithId = signals.filter(s => s.finding_id && RESOLUTION_SIGNALS.has(s.signal));
+      if (findingsWithId.length > 0) {
+        try {
+          const { readFileSync: rfs, writeFileSync: wfs, existsSync: exs } = require('fs');
+          const { join: jp } = require('path');
+          const findingsPath = jp(process.cwd(), '.gossip', 'implementation-findings.jsonl');
+          if (exs(findingsPath)) {
+            const lines = rfs(findingsPath, 'utf-8').trim().split('\n').filter(Boolean);
+            const resolveIds = new Set(findingsWithId.map(s => s.finding_id));
+            let updated = false;
+            const resolved = lines.map(line => {
+              try {
+                const entry = JSON.parse(line);
+                if (entry.taskId && resolveIds.has(entry.taskId) && entry.tag === 'unverified') {
+                  entry.tag = 'confirmed';
+                  entry.status = 'resolved';
+                  entry.resolvedAt = new Date().toISOString();
+                  updated = true;
+                  return JSON.stringify(entry);
+                }
+                return line;
+              } catch { return line; }
+            });
+            if (updated) {
+              wfs(findingsPath, resolved.join('\n') + '\n');
+              process.stderr.write(`[gossipcat] Resolved ${resolveIds.size} UNVERIFIED finding(s) in implementation-findings.jsonl\n`);
+            }
+          }
+        } catch { /* best-effort */ }
+      }
+
       // Summary by agent
       const byAgent = new Map<string, { pos: number; neg: number }>();
       for (const s of signals) {

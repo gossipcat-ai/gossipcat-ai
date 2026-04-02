@@ -169,7 +169,10 @@ export async function handleCollect(
 
       const findingsToSave = [
         ...(consensusReport.confirmed || []),
-        ...(consensusReport.unique || []).filter((f: any) => f.confidence >= 3),
+        ...(consensusReport.disputed || []),
+        ...(consensusReport.unverified || []),
+        ...(consensusReport.unique || []),
+        ...(consensusReport.insights || []),
       ];
 
       for (const f of findingsToSave) {
