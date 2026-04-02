@@ -49,7 +49,7 @@ function ReportFinding({ f }: { f: ConsensusReportFinding }) {
         {f.tag.toUpperCase()}
       </span>
       {f.findingType && f.findingType !== 'finding' && (
-        <span className={`shrink-0 rounded-sm px-1 py-0.5 font-mono text-[8px] font-bold ${f.findingType === 'suggestion' ? 'text-blue-400 bg-blue-500/10' : 'text-purple-400 bg-purple-500/10'}`}>
+        <span className={`shrink-0 rounded-sm px-1 py-0.5 font-mono text-[8px] font-bold ${f.findingType === 'suggestion' ? 'text-blue-400 bg-blue-500/10' : 'text-zinc-400 bg-zinc-500/10'}`}>
           {f.findingType === 'suggestion' ? '💡' : '🔍'}
         </span>
       )}
@@ -111,7 +111,7 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
               { count: report.disputed.length, cls: 'bg-disputed' },
               { count: report.unverified.length, cls: 'bg-unverified' },
               { count: report.unique.length, cls: 'bg-unique' },
-              { count: (report.insights || []).length, cls: 'bg-purple-500' },
+              { count: (report.insights || []).length, cls: 'bg-zinc-500' },
             ].filter(s => s.count > 0);
 
             return (
@@ -137,7 +137,7 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
                       {report.disputed.length > 0 && <span className="text-[10px] font-semibold text-disputed">{report.disputed.length} disputed</span>}
                       {report.unverified.length > 0 && <span className="text-[10px] font-semibold text-unverified">{report.unverified.length} unverified</span>}
                       {report.unique.length > 0 && <span className="text-[10px] font-semibold text-unique">{report.unique.length} unique</span>}
-                      {(report.insights || []).length > 0 && <span className="text-[10px] font-semibold text-purple-400">{report.insights.length} insights</span>}
+                      {(report.insights || []).length > 0 && <span className="text-[10px] font-semibold text-zinc-400">{report.insights.length} insights</span>}
                     </div>
                   </div>
                 </button>
