@@ -164,6 +164,12 @@ export class DashboardRouter {
         return true;
       }
 
+      if (url === '/dashboard/api/consensus-reports' && req.method === 'GET') {
+        const data = this.getConsensusReports();
+        this.json(res, 200, data);
+        return true;
+      }
+
       if (url === '/dashboard/api/signals' && req.method === 'GET') {
         const data = await signalsHandler(this.projectRoot, query ?? undefined);
         this.json(res, 200, data);
@@ -256,6 +262,28 @@ export class DashboardRouter {
     if (!cookie) return null;
     const match = cookie.match(/dashboard_session=([^;]+)/);
     return match ? match[1] : null;
+  }
+
+  private getConsensusReports(): { reports: any[] } {
+    const { readdirSync, readFileSync, existsSync } = require('fs');
+    const reportsDir = join(this.projectRoot, '.gossip', 'consensus-reports');
+    if (!existsSync(reportsDir)) return { reports: [] };
+
+    try {
+      const files = readdirSync(reportsDir)
+        .filter((f: string) => f.endsWith('.json'))
+        .sort()
+        .reverse()
+        .slice(0, 20); // last 20 reports
+
+      const reports = files.map((f: string) => {
+        try {
+          return JSON.parse(readFileSync(join(reportsDir, f), 'utf-8'));
+        } catch { return null; }
+      }).filter(Boolean);
+
+      return { reports };
+    } catch { return { reports: [] }; }
   }
 
   private json(res: ServerResponse, status: number, data: unknown): void {

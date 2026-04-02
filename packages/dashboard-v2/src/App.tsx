@@ -204,7 +204,7 @@ function FindingsPage({ consensus }: { consensus: import('@/lib/types').Consensu
 
 function Dashboard() {
   const route = useRoute();
-  const { overview, agents, tasks, consensus, memories, loading, refresh } = useDashboardData();
+  const { overview, agents, tasks, consensus, consensusReports, memories, loading, refresh } = useDashboardData();
 
   const handleWsEvent = useCallback((_event: DashboardEvent) => {
     refresh();
@@ -236,7 +236,7 @@ function Dashboard() {
     content = (
       <>
         {agents && <TeamSection agents={agents} />}
-        <FindingsMetrics consensus={consensus} />
+        <FindingsMetrics consensus={consensus} reports={consensusReports} />
         {tasks && <TasksSection tasks={tasks} />}
         {memories && <RecentMemories memories={memories} />}
       </>

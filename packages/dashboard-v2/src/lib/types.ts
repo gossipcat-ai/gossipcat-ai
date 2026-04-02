@@ -63,6 +63,34 @@ export interface ConsensusData {
   totalSignals: number;
 }
 
+export interface ConsensusReportFinding {
+  id: string;
+  originalAgentId: string;
+  finding: string;
+  findingType?: 'finding' | 'suggestion' | 'insight';
+  severity?: 'critical' | 'high' | 'medium' | 'low';
+  tag: string;
+  confirmedBy: string[];
+  confidence: number;
+}
+
+export interface ConsensusReport {
+  id: string;
+  timestamp: string;
+  agentCount: number;
+  rounds: number;
+  confirmed: ConsensusReportFinding[];
+  disputed: ConsensusReportFinding[];
+  unverified: ConsensusReportFinding[];
+  unique: ConsensusReportFinding[];
+  insights: ConsensusReportFinding[];
+  newFindings: Array<{ agentId: string; finding: string; evidence: string; confidence: number }>;
+}
+
+export interface ConsensusReportsData {
+  reports: ConsensusReport[];
+}
+
 export interface MemoryFile {
   filename: string;
   frontmatter: Record<string, string>;

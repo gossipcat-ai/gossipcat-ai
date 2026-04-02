@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import type { ConsensusData } from '@/lib/types';
+import type { ConsensusData, ConsensusReportsData, ConsensusReportFinding } from '@/lib/types';
 import { timeAgo, cleanFindingTags } from '@/lib/utils';
 
 interface FindingsMetricsProps {
   consensus: ConsensusData;
+  reports?: ConsensusReportsData | null;
 }
 
 const MAX_RUNS = 5;
@@ -29,11 +30,46 @@ const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: st
   { key: 'unique', label: 'Unique', cls: 'text-unique/60', activeCls: 'text-unique bg-unique/10' },
 ];
 
-export function FindingsMetrics({ consensus }: FindingsMetricsProps) {
+const SEVERITY_CLS: Record<string, string> = {
+  critical: 'text-red-400 bg-red-500/10',
+  high: 'text-orange-400 bg-orange-500/10',
+  medium: 'text-yellow-400 bg-yellow-500/10',
+  low: 'text-muted-foreground bg-muted/50',
+};
+
+function ReportFinding({ f }: { f: ConsensusReportFinding }) {
+  const tagCls = f.tag === 'confirmed' ? 'text-confirmed bg-confirmed/10'
+    : f.tag === 'disputed' ? 'text-disputed bg-disputed/10'
+    : f.tag === 'unverified' ? 'text-unverified bg-unverified/10'
+    : 'text-unique bg-unique/10';
+  const sevCls = f.severity ? SEVERITY_CLS[f.severity] || '' : '';
+  return (
+    <div className="flex items-start gap-2">
+      <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold ${tagCls}`}>
+        {f.tag.toUpperCase()}
+      </span>
+      {f.severity && (
+        <span className={`shrink-0 rounded-sm px-1 py-0.5 font-mono text-[8px] font-bold ${sevCls}`}>
+          {f.severity.toUpperCase()}
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <span className="text-xs text-muted-foreground [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400"
+          dangerouslySetInnerHTML={{ __html: cleanFindingTags(f.finding) }} />
+        <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">{f.originalAgentId}</span>
+      </div>
+    </div>
+  );
+}
+
+export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
   const runs = consensus.runs.slice(0, MAX_RUNS);
   const hasMore = consensus.runs.length > MAX_RUNS;
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
+
+  // If we have structured reports, show those instead of signal-based view
+  const latestReports = reports?.reports?.slice(0, MAX_RUNS) || [];
 
   return (
     <section>
@@ -48,7 +84,62 @@ export function FindingsMetrics({ consensus }: FindingsMetricsProps) {
         )}
       </div>
 
-      {runs.length === 0 ? (
+      {latestReports.length > 0 ? (
+        <div className="space-y-2">
+          {latestReports.map((report, i) => {
+            const allFindings = [
+              ...report.confirmed,
+              ...report.disputed,
+              ...report.unverified,
+              ...report.unique,
+              ...(report.insights || []),
+            ];
+            const filteredFindings = filter === 'all' ? allFindings
+              : allFindings.filter(f => f.tag === filter || (filter === 'unique' && f.findingType === 'insight'));
+            const isExpanded = expandedIdx === i;
+
+            return (
+              <div key={report.id} className="rounded-md border border-border/50 bg-card/50 px-3 py-2">
+                <button className="flex w-full items-center justify-between text-left" onClick={() => setExpandedIdx(isExpanded ? null : i)}>
+                  <div>
+                    <span className="font-mono text-sm font-bold text-foreground">{allFindings.length} findings</span>
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {report.agentCount} agents
+                    </span>
+                    <div className="mt-0.5">
+                      {report.confirmed.length > 0 && <span className="text-[10px] font-bold text-confirmed">{report.confirmed.length} confirmed </span>}
+                      {report.disputed.length > 0 && <span className="text-[10px] font-bold text-disputed">{report.disputed.length} disputed </span>}
+                      {report.unverified.length > 0 && <span className="text-[10px] font-bold text-unverified">{report.unverified.length} unverified </span>}
+                      {report.unique.length > 0 && <span className="text-[10px] font-bold text-unique">{report.unique.length} unique </span>}
+                      {(report.insights || []).length > 0 && <span className="text-[10px] font-bold text-purple-400">{report.insights.length} insights </span>}
+                    </div>
+                  </div>
+                  <span className="font-mono text-[10px] text-muted-foreground">{timeAgo(report.timestamp)}</span>
+                </button>
+                {isExpanded && (
+                  <div className="mt-3 border-t border-border/30 pt-3">
+                    <div className="mb-2 flex gap-2">
+                      {FILTER_TABS.map(tab => (
+                        <button key={tab.key} onClick={() => setFilter(tab.key)}
+                          className={`font-mono text-[10px] ${filter === tab.key ? tab.activeCls : tab.cls}`}>
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="space-y-1.5">
+                      {filteredFindings.length === 0 ? (
+                        <div className="py-4 text-center text-xs text-muted-foreground">No findings match this filter.</div>
+                      ) : (
+                        filteredFindings.map((f, j) => <ReportFinding key={j} f={f} />)
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : runs.length === 0 ? (
         <div className="py-8 text-center text-sm text-muted-foreground">No consensus runs yet.</div>
       ) : (
         <div className="space-y-2">

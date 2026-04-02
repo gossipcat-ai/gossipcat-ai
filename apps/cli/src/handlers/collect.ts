@@ -157,6 +157,30 @@ export async function handleCollect(
     }
   }
 
+  // Persist full consensus report for dashboard
+  if (consensusReport) {
+    try {
+      const { writeFileSync: wfr, mkdirSync: mdr } = require('fs');
+      const { join: jr } = require('path');
+      const reportsDir = jr(process.cwd(), '.gossip', 'consensus-reports');
+      mdr(reportsDir, { recursive: true });
+      const reportId = consensusReport.signals?.[0]?.consensusId || Date.now().toString();
+      const reportPath = jr(reportsDir, `${reportId}.json`);
+      wfr(reportPath, JSON.stringify({
+        id: reportId,
+        timestamp: new Date().toISOString(),
+        agentCount: consensusReport.agentCount,
+        rounds: consensusReport.rounds,
+        confirmed: consensusReport.confirmed || [],
+        disputed: consensusReport.disputed || [],
+        unverified: consensusReport.unverified || [],
+        unique: consensusReport.unique || [],
+        insights: consensusReport.insights || [],
+        newFindings: consensusReport.newFindings || [],
+      }, null, 2));
+    } catch { /* best-effort */ }
+  }
+
   // Auto-persist confirmed findings to implementation-findings.jsonl
   let provisionalSignalCount = 0;
   if (consensusReport) {
