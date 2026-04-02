@@ -42,6 +42,17 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   severity_miscalibrated: true,
 };
 
+const SEVERITY_MULTIPLIER: Record<string, number> = {
+  critical: 4,
+  high: 2,
+  medium: 1,
+  low: 1,
+};
+
+function getSeverityMultiplier(severity?: string): number {
+  return severity ? (SEVERITY_MULTIPLIER[severity] ?? 1) : 1;
+}
+
 export class PerformanceReader {
   private readonly filePath: string;
   // Cache: avoid re-reading file on every dispatch call
@@ -155,6 +166,7 @@ export class PerformanceReader {
       hallucinations: number;
       totalSignals: number;
       lastSignalMs: number;
+      categoryStrengths: Record<string, number>;
     }>();
 
     const ensure = (id: string) => {
@@ -163,7 +175,7 @@ export class PerformanceReader {
         weightedUnique: 0, weightedHallucinations: 0,
         tasksSeen: new Map(), taskCounter: 0,
         agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
-        totalSignals: 0, lastSignalMs: 0,
+        totalSignals: 0, lastSignalMs: 0, categoryStrengths: {},
       });
       return acc.get(id)!;
     };
@@ -199,25 +211,29 @@ export class PerformanceReader {
       const taskIndex = a.tasksSeen.get(taskKey) ?? a.taskCounter - 1;
       const tasksSince = a.taskCounter - taskIndex - 1;
       const decay = Math.pow(0.5, tasksSince / DECAY_HALF_LIFE);
+      const sevMul = getSeverityMultiplier(signal.severity);
 
       switch (signal.signal) {
         case 'agreement':
         case 'category_confirmed':
         case 'consensus_verified': {
-          a.weightedCorrect += decay;
-          a.weightedTotal += decay;
+          a.weightedCorrect += sevMul * decay;
+          a.weightedTotal += sevMul * decay;
           a.agreements++;
+          if (signal.signal === 'category_confirmed' && signal.category) {
+            a.categoryStrengths[signal.category] = (a.categoryStrengths[signal.category] ?? 0) + decay * 0.15;
+          }
           break;
         }
         case 'disagreement': {
-          a.weightedTotal += decay;
+          a.weightedTotal += sevMul * decay;
           a.disagreements++;
           if (signal.counterpartId && signal.counterpartId.length > 0) {
             const winner = ensure(signal.counterpartId);
             const wi = winner.tasksSeen.get(taskKey) ?? winner.taskCounter - 1;
             const wd = Math.pow(0.5, Math.max(0, winner.taskCounter - wi - 1) / DECAY_HALF_LIFE);
-            winner.weightedCorrect += wd;
-            winner.weightedTotal += wd;
+            winner.weightedCorrect += sevMul * wd;
+            winner.weightedTotal += sevMul * wd;
             if (signalMs > winner.lastSignalMs) winner.lastSignalMs = signalMs;
           }
           break;
@@ -228,9 +244,9 @@ export class PerformanceReader {
           break;
         }
         case 'unique_confirmed': {
-          a.weightedCorrect += decay;
-          a.weightedTotal += decay;
-          a.weightedUnique += 0.2 * decay;
+          a.weightedCorrect += sevMul * decay;
+          a.weightedTotal += sevMul * decay;
+          a.weightedUnique += 0.2 * sevMul * decay;
           a.uniqueFindings++;
           break;
         }
@@ -323,7 +339,7 @@ export class PerformanceReader {
         hallucinations: a.hallucinations,
         consecutiveFailures: consec,
         circuitOpen: consec >= CIRCUIT_BREAKER_THRESHOLD,
-        categoryStrengths: {},
+        categoryStrengths: a.categoryStrengths,
       });
     }
 
