@@ -1409,9 +1409,10 @@ server.tool(
         // Finding IDs are scoped: "reportId:fN" (new) or "fN" (legacy)
         // Scoped IDs only match within the correct report; legacy IDs match any report
         try {
-          const { readdirSync: rds } = require('fs');
-          const reportsDir = jp(process.cwd(), '.gossip', 'consensus-reports');
-          if (exs(reportsDir)) {
+          const { readdirSync: rds, readFileSync: rfs2, writeFileSync: wfs2, existsSync: exs2 } = require('fs');
+          const { join: jp2 } = require('path');
+          const reportsDir = jp2(process.cwd(), '.gossip', 'consensus-reports');
+          if (exs2(reportsDir)) {
             // Group finding_ids by report prefix (scoped) vs unscoped (legacy)
             const scopedByReport = new Map<string, Set<string>>();
             const unscopedIds = new Set<string>();
@@ -1428,8 +1429,8 @@ server.tool(
 
             for (const file of rds(reportsDir).filter((f: string) => f.endsWith('.json'))) {
               try {
-                const reportPath = jp(reportsDir, file);
-                const report = JSON.parse(rfs(reportPath, 'utf-8'));
+                const reportPath = jp2(reportsDir, file);
+                const report = JSON.parse(rfs2(reportPath, 'utf-8'));
                 // Determine which IDs apply to this report
                 const reportId = report.id || '';
                 const idsForThisReport = new Set<string>();
@@ -1463,7 +1464,7 @@ server.tool(
                 }
                 if (changed) {
                   const tmpPath = reportPath + '.tmp.' + Date.now();
-                  wfs(tmpPath, JSON.stringify(report, null, 2));
+                  wfs2(tmpPath, JSON.stringify(report, null, 2));
                   require('fs').renameSync(tmpPath, reportPath);
                   process.stderr.write(`[gossipcat] Resolved finding(s) in consensus report ${file}\n`);
                 }
