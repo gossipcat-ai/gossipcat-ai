@@ -1352,7 +1352,10 @@ server.tool(
               } catch { return line; }
             });
             if (updated) {
-              wfs(findingsPath, resolved.join('\n') + '\n');
+              // Atomic write: temp file + rename to avoid race with concurrent appenders
+              const tmpPath = findingsPath + '.tmp.' + Date.now();
+              wfs(tmpPath, resolved.join('\n') + '\n');
+              require('fs').renameSync(tmpPath, findingsPath);
               process.stderr.write(`[gossipcat] Resolved ${resolveIds.size} UNVERIFIED finding(s) in implementation-findings.jsonl\n`);
             }
           }

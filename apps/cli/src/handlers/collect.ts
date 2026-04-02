@@ -182,7 +182,7 @@ export async function handleCollect(
           originalAgentId: f.originalAgentId,
           confirmedBy: f.confirmedBy || [],
           finding: f.finding,
-          tag: f.tag || 'confirmed',
+          tag: f.tag || 'unknown',
           confidence: f.confidence || 0,
           status: 'open',
         };
