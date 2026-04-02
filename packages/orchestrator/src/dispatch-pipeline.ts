@@ -910,6 +910,7 @@ export class DispatchPipeline {
                 type: 'consensus', signal: 'consensus_verified', consensusId,
                 agentId: finding.originalAgentId,
                 evidence: v.evidence, timestamp: now, taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || '',
+                severity: finding.severity,
               });
             }
           }
@@ -944,6 +945,7 @@ export class DispatchPipeline {
               category,
               evidence: finding.finding,
               timestamp: now,
+              severity: finding.severity,
             } as any);
           }
         }
