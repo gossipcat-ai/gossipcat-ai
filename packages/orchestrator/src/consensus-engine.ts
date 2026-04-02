@@ -786,18 +786,68 @@ Return ONLY a JSON array:
       } catch { /* file unreadable, skip */ }
     }
 
-    // Fallback: if no file:line anchors found, try <fn> tag-based identifier search
-    if (anchors.length === 0 && this.config.projectRoot) {
-      const fnPattern = /<fn>([^<]+)<\/fn>/g;
-      let fnMatch: RegExpExecArray | null;
-      while ((fnMatch = fnPattern.exec(findingText)) !== null) {
+    // Parse <cite> tags for additional anchors
+    // <cite tag="file">auth.ts:38</cite> — resolved by file:line fetch (same as regex above, catches explicit citations)
+    // <cite tag="fn">functionName</cite> — resolved by identifier grep
+    // Also supports legacy <fn>identifier</fn> for backward compat
+    if (this.config.projectRoot) {
+      const citePattern = /<cite\s+tag="(file|fn)">([^<]+)<\/cite>/g;
+      let citeMatch: RegExpExecArray | null;
+      while ((citeMatch = citePattern.exec(findingText)) !== null) {
         if (anchors.length >= maxSnippets) break;
-        const identifier = fnMatch[1].trim();
-        if (!identifier || identifier.length > 60) continue;
-        const result = await this.grepIdentifier(identifier);
-        if (result) {
-          const safeSnippet = result.snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
-          anchors.push(`<anchor src="${result.file}:${result.line}" via="fn:${identifier}">\n${safeSnippet}\n</anchor>`);
+        const [, tag, value] = citeMatch;
+        const trimmed = value.trim();
+        if (!trimmed || trimmed.length > 80) continue;
+
+        if (tag === 'file') {
+          // file:line citation — resolve via existing file resolver
+          const fileMatch = trimmed.match(/^((?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)$/);
+          if (fileMatch && !seen.has(trimmed)) {
+            seen.add(trimmed);
+            const fullRef = fileMatch[1];
+            const bareFile = fileMatch[2];
+            const lineNum = parseInt(fileMatch[3], 10);
+            try {
+              const safeRef = fullRef.replace(/["<>]/g, '');
+              const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
+              if (filePath) {
+                const content = await this.cachedRead(filePath);
+                if (content) {
+                  const fileLines = content.split('\n');
+                  if (lineNum <= fileLines.length && fileLines[lineNum - 1].trim() !== '') {
+                    const start = Math.max(0, lineNum - 1 - CONTEXT_LINES);
+                    const end = Math.min(fileLines.length, lineNum + CONTEXT_LINES);
+                    const snippet = fileLines.slice(start, end).map((l, i) => `  ${start + i + 1}: ${l}`).join('\n');
+                    const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
+                    anchors.push(`<anchor src="${safeRef}:${lineNum}" via="cite:file">\n${safeSnippet}\n</anchor>`);
+                  }
+                }
+              }
+            } catch { /* skip */ }
+          }
+        } else if (tag === 'fn') {
+          // function name — grep identifier
+          const result = await this.grepIdentifier(trimmed);
+          if (result) {
+            const safeSnippet = result.snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
+            anchors.push(`<anchor src="${result.file}:${result.line}" via="cite:fn:${trimmed}">\n${safeSnippet}\n</anchor>`);
+          }
+        }
+      }
+
+      // Legacy: bare <fn> tags (backward compat)
+      if (anchors.length === 0) {
+        const fnPattern = /<fn>([^<]+)<\/fn>/g;
+        let fnMatch: RegExpExecArray | null;
+        while ((fnMatch = fnPattern.exec(findingText)) !== null) {
+          if (anchors.length >= maxSnippets) break;
+          const identifier = fnMatch[1].trim();
+          if (!identifier || identifier.length > 60) continue;
+          const result = await this.grepIdentifier(identifier);
+          if (result) {
+            const safeSnippet = result.snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
+            anchors.push(`<anchor src="${result.file}:${result.line}" via="fn:${identifier}">\n${safeSnippet}\n</anchor>`);
+          }
         }
       }
     }

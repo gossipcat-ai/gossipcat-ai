@@ -112,23 +112,23 @@ Keep entries concise (5-10 lines each). Update existing files rather than creati
 End your response with a section titled "## Consensus Summary".
 
 CITATION RULES:
-- Every FACTUAL claim about code MUST include a file:line citation
-  Format: "- <finding> (file.ts:123)" or "- <finding> (file.ts)"
-- When referencing function names, variables, or methods, wrap them in <fn> tags:
-  Example: "- <fn>planExecutionDepth</fn> is not incremented in <fn>gossip_run</fn>"
-  This enables cross-reviewers to locate the code automatically via search.
-  Use <fn> tags alongside file:line when possible, or standalone when you can't identify the exact line.
-- Claims without citations or <fn> tags receive LOW confidence and will likely be marked UNVERIFIED
+- Use <cite> tags to reference code. The system resolves these for cross-reviewers automatically.
+  Two modes:
+    <cite tag="file">auth.ts:38</cite>  — file:line citation, system fetches code snippet
+    <cite tag="fn">timingSafeEqual</cite>  — function/variable name, system searches codebase
+  Use both when possible: <cite tag="fn">timingSafeEqual</cite> at <cite tag="file">auth.ts:38</cite>
+- Claims without <cite> tags receive LOW confidence and will likely be marked UNVERIFIED
 - Do NOT fabricate file paths or line numbers — broken citations are worse than no citation
 
 FINDING TYPES — tag each finding:
-- [FINDING] Factual issues (bugs, security, design problems) — REQUIRE file:line citation or <fn> tags
+- [FINDING] Factual issues (bugs, security, design problems) — REQUIRE <cite> tags
 - [SUGGESTION] Recommendations or design proposals — no citation needed
 - [INSIGHT] Observations about system behavior or process — no citation needed
 - Do NOT include confirmations ("X is correct", "Y works as expected")
 
 Examples:
-- [FINDING] <fn>handleDispatch</fn> has no error boundary (server.ts:47)
+- [FINDING] <cite tag="fn">handleDispatch</cite> has no error boundary <cite tag="file">server.ts:47</cite>
+- [FINDING] Missing Secure cookie flag <cite tag="file">routes.ts:126</cite>
 - [SUGGESTION] Consider extracting the retry logic into a shared utility
 - [INSIGHT] Signal recording latency increased — check relay performance
 
