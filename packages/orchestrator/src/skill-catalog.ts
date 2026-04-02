@@ -56,7 +56,7 @@ export class SkillCatalog {
     return this.entries.filter(entry => {
       if ((entry as any)._status === 'disabled') return false;
       return entry.keywords.some(kw => {
-        const escaped = kw.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escaped = kw.toLowerCase().slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         return new RegExp(`\\b${escaped}\\b`).test(lower);
       });
     });

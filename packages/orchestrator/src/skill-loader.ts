@@ -188,6 +188,7 @@ export function listAvailableSkills(agentId: string, projectRoot: string): strin
     }
   }
 
+  if (!SAFE_AGENT_ID.test(agentId)) return Array.from(skills).sort();
   const agentDir = resolve(projectRoot, '.gossip', 'agents', agentId, 'skills');
   if (existsSync(agentDir)) {
     for (const f of readdirSync(agentDir)) {

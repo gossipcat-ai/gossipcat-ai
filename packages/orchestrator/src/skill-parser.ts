@@ -34,7 +34,7 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     if (raw.startsWith('[') && raw.endsWith(']')) {
       keywords = raw.slice(1, -1).split(',').map(k => k.trim().replace(/^['"]|['"]$/g, '').slice(0, 100)).filter(Boolean);
     } else {
-      keywords = raw.split(',').map(k => k.trim()).filter(Boolean);
+      keywords = raw.split(',').map(k => k.trim().slice(0, 100)).filter(Boolean);
     }
   }
 

@@ -87,7 +87,7 @@ export class SkillCounterTracker {
         // Auto-disable: last STALE_THRESHOLD dispatches had zero activations (rolling window)
         // Use recentWindow for recency, not cumulative counts which miss dormancy after early use
         const windowFull = counter.recentWindow.length >= STALE_THRESHOLD;
-        const windowAllInactive = windowFull && counter.recentWindow.slice(-STALE_THRESHOLD).every(v => !v);
+        const windowAllInactive = windowFull && counter.recentWindow.every(v => !v);
         if (windowAllInactive) {
           if (index.disable(agentId, skill)) {
             disabled.push(`${agentId}/${skill}`);
