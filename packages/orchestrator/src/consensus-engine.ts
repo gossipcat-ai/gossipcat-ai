@@ -1,6 +1,12 @@
 import { readFile, readdir, stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, resolve } from 'path';
+
+/** Generate a short consensus round ID: xxxxxxxx-xxxxxxxx (17 chars from UUID) */
+function shortConsensusId(): string {
+  const hex = randomUUID().replace(/-/g, '');
+  return hex.slice(0, 8) + '-' + hex.slice(8, 16);
+}
 import { LLMMessage } from '@gossip/types';
 import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
@@ -239,7 +245,7 @@ Return only valid JSON.` },
    * Phase 3: Synthesize Phase 1 results and Phase 2 cross-review entries into a consensus report.
    */
   async synthesize(results: TaskEntry[], crossReviewEntries: CrossReviewEntry[]): Promise<ConsensusReport> {
-    const consensusId = randomUUID().slice(0, 12);
+    const consensusId = shortConsensusId();
     const signals: ConsensusSignal[] = [];
     const newFindings: ConsensusNewFinding[] = [];
     const successful = results.filter(r => r.status === 'completed' && r.result);
@@ -712,7 +718,7 @@ Return ONLY a JSON array:
       const verdicts: Array<{ index: number; verdict: string; evidence: string }> = JSON.parse(text);
       if (!Array.isArray(verdicts)) return;
 
-      const consensusId = report.signals[0]?.consensusId ?? randomUUID().slice(0, 12);
+      const consensusId = report.signals[0]?.consensusId ?? shortConsensusId();
       const now = new Date().toISOString();
 
       // Process verdicts — deduplicate by index to prevent double-promotion

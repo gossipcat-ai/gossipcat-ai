@@ -102,9 +102,10 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
               <div key={report.id} className="rounded-md border border-border/50 bg-card/50 px-3 py-2">
                 <button className="flex w-full items-center justify-between text-left" onClick={() => setExpandedIdx(isExpanded ? null : i)}>
                   <div>
-                    <span className="font-mono text-sm font-bold text-foreground">{allFindings.length} findings</span>
+                    <span className="font-mono text-[10px] text-primary/70">{report.id}</span>
+                    <span className="ml-2 font-mono text-sm font-bold text-foreground">{allFindings.length} findings</span>
                     <span className="ml-2 text-xs text-muted-foreground">
-                      {report.agentCount} agents
+                      {report.agentCount} agents · {report.rounds} rounds
                     </span>
                     <div className="mt-0.5">
                       {report.confirmed.length > 0 && <span className="text-[10px] font-bold text-confirmed">{report.confirmed.length} confirmed </span>}
@@ -177,6 +178,7 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
+                        <span className="font-mono text-[10px] text-primary/50">{run.taskId.slice(0, 17)}</span>
                         <span className="font-mono text-sm font-semibold text-foreground">{runTotal} findings</span>
                         <div className="flex gap-1.5">
                           {run.agents.slice(0, 4).map((a) => (
