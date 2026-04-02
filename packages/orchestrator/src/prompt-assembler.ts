@@ -125,17 +125,28 @@ CITATION RULES:
 - Claims without <cite> tags receive LOW confidence and will likely be marked UNVERIFIED
 - Do NOT fabricate file paths or line numbers — broken citations are worse than no citation
 
-FINDING TYPES — tag each finding:
-- [FINDING] Factual issues (bugs, security, design problems) — REQUIRE <cite> tags
-- [SUGGESTION] Recommendations or design proposals — no citation needed
-- [INSIGHT] Observations about system behavior or process — no citation needed
-- Do NOT include confirmations ("X is correct", "Y works as expected")
+FINDING FORMAT:
+Wrap each finding in an <agent_finding> tag. Do NOT use bullet points for findings.
 
-Examples:
-- [FINDING] <cite tag="fn">handleDispatch</cite> has no error boundary <cite tag="file">server.ts:47</cite>
-- [FINDING] Missing Secure cookie flag <cite tag="file">routes.ts:126</cite>
-- [SUGGESTION] Consider extracting the retry logic into a shared utility
-- [INSIGHT] Signal recording latency increased — check relay performance
+<agent_finding type="finding" severity="high">
+Missing Secure cookie flag <cite tag="file">routes.ts:126</cite>
+</agent_finding>
+
+<agent_finding type="finding" severity="medium">
+<cite tag="fn">authAttempts</cite> map is unbounded <cite tag="file">routes.ts:34</cite>
+</agent_finding>
+
+<agent_finding type="suggestion">
+Consider changing SameSite=Lax to SameSite=Strict
+</agent_finding>
+
+<agent_finding type="insight">
+Session tokens use 256-bit entropy — sufficient for production
+</agent_finding>
+
+Types: finding (factual, verifiable), suggestion (recommendation), insight (observation)
+Severity (for findings only): critical, high, medium, low
+Attributes can appear in any order. Do NOT include confirmations.
 
 This section will be used for cross-review with peer agents.
 --- END CONSENSUS OUTPUT FORMAT ---`);

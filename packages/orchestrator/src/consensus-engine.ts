@@ -249,36 +249,70 @@ Return only valid JSON.` },
       originalAgentId: string;
       finding: string;
       findingType?: 'finding' | 'suggestion' | 'insight';
+      severity?: 'critical' | 'high' | 'medium' | 'low';
       confirmedBy: string[];
       disputedBy: Array<{ agentId: string; reason: string; evidence: string }>;
       unverifiedBy: Array<{ agentId: string; reason: string }>;
       confidences: number[];
     }>();
 
+    const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
+
     for (const r of successful) {
       const summary = this.extractSummary(r.result!);
-      const lines = summary.split('\n').filter(l => l.trimStart().startsWith('-'));
-      for (const line of lines) {
-        let finding = line.replace(/^\s*-\s*/, '').trim();
-        if (!finding) continue;
-        // Basic noise filter: very short lines are never findings
-        if (finding.length < 20) continue;
-        // Parse [FINDING]/[SUGGESTION]/[INSIGHT] tags — strip before map insertion
-        const tagMatch = finding.match(/^\[(FINDING|SUGGESTION|INSIGHT)\]\s*/i);
-        const findingType = tagMatch ? tagMatch[1].toLowerCase() as 'finding' | 'suggestion' | 'insight' : 'finding';
-        if (tagMatch) finding = finding.slice(tagMatch[0].length).trim();
-        const key = `${r.agentId}::${finding}`;
-        // Detect source file anchors — restrict to known extensions to avoid false matches (node:18, http:443)
-        const hasAnchor = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/.test(finding);
+      let agentFindingsFound = 0;
+
+      // Primary: parse <agent_finding> tags from raw summary
+      const agentFindingPattern = /<agent_finding\s+([^>]*)>([\s\S]*?)<\/agent_finding>/g;
+      let afMatch: RegExpExecArray | null;
+      while ((afMatch = agentFindingPattern.exec(summary)) !== null) {
+        const attrs = afMatch[1];
+        const content = afMatch[2].trim();
+        if (!content || content.length < 10 || content.length > 2000) continue;
+
+        const typeMatch = attrs.match(/type="(finding|suggestion|insight)"/);
+        if (!typeMatch) continue;
+        const severityMatch = attrs.match(/severity="(critical|high|medium|low)"/);
+
+        const findingType = typeMatch[1] as 'finding' | 'suggestion' | 'insight';
+        const severity = severityMatch?.[1] as 'critical' | 'high' | 'medium' | 'low' | undefined;
+        const key = `${r.agentId}::${content}`;
+        const hasAnchor = ANCHOR_PATTERN.test(content);
+
         findingMap.set(key, {
           originalAgentId: r.agentId,
-          finding,
+          finding: content,
           findingType,
+          severity,
           confirmedBy: [],
           disputedBy: [],
           unverifiedBy: [],
-          confidences: hasAnchor ? [] : [2], // pre-load low confidence for anchorless findings
+          confidences: hasAnchor ? [] : [2],
         });
+        agentFindingsFound++;
+      }
+
+      // Per-agent fallback: if THIS agent produced no tags, use legacy bullet parsing
+      if (agentFindingsFound === 0) {
+        const lines = summary.split('\n').filter(l => l.trimStart().startsWith('-'));
+        for (const line of lines) {
+          let finding = line.replace(/^\s*-\s*/, '').trim();
+          if (!finding || finding.length < 20) continue;
+          const prefixMatch = finding.match(/^\[(FINDING|SUGGESTION|INSIGHT)\]\s*/i);
+          const findingType = prefixMatch ? prefixMatch[1].toLowerCase() as 'finding' | 'suggestion' | 'insight' : 'finding';
+          if (prefixMatch) finding = finding.slice(prefixMatch[0].length).trim();
+          const key = `${r.agentId}::${finding}`;
+          const hasAnchor = ANCHOR_PATTERN.test(finding);
+          findingMap.set(key, {
+            originalAgentId: r.agentId,
+            finding,
+            findingType,
+            confirmedBy: [],
+            disputedBy: [],
+            unverifiedBy: [],
+            confidences: hasAnchor ? [] : [2],
+          });
+        }
       }
     }
 
@@ -438,6 +472,7 @@ Return only valid JSON.` },
         originalAgentId: entry.originalAgentId,
         finding: entry.finding,
         findingType: entry.findingType,
+        severity: entry.severity,
         tag: 'unique',
         confirmedBy: entry.confirmedBy,
         disputedBy: entry.disputedBy,
@@ -1119,12 +1154,14 @@ Return ONLY a JSON array:
       originalAgentId: string;
       finding: string;
       findingType?: 'finding' | 'suggestion' | 'insight';
+      severity?: 'critical' | 'high' | 'medium' | 'low';
       confirmedBy: string[];
       disputedBy: Array<{ agentId: string; reason: string; evidence: string }>;
       unverifiedBy: Array<{ agentId: string; reason: string }>;
       confidences: number[];
     }>,
   ): void {
+    const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
     const entries = Array.from(findingMap.entries());
     const toRemove = new Set<string>();
 
@@ -1176,6 +1213,8 @@ Return ONLY a JSON array:
             entryB.confidences.push(4);
             // Preserve findingType: suggestion/insight wins over finding (more specific)
             if (entryA.findingType && entryA.findingType !== 'finding') entryB.findingType = entryA.findingType;
+            // Severity: highest wins
+            if (entryA.severity && (!entryB.severity || (SEVERITY_RANK[entryA.severity] || 0) > (SEVERITY_RANK[entryB.severity] || 0))) entryB.severity = entryA.severity;
             toRemove.add(keyA);
             process.stderr.write(
               `[consensus] Dedup: merged "${entryA.finding.slice(0, 60)}..." (${entryA.originalAgentId}) into "${entryB.finding.slice(0, 60)}..." (${entryB.originalAgentId}) [B more precise]\n`
@@ -1186,6 +1225,7 @@ Return ONLY a JSON array:
           entryA.confirmedBy.push(entryB.originalAgentId);
           entryA.confidences.push(4); // high confidence — independent discovery
           if (entryB.findingType && entryB.findingType !== 'finding') entryA.findingType = entryB.findingType;
+          if (entryB.severity && (!entryA.severity || (SEVERITY_RANK[entryB.severity] || 0) > (SEVERITY_RANK[entryA.severity] || 0))) entryA.severity = entryB.severity;
           toRemove.add(keyB);
           process.stderr.write(
             `[consensus] Dedup: merged "${entryB.finding.slice(0, 60)}..." (${entryB.originalAgentId}) into "${entryA.finding.slice(0, 60)}..." (${entryA.originalAgentId})\n`

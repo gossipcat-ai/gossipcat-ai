@@ -4,6 +4,7 @@ export interface ConsensusFinding {
   originalAgentId: string;
   finding: string;
   findingType?: 'finding' | 'suggestion' | 'insight';
+  severity?: 'critical' | 'high' | 'medium' | 'low';
   tag: 'confirmed' | 'disputed' | 'unverified' | 'unique';
   confirmedBy: string[];
   disputedBy: Array<{
