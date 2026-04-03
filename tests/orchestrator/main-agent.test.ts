@@ -105,7 +105,7 @@ describe('MainAgent bootstrapPrompt', () => {
       bootstrapPrompt: '## Bootstrap Context\nTeam info here.',
     });
 
-    await mainAgent.handleMessage('do something', { mode: 'decompose' });
+    await mainAgent.handleMessage('do something', {});
 
     // The system prompt used in the unassigned path should contain bootstrapPrompt + CHAT_SYSTEM_PROMPT
     expect(systemMessages.length).toBeGreaterThan(0);
@@ -136,7 +136,7 @@ describe('MainAgent bootstrapPrompt', () => {
       llm: mockLLM,
     });
 
-    await mainAgent.handleMessage('do something', { mode: 'decompose' });
+    await mainAgent.handleMessage('do something', {});
 
     const lastSystem = systemMessages[systemMessages.length - 1];
     // Should contain CHAT_SYSTEM_PROMPT (orchestrator prompt) without bootstrap prefix
@@ -160,42 +160,3 @@ describe('MainAgent dispatch pipeline', () => {
   });
 });
 
-describe('MainAgent handleMessage → pipeline integration', () => {
-  it('executeSubTask uses dispatch pipeline for task execution', async () => {
-    const mockLLM: ILLMProvider = {
-      async generate(messages: LLMMessage[]) {
-        if (messages[0]?.content?.toString().includes('task decomposition engine')) {
-          return {
-            text: JSON.stringify({
-              strategy: 'single',
-              subTasks: [{ description: 'review the code', requiredSkills: ['code_review'] }],
-            }),
-          };
-        }
-        return { text: 'synthesized result' };
-      },
-    };
-
-    const mainAgent = new MainAgent({
-      provider: 'local', model: 'mock', relayUrl: 'ws://localhost:0',
-      agents: [{ id: 'reviewer', provider: 'local', model: 'mock', skills: ['code_review'] }],
-      projectRoot: '/tmp/gossip-pipeline-test-' + Date.now(),
-      llm: mockLLM,
-    });
-
-    const executeTaskCalls: string[] = [];
-    const mockWorker = {
-      executeTask: async (task: string, _lens?: string, _promptContent?: string) => {
-        executeTaskCalls.push(task);
-        return { result: 'review complete', inputTokens: 0, outputTokens: 0 };
-      },
-      start: async () => {},
-      stop: async () => {},
-    };
-    mainAgent.setWorkers(new Map([['reviewer', mockWorker as any]]));
-
-    const response = await mainAgent.handleMessage('review the code', { mode: 'decompose' });
-    expect(response.status).toBe('done');
-    expect(executeTaskCalls).toContain('review the code');
-  });
-});

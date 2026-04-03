@@ -3,6 +3,7 @@
  * All state accessed via the shared context object.
  */
 import { randomUUID } from 'crypto';
+import { CONSENSUS_OUTPUT_FORMAT } from '@gossip/orchestrator';
 import { ctx, generateTaskId, NATIVE_TASK_TTL_MS } from '../mcp-context';
 import { evictStaleNativeTasks, persistNativeTaskMap, spawnTimeoutWatcher } from './native-tasks';
 
@@ -208,37 +209,7 @@ export async function handleDispatchConsensus(
   }
 
   // Native tasks — inject consensus output format into the prompt (same as relay agents via prompt-assembler)
-  const consensusInstruction = `\n\n--- CONSENSUS OUTPUT FORMAT ---
-End your response with a section titled "## Consensus Summary".
-
-SOURCE FILES:
-- Always cite original source files, NOT compiled/bundled build output (dist/, build/, out/, *.min.js)
-- Build artifacts have different line numbers than source — citing them causes false verification failures
-
-CITATION RULES:
-- Use <cite> tags to reference code: <cite tag="file">auth.ts:38</cite> or <cite tag="fn">functionName</cite>
-- Claims without <cite> tags receive LOW confidence and will likely be marked UNVERIFIED
-- Do NOT fabricate file paths or line numbers — broken citations are worse than no citation
-
-FINDING FORMAT:
-Wrap each finding in an <agent_finding> tag. Do NOT use bullet points for findings.
-
-<agent_finding type="finding" severity="high">
-Missing Secure cookie flag <cite tag="file">routes.ts:126</cite>
-</agent_finding>
-
-<agent_finding type="suggestion">
-Consider changing SameSite=Lax to SameSite=Strict
-</agent_finding>
-
-<agent_finding type="insight">
-Session tokens use 256-bit entropy — sufficient for production
-</agent_finding>
-
-Types: finding (factual issue, verifiable), suggestion (recommendation), insight (observation/context)
-Severity (for findings only): critical, high, medium, low
-Do NOT include confirmations or "looks good" statements — only issues and observations.
---- END CONSENSUS OUTPUT FORMAT ---`;
+  const consensusInstruction = `\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n--- END CONSENSUS OUTPUT FORMAT ---`;
   const nativeInstructions: string[] = [];
   for (const def of nativeTasks) {
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id)!;

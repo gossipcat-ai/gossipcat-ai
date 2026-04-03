@@ -200,24 +200,4 @@ describe('Interactive Session E2E — Game Project', () => {
     expect(hasHistoryRef).toBe(true);
   }, 30_000);
 
-  // ── Test 9: Decompose mode falls back to chat when no workers ─────────
-  it('should handle decompose mode gracefully without workers', async () => {
-    // Decompose mode will try to dispatch to agents, but no workers are running.
-    // It should either: fall back to direct LLM answer (unassigned), or throw an error.
-    let response;
-    try {
-      response = await mainAgent.handleMessage(
-        'explain what the consensus engine does',
-        { mode: 'decompose' }
-      );
-      console.log('\n=== Decompose Mode Response ===');
-      console.log(response.text.slice(0, 300));
-      expect(response.text).toBeTruthy();
-    } catch (err) {
-      // Expected — no workers available for dispatch
-      console.log('\n=== Decompose Mode Error (expected) ===');
-      console.log((err as Error).message);
-      expect((err as Error).message).toBeTruthy();
-    }
-  }, 60_000);
 });

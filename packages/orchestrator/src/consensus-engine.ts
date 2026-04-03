@@ -100,23 +100,29 @@ export class ConsensusEngine {
     const crossReviewMs = Date.now() - crossReviewStart;
     process.stderr.write(`[consensus] Cross-review complete: ${crossReviewEntries.length} entries (${Math.round(crossReviewMs / 1000)}s)\n`);
 
+    const synthesizeStart = Date.now();
     const report = await this.synthesize(results, crossReviewEntries);
+    const synthesizeMs = Date.now() - synthesizeStart;
     // Build per-agent timing from task results
     const perAgent = successful.map(r => ({
       agentId: r.agentId,
       durationMs: (r.completedAt && r.startedAt) ? r.completedAt - r.startedAt : 0,
     }));
-    const totalMs = Date.now() - consensusStart;
-    const timing = { totalMs, perAgent, crossReviewMs };
-    process.stderr.write(`[consensus] ${report.confirmed.length} confirmed, ${report.disputed.length} disputed, ${report.unverified.length} unverified, ${report.unique.length} unique, ${report.newFindings.length} new\n`);
+    process.stderr.write(`[consensus] Synthesis: ${report.confirmed.length} confirmed, ${report.disputed.length} disputed, ${report.unverified.length} unverified, ${report.unique.length} unique, ${report.newFindings.length} new (${Math.round(synthesizeMs / 1000)}s)\n`);
 
     // Phase 3: Orchestrator verification of UNVERIFIED findings
+    let verifyMs = 0;
     if (report.unverified.length > 0) {
       process.stderr.write(`[consensus] Phase 3: verifying ${report.unverified.length} unverified findings\n`);
+      const verifyStart = Date.now();
       await this.verifyUnverified(report, successful);
-      process.stderr.write(`[consensus] After verification: ${report.confirmed.length} confirmed, ${report.disputed.length} disputed, ${report.unverified.length} unverified\n`);
+      verifyMs = Date.now() - verifyStart;
+      process.stderr.write(`[consensus] After verification: ${report.confirmed.length} confirmed, ${report.disputed.length} disputed, ${report.unverified.length} unverified (${Math.round(verifyMs / 1000)}s)\n`);
     }
 
+    const totalMs = Date.now() - consensusStart;
+    const timing = { totalMs, perAgent, crossReviewMs, synthesizeMs, verifyMs };
+    process.stderr.write(`[consensus] Total: ${Math.round(totalMs / 1000)}s (cross-review: ${Math.round(crossReviewMs / 1000)}s, synthesis: ${Math.round(synthesizeMs / 1000)}s, verify: ${Math.round(verifyMs / 1000)}s)\n`);
     // Always regenerate report with timing data
     report.summary = this.formatReport(report.confirmed, report.disputed, report.unverified, report.unique, report.newFindings, successful.length, report.rounds, timing, report.insights);
 
@@ -141,7 +147,12 @@ export class ConsensusEngine {
 
     // Dispatch cross-review in parallel, each agent reviews peers
     const allEntries = await Promise.all(
-      successful.map(agent => this.crossReviewForAgent(agent, summaries))
+      successful.map(async agent => {
+        const start = Date.now();
+        const entries = await this.crossReviewForAgent(agent, summaries);
+        process.stderr.write(`[consensus] ${agent.agentId} cross-review: ${entries.length} entries (${Math.round((Date.now() - start) / 1000)}s)\n`);
+        return entries;
+      })
     );
 
     return allEntries.flat();

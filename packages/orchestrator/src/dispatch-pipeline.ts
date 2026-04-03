@@ -87,11 +87,6 @@ export class DispatchPipeline {
 
   private readonly scopeTracker: ScopeTracker;
   private readonly worktreeManager: WorktreeManager;
-  // @ts-ignore — reserved for future write queue implementation
-  private writeQueue: Array<() => void> = [];
-  // @ts-ignore — reserved for future write queue implementation
-  private writeActive = false;
-
   private overlapDetector: OverlapDetector | null = null;
   private lensGenerator: LensGenerator | null = null;
   private bootWarningShown = false;
@@ -105,7 +100,6 @@ export class DispatchPipeline {
   private sessionStartTime: Date = new Date();
   private sessionConsensusHistory: Array<{ timestamp: string; confirmed: number; disputed: number; unverified: number; unique: number; summary: string }> = [];
 
-  private onTaskUpdate: ((taskId: string, event: TaskStreamEvent) => void) | null = null;
   private projectStructureCache: string | null = null;
 
   private getProjectStructure(): string | undefined {
@@ -113,10 +107,6 @@ export class DispatchPipeline {
     const parts = discoverProjectStructure(this.projectRoot);
     this.projectStructureCache = parts.length > 0 ? parts.join('\n') : '';
     return this.projectStructureCache || undefined;
-  }
-
-  setTaskUpdateCallback(cb: typeof this.onTaskUpdate): void {
-    this.onTaskUpdate = cb;
   }
 
   constructor(config: DispatchPipelineConfig) {
@@ -301,7 +291,6 @@ export class DispatchPipeline {
 
     entry.finalResultPromise = (async () => {
         for await (const event of stream) {
-            this.onTaskUpdate?.(taskId, event);
             switch (event.type) {
                 case TaskStreamEventType.PROGRESS:
                     entry.toolCalls = event.payload.toolCalls;
@@ -329,9 +318,6 @@ export class DispatchPipeline {
     this.tasks.set(taskId, entry);
     return { taskId, finalResultPromise: entry.finalResultPromise };
   }
-
-  // @ts-ignore — reserved for future write queue implementation
-  private static readonly MAX_WRITE_QUEUE = 20;
 
   getTask(taskId: string): TaskEntry | undefined {
     return this.tasks.get(taskId);

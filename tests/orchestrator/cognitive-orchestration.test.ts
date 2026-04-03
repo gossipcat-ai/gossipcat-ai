@@ -72,28 +72,6 @@ describe('Cognitive Orchestration', () => {
     expect(result.status).toBe('done');
   });
 
-  it('should preserve decompose mode', async () => {
-    const calls: string[] = [];
-    const llm = createMockLLM((messages) => {
-      const sys = messages[0]?.content?.toString() ?? '';
-      if (sys.includes('task decomposition engine')) {
-        calls.push('decompose');
-        return JSON.stringify({
-          strategy: 'single',
-          subTasks: [{ description: 'do thing', requiredSkills: ['unknown'] }],
-        });
-      }
-      calls.push('chat');
-      return 'Chat response.';
-    });
-    const agent = createMainAgent(llm);
-
-    const result = await agent.handleMessage('do thing', { mode: 'decompose' });
-
-    // Decompose was called (task decomposition engine prompt) then fallback to chat
-    expect(calls).toContain('decompose');
-    expect(result.status).toBe('done');
-  });
 
   it('should maintain conversation history', async () => {
     let callCount = 0;

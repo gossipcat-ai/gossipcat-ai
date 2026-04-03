@@ -25,7 +25,7 @@ export { SkillGapTracker } from './skill-gap-tracker';
 export type { GapSuggestion, GapResolution, GapEntry, GapData } from './skill-gap-tracker';
 export { SkillIndex } from './skill-index';
 export type { SkillSlot, SkillIndexData } from './skill-index';
-export { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment } from './prompt-assembler';
+export { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment, CONSENSUS_OUTPUT_FORMAT } from './prompt-assembler';
 export { AgentMemoryReader } from './agent-memory';
 export { MemoryWriter } from './memory-writer';
 export { MemoryCompactor } from './memory-compactor';

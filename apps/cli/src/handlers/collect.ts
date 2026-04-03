@@ -55,8 +55,8 @@ export async function handleCollect(
   }
 
   if (pendingNativeIds.length > 0 && consensus) {
-    const POLL_INTERVAL = 2000;
-    const HEARTBEAT_INTERVAL = 10000;
+    const POLL_INTERVAL = 500;
+    const HEARTBEAT_INTERVAL = 5000;
     const nativeTimeout = timeout_ms;
     const deadline = Date.now() + nativeTimeout;
     const waitStart = Date.now();

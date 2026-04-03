@@ -1,9 +1,11 @@
 import { DispatchPipeline } from '@gossip/orchestrator';
 
-// Minimal mock worker
+// Minimal mock worker using async generator (matches WorkerAgent.executeTask signature)
 function mockWorker(result = 'done') {
   return {
-    executeTask: jest.fn().mockResolvedValue({ result, inputTokens: 0, outputTokens: 0 }),
+    executeTask: jest.fn().mockImplementation(async function* () {
+      yield { type: 'final_result', payload: { result, inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+    }),
     subscribeToBatch: jest.fn().mockResolvedValue(undefined),
     unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
   };
@@ -32,7 +34,7 @@ describe('DispatchPipeline', () => {
       const { taskId, finalResultPromise: promise } = pipeline.dispatch('test-agent', 'review code');
       expect(taskId).toMatch(/^[a-f0-9]{8}$/);
       const result = await promise;
-      expect(result).toBe('done');
+      expect(result).toEqual({ result: 'done', inputTokens: 0, outputTokens: 0 });
       expect(workers.get('test-agent')!.executeTask).toHaveBeenCalledTimes(1);
     });
 
@@ -50,7 +52,9 @@ describe('DispatchPipeline', () => {
 
     it('tracks task status after failure', async () => {
       const failWorker = {
-        executeTask: jest.fn().mockRejectedValue(new Error('boom')),
+        executeTask: jest.fn().mockImplementation(async function* () {
+          yield { type: 'error', payload: { error: 'boom' }, timestamp: Date.now() };
+        }),
         subscribeToBatch: jest.fn().mockResolvedValue(undefined),
         unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
       };
@@ -117,8 +121,16 @@ describe('DispatchPipeline', () => {
       const order: number[] = [];
       const slowWorker = {
         executeTask: jest.fn()
-          .mockImplementationOnce(() => new Promise(r => setTimeout(() => { order.push(1); r({ result: 'first', inputTokens: 0, outputTokens: 0 }); }, 50)))
-          .mockImplementationOnce(() => new Promise(r => setTimeout(() => { order.push(2); r({ result: 'second', inputTokens: 0, outputTokens: 0 }); }, 10))),
+          .mockImplementationOnce(async function* () {
+            await new Promise(r => setTimeout(r, 50));
+            order.push(1);
+            yield { type: 'final_result', payload: { result: 'first', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+          })
+          .mockImplementationOnce(async function* () {
+            await new Promise(r => setTimeout(r, 10));
+            order.push(2);
+            yield { type: 'final_result', payload: { result: 'second', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+          }),
         subscribeToBatch: jest.fn().mockResolvedValue(undefined),
         unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
       };
@@ -176,7 +188,7 @@ describe('DispatchPipeline', () => {
     it('releases scoped task resources on cancel', async () => {
       const releaseAgent = jest.fn();
       const hangingWorker = {
-        executeTask: jest.fn().mockReturnValue(new Promise(() => {})),
+        executeTask: jest.fn().mockImplementation(async function* () { await new Promise(() => {}); }),
         subscribeToBatch: jest.fn().mockResolvedValue(undefined),
         unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
       };
@@ -195,7 +207,7 @@ describe('DispatchPipeline', () => {
 
       // Scope should be released — dispatching to same scope should not throw
       const freshWorker = {
-        executeTask: jest.fn().mockResolvedValue({ result: 'ok', inputTokens: 0, outputTokens: 0 }),
+        executeTask: jest.fn().mockImplementation(async function* () { yield { type: 'final_result', payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() }; }),
         subscribeToBatch: jest.fn().mockResolvedValue(undefined),
         unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
       };
@@ -209,7 +221,7 @@ describe('DispatchPipeline', () => {
       const cleanupMock = jest.fn().mockResolvedValue(undefined);
       const releaseAgent = jest.fn();
       const hangingWorker = {
-        executeTask: jest.fn().mockReturnValue(new Promise(() => {})),
+        executeTask: jest.fn().mockImplementation(async function* () { await new Promise(() => {}); }),
         subscribeToBatch: jest.fn().mockResolvedValue(undefined),
         unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
       };
@@ -238,7 +250,7 @@ describe('DispatchPipeline', () => {
       const cleanupMock = jest.fn().mockResolvedValue(undefined);
       const createMock = jest.fn().mockResolvedValue({ path: '/tmp/wt-fail', branch: 'gossip-fail' });
       const failWorker = {
-        executeTask: jest.fn().mockRejectedValue(new Error('exec failed')),
+        executeTask: jest.fn().mockImplementation(async function* () { yield { type: 'error', payload: { error: 'exec failed' }, timestamp: Date.now() }; }),
         subscribeToBatch: jest.fn().mockResolvedValue(undefined),
         unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
       };
@@ -398,7 +410,7 @@ describe('DispatchPipeline', () => {
     it('releases toolServer agent for timed-out worktree tasks', async () => {
       const releaseAgent = jest.fn();
       const hangingWorker = {
-        executeTask: jest.fn().mockReturnValue(new Promise(() => {})),
+        executeTask: jest.fn().mockImplementation(async function* () { await new Promise(() => {}); }),
         subscribeToBatch: jest.fn().mockResolvedValue(undefined),
         unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
       };

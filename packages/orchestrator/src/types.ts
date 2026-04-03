@@ -339,8 +339,7 @@ export interface ToolResult {
 
 /** Options for MainAgent.handleMessage() */
 export interface HandleMessageOptions {
-  /** 'cognitive' = intent detection (default), 'decompose' = old flow */
-  mode?: 'cognitive' | 'decompose';
+  mode?: 'cognitive';
 }
 
 // ── Project Team Init Types ──────────────────────────────────────────────

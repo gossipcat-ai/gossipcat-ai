@@ -1,5 +1,14 @@
-import { ILLMProvider, WorkerProgressCallback } from '@gossip/orchestrator';
+import { ILLMProvider } from '@gossip/orchestrator';
 import { LLMMessage, ToolDefinition } from '@gossip/types';
+
+/** Local type for the legacy progress callback tested here */
+type WorkerProgressCallback = (event: {
+  toolCalls: number;
+  currentTool: string;
+  turn: number;
+  inputTokens: number;
+  outputTokens: number;
+}) => void;
 
 /**
  * Test the WorkerAgent's multi-turn tool loop logic.

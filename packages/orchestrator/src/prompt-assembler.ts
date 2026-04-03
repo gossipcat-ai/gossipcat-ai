@@ -1,6 +1,49 @@
 import * as path from 'path';
 
 const DOC_EXTENSIONS = new Set(['.md', '.txt', '.rst']);
+
+/**
+ * Canonical consensus output format instructions injected into agent prompts.
+ * Used by both relay (prompt-assembler) and native (dispatch handler) paths.
+ */
+export const CONSENSUS_OUTPUT_FORMAT = `End your response with a section titled "## Consensus Summary".
+
+SOURCE FILES:
+- Always cite original source files, NOT compiled/bundled build output (dist/, build/, out/, *.min.js)
+- Build artifacts have different line numbers than source — citing them causes false verification failures
+- When in doubt, look for the file with the original extension (.ts, .tsx, .py, .go) not the compiled one (.js, .d.ts)
+
+CITATION RULES:
+- Use <cite> tags to reference code. The system resolves these for cross-reviewers automatically.
+  Two modes:
+    <cite tag="file">auth.ts:38</cite>  — file:line citation, system fetches code snippet
+    <cite tag="fn">timingSafeEqual</cite>  — function/variable name, system searches codebase
+  Use both when possible: <cite tag="fn">timingSafeEqual</cite> at <cite tag="file">auth.ts:38</cite>
+- Claims without <cite> tags receive LOW confidence and will likely be marked UNVERIFIED
+- Do NOT fabricate file paths or line numbers — broken citations are worse than no citation
+
+FINDING FORMAT:
+Wrap each finding in an <agent_finding> tag. Do NOT use bullet points for findings.
+
+<agent_finding type="finding" severity="high">
+Missing Secure cookie flag <cite tag="file">routes.ts:126</cite>
+</agent_finding>
+
+<agent_finding type="finding" severity="medium">
+<cite tag="fn">authAttempts</cite> map is unbounded <cite tag="file">routes.ts:34</cite>
+</agent_finding>
+
+<agent_finding type="suggestion">
+Consider changing SameSite=Lax to SameSite=Strict
+</agent_finding>
+
+<agent_finding type="insight">
+Session tokens use 256-bit entropy — sufficient for production
+</agent_finding>
+
+Types: finding (factual, verifiable), suggestion (recommendation), insight (observation)
+Severity (for findings only): critical, high, medium, low
+Attributes can appear in any order. Do NOT include confirmations.`;
 const SPEC_PATH_PATTERN = /(?:docs\/|specs\/|[\w-]+-(?:design|spec)\.md)/;
 const FILE_REF_PATTERN = /(?:`([^`]+\.[a-z]{1,6})`|([a-zA-Z][\w/.@-]+\.[a-z]{1,6})(?::\d+)?)/g;
 
@@ -108,48 +151,7 @@ Keep entries concise (5-10 lines each). Update existing files rather than creati
   }
 
   if (parts.consensusSummary) {
-    blocks.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---
-End your response with a section titled "## Consensus Summary".
-
-SOURCE FILES:
-- Always cite original source files, NOT compiled/bundled build output (dist/, build/, out/, *.min.js)
-- Build artifacts have different line numbers than source — citing them causes false verification failures
-- When in doubt, look for the file with the original extension (.ts, .tsx, .py, .go) not the compiled one (.js, .d.ts)
-
-CITATION RULES:
-- Use <cite> tags to reference code. The system resolves these for cross-reviewers automatically.
-  Two modes:
-    <cite tag="file">auth.ts:38</cite>  — file:line citation, system fetches code snippet
-    <cite tag="fn">timingSafeEqual</cite>  — function/variable name, system searches codebase
-  Use both when possible: <cite tag="fn">timingSafeEqual</cite> at <cite tag="file">auth.ts:38</cite>
-- Claims without <cite> tags receive LOW confidence and will likely be marked UNVERIFIED
-- Do NOT fabricate file paths or line numbers — broken citations are worse than no citation
-
-FINDING FORMAT:
-Wrap each finding in an <agent_finding> tag. Do NOT use bullet points for findings.
-
-<agent_finding type="finding" severity="high">
-Missing Secure cookie flag <cite tag="file">routes.ts:126</cite>
-</agent_finding>
-
-<agent_finding type="finding" severity="medium">
-<cite tag="fn">authAttempts</cite> map is unbounded <cite tag="file">routes.ts:34</cite>
-</agent_finding>
-
-<agent_finding type="suggestion">
-Consider changing SameSite=Lax to SameSite=Strict
-</agent_finding>
-
-<agent_finding type="insight">
-Session tokens use 256-bit entropy — sufficient for production
-</agent_finding>
-
-Types: finding (factual, verifiable), suggestion (recommendation), insight (observation)
-Severity (for findings only): critical, high, medium, low
-Attributes can appear in any order. Do NOT include confirmations.
-
-This section will be used for cross-review with peer agents.
---- END CONSENSUS OUTPUT FORMAT ---`);
+    blocks.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---`);
   }
 
   if (parts.skills) {

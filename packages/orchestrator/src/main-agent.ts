@@ -9,7 +9,7 @@ import { ILLMProvider, createProvider } from './llm-client';
 import { AgentRegistry } from './agent-registry';
 import { TaskDispatcher } from './task-dispatcher';
 import { WorkerAgent } from './worker-agent';
-import { AgentConfig, DispatchOptions, PlanState, TaskResult, ChatResponse, HandleMessageOptions, TaskProgressEvent } from './types';
+import { AgentConfig, DispatchOptions, PlanState, ChatResponse, HandleMessageOptions, TaskProgressEvent } from './types';
 import { ALL_TOOLS } from '@gossip/tools';
 import { ContentBlock, TextContent, MessageType, MessageEnvelope, Message, LLMMessage } from '@gossip/types';
 import { GossipAgent } from '@gossip/client';
@@ -346,11 +346,8 @@ export class MainAgent {
     this.workers.clear();
   }
 
-  /** Handle a user message. Default mode is cognitive (tool-calling); 'decompose' preserves the old flow. */
-  async handleMessage(userMessage: string | ContentBlock[], options?: HandleMessageOptions): Promise<ChatResponse> {
-    if (options?.mode === 'decompose') {
-      return this.handleMessageDecompose(userMessage);
-    }
+  /** Handle a user message via cognitive (tool-calling) orchestration. */
+  async handleMessage(userMessage: string | ContentBlock[], _options?: HandleMessageOptions): Promise<ChatResponse> {
     return this.handleMessageCognitive(userMessage);
   }
 
@@ -406,50 +403,6 @@ ${agentLines.join('\n')}`,
     }
     // Default: single, let caller pick agent
     return { complexity: 'single' };
-  }
-
-  /** Original decompose → assign → dispatch → synthesize flow. */
-  private async handleMessageDecompose(userMessage: string | ContentBlock[]): Promise<ChatResponse> {
-    // Extract text for task decomposition (dispatcher needs text only)
-    const textForDispatch = typeof userMessage === 'string'
-      ? userMessage
-      : userMessage.filter(b => b.type === 'text').map(b => (b as TextContent).text).join(' ') || 'Describe this image.';
-
-    const plan = await this.dispatcher.decompose(textForDispatch);
-    this.dispatcher.assignAgents(plan);
-
-    // Handle unassigned tasks directly with main LLM
-    const unassigned = plan.subTasks.filter(st => !st.assignedAgent);
-    if (unassigned.length === plan.subTasks.length) {
-      const systemPrompt = this.bootstrapPrompt
-        ? this.bootstrapPrompt + '\n\n' + CHAT_SYSTEM_PROMPT
-        : CHAT_SYSTEM_PROMPT;
-      const response = await this.llm.generate([
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ]);
-      return this.parseResponse(response.text);
-    }
-
-    // Execute assigned sub-tasks
-    const results: TaskResult[] = [];
-    const assigned = plan.subTasks.filter(st => st.assignedAgent);
-
-    if (plan.strategy === 'parallel') {
-      const promises = assigned.map(subTask => this.executeSubTask(subTask));
-      results.push(...await Promise.all(promises));
-    } else {
-      for (const subTask of assigned) {
-        results.push(await this.executeSubTask(subTask));
-      }
-    }
-
-    const text = await this.synthesize(textForDispatch, results);
-    return {
-      text,
-      status: 'done',
-      agents: results.map(r => r.agentId),
-    };
   }
 
   /** Cognitive mode: LLM decides whether to chat or call tools. */
@@ -954,35 +907,4 @@ ${agentLines.join('\n')}`,
     }
   }
 
-  private async executeSubTask(subTask: { assignedAgent?: string; description: string }): Promise<TaskResult> {
-    const { taskId, finalResultPromise: promise } = this.pipeline.dispatch(subTask.assignedAgent!, subTask.description);
-    const start = Date.now();
-    try {
-      const execResult = await promise;
-      await this.pipeline.writeMemoryForTask(taskId);
-      return { agentId: subTask.assignedAgent!, task: subTask.description, result: execResult.result, duration: Date.now() - start };
-    } catch (err) {
-      return {
-        agentId: subTask.assignedAgent!, task: subTask.description,
-        result: '', error: (err as Error).message, duration: Date.now() - start,
-      };
-    }
-  }
-
-  private async synthesize(originalTask: string, results: TaskResult[]): Promise<string> {
-    if (results.length === 1) {
-      return results[0].error || results[0].result;
-    }
-
-    const summaryPrompt = results.map(r =>
-      `Agent ${r.agentId} (${r.duration}ms):\n${r.error ? `ERROR: ${r.error}` : r.result}`
-    ).join('\n\n---\n\n');
-
-    const response = await this.llm.generate([
-      { role: 'system', content: 'Synthesize the following agent results into a single coherent response. Be concise.' },
-      { role: 'user', content: `Original task: ${originalTask}\n\nAgent results:\n${summaryPrompt}` },
-    ]);
-
-    return response.text;
-  }
 }
