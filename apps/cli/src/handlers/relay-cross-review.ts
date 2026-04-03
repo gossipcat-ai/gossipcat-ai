@@ -15,9 +15,16 @@ export function startConsensusTimeout(consensusId: string): void {
   const remainingMs = round.deadline - Date.now();
   if (remainingMs <= 0) return;
 
-  setTimeout(async () => {
+  const checkTimeout = async () => {
     const current = ctx.pendingConsensusRounds.get(consensusId);
     if (!current || current.pendingNativeAgents.size === 0) return;
+
+    // If deadline was extended (e.g., by an arriving cross-review relay), reschedule
+    const remaining = current.deadline - Date.now();
+    if (remaining > 0) {
+      setTimeout(checkTimeout, remaining);
+      return;
+    }
 
     const missingAgents = [...current.pendingNativeAgents];
     // Delete round BEFORE async work to prevent double-synthesis race with concurrent relay
@@ -82,7 +89,8 @@ export function startConsensusTimeout(consensusId: string): void {
     } catch (err) {
       process.stderr.write(`[gossipcat] Timeout synthesis failed: ${(err as Error).message}\n`);
     }
-  }, remainingMs);
+  };
+  setTimeout(checkTimeout, remainingMs);
 }
 
 export async function handleRelayCrossReview(
@@ -135,6 +143,11 @@ export async function handleRelayCrossReview(
 
   // Check if all native agents have responded
   if (round.pendingNativeAgents.size > 0) {
+    // Extend deadline — each arriving result proves the orchestrator is actively relaying.
+    // Without this, the 5-minute timer (started at gossip_collect return) expires before
+    // the orchestrator can dispatch Agent() calls and relay all results back.
+    const EXTENSION_MS = 300_000; // 5 more minutes from each arrival
+    round.deadline = Date.now() + EXTENSION_MS;
     return {
       content: [{
         type: 'text' as const,
