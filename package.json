@@ -10,7 +10,7 @@
     "build": "npm run build --workspaces",
     "test": "jest --config jest.config.base.js",
     "clean": "rm -rf packages/*/dist apps/*/dist dist-mcp/",
-    "build:mcp": "npx esbuild apps/cli/src/mcp-server-sdk.ts --bundle --platform=node --target=node22 --outfile=dist-mcp/mcp-server.js --external:ws --external:@modelcontextprotocol/sdk --tsconfig=tsconfig.json",
+    "build:mcp": "npx esbuild apps/cli/src/mcp-server-sdk.ts --bundle --platform=node --target=node22 --outfile=dist-mcp/mcp-server.js --external:ws --external:@modelcontextprotocol/sdk --tsconfig=tsconfig.json && cp -r packages/orchestrator/src/default-skills dist-mcp/default-skills",
     "build:dashboard": "cd packages/dashboard-v2 && npx vite build",
     "gossipcat": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts",
     "start": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts"
