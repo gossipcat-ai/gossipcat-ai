@@ -2,7 +2,9 @@ import { DispatchPipeline } from '@gossip/orchestrator';
 
 function mockWorker(result = 'found 3 bugs in tool-server.ts') {
   return {
-    executeTask: jest.fn().mockResolvedValue({ result, inputTokens: 0, outputTokens: 0 }),
+    executeTask: jest.fn().mockImplementation(async function* () {
+      yield { type: 'final_result', payload: { result, inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+    }),
     subscribeToBatch: jest.fn().mockResolvedValue(undefined),
     unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
   };

@@ -3,7 +3,9 @@ import type { CollectResult } from '@gossip/orchestrator';
 
 function mockWorker(result = 'done') {
   return {
-    executeTask: jest.fn().mockResolvedValue({ result, inputTokens: 0, outputTokens: 0 }),
+    executeTask: jest.fn().mockImplementation(async function* () {
+      yield { type: 'final_result', payload: { result, inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+    }),
     subscribeToBatch: jest.fn().mockResolvedValue(undefined),
     unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
   };
@@ -101,7 +103,7 @@ describe('DispatchPipeline consensus integration', () => {
 
   it('collect() skips consensus when only one agent succeeds', async () => {
     const workerA = mockWorker('## Consensus Summary\n- Finding A');
-    const workerB = { executeTask: jest.fn().mockRejectedValue(new Error('fail')), subscribeToBatch: jest.fn().mockResolvedValue(undefined), unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined) };
+    const workerB = { executeTask: jest.fn().mockImplementation(async function* () { yield { type: 'error', payload: { error: 'fail' }, timestamp: Date.now() }; }), subscribeToBatch: jest.fn().mockResolvedValue(undefined), unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined) };
 
     // Track which calls are for consensus vs session gossip
     const consensusCalls: any[] = [];

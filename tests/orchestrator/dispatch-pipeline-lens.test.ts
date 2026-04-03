@@ -3,7 +3,9 @@ import { DispatchPipeline } from '@gossip/orchestrator';
 // Minimal mock worker
 function mockWorker(result = 'done') {
   return {
-    executeTask: jest.fn().mockResolvedValue({ result, inputTokens: 0, outputTokens: 0 }),
+    executeTask: jest.fn().mockImplementation(async function* () {
+      yield { type: 'final_result', payload: { result, inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+    }),
     subscribeToBatch: jest.fn().mockResolvedValue(undefined),
     unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
   };
@@ -26,7 +28,7 @@ describe('DispatchPipeline — lens option', () => {
   });
 
   it('includes LENS block in prompt when lens option is provided', async () => {
-    const { promise } = pipeline.dispatch('test-agent', 'review code', {
+    const { finalResultPromise: promise } = pipeline.dispatch('test-agent', 'review code', {
       lens: 'Focus on security vulnerabilities',
     });
     await promise;
@@ -39,7 +41,7 @@ describe('DispatchPipeline — lens option', () => {
   });
 
   it('does NOT include LENS block in prompt when no lens option is provided', async () => {
-    const { promise } = pipeline.dispatch('test-agent', 'review code');
+    const { finalResultPromise: promise } = pipeline.dispatch('test-agent', 'review code');
     await promise;
 
     const worker = workers.get('test-agent')!;
