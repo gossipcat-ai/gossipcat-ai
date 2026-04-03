@@ -214,9 +214,6 @@ Rules:
     const filename = `${timestamp}-session.md`;
     const today = now.toISOString().split('T')[0];
 
-    // Prune knowledge files (warmth-aware for _project)
-    this.pruneProjectKnowledge(knowledgeDir);
-
     // Assemble raw data for LLM input
     const rawInput = [
       data.gossip ? `## Task Summaries\n${data.gossip}` : '',
@@ -231,6 +228,20 @@ Rules:
     const projectContext = discovered.length > 0
       ? `PROJECT CONTEXT:\n${discovered.join('\n')}\n- Only cite file paths that conform to the directory structure above. If no paths are available, describe features by name without paths.`
       : '';
+
+    // Load existing knowledge file descriptions for staleness detection
+    let existingMemoriesContext = '';
+    const existingFiles: string[] = [];
+    try {
+      const files = readdirSync(knowledgeDir).filter(f => f.endsWith('.md') && !f.endsWith('-session.md'));
+      for (const f of files) {
+        const content = readFileSync(join(knowledgeDir, f), 'utf-8');
+        const descMatch = content.match(/description:\s*(.+)/);
+        const desc = descMatch ? descMatch[1].trim() : '(no description)';
+        existingFiles.push(f);
+        existingMemoriesContext += `- ${f} — ${desc}\n`;
+      }
+    } catch { /* no existing files */ }
 
     let summaryBody: string;
     let pinned = false;
@@ -263,7 +274,13 @@ Rules:
 - Include specific numbers (commit count, finding count, test count)
 - Warnings > accomplishments — what NOT to do is more useful
 - NEVER fabricate file paths. Only cite paths that appear in the Git Log or Task Summaries. All paths must conform to the PROJECT CONTEXT above. If no paths are available, describe features by name without paths.
-- If ANY section has a "never do this again" lesson, respond with PINNED:true on the first line, then the summary`,
+- If ANY section has a "never do this again" lesson, respond with PINNED:true on the first line, then the summary
+${existingMemoriesContext ? `
+EXISTING MEMORY FILES:
+${existingMemoriesContext}
+After your summary, if any of these memory files describe work that is NOW COMPLETED based on the Git Log above, add one line per file:
+STALE: <exact filename>
+Only mark a file STALE if the git log clearly shows the described work has shipped. Do not guess. Omit the STALE section entirely if nothing is stale.` : ''}`,
           },
           {
             role: 'user',
@@ -306,11 +323,43 @@ Rules:
       summaryBody = `> ⚠️ No summary LLM configured — raw data below.\n\n${rawInput.slice(0, 3000)}`;
     }
 
+    // Parse STALE: lines from LLM output and downgrade those files' importance
+    const stalePattern = /^STALE:\s*(.+)$/gm;
+    let staleMatch: RegExpExecArray | null;
+    const staleFiles: string[] = [];
+    while ((staleMatch = stalePattern.exec(summaryBody)) !== null) {
+      const staleFilename = staleMatch[1].trim();
+      if (existingFiles.includes(staleFilename)) {
+        staleFiles.push(staleFilename);
+      }
+    }
+    if (staleFiles.length > 0) {
+      for (const sf of staleFiles) {
+        try {
+          const filePath = join(knowledgeDir, sf);
+          let fileContent = readFileSync(filePath, 'utf-8');
+          fileContent = fileContent.replace(/importance:\s*[\d.]+/, 'importance: 0.1');
+          if (!/status:/.test(fileContent)) {
+            fileContent = fileContent.replace(/\n---/, '\nstatus: shipped\n---');
+          } else {
+            fileContent = fileContent.replace(/status:\s*\w+/, 'status: shipped');
+          }
+          writeFileSync(filePath, fileContent);
+          process.stderr.write(`[gossipcat] Marked stale: ${sf}\n`);
+        } catch { /* best-effort */ }
+      }
+      // Strip STALE: lines from summary body (metadata, not content)
+      summaryBody = summaryBody.replace(/^STALE:.*\n?/gm, '').trim();
+    }
+
+    // Prune AFTER staleness downgrades so demoted files are eviction candidates
+    this.pruneProjectKnowledge(knowledgeDir);
+
     const content = [
       '---',
       `name: Session ${today} — ${summaryOneLiner}`,
       `description: ${summaryOneLiner}`,
-      `importance: 0.95`,
+      `importance: 0.7`,
       pinned ? `pinned: true` : '',
       `lastAccessed: ${today}`,
       `accessCount: 0`,

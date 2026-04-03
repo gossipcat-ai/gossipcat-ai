@@ -122,7 +122,7 @@ export class AgentMemoryReader {
     return Math.min(matches / denominator, 1.0);
   }
 
-  private parseFrontmatter(content: string): { name: string; description: string; importance: number; lastAccessed: string; accessCount: number } | null {
+  private parseFrontmatter(content: string): { name: string; description: string; importance: number; lastAccessed: string; accessCount: number; status?: string } | null {
     const match = content.match(/^---\n([\s\S]*?)\n---/);
     if (!match) return null;
     const lines = match[1].split('\n');
@@ -137,6 +137,7 @@ export class AgentMemoryReader {
       importance: parseFloat(obj.importance) || 0.5,
       lastAccessed: obj.lastAccessed || new Date().toISOString(),
       accessCount: parseInt(obj.accessCount) || 0,
+      ...(obj.status ? { status: obj.status } : {}),
     };
   }
 

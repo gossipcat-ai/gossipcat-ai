@@ -1831,7 +1831,14 @@ server.tool(
         const updated = lines.map((line: string) => {
           try {
             const f = JSON.parse(line);
-            if (f.status === 'open' && f.file && gitLog.includes(f.file.split('/').pop())) {
+            const fileBase = f.file?.split('/').pop() || '';
+            // Require both filename AND a content keyword from the finding to match git log
+            // Bare filename matching alone produces false positives (e.g., index.ts matches every session)
+            const findingWords = (f.finding || '').toLowerCase().split(/\s+/).filter((w: string) => w.length > 5).slice(0, 3);
+            const gitLogLower = gitLog.toLowerCase();
+            const fileMatch = fileBase && fileBase.length > 2 && gitLog.includes(fileBase);
+            const contentMatch = findingWords.length > 0 && findingWords.some((w: string) => gitLogLower.includes(w));
+            if (f.status === 'open' && fileMatch && contentMatch) {
               f.status = 'resolved';
               f.resolvedAt = new Date().toISOString();
               changed = true;
