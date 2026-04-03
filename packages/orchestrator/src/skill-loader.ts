@@ -10,7 +10,7 @@ const MAX_CONTEXTUAL_SKILLS = 3;
 const MIN_KEYWORD_HITS = 2;
 
 /** Default keyword sets by category — used when skill frontmatter has no explicit keywords */
-const DEFAULT_KEYWORDS: Record<string, string[]> = {
+export const DEFAULT_KEYWORDS: Record<string, string[]> = {
   trust_boundaries: ['auth', 'authentication', 'authorization', 'session', 'cookie', 'token', 'path', 'traversal', 'injection', 'middleware', 'permission', 'role', 'privilege', 'acl'],
   injection_vectors: ['injection', 'xss', 'sql', 'sanitize', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command'],
   input_validation: ['validation', 'schema', 'zod', 'parse', 'sanitize', 'input', 'form', 'request', 'coerce', 'transform'],

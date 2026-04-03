@@ -1380,6 +1380,34 @@ server.tool(
 
       writer.appendSignals(formatted);
 
+      // Auto-convert hallucination signals into skill gap suggestions
+      const hallucinationSignals = formatted.filter(s => s.signal === 'hallucination_caught');
+      if (hallucinationSignals.length > 0) {
+        try {
+          const { SkillGapTracker, DEFAULT_KEYWORDS } = await import('@gossip/orchestrator');
+          const gapTracker = new SkillGapTracker(process.cwd());
+          for (const s of hallucinationSignals) {
+            const text = `${s.evidence || ''} ${s.agentId || ''}`.toLowerCase();
+            let bestCategory = '';
+            let bestHits = 0;
+            for (const [category, keywords] of Object.entries(DEFAULT_KEYWORDS)) {
+              const hits = keywords.filter(kw => text.includes(kw)).length;
+              if (hits > bestHits) { bestHits = hits; bestCategory = category; }
+            }
+            if (bestCategory && bestHits >= 1) {
+              gapTracker.appendSuggestion({
+                type: 'suggestion',
+                skill: bestCategory.replace(/_/g, '-'),
+                reason: `Auto: hallucination_caught — ${(s.evidence || '').slice(0, 120)}`,
+                agent: s.agentId,
+                task_context: s.taskId,
+                timestamp: new Date().toISOString(),
+              });
+            }
+          }
+        } catch { /* best-effort */ }
+      }
+
       // Detect severity miscalibration: auto-record when orchestrator overrides agent's severity
       for (const s of formatted) {
         if (!s.severity || !s.findingId) continue;
