@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { normalizeSkillName } from './skill-name';
 
@@ -79,6 +79,13 @@ export class SkillGapTracker {
     return this.readSuggestions().filter(
       s => s.agent === agentId && new Date(s.timestamp).getTime() >= sinceMs
     );
+  }
+
+  appendSuggestion(suggestion: GapSuggestion): void {
+    const dir = join(this.gapLogPath, '..');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    appendFileSync(this.gapLogPath, JSON.stringify(suggestion) + '\n');
+    this.truncateIfNeeded();
   }
 
   private getPendingSkills(): string[] {
