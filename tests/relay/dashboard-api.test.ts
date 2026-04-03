@@ -217,7 +217,7 @@ describe('Memory API', () => {
     writeFileSync(join(memDir, 'tasks.jsonl'), JSON.stringify(task) + '\n');
     const result = await memoryHandler(projectRoot, 'agent-a');
     expect(result.tasks).toHaveLength(1);
-    expect(result.tasks[0].taskId).toBe('t1');
+    expect((result.tasks[0] as any).taskId).toBe('t1');
   });
 
   it('rejects path traversal in agentId', async () => {
@@ -254,8 +254,8 @@ describe('Tasks API', () => {
     ];
     writeFileSync(join(projectRoot, '.gossip', 'task-graph.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
     const result = await tasksHandler(projectRoot);
-    expect(result.tasks[0].inputTokens).toBe(2000);
-    expect(result.tasks[0].outputTokens).toBe(800);
+    expect(result.items[0].inputTokens).toBe(2000);
+    expect(result.items[0].outputTokens).toBe(800);
   });
 
   it('returns undefined token fields when not present in completed event', async () => {
@@ -265,13 +265,13 @@ describe('Tasks API', () => {
     ];
     writeFileSync(join(projectRoot, '.gossip', 'task-graph.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
     const result = await tasksHandler(projectRoot);
-    expect(result.tasks[0].inputTokens).toBeUndefined();
-    expect(result.tasks[0].outputTokens).toBeUndefined();
+    expect(result.items[0].inputTokens).toBeUndefined();
+    expect(result.items[0].outputTokens).toBeUndefined();
   });
 
   it('returns empty tasks for fresh project', async () => {
     const result = await tasksHandler(projectRoot);
-    expect(result.tasks).toEqual([]);
+    expect(result.items).toEqual([]);
     expect(result.total).toBe(0);
   });
 });
@@ -285,8 +285,8 @@ describe('Signals API', () => {
   });
 
   it('returns empty array when no performance file', async () => {
-    const result = await signalsHandler(projectRoot, null);
-    expect(result.signals).toEqual([]);
+    const result = await signalsHandler(projectRoot, undefined);
+    expect(result.items).toEqual([]);
     expect(result.total).toBe(0);
   });
 
@@ -296,9 +296,9 @@ describe('Signals API', () => {
       { type: 'consensus', signal: 'hallucination_caught', agentId: 'b', taskId: 't1', timestamp: '2026-03-29T14:01:00Z' },
     ];
     writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), signals.map(s => JSON.stringify(s)).join('\n') + '\n');
-    const result = await signalsHandler(projectRoot, null);
-    expect(result.signals).toHaveLength(2);
-    expect(result.signals[0].signal).toBe('hallucination_caught');
+    const result = await signalsHandler(projectRoot, undefined);
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0].signal).toBe('hallucination_caught');
   });
 
   it('filters by agent when query param provided', async () => {
@@ -307,18 +307,18 @@ describe('Signals API', () => {
       { type: 'consensus', signal: 'unique_confirmed', agentId: 'agent-b', taskId: 't1', timestamp: '2026-03-29T14:01:00Z' },
     ];
     writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), signals.map(s => JSON.stringify(s)).join('\n') + '\n');
-    const result = await signalsHandler(projectRoot, 'agent-a');
-    expect(result.signals).toHaveLength(1);
-    expect(result.signals[0].agentId).toBe('agent-a');
+    const result = await signalsHandler(projectRoot, new URLSearchParams({ agent: 'agent-a' }));
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].agentId).toBe('agent-a');
   });
 
-  it('limits to 100 signals', async () => {
+  it('default limit caps results at 50', async () => {
     const signals = Array.from({ length: 150 }, (_, i) => ({
       type: 'consensus', signal: 'agreement', agentId: 'a', taskId: `t${i}`, timestamp: new Date(Date.now() - i * 1000).toISOString(),
     }));
     writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), signals.map(s => JSON.stringify(s)).join('\n') + '\n');
-    const result = await signalsHandler(projectRoot, null);
-    expect(result.signals).toHaveLength(100);
+    const result = await signalsHandler(projectRoot, undefined);
+    expect(result.items).toHaveLength(50);
     expect(result.total).toBe(150);
   });
 });

@@ -110,7 +110,11 @@ describe('E2E: Full Gossip Mesh Flow', () => {
     // Give the worker time to register
     await new Promise(r => setTimeout(r, 100));
 
-    const result = await worker.executeTask('Read src/example.ts and describe what it does');
+    const stream = worker.executeTask('Read src/example.ts and describe what it does');
+    let finalResult = '';
+    for await (const event of stream) {
+      if (event.type === 'final_result') finalResult = event.payload.result;
+    }
 
     // The worker should have:
     //   1. Called MockLLM → got a file_read tool call
@@ -118,8 +122,8 @@ describe('E2E: Full Gossip Mesh Flow', () => {
     //   3. Tool server read the real file and sent RPC_RESPONSE
     //   4. Worker received file contents and called MockLLM again
     //   5. MockLLM returned a final response referencing the file content
-    expect(result.result).toMatch(/I read the file/i);
-    expect(result.result).toMatch(/Hello from Gossip Mesh/i);
+    expect(finalResult).toMatch(/I read the file/i);
+    expect(finalResult).toMatch(/Hello from Gossip Mesh/i);
 
     await worker.stop();
   }, 30_000);
@@ -150,8 +154,13 @@ describe('E2E: Full Gossip Mesh Flow', () => {
 
     // The tool-server rejects the path; the worker catches the error and
     // passes it as a tool result so the LLM can see it and adapt
-    const result = await worker.executeTask('Read /etc/passwd');
-    expect(result.result.toLowerCase()).toContain('outside project root');
+    const stream = worker.executeTask('Read /etc/passwd');
+    let finalResult = '';
+    for await (const event of stream) {
+      if (event.type === 'final_result') finalResult = event.payload.result;
+      if (event.type === 'error') finalResult = event.payload.error;
+    }
+    expect(finalResult.toLowerCase()).toContain('outside project root');
 
     await worker.stop();
   }, 30_000);
