@@ -63,6 +63,34 @@ describe('MemoryCompactor', () => {
     expect(firstArchived.reason).toBe('warmth_below_threshold');
   });
 
+  it('compacts _project entries to cap of 15', () => {
+    const projectMemDir = join(testDir, '.gossip', 'agents', '_project', 'memory');
+    mkdirSync(projectMemDir, { recursive: true });
+    const projectTasksPath = join(projectMemDir, 'tasks.jsonl');
+
+    // Write 20 entries — should compact to 15
+    const entries = Array.from({ length: 20 }, (_, i) => JSON.stringify({
+      version: 1,
+      taskId: `session-${i}`,
+      task: `Session ${i}`,
+      skills: [],
+      findings: 0,
+      hallucinated: 0,
+      scores: { relevance: 2, accuracy: 2, uniqueness: 2 },
+      warmth: 0,
+      importance: 0.4,
+      timestamp: new Date(Date.now() - (20 - i) * 86400000).toISOString(),
+    })).join('\n') + '\n';
+    writeFileSync(projectTasksPath, entries);
+
+    const compactor = new MemoryCompactor(testDir);
+    const result = compactor.compactIfNeeded('_project', 15);
+
+    expect(result.archived).toBe(5);
+    const remaining = readFileSync(projectTasksPath, 'utf-8').trim().split('\n');
+    expect(remaining).toHaveLength(15);
+  });
+
   it('calculates warmth for entries', () => {
     const compactor = new MemoryCompactor(testDir);
     expect(compactor.calculateWarmth(0.9, new Date().toISOString())).toBeCloseTo(0.9, 1);

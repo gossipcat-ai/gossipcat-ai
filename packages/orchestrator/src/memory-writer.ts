@@ -1,6 +1,7 @@
 import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { TaskMemoryEntry } from './types';
+import { MemoryCompactor } from './memory-compactor';
 import type { ILLMProvider } from './llm-client';
 import type { LLMMessage } from '@gossip/types';
 import { discoverProjectStructure } from './project-structure';
@@ -423,6 +424,13 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     });
 
     this.rebuildIndex('_project');
+
+    // Compact _project memory — session saves bypass the collect pipeline
+    try {
+      const compactor = new MemoryCompactor(this.projectRoot);
+      compactor.compactIfNeeded('_project', 15);
+    } catch { /* best-effort compaction */ }
+
     return summaryBody;
   }
 
