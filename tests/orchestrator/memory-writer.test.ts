@@ -354,6 +354,50 @@ describe('MemoryWriter', () => {
     expect(entry.importance).toBeCloseTo(0.4, 2);
   });
 
+  it('does not count -session.md files against knowledge cap', async () => {
+    const writer = new MemoryWriter(testDir);
+    const knowledgeDir = join(memDir, 'knowledge');
+    const { mkdirSync: md, writeFileSync: wf } = require('fs');
+    md(knowledgeDir, { recursive: true });
+
+    // Write 8 session files + 3 knowledge files = 11 total, but only 3 count
+    for (let i = 0; i < 8; i++) {
+      wf(join(knowledgeDir, `2026-01-0${i + 1}T00-00-00-session.md`),
+        `---\nname: Session ${i}\ndescription: test\nimportance: 0.7\nlastAccessed: 2026-01-0${i + 1}\naccessCount: 0\n---\nSession content`);
+    }
+    for (let i = 0; i < 3; i++) {
+      wf(join(knowledgeDir, `2026-02-0${i + 1}T00-00-00-knowledge.md`),
+        `---\nname: Knowledge ${i}\ndescription: test\nimportance: 0.8\nlastAccessed: 2026-02-0${i + 1}\naccessCount: 0\n---\nKnowledge content`);
+    }
+
+    // Prune with cap of 5 — should NOT evict knowledge files (only 3 count)
+    (writer as any).pruneKnowledgeDir(knowledgeDir, 5);
+
+    const remaining = readdirSync(knowledgeDir).filter(f => f.endsWith('.md') && !f.endsWith('-session.md'));
+    expect(remaining).toHaveLength(3);
+  });
+
+  it('caps -session.md files at 5, evicting oldest', async () => {
+    const writer = new MemoryWriter(testDir);
+    const knowledgeDir = join(memDir, 'knowledge');
+    const { mkdirSync: md, writeFileSync: wf } = require('fs');
+    md(knowledgeDir, { recursive: true });
+
+    for (let i = 0; i < 8; i++) {
+      wf(join(knowledgeDir, `2026-01-0${i + 1}T00-00-00-session.md`),
+        `---\nname: Session ${i}\ndescription: test\nimportance: 0.7\nlastAccessed: 2026-01-0${i + 1}\naccessCount: 0\n---\nSession`);
+    }
+
+    (writer as any).pruneKnowledgeDir(knowledgeDir, 25);
+
+    const sessionFiles = readdirSync(knowledgeDir).filter(f => f.endsWith('-session.md'));
+    expect(sessionFiles).toHaveLength(5);
+    // Oldest 3 should be gone (files sort lexicographically, oldest = smallest date prefix)
+    expect(sessionFiles).not.toContain('2026-01-01T00-00-00-session.md');
+    expect(sessionFiles).not.toContain('2026-01-02T00-00-00-session.md');
+    expect(sessionFiles).not.toContain('2026-01-03T00-00-00-session.md');
+  });
+
   it('migrates old high-importance _project entries on session save', async () => {
     const writer = new MemoryWriter(testDir);
     const projectMemDir = join(testDir, '.gossip', 'agents', '_project', 'memory');

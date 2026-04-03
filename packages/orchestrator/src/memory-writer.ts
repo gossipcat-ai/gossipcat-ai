@@ -442,33 +442,44 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
   /** Shared warmth-aware pruning — evicts lowest-warmth files, respects pinned */
   private pruneKnowledgeDir(knowledgeDir: string, maxFiles: number): void {
     try {
-      const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md')).sort();
-      if (existing.length < maxFiles) return;
+      const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md') && !f.endsWith('-session.md')).sort();
 
-      const scored = existing.map(f => {
-        const content = readFileSync(join(knowledgeDir, f), 'utf-8');
-        const importance = parseFloat(content.match(/importance:\s*([\d.]+)/)?.[1] ?? '0.5');
-        const isPinned = /pinned:\s*true/i.test(content);
-        const ts = f.slice(0, 19).replace(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/, '$1T$2:$3:$4');
-        const days = Math.max(0, (Date.now() - new Date(ts).getTime()) / 86400000);
-        const warmth = isPinned ? Infinity : importance * (1 / (1 + days / 30));
-        return { file: f, warmth, isPinned };
-      });
+      // Only run main eviction if over cap
+      if (existing.length >= maxFiles) {
+        const scored = existing.map(f => {
+          const content = readFileSync(join(knowledgeDir, f), 'utf-8');
+          const importance = parseFloat(content.match(/importance:\s*([\d.]+)/)?.[1] ?? '0.5');
+          const isPinned = /pinned:\s*true/i.test(content);
+          const ts = f.slice(0, 19).replace(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/, '$1T$2:$3:$4');
+          const days = Math.max(0, (Date.now() - new Date(ts).getTime()) / 86400000);
+          const warmth = isPinned ? Infinity : importance * (1 / (1 + days / 30));
+          return { file: f, warmth, isPinned };
+        });
 
-      scored.sort((a, b) => a.warmth - b.warmth);
+        scored.sort((a, b) => a.warmth - b.warmth);
 
-      const targetCount = maxFiles - 1; // leave room for incoming file
-      const unpinned = scored.filter(s => !s.isPinned);
-      const toEvict = unpinned.slice(0, Math.max(0, existing.length - targetCount));
+        const targetCount = maxFiles - 1; // leave room for incoming file
+        const unpinned = scored.filter(s => !s.isPinned);
+        const toEvict = unpinned.slice(0, Math.max(0, existing.length - targetCount));
 
-      if (toEvict.length === 0 && existing.length >= maxFiles) {
-        process.stderr.write(
-          `[gossipcat] pruneKnowledgeDir: all ${existing.length} files are pinned, cannot evict to stay under ${maxFiles}\n`
-        );
+        if (toEvict.length === 0 && existing.length >= maxFiles) {
+          process.stderr.write(
+            `[gossipcat] pruneKnowledgeDir: all ${existing.length} files are pinned, cannot evict to stay under ${maxFiles}\n`
+          );
+        }
+
+        for (const item of toEvict) {
+          unlinkSync(join(knowledgeDir, item.file));
+        }
       }
 
-      for (const item of toEvict) {
-        unlinkSync(join(knowledgeDir, item.file));
+      // Cap session files separately — always runs regardless of main cap
+      const sessionFiles = readdirSync(knowledgeDir).filter(f => f.endsWith('-session.md')).sort();
+      const MAX_SESSION_FILES = 5;
+      if (sessionFiles.length > MAX_SESSION_FILES) {
+        for (const sf of sessionFiles.slice(0, sessionFiles.length - MAX_SESSION_FILES)) {
+          try { unlinkSync(join(knowledgeDir, sf)); } catch { /* best-effort */ }
+        }
       }
     } catch { /* best-effort */ }
   }
