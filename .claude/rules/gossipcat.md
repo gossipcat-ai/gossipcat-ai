@@ -170,6 +170,11 @@ Agent() calls — don't double-wrap those.
 **Why:** Raw Agent() bypasses the gossipcat pipeline. Tasks won't appear in the activity
 feed, no memory is written, no signals recorded. The agent effectively works off-grid.
 
+**Cross-Review Dispatch:**
+When `gossip_collect(consensus: true)` returns `⚠️ EXECUTE NOW`, follow the same
+auto-execute rules: dispatch all native Agent() calls for cross-review and relay
+results via `gossip_relay_cross_review` before doing anything else.
+
 ---
 
 ## Signal Recording
@@ -197,6 +202,17 @@ which means wrong agents get picked for future tasks. The haiku-researcher tscon
 - "I'll record signals after I finish fixing" — NO, record NOW
 - "This was just a research task, no signal needed" — if the research was wrong, record it
 - "The agent tried its best" — intent doesn't matter, accuracy does
+
+---
+
+### Post-Collect Cross-Review (Mandatory)
+
+After `gossip_collect(consensus: true)`, if native cross-review is needed:
+1. The output starts with `⚠️ EXECUTE NOW` — same rules as gossip_run
+2. Dispatch Agent() calls for each native agent's cross-review prompt
+3. Relay each result via `gossip_relay_cross_review(consensus_id, agent_id, result)`
+4. Wait for consensus report synthesis to complete
+5. THEN verify UNVERIFIED findings and record signals
 
 ---
 
