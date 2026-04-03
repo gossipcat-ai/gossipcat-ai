@@ -168,6 +168,11 @@ function resolveSkill(agentId: string, skill: string, projectRoot: string): stri
   return null;
 }
 
+/** Check if a skill file exists in any resolution path (without reading content). */
+export function resolveSkillExists(agentId: string, skill: string, projectRoot: string): boolean {
+  return resolveSkill(agentId, skill, projectRoot) !== null;
+}
+
 /**
  * List available skills for an agent (from all sources, deduplicated).
  */

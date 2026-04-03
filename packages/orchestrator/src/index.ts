@@ -1,5 +1,5 @@
 export { MainAgent } from './main-agent';
-export { loadSkills, DEFAULT_KEYWORDS } from './skill-loader';
+export { loadSkills, DEFAULT_KEYWORDS, resolveSkillExists } from './skill-loader';
 export type { LoadSkillsResult } from './skill-loader';
 export { SkillCounterTracker } from './skill-counters';
 export type { MainAgentConfig } from './main-agent';

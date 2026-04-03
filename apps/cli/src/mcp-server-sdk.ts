@@ -1642,6 +1642,12 @@ server.tool(
       const index = ctx.mainAgent.getSkillIndex();
       if (!index) return { content: [{ type: 'text' as const, text: 'Skill index not initialized.' }] };
 
+      // Validate backing file exists before creating a phantom binding
+      const { resolveSkillExists } = await import('@gossip/orchestrator');
+      if (!resolveSkillExists(agent_id, skill, process.cwd())) {
+        return { content: [{ type: 'text' as const, text: `Error: No skill file found for "${skill}". Create the file first in .gossip/agents/${agent_id}/skills/, .gossip/skills/, or default-skills/.` }] };
+      }
+
       const existing = index.getSlot(agent_id, skill);
       const slot = index.bind(agent_id, skill, { enabled });
 
