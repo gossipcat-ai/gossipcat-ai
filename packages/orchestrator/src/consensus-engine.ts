@@ -167,33 +167,65 @@ export class ConsensusEngine {
   ): Promise<{ system: string; user: string }> {
     const ownSummary = summaries.get(agent.agentId) ?? '';
 
-    // Build peer findings section with per-finding inline code snippets
+    // Build peer findings section — parse <agent_finding> tags and assign stable IDs
     const peerLines: string[] = [];
+    const agentFindingPattern = /<agent_finding\s+([^>]*)>([\s\S]*?)<\/agent_finding>/g;
+    const MAX_ANCHORS_PER_SUMMARY = 15;
+
     for (const [peerId, peerSummary] of summaries) {
       if (peerId === agent.agentId) continue;
       const peerConfig = this.config.registryGet(peerId);
       const preset = peerConfig?.preset ?? 'unknown';
 
-      // Split summary into individual findings and attach code snippets to each
-      const summaryLines = peerSummary.split('\n');
-      const annotatedLines: string[] = [];
-      const MAX_ANCHORS_PER_SUMMARY = 15; // bound token growth per peer
-      let anchorCount = 0;
-      for (const line of summaryLines) {
-        annotatedLines.push(line);
-        // Only fetch snippets for non-empty lines that might contain citations
-        const trimmed = line.trim();
-        if (trimmed && this.config.projectRoot && anchorCount < MAX_ANCHORS_PER_SUMMARY) {
-          const snippets = await this.snippetsForFinding(trimmed);
-          if (snippets) {
-            annotatedLines.push(snippets);
-            anchorCount += (snippets.match(/<anchor /g) || []).length;
-          }
+      // Extract individual findings from <agent_finding> tags and assign IDs
+      const findings: Array<{ id: string; attrs: string; content: string }> = [];
+      let afMatch: RegExpExecArray | null;
+      const pattern = new RegExp(agentFindingPattern.source, agentFindingPattern.flags);
+      let findingIdx = 0;
+      while ((afMatch = pattern.exec(peerSummary)) !== null) {
+        const content = afMatch[2].trim();
+        if (content && content.length >= 15) {
+          findingIdx++;
+          findings.push({ id: `${peerId}:f${findingIdx}`, attrs: afMatch[1], content });
         }
       }
 
-      // SECURITY: Wrap external LLM output in <data> tags to prevent prompt injection.
-      const peerBlock = `Agent "${peerId}" (${preset}):\n<data>${annotatedLines.join('\n')}</data>`;
+      let peerBlock: string;
+      if (findings.length > 0) {
+        // Structured: numbered findings with IDs and inline code anchors
+        const findingBlocks: string[] = [];
+        let anchorCount = 0;
+        for (const f of findings) {
+          let block = `[${f.id}] <agent_finding ${f.attrs}>${f.content}</agent_finding>`;
+          // Attach code snippets for verification
+          if (this.config.projectRoot && anchorCount < MAX_ANCHORS_PER_SUMMARY) {
+            const snippets = await this.snippetsForFinding(f.content);
+            if (snippets) {
+              block += '\n' + snippets;
+              anchorCount += (snippets.match(/<anchor /g) || []).length;
+            }
+          }
+          findingBlocks.push(block);
+        }
+        peerBlock = `Agent "${peerId}" (${preset}):\n<data>${findingBlocks.join('\n\n')}</data>`;
+      } else {
+        // Fallback: no structured findings found, use raw summary with line-level anchors
+        const summaryLines = peerSummary.split('\n');
+        const annotatedLines: string[] = [];
+        let anchorCount = 0;
+        for (const line of summaryLines) {
+          annotatedLines.push(line);
+          const trimmed = line.trim();
+          if (trimmed && this.config.projectRoot && anchorCount < MAX_ANCHORS_PER_SUMMARY) {
+            const snippets = await this.snippetsForFinding(trimmed);
+            if (snippets) {
+              annotatedLines.push(snippets);
+              anchorCount += (snippets.match(/<anchor /g) || []).length;
+            }
+          }
+        }
+        peerBlock = `Agent "${peerId}" (${preset}):\n<data>${annotatedLines.join('\n')}</data>`;
+      }
       peerLines.push(peerBlock);
     }
 
@@ -202,11 +234,11 @@ export class ConsensusEngine {
 YOUR FINDINGS (Phase 1):
 <data>${ownSummary}</data>
 
-PEER FINDINGS (each finding with a file:line citation has a short code anchor inline):
+PEER FINDINGS (each has an ID like [agent:f1] — use these IDs in your response):
 ${peerLines.join('\n\n')}
 
 For each peer finding, you MUST:
-1. If the finding has an inline <anchor> block, use it to verify the claim against actual code
+1. If the finding has an inline <anchor> block, use the code shown to verify the claim
 2. Only AGREE if the claim is factually accurate based on the actual code
 3. DISAGREE if the code contradicts the claim (e.g., finding says "no validation" but code has validation)
 
@@ -216,11 +248,11 @@ Respond with one of:
 - UNVERIFIED: You cannot verify or refute this finding — no anchor is present, the line number is wrong, or you lack sufficient context. This is NOT disagreement — it means "I can't confirm or deny."
 - NEW: Something ALL agents missed that you now realize after seeing peer work.
 
-IMPORTANT: Use DISAGREE only when you have evidence the finding is WRONG. Use UNVERIFIED when you simply cannot check it. "I can't find line 172" is UNVERIFIED, not DISAGREE.
+IMPORTANT: Use DISAGREE only when you have evidence the finding is WRONG. Use UNVERIFIED when you simply cannot check it.
 
-Return ONLY a JSON array:
+Return ONLY a JSON array. Use findingId to reference findings:
 [
-  { "action": "agree"|"disagree"|"unverified"|"new", "agentId": "peer_id", "finding": "summary", "evidence": "your reasoning with file:line references", "confidence": 1-5 }
+  { "action": "agree"|"disagree"|"unverified"|"new", "findingId": "agent:f1", "finding": "brief summary", "evidence": "your reasoning", "confidence": 1-5 }
 ]`;
 
     const system = `You are a code reviewer performing cross-review. Your job is to verify peer findings against actual code — catch errors, but also confirm good work.
@@ -325,6 +357,9 @@ Return only valid JSON.`;
 
     const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
 
+    // findingId → findingMap key lookup (for cross-review matching by ID)
+    const findingIdToKey = new Map<string, string>();
+
     for (const r of successful) {
       const summary = this.extractSummary(r.result!);
       let agentFindingsFound = 0;
@@ -332,6 +367,7 @@ Return only valid JSON.`;
       // Primary: parse <agent_finding> tags from raw summary
       const agentFindingPattern = /<agent_finding\s+([^>]*)>([\s\S]*?)<\/agent_finding>/g;
       let afMatch: RegExpExecArray | null;
+      let findingIdx = 0;
       while ((afMatch = agentFindingPattern.exec(summary)) !== null) {
         const attrs = afMatch[1];
         const content = afMatch[2].trim();
@@ -341,10 +377,15 @@ Return only valid JSON.`;
         if (!typeMatch) continue;
         const severityMatch = attrs.match(/severity="(critical|high|medium|low)"/);
 
+        findingIdx++;
         const findingType = typeMatch[1] as 'finding' | 'suggestion' | 'insight';
         const severity = severityMatch?.[1] as 'critical' | 'high' | 'medium' | 'low' | undefined;
         const key = `${r.agentId}::${content}`;
         const hasAnchor = ANCHOR_PATTERN.test(content);
+
+        // Register stable findingId matching the IDs assigned in buildCrossReviewPrompt
+        const findingId = `${r.agentId}:f${findingIdx}`;
+        findingIdToKey.set(findingId, key);
 
         findingMap.set(key, {
           originalAgentId: r.agentId,
@@ -403,6 +444,15 @@ Return only valid JSON.`;
     const capEvidence = (e: string): string =>
       e.length > MAX_EVIDENCE_LENGTH ? e.slice(0, MAX_EVIDENCE_LENGTH) : e;
 
+    // Helper: resolve cross-review entry to a findingMap key.
+    // Tries findingId first (exact, fast), falls back to text matching (fuzzy, slow).
+    const resolveEntry = (entry: CrossReviewEntry): string | null => {
+      if (entry.findingId && findingIdToKey.has(entry.findingId)) {
+        return findingIdToKey.get(entry.findingId)!;
+      }
+      return this.findMatchingFinding(findingMap, entry.peerAgentId, entry.finding);
+    };
+
     // (b) Apply cross-review entries
     const crossReviewTimestamp = new Date().toISOString();
     for (const entry of crossReviewEntries) {
@@ -428,7 +478,7 @@ Return only valid JSON.`;
       }
 
       if (entry.action === 'agree') {
-        const matchKey = this.findMatchingFinding(findingMap, entry.peerAgentId, entry.finding);
+        const matchKey = resolveEntry(entry);
         if (matchKey) {
           const f = findingMap.get(matchKey)!;
           f.confirmedBy.push(entry.agentId);
@@ -449,7 +499,7 @@ Return only valid JSON.`;
       }
 
       if (entry.action === 'disagree') {
-        const matchKey = this.findMatchingFinding(findingMap, entry.peerAgentId, entry.finding);
+        const matchKey = resolveEntry(entry);
         if (matchKey) {
           const f = findingMap.get(matchKey)!;
           f.confidences.push(entry.confidence);
@@ -499,7 +549,7 @@ Return only valid JSON.`;
       }
 
       if (entry.action === 'unverified') {
-        const matchKey = this.findMatchingFinding(findingMap, entry.peerAgentId, entry.finding);
+        const matchKey = resolveEntry(entry);
         if (matchKey) {
           const f = findingMap.get(matchKey)!;
           f.unverifiedBy.push({
@@ -1455,10 +1505,15 @@ Return ONLY a JSON array:
         confidence = 3;
       }
 
+      // Derive peerAgentId from findingId (e.g., "gemini-reviewer:f1" → "gemini-reviewer")
+      // Fall back to item.agentId for backward compatibility
+      const findingId = item.findingId ?? '';
+      const peerFromId = findingId.includes(':') ? findingId.split(':')[0] : '';
       entries.push({
         action: item.action as CrossReviewEntry['action'],
         agentId: reviewerAgentId,
-        peerAgentId: item.agentId ?? '',
+        peerAgentId: peerFromId || item.agentId || '',
+        findingId: findingId || undefined,
         finding: item.finding,
         evidence: item.evidence,
         confidence,

@@ -32,6 +32,7 @@ export interface CrossReviewEntry {
   action: 'agree' | 'disagree' | 'unverified' | 'new';
   agentId: string;       // the reviewing agent
   peerAgentId: string;   // the agent whose finding is being reviewed
+  findingId?: string;    // stable ID from cross-review prompt (e.g., "gemini-reviewer:f1")
   finding: string;
   evidence: string;
   confidence: number;    // 1-5
