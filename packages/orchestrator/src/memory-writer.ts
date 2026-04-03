@@ -244,6 +244,7 @@ Rules:
     } catch { /* no existing files */ }
 
     let summaryBody: string;
+    let rawLlmResponse = ''; // Full LLM output before truncation (for STALE: parsing)
     let pinned = false;
     let summaryOneLiner = 'Session summary'; // Will be replaced by LLM extraction
 
@@ -290,6 +291,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
 
         const response = await this.summaryLlm.generate(messages, { temperature: 0 });
         const raw = response.text || '';
+        rawLlmResponse = raw;
 
         // Validate completeness before truncating
         const hasSummaryLine = /^SUMMARY:\s*.+/m.test(raw);
@@ -339,11 +341,13 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
       summaryBody = `> ⚠️ No summary LLM configured — raw data below.\n\n${rawInput.slice(0, 3000)}`;
     }
 
-    // Parse STALE: lines from LLM output and downgrade those files' importance
+    // Parse STALE: lines from FULL LLM output (before truncation) to avoid losing
+    // stale annotations that fall beyond the 3000-char slice
     const stalePattern = /^STALE:\s*(.+)$/gm;
     let staleMatch: RegExpExecArray | null;
     const staleFiles: string[] = [];
-    while ((staleMatch = stalePattern.exec(summaryBody)) !== null) {
+    const staleSource = rawLlmResponse || summaryBody;
+    while ((staleMatch = stalePattern.exec(staleSource)) !== null) {
       const staleFilename = staleMatch[1].trim();
       if (existingFiles.includes(staleFilename)) {
         staleFiles.push(staleFilename);
@@ -358,7 +362,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
           if (!/status:/.test(fileContent)) {
             fileContent = fileContent.replace(/\n---/, '\nstatus: shipped\n---');
           } else {
-            fileContent = fileContent.replace(/status:\s*\w+/, 'status: shipped');
+            fileContent = fileContent.replace(/status:\s*.+/, 'status: shipped');
           }
           writeFileSync(filePath, fileContent);
           process.stderr.write(`[gossipcat] Marked stale: ${sf}\n`);

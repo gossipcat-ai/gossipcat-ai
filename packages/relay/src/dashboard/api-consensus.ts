@@ -55,14 +55,6 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
     }
   } catch { return { runs: [], totalRuns: 0, totalSignals: 0, page, pageSize }; }
 
-  // Build a set of resolved findingIds — any findingId that has a resolution signal
-  const resolvedFindings = new Set<string>();
-  for (const sig of signals) {
-    if (sig.findingId && RESOLUTION_SIGNALS.has(sig.signal)) {
-      resolvedFindings.add(sig.findingId);
-    }
-  }
-
   // Group by consensusId (falls back to taskId for old signals)
   const byRun = new Map<string, ConsensusSignal[]>();
   for (const sig of signals) {
@@ -73,6 +65,14 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
 
   const runs: ConsensusRun[] = [];
   for (const [taskId, taskSignals] of byRun) {
+    // Build resolved findingIds scoped to THIS run (prevents cross-run collisions with short IDs)
+    const resolvedFindings = new Set<string>();
+    for (const sig of taskSignals) {
+      if (sig.findingId && RESOLUTION_SIGNALS.has(sig.signal)) {
+        resolvedFindings.add(sig.findingId);
+      }
+    }
+
     const agents = new Set<string>();
     const counts = { agreement: 0, disagreement: 0, unverified: 0, unique: 0, hallucination: 0, new: 0, insights: 0 };
 

@@ -147,7 +147,9 @@ export async function handleRelayCrossReview(
     // Without this, the 5-minute timer (started at gossip_collect return) expires before
     // the orchestrator can dispatch Agent() calls and relay all results back.
     const EXTENSION_MS = 300_000; // 5 more minutes from each arrival
-    round.deadline = Date.now() + EXTENSION_MS;
+    const MAX_TOTAL_MS = 1_800_000; // 30 minutes absolute cap from round creation
+    const maxDeadline = round.createdAt + MAX_TOTAL_MS;
+    round.deadline = Math.min(Date.now() + EXTENSION_MS, maxDeadline);
     return {
       content: [{
         type: 'text' as const,

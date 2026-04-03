@@ -160,7 +160,7 @@ export class PerformanceReader {
       weightedUnique: number;
       weightedHallucinations: number;
       weightedImpact: number;   // severity-weighted confirmed findings (CRITICAL=4x, HIGH=2x)
-      confirmedCount: number;   // count of confirmed signals (denominator for impactScore)
+      weightedConfirmedCount: number; // decay-weighted count of confirmed signals (denominator for impactScore)
       tasksSeen: Map<string, number>;
       taskCounter: number;
       agreements: number;
@@ -176,7 +176,7 @@ export class PerformanceReader {
       if (!acc.has(id)) acc.set(id, {
         weightedCorrect: 0, weightedTotal: 0,
         weightedUnique: 0, weightedHallucinations: 0,
-        weightedImpact: 0, confirmedCount: 0,
+        weightedImpact: 0, weightedConfirmedCount: 0,
         tasksSeen: new Map(), taskCounter: 0,
         agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
         totalSignals: 0, lastSignalMs: 0, categoryStrengths: {},
@@ -229,7 +229,7 @@ export class PerformanceReader {
           a.weightedTotal += sevMul * decay;
           a.agreements++;
           a.weightedImpact += sevMul * decay;
-          a.confirmedCount++;
+          a.weightedConfirmedCount += decay;
           if (signal.category) {
             a.categoryStrengths[signal.category] = (a.categoryStrengths[signal.category] ?? 0) + sevMul * decay * 0.15;
           }
@@ -259,7 +259,7 @@ export class PerformanceReader {
           a.weightedUnique += 0.2 * sevMul * decay;
           a.uniqueFindings++;
           a.weightedImpact += sevMul * decay;
-          a.confirmedCount++;
+          a.weightedConfirmedCount += decay;
           break;
         }
         case 'unique_unconfirmed': {
@@ -330,10 +330,10 @@ export class PerformanceReader {
       // Impact score: ratio of severity-weighted confirmed findings to confirmed count.
       // Agent catching only LOW findings → ~0.25. Agent catching CRITICAL → ~1.0.
       // Neutral (0.5) when no data. Confidence-gated to avoid overweighting sparse data.
-      const rawImpact = a.confirmedCount > 0
-        ? clamp(a.weightedImpact / a.confirmedCount, 0, 4) / 4  // max sevMul=4 → normalize to [0,1]
+      const rawImpact = a.weightedConfirmedCount > 0
+        ? clamp(a.weightedImpact / a.weightedConfirmedCount, 0, 4) / 4  // max sevMul=4 → normalize to [0,1]
         : 0.5;
-      const impactConfidence = 1 - Math.exp(-a.confirmedCount / 10);
+      const impactConfidence = 1 - Math.exp(-a.weightedConfirmedCount / 10);
       const impactScore = clamp(0.5 + (rawImpact - 0.5) * impactConfidence, 0, 1);
 
       // Accuracy dominates (0.75), uniqueness minor (0.15), impact breaks ties (0.10)

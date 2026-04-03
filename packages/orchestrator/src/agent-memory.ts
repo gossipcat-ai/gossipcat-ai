@@ -143,12 +143,18 @@ export class AgentMemoryReader {
 
   private touchKnowledgeFile(filePath: string, content: string): void {
     const today = new Date().toISOString().split('T')[0];
-    let updated = content.replace(/lastAccessed:.*/, `lastAccessed: ${today}`);
-    const countMatch = updated.match(/accessCount:\s*(\d+)/);
+    // Only modify frontmatter (between --- delimiters) to avoid corrupting body content
+    // that might contain strings like "lastAccessed:" or "accessCount:"
+    const fmEnd = content.indexOf('\n---', 4); // skip opening ---
+    if (fmEnd < 0) { writeFileSync(filePath, content); return; }
+    let frontmatter = content.slice(0, fmEnd);
+    const body = content.slice(fmEnd);
+    frontmatter = frontmatter.replace(/lastAccessed:.*/, `lastAccessed: ${today}`);
+    const countMatch = frontmatter.match(/accessCount:\s*(\d+)/);
     if (countMatch) {
       const newCount = parseInt(countMatch[1]) + 1;
-      updated = updated.replace(/accessCount:\s*\d+/, `accessCount: ${newCount}`);
+      frontmatter = frontmatter.replace(/accessCount:\s*\d+/, `accessCount: ${newCount}`);
     }
-    writeFileSync(filePath, updated);
+    writeFileSync(filePath, frontmatter + body);
   }
 }
