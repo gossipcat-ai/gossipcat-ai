@@ -50,7 +50,10 @@ function markTimedOut(taskId: string, info: { agentId: string; task: string; sta
   persistNativeTaskMap();
   // Release scope on timeout so it doesn't block future dispatches
   try { ctx.mainAgent?.scopeTracker.release(taskId); } catch { /* best-effort */ }
-  recordTimeoutSignal(taskId, info.agentId);
+  // Don't record timeout signals for utility tasks — _utility is not a real agent
+  if (info.agentId !== '_utility') {
+    recordTimeoutSignal(taskId, info.agentId);
+  }
 }
 
 export function cancelTimeoutWatcher(taskId: string): void {
@@ -180,19 +183,22 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       taskInfo = { agentId: timedOutResult.agentId, task: timedOutResult.task, startedAt: timedOutResult.startedAt };
       process.stderr.write(`[gossipcat] Late relay for ${task_id} — overwriting timed_out result with real data\n`);
       // Retract the timeout signal — agent completed successfully, don't penalize
-      try {
-        const { PerformanceWriter } = require('@gossip/orchestrator');
-        const writer = new PerformanceWriter(process.cwd());
-        writer.appendSignals([{
-          type: 'consensus' as const,
-          signal: 'signal_retracted' as const,
-          agentId: taskInfo.agentId,
-          taskId: task_id,
-          evidence: 'Late relay arrived — agent completed successfully after timeout',
-          timestamp: new Date().toISOString(),
-        }]);
-        process.stderr.write(`[gossipcat] Retracted timeout signal for ${taskInfo.agentId} [${task_id}]\n`);
-      } catch { /* best-effort */ }
+      // Skip for _utility tasks — no timeout signal was recorded for them
+      if (taskInfo.agentId !== '_utility') {
+        try {
+          const { PerformanceWriter } = require('@gossip/orchestrator');
+          const writer = new PerformanceWriter(process.cwd());
+          writer.appendSignals([{
+            type: 'consensus' as const,
+            signal: 'signal_retracted' as const,
+            agentId: taskInfo.agentId,
+            taskId: task_id,
+            evidence: 'Late relay arrived — agent completed successfully after timeout',
+            timestamp: new Date().toISOString(),
+          }]);
+          process.stderr.write(`[gossipcat] Retracted timeout signal for ${taskInfo.agentId} [${task_id}]\n`);
+        } catch { /* best-effort */ }
+      }
     } else {
       return { content: [{ type: 'text' as const, text: `Unknown task ID: ${task_id}. Was it dispatched via gossip_dispatch or gossip_run?` }] };
     }
@@ -284,7 +290,11 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
 
   const utilityBlocks: string[] = [];
 
-  if (!error && !taskInfo.utilityType && ctx.nativeUtilityConfig) {
+  // Cap utility tasks to prevent unbounded growth in large consensus rounds
+  const MAX_PENDING_UTILITY_TASKS = 10;
+  const pendingUtilityCount = [...ctx.nativeTaskMap.values()].filter(t => !!t.utilityType).length;
+
+  if (!error && !taskInfo.utilityType && ctx.nativeUtilityConfig && pendingUtilityCount < MAX_PENDING_UTILITY_TASKS) {
     const UTILITY_TTL_MS = 120_000;
     const model = ctx.nativeUtilityConfig.model;
 
