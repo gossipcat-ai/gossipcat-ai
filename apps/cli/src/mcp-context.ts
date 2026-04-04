@@ -22,6 +22,7 @@ export interface NativeTaskInfo {
   timeoutMs?: number;
   planId?: string;
   step?: number;
+  utilityType?: 'lens' | 'gossip' | 'summary' | 'session_summary';
 }
 
 export interface NativeResultInfo {
@@ -46,6 +47,7 @@ export interface McpContext {
   nativeResultMap: Map<string, NativeResultInfo>;
   nativeAgentConfigs: Map<string, { model: string; instructions: string; description: string }>;
   pendingConsensusRounds: Map<string, PendingConsensusRound>;
+  nativeUtilityConfig: { model: string } | null;
   booted: boolean;
   boot: () => Promise<void>;
   syncWorkersViaKeychain: () => Promise<void>;
@@ -63,6 +65,7 @@ export const ctx: McpContext = {
   nativeResultMap: new Map(),
   nativeAgentConfigs: new Map(),
   pendingConsensusRounds: new Map(),
+  nativeUtilityConfig: null,
   booted: false,
   boot: async () => { throw new Error('boot not initialized'); },
   syncWorkersViaKeychain: async () => {},
