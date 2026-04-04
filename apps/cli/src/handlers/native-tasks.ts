@@ -213,6 +213,10 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   persistNativeTaskMap();
   evictStaleNativeTasks();
 
+  if (!taskInfo.utilityType) {
+    process.stderr.write(`[gossipcat] relay ← ${taskInfo.agentId} [${task_id}]: ${error ? 'failed' : 'completed'} (${elapsed}ms, ${result?.length ?? 0} chars)\n`);
+  }
+
   // Release scope if this native task held one
   try { ctx.mainAgent.scopeTracker.release(task_id); } catch { /* best-effort — no scope registered is fine */ }
 

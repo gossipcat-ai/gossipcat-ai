@@ -56,6 +56,7 @@ export async function handleDispatchSingle(
     ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     persistNativeTaskMap();
+    process.stderr.write(`[gossipcat] dispatch → ${agent_id}: "${task.slice(0, 80)}..." (native, ${nativeConfig.model})\n`);
 
     // Register scope so subsequent dispatches see it
     if (write_mode === 'scoped' && scope) {
@@ -188,6 +189,7 @@ export async function handleDispatchParallel(
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     persistNativeTaskMap();
+    process.stderr.write(`[gossipcat] dispatch → ${def.agent_id}: "${def.task.slice(0, 80)}..." (native, ${nativeConfig.model})\n`);
 
     // Register scope with real task ID so subsequent dispatches see it
     if (def.write_mode === 'scoped' && def.scope) {
@@ -289,6 +291,7 @@ export async function handleDispatchConsensus(
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     allTaskIds.push(taskId);
     persistNativeTaskMap();
+    process.stderr.write(`[gossipcat] dispatch → ${def.agent_id}: "${def.task.slice(0, 80)}..." (native, ${nativeConfig.model})\n`);
 
     const agentPrompt = (nativeConfig.instructions || '') + consensusInstruction + `\n\n---\n\nTask: ${def.task}`;
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
