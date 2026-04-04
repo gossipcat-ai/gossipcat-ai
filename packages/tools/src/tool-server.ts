@@ -175,6 +175,10 @@ export class ToolServer {
         if (!isReadOnlyGit) {
           throw new Error('shell_exec is restricted in scoped write mode. Only git status/diff/log/show are allowed. Use run_tests and run_typecheck for verification.');
         }
+        // Block git flags that can write files or redirect exec
+        if (/--(?:output|exec-path)[=\s]/i.test(cmd)) {
+          throw new Error('shell_exec: --output and --exec-path flags are not permitted in scoped mode');
+        }
       }
       // Worktree agents: block dangerous patterns
       if (root) {
@@ -189,6 +193,27 @@ export class ToolServer {
           if (pattern.test(fullCmd)) {
             throw new Error(`Shell command blocked for write-mode agent: matches ${pattern}`);
           }
+        }
+      }
+    }
+
+    if (toolName === 'file_delete') {
+      const filePath = args.path as string;
+      if (scope) {
+        const resolved = resolve(this.sandbox.projectRoot, filePath);
+        const rel = relative(this.sandbox.projectRoot, resolved);
+        if (rel.startsWith('..')) {
+          throw new Error(`Delete blocked: "${filePath}" resolves outside project root`);
+        }
+        const normalizedRel = rel.endsWith('/') ? rel : rel + '/';
+        if (!normalizedRel.startsWith(scope)) {
+          throw new Error(`Delete blocked: "${filePath}" is outside scope "${scope}"`);
+        }
+      }
+      if (root) {
+        const resolved = resolve(root, filePath);
+        if (!resolved.startsWith(root)) {
+          throw new Error(`Delete blocked: "${filePath}" is outside worktree root "${root}"`);
         }
       }
     }
@@ -401,25 +426,23 @@ export class ToolServer {
     if (fileGlob.includes('../')) {
       throw new Error('run_tests: fileGlob must not contain path traversal (../)');
     }
-    // Validate: no flag injection
-    if (fileGlob.startsWith('--')) {
-      throw new Error('run_tests: fileGlob must be a file path, not a flag');
-    }
-    const blockedFlags = /--(?:config|setupFiles|globalSetup|transform)\b/;
-    if (blockedFlags.test(fileGlob)) {
-      throw new Error('run_tests: fileGlob must not contain config override flags');
+    // Validate: block ALL flags — whitespace splitting could turn embedded flags into real jest args
+    if (/\s-/.test(fileGlob) || fileGlob.startsWith('-')) {
+      throw new Error('run_tests: fileGlob must not contain flags. Pass only file paths/globs.');
     }
 
     const scope = callerId ? this.agentScopes.get(callerId) : undefined;
     const cwd = scope
-      ? resolve(this.sandbox.projectRoot, scope)
+      ? this.sandbox.validatePath(resolve(this.sandbox.projectRoot, scope))
       : this.sandbox.projectRoot;
 
     let output: string;
     let success: boolean;
     try {
+      // Pass fileGlob as args[] element — prevents whitespace splitting into separate jest flags
       output = await this.shellTools.shellExec({
-        command: `npx jest "${fileGlob}" --no-coverage --passWithNoTests --no-cache`,
+        command: 'npx',
+        args: ['jest', fileGlob, '--no-coverage', '--passWithNoTests', '--no-cache'],
         cwd,
         timeout: 60000,
       });
@@ -436,14 +459,17 @@ export class ToolServer {
   private async handleRunTypecheck(callerId?: string): Promise<string> {
     const scope = callerId ? this.agentScopes.get(callerId) : undefined;
     const cwd = scope
-      ? resolve(this.sandbox.projectRoot, scope)
+      ? this.sandbox.validatePath(resolve(this.sandbox.projectRoot, scope))
       : this.sandbox.projectRoot;
 
     let output: string;
     let success: boolean;
     try {
+      // Pin --project to root tsconfig — prevents agent-written tsconfig.json with malicious plugins
+      const tsconfigPath = resolve(this.sandbox.projectRoot, 'tsconfig.json');
       output = await this.shellTools.shellExec({
-        command: 'npx tsc --noEmit',
+        command: 'npx',
+        args: ['tsc', '--noEmit', '--project', tsconfigPath],
         cwd,
         timeout: 120000,
       });
