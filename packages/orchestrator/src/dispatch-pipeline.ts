@@ -882,11 +882,12 @@ export class DispatchPipeline {
   }
 
   /** Record a native agent task completion in TaskGraph */
-  recordNativeTaskCompleted(taskId: string, result: string, error?: string): void {
+  recordNativeTaskCompleted(taskId: string, result: string, error?: string, durationMs?: number): void {
+    const duration = durationMs ?? -1;
     if (error) {
-      this.taskGraph.recordFailed(taskId, error, -1);
+      this.taskGraph.recordFailed(taskId, error, duration);
     } else {
-      this.taskGraph.recordCompleted(taskId, (result || '').slice(0, 4000), -1);
+      this.taskGraph.recordCompleted(taskId, (result || '').slice(0, 4000), duration);
     }
   }
 

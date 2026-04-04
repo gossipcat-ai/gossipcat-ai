@@ -276,9 +276,9 @@ export class MainAgent {
   }
 
   /** Record a native agent task completion in the TaskGraph */
-  recordNativeTaskCompleted(taskId: string, result: string, error?: string): void {
+  recordNativeTaskCompleted(taskId: string, result: string, error?: string, durationMs?: number): void {
     try {
-      this.pipeline.recordNativeTaskCompleted(taskId, result, error);
+      this.pipeline.recordNativeTaskCompleted(taskId, result, error, durationMs);
     } catch { /* best-effort */ }
   }
 
