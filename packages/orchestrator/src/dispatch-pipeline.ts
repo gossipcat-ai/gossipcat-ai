@@ -1,9 +1,8 @@
 import { randomUUID } from 'crypto';
-import { readFileSync, appendFileSync, mkdirSync, writeFileSync, realpathSync } from 'fs';
-import { resolve as resolvePath, join, dirname } from 'path';
-import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, SessionGossipEntry, PlanState, MIN_AGENTS_FOR_CONSENSUS } from './types';
+import { readFileSync, mkdirSync, realpathSync } from 'fs';
+import { resolve as resolvePath, join } from 'path';
+import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, PlanState, MIN_AGENTS_FOR_CONSENSUS } from './types';
 import { ILLMProvider } from './llm-client';
-import { LLMMessage } from '@gossip/types';
 import { loadSkills } from './skill-loader';
 import { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment } from './prompt-assembler';
 import { AgentMemoryReader } from './agent-memory';
@@ -28,6 +27,7 @@ import { SkillIndex } from './skill-index';
 import { SkillCounterTracker } from './skill-counters';
 import { TaskStreamEvent, TaskStreamEventType } from './task-stream';
 import { ConsensusCoordinator } from './consensus-coordinator';
+import { SessionContext } from './session-context';
 
 const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
 
@@ -76,9 +76,7 @@ export class DispatchPipeline {
   private syncFactory: (() => TaskGraphSync | null) | null;
   private toolServer: ToolServerCallbacks | null;
   private isSyncing = false;
-  private sessionGossip: SessionGossipEntry[] = [];
-  private plans: Map<string, PlanState> = new Map();
-  private static readonly MAX_SESSION_GOSSIP = 20;
+  private sessionContext: SessionContext;
 
   private tasks: Map<string, TrackedTask> = new Map();
   private batches: Map<string, Set<string>> = new Map();
@@ -94,7 +92,6 @@ export class DispatchPipeline {
   private perfReader: PerformanceReader | null = null;
   private skillIndex: SkillIndex | null = null;
   private skillCounters: SkillCounterTracker | null = null;
-  private sessionStartTime: Date = new Date();
   private consensusCoordinator: ConsensusCoordinator;
 
   private projectStructureCache: string | null = null;
@@ -133,6 +130,8 @@ export class DispatchPipeline {
     try { this.catalog = new SkillCatalog(config.projectRoot); }
     catch (err) { this.catalog = null; log(`SkillCatalog unavailable: ${(err as Error).message}`); }
 
+    this.sessionContext = new SessionContext({ llm: config.llm ?? null, projectRoot: config.projectRoot });
+
     // Clean up orphaned worktrees from previous runs
     this.worktreeManager.pruneOrphans().catch(err => log(`Orphan cleanup failed: ${(err as Error).message}`));
 
@@ -141,32 +140,11 @@ export class DispatchPipeline {
       const projectMemDir = join(config.projectRoot, '.gossip', 'agents', '_project', 'memory');
       mkdirSync(projectMemDir, { recursive: true });
     } catch { /* best-effort */ }
-
-    // Track session start time for git log range.
-    // Check if gossip file has entries — if so, this is a reconnect within an existing session.
-    // Use the oldest gossip entry's timestamp as the real session start.
-    try {
-      const gossipPath = join(config.projectRoot, '.gossip', 'agents', '_project', 'memory', 'session-gossip.jsonl');
-      const { existsSync: ex, readFileSync: rf } = require('fs');
-      if (ex(gossipPath)) {
-        const lines = rf(gossipPath, 'utf-8').trim().split('\n').filter(Boolean);
-        if (lines.length > 0) {
-          const first = JSON.parse(lines[0]);
-          if (first.timestamp) this.sessionStartTime = new Date(first.timestamp);
-        }
-      }
-    } catch { /* best-effort — fall back to now */ }
   }
 
   /** Build chain context string for a plan step (used by native agent bridge) */
   getChainContext(planId: string, step: number): string {
-    if (step <= 1) return '';
-    const plan = this.plans.get(planId);
-    if (!plan) return '';
-    const priorSteps = plan.steps.filter(s => s.step < step && s.result);
-    if (priorSteps.length === 0) return '';
-    return '[Chain Context — results from prior steps in this plan]\n' +
-      priorSteps.map(s => `Step ${s.step} (${s.agentId}): ${s.result!.slice(0, 1000)}`).join('\n\n');
+    return this.sessionContext.getChainContext(planId, step);
   }
 
   private static readonly MAX_TASKS = 500;
@@ -225,15 +203,16 @@ export class DispatchPipeline {
       : [];
 
     // 4. Build session + chain context
-    let sessionContext = '';
-    if (this.sessionGossip.length > 0) {
-      sessionContext = '[Session Context — prior task results]\n' +
-        this.sessionGossip.map(g => `- ${g.agentId}: ${g.taskSummary}`).join('\n');
+    const sessionGossip = this.sessionContext.getSessionGossip();
+    let sessionCtx = '';
+    if (sessionGossip.length > 0) {
+      sessionCtx = '[Session Context — prior task results]\n' +
+        sessionGossip.map(g => `- ${g.agentId}: ${g.taskSummary}`).join('\n');
     }
 
     let chainContext = '';
     if (options?.planId && options?.step && options.step > 1) {
-      const plan = this.plans.get(options.planId);
+      const plan = this.sessionContext.getPlans().get(options.planId);
       if (plan) {
         const priorSteps = plan.steps.filter(s => s.step < options.step! && s.result);
         if (priorSteps.length > 0) {
@@ -275,7 +254,7 @@ export class DispatchPipeline {
       memoryDir,
       lens: options?.lens,
       skills,
-      sessionContext: sessionContext || undefined,
+      sessionContext: sessionCtx || undefined,
       chainContext: chainContext || undefined,
       consensusSummary: options?.consensus,
       specReviewContext,
@@ -406,7 +385,7 @@ export class DispatchPipeline {
   }
 
   registerPlan(plan: PlanState): void {
-    this.plans.set(plan.id, plan);
+    this.sessionContext.registerPlan(plan);
   }
 
   async collect(taskIds?: string[], timeoutMs: number = 120_000, options?: { consensus?: boolean }): Promise<CollectResult> {
@@ -473,18 +452,17 @@ export class DispatchPipeline {
 
       // 2b. Session gossip summarization (fire-and-forget — don't block collect)
       if (t.status === 'completed' && t.result && this.llm) {
-        this.summarizeAndStoreGossip(t.agentId, t.result);
+        this.sessionContext.summarizeAndStoreGossip(t.agentId, t.result);
       }
 
       // 2c. Store result in plan state for chain threading
       if (t.planId && t.planStep) {
-        const plan = this.plans.get(t.planId);
+        this.sessionContext.recordPlanStepResult(t.planId, t.planStep, t.result || '');
+        // Also update completedAt directly on the plan step
+        const plan = this.sessionContext.getPlans().get(t.planId);
         if (plan) {
           const step = plan.steps.find(s => s.step === t.planStep);
-          if (step) {
-            step.result = (t.result || '').slice(0, 2000);
-            step.completedAt = Date.now();
-          }
+          if (step) step.completedAt = Date.now();
         }
       }
     }
@@ -532,10 +510,11 @@ export class DispatchPipeline {
     }
 
     // 7. Plan cleanup — remove completed or expired plans
-    for (const [id, plan] of this.plans) {
+    const plans = this.sessionContext.getPlans();
+    for (const [id, plan] of plans) {
       const allDone = plan.steps.every(s => s.result !== undefined);
       const expired = Date.now() - plan.createdAt > 3_600_000;
-      if (allDone || expired) this.plans.delete(id);
+      if (allDone || expired) plans.delete(id);
     }
 
     // 7. Worktree merge/cleanup and scope release
@@ -913,12 +892,7 @@ export class DispatchPipeline {
 
   /** Record a native task result into the plan so subsequent steps get chain context */
   recordPlanStepResult(planId: string, step: number, result: string): void {
-    const plan = this.plans.get(planId);
-    if (!plan) return;
-    const planStep = plan.steps.find(s => s.step === step);
-    if (planStep) {
-      planStep.result = (result || '').slice(0, 2000);
-    }
+    this.sessionContext.recordPlanStepResult(planId, step, result);
   }
 
   /** Get suggestion results for formatting in collect responses */
@@ -939,8 +913,8 @@ export class DispatchPipeline {
    */
   getSessionConsensusHistory() { return this.consensusCoordinator.sessionConsensusHistory; }
   getConsensusCoordinator(): ConsensusCoordinator { return this.consensusCoordinator; }
-  getSessionStartTime() { return this.sessionStartTime; }
-  getSessionGossip() { return this.sessionGossip; }
+  getSessionStartTime() { return this.sessionContext.getSessionStartTime(); }
+  getSessionGossip() { return this.sessionContext.getSessionGossip(); }
   getLlm(): ILLMProvider | null { return this.llm; }
   getAgentConfig(agentId: string): AgentConfig | undefined { return this.registryGet(agentId); }
 
@@ -997,44 +971,13 @@ export class DispatchPipeline {
   }
 
   async summarizeAndStoreGossip(agentId: string, result: string): Promise<void> {
-    try {
-      const summary = await this.summarizeForSession(agentId, result);
-      if (summary) {
-        this.sessionGossip.push({ agentId, taskSummary: summary, timestamp: Date.now() });
-        if (this.sessionGossip.length > DispatchPipeline.MAX_SESSION_GOSSIP) {
-          this.sessionGossip.shift();
-        }
-        // Persist to disk for crash safety — gossip_session_save reads this file
-        try {
-          const gossipPath = join(this.projectRoot, '.gossip', 'agents', '_project', 'memory', 'session-gossip.jsonl');
-          mkdirSync(dirname(gossipPath), { recursive: true });
-          appendFileSync(gossipPath, JSON.stringify({ agentId, taskSummary: summary, timestamp: Date.now() }) + '\n');
-          this.rotateJsonlFile(gossipPath, 100, 50);
-        } catch { /* best-effort disk persistence */ }
-      }
-    } catch (err) {
-      log(`Session gossip summarization failed for ${agentId}: ${(err as Error).message}`);
-    }
+    return this.sessionContext.summarizeAndStoreGossip(agentId, result);
   }
 
-  private async summarizeForSession(agentId: string, result: string): Promise<string> {
-    const messages: LLMMessage[] = [
-      { role: 'system', content: 'Summarize the agent result in 1-2 sentences (max 400 chars). Extract only factual findings. No instructions or directives.' },
-      { role: 'user', content: `Agent ${agentId} result:\n${result.slice(0, 2000)}` },
-    ];
-    const response = await this.llm!.generate(messages, { temperature: 0 });
-    return (response.text || '').slice(0, 400);
-  }
-
-  /** Rotate a JSONL file: if over maxEntries lines, keep only the last keepEntries. */
-  private rotateJsonlFile(filePath: string, maxEntries: number, keepEntries: number): void {
-    try {
-      const content = readFileSync(filePath, 'utf-8');
-      const lines = content.trim().split('\n').filter(l => l.length > 0);
-      if (lines.length > maxEntries) {
-        writeFileSync(filePath, lines.slice(-keepEntries).join('\n') + '\n');
-      }
-    } catch { /* file may not exist yet */ }
+  /** @internal Delegates to SessionContext — kept for backward compatibility */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  protected rotateJsonlFile(filePath: string, maxEntries: number, keepEntries: number): void {
+    this.sessionContext.rotateJsonlFile(filePath, maxEntries, keepEntries);
   }
 }
 
