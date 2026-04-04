@@ -2057,11 +2057,25 @@ server.tool(
       status: t.isLikelyStuck ? 'likely_stuck' : 'running',
     }));
 
+    // Include native agent tasks (dispatched via Agent(), tracked in nativeTaskMap)
+    const now = Date.now();
+    for (const [taskId, info] of [...ctx.nativeTaskMap]) {
+      if (ctx.nativeResultMap.has(taskId)) continue; // already completed or timed_out
+      const stuckThreshold = info.timeoutMs ? Math.min(info.timeoutMs * 0.5, 300_000) : 180_000;
+      activeTasks.push({
+        taskId,
+        agentId: info.agentId,
+        elapsedMs: now - info.startedAt,
+        toolCalls: 0,
+        status: (now - info.startedAt > stuckThreshold) ? 'likely_stuck' : 'running',
+      });
+    }
+
     const consensus = phase !== 'idle' ? {
       phase,
-      tasksComplete: health.filter(t => !t.isLikelyStuck).length,
-      tasksTotal: health.length,
-      elapsedMs: health.length > 0 ? Math.max(...health.map(t => t.elapsedMs)) : 0,
+      tasksComplete: activeTasks.filter(t => t.status !== 'likely_stuck').length,
+      tasksTotal: activeTasks.length,
+      elapsedMs: activeTasks.length > 0 ? Math.max(...activeTasks.map(t => t.elapsedMs)) : 0,
     } : null;
 
     const result = { activeTasks, consensus };
