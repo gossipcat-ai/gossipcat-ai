@@ -227,7 +227,6 @@ export class MainAgent {
   getTask(taskId: string) { return this.pipeline.getTask(taskId); }
   setGossipPublisher(publisher: any) { this.pipeline.setGossipPublisher(publisher); }
   setOverlapDetector(detector: any): void { this.pipeline.setOverlapDetector(detector); }
-  setConsensusJudge(judge: any): void { this.pipeline.setConsensusJudge(judge); }
   async runConsensus(results: any[]): Promise<any> { return this.pipeline.runConsensus(results); }
   setLensGenerator(generator: any): void { this.pipeline.setLensGenerator(generator); }
   getSkillGapSuggestions() { return this.pipeline.getSkillGapSuggestions(); }

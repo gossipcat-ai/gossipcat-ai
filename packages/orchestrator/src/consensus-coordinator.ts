@@ -2,7 +2,6 @@ import { randomUUID } from 'crypto';
 import { readFileSync, appendFileSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { ILLMProvider, createProvider } from './llm-client';
-import { IConsensusJudge } from './consensus-judge';
 import { ConsensusEngine } from './consensus-engine';
 import { ConsensusReport } from './consensus-types';
 import { PerformanceWriter } from './performance-writer';
@@ -27,7 +26,6 @@ export class ConsensusCoordinator {
   private registryGet: (id: string) => AgentConfig | undefined;
   private projectRoot: string;
   private keyProvider: ((provider: string) => Promise<string | null>) | null;
-  private consensusJudge: IConsensusJudge | null = null;
   private gossipPublisher: GossipPublisher | null = null;
   private memWriter: MemoryWriter;
 
@@ -41,10 +39,6 @@ export class ConsensusCoordinator {
     this.projectRoot = config.projectRoot;
     this.keyProvider = config.keyProvider;
     this.memWriter = new MemoryWriter(config.projectRoot);
-  }
-
-  setConsensusJudge(judge: IConsensusJudge): void {
-    this.consensusJudge = judge;
   }
 
   setGossipPublisher(publisher: GossipPublisher | null): void {
@@ -93,54 +87,7 @@ export class ConsensusCoordinator {
 
       this.currentPhase = 'cross_review';
 
-      // Consensus Judge Integration
-      const agentTaskIdMap = new Map<string, string>();
-      for (const r of results) agentTaskIdMap.set(r.agentId, r.id);
       const consensusId = consensusReport.signals[0]?.consensusId ?? randomUUID().slice(0, 12);
-
-      if (consensusReport.confirmed.length > 0 && this.consensusJudge) {
-        try {
-          const verdicts = await this.consensusJudge.verify(consensusReport.confirmed);
-          const now = new Date().toISOString();
-
-          verdicts.sort((a, b) => b.index - a.index);
-
-          for (const v of verdicts) {
-            const findingIndex = v.index - 1;
-            const finding = consensusReport.confirmed[findingIndex];
-            if (!finding) continue;
-
-            if (v.verdict === 'REFUTED') {
-              consensusReport.confirmed.splice(findingIndex, 1);
-              finding.tag = 'disputed';
-              consensusReport.disputed.push(finding);
-
-              consensusReport.signals.push({
-                type: 'consensus', signal: 'hallucination_caught', consensusId,
-                agentId: finding.originalAgentId, outcome: 'judge_refuted',
-                evidence: v.evidence, timestamp: now, taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || '',
-              });
-              for (const confirmerId of finding.confirmedBy) {
-                consensusReport.signals.push({
-                  type: 'consensus', signal: 'hallucination_caught', consensusId,
-                  agentId: confirmerId, outcome: 'confirmed_hallucination',
-                  evidence: `Confirmed refuted finding: ${v.evidence}`,
-                  timestamp: now, taskId: agentTaskIdMap.get(confirmerId) || finding.id || '',
-                });
-              }
-            } else if (v.verdict === 'VERIFIED') {
-              consensusReport.signals.push({
-                type: 'consensus', signal: 'consensus_verified', consensusId,
-                agentId: finding.originalAgentId,
-                evidence: v.evidence, timestamp: now, taskId: agentTaskIdMap.get(finding.originalAgentId) || finding.id || '',
-                severity: finding.severity,
-              });
-            }
-          }
-        } catch (err) {
-          log(`Consensus judge failed: ${(err as Error).message}`);
-        }
-      }
 
       this.currentPhase = 'synthesis';
 

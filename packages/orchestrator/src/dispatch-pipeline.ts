@@ -22,7 +22,6 @@ import { PerformanceReader } from './performance-reader';
 import { DispatchDifferentiator } from './dispatch-differentiator';
 import { CollectResult } from './consensus-types';
 import { WorkerLike } from './worker-like';
-import { IConsensusJudge } from './consensus-judge';
 import { SkillIndex } from './skill-index';
 import { SkillCounterTracker } from './skill-counters';
 import { TaskStreamEvent, TaskStreamEventType } from './task-stream';
@@ -871,10 +870,6 @@ export class DispatchPipeline {
 
   setDispatchDifferentiator(differ: DispatchDifferentiator): void {
     this.dispatchDifferentiator = differ;
-  }
-
-  setConsensusJudge(judge: IConsensusJudge): void {
-    this.consensusCoordinator.setConsensusJudge(judge);
   }
 
   /**

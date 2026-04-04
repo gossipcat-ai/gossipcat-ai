@@ -61,7 +61,5 @@ export { extractCategories } from './category-extractor';
 export { DispatchDifferentiator } from './dispatch-differentiator';
 export { shouldSkipConsensus } from './dispatch-pipeline';
 export { SkillGenerator } from './skill-generator';
-export { ConsensusJudge } from './consensus-judge';
-export type { IConsensusJudge, JudgeVerdict } from './consensus-judge';
 export { MemorySearcher } from './memory-searcher';
 export type { SearchResult } from './memory-searcher';
