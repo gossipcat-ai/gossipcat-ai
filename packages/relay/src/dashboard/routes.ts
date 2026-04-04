@@ -285,10 +285,17 @@ export class DashboardRouter {
     if (!existsSync(reportsDir)) return { reports: [], totalReports: 0, page, pageSize };
 
     try {
+      const { statSync } = require('fs');
       const allFiles = readdirSync(reportsDir)
         .filter((f: string) => f.endsWith('.json'))
-        .sort()
-        .reverse();
+        .sort((a: string, b: string) => {
+          // Sort by modification time (newest first), not filename
+          try {
+            const aTime = statSync(join(reportsDir, a)).mtimeMs;
+            const bTime = statSync(join(reportsDir, b)).mtimeMs;
+            return bTime - aTime;
+          } catch { return 0; }
+        });
 
       const totalReports = allFiles.length;
       const clampedPageSize = Math.min(Math.max(pageSize, 1), 20);
