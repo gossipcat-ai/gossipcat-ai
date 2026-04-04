@@ -284,7 +284,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   const utilityBlocks: string[] = [];
 
   if (!error && !taskInfo.utilityType && ctx.nativeUtilityConfig) {
-    const UTILITY_TTL_MS = 60_000;
+    const UTILITY_TTL_MS = 120_000;
     const model = ctx.nativeUtilityConfig.model;
 
     // 1. Cognitive summary utility task

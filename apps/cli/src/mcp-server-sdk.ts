@@ -1993,7 +1993,7 @@ server.tool(
     if (ctx.nativeUtilityConfig && !_utility_task_id) {
       const { system, user } = writer.getSessionSummaryPrompt(summaryData);
       const taskId = randomUUID().slice(0, 8);
-      const UTILITY_TTL_MS = 60_000;
+      const UTILITY_TTL_MS = 120_000;
       ctx.nativeTaskMap.set(taskId, {
         agentId: '_utility',
         task: 'session_summary',
