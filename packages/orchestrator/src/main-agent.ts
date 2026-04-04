@@ -220,6 +220,8 @@ export class MainAgent {
   dispatch(agentId: string, task: string, options?: DispatchOptions) { return this.pipeline.dispatch(agentId, task, options); }
   async collect(taskIds?: string[], timeoutMs?: number, options?: { consensus?: boolean }) { return this.pipeline.collect(taskIds, timeoutMs, options); }
   async dispatchParallel(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>, options?: { consensus?: boolean }) { return this.pipeline.dispatchParallel(tasks, options); }
+  async dispatchParallelWithLenses(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>, options?: { consensus?: boolean }, precomputedLenses?: Map<string, string>) { return this.pipeline.dispatchParallelWithLenses(tasks, options, precomputedLenses); }
+  async generateLensesForAgents(taskDefs: Array<{ agentId: string; task: string }>) { return this.pipeline.generateLensesForAgents(taskDefs); }
   registerPlan(plan: PlanState): void { this.pipeline.registerPlan(plan); }
   getChainContext(planId: string, step: number): string { return this.pipeline.getChainContext(planId, step); }
   recordPlanStepResult(planId: string, step: number, result: string): void { this.pipeline.recordPlanStepResult(planId, step, result); }

@@ -92,6 +92,7 @@ export class DispatchPipeline {
   private skillIndex: SkillIndex | null = null;
   private skillCounters: SkillCounterTracker | null = null;
   private consensusCoordinator: ConsensusCoordinator;
+  private _precomputedLenses: Map<string, string> | null = null;
 
   private projectStructureCache: string | null = null;
 
@@ -673,9 +674,15 @@ export class DispatchPipeline {
       }
     }
 
-    // Profile-based differentiation (preferred — uses learned agent scores)
+    // Use pre-computed lenses if injected via dispatchParallelWithLenses
     let lensMap: Map<string, string> | null = null;
-    if (this.perfReader && this.dispatchDifferentiator) {
+    if (this._precomputedLenses) {
+      lensMap = this._precomputedLenses;
+      log(`Using pre-computed lenses:\n${[...lensMap].map(([id, focus]) => `  ${id} → ${focus.slice(0, 80)}`).join('\n')}`);
+    }
+
+    // Profile-based differentiation (preferred — uses learned agent scores)
+    if (!lensMap && this.perfReader && this.dispatchDifferentiator) {
       const scores = taskDefs
         .map(d => this.perfReader!.getAgentScore(d.agentId))
         .filter((s): s is NonNullable<typeof s> => s !== null);
@@ -768,6 +775,72 @@ export class DispatchPipeline {
 
     this.batches.set(batchId, batchTaskIds);
     return { taskIds, errors };
+  }
+
+  /**
+   * Generate differentiation lenses for a set of agents and a shared task.
+   * Extracts the overlap detection + lens generation logic so it can be
+   * invoked externally (e.g., by a native utility agent) before dispatch.
+   */
+  async generateLensesForAgents(
+    taskDefs: Array<{ agentId: string; task: string }>,
+  ): Promise<Map<string, string> | null> {
+    // Profile-based differentiation first (preferred)
+    if (this.perfReader && this.dispatchDifferentiator) {
+      const scores = taskDefs
+        .map(d => this.perfReader!.getAgentScore(d.agentId))
+        .filter((s): s is NonNullable<typeof s> => s !== null);
+
+      if (scores.length >= 2) {
+        const diffMap = this.dispatchDifferentiator.differentiate(scores, taskDefs[0]?.task || '');
+        if (diffMap.size > 0) {
+          log(`generateLensesForAgents: profile-based differentiation produced ${diffMap.size} lenses`);
+          return diffMap;
+        }
+      }
+    }
+
+    // Fall back to overlap detection + LensGenerator
+    if (this.overlapDetector) {
+      const agentConfigs = taskDefs
+        .map(d => this.registryGet(d.agentId))
+        .filter((c): c is AgentConfig => c !== undefined);
+      const overlapResult = this.overlapDetector.detect(agentConfigs);
+
+      if (overlapResult.hasOverlaps && this.lensGenerator) {
+        try {
+          const lenses = await this.lensGenerator.generateLenses(
+            overlapResult.agents, taskDefs[0]?.task || '', overlapResult.sharedSkills,
+          );
+          if (lenses.length > 0) {
+            const lensMap = new Map(lenses.map(l => [l.agentId, l.focus]));
+            log(`generateLensesForAgents: overlap-based lenses produced ${lensMap.size} lenses`);
+            return lensMap;
+          }
+        } catch (err) {
+          log(`generateLensesForAgents: lens generation failed: ${(err as Error).message}`);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Dispatch parallel tasks with optional pre-computed lenses.
+   * Stores lenses on the instance, delegates to dispatchParallel, then clears.
+   */
+  async dispatchParallelWithLenses(
+    taskDefs: Array<{ agentId: string; task: string; options?: DispatchOptions }>,
+    pipelineOptions?: { consensus?: boolean },
+    precomputedLenses?: Map<string, string>,
+  ): Promise<{ taskIds: string[]; errors: string[] }> {
+    this._precomputedLenses = precomputedLenses ?? null;
+    try {
+      return await this.dispatchParallel(taskDefs, pipelineOptions);
+    } finally {
+      this._precomputedLenses = null;
+    }
   }
 
   /** Write memory inline (for handleMessage synchronous path) */

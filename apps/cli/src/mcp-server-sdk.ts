@@ -797,8 +797,9 @@ server.tool(
     timeout_ms: z.number().optional().describe('Write task timeout in ms. Default 300000.'),
     plan_id: z.string().optional().describe('Plan ID from gossip_plan. Enables chain context from prior steps.'),
     step: z.number().optional().describe('Step number in the plan (1-indexed).'),
+    _utility_task_id: z.string().optional().describe('Internal: utility task ID for re-entry after native lens generation'),
   },
-  async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step }) => {
+  async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step, _utility_task_id }) => {
     // Track plan execution depth for re-entrant guard
     planExecutionDepth++;
     try {
@@ -818,7 +819,7 @@ server.tool(
         if (!tasks || tasks.length === 0) {
           return { content: [{ type: 'text' as const, text: 'Error: mode:"consensus" requires a non-empty tasks array.' }] };
         }
-        return handleDispatchConsensus(tasks);
+        return handleDispatchConsensus(tasks, _utility_task_id);
       }
       return { content: [{ type: 'text' as const, text: `Unknown mode: ${mode}` }] };
     } finally {

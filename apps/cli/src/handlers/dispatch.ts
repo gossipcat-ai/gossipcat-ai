@@ -216,6 +216,7 @@ export async function handleDispatchParallel(
 
 export async function handleDispatchConsensus(
   taskDefs: Array<{ agent_id: string; task: string }>,
+  _utility_task_id?: string,
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -224,6 +225,22 @@ export async function handleDispatchConsensus(
     if (!/^[a-zA-Z0-9_-]+$/.test(def.agent_id)) {
       return { content: [{ type: 'text' as const, text: `Invalid agent ID format: "${def.agent_id}"` }] };
     }
+  }
+
+  // Re-entry: recover pre-computed lenses from a completed native utility task
+  let precomputedLenses: Map<string, string> | null = null;
+  if (_utility_task_id) {
+    const lensResult = ctx.nativeResultMap.get(_utility_task_id);
+    if (lensResult?.status === 'completed' && lensResult.result) {
+      try {
+        const parsed = JSON.parse(lensResult.result);
+        if (Array.isArray(parsed)) {
+          precomputedLenses = new Map(parsed.map((l: any) => [l.agentId, l.focus]));
+        }
+      } catch { /* invalid result, dispatch without lenses */ }
+    }
+    ctx.nativeResultMap.delete(_utility_task_id);
+    ctx.nativeTaskMap.delete(_utility_task_id);
   }
 
   // Split native vs custom tasks (same pattern as parallel)
@@ -240,12 +257,18 @@ export async function handleDispatchConsensus(
   const lines: string[] = [];
   const allTaskIds: string[] = [];
 
-  // Dispatch relay tasks with consensus
+  // Dispatch relay tasks with consensus (use pre-computed lenses if available)
   if (relayTasks.length > 0) {
-    const { taskIds, errors } = await ctx.mainAgent.dispatchParallel(
-      relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task })),
-      { consensus: true },
-    );
+    const { taskIds, errors } = precomputedLenses
+      ? await ctx.mainAgent.dispatchParallelWithLenses(
+          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task })),
+          { consensus: true },
+          precomputedLenses,
+        )
+      : await ctx.mainAgent.dispatchParallel(
+          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task })),
+          { consensus: true },
+        );
     persistRelayTasks(); // Survive MCP reconnects
     for (const tid of taskIds) {
       const t = ctx.mainAgent.getTask(tid);
