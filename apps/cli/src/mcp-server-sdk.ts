@@ -12,6 +12,7 @@ import { ctx, defaultImportanceScores, NATIVE_TASK_TTL_MS } from './mcp-context'
 import { evictStaleNativeTasks, persistNativeTaskMap, restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';
+import { restorePendingConsensus } from './handlers/relay-cross-review';
 
 // ── Environment detection ────────────────────────────────────────────────
 
@@ -423,6 +424,7 @@ async function doBoot() {
 
   // Restore native task tracking from disk (survives /mcp reconnects)
   restoreNativeTaskMap(process.cwd());
+  restorePendingConsensus(process.cwd());
 
   // Wire adaptive team intelligence (overlap detection + lens generation)
   try {

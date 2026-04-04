@@ -30,6 +30,7 @@ export function startConsensusTimeout(consensusId: string): void {
     // Delete round BEFORE async work to prevent double-synthesis race with concurrent relay
     const snapshot = { allResults: current.allResults, relayCrossReviewEntries: current.relayCrossReviewEntries, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries] };
     ctx.pendingConsensusRounds.delete(consensusId);
+    persistPendingConsensus();
     process.stderr.write(`[gossipcat] Consensus ${consensusId} timed out. Missing: ${missingAgents.join(', ')}. Synthesizing with available entries.\n`);
 
     // Record timeout signals for missing agents
@@ -141,6 +142,9 @@ export async function handleRelayCrossReview(
     process.stderr.write(`[gossipcat] Failed to parse cross-review from ${agent_id}: ${(err as Error).message}\n`);
   }
 
+  // Persist after each arrival so /mcp reconnect doesn't lose partial cross-reviews
+  persistPendingConsensus();
+
   // Check if all native agents have responded
   if (round.pendingNativeAgents.size > 0) {
     // Extend deadline — each arriving result proves the orchestrator is actively relaying.
@@ -167,6 +171,7 @@ export async function handleRelayCrossReview(
     consensusId: round.consensusId,
   };
   ctx.pendingConsensusRounds.delete(consensus_id);
+  persistPendingConsensus();
   process.stderr.write(`[gossipcat] All native cross-reviews received. Synthesizing consensus for ${consensus_id}...\n`);
 
   try {
@@ -235,4 +240,78 @@ export async function handleRelayCrossReview(
       }],
     };
   }
+}
+
+// ── Persistence — survive /mcp reconnect ───────────────────────────────
+
+const CONSENSUS_FILE = 'pending-consensus.json';
+
+/** Persist pending consensus rounds to disk so /mcp reconnects don't lose them */
+export function persistPendingConsensus(): void {
+  try {
+    const projectRoot = ctx.mainAgent?.projectRoot;
+    if (!projectRoot) return;
+    const { writeFileSync, mkdirSync } = require('fs');
+    const { join } = require('path');
+    const dir = join(projectRoot, '.gossip');
+    mkdirSync(dir, { recursive: true });
+
+    const rounds: Record<string, any> = {};
+    for (const [id, round] of ctx.pendingConsensusRounds) {
+      rounds[id] = {
+        consensusId: round.consensusId,
+        allResults: round.allResults.map((r: any) => ({
+          id: r.id, agentId: r.agentId, task: r.task?.slice(0, 5000),
+          status: r.status, result: r.result?.slice(0, 10000),
+        })),
+        relayCrossReviewEntries: round.relayCrossReviewEntries,
+        pendingNativeAgents: [...round.pendingNativeAgents],
+        nativeCrossReviewEntries: round.nativeCrossReviewEntries,
+        deadline: round.deadline,
+        createdAt: round.createdAt,
+      };
+    }
+    writeFileSync(join(dir, CONSENSUS_FILE), JSON.stringify(rounds));
+  } catch (err) {
+    process.stderr.write(`[gossipcat] persistPendingConsensus failed: ${(err as Error).message}\n`);
+  }
+}
+
+/** Restore pending consensus rounds from disk (called on boot) */
+export function restorePendingConsensus(projectRoot: string): void {
+  try {
+    const { existsSync, readFileSync, unlinkSync } = require('fs');
+    const { join } = require('path');
+    const filePath = join(projectRoot, '.gossip', CONSENSUS_FILE);
+    if (!existsSync(filePath)) return;
+
+    const raw = JSON.parse(readFileSync(filePath, 'utf-8'));
+    const now = Date.now();
+
+    for (const [id, data] of Object.entries(raw) as [string, any][]) {
+      // Skip expired rounds (deadline passed + 5 min grace period)
+      if (now > data.deadline + 300_000) {
+        process.stderr.write(`[gossipcat] Skipping expired consensus round ${id}\n`);
+        continue;
+      }
+      if (ctx.pendingConsensusRounds.has(id)) continue;
+
+      ctx.pendingConsensusRounds.set(id, {
+        consensusId: data.consensusId,
+        allResults: data.allResults,
+        relayCrossReviewEntries: data.relayCrossReviewEntries || [],
+        pendingNativeAgents: new Set(data.pendingNativeAgents || []),
+        nativeCrossReviewEntries: data.nativeCrossReviewEntries || [],
+        deadline: data.deadline,
+        createdAt: data.createdAt,
+      });
+
+      // Re-arm timeout watcher
+      startConsensusTimeout(id);
+      process.stderr.write(`[gossipcat] Restored consensus round ${id} — ${data.pendingNativeAgents?.length ?? 0} agents pending\n`);
+    }
+
+    // Clean up file after restore
+    unlinkSync(filePath);
+  } catch { /* best-effort — corrupt file is fine */ }
 }

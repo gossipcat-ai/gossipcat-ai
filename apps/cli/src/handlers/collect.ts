@@ -3,7 +3,7 @@
  * All state accessed via the shared context object.
  */
 import { ctx } from '../mcp-context';
-import { startConsensusTimeout } from './relay-cross-review';
+import { startConsensusTimeout, persistPendingConsensus } from './relay-cross-review';
 
 export async function handleCollect(
   task_ids: string[],
@@ -256,6 +256,7 @@ export async function handleCollect(
 
         // Start timeout watcher — auto-synthesizes if native agents don't respond
         startConsensusTimeout(consensusId);
+        persistPendingConsensus();
 
         // Build partial output: action block FIRST, results AFTER
         // Matches ⚠️ EXECUTE NOW pattern from gossip_run (mcp-server-sdk.ts:1254)
