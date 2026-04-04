@@ -47,7 +47,13 @@ export function loadConfig(configPath: string): GossipConfig {
   return validateConfig(parsed);
 }
 
-const VALID_PROVIDERS = ['anthropic', 'openai', 'google', 'local'];
+const VALID_PROVIDERS = ['anthropic', 'openai', 'google', 'local', 'native'];
+
+const CLAUDE_MODEL_MAP: Record<string, { provider: string; model: string }> = {
+  opus:   { provider: 'anthropic', model: 'claude-opus-4-6' },
+  sonnet: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+  haiku:  { provider: 'anthropic', model: 'claude-haiku-4-5' },
+};
 
 export function validateConfig(raw: any): GossipConfig {
   if (!raw.main_agent) throw new Error('Config missing "main_agent" field');
@@ -67,6 +73,14 @@ export function validateConfig(raw: any): GossipConfig {
       throw new Error(
         `Invalid utility_model provider "${raw.utility_model.provider}". Must be one of: ${VALID_PROVIDERS.join(', ')}`
       );
+    }
+    if (raw.utility_model.provider === 'native') {
+      const validNativeModels = Object.keys(CLAUDE_MODEL_MAP);
+      if (!validNativeModels.includes(raw.utility_model.model)) {
+        throw new Error(
+          `Invalid native utility_model model "${raw.utility_model.model}". Must be one of: ${validNativeModels.join(', ')}`
+        );
+      }
     }
   }
 
@@ -97,12 +111,6 @@ export function configToAgentConfigs(config: GossipConfig): AgentConfig[] {
 }
 
 // ── Claude Code subagent loading ─────────────────────────────────────────
-
-const CLAUDE_MODEL_MAP: Record<string, { provider: string; model: string }> = {
-  opus:   { provider: 'anthropic', model: 'claude-opus-4-6' },
-  sonnet: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
-  haiku:  { provider: 'anthropic', model: 'claude-haiku-4-5' },
-};
 
 export interface ClaudeSubagent {
   id: string;

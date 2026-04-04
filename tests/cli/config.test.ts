@@ -37,6 +37,30 @@ describe('Config Validation', () => {
     const config = validateConfig({ main_agent: { provider: 'anthropic', model: 'claude' } });
     expect(config.agents).toBeUndefined();
   });
+
+  it('accepts utility_model with native provider and valid model', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'google', model: 'gemini-2.5-pro' },
+      utility_model: { provider: 'native', model: 'haiku' },
+    });
+    expect(config.utility_model?.provider).toBe('native');
+    expect(config.utility_model?.model).toBe('haiku');
+  });
+
+  it('rejects native utility_model with invalid model tier', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'google', model: 'gemini-2.5-pro' },
+      utility_model: { provider: 'native', model: 'gpt-4' },
+    })).toThrow('native');
+  });
+
+  it('accepts utility_model with relay provider (existing behavior)', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'google', model: 'gemini-2.5-pro' },
+      utility_model: { provider: 'anthropic', model: 'claude-haiku-4-5' },
+    });
+    expect(config.utility_model?.provider).toBe('anthropic');
+  });
 });
 
 describe('findConfigPath', () => {

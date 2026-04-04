@@ -31,7 +31,12 @@ function loadConfig(configPath) {
     }
     return validateConfig(parsed);
 }
-const VALID_PROVIDERS = ['anthropic', 'openai', 'google', 'local'];
+const VALID_PROVIDERS = ['anthropic', 'openai', 'google', 'local', 'native'];
+const CLAUDE_MODEL_MAP = {
+    opus: { provider: 'anthropic', model: 'claude-opus-4-6' },
+    sonnet: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    haiku: { provider: 'anthropic', model: 'claude-haiku-4-5' },
+};
 function validateConfig(raw) {
     if (!raw.main_agent)
         throw new Error('Config missing "main_agent" field');
@@ -49,6 +54,12 @@ function validateConfig(raw) {
             throw new Error('Config "utility_model" missing model');
         if (!VALID_PROVIDERS.includes(raw.utility_model.provider)) {
             throw new Error(`Invalid utility_model provider "${raw.utility_model.provider}". Must be one of: ${VALID_PROVIDERS.join(', ')}`);
+        }
+        if (raw.utility_model.provider === 'native') {
+            const validNativeModels = Object.keys(CLAUDE_MODEL_MAP);
+            if (!validNativeModels.includes(raw.utility_model.model)) {
+                throw new Error(`Invalid native utility_model model "${raw.utility_model.model}". Must be one of: ${validNativeModels.join(', ')}`);
+            }
         }
     }
     if (raw.agents) {
