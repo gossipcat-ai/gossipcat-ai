@@ -1229,13 +1229,28 @@ server.tool(
     if (scope) options.scope = scope;
 
     if (isNative) {
-      // Native agent — record task and return instructions for host
+      // Native agent — validate scope, record task, return instructions for host
+      if (write_mode === 'scoped') {
+        if (!scope) {
+          return { content: [{ type: 'text' as const, text: 'Error: scoped write mode requires a scope path' }] };
+        }
+        const overlap = ctx.mainAgent.scopeTracker.hasOverlap(scope);
+        if (overlap.overlaps) {
+          return { content: [{ type: 'text' as const, text: `Error: Scope "${scope}" conflicts with running task ${overlap.conflictTaskId} at "${overlap.conflictScope}"` }] };
+        }
+      }
+
       evictStaleNativeTasks();
       const taskId = require('crypto').randomUUID().slice(0, 8);
       ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS });
       spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
       persistNativeTaskMap();
       try { ctx.mainAgent.recordNativeTask(taskId, agent_id, task); } catch { /* best-effort */ }
+
+      // Register scope so subsequent dispatches see it
+      if (write_mode === 'scoped' && scope) {
+        ctx.mainAgent.scopeTracker.register(scope, taskId);
+      }
       const config = ctx.nativeAgentConfigs.get(agent_id)!;
 
       // Use agent's .claude/agents/<id>.md instructions as the system prompt
