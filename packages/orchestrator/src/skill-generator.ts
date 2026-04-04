@@ -59,10 +59,8 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
 
 ## Anti-Patterns
 
-| Thought | Reality |
-|---------|---------|
-| "Just one quick fix" | Quick fixes mask root causes |
-| "I know what's wrong" | Verify before acting |
+- **"Just one quick fix"** — Quick fixes mask root causes. Investigate before patching.
+- **"I know what's wrong"** — Verify with evidence before acting. Assumptions cause regressions.
 
 ## Quality Gate
 
@@ -103,7 +101,13 @@ export class SkillGenerator {
     let projectContext = '';
     const bootstrapPath = join(this.projectRoot, '.gossip', 'bootstrap.md');
     if (existsSync(bootstrapPath)) {
-      projectContext = readFileSync(bootstrapPath, 'utf-8').slice(0, 2000);
+      projectContext = readFileSync(bootstrapPath, 'utf-8').slice(0, 1500);
+    }
+
+    // Analyze project tech stack so skills are tailored, not generic
+    const techStack = this.detectTechStack();
+    if (techStack) {
+      projectContext += `\n\n<tech_stack>\n${techStack}\n</tech_stack>`;
     }
 
     const totalDispatches = agentScoreData?.totalSignals ?? 0;
@@ -146,14 +150,15 @@ Output a skill markdown file with this exact structure:
 3. ## When This Skill Activates — task patterns that trigger it
 4. ## Methodology — 5-8 step checklist, actionable not vague
 5. ## Key Patterns — important code patterns to look for
-6. ## Anti-Patterns — table with columns "Thought" and "Reality"
+6. ## Anti-Patterns — bullet list, each: **"Thought"** — Reality explanation
 7. ## Quality Gate — pre-report checklist with checkboxes
 
 Requirements:
 - Write with authority — MUST, NEVER, NO EXCEPTIONS
 - Keep under 150 lines
-- Methodology must be universal (works on any codebase)
-- Key Patterns can include project-specific examples from findings`,
+- CRITICAL: Tailor ALL content to the project's actual tech stack (see <tech_stack>). Only include checks relevant to technologies the project uses. If the project has no SQL database, do NOT mention SQL injection. If no HTML rendering, do NOT mention XSS. Generic security checklists waste agent prompt tokens.
+- Reference actual project file paths and patterns from findings and context
+- Use bullet lists instead of markdown tables for Anti-Patterns (tables render poorly in agent prompts)`,
       },
     ];
 
@@ -223,6 +228,40 @@ Requirements:
     }
 
     return BUNDLED_TEMPLATE;
+  }
+
+  /** Detect project tech stack from package.json and file patterns */
+  private detectTechStack(): string | null {
+    const lines: string[] = [];
+
+    // Read root package.json for dependencies
+    const pkgPath = join(this.projectRoot, 'package.json');
+    if (existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+        const depNames = Object.keys(allDeps);
+        if (depNames.length > 0) {
+          lines.push(`Dependencies: ${depNames.slice(0, 30).join(', ')}`);
+        }
+
+        // Detect what's NOT present (prevents irrelevant skill content)
+        const hasSQL = depNames.some(d => /pg|mysql|sqlite|knex|prisma|sequelize|typeorm|drizzle/i.test(d));
+        const hasHTML = depNames.some(d => /react|vue|svelte|angular|next|nuxt|ejs|handlebars|pug/i.test(d));
+        const hasGraphQL = depNames.some(d => /graphql|apollo/i.test(d));
+        lines.push(`Has SQL/DB ORM: ${hasSQL}`);
+        lines.push(`Has HTML/frontend framework: ${hasHTML}`);
+        lines.push(`Has GraphQL: ${hasGraphQL}`);
+      } catch { /* skip */ }
+    }
+
+    // Detect primary language/patterns from file extensions
+    try {
+      const srcDirs = ['src', 'packages', 'apps', 'lib'].filter(d => existsSync(join(this.projectRoot, d)));
+      lines.push(`Source directories: ${srcDirs.join(', ') || 'root'}`);
+    } catch { /* skip */ }
+
+    return lines.length > 0 ? lines.join('\n') : null;
   }
 
   private loadCategoryFindings(category: string): Array<{ agentId: string; evidence: string }> {
