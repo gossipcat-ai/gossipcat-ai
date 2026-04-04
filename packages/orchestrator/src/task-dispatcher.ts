@@ -34,19 +34,19 @@ export class TaskDispatcher {
 
 ## Rules
 
-1. **Implementation is always ONE task.** Never split a cohesive project into sequential implementation steps. One implementer builds the whole thing.
+1. **Decompose by file scope.** Split implementation into 3-5 tasks, each owning a non-overlapping set of files or directories. One task = one scope.
 
-2. **Use the full team in parallel.** If researchers and reviewers are available, give them work alongside the implementer:
+2. **Use the full team in parallel.** If researchers and reviewers are available, give them work alongside implementers:
    - Researcher: investigate APIs, find examples, check docs — runs in parallel with implementation
    - Reviewer: review the completed code — runs after implementation (sequential)
 
 3. **Describe WHAT, not HOW.** The agent decides file structure, components, architecture.
 
-4. **2-3 tasks max.** Typical patterns:
-   - Implementation only → single
-   - Implementation + research → parallel (2 tasks)
-   - Implementation then review → sequential (2 tasks)
-   - Implementation + research, then review → mixed (3 tasks)
+4. **3-5 tasks max.** Typical patterns:
+   - Small feature → single implementer (1 task)
+   - Medium feature → 2-3 scoped implementers in parallel
+   - Large feature → 3-5 scoped implementers + researcher + reviewer
+   - Each implementation task should specify its file scope (e.g., "packages/relay/src/dashboard/")
 
 ## Response format
 
