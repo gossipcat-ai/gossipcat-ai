@@ -103,8 +103,10 @@ ${fileList}`;
 
 /**
  * Assemble memory, lens, skills, context, and gossip into a single prompt string.
- * Order: CHAIN CONTEXT → SESSION CONTEXT → MEMORY → LENS → SKILLS → context
- * Each block is only included if content is provided.
+ * Priority order (highest first — survives truncation):
+ *   PROJECT → CHAIN CONTEXT → SKILLS → CONSENSUS FORMAT → LENS → MEMORY → SESSION → context
+ * Skills are behavioral methodology (iron laws, methodology, quality gates) — they define
+ * HOW the agent thinks. They must survive truncation over supplementary context like memory/session.
  */
 export function assemblePrompt(parts: {
   memory?: string;
@@ -120,6 +122,7 @@ export function assemblePrompt(parts: {
 }): string {
   const blocks: string[] = [];
 
+  // HIGH PRIORITY — project layout and chain context for plan continuity
   if (parts.projectStructure) {
     blocks.push(`\n\n--- PROJECT ---\n${parts.projectStructure}\n--- END PROJECT ---`);
   }
@@ -128,10 +131,20 @@ export function assemblePrompt(parts: {
     blocks.push(`\n\n${parts.chainContext}`);
   }
 
-  if (parts.sessionContext) {
-    blocks.push(`\n\n${parts.sessionContext}`);
+  // BEHAVIORAL — skills define how the agent thinks, must survive truncation
+  if (parts.skills) {
+    blocks.push(`\n\n--- SKILLS ---\n${parts.skills}\n--- END SKILLS ---`);
   }
 
+  if (parts.consensusSummary) {
+    blocks.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---`);
+  }
+
+  if (parts.lens) {
+    blocks.push(`\n\n--- LENS ---\n${parts.lens}\n--- END LENS ---`);
+  }
+
+  // SUPPLEMENTARY — memory and session context are useful but expendable under truncation
   if (parts.memory) {
     blocks.push(`\n\n--- MEMORY ---\n${parts.memory}\n--- END MEMORY ---`);
   }
@@ -146,16 +159,8 @@ Keep entries concise (5-10 lines each). Update existing files rather than creati
 --- END AGENT MEMORY ---`);
   }
 
-  if (parts.lens) {
-    blocks.push(`\n\n--- LENS ---\n${parts.lens}\n--- END LENS ---`);
-  }
-
-  if (parts.consensusSummary) {
-    blocks.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---`);
-  }
-
-  if (parts.skills) {
-    blocks.push(`\n\n--- SKILLS ---\n${parts.skills}\n--- END SKILLS ---`);
+  if (parts.sessionContext) {
+    blocks.push(`\n\n${parts.sessionContext}`);
   }
 
   if (parts.context) {

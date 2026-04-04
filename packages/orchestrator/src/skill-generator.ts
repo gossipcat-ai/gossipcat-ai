@@ -105,7 +105,7 @@ export class SkillGenerator {
     }
 
     // Analyze project tech stack so skills are tailored, not generic
-    const techStack = this.detectTechStack();
+    const techStack = await this.detectTechStack();
     if (techStack) {
       projectContext += `\n\n<tech_stack>\n${techStack}\n</tech_stack>`;
     }
@@ -230,38 +230,66 @@ Requirements:
     return BUNDLED_TEMPLATE;
   }
 
-  /** Detect project tech stack from package.json and file patterns */
-  private detectTechStack(): string | null {
-    const lines: string[] = [];
+  /**
+   * Use LLM to analyze the project's tech stack from package.json and structure.
+   * Returns a concise summary of what the project uses and what it does NOT use,
+   * so the skill generator can tailor content accordingly.
+   */
+  private async detectTechStack(): Promise<string | null> {
+    const inputs: string[] = [];
 
-    // Read root package.json for dependencies
-    const pkgPath = join(this.projectRoot, 'package.json');
-    if (existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-        const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
-        const depNames = Object.keys(allDeps);
-        if (depNames.length > 0) {
-          lines.push(`Dependencies: ${depNames.slice(0, 30).join(', ')}`);
+    // Gather package.json(s) — root + workspace packages
+    const pkgPaths = [join(this.projectRoot, 'package.json')];
+    try {
+      const packagesDir = join(this.projectRoot, 'packages');
+      if (existsSync(packagesDir)) {
+        for (const dir of readdirSync(packagesDir)) {
+          const p = join(packagesDir, dir, 'package.json');
+          if (existsSync(p)) pkgPaths.push(p);
         }
+      }
+    } catch { /* skip */ }
 
-        // Detect what's NOT present (prevents irrelevant skill content)
-        const hasSQL = depNames.some(d => /pg|mysql|sqlite|knex|prisma|sequelize|typeorm|drizzle/i.test(d));
-        const hasHTML = depNames.some(d => /react|vue|svelte|angular|next|nuxt|ejs|handlebars|pug/i.test(d));
-        const hasGraphQL = depNames.some(d => /graphql|apollo/i.test(d));
-        lines.push(`Has SQL/DB ORM: ${hasSQL}`);
-        lines.push(`Has HTML/frontend framework: ${hasHTML}`);
-        lines.push(`Has GraphQL: ${hasGraphQL}`);
+    for (const p of pkgPaths.slice(0, 5)) { // cap at 5 packages
+      try {
+        const pkg = JSON.parse(readFileSync(p, 'utf-8'));
+        const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+        if (deps.length > 0) {
+          inputs.push(`${p.replace(this.projectRoot + '/', '')}: ${deps.join(', ')}`);
+        }
       } catch { /* skip */ }
     }
 
-    // Detect primary language/patterns from file extensions
+    // Source directory listing
     try {
       const srcDirs = ['src', 'packages', 'apps', 'lib'].filter(d => existsSync(join(this.projectRoot, d)));
-      lines.push(`Source directories: ${srcDirs.join(', ') || 'root'}`);
+      inputs.push(`Source dirs: ${srcDirs.join(', ') || 'root'}`);
     } catch { /* skip */ }
 
-    return lines.length > 0 ? lines.join('\n') : null;
+    if (inputs.length === 0) return null;
+
+    try {
+      const messages: LLMMessage[] = [{
+        role: 'user',
+        content: `Analyze this project's tech stack from its dependencies and structure. Output a concise summary (max 10 lines) covering:
+1. Primary language and runtime (e.g., TypeScript + Node.js)
+2. Frameworks and libraries actually used (e.g., WebSocket, Express, React)
+3. Data storage (e.g., PostgreSQL, Redis, file-based JSON) — or "none" if no database
+4. What the project does NOT use that is commonly assumed (e.g., "No SQL database", "No HTML rendering", "No GraphQL")
+
+This summary will be used to filter security skill content — irrelevant checks waste agent prompt tokens.
+
+<project_deps>
+${inputs.join('\n')}
+</project_deps>`,
+      }];
+
+      const response = await this.llm.generate(messages, { temperature: 0 });
+      return response.text?.trim().slice(0, 1000) || null;
+    } catch {
+      // Fallback: return raw dependency list if LLM fails
+      return inputs.join('\n').slice(0, 500);
+    }
   }
 
   private loadCategoryFindings(category: string): Array<{ agentId: string; evidence: string }> {

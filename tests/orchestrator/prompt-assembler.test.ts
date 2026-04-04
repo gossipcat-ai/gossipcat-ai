@@ -25,17 +25,17 @@ describe('assemblePrompt', () => {
     expect(result).not.toContain('--- LENS ---');
   });
 
-  it('includes lens block between memory and skills', () => {
+  it('skills precede memory and lens (high priority — survives truncation)', () => {
     const result = assemblePrompt({
       memory: 'mem',
       lens: 'focus on DoS',
       skills: 'skills',
     });
-    const memIdx = result.indexOf('--- END MEMORY ---');
-    const lensIdx = result.indexOf('--- LENS ---');
     const skillsIdx = result.indexOf('--- SKILLS ---');
-    expect(memIdx).toBeLessThan(lensIdx);
-    expect(lensIdx).toBeLessThan(skillsIdx);
+    const lensIdx = result.indexOf('--- LENS ---');
+    const memIdx = result.indexOf('--- MEMORY ---');
+    expect(skillsIdx).toBeLessThan(lensIdx);
+    expect(lensIdx).toBeLessThan(memIdx);
   });
 
   it('includes context after skills', () => {
