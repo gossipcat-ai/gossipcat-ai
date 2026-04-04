@@ -90,6 +90,9 @@ export interface ConsensusReport {
 
 export interface ConsensusReportsData {
   reports: ConsensusReport[];
+  totalReports?: number;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface MemoryFile {

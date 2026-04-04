@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import type { ConsensusData, ConsensusReportsData, ConsensusReportFinding } from '@/lib/types';
+import { useState, useEffect } from 'react';
+import type { ConsensusData, ConsensusReportsData, ConsensusReportFinding, ConsensusReport } from '@/lib/types';
+import { api } from '@/lib/api';
 import { timeAgo, cleanFindingTags } from '@/lib/utils';
 
 interface FindingsMetricsProps {
@@ -124,10 +125,39 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
 
+  const [reportPage, setReportPage] = useState(1);
+  const [loadedReports, setLoadedReports] = useState<ConsensusReport[]>([]);
+  const [totalReports, setTotalReports] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // When the initial reports prop arrives (page 1 data), seed loadedReports
+  useEffect(() => {
+    if (reports?.reports) {
+      setLoadedReports(reports.reports);
+      setTotalReports(reports.totalReports ?? reports.reports.length);
+      setReportPage(1);
+    }
+  }, [reports]);
+
+  const handleLoadMore = async () => {
+    const nextPage = reportPage + 1;
+    setLoadingMore(true);
+    try {
+      const data = await api<ConsensusReportsData>(`consensus-reports?page=${nextPage}&pageSize=5`);
+      setLoadedReports(prev => [...prev, ...(data.reports || [])]);
+      setTotalReports(data.totalReports ?? totalReports);
+      setReportPage(nextPage);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   // If we have structured reports, show those instead of signal-based view
-  const latestReports = (reports?.reports || [])
-    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-    .slice(0, MAX_RUNS);
+  const latestReports = loadedReports
+    .slice()
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+  const hasMoreReports = loadedReports.length < totalReports;
 
   return (
     <section>
@@ -144,7 +174,7 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
 
       {latestReports.length > 0 ? (
         <div className="space-y-2">
-          {latestReports.map((report, i) => {
+          {latestReports.map((report, _i) => {
             const allFindings = [
               ...report.confirmed,
               ...report.disputed,
@@ -215,6 +245,15 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
               </div>
             );
           })}
+          {hasMoreReports && (
+            <button
+              onClick={handleLoadMore}
+              disabled={loadingMore}
+              className="mt-3 w-full rounded border border-border/40 px-3 py-1.5 font-mono text-xs text-muted-foreground transition hover:border-primary/40 hover:text-primary disabled:opacity-50"
+            >
+              {loadingMore ? 'Loading...' : 'Load older reports'}
+            </button>
+          )}
         </div>
       ) : runs.length === 0 ? (
         <div className="py-8 text-center text-sm text-muted-foreground">No consensus runs yet.</div>

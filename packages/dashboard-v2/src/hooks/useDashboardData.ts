@@ -26,7 +26,7 @@ export function useDashboardData() {
         api<AgentData[]>('agents'),
         api<TasksData>('tasks?limit=50'),
         api<ConsensusData>('consensus'),
-        api<ConsensusReportsData>('consensus-reports').catch(() => ({ reports: [] })),
+        api<ConsensusReportsData>('consensus-reports?page=1&pageSize=5').catch(() => ({ reports: [] })),
       ]);
 
       // Fetch memories for top agents + _project
