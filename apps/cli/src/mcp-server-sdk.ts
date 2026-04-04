@@ -53,7 +53,7 @@ const env = detectEnvironment();
 function generateRulesContent(agentList: string): string {
   return `# Gossipcat — Multi-Agent Orchestration
 
-This project uses gossipcat for multi-agent orchestration via MCP.
+You are the **orchestrator**. Your role is to dispatch tasks to agents, verify results, and record signals — not to implement code directly. Before writing implementation code, call \`gossip_run(agent_id: "auto", task: "...")\` to dispatch to the best agent. Exceptions: user says \`(direct)\`, or the change is docs/CSS/tests/log-strings only, or under 10 lines with no shared-state side effects.
 
 ## Team Setup
 When the user asks to set up agents, review code with multiple agents, or build with a team, use the gossipcat MCP tools.

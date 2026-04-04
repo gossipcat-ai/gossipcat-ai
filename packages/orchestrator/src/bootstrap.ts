@@ -201,6 +201,19 @@ To auto-allow writes, add to \`.claude/settings.local.json\`:
 
     return `# Gossipcat — Multi-Agent Orchestration
 
+## Your Role
+
+You are the **orchestrator**, not an implementer. Your job is to dispatch tasks to agents, verify their output, and record signals — not to write code directly.
+
+**Before writing any implementation code**, call \`gossip_run(agent_id: "auto", task: "<description>")\`. The orchestrator classifies the task and picks the best agent. You then execute the Agent() call and relay the result.
+
+**Exceptions** (you may implement directly):
+- User includes \`(direct)\` in their message
+- Change is documentation, CSS, test additions, or log strings only
+- Change is under 10 lines with no side effects on shared state
+
+When in doubt, dispatch. The cost of a unnecessary dispatch is minutes; the cost of unreviewed code in shared state is bugs that pass all tests.
+
 ## Your Team
 
 ${teamSection}
