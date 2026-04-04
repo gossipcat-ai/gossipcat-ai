@@ -83,3 +83,13 @@ Use the `/browse` skill from gstack for all web browsing. Never use `mcp__claude
 - `/guard` — Full safety mode (careful + freeze)
 - `/unfreeze` — Remove freeze boundary
 - `/gstack-upgrade` — Upgrade gstack to latest version
+
+## Scoped Agent Contract
+
+When an agent is dispatched with `write_mode: "scoped"`:
+- **Can:** `file_write`, `file_delete` (within scope), `file_read` (anywhere), `run_tests`, `run_typecheck`, `git status/diff/log/show`
+- **Cannot:** `shell_exec` (except read-only git), `git_commit`, `git_branch`
+- **Orchestrator commits** on behalf of scoped agents after verifying their output
+- **Worktree agents** have full shell + git access within their isolated branch
+
+This is intentional: scoped agents write files, the orchestrator validates and commits.
