@@ -165,7 +165,9 @@ export class DashboardRouter {
       }
 
       if (url === '/dashboard/api/consensus-reports' && req.method === 'GET') {
-        const data = this.getConsensusReports();
+        const page = parseInt(query?.get('page') || '1', 10);
+        const pageSize = parseInt(query?.get('pageSize') || '5', 10);
+        const data = this.getConsensusReports(page, pageSize);
         this.json(res, 200, data);
         return true;
       }
@@ -277,17 +279,22 @@ export class DashboardRouter {
     return match ? match[1] : null;
   }
 
-  private getConsensusReports(): { reports: any[] } {
+  private getConsensusReports(page = 1, pageSize = 5): { reports: any[]; totalReports: number; page: number; pageSize: number } {
     const { readdirSync, readFileSync, existsSync } = require('fs');
     const reportsDir = join(this.projectRoot, '.gossip', 'consensus-reports');
-    if (!existsSync(reportsDir)) return { reports: [] };
+    if (!existsSync(reportsDir)) return { reports: [], totalReports: 0, page, pageSize };
 
     try {
-      const files = readdirSync(reportsDir)
+      const allFiles = readdirSync(reportsDir)
         .filter((f: string) => f.endsWith('.json'))
         .sort()
-        .reverse()
-        .slice(0, 20); // last 20 reports
+        .reverse();
+
+      const totalReports = allFiles.length;
+      const clampedPageSize = Math.min(Math.max(pageSize, 1), 20);
+      const clampedPage = Math.max(page, 1);
+      const start = (clampedPage - 1) * clampedPageSize;
+      const files = allFiles.slice(start, start + clampedPageSize);
 
       const realReportsDir = realpathSync(reportsDir);
       const reports = files.map((f: string) => {
@@ -299,8 +306,8 @@ export class DashboardRouter {
         } catch { return null; }
       }).filter(Boolean);
 
-      return { reports };
-    } catch { return { reports: [] }; }
+      return { reports, totalReports, page: clampedPage, pageSize: clampedPageSize };
+    } catch { return { reports: [], totalReports: 0, page, pageSize }; }
   }
 
   private archiveFindings(): { archived: number; remaining: number; findingsCleared: number } {
