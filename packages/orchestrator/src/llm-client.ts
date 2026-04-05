@@ -203,6 +203,9 @@ export class OpenAIProvider implements ILLMProvider {
 // ─── Google Gemini ───────────────────────────────────────────────────────────
 
 export class GeminiProvider implements ILLMProvider {
+  private consecutive429s = 0;
+  private quotaExhaustedUntil = 0;
+
   constructor(private apiKey: string, private model: string) {}
 
   async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
@@ -231,6 +234,13 @@ export class GeminiProvider implements ILLMProvider {
       }];
     }
 
+    // Quota circuit breaker: skip API calls during cooldown
+    if (this.quotaExhaustedUntil > Date.now()) {
+      const remaining = Math.round((this.quotaExhaustedUntil - Date.now()) / 1000);
+      process.stderr.write(`[Gemini] quota exhausted, ${remaining}s cooldown remaining — returning empty\n`);
+      return { text: '' };
+    }
+
     if (process.env.GOSSIP_DEBUG) process.stderr.write(`[Gemini] ${this.model} — ${messages.length} messages, tools=${toolMode}\n`);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
     const res = await fetch(url, {
@@ -241,11 +251,20 @@ export class GeminiProvider implements ILLMProvider {
 
     if (!res.ok) {
       const errBody = (await res.text()).slice(0, 200);
+      if (res.status === 429) {
+        this.consecutive429s++;
+        const cooldownMs = Math.min(60_000 * Math.pow(2, this.consecutive429s - 1), 300_000); // 1min, 2min, 4min, max 5min
+        this.quotaExhaustedUntil = Date.now() + cooldownMs;
+        process.stderr.write(`[Gemini] 429 rate limited (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s\n`);
+      }
       throw new Error(`Gemini API error (${res.status}): ${errBody}`);
     }
+    // Reset on success
+    this.consecutive429s = 0;
+    this.quotaExhaustedUntil = 0;
     const data = await res.json() as Record<string, unknown>;
     const result = this.parseGeminiResponse(data);
-    process.stderr.write(`[Gemini] → text=${result.text?.length ?? 0}chars, toolCalls=${result.toolCalls?.length ?? 0}${result.toolCalls?.length ? ` [${result.toolCalls.map(tc => tc.name).join(', ')}]` : ''}, tokens=${result.usage?.inputTokens ?? '?'}/${result.usage?.outputTokens ?? '?'}\n`);
+    if (process.env.GOSSIP_DEBUG) process.stderr.write(`[Gemini] → text=${result.text?.length ?? 0}chars, toolCalls=${result.toolCalls?.length ?? 0}${result.toolCalls?.length ? ` [${result.toolCalls.map(tc => tc.name).join(', ')}]` : ''}, tokens=${result.usage?.inputTokens ?? '?'}/${result.usage?.outputTokens ?? '?'}\n`);
     return result;
   }
 
