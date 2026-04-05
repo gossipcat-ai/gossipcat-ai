@@ -151,10 +151,10 @@ export function restoreNativeTaskMap(projectRoot: string): void {
             error: `Timed out after MCP reconnect — ${elapsed}ms elapsed, limit was ${timeoutMs}ms`,
             startedAt: info.startedAt, completedAt: now,
           });
-          process.stderr.write(`[gossipcat] Restored task ${id} already expired — marked timed_out\n`);
+          process.stderr.write(`[gossipcat] restore ← ${info.agentId} [${id}] TIMED_OUT (expired during reconnect)\n`);
         } else {
           spawnTimeoutWatcher(id, { agentId: info.agentId, task: info.task, startedAt: info.startedAt, timeoutMs });
-          process.stderr.write(`[gossipcat] Restored task ${id} — re-armed timeout (${Math.round((timeoutMs - elapsed) / 1000)}s remaining)\n`);
+          process.stderr.write(`[gossipcat] restore ← ${info.agentId} [${id}] re-armed (${Math.round((timeoutMs - elapsed) / 1000)}s remaining)\n`);
         }
       }
     }
@@ -181,7 +181,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     const timedOutResult = ctx.nativeResultMap.get(task_id);
     if (timedOutResult && timedOutResult.status === 'timed_out') {
       taskInfo = { agentId: timedOutResult.agentId, task: timedOutResult.task, startedAt: timedOutResult.startedAt };
-      process.stderr.write(`[gossipcat] Late relay for ${task_id} — overwriting timed_out result with real data\n`);
+      process.stderr.write(`[gossipcat] relay ← ${timedOutResult.agentId} [${task_id}] LATE (overwriting timed_out)\n`);
       // Retract the timeout signal — agent completed successfully, don't penalize
       // Skip for _utility tasks — no timeout signal was recorded for them
       if (taskInfo.agentId !== '_utility') {
@@ -220,7 +220,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   evictStaleNativeTasks();
 
   if (!taskInfo.utilityType) {
-    process.stderr.write(`[gossipcat] relay ← ${taskInfo.agentId} [${task_id}]: ${error ? 'failed' : 'completed'} (${elapsed}ms, ${result?.length ?? 0} chars)\n`);
+    process.stderr.write(`[gossipcat] relay ← ${taskInfo.agentId} [${task_id}] ${error ? 'FAILED' : 'OK'} (${(elapsed / 1000).toFixed(1)}s, ${result?.length ?? 0} chars)\n`);
   }
 
   // Release scope if this native task held one
@@ -283,7 +283,10 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   }
 
   if (!error && taskInfo.utilityType) {
-    process.stderr.write(`[gossipcat] utility ← ${ctx.nativeUtilityConfig?.model || 'native'} [${task_id}]: completed (${elapsed}ms, ${result?.length ?? 0} chars)\n`);
+    const utilityLabel = taskInfo.utilityType === 'summary' ? 'cognitive-summary'
+      : taskInfo.utilityType === 'gossip' ? 'gossip-publish'
+      : taskInfo.utilityType;
+    process.stderr.write(`[gossipcat] utility ← ${utilityLabel} [${task_id}] OK (${(elapsed / 1000).toFixed(1)}s)\n`);
   }
 
   // Result already stored in nativeResultMap at top of handler (crash-safe)
