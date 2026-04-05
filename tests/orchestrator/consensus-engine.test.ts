@@ -225,6 +225,15 @@ End of review.`;
       expect(result[0].action).toBe('agree');
     });
 
+    it('should handle JSON array followed by trailing prose with brackets', () => {
+      const trailing = `Here is my review:
+[{"action": "agree", "findingId": "p1:f1", "finding": "Confirmed", "evidence": "Code matches", "confidence": 5}]
+Hope that helps! [end of review]`;
+      const result = parse(trailing);
+      expect(result.length).toBe(1);
+      expect(result[0].action).toBe('agree');
+    });
+
     it('should handle JSON array with surrounding prose and multiple entries', () => {
       const proseWrapped = `## Cross-Review
 

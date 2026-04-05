@@ -1307,15 +1307,15 @@ Return only valid JSON.`;
       parsed = JSON.parse(cleaned);
     } catch {
       // Fallback: try to extract a JSON array from within the text (native agents often wrap JSON in prose)
-      // Try each '[' position — greedy match from that point to last ']'
+      // Try each '[' position paired with each ']' from the end, narrowing the window
       let startIdx = 0;
       while (!parsed && (startIdx = cleaned.indexOf('[', startIdx)) !== -1) {
-        const lastBracket = cleaned.lastIndexOf(']');
-        if (lastBracket > startIdx) {
+        let endIdx = cleaned.length;
+        while (!parsed && (endIdx = cleaned.lastIndexOf(']', endIdx - 1)) > startIdx) {
           try {
-            parsed = JSON.parse(cleaned.slice(startIdx, lastBracket + 1));
+            parsed = JSON.parse(cleaned.slice(startIdx, endIdx + 1));
           } catch {
-            // Not valid JSON from this position, try next '['
+            // Not valid JSON with this window, try narrower
           }
         }
         startIdx++;
