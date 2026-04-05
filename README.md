@@ -372,6 +372,7 @@ Gossipcat auto-detects the host environment:
 | Live dashboard | Shipped |
 | Cross-platform key storage | Shipped |
 | Full implementation workflow (agents write code) | In progress |
+| Dashboard enrichment (graphs, trends, session history) | Planned |
 | Local LLM support (Ollama) | Planned |
 | Full Cursor support | Planned |
 | Windsurf / VS Code parity | Planned |
