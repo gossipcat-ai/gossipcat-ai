@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <em>agents that learn who catches what — and get better every round.</em>
+  <em>agentic orchestration framework — agents that learn, adapt, and get better every round.</em>
 </p>
 
 <p align="center">
