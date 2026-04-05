@@ -72,6 +72,30 @@
       "description": "Evidence-based analysis, quote exact code, read before cite, no hallucination",
       "keywords": ["verify", "evidence", "quote", "cite", "audit"],
       "categories": ["review"]
+    },
+    {
+      "name": "ui_design",
+      "description": "Component hierarchy, layout systems, accessibility, responsive design, visual consistency",
+      "keywords": ["ui", "ux", "design", "accessibility", "responsive", "layout", "components"],
+      "categories": ["design"]
+    },
+    {
+      "name": "frontend",
+      "description": "React/Vue/Svelte components, state management, rendering optimization, client-side routing",
+      "keywords": ["frontend", "react", "components", "hooks", "rendering", "css", "tailwind"],
+      "categories": ["implementation"]
+    },
+    {
+      "name": "ci_cd",
+      "description": "Build pipelines, GitHub Actions, caching, deployment strategies, secret management",
+      "keywords": ["ci", "cd", "pipeline", "deploy", "github-actions", "docker", "build"],
+      "categories": ["infrastructure"]
+    },
+    {
+      "name": "infrastructure",
+      "description": "IaC, containers, networking, monitoring, alerting, scaling, disaster recovery",
+      "keywords": ["infra", "terraform", "kubernetes", "docker", "monitoring", "cloud", "networking"],
+      "categories": ["infrastructure"]
     }
   ]
 }

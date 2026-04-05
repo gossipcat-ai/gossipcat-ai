@@ -60,9 +60,9 @@ const PRESET_SKILLS: Record<string, string[]> = {
   researcher:  ['documentation', 'api_design', 'research'],
   debugger:    ['debugging', 'testing', 'code_review'],
   security:    ['security_audit', 'dos_resilience', 'verification'],
-  designer:    ['implementation', 'typescript', 'code_review'],
+  designer:    ['ui_design', 'frontend', 'code_review'],
   planner:     ['system_design', 'research', 'documentation'],
-  devops:      ['implementation', 'testing', 'debugging'],
+  devops:      ['ci_cd', 'infrastructure', 'debugging'],
   documenter:  ['documentation', 'research', 'api_design'],
 };
 
