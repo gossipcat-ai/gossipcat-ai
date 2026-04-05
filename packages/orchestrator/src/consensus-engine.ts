@@ -1306,10 +1306,21 @@ Return only valid JSON.`;
     try {
       parsed = JSON.parse(cleaned);
     } catch {
-      if (cleaned.length > 0) {
-        process.stderr.write(`[consensus] ${reviewerAgentId} cross-review response is not valid JSON (${cleaned.length} chars)\n`);
+      // Fallback: try to extract a JSON array from within the text (native agents often wrap JSON in prose)
+      const jsonArrayMatch = cleaned.match(/\[[\s\S]*\]/);
+      if (jsonArrayMatch) {
+        try {
+          parsed = JSON.parse(jsonArrayMatch[0]);
+        } catch {
+          // Still not valid JSON
+        }
       }
-      return [];
+      if (!parsed) {
+        if (cleaned.length > 0) {
+          process.stderr.write(`[consensus] ${reviewerAgentId} cross-review response is not valid JSON (${cleaned.length} chars)\n`);
+        }
+        return [];
+      }
     }
 
     if (!Array.isArray(parsed)) {

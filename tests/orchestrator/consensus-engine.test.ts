@@ -202,6 +202,35 @@ describe('ConsensusEngine', () => {
       expect(parse(json).length).toBe(1);
     });
 
+    it('should extract JSON array embedded in prose text', () => {
+      const proseWrapped = `Here is my cross-review analysis:
+
+The findings are mostly accurate. Here are my assessments:
+
+[{"action": "agree", "findingId": "peer:f1", "finding": "Race condition confirmed", "evidence": "No mutex in handler", "confidence": 4}]
+
+That covers all the findings I was asked to review.`;
+      const result = parse(proseWrapped);
+      expect(result.length).toBe(1);
+      expect(result[0].action).toBe('agree');
+      expect(result[0].finding).toBe('Race condition confirmed');
+    });
+
+    it('should handle JSON array with surrounding prose and multiple entries', () => {
+      const proseWrapped = `## Cross-Review
+
+[
+  {"action": "agree", "findingId": "p1:f1", "finding": "F1", "evidence": "E1", "confidence": 5},
+  {"action": "disagree", "findingId": "p1:f2", "finding": "F2", "evidence": "Code shows otherwise", "confidence": 4}
+]
+
+Summary: 1 agree, 1 disagree.`;
+      const result = parse(proseWrapped);
+      expect(result.length).toBe(2);
+      expect(result[0].action).toBe('agree');
+      expect(result[1].action).toBe('disagree');
+    });
+
     it('should skip entries with invalid "action" values', () => {
       const json = `[{"action": "comment", "finding": "F1", "evidence": "E1"}]`;
       expect(parse(json)).toEqual([]);
