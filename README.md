@@ -10,8 +10,7 @@
         │                                              │
         ╰──────────────────────────────────────────────╯
 
-   one satisfying review has never been enough.
-   your code deserves a second opinion. and a third.
+   agents that learn who catches what — and get better every round.
 
 ```
 
