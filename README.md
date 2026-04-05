@@ -1,18 +1,10 @@
-```
+<p align="center">
+  <img src="packages/dashboard-v2/public/assets/banner.png" alt="Gossipcat" width="600" />
+</p>
 
-        ╭──────────────────────────────────────────────╮
-        │                                              │
-        │           /\_/\                              │
-        │          ( o.o )    g o s s i p c a t        │
-        │           > ^ <                              │
-        │          /|   |\    multi-agent               │
-        │         (_|   |_)   code review mesh          │
-        │                                              │
-        ╰──────────────────────────────────────────────╯
-
-   agents that learn who catches what — and get better every round.
-
-```
+<p align="center">
+  <em>agents that learn who catches what — and get better every round.</em>
+</p>
 
 <p align="center">
   <a href="https://github.com/ataberk-xyz/gossipcat-ai"><img src="https://img.shields.io/github/stars/ataberk-xyz/gossipcat-ai?style=flat" alt="Stars" /></a>
