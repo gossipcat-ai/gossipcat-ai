@@ -147,20 +147,17 @@ Both types participate equally in consensus, cross-review, and skill development
 
 ```bash
 git clone https://github.com/ataberk-xyz/gossipcat-ai.git
-cd gossipcat
+cd gossipcat-ai
 npm install
 npm run build:mcp
 ```
 
-### 2. Add to Claude Code
+`npm install` generates `.mcp.json` with the correct paths for your machine. `build:mcp` bundles the MCP server. Open Claude Code in this directory and gossipcat connects automatically.
 
+To register globally (available in all projects):
 ```bash
-claude mcp add gossipcat -s user -- node /absolute/path/to/gossipcat/dist-mcp/mcp-server.js
+claude mcp add gossipcat -s user -- node /absolute/path/to/gossipcat-ai/dist-mcp/mcp-server.js
 ```
-
-Use `-s project` instead of `-s user` to scope it to a single project. Claude Code will prompt you to allow each tool on first use.
-
-Or copy `.mcp.json.example` to `.mcp.json` and edit the paths manually.
 
 ### 3. API keys
 
