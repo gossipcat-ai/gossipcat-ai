@@ -9,13 +9,13 @@ export class FileTools {
     const absPath = this.sandbox.validatePath(args.path);
     try {
       const content = await readFile(absPath, 'utf-8');
+      const lines = content.split('\n');
       if (args.startLine !== undefined || args.endLine !== undefined) {
-        const lines = content.split('\n');
         const start = (args.startLine || 1) - 1;
         const end = args.endLine || lines.length;
-        return lines.slice(start, end).join('\n');
+        return lines.slice(start, end).map((line, i) => `${start + i + 1}\t${line}`).join('\n');
       }
-      return content;
+      return lines.map((line, i) => `${i + 1}\t${line}`).join('\n');
     } catch (err) {
       const msg = (err as Error).message;
       if (msg.includes('ENOENT')) throw new Error(`File not found: ${args.path}`);

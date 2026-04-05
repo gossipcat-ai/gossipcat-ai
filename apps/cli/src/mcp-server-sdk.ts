@@ -881,7 +881,8 @@ server.tool(
     // System status
     const claudeSubagentsList = loadClaudeSubagents(process.cwd());
     const banner = [
-      '\n   /\\_/\\   gossipcat v0.1.0',
+      '┌──────────────────────────────',
+      '   /\\_/\\   gossipcat v0.1.0',
       '  ( o.o )  multi-agent mesh',
       '   > ^ <',
       '  /|   |\\',
