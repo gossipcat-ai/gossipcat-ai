@@ -1,5 +1,5 @@
 import { persistRelayTasks, restoreRelayTasksAsFailed } from '../../apps/cli/src/handlers/relay-tasks';
-import { ctx, NATIVE_TASK_TTL_MS } from '../../apps/cli/src/mcp-context';
+import { ctx } from '../../apps/cli/src/mcp-context';
 import { MainAgent } from '@gossip/orchestrator';
 
 // Mock fs module
@@ -13,6 +13,12 @@ const fs = {
 jest.mock('fs', () => fs);
 jest.mock('path', () => ({
   join: (...args: string[]) => args.join('/'),
+}));
+
+// Mock a portion of the mcp-server-sdk to test the refreshBootstrap call site
+jest.mock('../../apps/cli/src/mcp-server-sdk', () => ({
+  ...jest.requireActual('../../apps/cli/src/mcp-server-sdk'),
+  __esModule: true, // This is important for ESM compatibility
 }));
 
 const mockTask = (overrides: Partial<any> = {}) => ({
@@ -35,8 +41,11 @@ describe('relay-tasks', () => {
 
     mockMainAgent = {
       getRelayTaskRecords: jest.fn().mockReturnValue([mockTask()]),
+      dispatch: jest.fn().mockReturnValue({ taskId: 'mock-task-1' }),
+      collect: jest.fn().mockResolvedValue({ results: [] }),
     };
     ctx.mainAgent = mockMainAgent as MainAgent;
+    ctx.nativeAgentConfigs = new Map();
   });
 
   describe('persistRelayTasks', () => {
@@ -126,11 +135,9 @@ describe('relay-tasks', () => {
       expect(fs.unlinkSync).not.toHaveBeenCalled();
     });
 
-    it('should not crash on corrupt JSON and should start fresh', () => {
+    it('should not crash on corrupt JSON and should not delete the file', () => {
       fs.existsSync.mockReturnValue(true);
       fs.readFileSync.mockReturnValue('{"tasks": malformed}');
-      // It should not delete the corrupt file, allowing manual inspection.
-      // And it should not throw.
       expect(() => restoreRelayTasksAsFailed(projectRoot)).not.toThrow();
       expect(ctx.nativeTaskMap.size).toBe(0);
       expect(ctx.nativeResultMap.size).toBe(0);
@@ -138,7 +145,7 @@ describe('relay-tasks', () => {
     });
 
     it('should skip expired tasks', () => {
-      const oldTask = mockTask({ startedAt: Date.now() - NATIVE_TASK_TTL_MS - 100 });
+      const oldTask = mockTask({ startedAt: Date.now() - (2 * 60 * 60 * 1000 + 1) }); // TTL is 2 hours
       const fileContent = JSON.stringify({ tasks: [oldTask] });
       fs.existsSync.mockReturnValue(true);
       fs.readFileSync.mockReturnValue(fileContent);
@@ -147,7 +154,7 @@ describe('relay-tasks', () => {
 
       expect(ctx.nativeTaskMap.has(oldTask.id)).toBe(false);
       expect(ctx.nativeResultMap.has(oldTask.id)).toBe(false);
-      expect(fs.unlinkSync).toHaveBeenCalledWith(filePath); // file is still consumed
+      expect(fs.unlinkSync).toHaveBeenCalledWith(filePath);
     });
 
     it('should skip tasks already present in nativeTaskMap', () => {
@@ -158,9 +165,9 @@ describe('relay-tasks', () => {
       fs.readFileSync.mockReturnValue(fileContent);
 
       restoreRelayTasksAsFailed(projectRoot);
-      // The maps should not be overwritten, result map should be empty
       expect(ctx.nativeResultMap.has(task.id)).toBe(false);
       expect(stderrWriteSpy).not.toHaveBeenCalledWith(expect.stringContaining(`Restored`));
     });
   });
+
 });

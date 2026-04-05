@@ -30,7 +30,7 @@ import { evictStaleNativeTasks, persistNativeTaskMap, restoreNativeTaskMap, hand
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';
 import { restorePendingConsensus } from './handlers/relay-cross-review';
-import { restoreRelayTasksAsFailed } from './handlers/relay-tasks';
+import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
 
 // ── Environment detection ────────────────────────────────────────────────
 
@@ -282,6 +282,9 @@ async function refreshBootstrap() {
     if (ctx.mainAgent) {
       ctx.mainAgent.setBootstrapPrompt(result.prompt);
     }
+    // Restore task state that may have changed since initial boot (order matches doBoot)
+    restoreNativeTaskMap(process.cwd());
+    restoreRelayTasksAsFailed(process.cwd());
     process.stderr.write(`[gossipcat] Bootstrap refreshed on reconnect (${result.agentCount} agents)\n`);
   } catch (err) {
     process.stderr.write(`[gossipcat] Bootstrap refresh failed: ${(err as Error).message}\n`);
@@ -1361,7 +1364,9 @@ server.tool(
     planExecutionDepth++;
     try {
       const { taskId } = ctx.mainAgent.dispatch(agent_id, task, options);
+      persistRelayTasks(); // Survive MCP reconnects — mirrors dispatch.ts pattern
       const collectResult = await ctx.mainAgent.collect([taskId], 300000);
+      persistRelayTasks(); // Clear completed task from relay-tasks.json
       const entry = collectResult.results[0];
 
       if (!entry) {
