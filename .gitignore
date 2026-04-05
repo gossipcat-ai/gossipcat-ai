@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-mcp/
 dist-dashboard/
+bin/
 *.js.map
 .env
 .env.local
@@ -10,6 +11,11 @@ gossip.agents.json
 coverage/
 .full-review/
 .gossip/
+keys.enc
 .superpowers/
 .gstack/
 .agents/
+.claude/skills/
+docs/superpowers/
+skills-lock.json
+*.tsbuildinfo
