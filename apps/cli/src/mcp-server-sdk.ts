@@ -1671,16 +1671,18 @@ server.tool(
             `    signals=${s.totalSignals} agree=${s.agreements} disagree=${s.disagreements} unique=${s.uniqueFindings} hallucinate=${s.hallucinations}\n` +
             `    dispatch weight=${w.toFixed(2)}${s.totalSignals < 3 ? ' (neutral — <3 signals)' : ''}`;
 
-          // Append skill gap suggestions for this agent
-          if (gapTracker && s.accuracy < 0.7) {
-            try {
-              const recentGaps = gapTracker.getSuggestionsSince(s.agentId, Date.now() - 30 * 24 * 60 * 60 * 1000);
-              if (recentGaps.length > 0) {
-                const categories = [...new Set(recentGaps.map((g: any) => g.skill))].slice(0, 3);
-                line += `\n    ⚠ skill gaps: ${categories.join(', ')}`;
-                line += `\n    → gossip_skills(action: "develop", agent_id: "${s.agentId}", category: "<category>")`;
-              }
-            } catch { /* best-effort */ }
+          // Show category strengths/weaknesses from ATI competency profiles
+          const cats = (s as any).categoryStrengths;
+          if (cats && Object.keys(cats).length > 0) {
+            const sorted = Object.entries(cats).sort((a: any, b: any) => b[1] - a[1]);
+            const strong = sorted.filter(([, v]) => (v as number) >= 0.6).map(([k, v]) => `${k}(${(v as number).toFixed(1)})`);
+            const weak = sorted.filter(([, v]) => (v as number) < 0.3 && (v as number) !== 0).map(([k, v]) => `${k}(${(v as number).toFixed(1)})`);
+            if (strong.length > 0) line += `\n    strengths: ${strong.slice(0, 4).join(', ')}`;
+            if (weak.length > 0) {
+              const weakestCategory = weak[0].split('(')[0];
+              line += `\n    ⚠ weak: ${weak.slice(0, 3).join(', ')}`;
+              line += `\n    → gossip_skills(action: "develop", agent_id: "${s.agentId}", category: "${weakestCategory}")`;
+            }
           }
           return line;
         });
