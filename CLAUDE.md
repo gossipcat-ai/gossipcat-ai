@@ -27,23 +27,24 @@ to see what was dispatched and track task IDs for progress checks.
 results. UNVERIFIED means the cross-reviewer couldn't check — you can and must. Do not
 show raw consensus results with unexamined UNVERIFIED findings.
 
-**Resolving findings in the dashboard:** When you verify an UNVERIFIED finding, pass
-`finding_id` in your `gossip_signals` call so the consensus report is updated. The
-finding ID is the `id` field shown in the consensus report (e.g., `f9`, `f12`). This
-moves the finding from UNVERIFIED → CONFIRMED in the report JSON, so the dashboard
-displays the resolved status.
+**Resolving findings in the dashboard:** When you record ANY signal — not just
+UNVERIFIED resolutions — you MUST include `finding_id`. The format is
+`<consensus_id>:<finding_id>` (e.g., `b81956b2-e0fa4ea4:sonnet-reviewer:f1`).
+This is the primary key that links signals back to specific findings in specific
+consensus rounds. Without it, the signal pipeline is unauditable — you can see an
+agent got penalized but can't trace which finding caused it.
 
 ```
 gossip_signals(action: "record", signals: [{
-  signal: "unique_confirmed",  // or "hallucination_caught"
+  signal: "unique_confirmed",  // or "hallucination_caught", "agreement", etc.
   agent_id: "<who found it>",
   finding: "<description>",
-  finding_id: "<id from consensus report>"  // ← THIS resolves it in dashboard
+  finding_id: "<consensus_id>:<agent:fN>"  // ← MANDATORY for all signals
 }])
 ```
 
-Without `finding_id`, signals update agent scores but the dashboard still shows the
-finding as UNVERIFIED.
+**Every signal needs a finding_id.** Signals without finding_id break back-search:
+dashboard finding → signal → agent score adjustment becomes opaque.
 
 ## Agent Accuracy — Skill Development
 

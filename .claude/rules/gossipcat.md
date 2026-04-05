@@ -206,10 +206,16 @@ which means wrong agents get picked for future tasks. The haiku-researcher tscon
 (moved paths to base config, broke all package builds) went unrecorded until manually prompted
 — that's a feedback loop failure.
 
+**finding_id is MANDATORY on every signal.** Format: `<consensus_id>:<finding_id>`
+(e.g., `b81956b2-e0fa4ea4:sonnet-reviewer:f1`). This is the foreign key that links
+signals to specific findings in specific consensus rounds. Without it, the signal
+pipeline is unauditable — you can't trace from agent score back to the finding.
+
 **Anti-patterns:**
 - "I'll record signals after I finish fixing" — NO, record NOW
 - "This was just a research task, no signal needed" — if the research was wrong, record it
 - "The agent tried its best" — intent doesn't matter, accuracy does
+- Signal without finding_id — breaks back-search, makes scoring opaque
 
 ---
 
