@@ -272,9 +272,20 @@ You don't need to type these — Claude Code handles tool selection. But you can
 
 ## Dashboard
 
-Launches automatically on port `24420`. Access the URL from `gossip_status`.
+Build the dashboard (one time):
+```bash
+npm run build:dashboard
+```
 
-Built with React + Vite + shadcn/ui (Terminal Amber theme):
+The dashboard launches automatically on port `24420` when gossipcat boots. Run `gossip_status` to get the URL and auth key:
+
+```
+Dashboard: http://localhost:24420/dashboard (key: a1b2c3...)
+```
+
+A new auth key is generated each session. Paste it when prompted to log in.
+
+Built with React + Vite + shadcn/ui:
 
 - **Overview** — agent cards with dispatch weights, recent tasks, finding metrics
 - **Team** — all agents sorted by reliability
