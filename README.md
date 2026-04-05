@@ -11,8 +11,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ataberk-xyz/gossipcat"><img src="https://img.shields.io/github/stars/ataberk-xyz/gossipcat?style=flat" alt="Stars" /></a>
-  <a href="https://github.com/ataberk-xyz/gossipcat/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
+  <a href="https://github.com/ataberk-xyz/gossipcat-ai"><img src="https://img.shields.io/github/stars/ataberk-xyz/gossipcat-ai?style=flat" alt="Stars" /></a>
+  <a href="https://github.com/ataberk-xyz/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
 </p>
 
@@ -147,7 +147,7 @@ Both types participate equally in consensus, cross-review, and skill development
 ### 1. Clone and build
 
 ```bash
-git clone https://github.com/ataberk-xyz/gossipcat.git
+git clone https://github.com/ataberk-xyz/gossipcat-ai.git
 cd gossipcat
 npm install
 npm run build:mcp
