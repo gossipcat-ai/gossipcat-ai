@@ -32,7 +32,7 @@ export class DispatchDifferentiator {
     const agentStrengths = new Map<string, string[]>();
     for (const p of profiles) {
       const sorted = Object.entries(p.categoryStrengths)
-        .filter(([, score]) => score > 0.5)
+        .filter(([, score]) => score > 0.3)
         .sort(([, a], [, b]) => b - a)
         .slice(0, 3)
         .map(([cat]) => cat);

@@ -370,11 +370,30 @@ export class MainAgent {
   async classifyTaskComplexity(task: string): Promise<{ complexity: 'single' | 'multi'; agentId?: string }> {
     const agents = this.registry.getAll();
 
-    // Build agent summary with dispatch weights so the LLM respects scoring
+    // Build agent summary with dispatch weights + category strengths so the LLM respects scoring
+    let perfScores: Map<string, any> | null = null;
+    try {
+      const { PerformanceReader: PerfR } = require('./performance-reader');
+      perfScores = new PerfR(this.projectRoot).getScores();
+    } catch { /* no perf data */ }
+
     const agentLines = agents.map(a => {
       const weight = this.registry.getDispatchWeight?.(a.id) ?? 1.0;
       const status = weight <= 0.3 ? ' [LOW RELIABILITY]' : '';
-      return `${a.id}: ${a.role ?? a.preset ?? 'agent'} (${a.skills.join(', ')}) weight=${weight.toFixed(2)}${status}`;
+      // Include top category strengths so LLM can match task to agent expertise
+      let strengthsTag = '';
+      try {
+        const score = perfScores?.get(a.id);
+        if (score?.categoryStrengths) {
+          const top = Object.entries(score.categoryStrengths)
+            .filter(([, v]) => v >= 0.3)
+            .sort(([, a], [, b]) => b - a)
+            .slice(0, 3)
+            .map(([k, v]) => `${k}(${v.toFixed(1)})`);
+          if (top.length > 0) strengthsTag = ` strengths=[${top.join(', ')}]`;
+        }
+      } catch { /* best-effort */ }
+      return `${a.id}: ${a.role ?? a.preset ?? 'agent'} (${a.skills.join(', ')}) weight=${weight.toFixed(2)}${strengthsTag}${status}`;
     });
 
     const response = await this.llm.generate([

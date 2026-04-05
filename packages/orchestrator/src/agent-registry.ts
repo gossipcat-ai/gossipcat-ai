@@ -13,6 +13,7 @@ export interface FindBestMatchOptions {
   taskText?: string;
   catalog?: SkillCatalog;
   taskType?: 'review' | 'impl';
+  taskCategory?: string;
 }
 
 export class AgentRegistry {
@@ -97,7 +98,16 @@ export class AgentRegistry {
         }
       }
 
-      // 4. Performance weight (circuit breaker → reader → neutral)
+      // 4. Category strength boost — if task has a known category, prefer agents strong in it
+      let categoryBoost = 0;
+      if (options?.taskCategory && this.perfReader) {
+        const agentScore = this.perfReader.getAgentScore(agent.id);
+        if (agentScore?.categoryStrengths?.[options.taskCategory]) {
+          categoryBoost = agentScore.categoryStrengths[options.taskCategory] * 0.5;
+        }
+      }
+
+      // 5. Performance weight (circuit breaker → reader → neutral)
       let perfWeight = 1.0;
       if (this.perfReader?.isCircuitOpen(agent.id)) {
         perfWeight = 0.3; // circuit breaker overrides all scoring
@@ -105,7 +115,7 @@ export class AgentRegistry {
         perfWeight = this.perfReader.getDispatchWeight(agent.id);
       }
 
-      const score = (staticOverlap + projectMatchBoost + suggesterBoost) * perfWeight;
+      const score = (staticOverlap + projectMatchBoost + suggesterBoost + categoryBoost) * perfWeight;
       // Tiebreaker: prefer agent with higher overlap ratio (more specialized)
       const ratio = agent.skills.length > 0 ? staticOverlap / agent.skills.length : 0;
       const bestRatio = bestMatch && bestMatch.skills.length > 0

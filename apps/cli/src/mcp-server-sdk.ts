@@ -465,7 +465,7 @@ async function doBoot() {
 
   // Wire adaptive team intelligence (overlap detection + lens generation)
   try {
-    const { OverlapDetector, LensGenerator } = await import('@gossip/orchestrator');
+    const { OverlapDetector, LensGenerator, DispatchDifferentiator } = await import('@gossip/orchestrator');
 
     // Default to the main agent's model
     let utilityLlm = m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined);
@@ -490,6 +490,7 @@ async function doBoot() {
 
     ctx.mainAgent.setOverlapDetector(new OverlapDetector());
     ctx.mainAgent.setLensGenerator(new LensGenerator(utilityLlm));
+    ctx.mainAgent.setDispatchDifferentiator(new DispatchDifferentiator());
     ctx.mainAgent.setSummaryLlm(utilityLlm);
     process.stderr.write(`[gossipcat] Adaptive team intelligence ready (utility: ${utilityModelId})\n`);
   } catch (err) {
@@ -1385,6 +1386,7 @@ server.tool(
       finding: z.string().describe('Brief description of the finding'),
       finding_id: z.string().optional().describe('Consensus finding ID — links this signal to a specific finding in a consensus report. Enables dashboard to resolve UNVERIFIED findings.'),
       severity: z.enum(['critical', 'high', 'medium', 'low']).optional().describe('Finding severity for impact scoring. If omitted, defaults to medium.'),
+      category: z.string().optional().describe('Finding category for ATI competency profiles (e.g., concurrency, trust_boundaries, injection_vectors, resource_exhaustion, type_safety, error_handling, data_integrity, input_validation)'),
       evidence: z.string().optional().describe('Supporting evidence or reasoning'),
     })).optional().describe('Array of consensus signals (required for action: "record")'),
     // retract params
@@ -1453,6 +1455,7 @@ server.tool(
         counterpartId: s.counterpart_id,
         findingId: s.finding_id,
         severity: s.severity,
+        category: s.category,
         evidence: ((s.evidence || s.finding) ?? '').slice(0, MAX_EVIDENCE_LENGTH),
         timestamp,
       }));
