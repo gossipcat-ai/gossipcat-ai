@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ataberk-xyz/gossipcat-ai/master/packages/dashboard-v2/public/assets/banner.png" alt="Gossipcat" width="600" />
+  <img src="packages/dashboard-v2/public/assets/banner.png" alt="Gossipcat" width="600" />
 </p>
 
 <p align="center">
