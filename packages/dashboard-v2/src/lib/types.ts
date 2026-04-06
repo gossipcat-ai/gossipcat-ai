@@ -12,6 +12,7 @@ export interface OverviewData {
   avgDurationMs: number;
   lastConsensusTimestamp: string;
   actionableFindings: number;
+  hourlyActivity: number[];
 }
 
 export interface AgentData {
@@ -27,8 +28,10 @@ export interface AgentData {
   lastTask: { task: string; timestamp: string } | null;
   scores: {
     accuracy: number; uniqueness: number; reliability: number;
-    dispatchWeight: number; signals: number;
+    impactScore: number; dispatchWeight: number; signals: number;
     agreements: number; disagreements: number; hallucinations: number;
+    consecutiveFailures: number; circuitOpen: boolean;
+    categoryStrengths: Record<string, number>;
   };
 }
 
@@ -36,6 +39,7 @@ export interface TaskItem {
   taskId: string;
   agentId: string;
   task: string;
+  result?: string;
   status: 'completed' | 'failed' | 'cancelled' | 'running';
   duration?: number;
   timestamp: string;
@@ -99,6 +103,7 @@ export interface MemoryFile {
   filename: string;
   frontmatter: Record<string, string>;
   content: string;
+  agentId?: string;
 }
 
 export interface MemoryData {
@@ -115,4 +120,5 @@ export type DashboardEvent =
   | { type: 'task_failed'; taskId: string; agentId: string }
   | { type: 'consensus_complete'; taskId: string }
   | { type: 'agent_connected'; agentId: string }
-  | { type: 'agent_disconnected'; agentId: string };
+  | { type: 'agent_disconnected'; agentId: string }
+  | { type: 'log_lines'; data: { lines: string[] } };

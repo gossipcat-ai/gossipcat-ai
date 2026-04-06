@@ -26,6 +26,11 @@ export function cleanFindingTags(text: string): string {
   // Inline backticks: `...` → <code>
   cleaned = cleaned.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
 
+  // Markdown bold: **text** → <strong> (run before italic so ** isn't eaten by *)
+  cleaned = cleaned.replace(/\*\*([^*\n]+)\*\*/g, '<strong class="font-semibold text-foreground">$1</strong>');
+  // Markdown italic: *text* → <em> (avoid matching ** already consumed)
+  cleaned = cleaned.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+
   return cleaned;
 }
 

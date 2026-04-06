@@ -22,7 +22,7 @@ export function TeamSection({ agents }: TeamSectionProps) {
         </h2>
         {hasMore && (
           <a
-            href="#/team"
+            href="/dashboard/team"
             className="font-mono text-xs text-muted-foreground transition hover:text-primary"
           >
             view all →

@@ -1,24 +1,32 @@
 import { useEffect, useRef } from 'react';
-import { OrbAvatarEngine } from '@/lib/neural-avatar';
+import { VortexEngine } from '@/lib/vortex-engine';
+import { agentColor } from '@/lib/utils';
 
 interface NeuralAvatarProps {
   agentId: string;
   size?: number;
+  /** Accepted but ignored — avatars always animate now. Kept for backwards-compat with callers. */
   animate?: boolean;
-  /** 0-1: controls node count. signals/200 */
-  evolution?: number;
-  /** 0-1: controls glow intensity */
+  /** Raw signal count (0-5000+). Controls size + complexity + shape emergence. */
+  signals?: number;
+  /** 0-1: controls brightness */
   accuracy?: number;
-  /** 0-1: controls blink/glimpse frequency */
+  /** 0-1: controls nova event rate */
   uniqueness?: number;
+  /** 0-1: controls rotation speed + trail length */
+  impact?: number;
 }
 
 export function NeuralAvatar({
-  agentId, size = 64, animate = true,
-  evolution = 0.15, accuracy = 0.5, uniqueness = 0.5,
+  agentId,
+  size = 64,
+  signals = 0,
+  accuracy = 0.5,
+  uniqueness = 0.5,
+  impact = 0.5,
 }: NeuralAvatarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const engineRef = useRef<OrbAvatarEngine | null>(null);
+  const engineRef = useRef<VortexEngine | null>(null);
   const rafRef = useRef<number>(0);
   const visibleRef = useRef(true);
 
@@ -32,13 +40,14 @@ export function NeuralAvatar({
     if (!ctx) return;
     ctx.scale(2, 2);
 
-    const engine = new OrbAvatarEngine(canvas, agentId, evolution, accuracy, uniqueness);
+    const color = agentColor(agentId);
+    const engine = new VortexEngine(canvas, agentId, signals, accuracy, uniqueness, color, impact);
     engineRef.current = engine;
     engine.draw();
 
     const loop = () => {
       if (visibleRef.current) {
-        engine.update(0.016);
+        engine.update(16);
         engine.draw();
       }
       rafRef.current = requestAnimationFrame(loop);
@@ -49,7 +58,7 @@ export function NeuralAvatar({
       cancelAnimationFrame(rafRef.current);
       engineRef.current = null;
     };
-  }, [agentId, size, animate, evolution, accuracy, uniqueness]);
+  }, [agentId, size, signals, accuracy, uniqueness, impact]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -72,8 +81,6 @@ export function NeuralAvatar({
         width: size,
         height: size,
         borderRadius: '50%',
-        opacity: animate ? 1 : 0.5,
-        transition: 'opacity 0.3s',
       }}
     />
   );

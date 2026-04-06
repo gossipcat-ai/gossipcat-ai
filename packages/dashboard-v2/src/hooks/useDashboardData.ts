@@ -35,10 +35,12 @@ export function useDashboardData() {
         agentIds.map((id) => api<MemoryData>(`memory/${id}`))
       );
       const allMemories: MemoryFile[] = [];
-      for (const result of memoryResults) {
+      for (let idx = 0; idx < memoryResults.length; idx++) {
+        const result = memoryResults[idx];
+        const ownerId = agentIds[idx];
         if (result.status === 'fulfilled' && result.value.knowledge) {
           for (const k of result.value.knowledge) {
-            allMemories.push(k);
+            allMemories.push({ ...k, agentId: ownerId });
           }
         }
       }

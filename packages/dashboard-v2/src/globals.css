@@ -19,10 +19,16 @@
   --color-destructive: #f87171;
   --color-destructive-foreground: #fafafa;
 
+  /* Semantic finding colors */
   --color-confirmed: #34d399;
   --color-disputed: #f87171;
   --color-unverified: #fbbf24;
   --color-unique: #c084fc;
+
+  /* v3 additions */
+  --color-impact: #fb7185;
+  --color-insight: #71717a;
+  --color-text-dim: #666674;
 
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -36,6 +42,8 @@ body {
   background-color: var(--color-background);
   color: var(--color-foreground);
   font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -54,3 +62,81 @@ html::after {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.15); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, 0.25); }
+
+/* ───── Tooltip system (CSS-only, data-tooltip="text") ───── */
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-6px);
+  padding: 8px 12px;
+  background: rgba(14, 14, 20, 0.98);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 6px;
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--color-foreground);
+  white-space: pre-line;
+  width: max-content;
+  max-width: 220px;
+  text-align: left;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 150ms ease 50ms;
+  z-index: 1000;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7);
+}
+[data-tooltip]::before {
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: rgba(14, 14, 20, 0.98);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 150ms ease 50ms;
+  z-index: 1000;
+}
+[data-tooltip]:hover::after,
+[data-tooltip]:hover::before {
+  opacity: 1;
+}
+[data-tooltip-pos="bottom"]::after {
+  bottom: auto;
+  top: 100%;
+  transform: translateX(-50%) translateY(6px);
+}
+[data-tooltip-pos="bottom"]::before {
+  bottom: auto;
+  top: 100%;
+  border-top-color: transparent;
+  border-bottom-color: rgba(14, 14, 20, 0.98);
+}
+[data-tooltip-pos="left"]::after {
+  left: auto;
+  right: 0;
+  transform: translateY(-6px);
+}
+[data-tooltip-pos="left"]::before {
+  left: auto;
+  right: 12px;
+  transform: none;
+}
+[data-tooltip-pos="right"]::after {
+  left: 0;
+  right: auto;
+  transform: translateY(-6px);
+}
+[data-tooltip-pos="right"]::before {
+  left: 12px;
+  right: auto;
+  transform: none;
+}

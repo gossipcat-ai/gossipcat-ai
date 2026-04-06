@@ -1,8 +1,18 @@
 import { useEffect, useState } from 'react';
 import { getWsState } from '@/lib/ws';
+import { href, useRoute } from '@/lib/router';
+
+const TABS = [
+  { to: '/', label: 'Dashboard', match: (r: string) => r === '/' },
+  { to: '/team', label: 'Team', match: (r: string) => r === '/team' || r.startsWith('/agent/') },
+  { to: '/debates', label: 'Debates', match: (r: string) => r === '/debates' },
+  { to: '/tasks', label: 'Tasks', match: (r: string) => r === '/tasks' },
+  { to: '/logs', label: 'Logs', match: (r: string) => r === '/logs' },
+];
 
 export function TopBar() {
   const [online, setOnline] = useState(false);
+  const route = useRoute();
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -12,15 +22,37 @@ export function TopBar() {
   }, []);
 
   return (
-    <nav className="flex items-center justify-between border-b border-border px-6 py-3">
-      <div className="flex items-center gap-3">
-        <img src="/dashboard/assets/gossipcat.png" alt="" className="h-8 w-8" />
-        <span className="font-semibold text-primary">gossipcat</span>
+    <nav className="relative flex items-center justify-between border-b border-border px-6 py-3.5">
+      <div className="flex items-center gap-6">
+        <a href={href('/')} className="flex items-center gap-3 leading-none">
+          <img src="/dashboard/assets/gossip-mini.png" alt="" className="h-10 w-10 object-contain" />
+          <span className="text-[17px] font-bold text-primary">gossipcat</span>
+        </a>
+        <div className="flex gap-1">
+          {TABS.map((tab) => {
+            const isActive = tab.match(route);
+            return (
+              <a
+                key={tab.to}
+                href={href(tab.to)}
+                className={`rounded-md px-3.5 py-1.5 font-mono text-[13px] transition ${
+                  isActive
+                    ? 'bg-primary/10 font-semibold text-primary'
+                    : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                }`}
+              >
+                {tab.label}
+              </a>
+            );
+          })}
+        </div>
       </div>
-      <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 font-mono text-xs text-muted-foreground">
+      <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3.5 py-1.5 font-mono text-xs text-muted-foreground">
         <span className={`inline-block h-1.5 w-1.5 rounded-full ${online ? 'bg-confirmed shadow-[0_0_6px_rgba(52,211,153,0.5)]' : 'bg-destructive'}`} />
         {online ? 'Connected' : 'Disconnected'}
       </div>
+      {/* Violet gradient accent under border */}
+      <span className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-gradient-to-r from-transparent via-primary/15 to-transparent" />
     </nav>
   );
 }

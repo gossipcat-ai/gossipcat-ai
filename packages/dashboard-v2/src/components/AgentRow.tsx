@@ -1,5 +1,6 @@
 import type { AgentData } from '@/lib/types';
 import { agentColor, timeAgo } from '@/lib/utils';
+import { navigate } from '@/lib/router';
 import { NeuralAvatar } from './NeuralAvatar';
 
 interface AgentRowProps {
@@ -13,7 +14,7 @@ export function AgentRow({ agent }: AgentRowProps) {
 
   return (
     <button
-      onClick={() => { window.location.hash = '#/agent/' + encodeURIComponent(agent.id); }}
+      onClick={() => { navigate('/agent/' + encodeURIComponent(agent.id)); }}
       className="group flex min-w-0 flex-1 flex-col items-center rounded-lg border border-border bg-card p-4 text-center transition hover:border-primary/30 hover:bg-accent"
     >
       {/* Avatar with portal glow */}
@@ -24,11 +25,14 @@ export function AgentRow({ agent }: AgentRowProps) {
           style={{ background: color }}
         />
         <NeuralAvatar
-        agentId={agent.id} size={112} animate={agent.online}
-        evolution={Math.min(1, (agent.scores.signals || 0) / 200)}
-        accuracy={agent.scores.accuracy}
-        uniqueness={agent.scores.uniqueness}
-      />
+          agentId={agent.id}
+          size={112}
+          animate={agent.online}
+          signals={agent.scores.signals}
+          accuracy={agent.scores.accuracy}
+          uniqueness={agent.scores.uniqueness}
+          impact={agent.scores.impactScore}
+        />
       </div>
 
       {/* Agent name */}

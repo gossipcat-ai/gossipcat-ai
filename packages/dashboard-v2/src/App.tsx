@@ -1,12 +1,18 @@
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState } from 'react';
+import { useRoute } from '@/lib/router';
 import { AuthGate } from '@/components/AuthGate';
 import { TopBar } from '@/components/TopBar';
+import { SystemPulse } from '@/components/SystemPulse';
+import { CircuitAlerts } from '@/components/CircuitAlerts';
+import { ActiveTasksBanner } from '@/components/ActiveTasksBanner';
 import { FindingsMetrics } from '@/components/FindingsMetrics';
-import { TeamSection } from '@/components/TeamSection';
+import { TeamHero } from '@/components/TeamHero';
+import { NeuralAvatar } from '@/components/NeuralAvatar';
+import { TaskDetailModal } from '@/components/TaskDetailModal';
 import { TasksSection } from '@/components/TasksSection';
 import { RecentMemories } from '@/components/RecentMemories';
-import { AgentRow } from '@/components/AgentRow';
 import { AgentPage } from '@/components/AgentPage';
+import { LogsPage } from '@/components/LogsPage';
 import { TaskRow } from '@/components/TaskRow';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/useWebSocket';
@@ -14,190 +20,384 @@ import { useDashboardData } from '@/hooks/useDashboardData';
 import { timeAgo, cleanFindingTags } from '@/lib/utils';
 import type { DashboardEvent, AgentData } from '@/lib/types';
 
-function useRoute() {
-  const [route, setRoute] = useState(window.location.hash || '#/');
-  useEffect(() => {
-    const handler = () => setRoute(window.location.hash || '#/');
-    window.addEventListener('hashchange', handler);
-    return () => window.removeEventListener('hashchange', handler);
-  }, []);
-  return route;
-}
+type SortKey = 'weight' | 'accuracy' | 'uniqueness' | 'impact' | 'signals' | 'agreements' | 'hallucinations' | 'lastTask';
 
-function TeamPage({ agents }: { agents: AgentData[] }) {
-  const sorted = [...agents].sort((a, b) =>
-    (b.scores?.dispatchWeight || 0) - (a.scores?.dispatchWeight || 0)
-  );
+function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib/types').TasksData | null }) {
+  const [sortKey, setSortKey] = useState<SortKey>('weight');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [query, setQuery] = useState('');
+
+  // Build a map from agentId → most recent task item
+  const lastTaskByAgent = new Map<string, import('@/lib/types').TaskItem>();
+  if (tasks) {
+    for (const t of tasks.items) {
+      const existing = lastTaskByAgent.get(t.agentId);
+      if (!existing || t.timestamp > existing.timestamp) lastTaskByAgent.set(t.agentId, t);
+    }
+  }
+
+  const circuitOpen = agents.filter((a) => a.scores.circuitOpen).length;
+  const healthy = agents.filter((a) => a.scores.accuracy >= 0.5).length;
+  const totalSignals = agents.reduce((acc, a) => acc + a.scores.signals, 0);
+  const totalTokens = agents.reduce((acc, a) => acc + a.totalTokens, 0);
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? agents.filter((a) =>
+        a.id.toLowerCase().includes(q) ||
+        a.provider.toLowerCase().includes(q) ||
+        a.model.toLowerCase().includes(q)
+      )
+    : agents;
+
+  const sortVal = (a: AgentData): number => {
+    const s = a.scores;
+    switch (sortKey) {
+      case 'weight': return s.dispatchWeight;
+      case 'accuracy': return s.accuracy;
+      case 'uniqueness': return s.uniqueness;
+      case 'impact': return s.impactScore;
+      case 'signals': return s.signals;
+      case 'agreements': return s.agreements;
+      case 'hallucinations': return s.hallucinations;
+      case 'lastTask': {
+        const lt = lastTaskByAgent.get(a.id);
+        return lt ? new Date(lt.timestamp).getTime() : 0;
+      }
+    }
+  };
+  const sorted = [...filtered].sort((a, b) => {
+    const va = sortVal(a); const vb = sortVal(b);
+    return sortDir === 'desc' ? vb - va : va - vb;
+  });
+
+  const toggleSort = (k: SortKey) => {
+    if (sortKey === k) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+    else { setSortKey(k); setSortDir('desc'); }
+  };
+
+  const arrow = (k: SortKey) => sortKey === k ? (sortDir === 'desc' ? '▾' : '▴') : '';
 
   return (
     <>
-      <div className="mb-4 flex items-center gap-3">
-        <a href="#/" className="font-mono text-xs text-muted-foreground hover:text-primary">← back</a>
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-          Team <span className="text-primary">{agents.length} agents</span>
-        </h2>
+      {/* Header with summary stats */}
+      <div className="mb-6">
+        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+          Team <span className="ml-2 text-primary">{agents.length}</span>
+        </h1>
+        <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border/40 bg-border/30 sm:grid-cols-4">
+          {[
+            { label: 'Healthy', value: healthy, color: 'text-confirmed' },
+            { label: 'Benched', value: circuitOpen, color: circuitOpen > 0 ? 'text-destructive' : 'text-muted-foreground' },
+            { label: 'Total Signals', value: totalSignals.toLocaleString(), color: 'text-foreground' },
+            { label: 'Tokens Used', value: totalTokens.toLocaleString(), color: 'text-foreground' },
+          ].map((stat) => (
+            <div key={stat.label} className="bg-card/80 px-4 py-3">
+              <div className={`font-mono text-lg font-bold tabular-nums ${stat.color}`}>{stat.value}</div>
+              <div className="mt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">{stat.label}</div>
+            </div>
+          ))}
+        </div>
       </div>
-      <div className="flex flex-wrap gap-3">
-        {sorted.map((agent) => (
-          <AgentRow key={agent.id} agent={agent} />
-        ))}
+
+      {/* Search */}
+      <div className="mb-3">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search agents by id, provider, or model..."
+          className="w-full max-w-md rounded-md border border-border/40 bg-card/80 px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-primary/40 focus:outline-none"
+        />
+      </div>
+
+      {/* Leaderboard table */}
+      <div className="overflow-hidden rounded-md border border-border/40 bg-card/80">
+        <table className="w-full text-left">
+          <colgroup>
+            <col style={{ width: 44 }} />
+            <col />
+            <col style={{ width: 80 }} />
+            <col style={{ width: 260 }} />
+            <col style={{ width: 80 }} />
+            <col style={{ width: 60 }} />
+            <col />
+          </colgroup>
+          <thead>
+            <tr className="border-b border-border/40 bg-muted/20 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80">
+              <th className="py-2.5 pl-5 pr-2 text-center">#</th>
+              <th className="py-2.5 pr-3 text-left">Agent</th>
+              <th className="py-2.5 pr-4 text-right cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort('weight')}>
+                Weight {arrow('weight')}
+              </th>
+              <th className="py-2.5 pr-4 text-left align-top">
+                <div className="flex items-center gap-2 text-[10px]">
+                  <button onClick={() => toggleSort('accuracy')} className="flex items-center gap-1 hover:text-foreground">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-confirmed" />Acc{arrow('accuracy')}
+                  </button>
+                  <span className="text-muted-foreground/30">·</span>
+                  <button onClick={() => toggleSort('uniqueness')} className="flex items-center gap-1 hover:text-foreground">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-unique" />Unq{arrow('uniqueness')}
+                  </button>
+                  <span className="text-muted-foreground/30">·</span>
+                  <button onClick={() => toggleSort('impact')} className="flex items-center gap-1 hover:text-foreground">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-impact)]" />Imp{arrow('impact')}
+                  </button>
+                </div>
+              </th>
+              <th className="py-2.5 pr-4 text-right cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort('signals')}>
+                Signals {arrow('signals')}
+              </th>
+              <th
+                className="py-2.5 pr-4 text-right cursor-pointer select-none hover:text-foreground"
+                onClick={() => toggleSort('hallucinations')}
+                data-tooltip="Hallucinations — fabricated findings caught by cross-review"
+              >
+                Halluc {arrow('hallucinations')}
+              </th>
+              <th className="py-2.5 pr-5 text-left cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort('lastTask')}>
+                Last Task {arrow('lastTask')}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((agent, i) => {
+              const s = agent.scores;
+              const lt = lastTaskByAgent.get(agent.id);
+              const weightColor = s.dispatchWeight >= 1.2 ? 'text-confirmed' : s.dispatchWeight >= 0.8 ? 'text-foreground' : 'text-disputed';
+              const rankDisplay = sortDir === 'desc' && (sortKey === 'weight' || sortKey === 'accuracy' || sortKey === 'impact')
+                ? i + 1 : null;
+
+              return (
+                <tr
+                  key={agent.id}
+                  className="group border-t border-border/20 align-top transition hover:bg-accent/20"
+                >
+                  {/* Rank */}
+                  <td className="py-3 pl-5 pr-2 text-center align-top">
+                    <span className={`font-mono text-[11px] tabular-nums ${
+                      rankDisplay === 1 ? 'font-bold text-primary' :
+                      rankDisplay === 2 || rankDisplay === 3 ? 'font-semibold text-foreground/80' :
+                      'text-muted-foreground/40'
+                    }`}>{rankDisplay ?? '·'}</span>
+                  </td>
+
+                  {/* Agent */}
+                  <td className="py-2.5 pr-3 align-top">
+                    <a href={`/dashboard/agent/${encodeURIComponent(agent.id)}`} className="flex items-center gap-3">
+                      <NeuralAvatar
+                        agentId={agent.id}
+                        size={32}
+                        signals={s.signals}
+                        accuracy={s.accuracy}
+                        uniqueness={s.uniqueness}
+                        impact={s.impactScore}
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate font-mono text-xs font-semibold text-foreground group-hover:text-primary">{agent.id}</span>
+                          {s.circuitOpen && (
+                            <span
+                              className="shrink-0 rounded bg-destructive/15 px-1 font-mono text-[8px] font-bold uppercase tracking-wider text-destructive"
+                              data-tooltip="Benched: too many consecutive failures. Deprioritized until new clean signals recover the score."
+                            >benched</span>
+                          )}
+                        </div>
+                        <div className="truncate font-mono text-[10px] text-muted-foreground/50">
+                          {agent.provider}/{agent.model}
+                        </div>
+                      </div>
+                    </a>
+                  </td>
+
+                  {/* Weight */}
+                  <td className="py-3 pr-4 text-right align-top">
+                    <span className={`font-mono text-sm font-bold tabular-nums ${weightColor}`}>{s.dispatchWeight.toFixed(2)}</span>
+                  </td>
+
+                  {/* Metrics: three mini bars stacked */}
+                  <td className="py-3 pr-4 align-top">
+                    <div className="space-y-1">
+                      <MiniBar label="A" value={s.accuracy} fillClass={s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed'} />
+                      <MiniBar label="U" value={s.uniqueness} fillClass="bg-unique" />
+                      <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--color-impact)]" />
+                    </div>
+                  </td>
+
+                  {/* Signals */}
+                  <td className="py-3 pr-4 text-right align-top font-mono text-xs tabular-nums text-foreground">
+                    {s.signals.toLocaleString()}
+                  </td>
+
+                  {/* Hallucinations */}
+                  <td className="py-3 pr-4 text-right align-top font-mono text-xs tabular-nums">
+                    <span
+                      className={s.hallucinations > 0 ? 'font-bold text-destructive' : 'text-muted-foreground/40'}
+                      data-tooltip={`Agreements ${s.agreements} · Disagreements ${s.disagreements} · Hallucinations ${s.hallucinations}`}
+                    >
+                      {s.hallucinations}
+                    </span>
+                  </td>
+
+                  {/* Last task */}
+                  <td className="py-3 pr-5 align-top">
+                    {lt ? (
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-400">
+                          {lt.taskId.slice(0, 8)}
+                        </span>
+                        <span className="truncate font-mono text-[11px] text-muted-foreground/80" style={{ maxWidth: 260 }}>
+                          {lt.task}
+                        </span>
+                        <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/50">{timeAgo(lt.timestamp)}</span>
+                      </div>
+                    ) : (
+                      <span className="font-mono text-[10px] text-muted-foreground/30">no tasks</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </>
+  );
+}
+
+function MiniBar({ label, value, fillClass }: { label: string; value: number; fillClass: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-2 font-mono text-[8px] uppercase text-muted-foreground/50">{label}</span>
+      <div className="h-1 flex-1 overflow-hidden rounded-full bg-background/60">
+        <div className={`h-full rounded-full ${fillClass}`} style={{ width: `${Math.max(0, Math.min(100, value * 100))}%` }} />
+      </div>
+      <span className="w-8 text-right font-mono text-[10px] tabular-nums text-foreground/80">
+        {Math.round(value * 100)}%
+      </span>
+    </div>
   );
 }
 
 function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<import('@/lib/types').TaskItem | null>(null);
+  const PAGE_SIZE = 50;
+
+  const completed = tasks.items.filter((t) => t.status === 'completed').length;
+  const failed = tasks.items.filter((t) => t.status === 'failed').length;
+  const running = tasks.items.filter((t) => t.status === 'running').length;
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? tasks.items.filter((t) =>
+        t.task?.toLowerCase().includes(q) ||
+        t.agentId?.toLowerCase().includes(q) ||
+        t.taskId?.toLowerCase().includes(q) ||
+        t.status?.toLowerCase().includes(q)
+      )
+    : tasks.items;
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const clampedPage = Math.min(page, totalPages - 1);
+  const paged = filtered.slice(clampedPage * PAGE_SIZE, (clampedPage + 1) * PAGE_SIZE);
+
   return (
     <>
-      <div className="mb-4 flex items-center gap-3">
-        <a href="#/" className="font-mono text-xs text-muted-foreground hover:text-primary">← back</a>
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-          Tasks <span className="text-primary">{tasks.total}</span>
-        </h2>
+      <div className="mb-6">
+        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+          Tasks <span className="ml-2 text-primary">{tasks.total}</span>
+        </h1>
+        <div className="mt-2 flex gap-4 font-mono text-[11px] text-muted-foreground">
+          <span><span className="text-confirmed">{completed}</span> completed</span>
+          {failed > 0 && <span><span className="text-destructive">{failed}</span> failed</span>}
+          {running > 0 && <span><span className="text-unverified">{running}</span> running</span>}
+          <span>showing {paged.length} of {filtered.length}{q && ` (filtered from ${tasks.items.length})`}</span>
+        </div>
       </div>
-      <div className="overflow-hidden rounded-md border border-border">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="border-b border-border bg-card">
-              <th className="py-2 pl-4 pr-2 text-xs font-medium text-muted-foreground" style={{ width: 32 }}></th>
-              <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">ID</th>
-              <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">Agent</th>
-              <th className="py-2 pr-3 text-xs font-medium text-muted-foreground">Description</th>
-              <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">Duration</th>
-              <th className="py-2 pr-4 text-right font-mono text-xs font-medium text-muted-foreground">When</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.items.map((task) => (
-              <TaskRow key={task.taskId} task={task} />
-            ))}
-          </tbody>
-        </table>
-        {tasks.items.length === 0 && (
-          <div className="py-8 text-center text-sm text-muted-foreground">No tasks yet.</div>
+
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setPage(0); }}
+          placeholder="Search tasks by description, agent, id, status..."
+          className="w-full max-w-md rounded-md border border-border/40 bg-card/80 px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-primary/40 focus:outline-none"
+        />
+        {totalPages > 1 && (
+          <div className="flex shrink-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={clampedPage === 0}
+              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+            >◂ Prev</button>
+            <span>{clampedPage + 1} / {totalPages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={clampedPage >= totalPages - 1}
+              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+            >Next ▸</button>
+          </div>
         )}
       </div>
+
+      <div className="overflow-hidden rounded-md border border-border/40 bg-card/80">
+        {paged.length === 0 ? (
+          <div className="py-12 text-center text-sm text-muted-foreground">
+            {q ? 'No tasks match your search.' : 'No tasks yet.'}
+          </div>
+        ) : (
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-border/40 bg-muted/30">
+                <th className="py-2.5 pl-4 pr-2 text-xs font-medium text-muted-foreground" style={{ width: 32 }}></th>
+                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">ID</th>
+                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Agent</th>
+                <th className="py-2.5 pr-3 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Description</th>
+                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Duration</th>
+                <th className="py-2.5 pr-4 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paged.map((task) => (
+                <TaskRow key={task.taskId} task={task} onClick={setSelected} />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <TaskDetailModal task={selected} onClose={() => setSelected(null)} />
     </>
   );
 }
 
-type FindingsFilter = 'all' | 'confirmed' | 'disputed' | 'unverified' | 'unique';
-
-const FINDINGS_TAG_MAP: Record<string, { label: string; filter: FindingsFilter; cls: string }> = {
-  agreement: { label: 'CONFIRMED', filter: 'confirmed', cls: 'text-confirmed bg-confirmed/10' },
-  consensus_verified: { label: 'CONFIRMED', filter: 'confirmed', cls: 'text-confirmed bg-confirmed/10' },
-  disagreement: { label: 'DISPUTED', filter: 'disputed', cls: 'text-disputed bg-disputed/10' },
-  hallucination_caught: { label: 'DISPUTED', filter: 'disputed', cls: 'text-disputed bg-disputed/10' },
-  unverified: { label: 'UNVERIFIED', filter: 'unverified', cls: 'text-unverified bg-unverified/10' },
-  unique_confirmed: { label: 'UNIQUE', filter: 'unique', cls: 'text-unique bg-unique/10' },
-  unique_unconfirmed: { label: 'UNIQUE', filter: 'unique', cls: 'text-unique bg-unique/10' },
-  new_finding: { label: 'NEW', filter: 'unique', cls: 'text-unique bg-unique/10' },
-};
-
-const FINDINGS_CHIPS: { key: FindingsFilter; label: string; cls: string; activeCls: string }[] = [
-  { key: 'all', label: 'All', cls: 'text-muted-foreground', activeCls: 'text-foreground bg-muted' },
-  { key: 'confirmed', label: 'Confirmed', cls: 'text-confirmed/60', activeCls: 'text-confirmed bg-confirmed/10' },
-  { key: 'disputed', label: 'Disputed', cls: 'text-disputed/60', activeCls: 'text-disputed bg-disputed/10' },
-  { key: 'unverified', label: 'Unverified', cls: 'text-unverified/60', activeCls: 'text-unverified bg-unverified/10' },
-  { key: 'unique', label: 'Unique', cls: 'text-unique/60', activeCls: 'text-unique bg-unique/10' },
-];
-
-function FindingsPage({ consensus }: { consensus: import('@/lib/types').ConsensusData }) {
-  const [filter, setFilter] = useState<FindingsFilter>('all');
+function FindingsPage({
+  consensus,
+  consensusReports,
+}: {
+  consensus: import('@/lib/types').ConsensusData;
+  consensusReports: import('@/lib/types').ConsensusReportsData | null;
+}) {
+  const confirmedTotal = consensus.runs.reduce((acc, r) => acc + (r.counts.agreement || 0), 0);
+  const disputedTotal = consensus.runs.reduce((acc, r) => acc + ((r.counts.disagreement || 0) + (r.counts.hallucination || 0)), 0);
+  const unverifiedTotal = consensus.runs.reduce((acc, r) => acc + (r.counts.unverified || 0), 0);
 
   return (
     <>
-      <div className="mb-4 flex items-center gap-3">
-        <a href="#/" className="font-mono text-xs text-muted-foreground hover:text-primary">← back</a>
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-          All Consensus Runs <span className="text-primary">{consensus.runs.length}</span>
-        </h2>
+      <div className="mb-6">
+        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+          Debates <span className="ml-2 text-primary">{consensus.runs.length}</span>
+        </h1>
+        <div className="mt-2 flex gap-4 font-mono text-[11px] text-muted-foreground">
+          <span><span className="text-confirmed">{confirmedTotal}</span> confirmed</span>
+          <span><span className="text-disputed">{disputedTotal}</span> disputed</span>
+          {unverifiedTotal > 0 && <span><span className="text-unverified">{unverifiedTotal}</span> unverified</span>}
+          <span>{consensus.totalSignals} total signals</span>
+        </div>
       </div>
-
-      {/* Global filter chips */}
-      <div className="mb-4 flex gap-1.5">
-        {FINDINGS_CHIPS.map((chip) => (
-          <button
-            key={chip.key}
-            onClick={() => setFilter(chip.key)}
-            className={`rounded-sm px-2.5 py-1 font-mono text-[10px] font-semibold transition ${filter === chip.key ? chip.activeCls : chip.cls} hover:opacity-80`}
-          >
-            {chip.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="space-y-2">
-        {consensus.runs.map((run, i) => {
-          const c = run.counts;
-          const runTotal = (c.agreement || 0) + (c.disagreement || 0) + (c.hallucination || 0) + (c.unverified || 0) + (c.unique || 0) + (c.new || 0);
-          const barTotal = runTotal || 1;
-          const segments = [
-            { key: 'confirmed' as const, count: c.agreement || 0, color: 'bg-confirmed', text: 'text-confirmed', label: 'confirmed' },
-            { key: 'disputed' as const, count: (c.disagreement || 0) + (c.hallucination || 0), color: 'bg-disputed', text: 'text-disputed', label: 'disputed' },
-            { key: 'unverified' as const, count: c.unverified || 0, color: 'bg-unverified', text: 'text-unverified', label: 'unverified' },
-            { key: 'unique' as const, count: (c.unique || 0) + (c.new || 0), color: 'bg-unique', text: 'text-unique', label: 'unique' },
-          ];
-
-          // Filter signals
-          const filteredSignals = run.signals.filter(sig => {
-            if (sig.signal === 'signal_retracted') return false;
-            const tag = FINDINGS_TAG_MAP[sig.signal];
-            if (!tag) return false;
-            return filter === 'all' || tag.filter === filter;
-          });
-
-          // If filtering and this run has no matching signals, hide it
-          if (filter !== 'all' && filteredSignals.length === 0) return null;
-
-          return (
-            <div key={run.taskId + i} className="rounded-md border border-border bg-card p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-sm font-semibold text-foreground">{runTotal} findings</span>
-                  <div className="flex gap-1.5">
-                    {run.agents.map((a) => (
-                      <span key={a} className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                        {a.split('-').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <span className="font-mono text-xs text-muted-foreground">{timeAgo(run.timestamp)}</span>
-              </div>
-              <div className="mt-2 flex gap-2">
-                {segments.map((s) => s.count > 0 && (
-                  <span key={s.key} className={`font-mono text-[10px] font-semibold ${s.text}`}>{s.count} {s.label}</span>
-                ))}
-              </div>
-              <div className="mt-2 flex h-1.5 overflow-hidden rounded-sm">
-                {segments.map((s) => s.count > 0 && (
-                  <div key={s.key} className={`${s.color}`} style={{ width: `${(s.count / barTotal) * 100}%` }} />
-                ))}
-              </div>
-              {filteredSignals.length > 0 && (
-                <div className="mt-3 space-y-1 border-t border-border pt-3">
-                  {filteredSignals.map((sig, j) => {
-                    const tag = FINDINGS_TAG_MAP[sig.signal];
-                    if (!tag) return null;
-                    return (
-                      <div key={j} className="flex items-start gap-2">
-                        <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold ${tag.cls}`}>{tag.label}</span>
-                        <div className="min-w-0 flex-1">
-                          <span className="text-xs text-muted-foreground [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400" dangerouslySetInnerHTML={{ __html: cleanFindingTags(sig.evidence || '') }} />
-                          <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">
-                            {sig.agentId}{sig.counterpartId ? ` + ${sig.counterpartId}` : ''}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <FindingsMetrics consensus={consensus} reports={consensusReports} showAll hideHeader />
     </>
   );
 }
@@ -205,8 +405,10 @@ function FindingsPage({ consensus }: { consensus: import('@/lib/types').Consensu
 function Dashboard() {
   const route = useRoute();
   const { overview, agents, tasks, consensus, consensusReports, memories, loading, refresh } = useDashboardData();
+  const [activeTaskCount, setActiveTaskCount] = useState(0);
 
-  const handleWsEvent = useCallback((_event: DashboardEvent) => {
+  const handleWsEvent = useCallback((event: DashboardEvent) => {
+    if (event.type === 'log_lines') return; // handled by LogsPage directly
     refresh();
   }, [refresh]);
 
@@ -222,31 +424,46 @@ function Dashboard() {
   }
 
   let content;
-  const agentMatch = route.match(/^#\/agent\/(.+)$/);
+  const agentMatch = route.match(/^\/agent\/(.+)$/);
   if (agentMatch && agents) {
     const agentId = decodeURIComponent(agentMatch[1]);
     content = <AgentPage agentId={agentId} agents={agents} tasks={tasks} consensus={consensus} />;
-  } else if (route === '#/team' && agents) {
-    content = <TeamPage agents={agents} />;
-  } else if (route === '#/tasks' && tasks) {
+  } else if (route === '/team' && agents) {
+    content = <TeamPage agents={agents} tasks={tasks} />;
+  } else if (route === '/tasks' && tasks) {
     content = <TasksPage tasks={tasks} />;
-  } else if (route === '#/findings' && consensus) {
-    content = <FindingsPage consensus={consensus} />;
+  } else if (route === '/debates' && consensus) {
+    content = <FindingsPage consensus={consensus} consensusReports={consensusReports} />;
+  } else if (route === '/logs') {
+    content = <LogsPage />;
   } else {
+    // Main dashboard — sidebar + main layout
     content = (
-      <>
-        {agents && <TeamSection agents={agents} />}
-        <FindingsMetrics consensus={consensus} reports={consensusReports} />
-        {tasks && <TasksSection tasks={tasks} />}
-        {memories && <RecentMemories memories={memories} />}
-      </>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr] lg:items-start">
+        {/* Left sidebar: System Pulse + Circuit Alerts */}
+        <aside className="space-y-4 lg:sticky lg:top-4">
+          <SystemPulse overview={overview} activeTasks={activeTaskCount} />
+          {agents && <CircuitAlerts agents={agents} />}
+        </aside>
+
+        {/* Main: Active tasks + Team hero + Consensus + Tasks + Memories */}
+        <main className="min-w-0 space-y-6">
+          <ActiveTasksBanner onCountChange={setActiveTaskCount} />
+          {agents && <TeamHero agents={agents} />}
+          <FindingsMetrics consensus={consensus} reports={consensusReports} />
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {tasks && <TasksSection tasks={tasks} />}
+            {memories && <RecentMemories memories={memories} />}
+          </div>
+        </main>
+      </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-background">
       <TopBar />
-      <main className="mx-auto max-w-6xl space-y-8 px-6 py-6">
+      <main className="mx-auto max-w-7xl space-y-6 px-6 py-6">
         {content}
       </main>
     </div>

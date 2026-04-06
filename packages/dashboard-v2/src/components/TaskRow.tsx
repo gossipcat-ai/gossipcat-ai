@@ -3,6 +3,7 @@ import { timeAgo, formatDuration } from '@/lib/utils';
 
 interface TaskRowProps {
   task: TaskItem;
+  onClick?: (task: TaskItem) => void;
 }
 
 const STATUS_STYLES = {
@@ -12,11 +13,18 @@ const STATUS_STYLES = {
   cancelled: { dot: 'bg-muted-foreground/40', label: '—' },
 } as const;
 
-export function TaskRow({ task }: TaskRowProps) {
+export function TaskRow({ task, onClick }: TaskRowProps) {
   const status = STATUS_STYLES[task.status] ?? STATUS_STYLES.cancelled;
 
   return (
-    <tr className="border-b border-border transition hover:bg-accent/50">
+    <tr
+      className={`border-b border-border transition hover:bg-accent/50 ${onClick ? 'cursor-pointer' : ''}`}
+      onClick={onClick ? (e) => {
+        // Ignore clicks on the inner agent link
+        if ((e.target as HTMLElement).closest('a')) return;
+        onClick(task);
+      } : undefined}
+    >
       <td className="py-2.5 pl-4 pr-2">
         <span className={`inline-block h-2.5 w-2.5 rounded-full ${status.dot}`} />
       </td>
@@ -24,7 +32,7 @@ export function TaskRow({ task }: TaskRowProps) {
         {task.taskId.slice(0, 8)}
       </td>
       <td className="py-2.5 pr-3 font-mono text-xs text-muted-foreground">
-        <a href={`#/agent/${encodeURIComponent(task.agentId)}`} className="transition hover:text-primary">
+        <a href={`/dashboard/agent/${encodeURIComponent(task.agentId)}`} className="transition hover:text-primary">
           {task.agentId}
         </a>
       </td>

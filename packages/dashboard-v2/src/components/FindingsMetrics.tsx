@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
 import type { ConsensusData, ConsensusReportsData, ConsensusReportFinding, ConsensusReport } from '@/lib/types';
 import { api } from '@/lib/api';
-import { timeAgo, cleanFindingTags } from '@/lib/utils';
+import { timeAgo, cleanFindingTags, agentInitials, agentColor } from '@/lib/utils';
 
 interface FindingsMetricsProps {
   consensus: ConsensusData;
   reports?: ConsensusReportsData | null;
+  /** If true, shows all consensus runs and hides the "view all" link. */
+  showAll?: boolean;
+  /** If true, hides the section header. Useful when the parent page provides its own header. */
+  hideHeader?: boolean;
 }
 
 const MAX_RUNS = 5;
@@ -84,20 +88,22 @@ function ReportFinding({ f }: { f: ConsensusReportFinding }) {
         {f.confirmedBy && f.confirmedBy.length > 0 && (() => {
           const unique = [...new Set(f.confirmedBy)];
           return (
-            <span className="group relative cursor-help font-mono text-[10px] text-confirmed/50 px-1 py-0.5 rounded hover:bg-confirmed/10 transition">
+            <span
+              className="cursor-help rounded px-1 py-0.5 font-mono text-[10px] text-confirmed/50 transition hover:bg-confirmed/10"
+              data-tooltip={`Verified by:\n${unique.join(', ')}`}
+              data-tooltip-pos="left"
+            >
               +{unique.length} ✓
-              <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 font-mono text-[10px] text-foreground shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity">
-                Verified by: {unique.join(', ')}
-              </span>
             </span>
           );
         })()}
         {f.disputedBy && f.disputedBy.length > 0 && (
-          <span className="group relative cursor-help font-mono text-[10px] text-disputed/50 px-1 py-0.5 rounded hover:bg-disputed/10 transition">
+          <span
+            className="cursor-help rounded px-1 py-0.5 font-mono text-[10px] text-disputed/50 transition hover:bg-disputed/10"
+            data-tooltip={`Disputed by:\n${f.disputedBy.map(d => d.agentId).join(', ')}`}
+            data-tooltip-pos="left"
+          >
             {f.disputedBy.length} ⚡
-            <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 font-mono text-[10px] text-foreground shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity">
-              Disputed by: {f.disputedBy.map(d => d.agentId).join(', ')}
-            </span>
           </span>
         )}
       </div>
@@ -119,9 +125,9 @@ function ReportFinding({ f }: { f: ConsensusReportFinding }) {
   );
 }
 
-export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
-  const runs = consensus.runs.slice(0, MAX_RUNS);
-  const hasMore = consensus.runs.length > MAX_RUNS;
+export function FindingsMetrics({ consensus, reports, showAll = false, hideHeader = false }: FindingsMetricsProps) {
+  const runs = showAll ? consensus.runs : consensus.runs.slice(0, MAX_RUNS);
+  const hasMore = !showAll && consensus.runs.length > MAX_RUNS;
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
 
@@ -139,6 +145,24 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
     }
   }, [reports]);
 
+  // On showAll pages, fetch all reports (not just the initial 5-page preview)
+  useEffect(() => {
+    if (!showAll) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api<ConsensusReportsData>('consensus-reports?page=1&pageSize=200');
+        if (cancelled) return;
+        setLoadedReports(data.reports || []);
+        setTotalReports(data.totalReports ?? (data.reports?.length || 0));
+        setReportPage(1);
+      } catch {
+        // keep the seeded page-1 data
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showAll]);
+
   const handleLoadMore = async () => {
     const nextPage = reportPage + 1;
     setLoadingMore(true);
@@ -152,29 +176,56 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
     }
   };
 
-  // If we have structured reports, show those instead of signal-based view
-  const latestReports = loadedReports
+  // Show at most MAX_RUNS structured reports (or all when showAll is true)
+  const sortedReports = loadedReports
     .slice()
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
-  const hasMoreReports = loadedReports.length < totalReports;
+  // Pagination for showAll view — 10 per page
+  const PAGE_SIZE = 10;
+  const [debatePage, setDebatePage] = useState(0);
+  const totalDebatePages = Math.max(1, Math.ceil(sortedReports.length / PAGE_SIZE));
+  const clampedDebatePage = Math.min(debatePage, totalDebatePages - 1);
+  const latestReports = showAll
+    ? sortedReports.slice(clampedDebatePage * PAGE_SIZE, (clampedDebatePage + 1) * PAGE_SIZE)
+    : sortedReports.slice(0, MAX_RUNS);
+
+  // Group by date bucket (today / yesterday / N days ago)
+  const dateBucket = (iso: string): string => {
+    const now = new Date();
+    const d = new Date(iso);
+    const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+    if (diffDays <= 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays} days ago`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+    return d.toISOString().slice(0, 10);
+  };
 
   return (
     <section>
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-          Consensus Rounds <span className="text-primary">{consensus.runs.length}</span>
-        </h2>
-        {hasMore && (
-          <a href="#/findings" className="font-mono text-xs text-muted-foreground transition hover:text-primary">
-            view all →
-          </a>
-        )}
-      </div>
+      {!hideHeader && (
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
+            Consensus Rounds <span className="text-primary">{consensus.runs.length}</span>
+          </h2>
+          {!showAll && (
+            <a href="/dashboard/debates" className="font-mono text-xs text-muted-foreground transition hover:text-primary">
+              view all
+            </a>
+          )}
+        </div>
+      )}
 
       {latestReports.length > 0 ? (
         <div className="space-y-2">
           {latestReports.map((report, _i) => {
+            // Render bucket separator above the first report of each new date group
+            const prev = _i > 0 ? latestReports[_i - 1] : null;
+            const currentBucket = showAll ? dateBucket(report.timestamp) : null;
+            const prevBucket = showAll && prev ? dateBucket(prev.timestamp) : null;
+            const showBucketHeader = showAll && currentBucket !== prevBucket;
             const allFindings = [
               ...report.confirmed,
               ...report.disputed,
@@ -188,41 +239,123 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
             const isExpanded = expandedId === report.id;
 
             const total = allFindings.length || 1;
+            const confirmedCount = report.confirmed.length;
+            const disputedCount = report.disputed.length;
+            const unverifiedCount = report.unverified.length;
+            const uniqueCount = report.unique.length;
+            const insightCount = (report.insights || []).length;
+
+            // Determine dominant quality: confirmed > disputed > mixed/unverified
+            const dominantBorderCls = (() => {
+              if (total <= 1) return 'border-l-border/40';
+              const confirmedRatio = confirmedCount / total;
+              const disputedRatio = disputedCount / total;
+              if (confirmedRatio >= 0.5) return 'border-l-confirmed/60';
+              if (disputedRatio >= 0.4) return 'border-l-disputed/60';
+              return 'border-l-unverified/50';
+            })();
+
             const segments = [
-              { count: report.confirmed.length, cls: 'bg-confirmed' },
-              { count: report.disputed.length, cls: 'bg-disputed' },
-              { count: report.unverified.length, cls: 'bg-unverified' },
-              { count: report.unique.length, cls: 'bg-unique' },
-              { count: (report.insights || []).length, cls: 'bg-zinc-500' },
+              { count: confirmedCount, cls: 'bg-confirmed' },
+              { count: disputedCount, cls: 'bg-disputed' },
+              { count: unverifiedCount, cls: 'bg-unverified' },
+              { count: uniqueCount, cls: 'bg-unique' },
+              { count: insightCount, cls: 'bg-zinc-500' },
             ].filter(s => s.count > 0);
 
+            const statChips = [
+              { count: confirmedCount, textCls: 'text-confirmed', label: 'confirmed' },
+              { count: disputedCount, textCls: 'text-disputed', label: 'disputed' },
+              { count: unverifiedCount, textCls: 'text-unverified', label: 'unverified' },
+              { count: uniqueCount, textCls: 'text-unique', label: 'unique' },
+              { count: insightCount, textCls: 'text-zinc-400', label: 'insights' },
+            ].filter(s => s.count > 0);
+
+            // Agents for this report — derive from confirmed/unique/disputed findings
+            const agentIds = [...new Set(
+              allFindings.map(f => f.originalAgentId).filter(Boolean)
+            )].slice(0, 5);
+
             return (
-              <div key={report.id} className={`rounded-lg border transition ${isExpanded ? 'border-primary/30 bg-card' : 'border-border/40 bg-card/50 hover:border-border/60'}`}>
-                <button className="flex w-full items-start justify-between p-4 text-left" onClick={() => setExpandedId(isExpanded ? null : report.id)}>
-                  <div className="flex-1">
-                    {/* Row 1: ID + findings count + time */}
-                    <div className="flex items-center gap-3">
-                      <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">{report.id}</span>
-                      <span className="font-mono text-sm font-bold text-foreground">{allFindings.length} findings</span>
-                      <span className="text-[11px] text-muted-foreground">{report.agentCount} agents · {report.rounds} rounds</span>
-                      <span className="ml-auto font-mono text-[10px] text-muted-foreground/60">{timeAgo(report.timestamp)}</span>
+              <div key={report.id}>
+                {showBucketHeader && (
+                  <div className={`mb-2 flex items-center gap-3 ${_i > 0 ? 'mt-4' : ''}`}>
+                    <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                      {currentBucket}
+                    </span>
+                    <div className="h-px flex-1 bg-border/30" />
+                  </div>
+                )}
+              <div
+                className={`group rounded-md border-l-2 border border-border/40 transition-all duration-150
+                  ${dominantBorderCls}
+                  ${isExpanded
+                    ? 'bg-card border-r-border/60 border-t-border/60 border-b-border/60'
+                    : 'bg-card/50 hover:bg-card/70 hover:border-r-border/60 hover:border-t-border/60 hover:border-b-border/60 hover:shadow-sm hover:shadow-black/20 hover:-translate-y-px'
+                  }`}
+              >
+                <button
+                  className="flex w-full items-start gap-3 px-3 py-2.5 text-left"
+                  onClick={() => setExpandedId(isExpanded ? null : report.id)}
+                >
+                  <div className="flex-1 min-w-0">
+                    {/* Row 1: count + agents + time */}
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-sm font-bold text-foreground">{allFindings.length}</span>
+                      <span className="text-[11px] text-muted-foreground/70">findings</span>
+                      <span className="text-muted-foreground/30 text-[10px]">·</span>
+                      <span className="text-[11px] text-muted-foreground/60">{report.rounds}r</span>
+                      {/* Agent initials as colored dots */}
+                      {agentIds.length > 0 && (
+                        <div className="flex items-center gap-1 ml-1">
+                          {agentIds.map(id => (
+                            <span
+                              key={id}
+                              title={id}
+                              className="inline-flex h-4 w-4 items-center justify-center rounded-full font-mono text-[8px] font-bold text-background"
+                              style={{ backgroundColor: agentColor(id) }}
+                            >
+                              {agentInitials(id)}
+                            </span>
+                          ))}
+                          {allFindings.length > 0 && [...new Set(allFindings.map(f => f.originalAgentId).filter(Boolean))].length > 5 && (
+                            <span className="font-mono text-[9px] text-muted-foreground/40">
+                              +{[...new Set(allFindings.map(f => f.originalAgentId).filter(Boolean))].length - 5}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <span
+                        className="shrink-0 rounded border border-primary/20 bg-primary/5 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary/90"
+                        title={report.id}
+                      >
+                        {report.id.slice(0, 8)}
+                      </span>
+                      <span className="ml-auto font-mono text-[10px] text-muted-foreground/50 shrink-0">
+                        {timeAgo(report.timestamp)}
+                      </span>
                     </div>
-                    {/* Row 2: Progress bar */}
-                    <div className="mt-2 flex h-1.5 w-full overflow-hidden rounded-full bg-muted/30">
+                    {/* Row 2: segmented progress bar */}
+                    <div className="mt-1.5 flex h-1 w-full overflow-hidden rounded-full bg-muted/20">
                       {segments.map((s, si) => (
-                        <div key={si} className={`${s.cls} transition-all`} style={{ width: `${(s.count / total) * 100}%` }} />
+                        <div key={si} className={`${s.cls} opacity-80`} style={{ width: `${(s.count / total) * 100}%` }} />
                       ))}
                     </div>
-                    {/* Row 3: Stat chips */}
-                    <div className="mt-1.5 flex gap-3">
-                      {report.confirmed.length > 0 && <span className="text-[10px] font-semibold text-confirmed">{report.confirmed.length} confirmed</span>}
-                      {report.disputed.length > 0 && <span className="text-[10px] font-semibold text-disputed">{report.disputed.length} disputed</span>}
-                      {report.unverified.length > 0 && <span className="text-[10px] font-semibold text-unverified">{report.unverified.length} unverified</span>}
-                      {report.unique.length > 0 && <span className="text-[10px] font-semibold text-unique">{report.unique.length} unique</span>}
-                      {(report.insights || []).length > 0 && <span className="text-[10px] font-semibold text-zinc-400">{report.insights.length} insights</span>}
+                    {/* Row 3: stat chips with labels */}
+                    <div className="mt-1 flex items-center gap-3">
+                      {statChips.map(chip => (
+                        <span key={chip.label} className={`font-mono text-[10px] font-semibold ${chip.textCls}`}>
+                          {chip.count} {chip.label}
+                        </span>
+                      ))}
                     </div>
                   </div>
+                  {/* Chevron */}
+                  <span className={`mt-1 shrink-0 font-mono text-[10px] text-muted-foreground/40 transition-transform duration-150 ${isExpanded ? 'rotate-90 text-primary/60' : 'group-hover:text-muted-foreground/60'}`}>
+                    ▸
+                  </span>
                 </button>
+
                 {isExpanded && (
                   <div className="border-t border-border/20 px-4 pb-4 pt-3">
                     <div className="mb-2 flex gap-2">
@@ -243,16 +376,23 @@ export function FindingsMetrics({ consensus, reports }: FindingsMetricsProps) {
                   </div>
                 )}
               </div>
+              </div>
             );
           })}
-          {hasMoreReports && (
-            <button
-              onClick={handleLoadMore}
-              disabled={loadingMore}
-              className="mt-3 w-full rounded border border-border/40 px-3 py-1.5 font-mono text-xs text-muted-foreground transition hover:border-primary/40 hover:text-primary disabled:opacity-50"
-            >
-              {loadingMore ? 'Loading...' : 'Load older reports'}
-            </button>
+          {showAll && totalDebatePages > 1 && (
+            <div className="flex items-center justify-center gap-3 pt-4 font-mono text-[11px] text-muted-foreground">
+              <button
+                onClick={() => setDebatePage(p => Math.max(0, p - 1))}
+                disabled={clampedDebatePage === 0}
+                className="rounded-sm border border-border/40 bg-card px-3 py-1 transition hover:bg-accent/50 disabled:opacity-30"
+              >◂ Prev</button>
+              <span>Page {clampedDebatePage + 1} of {totalDebatePages}</span>
+              <button
+                onClick={() => setDebatePage(p => Math.min(totalDebatePages - 1, p + 1))}
+                disabled={clampedDebatePage >= totalDebatePages - 1}
+                className="rounded-sm border border-border/40 bg-card px-3 py-1 transition hover:bg-accent/50 disabled:opacity-30"
+              >Next ▸</button>
+            </div>
           )}
         </div>
       ) : runs.length === 0 ? (
