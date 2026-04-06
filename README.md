@@ -540,7 +540,6 @@ Gossipcat auto-detects the host environment:
 | Agent cognitive memory | ✅ Shipped |
 | Live dashboard | ✅ Shipped |
 | Cross-platform key storage | ✅ Shipped |
-| OpenClaw integration | ✅ Shipped |
 | Full implementation workflow (agents write code) | 🔄 In progress |
 | Dashboard enrichment (graphs, trends, session history) | ☐ Planned |
 | Local Postgres migration (embedded Postgres for tasks/signals/consensus/memory — unblocks full task results, real queries, no more JSONL scans) | ☐ Planned |

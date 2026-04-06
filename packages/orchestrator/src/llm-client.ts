@@ -475,96 +475,6 @@ export class GeminiProvider implements ILLMProvider {
   }
 }
 
-// ─── OpenClaw (self-hosted OpenAI-compatible gateway) ───────────────────────
-
-export class OpenClawProvider implements ILLMProvider {
-  private quota: QuotaTracker;
-  private baseUrl: string;
-
-  constructor(private apiKey: string, private model: string, projectRoot?: string) {
-    this.quota = new QuotaTracker('openclaw', projectRoot);
-    this.baseUrl = (process.env.OPENCLAW_BASE_URL ?? 'http://127.0.0.1:18789').replace(/\/$/, '');
-  }
-
-  async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
-    const body: Record<string, unknown> = {
-      model: this.model,
-      messages: messages.map(m => this.toMessage(m)),
-    };
-    if (options?.maxTokens) body.max_tokens = options.maxTokens;
-    if (options?.temperature !== undefined) body.temperature = options.temperature;
-    if (options?.tools?.length) {
-      body.tools = options.tools.map(t => ({
-        type: 'function',
-        function: { name: t.name, description: t.description, parameters: t.parameters },
-      }));
-    }
-
-    this.quota.checkBeforeRequest();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
-
-    const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const errBody = (await res.text()).slice(0, 200);
-      if (res.status === 429) this.quota.handle429(res, errBody);
-      throw new Error(`OpenClaw API error (${res.status}): ${errBody}`);
-    }
-    this.quota.onSuccess();
-    const data = await res.json() as Record<string, unknown>;
-    return this.parseResponse(data);
-  }
-
-  private toMessage(m: LLMMessage): Record<string, unknown> {
-    if (typeof m.content !== 'string') {
-      return {
-        role: m.role,
-        content: m.content.map(block =>
-          block.type === 'image'
-            ? { type: 'image_url', image_url: { url: `data:${block.mediaType};base64,${block.data}` } }
-            : { type: 'text', text: block.text }
-        ),
-      };
-    }
-    if (m.role === 'tool') {
-      return { role: 'tool', content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content), tool_call_id: m.toolCallId };
-    }
-    if (m.role === 'assistant' && m.toolCalls?.length) {
-      return {
-        role: 'assistant', content: (m.content as string) || null,
-        tool_calls: m.toolCalls.map(tc => ({
-          id: tc.id, type: 'function',
-          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-        })),
-      };
-    }
-    return { role: m.role, content: m.content };
-  }
-
-  private parseResponse(data: Record<string, unknown>): LLMResponse {
-    const choices = data.choices as Array<Record<string, unknown>>;
-    const msg = choices[0].message as Record<string, unknown>;
-    const toolCalls: LLMResponse['toolCalls'] = [];
-    if (msg.tool_calls) {
-      for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
-        const fn = tc.function as Record<string, string>;
-        toolCalls.push({ id: tc.id as string, name: fn.name, arguments: JSON.parse(fn.arguments) });
-      }
-    }
-    const usage = data.usage as Record<string, number> | undefined;
-    return {
-      text: (msg.content as string) || '',
-      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      usage: usage ? { inputTokens: usage.prompt_tokens, outputTokens: usage.completion_tokens } : undefined,
-    };
-  }
-}
-
 // ─── Ollama (local) ─────────────────────────────────────────────────────────
 
 export class OllamaProvider implements ILLMProvider {
@@ -620,7 +530,6 @@ export function createProvider(provider: string, model: string, apiKey?: string,
     case 'anthropic': return new AnthropicProvider(apiKey!, model, projectRoot);
     case 'openai': return new OpenAIProvider(apiKey!, model, projectRoot);
     case 'google': return new GeminiProvider(apiKey!, model, projectRoot);
-    case 'openclaw': return new OpenClawProvider(apiKey ?? '', model, projectRoot);
     case 'local': return new OllamaProvider(model);
     case 'none': return new NullProvider();
     default: throw new Error(`Unknown provider: ${provider}`);
