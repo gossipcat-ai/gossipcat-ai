@@ -7,7 +7,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ataberk-xyz/gossipcat-ai"><img src="https://img.shields.io/github/stars/ataberk-xyz/gossipcat-ai?style=flat" alt="Stars" /></a>
   <a href="https://github.com/ataberk-xyz/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
 </p>
@@ -475,15 +474,6 @@ Gossipcat auto-detects the host environment:
 
 <br/>
 
-## Star History
-
-<a href="https://www.star-history.com/?repos=ataberk-xyz%2Fgossipcat-ai&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ataberk-xyz/gossipcat-ai&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ataberk-xyz/gossipcat-ai&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ataberk-xyz/gossipcat-ai&type=date&legend=top-left" />
- </picture>
-</a>
 
 <br/>
 
