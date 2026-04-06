@@ -608,7 +608,9 @@ Return only valid JSON.`;
 
       const now = taggingTimestamp;
 
-      if (entry.disputedBy.length > 0) {
+      // Require disputes to outnumber or tie with confirmations before marking disputed.
+      // A single malicious agent cannot override multiple confirmations (majority threshold).
+      if (entry.disputedBy.length > 0 && entry.disputedBy.length >= entry.confirmedBy.length) {
         finding.tag = 'disputed';
         disputed.push(finding);
       } else if (entry.confirmedBy.length > 0) {
@@ -1295,9 +1297,9 @@ Return only valid JSON.`;
    * Handles markdown code fences, invalid JSON, and confidence clamping.
    */
   parseCrossReviewResponse(reviewerAgentId: string, text: string, limit: number): CrossReviewEntry[] {
-    // Strip markdown code fences if present
+    // Strip markdown code fences if present (Gemini often wraps JSON in prose + fences)
     let cleaned = text.trim();
-    const fenceMatch = cleaned.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
+    const fenceMatch = cleaned.match(/```(?:json)?\s*\n([\s\S]*?)\n?\s*```/);
     if (fenceMatch) {
       cleaned = fenceMatch[1].trim();
     }
