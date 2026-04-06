@@ -161,10 +161,10 @@ export class DispatchPipeline {
     }
     const worker = this.workers.get(agentId);
     if (!worker) {
-      log(`dispatch FAILED: agent "${agentId}" not found. Available: [${[...this.workers.keys()].join(', ')}]`);
+      log(`❌ dispatch FAILED: agent "${agentId}" not found. Available: [${[...this.workers.keys()].join(', ')}]`);
       throw new Error(`Agent "${agentId}" not found`);
     }
-    log(`dispatch → ${agentId}: "${task.slice(0, 80)}..." writeMode=${options?.writeMode || 'default'}`);
+    log(`→ dispatch → ${agentId}: "${task.slice(0, 80)}..." writeMode=${options?.writeMode || 'default'}`);
 
     // Scoped write mode: validate scope and check for overlaps
     if (options?.writeMode === 'scoped') {
@@ -707,7 +707,7 @@ export class DispatchPipeline {
       if (!this.bootWarningShown) {
         const warning = this.overlapDetector.formatWarning(overlapResult);
         if (warning) {
-          process.stderr.write(`[gossipcat] Skill overlap detected:\n  ${warning}\n`);
+          process.stderr.write(`[gossipcat] ⚠️  Skill overlap detected:\n  ${warning}\n`);
         }
         this.bootWarningShown = true;
       }

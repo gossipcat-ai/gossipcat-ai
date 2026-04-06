@@ -443,7 +443,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
             fileContent = fileContent.replace(/status:\s*.+/, 'status: shipped');
           }
           writeFileSync(filePath, fileContent);
-          process.stderr.write(`[gossipcat] Marked stale: ${sf}\n`);
+          process.stderr.write(`[gossipcat] 🗜️  Marked stale: ${sf}\n`);
         } catch { /* best-effort */ }
       }
       // Strip STALE: lines from summary body (metadata, not content)

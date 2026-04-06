@@ -47,7 +47,7 @@ export function loadConfig(configPath: string): GossipConfig {
   return validateConfig(parsed);
 }
 
-const VALID_PROVIDERS = ['anthropic', 'openai', 'google', 'local', 'native'];
+const VALID_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'native'];
 
 const CLAUDE_MODEL_MAP: Record<string, { provider: string; model: string }> = {
   opus:   { provider: 'anthropic', model: 'claude-opus-4-6' },

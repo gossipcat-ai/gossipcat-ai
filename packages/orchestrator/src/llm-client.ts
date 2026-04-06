@@ -542,6 +542,7 @@ export function createProvider(provider: string, model: string, apiKey?: string,
   switch (provider) {
     case 'anthropic': return new AnthropicProvider(apiKey!, model, projectRoot);
     case 'openai': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl, baseUrl ? `openai:${baseUrl}` : undefined);
+    case 'openclaw': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl ?? 'http://127.0.0.1:18789/v1', 'openclaw');
     case 'google': return new GeminiProvider(apiKey!, model, projectRoot);
     case 'local': return new OllamaProvider(model);
     case 'none': return new NullProvider();

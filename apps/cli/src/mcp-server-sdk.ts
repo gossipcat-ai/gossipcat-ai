@@ -287,9 +287,9 @@ async function refreshBootstrap() {
     // Restore task state that may have changed since initial boot (order matches doBoot)
     restoreNativeTaskMap(process.cwd());
     restoreRelayTasksAsFailed(process.cwd());
-    process.stderr.write(`[gossipcat] Bootstrap refreshed on reconnect (${result.agentCount} agents)\n`);
+    process.stderr.write(`[gossipcat] 🔄 Bootstrap refreshed on reconnect (${result.agentCount} agents)\n`);
   } catch (err) {
-    process.stderr.write(`[gossipcat] Bootstrap refresh failed: ${(err as Error).message}\n`);
+    process.stderr.write(`[gossipcat] ❌ Bootstrap refresh failed: ${(err as Error).message}\n`);
   }
 }
 
@@ -340,7 +340,7 @@ async function doBoot() {
   process.once('SIGINT',  () => { cleanupPid(); process.exit(0); });
 
   if (ctx.relay.dashboardUrl) {
-    process.stderr.write(`[gossipcat] Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKey})\n`);
+    process.stderr.write(`[gossipcat] 🌐 Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKey})\n`);
   }
 
   // Create performance writer for ATI signal collection
@@ -366,7 +366,7 @@ async function doBoot() {
       }
       const modelTier = ac.model.includes('opus') ? 'opus' : ac.model.includes('haiku') ? 'haiku' : 'sonnet';
       ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions, description: ac.role || ac.preset || '' });
-      process.stderr.write(`[gossipcat] ${ac.id}: native agent (${modelTier}, dispatched via Agent tool)\n`);
+      process.stderr.write(`[gossipcat] 🤖 ${ac.id}: native agent (${modelTier})\n`);
       continue;
     }
     const key = await ctx.keychain.getKey(ac.provider);
@@ -403,7 +403,7 @@ async function doBoot() {
       // Map model tier for Agent tool dispatch
       const modelTier = sa.model.includes('opus') ? 'opus' : sa.model.includes('haiku') ? 'haiku' : 'sonnet';
       ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions: sa.instructions, description: sa.description });
-      process.stderr.write(`[gossipcat] Registered native agent: ${sa.id} (${modelTier}) — dispatched via Agent tool\n`);
+      process.stderr.write(`[gossipcat] 🤖 Registered native agent: ${sa.id} (${modelTier})\n`);
     }
   }
 
@@ -413,7 +413,7 @@ async function doBoot() {
   let mainKey: string | null = null;
   if (mainProvider === 'none') {
     // Explicit "none" — skip key lookup, use NullProvider
-    process.stderr.write(`[gossipcat] Orchestrator LLM disabled (provider: none) — features degrade to profile-based\n`);
+    process.stderr.write(`[gossipcat] ⚠️  Orchestrator LLM disabled (provider: none) — features degrade to profile-based\n`);
   } else {
     mainKey = await ctx.keychain.getKey(config.main_agent.provider);
     if (!mainKey) {
@@ -423,7 +423,7 @@ async function doBoot() {
           mainProvider = ac.provider;
           mainModel = ac.model;
           mainKey = key;
-          process.stderr.write(`[gossipcat] Main agent key unavailable, using ${ac.provider}/${ac.model} for orchestration\n`);
+          process.stderr.write(`[gossipcat] ⚠️  Main agent key unavailable, using ${ac.provider}/${ac.model} for orchestration\n`);
           break;
         }
       }
@@ -431,7 +431,7 @@ async function doBoot() {
     if (!mainKey) {
       mainProvider = 'none';
       config.main_agent.provider = 'none';
-      process.stderr.write(`[gossipcat] No API keys available — orchestrator LLM disabled, features degrade to profile-based\n`);
+      process.stderr.write(`[gossipcat] ❌ No API keys available — orchestrator LLM disabled, features degrade to profile-based\n`);
     }
   }
   ctx.mainProvider = mainProvider;
@@ -516,7 +516,7 @@ async function doBoot() {
         utilityModelId = `${config.utility_model.provider}/${config.utility_model.model}`;
       } else {
         // If configured but key is missing, just warn. The fallback is already set.
-        process.stderr.write(`[gossipcat] Utility model key for "${config.utility_model.provider}" not found, falling back to main agent model for lens generation.\n`);
+        process.stderr.write(`[gossipcat] ⚠️  Utility model key for "${config.utility_model.provider}" not found, falling back to main agent model for lens generation.\n`);
       }
     }
 
@@ -524,9 +524,9 @@ async function doBoot() {
     ctx.mainAgent.setLensGenerator(new LensGenerator(utilityLlm));
     ctx.mainAgent.setDispatchDifferentiator(new DispatchDifferentiator());
     ctx.mainAgent.setSummaryLlm(utilityLlm);
-    process.stderr.write(`[gossipcat] Adaptive team intelligence ready (utility: ${utilityModelId})\n`);
+    process.stderr.write(`[gossipcat] 🧠 Adaptive team intelligence ready (utility: ${utilityModelId})\n`);
   } catch (err) {
-    process.stderr.write(`[gossipcat] Adaptive team intelligence failed: ${(err as Error).message}\n`);
+    process.stderr.write(`[gossipcat] ❌ Adaptive team intelligence failed: ${(err as Error).message}\n`);
   }
 
   // Create skill generator for gossip_skills develop action
@@ -538,9 +538,9 @@ async function doBoot() {
       skillPerfReader,
       process.cwd(),
     );
-    process.stderr.write('[gossipcat] Skill generator ready\n');
+    process.stderr.write('[gossipcat] ✨ Skill generator ready\n');
   } catch (err) {
-    process.stderr.write(`[gossipcat] Skill generator failed: ${(err as Error).message}\n`);
+    process.stderr.write(`[gossipcat] ❌ Skill generator failed: ${(err as Error).message}\n`);
   }
 
   // Initialize per-agent skill index
@@ -550,12 +550,12 @@ async function doBoot() {
     if (!skillIndex.exists()) {
       // First time: seed from config.skills[] arrays
       skillIndex.seedFromConfigs(agentConfigs.map((ac: any) => ({ id: ac.id, skills: ac.skills || [] })));
-      process.stderr.write(`[gossipcat] Skill index created (seeded from ${agentConfigs.length} agent configs)\n`);
+      process.stderr.write(`[gossipcat] 📚 Skill index created (seeded from ${agentConfigs.length} agent configs)\n`);
     }
     ctx.mainAgent.setSkillIndex(skillIndex);
-    process.stderr.write(`[gossipcat] Skill index loaded (${skillIndex.getAgentIds().length} agents)\n`);
+    process.stderr.write(`[gossipcat] 📚 Skill index loaded (${skillIndex.getAgentIds().length} agents)\n`);
   } catch (err) {
-    process.stderr.write(`[gossipcat] Skill index failed: ${(err as Error).message}\n`);
+    process.stderr.write(`[gossipcat] ❌ Skill index failed: ${(err as Error).message}\n`);
   }
 
   // Create gossip publisher and wire into pipeline
@@ -574,9 +574,9 @@ async function doBoot() {
       { publishToChannel: (channel: string, data: unknown) => publisherAgent.sendChannel(channel, data as Record<string, unknown>) }
     );
     ctx.mainAgent.setGossipPublisher(gossipPublisher);
-    process.stderr.write(`[gossipcat] Gossip publisher ready\n`);
+    process.stderr.write(`[gossipcat] 📡 Gossip publisher ready\n`);
   } catch (err) {
-    process.stderr.write(`[gossipcat] Gossip publisher failed: ${(err as Error).message}\n`);
+    process.stderr.write(`[gossipcat] ❌ Gossip publisher failed: ${(err as Error).message}\n`);
   }
 
   // Auto-regenerate bootstrap.md on boot so session context is always fresh
@@ -589,15 +589,15 @@ async function doBoot() {
     md(j(process.cwd(), '.gossip'), { recursive: true });
     wf(j(process.cwd(), '.gossip', 'bootstrap.md'), result.prompt);
     if (result.tier === 'full') {
-      process.stderr.write(`[gossipcat] Bootstrap refreshed (${result.agentCount} agents, session context loaded)\n`);
+      process.stderr.write(`[gossipcat] 🔄 Bootstrap refreshed (${result.agentCount} agents, session context loaded)\n`);
     }
   } catch (err) {
-    process.stderr.write(`[gossipcat] Bootstrap refresh failed: ${(err as Error).message}\n`);
+    process.stderr.write(`[gossipcat] ❌ Bootstrap refresh failed: ${(err as Error).message}\n`);
   }
 
   booted = true;
   ctx.booted = true;
-  process.stderr.write(`[gossipcat] Booted: relay :${ctx.relay.port}, ${ctx.workers.size} workers\n`);
+  process.stderr.write(`[gossipcat] 🚀 Booted: relay :${ctx.relay.port}, ${ctx.workers.size} workers\n`);
 }
 
 /**
@@ -667,10 +667,10 @@ async function doSyncWorkers() {
           if (w) ctx.workers.set(ac.id, w);
         }
       }
-      process.stderr.write(`[gossipcat] Synced: ${ctx.workers.size} relay workers + ${ctx.nativeAgentConfigs.size} native agents\n`);
+      process.stderr.write(`[gossipcat] 🔄 Synced: ${ctx.workers.size} relay workers + ${ctx.nativeAgentConfigs.size} native agents\n`);
     }
   } catch (err) {
-    process.stderr.write(`[gossipcat] syncWorkers failed: ${(err as Error).message}\n`);
+    process.stderr.write(`[gossipcat] ❌ syncWorkers failed: ${(err as Error).message}\n`);
   }
 }
 
@@ -964,7 +964,11 @@ server.tool(
         existingIds.add(a.id);
         gossipAgents.push(`  - ${a.id}: ${a.provider}/${a.model} (${a.preset || 'custom'}) — skills: ${a.skills.join(', ')}`);
       }
-      agentSections.push(`Orchestrator: ${config.main_agent.model} (${config.main_agent.provider})`);
+      // In Claude Code MCP mode, the orchestrator is Claude Code itself — don't show the
+      // internal tool LLM as "Orchestrator" or "Internal LLM", it's an implementation detail.
+      if (env.host !== 'claude-code') {
+        agentSections.push(`Orchestrator LLM: ${config.main_agent.model} (${config.main_agent.provider})`);
+      }
     }
 
     // Claude Code subagents loaded into relay
@@ -1012,7 +1016,27 @@ server.tool(
       ].join('\n'));
     }
 
-    return { content: [{ type: 'text' as const, text: lines.join('\n') + '\n\n' + agentSections.join('\n') }] };
+    // Session context — regenerate from next-session.md and inject into response so the
+    // orchestrator receives fresh session priorities without reading files manually.
+    let sessionContextSection = '';
+    try {
+      const { BootstrapGenerator } = await import('@gossip/orchestrator');
+      const generator = new BootstrapGenerator(process.cwd());
+      const result = generator.generate();
+      // Persist fresh bootstrap for other consumers (relay agents, CLI chat)
+      const { writeFileSync: wf, mkdirSync: md } = require('fs');
+      const { join: j } = require('path');
+      md(j(process.cwd(), '.gossip'), { recursive: true });
+      wf(j(process.cwd(), '.gossip', 'bootstrap.md'), result.prompt);
+      // Extract only the Session Context section — the orchestrator already has the rules
+      // from CLAUDE.md; injecting the full prompt would be redundant noise.
+      const sessionMatch = result.prompt.match(/## Session Context\n([\s\S]*?)(?=\n## |\n$|$)/);
+      if (sessionMatch) {
+        sessionContextSection = `\n─────────────────────────────────\n## Session Context\n${sessionMatch[1].trim()}`;
+      }
+    } catch { /* best-effort — missing session context is not fatal */ }
+
+    return { content: [{ type: 'text' as const, text: lines.join('\n') + '\n\n' + agentSections.join('\n') + sessionContextSection }] };
   }
 );
 
@@ -1035,7 +1059,7 @@ server.tool(
   'gossip_setup',
   `Create or update gossipcat team. Default mode is "merge" — adds/updates specified agents while keeping existing ones. Use "replace" to overwrite entire config. Detects host environment (${env.host}) and supports both native Claude Code subagents (.claude/agents/*.md) and custom provider agents (Anthropic, OpenAI, Google Gemini).`,
   {
-    main_provider: z.enum(['anthropic', 'openai', 'google', 'none']).default('google')
+    main_provider: z.enum(['anthropic', 'openai', 'openclaw', 'google', 'none']).default('google')
       .describe('Provider for the orchestrator LLM. Use "none" when no API key is available — features degrade gracefully to profile-based.'),
     main_model: z.string().default('gemini-2.5-pro')
       .describe('Model ID for orchestrator (e.g. gemini-2.5-pro, claude-sonnet-4-6, gpt-4o)'),
@@ -1058,12 +1082,12 @@ server.tool(
       instructions: z.string().optional()
         .describe('For native agents: full instructions (markdown body of .claude/agents/*.md)'),
       // Custom agent fields
-      provider: z.enum(['anthropic', 'openai', 'google', 'local']).optional()
+      provider: z.enum(['anthropic', 'openai', 'openclaw', 'google', 'local']).optional()
         .describe('For custom agents: LLM provider'),
       custom_model: z.string().optional()
         .describe('For custom agents: model ID (e.g. gemini-2.5-pro, gpt-4o, claude-sonnet-4-6)'),
       base_url: z.string().optional()
-        .describe('For openai provider: custom base URL for OpenAI-compatible gateways (e.g. http://localhost:11434/v1 for Ollama, or a self-hosted vLLM/LM Studio endpoint). Defaults to https://api.openai.com/v1'),
+        .describe('Custom base URL for OpenAI-compatible gateways. For openai: defaults to https://api.openai.com/v1. For openclaw: defaults to http://127.0.0.1:18789/v1.'),
       // Shared fields
       role: z.string().optional()
         .describe('Agent role — freeform, e.g. "ui-architect", "security-auditor", "reviewer"'),
@@ -1153,6 +1177,16 @@ server.tool(
     const customCreated: string[] = [];
     const errors: string[] = [];
 
+    // Load existing agents up front — needed inside the loop to detect native→custom conflicts
+    let existingAgents: Record<string, any> = {};
+    if (mode === 'merge') {
+      try {
+        const { readFileSync } = require('fs');
+        const existing = JSON.parse(readFileSync(join(root, '.gossip', 'config.json'), 'utf-8'));
+        existingAgents = existing.agents || {};
+      } catch { /* no existing config — start fresh */ }
+    }
+
     const RESERVED_IDS = new Set(['_project', '__proto__', 'constructor', 'prototype']);
     for (const agent of agents) {
       if (RESERVED_IDS.has(agent.id)) {
@@ -1232,14 +1266,6 @@ server.tool(
     }
 
     // Write gossipcat config — merge with existing or replace
-    let existingAgents: Record<string, any> = {};
-    if (mode === 'merge') {
-      try {
-        const { readFileSync } = require('fs');
-        const existing = JSON.parse(readFileSync(join(root, '.gossip', 'config.json'), 'utf-8'));
-        existingAgents = existing.agents || {};
-      } catch { /* no existing config — start fresh */ }
-    }
 
     const config = {
       main_agent: { provider: main_provider, model: main_model },
@@ -1373,7 +1399,7 @@ server.tool(
 
         // Log whether this was LLM-selected or fallback
         const source = classification.agentId ? 'LLM-selected' : 'fallback';
-        process.stderr.write(`[gossipcat] Auto-dispatch: single-agent → ${selectedId} (${source})\n`);
+        process.stderr.write(`[gossipcat] 🎯 Auto-dispatch: single-agent → ${selectedId} (${source})\n`);
         agent_id = selectedId;
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Auto-dispatch failed: ${(err as Error).message}. Try gossip_run with a specific agent_id instead.` }] };
@@ -1435,6 +1461,10 @@ server.tool(
     }
 
     // Relay worker — dispatch and collect in one call
+    // Sync workers lazily: if this agent isn't connected yet (e.g. added after boot), spin it up now
+    if (!ctx.workers.has(agent_id)) {
+      await syncWorkersViaKeychain();
+    }
     planExecutionDepth++;
     try {
       const { taskId } = ctx.mainAgent.dispatch(agent_id, task, options);
@@ -2316,7 +2346,7 @@ server.tool(
       const { join: j } = require('path');
       md(j(process.cwd(), '.gossip'), { recursive: true });
       wf(j(process.cwd(), '.gossip', 'bootstrap.md'), result.prompt);
-      process.stderr.write('[gossipcat] Bootstrap regenerated with new session context\n');
+      process.stderr.write('[gossipcat] 🔄 Bootstrap regenerated with new session context\n');
     } catch { /* best-effort */ }
 
     let output = `Session saved to .gossip/agents/_project/memory/\n\n${summary}`;

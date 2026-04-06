@@ -53,7 +53,7 @@ export async function handleCollect(
   }
 
   if (pendingNativeIds.length > 0 && !consensus) {
-    process.stderr.write(`[gossipcat] ${pendingNativeIds.length} native agent(s) still running — results will show as 'running'. Use consensus: true to wait.\n`);
+    process.stderr.write(`[gossipcat] ⏳ ${pendingNativeIds.length} native agent(s) still running — results will show as 'running'. Use consensus: true to wait.\n`);
   }
 
   if (pendingNativeIds.length > 0 && consensus) {
@@ -63,7 +63,7 @@ export async function handleCollect(
     const deadline = Date.now() + nativeTimeout;
     const waitStart = Date.now();
     let lastHeartbeat = 0;
-    process.stderr.write(`[gossipcat] Waiting for ${pendingNativeIds.length} native agent(s) before consensus...\n`);
+    process.stderr.write(`[gossipcat] ⏳ Waiting for ${pendingNativeIds.length} native agent(s) before consensus...\n`);
 
     while (Date.now() < deadline) {
       const stillPending = pendingNativeIds.filter(id => !ctx.nativeResultMap.has(id) && ctx.nativeTaskMap.has(id));
@@ -81,7 +81,7 @@ export async function handleCollect(
           const running = info ? Math.round((Date.now() - info.startedAt) / 1000) : 0;
           return `${agentId}: running ${running}s`;
         }).join(', ');
-        process.stderr.write(`[gossipcat] Consensus: ${doneCount}/${pendingNativeIds.length} agents complete (${agentStatus})\n`);
+        process.stderr.write(`[gossipcat] ⏳ Consensus: ${doneCount}/${pendingNativeIds.length} agents complete (${agentStatus})\n`);
       }
 
       await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
@@ -94,9 +94,9 @@ export async function handleCollect(
     }).length;
     const stillPending = pendingNativeIds.length - arrived;
     if (stillPending > 0) {
-      process.stderr.write(`[gossipcat] ${stillPending} native agent(s) didn't respond, ${timedOutCount} timed out, ${arrived - timedOutCount} arrived\n`);
+      process.stderr.write(`[gossipcat] ⚠️  ${stillPending} native agent(s) didn't respond, ${timedOutCount} timed out, ${arrived - timedOutCount} arrived\n`);
     } else {
-      process.stderr.write(`[gossipcat] All ${arrived} native agent(s) arrived${timedOutCount > 0 ? ` (${timedOutCount} via timeout)` : ''}\n`);
+      process.stderr.write(`[gossipcat] ✅ All ${arrived} native agent(s) arrived${timedOutCount > 0 ? ` (${timedOutCount} via timeout)` : ''}\n`);
     }
   }
 
@@ -141,7 +141,7 @@ export async function handleCollect(
         timestamp,
       }));
       writer.appendSignals(autoSignals);
-      process.stderr.write(`[gossipcat] Auto-recorded ${autoSignals.length} failure signal(s): ${autoSignals.map((s: any) => s.agentId).join(', ')}\n`);
+      process.stderr.write(`[gossipcat] ⚠️  Auto-recorded ${autoSignals.length} failure signal(s): ${autoSignals.map((s: any) => s.agentId).join(', ')}\n`);
     }
   } catch { /* best-effort */ }
 
@@ -376,7 +376,7 @@ export async function handleCollect(
       }
 
       if (findingsToSave.length > 0) {
-        process.stderr.write(`[gossipcat] Auto-persisted ${findingsToSave.length} consensus findings to implementation-findings.jsonl\n`);
+        process.stderr.write(`[gossipcat] 💾 Auto-persisted ${findingsToSave.length} consensus findings to implementation-findings.jsonl\n`);
       }
     } catch { /* best-effort */ }
 

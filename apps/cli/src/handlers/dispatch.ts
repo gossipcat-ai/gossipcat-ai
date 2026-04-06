@@ -47,7 +47,7 @@ function reroutableAgent(agentId: string): string {
 
   const quotaState = readQuotaState();
   if (isProviderExhausted(provider, quotaState)) {
-    process.stderr.write(`[gossipcat] quota fallback: ${agentId} → ${fallback}\n`);
+    process.stderr.write(`[gossipcat] ⚠️  quota fallback: ${agentId} → ${fallback}\n`);
     return fallback;
   }
   return agentId;
@@ -123,7 +123,7 @@ export async function handleDispatchSingle(
     ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     persistNativeTaskMap();
-    process.stderr.write(`[gossipcat] dispatch → ${agent_id} (${nativeConfig.model}) [${taskId}]\n`);
+    process.stderr.write(`[gossipcat] → dispatch → ${agent_id} (${nativeConfig.model}) [${taskId}]\n`);
 
     // Register scope so subsequent dispatches see it
     if (write_mode === 'scoped' && scope) {
@@ -175,7 +175,7 @@ export async function handleDispatchSingle(
     const modeLabel = write_mode ? ` [${write_mode}${scope ? `:${scope}` : ''}]` : '';
     return { content: [{ type: 'text' as const, text: `Dispatched to ${agent_id}${modeLabel}. Task ID: ${taskId}` }] };
   } catch (err: any) {
-    process.stderr.write(`[gossipcat] dispatch failed: ${err.message}\n`);
+    process.stderr.write(`[gossipcat] ❌ dispatch failed: ${err.message}\n`);
     return { content: [{ type: 'text' as const, text: err.message }] };
   }
 }
@@ -337,10 +337,10 @@ export async function handleDispatchConsensus(
       if (timerId) clearTimeout(timerId);
       if (lenses && lenses.size > 0) {
         precomputedLenses = lenses;
-        process.stderr.write(`[gossipcat] Generated ${lenses.size} differentiation lenses for consensus\n`);
+        process.stderr.write(`[gossipcat] 🔍 Generated ${lenses.size} differentiation lenses for consensus\n`);
       }
     } catch (err: any) {
-      process.stderr.write(`[gossipcat] lens generation failed: ${err.message}\n`);
+      process.stderr.write(`[gossipcat] ❌ lens generation failed: ${err.message}\n`);
     }
   }
 

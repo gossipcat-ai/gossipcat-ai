@@ -76,7 +76,7 @@ function recordTimeoutSignal(taskId: string, agentId: string): void {
       evidence: 'Native agent timed out — no gossip_relay call received',
       timestamp: new Date().toISOString(),
     }]);
-    process.stderr.write(`[gossipcat] Auto-recorded timeout signal for ${agentId} [${taskId}]\n`);
+    process.stderr.write(`[gossipcat] ⏱️  Auto-recorded timeout signal for ${agentId} [${taskId}]\n`);
   } catch { /* best-effort */ }
 }
 
@@ -152,10 +152,10 @@ export function restoreNativeTaskMap(projectRoot: string): void {
             error: `Timed out after MCP reconnect — ${elapsed}ms elapsed, limit was ${timeoutMs}ms`,
             startedAt: info.startedAt, completedAt: now,
           });
-          process.stderr.write(`[gossipcat] restore ← ${info.agentId} [${id}] TIMED_OUT (expired during reconnect)\n`);
+          process.stderr.write(`[gossipcat] ⏱️  restore ← ${info.agentId} [${id}] TIMED_OUT (expired during reconnect)\n`);
         } else {
           spawnTimeoutWatcher(id, { agentId: info.agentId, task: info.task, startedAt: info.startedAt, timeoutMs });
-          process.stderr.write(`[gossipcat] restore ← ${info.agentId} [${id}] re-armed (${Math.round((timeoutMs - elapsed) / 1000)}s remaining)\n`);
+          process.stderr.write(`[gossipcat] 🔁 restore ← ${info.agentId} [${id}] re-armed (${Math.round((timeoutMs - elapsed) / 1000)}s remaining)\n`);
         }
       }
     }
@@ -182,7 +182,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     const timedOutResult = ctx.nativeResultMap.get(task_id);
     if (timedOutResult && timedOutResult.status === 'timed_out') {
       taskInfo = { agentId: timedOutResult.agentId, task: timedOutResult.task, startedAt: timedOutResult.startedAt };
-      process.stderr.write(`[gossipcat] relay ← ${timedOutResult.agentId} [${task_id}] LATE (overwriting timed_out)\n`);
+      process.stderr.write(`[gossipcat] ⚠️  relay ← ${timedOutResult.agentId} [${task_id}] LATE (overwriting timed_out)\n`);
       // Retract the timeout signal — agent completed successfully, don't penalize
       // Skip for _utility tasks — no timeout signal was recorded for them
       if (taskInfo.agentId !== '_utility') {
@@ -197,7 +197,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
             evidence: 'Late relay arrived — agent completed successfully after timeout',
             timestamp: new Date().toISOString(),
           }]);
-          process.stderr.write(`[gossipcat] Retracted timeout signal for ${taskInfo.agentId} [${task_id}]\n`);
+          process.stderr.write(`[gossipcat] ↩️  Retracted timeout signal for ${taskInfo.agentId} [${task_id}]\n`);
         } catch { /* best-effort */ }
       }
     } else {
@@ -221,7 +221,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   evictStaleNativeTasks();
 
   if (!taskInfo.utilityType) {
-    process.stderr.write(`[gossipcat] relay ← ${taskInfo.agentId} [${task_id}] ${error ? 'FAILED' : 'OK'} (${(elapsed / 1000).toFixed(1)}s, ${result?.length ?? 0} chars)\n`);
+    process.stderr.write(`[gossipcat] ${error ? '❌' : '✅'} relay ← ${taskInfo.agentId} [${task_id}] ${error ? 'FAILED' : 'OK'} (${(elapsed / 1000).toFixed(1)}s, ${result?.length ?? 0} chars)\n`);
   }
 
   // Release scope if this native task held one
@@ -304,7 +304,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     const utilityLabel = taskInfo.utilityType === 'summary' ? 'cognitive-summary'
       : taskInfo.utilityType === 'gossip' ? 'gossip-publish'
       : taskInfo.utilityType;
-    process.stderr.write(`[gossipcat] utility ← ${utilityLabel} [${task_id}] OK (${(elapsed / 1000).toFixed(1)}s)\n`);
+    process.stderr.write(`[gossipcat] ✅ utility ← ${utilityLabel} [${task_id}] OK (${(elapsed / 1000).toFixed(1)}s)\n`);
   }
 
   // Result already stored in nativeResultMap at top of handler (crash-safe)

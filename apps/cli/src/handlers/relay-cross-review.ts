@@ -31,7 +31,7 @@ export function startConsensusTimeout(consensusId: string): void {
     const snapshot = { allResults: current.allResults, relayCrossReviewEntries: current.relayCrossReviewEntries, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries] };
     ctx.pendingConsensusRounds.delete(consensusId);
     persistPendingConsensus();
-    process.stderr.write(`[gossipcat] Consensus ${consensusId} timed out. Missing: ${missingAgents.join(', ')}. Synthesizing with available entries.\n`);
+    process.stderr.write(`[gossipcat] ⏰ Consensus ${consensusId} timed out. Missing: ${missingAgents.join(', ')}. Synthesizing with available entries.\n`);
 
     // Record timeout signals for missing agents
     try {
@@ -53,7 +53,7 @@ export function startConsensusTimeout(consensusId: string): void {
       const { ConsensusEngine } = await import('@gossip/orchestrator');
       const timeoutLlm = ctx.mainAgent.getLlm();
       if (!timeoutLlm) {
-        process.stderr.write(`[gossipcat] Timeout synthesis skipped: no LLM configured\n`);
+        process.stderr.write(`[gossipcat] ⚠️  Timeout synthesis skipped: no LLM configured\n`);
         return;
       }
       const engine = new ConsensusEngine({
@@ -86,9 +86,9 @@ export function startConsensusTimeout(consensusId: string): void {
         }, null, 2));
       } catch { /* best-effort */ }
 
-      process.stderr.write(`[gossipcat] Timeout synthesis complete: ${report.confirmed.length} confirmed, ${report.disputed.length} disputed\n`);
+      process.stderr.write(`[gossipcat] 🔮 Timeout synthesis complete: ${report.confirmed.length} confirmed, ${report.disputed.length} disputed\n`);
     } catch (err) {
-      process.stderr.write(`[gossipcat] Timeout synthesis failed: ${(err as Error).message}\n`);
+      process.stderr.write(`[gossipcat] ❌ Timeout synthesis failed: ${(err as Error).message}\n`);
     }
   };
   setTimeout(checkTimeout, remainingMs);
@@ -121,7 +121,7 @@ export async function handleRelayCrossReview(
   // Delete from pending set BEFORE any await — closes TOCTOU window where duplicate
   // MCP calls could both pass the has() check above and double-process entries
   round.pendingNativeAgents.delete(agent_id);
-  process.stderr.write(`[gossipcat] Cross-review received from ${agent_id}. Remaining: ${round.pendingNativeAgents.size}\n`);
+  process.stderr.write(`[gossipcat] 📨 Cross-review received from ${agent_id}. Remaining: ${round.pendingNativeAgents.size}\n`);
 
   // Parse the cross-review response (parseCrossReviewResponse is stateless, llm not used)
   try {
@@ -172,7 +172,7 @@ export async function handleRelayCrossReview(
   };
   ctx.pendingConsensusRounds.delete(consensus_id);
   persistPendingConsensus();
-  process.stderr.write(`[gossipcat] All native cross-reviews received. Synthesizing consensus for ${consensus_id}...\n`);
+  process.stderr.write(`[gossipcat] 🔮 All native cross-reviews received. Synthesizing consensus for ${consensus_id}...\n`);
 
   try {
     const { ConsensusEngine, PerformanceWriter } = await import('@gossip/orchestrator');

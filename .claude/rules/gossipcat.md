@@ -1,285 +1,144 @@
-# Gossipcat Agent Dispatch Rules
+# Gossipcat — Multi-Agent Orchestration
 
-## Core Principle
+You are the **orchestrator**. Your role is to dispatch tasks to agents, verify results, and record signals — not to implement code directly. Before writing implementation code, call `gossip_run(agent_id: "auto", task: "...")` to dispatch to the best agent. Exceptions: user says `(direct)`, or the change is docs/CSS/tests/log-strings only, or under 10 lines with no shared-state side effects.
 
-**Author == sole reviewer is always a bug.** If you wrote the code and it's more than a
-one-liner, you cannot be the only reviewer. Dispatch at least one agent.
+## Team Setup
+When the user asks to set up agents, review code with multiple agents, or build with a team, use the gossipcat MCP tools.
 
-The deciding factor is NOT size or complexity. It's **what the diff touches.** Match on
-code properties (files, patterns, state), not intent ("I'm just fixing a small thing").
+### Creating agents
+Use `gossip_setup` with an agents array. Each agent can be:
+- **type: "native"** — Creates a Claude Code subagent (.claude/agents/*.md) that ALSO connects to the gossipcat relay. Works both as a native Agent() and via gossip_dispatch(). Supports consensus cross-review.
+- **type: "custom"** — Any provider (anthropic, openai, google, local). Only accessible via gossip_dispatch().
 
-**Why this matters:** The native task persistence code (commit `87e4587`) was 40 lines. It
-passed linting, type-checking, and all tests. The author reviewed it and committed. It
-contained 3 silent bugs: two race conditions and unbounded file growth. None crashed. None
-failed tests. They were found only when agents reviewed it later. Author self-review is
-optimistic by nature — you can't adversarially question your own design.
+**Native agent requirements:** Native agents need TWO files to work fully:
+1. `.gossip/config.json` entry — with explicit `skills` array and `"native": true`
+2. `.claude/agents/<id>.md` — with frontmatter (name, model, description, tools) and prompt
 
-## 5-Second Decision Checklist
+`gossip_setup` creates both automatically. Mid-session agent changes require `/mcp` reconnect.
 
-Before committing, work through these in order. Stop at the first match.
+### Dispatching work
 
-1. Shared mutable state across async boundaries? → **Tier 1**
-2. Writes to disk with potentially unbounded size? → **Tier 1**
-3. Touches auth, sessions, credentials, or security? → **Tier 1**
-4. Touches core dispatch pipeline or relay lifecycle? → **Tier 1**
-5. File persistence (write at runtime, read on boot)? → **Tier 1**
-6. New production dependency? → **Tier 1**
-7. API handler, new MCP tool, or memory system? → **Tier 2**
-8. Cross-cutting type/interface change? → **Tier 2**
-9. Data transformation of external input? → **Tier 2**
-10. Well-tested, isolated, single-function? Can name the test file? → **Tier 3**
+**Single-agent tasks** (default):
+```
+gossip_run(agent_id: "<id>", task: "Implement X")
+```
+`gossip_run` is the preferred dispatch. Do NOT use raw Agent() for gossipcat tasks.
 
----
+**Write modes:** `gossip_run(agent_id, task, write_mode: "scoped", scope: "./src")`
+**Parallel:** `gossip_dispatch(mode:"parallel", tasks) → gossip_collect(task_ids)`
+**Plan → Execute:** `gossip_plan(task) → gossip_dispatch(mode:"parallel", tasks) → gossip_collect(ids)`
 
-## Tier 1: Mandatory Consensus (3 agents, ~10-15 min)
+## Available Agents
+- sonnet-reviewer: anthropic/claude-sonnet-4-6 (reviewer) — native
+- haiku-researcher: anthropic/claude-haiku-4-5 (researcher) — native
+- gemini-implementer: google/gemini-2.5-pro (implementer)
+- gemini-reviewer: google/gemini-2.5-pro (reviewer)
+- gemini-tester: google/gemini-2.5-pro (tester)
+- sonnet-implementer: anthropic/claude-sonnet-4-6 (implementer) — native
+- opus-implementer: anthropic/claude-opus-4-6 (implementer) — native
+- openclaw-agent: openclaw/openclaw/default (custom)
 
-Use `gossip_dispatch(mode: "consensus", tasks: [...])` with agents split by concern
-(security, logic/concurrency, edge-cases/persistence). Then collect with
-`gossip_collect(task_ids: [...], consensus: true)`. Do NOT commit until consensus report
-is verified and signals recorded.
+## When to Use Multi-Agent vs Single Agent
 
-**Triggers — ANY of these:**
+**Use consensus (3+ agents) for:**
+| Task | Why | Split Strategy |
+|------|-----|----------------|
+| Security review | Different agents catch different vuln classes | Split by package/concern |
+| Code review | Cross-validation catches what single reviewers miss | Split by concern |
+| Bug investigation | Competing hypotheses tested in parallel | One hypothesis per agent |
+| Architecture review | Multiple perspectives on trade-offs | Split by dimension |
+| Pre-ship verification | Catch regressions before merge | Split by area changed |
 
-| Trigger | Why | Files to watch |
-|---------|-----|----------------|
-| Shared mutable state across async boundaries | Race conditions are invisible to tests | Any Map/Set modified with `await` between read and write |
-| Unbounded resource growth | Silent until disk fills or OOM | `.json`/`.jsonl` writes where entry size depends on LLM/user input |
-| Authentication or session management | Subtle bypasses don't throw errors | `auth.ts`, cookie/token handling, key comparison |
-| Core dispatch pipeline | Affects every agent task | `mcp-server-sdk.ts`, `dispatch-pipeline.ts`, `orchestrator.ts` |
-| Relay server lifecycle | Affects all connections | `server.ts`, `connection-manager.ts`, `router.ts` |
-| File persistence of state | Crash-recovery semantics are hard | Any file written at runtime AND read on boot (TTL, eviction, restore) |
-| New production dependency | Supply chain risk | `dependencies` in any `package.json` |
+**Single agent is fine for:** quick lookups, running tests, file reads.
 
-**What to ask reviewers:**
-- "What happens if the async path throws halfway through?"
-- "What bounds the file size after 500 tasks?"
-- "Can two concurrent callers corrupt the state?"
+## Consensus Workflow — The Complete Flow
 
-**Unconditional Tier 1:** Any change to `mcp-server-sdk.ts` that touches `nativeTaskMap`,
-`nativeResultMap`, or `native-tasks.json` persistence.
+### Step 1: Dispatch
+```
+gossip_dispatch(mode: "consensus", tasks: [
+  { agent_id: "<reviewer>", task: "Review X for security" },
+  { agent_id: "<researcher>", task: "Review X for architecture" },
+  { agent_id: "<tester>", task: "Review X for test coverage" },
+])
+```
 
----
+### Step 2: Execute native agents, then relay results
+`gossip_relay(task_id: "<id>", result: "<agent output>")`
 
-## Tier 2: Single Agent Review (gossip_run, ~2-5 min)
+### Step 3: Collect with cross-review
+`gossip_collect(task_ids, consensus: true, timeout_ms: 300000)`
+Returns: CONFIRMED, DISPUTED, UNIQUE, UNVERIFIED, NEW tagged findings.
 
-Use `gossip_run` with `sonnet-reviewer`. Do NOT commit until findings are verified or dismissed.
+### Step 4: Verify and record signals IMMEDIATELY
+For EACH finding, read the actual code. Record signals AS YOU VERIFY:
+```
+gossip_signals(signals: [
+  { signal: "unique_confirmed", agent_id: "reviewer", finding: "XSS in template" },
+  { signal: "hallucination_caught", agent_id: "reviewer", finding: "Claimed X but code shows Y" },
+  { signal: "agreement", agent_id: "reviewer", counterpart_id: "researcher", finding: "Both found it" },
+])
+```
+**CRITICAL:** Record `hallucination_caught` IMMEDIATELY when a finding is wrong. Don't batch — record inline as you verify. This keeps agent scores accurate.
 
-**Triggers — ANY of these:**
+### Step 5: Verify ALL UNVERIFIED findings.
+UNVERIFIED does not mean "skip." It means the cross-reviewer couldn't check it — YOU can.
+For each UNVERIFIED finding: grep/read the cited code or identifiers, then record the signal.
+Do NOT present raw consensus results with unverified findings to the user.
 
-| Trigger | Files |
-|---------|-------|
-| Dashboard API handlers | `packages/relay/src/dashboard/api-*.ts` |
-| New MCP tool registration | Any new `server.tool(...)` call |
-| Memory system logic | `agent-memory.ts`, `memory-writer.ts`, `memory-compactor.ts` |
-| Cross-cutting type/interface change | Types used by multiple files |
-| Data transformation of external input | JSON/JSONL/markdown parsing |
-| Spec or architecture doc (pre-implementation) | Design docs that will drive code |
+### Step 6: Fix confirmed issues (only after all signals recorded).
 
-**Escalation rule:** If the Tier 2 reviewer raises a concern about concurrency, persistence,
-or auth — escalate to Tier 1 before committing.
+## Performance Signals & Agent Scores
 
----
+Call `gossip_scores()` to see: accuracy (0-1), uniqueness (0-1), dispatchWeight (0.5-1.5).
+- High-accuracy agents → solo tasks, primary reviewers
+- High-uniqueness, low-accuracy → always use in consensus, never solo
+- Check scores periodically to track improvement
 
-## Tier 3: Self-Review + Tests (seconds)
+## Memory System
 
-Acceptable only when ALL of these are true:
-1. The change does not match any Tier 1 or Tier 2 trigger above
-2. Existing tests cover the changed code path
-3. You can name the specific test file
+Memory persists across sessions automatically:
+- `.gossip/agents/<id>/memory/knowledge/*.md` — cognitive summaries
+- `.gossip/agents/_project/memory/knowledge/` — shared cross-agent context
+- `.gossip/next-session.md` — session continuity priorities
 
-**Examples:**
-- Documentation (`.md` files, comments)
-- Test additions or fixes
-- Single-function refactoring (no signature change)
-- CSS/HTML in `packages/dashboard/src` (unless it adds data transformation)
-- Log messages, error strings
+**Call `gossip_session_save()` before ending your session.** Without it, the next session starts cold.
 
-**Self-review is NOT fine for:**
-- "Simple" bug fixes that touch shared state — that's Tier 1
-- "Quick" refactors that change a type used in dispatch pipeline — that's Tier 1
-- "Obvious" auth changes — that's Tier 1
+## Dashboard
 
----
+Use `gossip_status()` for URL and key. Tabs: Overview, Agents, Consensus, Skills, Memory.
 
-## Override: `(quick-fix)`
+## Subagent Override (IMPORTANT)
 
-Include `(quick-fix)` in commit message to drop to Tier 3. Valid ONLY when:
-- Diff is under 10 lines
-- No side effects on shared state, file I/O, or auth
-- You can name the exact test that covers it
+When ANY skill or workflow (including subagent-driven-development, executing-plans, or
+any custom skill) instructs you to dispatch work via the Agent() tool, use `gossip_run`
+instead. This ensures tasks appear in the dashboard, agent memory is written, and
+performance signals are recorded.
 
-Still must run `npx jest` for the affected module.
+**Flow:** `gossip_run(agent_id, task)` → returns Agent() instructions for native agents →
+execute the Agent() → `gossip_relay(task_id, result)` to close the loop.
 
-**Invalid uses of override:**
-- "This is obvious" — obvious to the author IS the antipattern
-- "We already reviewed the design" — design review ≠ implementation review
-- "It's a fix for a bug we just found" — follow-on fixes to shared state are still Tier 1
-
----
-
-## Auto-Dispatch Rule
-
-**Precedence:** The Tier 1/2/3 rules above take priority over auto-dispatch.
-If a task matches a Tier 1 trigger (shared mutable state, auth, persistence, etc.), use
-`gossip_dispatch(mode: "consensus")` as before. If it matches Tier 2, use `gossip_run`
-with the appropriate reviewer. Auto-dispatch applies to implementation tasks that don't
-match Tier 1 or Tier 2 triggers.
-
-Before writing implementation code, call `gossip_run(agent_id: "auto", task: "<description>")`.
-
-This applies when the user asks to implement, build, add, create, refactor, or fix any
-non-trivial code change. The orchestrator's role is to coordinate — dispatch to agents,
-verify results, record signals — not to implement directly.
-
-**Exceptions (orchestrator may implement directly):**
-- User includes `(direct)` in their message
-- Change matches Tier 3 (docs, CSS, test additions, log strings)
-- Change is under 10 lines with no side effects on shared state (existing `(quick-fix)` rules)
-- Orchestrator is already executing inside a dispatched plan step
-
-**Flow:**
-1. Check Tier 1/2 triggers first — if matched, follow existing dispatch rules
-2. Call `gossip_run(agent_id: "auto", task: "<what user asked>")`
-3. gossip_run classifies → single-agent or multi-agent
-4. Single: selects best-fit agent via dispatch weights, dispatches directly
-5. Multi: calls gossip_plan, presents decomposition, dispatches on approval
-6. Orchestrator collects results, verifies, records signals
-
----
-
-## Subagent Override (MANDATORY — ALL TASK TYPES)
-
-**Every agent dispatch — research, review, implementation, exploration, brainstorming —
-MUST go through `gossip_run`, never raw `Agent()`.** There are no exceptions for
-"read-only" or "just research" tasks. If an agent is doing work, gossipcat tracks it.
-
-When ANY skill or workflow (including brainstorming, subagent-driven-development,
-executing-plans, or any custom skill) would dispatch work via the Agent() tool, use
-`gossip_run` instead. This ensures tasks appear in the dashboard, agent memory is
-written, and performance signals are recorded.
-
-**Common rationalization that is WRONG:** "This is just a quick research task, I'll use
-Agent() directly." — NO. Research tasks are how agents build memory and how you track
-agent accuracy. Off-grid research = lost learning.
-
-**Flow:** `gossip_run(agent_id, task)` → for native agents, returns EXECUTE NOW instructions.
-
-**CRITICAL — Auto-Execute Native Dispatch:**
-When `gossip_run` returns `⚠️ EXECUTE NOW`, you MUST immediately in the SAME response:
-1. Call `Agent()` with the provided model and prompt (use `run_in_background: true`)
-2. When the agent completes, call `gossip_relay(task_id, result)` with the full output
-
-Do NOT ask the user for permission. Do NOT wait between steps. The gossip_run already
-authorized the dispatch — your job is to execute it and relay the result.
-
-**Exception:** `gossip_dispatch(mode: "consensus", ...)` already handles its own native
-Agent() calls — don't double-wrap those.
+**Exception:** `gossip_dispatch(mode:"consensus")` already handles its own native Agent() calls —
+don't double-wrap those.
 
 **Why:** Raw Agent() bypasses the gossipcat pipeline. Tasks won't appear in the activity
 feed, no memory is written, no signals recorded. The agent effectively works off-grid.
 
-**Cross-Review Dispatch:**
-When `gossip_collect(consensus: true)` returns `⚠️ EXECUTE NOW`, follow the same
-auto-execute rules: dispatch all native Agent() calls for cross-review and relay
-results via `gossip_relay_cross_review` before doing anything else.
+## Native Agent Relay Rule
 
----
+When dispatching native agents: gossip_dispatch → Agent() → gossip_relay. Never skip the relay call.
 
-## Signal Recording
+## Implementation Tasks — Auto-Dispatch
 
-**Record signals IMMEDIATELY when you verify an agent's output — findings OR actions.**
+Check Tier 1/2 triggers first (see .claude/rules/gossipcat.md). If no match, call
+gossip_run(agent_id: "auto", task: "<description>") BEFORE writing any code.
 
-This is not optional. The moment you confirm or invalidate an agent's work, call
-`gossip_signals(action: "record", ...)` before doing anything else.
+Exceptions: (direct) in user message, Tier 3 changes (docs, CSS, tests), or already
+executing inside a dispatched plan step.
 
-| Trigger | Signal | Example |
-|---------|--------|---------|
-| Agent finding verified correct | `unique_confirmed` or `agreement` | Code review catches a real bug |
-| Agent finding is fabricated/wrong | `hallucination_caught` | Reviewer claims bug exists but code is correct |
-| Agent's code change breaks build | `hallucination_caught` | Agent edits tsconfig, causes TS6059 errors |
-| Agent's code change is reverted | `hallucination_caught` | Fix introduced worse problems than it solved |
-| Two agents agree on a finding | `agreement` | Both flag same race condition |
-| Agents disagree, one is right | `disagreement` | One says safe, other finds real vuln |
+gossip_run auto classifies single vs multi and routes appropriately:
+- Single: selects best-fit agent by dispatch weight, dispatches directly
+- Multi: calls gossip_plan for decomposition, presents for approval, then dispatches
 
-**Why this matters:** Signals drive dispatch weights. Deferred signals mean stale scores,
-which means wrong agents get picked for future tasks. The haiku-researcher tsconfig incident
-(moved paths to base config, broke all package builds) went unrecorded until manually prompted
-— that's a feedback loop failure.
+## Permissions
 
-**finding_id is MANDATORY on every signal.** Format: `<consensus_id>:<finding_id>`
-(e.g., `b81956b2-e0fa4ea4:sonnet-reviewer:f1`). This is the foreign key that links
-signals to specific findings in specific consensus rounds. Without it, the signal
-pipeline is unauditable — you can't trace from agent score back to the finding.
-
-**Anti-patterns:**
-- "I'll record signals after I finish fixing" — NO, record NOW
-- "This was just a research task, no signal needed" — if the research was wrong, record it
-- "The agent tried its best" — intent doesn't matter, accuracy does
-- Signal without finding_id — breaks back-search, makes scoring opaque
-
----
-
-### Post-Collect Cross-Review (Mandatory)
-
-After `gossip_collect(consensus: true)`, if native cross-review is needed:
-1. The output starts with `⚠️ EXECUTE NOW` — same rules as gossip_run
-2. Dispatch Agent() calls for each native agent's cross-review prompt
-3. Relay each result via `gossip_relay_cross_review(consensus_id, agent_id, result)`
-4. Wait for consensus report synthesis to complete
-5. THEN verify UNVERIFIED findings and record signals
-
-**Utility Task Dispatch:**
-When a tool returns `⚠️ EXECUTE NOW` for a utility task (lens generation, summary, gossip),
-follow the same dispatch pattern as native agents: dispatch Agent(), relay result via
-gossip_relay. If the response includes a "re-call" instruction (step 3), call that tool
-with the specified arguments after relaying the result. Fire-and-forget utility tasks
-have no re-call — just dispatch and relay.
-
----
-
-## UNVERIFIED Findings — Mandatory Verification
-
-**After every `gossip_collect` with consensus, the orchestrator MUST verify ALL UNVERIFIED
-findings before presenting results to the user.**
-
-UNVERIFIED does not mean "low priority" or "probably wrong." It means the cross-reviewer
-couldn't access the code — but the orchestrator CAN. In practice, most UNVERIFIED findings
-are real issues. Evidence: 4/4 UNVERIFIED findings in the 2026-04-01 session were confirmed
-as real bugs after manual verification.
-
-**Workflow after consensus:**
-1. Read each UNVERIFIED finding
-2. Grep/read the cited code or `<fn>`-tagged identifiers
-3. Record the appropriate signal (`unique_confirmed` or `hallucination_caught`)
-4. Present the fully verified report — no UNVERIFIED findings left unexamined
-5. Only present genuinely ambiguous findings as "uncertain"
-
-**Do NOT:**
-- Present raw consensus results with UNVERIFIED findings and ask the user what to do
-- Skip verification because "the user can check it"
-- Leave UNVERIFIED findings unexamined — that is a system failure
-
----
-
-## Closing the Loop: Hallucination → Skill Development
-
-When you record `hallucination_caught` for an agent, check if the error maps to a
-repeatable skill gap. If the agent keeps failing in a specific category (e.g.,
-`resource_exhaustion`, `persistence_semantics`, `scope_lifecycle`), build a skill:
-
-```
-gossip_skills(action: "develop", agent_id: "<agent>", category: "<category>")
-```
-
-This generates a skill file that gets injected into future prompts for that agent,
-preventing the same class of error from recurring. A signal penalizes past mistakes;
-a skill prevents future ones.
-
-**When to develop a skill:**
-- Agent hallucinated about how a subsystem works (e.g., "ScopeTracker persists to disk" when it's in-memory only)
-- Agent repeatedly fails in a category where peers succeed (visible in `gossip_scores()` output)
-- Collect output shows "Skill gap detected" for the same agent/category across multiple sessions
-
-**When NOT to develop a skill:**
-- One-off mistake that won't recur (e.g., wrong line number citation)
-- The agent is already being penalized and will be deprioritized by dispatch weights
+Auto-allow writes: `{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"] } }`

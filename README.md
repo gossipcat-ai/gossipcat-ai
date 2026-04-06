@@ -70,7 +70,7 @@ When an agent keeps failing in a category, targeted skills are generated from fa
 <tr>
 <td align="center">
 <h3>Multi-Provider</h3>
-Mix Anthropic, Google, and OpenAI agents in one team. Each brings different strengths. Native agents need no API key.
+Mix Anthropic, Google, OpenAI, and OpenClaw agents in one team. Each brings different strengths. Native agents need no API key. 🦞 Lobster friendly.
 </td>
 <td align="center">
 <h3>Live Dashboard</h3>
@@ -89,10 +89,29 @@ Per-agent cognitive memory persists across sessions. Agents remember past findin
 <table>
   <tr>
     <td align="center"><strong>Works<br/>with</strong></td>
-    <td align="center"><strong>Claude Code</strong><br/><sub>Full support</sub></td>
+    <td align="center">
+      <img src="https://img.shields.io/badge/Claude%20Code-supported-orange?style=flat&logo=anthropic&logoColor=white" alt="Claude Code" /><br/><sub>Full support</sub>
+    </td>
     <td align="center"><strong>Cursor</strong><br/><sub>Not yet</sub></td>
     <td align="center"><strong>Windsurf</strong><br/><sub>Not yet</sub></td>
     <td align="center"><strong>VS Code</strong><br/><sub>Not yet</sub></td>
+  </tr>
+</table>
+
+<br/>
+
+<table>
+  <tr>
+    <td align="center"><strong>Provider<br/>gateways</strong></td>
+    <td align="center">
+      <img src="https://img.shields.io/badge/OpenClaw-gateway-4A90D9?style=flat" alt="OpenClaw" /><br/><sub>HTTP gateway ✅</sub>
+    </td>
+    <td align="center">
+      <img src="https://img.shields.io/badge/Ollama-local-gray?style=flat" alt="Ollama" /><br/><sub>Local models ✅</sub>
+    </td>
+    <td align="center">
+      <img src="https://img.shields.io/badge/OpenAI--compatible-any-green?style=flat" alt="OpenAI-compatible" /><br/><sub>Any base_url ✅</sub>
+    </td>
   </tr>
 </table>
 </div>
@@ -474,6 +493,45 @@ gossipcat/
 
 <br/>
 
+## OpenClaw Integration
+
+<p align="center">
+  <img src="https://img.shields.io/badge/OpenClaw-gateway-4A90D9?style=for-the-badge" alt="OpenClaw" />
+  <img src="https://img.shields.io/badge/%F0%9F%A6%9E-lobster%20friendly-red?style=for-the-badge" alt="Lobster friendly" />
+</p>
+
+Gossipcat supports [OpenClaw](https://github.com/openclaw/openclaw) as a provider gateway. OpenClaw runs locally and exposes an OpenAI-compatible HTTP API — gossipcat talks to it like any other relay agent, with your stored gateway token and a separate quota slot so OpenClaw rate limits never bleed into your OpenAI agents.
+
+### Wiring an OpenClaw agent
+
+Store your gateway token once:
+```bash
+gossipcat keys set openclaw <your-gateway-token>
+```
+
+Then add it to your team:
+```
+"Add an OpenClaw reviewer to my team"
+```
+
+Or directly via `gossip_setup`:
+```
+gossip_setup(mode: "merge", agents: [{
+  id: "openclaw-agent",
+  type: "custom",
+  provider: "openclaw",
+  custom_model: "openclaw/default",
+  role: "reviewer",
+  skills: ["code_review", "typescript"]
+}])
+```
+
+The gateway runs at `http://127.0.0.1:18789/v1` by default. Override with `base_url` if yours is on a different port. Available models: `openclaw`, `openclaw/default`, `openclaw/main`.
+
+Once added, the agent participates in consensus rounds, accumulates accuracy signals, and gets skill files generated from its failure patterns — same as any other agent in the mesh.
+
+<br/>
+
 ## Configuration
 
 Config is searched in order: `.gossip/config.json` > `gossip.agents.json` > `gossip.agents.yaml`.
@@ -510,7 +568,8 @@ Config is searched in order: `.gossip/config.json` > `gossip.agents.json` > `gos
 | `main_agent` | Orchestrator LLM for routing and synthesis |
 | `utility_model` | Memory compaction, gossip, lens generation |
 | `consensus_judge` | Model for cross-review synthesis |
-| `agents.<id>.provider` | `anthropic`, `google`, `openai` |
+| `agents.<id>.provider` | `anthropic`, `google`, `openai`, `openclaw`, `local` |
+| `agents.<id>.base_url` | Custom endpoint for `openai`/`openclaw` (e.g. `http://127.0.0.1:18789/v1`) |
 | `agents.<id>.native` | `true` = runs via Claude Code Agent(), no API key |
 | `agents.<id>.preset` | `reviewer`, `implementer`, `tester`, `researcher`, `debugger`, `architect`, `security`, `designer`, `planner`, `devops`, `documenter` |
 | `agents.<id>.skills` | Skill labels for dispatch matching |
@@ -540,6 +599,8 @@ Gossipcat auto-detects the host environment:
 | Agent cognitive memory | ✅ Shipped |
 | Live dashboard | ✅ Shipped |
 | Cross-platform key storage | ✅ Shipped |
+| OpenAI-compatible gateway support (`base_url`) | ✅ Shipped |
+| OpenClaw provider integration 🦞 | ✅ Shipped |
 | Full implementation workflow (agents write code) | 🔄 In progress |
 | Dashboard enrichment (graphs, trends, session history) | ☐ Planned |
 | Local Postgres migration (embedded Postgres for tasks/signals/consensus/memory — unblocks full task results, real queries, no more JSONL scans) | ☐ Planned |
