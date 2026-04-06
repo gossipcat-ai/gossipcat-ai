@@ -21,8 +21,10 @@ process.stderr.write = ((chunk: any, ...args: any[]) => {
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'http';
 
 // ── Extracted modules ────────────────────────────────────────────────────
 import { ctx, defaultImportanceScores, NATIVE_TASK_TTL_MS } from './mcp-context';
@@ -324,6 +326,9 @@ async function doBoot() {
     },
   });
   await ctx.relay.start();
+
+  // Start HTTP MCP transport for remote clients (OpenClaw, web agents, etc.)
+  startHttpMcpTransport();
 
   // Write PID so the next boot can clean up if we crash without releasing the port.
   try { writePid(pidFile, String(process.pid)); } catch { /* best-effort */ }
@@ -2476,6 +2481,103 @@ server.tool(
     };
   },
 );
+
+// ── HTTP MCP Transport (for remote clients like OpenClaw) ─────────────────
+// One StreamableHTTPServerTransport per session, reusing the same McpServer.
+// Port: GOSSIPCAT_HTTP_PORT (default 24421)
+// Auth: GOSSIPCAT_HTTP_TOKEN (optional bearer token — set for remote access)
+
+const httpMcpSessions = new Map<string, StreamableHTTPServerTransport>();
+
+function startHttpMcpTransport(): void {
+  const port = parseInt(process.env.GOSSIPCAT_HTTP_PORT ?? '24421', 10);
+  const token = process.env.GOSSIPCAT_HTTP_TOKEN ?? '';
+
+  const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
+    // Only handle /mcp
+    if (!req.url?.startsWith('/mcp')) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+
+    // Optional bearer token auth
+    if (token) {
+      const auth = req.headers['authorization'] ?? '';
+      const provided = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+      if (provided !== token) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+    }
+
+    // Collect body for POST requests
+    let body: unknown;
+    if (req.method === 'POST') {
+      const raw = await new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+        req.on('error', reject);
+      });
+      try { body = JSON.parse(raw); } catch { /* let transport handle invalid JSON */ }
+    }
+
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    // DELETE — client terminating a session
+    if (req.method === 'DELETE' && sessionId) {
+      const t = httpMcpSessions.get(sessionId);
+      if (t) { await t.close(); httpMcpSessions.delete(sessionId); }
+      res.writeHead(200); res.end();
+      return;
+    }
+
+    // GET (SSE reconnect) or POST with existing session
+    if (sessionId && httpMcpSessions.has(sessionId)) {
+      await httpMcpSessions.get(sessionId)!.handleRequest(req, res, body);
+      return;
+    }
+
+    // New session (POST with initialize request)
+    if (req.method === 'POST') {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sid) => {
+          httpMcpSessions.set(sid, transport);
+          process.stderr.write(`[gossipcat] HTTP MCP session opened: ${sid}\n`);
+        },
+      });
+      transport.onclose = () => {
+        const sid = transport.sessionId;
+        if (sid) {
+          httpMcpSessions.delete(sid);
+          process.stderr.write(`[gossipcat] HTTP MCP session closed: ${sid}\n`);
+        }
+      };
+      await server.connect(transport);
+      await transport.handleRequest(req, res, body);
+      return;
+    }
+
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Bad request' }));
+  });
+
+  httpServer.listen(port, '0.0.0.0', () => {
+    const authNote = token ? ' (token protected)' : ' (no auth — set GOSSIPCAT_HTTP_TOKEN for remote use)';
+    process.stderr.write(`[gossipcat] HTTP MCP listening on :${port}/mcp${authNote}\n`);
+  });
+
+  httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      process.stderr.write(`[gossipcat] HTTP MCP port ${port} in use — skipping HTTP transport\n`);
+    } else {
+      process.stderr.write(`[gossipcat] HTTP MCP server error: ${err.message}\n`);
+    }
+  });
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────
 async function main() {
