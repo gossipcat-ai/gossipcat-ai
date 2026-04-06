@@ -1,22 +1,63 @@
 #!/usr/bin/env node
-const { join } = require('path');
+/**
+ * Generates .mcp.json with the correct absolute path to mcp-server.js
+ * for the current install method (global npm, local project dep, git clone).
+ *
+ * Never shipped in the package tarball — always regenerated per machine.
+ */
+const { join, resolve } = require('path');
 const { existsSync, writeFileSync } = require('fs');
 
-const root = join(__dirname, '..');
-const mcpConfig = join(root, '.mcp.json');
+const scriptDir = __dirname;          // .../gossipcat/scripts/
+const packageRoot = resolve(scriptDir, '..'); // .../gossipcat/
+const mcpServerPath = join(packageRoot, 'dist-mcp', 'mcp-server.js');
 
-if (existsSync(mcpConfig)) {
-  return;
+// Detect install method:
+//   global npm  → process.env.npm_config_global === 'true'
+//   git clone   → .git exists at packageRoot (development)
+//   local dep   → neither of the above
+const isGlobal = process.env.npm_config_global === 'true';
+const isGitClone = existsSync(join(packageRoot, '.git'));
+
+// For git clones: skip if .mcp.json already exists (developer already set up)
+if (isGitClone && existsSync(join(packageRoot, '.mcp.json'))) {
+  console.log('gossipcat: .mcp.json already exists — skipping (git clone)');
+  process.exit(0);
 }
+
+// For project-local installs: write .mcp.json into the consumer project root,
+// not into node_modules/gossipcat. Detect consumer root by walking up from
+// node_modules to the directory that contains it.
+let outputDir = packageRoot; // default: package dir (global or git clone)
+if (!isGlobal && !isGitClone) {
+  // node_modules/gossipcat → node_modules → project root
+  const nodeModulesDir = resolve(packageRoot, '..');   // node_modules/
+  const projectRoot = resolve(nodeModulesDir, '..');   // project root
+  if (existsSync(join(nodeModulesDir, '..', 'package.json'))) {
+    outputDir = projectRoot;
+  }
+}
+
+const mcpConfig = join(outputDir, '.mcp.json');
 
 const config = {
   mcpServers: {
     gossipcat: {
       command: 'node',
-      args: [join(root, 'dist-mcp', 'mcp-server.js')],
+      args: [mcpServerPath],
     },
   },
 };
 
 writeFileSync(mcpConfig, JSON.stringify(config, null, 2) + '\n');
-console.log('Created .mcp.json — run `npm run build:mcp` next');
+
+const method = isGlobal ? 'global npm' : isGitClone ? 'git clone' : 'local install';
+console.log(`gossipcat: wrote .mcp.json (${method}) → ${mcpServerPath}`);
+
+if (!existsSync(mcpServerPath)) {
+  if (isGitClone) {
+    console.log('gossipcat: dist-mcp/mcp-server.js not built yet — run: npm run build:mcp');
+  } else {
+    console.warn('gossipcat: WARNING — mcp-server.js missing from package. The package may be corrupted.');
+  }
+}

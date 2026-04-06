@@ -987,6 +987,20 @@ server.tool(
   }
 );
 
+// ── Tool: update — check or apply gossipcat updates ──────────────────────
+server.tool(
+  'gossip_update',
+  'Check for or apply gossipcat updates. Detects install method (global npm, local dep, git clone) and fetches the latest version from the npm registry.',
+  {
+    check_only: z.boolean().default(false).describe('Only check version, do not update'),
+    confirm: z.boolean().default(false).describe('Set true to actually apply the update'),
+  },
+  async ({ check_only, confirm }) => {
+    const { handleGossipUpdate } = await import('./handlers/gossip-update');
+    return handleGossipUpdate({ check_only, confirm });
+  },
+);
+
 // ── Tool: setup — create or update team config ────────────────────────────
 server.tool(
   'gossip_setup',
@@ -2329,6 +2343,7 @@ server.tool(
       { name: 'gossip_relay', desc: 'Feed native Agent() result back into gossipcat relay for consensus, memory, and gossip.' },
       { name: 'gossip_signals', desc: 'Record or retract consensus signals. action:"record" or "retract".' },
       { name: 'gossip_status', desc: 'Show system status, agent list, relay, workers, and dashboard URL/key.' },
+      { name: 'gossip_update', desc: 'Check for or apply gossipcat updates from npm. check_only:true to just see version diff.' },
       { name: 'gossip_setup', desc: 'Create or update team. mode:"merge", "replace", or "update_instructions".' },
       { name: 'gossip_session_save', desc: 'Save cognitive session summary for next session context. Call before ending session.' },
       // Power-user (5)

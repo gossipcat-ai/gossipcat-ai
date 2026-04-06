@@ -1,20 +1,30 @@
 {
-  "name": "gossip-v2",
+  "name": "gossipcat",
   "version": "0.1.0",
-  "private": true,
+  "description": "Multi-agent orchestration for Claude Code — parallel review, consensus, adaptive dispatch",
+  "license": "MIT",
   "workspaces": [
     "packages/*",
     "apps/*"
   ],
+  "files": [
+    "dist-mcp/",
+    "dist-dashboard/",
+    "scripts/postinstall.js"
+  ],
   "scripts": {
     "build": "npm run build --workspaces",
     "test": "jest --config jest.config.base.js",
-    "clean": "rm -rf packages/*/dist apps/*/dist dist-mcp/",
+    "clean": "rm -rf packages/*/dist apps/*/dist dist-mcp/ dist-dashboard/",
     "postinstall": "node scripts/postinstall.js",
     "build:mcp": "npx esbuild apps/cli/src/mcp-server-sdk.ts --bundle --platform=node --target=node22 --outfile=dist-mcp/mcp-server.js --external:ws --external:@modelcontextprotocol/sdk --tsconfig=tsconfig.json && cp -r packages/orchestrator/src/default-skills dist-mcp/default-skills",
-    "build:dashboard": "cd packages/dashboard-v2 && npx vite build",
+    "build:dashboard": "cd packages/dashboard-v2 && npx vite build --outDir ../../dist-dashboard --emptyOutDir",
+    "prepublishOnly": "npm run build:mcp && npm run build:dashboard",
     "gossipcat": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts",
     "start": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@types/jest": "^29.5.11",
@@ -27,6 +37,7 @@
   "dependencies": {
     "@clack/prompts": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "tsconfig-paths": "^4.2.0"
+    "tsconfig-paths": "^4.2.0",
+    "ws": "^8.19.0"
   }
 }
