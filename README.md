@@ -383,6 +383,7 @@ Gossipcat auto-detects the host environment:
 | Cross-platform key storage | Shipped |
 | Full implementation workflow (agents write code) | In progress |
 | Dashboard enrichment (graphs, trends, session history) | Planned |
+| Local Postgres migration (embedded Postgres for tasks/signals/consensus/memory — unblocks full task results, real queries, no more JSONL scans) | Planned |
 | Local LLM support (Ollama) | Planned |
 | Full Cursor support | Planned |
 | Windsurf / VS Code parity | Planned |
