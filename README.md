@@ -195,6 +195,18 @@ Available presets: `reviewer`, `implementer`, `tester`, `researcher`, `debugger`
 
 ## Use Cases
 
+### Build something — gossipcat picks the team
+
+```
+"I want to build a Stripe integration, set up a team for that"
+"I'm adding real-time notifications — what agents do I need?"
+"Set up a team for a TypeScript REST API project"
+```
+
+Describe what you're building. Gossipcat proposes an agent team tailored to the task — right presets, right skills, right mix of providers. You review the proposal and approve it. From that point on, agents dispatch automatically based on what your code touches.
+
+---
+
 ### Review code before committing
 
 ```

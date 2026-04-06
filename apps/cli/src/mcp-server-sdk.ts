@@ -962,6 +962,7 @@ server.tool(
         '',
         '─────────────────────────────────',
         'Try saying:',
+        '  "I want to build X — set up a team for that"',
         '  "Review my recent changes"',
         '  "Do a consensus review on the auth module"',
         '  "Security audit the payment handler"',
@@ -973,11 +974,11 @@ server.tool(
       agentSections.push([
         '',
         '─────────────────────────────────',
-        'No agents yet. Get started:',
+        'No agents yet. Try:',
+        '  "I want to build a REST API — set up a team for that"',
         '  "Set up a gossipcat team with a Gemini reviewer and a Sonnet implementer"',
-        '  "Add a security auditor to my team"',
         '',
-        'Or manually: gossip_setup({ agents: [...] })',
+        'Gossipcat will propose the right agents for your project.',
         '─────────────────────────────────',
       ].join('\n'));
     }
