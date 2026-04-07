@@ -429,4 +429,45 @@ describe('checkEffectiveness — lazy migration', () => {
     // Verdict should reflect the stale/insufficient-evidence state
     expect(verdict.status).toBeDefined();
   });
+
+  it('sets bound_at to now() and does NOT set migration_reason when bound_at is absent entirely', async () => {
+    const agentId = 'agent-no-boundAt';
+    const category = 'trust_boundaries';
+
+    // Construct a skill file fixture WITH effectiveness: 0.0 but WITHOUT bound_at, baseline_correct, or migration_count
+    const skillPath = writeSkillFile(tmpDir, agentId, category, {
+      effectiveness: 0.0,
+      status: 'pending',
+      // NO bound_at, NO baseline_correct, NO baseline_hallucinated, NO migration_count
+    });
+
+    // Stub PerformanceReader to return categoryCorrect[cat]=10, categoryHallucinated[cat]=2
+    const perfReader = makeStubPerfReader(
+      tmpDir,
+      agentId,
+      { [category]: 10 },
+      { [category]: 2 },
+    );
+    const gen = new SkillGenerator(makeStubLLM(), perfReader, tmpDir);
+
+    const beforeMs = Date.now();
+    await gen.checkEffectiveness(agentId, category);
+    const afterMs = Date.now();
+
+    // Read the file back and assert
+    const fm = readFrontmatter(skillPath);
+    // frontmatter.bound_at is set and parses as a Date within ~5 seconds of now
+    expect(fm.bound_at).toBeTruthy();
+    const boundAtMs = new Date(fm.bound_at).getTime();
+    expect(boundAtMs).toBeGreaterThanOrEqual(beforeMs);
+    expect(boundAtMs).toBeLessThanOrEqual(afterMs + 5000);
+    // frontmatter.migration_reason is undefined / not present (this is the key distinction from the stale-reset path)
+    expect(fm.migration_reason).toBeUndefined();
+    // frontmatter.baseline_correct === 10
+    expect(Number(fm.baseline_correct)).toBe(10);
+    // frontmatter.baseline_hallucinated === 2
+    expect(Number(fm.baseline_hallucinated)).toBe(2);
+    // frontmatter.migration_count === 1
+    expect(Number(fm.migration_count)).toBe(1);
+  });
 });
