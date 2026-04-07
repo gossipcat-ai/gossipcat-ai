@@ -1,0 +1,264 @@
+/**
+ * Integration test: runCheckEffectivenessForAllSkills helper
+ *
+ * Tests the standalone runner extracted from collect.ts. The runner walks
+ * .gossip/agents/<agentId>/skills/*.md and calls checkEffectiveness on each
+ * (agentId, category) pair. collect.ts calls it AFTER signals are written.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { SkillGenerator } from '../../packages/orchestrator/src/skill-generator';
+import { PerformanceReader } from '../../packages/orchestrator/src/performance-reader';
+import type { AgentScore } from '../../packages/orchestrator/src/performance-reader';
+import type { ILLMProvider } from '../../packages/orchestrator/src/llm-client';
+import { runCheckEffectivenessForAllSkills } from '../../apps/cli/src/handlers/check-effectiveness-runner';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeStubLLM(): ILLMProvider {
+  return {
+    generate: vi.fn().mockResolvedValue({ text: '' }),
+  } as unknown as ILLMProvider;
+}
+
+function makeStubPerfReader(
+  projectRoot: string,
+  agentId: string,
+  categoryCorrect: Record<string, number>,
+  categoryHallucinated: Record<string, number>,
+): PerformanceReader {
+  const reader = new PerformanceReader(projectRoot);
+  const score: AgentScore = {
+    agentId,
+    score: 0,
+    totalSignals: 0,
+    correctSignals: 0,
+    hallucinationCount: 0,
+    categoryStrengths: {},
+    categoryAccuracy: {},
+    categoryCorrect,
+    categoryHallucinated,
+  };
+  vi.spyOn(reader, 'getScores').mockReturnValue(new Map([[agentId, score]]));
+  return reader;
+}
+
+/** Write a skill file with given frontmatter into the temp dir */
+function writeSkillFile(
+  tmpDir: string,
+  agentId: string,
+  category: string,
+  fields: Record<string, string | number>,
+): string {
+  const skillDir = join(tmpDir, '.gossip', 'agents', agentId, 'skills');
+  mkdirSync(skillDir, { recursive: true });
+  // normalizeSkillName maps underscores → hyphens
+  const skillName = category.replace(/_/g, '-');
+  const skillPath = join(skillDir, `${skillName}.md`);
+  const fmLines = Object.entries(fields)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\n');
+  writeFileSync(skillPath, `---\n${fmLines}\n---\n\n## Body\n\nContent here.\n`);
+  return skillPath;
+}
+
+/** Read frontmatter from a skill file */
+function readFrontmatter(skillPath: string): Record<string, string> {
+  const raw = readFileSync(skillPath, 'utf-8');
+  const match = raw.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) throw new Error('No frontmatter found');
+  const result: Record<string, string> = {};
+  for (const line of match[1].split('\n')) {
+    const colon = line.indexOf(':');
+    if (colon === -1) continue;
+    const key = line.slice(0, colon).trim();
+    const value = line.slice(colon + 1).trim();
+    result[key] = value;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('collect → checkEffectiveness wiring (runCheckEffectivenessForAllSkills)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'collect-eff-test-'));
+  });
+
+  it('calls checkEffectiveness for every (agent, category) pair with a skill file and updates status to passed when delta qualifies', async () => {
+    const agentId = 'agent-x';
+    // The runner passes the filename stem (already hyphenated by normalizeSkillName) as category.
+    // PerformanceReader counters must use the same key that checkEffectiveness looks up.
+    const categoryNormalized = 'injection-vectors'; // filename stem = normalizeSkillName result
+
+    // Write skill file with baseline snapshot that will yield a "passed" verdict.
+    // post-bind delta: correct=170-50=120, hallucinated=70-50=20 → accuracy=120/140≈0.857
+    // baseline accuracy=50/100=0.50, delta=0.357 (+35.7pp >> Z_CRITICAL) → passed
+    const skillPath = writeSkillFile(tmpDir, agentId, categoryNormalized, {
+      baseline_correct: 50,
+      baseline_hallucinated: 50,
+      bound_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(), // 8 days ago
+      status: 'pending',
+      migration_count: 0,
+    });
+
+    // Stub PerformanceReader with keys matching the normalized category name
+    const perfReader = makeStubPerfReader(
+      tmpDir,
+      agentId,
+      { [categoryNormalized]: 170 },
+      { [categoryNormalized]: 70 },
+    );
+
+    const skillGenerator = new SkillGenerator(makeStubLLM(), perfReader, tmpDir);
+
+    await runCheckEffectivenessForAllSkills({
+      skillGenerator,
+      registryGet: (_id: string) => ({ role: 'reviewer' }),
+      projectRoot: tmpDir,
+    });
+
+    const fm = readFrontmatter(skillPath);
+    expect(fm.status).toBe('passed');
+  });
+
+  it('skips agents with role=implementer', async () => {
+    const agentId = 'agent-impl';
+    const category = 'injection-vectors';
+
+    writeSkillFile(tmpDir, agentId, category, {
+      baseline_correct: 50,
+      baseline_hallucinated: 50,
+      bound_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+      status: 'pending',
+      migration_count: 0,
+    });
+
+    const perfReader = makeStubPerfReader(tmpDir, agentId, { [category]: 170 }, { [category]: 70 });
+    const skillGenerator = new SkillGenerator(makeStubLLM(), perfReader, tmpDir);
+    const spy = vi.spyOn(skillGenerator, 'checkEffectiveness');
+
+    await runCheckEffectivenessForAllSkills({
+      skillGenerator,
+      registryGet: (_id: string) => ({ role: 'implementer' }),
+      projectRoot: tmpDir,
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('handles agents with no skills dir gracefully', async () => {
+    // Create agent dir WITHOUT a skills/ subdirectory
+    const agentDir = join(tmpDir, '.gossip', 'agents', 'agent-noskildir');
+    mkdirSync(agentDir, { recursive: true });
+
+    const perfReader = new PerformanceReader(tmpDir);
+    const skillGenerator = new SkillGenerator(makeStubLLM(), perfReader, tmpDir);
+    const spy = vi.spyOn(skillGenerator, 'checkEffectiveness');
+
+    await expect(
+      runCheckEffectivenessForAllSkills({
+        skillGenerator,
+        registryGet: () => ({ role: 'reviewer' }),
+        projectRoot: tmpDir,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('returns immediately when .gossip/agents does not exist', async () => {
+    const perfReader = new PerformanceReader(tmpDir);
+    const skillGenerator = new SkillGenerator(makeStubLLM(), perfReader, tmpDir);
+    const spy = vi.spyOn(skillGenerator, 'checkEffectiveness');
+
+    await expect(
+      runCheckEffectivenessForAllSkills({
+        skillGenerator,
+        registryGet: () => ({ role: 'reviewer' }),
+        projectRoot: tmpDir,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('swallows per-skill errors and continues to remaining skills', async () => {
+    const agentId = 'agent-err';
+    const category1 = 'trust-boundaries';
+    const category2 = 'injection-vectors';
+
+    // Write two skill files
+    const skillDir = join(tmpDir, '.gossip', 'agents', agentId, 'skills');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, `${category1}.md`), `---\nstatus: pending\n---\n\n## Body\n`);
+    writeFileSync(join(skillDir, `${category2}.md`), `---\nstatus: pending\n---\n\n## Body\n`);
+
+    const perfReader = new PerformanceReader(tmpDir);
+    const skillGenerator = new SkillGenerator(makeStubLLM(), perfReader, tmpDir);
+
+    let callCount = 0;
+    vi.spyOn(skillGenerator, 'checkEffectiveness').mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) throw new Error('simulated error on first skill');
+      return { status: 'pending', shouldUpdate: false };
+    });
+
+    // Should NOT throw — error for first skill is swallowed, second skill still runs
+    await expect(
+      runCheckEffectivenessForAllSkills({
+        skillGenerator,
+        registryGet: () => ({ role: 'reviewer' }),
+        projectRoot: tmpDir,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(callCount).toBe(2);
+  });
+
+  it('processes multiple agents independently', async () => {
+    for (const agentId of ['agent-a', 'agent-b']) {
+      writeSkillFile(tmpDir, agentId, 'error-handling', {
+        baseline_correct: 10,
+        baseline_hallucinated: 10,
+        bound_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        status: 'pending',
+        migration_count: 0,
+      });
+    }
+
+    const perfA = makeStubPerfReader(tmpDir, 'agent-a', { 'error-handling': 50 }, { 'error-handling': 10 });
+    const perfB = makeStubPerfReader(tmpDir, 'agent-b', { 'error-handling': 50 }, { 'error-handling': 10 });
+
+    // Use a shared reader that covers both agents
+    const combinedReader = new PerformanceReader(tmpDir);
+    vi.spyOn(combinedReader, 'getScores').mockReturnValue(
+      new Map([
+        ['agent-a', (perfA.getScores() as Map<string, AgentScore>).get('agent-a')!],
+        ['agent-b', (perfB.getScores() as Map<string, AgentScore>).get('agent-b')!],
+      ]),
+    );
+
+    const skillGenerator = new SkillGenerator(makeStubLLM(), combinedReader, tmpDir);
+    const spy = vi.spyOn(skillGenerator, 'checkEffectiveness');
+
+    await runCheckEffectivenessForAllSkills({
+      skillGenerator,
+      registryGet: () => ({ role: 'reviewer' }),
+      projectRoot: tmpDir,
+    });
+
+    // Called once per (agent, category) pair = 2 calls
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledWith('agent-a', 'error-handling', { role: 'reviewer' });
+    expect(spy).toHaveBeenCalledWith('agent-b', 'error-handling', { role: 'reviewer' });
+  });
+});
