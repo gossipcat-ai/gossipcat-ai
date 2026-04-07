@@ -1313,6 +1313,53 @@ Return only valid JSON.`;
     lines.push(`Summary: ${confirmed.length} confirmed, ${disputed.length} disputed, ${unverified.length} unverified, ${unique.length} unique, ${insights?.length ?? 0} insights, ${newFindings.length} new`);
     lines.push(bar);
 
+    // EXECUTE NOW block: pre-fill signal recording for the orchestrator.
+    // This is the same pattern as the utility-task block in gossip_relay — surface the
+    // requirement at the moment the orchestrator has the data needed to act on it,
+    // not buried in bootstrap rules that decay as the conversation grows.
+    // newFindings are excluded — ConsensusNewFinding has no stable id (not in findingMap)
+    const actionable = [
+      ...confirmed.map(f => ({ kind: 'confirmed' as const, f })),
+      ...disputed.map(f => ({ kind: 'disputed' as const, f })),
+      ...unverified.map(f => ({ kind: 'unverified' as const, f })),
+      ...unique.map(f => ({ kind: 'unique' as const, f })),
+    ].filter(x => x.f.id); // skip findings without a stable ID
+
+    if (actionable.length > 0) {
+      lines.push('');
+      lines.push('⚠️  EXECUTE NOW — record signals for these findings before continuing:');
+      lines.push('');
+      lines.push('Verify each finding against the code, then call gossip_signals to record the result.');
+      lines.push('Every signal MUST include finding_id (already pre-filled below) so the dashboard can');
+      lines.push('back-trace the signal to the consensus round and the affected agent score.');
+      lines.push('');
+      lines.push('Suggested signal type per status:');
+      lines.push('  CONFIRMED  → "agreement" (peer agreed) or "unique_confirmed" (you verified solo)');
+      lines.push('  DISPUTED   → "hallucination_caught" (if you verify the finding is wrong)');
+      lines.push('  UNVERIFIED → "unique_confirmed" (if you verify it) or "hallucination_caught" (if not)');
+      lines.push('  UNIQUE     → "unique_confirmed" (verify, then record) or "hallucination_caught"');
+      lines.push('');
+      lines.push('Pre-filled finding_ids for this round:');
+      for (const { kind, f } of actionable) {
+        const agentId = f.originalAgentId || 'unknown';
+        const truncated = f.finding.length > 80 ? f.finding.slice(0, 77) + '...' : f.finding;
+        lines.push(`  [${kind.toUpperCase()}] agent_id: "${agentId}", finding_id: "${f.id}"`);
+        lines.push(`     ${truncated}`);
+      }
+      lines.push('');
+      lines.push('Example call:');
+      lines.push('  gossip_signals(action: "record", signals: [{');
+      lines.push('    signal: "unique_confirmed",  // pick from the list above');
+      lines.push('    agent_id: "<agent_id from above>",');
+      lines.push('    finding: "<one-line description>",');
+      lines.push(`    finding_id: "<finding_id from above>"`);
+      lines.push('  }])');
+      lines.push('');
+      lines.push('Skipping this step leaves agent scores stale and breaks the back-search from');
+      lines.push('dashboard finding → signal → score adjustment. Record signals before moving on.');
+      lines.push(bar);
+    }
+
     return lines.join('\n');
   }
 
