@@ -49,7 +49,7 @@ export class Keychain {
   private deriveKey(salt: Buffer): Buffer {
     const seed = `${SERVICE_NAME}:${hostname()}:${userInfo().username}`;
     // PBKDF2 with random salt — resistant to offline brute-force on a stolen keys.enc
-    return pbkdf2Sync(seed, salt, 100_000, 32, 'sha256');
+    return pbkdf2Sync(seed, salt, 600_000, 32, 'sha256');
   }
 
   private loadEncryptedFile(): void {

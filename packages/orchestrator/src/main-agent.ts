@@ -77,6 +77,7 @@ export interface MainAgentConfig {
   model: string;
   apiKey?: string;
   relayUrl: string;
+  relayApiKey?: string;  // shared secret for relay auth — passed to all workers
   agents: AgentConfig[];
   apiKeys?: Record<string, string>;  // provider → key
   projectRoot?: string;  // defaults to process.cwd()
@@ -95,6 +96,7 @@ export class MainAgent {
   private dispatcher: TaskDispatcher;
   private workers: Map<string, WorkerAgent> = new Map();
   private relayUrl: string;
+  private relayApiKey: string | undefined;
   private apiKeys: Record<string, string>;
   private projectRoot: string;
   private pipeline: DispatchPipeline;
@@ -115,6 +117,7 @@ export class MainAgent {
     this.registry = new AgentRegistry();
     this.dispatcher = new TaskDispatcher(this.llm, this.registry);
     this.relayUrl = config.relayUrl;
+    this.relayApiKey = config.relayApiKey;
     this.apiKeys = config.apiKeys ?? {};
     this.bootstrapPrompt = config.bootstrapPrompt || '';
 
@@ -190,7 +193,7 @@ export class MainAgent {
 
       // Enable web search for researcher agents (they need to look things up)
       const enableWebSearch = config.preset === 'researcher' || config.skills.includes('research');
-      const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
+      const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey);
       await worker.start();
       this.workers.set(config.id, worker);
     }

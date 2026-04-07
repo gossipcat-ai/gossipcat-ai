@@ -317,7 +317,8 @@ export class OpenAIProvider implements ILLMProvider {
   private parseOpenAIResponse(data: Record<string, unknown>): LLMResponse {
     const choices = data.choices as Array<Record<string, unknown>>;
     if (!choices?.length) throw new Error(`LLM returned no choices: ${JSON.stringify(data)}`);
-    const msg = choices[0].message as Record<string, unknown>;
+    const msg = choices[0].message as Record<string, unknown> | undefined;
+    if (!msg) throw new Error(`LLM choice missing message object: ${JSON.stringify(choices[0])}`);
     const toolCalls: LLMResponse['toolCalls'] = [];
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {

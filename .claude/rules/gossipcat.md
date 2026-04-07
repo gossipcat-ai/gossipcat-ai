@@ -95,6 +95,11 @@ Do NOT present raw consensus results with unverified findings to the user.
 
 ### Step 6: Fix confirmed issues (only after all signals recorded).
 
+⛔ **CHECKPOINT — do not proceed to fixes until signals are recorded.**
+If you find yourself writing code or editing files before calling `gossip_signals`, STOP.
+Signal recording is not optional cleanup — it is part of the verification step, not after it.
+The correct order is always: verify finding → record signal → next finding → ... → then fix.
+
 ## Performance Signals & Agent Scores
 
 Call `gossip_scores()` to see: accuracy (0-1), uniqueness (0-1), dispatchWeight (0.5-1.5).

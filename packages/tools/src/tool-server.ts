@@ -8,12 +8,14 @@ import { GitTools } from './git-tools';
 import { SkillTools } from './skill-tools';
 import { Sandbox } from './sandbox';
 import { resolve, relative } from 'path';
+import { realpathSync, existsSync } from 'fs';
 
 export interface ToolServerConfig {
   relayUrl: string;
   projectRoot: string;
   agentId?: string;
   allowedCallers?: string[];  // If set, only these agent IDs can call tools
+  apiKey?: string;            // Relay auth key — must match the relay's configured key
   perfWriter?: { appendSignal(signal: unknown): void };
 }
 
@@ -50,6 +52,7 @@ export class ToolServer {
     this.agent = new GossipAgent({
       agentId: config.agentId || 'tool-server',
       relayUrl: config.relayUrl,
+      apiKey: config.apiKey,
       reconnect: true
     });
   }
@@ -70,7 +73,10 @@ export class ToolServer {
   get agentId(): string { return this.agent.agentId; }
 
   assignScope(agentId: string, scope: string): void {
-    const normalized = scope.endsWith('/') ? scope : scope + '/';
+    // Resolve to absolute path relative to projectRoot so comparisons are always
+    // absolute→absolute, regardless of whether caller passed relative or absolute scope.
+    const abs = resolve(this.sandbox.projectRoot, scope);
+    const normalized = abs.endsWith('/') ? abs : abs + '/';
     this.agentScopes.set(agentId, normalized);
     this.writeAgents.add(agentId);
   }
@@ -161,7 +167,10 @@ export class ToolServer {
       }
       if (root) {
         const resolved = resolve(root, filePath);
-        if (!resolved.startsWith(root)) {
+        // Resolve symlinks before boundary check to prevent symlink escape (fix #5)
+        const realResolved = existsSync(resolved) ? realpathSync(resolved) : resolved;
+        const realRoot = existsSync(root) ? realpathSync(root) : root;
+        if (!realResolved.startsWith(realRoot + '/') && realResolved !== realRoot) {
           throw new Error(`Write blocked: "${filePath}" is outside worktree root "${root}"`);
         }
       }
@@ -170,13 +179,14 @@ export class ToolServer {
     if (toolName === 'shell_exec') {
       // Allow ONLY read-only git commands for scoped agents
       if (scope) {
-        const cmd = (args.command as string || '').trim();
-        const isReadOnlyGit = /^git\s+(status|diff|log|show)\b/.test(cmd);
+        // Join command + args[] so flag injection via args array is also caught (fix #7)
+        const fullCmd = [args.command as string || '', ...((args.args as string[]) || [])].join(' ').trim();
+        const isReadOnlyGit = /^git\s+(status|diff|log|show)\b/.test(fullCmd);
         if (!isReadOnlyGit) {
           throw new Error('shell_exec is restricted in scoped write mode. Only git status/diff/log/show are allowed. Use run_tests and run_typecheck for verification.');
         }
         // Block git flags that can write files or redirect exec
-        if (/--(?:output|exec-path)[=\s]/i.test(cmd)) {
+        if (/--(?:output|exec-path)[=\s]/i.test(fullCmd)) {
           throw new Error('shell_exec: --output and --exec-path flags are not permitted in scoped mode');
         }
       }
@@ -249,8 +259,19 @@ export class ToolServer {
     const agentRoot = callerId ? this.agentRoots.get(callerId) : undefined;
 
     switch (name) {
-      case 'file_read':
+      case 'file_read': {
+        // For scoped agents, restrict reads to within their assigned scope
+        const readScope = callerId ? this.agentScopes.get(callerId) : undefined;
+        if (readScope) {
+          const resolved = resolve(this.sandbox.projectRoot, args.path as string);
+          const rel = relative(this.sandbox.projectRoot, resolved);
+          const normalizedRel = rel.endsWith('/') ? rel : rel + '/';
+          if (rel.startsWith('..') || !normalizedRel.startsWith(readScope)) {
+            throw new Error(`Read blocked: "${args.path}" is outside scope "${readScope}"`);
+          }
+        }
         return this.fileTools.fileRead(args as { path: string; startLine?: number; endLine?: number });
+      }
       case 'file_write': {
         // Check cap BEFORE write to avoid write-success-with-false-error
         if (callerId) {
@@ -422,9 +443,11 @@ export class ToolServer {
   private async handleRunTests(args: { fileGlob: string }, callerId?: string): Promise<string> {
     const { fileGlob } = args;
 
-    // Validate: no path traversal
-    if (fileGlob.includes('../')) {
-      throw new Error('run_tests: fileGlob must not contain path traversal (../)');
+    // Validate: no path traversal — resolve and check boundary instead of string-contains
+    // (string-contains '../' is bypassable via %2e%2e/ or unicode variants) (fix #8)
+    const resolvedGlob = resolve(this.sandbox.projectRoot, fileGlob.replace(/\*/g, '_'));
+    if (!resolvedGlob.startsWith(this.sandbox.projectRoot)) {
+      throw new Error('run_tests: fileGlob must not contain path traversal');
     }
     // Validate: block ALL flags — whitespace splitting could turn embedded flags into real jest args
     if (/\s-/.test(fileGlob) || fileGlob.startsWith('-')) {

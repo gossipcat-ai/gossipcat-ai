@@ -23,7 +23,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { randomUUID, timingSafeEqual } from 'crypto';
+import { randomUUID, randomBytes, timingSafeEqual } from 'crypto';
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'http';
 
 // ── Extracted modules ────────────────────────────────────────────────────
@@ -318,8 +318,12 @@ async function doBoot() {
     }
   }
 
+  // Generate a per-process relay key so only co-launched agents can connect.
+  const relayApiKey = randomBytes(32).toString('hex');
+
   ctx.relay = new m.RelayServer({
     port: 24420,
+    apiKey: relayApiKey,
     dashboard: {
       projectRoot: process.cwd(),
       agentConfigs: agentConfigs,
@@ -346,7 +350,13 @@ async function doBoot() {
   // Create performance writer for ATI signal collection
   const perfWriter = new m.PerformanceWriter(process.cwd());
 
-  ctx.toolServer = new m.ToolServer({ relayUrl: ctx.relay.url, projectRoot: process.cwd(), perfWriter });
+  ctx.toolServer = new m.ToolServer({
+    relayUrl: ctx.relay.url,
+    projectRoot: process.cwd(),
+    perfWriter,
+    apiKey: relayApiKey,
+    allowedCallers: agentConfigs.map(a => a.id),
+  });
   await ctx.toolServer.start();
 
   // Create workers before MainAgent to avoid duplicate relay connections.
@@ -442,6 +452,7 @@ async function doBoot() {
     model: mainModel,
     apiKey: mainKey ?? undefined,
     relayUrl: ctx.relay.url,
+    relayApiKey,
     agents: agentConfigs,
     projectRoot: process.cwd(),
     bootstrapPrompt: (() => {
