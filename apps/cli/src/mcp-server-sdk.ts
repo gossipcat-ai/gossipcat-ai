@@ -1806,7 +1806,74 @@ server.tool(
         .join('\n');
 
       const taskIdList = formatted.map(f => `  ${f.agentId}: ${f.taskId}`).join('\n');
-      return { content: [{ type: 'text' as const, text: `Recorded ${signals.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\nThese will influence future agent selection via dispatch weighting.` }] };
+      let baseReceipt = `Recorded ${signals.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\nThese will influence future agent selection via dispatch weighting.`;
+
+      // Post-write check: nudge orchestrator toward skill development when this batch
+      // moved an agent into a weak state. Best-effort, never blocks the receipt.
+      try {
+        const { PerformanceReader, SkillGapTracker } = await import('@gossip/orchestrator');
+        const reader = new PerformanceReader(process.cwd());
+        const scores = reader.getScores();
+        const batchAgentIds = Array.from(new Set(formatted.map(f => f.agentId)));
+        const triggers: string[] = [];
+
+        for (const agentId of batchAgentIds) {
+          const score: any = scores.get(agentId);
+          if (!score) continue;
+
+          const cats = score.categoryStrengths;
+          let weakestCategory: string | null = null;
+          let weakestValue = Infinity;
+          if (cats && typeof cats === 'object') {
+            for (const [k, v] of Object.entries(cats)) {
+              const val = v as number;
+              if (val < 0.3 && val !== 0 && val < weakestValue) {
+                weakestValue = val;
+                weakestCategory = k;
+              }
+            }
+          }
+
+          if (weakestCategory) {
+            triggers.push(
+              `⚠ ${agentId} is now weak in ${weakestCategory} (${weakestValue.toFixed(2)}) — recommended:\n` +
+              `  → gossip_skills(action: "develop", agent_id: "${agentId}", category: "${weakestCategory}")`
+            );
+          } else if ((score.hallucinations || 0) >= 3) {
+            triggers.push(
+              `⚠ ${agentId} has 3+ hallucinations but no category profile yet:\n` +
+              `  → gossip_scores() to view full profile and category breakdown`
+            );
+          }
+
+          try {
+            const w = reader.getDispatchWeight(agentId);
+            if (typeof w === 'number' && w < 0.5) {
+              triggers.push(
+                `⚠ ${agentId} dispatch weight dropped to ${w.toFixed(2)} (circuit_breaker_risk):\n` +
+                `  → gossip_scores() to review before next dispatch`
+              );
+            }
+          } catch { /* best-effort */ }
+        }
+
+        try {
+          const gapTracker = new SkillGapTracker(process.cwd());
+          const { pending } = gapTracker.checkThresholds();
+          if (pending && pending.length > 0) {
+            triggers.push(
+              `⚠ Pending skill builds reached threshold (≥3 suggestions, ≥2 agents):\n` +
+              `  → gossip_skills(action: "build")  // builds: ${pending.join(', ')}`
+            );
+          }
+        } catch { /* best-effort */ }
+
+        if (triggers.length > 0) {
+          baseReceipt += `\n\n─── Skill development triggers ───\n` + triggers.join('\n\n');
+        }
+      } catch { /* best-effort, non-blocking */ }
+
+      return { content: [{ type: 'text' as const, text: baseReceipt }] };
     } catch (err) {
       return { content: [{ type: 'text' as const, text: `Failed to record signals: ${(err as Error).message}` }] };
     }
