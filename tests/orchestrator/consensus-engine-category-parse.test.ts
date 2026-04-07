@@ -130,4 +130,84 @@ SQL injection at db.ts:42
       expect(uniqueConfirmed!.category).toBe('injection_vectors');
     });
   });
+
+  describe('deduplicateFindings — category merge', () => {
+    it('surviving entry inherits category from loser when survivor has none (A-wins branch)', () => {
+      const engine = new ConsensusEngine({} as any);
+
+      // entryA: no category (will survive as A-wins default branch)
+      // entryB: has category "injection_vectors" (will be merged into A)
+      // Both reference the same file and have high Jaccard overlap to trigger dedup.
+      const findingMap = new Map<string, any>([
+        ['agent-a:f1', {
+          originalAgentId: 'agent-a',
+          finding: 'SQL injection vulnerability in db.ts allows unsanitised input directly into query builder',
+          findingType: 'finding',
+          severity: 'high',
+          category: undefined,
+          confirmedBy: [],
+          disputedBy: [],
+          unverifiedBy: [],
+          confidences: [4],
+        }],
+        ['agent-b:f1', {
+          originalAgentId: 'agent-b',
+          finding: 'SQL injection vulnerability in db.ts allows unsanitised input directly into query builder',
+          findingType: 'finding',
+          severity: 'high',
+          category: 'injection_vectors',
+          confirmedBy: [],
+          disputedBy: [],
+          unverifiedBy: [],
+          confidences: [4],
+        }],
+      ]);
+
+      (engine as any).deduplicateFindings(findingMap);
+
+      // After dedup, only one entry should remain
+      expect(findingMap.size).toBe(1);
+
+      const surviving = Array.from(findingMap.values())[0];
+      expect(surviving.category).toBe('injection_vectors');
+    });
+
+    it('surviving entry inherits category from loser when survivor has none (B-wins branch)', () => {
+      const engine = new ConsensusEngine({} as any);
+
+      // entryA: HAS category "injection_vectors", but NO line citation (so B wins — B has :42 citation)
+      // entryB: no category but has a line citation (B-wins branch, B survives without category)
+      // Bug: B wins but B has no category, even though A (the loser) had one.
+      const findingMap = new Map<string, any>([
+        ['agent-a:f1', {
+          originalAgentId: 'agent-a',
+          finding: 'SQL injection vulnerability in db.ts allows unsanitised input directly into query builder',
+          findingType: 'finding',
+          severity: 'high',
+          category: 'injection_vectors',
+          confirmedBy: [],
+          disputedBy: [],
+          unverifiedBy: [],
+          confidences: [4],
+        }],
+        ['agent-b:f1', {
+          originalAgentId: 'agent-b',
+          finding: 'SQL injection vulnerability in db.ts:42 allows unsanitised input directly into query builder',
+          findingType: 'finding',
+          severity: 'high',
+          category: undefined,
+          confirmedBy: [],
+          disputedBy: [],
+          unverifiedBy: [],
+          confidences: [4],
+        }],
+      ]);
+
+      (engine as any).deduplicateFindings(findingMap);
+
+      expect(findingMap.size).toBe(1);
+      const surviving = Array.from(findingMap.values())[0];
+      expect(surviving.category).toBe('injection_vectors');
+    });
+  });
 });

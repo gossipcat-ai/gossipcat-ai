@@ -1170,6 +1170,7 @@ Return only valid JSON.`;
       finding: string;
       findingType?: 'finding' | 'suggestion' | 'insight';
       severity?: 'critical' | 'high' | 'medium' | 'low';
+      category?: string;
       confirmedBy: string[];
       disputedBy: Array<{ agentId: string; reason: string; evidence: string }>;
       unverifiedBy: Array<{ agentId: string; reason: string }>;
@@ -1230,6 +1231,8 @@ Return only valid JSON.`;
             if (entryA.findingType === 'finding') entryB.findingType = 'finding';
             // Severity: highest wins
             if (entryA.severity && (!entryB.severity || (SEVERITY_RANK[entryA.severity] || 0) > (SEVERITY_RANK[entryB.severity] || 0))) entryB.severity = entryA.severity;
+            // Inherit category from loser if winner has none (never overwrite a real category)
+            if (entryA.category && !entryB.category) entryB.category = entryA.category;
             toRemove.add(keyA);
             process.stderr.write(
               `[consensus] Dedup: merged "${entryA.finding.slice(0, 60)}..." (${entryA.originalAgentId}) into "${entryB.finding.slice(0, 60)}..." (${entryB.originalAgentId}) [B more precise]\n`
@@ -1241,6 +1244,7 @@ Return only valid JSON.`;
           entryA.confidences.push(4); // high confidence — independent discovery
           if (entryB.findingType === 'finding') entryA.findingType = 'finding';
           if (entryB.severity && (!entryA.severity || (SEVERITY_RANK[entryB.severity] || 0) > (SEVERITY_RANK[entryA.severity] || 0))) entryA.severity = entryB.severity;
+          if (entryB.category && !entryA.category) entryA.category = entryB.category;
           toRemove.add(keyB);
           process.stderr.write(
             `[consensus] Dedup: merged "${entryB.finding.slice(0, 60)}..." (${entryB.originalAgentId}) into "${entryA.finding.slice(0, 60)}..." (${entryA.originalAgentId})\n`
