@@ -140,18 +140,6 @@ feed, no memory is written, no signals recorded. The agent effectively works off
 
 When dispatching native agents: gossip_dispatch → Agent() → gossip_relay. Never skip the relay call.
 
-## Implementation Tasks — Auto-Dispatch
-
-Check Tier 1/2 triggers first (see .claude/rules/gossipcat.md). If no match, call
-gossip_run(agent_id: "auto", task: "<description>") BEFORE writing any code.
-
-Exceptions: (direct) in user message, Tier 3 changes (docs, CSS, tests), or already
-executing inside a dispatched plan step.
-
-gossip_run auto classifies single vs multi and routes appropriately:
-- Single: selects best-fit agent by dispatch weight, dispatches directly
-- Multi: calls gossip_plan for decomposition, presents for approval, then dispatches
-
 ## Permissions
 
 Auto-allow writes: `{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"] } }`
