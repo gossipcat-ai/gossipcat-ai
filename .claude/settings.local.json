@@ -1,6 +1,8 @@
 {
   "permissions": {
     "allow": [
+      "Edit",
+      "Write",
       "Skill(plan-eng-review)",
       "Bash(python3 -c \"import sys,json; d=json.loads\\(sys.stdin.read\\(\\)\\); servers=d.get\\(''''mcpServers'''',{}\\); [print\\(f''''{k}: {v.get\\(command,?\\)} { .join\\(v.get\\(args,[]\\)\\)}''''\\) for k,v in servers.items\\(\\)]\")",
       "Bash(npx jest:*)",
