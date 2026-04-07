@@ -12,6 +12,7 @@ import { ConsensusSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
 import {
   resolveVerdict,
+  TIMEOUT_MS,
   type SkillSnapshot,
   type CategoryCounters,
   type VerdictResult,
@@ -490,11 +491,11 @@ ${inputs.join('\n')}
       migration_count: migration_count + 1,
     };
 
-    const NINETY_DAYS_MS = 90 * 86400_000;
+    // Use the same 90-day threshold as resolveVerdict's timeout — single source of truth
     const boundAt = frontmatter.bound_at as string | undefined;
     if (boundAt) {
       const ageMs = nowMs - new Date(boundAt).getTime();
-      if (ageMs > NINETY_DAYS_MS) {
+      if (ageMs > TIMEOUT_MS) {
         // Stale baseline: reset clock to give the skill a fresh window
         updates.bound_at = new Date(nowMs).toISOString();
         updates.migration_reason = 'stale_baseline_reset';
