@@ -82,7 +82,12 @@ function readFrontmatter(skillPath: string): Record<string, string> {
     const colon = line.indexOf(':');
     if (colon === -1) continue;
     const key = line.slice(0, colon).trim();
-    const value = line.slice(colon + 1).trim();
+    let value = line.slice(colon + 1).trim();
+    // Strip surrounding double-quotes (the writer wraps string values
+    // in "..." with `\"` and `\\` escaping for proper YAML safety).
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    }
     result[key] = value;
   }
   return result;

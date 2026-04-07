@@ -7,7 +7,8 @@
  * once the class grew beyond generation into a full lifecycle engine.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, renameSync, unlinkSync } from 'fs';
+import { randomBytes } from 'crypto';
 import { join, resolve } from 'path';
 import { ILLMProvider } from './llm-client';
 import { PerformanceReader } from './performance-reader';
@@ -552,6 +553,14 @@ ${inputs.join('\n')}
       const key = line.slice(0, colon).trim();
       const rawVal = line.slice(colon + 1).trim();
       if (!key) continue;
+      // Quoted strings preserve their string-ness even when the contents
+      // would otherwise parse as a number — `version: "1.0"` must stay a
+      // string. Strip surrounding quotes and unescape `\"` BEFORE the
+      // numeric-coercion check.
+      if (rawVal.length >= 2 && rawVal.startsWith('"') && rawVal.endsWith('"')) {
+        frontmatter[key] = rawVal.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        continue;
+      }
       // Preserve numeric values as numbers so YAML round-trips correctly
       const asNum = Number(rawVal);
       if (rawVal !== '' && !isNaN(asNum) && !rawVal.startsWith('[')) {
@@ -574,17 +583,66 @@ ${inputs.join('\n')}
   }
 
   /**
+   * Serialises a single frontmatter value to its YAML scalar form.
+   *
+   * - number / boolean: bare scalar via String(v) — round-trips through the
+   *   parser's Number()/literal coercion.
+   * - null / undefined: empty string (parser drops empty values gracefully).
+   * - inline arrays already in `[a, b, c]` form: passed through unchanged
+   *   for backward compat with existing skill files (the parser recognises
+   *   the leading `[`).
+   * - everything else (strings): wrapped in double quotes with `"` and `\`
+   *   internal escaping. This is the actual fix for the deferred TODO —
+   *   without quoting, a string value containing `:`, `#`, a leading `-`,
+   *   or other YAML-meaningful characters would corrupt the next read.
+   *   Quoting also pins the type so future fields like `version: "1.0"`
+   *   stay strings instead of being silently coerced to Number 1.0.
+   */
+  private serializeYamlValue(v: unknown): string {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    const s = String(v);
+    // Backward compat: existing skill files written by the old serializer
+    // have inline arrays as `[a, b, c]`. The parser checks `startsWith('[')`
+    // to skip the numeric-coercion branch, so we keep that shape unquoted.
+    if (s.startsWith('[') && s.endsWith(']')) return s;
+    // Quote everything else, escaping `\` and `"` so the parser's
+    // un-escape pass round-trips cleanly.
+    return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+
+  /**
    * Serialises frontmatter + body back to a skill file and writes it atomically.
    * Preserves all existing frontmatter fields; only updated fields in the map
    * will change value.
+   *
+   * Atomicity: writes to a sibling tmp file then renames into place. The
+   * rename is atomic on POSIX filesystems within a single mount, so a
+   * crash mid-write leaves either the old contents intact or the new
+   * contents fully present — never a torn file. The tmp file is cleaned
+   * up on the failure path.
    */
   private writeSkillFileFromParts(
     skillPath: string,
     frontmatter: Record<string, unknown>,
     body: string,
   ): void {
-    const fmLines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${v}`);
+    const fmLines = Object.entries(frontmatter).map(
+      ([k, v]) => `${k}: ${this.serializeYamlValue(v)}`,
+    );
     const content = `---\n${fmLines.join('\n')}\n---${body}`;
-    writeFileSync(skillPath, content, 'utf-8');
+
+    // Atomic write: write to a sibling tmp, then rename into place.
+    // tmp must live in the same directory so rename(2) is a single inode
+    // operation rather than a cross-device copy+unlink.
+    const tmpPath = `${skillPath}.tmp.${process.pid}.${randomBytes(4).toString('hex')}`;
+    try {
+      writeFileSync(tmpPath, content, 'utf-8');
+      renameSync(tmpPath, skillPath);
+    } catch (err) {
+      // Best-effort tmp cleanup — never mask the original error.
+      try { unlinkSync(tmpPath); } catch { /* tmp already gone */ }
+      throw err;
+    }
   }
 }
