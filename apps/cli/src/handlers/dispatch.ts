@@ -9,6 +9,42 @@ import { CONSENSUS_OUTPUT_FORMAT } from '@gossip/orchestrator';
 import { ctx, NATIVE_TASK_TTL_MS } from '../mcp-context';
 import { evictStaleNativeTasks, persistNativeTaskMap, spawnTimeoutWatcher } from './native-tasks';
 import { persistRelayTasks } from './relay-tasks';
+import {
+  prependScopeNote,
+  recordDispatchMetadata,
+  relativizeProjectPaths,
+  readSandboxMode,
+  shouldSanitize,
+} from '../sandbox';
+
+function agentPreset(agentId: string): string | undefined {
+  try {
+    return ctx.mainAgent.getAgentList?.().find((a: any) => a.id === agentId)?.preset;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Sanitize a task string and return the rewritten text. Honors sandboxEnforcement=off. */
+function maybeSanitizeTask(
+  task: string,
+  writeMode: 'sequential' | 'scoped' | 'worktree' | undefined,
+  agentId: string,
+): { task: string; sanitized: boolean; replacements: number } {
+  const projectRoot = process.cwd();
+  const mode = readSandboxMode(projectRoot);
+  if (mode === 'off') return { task, sanitized: false, replacements: 0 };
+  if (!shouldSanitize(writeMode, agentPreset(agentId))) {
+    return { task, sanitized: false, replacements: 0 };
+  }
+  const { sanitized, replacements } = relativizeProjectPaths(task, projectRoot);
+  if (replacements > 0) {
+    process.stderr.write(
+      `[gossipcat] 🧹 sanitized ${replacements} project path(s) in task for ${agentId}\n`,
+    );
+  }
+  return { task: sanitized, sanitized: true, replacements };
+}
 
 // Quota-based fallback routing for relay agents
 const QUOTA_FALLBACK_MAP: Record<string, string> = {
@@ -88,6 +124,10 @@ export async function handleDispatchSingle(
   // Quota fallback: reroute exhausted relay agents to native equivalents
   agent_id = reroutableAgent(agent_id);
 
+  // Sandbox mitigation 1: sanitize project paths in the task prompt
+  const sanitizeResult = maybeSanitizeTask(task, write_mode, agent_id);
+  task = sanitizeResult.task;
+
   const options: Record<string, unknown> = {};
   if (write_mode) {
     options.writeMode = write_mode as 'sequential' | 'scoped' | 'worktree';
@@ -140,11 +180,21 @@ export async function handleDispatchSingle(
       chainContext = ctx.mainAgent.getChainContext(plan_id, step);
     }
 
-    const agentPrompt = [
+    let agentPrompt = [
       nativeConfig.instructions || '',
       chainContext ? `\n${chainContext}\n` : '',
       `\n---\n\nTask: ${task}`,
     ].filter(Boolean).join('').trim();
+    if (sanitizeResult.sanitized) agentPrompt = prependScopeNote(agentPrompt);
+
+    // Record dispatch metadata for the post-task audit
+    recordDispatchMetadata(process.cwd(), {
+      taskId,
+      agentId: agent_id,
+      writeMode: write_mode,
+      scope,
+      timestamp: Date.now(),
+    });
 
     // Only use worktree if explicitly requested AND project is a git repo
     let useWorktree = write_mode === 'worktree';
@@ -172,6 +222,13 @@ export async function handleDispatchSingle(
 
   try {
     const { taskId } = ctx.mainAgent.dispatch(agent_id, task, dispatchOptions as any);
+    recordDispatchMetadata(process.cwd(), {
+      taskId,
+      agentId: agent_id,
+      writeMode: write_mode,
+      scope,
+      timestamp: Date.now(),
+    });
     persistRelayTasks(); // Survive MCP reconnects
     const modeLabel = write_mode ? ` [${write_mode}${scope ? `:${scope}` : ''}]` : '';
     return { content: [{ type: 'text' as const, text: `Dispatched to ${agent_id}${modeLabel}. Task ID: ${taskId}` }] };
@@ -198,6 +255,12 @@ export async function handleDispatchParallel(
   // Quota fallback: reroute exhausted relay agents to native equivalents
   taskDefs = taskDefs.map(def => ({ ...def, agent_id: reroutableAgent(def.agent_id) }));
 
+  // Sandbox mitigation 1: sanitize each task's project paths
+  taskDefs = taskDefs.map(def => {
+    const s = maybeSanitizeTask(def.task, def.write_mode as any, def.agent_id);
+    return { ...def, task: s.task, _sandboxSanitized: s.sanitized } as any;
+  });
+
   // [C2 fix] Split native vs custom tasks — native agents have no relay worker
   const nativeTasks: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }> = [];
   const relayTasks: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }> = [];
@@ -222,9 +285,20 @@ export async function handleDispatchParallel(
       consensus ? { consensus: true } : undefined,
     );
     persistRelayTasks(); // Survive MCP reconnects
-    for (const tid of taskIds) {
+    for (let i = 0; i < taskIds.length; i++) {
+      const tid = taskIds[i];
+      const def = relayTasks[i];
       const t = ctx.mainAgent.getTask(tid);
       lines.push(`  ${tid} → ${t?.agentId || 'unknown'} (relay)`);
+      if (def) {
+        recordDispatchMetadata(process.cwd(), {
+          taskId: tid,
+          agentId: def.agent_id,
+          writeMode: def.write_mode as any,
+          scope: def.scope,
+          timestamp: Date.now(),
+        });
+      }
     }
     if (errors.length) lines.push(`Relay errors: ${errors.join(', ')}`);
   }
@@ -268,9 +342,18 @@ export async function handleDispatchParallel(
       ctx.mainAgent.scopeTracker.register(def.scope, taskId);
     }
 
-    const agentPrompt = nativeConfig.instructions
+    let agentPrompt = nativeConfig.instructions
       ? `${nativeConfig.instructions}\n\n---\n\nTask: ${def.task}`
       : def.task;
+    if ((def as any)._sandboxSanitized) agentPrompt = prependScopeNote(agentPrompt);
+
+    recordDispatchMetadata(process.cwd(), {
+      taskId,
+      agentId: def.agent_id,
+      writeMode: def.write_mode as any,
+      scope: def.scope,
+      timestamp: Date.now(),
+    });
 
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
     nativeInstructions.push(
@@ -303,6 +386,12 @@ export async function handleDispatchConsensus(
 
   // Quota fallback: reroute exhausted relay agents to native equivalents
   taskDefs = taskDefs.map(def => ({ ...def, agent_id: reroutableAgent(def.agent_id) }));
+
+  // Sandbox mitigation 1: sanitize project paths (applies when agent preset is implementer)
+  taskDefs = taskDefs.map(def => {
+    const s = maybeSanitizeTask(def.task, undefined, def.agent_id);
+    return { ...def, task: s.task, _sandboxSanitized: s.sanitized } as any;
+  });
 
   // Re-entry: recover pre-computed lenses from a completed native utility task
   let precomputedLenses: Map<string, string> | null = null;

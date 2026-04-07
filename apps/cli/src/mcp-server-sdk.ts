@@ -1449,6 +1449,26 @@ server.tool(
     }
 
     const isNative = ctx.nativeAgentConfigs.has(agent_id);
+
+    // Sandbox mitigation 1: sanitize project paths in the task prompt
+    let _runSanitized = false;
+    try {
+      const { relativizeProjectPaths, readSandboxMode, shouldSanitize } = require('./sandbox');
+      if (readSandboxMode(process.cwd()) !== 'off') {
+        const preset = (() => {
+          try { return ctx.mainAgent.getAgentList?.().find((a: any) => a.id === agent_id)?.preset; } catch { return undefined; }
+        })();
+        if (shouldSanitize(write_mode, preset)) {
+          const { sanitized, replacements } = relativizeProjectPaths(task, process.cwd());
+          if (replacements > 0) {
+            process.stderr.write(`[gossipcat] 🧹 sanitized ${replacements} project path(s) in task for ${agent_id}\n`);
+          }
+          task = sanitized;
+          _runSanitized = true;
+        }
+      }
+    } catch { /* best-effort */ }
+
     const options: any = {};
     if (write_mode) options.writeMode = write_mode;
     if (scope) options.scope = scope;
@@ -1488,7 +1508,20 @@ server.tool(
         ? `SCOPE RESTRICTION: Only modify files within ${scope}. Do not edit files outside this directory.\n\n`
         : '';
 
-      const agentPrompt = `${scopePrefix}${basePrompt}\n\n---\n\nTask: ${task}`;
+      let agentPrompt = `${scopePrefix}${basePrompt}\n\n---\n\nTask: ${task}`;
+      if (_runSanitized) {
+        try {
+          const { prependScopeNote } = require('./sandbox');
+          agentPrompt = prependScopeNote(agentPrompt);
+        } catch { /* best-effort */ }
+      }
+      // Record dispatch metadata for post-task audit
+      try {
+        const { recordDispatchMetadata } = require('./sandbox');
+        recordDispatchMetadata(process.cwd(), {
+          taskId, agentId: agent_id, writeMode: write_mode, scope, timestamp: Date.now(),
+        });
+      } catch { /* best-effort */ }
       // config.model is already the short tier ('sonnet', 'opus', 'haiku') from boot
       const modelShort = config.model || 'sonnet';
 
@@ -1511,6 +1544,12 @@ server.tool(
     planExecutionDepth++;
     try {
       const { taskId } = ctx.mainAgent.dispatch(agent_id, task, options);
+      try {
+        const { recordDispatchMetadata } = require('./sandbox');
+        recordDispatchMetadata(process.cwd(), {
+          taskId, agentId: agent_id, writeMode: write_mode, scope, timestamp: Date.now(),
+        });
+      } catch { /* best-effort */ }
       persistRelayTasks(); // Survive MCP reconnects — mirrors dispatch.ts pattern
       const collectResult = await ctx.mainAgent.collect([taskId], 300000);
       persistRelayTasks(); // Clear completed task from relay-tasks.json

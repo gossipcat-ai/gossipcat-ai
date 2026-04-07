@@ -214,18 +214,47 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     return { content: [{ type: 'text' as const, text: msg }] };
   }
 
+  // Sandbox mitigation 2: post-task boundary audit
+  // Runs BEFORE the result is stored, so "block" mode can mark the task failed
+  // and prevent the dirty result from entering consensus/memory.
+  let auditBlockError: string | null = null;
+  let auditPrefix = '';
+  try {
+    const { auditDispatchBoundary, readSandboxMode } = require('../sandbox');
+    const enforcement = readSandboxMode(process.cwd());
+    if (enforcement !== 'off' && !error && !taskInfo.utilityType) {
+      const audit = auditDispatchBoundary(process.cwd(), task_id);
+      if (audit.violations.length > 0) {
+        const list = audit.violations.slice(0, 20).join(', ');
+        if (enforcement === 'block') {
+          auditBlockError = `BOUNDARY ESCAPE DETECTED — task marked as failed. Violating paths: ${list}`;
+        } else {
+          auditPrefix = `⚠ BOUNDARY ESCAPE (warn): wrote outside ${taskInfo.writeMode || 'scope'} — ${list}\n\n`;
+        }
+      }
+    }
+  } catch (auditErr) {
+    process.stderr.write(`[gossipcat] sandbox audit failed: ${(auditErr as Error).message}\n`);
+  }
+
   // Move to result map BEFORE running pipeline — prevents data loss if pipeline crashes
   // Use agentStartedAt (actual Agent() launch time) if provided, otherwise fall back to dispatch time
   const effectiveStart = agentStartedAt ?? taskInfo.startedAt;
   const elapsed = Date.now() - effectiveStart;
+  const effectiveError = auditBlockError || error;
+  const effectiveResult = auditBlockError
+    ? undefined
+    : (error ? undefined : (result ? (auditPrefix + result).slice(0, 50000) : result));
   ctx.nativeTaskMap.delete(task_id);
   ctx.nativeResultMap.set(task_id, {
     id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
-    status: error ? 'failed' : 'completed',
-    result: error ? undefined : (result ? result.slice(0, 50000) : result), // intentional 50k cap — memory protection
-    error: error || undefined,
+    status: effectiveError ? 'failed' : 'completed',
+    result: effectiveResult,
+    error: effectiveError || undefined,
     startedAt: effectiveStart, completedAt: Date.now(),
   });
+  // If audit blocked, treat the rest of the pipeline as a failed task
+  if (auditBlockError) error = auditBlockError;
   persistNativeTaskMap();
   evictStaleNativeTasks();
 

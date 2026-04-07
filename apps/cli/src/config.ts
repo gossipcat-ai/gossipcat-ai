@@ -11,6 +11,15 @@ export interface GossipConfig {
     provider: string;
     model: string;
   };
+  /**
+   * Sandbox enforcement level for write-mode tasks.
+   * - "off":   no prompt sanitization, no post-task audit
+   * - "warn":  sanitize prompts, run audit, record signals, but accept results
+   * - "block": sanitize prompts, run audit, reject results from tasks that
+   *            wrote outside their declared scope/worktree boundary
+   * Default: "warn"
+   */
+  sandboxEnforcement?: 'off' | 'warn' | 'block';
   agents?: Record<string, {
     provider: string;
     model: string;
@@ -64,6 +73,15 @@ export function validateConfig(raw: any): GossipConfig {
     throw new Error(
       `Invalid provider "${raw.main_agent.provider}". Must be one of: ${VALID_PROVIDERS.join(', ')}`
     );
+  }
+
+  if (raw.sandboxEnforcement !== undefined) {
+    const valid = ['off', 'warn', 'block'];
+    if (!valid.includes(raw.sandboxEnforcement)) {
+      throw new Error(
+        `Invalid sandboxEnforcement "${raw.sandboxEnforcement}". Must be one of: ${valid.join(', ')}`
+      );
+    }
   }
 
   if (raw.utility_model) {
