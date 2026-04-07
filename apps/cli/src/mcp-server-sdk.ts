@@ -598,6 +598,21 @@ async function doBoot() {
     process.stderr.write(`[gossipcat] ❌ Gossip publisher failed: ${(err as Error).message}\n`);
   }
 
+  // First-run materialization: copy bundled rules to .gossip/rules.md if missing.
+  // Done after relay starts but before bootstrap is regenerated, so the bootstrap
+  // pulls the freshly materialized rules into its output.
+  try {
+    const { ensureRulesFile } = await import('@gossip/orchestrator');
+    const rulesResult = ensureRulesFile(process.cwd());
+    if (rulesResult.created) {
+      process.stderr.write(
+        '[gossipcat] Created .gossip/rules.md from bundled defaults — edit this file to customize project rules\n'
+      );
+    }
+  } catch (err) {
+    process.stderr.write(`[gossipcat] ❌ ensureRulesFile failed: ${(err as Error).message}\n`);
+  }
+
   // Auto-regenerate bootstrap.md on boot so session context is always fresh
   try {
     const { BootstrapGenerator } = await import('@gossip/orchestrator');
@@ -699,10 +714,16 @@ ctx.syncWorkersViaKeychain = syncWorkersViaKeychain;
 ctx.getModules = getModules;
 
 // ── Create MCP Server ─────────────────────────────────────────────────────
-const server = new McpServer({
-  name: 'gossipcat',
-  version: '0.1.0',
-});
+const server = new McpServer(
+  {
+    name: 'gossipcat',
+    version: '0.1.0',
+  },
+  {
+    instructions:
+      'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project. The gossip_status response loads the orchestrator role, dispatch rules, consensus workflow, native agent relay rule, sandbox enforcement, and other operating rules from .gossip/rules.md. These rules are not in this instruction text — they live in the gossip_status output to keep the instruction surface small and to allow per-project customization.',
+  }
+);
 
 // ── Plan: decompose with write-mode classification ────────────────────────
 server.tool(

@@ -40,6 +40,7 @@ export { ScopeTracker } from './scope-tracker';
 export { WorktreeManager } from './worktree-manager';
 export { BootstrapGenerator } from './bootstrap';
 export type { BootstrapResult } from './bootstrap';
+export { findBundledRules, ensureRulesFile, readRulesContent } from './rules-loader';
 export { OverlapDetector } from './overlap-detector';
 export { LensGenerator } from './lens-generator';
 export { PerformanceWriter } from './performance-writer';

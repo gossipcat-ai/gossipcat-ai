@@ -162,7 +162,7 @@ describe('BootstrapGenerator', () => {
       const gen = new BootstrapGenerator(dir);
       const result = gen.generate();
       expect(result.prompt).toContain('gossip_missing — TODO: build this');
-      expect(result.prompt).not.toContain('verified');
+      expect(result.prompt).not.toContain('*(verified:');
     });
 
     it('does not annotate lines without TODO/remaining/pending keywords', () => {
@@ -186,7 +186,7 @@ describe('BootstrapGenerator', () => {
       const gen = new BootstrapGenerator(dir);
       const result = gen.generate();
       // No TODO keyword, so no annotation even though tool exists
-      expect(result.prompt).not.toContain('verified');
+      expect(result.prompt).not.toContain('*(verified:');
       expect(result.prompt).toContain('SHIPPED: gossip_run works great');
     });
   });

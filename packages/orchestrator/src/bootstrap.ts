@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, mkdirSync, copyFileSync } from 'fs';
 import { resolve, join } from 'path';
+import { readRulesContent } from './rules-loader';
 
 export interface BootstrapResult {
   prompt: string;
@@ -204,6 +205,14 @@ To auto-allow writes, add to \`.claude/settings.local.json\`:
       ? `\n## Session Context\n\n${sessionParts.map(s => demote(s!)).join('\n\n---\n\n')}\n`
       : '';
 
+    // Operating rules: read .gossip/rules.md (or bundled default fallback) and inject
+    // between Your Role and Your Team. Demote embedded headings to avoid colliding
+    // with the outer bootstrap structure (same pattern as session memory above).
+    const rulesContent = this.readRulesContent();
+    const rulesSection = rulesContent
+      ? `\n## Operating Rules\n\n${demote(rulesContent.trim())}\n`
+      : '';
+
     return `# Gossipcat — Multi-Agent Orchestration
 
 ## Your Role
@@ -218,7 +227,7 @@ You are the **orchestrator**, not an implementer. Your job is to dispatch tasks 
 - Change is under 10 lines with no side effects on shared state
 
 When in doubt, dispatch. The cost of a unnecessary dispatch is minutes; the cost of unreviewed code in shared state is bugs that pass all tests.
-
+${rulesSection}
 ## Your Team
 
 ${teamSection}
@@ -322,6 +331,14 @@ Agent memory is auto-managed:
 - **On-demand retrieval**: Use \`gossip_remember(agent_id, query)\` to search an agent's archived knowledge files by keyword. Useful when you need context from a past task or want to check what an agent learned about a topic.
 
 Skills are auto-injected from agent config. Project-wide skills in .gossip/skills/.`;
+  }
+
+  /**
+   * Read .gossip/rules.md content (or bundled default fallback). Returns null
+   * only if both are missing. Exposed as a method so tests can stub it.
+   */
+  readRulesContent(): string | null {
+    return readRulesContent(this.projectRoot);
   }
 
   /**
