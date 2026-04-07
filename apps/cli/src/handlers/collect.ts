@@ -28,7 +28,12 @@ export async function handleCollect(
   try {
     const idsForRelay = relayIds && relayIds.length > 0 ? relayIds : (!requestedIds ? undefined : []);
     if (!idsForRelay || idsForRelay.length > 0) {
-      const collected = await ctx.mainAgent.collect(idsForRelay, timeout_ms);
+      // Pass consume:false so tasks stay in the tracking map across calls.
+      // Without this, calling gossip_collect to inspect a result mid-round
+      // silently drops it from the map, and a subsequent gossip_collect
+      // with consensus:true cannot find it. The relay's own TTL handles
+      // memory cleanup; the in-process tracking map can stay populated.
+      const collected = await ctx.mainAgent.collect(idsForRelay, timeout_ms, { consume: false });
       relayResults = collected.results || [];
       persistRelayTasks(); // Prune completed tasks from disk
     }

@@ -221,7 +221,7 @@ export class MainAgent {
   /** Update bootstrap prompt after MCP reconnect so agents see fresh session context. */
   setBootstrapPrompt(prompt: string) { this.bootstrapPrompt = prompt; }
   dispatch(agentId: string, task: string, options?: DispatchOptions) { return this.pipeline.dispatch(agentId, task, options); }
-  async collect(taskIds?: string[], timeoutMs?: number, options?: { consensus?: boolean }) { return this.pipeline.collect(taskIds, timeoutMs, options); }
+  async collect(taskIds?: string[], timeoutMs?: number, options?: { consensus?: boolean; consume?: boolean }) { return this.pipeline.collect(taskIds, timeoutMs, options); }
   async dispatchParallel(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>, options?: { consensus?: boolean }) { return this.pipeline.dispatchParallel(tasks, options); }
   async dispatchParallelWithLenses(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>, options?: { consensus?: boolean }, precomputedLenses?: Map<string, string>) { return this.pipeline.dispatchParallelWithLenses(tasks, options, precomputedLenses); }
   async generateLensesForAgents(taskDefs: Array<{ agentId: string; task: string }>) { return this.pipeline.generateLensesForAgents(taskDefs); }

@@ -432,7 +432,7 @@ export class DispatchPipeline {
     this.sessionContext.registerPlan(plan);
   }
 
-  async collect(taskIds?: string[], timeoutMs: number = 120_000, options?: { consensus?: boolean }): Promise<CollectResult> {
+  async collect(taskIds?: string[], timeoutMs: number = 120_000, options?: { consensus?: boolean; consume?: boolean }): Promise<CollectResult> {
     const targets = taskIds
       ? taskIds.map(id => this.tasks.get(id)).filter((t): t is TrackedTask => t !== undefined)
       : Array.from(this.tasks.values());
@@ -626,9 +626,17 @@ export class DispatchPipeline {
       consensusReport = await this.runConsensus(results);
     }
 
-    // Cleanup tasks from tracking map
-    for (const t of targets) {
-      this.tasks.delete(t.id);
+    // Cleanup tasks from tracking map.
+    // Default to consume:true for backwards compat, but the MCP collect handler
+    // passes consume:false to keep tasks queryable across multiple gossip_collect
+    // calls (e.g. inspect mid-round, then synthesize with consensus:true).
+    // Without this, an inspection-only collect would silently drop the task
+    // from the tracking map and break a subsequent consensus synthesis.
+    const consume = options?.consume !== false;
+    if (consume) {
+      for (const t of targets) {
+        this.tasks.delete(t.id);
+      }
     }
 
     const result: CollectResult = { results, consensus: consensusReport };
