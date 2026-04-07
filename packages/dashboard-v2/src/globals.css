@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -55,6 +56,91 @@ html::after {
   pointer-events: none;
   z-index: 9998;
   background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 65%, rgba(0, 0, 0, 0.2) 100%);
+}
+
+/* ───── CRT / TV hover effect ───── */
+@keyframes crt-flicker {
+  0%   { opacity: 1; }
+  8%   { opacity: 0.6; }
+  9%   { opacity: 1; }
+  22%  { opacity: 1; }
+  23%  { opacity: 0.4; }
+  24%  { opacity: 1; }
+  60%  { opacity: 1; }
+  61%  { opacity: 0.7; }
+  62%  { opacity: 0.3; }
+  63%  { opacity: 1; }
+  85%  { opacity: 1; }
+  86%  { opacity: 0.5; }
+  87%  { opacity: 1; }
+}
+
+@keyframes crt-scanlines-move {
+  from { background-position: 0 0; }
+  to   { background-position: 0 8px; }
+}
+
+@keyframes crt-rgb-bleed {
+  0%   { text-shadow: 2px 0 0 rgba(255,0,80,0.5), -2px 0 0 rgba(0,200,255,0.5); }
+  25%  { text-shadow: -2px 0 0 rgba(255,0,80,0.5), 2px 0 0 rgba(0,200,255,0.5); }
+  50%  { text-shadow: 1px 0 0 rgba(255,0,80,0.3), -1px 0 0 rgba(0,200,255,0.3); }
+  75%  { text-shadow: -1px 0 0 rgba(255,0,80,0.5), 1px 0 0 rgba(0,200,255,0.5); }
+  100% { text-shadow: 2px 0 0 rgba(255,0,80,0.5), -2px 0 0 rgba(0,200,255,0.5); }
+}
+
+.crt-logo {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+}
+
+/* Scanlines layer */
+.crt-logo::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    rgba(0, 0, 0, 0.25) 3px,
+    rgba(0, 0, 0, 0.25) 4px
+  );
+  pointer-events: none;
+  border-radius: 12px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 2;
+}
+
+/* Phosphor glow layer */
+.crt-logo::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 16px;
+  background: radial-gradient(ellipse at center, rgba(139,92,246,0.15) 0%, transparent 70%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 1;
+}
+
+.crt-logo:hover::before,
+.crt-logo--glitch::before {
+  opacity: 1;
+  animation: crt-scanlines-move 0.1s linear infinite;
+}
+
+.crt-logo:hover::after,
+.crt-logo--glitch::after {
+  opacity: 1;
+}
+
+.crt-logo:hover .crt-logo-img,
+.crt-logo--glitch .crt-logo-img {
+  animation: crt-flicker 0.6s step-end infinite;
+  filter: brightness(1.25) saturate(1.1) drop-shadow(0 0 32px rgba(139,92,246,0.7));
 }
 
 /* Scrollbar */

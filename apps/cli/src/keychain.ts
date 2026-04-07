@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process';
 import { platform, hostname, userInfo } from 'os';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
+import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from 'crypto';
 
 const SERVICE_NAME = 'gossip-mesh';
 const VALID_PROVIDERS = /^[a-zA-Z0-9_-]{1,32}$/;
@@ -12,11 +12,9 @@ const ALGO = 'aes-256-gcm';
 export class Keychain {
   private inMemoryStore: Map<string, string> = new Map();
   private keychainAvailable: boolean;
-  private encryptionKey: Buffer;
 
   constructor() {
     this.keychainAvailable = this.isKeychainAvailable();
-    this.encryptionKey = this.deriveEncryptionKey();
 
     if (!this.keychainAvailable) {
       this.loadEncryptedFile();
@@ -48,9 +46,10 @@ export class Keychain {
     }
   }
 
-  private deriveEncryptionKey(): Buffer {
+  private deriveKey(salt: Buffer): Buffer {
     const seed = `${SERVICE_NAME}:${hostname()}:${userInfo().username}`;
-    return createHash('sha256').update(seed).digest();
+    // PBKDF2 with random salt — resistant to offline brute-force on a stolen keys.enc
+    return pbkdf2Sync(seed, salt, 100_000, 32, 'sha256');
   }
 
   private loadEncryptedFile(): void {
@@ -59,13 +58,16 @@ export class Keychain {
 
     try {
       const raw = readFileSync(filePath);
-      if (raw.length < 29) return; // iv(12) + tag(16) + min 1 byte
+      // Format: salt(32) + iv(12) + tag(16) + ciphertext — min 61 bytes
+      if (raw.length < 61) return; // legacy or corrupted — start fresh
 
-      const iv = raw.subarray(0, 12);
-      const tag = raw.subarray(12, 28);
-      const ciphertext = raw.subarray(28);
+      const salt = raw.subarray(0, 32);
+      const iv = raw.subarray(32, 44);
+      const tag = raw.subarray(44, 60);
+      const ciphertext = raw.subarray(60);
 
-      const decipher = createDecipheriv(ALGO, this.encryptionKey, iv);
+      const key = this.deriveKey(salt);
+      const decipher = createDecipheriv(ALGO, key, iv);
       decipher.setAuthTag(tag);
       const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
       const entries: Record<string, string> = JSON.parse(decrypted.toString('utf8'));
@@ -84,13 +86,15 @@ export class Keychain {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
     const data = JSON.stringify(Object.fromEntries(this.inMemoryStore));
+    const salt = randomBytes(32);
     const iv = randomBytes(12);
-    const cipher = createCipheriv(ALGO, this.encryptionKey, iv);
+    const key = this.deriveKey(salt);
+    const cipher = createCipheriv(ALGO, key, iv);
     const encrypted = Buffer.concat([cipher.update(data, 'utf8'), cipher.final()]);
     const tag = cipher.getAuthTag();
 
-    // Format: iv(12) + tag(16) + ciphertext
-    writeFileSync(filePath, Buffer.concat([iv, tag, encrypted]), { mode: 0o600 });
+    // Format: salt(32) + iv(12) + tag(16) + ciphertext
+    writeFileSync(filePath, Buffer.concat([salt, iv, tag, encrypted]), { mode: 0o600 });
   }
 
   private isKeychainAvailable(): boolean {

@@ -24,6 +24,14 @@ gossip_run(agent_id: "<id>", task: "Implement X")
 ```
 `gossip_run` is the preferred dispatch. Do NOT use raw Agent() for gossipcat tasks.
 
+**Active polling — do NOT wait passively for notifications:**
+After dispatching background native agents, wait ~60-90 seconds, then actively check their status:
+1. Call `gossip_progress(task_ids: [...])` to see live completion state
+2. If complete, read the output file directly (path returned in Agent() response as `output_file`)
+3. Then call `gossip_relay(task_id, result)` immediately
+
+Do NOT sit idle waiting for task-notification events — the notification system can lag 5-10 minutes. Always poll proactively after a short wait.
+
 **Write modes:** `gossip_run(agent_id, task, write_mode: "scoped", scope: "./src")`
 **Parallel:** `gossip_dispatch(mode:"parallel", tasks) → gossip_collect(task_ids)`
 **Plan → Execute:** `gossip_plan(task) → gossip_dispatch(mode:"parallel", tasks) → gossip_collect(ids)`

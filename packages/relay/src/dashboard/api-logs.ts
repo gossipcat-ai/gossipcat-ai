@@ -79,15 +79,44 @@ export function logsHandler(
   } finally {
     closeSync(fd);
   }
-  // If we started mid-file, drop the first (possibly partial) line.
+  // If we started mid-file, drop the first (possibly partial) line and count
+  // newlines in the skipped portion so we can produce correct file-absolute
+  // line numbers.
   let raw = buf.toString('utf-8');
+  let lineOffset = 0;
   if (readFrom > 0) {
     const nl = raw.indexOf('\n');
     raw = nl >= 0 ? raw.slice(nl + 1) : raw;
+
+    // Count newlines in the skipped byte range (0..readFrom) using 64KB chunks
+    // to avoid a single large allocation.
+    const SCAN_CHUNK = 64 * 1024;
+    const scanFd = openSync(logPath, 'r');
+    try {
+      let pos = 0;
+      const chunk = Buffer.allocUnsafe(SCAN_CHUNK);
+      while (pos < readFrom) {
+        const len = Math.min(SCAN_CHUNK, readFrom - pos);
+        const n = readSync(scanFd, chunk, 0, len, pos);
+        if (n === 0) break;
+        for (let j = 0; j < n; j++) {
+          if (chunk[j] === 0x0a) lineOffset++;
+        }
+        pos += n;
+      }
+    } finally {
+      closeSync(scanFd);
+    }
+    // lineOffset = number of newlines in [0, readFrom) = complete lines before our window.
+    // The partial line straddling readFrom is then dropped above, so allLines[0] is
+    // file line lineOffset+2 (lineOffset complete lines + 1 dropped partial line + 1).
   }
   const allLines = raw.split('\n').filter(Boolean);
 
-  // Build entries from the tail
+  // Build entries with correct file-absolute line numbers.
+  // When readFrom > 0: allLines[0] is file line (lineOffset + 2) because we dropped
+  // one partial line. When readFrom === 0: lineOffset is 0 and allLines[0] is line 1.
+  const firstLineNumber = readFrom > 0 ? lineOffset + 2 : 1;
   let entries: LogEntry[] = [];
   for (let i = 0; i < allLines.length; i++) {
     const text = allLines[i];
@@ -97,7 +126,7 @@ export function logsHandler(
       if (category !== filter) continue;
     }
 
-    entries.push({ line: i + 1, text, category });
+    entries.push({ line: firstLineNumber + i, text, category });
   }
 
   // totalLines reflects the matched set so clients can show "X of Y" correctly.

@@ -499,11 +499,17 @@ async function doBoot() {
   try {
     const { OverlapDetector, LensGenerator, DispatchDifferentiator } = await import('@gossip/orchestrator');
 
-    // Default to the main agent's model
+    // In Claude Code MCP mode the orchestrator IS Claude Code — default to native utility
+    // so ATI (lens gen, summarization, overlap detection) uses the orchestrator directly
+    // instead of a separate API-key LLM. Can be overridden via config.utility_model.
+    const autoNative = env.host === 'claude-code' && !config.utility_model;
     let utilityLlm = m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined);
     let utilityModelId = `${mainProvider}/${mainModel}`;
 
-    if (config.utility_model?.provider === 'native') {
+    if (autoNative) {
+      ctx.nativeUtilityConfig = { model: 'sonnet' };
+      utilityModelId = 'native/orchestrator';
+    } else if (config.utility_model?.provider === 'native') {
       // Native utility: calls go through Agent() dispatch + gossip_relay, not direct LLM
       ctx.nativeUtilityConfig = { model: config.utility_model.model };
       utilityModelId = `native/${config.utility_model.model}`;
@@ -1028,11 +1034,26 @@ server.tool(
       const { join: j } = require('path');
       md(j(process.cwd(), '.gossip'), { recursive: true });
       wf(j(process.cwd(), '.gossip', 'bootstrap.md'), result.prompt);
-      // Extract only the Session Context section — the orchestrator already has the rules
-      // from CLAUDE.md; injecting the full prompt would be redundant noise.
-      const sessionMatch = result.prompt.match(/## Session Context\n([\s\S]*?)(?=\n## |\n$|$)/);
+      // Extract key sections from the bootstrap to orient the orchestrator at session start.
+      // CLAUDE.md covers role/rules; bootstrap covers team state, dispatch guidance, and tools.
+      const sectionPattern = (name: string) =>
+        new RegExp(`## ${name}\\n([\\s\\S]*?)(?=\\n## |\\n$|$)`);
+
+      const roleMatch = result.prompt.match(sectionPattern('Your Role'));
+      if (roleMatch) {
+        sessionContextSection = `\n─────────────────────────────────\n## Your Role\n${roleMatch[1].trim()}`;
+      }
+      const sessionMatch = result.prompt.match(sectionPattern('Session Context'));
       if (sessionMatch) {
-        sessionContextSection = `\n─────────────────────────────────\n## Session Context\n${sessionMatch[1].trim()}`;
+        sessionContextSection += `\n─────────────────────────────────\n## Session Context\n${sessionMatch[1].trim()}`;
+      }
+      const dispatchMatch = result.prompt.match(sectionPattern('Dispatch Rules'));
+      if (dispatchMatch) {
+        sessionContextSection += `\n─────────────────────────────────\n## Dispatch Rules\n${dispatchMatch[1].trim()}`;
+      }
+      const toolsMatch = result.prompt.match(sectionPattern('Tools'));
+      if (toolsMatch) {
+        sessionContextSection += `\n─────────────────────────────────\n## Tools\n${toolsMatch[1].trim()}`;
       }
     } catch { /* best-effort — missing session context is not fatal */ }
 
@@ -1087,6 +1108,13 @@ server.tool(
       custom_model: z.string().optional()
         .describe('For custom agents: model ID (e.g. gemini-2.5-pro, gpt-4o, claude-sonnet-4-6)'),
       base_url: z.string().optional()
+        .refine(url => {
+          if (!url) return true;
+          try {
+            const { protocol } = new URL(url);
+            return protocol === 'http:' || protocol === 'https:';
+          } catch { return false; }
+        }, { message: 'base_url must be a valid http or https URL' })
         .describe('Custom base URL for OpenAI-compatible gateways. For openai: defaults to https://api.openai.com/v1. For openclaw: defaults to http://127.0.0.1:18789/v1.'),
       // Shared fields
       role: z.string().optional()
@@ -2148,7 +2176,7 @@ server.tool(
         const { writeFileSync: wf2, mkdirSync: md2 } = require('fs');
         const { join: j2 } = require('path');
         md2(j2(process.cwd(), '.gossip'), { recursive: true });
-        wf2(j2(process.cwd(), '.gossip', 'bootstrap.md'), result.content);
+        wf2(j2(process.cwd(), '.gossip', 'bootstrap.md'), result.prompt);
       } catch { /* best-effort */ }
 
       // Clear consumed gossip

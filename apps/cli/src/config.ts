@@ -93,6 +93,17 @@ export function validateConfig(raw: any): GossipConfig {
       if (!agent.skills || !Array.isArray(agent.skills) || agent.skills.length === 0) {
         throw new Error(`Agent "${id}" must have at least one skill`);
       }
+      if (agent.base_url) {
+        try {
+          const { protocol } = new URL(agent.base_url);
+          if (protocol !== 'http:' && protocol !== 'https:') {
+            throw new Error(`Agent "${id}" base_url must use http or https scheme`);
+          }
+        } catch (e: any) {
+          if (e.message.includes(id)) throw e;
+          throw new Error(`Agent "${id}" has invalid base_url: ${agent.base_url}`);
+        }
+      }
     }
   }
 
