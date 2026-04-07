@@ -521,7 +521,13 @@ export async function handleDispatchConsensus(
 
   let msg = `Dispatched ${taskDefs.length} tasks with consensus:\n${lines.join('\n')}`;
   msg += '\n\nAgents will include ## Consensus Summary in output.';
-  msg += `\nCall gossip_collect with task IDs: [${allTaskIds.map(id => `"${id}"`).join(', ')}] and consensus: true`;
+  msg += `\n\n⚠️ CONSENSUS PROTOCOL — 5 steps, do NOT stop after step 2:\n`;
+  msg += `  1. ✓ Phase 1 dispatched (task IDs above)\n`;
+  msg += `  2. → Run native Agent() calls + relay each via gossip_relay(task_id, relay_token, result)\n`;
+  msg += `  3. → Call gossip_collect(task_ids: [${allTaskIds.map(id => `"${id}"`).join(', ')}], consensus: true) — this triggers PHASE 2 cross-review dispatches\n`;
+  msg += `  4. → Run the cross-review Agent() calls + relay each via gossip_relay_cross_review(consensus_id, agent_id, result) — DIFFERENT tool than gossip_relay\n`;
+  msg += `  5. → Call gossip_collect(consensus: true) AGAIN to get the final synthesized consensus output\n`;
+  msg += `\nStopping at step 2 produces fake-consensus results — agents never cross-validate each other's findings.`;
   if (nativeInstructions.length > 0) {
     msg += `\n\nNATIVE_DISPATCH: Execute these ${nativeInstructions.length} Agent calls, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
     msg += `\n\n⚠️ You MUST call gossip_relay for EVERY native agent after it completes. Without it, results are lost — no memory, no consensus cross-review.`;
