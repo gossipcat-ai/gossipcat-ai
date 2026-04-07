@@ -311,3 +311,122 @@ describe('SkillGenerator.checkEffectiveness()', () => {
     expect(fm.keywords).toBe('[auth, session]');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 8 — Lazy migration tests
+// ---------------------------------------------------------------------------
+
+describe('checkEffectiveness — lazy migration', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'skill-migration-test-'));
+  });
+
+  it('snapshots baseline_correct from current counters when missing AND bound_at < 90 days old', async () => {
+    const agentId = 'agent-migrate';
+    const category = 'trust_boundaries';
+
+    // 30 days ago — NOT stale
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400_000).toISOString();
+
+    const skillPath = writeSkillFile(tmpDir, agentId, category, {
+      effectiveness: 0.0,
+      bound_at: thirtyDaysAgo,
+      status: 'pending',
+      // NO baseline_correct, NO baseline_hallucinated, NO migration_count
+    });
+
+    const perfReader = makeStubPerfReader(
+      tmpDir,
+      agentId,
+      { [category]: 42 },
+      { [category]: 8 },
+    );
+    const gen = new SkillGenerator(makeStubLLM(), perfReader, tmpDir);
+
+    await gen.checkEffectiveness(agentId, category);
+
+    const fm = readFrontmatter(skillPath);
+    expect(Number(fm.baseline_correct)).toBe(42);
+    expect(Number(fm.baseline_hallucinated)).toBe(8);
+    expect(Number(fm.migration_count)).toBe(1);
+    // bound_at must be unchanged (still 30 days ago)
+    expect(fm.bound_at).toBe(thirtyDaysAgo);
+    // migration_reason must be ABSENT (not a stale reset)
+    expect(fm.migration_reason).toBeUndefined();
+  });
+
+  it('resets bound_at to now() AND sets migration_reason when bound_at > 90 days old', async () => {
+    const agentId = 'agent-stale';
+    const category = 'trust_boundaries';
+
+    // 100 days ago — stale
+    const hundredDaysAgo = new Date(Date.now() - 100 * 86400_000).toISOString();
+
+    const skillPath = writeSkillFile(tmpDir, agentId, category, {
+      effectiveness: 0.0,
+      bound_at: hundredDaysAgo,
+      status: 'pending',
+      // NO baseline_correct, NO migration_count
+    });
+
+    const perfReader = makeStubPerfReader(
+      tmpDir,
+      agentId,
+      { [category]: 30 },
+      { [category]: 10 },
+    );
+    const gen = new SkillGenerator(makeStubLLM(), perfReader, tmpDir);
+
+    const beforeMs = Date.now();
+    await gen.checkEffectiveness(agentId, category);
+    const afterMs = Date.now();
+
+    const fm = readFrontmatter(skillPath);
+    // bound_at must be reset to now (within 5 seconds)
+    const newBoundAt = new Date(fm.bound_at).getTime();
+    expect(newBoundAt).toBeGreaterThanOrEqual(beforeMs);
+    expect(newBoundAt).toBeLessThanOrEqual(afterMs + 5000);
+    expect(fm.migration_reason).toBe('stale_baseline_reset');
+    expect(Number(fm.migration_count)).toBe(1);
+    expect(Number(fm.baseline_correct)).toBe(30);
+    expect(Number(fm.baseline_hallucinated)).toBe(10);
+  });
+
+  it('refuses to re-migrate when migration_count >= 1', async () => {
+    const agentId = 'agent-remigrate';
+    const category = 'trust_boundaries';
+
+    // 200 days ago — would trigger stale reset if migration ran
+    const twohundredDaysAgo = new Date(Date.now() - 200 * 86400_000).toISOString();
+
+    const skillPath = writeSkillFile(tmpDir, agentId, category, {
+      effectiveness: 0.0,
+      bound_at: twohundredDaysAgo,
+      migration_count: 1,
+      status: 'pending',
+      // NO baseline_correct — simulates manual deletion after first migration
+    });
+
+    const perfReader = makeStubPerfReader(
+      tmpDir,
+      agentId,
+      { [category]: 99 },
+      { [category]: 1 },
+    );
+    const gen = new SkillGenerator(makeStubLLM(), perfReader, tmpDir);
+
+    const verdict = await gen.checkEffectiveness(agentId, category);
+
+    const fm = readFrontmatter(skillPath);
+    // bound_at must NOT be touched
+    expect(fm.bound_at).toBe(twohundredDaysAgo);
+    // migration_count still 1
+    expect(Number(fm.migration_count)).toBe(1);
+    // baseline_correct must NOT have been freshly snapshotted (still absent / 0)
+    expect(fm.baseline_correct == null || Number(fm.baseline_correct) === 0).toBe(true);
+    // Verdict should reflect the stale/insufficient-evidence state
+    expect(verdict.status).toBeDefined();
+  });
+});

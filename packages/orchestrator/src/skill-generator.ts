@@ -399,12 +399,28 @@ ${inputs.join('\n')}
     }
 
     const raw = readFileSync(skillPath, 'utf-8');
-    const { frontmatter, body } = this.parseSkillFile(raw);
+    const { frontmatter: rawFrontmatter, body } = this.parseSkillFile(raw);
+
+    // Lazy migration: pre-existing skill files may lack the snapshot fields
+    const score = this.perfReader.getScores().get(agentId);
+    const liveCountersForMigration = {
+      correct: score?.categoryCorrect?.[category] ?? 0,
+      hallucinated: score?.categoryHallucinated?.[category] ?? 0,
+    };
+    const nowMs = Date.now();
+    const { frontmatter, mutated } = this.migrateIfNeeded(
+      rawFrontmatter,
+      liveCountersForMigration,
+      nowMs,
+    );
+    if (mutated) {
+      this.writeSkillFileFromParts(skillPath, frontmatter, body);
+    }
 
     const snapshot: SkillSnapshot = {
       baseline_correct: Number(frontmatter.baseline_correct ?? 0),
       baseline_hallucinated: Number(frontmatter.baseline_hallucinated ?? 0),
-      bound_at: String(frontmatter.bound_at ?? new Date().toISOString()),
+      bound_at: String(frontmatter.bound_at ?? new Date(nowMs).toISOString()),
       status: (frontmatter.status as VerdictStatus) ?? 'pending',
       migration_count: Number(frontmatter.migration_count ?? 0),
       inconclusive_correct:
@@ -423,13 +439,12 @@ ${inputs.join('\n')}
           : undefined,
     };
 
-    const score = this.perfReader.getScores().get(agentId);
     const counters: CategoryCounters = {
       correct: score?.categoryCorrect?.[category] ?? 0,
       hallucinated: score?.categoryHallucinated?.[category] ?? 0,
     };
 
-    const verdict = resolveVerdict(snapshot, counters, Date.now(), opts);
+    const verdict = resolveVerdict(snapshot, counters, nowMs, opts);
 
     if (verdict.shouldUpdate && verdict.newSnapshotFields) {
       const merged: Record<string, unknown> = { ...frontmatter, ...verdict.newSnapshotFields };
@@ -440,6 +455,57 @@ ${inputs.join('\n')}
     }
 
     return verdict;
+  }
+
+  /**
+   * Lazily migrates pre-existing skill files that lack the snapshot fields
+   * introduced by the checkEffectiveness redesign.
+   *
+   * - Snapshots current counters as the baseline when `baseline_correct` is
+   *   missing (giving migrated skills a fair window from migration time).
+   * - Resets `bound_at` to now when it is more than 90 days old (preventing
+   *   immediate insufficient_evidence timeout for old skills).
+   * - Refuses to re-fire when `migration_count >= 1` (idempotency guard).
+   */
+  private migrateIfNeeded(
+    frontmatter: Record<string, unknown>,
+    liveCounters: { correct: number; hallucinated: number },
+    nowMs: number,
+  ): { frontmatter: Record<string, unknown>; mutated: boolean } {
+    const migration_count = Number(frontmatter.migration_count ?? 0);
+
+    // Re-fire guard: refuse subsequent migrations
+    if (migration_count >= 1) {
+      return { frontmatter, mutated: false };
+    }
+
+    // Already has baseline — no migration needed
+    if (frontmatter.baseline_correct != null) {
+      return { frontmatter, mutated: false };
+    }
+
+    const updates: Record<string, unknown> = {
+      baseline_correct: liveCounters.correct,
+      baseline_hallucinated: liveCounters.hallucinated,
+      migration_count: migration_count + 1,
+    };
+
+    const NINETY_DAYS_MS = 90 * 86400_000;
+    const boundAt = frontmatter.bound_at as string | undefined;
+    if (boundAt) {
+      const ageMs = nowMs - new Date(boundAt).getTime();
+      if (ageMs > NINETY_DAYS_MS) {
+        // Stale baseline: reset clock to give the skill a fresh window
+        updates.bound_at = new Date(nowMs).toISOString();
+        updates.migration_reason = 'stale_baseline_reset';
+      }
+      // Otherwise preserve the existing bound_at
+    } else {
+      // No bound_at at all — set it to now
+      updates.bound_at = new Date(nowMs).toISOString();
+    }
+
+    return { frontmatter: { ...frontmatter, ...updates }, mutated: true };
   }
 
   /**
