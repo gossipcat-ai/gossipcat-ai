@@ -465,13 +465,13 @@ export async function handleCollect(
   // and automatically generate + bind skills instead of just suggesting
   try {
     const gaps = ctx.mainAgent.getSkillGapSuggestions();
-    if (gaps.length > 0 && ctx.skillGenerator) {
+    if (gaps.length > 0 && ctx.skillEngine) {
       const { normalizeSkillName: nsn } = await import('@gossip/orchestrator');
       const developed: string[] = [];
       const failed: string[] = [];
       for (const gap of gaps) {
         try {
-          await ctx.skillGenerator.generate(gap.agentId, gap.category);
+          await ctx.skillEngine.generate(gap.agentId, gap.category);
           const skillName = nsn(gap.category);
           const skillIndex = ctx.mainAgent.getSkillIndex();
           if (skillIndex) skillIndex.bind(gap.agentId, skillName, { source: 'auto', mode: 'contextual' });
@@ -493,7 +493,7 @@ export async function handleCollect(
         output += `\n\n⚠️ Failed to auto-develop: ${failed.join(', ')} — call gossip_skills(action: "develop") manually`;
       }
     } else if (gaps.length > 0) {
-      // Fallback: skill generator not available, just surface suggestions
+      // Fallback: skill engine not available, just surface suggestions
       output += `\n\n📊 Skill gap detected:\n${gaps.map((g: any) => `  - ${g.agentId} needs "${g.category}" (score: ${g.score.toFixed(2)}, median: ${g.median.toFixed(2)})`).join('\n')}`;
     }
   } catch { /* best-effort */ }
@@ -514,6 +514,21 @@ export async function handleCollect(
       }
     }
   } catch { /* best-effort */ }
+
+  // Run checkEffectiveness on all skill files — must happen AFTER signals are written above
+  // so per-category counters reflect the current consensus round.
+  if (ctx.skillEngine) {
+    try {
+      const { runCheckEffectivenessForAllSkills } = await import('./check-effectiveness-runner');
+      await runCheckEffectivenessForAllSkills({
+        skillEngine: ctx.skillEngine,
+        registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
+        projectRoot: process.cwd(),
+      });
+    } catch (e) {
+      process.stderr.write(`[gossipcat] checkEffectiveness post-collect run failed: ${(e as Error).message}\n`);
+    }
+  }
 
   // Session save reminder — only every 10th task completion to avoid nagging
   try {

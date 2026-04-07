@@ -1,6 +1,10 @@
 /**
- * SkillGenerator — generates superpowers-quality skill files per agent
- * based on competency gaps. Uses LLM with reference templates.
+ * SkillEngine — manages the full skill lifecycle per agent:
+ * LLM-driven skill file generation, baseline snapshots, lazy migration,
+ * effectiveness evaluation (checkEffectiveness), and verdict resolution wiring.
+ *
+ * Originally named SkillGenerator; renamed in the checkEffectiveness branch
+ * once the class grew beyond generation into a full lifecycle engine.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync } from 'fs';
@@ -10,6 +14,14 @@ import { PerformanceReader } from './performance-reader';
 import { LLMMessage } from '@gossip/types';
 import { ConsensusSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
+import {
+  resolveVerdict,
+  TIMEOUT_MS,
+  type SkillSnapshot,
+  type CategoryCounters,
+  type VerdictResult,
+  type VerdictStatus,
+} from './check-effectiveness';
 
 const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
@@ -75,7 +87,7 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
 - [ ] Tests verify the fix
 `;
 
-export class SkillGenerator {
+export class SkillEngine {
   private techStackCache: string | null | undefined = undefined; // undefined = not yet computed
 
   constructor(
@@ -190,6 +202,14 @@ Requirements:
 
     this.validateSkillContent(cleaned);
 
+    // Snapshot baseline counters at bind time — Tasks 7/8 read these for effectiveness checks
+    const agentScore = this.perfReader.getScores().get(agentId);
+    const baseline_correct = agentScore?.categoryCorrect?.[category] ?? 0;
+    const baseline_hallucinated = agentScore?.categoryHallucinated?.[category] ?? 0;
+    const bound_at = new Date().toISOString();
+
+    cleaned = this.injectSnapshotFields(cleaned, { baseline_correct, baseline_hallucinated, bound_at });
+
     const skillName = normalizeSkillName(category);
     const skillDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'skills');
     mkdirSync(skillDir, { recursive: true });
@@ -197,6 +217,44 @@ Requirements:
     writeFileSync(skillPath, cleaned);
 
     return { path: skillPath, content: cleaned };
+  }
+
+  /**
+   * Post-processes LLM-generated skill content to inject or overwrite snapshot fields
+   * in the YAML frontmatter. This ensures spec compliance regardless of LLM output.
+   */
+  private injectSnapshotFields(
+    content: string,
+    snapshot: { baseline_correct: number; baseline_hallucinated: number; bound_at: string },
+  ): string {
+    const fmMatch = content.match(/^(---\n)([\s\S]*?)(\n---)/);
+    if (!fmMatch) return content;
+
+    let fm = fmMatch[2];
+    const rest = content.slice(fmMatch[0].length);
+
+    // Remove any pre-existing snapshot fields the LLM may have emitted
+    fm = fm
+      .replace(/^baseline_correct:.*\n?/m, '')
+      .replace(/^baseline_hallucinated:.*\n?/m, '')
+      .replace(/^bound_at:.*\n?/m, '')
+      .replace(/^migration_count:.*\n?/m, '')
+      .replace(/^status:.*\n?/m, '');
+
+    // Ensure effectiveness is present as a number
+    if (!fm.match(/^effectiveness:/m)) {
+      fm = fm.trimEnd() + '\neffectiveness: 0.0';
+    }
+
+    // Append snapshot fields
+    fm = fm.trimEnd() +
+      `\nbaseline_correct: ${snapshot.baseline_correct}` +
+      `\nbaseline_hallucinated: ${snapshot.baseline_hallucinated}` +
+      `\nbound_at: ${snapshot.bound_at}` +
+      `\nmigration_count: 0` +
+      `\nstatus: pending`;
+
+    return `---\n${fm}\n---${rest}`;
   }
 
   private validateSkillContent(content: string): void {
@@ -213,7 +271,7 @@ Requirements:
       throw new Error(`Generated skill is ${lines} lines (max 200). LLM output too verbose.`);
     }
     // Validate keywords presence for contextual activation
-    if (!content.match(/keywords:\s*\[/)) {
+    if (!content.match(/keywords:(\s*\[|\s*\n\s*-)/)) {
       throw new Error('Generated skill missing keywords in frontmatter. Contextual activation requires keywords.');
     }
   }
@@ -320,5 +378,213 @@ ${inputs.join('\n')}
         )
         .map(s => ({ agentId: s.agentId, evidence: s.evidence || '' }));
     } catch { return []; }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Skill effectiveness evaluation (Task 7)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Reads the skill file for (agentId, category), fetches live counters from
+   * PerformanceReader, runs resolveVerdict, and writes back any state changes
+   * (status, effectiveness, inconclusive epoch fields) atomically.
+   *
+   * Role is passed via opts.role — the caller (collect.ts, Task 9) provides it
+   * from the agent registry. This avoids wiring a registry getter into the
+   * constructor and keeps the class dependencies minimal.
+   */
+  async checkEffectiveness(
+    agentId: string,
+    category: string,
+    opts?: { role?: string },
+  ): Promise<VerdictResult> {
+    if (!SAFE_NAME.test(agentId)) {
+      return { status: 'pending', shouldUpdate: false };
+    }
+    const skillPath = this.resolveSkillPath(agentId, category);
+    if (!existsSync(skillPath)) {
+      return { status: 'pending', shouldUpdate: false };
+    }
+
+    const raw = readFileSync(skillPath, 'utf-8');
+    const { frontmatter: rawFrontmatter, body } = this.parseSkillFile(raw);
+
+    // Lazy migration: pre-existing skill files may lack the snapshot fields
+    const score = this.perfReader.getScores().get(agentId);
+    const liveCountersForMigration = {
+      correct: score?.categoryCorrect?.[category] ?? 0,
+      hallucinated: score?.categoryHallucinated?.[category] ?? 0,
+    };
+    const nowMs = Date.now();
+    const { frontmatter, mutated } = this.migrateIfNeeded(
+      rawFrontmatter,
+      liveCountersForMigration,
+      nowMs,
+    );
+    if (mutated) {
+      this.writeSkillFileFromParts(skillPath, frontmatter, body);
+    }
+
+    const snapshot: SkillSnapshot = {
+      baseline_correct: this.safeNumber(frontmatter.baseline_correct ?? 0, 0),
+      baseline_hallucinated: this.safeNumber(frontmatter.baseline_hallucinated ?? 0, 0),
+      bound_at: String(frontmatter.bound_at ?? new Date(nowMs).toISOString()),
+      status: (frontmatter.status as VerdictStatus) ?? 'pending',
+      migration_count: this.safeNumber(frontmatter.migration_count ?? 0, 0),
+      inconclusive_correct:
+        frontmatter.inconclusive_correct != null
+          ? (Number.isFinite(Number(frontmatter.inconclusive_correct)) ? Number(frontmatter.inconclusive_correct) : undefined)
+          : undefined,
+      inconclusive_hallucinated:
+        frontmatter.inconclusive_hallucinated != null
+          ? (Number.isFinite(Number(frontmatter.inconclusive_hallucinated)) ? Number(frontmatter.inconclusive_hallucinated) : undefined)
+          : undefined,
+      inconclusive_at:
+        typeof frontmatter.inconclusive_at === 'string' ? frontmatter.inconclusive_at : undefined,
+      inconclusive_strikes:
+        frontmatter.inconclusive_strikes != null
+          ? (Number.isFinite(Number(frontmatter.inconclusive_strikes)) ? Number(frontmatter.inconclusive_strikes) : undefined)
+          : undefined,
+    };
+
+    const counters: CategoryCounters = {
+      correct: score?.categoryCorrect?.[category] ?? 0,
+      hallucinated: score?.categoryHallucinated?.[category] ?? 0,
+    };
+
+    const verdict = resolveVerdict(snapshot, counters, nowMs, opts);
+
+    if (verdict.shouldUpdate && verdict.newSnapshotFields) {
+      const merged: Record<string, unknown> = { ...frontmatter, ...verdict.newSnapshotFields };
+      if (verdict.effectiveness !== undefined) {
+        merged.effectiveness = verdict.effectiveness;
+      }
+      this.writeSkillFileFromParts(skillPath, merged, body);
+    }
+
+    return verdict;
+  }
+
+  /**
+   * Lazily migrates pre-existing skill files that lack the snapshot fields
+   * introduced by the checkEffectiveness redesign.
+   *
+   * - Snapshots current counters as the baseline when `baseline_correct` is
+   *   missing (giving migrated skills a fair window from migration time).
+   * - Resets `bound_at` to now when it is more than 90 days old (preventing
+   *   immediate insufficient_evidence timeout for old skills).
+   * - Refuses to re-fire when `migration_count >= 1` (idempotency guard).
+   */
+  private migrateIfNeeded(
+    frontmatter: Record<string, unknown>,
+    liveCounters: { correct: number; hallucinated: number },
+    nowMs: number,
+  ): { frontmatter: Record<string, unknown>; mutated: boolean } {
+    const migration_count = Number(frontmatter.migration_count ?? 0);
+
+    // Re-fire guard: refuse subsequent migrations
+    if (migration_count >= 1) {
+      return { frontmatter, mutated: false };
+    }
+
+    // Already has baseline — no migration needed
+    if (frontmatter.baseline_correct != null) {
+      return { frontmatter, mutated: false };
+    }
+
+    const updates: Record<string, unknown> = {
+      baseline_correct: liveCounters.correct,
+      baseline_hallucinated: liveCounters.hallucinated,
+      migration_count: migration_count + 1,
+    };
+
+    // Use the same 90-day threshold as resolveVerdict's timeout — single source of truth
+    const boundAt = frontmatter.bound_at as string | undefined;
+    if (boundAt) {
+      const ageMs = nowMs - new Date(boundAt).getTime();
+      if (ageMs > TIMEOUT_MS) {
+        // Stale baseline: reset clock to give the skill a fresh window
+        updates.bound_at = new Date(nowMs).toISOString();
+        updates.migration_reason = 'stale_baseline_reset';
+      }
+      // Otherwise preserve the existing bound_at
+    } else {
+      // No bound_at at all — set it to now
+      updates.bound_at = new Date(nowMs).toISOString();
+    }
+
+    return { frontmatter: { ...frontmatter, ...updates }, mutated: true };
+  }
+
+  /**
+   * Returns the canonical path for a skill file given agentId and category.
+   * Uses the same normalizeSkillName logic as generate().
+   */
+  private resolveSkillPath(agentId: string, category: string): string {
+    const skillName = normalizeSkillName(category);
+    return join(this.projectRoot, '.gossip', 'agents', agentId, 'skills', `${skillName}.md`);
+  }
+
+  /**
+   * Splits a skill file into its frontmatter key-value map and the body text
+   * (everything after the closing ---).
+   *
+   * Handles simple scalar YAML (strings, numbers, inline arrays) — sufficient
+   * for the snapshot fields we write and read. Does NOT need a full YAML parser
+   * because the frontmatter schema is well-defined and written by this module.
+   */
+  private parseSkillFile(raw: string): {
+    frontmatter: Record<string, string | number>;
+    body: string;
+  } {
+    const match = raw.match(/^---\n([\s\S]*?)\n---(\n[\s\S]*)?$/);
+    if (!match) {
+      return { frontmatter: {}, body: raw };
+    }
+
+    const fmText = match[1];
+    const body = match[2] ?? '';
+
+    const frontmatter: Record<string, string | number> = {};
+    for (const line of fmText.split('\n')) {
+      const colon = line.indexOf(':');
+      if (colon === -1) continue;
+      const key = line.slice(0, colon).trim();
+      const rawVal = line.slice(colon + 1).trim();
+      if (!key) continue;
+      // Preserve numeric values as numbers so YAML round-trips correctly
+      const asNum = Number(rawVal);
+      if (rawVal !== '' && !isNaN(asNum) && !rawVal.startsWith('[')) {
+        frontmatter[key] = asNum;
+      } else {
+        frontmatter[key] = rawVal;
+      }
+    }
+
+    return { frontmatter, body };
+  }
+
+  /**
+   * Safely converts a value to a number, returning fallback if the result is not
+   * finite (NaN, Infinity). Guards against corrupted frontmatter from manual edits.
+   */
+  private safeNumber(value: unknown, fallback: number): number {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  /**
+   * Serialises frontmatter + body back to a skill file and writes it atomically.
+   * Preserves all existing frontmatter fields; only updated fields in the map
+   * will change value.
+   */
+  private writeSkillFileFromParts(
+    skillPath: string,
+    frontmatter: Record<string, unknown>,
+    body: string,
+  ): void {
+    const fmLines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${v}`);
+    const content = `---\n${fmLines.join('\n')}\n---${body}`;
+    writeFileSync(skillPath, content, 'utf-8');
   }
 }

@@ -1,4 +1,4 @@
-import { SkillGenerator, PerformanceReader, PerformanceWriter } from '@gossip/orchestrator';
+import { SkillEngine, PerformanceReader, PerformanceWriter } from '@gossip/orchestrator';
 import { loadSkills } from '../../packages/orchestrator/src/skill-loader';
 import { ILLMProvider } from '@gossip/orchestrator';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
@@ -56,7 +56,7 @@ NO input assessment without tracing from entry to prompt.
 
 describe('Skill Development — Integration', () => {
   const testDir = join(tmpdir(), 'gossip-skilldev-integ-' + Date.now());
-  let generator: SkillGenerator;
+  let generator: SkillEngine;
 
   const mockLlm = {
     generate: jest.fn().mockResolvedValue({ text: VALID_SKILL, toolCalls: [] }),
@@ -79,7 +79,7 @@ describe('Skill Development — Integration', () => {
     jest.clearAllMocks();
     (mockLlm.generate as jest.Mock).mockResolvedValue({ text: VALID_SKILL, toolCalls: [] });
     const profiler = new PerformanceReader(testDir);
-    generator = new SkillGenerator(mockLlm as any, profiler, testDir);
+    generator = new SkillEngine(mockLlm as any, profiler, testDir);
   });
 
   test('generate → file exists → loadSkills picks it up', async () => {
@@ -119,7 +119,7 @@ describe('Skill Development — Integration', () => {
     }
 
     const freshProfiler = new PerformanceReader(testDir);
-    const freshGenerator = new SkillGenerator(mockLlm as any, freshProfiler, testDir);
+    const freshGenerator = new SkillEngine(mockLlm as any, freshProfiler, testDir);
     await freshGenerator.generate('test-agent', 'injection_vectors');
 
     const callArgs = (mockLlm.generate as jest.Mock).mock.calls[1];

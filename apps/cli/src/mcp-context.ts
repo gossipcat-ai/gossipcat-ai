@@ -53,7 +53,7 @@ export interface McpContext {
   toolServer: any;
   workers: Map<string, any>;
   keychain: any;
-  skillGenerator: any;
+  skillEngine: any;
   nativeTaskMap: Map<string, NativeTaskInfo>;
   nativeResultMap: Map<string, NativeResultInfo>;
   nativeAgentConfigs: Map<string, { model: string; instructions: string; description: string }>;
@@ -72,7 +72,7 @@ export const ctx: McpContext = {
   toolServer: null,
   workers: new Map(),
   keychain: null,
-  skillGenerator: null,
+  skillEngine: null,
   nativeTaskMap: new Map(),
   nativeResultMap: new Map(),
   nativeAgentConfigs: new Map(),

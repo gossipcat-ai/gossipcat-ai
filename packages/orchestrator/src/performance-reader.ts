@@ -23,6 +23,9 @@ export interface AgentScore {
   consecutiveFailures: number; // circuit breaker: consecutive negative signals at tail
   circuitOpen: boolean;        // true when consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD
   categoryStrengths: Record<string, number>;
+  categoryCorrect: Record<string, number>;
+  categoryHallucinated: Record<string, number>;
+  categoryAccuracy: Record<string, number>;
 }
 
 const CIRCUIT_BREAKER_THRESHOLD = 3; // consecutive failures → open circuit
@@ -177,6 +180,8 @@ export class PerformanceReader {
       totalSignals: number;
       lastSignalMs: number;
       categoryStrengths: Record<string, number>;
+      categoryCorrect: Record<string, number>;
+      categoryHallucinated: Record<string, number>;
     }>();
 
     const ensure = (id: string) => {
@@ -187,6 +192,7 @@ export class PerformanceReader {
         tasksSeen: new Map(), taskCounter: 0,
         agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
         totalSignals: 0, lastSignalMs: 0, categoryStrengths: {},
+        categoryCorrect: {}, categoryHallucinated: {},
       });
       return acc.get(id)!;
     };
@@ -209,9 +215,31 @@ export class PerformanceReader {
 
     const peerDiversity = this.computePeerDiversity(signals);
 
+    // Build per-agent retraction index so computeScores skips retracted signals
+    // even when called with a raw (unfiltered) signal array (e.g. directly from tests).
+    const retractedKeys = new Set<string>();
+    for (const signal of signals) {
+      if (signal.signal === 'signal_retracted') {
+        const taskKey = signal.taskId || signal.timestamp;
+        if (signal.retractedSignal) {
+          retractedKeys.add(signal.agentId + ':' + taskKey + ':' + signal.retractedSignal);
+        } else {
+          retractedKeys.add(signal.agentId + ':' + taskKey + ':*');
+        }
+      }
+    }
+
     for (const signal of signals) {
       const isKnown = KNOWN_SIGNALS[signal.signal];
       if (!isKnown) continue;
+      if (signal.signal === 'signal_retracted') continue;
+
+      // Skip signals retracted by a signal_retracted entry
+      const taskKey2 = signal.taskId || signal.timestamp;
+      if (
+        retractedKeys.has(signal.agentId + ':' + taskKey2 + ':' + signal.signal) ||
+        retractedKeys.has(signal.agentId + ':' + taskKey2 + ':*')
+      ) continue;
 
       const a = ensure(signal.agentId);
       a.totalSignals++;
@@ -239,6 +267,7 @@ export class PerformanceReader {
           a.weightedConfirmedCount += decay;
           if (signal.category) {
             a.categoryStrengths[signal.category] = (a.categoryStrengths[signal.category] ?? 0) + sevMul * decay * 0.15;
+            a.categoryCorrect[signal.category] = (a.categoryCorrect[signal.category] ?? 0) + 1;
           }
           break;
         }
@@ -252,6 +281,9 @@ export class PerformanceReader {
             winner.weightedCorrect += sevMul * wd;
             winner.weightedTotal += sevMul * wd;
             if (signalMs > winner.lastSignalMs) winner.lastSignalMs = signalMs;
+          }
+          if (signal.category) {
+            a.categoryHallucinated[signal.category] = (a.categoryHallucinated[signal.category] ?? 0) + 1;
           }
           break;
         }
@@ -267,6 +299,9 @@ export class PerformanceReader {
           a.uniqueFindings++;
           a.weightedImpact += sevMul * decay;
           a.weightedConfirmedCount += decay;
+          if (signal.category) {
+            a.categoryCorrect[signal.category] = (a.categoryCorrect[signal.category] ?? 0) + 1;
+          }
           break;
         }
         case 'unique_unconfirmed': {
@@ -287,6 +322,9 @@ export class PerformanceReader {
           a.weightedHallucinations += severity * decay;
           a.weightedTotal += decay;
           a.hallucinations++;
+          if (signal.category) {
+            a.categoryHallucinated[signal.category] = (a.categoryHallucinated[signal.category] ?? 0) + 1;
+          }
           break;
         }
       }
@@ -360,6 +398,18 @@ export class PerformanceReader {
         reliability = 0.5 + (reliability - 0.5) * timeFreshness;
       }
 
+      // Per-category raw accuracy: correct / (correct + hallucinated)
+      const categoryAccuracy: Record<string, number> = {};
+      const allCategories = new Set([
+        ...Object.keys(a.categoryCorrect),
+        ...Object.keys(a.categoryHallucinated),
+      ]);
+      for (const cat of allCategories) {
+        const c = a.categoryCorrect[cat] ?? 0;
+        const h = a.categoryHallucinated[cat] ?? 0;
+        if (c + h > 0) categoryAccuracy[cat] = c / (c + h);
+      }
+
       const consec = consecutiveFailures.get(id) || 0;
       scores.set(id, {
         agentId: id, accuracy, uniqueness, reliability, impactScore,
@@ -371,6 +421,9 @@ export class PerformanceReader {
         consecutiveFailures: consec,
         circuitOpen: consec >= CIRCUIT_BREAKER_THRESHOLD,
         categoryStrengths: a.categoryStrengths,
+        categoryCorrect: { ...a.categoryCorrect },
+        categoryHallucinated: { ...a.categoryHallucinated },
+        categoryAccuracy,
       });
     }
 

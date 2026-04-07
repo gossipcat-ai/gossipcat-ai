@@ -165,7 +165,7 @@ const originalCtx = {
   relay: ctx.relay,
   workers: ctx.workers,
   keychain: ctx.keychain,
-  skillGenerator: ctx.skillGenerator,
+  skillEngine: ctx.skillEngine,
   nativeTaskMap: ctx.nativeTaskMap,
   nativeResultMap: ctx.nativeResultMap,
   nativeAgentConfigs: ctx.nativeAgentConfigs,
@@ -213,7 +213,7 @@ function resetCtx(mainAgentOverrides: Record<string, any> = {}, projectRoot?: st
   ctx.booted = true;
   ctx.boot = jest.fn().mockResolvedValue(undefined) as any;
   ctx.syncWorkersViaKeychain = jest.fn().mockResolvedValue(undefined) as any;
-  (ctx as any).skillGenerator = null;
+  (ctx as any).skillEngine = null;
 }
 
 function restoreCtx() {

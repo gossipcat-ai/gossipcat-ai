@@ -254,7 +254,7 @@ async function getModules() {
     WorkerAgent: (await import('@gossip/orchestrator')).WorkerAgent,
     createProvider: (await import('@gossip/orchestrator')).createProvider,
     PerformanceWriter: (await import('@gossip/orchestrator')).PerformanceWriter,
-    SkillGenerator: (await import('@gossip/orchestrator')).SkillGenerator,
+    SkillEngine: (await import('@gossip/orchestrator')).SkillEngine,
     ...(await import('./config')),
     Keychain: (await import('./keychain')).Keychain,
   };
@@ -547,18 +547,18 @@ async function doBoot() {
     process.stderr.write(`[gossipcat] ❌ Adaptive team intelligence failed: ${(err as Error).message}\n`);
   }
 
-  // Create skill generator for gossip_skills develop action
+  // Create skill engine for gossip_skills develop action
   try {
-    const { PerformanceReader: PR, SkillGenerator: SG } = await import('@gossip/orchestrator');
+    const { PerformanceReader: PR, SkillEngine: SE } = await import('@gossip/orchestrator');
     const skillPerfReader = new PR(process.cwd());
-    ctx.skillGenerator = new SG(
+    ctx.skillEngine = new SE(
       m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined),
       skillPerfReader,
       process.cwd(),
     );
-    process.stderr.write('[gossipcat] ✨ Skill generator ready\n');
+    process.stderr.write('[gossipcat] ✨ Skill engine ready\n');
   } catch (err) {
-    process.stderr.write(`[gossipcat] ❌ Skill generator failed: ${(err as Error).message}\n`);
+    process.stderr.write(`[gossipcat] ❌ Skill engine failed: ${(err as Error).message}\n`);
   }
 
   // Initialize per-agent skill index
@@ -2100,12 +2100,12 @@ server.tool(
       if (!agent_id) return { content: [{ type: 'text' as const, text: 'Error: agent_id is required for develop.' }] };
       if (!category) return { content: [{ type: 'text' as const, text: 'Error: category is required for develop.' }] };
 
-      if (!ctx.skillGenerator) {
-        return { content: [{ type: 'text' as const, text: 'Skill generator not available. Check boot logs.' }] };
+      if (!ctx.skillEngine) {
+        return { content: [{ type: 'text' as const, text: 'Skill engine not available. Check boot logs.' }] };
       }
 
       try {
-        const result = await ctx.skillGenerator.generate(agent_id, category);
+        const result = await ctx.skillEngine.generate(agent_id, category);
         const { normalizeSkillName: nsn } = await import('@gossip/orchestrator');
         const skillName = nsn(category);
 
