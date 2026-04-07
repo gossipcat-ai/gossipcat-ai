@@ -25,6 +25,7 @@ const FALLBACK_MAX_LENGTH = 2000;
 const MAX_SUMMARY_LENGTH = 5000; // raised from 3000 — citations were being truncated before snippet extraction
 const MAX_CROSS_REVIEW_ENTRIES = 50; // DoS prevention
 const VALID_ACTIONS = new Set(['agree', 'disagree', 'unverified', 'new']);
+const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
 
 export interface ConsensusEngineConfig {
   llm: ILLMProvider;
@@ -366,8 +367,6 @@ Return only valid JSON.`;
       unverifiedBy: Array<{ agentId: string; reason: string }>;
       confidences: number[];
     }>();
-
-    const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
 
     // findingId → findingMap key lookup (for cross-review matching by ID)
     const findingIdToKey = new Map<string, string>();
@@ -1120,7 +1119,6 @@ Return only valid JSON.`;
     content: string;
     hasAnchor: boolean;
   }> {
-    const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
     const agentFindingPattern = /<agent_finding\s+([^>]*)>([\s\S]*?)<\/agent_finding>/g;
     const out: Array<{
       findingType: 'finding' | 'suggestion' | 'insight';
