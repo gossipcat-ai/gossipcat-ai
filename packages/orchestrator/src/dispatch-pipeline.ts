@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { readFileSync, mkdirSync, realpathSync } from 'fs';
+import { readFileSync, mkdirSync, realpathSync, appendFileSync } from 'fs';
 import { resolve as resolvePath, join } from 'path';
 import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, PlanState, MIN_AGENTS_FOR_CONSENSUS } from './types';
 import { ILLMProvider } from './llm-client';
@@ -312,6 +312,22 @@ export class DispatchPipeline {
             entry.outputTokens = event.payload.outputTokens;
             entry.completedAt = Date.now();
             if (entry.writeMode === 'scoped') this.scopeTracker.release(entry.id);
+            // Visibility fix (Option A): emit log + persist task.completed so async dispatch results
+            // are debuggable. Without this, the result lives only in this.tasks Map until gossip_collect
+            // is called — invisible to gossip_progress and lost on process restart. Symmetric persistence
+            // (mirroring native-tasks.ts:262) is the next-session implementation task.
+            try {
+              const elapsedMs = (entry.completedAt ?? Date.now()) - entry.startedAt;
+              process.stderr.write(`[gossipcat] ✅ relay ← ${entry.agentId} [${entry.id}] OK (${(elapsedMs / 1000).toFixed(1)}s, ${(event.payload.result || '').length} chars)\n`);
+              appendFileSync(join(this.projectRoot, '.gossip', 'task-graph.jsonl'), JSON.stringify({
+                type: 'task.completed',
+                taskId: entry.id,
+                agentId: entry.agentId,
+                durationMs: elapsedMs,
+                resultLength: (event.payload.result || '').length,
+                timestamp: new Date().toISOString(),
+              }) + '\n');
+            } catch { /* best-effort visibility — never crash dispatch on log/write failure */ }
             return event.payload;
           case TaskStreamEventType.ERROR:
             entry.status = 'failed';
@@ -321,6 +337,20 @@ export class DispatchPipeline {
             if (entry.writeMode === 'worktree' && entry.worktreeInfo) {
               this.worktreeManager.cleanup(entry.id, entry.worktreeInfo.path).catch(() => {});
             }
+            // Visibility fix (Option A): same as FINAL_RESULT but for the failed path. Silent worker
+            // errors in async dispatch were the diagnostic blindness that ate ~45min of session 2026-04-07.
+            try {
+              const elapsedMs = (entry.completedAt ?? Date.now()) - entry.startedAt;
+              process.stderr.write(`[gossipcat] ❌ relay ← ${entry.agentId} [${entry.id}] FAILED (${(elapsedMs / 1000).toFixed(1)}s) — ${event.payload.error}\n`);
+              appendFileSync(join(this.projectRoot, '.gossip', 'task-graph.jsonl'), JSON.stringify({
+                type: 'task.failed',
+                taskId: entry.id,
+                agentId: entry.agentId,
+                durationMs: elapsedMs,
+                error: event.payload.error,
+                timestamp: new Date().toISOString(),
+              }) + '\n');
+            } catch { /* best-effort */ }
             throw new Error(event.payload.error);
           default:
             // LOG, PARTIAL_RESULT, etc. — tracked via lastEventAt above
