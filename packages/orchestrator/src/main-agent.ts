@@ -200,7 +200,7 @@ export class MainAgent {
 
     // Connect orchestrator agent to relay for verify_write review requests
     try {
-      this.orchestratorAgent = new GossipAgent({ agentId: 'orchestrator', relayUrl: this.relayUrl, reconnect: true });
+      this.orchestratorAgent = new GossipAgent({ agentId: 'orchestrator', relayUrl: this.relayUrl, apiKey: this.relayApiKey, reconnect: true });
       await this.orchestratorAgent.connect();
       this.orchestratorAgent.on('message', this.handleReviewRequest.bind(this));
     } catch (err) {
@@ -331,7 +331,7 @@ export class MainAgent {
         ? readFileSync(instructionsPath, 'utf-8') : undefined;
 
       const enableWebSearch = ac.preset === 'researcher' || ac.skills.includes('research');
-      const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch);
+      const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey);
       await worker.start();
       this.workers.set(ac.id, worker);
       added++;

@@ -385,7 +385,8 @@ async function doBoot() {
     const { join } = require('path');
     const instructionsPath = join(process.cwd(), '.gossip', 'agents', ac.id, 'instructions.md');
     const instructions = existsSync(instructionsPath) ? readFileSync(instructionsPath, 'utf-8') : undefined;
-    const worker = new m.WorkerAgent(ac.id, llm, ctx.relay.url, m.ALL_TOOLS, instructions);
+    const enableWebSearch = ac.preset === 'researcher' || (ac.skills ?? []).includes('research');
+    const worker = new m.WorkerAgent(ac.id, llm, ctx.relay.url, m.ALL_TOOLS, instructions, enableWebSearch, relayApiKey);
     // Wire meta signal emission for ATI profiling
     worker.setOnTaskComplete?.((event: { agentId: string; taskId: string; toolCalls: number; durationMs: number }) => {
       try {
@@ -581,6 +582,7 @@ async function doBoot() {
     const publisherAgent = new GossipAgentPub({
       agentId: 'gossip-publisher',
       relayUrl: ctx.relay.url,
+      apiKey: relayApiKey,
       reconnect: true,
     });
     await publisherAgent.connect();

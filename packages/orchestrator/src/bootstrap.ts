@@ -197,7 +197,12 @@ To auto-allow writes, add to \`.claude/settings.local.json\`:
     const sessionContext = this.readProjectMemory();
     const nextSessionNotes = this.readNextSessionNotes();
     const sessionParts = [sessionContext, nextSessionNotes].filter(Boolean);
-    const sessionSection = sessionParts.length > 0 ? `\n## Session Context\n\n${sessionParts.join('\n\n---\n\n')}\n` : '';
+    // Demote embedded headings so they don't collide with the outer ## section structure.
+    // Without this, an embedded "## Foo" terminates gossip_status's Session Context regex.
+    const demote = (s: string) => s.replace(/^(#{1,4}) /gm, '##$1 ');
+    const sessionSection = sessionParts.length > 0
+      ? `\n## Session Context\n\n${sessionParts.map(s => demote(s!)).join('\n\n---\n\n')}\n`
+      : '';
 
     return `# Gossipcat — Multi-Agent Orchestration
 
