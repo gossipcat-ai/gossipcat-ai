@@ -10,6 +10,13 @@ import { PerformanceReader } from './performance-reader';
 import { LLMMessage } from '@gossip/types';
 import { ConsensusSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
+import {
+  resolveVerdict,
+  type SkillSnapshot,
+  type CategoryCounters,
+  type VerdictResult,
+  type VerdictStatus,
+} from './check-effectiveness';
 
 const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
@@ -366,5 +373,135 @@ ${inputs.join('\n')}
         )
         .map(s => ({ agentId: s.agentId, evidence: s.evidence || '' }));
     } catch { return []; }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Skill effectiveness evaluation (Task 7)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Reads the skill file for (agentId, category), fetches live counters from
+   * PerformanceReader, runs resolveVerdict, and writes back any state changes
+   * (status, effectiveness, inconclusive epoch fields) atomically.
+   *
+   * Role is passed via opts.role — the caller (collect.ts, Task 9) provides it
+   * from the agent registry. This avoids wiring a registry getter into the
+   * constructor and keeps the class dependencies minimal.
+   */
+  async checkEffectiveness(
+    agentId: string,
+    category: string,
+    opts?: { role?: string },
+  ): Promise<VerdictResult> {
+    const skillPath = this.resolveSkillPath(agentId, category);
+    if (!existsSync(skillPath)) {
+      return { status: 'pending', shouldUpdate: false };
+    }
+
+    const raw = readFileSync(skillPath, 'utf-8');
+    const { frontmatter, body } = this.parseSkillFile(raw);
+
+    const snapshot: SkillSnapshot = {
+      baseline_correct: Number(frontmatter.baseline_correct ?? 0),
+      baseline_hallucinated: Number(frontmatter.baseline_hallucinated ?? 0),
+      bound_at: String(frontmatter.bound_at ?? new Date().toISOString()),
+      status: (frontmatter.status as VerdictStatus) ?? 'pending',
+      migration_count: Number(frontmatter.migration_count ?? 0),
+      inconclusive_correct:
+        frontmatter.inconclusive_correct != null
+          ? Number(frontmatter.inconclusive_correct)
+          : undefined,
+      inconclusive_hallucinated:
+        frontmatter.inconclusive_hallucinated != null
+          ? Number(frontmatter.inconclusive_hallucinated)
+          : undefined,
+      inconclusive_at:
+        typeof frontmatter.inconclusive_at === 'string' ? frontmatter.inconclusive_at : undefined,
+      inconclusive_strikes:
+        frontmatter.inconclusive_strikes != null
+          ? Number(frontmatter.inconclusive_strikes)
+          : undefined,
+    };
+
+    const score = this.perfReader.getScores().get(agentId);
+    const counters: CategoryCounters = {
+      correct: score?.categoryCorrect?.[category] ?? 0,
+      hallucinated: score?.categoryHallucinated?.[category] ?? 0,
+    };
+
+    const verdict = resolveVerdict(snapshot, counters, Date.now(), opts);
+
+    if (verdict.shouldUpdate && verdict.newSnapshotFields) {
+      const merged: Record<string, unknown> = { ...frontmatter, ...verdict.newSnapshotFields };
+      if (verdict.effectiveness !== undefined) {
+        merged.effectiveness = verdict.effectiveness;
+      }
+      this.writeSkillFileFromParts(skillPath, merged, body);
+    }
+
+    return verdict;
+  }
+
+  /**
+   * Returns the canonical path for a skill file given agentId and category.
+   * Uses the same normalizeSkillName logic as generate().
+   */
+  private resolveSkillPath(agentId: string, category: string): string {
+    const skillName = normalizeSkillName(category);
+    return join(this.projectRoot, '.gossip', 'agents', agentId, 'skills', `${skillName}.md`);
+  }
+
+  /**
+   * Splits a skill file into its frontmatter key-value map and the body text
+   * (everything after the closing ---).
+   *
+   * Handles simple scalar YAML (strings, numbers, inline arrays) — sufficient
+   * for the snapshot fields we write and read. Does NOT need a full YAML parser
+   * because the frontmatter schema is well-defined and written by this module.
+   */
+  private parseSkillFile(raw: string): {
+    frontmatter: Record<string, string | number>;
+    body: string;
+  } {
+    const match = raw.match(/^---\n([\s\S]*?)\n---(\n[\s\S]*)?$/);
+    if (!match) {
+      return { frontmatter: {}, body: raw };
+    }
+
+    const fmText = match[1];
+    const body = match[2] ?? '';
+
+    const frontmatter: Record<string, string | number> = {};
+    for (const line of fmText.split('\n')) {
+      const colon = line.indexOf(':');
+      if (colon === -1) continue;
+      const key = line.slice(0, colon).trim();
+      const rawVal = line.slice(colon + 1).trim();
+      if (!key) continue;
+      // Preserve numeric values as numbers so YAML round-trips correctly
+      const asNum = Number(rawVal);
+      if (rawVal !== '' && !isNaN(asNum) && !rawVal.startsWith('[')) {
+        frontmatter[key] = asNum;
+      } else {
+        frontmatter[key] = rawVal;
+      }
+    }
+
+    return { frontmatter, body };
+  }
+
+  /**
+   * Serialises frontmatter + body back to a skill file and writes it atomically.
+   * Preserves all existing frontmatter fields; only updated fields in the map
+   * will change value.
+   */
+  private writeSkillFileFromParts(
+    skillPath: string,
+    frontmatter: Record<string, unknown>,
+    body: string,
+  ): void {
+    const fmLines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${v}`);
+    const content = `---\n${fmLines.join('\n')}\n---${body}`;
+    writeFileSync(skillPath, content, 'utf-8');
   }
 }
