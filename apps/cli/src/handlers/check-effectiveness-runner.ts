@@ -38,12 +38,16 @@ export async function runCheckEffectivenessForAllSkills(opts: RunnerOptions): Pr
       const category = file.replace(/\.md$/, '');
       try {
         const verdict = await opts.skillGenerator.checkEffectiveness(agentId, category, { role });
-        if (verdict.shouldUpdate && (verdict.status === 'passed' || verdict.status === 'failed')) {
-          process.stderr.write(
-            `[gossipcat] checkEffectiveness ${agentId}/${category}: ${verdict.status}` +
-            (verdict.effectiveness !== undefined ? ` (Δ=${verdict.effectiveness.toFixed(3)})` : '') +
-            `\n`,
-          );
+        if (verdict.shouldUpdate) {
+          // Log every transition that changes operator-visible status: passed/failed/flagged
+          const loggedStates = new Set(['passed', 'failed', 'flagged_for_manual_review']);
+          if (loggedStates.has(verdict.status)) {
+            process.stderr.write(
+              `[gossipcat] checkEffectiveness ${agentId}/${category}: ${verdict.status}` +
+              (verdict.effectiveness !== undefined ? ` (Δ=${verdict.effectiveness.toFixed(3)})` : '') +
+              `\n`,
+            );
+          }
         }
       } catch (e) {
         process.stderr.write(`[gossipcat] checkEffectiveness ${agentId}/${category} threw: ${(e as Error).message}\n`);

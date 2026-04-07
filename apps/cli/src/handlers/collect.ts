@@ -512,15 +512,17 @@ export async function handleCollect(
 
   // Run checkEffectiveness on all skill files — must happen AFTER signals are written above
   // so per-category counters reflect the current consensus round.
-  try {
-    const { runCheckEffectivenessForAllSkills } = await import('./check-effectiveness-runner');
-    await runCheckEffectivenessForAllSkills({
-      skillGenerator: ctx.skillGenerator,
-      registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
-      projectRoot: process.cwd(),
-    });
-  } catch (e) {
-    process.stderr.write(`[gossipcat] checkEffectiveness post-collect run failed: ${(e as Error).message}\n`);
+  if (ctx.skillGenerator) {
+    try {
+      const { runCheckEffectivenessForAllSkills } = await import('./check-effectiveness-runner');
+      await runCheckEffectivenessForAllSkills({
+        skillGenerator: ctx.skillGenerator,
+        registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
+        projectRoot: process.cwd(),
+      });
+    } catch (e) {
+      process.stderr.write(`[gossipcat] checkEffectiveness post-collect run failed: ${(e as Error).message}\n`);
+    }
   }
 
   // Session save reminder — only every 10th task completion to avoid nagging
