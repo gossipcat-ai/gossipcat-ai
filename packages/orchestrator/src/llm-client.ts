@@ -14,6 +14,46 @@ import { join } from 'path';
 import { ToolDefinition, LLMMessage } from '@gossip/types';
 import { LLMResponse } from './types';
 
+// ─── 503 Retry Helper ───────────────────────────────────────────────────────
+
+/**
+ * Wraps fetch with one-shot retry on 503 (service unavailable / overloaded).
+ * Many 503s clear within seconds — a single short retry recovers the request
+ * before triggering the cooldown dance in QuotaTracker.handle503. If the retry
+ * also returns 503, returns that response and lets the caller's handle503()
+ * set the cooldown as before. The caller does NOT need to know whether a
+ * retry happened.
+ *
+ * Notes:
+ * - Drains the first response body before retrying so the connection releases.
+ * - Honours Retry-After if present (capped at 30s to avoid oversleeping).
+ * - Reuses the caller's RequestInit including AbortSignal — the original
+ *   timeout budget still applies across both attempts combined.
+ */
+async function fetchWithRetry503(
+  url: string,
+  init: RequestInit,
+  providerName: string,
+): Promise<Response> {
+  const res = await fetch(url, init);
+  if (res.status !== 503) return res;
+
+  // Drain the body so the connection can be released before we retry.
+  try { await res.text(); } catch { /* ignore */ }
+
+  // Respect Retry-After (seconds), else default to 5s; cap at 30s.
+  const retryAfter = res.headers.get('Retry-After') ?? res.headers.get('retry-after');
+  const seconds = retryAfter ? Number(retryAfter) : NaN;
+  const retryMs = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, 30_000) : 5_000;
+
+  process.stderr.write(`[${providerName}] 503 service unavailable — retrying once after ${Math.round(retryMs / 1000)}s\n`);
+  await new Promise(r => setTimeout(r, retryMs));
+
+  // Second attempt. If it also returns 503, the caller's existing handle503
+  // path takes over and sets the cooldown.
+  return fetch(url, init);
+}
+
 // ─── Quota Exception ────────────────────────────────────────────────────────
 
 export class QuotaExhaustedException extends Error {
@@ -183,7 +223,7 @@ export class AnthropicProvider implements ILLMProvider {
     if (anthropicTools.length > 0) body.tools = anthropicTools;
 
     this.quota.checkBeforeRequest();
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetchWithRetry503('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -192,7 +232,7 @@ export class AnthropicProvider implements ILLMProvider {
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120_000),
-    });
+    }, 'anthropic');
 
     if (!res.ok) {
       const body = (await res.text()).slice(0, 200);
@@ -292,12 +332,12 @@ export class OpenAIProvider implements ILLMProvider {
     this.quota.checkBeforeRequest();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+    const res = await fetchWithRetry503(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120_000),
-    });
+    }, 'openai');
 
     if (!res.ok) {
       const body = (await res.text()).slice(0, 200);
@@ -396,12 +436,12 @@ export class GeminiProvider implements ILLMProvider {
 
     if (process.env.GOSSIP_DEBUG) process.stderr.write(`[Gemini] ${this.model} — ${messages.length} messages, tools=${toolMode}\n`);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
-    const res = await fetch(url, {
+    const res = await fetchWithRetry503(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120_000),
-    });
+    }, 'google');
 
     if (!res.ok) {
       const errBody = (await res.text()).slice(0, 200);

@@ -101,6 +101,59 @@ describe('LLM Client', () => {
       global.fetch = originalFetch;
     });
 
+    it('retries once on 503 and succeeds on second attempt', async () => {
+      // Regression for the "503 in-task retry" gap (next-session item #6).
+      // Many 503s clear within seconds; one short retry recovers the request
+      // before triggering the cooldown dance in QuotaTracker.handle503.
+      const originalFetch = global.fetch;
+      const calls: number[] = [];
+      global.fetch = jest.fn().mockImplementation(() => {
+        calls.push(Date.now());
+        if (calls.length === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            headers: new Map([['retry-after', '0']]) as any,
+            text: async () => 'overloaded',
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            content: [{ type: 'text', text: 'recovered' }],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+        });
+      }) as unknown as typeof fetch;
+
+      const provider = new AnthropicProvider('test-key', 'claude-3');
+      const response = await provider.generate([{ role: 'user', content: 'hi' }]);
+
+      expect(response.text).toBe('recovered');
+      expect(calls.length).toBe(2);
+      global.fetch = originalFetch;
+    }, 15_000);
+
+    it('throws via handle503 after retry also returns 503', async () => {
+      const originalFetch = global.fetch;
+      let callCount = 0;
+      global.fetch = jest.fn().mockImplementation(() => {
+        callCount++;
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: new Map([['retry-after', '0']]) as any,
+          text: async () => 'still overloaded',
+        });
+      }) as unknown as typeof fetch;
+
+      const provider = new AnthropicProvider('test-key', 'claude-3');
+      await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+        .rejects.toThrow(/quota exhausted|service unavailable/);
+      expect(callCount).toBe(2);  // one initial + one retry
+      global.fetch = originalFetch;
+    }, 15_000);
+
     it('parses tool_use response correctly', async () => {
       const originalFetch = global.fetch;
       global.fetch = jest.fn().mockResolvedValue({
