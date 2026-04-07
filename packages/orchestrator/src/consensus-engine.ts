@@ -360,6 +360,7 @@ Return only valid JSON.`;
       finding: string;
       findingType?: 'finding' | 'suggestion' | 'insight';
       severity?: 'critical' | 'high' | 'medium' | 'low';
+      category?: string;
       confirmedBy: string[];
       disputedBy: Array<{ agentId: string; reason: string; evidence: string }>;
       unverifiedBy: Array<{ agentId: string; reason: string }>;
