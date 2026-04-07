@@ -851,6 +851,59 @@ describe('snippetsForFinding()', () => {
     expect(result).not.toContain('"</data>"');
     expect(result).not.toContain('<anchor>evil');
   });
+
+  it('should resolve citations to files in a worktree path supplied via TaskEntry.worktreeInfo', async () => {
+    // Regression for the deferred TODO: "Consensus auto-anchor resolves
+    // against project root, not worktree — causes file not found warnings
+    // on all cites for branch work". When a TaskEntry carries worktreeInfo,
+    // the consensus engine must add the worktree path as an additional
+    // resolver root so files only present on that branch can be anchored.
+    const { mkdirSync, writeFileSync, rmSync } = require('fs');
+    const wtDir = join(__dirname, '../../.test-fixtures-worktree');
+    mkdirSync(join(wtDir, 'packages', 'orchestrator', 'src'), { recursive: true });
+    // A file that exists ONLY in the worktree, not in the projectRoot tmpDir.
+    writeFileSync(
+      join(wtDir, 'packages', 'orchestrator', 'src', 'feature-branch-only.ts'),
+      [
+        'export function newFeature() {',
+        '  return "only on this branch";',
+        '}',
+      ].join('\n'),
+    );
+
+    try {
+      // Confirm the file is NOT in the projectRoot — without the worktree
+      // root the resolver should fail with "file not found".
+      const beforeUpdate = await (engineWithRoot as any).snippetsForFinding(
+        'New code at packages/orchestrator/src/feature-branch-only.ts:1',
+      );
+      expect(beforeUpdate).toContain('file not found');
+
+      // Inject a TaskEntry with worktreeInfo and call updateWorktreeRoots.
+      // After this, the resolver should locate the file via the worktree root.
+      const fakeResults = [{
+        id: 't1',
+        agentId: 'agent-x',
+        task: 'do work',
+        status: 'completed' as const,
+        result: '',
+        startedAt: 0,
+        worktreeInfo: { path: wtDir, branch: 'feat/test' },
+      }];
+      (engineWithRoot as any).updateWorktreeRoots(fakeResults);
+
+      const afterUpdate = await (engineWithRoot as any).snippetsForFinding(
+        'New code at packages/orchestrator/src/feature-branch-only.ts:1',
+      );
+      expect(afterUpdate).toContain('<anchor');
+      expect(afterUpdate).toContain('newFeature');
+      expect(afterUpdate).not.toContain('file not found');
+    } finally {
+      rmSync(wtDir, { recursive: true, force: true });
+      // Reset worktree roots so unrelated tests are unaffected
+      (engineWithRoot as any).updateWorktreeRoots([]);
+    }
+  });
 });
 
 describe('crossReviewForAgent per-finding snippets', () => {

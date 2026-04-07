@@ -39,9 +39,61 @@ export class ConsensusEngine {
   protected readonly config: ConsensusEngineConfig;
   private fileCache = new Map<string, string | null>();
   private pathCache = new Map<string, string | null>();
+  /**
+   * Per-task worktree paths discovered from TaskEntry.worktreeInfo. Used as
+   * additional file-resolution roots so consensus auto-anchor can find files
+   * created in a feature-branch worktree (which only exist there, not in the
+   * main project root). Populated lazily by updateWorktreeRoots() at the
+   * start of dispatchCrossReview / synthesize. The pathCache is invalidated
+   * when this set changes so a stale "file not found" doesn't poison later
+   * resolutions.
+   */
+  private currentWorktreeRoots: Set<string> = new Set();
 
   constructor(config: ConsensusEngineConfig) {
     this.config = config;
+  }
+
+  /**
+   * Capture all worktree paths from a TaskEntry array as additional resolver
+   * roots. Called at the start of every consensus pipeline entry point so
+   * snippetsForFinding can resolve citations to files that only exist in a
+   * feature-branch worktree, not in the main project root. Closes the
+   * "Consensus auto-anchor resolves against project root, not worktree" gap.
+   */
+  private updateWorktreeRoots(results: TaskEntry[]): void {
+    const next = new Set<string>();
+    for (const r of results) {
+      const wt = r.worktreeInfo?.path;
+      if (wt && typeof wt === 'string') {
+        next.add(resolve(wt));
+      }
+    }
+    // Reset path cache only if the worktree set changed — otherwise we'd
+    // wipe a hot cache between back-to-back synthesize calls on the same
+    // round (synthesize → synthesizeWithCrossReview → ...).
+    let changed = next.size !== this.currentWorktreeRoots.size;
+    if (!changed) {
+      for (const wt of next) {
+        if (!this.currentWorktreeRoots.has(wt)) { changed = true; break; }
+      }
+    }
+    if (changed) {
+      this.currentWorktreeRoots = next;
+      this.pathCache.clear();
+    }
+  }
+
+  /**
+   * All valid resolution roots: the configured projectRoot first (most
+   * citations live here), followed by every active worktree path. The
+   * resolver and the path-traversal guard both iterate this list.
+   */
+  private getValidRoots(): string[] {
+    const roots: string[] = [];
+    if (this.config.projectRoot) roots.push(this.config.projectRoot);
+    for (const wt of this.currentWorktreeRoots) roots.push(wt);
+    return roots;
   }
 
   private async cachedResolve(fileRef: string): Promise<string | null> {
@@ -97,6 +149,7 @@ export class ConsensusEngine {
 
     const consensusStart = Date.now();
     process.stderr.write(`[consensus] Starting cross-review for ${successful.length} agents\n`);
+    this.updateWorktreeRoots(results);
     const crossReviewStart = Date.now();
     const crossReviewEntries = await this.dispatchCrossReview(results);
     const crossReviewMs = Date.now() - crossReviewStart;
@@ -126,6 +179,7 @@ export class ConsensusEngine {
    * Each agent reviews all peer summaries and produces agree/disagree/new entries.
    */
   async dispatchCrossReview(results: TaskEntry[]): Promise<CrossReviewEntry[]> {
+    this.updateWorktreeRoots(results);
     const successful = results.filter(r => r.status === 'completed' && r.result);
     if (successful.length < 2) return [];
 
@@ -322,6 +376,7 @@ Return only valid JSON.`;
     summaries: Map<string, string>;
     consensusId: string;
   }> {
+    this.updateWorktreeRoots(results);
     const successful = results.filter(r => r.status === 'completed' && r.result);
     const consensusId = shortConsensusId();
 
@@ -351,6 +406,7 @@ Return only valid JSON.`;
    * Phase 3: Synthesize Phase 1 results and Phase 2 cross-review entries into a consensus report.
    */
   async synthesize(results: TaskEntry[], crossReviewEntries: CrossReviewEntry[]): Promise<ConsensusReport> {
+    this.updateWorktreeRoots(results);
     const consensusId = shortConsensusId();
     const signals: ConsensusSignal[] = [];
     const newFindings: ConsensusNewFinding[] = [];
@@ -917,60 +973,72 @@ Return only valid JSON.`;
   }
 
   /**
-   * Resolve a relative file reference to an absolute path within the project.
+   * Resolve a relative file reference to an absolute path within the project
+   * OR within any active worktree (so findings created in a feature-branch
+   * worktree can still be auto-anchored when consensus runs back in the main
+   * MCP process).
    */
-  /** Guard: resolved path must stay within project root */
-  private isInsideRoot(candidate: string, root: string): boolean {
+  /** Guard: resolved path must stay inside one of the valid roots */
+  private isInsideAnyRoot(candidate: string, roots: string[]): boolean {
     const normalized = resolve(candidate);
-    const normalizedRoot = resolve(root);
-    return normalized === normalizedRoot || normalized.startsWith(normalizedRoot + '/');
+    return roots.some(root => {
+      const normalizedRoot = resolve(root);
+      return normalized === normalizedRoot || normalized.startsWith(normalizedRoot + '/');
+    });
   }
 
   private async resolveFilePath(fileRef: string): Promise<string | null> {
-    const root = this.config.projectRoot!;
+    const roots = this.getValidRoots();
+    if (roots.length === 0) return null;
     const fileName = fileRef.split('/').pop()!;
 
-    // Try the reference as-is (could be a full relative path)
-    try {
-      const candidate = join(root, fileRef);
-      if (!this.isInsideRoot(candidate, root)) return null; // path traversal guard
-      await stat(candidate);
-      return candidate;
-    } catch { /* not found at root */ }
-
-    // Try bare filename at project root (covers eslint.config.ts, vite.config.ts, etc.)
-    if (fileName !== fileRef) {
+    // Try every root in order: projectRoot first (most files), then any
+    // active worktree paths (for files only present on a feature branch).
+    for (const root of roots) {
+      // Try the reference as-is (could be a full relative path)
       try {
-        const candidate = join(root, fileName);
-        if (!this.isInsideRoot(candidate, root)) return null;
-        await stat(candidate);
-        return candidate;
-      } catch { /* not at root */ }
-    }
+        const candidate = join(root, fileRef);
+        if (this.isInsideAnyRoot(candidate, roots)) {
+          await stat(candidate);
+          return candidate;
+        }
+      } catch { /* not at this root */ }
 
-    // Recursive search in common source directories (including tests, tools, lib)
-    const searchDirs = ['packages', 'src', 'apps', 'tests', 'test', 'tools', 'scripts', 'lib'];
-    for (const dir of searchDirs) {
-      const found = await this.findFile(join(root, dir), fileName);
-      if (found) return found;
+      // Try bare filename at this root (covers eslint.config.ts, vite.config.ts, etc.)
+      if (fileName !== fileRef) {
+        try {
+          const candidate = join(root, fileName);
+          if (this.isInsideAnyRoot(candidate, roots)) {
+            await stat(candidate);
+            return candidate;
+          }
+        } catch { /* not at this root */ }
+      }
+
+      // Recursive search in common source directories under this root
+      const searchDirs = ['packages', 'src', 'apps', 'tests', 'test', 'tools', 'scripts', 'lib'];
+      for (const dir of searchDirs) {
+        const found = await this.findFile(join(root, dir), fileName, roots);
+        if (found) return found;
+      }
     }
 
     return null;
   }
 
-  private async findFile(dir: string, fileName: string): Promise<string | null> {
-    const root = this.config.projectRoot;
+  private async findFile(dir: string, fileName: string, validRoots: string[]): Promise<string | null> {
     try {
       const entries = await readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = join(dir, entry.name);
         if (entry.isFile() && entry.name === fileName) {
-          // Path traversal guard — findFile results must be inside project root
-          if (root && !this.isInsideRoot(fullPath, root)) return null;
+          // Path traversal guard — findFile results must be inside one of
+          // the valid roots (projectRoot or any active worktree).
+          if (!this.isInsideAnyRoot(fullPath, validRoots)) return null;
           return fullPath;
         }
         if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
-          const found = await this.findFile(fullPath, fileName);
+          const found = await this.findFile(fullPath, fileName, validRoots);
           if (found) return found;
         }
       }
@@ -983,16 +1051,20 @@ Return only valid JSON.`;
    * Returns the first definition-like match with surrounding context.
    */
   private async grepIdentifier(identifier: string): Promise<{ file: string; line: number; snippet: string } | null> {
-    const root = this.config.projectRoot;
-    if (!root) return null;
+    const roots = this.getValidRoots();
+    if (roots.length === 0) return null;
 
     const CONTEXT_LINES = 2;
     const searchDirs = ['packages', 'src', 'apps', 'tests', 'test', 'tools', 'scripts', 'lib'];
     const sourceExts = new Set(['.ts', '.tsx', '.js', '.jsx']);
 
-    for (const dir of searchDirs) {
-      const result = await this.grepDir(join(root, dir), identifier, sourceExts, CONTEXT_LINES);
-      if (result) return result;
+    // Search every root in order — projectRoot first, then any active worktree
+    // (so identifiers defined only on a feature branch can still be located).
+    for (const root of roots) {
+      for (const dir of searchDirs) {
+        const result = await this.grepDir(join(root, dir), identifier, sourceExts, CONTEXT_LINES);
+        if (result) return result;
+      }
     }
     return null;
   }
@@ -1003,7 +1075,10 @@ Return only valid JSON.`;
     exts: Set<string>,
     contextLines: number,
   ): Promise<{ file: string; line: number; snippet: string } | null> {
-    const root = this.config.projectRoot;
+    // For display, strip whichever valid root prefixes the result so the
+    // returned file path is relative. Iterate roots — projectRoot first,
+    // then any active worktree — and use the first one that matches.
+    const validRoots = this.getValidRoots();
     try {
       const entries = await readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
@@ -1026,7 +1101,13 @@ Return only valid JSON.`;
             const snippet = lines.slice(start, end)
               .map((l, idx) => `  ${start + idx + 1}: ${l}`)
               .join('\n');
-            const relPath = root ? fullPath.replace(root + '/', '') : fullPath;
+            let relPath = fullPath;
+            for (const root of validRoots) {
+              if (fullPath.startsWith(root + '/')) {
+                relPath = fullPath.slice(root.length + 1);
+                break;
+              }
+            }
             return { file: relPath, line: i + 1, snippet };
           }
         }
