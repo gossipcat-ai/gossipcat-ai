@@ -81,9 +81,9 @@ Returns: CONFIRMED, DISPUTED, UNIQUE, UNVERIFIED, NEW tagged findings.
 For EACH finding, read the actual code. Record signals AS YOU VERIFY:
 ```
 gossip_signals(signals: [
-  { signal: "unique_confirmed", agent_id: "reviewer", finding: "XSS in template" },
-  { signal: "hallucination_caught", agent_id: "reviewer", finding: "Claimed X but code shows Y" },
-  { signal: "agreement", agent_id: "reviewer", counterpart_id: "researcher", finding: "Both found it" },
+  { signal: "unique_confirmed", agent_id: "reviewer", finding: "XSS in template", finding_id: "<consensus_id>:reviewer:f1" },
+  { signal: "hallucination_caught", agent_id: "reviewer", finding: "Claimed X but code shows Y", finding_id: "<consensus_id>:reviewer:f2", evidence: "code at file.ts:42 shows Y not X" },
+  { signal: "agreement", agent_id: "reviewer", counterpart_id: "researcher", finding: "Both found it", finding_id: "<consensus_id>:reviewer:f3" },
 ])
 ```
 **CRITICAL:** Record `hallucination_caught` IMMEDIATELY when a finding is wrong. Don't batch — record inline as you verify. This keeps agent scores accurate.
