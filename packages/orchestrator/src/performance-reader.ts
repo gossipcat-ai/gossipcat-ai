@@ -215,9 +215,31 @@ export class PerformanceReader {
 
     const peerDiversity = this.computePeerDiversity(signals);
 
+    // Build per-agent retraction index so computeScores skips retracted signals
+    // even when called with a raw (unfiltered) signal array (e.g. directly from tests).
+    const retractedKeys = new Set<string>();
+    for (const signal of signals) {
+      if (signal.signal === 'signal_retracted') {
+        const taskKey = signal.taskId || signal.timestamp;
+        if (signal.retractedSignal) {
+          retractedKeys.add(signal.agentId + ':' + taskKey + ':' + signal.retractedSignal);
+        } else {
+          retractedKeys.add(signal.agentId + ':' + taskKey + ':*');
+        }
+      }
+    }
+
     for (const signal of signals) {
       const isKnown = KNOWN_SIGNALS[signal.signal];
       if (!isKnown) continue;
+      if (signal.signal === 'signal_retracted') continue;
+
+      // Skip signals retracted by a signal_retracted entry
+      const taskKey2 = signal.taskId || signal.timestamp;
+      if (
+        retractedKeys.has(signal.agentId + ':' + taskKey2 + ':' + signal.signal) ||
+        retractedKeys.has(signal.agentId + ':' + taskKey2 + ':*')
+      ) continue;
 
       const a = ensure(signal.agentId);
       a.totalSignals++;

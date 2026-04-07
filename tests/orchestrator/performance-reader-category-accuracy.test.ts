@@ -54,4 +54,21 @@ describe('PerformanceReader — per-category accuracy', () => {
     expect(Object.keys(score.categoryCorrect)).toHaveLength(0);
     expect(Object.keys(score.categoryHallucinated)).toHaveLength(0);
   });
+
+  it('Test 3 — excludes retracted signals from per-category counters', () => {
+    const reader = new PerformanceReader('');
+    const signals = [
+      makeSignal({ signal: 'agreement', category: 'concurrency', taskId: 't1' }),
+      makeSignal({ signal: 'agreement', category: 'concurrency', taskId: 't2' }),
+      makeSignal({ signal: 'agreement', category: 'concurrency', taskId: 't3' }),
+      makeSignal({ signal: 'signal_retracted', category: 'concurrency', taskId: 't1' }), // retracts t1
+      makeSignal({ signal: 'hallucination_caught', category: 'concurrency', taskId: 't4' }),
+    ];
+    const scores = (reader as any).computeScores(signals);
+    const score = scores.get('agent-x');
+    // After retraction of t1: 2 correct (t2, t3), 1 hallucinated (t4)
+    expect(score.categoryCorrect.concurrency).toBe(2);
+    expect(score.categoryHallucinated.concurrency).toBe(1);
+    expect(score.categoryAccuracy.concurrency).toBeCloseTo(2 / 3, 4);
+  });
 });
