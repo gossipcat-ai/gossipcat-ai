@@ -2201,7 +2201,12 @@ server.tool(
     // bind/unbind/develop params
     agent_id: z.string().optional().describe('Agent ID (required for bind, unbind, develop)'),
     skill: z.string().optional().describe('Skill name (required for bind, unbind)'),
-    enabled: z.boolean().default(true).optional().describe('For bind: set to false to disable the slot without removing it'),
+    // NOTE: no z.default() here — combining .default().optional() on a boolean
+    // produces a malformed JSON schema emitted to MCP clients, which then
+    // mis-serialize sibling complex fields (notably `skills: [...]`) as strings,
+    // breaking `gossip_skills(action: "build", skills: [...])`. Apply the default
+    // in the handler instead. See project_gossip_skills_build_wrapper_bug.md.
+    enabled: z.boolean().optional().describe('For bind: set to false to disable the slot without removing it. Defaults to true.'),
     // develop params
     category: z.string().optional().describe('Category to improve (required for develop). One of: trust_boundaries, injection_vectors, input_validation, concurrency, resource_exhaustion, type_safety, error_handling, data_integrity'),
     // build params
@@ -2248,10 +2253,11 @@ server.tool(
       }
 
       const existing = index.getSlot(agent_id, skill);
-      const slot = index.bind(agent_id, skill, { enabled });
+      const enabledResolved = enabled ?? true;
+      const slot = index.bind(agent_id, skill, { enabled: enabledResolved });
 
       const bindAction = existing
-        ? (existing.enabled !== enabled ? (enabled ? 'enabled' : 'disabled') : 'updated')
+        ? (existing.enabled !== enabledResolved ? (enabledResolved ? 'enabled' : 'disabled') : 'updated')
         : 'bound';
 
       process.stderr.write(`[gossipcat] Skill "${slot.skill}" ${bindAction} for ${agent_id} (v${slot.version})\n`);
