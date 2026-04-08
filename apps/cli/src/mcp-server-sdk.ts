@@ -3103,6 +3103,15 @@ function startHttpMcpTransport(): void {
         }
       };
       await server.connect(transport);
+      // Each new HTTP session is effectively a reconnect from a fresh client —
+      // its tool calls should see the latest next-session.md and any signal
+      // state that changed since the last session. The stdio main() path does
+      // this at line 3136 but the HTTP path was missing it, leaving reconnected
+      // clients on stale bootstrap context until something else refreshed it.
+      // See project_bootstrap_stale_on_reconnect.md.
+      if (booted) {
+        refreshBootstrap().catch(() => {});
+      }
       await transport.handleRequest(req, res, body);
       return;
     }
