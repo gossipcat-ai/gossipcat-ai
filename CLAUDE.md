@@ -27,26 +27,34 @@ to see what was dispatched and track task IDs for progress checks.
 results. UNVERIFIED means the cross-reviewer couldn't check — you can and must. Do not
 show raw consensus results with unexamined UNVERIFIED findings.
 
-**Before acting on any backlog item from memory:** Your FIRST action is a gossipcat
-research dispatch, not manual Read/Grep. Backlog memories decay fast — an item described
-as "not shipped" may already be ~90% built by prior sessions. Dispatch first:
+**Before acting on any backlog item from memory:** Call `gossip_verify_memory(memory_path, claim)`
+where `claim` is the specific memory assertion you are about to rely on. Handle the
+verdict:
 
-```
-gossip_run(agent_id: "auto", task: "Audit <backlog item>: what's already in the code,
-  what's actually missing, what the smallest useful fix would be")
-```
+- **FRESH** — proceed, optionally cite `checked_at` in your output.
+- **STALE** — do NOT use the memory content as-is. Read the actual code at the paths in
+  `evidence`, then apply the returned `rewrite_suggestion` to the memory file before
+  acting.
+- **CONTRADICTED** — the memory is wrong, not just outdated. Stop, read the code, rewrite
+  the memory, then reassess whether the original task still makes sense — the premise may
+  have changed.
+- **INCONCLUSIVE** — the tool could not verify the claim (parse failure, missing file,
+  dispatch error, or the claim is too vague). Fall back to manual audit via Read/Grep
+  followed by a `gossip_run(agent_id: "auto", task: "Audit <backlog item>: ...")` research
+  dispatch. **Do NOT treat INCONCLUSIVE as a pass.**
 
-Only after the dispatch report is back, decide whether to edit code, file a new bug, or
-mark the memory SHIPPED. This is especially critical when the memory file shows a
-`stale memory` warning from the auto-memory system.
+Backlog memories decay fast — an item described as "not shipped" may already be ~90%
+built by prior sessions. The verification step is one structured tool call in place of a
+prose research prompt; never skip it.
 
 **Exceptions:** trivially small fixes already located in the current conversation (under
 10 lines, exact file:line already known) and items fresh from the current session.
 
 **Why this rule exists:** in session 2026-04-08, the Gemini quota watcher backlog item
 was audited manually and took ~10 Grep/Read calls to discover that 90% of the
-infrastructure was already shipped in prior sessions. A 30-second research dispatch
-would have produced the same answer. See `feedback_dispatch_before_backlog_audit.md`.
+infrastructure was already shipped in prior sessions. A 30-second `gossip_verify_memory`
+call would have produced the same answer. See `feedback_dispatch_before_backlog_audit.md`
+and `docs/specs/2026-04-08-gossip-verify-memory.md`.
 
 **Resolving findings in the dashboard:** When you record ANY signal — not just
 UNVERIFIED resolutions — you MUST include `finding_id`. The format is
