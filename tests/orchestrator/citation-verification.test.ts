@@ -432,6 +432,156 @@ describe('Tier 1B Fix #3 — strict-mode citation verification', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────
+// Task #9 — meta-reference false positive fix
+// Consensus round 99f15984-eb844568 retraction + follow-up
+// ────────────────────────────────────────────────────────────────────
+describe('Task #9 — citation dedup + meta-reference exemption', () => {
+  const testDir = resolve(tmpdir(), 'gossip-meta-ref-' + Date.now());
+  const realFile = resolve(testDir, 'src', 'real.ts');
+
+  beforeAll(() => {
+    mkdirSync(resolve(testDir, 'src'), { recursive: true });
+    writeFileSync(
+      realFile,
+      ['export const a = 1;', 'export const b = 2;'].join('\n'),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  test('duplicate citations count as one', async () => {
+    // Pre-fix: "X at fake.ts:42 where fake.ts:42 is broken" extracted 2
+    // citations, both failed, majority fired. Post-fix: deduped to 1 citation.
+    // Under strict mode, 1 bad of 1 = still fabricated (fires as expected).
+    // Under default mode, 1 bad of 1 = 1 > 0.5 = still fabricated (also
+    // fires). So this test verifies the COUNT is correct, not that it
+    // silently passes.
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    // Mix: 1 real citation (deduped) + 1 fake citation (deduped) = 2 total.
+    // 1 fake of 2 = default majority 1 > 1 = false (not fabricated).
+    // Without dedup: the same text would produce 4 citations (2 real + 2 fake)
+    // and 2 > 2 = false still, but a 3:1 real:fake mix would hit majority
+    // differently. The key invariant is that duplication cannot drive the
+    // ratio — this test pins that.
+    const result = await engine.verifyCitations(
+      'src/real.ts:1 is fine and src/real.ts:1 is also fine, ' +
+      'but fake-module.ts:42 is bad and fake-module.ts:42 is still bad',
+    );
+    expect(result).toBe(false); // 1 real + 1 fake, 1 > 1 = false
+  });
+
+  test('duplicate fake citations cannot game the strict threshold', async () => {
+    // Pre-fix: one fake path mentioned 3 times = 3 failures, trips strict
+    // threshold trivially. This was the sonnet f5 meta-bug in its exact form.
+    // Post-fix: 3 mentions of the same fake path = 1 deduped citation.
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    // Narrative mentions fake-module.ts:42 three times.
+    // Post-dedup: 1 citation (fake). 1 >= 1 strict = true (still fires).
+    // This is correct — a single fake citation SHOULD fire strict.
+    // The point of this test is that the dedup doesn't ACCIDENTALLY suppress
+    // real fabrication; it just prevents over-counting.
+    const result = await engine.verifyCitations(
+      'The fake-module.ts:42 reference, again fake-module.ts:42, and once more fake-module.ts:42',
+      { strict: true },
+    );
+    expect(result).toBe(true);
+  });
+
+  test('citations inside single-backtick inline code are stripped', async () => {
+    // A finding that describes fabrication detection by quoting an example
+    // fake path in inline code should NOT count as claiming the path exists.
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    const result = await engine.verifyCitations(
+      'When a reviewer writes `fake-path.ts:100` in dispute evidence, ' +
+      'the regex extracts it even though src/real.ts:1 is the only real code',
+      { strict: true },
+    );
+    // Only src/real.ts:1 is extracted (real). 0 failures. Returns false.
+    expect(result).toBe(false);
+  });
+
+  test('citations inside triple-backtick code fences are stripped', async () => {
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    const result = await engine.verifyCitations(
+      'Here is the example:\n```\nconst x = require("fake-lib.ts:99");\n```\n' +
+      'and the real reference is src/real.ts:2',
+      { strict: true },
+    );
+    expect(result).toBe(false);
+  });
+
+  test('citations inside <example> tags are stripped', async () => {
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    const result = await engine.verifyCitations(
+      '<example>fake-thing.ts:999 is not real</example> but src/real.ts:1 is real',
+      { strict: true },
+    );
+    expect(result).toBe(false);
+  });
+
+  test('citations inside double-quoted strings are stripped', async () => {
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    const result = await engine.verifyCitations(
+      'When reviewer B writes "fake-file.ts:100 does not exist", the regex extracts it. src/real.ts:1 is the only real claim.',
+      { strict: true },
+    );
+    expect(result).toBe(false);
+  });
+
+  test('regression: the sonnet f5 meta-finding scenario does NOT fire', async () => {
+    // Exact reproduction of the round 99f15984-eb844568 false positive.
+    // The finding text describes the dispute-path attribution bug AND quotes
+    // example fake paths in double quotes + inline code. Must NOT fire
+    // hallucination_caught against the author under strict mode.
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    const sonnetF5Text =
+      'The current AND-gate at src/real.ts:1 is semantically inverted. ' +
+      'verifyCitations(entry.evidence) extracts citations from the reviewer. ' +
+      'When reviewer B writes "fake-file.ts:100 does not exist", ' +
+      '`citationPattern` extracts `fake-file.ts:100` from B\'s text, ' +
+      'resolution fails, isCitationFabricated=true. ' +
+      'detectHallucination matches "does not exist". ' +
+      'Both conditions hold — hallucination_caught fires against B.';
+    const result = await engine.verifyCitations(sonnetF5Text, { strict: true });
+    // After strip: only src/real.ts:1 survives (inside narrative prose, not quoted).
+    // fake-file.ts:100 appears inside both a double-quoted string and inline
+    // backticks, both of which are stripped before extraction.
+    // Result: 1 real citation, 0 failures, returns false. No false positive.
+    expect(result).toBe(false);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
 // Tier 1A — Fix #2: dead ternary deletion — outcome is always 'fabricated_citation'
 // Consensus round 82a3c123-19db41e7
 // ────────────────────────────────────────────────────────────────────

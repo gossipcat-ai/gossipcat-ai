@@ -984,12 +984,50 @@ Return only valid JSON.`;
       return false;
     }
 
+    // Strip quoted / code-fenced / example-tagged content before citation
+    // extraction. This prevents the pre-filter from penalizing findings that
+    // describe fabrication detection by quoting example fake paths. Caught in
+    // consensus round 99f15984-eb844568: sonnet's f5 finding about the
+    // dispute-path attribution bug quoted `fake-file.ts:100` twice as part of
+    // explaining the gemini:f1 scenario, and the pre-filter auto-emitted a
+    // hallucination_caught signal against sonnet — the finding that was
+    // correctly describing the bug that fired on it.
+    //
+    // Regions stripped:
+    //   - Triple-backtick code fences (```...```)
+    //   - Single-backtick inline code (`...`)
+    //   - <example>...</example> tags (explicit meta-quote marker)
+    //   - Content inside "double" or 'single' quote pairs on a single line
+    //
+    // All other <cite> tags and narrative prose are preserved so the regex
+    // still catches real fabricated citations in the finding's own claims.
+    const stripped = evidence
+      .replace(/```[\s\S]*?```/g, '')          // fenced code blocks
+      .replace(/`[^`\n]*`/g, '')               // inline code
+      .replace(/<example>[\s\S]*?<\/example>/gi, '')
+      .replace(/"[^"\n]*"/g, '')               // double-quoted strings
+      .replace(/'[^'\n]*'/g, '');              // single-quoted strings
+
     // Extract file:line patterns like "task-dispatcher.ts:146" or "consensus-engine.ts:113"
     const citationPattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6}):(\d+)/g;
-    const citations: Array<{ file: string; line: number }> = [];
+    const rawCitations: Array<{ file: string; line: number }> = [];
     let match;
-    while ((match = citationPattern.exec(evidence)) !== null) {
-      citations.push({ file: match[1], line: parseInt(match[2], 10) });
+    while ((match = citationPattern.exec(stripped)) !== null) {
+      rawCitations.push({ file: match[1], line: parseInt(match[2], 10) });
+    }
+
+    // Dedupe by (file, line) tuple. Previously a finding that mentioned the
+    // same citation twice in narrative text (e.g., "X at foo.ts:42 where
+    // foo.ts:42 is broken") counted as two citations and doubled the weight
+    // toward the majority/strict threshold — a silent gameable surface.
+    // Same consensus round as above.
+    const seen = new Set<string>();
+    const citations: Array<{ file: string; line: number }> = [];
+    for (const c of rawCitations) {
+      const key = `${c.file}:${c.line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      citations.push(c);
     }
 
     if (citations.length === 0) return false;
