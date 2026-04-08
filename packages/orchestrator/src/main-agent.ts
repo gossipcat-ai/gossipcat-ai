@@ -247,6 +247,7 @@ export class MainAgent {
 
   /** Health check for active tasks — diagnostics for "is it working?" */
   getActiveTasksHealth() { return this.pipeline.getActiveTasksHealth(); }
+  getRecentlyCompletedTasks(maxAgeMs: number) { return this.pipeline.getRecentlyCompletedTasks(maxAgeMs); }
   cancelRunningTasks() { return this.pipeline.cancelRunningTasks(); }
   getConsensusCoordinator() { return this.pipeline.getConsensusCoordinator(); }
 

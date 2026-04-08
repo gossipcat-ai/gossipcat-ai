@@ -405,6 +405,28 @@ export class DispatchPipeline {
       }));
   }
 
+  /**
+   * Get recently-completed/failed tasks for `gossip_progress` display.
+   * Without this, completed relay tasks vanish from the UI: they're filtered out of
+   * `getActiveTasksHealth()` (running-only) AND `gossip_progress`'s recentlyCompleted
+   * loop only inspects nativeResultMap. Result: relay-task invisibility bug.
+   */
+  getRecentlyCompletedTasks(maxAgeMs: number): Array<{
+    id: string; agentId: string; status: string; durationMs: number; completedAgoMs: number;
+  }> {
+    const now = Date.now();
+    const cutoff = now - maxAgeMs;
+    return Array.from(this.tasks.values())
+      .filter(t => (t.status === 'completed' || t.status === 'failed') && t.completedAt && t.completedAt >= cutoff)
+      .map(t => ({
+        id: t.id,
+        agentId: t.agentId,
+        status: t.status,
+        durationMs: (t.completedAt ?? now) - t.startedAt,
+        completedAgoMs: now - (t.completedAt ?? now),
+      }));
+  }
+
   /** Mark all running tasks as cancelled and remove from tracking. Prevents zombie tasks after Ctrl+C. */
   cancelRunningTasks(): number {
     let cancelled = 0;

@@ -2709,7 +2709,11 @@ server.tool(
       elapsedMs: activeTasks.length > 0 ? Math.max(...activeTasks.map(t => t.elapsedMs)) : 0,
     } : null;
 
-    // Recently completed native tasks (last 10 minutes)
+    // Recently completed tasks (last 10 minutes) — UNION of native and relay tracks.
+    // Native: ctx.nativeResultMap. Relay: pipeline.getRecentlyCompletedTasks().
+    // Without the relay branch, completed relay tasks vanish from gossip_progress
+    // (they're filtered out of getActiveTasksHealth's running-only list AND not
+    // tracked in nativeResultMap). This was the relay-task invisibility bug.
     const recentCutoff = now - 600_000;
     const recentlyCompleted: Array<{ taskId: string; agentId: string; durationMs: number; status: string; completedAgoMs: number }> = [];
     for (const [taskId, info] of [...ctx.nativeResultMap]) {
@@ -2720,6 +2724,17 @@ server.tool(
         durationMs: info.completedAt - (info.startedAt || info.completedAt),
         status: info.status,
         completedAgoMs: now - info.completedAt,
+      });
+    }
+    for (const t of ctx.mainAgent.getRecentlyCompletedTasks(600_000)) {
+      // Skip if already added via nativeResultMap (shouldn't happen, but defensive)
+      if (recentlyCompleted.some(r => r.taskId === t.id)) continue;
+      recentlyCompleted.push({
+        taskId: t.id,
+        agentId: t.agentId,
+        durationMs: t.durationMs,
+        status: t.status,
+        completedAgoMs: t.completedAgoMs,
       });
     }
     recentlyCompleted.sort((a, b) => a.completedAgoMs - b.completedAgoMs);
