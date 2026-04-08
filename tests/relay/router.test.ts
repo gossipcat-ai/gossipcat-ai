@@ -133,9 +133,12 @@ describe('MessageRouter', () => {
     expect(metrics.messagesByType[MessageType.DIRECT]).toBe(1);
   });
 
-  it('drops messages and sends error when rate limit is exceeded', () => {
+  // Router-level rate limiting was removed; enforcement now lives in MessageRateLimiter
+  // wired at the connection layer. See tests/relay/message-rate-limiter.test.ts.
+  it.skip('drops messages and sends error when rate limit is exceeded', () => {
     const rateLimiter = new MessageRateLimiter({ maxMessages: 2, windowMs: 1000 });
-    const routerWithLimit = new MessageRouter(cm, rateLimiter);
+    const routerWithLimit = new MessageRouter(cm);
+    (routerWithLimit as any).rateLimiter = rateLimiter;
     const connA = makeMockConn('agent-a', 'sess-a');
     const connB = makeMockConn('agent-b', 'sess-b');
     cm.register('sess-a', connA);

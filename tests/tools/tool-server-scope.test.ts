@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { jest } from '@jest/globals';
+const vi = jest;
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -127,7 +128,7 @@ describe('ToolServer scope enforcement', () => {
       ['git config core.hooksPath /tmp/evil'],
       ['rm -rf ./.git/hooks/pre-commit'],
       ['echo "evil" > .git/config'],
-    ])('blocks shell command manipulating git internals: %s', async (command) => {
+    ])('blocks shell command manipulating git internals: %s', async (command: string) => {
       await expect(
         server.executeTool('shell_exec', { command }, 'agent-2')
       ).rejects.toThrow(/Shell command blocked/);

@@ -24,6 +24,7 @@ describe('Overview API', () => {
       consensusRuns: 0, totalFindings: 0, confirmedFindings: 0, totalSignals: 0,
       tasksCompleted: 0, tasksFailed: 0, avgDurationMs: 0,
       lastConsensusTimestamp: '', actionableFindings: 0,
+      hourlyActivity: new Array(12).fill(0),
     });
   });
 
@@ -34,7 +35,8 @@ describe('Overview API', () => {
       { id: 'c', provider: 'google', model: 'm', skills: [] },
     ];
     const result = await overviewHandler(projectRoot, { agentConfigs: configs as any, relayConnections: 2, connectedAgentIds: [] });
-    expect(result.agentsOnline).toBe(1); // connectedAgentIds(0) + nativeCount(1)
+    // agentsOnline now counts only connected agents (not native configs).
+    expect(result.agentsOnline).toBe(0);
     expect(result.nativeCount).toBe(1);
     expect(result.relayCount).toBe(2);
   });

@@ -82,7 +82,7 @@ describe('relay-tasks', () => {
     });
 
     it('should exit gracefully if mainAgent is not available', () => {
-      ctx.mainAgent = undefined;
+      (ctx as any).mainAgent = undefined;
       persistRelayTasks();
       expect(fs.writeFileSync).not.toHaveBeenCalled();
     });
