@@ -134,6 +134,61 @@ describe('ToolServer scope enforcement', () => {
     });
   });
 
+  describe('symlink + case-insensitive hardening', () => {
+    beforeEach(() => {
+      fs.mkdirSync(path.join(projectRoot, 'packages/relay'), { recursive: true });
+      fs.mkdirSync(path.join(projectRoot, 'packages/tools'), { recursive: true });
+      fs.writeFileSync(path.join(projectRoot, 'packages/tools/secret.ts'), 'secret');
+      server.assignScope('agent-1', 'packages/relay/');
+    });
+
+    it('blocks file_read through a symlink that escapes scope', async () => {
+      // Plant a symlink inside scope pointing at an out-of-scope file
+      const linkPath = path.join(projectRoot, 'packages/relay/escape.ts');
+      fs.symlinkSync(path.join(projectRoot, 'packages/tools/secret.ts'), linkPath);
+      await expect(
+        server.executeTool('file_read', { path: 'packages/relay/escape.ts' }, 'agent-1')
+      ).rejects.toThrow(/outside scope/);
+    });
+
+    it('blocks file_write through a symlinked parent that escapes scope', async () => {
+      // Symlink an in-scope directory name to an out-of-scope directory
+      const linkDir = path.join(projectRoot, 'packages/relay/bounce');
+      fs.symlinkSync(path.join(projectRoot, 'packages/tools'), linkDir);
+      await expect(
+        server.executeTool('file_write', { path: 'packages/relay/bounce/evil.ts', content: 'x' }, 'agent-1')
+      ).rejects.toThrow(/outside scope/);
+    });
+
+    it('blocks case-folded sibling-prefix bypass on case-insensitive fs', async () => {
+      // On darwin/win32 the OS treats RELAY and relay as the same directory;
+      // case-sensitive startsWith would have let `RELAY2/evil.ts` through.
+      await expect(
+        server.executeTool('file_write', { path: 'packages/RELAY2/evil.ts', content: 'x' }, 'agent-1')
+      ).rejects.toThrow(/outside scope/);
+    });
+  });
+
+  describe('file_delete worktree root hardening', () => {
+    beforeEach(() => {
+      const wtRoot = path.join(projectRoot, 'wt');
+      fs.mkdirSync(wtRoot, { recursive: true });
+      server.assignRoot('agent-wt', wtRoot);
+    });
+
+    it('blocks file_delete to a sibling-prefix root', async () => {
+      // Root is `<projectRoot>/wt`; a path like `<projectRoot>/wt2/file.ts`
+      // must not be accepted via bare startsWith.
+      const siblingRoot = path.join(projectRoot, 'wt2');
+      fs.mkdirSync(siblingRoot, { recursive: true });
+      const victim = path.join(siblingRoot, 'file.ts');
+      fs.writeFileSync(victim, 'x');
+      await expect(
+        server.executeTool('file_delete', { path: victim }, 'agent-wt')
+      ).rejects.toThrow(/outside worktree root/);
+    });
+  });
+
   describe('fail-closed enforcement', () => {
     it('blocks write tools if agent is in writeAgents but has no scope/root', async () => {
       // Simulate state inconsistency: write agent with no scope

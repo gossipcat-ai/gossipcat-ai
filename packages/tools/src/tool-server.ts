@@ -7,8 +7,40 @@ import { ShellTools } from './shell-tools';
 import { GitTools } from './git-tools';
 import { SkillTools } from './skill-tools';
 import { Sandbox } from './sandbox';
-import { resolve } from 'path';
+import { resolve, dirname, basename, join } from 'path';
 import { realpathSync, existsSync } from 'fs';
+
+// Case-insensitive filesystems (darwin/win32) require case-folded path compares,
+// otherwise a scope of `packages/relay/` can be bypassed by a path like
+// `packages/RELAY/evil.ts` — the OS treats them as the same directory but
+// `startsWith` is case-sensitive.
+const CASE_INSENSITIVE_FS = process.platform === 'darwin' || process.platform === 'win32';
+
+/**
+ * Resolve a path to its canonical form for boundary comparison:
+ *   1. Follow symlinks via realpathSync so a planted symlink in-scope cannot
+ *      escape to an out-of-scope target. If the target does not exist yet
+ *      (common for file_write), resolve the parent and re-attach the basename.
+ *   2. Case-fold on case-insensitive filesystems.
+ *   3. Append a trailing slash so sibling-prefix bypass (e.g. `packages/relay2/`
+ *      matching scope `packages/relay/`) is impossible.
+ */
+function canonicalizeForBoundary(p: string): string {
+  let out = p;
+  if (existsSync(out)) {
+    try { out = realpathSync(out); } catch { /* best-effort */ }
+  } else {
+    // Path does not exist — resolve symlinks in the parent directory instead,
+    // then reattach the basename. This prevents symlinks in ancestor dirs from
+    // hiding an escape during file_write.
+    const parent = dirname(out);
+    if (parent !== out && existsSync(parent)) {
+      try { out = join(realpathSync(parent), basename(out)); } catch { /* best-effort */ }
+    }
+  }
+  if (CASE_INSENSITIVE_FS) out = out.toLowerCase();
+  return out.endsWith('/') ? out : out + '/';
+}
 
 /**
  * Structural shape of MemorySearcher from @gossip/orchestrator. Defined here as
@@ -124,16 +156,16 @@ export class ToolServer {
   get agentId(): string { return this.agent.agentId; }
 
   assignScope(agentId: string, scope: string): void {
-    // Resolve to absolute path relative to projectRoot so comparisons are always
-    // absolute→absolute, regardless of whether caller passed relative or absolute scope.
+    // Canonicalize (symlink-resolve, case-fold, trailing-slash) so all four
+    // guard sites can do a plain startsWith check against the stored value.
     const abs = resolve(this.sandbox.projectRoot, scope);
-    const normalized = abs.endsWith('/') ? abs : abs + '/';
-    this.agentScopes.set(agentId, normalized);
+    this.agentScopes.set(agentId, canonicalizeForBoundary(abs));
     this.writeAgents.add(agentId);
   }
 
   assignRoot(agentId: string, root: string): void {
-    this.agentRoots.set(agentId, root);
+    const abs = resolve(root);
+    this.agentRoots.set(agentId, canonicalizeForBoundary(abs));
     this.writeAgents.add(agentId);
   }
 
@@ -205,20 +237,17 @@ export class ToolServer {
     if (toolName === 'file_write') {
       const filePath = args.path as string;
       if (scope) {
-        // Resolve path to prevent traversal attacks (e.g. 'packages/tools/../relay/evil.ts').
-        // scope is stored absolute+trailing-slash (see assignScope), so compare absolute→absolute.
-        const resolved = resolve(this.sandbox.projectRoot, filePath);
-        const normalizedResolved = resolved.endsWith('/') ? resolved : resolved + '/';
-        if (!normalizedResolved.startsWith(scope)) {
+        // canonicalizeForBoundary resolves symlinks, case-folds on
+        // case-insensitive filesystems, and appends a trailing slash so
+        // sibling-prefix bypass is impossible. scope is already canonical.
+        const canonical = canonicalizeForBoundary(resolve(this.sandbox.projectRoot, filePath));
+        if (!canonical.startsWith(scope)) {
           throw new Error(`Write blocked: "${filePath}" is outside scope "${scope}"`);
         }
       }
       if (root) {
-        const resolved = resolve(root, filePath);
-        // Resolve symlinks before boundary check to prevent symlink escape (fix #5)
-        const realResolved = existsSync(resolved) ? realpathSync(resolved) : resolved;
-        const realRoot = existsSync(root) ? realpathSync(root) : root;
-        if (!realResolved.startsWith(realRoot + '/') && realResolved !== realRoot) {
+        const canonical = canonicalizeForBoundary(resolve(root, filePath));
+        if (!canonical.startsWith(root)) {
           throw new Error(`Write blocked: "${filePath}" is outside worktree root "${root}"`);
         }
       }
@@ -258,15 +287,16 @@ export class ToolServer {
     if (toolName === 'file_delete') {
       const filePath = args.path as string;
       if (scope) {
-        const resolved = resolve(this.sandbox.projectRoot, filePath);
-        const normalizedResolved = resolved.endsWith('/') ? resolved : resolved + '/';
-        if (!normalizedResolved.startsWith(scope)) {
+        const canonical = canonicalizeForBoundary(resolve(this.sandbox.projectRoot, filePath));
+        if (!canonical.startsWith(scope)) {
           throw new Error(`Delete blocked: "${filePath}" is outside scope "${scope}"`);
         }
       }
       if (root) {
-        const resolved = resolve(root, filePath);
-        if (!resolved.startsWith(root)) {
+        // Match file_write hardening: resolve symlinks + trailing-slash guard
+        // so planted symlinks and sibling-prefix roots cannot escape.
+        const canonical = canonicalizeForBoundary(resolve(root, filePath));
+        if (!canonical.startsWith(root)) {
           throw new Error(`Delete blocked: "${filePath}" is outside worktree root "${root}"`);
         }
       }
@@ -307,9 +337,10 @@ export class ToolServer {
         // For scoped agents, restrict reads to within their assigned scope
         const readScope = callerId ? this.agentScopes.get(callerId) : undefined;
         if (readScope) {
-          const resolved = resolve(this.sandbox.projectRoot, args.path as string);
-          const normalizedResolved = resolved.endsWith('/') ? resolved : resolved + '/';
-          if (!normalizedResolved.startsWith(readScope)) {
+          // canonicalizeForBoundary follows symlinks so a planted symlink
+          // inside scope cannot redirect the read to an out-of-scope target.
+          const canonical = canonicalizeForBoundary(resolve(this.sandbox.projectRoot, args.path as string));
+          if (!canonical.startsWith(readScope)) {
             throw new Error(`Read blocked: "${args.path}" is outside scope "${readScope}"`);
           }
         }
