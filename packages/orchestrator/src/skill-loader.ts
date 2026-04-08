@@ -19,6 +19,10 @@ export const DEFAULT_KEYWORDS: Record<string, string[]> = {
   type_safety: ['type guard', 'generic', 'cast', 'assertion', 'narrowing', 'discriminated', 'satisfies'],
   error_handling: ['error handling', 'catch', 'throw', 'exception', 'retry', 'fallback', 'recovery', 'graceful'],
   data_integrity: ['data integrity', 'migration', 'serialize', 'deserialize', 'corrupt', 'consistency', 'invariant', 'transaction', 'rollback', 'idempotent'],
+  // Fabrication-class failures: agent cites code that does not match repo state.
+  // Kept in sync with CATEGORY_KEYWORDS in skill-engine.ts — both tables drive contextual activation
+  // and auto-inference in gossip_signals, so they must agree.
+  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricat', 'hallucin', 'verify', 'does not exist', 'no such'],
 };
 
 export interface LoadSkillsResult {

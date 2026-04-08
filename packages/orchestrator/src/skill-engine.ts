@@ -28,7 +28,7 @@ const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const KNOWN_CATEGORIES = new Set([
   'trust_boundaries', 'injection_vectors', 'input_validation', 'concurrency',
   'resource_exhaustion', 'type_safety', 'error_handling', 'data_integrity',
-  'severity_calibration',
+  'severity_calibration', 'citation_grounding',
 ]);
 
 /** Default keywords per category for contextual skill activation */
@@ -42,6 +42,10 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
   error_handling: ['error handling', 'catch', 'throw', 'exception', 'retry', 'fallback', 'recovery', 'graceful'],
   data_integrity: ['data integrity', 'migration', 'serialize', 'deserialize', 'corrupt', 'consistency', 'invariant', 'transaction', 'rollback', 'idempotent'],
   severity_calibration: ['severity', 'critical', 'high', 'medium', 'low', 'impact', 'risk', 'priority', 'triage', 'cvss'],
+  // Citation grounding — fabrication-class failures: cited file/line/symbol does not match repo state.
+  // Gate for this is a skill bind + signal category, not the consensus-engine verifyCitations AND-gate
+  // (which only fires on keyword+regex dual-match, rarely in practice).
+  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricat', 'hallucin', 'verify', 'does not exist', 'no such'],
 };
 
 const REQUIRED_SECTIONS = ['## Iron Law', '## When This Skill Activates', '## Methodology', '## Key Patterns', '## Anti-Patterns', '## Quality Gate'];
@@ -174,7 +178,7 @@ Peer scores: ${peerScores.length > 0 ? peerScores.join(', ') : 'no peer data'}
 
 Output a skill markdown file with this exact structure:
 
-1. YAML frontmatter with fields: name, category (${category}), agent (${agentId}), generated, effectiveness (0.0), baseline_rate (${baselineRate.toFixed(3)}), baseline_dispatches (${totalDispatches}), post_skill_dispatches (0), version (1), mode (contextual), keywords ([${(CATEGORY_KEYWORDS[category] || [category]).join(', ')}])
+1. YAML frontmatter with fields: name, category (${category}), agent (${agentId}), generated, effectiveness (0.0), baseline_rate (${baselineRate.toFixed(3)}), baseline_dispatches (${totalDispatches}), version (1), mode (contextual), keywords ([${(CATEGORY_KEYWORDS[category] || [category]).join(', ')}])
 2. ## Iron Law — one absolute rule (MUST/NEVER language)
 3. ## When This Skill Activates — task patterns that trigger it
 4. ## Methodology — 5-8 step checklist, actionable not vague

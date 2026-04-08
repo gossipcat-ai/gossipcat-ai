@@ -224,6 +224,10 @@ export class ConsensusEngine {
     const peerLines: string[] = [];
     const agentFindingPattern = /<agent_finding\s+([^>]*)>([\s\S]*?)<\/agent_finding>/g;
     const MAX_ANCHORS_PER_SUMMARY = 15;
+    // Content cap — see parseAgentFindings() for the full rationale. Must match
+    // MAX_FINDING_CONTENT over there so findingIdx stays in lockstep with
+    // synthesize()'s own pass, otherwise wrong findings get confirmed/disputed.
+    const MAX_FINDING_CONTENT = 8000;
 
     for (const [peerId, peerSummary] of summaries) {
       if (peerId === agent.agentId) continue;
@@ -238,11 +242,12 @@ export class ConsensusEngine {
       let findingIdx = 0;
       while ((afMatch = pattern.exec(peerFindingText)) !== null) {
         const attrs = afMatch[1];
-        const content = afMatch[2].trim();
-        // MUST match synthesize() filtering exactly: length 15-2000, type attribute required.
-        // If these filters diverge, findingIdx goes out of sync → wrong finding confirmed/disputed.
-        if (!content || content.length < 15 || content.length > 2000) continue;
+        let content = afMatch[2].trim();
+        if (!content || content.length < 15) continue;
         if (!attrs.match(/type="(finding|suggestion|insight)"/)) continue;
+        if (content.length > MAX_FINDING_CONTENT) {
+          content = content.slice(0, MAX_FINDING_CONTENT) + '\n…[truncated]';
+        }
         findingIdx++;
         findings.push({ id: `${peerId}:f${findingIdx}`, attrs, content });
       }
@@ -1210,6 +1215,14 @@ Return only valid JSON.`;
     content: string;
     hasAnchor: boolean;
   }> {
+    // Cap is generous (8 KB) so that long-form findings from verbose agents
+    // (gemini-reviewer has emitted 5–6 KB single blocks) still parse. The old
+    // 2 KB cap silently dropped them, which forced bullet-fallback and broke
+    // finding-ID roundtrip to cross-review — see consensus round
+    // c8dae78e-b6334267 for the canonical example. Over-cap findings are
+    // truncated (with an ellipsis marker) rather than rejected so the signal
+    // is preserved even for runaway outputs.
+    const MAX_FINDING_CONTENT = 8000;
     const agentFindingPattern = /<agent_finding\s+([^>]*)>([\s\S]*?)<\/agent_finding>/g;
     const out: Array<{
       findingType: 'finding' | 'suggestion' | 'insight';
@@ -1221,8 +1234,16 @@ Return only valid JSON.`;
     let afMatch: RegExpExecArray | null;
     while ((afMatch = agentFindingPattern.exec(raw)) !== null) {
       const attrs = afMatch[1];
-      const content = afMatch[2].trim();
-      if (!content || content.length < 15 || content.length > 2000) continue;
+      let content = afMatch[2].trim();
+      if (!content || content.length < 15) continue;
+      if (content.length > MAX_FINDING_CONTENT) {
+        process.stderr.write(
+          `[consensus] ⚠ agent "${_agentId}" emitted an <agent_finding> of ${content.length} chars ` +
+          `(cap ${MAX_FINDING_CONTENT}) — truncating rather than dropping. ` +
+          `Consider splitting into multiple tagged findings.\n`
+        );
+        content = content.slice(0, MAX_FINDING_CONTENT) + '\n…[truncated]';
+      }
 
       const typeMatch = attrs.match(/type="(finding|suggestion|insight)"/);
       if (!typeMatch) continue;
