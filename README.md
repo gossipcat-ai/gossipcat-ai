@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="packages/dashboard-v2/public/assets/banner.png" alt="Gossipcat" width="600" />
+  <img src="https://raw.githubusercontent.com/gossipcat-ai/gossipcat-ai/master/packages/dashboard-v2/public/assets/banner.png" alt="Gossipcat" width="600" />
 </p>
 
 <p align="center">
@@ -7,8 +7,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ataberk-xyz/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
+  <a href="https://www.npmjs.com/package/gossipcat"><img src="https://img.shields.io/npm/v/gossipcat.svg?color=cb3837&label=npm" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/gossipcat"><img src="https://img.shields.io/npm/dm/gossipcat.svg?color=cb3837" alt="npm downloads" /></a>
+  <a href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
+  <a href="https://github.com/gossipcat-ai/gossipcat-ai/stargazers"><img src="https://img.shields.io/github/stars/gossipcat-ai/gossipcat-ai?style=social" alt="GitHub stars" /></a>
 </p>
 
 <p align="center">
@@ -160,37 +163,53 @@ Both types participate equally in consensus, cross-review, and skill development
 
 ## Quickstart
 
-**Requirements:** Node.js 22+
+**Requirements:** Node.js 22+ and [Claude Code](https://claude.com/claude-code).
 
-### 1. Install
+### One-liner
 
 ```bash
-npm install -g gossipcat
+npm install -g gossipcat@next && claude mcp add gossipcat -s user -- gossipcat
 ```
 
-That's it. The install drops a `gossipcat` binary on your `PATH` and ships both the MCP server bundle and the dashboard assets. No clone, no build step.
+Restart Claude Code. Then in any project, ask:
 
-If you prefer project-local install:
+> "Set up a gossipcat team for this project"
+
+Claude Code will call `gossip_setup()` to scaffold `.gossip/config.json` and your agent team. First-run bootstrap also writes the dispatch rules and tool catalog so Claude Code knows how to use gossipcat — no manual config needed.
+
+### What the install ships
+
+| | What you get |
+|---|---|
+| **MCP server** | Bundled binary at `dist-mcp/mcp-server.js`, wired as the `gossipcat` command on `PATH` |
+| **Dashboard** | Prebuilt static assets in `dist-dashboard/` — launches automatically on port `24420` when the relay boots |
+| **Default skills + rules** | 18 bundled skill templates + gossipcat operational rules copied into the install |
+| **Postinstall wizard** | Writes `.mcp.json` with correct absolute paths for your machine |
+
+### Alternative install paths
+
+**Project-local install** (each project gets its own gossipcat):
 ```bash
-npm install --save-dev gossipcat
+cd your-project
+npm install --save-dev gossipcat@next
 ```
-The postinstall will write a `.mcp.json` into your project root automatically. Open Claude Code in that directory and gossipcat connects.
+The postinstall writes `.mcp.json` to your project root. Open Claude Code in that directory and gossipcat connects automatically — no `claude mcp add` needed.
 
-### 2. Register with Claude Code
-
-For global registration (available in every project):
+**From source** (contributors):
 ```bash
-claude mcp add gossipcat -s user -- gossipcat
-```
-
-The dashboard launches automatically on port `24420` when the relay starts — no extra setup needed.
-
-**From source** (contributors only):
-```bash
-git clone https://github.com/ataberk-xyz/gossipcat-ai.git
-cd gossipcat-ai && npm install && npm run build:mcp
+git clone https://github.com/gossipcat-ai/gossipcat-ai.git
+cd gossipcat-ai
+npm install
+npm run build:mcp
 claude mcp add gossipcat -s user -- node "$PWD/dist-mcp/mcp-server.js"
 ```
+
+### Upgrading
+
+```bash
+npm update -g gossipcat
+```
+Or in-session, ask Claude Code: *"Check for gossipcat updates"* — the `gossip_update` tool fetches the latest release notes and applies the upgrade with your confirmation.
 
 ### 3. API keys
 
@@ -531,18 +550,17 @@ These tools are called by the internal LLM (the orchestrator — Claude Code wit
 
 ## Dashboard
 
-Build the dashboard (one time):
-```bash
-npm run build:dashboard
-```
+The dashboard ships prebuilt with the npm package — no build step. It launches automatically on port `24420` the first time gossipcat boots. Ask Claude Code for the URL:
 
-The dashboard launches automatically on port `24420` when gossipcat boots. Run `gossip_status` to get the URL and auth key:
+> "What's my gossipcat dashboard URL?"
+
+Or call `gossip_status` directly — the response includes the URL and a per-session auth key:
 
 ```
 Dashboard: http://localhost:24420/dashboard (key: a1b2c3...)
 ```
 
-A new auth key is generated each session. Paste it when prompted to log in.
+A new auth key is generated each session — paste it when prompted to log in.
 
 Built with React + Vite + shadcn/ui:
 
@@ -692,6 +710,7 @@ Gossipcat auto-detects the host environment:
 | Statistical skill effectiveness (z-test on per-category accuracy, auto pass/fail verdicts) | ✅ Shipped |
 | Native subagents get skill injection + cognitive memory recall | ✅ Shipped |
 | Relay cross-reviewers get `file_read` + `file_grep` (closes tool-blindness gap with natives) | ✅ Shipped |
+| npm package — one-liner install with bundled MCP server + dashboard | ✅ Shipped |
 | Full implementation workflow (agents write code) | 🔄 In progress |
 | Dashboard enrichment (graphs, trends, session history) | ☐ Planned |
 | Local Postgres migration (embedded Postgres for tasks/signals/consensus/memory — unblocks full task results, real queries, no more JSONL scans) | ☐ Planned |
@@ -702,6 +721,15 @@ Gossipcat auto-detects the host environment:
 
 <br/>
 
+## Contributing
+
+Gossipcat is open source and early-stage — bug reports, feature ideas, and PRs are all welcome.
+
+- **Bugs / feature requests** → [open an issue](https://github.com/gossipcat-ai/gossipcat-ai/issues). Or ask Claude Code directly: *"File a gossipcat bug report about <...>"* — the `gossip_bug_feedback` tool posts structured issues from your current session.
+- **Pull requests** → fork, branch, PR against `master`. Run `npm test` before pushing. Commit messages follow conventional commits (`fix:`, `feat:`, `chore:`, `docs:`).
+- **Discussions** → new ideas, design questions, "should this be a feature?" → [GitHub Discussions](https://github.com/gossipcat-ai/gossipcat-ai/discussions).
+
+See `CLAUDE.md` in the repo for the operational rules gossipcat's own agents follow during development — it's a useful read if you want to understand the signal pipeline and consensus workflow from the inside.
 
 <br/>
 
