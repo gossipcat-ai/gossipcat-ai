@@ -17,6 +17,8 @@ keys.enc
 .gstack/
 .agents/
 .claude/skills/
+.claude/agents/
+.claude/settings.local.json
 docs/superpowers/
 skills-lock.json
 *.tsbuildinfo
