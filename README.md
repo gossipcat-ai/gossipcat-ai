@@ -192,14 +192,75 @@ Add env vars for the providers you want to use. Pass them with `-e` when registe
 
 | Provider | Env var | Notes |
 |----------|---------|-------|
-| Google Gemini | `GOOGLE_API_KEY` | For Gemini relay agents |
-| OpenAI | `OPENAI_API_KEY` | For OpenAI relay agents |
-| Anthropic | — | Native agents use your Claude Code subscription — no key needed |
+| Native (Claude Code) | — | Dispatches through your active Claude Code subscription. No key needed. |
+| Anthropic API | `ANTHROPIC_API_KEY` | Direct API access if you don't want to go through Claude Code. |
+| Google Gemini | `GOOGLE_API_KEY` | Gemini Pro / Flash relay agents. |
+| OpenAI | `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`) | GPT-4 / GPT-4o relay agents. `OPENAI_BASE_URL` lets you point at OpenAI-compatible gateways (Azure, Together, Groq, etc.). |
+| OpenClaw | — (local gateway) | OpenAI-compatible, defaults to `http://127.0.0.1:18789/v1`. No API key — auth handled by your local OpenClaw daemon. |
+| Ollama (local) | — | Runs locally via `http://localhost:11434`. No key. Pull your model first with `ollama pull llama3.1:8b`. |
 
-Example with Gemini:
+#### Examples — registering gossipcat with each provider
+
+**Native only** (zero API keys — everything runs through Claude Code):
 ```bash
-claude mcp add gossipcat -s user -e GOOGLE_API_KEY=your-key -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+claude mcp add gossipcat -s user -- node /path/to/gossipcat/dist-mcp/mcp-server.js
 ```
+Then in session ask for a team built from `sonnet-reviewer` / `haiku-researcher` / `opus-implementer`. Native agents dispatch through `Agent()` and relay back. Good zero-config starting point.
+
+**Anthropic API** (direct, bypasses Claude Code):
+```bash
+claude mcp add gossipcat -s user \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+```
+Use this if you want relay agents running Claude models without going through the Claude Code subscription path — e.g. for parallelism beyond Claude Code's concurrency cap, or for running long background reviews while you keep working.
+
+**Google Gemini**:
+```bash
+claude mcp add gossipcat -s user \
+  -e GOOGLE_API_KEY=AIza... \
+  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+```
+Enables `gemini-reviewer`, `gemini-tester`, `gemini-implementer` on the relay. Watch the quota — gossipcat has a built-in 429 watcher that falls back to native agents when Gemini is cooling down.
+
+**OpenAI** (and OpenAI-compatible gateways):
+```bash
+claude mcp add gossipcat -s user \
+  -e OPENAI_API_KEY=sk-... \
+  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+```
+For Azure / Together / Groq / OpenRouter, add `OPENAI_BASE_URL`:
+```bash
+claude mcp add gossipcat -s user \
+  -e OPENAI_API_KEY=your-key \
+  -e OPENAI_BASE_URL=https://api.groq.com/openai/v1 \
+  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+```
+
+**OpenClaw** (local gateway):
+```bash
+# Start the OpenClaw daemon first (see openclaw docs), default port 18789
+claude mcp add gossipcat -s user -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+```
+No env vars. Configure an agent with `provider: "openclaw"` in `.gossip/config.json` and gossipcat talks to the local gateway automatically. Override the port with `base_url` in the agent config if your daemon runs elsewhere.
+
+**Ollama** (fully local, no API):
+```bash
+# Pull a model once
+ollama pull llama3.1:8b
+# Then register gossipcat
+claude mcp add gossipcat -s user -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+```
+Configure the agent with `provider: "local"` and `model: "llama3.1:8b"` in `.gossip/config.json`. Good for airgapped dev, offline work, and burning-down-test-debt sessions where you don't want to spend API credits.
+
+**Mixed setup** (common production shape — Gemini cheap reviewers + Anthropic heavy implementers):
+```bash
+claude mcp add gossipcat -s user \
+  -e GOOGLE_API_KEY=AIza... \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+```
+Then set up a team with `gemini-reviewer` + `haiku-researcher` (native) + `opus-implementer` (native) + `sonnet-reviewer` (native). Gossipcat dispatches by category strength from the signal pipeline.
 
 Keys are stored persistently and cross-platform:
 - **macOS** — OS Keychain
