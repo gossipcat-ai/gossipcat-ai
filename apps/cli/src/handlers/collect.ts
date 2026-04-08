@@ -147,8 +147,8 @@ export async function handleCollect(
     if (failedResults.length > 0) {
       const { PerformanceWriter } = await import('@gossip/orchestrator');
       const writer = new PerformanceWriter(process.cwd());
-      const timestamp = new Date().toISOString();
-      const autoSignals = failedResults.map((r: any) => ({
+      const now = Date.now();
+      const autoSignals = failedResults.map((r: any, i: number) => ({
         type: 'consensus' as const,
         taskId: r.id || '',
         // Use disagreement for empty/timeout (reliability failure), hallucination only for actual errors
@@ -157,7 +157,11 @@ export async function handleCollect(
         evidence: r.status === 'failed' ? `Task failed: ${r.error || 'unknown error'}`
           : r.status === 'timed_out' ? 'Task timed out — no response'
           : 'Empty response — agent produced no output',
-        timestamp,
+        // Per-signal timestamp: prefer real task completion time when available, else
+        // a strictly-increasing per-index time so sort tiebreaker is deterministic.
+        timestamp: r.completedAt
+          ? new Date(r.completedAt).toISOString()
+          : new Date(now + i).toISOString(),
       }));
       writer.appendSignals(autoSignals);
       process.stderr.write(`[gossipcat] ⚠️  Auto-recorded ${autoSignals.length} failure signal(s): ${autoSignals.map((s: any) => s.agentId).join(', ')}\n`);

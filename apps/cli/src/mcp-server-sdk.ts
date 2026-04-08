@@ -1769,6 +1769,7 @@ server.tool(
     action: z.enum(['record', 'retract']).default('record').describe('Action: "record" to add signals, "retract" to undo a previous signal'),
     // record params
     task_id: z.string().optional().describe('Task ID to link signals to. For record: optional (synthetic ID if omitted). For retract: required.'),
+    task_start_time: z.string().optional().describe('ISO-8601 timestamp of the underlying task/consensus round. Used as the per-batch fallback timestamp so bulk-recording from a backlog preserves true chronology. Falls back to wall-clock if omitted.'),
     signals: z.array(z.object({
       signal: z.enum(['agreement', 'disagreement', 'unique_confirmed', 'unique_unconfirmed', 'new_finding', 'hallucination_caught', 'impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected'])
         .describe('Signal type: agreement (both agree), disagreement (one wrong), unique_confirmed (only one found it + verified), unique_unconfirmed (only one found it, unverified), new_finding (discovered during cross-review), hallucination_caught (fabricated finding), impl_test_pass/fail (write-mode task outcome), impl_peer_approved/rejected (peer code review verdict)'),
@@ -1779,12 +1780,13 @@ server.tool(
       severity: z.enum(['critical', 'high', 'medium', 'low']).optional().describe('Finding severity for impact scoring. If omitted, defaults to medium.'),
       category: z.string().optional().describe('Finding category for ATI competency profiles (e.g., concurrency, trust_boundaries, injection_vectors, resource_exhaustion, type_safety, error_handling, data_integrity, input_validation)'),
       evidence: z.string().optional().describe('Supporting evidence or reasoning'),
+      timestamp: z.string().optional().describe('ISO-8601 timestamp of when this specific finding occurred. Highest precedence; overrides task_start_time. Use for per-finding chronology when known.'),
     })).optional().describe('Array of consensus signals (required for action: "record")'),
     // retract params
     agent_id: z.string().optional().describe('Agent whose signal to retract (required for action: "retract")'),
     reason: z.string().optional().describe('Why this signal is being retracted (required for action: "retract")'),
   },
-  async ({ action, task_id, signals, agent_id, reason }) => {
+  async ({ action, task_id, task_start_time, signals, agent_id, reason }) => {
     await boot();
 
     if (action === 'retract') {
@@ -1823,12 +1825,29 @@ server.tool(
     try {
       const { PerformanceWriter } = await import('@gossip/orchestrator');
       const writer = new PerformanceWriter(process.cwd());
-      const timestamp = new Date().toISOString();
+      const wallClockMs = Date.now();
+      const wallClock = new Date(wallClockMs).toISOString();
+      // Sanity window for caller-provided timestamps: 30 days back, 1 hour forward.
+      // Anything outside this is rejected to prevent score manipulation via spoofed
+      // timestamps (parking the tail far in the future, or burying negatives in the past).
+      const MIN_TS_MS = wallClockMs - 30 * 24 * 60 * 60 * 1000;
+      const MAX_TS_MS = wallClockMs + 60 * 60 * 1000;
+      const validateTimestamp = (ts: string | undefined, label: string): string | null => {
+        if (!ts) return null;
+        const parsed = new Date(ts).getTime();
+        if (!Number.isFinite(parsed)) return `Error: ${label} is not a valid ISO-8601 date: ${ts}`;
+        if (parsed < MIN_TS_MS) return `Error: ${label} is more than 30 days in the past (${ts}). Rejecting to prevent score manipulation.`;
+        if (parsed > MAX_TS_MS) return `Error: ${label} is more than 1 hour in the future (${ts}). Rejecting to prevent score manipulation.`;
+        return null;
+      };
+      const tstErr = validateTimestamp(task_start_time, 'task_start_time');
+      if (tstErr) return { content: [{ type: 'text' as const, text: tstErr }] };
+      const batchFallback = task_start_time || wallClock;
       const MAX_EVIDENCE_LENGTH = 2000;
       const PUNITIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement']);
       const COUNTERPART_REQUIRED = new Set(['agreement', 'disagreement', 'impl_peer_approved', 'impl_peer_rejected']);
 
-      // Validate: punitive signals require evidence
+      // Validate: punitive signals require evidence; per-signal timestamps must be in range
       for (const s of signals) {
         if (PUNITIVE_SIGNALS.has(s.signal) && (!s.evidence || s.evidence.trim().length === 0)) {
           return { content: [{ type: 'text' as const, text: `Error: ${s.signal} signals require non-empty evidence for audit trail. Agent: ${s.agent_id}` }] };
@@ -1836,6 +1855,8 @@ server.tool(
         if (COUNTERPART_REQUIRED.has(s.signal) && (!s.counterpart_id || s.counterpart_id.trim().length === 0)) {
           return { content: [{ type: 'text' as const, text: `Error: ${s.signal} signals require counterpart_id. Agent: ${s.agent_id}` }] };
         }
+        const sigTsErr = validateTimestamp(s.timestamp, `signal[${s.agent_id}].timestamp`);
+        if (sigTsErr) return { content: [{ type: 'text' as const, text: sigTsErr }] };
       }
 
       const IMPL_SIGNALS = new Set(['impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected']);
@@ -1859,8 +1880,18 @@ server.tool(
       };
 
       type PS = import('@gossip/orchestrator').PerformanceSignal;
+      // Per-signal timestamp resolution (highest → lowest precedence):
+      //   1. s.timestamp — caller-provided per-finding precision
+      //   2. task_start_time — caller-provided per-batch precision
+      //   3. wallClock + i ms — fallback, +i offset keeps batch order deterministic
+      const resolveTs = (s: { timestamp?: string }, i: number): string => {
+        if (s.timestamp) return s.timestamp;
+        if (task_start_time) return new Date(new Date(task_start_time).getTime() + i).toISOString();
+        return new Date(wallClockMs + i).toISOString();
+      };
       const formatted: PS[] = signals.map((s, i): PS => {
-        const taskId = task_id || `manual-${timestamp.replace(/[:.]/g, '')}-${i}`;
+        const ts = resolveTs(s, i);
+        const taskId = task_id || `manual-${batchFallback.replace(/[:.]/g, '')}-${i}`;
         const evidence = ((s.evidence || s.finding) ?? '').slice(0, MAX_EVIDENCE_LENGTH);
         if (IMPL_SIGNALS.has(s.signal)) {
           return {
@@ -1870,7 +1901,7 @@ server.tool(
             taskId,
             source: 'manual',
             evidence,
-            timestamp,
+            timestamp: ts,
           };
         }
         return {
@@ -1883,7 +1914,7 @@ server.tool(
           severity: s.severity,
           category: s.category ?? inferCategory(s),
           evidence,
-          timestamp,
+          timestamp: ts,
         };
       });
 

@@ -102,7 +102,12 @@ export class ConsensusCoordinator {
 
       // Extract categories from confirmed findings
       if (consensusReport.confirmed.length > 0) {
-        const now = new Date().toISOString();
+        // synthesize() runs at the time the consensus actually completes, so wall-clock
+        // IS the task time here. The +i ms offset on each emitted signal keeps the
+        // chronological sort tiebreaker deterministic when many categories fire in one
+        // synthesize() call (otherwise they would all share one timestamp).
+        const baseMs = Date.now();
+        let i = 0;
         for (const finding of consensusReport.confirmed) {
           const categories = extractCategories(finding.finding);
           for (const category of categories) {
@@ -114,9 +119,10 @@ export class ConsensusCoordinator {
               taskId: finding.id || '',
               category,
               evidence: finding.finding,
-              timestamp: now,
+              timestamp: new Date(baseMs + i).toISOString(),
               severity: finding.severity,
             } as any);
+            i++;
           }
         }
       }

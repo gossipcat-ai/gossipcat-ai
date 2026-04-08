@@ -528,14 +528,16 @@ export class ToolServer {
     // Emit impl signals
     const testStatus = testResult.includes('FAIL') ? 'FAIL' : 'PASS';
     if (this.perfWriter) {
-      const now = new Date().toISOString();
+      // Distinct per-signal timestamps so the test signal and the peer-review signal
+      // are deterministically ordered (test result happens before peer review).
+      const baseMs = Date.now();
       this.perfWriter.appendSignal({
         type: 'impl',
         signal: testStatus === 'PASS' ? 'impl_test_pass' : 'impl_test_fail',
         agentId: callerId,
         taskId: callerId,
         evidence: testStatus === 'FAIL' ? testResult.slice(-500) : undefined,
-        timestamp: now,
+        timestamp: new Date(baseMs).toISOString(),
       });
 
       if (reviewResult && !reviewResult.includes('unavailable')) {
@@ -546,7 +548,7 @@ export class ToolServer {
           agentId: callerId,
           taskId: callerId,
           evidence: reviewResult.slice(0, 500),
-          timestamp: now,
+          timestamp: new Date(baseMs + 1).toISOString(),
         });
       }
     }

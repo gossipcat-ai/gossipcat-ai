@@ -579,3 +579,136 @@ describe('gossip_signals retraction validation', () => {
     }
   });
 });
+
+// ── Timestamp resolution & validation (signal-timestamp-from-task-time spec) ──
+//
+// Replicates the resolution + validation logic from mcp-server-sdk.ts so we can
+// exercise it without spinning up the full server. Mirrors the production code:
+// per-signal `timestamp` (highest precedence) → `task_start_time` (batch) →
+// wall-clock + i ms fallback. Caller-provided timestamps are clamped to a sane
+// 30-day-back / 1-hour-forward window to prevent score manipulation.
+
+describe('gossip_signals timestamp resolution + spoofing rejection', () => {
+  function resolveTimestamps(opts: {
+    taskStartTime?: string;
+    signals: Array<{ timestamp?: string }>;
+    nowMs: number;
+  }): { error?: string; timestamps?: string[] } {
+    const wallClockMs = opts.nowMs;
+    const MIN_TS_MS = wallClockMs - 30 * 24 * 60 * 60 * 1000;
+    const MAX_TS_MS = wallClockMs + 60 * 60 * 1000;
+    const validateTimestamp = (ts: string | undefined, label: string): string | null => {
+      if (!ts) return null;
+      const parsed = new Date(ts).getTime();
+      if (!Number.isFinite(parsed)) return `Error: ${label} is not a valid ISO-8601 date: ${ts}`;
+      if (parsed < MIN_TS_MS) return `Error: ${label} is more than 30 days in the past (${ts}). Rejecting to prevent score manipulation.`;
+      if (parsed > MAX_TS_MS) return `Error: ${label} is more than 1 hour in the future (${ts}). Rejecting to prevent score manipulation.`;
+      return null;
+    };
+    const tstErr = validateTimestamp(opts.taskStartTime, 'task_start_time');
+    if (tstErr) return { error: tstErr };
+    for (let i = 0; i < opts.signals.length; i++) {
+      const err = validateTimestamp(opts.signals[i].timestamp, `signal[${i}].timestamp`);
+      if (err) return { error: err };
+    }
+    const timestamps = opts.signals.map((s, i) => {
+      if (s.timestamp) return s.timestamp;
+      if (opts.taskStartTime) return new Date(new Date(opts.taskStartTime).getTime() + i).toISOString();
+      return new Date(wallClockMs + i).toISOString();
+    });
+    return { timestamps };
+  }
+
+  const NOW_MS = new Date('2026-04-08T12:00:00.000Z').getTime();
+
+  it('per-signal timestamps win over task_start_time', () => {
+    const r = resolveTimestamps({
+      taskStartTime: '2026-04-01T00:00:00.000Z',
+      signals: [
+        { timestamp: '2026-04-05T10:00:00.000Z' },
+        { timestamp: '2026-04-06T10:00:00.000Z' },
+      ],
+      nowMs: NOW_MS,
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.timestamps).toEqual([
+      '2026-04-05T10:00:00.000Z',
+      '2026-04-06T10:00:00.000Z',
+    ]);
+  });
+
+  it('task_start_time used as fallback when per-signal omitted, with +i ms offsets', () => {
+    const r = resolveTimestamps({
+      taskStartTime: '2026-04-04T14:08:13.631Z',
+      signals: [{}, {}, {}],
+      nowMs: NOW_MS,
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.timestamps).toEqual([
+      '2026-04-04T14:08:13.631Z',
+      '2026-04-04T14:08:13.632Z',
+      '2026-04-04T14:08:13.633Z',
+    ]);
+  });
+
+  it('wall-clock fallback when both omitted, distinct per signal', () => {
+    const r = resolveTimestamps({
+      signals: [{}, {}, {}],
+      nowMs: NOW_MS,
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.timestamps).toEqual([
+      '2026-04-08T12:00:00.000Z',
+      '2026-04-08T12:00:00.001Z',
+      '2026-04-08T12:00:00.002Z',
+    ]);
+    // Critical: distinct so the reader's chronological sort is meaningful.
+    expect(new Set(r.timestamps).size).toBe(r.timestamps!.length);
+  });
+
+  it('rejects task_start_time more than 1 hour in the future', () => {
+    const r = resolveTimestamps({
+      taskStartTime: '3026-01-01T00:00:00.000Z',
+      signals: [{}],
+      nowMs: NOW_MS,
+    });
+    expect(r.error).toMatch(/more than 1 hour in the future/);
+    expect(r.error).toMatch(/task_start_time/);
+  });
+
+  it('rejects task_start_time more than 30 days in the past', () => {
+    const r = resolveTimestamps({
+      taskStartTime: '1970-01-01T00:00:00.000Z',
+      signals: [{}],
+      nowMs: NOW_MS,
+    });
+    expect(r.error).toMatch(/more than 30 days in the past/);
+  });
+
+  it('rejects per-signal timestamp far in the future', () => {
+    const r = resolveTimestamps({
+      signals: [{ timestamp: '3026-01-01T00:00:00.000Z' }],
+      nowMs: NOW_MS,
+    });
+    expect(r.error).toMatch(/more than 1 hour in the future/);
+    expect(r.error).toMatch(/signal\[0\]/);
+  });
+
+  it('rejects garbage timestamp', () => {
+    const r = resolveTimestamps({
+      taskStartTime: 'not a date',
+      signals: [{}],
+      nowMs: NOW_MS,
+    });
+    expect(r.error).toMatch(/not a valid ISO-8601 date/);
+  });
+
+  it('accepts task_start_time exactly 1 hour in the future (boundary)', () => {
+    const r = resolveTimestamps({
+      taskStartTime: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+      signals: [{}],
+      nowMs: NOW_MS,
+    });
+    expect(r.error).toBeUndefined();
+  });
+});

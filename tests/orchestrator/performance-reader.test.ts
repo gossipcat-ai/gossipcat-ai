@@ -334,3 +334,94 @@ describe('PerformanceReader.getCountersSince', () => {
     expect(counters2).toEqual({ correct: 0, hallucinated: 1 });
   });
 });
+
+describe('PerformanceReader — circuit breaker chronology (signal-timestamp-from-task-time)', () => {
+  // Regression suite for the bulk-record bug. Before the fix, every signal in a
+  // bulk-record call shared one timestamp; the reader's localeCompare sort
+  // returned 0 for every pair, making the sort a no-op and letting append order
+  // determine the tail. The reader was always correct in intent — these tests
+  // pin its behavior so a future regression to "single batch timestamp"
+  // recording immediately fails.
+
+  function ts(daysAgo: number, ms = 0): string {
+    return new Date(Date.now() - daysAgo * 86400000 + ms).toISOString();
+  }
+
+  it('circuit OPEN when 3 newest signals are negative (true chronology)', () => {
+    writeSignals([
+      // 3 positives in the past
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 't1', evidence: 'x', timestamp: ts(5) },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 't2', evidence: 'x', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 't3', evidence: 'x', timestamp: ts(3) },
+      // 3 negatives more recent
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't4', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 't5', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rev', taskId: 't6', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    expect(reader.isCircuitOpen('rev')).toBe(true);
+  });
+
+  it('circuit CLOSED when newest signal is positive even though older negatives exist', () => {
+    writeSignals([
+      // 3 negatives in the past
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't1', evidence: 'bad', timestamp: ts(5) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 't2', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rev', taskId: 't3', evidence: 'bad', timestamp: ts(3) },
+      // Newest is positive — must break the streak
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 't4', evidence: 'x', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    expect(reader.isCircuitOpen('rev')).toBe(false);
+  });
+
+  it('circuit CLOSED when negatives are recorded in append order but timestamps put them in the past', () => {
+    // Simulates the exact bug from session 2026-04-08: orchestrator bulk-records
+    // 5 backlogged rounds in newest-first read order, so the JSONL tail is the
+    // OLDEST round. With per-signal timestamps from the consensus reports, the
+    // reader's chronological sort must put the actually-newest round at the tail.
+    writeSignals([
+      // Append order = newest-first (file tail = oldest)
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 'newest', evidence: 'x', timestamp: ts(0) },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 'newer', evidence: 'x', timestamp: ts(1) },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 'mid', evidence: 'x', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 'old', evidence: 'bad', timestamp: ts(3) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'oldest1', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'oldest2', evidence: 'bad', timestamp: ts(5) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    // True chronology: 3 negatives (oldest) → 3 positives (newest). Tail is positive.
+    expect(reader.isCircuitOpen('rev')).toBe(false);
+  });
+
+  it('circuit OPEN when negatives appended first but timestamps make them newest', () => {
+    // The exact incident: even though file order looks "good then bad",
+    // the bad signals are CHRONOLOGICALLY NEWER and must trip the breaker.
+    writeSignals([
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'oldest', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 'mid', evidence: 'x', timestamp: ts(5) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 'newer', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'newest', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    expect(reader.isCircuitOpen('rev')).toBe(true);
+  });
+
+  it('consensusId tiebreaker keeps order deterministic when timestamps collide', () => {
+    // Two signals with the SAME timestamp — tiebreaker on consensusId.
+    // Without the tiebreaker, sort order would depend on file order; with it,
+    // 'aaa' always sorts before 'bbb' so the tail is deterministic.
+    const sameTime = ts(0);
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', consensusId: 'bbb', taskId: 't1', evidence: 'x', timestamp: sameTime },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', consensusId: 'aaa', taskId: 't2', evidence: 'x', timestamp: sameTime },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', consensusId: 'aaa', taskId: 't3', evidence: 'x', timestamp: ts(1) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    // The tail is the bbb-tagged signal (positive) — circuit closed.
+    // What we're really testing: the reader doesn't crash, returns deterministic state.
+    expect(reader.isCircuitOpen('rev')).toBe(false);
+    // Run twice to confirm idempotence under tiebreaker.
+    expect(reader.isCircuitOpen('rev')).toBe(false);
+  });
+});

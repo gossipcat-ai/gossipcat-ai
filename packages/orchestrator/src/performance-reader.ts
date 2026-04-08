@@ -430,8 +430,14 @@ export class PerformanceReader {
       signalsByAgent.set(signal.agentId, list);
     }
     for (const [agentId, agentSignals] of signalsByAgent) {
-      // Sort chronologically so "tail" means most recent
-      agentSignals.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+      // Sort chronologically so "tail" means most recent.
+      // Tiebreaker on consensusId keeps order deterministic when timestamps collide
+      // (legacy bulk-recorded data, or signals from the same consensus round).
+      agentSignals.sort((a, b) => {
+        const t = (a.timestamp || '').localeCompare(b.timestamp || '');
+        if (t !== 0) return t;
+        return ((a as any).consensusId || '').localeCompare((b as any).consensusId || '');
+      });
       let streak = 0;
       // Walk from newest to oldest — count consecutive negatives at tail
       for (let i = agentSignals.length - 1; i >= 0; i--) {
