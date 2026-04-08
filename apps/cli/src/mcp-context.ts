@@ -32,7 +32,7 @@ export interface NativeTaskInfo {
   timeoutMs?: number;
   planId?: string;
   step?: number;
-  utilityType?: 'lens' | 'gossip' | 'summary' | 'session_summary';
+  utilityType?: 'lens' | 'gossip' | 'summary' | 'session_summary' | 'verify_memory';
   writeMode?: 'sequential' | 'scoped' | 'worktree';
   /** One-time token that must accompany gossip_relay — prevents task-ID spoofing */
   relayToken?: string;
