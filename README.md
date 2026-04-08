@@ -162,29 +162,35 @@ Both types participate equally in consensus, cross-review, and skill development
 
 **Requirements:** Node.js 22+
 
-### 1. Clone and build
+### 1. Install
 
+```bash
+npm install -g gossipcat
+```
+
+That's it. The install drops a `gossipcat` binary on your `PATH` and ships both the MCP server bundle and the dashboard assets. No clone, no build step.
+
+If you prefer project-local install:
+```bash
+npm install --save-dev gossipcat
+```
+The postinstall will write a `.mcp.json` into your project root automatically. Open Claude Code in that directory and gossipcat connects.
+
+### 2. Register with Claude Code
+
+For global registration (available in every project):
+```bash
+claude mcp add gossipcat -s user -- gossipcat
+```
+
+The dashboard launches automatically on port `24420` when the relay starts — no extra setup needed.
+
+**From source** (contributors only):
 ```bash
 git clone https://github.com/ataberk-xyz/gossipcat-ai.git
-cd gossipcat-ai
-npm install
-npm run build:mcp
+cd gossipcat-ai && npm install && npm run build:mcp
+claude mcp add gossipcat -s user -- node "$PWD/dist-mcp/mcp-server.js"
 ```
-
-`npm install` generates `.mcp.json` with the correct paths for your machine. `build:mcp` bundles the MCP server. Open Claude Code in this directory and gossipcat connects automatically.
-
-To register globally (available in all projects):
-```bash
-claude mcp add gossipcat -s user -- node /absolute/path/to/gossipcat-ai/dist-mcp/mcp-server.js
-```
-
-### 2. Build the dashboard (optional)
-
-```bash
-npm run build:dashboard
-```
-
-Launches automatically on port `24420`. Skip this if you don't need the visual dashboard.
 
 ### 3. API keys
 
@@ -203,7 +209,7 @@ Add env vars for the providers you want to use. Pass them with `-e` when registe
 
 **Native only** (zero API keys — everything runs through Claude Code):
 ```bash
-claude mcp add gossipcat -s user -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+claude mcp add gossipcat -s user -- gossipcat
 ```
 Then in session ask for a team built from `sonnet-reviewer` / `haiku-researcher` / `opus-implementer`. Native agents dispatch through `Agent()` and relay back. Good zero-config starting point.
 
@@ -211,7 +217,7 @@ Then in session ask for a team built from `sonnet-reviewer` / `haiku-researcher`
 ```bash
 claude mcp add gossipcat -s user \
   -e ANTHROPIC_API_KEY=sk-ant-... \
-  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+  -- gossipcat
 ```
 Use this if you want relay agents running Claude models without going through the Claude Code subscription path — e.g. for parallelism beyond Claude Code's concurrency cap, or for running long background reviews while you keep working.
 
@@ -219,7 +225,7 @@ Use this if you want relay agents running Claude models without going through th
 ```bash
 claude mcp add gossipcat -s user \
   -e GOOGLE_API_KEY=AIza... \
-  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+  -- gossipcat
 ```
 Enables `gemini-reviewer`, `gemini-tester`, `gemini-implementer` on the relay. Watch the quota — gossipcat has a built-in 429 watcher that falls back to native agents when Gemini is cooling down.
 
@@ -227,20 +233,20 @@ Enables `gemini-reviewer`, `gemini-tester`, `gemini-implementer` on the relay. W
 ```bash
 claude mcp add gossipcat -s user \
   -e OPENAI_API_KEY=sk-... \
-  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+  -- gossipcat
 ```
 For Azure / Together / Groq / OpenRouter, add `OPENAI_BASE_URL`:
 ```bash
 claude mcp add gossipcat -s user \
   -e OPENAI_API_KEY=your-key \
   -e OPENAI_BASE_URL=https://api.groq.com/openai/v1 \
-  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+  -- gossipcat
 ```
 
 **OpenClaw** (local gateway):
 ```bash
 # Start the OpenClaw daemon first (see openclaw docs), default port 18789
-claude mcp add gossipcat -s user -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+claude mcp add gossipcat -s user -- gossipcat
 ```
 No env vars. Configure an agent with `provider: "openclaw"` in `.gossip/config.json` and gossipcat talks to the local gateway automatically. Override the port with `base_url` in the agent config if your daemon runs elsewhere.
 
@@ -249,7 +255,7 @@ No env vars. Configure an agent with `provider: "openclaw"` in `.gossip/config.j
 # Pull a model once
 ollama pull llama3.1:8b
 # Then register gossipcat
-claude mcp add gossipcat -s user -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+claude mcp add gossipcat -s user -- gossipcat
 ```
 Configure the agent with `provider: "local"` and `model: "llama3.1:8b"` in `.gossip/config.json`. Good for airgapped dev, offline work, and burning-down-test-debt sessions where you don't want to spend API credits.
 
@@ -258,7 +264,7 @@ Configure the agent with `provider: "local"` and `model: "llama3.1:8b"` in `.gos
 claude mcp add gossipcat -s user \
   -e GOOGLE_API_KEY=AIza... \
   -e ANTHROPIC_API_KEY=sk-ant-... \
-  -- node /path/to/gossipcat/dist-mcp/mcp-server.js
+  -- gossipcat
 ```
 Then set up a team with `gemini-reviewer` + `haiku-researcher` (native) + `opus-implementer` (native) + `sonnet-reviewer` (native). Gossipcat dispatches by category strength from the signal pipeline.
 
