@@ -250,11 +250,13 @@ async function getModules() {
     RelayServer: (await import('@gossip/relay')).RelayServer,
     ToolServer: (await import('@gossip/tools')).ToolServer,
     ALL_TOOLS: (await import('@gossip/tools')).ALL_TOOLS,
+    formatIdentityBlock: (await import('@gossip/tools')).formatIdentityBlock,
     MainAgent: (await import('@gossip/orchestrator')).MainAgent,
     WorkerAgent: (await import('@gossip/orchestrator')).WorkerAgent,
     createProvider: (await import('@gossip/orchestrator')).createProvider,
     PerformanceWriter: (await import('@gossip/orchestrator')).PerformanceWriter,
     SkillEngine: (await import('@gossip/orchestrator')).SkillEngine,
+    MemorySearcher: (await import('@gossip/orchestrator')).MemorySearcher,
     ...(await import('./config')),
     Keychain: (await import('./keychain')).Keychain,
   };
