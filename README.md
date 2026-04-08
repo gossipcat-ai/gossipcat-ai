@@ -858,6 +858,24 @@ Gossipcat is open source and early-stage — bug reports, feature ideas, and PRs
 
 See `CLAUDE.md` in the repo for the operational rules gossipcat's own agents follow during development — it's a useful read if you want to understand the signal pipeline and consensus workflow from the inside.
 
+### Cutting a release (maintainers)
+
+Releases go to GitHub Releases via a two-stage script that respects branch protection — no direct commits to master.
+
+```bash
+# Stage 1 — open the version bump PR
+./scripts/release.sh 0.1.2
+
+# review + merge the PR via gh or web UI
+gh pr merge <pr-number> --squash --delete-branch
+
+# Stage 2 — build, tag, release (from master, after the PR is merged)
+git checkout master && git pull
+./scripts/release.sh   # no args
+```
+
+Stage 1 creates `chore/release-X.Y.Z`, bumps `package.json`, opens the PR, exits. Stage 2 reads the version from `package.json`, builds the MCP bundle + dashboard, packs the tarball, tags, pushes the tag, and creates the GitHub release with auto-generated notes from commits since the last tag.
+
 <br/>
 
 ## Star History
