@@ -1920,11 +1920,20 @@ server.tool(
         } catch { /* best-effort */ }
       }
 
-      // Summary by agent
+      // Summary by agent — impl_* signals reward/penalize the implementer's track record,
+      // and must be classified explicitly. Anything not matched falls into "neg" as a
+      // conservative default.
+      const POSITIVE_SIGNALS = new Set([
+        'agreement',
+        'unique_confirmed',
+        'new_finding',
+        'impl_test_pass',
+        'impl_peer_approved',
+      ]);
       const byAgent = new Map<string, { pos: number; neg: number }>();
       for (const s of signals) {
         const entry = byAgent.get(s.agent_id) || { pos: 0, neg: 0 };
-        if (['agreement', 'unique_confirmed', 'new_finding'].includes(s.signal)) entry.pos++;
+        if (POSITIVE_SIGNALS.has(s.signal)) entry.pos++;
         else entry.neg++;
         byAgent.set(s.agent_id, entry);
       }
