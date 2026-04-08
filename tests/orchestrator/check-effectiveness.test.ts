@@ -16,8 +16,8 @@ import {
 } from '../../packages/orchestrator/src/check-effectiveness';
 
 const baseSnapshot: SkillSnapshot = {
-  baseline_correct: 50,
-  baseline_hallucinated: 50,
+  baseline_accuracy_correct: 50,
+  baseline_accuracy_hallucinated: 50,
   bound_at: '2026-04-01T00:00:00Z',
   status: 'pending',
   migration_count: 0,
@@ -30,14 +30,14 @@ const baseSnapshot: SkillSnapshot = {
 describe('checkEffectiveness — Test 1: Monotonicity', () => {
   it('z-scores strictly increase with accuracy, only highest crosses gate', () => {
     // Construct three counter sets at p_hat ∈ {0.60, 0.80, 0.90} post-bind, all N=120
-    // Baseline is 50/100 = 50%, so post-bind is additive.
+    // Baseline is 50/100 = 50%, so post-bind delta is:
     // p_hat 0.60 → 72 correct + 48 hallucinated since baseline
     // p_hat 0.80 → 96 correct + 24 hallucinated
     // p_hat 0.90 → 108 correct + 12 hallucinated
 
-    const v60 = resolveVerdict(baseSnapshot, { correct: 50 + 72, hallucinated: 50 + 48 }, Date.now());
-    const v80 = resolveVerdict(baseSnapshot, { correct: 50 + 96, hallucinated: 50 + 24 }, Date.now());
-    const v90 = resolveVerdict(baseSnapshot, { correct: 50 + 108, hallucinated: 50 + 12 }, Date.now());
+    const v60 = resolveVerdict(baseSnapshot, { correct: 72, hallucinated: 48 }, Date.now());
+    const v80 = resolveVerdict(baseSnapshot, { correct: 96, hallucinated: 24 }, Date.now());
+    const v90 = resolveVerdict(baseSnapshot, { correct: 108, hallucinated: 12 }, Date.now());
 
     // All three meet the gate (post-bind N=120), so all run the z-test
     // Higher accuracy → higher z-score
@@ -60,8 +60,8 @@ describe('checkEffectiveness — Test 2: Decay interaction', () => {
     // (Decay is applied only to the legacy categoryStrengths metric,
     //  not to categoryCorrect/categoryHallucinated.)
 
-    const post = { correct: 50 + 102, hallucinated: 50 + 18 }; // 120 signals at 85%
-    const v = resolveVerdict(baseSnapshot, post, Date.now());
+    const delta = { correct: 102, hallucinated: 18 }; // 120 signals at 85%
+    const v = resolveVerdict(baseSnapshot, delta, Date.now());
     expect(v.status).toBe('passed');
     // The pure function doesn't take decay as input — that's the design confirmation.
     // Validation that PerformanceReader doesn't decay categoryCorrect is covered in
@@ -78,31 +78,31 @@ describe('checkEffectiveness — Test 4: Dampener asymmetry guard', () => {
     // Baseline: 90 correct + 10 hallucinated = 90% accuracy
     // (Avoids the p=1.0 degenerate case where SE=0 in the z-test.)
     const snap: SkillSnapshot = {
-      baseline_correct: 90,
-      baseline_hallucinated: 10,
+      baseline_accuracy_correct: 90,
+      baseline_accuracy_hallucinated: 10,
       bound_at: '2026-04-01T00:00:00Z',
       status: 'pending',
       migration_count: 0,
     };
-    // Post-bind: 48 correct + 72 hallucinated = 40% accuracy → real -50pp drop
+    // Post-bind delta: 48 correct + 72 hallucinated = 40% accuracy → real -50pp drop
     // (baseline 90%, post-bind 40%, Δ = -50pp — strongly rejects negative H0)
-    const v = resolveVerdict(snap, { correct: 90 + 48, hallucinated: 10 + 72 }, Date.now());
+    const v = resolveVerdict(snap, { correct: 48, hallucinated: 72 }, Date.now());
     expect(v.status).toBe('failed');
   });
 
   it('hallucination growth without accuracy change does NOT produce failed', () => {
     // Baseline: 50 correct + 50 hallucinated = 50% accuracy
     const snap: SkillSnapshot = {
-      baseline_correct: 50,
-      baseline_hallucinated: 50,
+      baseline_accuracy_correct: 50,
+      baseline_accuracy_hallucinated: 50,
       bound_at: '2026-04-01T00:00:00Z',
       status: 'pending',
       migration_count: 0,
     };
-    // Post-bind: another 60 correct + 60 hallucinated = still 50% accuracy
-    // Absolute hallucination count grew from 50 to 110, but post-window p_hat == baseline_p
+    // Post-bind delta: 60 correct + 60 hallucinated = still 50% accuracy
+    // Absolute hallucination count grew but post-window p_hat == baseline_p
     // Because we use raw ratio (no dampener), there's no asymmetric penalty.
-    const v = resolveVerdict(snap, { correct: 110, hallucinated: 110 }, Date.now());
+    const v = resolveVerdict(snap, { correct: 60, hallucinated: 60 }, Date.now());
     expect(v.status).not.toBe('failed');
     expect(['inconclusive', 'pending']).toContain(v.status);
   });
@@ -114,33 +114,33 @@ describe('checkEffectiveness — Test 4: Dampener asymmetry guard', () => {
 
 describe('checkEffectiveness — Test 5: Inconclusive epoch', () => {
   const snap: SkillSnapshot = {
-    baseline_correct: 50,
-    baseline_hallucinated: 50,
+    baseline_accuracy_correct: 50,
+    baseline_accuracy_hallucinated: 50,
     bound_at: '2026-04-01T00:00:00Z',
     status: 'pending',
     migration_count: 0,
   };
 
   it('writes inconclusive snapshot fields on first inconclusive verdict', () => {
-    // p_hat ≈ baseline → inconclusive
-    const v = resolveVerdict(snap, { correct: 50 + 60, hallucinated: 50 + 60 }, Date.now());
+    // p_hat ≈ baseline → inconclusive. delta = 60 correct + 60 hallucinated
+    const v = resolveVerdict(snap, { correct: 60, hallucinated: 60 }, Date.now());
     expect(v.status).toBe('inconclusive');
-    expect(v.newSnapshotFields?.inconclusive_correct).toBe(110);
-    expect(v.newSnapshotFields?.inconclusive_hallucinated).toBe(110);
     expect(v.newSnapshotFields?.inconclusive_strikes).toBe(1);
+    expect(v.newSnapshotFields?.inconclusive_at).toBeDefined();
+    // v2: inconclusive_correct and inconclusive_hallucinated are NOT written
+    expect((v.newSnapshotFields as Record<string, unknown>)?.inconclusive_correct).toBeUndefined();
+    expect((v.newSnapshotFields as Record<string, unknown>)?.inconclusive_hallucinated).toBeUndefined();
   });
 
-  it('subsequent runs measure delta from inconclusive snapshot, not original baseline', () => {
+  it('subsequent runs measure delta from inconclusive epoch, not original baseline', () => {
     const snap2: SkillSnapshot = {
       ...snap,
       status: 'inconclusive',
-      inconclusive_correct: 110,
-      inconclusive_hallucinated: 110,
       inconclusive_at: '2026-04-15T00:00:00Z',
       inconclusive_strikes: 1,
     };
-    // Add only 50 more signals (less than 120) — should be pending against the inconclusive epoch
-    const v = resolveVerdict(snap2, { correct: 110 + 25, hallucinated: 110 + 25 }, Date.now());
+    // Caller pre-computes delta since inconclusive_at: only 50 more signals (< 120)
+    const v = resolveVerdict(snap2, { correct: 25, hallucinated: 25 }, Date.now());
     expect(v.status).toBe('pending');
   });
 
@@ -148,13 +148,11 @@ describe('checkEffectiveness — Test 5: Inconclusive epoch', () => {
     const snap3: SkillSnapshot = {
       ...snap,
       status: 'inconclusive',
-      inconclusive_correct: 110,
-      inconclusive_hallucinated: 110,
       inconclusive_at: '2026-04-15T00:00:00Z',
       inconclusive_strikes: 2,
     };
     // Add 120 more signals at p_hat = baseline → another inconclusive → 3rd strike → flagged
-    const v = resolveVerdict(snap3, { correct: 110 + 60, hallucinated: 110 + 60 }, Date.now());
+    const v = resolveVerdict(snap3, { correct: 60, hallucinated: 60 }, Date.now());
     expect(v.status).toBe('flagged_for_manual_review');
   });
 
@@ -186,8 +184,8 @@ describe('checkEffectiveness — Test 6: FDR boundary at baseline', () => {
     }
 
     const baseline: SkillSnapshot = {
-      baseline_correct: 75,
-      baseline_hallucinated: 25,
+      baseline_accuracy_correct: 75,
+      baseline_accuracy_hallucinated: 25,
       bound_at: '2026-04-01T00:00:00Z',
       status: 'pending',
       migration_count: 0,
@@ -201,9 +199,10 @@ describe('checkEffectiveness — Test 6: FDR boundary at baseline', () => {
       for (let j = 0; j < 120; j++) {
         if (rng() < 0.75) correct++;
       }
+      // v2: pass only the delta (120 fresh signals, not cumulative)
       const v = resolveVerdict(baseline, {
-        correct: 75 + correct,
-        hallucinated: 25 + (120 - correct),
+        correct: correct,
+        hallucinated: 120 - correct,
       }, Date.now());
       if (v.status === 'passed' || v.status === 'failed') falsePositives++;
     }
@@ -218,16 +217,16 @@ describe('checkEffectiveness — Test 6: FDR boundary at baseline', () => {
 // ---------------------------------------------------------------------------
 
 describe('checkEffectiveness — Test 7: Lazy migration', () => {
-  it('preserves bound_at when within 90 days, snapshots baseline_correct — see skill-generator-check-effectiveness.test.ts for canonical tests', () => {
+  it('preserves bound_at when within 90 days, snapshots baseline_accuracy_correct — see skill-generator-check-effectiveness.test.ts for canonical tests', () => {
     // The 4 lazy-migration scenarios (fresh, stale-reset, re-fire-guard, absent-bound_at)
     // are canonically tested in skill-generator-check-effectiveness.test.ts (Task 8 section).
     // This entry exists for spec traceability: spec Test 7 → Task 16 → this block.
     //
-    // We assert a minimal round-trip here: a snapshot without baseline_correct uses
-    // the pure resolveVerdict fallback (baseline_correct=0) and does not crash.
+    // We assert a minimal round-trip here: a snapshot without baseline_accuracy_correct uses
+    // the pure resolveVerdict fallback (baseline_accuracy_correct=0) and does not crash.
     const snapNoBound: SkillSnapshot = {
-      baseline_correct: 0,
-      baseline_hallucinated: 0,
+      baseline_accuracy_correct: 0,
+      baseline_accuracy_hallucinated: 0,
       bound_at: new Date().toISOString(), // fresh — no timeout
       status: 'pending',
       migration_count: 0,
@@ -236,5 +235,90 @@ describe('checkEffectiveness — Test 7: Lazy migration', () => {
     const v = resolveVerdict(snapNoBound, { correct: 80, hallucinated: 0 }, Date.now());
     expect(v.status).toBe('pending');
     expect(v.shouldUpdate).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: frame-mixing — bound_at 60d ago
+// ---------------------------------------------------------------------------
+
+describe('checkEffectiveness — frame-mixing regression', () => {
+  it('does not produce postTotal<0 when bound_at is 60d ago (delta is pre-computed)', () => {
+    // v2: the caller pre-computes delta via getCountersSince(agentId, category, bound_at_ms).
+    // The delta is always non-negative by construction. This test verifies resolveVerdict
+    // accepts a delta from a 60d-old anchor without returning pending due to negative postTotal.
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 80,
+      baseline_accuracy_hallucinated: 20,
+      bound_at: new Date(Date.now() - 60 * 86400_000).toISOString(), // 60d ago
+      status: 'pending',
+      migration_count: 0,
+    };
+    // delta = 50 correct + 70 hallucinated since bound_at (pre-computed by caller)
+    const delta = { correct: 50, hallucinated: 70 };
+    const v = resolveVerdict(snap, delta, Date.now());
+    // postTotal = 120 ≥ MIN_EVIDENCE — must produce a real verdict, not pending/negative
+    expect(v.status).not.toBe('pending');
+    // postTotal is 120 which is non-negative — this is the regression guard
+    expect(['passed', 'failed', 'inconclusive']).toContain(v.status);
+  });
+
+  it('correctly counts evidence from delta passed in (not clamped to 30d)', () => {
+    // bound_at 60d ago; delta contains 130 signals from the full 60d window.
+    // In v1 with rolling-window subtraction this could fail; in v2 it should resolve.
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 75,
+      baseline_accuracy_hallucinated: 25,
+      bound_at: new Date(Date.now() - 60 * 86400_000).toISOString(),
+      status: 'pending',
+      migration_count: 0,
+    };
+    // 130 signals at 85% → +10pp over 75% baseline → passed
+    const delta = { correct: 110, hallucinated: 20 };
+    const v = resolveVerdict(snap, delta, Date.now());
+    expect(v.status).toBe('passed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: delta-from-delta — multiple inconclusive epochs
+// ---------------------------------------------------------------------------
+
+describe('checkEffectiveness — delta-from-delta regression', () => {
+  it('does not produce negative postTotal on second inconclusive check', () => {
+    // Each check, caller pre-computes delta since the most recent anchor.
+    // Simulates two inconclusive epochs — each delta is independently non-negative.
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 60,
+      baseline_accuracy_hallucinated: 40,
+      bound_at: new Date(Date.now() - 120 * 86400_000).toISOString(), // 120d ago
+      status: 'inconclusive',
+      inconclusive_at: new Date(Date.now() - 45 * 86400_000).toISOString(), // 45d ago
+      inconclusive_strikes: 1,
+      migration_count: 0,
+    };
+    // Caller computes delta since inconclusive_at (45d ago). 60 signals — below gate.
+    const delta = { correct: 30, hallucinated: 30 };
+    const v = resolveVerdict(snap, delta, Date.now());
+    // postTotal = 60 ≥ 0 — regression guard: never negative
+    // bound_at is 120d ago (>90d timeout), so timedOut=true, postTotal=60 → insufficient_evidence
+    expect(['pending', 'insufficient_evidence']).toContain(v.status);
+  });
+
+  it('second inconclusive epoch produces non-negative delta and real verdict', () => {
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 60,
+      baseline_accuracy_hallucinated: 40,
+      bound_at: new Date(Date.now() - 120 * 86400_000).toISOString(),
+      status: 'inconclusive',
+      inconclusive_at: new Date(Date.now() - 45 * 86400_000).toISOString(),
+      inconclusive_strikes: 1,
+      migration_count: 0,
+    };
+    // 130 signals at 70% accuracy (slightly above 60% baseline) — barely inconclusive region
+    const delta = { correct: 91, hallucinated: 39 };
+    const v = resolveVerdict(snap, delta, Date.now());
+    // Must be a real verdict, not pending or negative-caused error
+    expect(['passed', 'failed', 'inconclusive']).toContain(v.status);
   });
 });

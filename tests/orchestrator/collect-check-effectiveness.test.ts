@@ -50,6 +50,10 @@ function makeStubPerfReader(
     categoryHallucinated,
   };
   jest.spyOn(reader, 'getScores').mockReturnValue(new Map([[agentId, score]]));
+  jest.spyOn(reader, 'getCountersSince').mockImplementation((_a, cat) => ({
+    correct: categoryCorrect[cat] ?? 0,
+    hallucinated: categoryHallucinated[cat] ?? 0,
+  }));
   return reader;
 }
 
@@ -114,19 +118,19 @@ describe('collect → checkEffectiveness wiring (runCheckEffectivenessForAllSkil
     // post-bind delta: correct=170-50=120, hallucinated=70-50=20 → accuracy=120/140≈0.857
     // baseline accuracy=50/100=0.50, delta=0.357 (+35.7pp >> Z_CRITICAL) → passed
     const skillPath = writeSkillFile(tmpDir, agentId, categoryNormalized, {
-      baseline_correct: 50,
-      baseline_hallucinated: 50,
+      baseline_accuracy_correct: 50,
+      baseline_accuracy_hallucinated: 50,
       bound_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(), // 8 days ago
       status: 'pending',
-      migration_count: 0,
+      migration_count: 2,
     });
 
-    // Stub PerformanceReader with keys matching the normalized category name
+    // Stub PerformanceReader getCountersSince to return delta directly
     const perfReader = makeStubPerfReader(
       tmpDir,
       agentId,
-      { [categoryNormalized]: 170 },
-      { [categoryNormalized]: 70 },
+      { [categoryNormalized]: 120 },
+      { [categoryNormalized]: 20 },
     );
 
     const skillEngine = new SkillEngine(makeStubLLM(), perfReader, tmpDir);
@@ -146,11 +150,11 @@ describe('collect → checkEffectiveness wiring (runCheckEffectivenessForAllSkil
     const category = 'injection-vectors';
 
     writeSkillFile(tmpDir, agentId, category, {
-      baseline_correct: 50,
-      baseline_hallucinated: 50,
+      baseline_accuracy_correct: 50,
+      baseline_accuracy_hallucinated: 50,
       bound_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
       status: 'pending',
-      migration_count: 0,
+      migration_count: 2,
     });
 
     const perfReader = makeStubPerfReader(tmpDir, agentId, { [category]: 170 }, { [category]: 70 });
@@ -238,11 +242,11 @@ describe('collect → checkEffectiveness wiring (runCheckEffectivenessForAllSkil
   it('processes multiple agents independently', async () => {
     for (const agentId of ['agent-a', 'agent-b']) {
       writeSkillFile(tmpDir, agentId, 'error-handling', {
-        baseline_correct: 10,
-        baseline_hallucinated: 10,
+        baseline_accuracy_correct: 10,
+        baseline_accuracy_hallucinated: 10,
         bound_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
         status: 'pending',
-        migration_count: 0,
+        migration_count: 2,
       });
     }
 

@@ -28,6 +28,11 @@ export interface AgentScore {
   categoryAccuracy: Record<string, number>;
 }
 
+export interface CategoryCounters {
+  correct: number;
+  hallucinated: number;
+}
+
 const CIRCUIT_BREAKER_THRESHOLD = 3; // consecutive failures → open circuit
 const NEGATIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement', 'unique_unconfirmed']);
 const SIGNAL_EXPIRY_DAYS = 30;
@@ -110,6 +115,76 @@ export class PerformanceReader {
   isCircuitOpen(agentId: string): boolean {
     const score = this.getAgentScore(agentId);
     return score?.circuitOpen ?? false;
+  }
+
+  /**
+   * Returns count of (correct, hallucinated) signals for an agent in a given
+   * category, where signal timestamp > sinceMs.
+   */
+  getCountersSince(agentId: string, category: string, sinceMs: number): CategoryCounters {
+    const allSignals = this.readSignalsRaw();
+    const counters: CategoryCounters = { correct: 0, hallucinated: 0 };
+
+    for (const s of allSignals) {
+      if (s.agentId !== agentId) continue;
+      if (s.category !== category) continue;
+      const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
+      if (!isFinite(ts) || ts === 0 || ts <= sinceMs) continue;
+
+      switch (s.signal) {
+        case 'agreement':
+        case 'category_confirmed':
+        case 'consensus_verified':
+        case 'unique_confirmed':
+          counters.correct++;
+          break;
+        case 'disagreement':
+        case 'hallucination_caught':
+          counters.hallucinated++;
+          break;
+      }
+    }
+    return counters;
+  }
+
+  private readSignalsRaw(): ConsensusSignal[] {
+    if (!existsSync(this.filePath)) return [];
+    try {
+      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      const all = lines.map(line => {
+        try { return JSON.parse(line) as ConsensusSignal; }
+        catch { return null; }
+      }).filter((s): s is ConsensusSignal =>
+        s !== null && s.type === 'consensus' && typeof s.agentId === 'string' && s.agentId.length > 0
+      );
+
+      // Collect retraction keys: agentId + taskId + signalType combos that have been retracted
+      const retracted = new Set<string>();
+      for (const s of all) {
+        if (s.signal === 'signal_retracted') {
+          const taskKey = s.taskId || s.timestamp;
+          if (s.retractedSignal) {
+            // Scoped retraction: only retract the specific signal type
+            retracted.add(s.agentId + ':' + taskKey + ':' + s.retractedSignal);
+          } else {
+            // Legacy/unscoped retraction: retract all signals for this agent+task
+            retracted.add(s.agentId + ':' + taskKey + ':*');
+          }
+        }
+      }
+
+      // Filter: exclude retracted signals and the retraction signals themselves
+      return all.filter(s => {
+        if (s.signal === 'signal_retracted') return false;
+        // Skip retracted signals (check both scoped and wildcard keys)
+        const taskKey = s.taskId || s.timestamp;
+        if (retracted.has(s.agentId + ':' + taskKey + ':' + s.signal)) return false;
+        if (retracted.has(s.agentId + ':' + taskKey + ':*')) return false;
+        return true;
+      });
+    } catch {
+      return [];
+    }
   }
 
   private readSignals(): ConsensusSignal[] {

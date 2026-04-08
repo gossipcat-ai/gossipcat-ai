@@ -68,6 +68,10 @@ function makeStubPerfReader(
   categoryHallucinated: Record<string, number>,
 ): PerformanceReader {
   const reader = new PerformanceReader(projectRoot);
+  jest.spyOn(reader, 'getCountersSince').mockImplementation((_a, cat) => ({
+    correct: categoryCorrect[cat] ?? 0,
+    hallucinated: categoryHallucinated[cat] ?? 0,
+  }));
   jest.spyOn(reader, 'getScores').mockReturnValue(
     new Map([
       [
@@ -115,8 +119,8 @@ describe('SkillEngine — baseline snapshot in frontmatter', () => {
     expect(fmMatch).toBeTruthy(); // file must have YAML frontmatter
 
     const fm = fmMatch![1];
-    expect(fm).toMatch(/baseline_correct:\s*42/);
-    expect(fm).toMatch(/baseline_hallucinated:\s*8/);
+    expect(fm).toMatch(/baseline_accuracy_correct:\s*42/);
+    expect(fm).toMatch(/baseline_accuracy_hallucinated:\s*8/);
   });
 
   it('writes bound_at as a valid ISO 8601 timestamp', async () => {
@@ -193,8 +197,8 @@ describe('SkillEngine — baseline snapshot in frontmatter', () => {
     const written = readFileSync(result.path, 'utf-8');
     const fmMatch = written.match(/^---\n([\s\S]*?)\n---/);
     const fm = fmMatch![1];
-    expect(fm).toMatch(/baseline_correct:\s*0\b/);
-    expect(fm).toMatch(/baseline_hallucinated:\s*0\b/);
+    expect(fm).toMatch(/baseline_accuracy_correct:\s*0\b/);
+    expect(fm).toMatch(/baseline_accuracy_hallucinated:\s*0\b/);
   });
 
   it('defaults to 0 when the agent is not in the scores map at all', async () => {
@@ -208,7 +212,7 @@ describe('SkillEngine — baseline snapshot in frontmatter', () => {
     const written = readFileSync(result.path, 'utf-8');
     const fmMatch = written.match(/^---\n([\s\S]*?)\n---/);
     const fm = fmMatch![1];
-    expect(fm).toMatch(/baseline_correct:\s*0\b/);
-    expect(fm).toMatch(/baseline_hallucinated:\s*0\b/);
+    expect(fm).toMatch(/baseline_accuracy_correct:\s*0\b/);
+    expect(fm).toMatch(/baseline_accuracy_hallucinated:\s*0\b/);
   });
 });

@@ -257,3 +257,80 @@ describe('PerformanceReader', () => {
     expect(score.reliability).toBeLessThanOrEqual(0.55);
   });
 });
+
+describe('PerformanceReader.getCountersSince', () => {
+  it('returns {correct: 0, hallucinated: 0} when no matching signals exist', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-a', taskId: 't1', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const counters = reader.getCountersSince('agent-2', 'cat-a', 0);
+    expect(counters).toEqual({ correct: 0, hallucinated: 0 });
+    const counters2 = reader.getCountersSince('agent-1', 'cat-b', 0);
+    expect(counters2).toEqual({ correct: 0, hallucinated: 0 });
+  });
+
+  it('lifetime mode (sinceMs=0) counts all non-retracted signals including >30d old', () => {
+    const fortyDaysAgo = new Date(Date.now() - 40 * 86400000).toISOString();
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400000).toISOString();
+    writeSignals([
+      // Old signals (should be counted)
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-a', taskId: 't1', timestamp: fortyDaysAgo },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'agent-1', category: 'cat-a', taskId: 't2', timestamp: fortyDaysAgo },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-1', category: 'cat-a', taskId: 't3', timestamp: fortyDaysAgo },
+      // Recent signals (should be counted)
+      { type: 'consensus', signal: 'category_confirmed', agentId: 'agent-1', category: 'cat-a', taskId: 't4', timestamp: tenDaysAgo },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-1', category: 'cat-a', taskId: 't5', timestamp: tenDaysAgo },
+      // Irrelevant signals (should be ignored)
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-2', category: 'cat-a', taskId: 't6', timestamp: tenDaysAgo },
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-b', taskId: 't7', timestamp: tenDaysAgo },
+    ]);
+
+    const reader = new PerformanceReader(TEST_DIR);
+    const counters = reader.getCountersSince('agent-1', 'cat-a', 0);
+    expect(counters).toEqual({ correct: 3, hallucinated: 2 });
+  });
+
+  it('anchored mode (sinceMs > 0) only counts signals after the timestamp', () => {
+    const fortyDaysAgo = new Date(Date.now() - 40 * 86400000);
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400000);
+    const anchorMs = Date.now() - 20 * 86400000;
+
+    writeSignals([
+      // Old signals (should be ignored)
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-a', taskId: 't1', timestamp: fortyDaysAgo.toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-1', category: 'cat-a', taskId: 't2', timestamp: fortyDaysAgo.toISOString() },
+      // Recent signals (should be counted)
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'agent-1', category: 'cat-a', taskId: 't3', timestamp: tenDaysAgo.toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-1', category: 'cat-a', taskId: 't4', timestamp: tenDaysAgo.toISOString() },
+    ]);
+
+    const reader = new PerformanceReader(TEST_DIR);
+    const counters = reader.getCountersSince('agent-1', 'cat-a', anchorMs);
+    expect(counters).toEqual({ correct: 1, hallucinated: 1 });
+  });
+
+  it('excludes retracted signals regardless of age', () => {
+    const fortyDaysAgo = new Date(Date.now() - 40 * 86400000).toISOString();
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400000).toISOString();
+    writeSignals([
+      // Old signals, one retracted
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-a', taskId: 't1', timestamp: fortyDaysAgo },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-1', category: 'cat-a', taskId: 't2', timestamp: fortyDaysAgo }, // This one is retracted
+      { type: 'consensus', signal: 'signal_retracted', agentId: 'agent-1', taskId: 't2', retractedSignal: 'disagreement', timestamp: tenDaysAgo },
+      // Recent signals, one retracted by wildcard
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'agent-1', category: 'cat-a', taskId: 't3', timestamp: tenDaysAgo }, // This one is retracted
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-1', category: 'cat-a', taskId: 't4', timestamp: tenDaysAgo },
+      { type: 'consensus', signal: 'signal_retracted', agentId: 'agent-1', taskId: 't3', timestamp: tenDaysAgo }, // Wildcard retraction
+    ]);
+
+    const reader = new PerformanceReader(TEST_DIR);
+    // Lifetime check
+    const counters1 = reader.getCountersSince('agent-1', 'cat-a', 0);
+    expect(counters1).toEqual({ correct: 1, hallucinated: 1 });
+    // Anchored check
+    const anchorMs = Date.now() - 20 * 86400000;
+    const counters2 = reader.getCountersSince('agent-1', 'cat-a', anchorMs);
+    expect(counters2).toEqual({ correct: 0, hallucinated: 1 });
+  });
+});

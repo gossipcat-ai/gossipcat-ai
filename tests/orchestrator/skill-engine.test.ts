@@ -149,8 +149,8 @@ describe('SkillEngine', () => {
     expect(frontmatter).toContain('name: injection-audit');
     expect(frontmatter).toContain('category: injection_vectors');
     expect(frontmatter).toContain('agent: agent-a');
-    expect(frontmatter).toContain('baseline_correct:');
-    expect(frontmatter).toContain('baseline_hallucinated:');
+    expect(frontmatter).toContain('baseline_accuracy_correct:');
+    expect(frontmatter).toContain('baseline_accuracy_hallucinated:');
     expect(frontmatter).toContain('bound_at:');
     expect(frontmatter).toContain('migration_count:');
     expect(frontmatter).toContain('status:');

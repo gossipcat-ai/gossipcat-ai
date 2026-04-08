@@ -19,7 +19,6 @@ import {
   resolveVerdict,
   TIMEOUT_MS,
   type SkillSnapshot,
-  type CategoryCounters,
   type VerdictResult,
   type VerdictStatus,
 } from './check-effectiveness';
@@ -204,12 +203,12 @@ Requirements:
     this.validateSkillContent(cleaned);
 
     // Snapshot baseline counters at bind time — Tasks 7/8 read these for effectiveness checks
-    const agentScore = this.perfReader.getScores().get(agentId);
-    const baseline_correct = agentScore?.categoryCorrect?.[category] ?? 0;
-    const baseline_hallucinated = agentScore?.categoryHallucinated?.[category] ?? 0;
+    const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
+    const baseline_accuracy_correct = lifetime.correct;
+    const baseline_accuracy_hallucinated = lifetime.hallucinated;
     const bound_at = new Date().toISOString();
 
-    cleaned = this.injectSnapshotFields(cleaned, { baseline_correct, baseline_hallucinated, bound_at });
+    cleaned = this.injectSnapshotFields(cleaned, { baseline_accuracy_correct, baseline_accuracy_hallucinated, bound_at });
 
     const skillName = normalizeSkillName(category);
     const skillDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'skills');
@@ -226,7 +225,7 @@ Requirements:
    */
   private injectSnapshotFields(
     content: string,
-    snapshot: { baseline_correct: number; baseline_hallucinated: number; bound_at: string },
+    snapshot: { baseline_accuracy_correct: number; baseline_accuracy_hallucinated: number; bound_at: string },
   ): string {
     const fmMatch = content.match(/^(---\n)([\s\S]*?)(\n---)/);
     if (!fmMatch) return content;
@@ -236,6 +235,8 @@ Requirements:
 
     // Remove any pre-existing snapshot fields the LLM may have emitted
     fm = fm
+      .replace(/^baseline_accuracy_correct:.*\n?/m, '')
+      .replace(/^baseline_accuracy_hallucinated:.*\n?/m, '')
       .replace(/^baseline_correct:.*\n?/m, '')
       .replace(/^baseline_hallucinated:.*\n?/m, '')
       .replace(/^bound_at:.*\n?/m, '')
@@ -249,8 +250,8 @@ Requirements:
 
     // Append snapshot fields
     fm = fm.trimEnd() +
-      `\nbaseline_correct: ${snapshot.baseline_correct}` +
-      `\nbaseline_hallucinated: ${snapshot.baseline_hallucinated}` +
+      `\nbaseline_accuracy_correct: ${snapshot.baseline_accuracy_correct}` +
+      `\nbaseline_accuracy_hallucinated: ${snapshot.baseline_accuracy_hallucinated}` +
       `\nbound_at: ${snapshot.bound_at}` +
       `\nmigration_count: 0` +
       `\nstatus: pending`;
@@ -411,15 +412,11 @@ ${inputs.join('\n')}
     const { frontmatter: rawFrontmatter, body } = this.parseSkillFile(raw);
 
     // Lazy migration: pre-existing skill files may lack the snapshot fields
-    const score = this.perfReader.getScores().get(agentId);
-    const liveCountersForMigration = {
-      correct: score?.categoryCorrect?.[category] ?? 0,
-      hallucinated: score?.categoryHallucinated?.[category] ?? 0,
-    };
     const nowMs = Date.now();
     const { frontmatter, mutated } = this.migrateIfNeeded(
       rawFrontmatter,
-      liveCountersForMigration,
+      agentId,
+      category,
       nowMs,
     );
     if (mutated) {
@@ -427,19 +424,17 @@ ${inputs.join('\n')}
     }
 
     const snapshot: SkillSnapshot = {
-      baseline_correct: this.safeNumber(frontmatter.baseline_correct ?? 0, 0),
-      baseline_hallucinated: this.safeNumber(frontmatter.baseline_hallucinated ?? 0, 0),
+      baseline_accuracy_correct: this.safeNumber(
+        frontmatter.baseline_accuracy_correct ?? frontmatter.baseline_correct ?? 0,
+        0,
+      ),
+      baseline_accuracy_hallucinated: this.safeNumber(
+        frontmatter.baseline_accuracy_hallucinated ?? frontmatter.baseline_hallucinated ?? 0,
+        0,
+      ),
       bound_at: String(frontmatter.bound_at ?? new Date(nowMs).toISOString()),
       status: (frontmatter.status as VerdictStatus) ?? 'pending',
       migration_count: this.safeNumber(frontmatter.migration_count ?? 0, 0),
-      inconclusive_correct:
-        frontmatter.inconclusive_correct != null
-          ? (Number.isFinite(Number(frontmatter.inconclusive_correct)) ? Number(frontmatter.inconclusive_correct) : undefined)
-          : undefined,
-      inconclusive_hallucinated:
-        frontmatter.inconclusive_hallucinated != null
-          ? (Number.isFinite(Number(frontmatter.inconclusive_hallucinated)) ? Number(frontmatter.inconclusive_hallucinated) : undefined)
-          : undefined,
       inconclusive_at:
         typeof frontmatter.inconclusive_at === 'string' ? frontmatter.inconclusive_at : undefined,
       inconclusive_strikes:
@@ -448,12 +443,11 @@ ${inputs.join('\n')}
           : undefined,
     };
 
-    const counters: CategoryCounters = {
-      correct: score?.categoryCorrect?.[category] ?? 0,
-      hallucinated: score?.categoryHallucinated?.[category] ?? 0,
-    };
-
-    const verdict = resolveVerdict(snapshot, counters, nowMs, opts);
+    const anchorMs = snapshot.inconclusive_at
+      ? new Date(snapshot.inconclusive_at).getTime()
+      : new Date(snapshot.bound_at).getTime();
+    const delta = this.perfReader.getCountersSince(agentId, category, anchorMs);
+    const verdict = resolveVerdict(snapshot, delta, nowMs, opts);
 
     if (verdict.shouldUpdate && verdict.newSnapshotFields) {
       const merged: Record<string, unknown> = { ...frontmatter, ...verdict.newSnapshotFields };
@@ -478,42 +472,38 @@ ${inputs.join('\n')}
    */
   private migrateIfNeeded(
     frontmatter: Record<string, unknown>,
-    liveCounters: { correct: number; hallucinated: number },
+    agentId: string,
+    category: string,
     nowMs: number,
   ): { frontmatter: Record<string, unknown>; mutated: boolean } {
     const migration_count = Number(frontmatter.migration_count ?? 0);
+    if (migration_count >= 2) return { frontmatter, mutated: false };
 
-    // Re-fire guard: refuse subsequent migrations
-    if (migration_count >= 1) {
-      return { frontmatter, mutated: false };
+    const updates: Record<string, unknown> = {};
+
+    // Step 1: rename v1 fields if present
+    if (frontmatter.baseline_correct != null && frontmatter.baseline_accuracy_correct == null) {
+      updates.baseline_accuracy_correct = frontmatter.baseline_correct;
+      updates.baseline_accuracy_hallucinated = frontmatter.baseline_hallucinated ?? 0;
     }
 
-    // Already has baseline — no migration needed
-    if (frontmatter.baseline_correct != null) {
-      return { frontmatter, mutated: false };
+    // Step 3: snapshot lifetime if no baseline at all (v0 case)
+    const renamedHere = updates.baseline_accuracy_correct != null;
+    const alreadyV2 = frontmatter.baseline_accuracy_correct != null;
+    if (!renamedHere && !alreadyV2) {
+      const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
+      updates.baseline_accuracy_correct = lifetime.correct;
+      updates.baseline_accuracy_hallucinated = lifetime.hallucinated;
     }
 
-    const updates: Record<string, unknown> = {
-      baseline_correct: liveCounters.correct,
-      baseline_hallucinated: liveCounters.hallucinated,
-      migration_count: migration_count + 1,
-    };
-
-    // Use the same 90-day threshold as resolveVerdict's timeout — single source of truth
+    // Step 4: stale bound_at reset
     const boundAt = frontmatter.bound_at as string | undefined;
-    if (boundAt) {
-      const ageMs = nowMs - new Date(boundAt).getTime();
-      if (ageMs > TIMEOUT_MS) {
-        // Stale baseline: reset clock to give the skill a fresh window
-        updates.bound_at = new Date(nowMs).toISOString();
-        updates.migration_reason = 'stale_baseline_reset';
-      }
-      // Otherwise preserve the existing bound_at
-    } else {
-      // No bound_at at all — set it to now
+    if (!boundAt || (nowMs - new Date(boundAt).getTime()) > TIMEOUT_MS) {
       updates.bound_at = new Date(nowMs).toISOString();
+      updates.migration_reason = 'v2_stale_baseline_reset';
     }
 
+    updates.migration_count = 2;
     return { frontmatter: { ...frontmatter, ...updates }, mutated: true };
   }
 

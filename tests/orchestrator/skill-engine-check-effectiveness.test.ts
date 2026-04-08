@@ -42,6 +42,16 @@ function makeStubPerfReader(
     categoryHallucinated,
   };
   jest.spyOn(reader, 'getScores').mockReturnValue(new Map([[agentId, score]]));
+  // v2: checkEffectiveness uses getCountersSince(agentId, cat, anchorMs) to get
+  // the post-bind delta directly. For the tests we model the legacy fixtures
+  // by treating categoryCorrect/Hallucinated as the live cumulative counts and
+  // subtracting the baseline encoded in the skill file frontmatter at call time.
+  // To keep tests deterministic without re-parsing the file, we instead spy
+  // and let individual tests override; the default returns the raw map values.
+  jest.spyOn(reader, 'getCountersSince').mockImplementation((_a, cat) => ({
+    correct: categoryCorrect[cat] ?? 0,
+    hallucinated: categoryHallucinated[cat] ?? 0,
+  }));
   return reader;
 }
 
@@ -106,17 +116,17 @@ describe('SkillEngine.checkEffectiveness()', () => {
     const category = 'trust_boundaries';
 
     const skillPath = writeSkillFile(tmpDir, agentId, category, {
-      baseline_correct: 50,
-      baseline_hallucinated: 50,
+      baseline_accuracy_correct: 50,
+      baseline_accuracy_hallucinated: 50,
       status: 'pending',
       bound_at: new Date().toISOString(),
-      migration_count: 0,
+      migration_count: 2,
     });
 
     const contentBefore = readFileSync(skillPath, 'utf-8');
 
-    // Live counters: baseline + 20 correct, +20 hallucinated (delta = 40 < 120)
-    const perfReader = makeStubPerfReader(tmpDir, agentId, { [category]: 70 }, { [category]: 70 });
+    // Delta = 20 correct + 20 hallucinated = 40 < 120
+    const perfReader = makeStubPerfReader(tmpDir, agentId, { [category]: 20 }, { [category]: 20 });
     const gen = new SkillEngine(makeStubLLM(), perfReader, tmpDir);
 
     const verdict = await gen.checkEffectiveness(agentId, category);
@@ -135,19 +145,19 @@ describe('SkillEngine.checkEffectiveness()', () => {
     const category = 'trust_boundaries';
 
     writeSkillFile(tmpDir, agentId, category, {
-      baseline_correct: 75,
-      baseline_hallucinated: 25,
+      baseline_accuracy_correct: 75,
+      baseline_accuracy_hallucinated: 25,
       status: 'pending',
       bound_at: new Date().toISOString(),
-      migration_count: 0,
+      migration_count: 2,
     });
 
-    // Post-bind: 102 correct + 18 hallucinated = 120 signals at 85% (+10pp)
+    // Delta: 102 correct + 18 hallucinated = 120 signals at 85% (+10pp)
     const perfReader = makeStubPerfReader(
       tmpDir,
       agentId,
-      { [category]: 75 + 102 },
-      { [category]: 25 + 18 },
+      { [category]: 102 },
+      { [category]: 18 },
     );
     const gen = new SkillEngine(makeStubLLM(), perfReader, tmpDir);
 
@@ -172,19 +182,19 @@ describe('SkillEngine.checkEffectiveness()', () => {
     const category = 'trust_boundaries';
 
     writeSkillFile(tmpDir, agentId, category, {
-      baseline_correct: 50,
-      baseline_hallucinated: 50,
+      baseline_accuracy_correct: 50,
+      baseline_accuracy_hallucinated: 50,
       status: 'pending',
       bound_at: new Date().toISOString(),
-      migration_count: 0,
+      migration_count: 2,
     });
 
-    // Post-bind: exactly 60 correct + 60 hallucinated = 120 signals at 50% (no change)
+    // Delta: 60 correct + 60 hallucinated = 120 signals at 50% (no change)
     const perfReader = makeStubPerfReader(
       tmpDir,
       agentId,
-      { [category]: 110 },
-      { [category]: 110 },
+      { [category]: 60 },
+      { [category]: 60 },
     );
     const gen = new SkillEngine(makeStubLLM(), perfReader, tmpDir);
 
@@ -197,8 +207,6 @@ describe('SkillEngine.checkEffectiveness()', () => {
     const skillPath = join(skillDir, 'trust-boundaries.md');
     const fm = readFrontmatter(skillPath);
     expect(fm.status).toBe('inconclusive');
-    expect(Number(fm.inconclusive_correct)).toBe(110);
-    expect(Number(fm.inconclusive_hallucinated)).toBe(110);
     expect(Number(fm.inconclusive_strikes)).toBe(1);
     expect(fm.inconclusive_at).toBeTruthy();
     // Should be a parseable ISO date
@@ -213,11 +221,11 @@ describe('SkillEngine.checkEffectiveness()', () => {
     const category = 'trust_boundaries';
 
     const skillPath = writeSkillFile(tmpDir, agentId, category, {
-      baseline_correct: 50,
-      baseline_hallucinated: 50,
+      baseline_accuracy_correct: 50,
+      baseline_accuracy_hallucinated: 50,
       status: 'flagged_for_manual_review',
       bound_at: new Date().toISOString(),
-      migration_count: 0,
+      migration_count: 2,
     });
 
     const contentBefore = readFileSync(skillPath, 'utf-8');
@@ -246,11 +254,11 @@ describe('SkillEngine.checkEffectiveness()', () => {
     const category = 'trust_boundaries';
 
     writeSkillFile(tmpDir, agentId, category, {
-      baseline_correct: 50,
-      baseline_hallucinated: 50,
+      baseline_accuracy_correct: 50,
+      baseline_accuracy_hallucinated: 50,
       status: 'pending',
       bound_at: new Date().toISOString(),
-      migration_count: 0,
+      migration_count: 2,
     });
 
     const contentBefore = readFileSync(
@@ -303,14 +311,14 @@ describe('SkillEngine.checkEffectiveness()', () => {
     const skillPath = join(skillDir, 'trust-boundaries.md');
     writeFileSync(
       skillPath,
-      `---\nname: my-skill\ncategory: trust_boundaries\nkeywords: [auth, session]\nbaseline_correct: 75\nbaseline_hallucinated: 25\nstatus: pending\nbound_at: ${new Date().toISOString()}\nmigration_count: 0\n---\n\n## Body\n\nSome content.\n`,
+      `---\nname: my-skill\ncategory: trust_boundaries\nkeywords: [auth, session]\nbaseline_accuracy_correct: 75\nbaseline_accuracy_hallucinated: 25\nstatus: pending\nbound_at: ${new Date().toISOString()}\nmigration_count: 2\n---\n\n## Body\n\nSome content.\n`,
     );
 
     const perfReader = makeStubPerfReader(
       tmpDir,
       agentId,
-      { [category]: 75 + 102 },
-      { [category]: 25 + 18 },
+      { [category]: 102 },
+      { [category]: 18 },
     );
     const gen = new SkillEngine(makeStubLLM(), perfReader, tmpDir);
 
@@ -359,9 +367,9 @@ describe('checkEffectiveness — lazy migration', () => {
     await gen.checkEffectiveness(agentId, category);
 
     const fm = readFrontmatter(skillPath);
-    expect(Number(fm.baseline_correct)).toBe(42);
-    expect(Number(fm.baseline_hallucinated)).toBe(8);
-    expect(Number(fm.migration_count)).toBe(1);
+    expect(Number(fm.baseline_accuracy_correct)).toBe(42);
+    expect(Number(fm.baseline_accuracy_hallucinated)).toBe(8);
+    expect(Number(fm.migration_count)).toBe(2);
     // bound_at must be unchanged (still 30 days ago)
     expect(fm.bound_at).toBe(thirtyDaysAgo);
     // migration_reason must be ABSENT (not a stale reset)
@@ -399,13 +407,13 @@ describe('checkEffectiveness — lazy migration', () => {
     const newBoundAt = new Date(fm.bound_at).getTime();
     expect(newBoundAt).toBeGreaterThanOrEqual(beforeMs);
     expect(newBoundAt).toBeLessThanOrEqual(afterMs + 5000);
-    expect(fm.migration_reason).toBe('stale_baseline_reset');
-    expect(Number(fm.migration_count)).toBe(1);
-    expect(Number(fm.baseline_correct)).toBe(30);
-    expect(Number(fm.baseline_hallucinated)).toBe(10);
+    expect(fm.migration_reason).toBe('v2_stale_baseline_reset');
+    expect(Number(fm.migration_count)).toBe(2);
+    expect(Number(fm.baseline_accuracy_correct)).toBe(30);
+    expect(Number(fm.baseline_accuracy_hallucinated)).toBe(10);
   });
 
-  it('refuses to re-migrate when migration_count >= 1', async () => {
+  it('refuses to re-migrate when migration_count >= 2', async () => {
     const agentId = 'agent-remigrate';
     const category = 'trust_boundaries';
 
@@ -415,9 +423,9 @@ describe('checkEffectiveness — lazy migration', () => {
     const skillPath = writeSkillFile(tmpDir, agentId, category, {
       effectiveness: 0.0,
       bound_at: twohundredDaysAgo,
-      migration_count: 1,
+      migration_count: 2,
       status: 'pending',
-      // NO baseline_correct — simulates manual deletion after first migration
+      // NO baseline_accuracy_correct — simulates manual deletion after migration
     });
 
     const perfReader = makeStubPerfReader(
@@ -433,15 +441,15 @@ describe('checkEffectiveness — lazy migration', () => {
     const fm = readFrontmatter(skillPath);
     // bound_at must NOT be touched
     expect(fm.bound_at).toBe(twohundredDaysAgo);
-    // migration_count still 1
-    expect(Number(fm.migration_count)).toBe(1);
-    // baseline_correct must NOT have been freshly snapshotted (still absent / 0)
-    expect(fm.baseline_correct == null || Number(fm.baseline_correct) === 0).toBe(true);
+    // migration_count still 2
+    expect(Number(fm.migration_count)).toBe(2);
+    // baseline_accuracy_correct must NOT have been freshly snapshotted (still absent / 0)
+    expect(fm.baseline_accuracy_correct == null || Number(fm.baseline_accuracy_correct) === 0).toBe(true);
     // Verdict should reflect the stale/insufficient-evidence state
     expect(verdict.status).toBeDefined();
   });
 
-  it('sets bound_at to now() and does NOT set migration_reason when bound_at is absent entirely', async () => {
+  it('sets bound_at to now() AND sets migration_reason when bound_at is absent entirely', async () => {
     const agentId = 'agent-no-boundat';
     const category = 'trust_boundaries';
 
@@ -472,14 +480,11 @@ describe('checkEffectiveness — lazy migration', () => {
     const boundAtMs = new Date(fm.bound_at).getTime();
     expect(boundAtMs).toBeGreaterThanOrEqual(beforeMs);
     expect(boundAtMs).toBeLessThanOrEqual(afterMs + 5000);
-    // frontmatter.migration_reason is undefined / not present (this is the key distinction from the stale-reset path)
-    expect(fm.migration_reason).toBeUndefined();
-    // frontmatter.baseline_correct === 10
-    expect(Number(fm.baseline_correct)).toBe(10);
-    // frontmatter.baseline_hallucinated === 2
-    expect(Number(fm.baseline_hallucinated)).toBe(2);
-    // frontmatter.migration_count === 1
-    expect(Number(fm.migration_count)).toBe(1);
+    // v2: missing bound_at counts as stale and sets migration_reason
+    expect(fm.migration_reason).toBe('v2_stale_baseline_reset');
+    expect(Number(fm.baseline_accuracy_correct)).toBe(10);
+    expect(Number(fm.baseline_accuracy_hallucinated)).toBe(2);
+    expect(Number(fm.migration_count)).toBe(2);
   });
 });
 
@@ -504,7 +509,7 @@ describe('checkEffectiveness — NaN coercion guard', () => {
     const skillPath = join(skillDir, 'trust-boundaries.md');
     writeFileSync(
       skillPath,
-      `---\nbaseline_correct: not-a-number\nbaseline_hallucinated: also-bad\nstatus: pending\nbound_at: ${new Date().toISOString()}\nmigration_count: 0\n---\n\n## Body\n\nContent.\n`,
+      `---\nbaseline_accuracy_correct: not-a-number\nbaseline_accuracy_hallucinated: also-bad\nstatus: pending\nbound_at: ${new Date().toISOString()}\nmigration_count: 2\n---\n\n## Body\n\nContent.\n`,
     );
 
     // Normal live counters
