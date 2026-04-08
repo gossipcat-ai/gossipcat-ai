@@ -5,7 +5,7 @@
  * Spec: docs/specs/2026-04-08-gossip-verify-memory.md (Deliverable 3).
  */
 
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -194,7 +194,8 @@ describe('validateInputs', () => {
     const r = validateInputs('memory.md', 'some claim', { cwd, autoMemoryRoot: autoMemory });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.absPath).toBe(file);
+      // absPath is the realpath after symlink hardening (macOS /tmp -> /private/tmp)
+      expect(r.absPath).toBe(realpathSync(file));
       expect(r.body).toContain('# memory');
     }
   });
@@ -259,5 +260,68 @@ describe('validateInputs', () => {
     const r = validateInputs('subdir', 'claim', { cwd, autoMemoryRoot: autoMemory });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.evidence).toMatch(/not a regular file/);
+  });
+
+  // F4 regression: symlink at /allowed/link.md -> /escape/secret.txt would
+  // pass the lexical allowlist on the symlink path, then statSync/readFileSync
+  // would follow the link and read the escape target. realpathSync hardening
+  // re-runs the allowlist check against the resolved target.
+  it('rejects symlinks whose target escapes the allowlist', () => {
+    const escape = tmpRoot('escape');
+    const target = join(escape, 'secret.txt');
+    writeFileSync(target, 'classified');
+    const link = join(cwd, 'link.md');
+    try {
+      symlinkSync(target, link);
+    } catch {
+      // skip on filesystems that disallow symlinks
+      rmSync(escape, { recursive: true, force: true });
+      return;
+    }
+    try {
+      const r = validateInputs('link.md', 'claim', { cwd, autoMemoryRoot: autoMemory });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.evidence).toMatch(/symlink target escapes allowlist|outside allowed roots/);
+    } finally {
+      rmSync(escape, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts symlinks whose target is inside the allowlist (returns realpath)', () => {
+    const target = join(cwd, 'real.md');
+    writeFileSync(target, 'in-bounds body');
+    const link = join(cwd, 'link.md');
+    try {
+      symlinkSync(target, link);
+    } catch {
+      return;
+    }
+    const r = validateInputs('link.md', 'claim', { cwd, autoMemoryRoot: autoMemory });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      // absPath should be the resolved real file (realpath of target), not the link
+      expect(r.absPath).toBe(realpathSync(target));
+      expect(r.body).toBe('in-bounds body');
+    }
+  });
+});
+
+// ── REWRITE g-flag regression (F6) ────────────────────────────────────────────
+
+describe('parseVerdict — REWRITE multi-line stripping (F6 regression)', () => {
+  it('strips ALL REWRITE lines from evidence, not just the first', () => {
+    const raw = [
+      'evidence line',
+      'REWRITE: first suggestion',
+      'more evidence',
+      'REWRITE: second hallucinated suggestion',
+      'VERDICT: STALE',
+    ].join('\n');
+    const r = parseVerdict(raw);
+    expect(r.verdict).toBe('STALE');
+    expect(r.rewrite_suggestion).toBe('first suggestion');
+    expect(r.evidence).not.toMatch(/REWRITE:/);
+    expect(r.evidence).toContain('evidence line');
+    expect(r.evidence).toContain('more evidence');
   });
 });
