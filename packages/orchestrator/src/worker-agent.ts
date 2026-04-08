@@ -122,7 +122,7 @@ export class WorkerAgent {
    */
   private toolCallBudget: Map<string, number> = new Map();
   private static readonly TOOL_CALL_BUDGETS: Record<string, number> = {
-    memory_query: 5,
+    memory_query: 10,
     self_identity: 3,
   };
   private pendingToolCalls: Map<string, {
