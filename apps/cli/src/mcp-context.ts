@@ -3,7 +3,7 @@
  * Single mutable context object avoids passing dozens of parameters.
  */
 import { randomUUID } from 'crypto';
-import type { CrossReviewEntry } from '@gossip/orchestrator';
+import type { CrossReviewEntry, MainAgent } from '@gossip/orchestrator';
 
 export interface NativeCrossReviewPrompt {
   agentId: string;
@@ -50,7 +50,7 @@ export interface NativeResultInfo {
 }
 
 export interface McpContext {
-  mainAgent: any;
+  mainAgent: MainAgent;  // assigned in boot(); accessed only after boot completes
   relay: any;
   toolServer: any;
   workers: Map<string, any>;
@@ -69,7 +69,7 @@ export interface McpContext {
 }
 
 export const ctx: McpContext = {
-  mainAgent: null,
+  mainAgent: null as unknown as MainAgent,
   relay: null,
   toolServer: null,
   workers: new Map(),

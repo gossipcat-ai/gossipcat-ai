@@ -98,7 +98,8 @@ export class MainAgent {
   private relayUrl: string;
   private relayApiKey: string | undefined;
   private apiKeys: Record<string, string>;
-  private projectRoot: string;
+  /** Public so MCP handlers can resolve project-relative paths without going through getters. */
+  public projectRoot: string;
   private pipeline: DispatchPipeline;
   private bootstrapPrompt: string;
   private orchestratorAgent: GossipAgent | null = null;

@@ -8,7 +8,8 @@ interface UpdateOptions {
 }
 
 interface UpdateResult {
-  content: [{ type: 'text'; text: string }];
+  [x: string]: unknown;
+  content: Array<{ type: 'text'; text: string }>;
 }
 
 function getCurrentVersion(): string {

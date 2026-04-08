@@ -8,8 +8,7 @@
       "performance-reader": ["dist/performance-reader.d.ts"],
       "skill-index": ["dist/skill-index.d.ts"],
       "consensus-types": ["dist/consensus-types.d.ts"],
-      "bootstrap": ["dist/bootstrap.d.ts"],
-      "*": ["dist/*"]
+      "bootstrap": ["dist/bootstrap.d.ts"]
     }
   },
   "scripts": { "build": "tsc" },

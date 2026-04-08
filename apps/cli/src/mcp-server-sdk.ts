@@ -13,7 +13,6 @@ import { join } from 'path';
 const gossipDir = join(process.cwd(), '.gossip');
 try { mkdirSync(gossipDir, { recursive: true }); } catch {}
 const logStream = createWriteStream(join(gossipDir, 'mcp.log'), { flags: 'a' });
-const origStderrWrite = process.stderr.write.bind(process.stderr);
 process.stderr.write = ((chunk: any, ...args: any[]) => {
   // Route ALL stderr to log file — Claude Code interprets any MCP stderr as server errors
   return logStream.write(chunk, ...args as any);
@@ -27,7 +26,7 @@ import { randomUUID, randomBytes, timingSafeEqual } from 'crypto';
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'http';
 
 // ── Extracted modules ────────────────────────────────────────────────────
-import { ctx, defaultImportanceScores, NATIVE_TASK_TTL_MS } from './mcp-context';
+import { ctx, NATIVE_TASK_TTL_MS } from './mcp-context';
 import { evictStaleNativeTasks, persistNativeTaskMap, restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';
@@ -379,7 +378,7 @@ async function doBoot() {
     projectRoot: process.cwd(),
     perfWriter,
     apiKey: relayApiKey,
-    allowedCallers: agentConfigs.map(a => a.id),
+    allowedCallers: agentConfigs.map((a: { id: string }) => a.id),
     memorySearcher,
     agentLookup,
   });
@@ -1816,52 +1815,84 @@ server.tool(
       }
 
       const IMPL_SIGNALS = new Set(['impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected']);
-      const formatted = signals.map((s, i) => ({
-        type: (IMPL_SIGNALS.has(s.signal) ? 'impl' : 'consensus') as 'impl' | 'consensus',
-        taskId: task_id || `manual-${timestamp.replace(/[:.]/g, '')}-${i}`,
-        signal: s.signal,
-        agentId: s.agent_id,
-        counterpartId: s.counterpart_id,
-        findingId: s.finding_id,
-        severity: s.severity,
-        category: s.category,
-        source: 'manual' as const,
-        evidence: ((s.evidence || s.finding) ?? '').slice(0, MAX_EVIDENCE_LENGTH),
-        timestamp,
-      }));
+
+      // Auto-derive category from finding+evidence text when the caller omitted it.
+      // Without this, null-category signals are invisible to getCountersSince() — every
+      // bound skill stays pending forever because post-bind counters only match exact
+      // category strings. Uses the same DEFAULT_KEYWORDS table the skill-gap tracker
+      // uses below, so category assignment is consistent across both pipelines.
+      const { DEFAULT_KEYWORDS: DK } = await import('@gossip/orchestrator');
+      const inferCategory = (s: { finding?: string; evidence?: string; agent_id?: string }): string | undefined => {
+        const text = `${s.finding || ''} ${s.evidence || ''}`.toLowerCase();
+        if (!text.trim()) return undefined;
+        let bestCategory = '';
+        let bestHits = 0;
+        for (const [category, keywords] of Object.entries(DK)) {
+          const hits = keywords.filter(kw => text.includes(kw)).length;
+          if (hits > bestHits) { bestHits = hits; bestCategory = category; }
+        }
+        return bestHits >= 1 ? bestCategory : undefined;
+      };
+
+      type PS = import('@gossip/orchestrator').PerformanceSignal;
+      const formatted: PS[] = signals.map((s, i): PS => {
+        const taskId = task_id || `manual-${timestamp.replace(/[:.]/g, '')}-${i}`;
+        const evidence = ((s.evidence || s.finding) ?? '').slice(0, MAX_EVIDENCE_LENGTH);
+        if (IMPL_SIGNALS.has(s.signal)) {
+          return {
+            type: 'impl',
+            signal: s.signal as 'impl_test_pass' | 'impl_test_fail' | 'impl_peer_approved' | 'impl_peer_rejected',
+            agentId: s.agent_id,
+            taskId,
+            source: 'manual',
+            evidence,
+            timestamp,
+          };
+        }
+        return {
+          type: 'consensus',
+          signal: s.signal as Exclude<typeof s.signal, 'impl_test_pass' | 'impl_test_fail' | 'impl_peer_approved' | 'impl_peer_rejected'>,
+          agentId: s.agent_id,
+          taskId,
+          counterpartId: s.counterpart_id,
+          findingId: s.finding_id,
+          severity: s.severity,
+          category: s.category ?? inferCategory(s),
+          evidence,
+          timestamp,
+        };
+      });
 
       writer.appendSignals(formatted);
 
-      // Auto-convert hallucination signals into skill gap suggestions
-      const hallucinationSignals = formatted.filter(s => s.signal === 'hallucination_caught');
+      // Auto-convert hallucination signals into skill gap suggestions.
+      // Reuses the category derived above (formatted[i].category) so the suggestion
+      // pipeline and the signal pipeline always agree on which category fired.
+      type ConsensusPS = Extract<PS, { type: 'consensus' }>;
+      const hallucinationSignals = formatted.filter(
+        (s): s is ConsensusPS => s.type === 'consensus' && s.signal === 'hallucination_caught',
+      );
       if (hallucinationSignals.length > 0) {
         try {
-          const { SkillGapTracker, DEFAULT_KEYWORDS } = await import('@gossip/orchestrator');
+          const { SkillGapTracker } = await import('@gossip/orchestrator');
           const gapTracker = new SkillGapTracker(process.cwd());
           for (const s of hallucinationSignals) {
-            const text = `${s.evidence || ''} ${s.agentId || ''}`.toLowerCase();
-            let bestCategory = '';
-            let bestHits = 0;
-            for (const [category, keywords] of Object.entries(DEFAULT_KEYWORDS)) {
-              const hits = keywords.filter(kw => text.includes(kw)).length;
-              if (hits > bestHits) { bestHits = hits; bestCategory = category; }
-            }
-            if (bestCategory && bestHits >= 1) {
-              gapTracker.appendSuggestion({
-                type: 'suggestion',
-                skill: bestCategory.replace(/_/g, '-'),
-                reason: `Auto: hallucination_caught — ${(s.evidence || '').slice(0, 120)}`,
-                agent: s.agentId,
-                task_context: s.taskId,
-                timestamp: new Date().toISOString(),
-              });
-            }
+            if (!s.category) continue;
+            gapTracker.appendSuggestion({
+              type: 'suggestion',
+              skill: s.category.replace(/_/g, '-'),
+              reason: `Auto: hallucination_caught — ${(s.evidence || '').slice(0, 120)}`,
+              agent: s.agentId,
+              task_context: s.taskId,
+              timestamp: new Date().toISOString(),
+            });
           }
         } catch { /* best-effort */ }
       }
 
       // Detect severity miscalibration: auto-record when orchestrator overrides agent's severity
       for (const s of formatted) {
+        if (s.type !== 'consensus') continue;
         if (!s.severity || !s.findingId) continue;
         const originalSeverity = lookupFindingSeverity(s.findingId, process.cwd());
         if (originalSeverity && originalSeverity !== s.severity) {
@@ -1893,7 +1924,7 @@ server.tool(
             const lines = rfs(findingsPath, 'utf-8').trim().split('\n').filter(Boolean);
             const resolveIds = new Set(findingsWithId.map(s => s.finding_id));
             let resolvedCount = 0;
-            const resolved = lines.map(line => {
+            const resolved = (lines as string[]).map((line: string) => {
               try {
                 const entry = JSON.parse(line);
                 // Match on taskId (which stores f.id from consensus findings) — check both unverified and unique tags
@@ -1930,7 +1961,7 @@ server.tool(
             for (const s of findingsWithId) {
               const fid = s.finding_id as string;
               if (fid.includes(':')) {
-                const [reportPrefix, localId] = fid.split(':', 2);
+                const [reportPrefix] = fid.split(':', 2);
                 if (!scopedByReport.has(reportPrefix)) scopedByReport.set(reportPrefix, new Set());
                 scopedByReport.get(reportPrefix)!.add(fid);
               } else {

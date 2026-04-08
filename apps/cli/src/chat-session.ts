@@ -34,7 +34,6 @@ export class ChatSession {
   private writeMode: { mode: 'sequential' | 'scoped' | 'worktree'; scope?: string } | null = null;
   private lastTaskIds: string[] = [];
   private mainAgent: MainAgent;
-  private config: GossipConfig;
   private rl!: ReadlineInterface;
   private renderer: ChatRenderer;
   private spinner: Spinner;
@@ -45,7 +44,6 @@ export class ChatSession {
 
   constructor(opts: ChatSessionConfig) {
     this.mainAgent = opts.mainAgent;
-    this.config = opts.config;
     this.onShutdown = opts.onShutdown;
     this.renderer = new ChatRenderer();
     this.spinner = new Spinner();
@@ -281,9 +279,9 @@ export class ChatSession {
       const { results } = await this.mainAgent.collect([taskId]);
       const r = results[0];
       if (r?.status === 'completed') {
-        this.renderer.text(r.result);
+        this.renderer.text(r.result ?? '');
       } else {
-        this.renderer.error(new Error(r?.error || 'Unknown write mode error'));
+        this.renderer.error(new Error(r?.error ?? 'Unknown write mode error'));
       }
     } catch (err) {
       this.renderer.error(err);
@@ -660,9 +658,9 @@ export class ChatSession {
         for (const r of results) {
           const dur = r.completedAt ? `${r.completedAt - r.startedAt}ms` : '?';
           if (r.status === 'completed') {
-            this.renderer.section(`${r.agentId} (${dur})`, [r.result]);
+            this.renderer.section(`${r.agentId} (${dur})`, [r.result ?? '']);
           } else {
-            this.renderer.warn(`${r.agentId}: ${r.status === 'failed' ? r.error : 'still running'}`);
+            this.renderer.warn(`${r.agentId}: ${r.status === 'failed' ? (r.error ?? 'failed') : 'still running'}`);
           }
         }
       } finally {
@@ -706,10 +704,10 @@ export class ChatSession {
         const { results, consensus: report } = await this.mainAgent.collect(ids, timeout, { consensus: true });
         for (const r of results) {
           const dur = r.completedAt ? `${r.completedAt - r.startedAt}ms` : '?';
-          this.renderer.section(`${r.agentId} (${dur})`, [r.status === 'completed' ? r.result : `${r.status}: ${r.error}`]);
+          this.renderer.section(`${r.agentId} (${dur})`, [r.status === 'completed' ? (r.result ?? '') : `${r.status}: ${r.error ?? 'unknown'}`]);
         }
         if (report) {
-          this.renderer.text(report.summary);
+          this.renderer.text(report.summary ?? '');
         } else {
           this.renderer.warn('Consensus cross-review did not run (need >= 2 successful agents).');
         }
@@ -849,9 +847,8 @@ export class ChatSession {
     if (this.progressTree?.isActive()) this.progressTree.finish();
     this.renderer.info('Shutting down...');
     
-    // This allows the 'close' event to be handled gracefully.
-    // Calling rl.close() here again would be redundant.
-    if (this.rl && !this.rl.closed) {
+    // rl.close() is idempotent — safe to call even if already closed.
+    if (this.rl) {
         this.rl.close();
     }
 
