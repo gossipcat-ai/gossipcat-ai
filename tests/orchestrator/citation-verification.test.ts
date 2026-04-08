@@ -295,12 +295,12 @@ describe('Tier 1A Fix #5 — I/O errors count as failed citations', () => {
     }
   });
 
-  test('I/O error on one of many citations still allows verification of others', async () => {
-    // With Fix #5, the I/O error increments failed, but the majority rule at
-    // :985 still protects against single-bad-citation false positives under
-    // the CURRENT (pre-Fix-#3) threshold of `failed > citations.length / 2`.
-    // This test pins the pre-Fix-#3 behavior so that when Fix #3 ships the
-    // threshold change will be the ONLY thing that flips this assertion.
+  test('I/O error on one of many citations — default (majority) mode does not fire', async () => {
+    // Default verifyCitations uses majority threshold: `failed > citations.length / 2`.
+    // Two citations, one EISDIR, one valid → failed=1, total=2 → 1 > 1 === false.
+    // This behavior is PRESERVED by Tier 1B for the dispute path at :595 where a
+    // reviewer's evidence may legitimately cite multiple files and one bad citation
+    // out of many should not discard a valid refutation.
     const dirAsFile = resolve(testDir, 'src', 'isadir2.ts');
     mkdirSync(dirAsFile, { recursive: true });
     try {
@@ -309,14 +309,125 @@ describe('Tier 1A Fix #5 — I/O errors count as failed citations', () => {
         registryGet: mockRegistryGet,
         projectRoot: testDir,
       });
-      // Two citations, one EISDIR, one valid → failed=1, total=2 → 1 > 1 is false.
       const result = await engine.verifyCitations(
         'See src/isadir2.ts:1 and src/readable.ts:2',
       );
-      expect(result).toBe(false); // below majority threshold — no fabrication
+      expect(result).toBe(false); // default majority mode — below threshold
     } finally {
       rmSync(dirAsFile, { recursive: true, force: true });
     }
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Tier 1B — Fix #3: strict mode threshold (failed >= 1) for pre-filter path
+// Consensus round 82a3c123-19db41e7 Tier 1B
+// ────────────────────────────────────────────────────────────────────
+describe('Tier 1B Fix #3 — strict-mode citation verification', () => {
+  const testDir = resolve(tmpdir(), 'gossip-tier1b-strict-' + Date.now());
+  const realFile = resolve(testDir, 'src', 'real.ts');
+
+  beforeAll(() => {
+    mkdirSync(resolve(testDir, 'src'), { recursive: true });
+    writeFileSync(
+      realFile,
+      ['export const a = 1;', 'export const b = 2;', 'export const c = 3;'].join('\n'),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  test('strict mode: 1 citation all bad → fires', async () => {
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    // Single fabricated citation → failed=1, strict → 1 >= 1 === true.
+    const result = await engine.verifyCitations(
+      'The code at fake-module.ts:42 does the thing',
+      { strict: true },
+    );
+    expect(result).toBe(true);
+  });
+
+  test('strict mode: 2 citations 1 bad → fires (boundary case that default missed)', async () => {
+    // This is the boundary bug sonnet surfaced in round 99f15984-eb844568:f9
+    // Under default (majority) mode: 1 of 2 bad = 1 > 1 = false (passes).
+    // Under strict mode: 1 of 2 bad = 1 >= 1 = true (catches).
+    // An author fabricating exactly half their citations always escaped the
+    // default threshold; strict mode closes that escape hatch.
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    const result = await engine.verifyCitations(
+      'See src/real.ts:1 and fake-module.ts:42',
+      { strict: true },
+    );
+    expect(result).toBe(true);
+  });
+
+  test('strict mode: 3 citations 1 bad → fires', async () => {
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    const result = await engine.verifyCitations(
+      'See src/real.ts:1, src/real.ts:2, and fake-module.ts:42',
+      { strict: true },
+    );
+    expect(result).toBe(true);
+  });
+
+  test('strict mode: 0 citations → still returns false (early return at :968 unchanged)', async () => {
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    const result = await engine.verifyCitations(
+      'This is a qualitative disagreement with no file references at all',
+      { strict: true },
+    );
+    // Zero-citation early return at :968 is NOT affected by strict mode.
+    // The whole point of that early return is the case where citation regex
+    // finds nothing → we cannot make any fabrication claim either way.
+    expect(result).toBe(false);
+  });
+
+  test('strict mode: all citations valid → returns false', async () => {
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    const result = await engine.verifyCitations(
+      'See src/real.ts:1 and src/real.ts:2',
+      { strict: true },
+    );
+    expect(result).toBe(false);
+  });
+
+  test('default mode (no opts) preserves pre-Tier-1B majority behavior', async () => {
+    // Regression guard: the dispute path at :595 calls verifyCitations(evidence)
+    // WITHOUT strict:true. That call site must still use the majority rule.
+    // This pins the behavior so a future refactor can't accidentally change
+    // the default.
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+    // 2 citations, 1 bad — under majority, 1 > 1 === false.
+    const result = await engine.verifyCitations(
+      'See src/real.ts:1 and fake-module.ts:42',
+    );
+    expect(result).toBe(false);
   });
 });
 

@@ -704,10 +704,17 @@ Return only valid JSON.`;
         finding.tag = 'disputed';
         disputed.push(finding);
       } else if (entry.confirmedBy.length > 0) {
-        // Pre-filter: check if finding cites non-existent code
+        // Pre-filter: check if finding cites non-existent code.
         // Requires BOTH keyword hallucination AND fabricated citation (AND gate)
-        // to avoid false positives from stale/moved files after refactoring
-        const hasFabricatedCitation = await this.verifyCitations(entry.finding);
+        // to avoid false positives from stale/moved files after refactoring.
+        // strict:true means any single bad citation triggers fabricated=true —
+        // the AND-gate with detectHallucination is the blast-radius guard that
+        // prevents single-citation noise from firing hallucination_caught on its
+        // own, and the stale-file downgrade at :716 catches legitimate post-
+        // refactor citations without penalty. The prior majority threshold had a
+        // boundary bug (1-of-2 bad === passes) that let authors fabricating half
+        // their citations escape the filter. Tier 1B Fix #3.
+        const hasFabricatedCitation = await this.verifyCitations(entry.finding, { strict: true });
         const hasHallucinationKeywords = this.detectHallucination(entry.finding);
         if (hasFabricatedCitation && hasHallucinationKeywords) {
           finding.tag = 'unique';
@@ -943,10 +950,30 @@ Return only valid JSON.`;
   }
 
   /**
-   * Verify file:line citations in disagreement evidence against actual source code.
-   * Returns true if any citation is fabricated (file doesn't exist, line doesn't match claim).
+   * Verify file:line citations in text against actual source code.
+   * Returns true if the cited code is fabricated (file doesn't exist, line
+   * doesn't match claim).
+   *
+   * Threshold modes:
+   *   - `strict: false` (default, majority rule): returns true only when
+   *     more than half of the extracted citations are unresolvable. This is
+   *     the correct rule for the dispute path at :595, where a reviewer's
+   *     evidence may legitimately cite multiple files and one bad citation
+   *     out of many should not discard a valid refutation.
+   *   - `strict: true` (any-failure rule): returns true when ANY cited
+   *     line fails to resolve. Used by the pre-filter path at :710 to
+   *     catch authors who fabricate even a single citation in an otherwise
+   *     real-looking finding. The AND-gate with detectHallucination at
+   *     :712 prevents false positives on legitimate stale-file refactor
+   *     citations, and the stale-file downgrade branch at :716 catches
+   *     post-refactor drift without firing hallucination_caught.
+   *
+   * This split lets Tier 1B lower the pre-filter threshold without
+   * regressing the dispute-path's tolerance for partial bad citations.
+   * See consensus round 82a3c123-19db41e7 Tier 1B Fix #3.
    */
-  async verifyCitations(evidence: string): Promise<boolean> {
+  async verifyCitations(evidence: string, opts: { strict?: boolean } = {}): Promise<boolean> {
+    const strict = opts.strict === true;
     if (!this.config.projectRoot) return false;
 
     // Verify the project root itself is accessible — if not, we can't verify anything
@@ -995,8 +1022,13 @@ Return only valid JSON.`;
         continue;
       }
     }
-    // Fabricated if more than half of citations are invalid
-    return failed > citations.length / 2;
+    // Fabricated if (strict) any citation fails, otherwise majority.
+    // The sonnet:new-f1 finding in round 99f15984-eb844568 caught a boundary
+    // bug in the majority path: 1 of 2 bad citations is 1 > 1 === false,
+    // so an author fabricating exactly half their citations always passed
+    // the pre-filter under the old threshold. Tier 1B's strict mode closes
+    // that escape hatch for the pre-filter path.
+    return strict ? failed >= 1 : failed > citations.length / 2;
   }
 
   /**
