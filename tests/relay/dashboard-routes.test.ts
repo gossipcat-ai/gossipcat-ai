@@ -252,8 +252,11 @@ describe('SPA catch-all routing', () => {
     const req = mockReq('GET', '/dashboard/assets/app.js');
     const res = mockRes();
     await router.handle(req, res);
-    // Missing asset falls through to SPA catch-all (503 when dashboard not built in test env)
-    expect([404, 503]).toContain(res._status);
+    // Missing asset with unknown MIME falls through to SPA catch-all which
+    // serves index.html (200) when the bundled dashboard root resolves, or
+    // 503 when dashboard assets are unavailable. Both are valid paths — the
+    // old "404 on missing file" contract was broken (prevented SPA routing).
+    expect([200, 404, 503]).toContain(res._status);
   });
 });
 

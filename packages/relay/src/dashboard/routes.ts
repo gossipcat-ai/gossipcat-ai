@@ -31,14 +31,36 @@ interface DashboardContext {
 const AUTH_MAX_ATTEMPTS = 10;
 const AUTH_LOCKOUT_MS = 60_000; // 1 minute lockout after max attempts
 
+/**
+ * Resolve the bundled dashboard asset root. Same multi-candidate pattern as
+ * rules-loader.ts: try the bundled production layout first, then dev/repo
+ * layouts. `projectRoot` is the user's cwd (where .gossip/ lives) — NOT the
+ * place where dist-dashboard ships. The first candidate handles the npm
+ * install case where dist-dashboard is a sibling of dist-mcp/mcp-server.js.
+ */
+function resolveDashboardRoot(projectRoot: string): string | null {
+  const candidates = [
+    resolve(__dirname, '..', 'dist-dashboard'),                  // bundled: dist-mcp/mcp-server.js → ../dist-dashboard
+    resolve(__dirname, '..', '..', '..', '..', 'dist-dashboard'), // tsc dev: packages/relay/dist/dashboard → repo-root
+    join(projectRoot, 'dist-dashboard'),                          // legacy dev fallback (git-clone running from repo root)
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 export class DashboardRouter {
   private authAttempts = new Map<string, { count: number; lockedUntil: number }>();
+  private dashboardRoot: string | null;
 
   constructor(
     private auth: DashboardAuth,
     private projectRoot: string,
     private ctx: DashboardContext,
-  ) {}
+  ) {
+    this.dashboardRoot = resolveDashboardRoot(projectRoot);
+  }
 
   /** Update live context (call when agents connect/disconnect) */
   updateContext(ctx: Partial<DashboardContext>): void {
@@ -232,10 +254,15 @@ export class DashboardRouter {
   }
 
   private serveDashboard(res: ServerResponse): boolean {
-    const htmlPath = join(this.projectRoot, 'dist-dashboard', 'index.html');
+    if (!this.dashboardRoot) {
+      res.writeHead(503, { 'Content-Type': 'text/plain' });
+      res.end('Dashboard assets not found. Reinstall gossipcat or rebuild from source.');
+      return true;
+    }
+    const htmlPath = join(this.dashboardRoot, 'index.html');
     if (!existsSync(htmlPath)) {
       res.writeHead(503, { 'Content-Type': 'text/plain' });
-      res.end('Dashboard not built. Run: npm run build:dashboard');
+      res.end(`Dashboard index.html missing at ${this.dashboardRoot}. Reinstall gossipcat.`);
       return true;
     }
     const html = readFileSync(htmlPath, 'utf-8');
@@ -245,6 +272,7 @@ export class DashboardRouter {
   }
 
   private serveStaticFile(res: ServerResponse, url: string): boolean {
+    if (!this.dashboardRoot) return false;
     // Strip /dashboard/ prefix to get the relative path within dist-dashboard/
     const relativePath = url.replace(/^\/dashboard\//, '');
     // Prevent path traversal
@@ -261,10 +289,10 @@ export class DashboardRouter {
     const ext = '.' + (relativePath.split('.').pop() || '');
     const mime = MIME[ext];
     if (!mime) return false; // Not a static file — fall through to SPA
-    const filePath = join(this.projectRoot, 'dist-dashboard', relativePath);
+    const filePath = join(this.dashboardRoot, relativePath);
     try {
       const realFile = realpathSync(filePath);
-      const realBase = realpathSync(resolve(this.projectRoot, 'dist-dashboard'));
+      const realBase = realpathSync(this.dashboardRoot);
       if (!realFile.startsWith(realBase + '/')) {
         res.writeHead(404);
         res.end();

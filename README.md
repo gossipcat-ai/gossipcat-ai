@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/gossipcat"><img src="https://img.shields.io/npm/v/gossipcat.svg?color=cb3837&label=npm" alt="npm version" /></a>
-  <a href="https://www.npmjs.com/package/gossipcat"><img src="https://img.shields.io/npm/dm/gossipcat.svg?color=cb3837" alt="npm downloads" /></a>
+  <a href="https://github.com/gossipcat-ai/gossipcat-ai/releases/latest"><img src="https://img.shields.io/github/v/release/gossipcat-ai/gossipcat-ai?color=0ea5e9&label=release" alt="Latest release" /></a>
+  <a href="https://github.com/gossipcat-ai/gossipcat-ai/releases"><img src="https://img.shields.io/github/downloads/gossipcat-ai/gossipcat-ai/total?color=0ea5e9" alt="Downloads" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/stargazers"><img src="https://img.shields.io/github/stars/gossipcat-ai/gossipcat-ai?style=social" alt="GitHub stars" /></a>
@@ -168,7 +168,8 @@ Both types participate equally in consensus, cross-review, and skill development
 ### One-liner
 
 ```bash
-npm install -g gossipcat@next && claude mcp add gossipcat -s user -- gossipcat
+npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/latest/download/gossipcat.tgz && \
+claude mcp add gossipcat -s user -- gossipcat
 ```
 
 Restart Claude Code. Then in any project, ask:
@@ -177,21 +178,28 @@ Restart Claude Code. Then in any project, ask:
 
 Claude Code will call `gossip_setup()` to scaffold `.gossip/config.json` and your agent team. First-run bootstrap also writes the dispatch rules and tool catalog so Claude Code knows how to use gossipcat — no manual config needed.
 
+Gossipcat ships from **[GitHub Releases](https://github.com/gossipcat-ai/gossipcat-ai/releases)**, not the npm registry. The install URL above always points at the latest release. `npm` downloads the tarball directly, installs it globally, and drops a `gossipcat` binary on your `PATH` — no `npm publish` involved.
+
 ### What the install ships
 
 | | What you get |
 |---|---|
 | **MCP server** | Bundled binary at `dist-mcp/mcp-server.js`, wired as the `gossipcat` command on `PATH` |
 | **Dashboard** | Prebuilt static assets in `dist-dashboard/` — launches automatically on port `24420` when the relay boots |
-| **Default skills + rules** | 18 bundled skill templates + gossipcat operational rules copied into the install |
+| **Default skills + rules + archetypes** | 18 bundled skill templates, operational rules, and project archetypes copied into the install |
 | **Postinstall wizard** | Writes `.mcp.json` with correct absolute paths for your machine |
 
 ### Alternative install paths
 
+**Pin to a specific version:**
+```bash
+npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.1.1/gossipcat-0.1.1.tgz
+```
+
 **Project-local install** (each project gets its own gossipcat):
 ```bash
 cd your-project
-npm install --save-dev gossipcat@next
+npm install --save-dev https://github.com/gossipcat-ai/gossipcat-ai/releases/latest/download/gossipcat.tgz
 ```
 The postinstall writes `.mcp.json` to your project root. Open Claude Code in that directory and gossipcat connects automatically — no `claude mcp add` needed.
 
@@ -206,8 +214,9 @@ claude mcp add gossipcat -s user -- node "$PWD/dist-mcp/mcp-server.js"
 
 ### Upgrading
 
+Re-run the one-liner — npm will fetch the latest release tarball and replace the installed version:
 ```bash
-npm update -g gossipcat
+npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/latest/download/gossipcat.tgz
 ```
 Or in-session, ask Claude Code: *"Check for gossipcat updates"* — the `gossip_update` tool fetches the latest release notes and applies the upgrade with your confirmation.
 
