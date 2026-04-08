@@ -10,6 +10,22 @@ import { Sandbox } from './sandbox';
 import { resolve, relative } from 'path';
 import { realpathSync, existsSync } from 'fs';
 
+/**
+ * Structural shape of MemorySearcher from @gossip/orchestrator. Defined here as
+ * a structural type rather than a value import to avoid the orchestrator→tools
+ * circular dependency. Inject the real MemorySearcher instance from the MCP
+ * boot path; both gossip_remember and memory_query then call the same backend.
+ */
+export interface MemorySearcherLike {
+  search(agentId: string, query: string, maxResults?: number): Array<{
+    source: string;
+    name: string;
+    description: string;
+    score: number;
+    snippets: string[];
+  }>;
+}
+
 export interface ToolServerConfig {
   relayUrl: string;
   projectRoot: string;
@@ -17,6 +33,7 @@ export interface ToolServerConfig {
   allowedCallers?: string[];  // If set, only these agent IDs can call tools
   apiKey?: string;            // Relay auth key — must match the relay's configured key
   perfWriter?: { appendSignal(signal: unknown): void };
+  memorySearcher?: MemorySearcherLike;  // Injected from MCP boot path for memory_query
 }
 
 function truncateAtLine(text: string, maxLength: number): string {
@@ -40,6 +57,7 @@ export class ToolServer {
   private agentWrittenFiles: Map<string, Set<string>> = new Map(); // agentId → written file paths
   private static readonly MAX_WRITTEN_FILES_PER_AGENT = 1024;
   private perfWriter?: { appendSignal(signal: unknown): void };
+  private memorySearcher?: MemorySearcherLike;
 
   constructor(config: ToolServerConfig) {
     this.allowedCallers = config.allowedCallers ? new Set(config.allowedCallers) : null;
@@ -49,6 +67,7 @@ export class ToolServer {
     this.gitTools = new GitTools(config.projectRoot);
     this.skillTools = new SkillTools(config.projectRoot);
     this.perfWriter = config.perfWriter;
+    this.memorySearcher = config.memorySearcher;
     this.agent = new GossipAgent({
       agentId: config.agentId || 'tool-server',
       relayUrl: config.relayUrl,
@@ -321,9 +340,51 @@ export class ToolServer {
         return this.handleRunTests(args as { fileGlob: string }, callerId);
       case 'run_typecheck':
         return this.handleRunTypecheck(callerId);
+      case 'memory_query':
+        return this.handleMemoryQuery(args as { query: string; max_results?: number | string }, callerId);
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
+  }
+
+  /**
+   * memory_query — return the calling agent's own archived knowledge in the
+   * same markdown shape that gossip_remember produces. Scope is always the
+   * caller (envelope.sid via allowedCallers gate); cross-agent recall has no
+   * code path. Output format mirrors mcp-server-sdk.ts:2662-2673 exactly so
+   * citation patterns roundtrip between native and relay agents.
+   */
+  private async handleMemoryQuery(
+    args: { query: string; max_results?: number | string },
+    callerId?: string,
+  ): Promise<string> {
+    if (!this.memorySearcher) {
+      return 'memory_query unavailable: tool-server has no memorySearcher injected.';
+    }
+    if (!callerId) {
+      return 'memory_query requires a caller identity (envelope.sid). Refusing.';
+    }
+    const query = (args.query || '').toString();
+    if (!query.trim()) return 'memory_query requires a non-empty query string.';
+    const maxRaw = args.max_results;
+    const max = typeof maxRaw === 'string' ? parseInt(maxRaw, 10) : (typeof maxRaw === 'number' ? maxRaw : 3);
+    const maxResults = Number.isFinite(max) && max > 0 ? Math.min(max, 10) : 3;
+    const results = this.memorySearcher.search(callerId, query, maxResults);
+    if (results.length === 0) {
+      return `No knowledge found for agent "${callerId}" matching query: "${query}"`;
+    }
+    const lines: string[] = [`Knowledge search results for agent "${callerId}" (query: "${query}"):\n`];
+    for (const r of results) {
+      lines.push(`## ${r.name} (score: ${r.score.toFixed(2)})`);
+      lines.push(`Source: ${r.source}`);
+      if (r.description) lines.push(`Description: ${r.description}`);
+      if (r.snippets.length > 0) {
+        lines.push('Snippets:');
+        for (const s of r.snippets) lines.push(`  - ${s}`);
+      }
+      lines.push('');
+    }
+    return lines.join('\n');
   }
 
   private async handleVerifyWrite(callerId: string, testFile?: string): Promise<string> {

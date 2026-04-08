@@ -175,4 +175,19 @@ export const VERIFY_TOOLS: ToolDefinition[] = [
   },
 ];
 
-export const ALL_TOOLS: ToolDefinition[] = [...FILE_TOOLS, ...SHELL_TOOLS, ...GIT_TOOLS, ...SKILL_TOOLS, ...VERIFY_TOOLS];
+export const MEMORY_TOOLS: ToolDefinition[] = [
+  {
+    name: 'memory_query',
+    description: 'Search YOUR OWN archived knowledge files, task summaries, and consensus signals from prior sessions. Use BEFORE reviewing code that names a specific file/function/module so you don\'t re-discover or contradict prior findings. Scoped to your own archive — you cannot read other agents\' memory.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Concrete identifier to search for: file path, function name, module, or commit hash. Two-to-five focused words. Vague terms like "review" or "bug" waste the call.' },
+        max_results: { type: 'string', description: 'Max results to return (default 3, max 10)' },
+      },
+      required: ['query'],
+    },
+  },
+];
+
+export const ALL_TOOLS: ToolDefinition[] = [...FILE_TOOLS, ...SHELL_TOOLS, ...GIT_TOOLS, ...SKILL_TOOLS, ...VERIFY_TOOLS, ...MEMORY_TOOLS];

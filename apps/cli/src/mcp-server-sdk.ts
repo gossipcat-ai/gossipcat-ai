@@ -350,12 +350,19 @@ async function doBoot() {
   // Create performance writer for ATI signal collection
   const perfWriter = new m.PerformanceWriter(process.cwd());
 
+  // Inject MemorySearcher so relay workers can call memory_query without
+  // requiring packages/tools to import @gossip/orchestrator (would create a
+  // circular dependency). Both gossip_remember and memory_query now hit the
+  // same backend instance.
+  const memorySearcher = new m.MemorySearcher(process.cwd());
+
   ctx.toolServer = new m.ToolServer({
     relayUrl: ctx.relay.url,
     projectRoot: process.cwd(),
     perfWriter,
     apiKey: relayApiKey,
     allowedCallers: agentConfigs.map(a => a.id),
+    memorySearcher,
   });
   await ctx.toolServer.start();
 
@@ -563,7 +570,7 @@ async function doBoot() {
 
   // Initialize per-agent skill index
   try {
-    const { SkillIndex: SI, parseSkillFrontmatter } = await import('@gossip/orchestrator');
+    const { SkillIndex: SI } = await import('@gossip/orchestrator');
     const skillIndex = new SI(process.cwd());
     if (!skillIndex.exists()) {
       // First time: seed from config.skills[] arrays
@@ -571,58 +578,30 @@ async function doBoot() {
       process.stderr.write(`[gossipcat] 📚 Skill index created (seeded from ${agentConfigs.length} agent configs)\n`);
     }
 
-    // Auto-seed permanent-mode default skills into every agent's slot list.
-    // Runs on EVERY boot (not just first-init) so default skills like
-    // memory-retrieval reach existing installs too. The previous behavior was
-    // that mode:permanent files in packages/orchestrator/src/default-skills/
-    // never reached any agent because skill-loader.ts:42-45 only returns
-    // bound slots, not all permanent-mode files. Validation round on
-    // 2026-04-08 confirmed memory-retrieval was not being injected despite
-    // existing on disk; this block is the fix.
+    // Auto-seed global permanent default skills into every agent's slot list.
+    // Runs on EVERY boot (not just first-init via seedFromConfigs) so these
+    // skills reach existing installs with a previously-seeded index too.
     //
-    // We scan the bundled default-skills directory, parse each .md's
-    // frontmatter, filter to mode:permanent, and ensureBoundWithMode() them
-    // with the same mode. ensureBoundWithMode is idempotent and respects any
-    // existing binding — it only adds slots that don't exist yet. This
-    // enforces the "no overlap between permanent and contextual" invariant:
-    // once an agent has a skill bound with a mode, that mode wins.
+    // Initially I tried to scan the default-skills directory and filter by
+    // mode:permanent frontmatter, but the existing default skill files
+    // (code-review.md, security-audit.md, etc.) don't have frontmatter at
+    // all — they work today only because they're explicitly listed in each
+    // agent's .gossip/config.json skills array. So the scan approach would
+    // find zero permanent defaults and no-op. Instead we hardcode the list
+    // of "global permanent defaults" — skills that should reach every agent
+    // regardless of their config, because they teach about cross-cutting
+    // tools like gossip_remember.
+    //
+    // ensureBoundWithMode is idempotent: existing slots are untouched, new
+    // slots added. The "no overlap between permanent and contextual"
+    // invariant the user raised is enforced by construction: once a slot is
+    // bound, its mode is authoritative for that agent and won't be clobbered.
+    const GLOBAL_PERMANENT_DEFAULTS = ['memory-retrieval'];
     try {
-      const { readdirSync, readFileSync } = await import('fs');
-      const { dirname, join } = await import('path');
-      const { fileURLToPath } = await import('url');
-      const thisDir = typeof __dirname !== 'undefined'
-        ? __dirname
-        : dirname(fileURLToPath(import.meta.url));
-      // In the built MCP bundle, default-skills is copied next to mcp-server.js
-      // at dist-mcp/default-skills. In dev (ts-node), it's at the orchestrator
-      // source path. Try both.
-      const candidates = [
-        join(thisDir, 'default-skills'),
-        join(thisDir, '..', '..', 'packages', 'orchestrator', 'src', 'default-skills'),
-      ];
-      let defaultSkillsDir: string | null = null;
-      for (const c of candidates) {
-        try {
-          if (readdirSync(c).length > 0) { defaultSkillsDir = c; break; }
-        } catch { /* not this one */ }
-      }
-      if (defaultSkillsDir) {
-        const files = readdirSync(defaultSkillsDir).filter((f: string) => f.endsWith('.md'));
-        const permanentDefaults: string[] = [];
-        for (const f of files) {
-          try {
-            const content = readFileSync(join(defaultSkillsDir, f), 'utf-8');
-            const fm = parseSkillFrontmatter(content);
-            if (fm?.mode === 'permanent') {
-              permanentDefaults.push(f.replace(/\.md$/, ''));
-            }
-          } catch { /* skip unreadable / unparseable files */ }
-        }
-        if (permanentDefaults.length > 0) {
-          const allAgentIds = agentConfigs.map((ac: any) => ac.id).filter((id: any) => typeof id === 'string' && id.length > 0);
-          skillIndex.ensureBoundWithMode(permanentDefaults, allAgentIds, 'permanent');
-          process.stderr.write(`[gossipcat] 📚 Global permanent defaults seeded: ${permanentDefaults.join(', ')} → ${allAgentIds.length} agents\n`);
-        }
+      const allAgentIds = agentConfigs.map((ac: any) => ac.id).filter((id: any) => typeof id === 'string' && id.length > 0);
+      if (allAgentIds.length > 0) {
+        skillIndex.ensureBoundWithMode(GLOBAL_PERMANENT_DEFAULTS, allAgentIds, 'permanent');
+        process.stderr.write(`[gossipcat] 📚 Global permanent defaults seeded: ${GLOBAL_PERMANENT_DEFAULTS.join(', ')} → ${allAgentIds.length} agents\n`);
       }
     } catch (seedErr) {
       process.stderr.write(`[gossipcat] ⚠️  Global permanent skill auto-seed failed: ${(seedErr as Error).message}\n`);
