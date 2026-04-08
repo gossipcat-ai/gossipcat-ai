@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "description": "Multi-agent orchestration for Claude Code — parallel review, consensus, adaptive dispatch",
   "license": "MIT",
+  "main": "dist-mcp/mcp-server.js",
+  "bin": {
+    "gossipcat": "dist-mcp/mcp-server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -17,7 +24,7 @@
     "test": "jest --config jest.config.base.js",
     "clean": "rm -rf packages/*/dist apps/*/dist dist-mcp/ dist-dashboard/",
     "postinstall": "node scripts/postinstall.js",
-    "build:mcp": "npx esbuild apps/cli/src/mcp-server-sdk.ts --bundle --platform=node --target=node22 --outfile=dist-mcp/mcp-server.js --external:ws --external:@modelcontextprotocol/sdk --tsconfig=tsconfig.json && rm -rf dist-mcp/default-skills dist-mcp/default-rules && cp -r packages/orchestrator/src/default-skills dist-mcp/default-skills && cp -r packages/orchestrator/src/default-rules dist-mcp/default-rules",
+    "build:mcp": "rm -rf dist-mcp && npx esbuild apps/cli/src/mcp-server-sdk.ts --bundle --platform=node --target=node22 --outfile=dist-mcp/mcp-server.js --external:ws --external:@modelcontextprotocol/sdk --tsconfig=tsconfig.json && cp -r packages/orchestrator/src/default-skills dist-mcp/default-skills && cp -r packages/orchestrator/src/default-rules dist-mcp/default-rules && chmod +x dist-mcp/mcp-server.js",
     "build:dashboard": "cd packages/dashboard-v2 && npx vite build --outDir ../../dist-dashboard --emptyOutDir",
     "prepublishOnly": "npm run build:mcp && npm run build:dashboard",
     "gossipcat": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts",
