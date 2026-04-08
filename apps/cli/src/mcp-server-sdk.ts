@@ -219,6 +219,11 @@ let planExecutionDepth = 0;
 // Stash gathered session data between utility dispatch and re-entry (keyed by task ID)
 const _pendingSessionData = new Map<string, { gossip: string; consensus: string; performance: string; gitLog: string; notes?: string }>();
 
+// Re-entry stash for gossip_verify_memory native-utility dispatch. Keyed by
+// the utility task id; cleared on re-entry. Without this we'd need to re-read
+// the file and re-validate inputs on the second call.
+const _pendingVerifyData = new Map<string, { memory_path: string; absPath: string; claim: string }>();
+
 // Cache modules after first import
 let _modules: any = null;
 
@@ -2769,6 +2774,94 @@ server.tool(
 );
 
 server.tool(
+  'gossip_verify_memory',
+  'On-demand staleness check for a memory file claim. Reads the memory file, dispatches a native haiku-researcher utility to verify the claim against current code, and returns a structured verdict (FRESH | STALE | CONTRADICTED | INCONCLUSIVE) with file:line evidence. Call before acting on any backlog item from memory. Spec: docs/specs/2026-04-08-gossip-verify-memory.md',
+  {
+    memory_path: z.string().describe('Path to memory file (relative to cwd or absolute). Absolute paths must resolve inside cwd or under ~/.claude/projects/.'),
+    claim: z.string().describe('The specific memory assertion to verify against current code.'),
+    _utility_task_id: z.string().optional().describe('Internal: utility task ID for re-entry after native haiku dispatch'),
+  },
+  async ({ memory_path, claim, _utility_task_id }) => {
+    await boot();
+    const { validateInputs, buildPrompt, parseVerdict } = await import('./handlers/verify-memory.js');
+    const checked_at = new Date().toISOString();
+
+    const renderResult = (r: { verdict: string; evidence: string; rewrite_suggestion?: string }) => {
+      const payload: Record<string, unknown> = {
+        verdict: r.verdict,
+        evidence: r.evidence,
+        checked_at,
+      };
+      if (r.rewrite_suggestion) payload.rewrite_suggestion = r.rewrite_suggestion;
+      return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] };
+    };
+
+    // Re-entry: relayed haiku result has landed in nativeResultMap.
+    if (_utility_task_id) {
+      const stashed = _pendingVerifyData.get(_utility_task_id);
+      _pendingVerifyData.delete(_utility_task_id);
+      const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
+      ctx.nativeResultMap.delete(_utility_task_id);
+      ctx.nativeTaskMap.delete(_utility_task_id);
+
+      if (!utilityResult || utilityResult.status !== 'completed' || !utilityResult.result) {
+        const reason = utilityResult?.error || utilityResult?.status || 'no result';
+        return renderResult({
+          verdict: 'INCONCLUSIVE',
+          evidence: `dispatch failed: ${reason}${stashed ? ` (memory_path: ${stashed.memory_path})` : ''}`,
+        });
+      }
+
+      const parsed = parseVerdict(utilityResult.result);
+      return renderResult(parsed);
+    }
+
+    // First call: validate, read, build prompt, return AGENT_PROMPT instructions.
+    const validation = validateInputs(memory_path, claim, { cwd: process.cwd() });
+    if (!validation.ok) {
+      return renderResult({ verdict: 'INCONCLUSIVE', evidence: validation.evidence });
+    }
+
+    // No native utility configured: bail out as INCONCLUSIVE so the orchestrator
+    // can fall back to manual audit. We do not fabricate verdicts.
+    if (!ctx.nativeUtilityConfig) {
+      return renderResult({
+        verdict: 'INCONCLUSIVE',
+        evidence: 'native utility provider not configured; cannot dispatch haiku verifier. Set utility_model in config.json or fall back to manual Read/Grep audit.',
+      });
+    }
+
+    const prompt = buildPrompt(validation.absPath, validation.body, claim, process.cwd());
+    const taskId = randomUUID().slice(0, 8);
+    _pendingVerifyData.set(taskId, { memory_path, absPath: validation.absPath, claim });
+    const UTILITY_TTL_MS = 120_000;
+    ctx.nativeTaskMap.set(taskId, {
+      agentId: '_utility',
+      task: 'verify_memory',
+      startedAt: Date.now(),
+      timeoutMs: UTILITY_TTL_MS,
+      utilityType: 'verify_memory',
+    });
+    spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
+
+    const modelShort = ctx.nativeUtilityConfig.model;
+    return {
+      content: [
+        { type: 'text' as const, text:
+          `Verify-memory dispatch ready. Memory: ${validation.absPath}\n\n` +
+          `⚠️ EXECUTE NOW — launch this Agent and re-call gossip_verify_memory:\n\n` +
+          `1. Agent(model: "${modelShort}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true) — pass the AGENT_PROMPT:${taskId} content item verbatim\n` +
+          `2. When agent completes → gossip_relay(task_id: "${taskId}", result: "<full agent output>")\n` +
+          `3. Then re-call: gossip_verify_memory(memory_path: ${JSON.stringify(memory_path)}, claim: ${JSON.stringify(claim)}, _utility_task_id: "${taskId}")\n\n` +
+          `Do ALL steps in order. Do not wait for user input between them.`
+        },
+        { type: 'text' as const, text: `AGENT_PROMPT:${taskId} (_utility)\n${prompt}` },
+      ],
+    };
+  }
+);
+
+server.tool(
   'gossip_format',
   'Return the canonical CONSENSUS_OUTPUT_FORMAT block. Use this when you need to write an ad-hoc Agent() prompt for a native subagent that should produce findings the consensus engine can parse. Paste the returned string into your prompt verbatim — the format trains the agent to emit <agent_finding> tags instead of prose.',
   {},
@@ -2799,6 +2892,7 @@ server.tool(
       { name: 'gossip_scores', desc: 'View agent performance scores and dispatch weights.' },
       { name: 'gossip_skills', desc: 'Manage skills. action: list, bind, unbind, build, develop.' },
       { name: 'gossip_remember', desc: 'Search an agent\'s archived knowledge files by keyword query.' },
+      { name: 'gossip_verify_memory', desc: 'On-demand staleness check for a memory file claim. Returns FRESH | STALE | CONTRADICTED | INCONCLUSIVE with file:line evidence.' },
       { name: 'gossip_tools', desc: 'List available tools (this command).' },
       { name: 'gossip_progress', desc: 'Show active task progress and consensus phase. No params.' },
       { name: 'gossip_format', desc: 'Return the CONSENSUS_OUTPUT_FORMAT block to paste into ad-hoc Agent() prompts so native subagents emit parseable <agent_finding> tags.' },
