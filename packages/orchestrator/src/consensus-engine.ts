@@ -551,6 +551,42 @@ Return only valid JSON.`;
       'critical' | 'high' | 'medium' | 'low' =>
       s === 'critical' || s === 'high' ? 'medium' : (s ?? 'medium');
 
+    // Helper: runs the fabrication pre-filter on a finding's own text and
+    // emits hallucination_caught if the strict AND-gate fires (fabricated
+    // citation + hallucination keyword). Returns true if the signal was
+    // emitted, false otherwise.
+    //
+    // Originally the pre-filter was scoped to the confirmed branch only.
+    // Tier 2 task #4 broadens it to cover the unverified and fallthrough
+    // unique branches too, following gemini:f4 from consensus round
+    // 82a3c123-19db41e7 and its re-confirmation in round 99f15984-eb844568.
+    // The stale-file downgrade (fabricated without keywords) remains
+    // confirmed-branch-only, because stale detection only makes sense when
+    // peers confirmed the finding despite unresolvable citations — outside
+    // that context we can't distinguish "stale after refactor" from
+    // "fabricated from the start".
+    const emitFabricationHallucinationIfDetected = async (
+      entry: { originalAgentId: string; finding: string; severity?: 'critical' | 'high' | 'medium' | 'low'; category?: string },
+    ): Promise<boolean> => {
+      const hasFabricatedCitation = await this.verifyCitations(entry.finding, { strict: true });
+      if (!hasFabricatedCitation) return false;
+      const hasHallucinationKeywords = this.detectHallucination(entry.finding);
+      if (!hasHallucinationKeywords) return false;
+      signals.push({
+        type: 'consensus',
+        taskId: getTaskId(entry.originalAgentId),
+        consensusId,
+        signal: 'hallucination_caught',
+        agentId: entry.originalAgentId,
+        outcome: 'fabricated_citation',
+        evidence: capEvidence(`Finding cites non-existent code: "${entry.finding.slice(0, 200)}"`),
+        timestamp: new Date().toISOString(),
+        severity: capAutoSeverity(entry.severity),
+        category: entry.category,
+      });
+      return true;
+    };
+
     // Helper: resolve cross-review entry to a findingMap key.
     // Tries findingId first (exact, fast), falls back to text matching (fuzzy, slow).
     const resolveEntry = (entry: CrossReviewEntry): string | null => {
@@ -728,34 +764,18 @@ Return only valid JSON.`;
         disputed.push(finding);
       } else if (entry.confirmedBy.length > 0) {
         // Pre-filter: check if finding cites non-existent code.
-        // Requires BOTH keyword hallucination AND fabricated citation (AND gate)
-        // to avoid false positives from stale/moved files after refactoring.
-        // strict:true means any single bad citation triggers fabricated=true —
-        // the AND-gate with detectHallucination is the blast-radius guard that
-        // prevents single-citation noise from firing hallucination_caught on its
-        // own, and the stale-file downgrade at :716 catches legitimate post-
-        // refactor citations without penalty. The prior majority threshold had a
-        // boundary bug (1-of-2 bad === passes) that let authors fabricating half
-        // their citations escape the filter. Tier 1B Fix #3.
-        const hasFabricatedCitation = await this.verifyCitations(entry.finding, { strict: true });
-        const hasHallucinationKeywords = this.detectHallucination(entry.finding);
-        if (hasFabricatedCitation && hasHallucinationKeywords) {
+        // The helper handles the fabricated+keyword case; the confirmed
+        // branch additionally handles the "fabricated but no keyword"
+        // stale-file downgrade, which only makes sense when peers have
+        // confirmed the finding (outside that context we cannot tell
+        // "stale after refactor" from "fabricated from the start").
+        if (await emitFabricationHallucinationIfDetected(entry)) {
           finding.tag = 'unique';
           unique.push(finding);
-          signals.push({
-            type: 'consensus',
-            taskId: getTaskId(entry.originalAgentId),
-            consensusId,
-            signal: 'hallucination_caught',
-            agentId: entry.originalAgentId,
-            outcome: 'fabricated_citation',
-            evidence: capEvidence(`Confirmed finding cites non-existent code: "${entry.finding.slice(0, 200)}"`),
-            timestamp: now,
-            severity: capAutoSeverity(entry.severity),
-            category: entry.category,
-          });
           continue;
-        } else if (hasFabricatedCitation) {
+        }
+        const hasFabricatedCitation = await this.verifyCitations(entry.finding, { strict: true });
+        if (hasFabricatedCitation) {
           // Citation failed but no hallucination keywords — likely stale/moved file
           // Downgrade to unique with softer signal instead of hallucination penalty
           finding.tag = 'unique';
@@ -800,6 +820,15 @@ Return only valid JSON.`;
           insights.push(finding);
           continue; // skip unverified signal — these aren't failures
         }
+        // Tier 2: broadened pre-filter. If the unverified finding itself
+        // cites non-existent code and contains hallucination keywords, it's
+        // an author fabrication even though peers couldn't verify. Fire
+        // hallucination_caught instead of the soft unique_unconfirmed.
+        if (await emitFabricationHallucinationIfDetected(entry)) {
+          finding.tag = 'unique';
+          unique.push(finding);
+          continue;
+        }
         // Peers couldn't verify (wrong line number, missing context) — not a refutation
         finding.tag = 'unverified';
         unverified.push(finding);
@@ -815,6 +844,13 @@ Return only valid JSON.`;
           category: entry.category,
         });
       } else {
+        // Tier 2: broadened pre-filter. Same fabrication check for findings
+        // that fell through without confirmation, dispute, or unverified mark.
+        if (await emitFabricationHallucinationIfDetected(entry)) {
+          finding.tag = 'unique';
+          unique.push(finding);
+          continue;
+        }
         finding.tag = 'unique';
         unique.push(finding);
         signals.push({
