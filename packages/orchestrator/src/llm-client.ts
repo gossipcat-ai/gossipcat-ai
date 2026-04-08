@@ -304,15 +304,24 @@ export class AnthropicProvider implements ILLMProvider {
 export class OpenAIProvider implements ILLMProvider {
   private quota: QuotaTracker;
   private baseUrl: string;
+  private timeoutMs: number;
   constructor(
     private apiKey: string,
     private model: string,
     projectRoot?: string,
     baseUrl?: string,
     quotaSlot?: string,
+    /**
+     * HTTP request timeout in milliseconds. Defaults to 120s for openai.com
+     * compatible endpoints. OpenClaw and other remote agentic LLMs that run
+     * server-side tool chains (web_fetch, exec, etc.) need a longer ceiling
+     * — pass 600_000 or higher when instantiating for those providers.
+     */
+    timeoutMs?: number,
   ) {
     this.baseUrl = (baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, '');
     this.quota = new QuotaTracker(quotaSlot ?? 'openai', projectRoot);
+    this.timeoutMs = timeoutMs ?? 120_000;
   }
 
   async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
@@ -336,7 +345,7 @@ export class OpenAIProvider implements ILLMProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(this.timeoutMs),
     }, 'openai');
 
     if (!res.ok) {
@@ -607,7 +616,12 @@ export function createProvider(provider: string, model: string, apiKey?: string,
   switch (provider) {
     case 'anthropic': return new AnthropicProvider(apiKey!, model, projectRoot);
     case 'openai': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl, baseUrl ? `openai:${baseUrl}` : undefined);
-    case 'openclaw': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl ?? 'http://127.0.0.1:18789/v1', 'openclaw');
+    // OpenClaw is a remote agentic LLM with its own server-side tool chain
+    // (web_fetch, exec, browser, etc.). Its wallclock regularly exceeds the
+    // 120s default because it's doing Claude-like agentic work per request
+    // — two timeouts this session (task 2b426ef6 at 100.9s, task 53005181
+    // hit the 120s cap on a URL-fetching review). Give it 10 minutes.
+    case 'openclaw': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl ?? 'http://127.0.0.1:18789/v1', 'openclaw', 600_000);
     case 'google': return new GeminiProvider(apiKey!, model, projectRoot);
     case 'local': return new OllamaProvider(model);
     case 'none': return new NullProvider();
