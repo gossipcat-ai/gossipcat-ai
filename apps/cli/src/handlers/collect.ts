@@ -256,13 +256,10 @@ export async function handleCollect(
           { role: 'system', content: p.system },
           { role: 'user', content: p.user },
         ];
-        let response: any;
-        let turn = 0;
-        while (true) {
-          response = await llm.generate(messages, { temperature: 0, tools: verifierTools });
-          const calls = response.toolCalls ?? [];
-          if (calls.length === 0 || turn >= MAX_VERIFIER_TURNS) break;
-          messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: calls });
+        // Inline tool helper — used by both the main loop and the cap-hit
+        // recovery path so the model gets the evidence it requested before
+        // being asked to emit findings.
+        const runToolCalls = async (calls: any[]) => {
           for (const tc of calls) {
             let out: string;
             try {
@@ -275,17 +272,42 @@ export async function handleCollect(
             if (out.length > 8000) out = out.slice(0, 8000) + '\n…[truncated]';
             messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content: out });
           }
+        };
+
+        let response: any;
+        let capHit = false;
+        let turn = 0;
+        while (true) {
+          response = await llm.generate(messages, { temperature: 0, tools: verifierTools });
+          const calls = response.toolCalls ?? [];
+          if (calls.length === 0) break; // model emitted text — done
+          if (turn >= MAX_VERIFIER_TURNS) {
+            // Cap hit while the model still has pending tool calls. Execute
+            // them so the model has the evidence it asked for, then force a
+            // final text-only pass with an explicit "emit now" instruction.
+            messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: calls });
+            await runToolCalls(calls);
+            messages.push({
+              role: 'user',
+              content: 'You have reached the maximum verification turns. Emit your cross-review findings now in the required JSON format. Do not request additional tools.',
+            });
+            response = await llm.generate(messages, { temperature: 0 });
+            capHit = true;
+            break;
+          }
+          messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: calls });
+          await runToolCalls(calls);
           turn++;
         }
         const parsed = engine.parseCrossReviewResponse(p.agentId, response.text, 50);
         const filtered = parsed.filter((e: any) => e.peerAgentId !== p.agentId && validPeerIds.has(e.peerAgentId));
         if (filtered.length === 0) {
-          // The parser already logged + dumped on full failure; an empty
-          // result here means parse-succeeded-but-yielded-nothing-useful.
-          process.stderr.write(`[consensus] ${p.agentId} cross-review produced 0 entries (attempt ${attempt + 1})\n`);
+          process.stderr.write(`[consensus] ${p.agentId} cross-review produced 0 entries (attempt ${attempt + 1}${capHit ? ', cap-hit recovery path' : ''})\n`);
           relayCrossReviewSkipped.push({
             agentId: p.agentId,
-            reason: 'parser produced 0 entries (likely prose-wrapped or off-format JSON)',
+            reason: capHit
+              ? 'verifier turn cap hit; final text-only pass still produced no parseable entries'
+              : 'parser produced 0 entries (likely prose-wrapped or off-format JSON)',
           });
           return;
         }
