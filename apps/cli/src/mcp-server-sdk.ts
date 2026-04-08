@@ -342,8 +342,17 @@ async function doBoot() {
   // Generate a per-process relay key so only co-launched agents can connect.
   const relayApiKey = randomBytes(32).toString('hex');
 
+  // Port selection: try a user-provided port via GOSSIPCAT_PORT env var,
+  // otherwise let the OS assign a free port (port: 0). This lets multiple
+  // Claude Code instances run gossipcat in parallel on the same machine
+  // without fighting over 24420. Each instance gets its own port; the actual
+  // port is logged to stderr + written to .gossip/relay.pid + exposed via
+  // gossip_status() and the MCP `instructions` field after boot.
+  const envPort = process.env.GOSSIPCAT_PORT ? parseInt(process.env.GOSSIPCAT_PORT, 10) : NaN;
+  const relayPort = Number.isFinite(envPort) && envPort >= 0 && envPort <= 65535 ? envPort : 0;
+
   ctx.relay = new m.RelayServer({
-    port: 24420,
+    port: relayPort,
     apiKey: relayApiKey,
     dashboard: {
       projectRoot: process.cwd(),

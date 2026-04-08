@@ -185,7 +185,7 @@ Gossipcat ships from **[GitHub Releases](https://github.com/gossipcat-ai/gossipc
 | | What you get |
 |---|---|
 | **MCP server** | Bundled binary at `dist-mcp/mcp-server.js`, wired as the `gossipcat` command on `PATH` |
-| **Dashboard** | Prebuilt static assets in `dist-dashboard/` — launches automatically on port `24420` when the relay boots |
+| **Dashboard** | Prebuilt static assets in `dist-dashboard/` — launches automatically on a dynamic port (ask Claude Code *"what's my gossipcat dashboard URL?"*). Override with `GOSSIPCAT_PORT=24420` if you want a stable port. |
 | **Default skills + rules + archetypes** | 18 bundled skill templates, operational rules, and project archetypes copied into the install |
 | **Postinstall wizard** | Writes `.mcp.json` with correct absolute paths for your machine |
 
@@ -559,15 +559,17 @@ These tools are called by the internal LLM (the orchestrator — Claude Code wit
 
 ## Dashboard
 
-The dashboard ships prebuilt with the npm package — no build step. It launches automatically on port `24420` the first time gossipcat boots. Ask Claude Code for the URL:
+The dashboard ships prebuilt with the release tarball — no build step. It launches automatically the first time gossipcat boots, on a **dynamic port** assigned by the OS. Ask Claude Code for the URL:
 
 > "What's my gossipcat dashboard URL?"
 
 Or call `gossip_status` directly — the response includes the URL and a per-session auth key:
 
 ```
-Dashboard: http://localhost:24420/dashboard (key: a1b2c3...)
+Dashboard: http://localhost:51847/dashboard (key: a1b2c3...)
 ```
+
+The port is picked dynamically so multiple Claude Code instances can run gossipcat in parallel on the same machine without fighting over a single port. If you want a stable port (e.g. for browser bookmarks), set `GOSSIPCAT_PORT=24420` in your environment before launching Claude Code.
 
 A new auth key is generated each session — paste it when prompted to log in.
 
