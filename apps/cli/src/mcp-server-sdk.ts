@@ -2843,6 +2843,11 @@ server.tool(
 
     const prompt = buildPrompt(validation.absPath, validation.body, claim, process.cwd());
     const taskId = randomUUID().slice(0, 8);
+    // F1 hardening: issue a one-time relay_token so handleNativeRelay enforces
+    // the token check on the verify_memory dispatch. Without this, any caller
+    // who guesses the 8-hex taskId in the <120s window can inject a fabricated
+    // verdict via gossip_relay before the real haiku output lands.
+    const relayToken = randomUUID().slice(0, 12);
     _pendingVerifyData.set(taskId, { memory_path, absPath: validation.absPath, claim });
     const UTILITY_TTL_MS = 120_000;
     ctx.nativeTaskMap.set(taskId, {
@@ -2851,6 +2856,7 @@ server.tool(
       startedAt: Date.now(),
       timeoutMs: UTILITY_TTL_MS,
       utilityType: 'verify_memory',
+      relayToken,
     });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     // F3 hardening: spawnTimeoutWatcher only writes a timed_out record into
@@ -2869,7 +2875,7 @@ server.tool(
           `Verify-memory dispatch ready. Memory: ${validation.absPath}\n\n` +
           `⚠️ EXECUTE NOW — launch this Agent and re-call gossip_verify_memory:\n\n` +
           `1. Agent(model: "${modelShort}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true) — pass the AGENT_PROMPT:${taskId} content item verbatim\n` +
-          `2. When agent completes → gossip_relay(task_id: "${taskId}", result: "<full agent output>")\n` +
+          `2. When agent completes → gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<full agent output>")\n` +
           `3. Then re-call: gossip_verify_memory(memory_path: ${JSON.stringify(memory_path)}, claim: ${JSON.stringify(claim)}, _utility_task_id: "${taskId}")\n\n` +
           `Do ALL steps in order. Do not wait for user input between them.`
         },
