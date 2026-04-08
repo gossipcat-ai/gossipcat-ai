@@ -140,7 +140,11 @@ function getKeywords(content: string, skillName: string): string[] {
   if (frontmatter?.category && DEFAULT_KEYWORDS[frontmatter.category]) {
     return DEFAULT_KEYWORDS[frontmatter.category];
   }
-  // Fallback: skill name as single keyword (unlikely to hit 2-match minimum alone)
+  // Fallback: skill name as single keyword. With MIN_KEYWORD_HITS=2 this is
+  // virtually unreachable for contextual skills, so warn to surface broken or
+  // missing frontmatter that would otherwise silently fail to activate.
+  // Per bench review finding 12827629-fa9a4660:f2.
+  process.stderr.write(`[skill-loader] WARNING: skill '${skillName}' has no keywords/category frontmatter — contextual activation will fail (using filename fallback)\n`);
   return [skillName.replace(/-/g, ' ')];
 }
 

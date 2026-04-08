@@ -161,11 +161,13 @@ export async function handleDispatchSingle(
       chainContext = ctx.mainAgent.getChainContext(plan_id, step);
     }
 
+    let singleSkillIndex: ReturnType<typeof ctx.mainAgent.getSkillIndex> | undefined;
+    try { singleSkillIndex = ctx.mainAgent.getSkillIndex() ?? undefined; } catch { /* best-effort */ }
     const skillResult = loadSkills(
       agent_id,
       nativeConfig.skills,
       process.cwd(),
-      ctx.mainAgent.getSkillIndex() ?? undefined,
+      singleSkillIndex,
       task,
     );
 
@@ -336,17 +338,19 @@ export async function handleDispatchParallel(
       ctx.mainAgent.scopeTracker.register(def.scope, taskId);
     }
 
-    const skillResultP = loadSkills(
+    let parallelSkillIndex: ReturnType<typeof ctx.mainAgent.getSkillIndex> | undefined;
+    try { parallelSkillIndex = ctx.mainAgent.getSkillIndex() ?? undefined; } catch { /* best-effort */ }
+    const skillResult = loadSkills(
       def.agent_id,
       nativeConfig.skills,
       process.cwd(),
-      ctx.mainAgent.getSkillIndex() ?? undefined,
+      parallelSkillIndex,
       def.task,
     );
 
     let agentPrompt = [
       nativeConfig.instructions || '',
-      skillResultP.content,
+      skillResult.content,
       `\n---\n\nTask: ${def.task}`,
     ].filter(Boolean).join('').trim();
     const MAX_AGENT_PROMPT_CHARS = 30_000;
@@ -503,11 +507,13 @@ export async function handleDispatchConsensus(
       ? `\n\n--- LENS ---\n${rawLens.replace(/---\s*(END )?LENS\s*---/gi, '')}\n--- END LENS ---`
       : '';
 
+    let consensusSkillIndex: ReturnType<typeof ctx.mainAgent.getSkillIndex> | undefined;
+    try { consensusSkillIndex = ctx.mainAgent.getSkillIndex() ?? undefined; } catch { /* best-effort */ }
     const skillResultC = loadSkills(
       def.agent_id,
       nativeConfig.skills,
       process.cwd(),
-      ctx.mainAgent.getSkillIndex() ?? undefined,
+      consensusSkillIndex,
       def.task,
     );
 
@@ -524,7 +530,7 @@ export async function handleDispatchConsensus(
     let prefix = [
       nativeConfig.instructions || '',
       skillResultC.content,
-    ].filter(Boolean).join('');
+    ].filter(Boolean).join('').trim();
     if (prefix.length > prefixBudget) {
       prefix = prefix.slice(0, prefixBudget) + '\n\n[Context truncated to fit budget]';
     }

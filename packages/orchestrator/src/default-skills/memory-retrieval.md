@@ -6,7 +6,7 @@ description: Call gossip_remember BEFORE reviewing — recall prior findings on 
 
 # STEP 0 — DO THIS BEFORE READING ANY CODE
 
-Call `mcp__gossipcat__gossip_remember(query)` with the most specific identifier in the task: a file path, function name, module, or commit hash. This is your first action, before any file_read, before any analysis. It searches YOUR OWN archived findings, task summaries, and consensus signals from prior sessions on this project.
+Call `gossip_remember(query)` with the most specific identifier in the task: a file path, function name, module, or commit hash. (Your runtime exposes this as `mcp__gossipcat__gossip_remember` if you need the fully-qualified name.) This is your first action, before any file_read, before any analysis. It searches YOUR OWN archived findings, task summaries, and consensus signals from prior sessions on this project.
 
 Skipping this step means you re-discover bugs you already filed, contradict your own prior verdict, or miss context that would change a finding's severity. Past-you already did the work — use it.
 
