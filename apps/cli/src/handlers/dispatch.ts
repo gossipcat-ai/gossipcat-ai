@@ -511,11 +511,24 @@ export async function handleDispatchConsensus(
       def.task,
     );
 
-    let agentPrompt = (nativeConfig.instructions || '') + skillResultC.content + consensusInstruction + lensSection + `\n\n---\n\nTask: ${def.task}`;
+    // Truncation reserves CONSENSUS_OUTPUT_FORMAT + lens + task — those must survive
+    // or the agent will emit prose instead of <agent_finding> tags (silent consensus
+    // round degradation). Per bench review finding 12827629-fa9a4660:f8, the old
+    // behavior concatenated everything THEN truncated, which could sever the format
+    // block entirely when skill content was large. Now we apply the cap only to the
+    // [instructions + skills] prefix and always append consensusInstruction + lens +
+    // task at full length afterward.
     const MAX_AGENT_PROMPT_CHARS = 30_000;
-    if (agentPrompt.length > MAX_AGENT_PROMPT_CHARS) {
-      agentPrompt = agentPrompt.slice(0, MAX_AGENT_PROMPT_CHARS) + '\n\n[Context truncated to fit budget]';
+    const suffix = consensusInstruction + lensSection + `\n\n---\n\nTask: ${def.task}`;
+    const prefixBudget = Math.max(0, MAX_AGENT_PROMPT_CHARS - suffix.length);
+    let prefix = [
+      nativeConfig.instructions || '',
+      skillResultC.content,
+    ].filter(Boolean).join('');
+    if (prefix.length > prefixBudget) {
+      prefix = prefix.slice(0, prefixBudget) + '\n\n[Context truncated to fit budget]';
     }
+    let agentPrompt = prefix + suffix;
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
     nativeInstructions.push(
       `Agent(model: "${nativeConfig.model}", prompt: ${JSON.stringify(agentPrompt)}, run_in_background: true)` +

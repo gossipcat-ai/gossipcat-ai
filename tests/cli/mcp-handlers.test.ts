@@ -1040,7 +1040,19 @@ describe('handleDispatchSingle — native skill injection', () => {
   let skillDir: string;
   let previousCwd: string;
 
-  function makeSkillIndex(enabled: string[]) {
+  // Typed mock of the SkillIndex surface that loadSkills actually uses.
+  // Per bench review 12827629-fa9a4660:f10, the prior untyped stub
+  // {slot: i} duck-type would let silent interface drift ship unnoticed:
+  // the test still passes when SkillIndex gains a new method that
+  // loadSkills starts calling. Declaring the shape explicitly forces
+  // test updates when the contract changes.
+  type SkillIndexStub = {
+    getAgentSlots: (agentId: string) => Array<{ slot: number }>;
+    getEnabledSkills: (agentId: string) => string[];
+    getSkillMode: (agentId: string, skill: string) => 'permanent' | 'contextual';
+  };
+
+  function makeSkillIndex(enabled: string[]): SkillIndexStub {
     return {
       getAgentSlots: (_agentId: string) => enabled.map((_, i) => ({ slot: i })),
       getEnabledSkills: (_agentId: string) => enabled,

@@ -163,7 +163,21 @@ function resolveSkill(agentId: string, skill: string, projectRoot: string): stri
     const candidate = resolve(base, filename);
     // Validate resolved path stays within base directory
     if (!candidate.startsWith(base + sep)) continue;
-    if (existsSync(candidate)) return readFileSync(candidate, 'utf-8');
+    if (existsSync(candidate)) {
+      // Guard against permission errors, I/O failures, corrupted files.
+      // Per bench review 12827629-fa9a4660:f1, an unguarded readFileSync here
+      // propagated uncaught through dispatch handlers and could crash the
+      // entire gossip_dispatch call. Now we log and fall through to the next
+      // base (or return null) instead.
+      try {
+        return readFileSync(candidate, 'utf-8');
+      } catch (err: any) {
+        process.stderr.write(
+          `[skill-loader] Failed to read skill file ${candidate}: ${err?.message ?? err}\n`,
+        );
+        continue;
+      }
+    }
   }
   return null;
 }
