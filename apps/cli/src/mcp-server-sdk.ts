@@ -502,7 +502,14 @@ async function doBoot() {
     if (!mainKey) {
       mainProvider = 'none';
       config.main_agent.provider = 'none';
-      process.stderr.write(`[gossipcat] ❌ No API keys available — orchestrator LLM disabled, features degrade to profile-based\n`);
+      // On Claude Code hosts with native subagents available, "none" is the
+      // expected zero-config state — the host classifies via natural language
+      // through isNullLlm path. Don't misrepresent this as an error.
+      if (env.host === 'claude-code') {
+        process.stderr.write(`[gossipcat] ✅ Native Claude Code orchestration enabled (no API LLM needed — host classifies via natural language)\n`);
+      } else {
+        process.stderr.write(`[gossipcat] ❌ No API keys available — orchestrator LLM disabled, features degrade to profile-based\n`);
+      }
     }
   }
   ctx.mainProvider = mainProvider;

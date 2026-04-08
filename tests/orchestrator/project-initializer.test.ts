@@ -120,14 +120,48 @@ describe('ProjectInitializer', () => {
     expect(systemMsg.content).toContain('anthropic:');
   });
 
-  it('proposeTeam returns error when no API keys', async () => {
-    const init = new ProjectInitializer(makeConfig({ keyProvider: nullKeyProvider }));
-    const signals: ProjectSignals = { dependencies: [], directories: [], files: [] };
+  it('proposeTeam returns error when no API keys and not on Claude Code host', async () => {
+    const savedCC = process.env.CLAUDECODE;
+    const savedCCE = process.env.CLAUDE_CODE_ENTRYPOINT;
+    delete process.env.CLAUDECODE;
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    try {
+      const init = new ProjectInitializer(makeConfig({ keyProvider: nullKeyProvider }));
+      const signals: ProjectSignals = { dependencies: [], directories: [], files: [] };
 
-    const result = await init.proposeTeam('test', signals);
+      const result = await init.proposeTeam('test', signals);
 
-    expect(result.text).toContain('No API keys available');
-    expect(result.choices).toBeUndefined();
+      expect(result.text).toContain('No API keys available');
+      expect(result.choices).toBeUndefined();
+    } finally {
+      if (savedCC !== undefined) process.env.CLAUDECODE = savedCC;
+      if (savedCCE !== undefined) process.env.CLAUDE_CODE_ENTRYPOINT = savedCCE;
+    }
+  });
+
+  it('proposeTeam on Claude Code host with no keys proposes native orchestration', async () => {
+    const savedCC = process.env.CLAUDECODE;
+    process.env.CLAUDECODE = '1';
+    try {
+      const llm = mockLLM(JSON.stringify({
+        archetype: 'generic',
+        reason: 'Native Claude Code host',
+        main_agent: { provider: 'none', model: 'none' },
+        agents: [],
+      }));
+      const init = new ProjectInitializer(makeConfig({ llm, keyProvider: nullKeyProvider, projectRoot: tmpDir }));
+      const signals: ProjectSignals = { dependencies: [], directories: [], files: [] };
+
+      await init.proposeTeam('test', signals);
+
+      expect(llm.generate).toHaveBeenCalledTimes(1);
+      const systemMsg = (llm.generate as jest.Mock).mock.calls[0][0].find((m: any) => m.role === 'system');
+      expect(systemMsg.content).toContain('none: none');
+      expect(systemMsg.content).toContain('native Claude Code orchestration');
+    } finally {
+      if (savedCC === undefined) delete process.env.CLAUDECODE;
+      else process.env.CLAUDECODE = savedCC;
+    }
   });
 
   it('proposeTeam returns CHOICES with team proposal', async () => {

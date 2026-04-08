@@ -379,12 +379,19 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     } else {
       rawLlmResponse = raw;
 
-      // Validate completeness before truncating
-      const hasSummaryLine = /^SUMMARY:\s*.+/m.test(raw);
+      // Validate completeness before truncating. We only require a ## header —
+      // the SUMMARY: line is nice-to-have, and the fallback extraction below can
+      // synthesize a one-liner from the first bullet or sentence if it's missing.
       const hasSectionHeader = /^##\s+\w/m.test(raw);
 
-      if (!hasSummaryLine || !hasSectionHeader) {
+      if (!hasSectionHeader) {
         process.stderr.write('[gossipcat] Session summary missing required structure, using raw fallback\n');
+        // Persist the raw LLM output so we can diagnose what went wrong next time,
+        // instead of throwing it away and being blind to the failure mode.
+        try {
+          const debugPath = join(memDir, 'last-malformed-summary.txt');
+          writeFileSync(debugPath, `# Malformed session summary @ ${timestamp}\n# No ## header found in LLM output.\n\n---\n${raw}`);
+        } catch {}
         summaryBody = `> ⚠️ LLM summary malformed — raw data below.\n\n${rawInput.slice(0, SESSION_SUMMARY_MAX_CHARS)}`;
       } else if (raw.length > SESSION_SUMMARY_MAX_CHARS - 100 && !/[.!)\n]$/.test(raw.trimEnd())) {
         // Likely truncated by model output limit — trim to last complete paragraph

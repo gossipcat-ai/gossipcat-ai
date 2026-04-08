@@ -84,7 +84,11 @@ export class ProjectInitializer {
     for (const p of ['google', 'anthropic', 'openai']) {
       if (await this.config.keyProvider(p)) providers.push(p);
     }
-    if (!providers.length) {
+    // Native Claude Code is always available as an orchestrator when running
+    // under the Claude Code host — it needs no API key because the host
+    // classifies via natural language through the isNullLlm path.
+    const hostIsClaudeCode = process.env.CLAUDECODE === '1' || !!process.env.CLAUDE_CODE_ENTRYPOINT;
+    if (!providers.length && !hostIsClaudeCode) {
       return { text: 'No API keys available. Run gossipcat setup to configure providers.' };
     }
     const catalog = new ArchetypeCatalog(this.config.catalogPath);
@@ -98,11 +102,14 @@ export class ProjectInitializer {
       anthropic: { best: 'claude-opus-4-6', fast: 'claude-sonnet-4-6', cheapest: 'claude-haiku-4-5' },
       openai: { best: 'gpt-4o', fast: 'gpt-4o', cheapest: 'gpt-4o-mini' },
     };
-    const availableModels = providers.map(p => {
-      const tiers = MODEL_TIERS[p];
-      if (!tiers) return `${p}: (use any available model)`;
-      return `${p}: ${tiers.best} (best), ${tiers.fast} (fast), ${tiers.cheapest} (cheapest)`;
-    }).join('\n');
+    const availableModels = [
+      ...(hostIsClaudeCode ? ['none: none (native Claude Code orchestration — no API key needed, preferred for main_agent on this host)'] : []),
+      ...providers.map(p => {
+        const tiers = MODEL_TIERS[p];
+        if (!tiers) return `${p}: (use any available model)`;
+        return `${p}: ${tiers.best} (best), ${tiers.fast} (fast), ${tiers.cheapest} (cheapest)`;
+      }),
+    ].join('\n');
 
     const brainstormCtx = (signals as any).brainstormContext;
     const systemPrompt = `You are configuring an agent team for a software project.
@@ -147,7 +154,7 @@ You may add additional skills from the table above based on project needs. Do NO
 - Pick the best archetype and customize roles for this specific project
 - Use ONLY the exact model names listed above
 - Choose models based on project complexity: simple → "fast" for all, complex → "best" for critical roles
-- For the main_agent (orchestrator), use the "best" model from the primary provider
+- For the main_agent (orchestrator): ${hostIsClaudeCode ? 'PREFER { "provider": "none", "model": "none" } — native Claude Code orchestration needs no API key and is the zero-config default on this host. Only pick a keyed provider if the user explicitly asks for one.' : 'use the "best" model from the primary provider'}
 - Do NOT include agent IDs — the system generates them automatically
 - **Scale team size to project complexity.** Simple (single-page app, script, simple game) → 1-2 agents. Medium → 2-3. Complex multi-module → 4-5. NEVER duplicate roles.
 - Max 5 agents, prefer fewer. Every agent costs money.
