@@ -1,0 +1,28 @@
+[
+  {
+    "snapshot": "stale-quota-watcher.md",
+    "claim": "Gemini hit 429 quota limit during session 2026-04-05 and there is no mechanism to detect or recover",
+    "expected_verdict": "CONTRADICTED",
+    "expected_evidence_files": [
+      "packages/orchestrator/src/llm-client.ts",
+      "apps/cli/src/handlers/dispatch.ts",
+      "apps/cli/src/mcp-server-sdk.ts"
+    ]
+  },
+  {
+    "snapshot": "stale-cross-platform-credentials.md",
+    "claim": "Current Keychain class in apps/cli/src/keychain.ts is macOS-only — Linux and Windows users have no working credential persistence path",
+    "expected_verdict": "CONTRADICTED",
+    "expected_evidence_files": [
+      "apps/cli/src/keychain.ts"
+    ]
+  },
+  {
+    "snapshot": "fresh-auto-failure-fanout.md",
+    "claim": "SHIPPED 0bbf4b0 — collect.ts auto-signal filter skips synthetic _* buckets and scopes to requestedIds",
+    "expected_verdict": "FRESH",
+    "expected_evidence_files": [
+      "apps/cli/src/handlers/collect.ts"
+    ]
+  }
+]
