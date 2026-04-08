@@ -693,6 +693,25 @@ async function doBoot() {
   booted = true;
   ctx.booted = true;
   process.stderr.write(`[gossipcat] 🚀 Booted: relay :${ctx.relay.port}, ${ctx.workers.size} workers\n`);
+
+  // Surface any active quota cooldown at boot so the orchestrator sees it
+  // without having to call gossip_status. Without this, a server that boots
+  // mid-cooldown silently routes dispatches through the fallback map and
+  // nothing indicates why — looks like random flakiness. See
+  // project_quota_watcher.md.
+  try {
+    const { readFileSync: rfs } = require('fs');
+    const { join: jn } = require('path');
+    const quotaPath = jn(process.cwd(), '.gossip', 'quota-state.json');
+    const quotaState: Record<string, { exhaustedUntil?: number; reason?: string }> = JSON.parse(rfs(quotaPath, 'utf8'));
+    const now = Date.now();
+    for (const [provider, state] of Object.entries(quotaState)) {
+      if (state.exhaustedUntil && state.exhaustedUntil > now) {
+        const cooldownSec = Math.ceil((state.exhaustedUntil - now) / 1000);
+        process.stderr.write(`[gossipcat] ⏳ quota cooldown active: ${provider} — ${cooldownSec}s remaining (${state.reason ?? 'quota'}). Dispatches will fall back to native agents.\n`);
+      }
+    }
+  } catch { /* quota-state.json not present or invalid — skip */ }
 }
 
 /**
