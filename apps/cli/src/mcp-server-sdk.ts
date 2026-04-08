@@ -2798,7 +2798,17 @@ server.tool(
 
     // Re-entry: relayed haiku result has landed in nativeResultMap.
     if (_utility_task_id) {
+      // F5 hardening: only consume nativeResultMap/nativeTaskMap entries that
+      // we actually own (i.e., the stash has a verify_memory record). Without
+      // this check a crafted _utility_task_id could silently delete a live
+      // consensus task result before the consensus collector reads it.
       const stashed = _pendingVerifyData.get(_utility_task_id);
+      if (!stashed) {
+        return renderResult({
+          verdict: 'INCONCLUSIVE',
+          evidence: `unknown _utility_task_id: ${_utility_task_id} (not a verify_memory dispatch)`,
+        });
+      }
       _pendingVerifyData.delete(_utility_task_id);
       const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
       ctx.nativeResultMap.delete(_utility_task_id);
@@ -2843,6 +2853,14 @@ server.tool(
       utilityType: 'verify_memory',
     });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
+    // F3 hardening: spawnTimeoutWatcher only writes a timed_out record into
+    // ctx.nativeResultMap; it does not know about _pendingVerifyData. Schedule
+    // an independent eviction with a small grace window so the stash never
+    // outlives a never-re-entered dispatch.
+    const STASH_TTL_MS = UTILITY_TTL_MS + 30_000;
+    setTimeout(() => {
+      _pendingVerifyData.delete(taskId);
+    }, STASH_TTL_MS).unref();
 
     const modelShort = ctx.nativeUtilityConfig.model;
     return {

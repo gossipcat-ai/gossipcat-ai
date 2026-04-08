@@ -7,7 +7,7 @@
 // defense, and strict VERDICT-line parsing. Tests target these functions
 // directly so the verdict pipeline can be exercised without spawning Agents.
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, realpathSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -61,21 +61,39 @@ export function validateInputs(
     ? resolve(memory_path)
     : resolve(opts.cwd, memory_path);
 
-  const cwdAbs = resolve(opts.cwd);
-  const autoMemoryRoot = resolve(opts.autoMemoryRoot ?? `${homedir()}/.claude/projects`);
-  const inCwd = absPath === cwdAbs || absPath.startsWith(cwdAbs + '/');
-  const inAutoMemory = absPath === autoMemoryRoot || absPath.startsWith(autoMemoryRoot + '/');
-  if (!inCwd && !inAutoMemory) {
-    return { ok: false, evidence: 'path outside allowed roots' };
-  }
-
   if (!existsSync(absPath)) {
     return { ok: false, evidence: `memory_path not found: ${absPath}` };
   }
 
+  // Symlink hardening: resolve() is purely lexical (`..` and `.`), it does
+  // NOT dereference symlinks, but readFileSync/statSync DO follow them.
+  // Without realpathSync, /allowed/link.md → /etc/passwd would pass an
+  // allowlist check on the symlink's own path then read the escape target.
+  // Resolve roots AND the candidate via realpath, then compare. macOS /tmp
+  // is itself a symlink to /private/tmp, so the roots must be resolved too
+  // or every tmpdir test would fail.
+  let realPath: string;
+  let cwdAbs: string;
+  let autoMemoryRoot: string;
+  try {
+    realPath = realpathSync(absPath);
+  } catch (err) {
+    return { ok: false, evidence: `memory_path realpath failed: ${(err as Error).message}` };
+  }
+  try { cwdAbs = realpathSync(resolve(opts.cwd)); }
+  catch { cwdAbs = resolve(opts.cwd); }
+  try { autoMemoryRoot = realpathSync(resolve(opts.autoMemoryRoot ?? `${homedir()}/.claude/projects`)); }
+  catch { autoMemoryRoot = resolve(opts.autoMemoryRoot ?? `${homedir()}/.claude/projects`); }
+
+  const inCwd = realPath === cwdAbs || realPath.startsWith(cwdAbs + '/');
+  const inAutoMemory = realPath === autoMemoryRoot || realPath.startsWith(autoMemoryRoot + '/');
+  if (!inCwd && !inAutoMemory) {
+    return { ok: false, evidence: 'path outside allowed roots' };
+  }
+
   let stat;
   try {
-    stat = statSync(absPath);
+    stat = statSync(realPath);
   } catch (err) {
     return { ok: false, evidence: `memory_path stat failed: ${(err as Error).message}` };
   }
@@ -88,7 +106,7 @@ export function validateInputs(
 
   let raw: Buffer;
   try {
-    raw = readFileSync(absPath);
+    raw = readFileSync(realPath);
   } catch (err) {
     return { ok: false, evidence: `memory_path read failed: ${(err as Error).message}` };
   }
@@ -103,7 +121,7 @@ export function validateInputs(
     return { ok: false, evidence: 'memory_path is not text' };
   }
 
-  return { ok: true, absPath, body };
+  return { ok: true, absPath: realPath, body };
 }
 
 /**
@@ -196,13 +214,15 @@ export function parseVerdict(raw: string | undefined | null): { verdict: Verdict
     let evidence = evidenceLines.join('\n').trim();
 
     // Optional REWRITE: <line> directive — extract for rewrite_suggestion field.
+    // Use the first match for the suggestion value, but strip ALL REWRITE
+    // lines from evidence so a hallucinated second REWRITE doesn't leak.
     let rewrite_suggestion: string | undefined;
-    const rewriteRe = /^REWRITE:\s*(.+)$/m;
-    const rm = rewriteRe.exec(evidence);
+    const rewriteReFirst = /^REWRITE:\s*(.+)$/m;
+    const rewriteReAll = /^REWRITE:\s*(.+)$/gm;
+    const rm = rewriteReFirst.exec(evidence);
     if (rm) {
       rewrite_suggestion = rm[1].trim();
-      // Strip the REWRITE line from evidence to avoid duplication.
-      evidence = evidence.replace(rewriteRe, '').replace(/\n{3,}/g, '\n\n').trim();
+      evidence = evidence.replace(rewriteReAll, '').replace(/\n{3,}/g, '\n\n').trim();
     }
 
     return { verdict, evidence, rewrite_suggestion };

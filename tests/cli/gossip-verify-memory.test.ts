@@ -91,7 +91,8 @@ describe('gossip_verify_memory — fixture-driven integration', () => {
         expect(r.ok).toBe(true);
         if (r.ok) {
           expect(r.body.length).toBeGreaterThan(0);
-          expect(r.absPath).toBe(snapshotPath);
+          // absPath is realpath after F4 symlink hardening
+          expect(r.absPath).toBe(require('fs').realpathSync(snapshotPath));
         }
       });
 
