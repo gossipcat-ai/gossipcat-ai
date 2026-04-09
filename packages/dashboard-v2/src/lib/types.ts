@@ -35,6 +35,8 @@ export interface AgentData {
     // render as a percentage. categoryAccuracy = c / (c + h) is the real ratio.
     categoryStrengths: Record<string, number>;
     categoryAccuracy?: Record<string, number>;
+    categoryCorrect?: Record<string, number>;
+    categoryHallucinated?: Record<string, number>;
   };
 }
 
