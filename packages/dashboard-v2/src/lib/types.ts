@@ -67,7 +67,11 @@ export interface ConsensusRun {
 
 export interface ConsensusData {
   runs: ConsensusRun[];
+  /** Total count of real consensus runs (≥2 agents, ≥3 signals) — independent of pagination. */
+  totalRuns: number;
   totalSignals: number;
+  page: number;
+  pageSize: number;
 }
 
 export interface ConsensusReportFinding {

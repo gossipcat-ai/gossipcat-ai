@@ -25,7 +25,10 @@ export function useDashboardData() {
         api<OverviewData>('overview'),
         api<AgentData[]>('agents'),
         api<TasksData>('tasks?limit=50'),
-        api<ConsensusData>('consensus'),
+        // pageSize=50 matches api-consensus MAX_PAGE_SIZE so header aggregates
+        // (confirmedTotal/disputedTotal/unverifiedTotal in App.tsx:383-385) cover
+        // the full round history instead of the first 10 runs.
+        api<ConsensusData>('consensus?pageSize=50'),
         api<ConsensusReportsData>('consensus-reports?page=1&pageSize=5').catch(() => ({ reports: [] })),
       ]);
 

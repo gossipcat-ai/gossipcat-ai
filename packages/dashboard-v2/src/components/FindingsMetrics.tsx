@@ -208,7 +208,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
       {!hideHeader && (
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-            Consensus Rounds <span className="text-primary">{consensus.runs.length}</span>
+            Consensus Rounds <span className="text-primary">{consensus.totalRuns ?? consensus.runs.length}</span>
           </h2>
           {!showAll && (
             <a href="/dashboard/debates" className="font-mono text-xs text-muted-foreground transition hover:text-primary">
