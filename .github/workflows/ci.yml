@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# Cancel in-progress runs for the same PR/branch on new pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck-and-test:
+    name: typecheck + test + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck — apps/cli
+        run: npx tsc --noEmit
+        working-directory: apps/cli
+
+      - name: Typecheck — packages/orchestrator
+        run: npx tsc --noEmit
+        working-directory: packages/orchestrator
+
+      - name: Run tests
+        run: npm test -- --ci --reporters=default
+
+      - name: Build MCP bundle
+        run: npm run build:mcp
+
+      - name: Verify MCP bundle size (informational)
+        run: |
+          ls -lh dist-mcp/mcp-server.js
+          SIZE=$(wc -c < dist-mcp/mcp-server.js)
+          echo "MCP bundle: $SIZE bytes"
+          # Fail if bundle explodes past 5MB — catches accidental inclusion
+          # of large native-agent dirs or vendor blobs.
+          if [ "$SIZE" -gt 5242880 ]; then
+            echo "::error::MCP bundle exceeded 5MB soft limit ($SIZE bytes)"
+            exit 1
+          fi
