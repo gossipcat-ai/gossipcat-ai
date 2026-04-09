@@ -39,10 +39,12 @@ export function CategoryStrengths({ strengths, accuracy }: CategoryStrengthsProp
             {category.replace(/_/g, ' ')}
           </span>
           <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted/30">
+            {/* Single muted bar color — the green/amber/red threshold coloring
+                used to make new agents look "on fire" when their categories
+                were just sparse. Bar length already communicates score; the
+                percent label on the right carries the quantitative detail. */}
             <div
-              className={`h-full rounded-full transition-all ${
-                score >= 0.7 ? 'bg-confirmed' : score >= 0.4 ? 'bg-unverified' : 'bg-disputed'
-              }`}
+              className="h-full rounded-full bg-primary/60 transition-all"
               style={{ width: `${score * 100}%` }}
             />
           </div>

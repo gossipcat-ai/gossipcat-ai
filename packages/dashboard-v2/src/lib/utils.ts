@@ -136,9 +136,13 @@ export function agentInitials(id: string): string {
   return id.slice(0, 2).toUpperCase();
 }
 
+// Agent avatar hue palette — turquoise-biased so the dashboard feels
+// cohesive with the primary theme. Keeps enough variance (8 hues) that
+// neighbouring agents in a team grid don't collide, but avoids the old
+// full-rainbow lineup which contributed to the "too colorful" feedback.
 const AGENT_COLORS = [
-  '#8b5cf6', '#06b6d4', '#f97316', '#34d399',
-  '#f43f5e', '#fbbf24', '#60a5fa', '#e879f9',
+  '#75dddd', '#09bc8a', '#508991', '#34d399',
+  '#60a5fa', '#c084fc', '#fbbf24', '#f87171',
 ];
 
 export function agentColor(id: string): string {

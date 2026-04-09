@@ -15,19 +15,24 @@ interface LogsResponse {
   filter?: string;
 }
 
+// Neutral-first: a live log tail's primary job is readability. The old
+// 14-color palette made the tail look like a rainbow and buried the things
+// you actually want to notice (errors, timeouts). Now only error/timeout pop;
+// everything else is muted so errors stand out by contrast. User feedback:
+// "too colorful" landed hardest on this page.
 const CATEGORY_COLORS: Record<string, string> = {
-  dispatch: 'text-blue-400',
-  consensus: 'text-purple-400',
-  error: 'text-red-400',
-  timeout: 'text-orange-400',
-  worker: 'text-cyan-400/70',
-  gemini: 'text-cyan-400/70',
-  skill: 'text-amber-400',
+  dispatch: 'text-muted-foreground/80',
+  consensus: 'text-primary/70',
+  error: 'text-disputed',
+  timeout: 'text-unverified',
+  worker: 'text-muted-foreground/70',
+  gemini: 'text-muted-foreground/70',
+  skill: 'text-muted-foreground/80',
   boot: 'text-muted-foreground/50',
-  relay: 'text-green-400',
-  gossip: 'text-pink-400',
-  utility: 'text-muted-foreground/70',
-  memory: 'text-violet-400',
+  relay: 'text-muted-foreground/80',
+  gossip: 'text-muted-foreground/80',
+  utility: 'text-muted-foreground/60',
+  memory: 'text-muted-foreground/80',
   persist: 'text-muted-foreground/50',
   toolserver: 'text-muted-foreground/50',
   other: 'text-muted-foreground/70',

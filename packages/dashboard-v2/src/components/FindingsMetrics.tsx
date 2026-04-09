@@ -208,7 +208,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
       {!hideHeader && (
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-            Consensus Rounds <span className="text-primary">{consensus.totalRuns ?? consensus.runs.length}</span>
+            Consensus Rounds <span className="text-foreground">{consensus.totalRuns ?? consensus.runs.length}</span>
           </h2>
           {!showAll && (
             <a href="/dashboard/debates" className="font-mono text-xs text-muted-foreground transition hover:text-primary">
@@ -254,14 +254,6 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               if (disputedRatio >= 0.4) return 'border-l-disputed/60';
               return 'border-l-unverified/50';
             })();
-
-            const segments = [
-              { count: confirmedCount, cls: 'bg-confirmed' },
-              { count: disputedCount, cls: 'bg-disputed' },
-              { count: unverifiedCount, cls: 'bg-unverified' },
-              { count: uniqueCount, cls: 'bg-unique' },
-              { count: insightCount, cls: 'bg-zinc-500' },
-            ].filter(s => s.count > 0);
 
             const statChips = [
               { count: confirmedCount, textCls: 'text-confirmed', label: 'confirmed' },
@@ -326,7 +318,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                         </div>
                       )}
                       <span
-                        className="shrink-0 rounded border border-primary/20 bg-primary/5 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary/90"
+                        className="shrink-0 rounded border border-border/30 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground"
                         title={report.id}
                       >
                         {report.id.slice(0, 8)}
@@ -335,14 +327,13 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                         {timeAgo(report.timestamp)}
                       </span>
                     </div>
-                    {/* Row 2: segmented progress bar */}
-                    <div className="mt-1.5 flex h-1 w-full overflow-hidden rounded-full bg-muted/20">
-                      {segments.map((s, si) => (
-                        <div key={si} className={`${s.cls} opacity-80`} style={{ width: `${(s.count / total) * 100}%` }} />
-                      ))}
-                    </div>
-                    {/* Row 3: stat chips with labels */}
-                    <div className="mt-1 flex items-center gap-3">
+                    {/* Row 2: stat chips with labels. The segmented progress
+                        bar that used to live here was dropped because the card
+                        already triple-encoded the same status via the
+                        border-left accent, the bar, and the chips — keeping
+                        only border-left + chips removes ~60% of colored
+                        surface without losing any information. */}
+                    <div className="mt-1.5 flex items-center gap-3">
                       {statChips.map(chip => (
                         <span key={chip.label} className={`font-mono text-[10px] font-semibold ${chip.textCls}`}>
                           {chip.count} {chip.label}

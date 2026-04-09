@@ -81,7 +81,7 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
         <BigStat
           value={overview.consensusRuns}
           label="Consensus"
-          valueClass="text-primary"
+          valueClass="text-foreground"
         />
         <BigStat
           value={`${confirmRate}%`}

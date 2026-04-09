@@ -40,7 +40,7 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
   return (
     <a
       href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
-      className="group relative block rounded-xl border border-border bg-gradient-to-br from-card to-card/50 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_2px_8px_rgba(0,0,0,0.35)] transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:from-card/90 hover:to-card/40 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_10px_28px_rgba(0,0,0,0.55),0_0_0_1px_rgba(139,92,246,0.12)]"
+      className="group relative block rounded-xl border border-border bg-gradient-to-br from-card to-card/50 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_2px_8px_rgba(0,0,0,0.35)] transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:from-card/90 hover:to-card/40 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_10px_28px_rgba(0,0,0,0.55),0_0_0_1px_rgba(117,221,221,0.14)]"
     >
       {/* Top inner highlight line */}
       <span className="pointer-events-none absolute inset-x-0 top-0 h-px rounded-t-xl bg-gradient-to-r from-transparent via-white/12 to-transparent" />
