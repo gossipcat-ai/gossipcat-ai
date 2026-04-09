@@ -58,6 +58,19 @@ export function loadSkills(agentId: string, skills: string[], projectRoot: strin
     const content = resolveSkill(agentId, skill, projectRoot);
     if (!content) continue;
 
+    // Filter by skill effectiveness status written by checkEffectiveness().
+    // 'failed' and 'silent_skill' are suppressed — injecting a skill the RL loop
+    // has marked as harmful or silent would re-pollute the forward pass.
+    const frontmatterStatus = parseSkillFrontmatter(content)?.status;
+    if (frontmatterStatus === 'failed' || frontmatterStatus === 'silent_skill') {
+      process.stderr.write(`[gossipcat] Skipping ${frontmatterStatus} skill ${agentId}/${skill} from injection\n`);
+      dropped.push(skill);
+      continue;
+    }
+    if (frontmatterStatus === 'flagged_for_manual_review') {
+      process.stderr.write(`[gossipcat] Injecting flagged_for_manual_review skill ${agentId}/${skill} — manual review recommended\n`);
+    }
+
     const mode = index?.getSkillMode(agentId, skill) ?? 'permanent';
 
     if (mode === 'permanent') {
