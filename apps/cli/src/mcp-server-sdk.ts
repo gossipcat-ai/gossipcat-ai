@@ -33,6 +33,7 @@ import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus }
 import { handleCollect } from './handlers/collect';
 import { restorePendingConsensus } from './handlers/relay-cross-review';
 import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
+import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FILE } from './stickyPort';
 
 // ── Environment detection ────────────────────────────────────────────────
 
@@ -343,14 +344,16 @@ async function doBoot() {
   // Generate a per-process relay key so only co-launched agents can connect.
   const relayApiKey = randomBytes(32).toString('hex');
 
-  // Port selection: try a user-provided port via GOSSIPCAT_PORT env var,
-  // otherwise let the OS assign a free port (port: 0). This lets multiple
-  // Claude Code instances run gossipcat in parallel on the same machine
-  // without fighting over 24420. Each instance gets its own port; the actual
-  // port is logged to stderr + written to .gossip/relay.pid + exposed via
-  // gossip_status() and the MCP `instructions` field after boot.
-  const envPort = process.env.GOSSIPCAT_PORT ? parseInt(process.env.GOSSIPCAT_PORT, 10) : NaN;
-  const relayPort = Number.isFinite(envPort) && envPort >= 0 && envPort <= 65535 ? envPort : 0;
+  // Port selection: env → sticky file (.gossip/relay.port) → OS-assigned.
+  // GOSSIPCAT_PORT still wins unconditionally. When unset we try to re-bind the
+  // last port this project used so dashboard URLs stay stable across reboots,
+  // then fall back to port 0 if it's busy — multiple Claude Code instances can
+  // still run gossipcat in parallel on the same machine. The actual bound port
+  // is logged to stderr, written to .gossip/relay.port, and exposed via
+  // gossip_status() + the MCP `instructions` field after boot.
+  const relayPick = await pickStickyPort('GOSSIPCAT_PORT', RELAY_STICKY_FILE);
+  const relayPort = relayPick.port;
+  ctx.relayPortSource = relayPick.source;
 
   ctx.relay = new m.RelayServer({
     port: relayPort,
@@ -362,8 +365,13 @@ async function doBoot() {
   });
   await ctx.relay.start();
 
+  // Persist the actual bound port for next boot's sticky lookup.
+  if (typeof ctx.relay.port === 'number' && ctx.relay.port > 0) {
+    writeStickyPort(RELAY_STICKY_FILE, ctx.relay.port);
+  }
+
   // Start HTTP MCP transport for remote clients
-  startHttpMcpTransport();
+  await startHttpMcpTransport();
 
   // Write PID so the next boot can clean up if we crash without releasing the port.
   try { writePid(pidFile, String(process.pid)); } catch { /* best-effort */ }
@@ -1083,13 +1091,16 @@ server.tool(
       'Status:',
       `  Host: ${env.host}${env.supportsNativeAgents ? ' (native agents supported)' : ''}`,
       `  Native agent dir: ${env.nativeAgentDir || 'n/a'}`,
-      `  Relay: ${ctx.relay ? `running :${ctx.relay.port}` : 'not started'}`,
+      `  Relay: ${ctx.relay ? `running :${ctx.relay.port}${ctx.relayPortSource === 'sticky' ? ' (sticky)' : ''}` : 'not started'}`,
       `  Tool Server: ${ctx.toolServer ? 'running' : 'not started'}`,
       `  Workers: ${ctx.workers.size} (${Array.from(ctx.workers.keys()).join(', ') || 'none'})`,
       `  Claude subagents found: ${claudeSubagentsList.length}`,
     ];
     if (ctx.relay?.dashboardUrl) {
-      lines.push(`  Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKey})`);
+      lines.push(`  Dashboard: ${ctx.relay.dashboardUrl}${ctx.relayPortSource === 'sticky' ? ' (sticky)' : ''} (key: ${ctx.relay.dashboardKey})`);
+    }
+    if (ctx.httpMcpPort) {
+      lines.push(`  HTTP MCP: :${ctx.httpMcpPort}/mcp${ctx.httpMcpPortSource === 'sticky' ? ' (sticky)' : ''}`);
     }
 
     // Quota health
@@ -3215,8 +3226,17 @@ function touchSession(sid: string): void {
   }, HTTP_SESSION_TTL_MS);
 }
 
-function startHttpMcpTransport(): void {
-  const port = parseInt(process.env.GOSSIPCAT_HTTP_PORT ?? '24421', 10);
+async function startHttpMcpTransport(): Promise<void> {
+  // Port selection: GOSSIPCAT_HTTP_PORT env wins, then .gossip/http-mcp.port
+  // sticky file, then OS-assigned (0). Previously this hardcoded 24421 which
+  // collided across parallel Claude Code instances on the same machine —
+  // matches the fix already applied to the relay port.
+  const httpPick = await pickStickyPort('GOSSIPCAT_HTTP_PORT', HTTP_MCP_STICKY_FILE);
+  // Legacy default: if nothing was provided and we had no sticky file, prefer
+  // 24421 once so existing clients with that port in their config keep working.
+  // If 24421 is already busy we'll still fall through to port 0 via EADDRINUSE.
+  const port = httpPick.source === 'auto' ? 24421 : httpPick.port;
+  ctx.httpMcpPortSource = httpPick.source;
   const token = process.env.GOSSIPCAT_HTTP_TOKEN ?? '';
   const bindHost = (process.env.GOSSIPCAT_HTTP_BIND === '0.0.0.0' && token) ? '0.0.0.0' : '127.0.0.1';
 
@@ -3318,9 +3338,13 @@ function startHttpMcpTransport(): void {
   });
 
   httpServer.listen(port, bindHost, () => {
+    const addr = httpServer.address();
+    const bound = typeof addr === 'object' && addr ? addr.port : port;
+    ctx.httpMcpPort = bound;
+    if (bound > 0) writeStickyPort(HTTP_MCP_STICKY_FILE, bound);
     const authNote = token ? ' (token protected)' : ' (no auth — set GOSSIPCAT_HTTP_TOKEN to secure)';
     const bindNote = bindHost === '0.0.0.0' ? ' [remote]' : ' [localhost only]';
-    process.stderr.write(`[gossipcat] HTTP MCP listening on :${port}/mcp${authNote}${bindNote}\n`);
+    process.stderr.write(`[gossipcat] HTTP MCP listening on :${bound}/mcp${authNote}${bindNote}\n`);
   });
 
   httpServer.on('error', (err: NodeJS.ErrnoException) => {

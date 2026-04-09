@@ -1,9 +1,26 @@
 interface CategoryStrengthsProps {
+  /** Raw severity-weighted accumulator from performance-reader. Unbounded — used as sort fallback only. */
   strengths: Record<string, number>;
+  /** c / (c + h) ratio in [0,1]. Preferred data source when available. */
+  accuracy?: Record<string, number>;
 }
 
-export function CategoryStrengths({ strengths }: CategoryStrengthsProps) {
-  const entries = Object.entries(strengths)
+// Clamp any score to [0, 1] before turning it into a percentage. Guards against
+// stale clients rendering categoryStrengths (unbounded) as a ratio.
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+export function CategoryStrengths({ strengths, accuracy }: CategoryStrengthsProps) {
+  // Prefer categoryAccuracy (real c/(c+h) ratio) over categoryStrengths (unbounded
+  // severity-weighted accumulator used for dispatch routing). Fall back to clamped
+  // strengths when accuracy is unavailable for back-compat with older server builds.
+  const source = accuracy && Object.keys(accuracy).length > 0 ? accuracy : strengths;
+  const entries = Object.entries(source)
+    .map(([k, v]) => [k, clamp01(v)] as [string, number])
     .sort(([, a], [, b]) => b - a);
 
   if (entries.length === 0) {

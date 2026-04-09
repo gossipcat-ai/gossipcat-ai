@@ -62,6 +62,12 @@ export interface McpContext {
   pendingConsensusRounds: Map<string, PendingConsensusRound>;
   nativeUtilityConfig: { model: string } | null;
   mainProvider: string;
+  /** Actual bound HTTP MCP port (0/null if transport disabled). Set after listen(). */
+  httpMcpPort: number | null;
+  /** Source of the relay port: 'env' | 'sticky' | 'auto'. Used by gossip_status. */
+  relayPortSource: 'env' | 'sticky' | 'auto' | null;
+  /** Source of the HTTP MCP port. */
+  httpMcpPortSource: 'env' | 'sticky' | 'auto' | null;
   booted: boolean;
   boot: () => Promise<void>;
   syncWorkersViaKeychain: () => Promise<void>;
@@ -81,6 +87,9 @@ export const ctx: McpContext = {
   pendingConsensusRounds: new Map(),
   nativeUtilityConfig: null,
   mainProvider: 'google',
+  httpMcpPort: null,
+  relayPortSource: null,
+  httpMcpPortSource: null,
   booted: false,
   boot: async () => { throw new Error('boot not initialized'); },
   syncWorkersViaKeychain: async () => {},

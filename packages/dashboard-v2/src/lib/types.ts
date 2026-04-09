@@ -31,7 +31,10 @@ export interface AgentData {
     impactScore: number; dispatchWeight: number; signals: number;
     agreements: number; disagreements: number; hallucinations: number;
     consecutiveFailures: number; circuitOpen: boolean;
+    // categoryStrengths is an unbounded dispatch-routing accumulator — do not
+    // render as a percentage. categoryAccuracy = c / (c + h) is the real ratio.
     categoryStrengths: Record<string, number>;
+    categoryAccuracy?: Record<string, number>;
   };
 }
 
@@ -64,7 +67,11 @@ export interface ConsensusRun {
 
 export interface ConsensusData {
   runs: ConsensusRun[];
+  /** Total count of real consensus runs (≥2 agents, ≥3 signals) — independent of pagination. */
+  totalRuns: number;
   totalSignals: number;
+  page: number;
+  pageSize: number;
 }
 
 export interface ConsensusReportFinding {

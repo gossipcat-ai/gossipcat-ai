@@ -106,7 +106,12 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
   let confirmedFindings = 0;
   let lastConsensusTimestamp = '';
   let actionableFindings = 0;
-  const consensusTaskIds = new Set<string>();
+  // Per-run buckets for the consensus-runs count: mirror api-consensus.ts:98's
+  // "real consensus run" definition (≥2 agents, ≥3 signals). Without this filter,
+  // SystemPulse.consensusRuns counts manual/singleton signal recordings and
+  // diverges from the Debates page which uses the filtered definition.
+  interface RunBucket { agents: Set<string>; signalCount: number; }
+  const runBuckets = new Map<string, RunBucket>();
 
   const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
   if (existsSync(perfPath)) {
@@ -115,9 +120,21 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);
-          totalSignals++;
+          // totalSignals counts only real consensus signals — impl_*, signal_retracted,
+          // and future metadata rows are not "signals" for this counter.
+          if (entry.type === 'consensus' && typeof entry.signal === 'string') {
+            totalSignals++;
+          }
           if (entry.type === 'consensus' && (entry.consensusId || entry.taskId)) {
-            consensusTaskIds.add(entry.consensusId ?? entry.taskId);
+            const runId = entry.consensusId ?? entry.taskId;
+            let bucket = runBuckets.get(runId);
+            if (!bucket) {
+              bucket = { agents: new Set(), signalCount: 0 };
+              runBuckets.set(runId, bucket);
+            }
+            bucket.signalCount++;
+            if (entry.agentId) bucket.agents.add(entry.agentId);
+            if (entry.counterpartId) bucket.agents.add(entry.counterpartId);
           }
           if (entry.consensusId && entry.timestamp > lastConsensusTimestamp) {
             lastConsensusTimestamp = entry.timestamp;
@@ -138,7 +155,10 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
       }
     } catch { /* empty */ }
   }
-  consensusRuns = consensusTaskIds.size;
+  // Only count runs with ≥2 agents AND ≥3 signals — matches api-consensus.ts:98.
+  for (const bucket of runBuckets.values()) {
+    if (bucket.agents.size >= 2 && bucket.signalCount >= 3) consensusRuns++;
+  }
 
   const avgDurationMs = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
 
