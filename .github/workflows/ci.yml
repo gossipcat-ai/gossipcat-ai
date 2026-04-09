@@ -30,6 +30,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Build workspace packages first so downstream typecheck / test / bundle
+      # steps can resolve @gossip/* imports against compiled dist/ output.
+      # Locally this works because prior builds leave dist/ around; on a cold
+      # CI runner we must build explicitly.
+      - name: Build workspace packages
+        run: npm run build --workspaces --if-present
+
       - name: Typecheck — apps/cli
         run: npx tsc --noEmit
         working-directory: apps/cli
