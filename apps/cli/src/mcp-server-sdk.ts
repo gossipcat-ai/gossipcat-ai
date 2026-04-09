@@ -2612,9 +2612,10 @@ server.tool(
   'Save a cognitive session summary to project memory. The next session will load this context automatically on MCP connect. Call before ending your session to preserve what was learned.',
   {
     notes: z.string().optional().describe('Optional freeform user context (e.g., "focusing on security hardening")'),
+    force: z.boolean().optional().describe('Bypass the refuse-gate for pending native tasks / consensus rounds. Audited to .gossip/forced-saves.jsonl.'),
     _utility_task_id: z.string().optional().describe('Internal: utility task ID for re-entry after native session summary'),
   },
-  async ({ notes, _utility_task_id }) => {
+  async ({ notes, force, _utility_task_id }) => {
     await boot();
 
     // Re-entry fast path: retrieve stashed data, skip re-gathering
@@ -2705,6 +2706,51 @@ server.tool(
       } catch { /* best-effort */ }
 
       return { content: [{ type: 'text' as const, text: `Session saved.\n\n${summary}` }] };
+    }
+
+    // Refuse-gate: block session_save while native tasks or consensus rounds are still in flight.
+    // Saving now would freeze a snapshot that omits results still landing, and next-session.md would
+    // misrepresent what shipped. `force: true` bypasses and is audited to .gossip/forced-saves.jsonl.
+    {
+      const pendingNative: string[] = [];
+      for (const [taskId, info] of ctx.nativeTaskMap) {
+        if (!ctx.nativeResultMap.has(taskId)) pendingNative.push(`${taskId} (${info.agentId})`);
+      }
+      const pendingConsensus: string[] = [];
+      const now = Date.now();
+      for (const [cid, round] of ctx.pendingConsensusRounds) {
+        // Skip rounds past their deadline — timer was lost or never fired (e.g. restart without
+        // re-arm). Without this, a stale round permanently blocks session_save.
+        if (round.deadline && now > round.deadline) continue;
+        if (round.pendingNativeAgents && round.pendingNativeAgents.size > 0) {
+          pendingConsensus.push(`${cid} (${round.pendingNativeAgents.size} agents)`);
+        }
+      }
+      if ((pendingNative.length > 0 || pendingConsensus.length > 0) && !force) {
+        const lines: string[] = ['⛔ session_save refused — work still in flight.\n'];
+        if (pendingNative.length > 0) {
+          lines.push(`Pending native tasks (${pendingNative.length}):`);
+          for (const t of pendingNative.slice(0, 10)) lines.push(`  - ${t}`);
+          lines.push('');
+        }
+        if (pendingConsensus.length > 0) {
+          lines.push(`Pending consensus rounds (${pendingConsensus.length}):`);
+          for (const c of pendingConsensus.slice(0, 10)) lines.push(`  - ${c}`);
+          lines.push('');
+        }
+        lines.push('Relay the results via gossip_relay / gossip_relay_cross_review, then re-call gossip_session_save.');
+        lines.push('To override (snapshot is intentional / tasks are abandoned): gossip_session_save(force: true).');
+        return { content: [{ type: 'text' as const, text: lines.join('\n') }], isError: true };
+      }
+      if (force && (pendingNative.length > 0 || pendingConsensus.length > 0)) {
+        try {
+          const { appendFileSync: af, mkdirSync: md } = require('fs');
+          const { join: j } = require('path');
+          md(j(process.cwd(), '.gossip'), { recursive: true });
+          af(j(process.cwd(), '.gossip', 'forced-saves.jsonl'),
+            JSON.stringify({ at: new Date().toISOString(), pendingNative, pendingConsensus, notes: notes || null }) + '\n');
+        } catch { /* best-effort audit */ }
+      }
     }
 
     // 1. Gather session gossip from disk (crash-safe)
