@@ -179,7 +179,13 @@ export async function agentsHandler(
         hallucinations: score.hallucinations,
         consecutiveFailures: score.consecutiveFailures ?? 0,
         circuitOpen: score.circuitOpen ?? false,
+        // categoryStrengths is an UNBOUNDED severity-weighted accumulator used
+        // for dispatch routing (severity × decay × 0.15 per confirmed signal),
+        // not a [0,1] ratio. The dashboard must NOT render it as a percentage —
+        // it should render categoryAccuracy (c / (c + h)) which is a real ratio.
+        // See performance-reader.ts:357 (increment) vs :496-505 (accuracy).
         categoryStrengths: score.categoryStrengths ?? {},
+        categoryAccuracy: score.categoryAccuracy ?? {},
       },
     };
   });

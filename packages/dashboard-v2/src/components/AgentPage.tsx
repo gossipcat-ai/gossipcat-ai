@@ -180,7 +180,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
             Category Strengths
           </h2>
-          <CategoryStrengths strengths={s.categoryStrengths} />
+          <CategoryStrengths strengths={s.categoryStrengths} accuracy={s.categoryAccuracy} />
         </div>
       </section>
 
