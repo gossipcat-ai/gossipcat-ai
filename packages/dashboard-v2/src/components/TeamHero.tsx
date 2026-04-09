@@ -6,9 +6,19 @@ interface TeamHeroProps {
 }
 
 export function TeamHero({ agents }: TeamHeroProps) {
-  const sorted = [...agents].sort((a, b) => (b.scores?.dispatchWeight || 0) - (a.scores?.dispatchWeight || 0));
-  const visible = sorted.slice(0, 6);
-  const hasMore = sorted.length > 6;
+  // Sort by most recent dispatch first (lastTask.timestamp desc), with signal count as tie-break
+  // so agents with no tasks sink to the bottom deterministically.
+  const sorted = [...agents].sort((a, b) => {
+    const aTs = a.lastTask?.timestamp ?? '';
+    const bTs = b.lastTask?.timestamp ?? '';
+    if (aTs !== bTs) return bTs.localeCompare(aTs);
+    const aSig = a.scores?.signals || 0;
+    const bSig = b.scores?.signals || 0;
+    if (aSig !== bSig) return bSig - aSig;
+    return a.id.localeCompare(b.id);
+  });
+  const visible = sorted.slice(0, 4);
+  const hasMore = sorted.length > 4;
 
   return (
     <section>
@@ -22,7 +32,7 @@ export function TeamHero({ agents }: TeamHeroProps) {
           </a>
         )}
       </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {visible.map((agent) => (
           <AgentCardBig key={agent.id} agent={agent} />
         ))}
