@@ -7,7 +7,7 @@
 
 ## Motivation
 
-The current skill engine has 8 hardcoded categories (`trust_boundaries`, `injection_vectors`, `concurrency`, `type_safety`, `data_integrity`, `resource_exhaustion`, `input_validation`, `error_handling`) shaped for web/TS code review. Smart-contract auditors, ML platform teams, embedded firmware consultants, healthcare EHR integrators, and the other ~9 personas gossipcat targets cannot meaningfully use this taxonomy — `reentrancy` becomes `concurrency`, `phi-redaction` has no home at all, and the skill names land as web-app nouns regardless of project domain.
+The current skill engine has 10 hardcoded categories — the original 8 (`trust_boundaries`, `injection_vectors`, `concurrency`, `type_safety`, `data_integrity`, `resource_exhaustion`, `input_validation`, `error_handling`) plus `severity_calibration` and `citation_grounding` added during the Tier 1 hardening — all shaped for web/TS code review. Smart-contract auditors, ML platform teams, embedded firmware consultants, healthcare EHR integrators, and the other ~9 personas gossipcat targets cannot meaningfully use this taxonomy — `reentrancy` becomes `concurrency`, `phi-redaction` has no home at all, and the skill names land as web-app nouns regardless of project domain.
 
 The user wants the skill engine to be **emergent**: profile a project (consensus history, signals, memories, codebase) and synthesize per-agent named skills automatically, rather than shipping hand-curated verticals. The north-star example came from a real orchestrator session on a Solidity audit project, which produced per-agent proposals like `protocol-modeling` (permanent gate for `solidity-auditor`), `writer-enumeration` (permanent gate for `static-analyzer`), `exploit-chaining` (contextual for `dynamic-tester`).
 
@@ -45,9 +45,9 @@ Three independent consensus rounds caught three load-bearing holes; all are fixe
 
 ### Hole 1 — Null evidence promotes to permanent (sonnet)
 
-**Problem:** PR C's contextual trial-bind runs for N=3 dispatches. If none of those dispatches touch the skill's category, the delta is `0/0`. `resolveVerdict` has no `INCONCLUSIVE` branch — silence resolves to PASS or FAIL. A "silently passed" contextual skill flips to permanent, and `permanent` is exempt from `TIMEOUT_MS` per PR C, so **null evidence becomes a write-only path into the permanent skill registry**.
+**Problem:** PR C's contextual trial-bind runs for N=3 dispatches. If none of those dispatches touch the skill's category, the delta is `0/0`. `resolveVerdict` has no null-evidence branch — silence resolves to PASS or FAIL. A "silently passed" contextual skill flips to permanent, and `permanent` is exempt from `TIMEOUT_MS` per PR C, so **null evidence becomes a write-only path into the permanent skill registry**.
 
-**Fix:** trial-bind verdict requires `correct + hallucinated >= K` in the target category before resolving. If K is unmet after N dispatches, return `INCONCLUSIVE` (verdict state already exists in `check-effectiveness.ts`). Never bind from silence.
+**Fix:** trial-bind verdict requires `correct + hallucinated >= K` in the target category before resolving. If K is unmet after N dispatches, return a null-evidence verdict. **Correction after validation:** the `'inconclusive'` value exists in `VerdictStatus` at `check-effectiveness.ts:21-29`, but today `resolveVerdict` only emits it on the post-`MIN_EVIDENCE` Bonferroni-failed branch, NOT for the null-evidence path we need. Null evidence currently returns `'pending'`. PR C must either repurpose `'inconclusive'` (risks conflating two meanings) or add a new distinct verdict state like `'trial_null_evidence'`. Budget a new branch, not a reuse.
 
 **Bonus fix in same area:** `cluster_density = min(1.0, n/3)` ranks one critical miss below three medium nits. Severity-gate the floor: `cluster_density = severity >= high ? 1.0 : min(1.0, n/3)`.
 
@@ -61,7 +61,14 @@ Three independent consensus rounds caught three load-bearing holes; all are fixe
 
 **Problem:** PR C's original design proposed `calibration` mode skills be verified by "dispatching a consensus round on the skill markdown file." There is **zero prior art** in `consensus-engine.ts` for reviewing prose; consensus operates over findings produced from code-review tasks with file/line citations. Reviewers strong in the category rubber-stamp; weak reviewers can't judge; citation_grounding fails because it's prose. The mechanism doesn't exist and would require extending consensus to a non-code target.
 
-**Fix:** drop self-consensus calibration entirely. `calibration` mode uses the **same trial-bind + signal-delta path** as `contextual`, just with different thresholds (calibration measures `severity_miscalibrated` rate decline, contextual measures `categoryAccuracy` improvement). Both reuse `check-effectiveness.ts` + `performance-reader.ts:356-414`. Zero new dispatch infrastructure.
+**Fix:** drop self-consensus calibration entirely. `calibration` mode uses the **same trial-bind + signal-delta path** as `contextual`, just with different thresholds (calibration measures `severity_miscalibrated` rate decline, contextual measures `categoryAccuracy` improvement).
+
+**Correction after validation:** this is not a pure reuse. Two concrete extensions are required, not just branching:
+
+1. **New counter dimension.** `CategoryCounters` in `performance-reader.ts` only tracks `correct`/`hallucinated` today. `severity_miscalibrated` is not aggregated anywhere — calibration mode needs a new counter added to `categoryStrengths` accumulation inside `computeScores`. Budget ~40 LOC, not reuse.
+2. **Mode threading.** `resolveVerdict` at `check-effectiveness.ts:63` takes `(snapshot, delta, nowMs, opts?: { role?: string })` — no `mode` parameter, no `mode` field on `SkillSnapshot` at `:31-39`. Threading `mode` means updating `SkillSnapshot` frontmatter (PR B territory) AND the `resolveVerdict` signature AND every caller. This crosses the PR B/C boundary and must be budgeted accordingly.
+
+Still cheaper than self-consensus, but "reuses existing machinery" was wrong framing.
 
 ## Interactive validation step (the human-in-the-loop layer)
 
@@ -165,12 +172,14 @@ Approvals are not persisted as signals. The bind itself is the record of approva
 | Component | LOC |
 |---|---|
 | `skill-engine.ts:217` accepts profiler-supplied slug instead of `normalizeSkillName(category)` | ~10 |
-| `categories: string[]` frontmatter field added to `parseSkillFrontmatter` at `skill-parser.ts:14-51` (single choke point per opus) | ~5 |
+| `categories: string[]` frontmatter array parsing at `skill-parser.ts:14-51` (mirror the existing keywords array parser at `:32-39`, which is ~10 LOC, not ~5) | ~12 |
 | Back-compat: legacy `category: foo` reads as `categories: [foo]` | ~5 |
-| `mode`, `volatility`, `source_findings`, `shape` frontmatter fields | ~15 |
+| Extend `mode` type at `skill-parser.ts:8` from `'permanent' \| 'contextual'` to include `'calibration'`, update parser branch at `:46` (ternary currently collapses unknown to undefined) | ~5 |
+| `volatility`, `source_findings`, `shape` frontmatter fields | ~15 |
+| Add `mode` field to `SkillSnapshot` at `check-effectiveness.ts:31-39` (threading prep for PR C) | ~5 |
 | Update downstream readers (`skill-loader.ts:144`, `skill-engine.ts:383`) | ~10 |
 | Tests for back-compat | ~35 |
-| **Total PR B** | **~80** |
+| **Total PR B** | **~97** |
 
 **Unblocks** binding of Step 1's proposals as multi-category-tagged files.
 
@@ -178,19 +187,37 @@ Approvals are not persisted as signals. The bind itself is the record of approva
 
 | Component | LOC |
 |---|---|
-| Branch `resolveVerdict` on `mode` in `check-effectiveness.ts` | ~20 |
-| `permanent` mode: exempt from `TIMEOUT_MS` (fixes embedded/kernel persona brittleness) | ~10 |
-| `contextual` mode: trial-bind for N dispatches + signal delta, **with sonnet's INCONCLUSIVE branch when `correct + hallucinated < K`** | ~40 |
-| `calibration` mode: trial-bind + signal delta on `severity_miscalibrated` rate (NOT self-consensus per opus — drop self-consensus entirely) | ~30 |
-| Tests for null-evidence handling | ~50 |
-| **Total PR C** | **~150** |
+| Extend `resolveVerdict` signature at `check-effectiveness.ts:63` to accept `mode` via opts or `SkillSnapshot` (note: this is an API extension, not a reuse — no mode concept exists today) | ~15 |
+| Thread `mode` through every `resolveVerdict` caller | ~20 |
+| `permanent` mode: exempt from `TIMEOUT_MS` (fixes embedded/kernel persona brittleness). **Caveat:** without lifecycle state machine (Step 6, deferred), permanent skills have no alternate transition rule when they accumulate hallucinations. Document the gap; revisit in Step 6. | ~10 |
+| `contextual` mode: trial-bind for N dispatches + signal delta, with null-evidence branch when `correct + hallucinated < K` (new verdict state `'trial_null_evidence'` or repurposed `'inconclusive'` — see Hole 1 correction) | ~45 |
+| `calibration` mode: trial-bind + signal delta on `severity_miscalibrated` rate. **New counter dimension** — `severity_miscalibrated` is not aggregated in `CategoryCounters` today; add accumulator in `performance-reader.ts:356-414` switch statement inside `computeScores`. This is a new code path, not a reuse. | ~50 |
+| New export from `performance-reader.ts` for calibration delta queries (the `categoryAccuracy` computation at `:496-520` is private today — either refactor the private reduction out or export a wrapper) | ~20 |
+| Tests for null-evidence handling, mode branching, new counter | ~60 |
+| **Total PR C** | **~220** |
 
 ### Deferred to later PRs
 
 - **Step 5** synthesis of skill file content (only after PR A proposals are calibrated against hand-picks for ≥2 weeks)
-- **Step 6** lifecycle state machine (proposed → bound → validated → active/violated/stale/retired)
+- **Step 6** lifecycle state machine (proposed → bound → validated → active/violated/stale/retired). **Blocking gap:** PR C's `permanent`-mode `TIMEOUT_MS` exemption creates skills with no alternate transition rule. Must be addressed in Step 6.
 - **Step 7** 4-skill-per-dispatch budget
 - **Step 8** namespacing (`core:*`, `sc:*`) — only if/when a second domain actually lands
+
+## Persona tunables
+
+Five configuration knobs added to PR A to serve the personas whose commitments were made in earlier consensus rounds but dropped during spec compression. All live in a new `persona_tunables` block in `.gossip/config.json`:
+
+| Knob | Default | Who needs it | Why |
+|---|---|---|---|
+| `recency_half_life_days` | 14 | embedded firmware (365), ML platform (7) | Yearly-volatility personas get their skill proposals permanently aged out of the top-N (`0.5^(365/14) ≈ 1.5e-8`). Weekly-volatility personas want faster decay. |
+| `reserved_names` | `{}` (object keyed by domain: `healthcare`, `fintech`, `kernel`, etc.) | healthcare EHR (`phi-redaction`, `hipaa-audit-log`), regulated fintech (`pci-cardholder-data-scope`, `sox-attestation`) | Single global list doesn't work for a monorepo spanning multiple compliance surfaces. Each domain declares its own protected names. |
+| `proposal_retention_days.{permanent,contextual,calibration}` | `{365, 30, 30}` | kernel contributor (`permanent: 365+`), security research (`contextual: 7`) | Kernel review cycles exceed 30 days; manual `archive-proposals` is not retention-length-aware. |
+| `nudge_cooldown_days` | 7 | security research lab (1), enterprise data eng (30) | Auto-nudge from `collect.ts` spams high-volatility personas every dispatch without a cooldown. |
+| `profile_interactive_default` | `true` | enterprise data eng (`false` for `profile-all` loops), solo indie (`true`) | `gossip_skills(action: "profile", interactive: false)` dumps proposals without blocking on structured prompts — enterprise can run batch profiles without the first unanswered prompt blocking 99 more. |
+
+Budget: ~40 LOC for config plumbing in `.gossip/config.json` reader + `.gossip/config-default.json` + type definition. Added to PR A's total above.
+
+**Updated PR A total: ~537 LOC.**
 
 ## File anchors
 
@@ -212,17 +239,25 @@ Approvals are not persisted as signals. The bind itself is the record of approva
 - `packages/orchestrator/src/performance-reader.ts:171` — **`s.type === 'consensus'` filter — DO NOT add proposal signals here**
 - `packages/orchestrator/src/performance-reader.ts:177-186` — `signal_retracted` prior art (mirror for `proposal_rejection_retracted`)
 - `packages/orchestrator/src/performance-reader.ts:283-292` — `ensure(signal.agentId)` decay-window bumper (the reason proposal signals must NEVER share the JSONL)
-- `packages/orchestrator/src/performance-reader.ts:356-414` — `categoryAccuracy` aggregation (reused for trial-bind verdicts)
+- `packages/orchestrator/src/performance-reader.ts:356-414` — the private `computeScores` inner signal switch that increments `categoryCorrect`/`categoryHallucinated` (NOT an exported API — calibration mode must refactor out or add an export)
+- `packages/orchestrator/src/performance-reader.ts:496-520` — `categoryAccuracy` computation (actual reuse target for trial-bind delta queries)
 - `packages/orchestrator/src/skill-parser.ts:14-51` — `parseSkillFrontmatter` (single back-compat choke point)
 - `packages/orchestrator/src/check-effectiveness.ts` — VerdictStatus / TIMEOUT_MS / `INCONCLUSIVE` state already exists
-- `apps/cli/src/handlers/skills.ts` — handler additions for new `gossip_skills` actions
+- `apps/cli/src/mcp-server-sdk.ts:2295` — the `gossip_skills` tool is defined inline here (no dedicated `handlers/skills.ts` file exists). Action enum at `:2298`, dispatch body at `:2341/:2366/:2381`. PR A's 4 new actions land in this 3000+-line monolith; consider extracting to a dedicated handler file as a zero-behavior-change prep commit if the diff gets too noisy.
+- `packages/orchestrator/src/skill-parser.ts:8` — `mode?: 'permanent' | 'contextual'` type declaration (PR B must extend to include `'calibration'`)
+- `packages/orchestrator/src/skill-parser.ts:32-39` — existing keywords array parser (mirror for `categories: string[]`)
+- `packages/orchestrator/src/skill-parser.ts:46` — `mode` ternary parser branch (currently collapses unknown to undefined)
+- `packages/orchestrator/src/check-effectiveness.ts:21-29` — `VerdictStatus` type; `'inconclusive'` exists but semantics are Bonferroni-failed, NOT null-evidence
+- `packages/orchestrator/src/check-effectiveness.ts:31-39` — `SkillSnapshot` shape (PR B adds `mode` field)
+- `packages/orchestrator/src/check-effectiveness.ts:63` — `resolveVerdict` signature (no `mode` param today)
 
 ## Open questions deferred (not blockers)
 
 - **Skill content synthesis** (Step 5) — when the LLM writes the actual skill markdown body, what prevents hallucinated methodology? Trial-bind + signal delta is the floor; explicit content cross-review before binding is the next-level gate. Defer until PR A/B/C land and we have real proposals to test against.
 - **Cross-pollination of skills across agents** — if `bridge-semantics` is proposed for `solidity-auditor`, can `static-analyzer` also gain it? `categories: string[]` allows it structurally; the binding policy is undefined. Defer to a follow-up PR after we see real cross-cutting cases.
 - **Compliance audit cadence** — healthcare EHR / fintech personas need scheduled profiler runs aligned to SOC2/HIPAA cycles. Add `profile_schedule` config in a later PR; the manual `profile` invocation satisfies audit evidence ("we ran the profiler on `<date>`") in the meantime.
-- **Enterprise batch interface** — `gossip_skills(action: "profile-all")` for orgs with 100+ agents. Loop is correctness-equivalent to batch; defer until a real enterprise persona shows up.
+- **Lifecycle state machine for permanent skills** (Step 6) — PR C ships permanent-mode `TIMEOUT_MS` exemption but no alternate transition rule. Must be addressed in Step 6 before permanent-mode accumulates un-auditable hallucinations.
+- **`gossip_skills(action: "profile-all")` batch interface** — not correctness-equivalent to a loop: with `interactive: true` (default), the loop blocks on the first unanswered prompt. Enterprise personas should set `profile_interactive_default: false` in `persona_tunables` and pipe `profile-all` to a batch handler that never prompts. Defer the dedicated `profile-all` action but ship the `interactive: false` flag in PR A.
 
 ## Verification before each PR ships
 
