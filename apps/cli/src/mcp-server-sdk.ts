@@ -27,6 +27,7 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 
 // ── Extracted modules ────────────────────────────────────────────────────
 import { ctx, NATIVE_TASK_TTL_MS } from './mcp-context';
+import { getGossipcatVersion } from './version';
 import { evictStaleNativeTasks, persistNativeTaskMap, restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';
@@ -833,7 +834,7 @@ ctx.getModules = getModules;
 const server = new McpServer(
   {
     name: 'gossipcat',
-    version: '0.1.0',
+    version: getGossipcatVersion(),
   },
   {
     instructions:
@@ -3143,13 +3144,10 @@ server.tool(
     }
 
     // 2. Gather context (each wrapped in try/catch, swallow errors)
-    let version = 'unknown';
-    try {
-      const { readFileSync } = await import('fs');
-      const { join } = await import('path');
-      const pkgRaw = readFileSync(join(process.cwd(), 'package.json'), 'utf-8');
-      version = JSON.parse(pkgRaw).version ?? 'unknown';
-    } catch { /* swallow */ }
+    // Use the shared helper — reads gossipcat's own package.json, not the
+    // calling project's (which is what the old process.cwd() path returned).
+    const { getGossipcatVersion } = await import('./version');
+    const version = getGossipcatVersion();
 
     let gitHead = 'unknown';
     try {

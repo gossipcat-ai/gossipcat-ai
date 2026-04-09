@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { join, resolve } from 'path';
+import { getGossipcatVersion } from '../version';
 
 interface UpdateOptions {
   check_only: boolean;
@@ -13,14 +14,13 @@ interface UpdateResult {
 }
 
 function getCurrentVersion(): string {
-  try {
-    // Walk up from this file to find package.json at the package root
-    const pkgPath = resolve(__dirname, '..', '..', '..', '..', 'package.json');
-    if (existsSync(pkgPath)) {
-      return JSON.parse(readFileSync(pkgPath, 'utf-8')).version ?? '0.0.0';
-    }
-  } catch { /* fall through */ }
-  return '0.0.0';
+  // Delegate to the shared helper — it walks up from __dirname until it finds
+  // a package.json with name === 'gossipcat', which works across dev, global
+  // install, local dep, and bundled layouts. The old 4-up path walk fell
+  // through to '0.0.0' whenever the install layout was anything other than
+  // the monorepo dev checkout.
+  const v = getGossipcatVersion();
+  return v === 'unknown' ? '0.0.0' : v;
 }
 
 async function getLatestVersion(): Promise<string> {
