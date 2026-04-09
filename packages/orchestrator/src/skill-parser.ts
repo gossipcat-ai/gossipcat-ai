@@ -1,5 +1,21 @@
 import { normalizeSkillName } from './skill-name';
 
+/** Status values written by the skill lifecycle: both the authoring-time values
+ * ('active', 'draft', 'disabled') and the effectiveness verdict values written
+ * by checkEffectiveness() ('passed', 'failed', 'pending', 'flagged_for_manual_review',
+ * 'silent_skill', 'insufficient_evidence'). Loader filters on these at dispatch time.
+ */
+export type SkillStatus =
+  | 'active'
+  | 'draft'
+  | 'disabled'
+  | 'passed'
+  | 'failed'
+  | 'pending'
+  | 'flagged_for_manual_review'
+  | 'silent_skill'
+  | 'insufficient_evidence';
+
 export interface SkillFrontmatter {
   name: string;
   description: string;
@@ -8,7 +24,7 @@ export interface SkillFrontmatter {
   mode?: 'permanent' | 'contextual';
   generated_by?: string;
   sources?: string;
-  status: 'active' | 'draft' | 'disabled';
+  status: SkillStatus;
 }
 
 export function parseSkillFrontmatter(content: string): SkillFrontmatter | null {
@@ -46,6 +62,6 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     mode: (fields.mode === 'contextual' ? 'contextual' : fields.mode === 'permanent' ? 'permanent' : undefined),
     generated_by: fields.generated_by,
     sources: fields.sources,
-    status: fields.status as 'active' | 'draft' | 'disabled',
+    status: fields.status as SkillStatus,
   };
 }

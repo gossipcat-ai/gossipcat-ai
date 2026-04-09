@@ -8,6 +8,7 @@
 import { readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { ConsensusSignal } from './consensus-types';
+import { normalizeSkillName } from './skill-name';
 
 export interface AgentScore {
   agentId: string;
@@ -131,10 +132,11 @@ export class PerformanceReader {
   getCountersSince(agentId: string, category: string, sinceMs: number): CategoryCounters {
     const allSignals = this.readSignalsRaw();
     const counters: CategoryCounters = { correct: 0, hallucinated: 0 };
+    const normalizedTarget = normalizeSkillName(category);
 
     for (const s of allSignals) {
       if (s.agentId !== agentId) continue;
-      if (s.category !== category) continue;
+      if (normalizeSkillName(s.category ?? '') !== normalizedTarget) continue;
       const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
       if (!isFinite(ts) || ts === 0 || ts < sinceMs) continue;
 
