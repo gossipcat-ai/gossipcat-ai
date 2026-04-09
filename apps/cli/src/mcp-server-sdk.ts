@@ -220,6 +220,8 @@ let bootPromise: Promise<void> | null = null;
 let planExecutionDepth = 0;
 // Stash gathered session data between utility dispatch and re-entry (keyed by task ID)
 const _pendingSessionData = new Map<string, { gossip: string; consensus: string; performance: string; gitLog: string; notes?: string }>();
+// Stash skill develop prompt metadata between native-utility dispatch and re-entry (keyed by task ID)
+const _pendingSkillData = new Map<string, { agentId: string; category: string; skillName: string; skillPath: string; baseline_accuracy_correct: number; baseline_accuracy_hallucinated: number; bound_at: string }>();
 
 // Re-entry stash for gossip_verify_memory native-utility dispatch. Keyed by
 // the utility task id; cleared on re-entry. Without this we'd need to re-read
@@ -2313,8 +2315,10 @@ server.tool(
       name: z.string().describe('Skill name (kebab-case)'),
       content: z.string().describe('Full .md content with frontmatter'),
     })).optional().describe('For build: generated skill files to save. Omit for discovery mode.'),
+    // Internal: re-entry param for native-utility dispatch path (develop action only)
+    _utility_task_id: z.string().optional().describe('Internal: utility task ID for re-entry after native skill generation'),
   },
-  async ({ action, agent_id, skill, enabled, category, skill_names, skills }) => {
+  async ({ action, agent_id, skill, enabled, category, skill_names, skills, _utility_task_id }) => {
     await boot();
 
     // ── list ──
@@ -2386,6 +2390,98 @@ server.tool(
         return { content: [{ type: 'text' as const, text: 'Skill engine not available. Check boot logs.' }] };
       }
 
+      // ── Re-entry fast path (native utility returned) ──
+      if (_utility_task_id) {
+        const stashedMeta = _pendingSkillData.get(_utility_task_id);
+        _pendingSkillData.delete(_utility_task_id);
+        const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
+        ctx.nativeResultMap.delete(_utility_task_id);
+        ctx.nativeTaskMap.delete(_utility_task_id);
+
+        if (utilityResult?.status === 'completed' && utilityResult.result && stashedMeta) {
+          try {
+            const result = ctx.skillEngine.saveFromRaw(agent_id, category, utilityResult.result, stashedMeta);
+            const { normalizeSkillName: nsn } = await import('@gossip/orchestrator');
+            const skillName = nsn(category);
+
+            // Auto-bind to skill index so it's injected on next dispatch
+            if (ctx.mainAgent) {
+              const skillIndex = ctx.mainAgent.getSkillIndex();
+              if (skillIndex) {
+                skillIndex.bind(agent_id, skillName, { source: 'auto', mode: 'permanent' });
+              }
+
+              // Also register on agent config for backwards compat
+              const registry = (ctx.mainAgent as any).registry;
+              const agentConfig = registry?.get(agent_id);
+              const normalizedCategory = nsn(category);
+              if (agentConfig && !agentConfig.skills.includes(normalizedCategory)) {
+                agentConfig.skills.push(normalizedCategory);
+              }
+              // Suppress future skill gap alerts for this agent+category
+              const pipeline = (ctx.mainAgent as any).pipeline;
+              if (pipeline?.suppressSkillGapAlert) {
+                pipeline.suppressSkillGapAlert(agent_id, category);
+              }
+            }
+
+            const preview = result.content.length > 1000
+              ? result.content.slice(0, 1000) + '\n\n... (truncated)'
+              : result.content;
+
+            process.stderr.write(`[gossipcat] Skill developed (native): "${skillName}" for ${agent_id} (category: ${category})\n`);
+            return {
+              content: [{ type: 'text' as const, text: `Skill generated and saved:\n\nPath: ${result.path}\n\nAuto-bound "${skillName}" to ${agent_id} in skill index.\n\n${preview}` }],
+            };
+          } catch (err) {
+            process.stderr.write(`[gossipcat] Skill develop native post-processing failed: ${(err as Error).message}\n`);
+            return {
+              content: [{ type: 'text' as const, text: `Skill generation failed: ${(err as Error).message}` }],
+            };
+          }
+        } else {
+          process.stderr.write(`[gossipcat] Skill develop utility ${_utility_task_id} failed/missing, falling back to direct LLM\n`);
+          // Fall through to direct path below
+        }
+      }
+
+      // ── Fresh call: native utility branch ──
+      if (ctx.nativeUtilityConfig && !_utility_task_id) {
+        try {
+          const { system, user, skillName, skillPath, baseline_accuracy_correct, baseline_accuracy_hallucinated, bound_at } =
+            await ctx.skillEngine.buildPrompt(agent_id, category);
+          const taskId = randomUUID().slice(0, 8);
+          _pendingSkillData.set(taskId, { agentId: agent_id, category, skillName, skillPath, baseline_accuracy_correct, baseline_accuracy_hallucinated, bound_at });
+          ctx.nativeTaskMap.set(taskId, {
+            agentId: '_utility',
+            task: `skill_develop:${category}`,
+            startedAt: Date.now(),
+            timeoutMs: 120_000,
+            utilityType: 'skill_develop',
+          });
+          spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
+
+          const modelShort = ctx.nativeUtilityConfig.model;
+          return {
+            content: [
+              { type: 'text' as const, text:
+                `Skill prompt built. Dispatching native utility for generation.\n\n` +
+                `⚠️ EXECUTE NOW — launch this Agent and re-call gossip_skills:\n\n` +
+                `1. Agent(model: "${modelShort}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true) — pass the AGENT_PROMPT:${taskId} content item verbatim\n` +
+                `2. When agent completes → gossip_relay(task_id: "${taskId}", result: "<full agent output>")\n` +
+                `3. Then re-call: gossip_skills(action: "develop", agent_id: "${agent_id}", category: "${category}", _utility_task_id: "${taskId}")\n\n` +
+                `Do ALL steps in order. Do not wait for user input between them.`
+              },
+              { type: 'text' as const, text: `AGENT_PROMPT:${taskId} (_utility)\n${system}\n\n---\n\n${user}` },
+            ],
+          };
+        } catch (err) {
+          process.stderr.write(`[gossipcat] Skill develop native prompt build failed: ${(err as Error).message}, falling back to direct LLM\n`);
+          // Fall through to direct path below
+        }
+      }
+
+      // ── Direct path (no native utility config, or fallback) ──
       try {
         const result = await ctx.skillEngine.generate(agent_id, category);
         const { normalizeSkillName: nsn } = await import('@gossip/orchestrator');

@@ -100,7 +100,21 @@ export class SkillEngine {
     private projectRoot: string,
   ) {}
 
-  async generate(agentId: string, category: string): Promise<{ path: string; content: string }> {
+  /**
+   * Build the LLM prompt strings and metadata needed to generate a skill file.
+   * Separated from generate() so callers (e.g. the native-utility re-entry path)
+   * can obtain the prompt, dispatch it externally, and later call saveFromRaw()
+   * with the result — without re-running the expensive data-gathering step.
+   */
+  async buildPrompt(agentId: string, category: string): Promise<{
+    system: string;
+    user: string;
+    skillName: string;
+    skillPath: string;
+    baseline_accuracy_correct: number;
+    baseline_accuracy_hallucinated: number;
+    bound_at: string;
+  }> {
     if (!SAFE_NAME.test(agentId)) {
       throw new Error(`Invalid agent_id: "${agentId}". Must be lowercase alphanumeric with hyphens/underscores.`);
     }
@@ -141,10 +155,17 @@ export class SkillEngine {
     const categoryConfirmations = findings.filter(f => f.agentId === agentId).length;
     const baselineRate = totalDispatches > 0 ? categoryConfirmations / totalDispatches : 0;
 
-    const messages: LLMMessage[] = [
-      {
-        role: 'system',
-        content: `You are a senior prompt engineer who builds skill files for AI code review agents. Your skills are injected into agent system prompts at dispatch time — every word costs tokens and shapes behavior. You write concise, opinionated methodology that changes how an agent thinks about a specific class of problems.
+    // Snapshot baseline counters at build time so they are stable regardless of
+    // which code path eventually calls saveFromRaw().
+    const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
+    const baseline_accuracy_correct = lifetime.correct;
+    const baseline_accuracy_hallucinated = lifetime.hallucinated;
+    const bound_at = new Date().toISOString();
+
+    const skillName = normalizeSkillName(category);
+    const skillPath = join(this.projectRoot, '.gossip', 'agents', agentId, 'skills', `${skillName}.md`);
+
+    const system = `You are a senior prompt engineer who builds skill files for AI code review agents. Your skills are injected into agent system prompts at dispatch time — every word costs tokens and shapes behavior. You write concise, opinionated methodology that changes how an agent thinks about a specific class of problems.
 
 Your output quality is measured by:
 1. **Relevance** — every check must apply to THIS project's tech stack. Generic checklists are waste.
@@ -156,11 +177,9 @@ Study this reference skill — it represents the quality bar:
 
 <reference_skill>
 ${template}
-</reference_skill>`,
-      },
-      {
-        role: 'user',
-        content: `Generate a skill file for agent "${agentId}" to improve its "${category}" review performance.
+</reference_skill>`;
+
+    const user = `Generate a skill file for agent "${agentId}" to improve its "${category}" review performance.
 
 <project_context>
 ${projectContext || 'No project context available.'}
@@ -191,36 +210,64 @@ Requirements:
 - Keep under 150 lines
 - CRITICAL: Tailor ALL content to the project's actual tech stack (see <tech_stack>). Only include checks relevant to technologies the project uses. If the project has no SQL database, do NOT mention SQL injection. If no HTML rendering, do NOT mention XSS. Generic security checklists waste agent prompt tokens.
 - Reference actual project file paths and patterns from findings and context
-- Use bullet lists instead of markdown tables for Anti-Patterns (tables render poorly in agent prompts)`,
-      },
-    ];
+- Use bullet lists instead of markdown tables for Anti-Patterns (tables render poorly in agent prompts)`;
 
-    const response = await this.llm.generate(messages, { temperature: 0.3 });
-    const content = response.text || '';
+    return { system, user, skillName, skillPath, baseline_accuracy_correct, baseline_accuracy_hallucinated, bound_at };
+  }
 
+  /**
+   * Persist a raw LLM-generated skill markdown string to disk.
+   * Mirrors the post-LLM steps from generate(): code-fence stripping,
+   * validation, snapshot-field injection, and atomic file write.
+   *
+   * Called by the native-utility re-entry path after gossip_relay delivers
+   * the agent output back to the orchestrator.
+   */
+  saveFromRaw(
+    _agentId: string,
+    _category: string,
+    rawMarkdown: string,
+    meta: {
+      skillName: string;
+      skillPath: string;
+      baseline_accuracy_correct: number;
+      baseline_accuracy_hallucinated: number;
+      bound_at: string;
+    },
+  ): { path: string; content: string } {
     // Strip markdown code fences if LLM wrapped the output
-    let cleaned = content.trim();
+    let cleaned = rawMarkdown.trim();
     if (cleaned.startsWith('```')) {
       cleaned = cleaned.replace(/^```\w*\n/, '').replace(/\n```\s*$/, '').trim();
     }
 
     this.validateSkillContent(cleaned);
 
-    // Snapshot baseline counters at bind time — Tasks 7/8 read these for effectiveness checks
-    const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
-    const baseline_accuracy_correct = lifetime.correct;
-    const baseline_accuracy_hallucinated = lifetime.hallucinated;
-    const bound_at = new Date().toISOString();
+    cleaned = this.injectSnapshotFields(cleaned, {
+      baseline_accuracy_correct: meta.baseline_accuracy_correct,
+      baseline_accuracy_hallucinated: meta.baseline_accuracy_hallucinated,
+      bound_at: meta.bound_at,
+    });
 
-    cleaned = this.injectSnapshotFields(cleaned, { baseline_accuracy_correct, baseline_accuracy_hallucinated, bound_at });
-
-    const skillName = normalizeSkillName(category);
-    const skillDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'skills');
+    const skillDir = join(this.projectRoot, '.gossip', 'agents', _agentId, 'skills');
     mkdirSync(skillDir, { recursive: true });
-    const skillPath = join(skillDir, `${skillName}.md`);
-    writeFileSync(skillPath, cleaned);
+    writeFileSync(meta.skillPath, cleaned);
 
-    return { path: skillPath, content: cleaned };
+    return { path: meta.skillPath, content: cleaned };
+  }
+
+  async generate(agentId: string, category: string): Promise<{ path: string; content: string }> {
+    const promptData = await this.buildPrompt(agentId, category);
+
+    const messages: LLMMessage[] = [
+      { role: 'system', content: promptData.system },
+      { role: 'user', content: promptData.user },
+    ];
+
+    const response = await this.llm.generate(messages, { temperature: 0.3 });
+    const content = response.text || '';
+
+    return this.saveFromRaw(agentId, category, content, promptData);
   }
 
   /**
