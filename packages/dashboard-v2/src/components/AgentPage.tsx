@@ -274,22 +274,26 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                   </button>
                   {isOpen && (
                     <div className="border-t border-border px-4 pb-3 pt-3">
+                      {/* Filter chips are neutral. They used to echo the
+                          finding colors (confirmed/disputed/unverified/unique),
+                          which collided visually with the actual count chips
+                          above — users couldn't tell "filter for disputed"
+                          from "there were 3 disputed findings". Matching the
+                          LogsPage filter pattern for consistency. */}
                       <div className="mb-3 flex gap-1.5">
-                        {(['all', 'confirmed', 'disputed', 'unverified', 'unique'] as const).map(f => {
-                          const styles: Record<string, { cls: string; active: string }> = {
-                            all: { cls: 'text-muted-foreground', active: 'text-foreground bg-muted' },
-                            confirmed: { cls: 'text-confirmed/60', active: 'text-confirmed bg-confirmed/10' },
-                            disputed: { cls: 'text-disputed/60', active: 'text-disputed bg-disputed/10' },
-                            unverified: { cls: 'text-unverified/60', active: 'text-unverified bg-unverified/10' },
-                            unique: { cls: 'text-unique/60', active: 'text-unique bg-unique/10' },
-                          };
-                          const st = styles[f];
-                          return (
-                            <button key={f} onClick={() => setRunFilter(f)}
-                              className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold transition ${runFilter === f ? st.active : st.cls} hover:opacity-80`}
-                            >{f.charAt(0).toUpperCase() + f.slice(1)}</button>
-                          );
-                        })}
+                        {(['all', 'confirmed', 'disputed', 'unverified', 'unique'] as const).map(f => (
+                          <button
+                            key={f}
+                            onClick={() => setRunFilter(f)}
+                            className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold transition ${
+                              runFilter === f
+                                ? 'text-foreground bg-muted'
+                                : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                          >
+                            {f.charAt(0).toUpperCase() + f.slice(1)}
+                          </button>
+                        ))}
                       </div>
                       {filteredSignals.length === 0 ? (
                         <div className="py-3 text-center text-xs text-muted-foreground">No findings match this filter.</div>

@@ -28,14 +28,19 @@ function inferType(memory: MemoryFile): string {
   return 'note';
 }
 
+// Neutral-first: only `session` and `skill` get color because they map to
+// meaningful quality signals (a session memory is a review artifact; a skill
+// memory is a capability delta). Everything else reads as neutral text so the
+// list stops looking like a bag of skittles. User feedback: "too colorful" —
+// type labels are text, they don't need color to be legible.
 const TYPE_COLORS: Record<string, string> = {
-  cognitive: 'text-primary bg-primary/10',
-  knowledge: 'text-blue-400 bg-blue-500/10',
+  cognitive: 'text-muted-foreground bg-muted/40',
+  knowledge: 'text-muted-foreground bg-muted/40',
   skill: 'text-confirmed bg-confirmed/10',
-  review: 'text-unique bg-unique/10',
-  task: 'text-unverified bg-unverified/10',
-  session: 'text-amber-400 bg-amber-500/10',
-  note: 'text-muted-foreground bg-muted/50',
+  review: 'text-muted-foreground bg-muted/40',
+  task: 'text-muted-foreground bg-muted/40',
+  session: 'text-primary bg-primary/10',
+  note: 'text-muted-foreground bg-muted/40',
 };
 
 const TYPE_LABEL: Record<string, string> = {

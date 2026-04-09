@@ -388,7 +388,7 @@ function FindingsPage({
     <>
       <div className="mb-6">
         <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Debates <span className="ml-2 text-primary">{consensus.runs.length}</span>
+          Debates <span className="ml-2 text-foreground">{consensus.runs.length}</span>
         </h1>
         <div className="mt-2 flex gap-4 font-mono text-[11px] text-muted-foreground">
           <span><span className="text-confirmed">{confirmedTotal}</span> confirmed</span>
