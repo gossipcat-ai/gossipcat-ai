@@ -492,7 +492,20 @@ export class PerformanceReader {
         reliability = 0.5 + (reliability - 0.5) * timeFreshness;
       }
 
-      // Per-category raw accuracy: correct / (correct + hallucinated)
+      // Per-category raw accuracy: correct / (correct + hallucinated).
+      //
+      // Minimum-N gate: categories with fewer than MIN_CATEGORY_N total signals
+      // are excluded from categoryAccuracy because `1/(1+0) = 100%` reads
+      // identically to `100/(100+0) = 100%` to a user glancing at a bar chart.
+      // A sparse category inflates the "gemini is 100% in trust_boundaries"
+      // story even when trust_boundaries has a single signal. Categories with
+      // too few samples are still exposed via the raw categoryCorrect /
+      // categoryHallucinated counters below, so the dashboard can render them
+      // dimmed or mark them as "sparse" rather than hide them silently.
+      //
+      // Peer metrics (uniqueness, impactScore) both apply `1 - exp(-N/10)`
+      // confidence gating — categoryAccuracy was the lone holdout.
+      const MIN_CATEGORY_N = 5;
       const categoryAccuracy: Record<string, number> = {};
       const allCategories = new Set([
         ...Object.keys(a.categoryCorrect),
@@ -501,7 +514,7 @@ export class PerformanceReader {
       for (const cat of allCategories) {
         const c = a.categoryCorrect[cat] ?? 0;
         const h = a.categoryHallucinated[cat] ?? 0;
-        if (c + h > 0) categoryAccuracy[cat] = c / (c + h);
+        if (c + h >= MIN_CATEGORY_N) categoryAccuracy[cat] = c / (c + h);
       }
 
       const consec = consecutiveFailures.get(id) || 0;

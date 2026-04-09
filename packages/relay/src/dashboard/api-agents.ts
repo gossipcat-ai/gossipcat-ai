@@ -186,6 +186,13 @@ export async function agentsHandler(
         // See performance-reader.ts:357 (increment) vs :496-505 (accuracy).
         categoryStrengths: score.categoryStrengths ?? {},
         categoryAccuracy: score.categoryAccuracy ?? {},
+        // Forward raw counts so the dashboard can render "100% (3/3)" and
+        // distinguish a sparse-but-clean category from a high-volume clean
+        // one. categoryAccuracy already drops categories with fewer than
+        // MIN_CATEGORY_N signals, but the counts let the UI surface them
+        // as dimmed "sparse" rows instead of hiding them silently.
+        categoryCorrect: score.categoryCorrect ?? {},
+        categoryHallucinated: score.categoryHallucinated ?? {},
       },
     };
   });

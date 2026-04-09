@@ -31,6 +31,13 @@
   --color-insight: #71717a;
   --color-text-dim: #666674;
 
+  /* Chart / dynamic-data palette — turquoise tones for bars, sparklines,
+     and activity graphs that don't carry finding semantics. Kept separate
+     from --color-primary (purple) which remains the UI chrome accent. */
+  --color-chart: #75dddd;
+  --color-chart-accent: #09bc8a;
+  --color-chart-deep: #508991;
+
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 

@@ -65,9 +65,10 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
   // Reverse so oldest is left, newest is right
   const ordered = [...signals].reverse();
 
-  // Summary counts row — lets users see the distribution without hovering
-  // every 1.5px bar. Counts are grouped by resolution bucket so the row
-  // mirrors the legend at the bottom.
+  // Summary counts row — computed from the fetched window only (not the full
+  // `total` population). The API hard-caps at limit=100, so with a 500-signal
+  // agent the window is only the most recent slice. Label explicitly says
+  // "Last N" so users don't divide counts by total and get a wrong ratio.
   const counts = {
     confirmed: 0,
     disputed: 0,
@@ -76,23 +77,33 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
   };
   for (const s of signals) {
     if (s.signal === 'agreement' || s.signal === 'consensus_verified') counts.confirmed++;
+    // The "disputed" bucket covers both disagreement AND hallucination_caught
+    // — both render as the same red `bg-disputed` color. Legend label below
+    // matches "Disputed" so the counts row and legend tell one story.
     else if (s.signal === 'disagreement' || s.signal === 'hallucination_caught') counts.disputed++;
     else if (s.signal === 'unique_confirmed' || s.signal === 'unique_unconfirmed' || s.signal === 'new_finding') counts.unique++;
     else if (s.signal === 'unverified') counts.unverified++;
   }
 
+  const windowSize = signals.length;
+  const isWindowed = total > windowSize;
+
   return (
     <div className="rounded-md border border-border/40 bg-card/80 px-4 py-3">
       <div className="mb-2 flex items-center justify-between">
-        <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-          Signal Timeline
-        </span>
+        <div className="flex items-baseline gap-2">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Signal Timeline
+          </span>
+          <span className="font-mono text-[9px] text-muted-foreground/50">
+            {isWindowed ? `last ${windowSize} of ${total}` : `${total} total`}
+          </span>
+        </div>
         <div className="flex items-center gap-3 font-mono text-[10px]">
           <span className="text-confirmed">{counts.confirmed} confirmed</span>
           {counts.disputed > 0 && <span className="text-disputed">{counts.disputed} disputed</span>}
           {counts.unique > 0 && <span className="text-unique">{counts.unique} unique</span>}
           {counts.unverified > 0 && <span className="text-unverified">{counts.unverified} unverified</span>}
-          <span className="text-muted-foreground/50">· {total} total</span>
         </div>
       </div>
       <div className="flex items-center gap-0.5">
@@ -106,11 +117,13 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
           />
         ))}
       </div>
-      {/* Legend */}
+      {/* Legend — "Disputed" covers disagreement + hallucination_caught; the
+          counts row above uses the same name so a red bar has exactly one
+          label throughout the component. */}
       <div className="mt-2 flex flex-wrap gap-3">
         {[
           { color: 'bg-confirmed', label: 'Confirmed' },
-          { color: 'bg-disputed', label: 'Hallucination' },
+          { color: 'bg-disputed', label: 'Disputed' },
           { color: 'bg-unique', label: 'Unique' },
           { color: 'bg-unverified', label: 'Unverified' },
         ].map((l) => (

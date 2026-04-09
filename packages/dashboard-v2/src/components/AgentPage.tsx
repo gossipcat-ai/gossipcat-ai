@@ -41,7 +41,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
 
   const metricBars = [
     { label: 'accuracy', value: s.accuracy, fill: s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed' },
-    { label: 'reliability', value: s.reliability, fill: 'bg-primary' },
+    { label: 'reliability', value: s.reliability, fill: 'bg-chart' },
     { label: 'unique', value: s.uniqueness, fill: 'bg-unique' },
     { label: 'impact', value: s.impactScore, fill: 'bg-[var(--color-impact)]' },
   ];
@@ -177,7 +177,12 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
             Category Strengths
           </h2>
-          <CategoryStrengths strengths={s.categoryStrengths} accuracy={s.categoryAccuracy} />
+          <CategoryStrengths
+            strengths={s.categoryStrengths}
+            accuracy={s.categoryAccuracy}
+            correctCounts={s.categoryCorrect}
+            hallucinatedCounts={s.categoryHallucinated}
+          />
         </div>
       </section>
 
