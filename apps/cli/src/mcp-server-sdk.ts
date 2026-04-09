@@ -1321,6 +1321,60 @@ server.tool(
   }
 );
 
+// ── Tool: guide — human-facing handbook reader ──────────────────────────
+// This is the human-visible counterpart to the LLM-facing handbook auto-load
+// in gossip_status(). Users call this explicitly when they want to READ the
+// handbook; gossip_status injects it invisibly for orchestrator context.
+// Different audiences, different delivery mechanisms — same source artifact.
+server.tool(
+  'gossip_guide',
+  'Show the gossipcat handbook for humans — architectural invariants, operator playbook, caveats, hallucination patterns, glossary. Call this when you want to READ the docs, not when you need LLM context. The LLM-facing auto-load lives in gossip_status().',
+  {},
+  async () => {
+    try {
+      const { readFileSync: rfG, existsSync: exG } = require('fs');
+      const { join: jG, dirname: dG } = require('path');
+      // Prefer the current project's customized handbook
+      const projectHandbook = jG(process.cwd(), 'docs', 'HANDBOOK.md');
+      if (exG(projectHandbook)) {
+        const body = rfG(projectHandbook, 'utf-8');
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `# Gossipcat Handbook (from ${projectHandbook})\n\n${body}`,
+          }],
+        };
+      }
+      // Fallback to the bundled default handbook shipped with gossipcat
+      // (resolved relative to the running MCP bundle)
+      const bundleRoot = dG(require.resolve('../../dist-mcp/mcp-server.js').replace(/\/dist-mcp\/mcp-server\.js$/, '/dist-mcp/mcp-server.js'));
+      const defaultHandbook = jG(bundleRoot, '..', 'docs', 'HANDBOOK.md');
+      if (exG(defaultHandbook)) {
+        const body = rfG(defaultHandbook, 'utf-8');
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `# Gossipcat Handbook (bundled default — your project has no docs/HANDBOOK.md yet)\n\n${body}`,
+          }],
+        };
+      }
+      return {
+        content: [{
+          type: 'text' as const,
+          text: 'No handbook found. Expected at docs/HANDBOOK.md in the current project or bundled with gossipcat. If you are inside a gossipcat project, run `gossip_setup` first.',
+        }],
+      };
+    } catch (err) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Error reading handbook: ${(err as Error).message}`,
+        }],
+      };
+    }
+  }
+);
+
 // ── Tool: update — check or apply gossipcat updates ──────────────────────
 server.tool(
   'gossip_update',
@@ -3162,6 +3216,7 @@ server.tool(
       { name: 'gossip_remember', desc: 'Search an agent\'s archived knowledge files by keyword query.' },
       { name: 'gossip_verify_memory', desc: 'On-demand staleness check for a memory file claim. Returns FRESH | STALE | CONTRADICTED | INCONCLUSIVE with file:line evidence.' },
       { name: 'gossip_tools', desc: 'List available tools (this command).' },
+      { name: 'gossip_guide', desc: 'Show the gossipcat handbook for humans — invariants, operator playbook, caveats, hallucination patterns, glossary. Read the docs, not LLM context.' },
       { name: 'gossip_progress', desc: 'Show active task progress and consensus phase. No params.' },
       { name: 'gossip_format', desc: 'Return the CONSENSUS_OUTPUT_FORMAT block to paste into ad-hoc Agent() prompts so native subagents emit parseable <agent_finding> tags.' },
       { name: 'gossip_bug_feedback', desc: 'File a GitHub issue on the gossipcat repo from an in-session bug report. Dedupes against open issues.' },
