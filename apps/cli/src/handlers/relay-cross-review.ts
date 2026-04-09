@@ -124,6 +124,10 @@ export async function handleRelayCrossReview(
   process.stderr.write(`[gossipcat] 📨 Cross-review received from ${agent_id}. Remaining: ${round.pendingNativeAgents.size}\n`);
 
   // Parse the cross-review response (parseCrossReviewResponse is stateless, llm not used)
+  let parsedCount = 0;
+  let acceptedCount = 0;
+  const rejectedPeerIds = new Set<string>();
+  let parseError: string | null = null;
   try {
     const { ConsensusEngine } = await import('@gossip/orchestrator');
     const parseLlm = ctx.mainAgent.getLlm();
@@ -134,16 +138,60 @@ export async function handleRelayCrossReview(
       projectRoot: process.cwd(),
     });
     const entries = engine.parseCrossReviewResponse(agent_id, result, 50);
+    parsedCount = entries.length;
     // Filter to round members only — prevents fabricated peerAgentId targeting agents outside the round
     const validPeerIds = new Set(round.allResults.map((r: any) => r.agentId));
-    const filtered = entries.filter(e => e.peerAgentId !== agent_id && validPeerIds.has(e.peerAgentId));
+    const filtered = entries.filter(e => {
+      const selfReview = e.peerAgentId === agent_id;
+      const unknownPeer = !validPeerIds.has(e.peerAgentId);
+      if (selfReview || unknownPeer) {
+        if (e.peerAgentId) rejectedPeerIds.add(e.peerAgentId);
+        return false;
+      }
+      return true;
+    });
+    acceptedCount = filtered.length;
     round.nativeCrossReviewEntries.push(...filtered);
+    if (parsedCount > 0 && acceptedCount === 0) {
+      process.stderr.write(
+        `[gossipcat] ⚠️  Cross-review from ${agent_id}: all ${parsedCount} entries rejected. ` +
+        `Bad peer IDs: [${[...rejectedPeerIds].join(', ')}]. ` +
+        `Valid round members: [${[...validPeerIds].join(', ')}]. ` +
+        `Expected findingId format "<peerAgentId>:f<N>".\n`
+      );
+    } else if (parsedCount > acceptedCount) {
+      process.stderr.write(
+        `[gossipcat] ⚠️  Cross-review from ${agent_id}: ${parsedCount - acceptedCount}/${parsedCount} entries rejected ` +
+        `(bad peer IDs: [${[...rejectedPeerIds].join(', ')}]).\n`
+      );
+    }
   } catch (err) {
-    process.stderr.write(`[gossipcat] Failed to parse cross-review from ${agent_id}: ${(err as Error).message}\n`);
+    parseError = (err as Error).message;
+    process.stderr.write(`[gossipcat] Failed to parse cross-review from ${agent_id}: ${parseError}\n`);
   }
 
   // Persist after each arrival so /mcp reconnect doesn't lose partial cross-reviews
   persistPendingConsensus();
+
+  // Build a diagnostic line so the orchestrator can see when entries were silently
+  // dropped by the peer-ID filter — previously this was stderr-only, so malformed
+  // findingIds like "cr:f1" / "sa:f1" would vanish without any visible signal.
+  const validPeerList = [...new Set(round.allResults.map((r: any) => r.agentId))].join(', ');
+  let diagnostic = '';
+  if (parseError) {
+    diagnostic = `\n⚠️  Parse error: ${parseError}`;
+  } else if (parsedCount > 0 && acceptedCount === 0) {
+    diagnostic =
+      `\n⚠️  All ${parsedCount} entries were REJECTED. Bad peer IDs: [${[...rejectedPeerIds].join(', ')}]. ` +
+      `Valid round members: [${validPeerList}]. ` +
+      `Expected findingId format "<peerAgentId>:f<N>" using exact agent IDs from the round.`;
+  } else if (parsedCount > acceptedCount) {
+    diagnostic =
+      `\n⚠️  ${parsedCount - acceptedCount}/${parsedCount} entries rejected (bad peer IDs: [${[...rejectedPeerIds].join(', ')}]). ` +
+      `Valid round members: [${validPeerList}].`;
+  } else if (parsedCount > 0) {
+    diagnostic = `\n✅ ${acceptedCount}/${parsedCount} entries accepted.`;
+  }
 
   // Check if all native agents have responded
   if (round.pendingNativeAgents.size > 0) {
@@ -157,7 +205,7 @@ export async function handleRelayCrossReview(
     return {
       content: [{
         type: 'text' as const,
-        text: `Cross-review from ${agent_id} received. Waiting for ${round.pendingNativeAgents.size} more agent(s): ${[...round.pendingNativeAgents].join(', ')}`,
+        text: `Cross-review from ${agent_id} received. Waiting for ${round.pendingNativeAgents.size} more agent(s): ${[...round.pendingNativeAgents].join(', ')}${diagnostic}`,
       }],
     };
   }
