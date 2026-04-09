@@ -1289,7 +1289,35 @@ server.tool(
       }
     } catch { /* best-effort — missing session context is not fatal */ }
 
-    return { content: [{ type: 'text' as const, text: lines.join('\n') + '\n\n' + agentSections.join('\n') + sessionContextSection }] };
+    // Project handbook — load docs/HANDBOOK.md if present so every new session
+    // inherits the operator wisdom (architectural invariants, caveats, lessons,
+    // hallucination patterns to watch for). This is how earned wisdom transfers
+    // across sessions and installations without living only in chat history.
+    let handbookSection = '';
+    try {
+      const { readFileSync: rfHB, statSync: stHB } = require('fs');
+      const { join: jHB } = require('path');
+      const handbookPath = jHB(process.cwd(), 'docs', 'HANDBOOK.md');
+      const stat = stHB(handbookPath);
+      // Cap at 24KB of handbook content so the status response doesn't balloon
+      // beyond the context window on very large handbooks. If capped, append a
+      // pointer so the orchestrator knows to read the full file manually.
+      const HANDBOOK_CAP_BYTES = 24 * 1024;
+      let body = rfHB(handbookPath, 'utf-8');
+      const truncated = body.length > HANDBOOK_CAP_BYTES;
+      if (truncated) {
+        body = body.slice(0, HANDBOOK_CAP_BYTES);
+      }
+      handbookSection =
+        '\n─────────────────────────────────\n' +
+        '## Project Handbook (auto-loaded from docs/HANDBOOK.md)\n\n' +
+        body.trim() +
+        (truncated
+          ? `\n\n[handbook truncated at ${HANDBOOK_CAP_BYTES / 1024}KB — full file at docs/HANDBOOK.md, ${stat.size} bytes total]`
+          : '');
+    } catch { /* no handbook present — skip silently, this is optional infrastructure */ }
+
+    return { content: [{ type: 'text' as const, text: lines.join('\n') + '\n\n' + agentSections.join('\n') + sessionContextSection + handbookSection }] };
   }
 );
 
