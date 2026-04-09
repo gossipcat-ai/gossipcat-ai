@@ -58,6 +58,10 @@ jobs:
         run: npx tsc --noEmit
         working-directory: packages/orchestrator
 
+      # Known-broken suites are excluded via jest.config.base.js
+      # (KNOWN_BROKEN_SUITES) so local dev and CI share the same source of
+      # truth. Set RUN_KNOWN_BROKEN=1 locally when you're actively fixing
+      # one of them. See the config file for the list and debt tracking.
       - name: Run tests
         run: npm test -- --ci --reporters=default
 
