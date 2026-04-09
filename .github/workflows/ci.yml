@@ -30,12 +30,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Build workspace packages first so downstream typecheck / test / bundle
-      # steps can resolve @gossip/* imports against compiled dist/ output.
-      # Locally this works because prior builds leave dist/ around; on a cold
-      # CI runner we must build explicitly.
-      - name: Build workspace packages
-        run: npm run build --workspaces --if-present
+      # Build workspace packages in topological order so downstream
+      # typecheck / test / bundle steps can resolve @gossip/* imports
+      # against compiled dist/ output. `npm run build --workspaces` does
+      # NOT respect dep order — it walks the workspaces array as-listed,
+      # which produces build failures when a consumer builds before its
+      # dependency. Explicit order is the simplest correct fix.
+      #
+      # Topology (see each package.json @gossip/* deps):
+      #   types  →  client  →  tools  →  orchestrator  →  relay  →  cli
+      - name: Build @gossip/types
+        run: npm run build -w @gossip/types
+      - name: Build @gossip/client
+        run: npm run build -w @gossip/client
+      - name: Build @gossip/tools
+        run: npm run build -w @gossip/tools
+      - name: Build @gossip/orchestrator
+        run: npm run build -w @gossip/orchestrator
+      - name: Build @gossip/relay
+        run: npm run build -w @gossip/relay
 
       - name: Typecheck — apps/cli
         run: npx tsc --noEmit
