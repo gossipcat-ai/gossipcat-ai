@@ -2,49 +2,34 @@
 @import "tailwindcss";
 
 @theme {
-  /* ──────────────────────────────────────────────────────────────────────
-   * Turquoise palette — 75dddd / 508991 / 172a3a / 004346 / 09bc8a
-   *
-   * 172a3a  dark navy          → background
-   * 004346  deep teal          → cards/surfaces
-   * 508991  muted teal         → borders, muted text
-   * 75dddd  light turquoise    → primary accent (replaces purple)
-   * 09bc8a  bright mint        → secondary accent / success pop
-   *
-   * Finding colors (confirmed/disputed/unverified/unique/impact/insight)
-   * intentionally KEPT because the user asked to leave finding-count
-   * colors alone. Everything else moves to turquoise tones so the UI
-   * feels less rainbow-y.
-   * ────────────────────────────────────────────────────────────────────── */
-  --color-background: #172a3a;
-  --color-foreground: #eaf6f6;
-  --color-card: #004346;
-  --color-card-foreground: #eaf6f6;
-  --color-muted: #0d2030;
-  --color-muted-foreground: #75dddd99; /* soft turquoise at ~60% alpha */
-  --color-border: rgba(117, 221, 221, 0.14);
-  --color-input: rgba(117, 221, 221, 0.14);
-  --color-ring: #75dddd;
-  --color-primary: #75dddd;
-  --color-primary-foreground: #172a3a;
-  --color-secondary: #004346;
-  --color-secondary-foreground: #eaf6f6;
-  --color-accent: #09bc8a;
-  --color-accent-foreground: #172a3a;
+  --color-background: #0a0a0f;
+  --color-foreground: #f0f0f5;
+  --color-card: #13131a;
+  --color-card-foreground: #f0f0f5;
+  --color-muted: #1c1c26;
+  --color-muted-foreground: #9898a8;
+  --color-border: rgba(139, 92, 246, 0.12);
+  --color-input: rgba(139, 92, 246, 0.12);
+  --color-ring: #8b5cf6;
+  --color-primary: #8b5cf6;
+  --color-primary-foreground: #fafafa;
+  --color-secondary: #1c1c26;
+  --color-secondary-foreground: #f0f0f5;
+  --color-accent: #1e1e30;
+  --color-accent-foreground: #f0f0f5;
   --color-destructive: #f87171;
   --color-destructive-foreground: #fafafa;
 
-  /* Semantic finding colors — KEEP. These drive count chips and bar tones
-     that users rely on for quick scanning. Don't change without approval. */
+  /* Semantic finding colors */
   --color-confirmed: #34d399;
   --color-disputed: #f87171;
   --color-unverified: #fbbf24;
   --color-unique: #c084fc;
 
-  /* v3 additions — KEEP. Same reasoning as finding colors. */
+  /* v3 additions */
   --color-impact: #60a5fa;
   --color-insight: #71717a;
-  --color-text-dim: #508991;
+  --color-text-dim: #666674;
 
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -134,7 +119,7 @@ html::after {
   position: absolute;
   inset: -4px;
   border-radius: 16px;
-  background: radial-gradient(ellipse at center, rgba(117,221,221,0.18) 0%, transparent 70%);
+  background: radial-gradient(ellipse at center, rgba(139,92,246,0.15) 0%, transparent 70%);
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -155,14 +140,14 @@ html::after {
 .crt-logo:hover .crt-logo-img,
 .crt-logo--glitch .crt-logo-img {
   animation: crt-flicker 0.6s step-end infinite;
-  filter: brightness(1.25) saturate(1.1) drop-shadow(0 0 32px rgba(117,221,221,0.7));
+  filter: brightness(1.25) saturate(1.1) drop-shadow(0 0 32px rgba(139,92,246,0.7));
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(117, 221, 221, 0.18); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(117, 221, 221, 0.28); }
+::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, 0.25); }
 
 /* ───── Tooltip system (CSS-only, data-tooltip="text") ───── */
 [data-tooltip] {
@@ -176,7 +161,7 @@ html::after {
   transform: translateX(-50%) translateY(-6px);
   padding: 8px 12px;
   background: rgba(14, 14, 20, 0.98);
-  border: 1px solid rgba(117, 221, 221, 0.28);
+  border: 1px solid rgba(139, 92, 246, 0.25);
   border-radius: 6px;
   font-family: 'Inter', sans-serif;
   font-size: 11px;
@@ -289,8 +274,8 @@ html::after {
 .task-md code.md-inline-code {
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  background: rgba(117, 221, 221, 0.14);
-  border: 1px solid rgba(117, 221, 221, 0.18);
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.15);
   border-radius: 3px;
   padding: 0.1em 0.35em;
   color: var(--color-foreground);
@@ -300,7 +285,7 @@ html::after {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(117, 221, 221, 0.14);
+  border: 1px solid rgba(139, 92, 246, 0.12);
   border-radius: 5px;
   padding: 0.6rem 0.75rem;
   margin: 0.5rem 0;

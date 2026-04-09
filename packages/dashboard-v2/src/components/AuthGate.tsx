@@ -27,7 +27,7 @@ export function AuthGate({ onLogin, error }: AuthGateProps) {
           <img
             src="/dashboard/assets/gossip-mini.png"
             alt="gossipcat"
-            className="crt-logo-img h-56 w-56 object-contain drop-shadow-[0_0_28px_rgba(117,221,221,0.45)]"
+            className="crt-logo-img h-56 w-56 object-contain drop-shadow-[0_0_28px_rgba(139,92,246,0.45)]"
           />
         </div>
 
@@ -37,7 +37,7 @@ export function AuthGate({ onLogin, error }: AuthGateProps) {
           style={{
             fontFamily: "'Space Grotesk', system-ui, sans-serif",
             letterSpacing: '-0.02em',
-            textShadow: '0 0 24px rgba(117,221,221,0.4)',
+            textShadow: '0 0 24px rgba(139,92,246,0.4)',
           }}
         >
           Gossipcat
