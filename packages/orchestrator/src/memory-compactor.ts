@@ -14,6 +14,9 @@ export class MemoryCompactor {
   }
 
   compactIfNeeded(agentId: string, maxEntries: number = 20): { archived: number; dropped?: number; message?: string } {
+    if (!agentId || agentId === '.' || agentId === '..' || agentId.includes('/') || agentId.includes('\\') || agentId.includes('\0')) {
+      return { archived: 0, message: `Invalid agentId: ${agentId.slice(0, 50)}` };
+    }
     const memDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory');
     const tasksPath = join(memDir, 'tasks.jsonl');
     const lockPath = join(memDir, 'tasks.jsonl.lock');

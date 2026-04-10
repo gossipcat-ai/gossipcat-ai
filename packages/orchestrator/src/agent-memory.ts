@@ -5,6 +5,7 @@ export class AgentMemoryReader {
   constructor(private projectRoot: string) {}
 
   loadMemory(agentId: string, taskText: string): string | null {
+    if (!agentId || /[/\\.\0]/.test(agentId)) return null;
     const memDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory');
     const indexPath = join(memDir, 'MEMORY.md');
 
