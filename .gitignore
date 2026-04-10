@@ -20,6 +20,8 @@ keys.enc
 .claude/agents/
 .claude/settings.local.json
 docs/superpowers/
+docs/reddit-*
+docs/specs/
 skills-lock.json
 *.tsbuildinfo
 .DS_Store
