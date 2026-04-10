@@ -3457,10 +3457,9 @@ async function startHttpMcpTransport(): Promise<void> {
   // collided across parallel Claude Code instances on the same machine —
   // matches the fix already applied to the relay port.
   const httpPick = await pickStickyPort('GOSSIPCAT_HTTP_PORT', HTTP_MCP_STICKY_FILE);
-  // Legacy default: if nothing was provided and we had no sticky file, prefer
-  // 24421 once so existing clients with that port in their config keep working.
-  // If 24421 is already busy we'll still fall through to port 0 via EADDRINUSE.
-  const port = httpPick.source === 'auto' ? 24421 : httpPick.port;
+  // OS-assigned port when no env var or sticky file — matches relay port behavior.
+  // Sticky file makes it stable across reconnects; no need for a hardcoded default.
+  const port = httpPick.port;
   ctx.httpMcpPortSource = httpPick.source;
   const token = process.env.GOSSIPCAT_HTTP_TOKEN ?? '';
   const bindHost = (process.env.GOSSIPCAT_HTTP_BIND === '0.0.0.0' && token) ? '0.0.0.0' : '127.0.0.1';
