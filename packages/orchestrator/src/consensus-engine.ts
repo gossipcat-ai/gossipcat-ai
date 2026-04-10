@@ -597,6 +597,7 @@ Return only valid JSON.`;
     };
 
     // (b) Apply cross-review entries
+    let newFindingIdx = 0;
     const crossReviewTimestamp = new Date().toISOString();
     for (const entry of crossReviewEntries) {
       const now = crossReviewTimestamp;
@@ -605,6 +606,7 @@ Return only valid JSON.`;
         // Sanitize before storage — strip XML-like tags that could be re-injected as instructions
         // in future sessions via gossip_remember() or session context loading.
         const sanitize = (t: string) => t.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
+        const newFindingId = `${consensusId}:${entry.agentId}:n${++newFindingIdx}`;
         newFindings.push({
           agentId: entry.agentId,
           finding: sanitize(entry.finding),
@@ -619,6 +621,7 @@ Return only valid JSON.`;
           agentId: entry.agentId,
           evidence: capEvidence(entry.evidence),
           timestamp: now,
+          findingId: newFindingId,
         });
         continue;
       }
@@ -680,10 +683,11 @@ Return only valid JSON.`;
               category: f.category,
             });
           } else {
+            const sanitizeEvidence = (t: string) => t.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
             f.disputedBy.push({
               agentId: entry.agentId,
-              reason: entry.evidence,
-              evidence: entry.evidence,
+              reason: sanitizeEvidence(entry.evidence),
+              evidence: sanitizeEvidence(entry.evidence),
             });
             signals.push({
               type: 'consensus',
