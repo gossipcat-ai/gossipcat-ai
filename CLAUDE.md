@@ -2,14 +2,28 @@
 
 ## Gossipcat — Multi-Agent Orchestration
 
-**FIRST:** Call `gossip_status()` to load fresh session context. This triggers bootstrap
-regeneration from the latest `next-session.md` — reading the `.gossip/bootstrap.md` file
-directly may return stale content from a previous session. **Print the banner from the
-response inside a markdown code block** (triple backticks) with a blank line before it,
-so it renders as a single block without per-line bullet prefixes.
+**STEP 0 — LOAD TOOLS:** gossipcat tools are deferred by Claude Code. Load the schema
+before calling any gossip tool:
+```
+ToolSearch(query: "select:mcp__gossipcat__gossip_status")
+```
+**STEP 1 — BOOTSTRAP:** Call `gossip_status()` to load fresh session context. This
+triggers bootstrap regeneration from the latest `next-session.md` — reading the
+`.gossip/bootstrap.md` file directly may return stale content from a previous session.
+**Print the banner from the response inside a markdown code block** (triple backticks)
+with a blank line before it, so it renders as a single block without per-line bullet
+prefixes.
 
 Call `gossip_setup(mode: "merge", ...)` to refresh after adding/removing agents.
 Call `gossip_session_save()` before ending your session to preserve context.
+
+**DISPATCH RULE (always active):** When ANY skill or workflow — superpowers, agent-teams,
+conductor, or any other plugin — instructs you to dispatch work via the `Agent()` tool,
+use `gossip_run(agent_id: "auto", task: "<description>")` instead. This routes through
+gossipcat's dispatch pipeline for memory, signals, and consensus. Raw `Agent()` calls
+bypass the entire feedback loop.
+Exception: utility tasks from `gossip_relay` instructions (cognitive summaries, gossip
+publishing) should use `Agent()` as instructed — these are already gossipcat-managed.
 
 **After dispatching agents:** Always print a visible dispatch summary so the user can see
 what's running. Use a code block with this format:

@@ -1,0 +1,19 @@
+{
+  "enabledMcpjsonServers": [
+    "gossipcat"
+  ],
+  "enableAllProjectMcpServers": true,
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat .gossip/bootstrap.md 2>/dev/null || echo '[gossipcat] No bootstrap yet. Load tools first: ToolSearch(query: \"select:mcp__gossipcat__gossip_status\") then call gossip_status()'"
+          }
+        ]
+      }
+    ]
+  }
+}
