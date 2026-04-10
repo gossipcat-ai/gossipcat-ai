@@ -1,4 +1,4 @@
-import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
+import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, openSync, closeSync, constants } from 'fs';
 import { join } from 'path';
 import { TaskMemoryEntry } from './types';
 import { MemoryCompactor } from './memory-compactor';
@@ -27,6 +27,18 @@ function truncateStartAndEnd(text: string, maxLen: number): string {
   return `${text.slice(0, head)}\n\n[... truncated ${text.length - maxLen} chars ...]\n\n${text.slice(-tail)}`;
 }
 
+/** Reject agentIds that could escape the .gossip/agents/ directory tree */
+function validateAgentId(agentId: string): void {
+  if (!agentId || agentId.includes('/') || agentId.includes('\\') || agentId.includes('..') || agentId.includes('\0')) {
+    throw new Error(`Invalid agentId: ${agentId.slice(0, 50)} — must not contain path separators`);
+  }
+}
+
+/** Strip path separators from taskId for safe use in filenames */
+function sanitizeTaskId(taskId: string): string {
+  return taskId.replace(/[/\\:*?"<>|\0]/g, '_');
+}
+
 export class MemoryWriter {
   private summaryLlm: ILLMProvider | null = null;
 
@@ -38,6 +50,7 @@ export class MemoryWriter {
   }
 
   private getMemDir(agentId: string): string {
+    validateAgentId(agentId);
     return join(this.projectRoot, '.gossip', 'agents', agentId, 'memory');
   }
 
@@ -105,7 +118,7 @@ export class MemoryWriter {
     // Timestamp prefix for chronological ordering + taskId for uniqueness
     const now = new Date();
     const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const filename = `${timestamp}-${data.taskId}.md`;
+    const filename = `${timestamp}-${sanitizeTaskId(data.taskId)}.md`;
     const today = now.toISOString().split('T')[0];
 
     // Warmth-aware pruning — evict lowest-warmth files, not just oldest
@@ -169,7 +182,7 @@ export class MemoryWriter {
     const messages: LLMMessage[] = [
       {
         role: 'system',
-        content: `You are writing a memory entry for an AI agent named "${agentId}". This entry will be loaded into the agent's context on future tasks to help it remember what it learned.
+        content: `You are writing a memory entry for an AI agent named "${sanitizeYamlValue(agentId)}". This entry will be loaded into the agent's context on future tasks to help it remember what it learned.
 
 Write in second person ("You reviewed...", "You found..."). Be specific and actionable. Focus on:
 1. What was the key finding or outcome?
@@ -800,16 +813,22 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
 
     // Apply adjustments to tasks.jsonl for each agent
     for (const [agentId, taskAdjustments] of adjustments) {
+      try { validateAgentId(agentId); } catch { continue; }
       const memDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory');
       const tasksPath = join(memDir, 'tasks.jsonl');
       const lockPath = join(memDir, 'tasks.jsonl.lock');
 
       if (!existsSync(tasksPath)) continue;
-      if (existsSync(lockPath)) continue; // locked by compactor, skip
+
+      // Atomic lock acquisition (same O_EXCL pattern as MemoryCompactor)
+      let fd: number;
+      try {
+        fd = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);
+        writeFileSync(fd, `${Date.now()}`);
+        closeSync(fd);
+      } catch { continue; } // lock held by compactor or another writer, skip
 
       try {
-        // Acquire lock to prevent race with concurrent signal updates or compaction
-        writeFileSync(lockPath, `${Date.now()}`);
 
         const lines = readFileSync(tasksPath, 'utf-8').trim().split('\n').filter(Boolean);
         let modified = false;
