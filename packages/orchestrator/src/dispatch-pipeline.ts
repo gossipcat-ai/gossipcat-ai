@@ -28,7 +28,7 @@ import { TaskStreamEvent, TaskStreamEventType } from './task-stream';
 import { ConsensusCoordinator } from './consensus-coordinator';
 import { SessionContext } from './session-context';
 
-const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
+import { gossipLog as log } from './log';
 
 export interface SkillGapSuggestionResult {
   agentId: string;
@@ -182,7 +182,7 @@ export class DispatchPipeline {
     const skillResult = loadSkills(agentId, agentSkills, this.projectRoot, this.skillIndex ?? undefined, task);
     const skills = skillResult.content;
     if (skillResult.dropped.length > 0) {
-      process.stderr.write(`[gossipcat] Dropped ${skillResult.dropped.length} contextual skill(s) for ${agentId}: ${skillResult.dropped.join(', ')}\n`);
+      log(`Dropped ${skillResult.dropped.length} contextual skill(s) for ${agentId}: ${skillResult.dropped.join(', ')}`);
     }
     // Track contextual skill activations for lifecycle management
     if (this.skillCounters && this.skillIndex) {
@@ -318,7 +318,7 @@ export class DispatchPipeline {
             // (mirroring native-tasks.ts:262) is the next-session implementation task.
             try {
               const elapsedMs = (entry.completedAt ?? Date.now()) - entry.startedAt;
-              process.stderr.write(`[gossipcat] ✅ relay ← ${entry.agentId} [${entry.id}] OK (${(elapsedMs / 1000).toFixed(1)}s, ${(event.payload.result || '').length} chars)\n`);
+              log(`✅ relay ← ${entry.agentId} [${entry.id}] OK (${(elapsedMs / 1000).toFixed(1)}s, ${(event.payload.result || '').length} chars)`);
               appendFileSync(join(this.projectRoot, '.gossip', 'task-graph.jsonl'), JSON.stringify({
                 type: 'task.completed',
                 taskId: entry.id,
@@ -341,7 +341,7 @@ export class DispatchPipeline {
             // errors in async dispatch were the diagnostic blindness that ate ~45min of session 2026-04-07.
             try {
               const elapsedMs = (entry.completedAt ?? Date.now()) - entry.startedAt;
-              process.stderr.write(`[gossipcat] ❌ relay ← ${entry.agentId} [${entry.id}] FAILED (${(elapsedMs / 1000).toFixed(1)}s) — ${event.payload.error}\n`);
+              log(`❌ relay ← ${entry.agentId} [${entry.id}] FAILED (${(elapsedMs / 1000).toFixed(1)}s) — ${event.payload.error}`);
               appendFileSync(join(this.projectRoot, '.gossip', 'task-graph.jsonl'), JSON.stringify({
                 type: 'task.failed',
                 taskId: entry.id,
@@ -767,7 +767,7 @@ export class DispatchPipeline {
       if (!this.bootWarningShown) {
         const warning = this.overlapDetector.formatWarning(overlapResult);
         if (warning) {
-          process.stderr.write(`[gossipcat] ⚠️  Skill overlap detected:\n  ${warning}\n`);
+          log(`⚠️  Skill overlap detected:\n  ${warning}`);
         }
         this.bootWarningShown = true;
       }
@@ -824,7 +824,7 @@ export class DispatchPipeline {
                     remainingSiblings: remaining.map(ac => ({
                       agentId: ac.id, preset: ac.preset || 'custom', skills: ac.skills,
                     })),
-                  }).catch(err => process.stderr.write(`[gossipcat] Gossip: ${(err as Error).message}\n`));
+                  }).catch(err => log(`Gossip: ${(err as Error).message}`));
                 }
               }).catch(() => {});
             }

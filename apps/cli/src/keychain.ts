@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from 'crypto';
 
-const SERVICE_NAME = 'gossip-mesh';
+const DEFAULT_SERVICE_NAME = 'gossip-mesh';
 const VALID_PROVIDERS = /^[a-zA-Z0-9_-]{1,32}$/;
 const ENCRYPTED_FILE = '.gossip/keys.enc';
 const ALGO = 'aes-256-gcm';
@@ -12,8 +12,10 @@ const ALGO = 'aes-256-gcm';
 export class Keychain {
   private inMemoryStore: Map<string, string> = new Map();
   private keychainAvailable: boolean;
+  private readonly serviceName: string;
 
-  constructor() {
+  constructor(serviceName?: string) {
+    this.serviceName = serviceName ?? DEFAULT_SERVICE_NAME;
     this.keychainAvailable = this.isKeychainAvailable();
 
     if (!this.keychainAvailable) {
@@ -47,7 +49,7 @@ export class Keychain {
   }
 
   private deriveKey(salt: Buffer): Buffer {
-    const seed = `${SERVICE_NAME}:${hostname()}:${userInfo().username}`;
+    const seed = `${this.serviceName}:${hostname()}:${userInfo().username}`;
     // PBKDF2 with random salt — resistant to offline brute-force on a stolen keys.enc
     return pbkdf2Sync(seed, salt, 600_000, 32, 'sha256');
   }
@@ -123,12 +125,12 @@ export class Keychain {
     this.validateProvider(provider);
     if (platform() === 'darwin') {
       return execFileSync('security', [
-        'find-generic-password', '-s', SERVICE_NAME, '-a', provider, '-w'
+        'find-generic-password', '-s', this.serviceName, '-a', provider, '-w'
       ], { stdio: 'pipe' }).toString().trim();
     }
     if (platform() === 'linux') {
       return execFileSync('secret-tool', [
-        'lookup', 'service', SERVICE_NAME, 'provider', provider
+        'lookup', 'service', this.serviceName, 'provider', provider
       ], { stdio: 'pipe' }).toString().trim();
     }
     throw new Error('Unsupported platform');
@@ -139,17 +141,17 @@ export class Keychain {
     if (platform() === 'darwin') {
       try {
         execFileSync('security', [
-          'delete-generic-password', '-s', SERVICE_NAME, '-a', provider
+          'delete-generic-password', '-s', this.serviceName, '-a', provider
         ], { stdio: 'pipe' });
       } catch { /* doesn't exist yet */ }
       execFileSync('security', [
-        'add-generic-password', '-s', SERVICE_NAME, '-a', provider, '-w', key
+        'add-generic-password', '-s', this.serviceName, '-a', provider, '-w', key
       ], { stdio: 'pipe' });
       return;
     }
     if (platform() === 'linux') {
       execFileSync('secret-tool', [
-        'store', '--label', `Gossip Mesh ${provider}`, 'service', SERVICE_NAME, 'provider', provider
+        'store', '--label', `Gossip Mesh ${provider}`, 'service', this.serviceName, 'provider', provider
       ], { input: key, stdio: ['pipe', 'pipe', 'pipe'] });
       return;
     }

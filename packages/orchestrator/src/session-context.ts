@@ -4,7 +4,7 @@ import { SessionGossipEntry, PlanState } from './types';
 import { ILLMProvider } from './llm-client';
 import { LLMMessage } from '@gossip/types';
 
-const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
+import { gossipLog as log } from './log';
 
 export interface SessionContextConfig {
   llm: ILLMProvider | null;

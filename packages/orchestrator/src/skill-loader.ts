@@ -3,6 +3,7 @@ import { resolve, sep } from 'path';
 import type { SkillIndex } from './skill-index';
 import { parseSkillFrontmatter } from './skill-parser';
 import { normalizeSkillName } from './skill-name';
+import { gossipLog, log as _log } from './log';
 
 const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
@@ -63,12 +64,12 @@ export function loadSkills(agentId: string, skills: string[], projectRoot: strin
     // has marked as harmful or silent would re-pollute the forward pass.
     const frontmatterStatus = parseSkillFrontmatter(content)?.status;
     if (frontmatterStatus === 'failed' || frontmatterStatus === 'silent_skill') {
-      process.stderr.write(`[gossipcat] Skipping ${frontmatterStatus} skill ${agentId}/${skill} from injection\n`);
+      gossipLog(`Skipping ${frontmatterStatus} skill ${agentId}/${skill} from injection`);
       dropped.push(skill);
       continue;
     }
     if (frontmatterStatus === 'flagged_for_manual_review') {
-      process.stderr.write(`[gossipcat] Injecting flagged_for_manual_review skill ${agentId}/${skill} — manual review recommended\n`);
+      gossipLog(`Injecting flagged_for_manual_review skill ${agentId}/${skill} — manual review recommended`);
     }
 
     const mode = index?.getSkillMode(agentId, skill) ?? 'permanent';
@@ -161,7 +162,7 @@ function getKeywords(content: string, skillName: string): string[] {
   // virtually unreachable for contextual skills, so warn to surface broken or
   // missing frontmatter that would otherwise silently fail to activate.
   // Per bench review finding 12827629-fa9a4660:f2.
-  process.stderr.write(`[skill-loader] WARNING: skill '${skillName}' has no keywords/category frontmatter — contextual activation will fail (using filename fallback)\n`);
+  _log('skill-loader', `WARNING: skill '${skillName}' has no keywords/category frontmatter — contextual activation will fail (using filename fallback)`);
   return [skillName.replace(/-/g, ' ')];
 }
 
@@ -193,9 +194,7 @@ function resolveSkill(agentId: string, skill: string, projectRoot: string): stri
       try {
         return readFileSync(candidate, 'utf-8');
       } catch (err: any) {
-        process.stderr.write(
-          `[skill-loader] Failed to read skill file ${candidate}: ${err?.message ?? err}\n`,
-        );
+        _log('skill-loader', `Failed to read skill file ${candidate}: ${err?.message ?? err}`);
         continue;
       }
     }

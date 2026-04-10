@@ -8,7 +8,7 @@ import { AgentConfig, TaskEntry } from './types';
 import { GossipPublisher } from './gossip-publisher';
 import { extractCategories } from './category-extractor';
 
-const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
+import { gossipLog as log } from './log';
 
 export interface ConsensusCoordinatorConfig {
   llm: ILLMProvider | null;
@@ -178,7 +178,7 @@ export class ConsensusCoordinator {
 
       return consensusReport;
     } catch (err) {
-      process.stderr.write(`[gossipcat] Consensus failed: ${(err as Error).message}\n`);
+      log(`Consensus failed: ${(err as Error).message}`);
       return undefined;
     } finally {
       this.currentPhase = 'idle';

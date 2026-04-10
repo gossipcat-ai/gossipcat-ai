@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { ToolDefinition, LLMMessage } from '@gossip/types';
 import { LLMResponse } from './types';
+import { log as _log } from './log';
 
 // ─── 503 Retry Helper ───────────────────────────────────────────────────────
 
@@ -46,7 +47,7 @@ async function fetchWithRetry503(
   const seconds = retryAfter ? Number(retryAfter) : NaN;
   const retryMs = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, 30_000) : 5_000;
 
-  process.stderr.write(`[${providerName}] 503 service unavailable — retrying once after ${Math.round(retryMs / 1000)}s\n`);
+  _log(providerName, `503 service unavailable — retrying once after ${Math.round(retryMs / 1000)}s`);
   await new Promise(r => setTimeout(r, retryMs));
 
   // Second attempt. If it also returns 503, the caller's existing handle503
@@ -123,7 +124,7 @@ class QuotaTracker {
     if (this.exhaustedUntil > Date.now()) {
       const remainingMs = this.exhaustedUntil - Date.now();
       const label = this.reason === 'unavailable' ? 'service unavailable' : 'quota exhausted';
-      process.stderr.write(`[${this.provider}] ${label}, ${Math.round(remainingMs / 1000)}s cooldown remaining\n`);
+      _log(this.provider, `${label}, ${Math.round(remainingMs / 1000)}s cooldown remaining`);
       throw new QuotaExhaustedException({
         message: `${this.provider} ${label} — ${Math.round(remainingMs / 1000)}s cooldown remaining`,
         provider: this.provider,
@@ -140,7 +141,7 @@ class QuotaTracker {
     const cooldownMs = retryAfter ?? Math.min(60_000 * Math.pow(2, this.consecutive429s - 1), 300_000);
     this.exhaustedUntil = Date.now() + cooldownMs;
     this.persist();
-    process.stderr.write(`[${this.provider}] 429 rate limited (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s\n`);
+    _log(this.provider, `429 rate limited (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s`);
     throw new QuotaExhaustedException({
       message: `${this.provider} quota exhausted (429 #${this.consecutive429s}): ${errBody}`,
       provider: this.provider,
@@ -163,7 +164,7 @@ class QuotaTracker {
     const cooldownMs = retryAfter ?? Math.min(15_000 * Math.pow(2, this.consecutive429s - 1), 300_000);
     this.exhaustedUntil = Date.now() + cooldownMs;
     this.persist();
-    process.stderr.write(`[${this.provider}] 503 service unavailable (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s\n`);
+    _log(this.provider, `503 service unavailable (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s`);
     throw new QuotaExhaustedException({
       message: `${this.provider} service unavailable (503 #${this.consecutive429s}): ${errBody}`,
       provider: this.provider,
@@ -454,7 +455,7 @@ export class GeminiProvider implements ILLMProvider {
 
     this.quota.checkBeforeRequest();
 
-    if (process.env.GOSSIP_DEBUG) process.stderr.write(`[Gemini] ${this.model} — ${messages.length} messages, tools=${toolMode}\n`);
+    if (process.env.GOSSIP_DEBUG) _log('Gemini', `${this.model} — ${messages.length} messages, tools=${toolMode}`);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
     const res = await fetchWithRetry503(url, {
       method: 'POST',
@@ -472,7 +473,7 @@ export class GeminiProvider implements ILLMProvider {
     this.quota.onSuccess();
     const data = await res.json() as Record<string, unknown>;
     const result = this.parseGeminiResponse(data);
-    if (process.env.GOSSIP_DEBUG) process.stderr.write(`[Gemini] → text=${result.text?.length ?? 0}chars, toolCalls=${result.toolCalls?.length ?? 0}${result.toolCalls?.length ? ` [${result.toolCalls.map(tc => tc.name).join(', ')}]` : ''}, tokens=${result.usage?.inputTokens ?? '?'}/${result.usage?.outputTokens ?? '?'}\n`);
+    if (process.env.GOSSIP_DEBUG) _log('Gemini', `→ text=${result.text?.length ?? 0}chars, toolCalls=${result.toolCalls?.length ?? 0}${result.toolCalls?.length ? ` [${result.toolCalls.map(tc => tc.name).join(', ')}]` : ''}, tokens=${result.usage?.inputTokens ?? '?'}/${result.usage?.outputTokens ?? '?'}`);
     return result;
   }
 
@@ -515,7 +516,7 @@ export class GeminiProvider implements ILLMProvider {
       const blockReason = (data as any).promptFeedback?.blockReason;
       const safetyRatings = (data as any).promptFeedback?.safetyRatings;
       const details = blockReason ? `blocked: ${blockReason}` : 'no candidates returned';
-      process.stderr.write(`[GeminiProvider] Empty response — ${details}${safetyRatings ? ` safety=${JSON.stringify(safetyRatings)}` : ''}\n`);
+      _log('GeminiProvider', `Empty response — ${details}${safetyRatings ? ` safety=${JSON.stringify(safetyRatings)}` : ''}`);
       return { text: `[No response from Gemini: ${details}]` };
     }
     const candidate = candidates[0];
@@ -523,7 +524,7 @@ export class GeminiProvider implements ILLMProvider {
     // STOP = normal, MAX_TOKENS = truncated, tool call reasons = function calling (expected)
     const expectedReasons = ['STOP', 'MAX_TOKENS', 'TOOL_CALL', 'UNEXPECTED_TOOL_CALL'];
     if (finishReason && !expectedReasons.includes(finishReason)) {
-      process.stderr.write(`[GeminiProvider] Unusual finishReason: ${finishReason}\n`);
+      _log('GeminiProvider', `Unusual finishReason: ${finishReason}`);
     }
     const content = candidate.content as Record<string, unknown> | undefined;
     const parts = (content?.parts || []) as Array<Record<string, unknown>>;
@@ -532,10 +533,10 @@ export class GeminiProvider implements ILLMProvider {
       // The function call data may be in candidate.content.functionCall or similar.
       // Log and return empty — the orchestrator's retry mechanism will handle this.
       if (finishReason !== 'SAFETY') {
-        process.stderr.write(`[GeminiProvider] Empty response parts (finishReason: ${finishReason || 'unknown'}). Returning empty to trigger retry.\n`);
+        _log('GeminiProvider', `Empty response parts (finishReason: ${finishReason || 'unknown'}). Returning empty to trigger retry.`);
       }
       if (finishReason === 'SAFETY') {
-        process.stderr.write(`[GeminiProvider] Response blocked by safety filter\n`);
+        _log('GeminiProvider', 'Response blocked by safety filter');
       }
       return { text: finishReason === 'SAFETY' ? '[Response blocked by Gemini safety filter]' : '' };
     }

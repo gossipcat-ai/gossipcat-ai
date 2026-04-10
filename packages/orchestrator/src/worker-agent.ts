@@ -24,7 +24,8 @@ export type TaskCompleteCallback = (event: {
 
 const MAX_TOOL_TURNS = 15;
 const TOOL_CALL_TIMEOUT_MS = 60_000;
-const log = (agentId: string, msg: string) => process.stderr.write(`[worker:${agentId}] ${msg}\n`);
+import { log as _log } from './log';
+const log = (agentId: string, msg: string) => _log(`worker:${agentId}`, msg);
 
 /**
  * Extract tool calls from LLM text when native function calling fails.

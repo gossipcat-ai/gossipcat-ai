@@ -19,7 +19,7 @@ interface AgentSummary {
   topics?: string;
 }
 
-const log = (msg: string) => process.stderr.write(`[gossipcat] ${msg}\n`);
+import { gossipLog as log } from './log';
 
 export class BootstrapGenerator {
   constructor(private projectRoot: string) {}

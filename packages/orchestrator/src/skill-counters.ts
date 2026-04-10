@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import type { SkillIndex } from './skill-index';
+import { gossipLog } from './log';
 
 const STALE_THRESHOLD = 30;
 const PROMOTION_RATE = 0.8;
@@ -91,7 +92,7 @@ export class SkillCounterTracker {
         if (windowAllInactive) {
           if (index.disable(agentId, skill)) {
             disabled.push(`${agentId}/${skill}`);
-            process.stderr.write(`[gossipcat] Auto-disabled stale skill ${skill} for ${agentId} (${counter.totalDispatches} dispatches, ${counter.activations} activations)\n`);
+            gossipLog(`Auto-disabled stale skill ${skill} for ${agentId} (${counter.totalDispatches} dispatches, ${counter.activations} activations)`);
           }
         }
 
@@ -102,7 +103,7 @@ export class SkillCounterTracker {
           if (rate >= PROMOTION_RATE) {
             index.bind(agentId, skill, { mode: 'permanent' });
             promoted.push(`${agentId}/${skill}`);
-            process.stderr.write(`[gossipcat] Promoted skill ${skill} for ${agentId} to permanent (${(rate * 100).toFixed(0)}% activation over ${counter.recentWindow.length} dispatches)\n`);
+            gossipLog(`Promoted skill ${skill} for ${agentId} to permanent (${(rate * 100).toFixed(0)}% activation over ${counter.recentWindow.length} dispatches)`);
             // Clear counter — no longer tracked as contextual
             delete this.data[agentId][skill];
             this.dirty = true;

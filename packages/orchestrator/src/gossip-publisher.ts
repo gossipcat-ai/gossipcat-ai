@@ -1,4 +1,5 @@
 // packages/orchestrator/src/gossip-publisher.ts
+import { gossipLog } from './log';
 import { ILLMProvider } from './llm-client';
 import { LLMMessage } from '@gossip/types';
 import { GossipMessage } from './types';
@@ -83,7 +84,7 @@ Return JSON: { "<agentId>": "<summary>", ... }`,
         await this.relay.publishToChannel(`batch:${params.batchId}`, gossipMsg);
       }
     } catch (err) {
-      process.stderr.write(`[gossipcat] Gossip generation failed: ${(err as Error).message}\n`);
+      gossipLog(`Gossip generation failed: ${(err as Error).message}`);
     }
   }
 }

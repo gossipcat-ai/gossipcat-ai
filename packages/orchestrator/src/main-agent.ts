@@ -9,6 +9,7 @@ import { ILLMProvider, createProvider } from './llm-client';
 import { AgentRegistry } from './agent-registry';
 import { TaskDispatcher } from './task-dispatcher';
 import { WorkerAgent } from './worker-agent';
+import { log as _log } from './log';
 import { AgentConfig, DispatchOptions, PlanState, ChatResponse, HandleMessageOptions, TaskProgressEvent } from './types';
 import { ALL_TOOLS } from '@gossip/tools';
 import { ContentBlock, TextContent, MessageType, MessageEnvelope, Message, LLMMessage } from '@gossip/types';
@@ -324,7 +325,16 @@ export class MainAgent {
     let added = 0;
     for (const ac of this.registry.getAll()) {
       if (ac.native) continue; // native agents use host's Agent tool, not relay
-      if (this.workers.has(ac.id)) continue;
+
+      // Stop existing worker before recreating — ensures fresh API key from keychain.
+      // Without this, MCP reconnects reuse workers with stale cached keys, causing
+      // "API key not valid" errors when the key is rotated or refreshed.
+      const existing = this.workers.get(ac.id);
+      if (existing) {
+        await existing.stop();
+        this.workers.delete(ac.id);
+      }
+
       const key = await keyProvider(ac.provider);
       const llm = createProvider(ac.provider, ac.model, key ?? undefined, undefined, (ac as any).base_url);
 
@@ -468,7 +478,7 @@ ${agentLines.join('\n')}`,
 
     // Retry on empty response (UNEXPECTED_TOOL_CALL or other Gemini failures)
     if (!response.text && !response.toolCalls?.length) {
-      process.stderr.write('[MainAgent] Empty LLM response — retrying without tools\n');
+      _log('MainAgent', 'Empty LLM response — retrying without tools');
       response = await this.llm.generate(messages, { temperature: 0 });
     }
 
@@ -677,7 +687,7 @@ ${agentLines.join('\n')}`,
           try {
             await this.syncWorkers(this.keyProviderFn);
           } catch (err) {
-            process.stderr.write(`[MainAgent] Failed to start workers: ${(err as Error).message}\n`);
+            _log('MainAgent', `Failed to start workers: ${(err as Error).message}`);
           }
         }
         const task = this.projectInitializer.pendingTask;

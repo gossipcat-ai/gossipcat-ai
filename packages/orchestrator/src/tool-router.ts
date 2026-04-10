@@ -8,7 +8,8 @@ import type { ToolCall, ToolResult, DispatchPlan, PlannedTask, TaskProgressEvent
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
-const log = (msg: string) => process.stderr.write(`[tool-router] ${msg}\n`);
+import { log as _log } from './log';
+const log = (msg: string) => _log('tool-router', msg);
 const AGENT_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
 /**

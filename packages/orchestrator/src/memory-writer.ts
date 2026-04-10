@@ -5,6 +5,7 @@ import { MemoryCompactor } from './memory-compactor';
 import type { ILLMProvider } from './llm-client';
 import type { LLMMessage } from '@gossip/types';
 import { discoverProjectStructure } from './project-structure';
+import { gossipLog } from './log';
 
 /** Truncate text at a word boundary, appending "..." if truncated */
 function truncateAtWord(text: string, maxLen: number): string {
@@ -349,7 +350,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
         const response = await this.summaryLlm.generate(messages, { temperature: 0 });
         raw = response.text || '';
       } catch (err) {
-        process.stderr.write(`[gossipcat] Session summary LLM failed: ${(err as Error).message}\n`);
+        gossipLog(`Session summary LLM failed: ${(err as Error).message}`);
         raw = ''; // Will trigger fallback in processSessionResponse
       }
     }
@@ -398,7 +399,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
       const hasSectionHeader = /^##\s+\w/m.test(raw);
 
       if (!hasSectionHeader) {
-        process.stderr.write('[gossipcat] Session summary missing required structure, using raw fallback\n');
+        gossipLog('Session summary missing required structure, using raw fallback');
         // Persist the raw LLM output so we can diagnose what went wrong next time,
         // instead of throwing it away and being blind to the failure mode.
         try {
@@ -410,7 +411,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
         // Likely truncated by model output limit — trim to last complete paragraph
         const lastPara = raw.lastIndexOf('\n\n');
         summaryBody = (lastPara > 1000 ? raw.slice(0, lastPara) : raw).slice(0, SESSION_SUMMARY_MAX_CHARS);
-        process.stderr.write('[gossipcat] Session summary truncated — trimmed to last complete paragraph\n');
+        gossipLog('Session summary truncated — trimmed to last complete paragraph');
       } else {
         summaryBody = raw.slice(0, SESSION_SUMMARY_MAX_CHARS);
       }
@@ -463,7 +464,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
             fileContent = fileContent.replace(/status:\s*.+/, 'status: shipped');
           }
           writeFileSync(filePath, fileContent);
-          process.stderr.write(`[gossipcat] 🗜️  Marked stale: ${sf}\n`);
+          gossipLog(`🗜️  Marked stale: ${sf}`);
         } catch { /* best-effort */ }
       }
       // Strip STALE: lines from summary body (metadata, not content)
@@ -564,9 +565,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
         const toEvict = unpinned.slice(0, Math.max(0, existing.length - targetCount));
 
         if (toEvict.length === 0 && existing.length >= maxFiles) {
-          process.stderr.write(
-            `[gossipcat] pruneKnowledgeDir: all ${existing.length} files are pinned, cannot evict to stay under ${maxFiles}\n`
-          );
+          gossipLog(`pruneKnowledgeDir: all ${existing.length} files are pinned, cannot evict to stay under ${maxFiles}`);
         }
 
         for (const item of toEvict) {
