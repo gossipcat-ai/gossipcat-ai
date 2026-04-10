@@ -1,7 +1,12 @@
 {
   "name": "gossipcat",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Multi-agent orchestration for Claude Code — parallel review, consensus, adaptive dispatch",
+  "mcpName": "io.github.ataberk-xyz/gossipcat",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gossipcat-ai/gossipcat-ai.git"
+  },
   "license": "MIT",
   "main": "dist-mcp/mcp-server.js",
   "bin": {
