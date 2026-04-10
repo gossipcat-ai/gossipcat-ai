@@ -210,6 +210,42 @@ describe('detectBoundaryEscapes', () => {
     );
     expect(v).toEqual([]);
   });
+
+  it('worktree mode: allowlists .claude/worktrees/ paths', () => {
+    const v = detectBoundaryEscapes(
+      baseMeta({ writeMode: 'worktree', scope: undefined }),
+      ['.claude/worktrees/some-branch/HEAD', 'apps/cli/src/leaked.ts'],
+      root,
+    );
+    expect(v).toEqual(['apps/cli/src/leaked.ts']);
+  });
+
+  it('scoped mode: allowlists .claude/settings.local.json', () => {
+    const v = detectBoundaryEscapes(
+      baseMeta(),
+      ['apps/cli/src/ok.ts', '.claude/settings.local.json'],
+      root,
+    );
+    expect(v).toEqual([]);
+  });
+
+  it('scoped mode: allowlists .claude/worktrees/ paths', () => {
+    const v = detectBoundaryEscapes(
+      baseMeta(),
+      ['apps/cli/src/ok.ts', '.claude/worktrees/feat/config'],
+      root,
+    );
+    expect(v).toEqual([]);
+  });
+
+  it('worktree mode: non-allowlisted .claude paths are still violations', () => {
+    const v = detectBoundaryEscapes(
+      baseMeta({ writeMode: 'worktree', scope: undefined }),
+      ['.claude/agents/rogue/instructions.md'],
+      root,
+    );
+    expect(v).toEqual(['.claude/agents/rogue/instructions.md']);
+  });
 });
 
 describe('dispatch metadata round-trip', () => {

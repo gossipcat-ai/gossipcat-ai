@@ -35,6 +35,20 @@ export interface DispatchMetadata {
 const METADATA_FILE = 'dispatch-metadata.jsonl';
 const BOUNDARY_ESCAPE_FILE = 'boundary-escapes.jsonl';
 
+// Paths that agents legitimately write outside their declared boundary.
+// These are infrastructure artifacts, not application code — false-positive
+// disagreements from these paths penalize agents unfairly.
+// Prefix-matched against relative paths from projectRoot.
+const BOUNDARY_ALLOWLIST = [
+  '.claude/worktrees/',       // worktree agents: git worktree config lives in main repo
+  '.claude/settings.local.json', // scoped/worktree agents: permission adjustments
+];
+
+function isBoundaryAllowed(filePath: string): boolean {
+  const f = filePath.replace(/^\.\//, '');
+  return BOUNDARY_ALLOWLIST.some(prefix => f === prefix || f.startsWith(prefix));
+}
+
 // System directories that should NEVER be rewritten, even if nested under
 // something that looks like a project path. The check is prefix-based on the
 // canonical absolute path.
@@ -245,13 +259,14 @@ export function detectBoundaryEscapes(
   if (mode === 'scoped') {
     const scope = normalizeScope(meta.scope || '', projectRoot);
     if (!scope) return []; // no scope declared → cannot evaluate
-    return modifiedFiles.filter(f => !isInsideScope(f, scope));
+    return modifiedFiles.filter(f => !isInsideScope(f, scope) && !isBoundaryAllowed(f));
   }
 
   if (mode === 'worktree') {
     // Main repo should have NO modifications — all writes should have gone to
-    // the isolated worktree. Every modified file in the main repo is a violation.
-    return [...modifiedFiles];
+    // the isolated worktree. Every modified file in the main repo is a violation,
+    // EXCEPT infrastructure paths that legitimately live in the main repo.
+    return modifiedFiles.filter(f => !isBoundaryAllowed(f));
   }
 
   return [];
@@ -356,5 +371,7 @@ function recordBoundaryEscape(
 export const __test__ = {
   normalizeScope,
   isSystemPath,
+  isBoundaryAllowed,
   SYSTEM_PREFIXES,
+  BOUNDARY_ALLOWLIST,
 };
