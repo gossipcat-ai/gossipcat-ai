@@ -118,7 +118,8 @@ export class ConsensusEngine {
       this.fileCache.set(filePath, content);
       return content;
     } catch {
-      this.fileCache.set(filePath, null);
+      // Don't cache failures — transient I/O errors (locked file, network FS blip)
+      // should be retried on the next call, not permanently poisoned.
       return null;
     }
   }
@@ -126,14 +127,14 @@ export class ConsensusEngine {
   extractSummary(result: string): string {
     const idx = result.indexOf(SUMMARY_HEADER);
     if (idx !== -1) {
-      const afterHeader = result.slice(idx + SUMMARY_HEADER.length).trimStart();
+      // Cap before regex scan to bound search cost
+      const afterHeader = result.slice(idx + SUMMARY_HEADER.length, idx + SUMMARY_HEADER.length + MAX_SUMMARY_LENGTH).trimStart();
       // Only stop at the next markdown header (##), not at blank lines
       // — summaries often have blank-line-separated bullet points
       const nextHeader = afterHeader.search(/\n##\s/);
       let end = afterHeader.length;
       if (nextHeader !== -1) end = Math.min(end, nextHeader);
-      // Cap extracted summary to prevent unbounded prompt sizes
-      return afterHeader.slice(0, Math.min(end, MAX_SUMMARY_LENGTH)).trim();
+      return afterHeader.slice(0, end).trim();
     }
 
     if (result.length <= FALLBACK_MAX_LENGTH) return result;
@@ -506,9 +507,33 @@ Return only valid JSON.`;
     // (a.2) Semantic dedup: merge findings across agents that describe the same issue
     this.deduplicateFindings(findingMap);
 
-    // Prune findingIdToKey: dedup may have deleted keys from findingMap
+    // Redirect findingIdToKey entries for deduped-away findings to their surviving merge target.
+    // Without this, cross-review entries pointing to the removed finding silently drop.
     for (const [fid, key] of findingIdToKey) {
-      if (!findingMap.has(key)) findingIdToKey.delete(fid);
+      if (!findingMap.has(key)) {
+        // Find the surviving key that absorbed this finding (same originalAgentId prefix)
+        const agentPrefix = key.split('::')[0];
+        let redirected = false;
+        for (const [survivingKey] of findingMap) {
+          if (survivingKey.startsWith(agentPrefix + '::')) {
+            findingIdToKey.set(fid, survivingKey);
+            redirected = true;
+            break;
+          }
+        }
+        // If the merge target was from a DIFFERENT agent (cross-agent dedup),
+        // search all surviving entries for one that lists this agent in confirmedBy
+        if (!redirected) {
+          for (const [survivingKey, entry] of findingMap) {
+            if (entry.confirmedBy.includes(agentPrefix)) {
+              findingIdToKey.set(fid, survivingKey);
+              redirected = true;
+              break;
+            }
+          }
+        }
+        if (!redirected) findingIdToKey.delete(fid);
+      }
     }
 
     // Build taskId lookup from results
@@ -1878,7 +1903,6 @@ Return only valid JSON.`;
     const allFindings = [...report.confirmed, ...report.disputed, ...report.unverified, ...report.unique, ...(report.insights || [])];
     for (const f of allFindings) {
       if (f.id) {
-        // Replace auto-generated prefix with provided consensusId
         const suffix = f.id.split(':').pop() || f.id;
         f.id = `${consensusId}:${suffix}`;
       }
