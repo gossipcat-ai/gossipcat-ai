@@ -118,10 +118,12 @@ export interface ImplSignal {
 /** Meta signal from worker-agent telemetry */
 export interface MetaSignal {
   type: 'meta';
-  signal: 'task_completed' | 'task_tool_turns';
+  signal: 'task_completed' | 'task_tool_turns' | 'format_compliance';
   agentId: string;
   taskId: string;
   value?: number;
+  /** Additional structured data for signals that carry more than a scalar value */
+  metadata?: Record<string, unknown>;
   timestamp: string;
 }
 

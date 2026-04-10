@@ -14,7 +14,7 @@ const VALID_IMPL_SIGNALS = new Set([
 ]);
 
 const VALID_META_SIGNALS = new Set([
-  'task_completed', 'task_tool_turns',
+  'task_completed', 'task_tool_turns', 'format_compliance',
 ]);
 
 function validateSignal(signal: PerformanceSignal): void {

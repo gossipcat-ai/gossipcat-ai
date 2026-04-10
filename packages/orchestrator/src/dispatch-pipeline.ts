@@ -13,6 +13,8 @@ import { TaskGraph } from './task-graph';
 import { SkillCatalog } from './skill-catalog';
 import { SkillGapTracker } from './skill-gap-tracker';
 import { GossipPublisher } from './gossip-publisher';
+import { PerformanceWriter } from './performance-writer';
+import { MetaSignal } from './consensus-types';
 import { ScopeTracker } from './scope-tracker';
 import { WorktreeManager } from './worktree-manager';
 import { TaskGraphSync } from './task-graph-sync';
@@ -54,10 +56,22 @@ export interface DispatchPipelineConfig {
   keyProvider?: (provider: string) => Promise<string | null>;
 }
 
-type TrackedTask = TaskEntry & { 
+type TrackedTask = TaskEntry & {
     stream: AsyncGenerator<TaskStreamEvent, void, undefined>;
     finalResultPromise: Promise<TaskExecutionResult>;
 };
+
+/** Mechanical format compliance check — regex only, no LLM judgment */
+function detectFormatCompliance(result: string): {
+  findingCount: number;
+  citationCount: number;
+  formatCompliant: boolean;
+} {
+  const findingCount = (result.match(/<agent_finding[\s>]/g) ?? []).length;
+  const citationCount = (result.match(/\b[\w./-]+\.\w+:\d+\b/g) ?? []).length;
+  const formatCompliant = findingCount > 0 && citationCount >= findingCount;
+  return { findingCount, citationCount, formatCompliant };
+}
 
 export class DispatchPipeline {
   private readonly projectRoot: string;
@@ -295,7 +309,7 @@ export class DispatchPipeline {
         entry.worktreeInfo = wtInfo;
         this.toolServer?.assignRoot(agentId, wtInfo.path);
       }
-      const stream = worker.executeTask(task, options?.lens, promptContent);
+      const stream = worker.executeTask(task, options?.lens, promptContent, taskId);
       entry.stream = stream;
       for await (const event of stream) {
         entry.lastEventAt = Date.now();
@@ -328,6 +342,19 @@ export class DispatchPipeline {
                 timestamp: new Date().toISOString(),
               }) + '\n');
             } catch { /* best-effort visibility — never crash dispatch on log/write failure */ }
+            // Emit meta signals for non-consensus dispatch telemetry
+            try {
+              const perfWriter = new PerformanceWriter(this.projectRoot);
+              const now = new Date().toISOString();
+              const durationMs = (entry.completedAt ?? Date.now()) - entry.startedAt;
+              const compliance = detectFormatCompliance(event.payload.result ?? '');
+              const metaSignals: MetaSignal[] = [
+                { type: 'meta', signal: 'task_completed', agentId: entry.agentId, taskId: entry.id, value: durationMs, timestamp: now },
+                { type: 'meta', signal: 'task_tool_turns', agentId: entry.agentId, taskId: entry.id, value: entry.toolCalls ?? 0, timestamp: now },
+                { type: 'meta', signal: 'format_compliance', agentId: entry.agentId, taskId: entry.id, value: compliance.formatCompliant ? 1 : 0, metadata: { findingCount: compliance.findingCount, citationCount: compliance.citationCount }, timestamp: now },
+              ];
+              perfWriter.appendSignals(metaSignals);
+            } catch { /* best-effort — never crash dispatch on signal write failure */ }
             return event.payload;
           case TaskStreamEventType.ERROR:
             entry.status = 'failed';

@@ -28,3 +28,4 @@ skills-lock.json
 **/.DS_Store
 settings.local.json
 gossipcat-*.tgz
+.mcpregistry_*
