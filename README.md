@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/gossipcat-ai/gossipcat-ai/releases/latest"><img src="https://img.shields.io/github/v/release/gossipcat-ai/gossipcat-ai?color=0ea5e9&label=release" alt="Latest release" /></a>
-  <a href="https://github.com/gossipcat-ai/gossipcat-ai/releases"><img src="https://img.shields.io/github/downloads/gossipcat-ai/gossipcat-ai/total?color=0ea5e9" alt="Downloads" /></a>
+  <a href="https://www.npmjs.com/package/gossipcat"><img src="https://img.shields.io/npm/v/gossipcat?color=0ea5e9" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/gossipcat"><img src="https://img.shields.io/npm/dw/gossipcat?color=0ea5e9" alt="npm weekly downloads" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/stargazers"><img src="https://img.shields.io/github/stars/gossipcat-ai/gossipcat-ai?style=social" alt="GitHub stars" /></a>
@@ -175,6 +175,37 @@ claude mcp add gossipcat -s user -- gossipcat
 Restart Claude Code. Then in any project, ask:
 
 > "Set up a gossipcat team for this project"
+
+<details>
+<summary><strong>Manual MCP config</strong> (if <code>claude mcp add</code> doesn't work for your setup)</summary>
+
+Add to `~/.claude/mcp_settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "gossipcat": {
+      "command": "gossipcat",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Or project-local in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "gossipcat": {
+      "command": "npx",
+      "args": ["gossipcat", "mcp"]
+    }
+  }
+}
+```
+
+</details>
 
 Claude Code will call `gossip_setup()` to scaffold `.gossip/config.json` and your agent team. First-run bootstrap also writes the dispatch rules and tool catalog so Claude Code knows how to use gossipcat — no manual config needed.
 

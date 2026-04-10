@@ -252,6 +252,14 @@ PR #24 caught this: `getCountersSince` was comparing `signal.category !== catego
 
 Don't. Reddit punishes hype visibly. Reddit-native voice is specific, honest about limits, and leads with what can be poked at, not what's impressive. See `docs/reddit-claudeai-post.md` for the canonical voice.
 
+### Dual delivery mechanism for LLM + human artifacts
+
+Consensus reports, session summaries, and formatted outputs serve two audiences simultaneously: (1) the orchestrator LLM that needs structured tokens (`REQUIRED_NEXT`, `finding_id`, `<agent_finding>` tags) to drive the next tool call, and (2) the human reading the terminal or dashboard who needs readable tables and prose. These are not the same format.
+
+Early versions optimized for one audience and confused the other. Machine tokens in human-readable output look like noise. Human prose in machine-parsed output causes regex fallbacks and silent data loss (see consensus `1537efbb-2b44492d:f13` — paraphrased AGENT_PROMPT dropped the CONSENSUS_OUTPUT_FORMAT training block).
+
+**Lesson:** every artifact that crosses the LLM/human boundary needs explicit separation. The two-content-item split for native dispatch (item 1: orchestrator instructions, item 2: agent prompt verbatim) is the working pattern. `formatReport()` producing both a structured `ConsensusReport` object and a human-readable `summary` string is another. When adding new output, decide which audience it serves before writing it — don't try to serve both in one string.
+
 ---
 
 ## Glossary
