@@ -29,7 +29,7 @@ function truncateStartAndEnd(text: string, maxLen: number): string {
 
 /** Reject agentIds that could escape the .gossip/agents/ directory tree */
 function validateAgentId(agentId: string): void {
-  if (!agentId || agentId.includes('/') || agentId.includes('\\') || agentId.includes('..') || agentId.includes('\0')) {
+  if (!agentId || agentId === '.' || agentId === '..' || agentId.includes('/') || agentId.includes('\\') || agentId.includes('\0')) {
     throw new Error(`Invalid agentId: ${agentId.slice(0, 50)} — must not contain path separators`);
   }
 }
