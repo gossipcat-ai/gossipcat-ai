@@ -176,6 +176,37 @@ Restart Claude Code. Then in any project, ask:
 
 > "Set up a gossipcat team for this project"
 
+<details>
+<summary><strong>Manual MCP config</strong> (if <code>claude mcp add</code> doesn't work for your setup)</summary>
+
+Add to `~/.claude/mcp_settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "gossipcat": {
+      "command": "gossipcat",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Or project-local in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "gossipcat": {
+      "command": "npx",
+      "args": ["gossipcat", "mcp"]
+    }
+  }
+}
+```
+
+</details>
+
 Claude Code will call `gossip_setup()` to scaffold `.gossip/config.json` and your agent team. First-run bootstrap also writes the dispatch rules and tool catalog so Claude Code knows how to use gossipcat — no manual config needed.
 
 Gossipcat ships from **[GitHub Releases](https://github.com/gossipcat-ai/gossipcat-ai/releases)**, not the npm registry. The install URL above always points at the latest release. `npm` downloads the tarball directly, installs it globally, and drops a `gossipcat` binary on your `PATH` — no `npm publish` involved.
