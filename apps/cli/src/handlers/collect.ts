@@ -679,7 +679,7 @@ export async function handleCollect(
     const taskCount = ctx.mainAgent.getSessionGossip().length;
     const consensusCount = ctx.mainAgent.getSessionConsensusHistory().length;
     if (taskCount > 0 && taskCount % 10 === 0) {
-      output += `\n\n💡 Active session (${taskCount} tasks, ${consensusCount} consensus runs). Call gossip_session_save() before ending to preserve what you've learned.`;
+      output += `\n\nREQUIRED_BEFORE_END: gossip_session_save() — ${taskCount} tasks, ${consensusCount} consensus runs. Context will be lost if you end without saving.`;
     }
   } catch { /* best-effort */ }
 

@@ -573,20 +573,19 @@ export async function handleDispatchConsensus(
     nativePrompts.push({ taskId, agentId: def.agent_id, prompt: agentPrompt });
   }
 
-  let msg = `Dispatched ${taskDefs.length} tasks with consensus:\n${lines.join('\n')}`;
-  msg += '\n\nAgents will include ## Consensus Summary in output.';
+  const collectCall = `gossip_collect(task_ids: [${allTaskIds.map(id => `"${id}"`).join(', ')}], consensus: true)`;
+  let msg = `REQUIRED_NEXT: ${collectCall}\n\n`;
+  msg += `Dispatched ${taskDefs.length} tasks with consensus:\n${lines.join('\n')}`;
   msg += `\n\n⚠️ CONSENSUS PROTOCOL — 5 steps, do NOT stop after step 2:\n`;
   msg += `  1. ✓ Phase 1 dispatched (task IDs above)\n`;
   msg += `  2. → Run native Agent() calls + relay each via gossip_relay(task_id, relay_token, result)\n`;
-  msg += `  3. → Call gossip_collect(task_ids: [${allTaskIds.map(id => `"${id}"`).join(', ')}], consensus: true) — this triggers PHASE 2 cross-review dispatches\n`;
-  msg += `  4. → Run the cross-review Agent() calls + relay each via gossip_relay_cross_review(consensus_id, agent_id, result) — DIFFERENT tool than gossip_relay\n`;
-  msg += `  5. → Call gossip_collect(consensus: true) AGAIN to get the final synthesized consensus output\n`;
+  msg += `  3. → Call ${collectCall} — triggers PHASE 2 cross-review\n`;
+  msg += `  4. → Run cross-review Agent() calls + relay each via gossip_relay_cross_review (DIFFERENT tool)\n`;
+  msg += `  5. → Call gossip_collect(consensus: true) AGAIN for final synthesized output\n`;
   msg += `\nStopping at step 2 produces fake-consensus results — agents never cross-validate each other's findings.`;
   if (nativeInstructions.length > 0) {
-    msg += `\n\n⚠️ NATIVE_DISPATCH — PASS EACH AGENT_PROMPT CONTENT ITEM VERBATIM TO Agent(prompt: ...).\n`;
-    msg += `Do NOT condense, summarize, or rewrite the AGENT_PROMPT content items below. The CONSENSUS_OUTPUT_FORMAT block embedded in each prompt is what trains the agent to emit <agent_finding> tags. If you write your own shorter prompt, the agent will emit prose, the consensus parser will fall back to bullet extraction, finding IDs will not roundtrip to peer cross-review, and the dashboard will show degraded results.\n\n`;
+    msg += `\n\n⚠️ NATIVE_DISPATCH — pass each AGENT_PROMPT content item VERBATIM to Agent(prompt: ...). Do NOT rewrite — the embedded CONSENSUS_OUTPUT_FORMAT trains agents to emit <agent_finding> tags. Call gossip_relay for EVERY native agent after completion.\n\n`;
     msg += `Execute these ${nativeInstructions.length} Agent calls, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
-    msg += `\n\n⚠️ You MUST call gossip_relay for EVERY native agent after it completes. Without it, results are lost — no memory, no consensus cross-review.`;
   }
   const content: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: msg }];
   for (const p of nativePrompts) {
