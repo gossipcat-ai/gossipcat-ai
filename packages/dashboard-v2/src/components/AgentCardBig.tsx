@@ -71,7 +71,7 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
               </span>
             )}
           </div>
-          <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted-foreground/60">
+          <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted-foreground/60" style={{ fontFamily: "'Inter', sans-serif" }}>
             <span
               className={`rounded-sm border border-border/60 bg-background/60 px-1.5 py-0.5 font-bold tabular-nums ${weightColor}`}
               data-tooltip={`Dispatch weight ${s.dispatchWeight.toFixed(2)}\nScale 0.3 → 2.0`}
@@ -125,7 +125,7 @@ function BarRow({ label, value, fillClass, tooltip }: BarRowProps) {
       >
         {label}
       </span>
-      <div className="h-1.5 overflow-hidden rounded-full bg-background/80">
+      <div className="h-2 overflow-hidden rounded-full bg-background/80">
         <div
           className={`h-full rounded-full transition-all ${fillClass}`}
           style={{ width: `${Math.max(0, Math.min(100, value * 100))}%` }}

@@ -171,7 +171,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
               return (
                 <tr
                   key={agent.id}
-                  className="group border-t border-border/20 align-top transition hover:bg-accent/20"
+                  className="group border-t border-border/20 align-top transition-colors hover:bg-accent/20"
                 >
                   {/* Rank */}
                   <td className="py-3 pl-5 pr-2 text-center align-top">
@@ -246,7 +246,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                         <span className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-400">
                           {lt.taskId.slice(0, 8)}
                         </span>
-                        <span className="truncate font-mono text-[11px] text-muted-foreground/80" style={{ maxWidth: 260 }}>
+                        <span className="truncate font-mono text-[11px] text-muted-foreground/80" style={{ maxWidth: 260, fontFamily: "'Inter', sans-serif" }}>
                           {lt.task}
                         </span>
                         <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/50">{timeAgo(lt.timestamp)}</span>

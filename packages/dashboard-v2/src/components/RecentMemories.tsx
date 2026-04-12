@@ -91,7 +91,7 @@ export function RecentMemories({ memories }: RecentMemoriesProps) {
                   <span className={`font-mono text-xs ${isOpen ? 'text-primary' : 'text-muted-foreground/40'}`}>
                     {isOpen ? '▾' : '▸'}
                   </span>
-                  <span className={`shrink-0 rounded-sm px-1 py-0.5 font-mono text-[9px] font-bold ${TYPE_COLORS[type] || TYPE_COLORS.note}`}>
+                  <span className={`shrink-0 rounded-sm border border-border/30 px-1 py-0.5 font-mono text-[10px] font-bold ${TYPE_COLORS[type] || TYPE_COLORS.note}`}>
                     {TYPE_LABEL[type] || 'NOTE'}
                   </span>
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
@@ -103,7 +103,7 @@ export function RecentMemories({ memories }: RecentMemoriesProps) {
                 </button>
                 {isOpen && (
                   <div className="border-t border-border/10 px-4 py-2">
-                    <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground">
+                    <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground" style={{ fontFamily: "'Inter', sans-serif" }}>
                       {mem.content}
                     </pre>
                   </div>
