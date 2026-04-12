@@ -260,6 +260,20 @@ export async function handleCollect(
         },
       });
 
+      // Server-side Phase 2: engine selects cross-reviewers and runs internally
+      if (engine.hasPerformanceReader) {
+        try {
+          consensusReport = await engine.runSelectedCrossReview(
+            allResults.filter((r: any) => r.status === 'completed'),
+          );
+          // Success — skip legacy relay + native dispatch paths
+        } catch (err) {
+          process.stderr.write(`[consensus] Server-side Phase 2 failed: ${(err as Error).message} — falling back\n`);
+          consensusReport = null; // fall through to legacy path
+        }
+      }
+
+      if (!consensusReport) {
       // Phase 2a: Generate cross-review prompts for all agents
       const { prompts, consensusId } = await engine.generateCrossReviewPrompts(allResults, nativeAgentIds);
 
@@ -461,6 +475,7 @@ export async function handleCollect(
 
         return { content: [{ type: 'text' as const, text: partialOutput }] };
       }
+      } // end if (!consensusReport) — legacy Phase 2 path
     }
   }
 

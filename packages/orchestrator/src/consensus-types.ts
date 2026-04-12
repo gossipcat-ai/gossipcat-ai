@@ -61,6 +61,11 @@ export interface ConsensusReport {
    * consensus instead of pretending the round was complete.
    */
   relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;
+  /**
+   * True when at least one finding received fewer cross-reviewers than the
+   * target K (e.g. not enough eligible agents). Set by runSelectedCrossReview.
+   */
+  partialReview?: boolean;
 }
 
 /** Return type for collect() */

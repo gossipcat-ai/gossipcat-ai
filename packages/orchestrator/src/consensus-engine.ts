@@ -13,6 +13,7 @@ import { LLMMessage, ToolDefinition } from '@gossip/types';
 import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry } from './consensus-types';
+import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
 
 export type {
   ConsensusReport,
@@ -88,6 +89,11 @@ export class ConsensusEngine {
 
   constructor(config: ConsensusEngineConfig) {
     this.config = config;
+  }
+
+  /** True when a PerformanceReader is available for orchestrator-selected cross-review (Step 3). */
+  get hasPerformanceReader(): boolean {
+    return this.config.performanceReader !== undefined;
   }
 
   /**
@@ -2060,6 +2066,147 @@ Return only valid JSON.`;
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       writeFileSync(join(dir, `${safeId}-${ts}.txt`), text);
     } catch { /* best effort */ }
+  }
+
+  /**
+   * Run Phase 2 server-side with orchestrator-selected cross-reviewers.
+   *
+   * Step 3 of the orchestrator-selected cross-review spec
+   * (docs/specs/2026-04-10-relay-only-consensus.md lines 237-242).
+   *
+   * Requires `config.performanceReader` — throws if not set.
+   * Sets `partialReview: true` on the report if any finding received fewer
+   * than K cross-reviewers (K = 3 for critical, 2 for all others).
+   */
+  async runSelectedCrossReview(
+    results: TaskEntry[],
+    _consensusId?: string,
+  ): Promise<ConsensusReport> {
+    const { performanceReader } = this.config;
+    if (!performanceReader) {
+      throw new Error('runSelectedCrossReview requires config.performanceReader');
+    }
+
+    const successful = results.filter(r => r.status === 'completed' && r.result);
+    if (successful.length < 2) {
+      return {
+        agentCount: 0, rounds: 0,
+        confirmed: [], disputed: [], unverified: [], unique: [], insights: [], newFindings: [], signals: [],
+        summary: 'Consensus skipped: insufficient agents (need ≥2 successful).',
+      };
+    }
+
+    this.updateWorktreeRoots(results);
+
+    // Build summaries and rawResults maps (same pattern as dispatchCrossReview)
+    const summaries = new Map<string, string>();
+    const rawResults = new Map<string, string>();
+    const sanitize = (s: string) => s.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
+    for (const r of successful) {
+      summaries.set(r.agentId, sanitize(this.extractSummary(r.result!)));
+      rawResults.set(r.agentId, sanitize(r.result!));
+    }
+
+    // Extract all findings from all agents to build selection input
+    const findingsForSelection: FindingForSelection[] = [];
+    // Track K per finding so we can detect partial coverage
+    const findingKMap = new Map<string, number>();
+    let findingSeq = 0;
+    for (const r of successful) {
+      const parsed = this.parseAgentFindings(r.agentId, r.result!);
+      let idx = 0;
+      for (const p of parsed) {
+        idx++;
+        const id = `${r.agentId}:f${idx}`;
+        findingSeq++;
+        findingsForSelection.push({
+          id,
+          originalAuthor: r.agentId,
+          content: p.content,
+          declaredCategory: p.category,
+          severity: p.severity ?? 'medium',
+        });
+        const K = p.severity === 'critical' ? 3 : 2;
+        findingKMap.set(id, K);
+      }
+    }
+
+    if (findingSeq === 0) {
+      // No structured findings — fall back to synthesize with no cross-review entries
+      _log('consensus', 'runSelectedCrossReview: no structured findings extracted; synthesizing without cross-review');
+      return this.synthesize(results, []);
+    }
+
+    // Build agent candidates from successful results
+    const agentCandidates: AgentCandidate[] = successful.map(r => ({ agentId: r.agentId }));
+
+    // Select cross-reviewers: Map<reviewerAgentId, Set<findingId>>
+    const assignments = selectCrossReviewers(findingsForSelection, agentCandidates, performanceReader);
+
+    if (assignments.size === 0) {
+      _log('consensus', 'runSelectedCrossReview: no reviewers selected; synthesizing without cross-review');
+      const report = await this.synthesize(results, []);
+      report.partialReview = true;
+      return report;
+    }
+
+    // Check if any finding has fewer than K reviewers assigned
+    const reviewerCountPerFinding = new Map<string, number>();
+    for (const [, assignedFindings] of assignments) {
+      for (const fid of assignedFindings) {
+        reviewerCountPerFinding.set(fid, (reviewerCountPerFinding.get(fid) ?? 0) + 1);
+      }
+    }
+    let partialReview = false;
+    for (const finding of findingsForSelection) {
+      const K = findingKMap.get(finding.id) ?? 2;
+      const actual = reviewerCountPerFinding.get(finding.id) ?? 0;
+      if (actual < K) {
+        partialReview = true;
+        break;
+      }
+    }
+
+    // For each reviewer, build a scoped summaries map containing only peers
+    // whose findings they are assigned to review, then call crossReviewForAgent.
+    const allCrossReviewEntries: CrossReviewEntry[] = [];
+
+    await Promise.all(
+      Array.from(assignments.entries()).map(async ([reviewerAgentId, assignedFindingIds]) => {
+        // Find the TaskEntry for this reviewer
+        const reviewerEntry = successful.find(r => r.agentId === reviewerAgentId);
+        if (!reviewerEntry) return;
+
+        // Build scoped summaries: only peers who authored at least one assigned finding
+        const peerAuthors = new Set<string>();
+        for (const fid of assignedFindingIds) {
+          const authorId = fid.split(':f')[0];
+          if (authorId && authorId !== reviewerAgentId) {
+            peerAuthors.add(authorId);
+          }
+        }
+
+        const scopedSummaries = new Map<string, string>();
+        const scopedRaw = new Map<string, string>();
+        // Include the reviewer's own summary (needed by buildCrossReviewPrompt)
+        scopedSummaries.set(reviewerAgentId, summaries.get(reviewerAgentId) ?? '');
+        for (const peerId of peerAuthors) {
+          if (summaries.has(peerId)) scopedSummaries.set(peerId, summaries.get(peerId)!);
+          if (rawResults.has(peerId)) scopedRaw.set(peerId, rawResults.get(peerId)!);
+        }
+
+        const start = Date.now();
+        const entries = await this.crossReviewForAgent(reviewerEntry, scopedSummaries, scopedRaw);
+        _log('consensus', `${reviewerAgentId} selected cross-review: ${entries.length} entries (${Math.round((Date.now() - start) / 1000)}s)`);
+        allCrossReviewEntries.push(...entries);
+      }),
+    );
+
+    const report = await this.synthesize(results, allCrossReviewEntries);
+    if (partialReview) {
+      report.partialReview = true;
+    }
+    return report;
   }
 
   /**
