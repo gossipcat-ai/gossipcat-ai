@@ -284,7 +284,7 @@ export async function handleCollect(
       // file_grep through a small inline tool loop so reviewers can verify
       // identifiers and snippets against the actual repo.
       const verifierTools = FILE_TOOLS.filter(t => t.name === 'file_read' || t.name === 'file_grep');
-      const MAX_VERIFIER_TURNS = 6;
+      const MAX_VERIFIER_TURNS = 7;
 
       const runOneRelayCrossReview = async (p: any, attempt: number): Promise<void> => {
         let llm = agentLlmCache.get(p.agentId);

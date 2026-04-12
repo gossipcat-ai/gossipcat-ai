@@ -56,8 +56,11 @@ export class GitTools {
     return diffs.join('\n');
   }
 
-  async gitLog(args?: { count?: number }): Promise<string> {
-    return this.git('log', '--oneline', `-${args?.count || 20}`);
+  async gitLog(args?: { count?: number; maxCount?: number; path?: string }): Promise<string> {
+    const limit = args?.maxCount ?? args?.count ?? 20;
+    const gitArgs = ['log', '--oneline', `-${limit}`];
+    if (args?.path) gitArgs.push('--', args.path);
+    return this.git(...gitArgs);
   }
 
   async gitCommit(args: { message: string; files?: string[] }): Promise<string> {
