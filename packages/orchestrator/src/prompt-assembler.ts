@@ -88,20 +88,81 @@ export function extractSpecReferences(taskText: string, specContent?: string): s
 }
 
 /**
- * Build a cross-reference instruction block for spec-aware review.
+ * Valid lifecycle states for a spec document.
+ * Declared via `status:` field in YAML front-matter.
  */
-export function buildSpecReviewEnrichment(implementationFiles: string[]): string | null {
-  if (!implementationFiles.length) return null;
+export type SpecStatus = 'proposal' | 'implemented' | 'retired';
 
-  const fileList = implementationFiles.map((f) => `- ${f}`).join('\n');
+/**
+ * Parse minimal YAML front-matter from a spec document. Only extracts the
+ * `status` field — a full YAML parse would pull in a dependency and we only
+ * need this one value. Returns undefined when no front-matter or no status.
+ *
+ * Recognizes:
+ *   ---
+ *   status: proposal
+ *   ---
+ *
+ * Accepts optional quoting and trailing whitespace/comments. Invalid values
+ * (anything outside the SpecStatus union) return undefined.
+ */
+export function parseSpecFrontMatter(content: string): { status?: SpecStatus } {
+  // Front matter must start at the very beginning of the file
+  if (!content.startsWith('---')) return {};
+  const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n/);
+  if (!match) return {};
+  const body = match[1];
+  const statusMatch = body.match(/^\s*status\s*:\s*["']?([a-z_-]+)["']?\s*(?:#.*)?$/m);
+  if (!statusMatch) return {};
+  const raw = statusMatch[1].toLowerCase();
+  if (raw === 'proposal' || raw === 'implemented' || raw === 'retired') {
+    return { status: raw };
+  }
+  return {};
+}
+
+/**
+ * Build a cross-reference instruction block for spec-aware review.
+ *
+ * When `status` is provided, the enrichment branches on the spec lifecycle
+ * state to give the reviewer explicit framing guidance — this prevents the
+ * "NOT IMPLEMENTED" framing drift where agents audit code state against a
+ * proposal as if it were a completion report. See consensus round
+ * 4ee3xxxx (2026-04-08) and project_task_framing_drift.md for context.
+ */
+export function buildSpecReviewEnrichment(
+  implementationFiles: string[],
+  status?: SpecStatus,
+): string | null {
+  if (!implementationFiles.length && !status) return null;
+
+  const fileList = implementationFiles.length
+    ? `\n\nImplementation files to cross-reference:\n${implementationFiles.map((f) => `- ${f}`).join('\n')}`
+    : '';
+
+  if (status === 'proposal') {
+    return `IMPORTANT: This task references a PROPOSAL spec.
+Your job is to find GAPS and ARCHITECTURAL ISSUES in the design, not to audit
+current code state. Do NOT generate "NOT IMPLEMENTED" / "does not exist" /
+"file not changed" findings — the spec describes INTENDED changes, not current
+state. Test the proposal's LOGIC against the code (does the design account for
+existing invariants, is the plan consistent, are edge cases handled), not the
+code against the proposal.${fileList}`;
+  }
+
+  if (status === 'retired') {
+    return `IMPORTANT: This task references a RETIRED spec.
+Do not apply its claims to current code — the spec is historical and may
+describe a design that was superseded or abandoned. Use it only as context
+for understanding why the current code looks the way it does.${fileList}`;
+  }
+
+  // implemented (default): existing behavior — verify code matches spec
   return `IMPORTANT: This task references a spec document.
 Before completing:
 1. Verify described flows match the implementation
 2. Check backwards-compatibility constraints
-3. Confirm referenced functions/methods exist
-
-Implementation files to cross-reference:
-${fileList}`;
+3. Confirm referenced functions/methods exist${fileList}`;
 }
 
 /**

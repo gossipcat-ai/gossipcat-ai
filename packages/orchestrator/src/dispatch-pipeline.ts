@@ -4,7 +4,7 @@ import { resolve as resolvePath, join } from 'path';
 import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, PlanState, MIN_AGENTS_FOR_CONSENSUS } from './types';
 import { ILLMProvider } from './llm-client';
 import { loadSkills } from './skill-loader';
-import { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment } from './prompt-assembler';
+import { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment, parseSpecFrontMatter } from './prompt-assembler';
 import { AgentMemoryReader } from './agent-memory';
 import { MemoryWriter } from './memory-writer';
 import { discoverProjectStructure } from './project-structure';
@@ -253,7 +253,12 @@ export class DispatchPipeline {
         if (realSpecPath.startsWith(realRoot + '/')) {
           const specContent = readFileSync(realSpecPath, 'utf-8');
           const implFiles = extractSpecReferences(task, specContent);
-          const enrichment = buildSpecReviewEnrichment(implFiles);
+          // Parse YAML front-matter to extract the spec's lifecycle status
+          // (proposal | implemented | retired). The status is injected into
+          // the review enrichment so reviewers frame findings correctly — see
+          // project_task_framing_drift.md (2026-04-08).
+          const { status } = parseSpecFrontMatter(specContent);
+          const enrichment = buildSpecReviewEnrichment(implFiles, status);
           if (enrichment) specReviewContext = enrichment;
         }
       } catch {

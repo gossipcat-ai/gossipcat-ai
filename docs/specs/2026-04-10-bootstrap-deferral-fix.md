@@ -1,3 +1,7 @@
+---
+status: implemented
+---
+
 # Fix: gossipcat Bootstrap Deferral Problem
 
 **Date:** 2026-04-10

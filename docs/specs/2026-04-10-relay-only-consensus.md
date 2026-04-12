@@ -1,3 +1,7 @@
+---
+status: proposal
+---
+
 # Orchestrator-Selected Cross-Review (formerly Relay-Only Consensus Phase 2)
 
 **Date:** 2026-04-10 (revised 2026-04-12)
