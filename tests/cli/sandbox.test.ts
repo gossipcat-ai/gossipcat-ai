@@ -287,6 +287,25 @@ describe('dispatch metadata round-trip', () => {
     const found = lookupDispatchMetadata(tmp, 'dup');
     expect(found!.agentId).toBe('second');
   });
+
+  it('preserves preTaskFiles snapshot through round-trip', () => {
+    // When the project root is not a git repo, recordDispatchMetadata's
+    // internal git snapshot fails silently and the caller-provided
+    // preTaskFiles field is preserved via the spread.
+    const tmp = mkdtempSync(join(tmpdir(), 'sandbox-test-'));
+    const meta: DispatchMetadata = {
+      taskId: 'snap1',
+      agentId: 'sonnet-implementer',
+      writeMode: 'scoped',
+      scope: 'packages/orchestrator/src',
+      timestamp: Date.now(),
+      preTaskFiles: ['docs/existing-untracked.md', '.mcpregistry_token'],
+    };
+    recordDispatchMetadata(tmp, meta);
+    const found = lookupDispatchMetadata(tmp, 'snap1');
+    expect(found).not.toBeNull();
+    expect(found!.preTaskFiles).toEqual(['docs/existing-untracked.md', '.mcpregistry_token']);
+  });
 });
 
 describe('readSandboxMode', () => {

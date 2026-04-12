@@ -30,6 +30,9 @@ export interface DispatchMetadata {
   scope?: string;
   worktreePath?: string;
   timestamp: number;
+  /** Pre-task git status snapshot. Used to distinguish agent-created files
+   * from pre-existing untracked files during boundary audit. */
+  preTaskFiles?: string[];
 }
 
 const METADATA_FILE = 'dispatch-metadata.jsonl';
@@ -149,12 +152,26 @@ export function readSandboxMode(projectRoot: string): SandboxMode {
   }
 }
 
-/** Append a dispatch metadata record to .gossip/dispatch-metadata.jsonl */
+/** Append a dispatch metadata record to .gossip/dispatch-metadata.jsonl.
+ * Captures a pre-task git status snapshot when writeMode is scoped/worktree
+ * so the boundary audit can subtract pre-existing untracked files from the
+ * violation set. */
 export function recordDispatchMetadata(projectRoot: string, meta: DispatchMetadata): void {
   try {
     const dir = join(projectRoot, '.gossip');
     mkdirSync(dir, { recursive: true });
-    appendFileSync(join(dir, METADATA_FILE), JSON.stringify(meta) + '\n');
+    const snapshotted = { ...meta };
+    if (meta.writeMode === 'scoped' || meta.writeMode === 'worktree') {
+      try {
+        const porcelain = execSync('git status --porcelain', {
+          cwd: projectRoot,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        snapshotted.preTaskFiles = parseGitStatus(porcelain);
+      } catch { /* git unavailable — audit will treat all files as new */ }
+    }
+    appendFileSync(join(dir, METADATA_FILE), JSON.stringify(snapshotted) + '\n');
   } catch {
     /* best-effort */
   }
@@ -304,7 +321,12 @@ export function auditDispatchBoundary(
     return { violations: [], skipped: 'git status failed (not a repo or git unavailable)' };
   }
 
-  const modifiedFiles = parseGitStatus(porcelain);
+  const postTaskFiles = parseGitStatus(porcelain);
+  // Subtract pre-task snapshot so pre-existing untracked files don't count
+  // as agent violations. Falls back to post-task set if no snapshot (missing
+  // metadata or old records written before this field existed).
+  const preTaskSet = new Set(meta.preTaskFiles ?? []);
+  const modifiedFiles = postTaskFiles.filter(f => !preTaskSet.has(f));
   const violations = detectBoundaryEscapes(meta, modifiedFiles, projectRoot);
 
   if (violations.length > 0) {
