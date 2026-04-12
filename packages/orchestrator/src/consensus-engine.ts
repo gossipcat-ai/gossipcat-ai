@@ -560,6 +560,10 @@ Return only valid JSON.`;
     // (a) Seed finding map from Phase 1 results
     const findingMap = new Map<string, {
       originalAgentId: string;
+      /** Per-agent finding id `agentId:fN` from cross-review prompt assembly.
+       * Carried to ConsensusFinding so signal writeback can resolve the 3-part
+       * finding_id format (`consensusId:agentId:fN`) against the report. */
+      authorFindingId?: string;
       finding: string;
       findingType?: 'finding' | 'suggestion' | 'insight';
       severity?: 'critical' | 'high' | 'medium' | 'low';
@@ -594,6 +598,7 @@ Return only valid JSON.`;
 
         findingMap.set(key, {
           originalAgentId: r.agentId,
+          authorFindingId: findingId,
           finding: p.content,
           findingType: p.findingType,
           severity: p.severity,
@@ -904,6 +909,7 @@ Return only valid JSON.`;
 
       const finding: ConsensusFinding = {
         id: `${consensusId}:f${findingIdx}`,
+        authorFindingId: entry.authorFindingId,
         originalAgentId: entry.originalAgentId,
         finding: entry.finding,
         findingType: entry.findingType,

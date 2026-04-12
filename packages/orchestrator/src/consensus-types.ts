@@ -1,6 +1,11 @@
 /** A finding tagged by consensus phase */
 export interface ConsensusFinding {
   id: string;
+  /** The per-agent finding identifier `${originalAgentId}:f${perAgentIdx}` as
+   * assigned during cross-review prompt assembly. Enables dashboard/signal
+   * writeback to resolve the 3-part finding_id format
+   * `${consensusId}:${agentId}:fN` against this finding. */
+  authorFindingId?: string;
   originalAgentId: string;
   finding: string;
   findingType?: 'finding' | 'suggestion' | 'insight';

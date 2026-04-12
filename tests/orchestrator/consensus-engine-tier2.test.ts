@@ -329,3 +329,92 @@ describe('capAutoSeverity — clamping via Tier 2 fallthrough branch', () => {
     expect(signal!.severity).toBe('medium');
   });
 });
+
+describe('authorFindingId — per-agent id carried through synthesis', () => {
+  const testDir = resolve(tmpdir(), 'gossip-author-id-' + Date.now());
+  let engine: ConsensusEngine;
+
+  beforeAll(() => {
+    mkdirSync(resolve(testDir, 'packages/orchestrator/src'), { recursive: true });
+    writeFileSync(
+      resolve(testDir, 'packages/orchestrator/src/real-module.ts'),
+      'export const ONE = 1;\nexport const TWO = 2;\n',
+    );
+  });
+
+  afterAll(() => rmSync(testDir, { recursive: true, force: true }));
+
+  beforeEach(() => {
+    engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      projectRoot: testDir,
+    });
+  });
+
+  test('ConsensusFinding.authorFindingId is set to the per-agent cross-review id', async () => {
+    // Each agent produces two findings. Parse assigns them per-agent IDs
+    // `agent-a:f1`, `agent-a:f2`, `agent-b:f1`. After synthesis, each finding
+    // in the report should carry its original authorFindingId alongside the
+    // global finding.id. This is what signal writeback uses to resolve the
+    // 3-part finding_id format (`consensusId:agentId:fN`) back to a report
+    // finding.
+    const results = [
+      {
+        id: 'task-a',
+        agentId: 'agent-a',
+        task: 'review',
+        status: 'completed' as const,
+        result:
+          '<agent_finding type="finding" severity="low" title="first">\n' +
+          'First finding cites packages/orchestrator/src/real-module.ts:1 ONE.\n' +
+          '</agent_finding>\n' +
+          '<agent_finding type="finding" severity="low" title="second">\n' +
+          'Second finding cites packages/orchestrator/src/real-module.ts:2 TWO.\n' +
+          '</agent_finding>',
+        startedAt: Date.now(),
+      },
+      {
+        id: 'task-b',
+        agentId: 'agent-b',
+        task: 'review',
+        status: 'completed' as const,
+        result:
+          '<agent_finding type="finding" severity="low" title="b-first">\n' +
+          'Agent-B finding on packages/orchestrator/src/real-module.ts:1 ONE.\n' +
+          '</agent_finding>',
+        startedAt: Date.now(),
+      },
+    ];
+
+    const report = await engine.synthesize(results, []);
+
+    // Collect all findings regardless of tag bucket.
+    const all = [...report.confirmed, ...report.disputed, ...report.unverified, ...report.unique, ...(report.insights ?? [])];
+
+    const agentAFindings = all.filter(f => f.originalAgentId === 'agent-a');
+    const agentBFindings = all.filter(f => f.originalAgentId === 'agent-b');
+
+    // Agent-A contributed 2, agent-B contributed 1 — dedup may merge them
+    // (both reference real-module.ts:1) so we assert only on structure.
+    expect(agentAFindings.length).toBeGreaterThanOrEqual(1);
+    expect(agentBFindings.length).toBeGreaterThanOrEqual(0);
+
+    for (const f of agentAFindings) {
+      expect(f.authorFindingId).toBeDefined();
+      expect(f.authorFindingId!).toMatch(/^agent-a:f\d+$/);
+    }
+    for (const f of agentBFindings) {
+      expect(f.authorFindingId).toBeDefined();
+      expect(f.authorFindingId!).toMatch(/^agent-b:f\d+$/);
+    }
+
+    // Global finding.id follows `consensusId:fGlobalN` and is distinct from authorFindingId.
+    for (const f of all) {
+      if (f.authorFindingId) {
+        expect(f.id).not.toBe(f.authorFindingId);
+        expect(f.id).toContain(':f');
+      }
+    }
+  });
+});

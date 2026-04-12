@@ -2195,11 +2195,25 @@ server.tool(
 
                 if (idsForThisReport.size === 0) continue;
 
+                // Match signal finding_id against BOTH formats:
+                //   (a) the report-global id: `consensusId:fGlobalN` (f.id)
+                //   (b) the author-scoped id: `consensusId:agentId:fPerAgentN`
+                //       synthesized from f.authorFindingId + reportId
+                const matchesFinding = (f: any): boolean => {
+                  if (!f) return false;
+                  if (f.id && (idsForThisReport.has(f.id) || unscopedIds.has(f.id))) return true;
+                  if (f.authorFindingId) {
+                    const scoped = `${reportId}:${f.authorFindingId}`;
+                    if (idsForThisReport.has(scoped) || unscopedIds.has(scoped)) return true;
+                  }
+                  return false;
+                };
+
                 let changed = false;
                 if (report.unverified) {
                   const remaining: any[] = [];
                   for (const f of report.unverified) {
-                    if (f.id && (idsForThisReport.has(f.id) || unscopedIds.has(f.id))) {
+                    if (matchesFinding(f)) {
                       f.tag = 'confirmed';
                       // Record orchestrator verification — the orchestrator manually confirmed this
                       f.confirmedBy = f.confirmedBy || [];
