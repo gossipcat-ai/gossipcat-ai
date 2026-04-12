@@ -90,10 +90,19 @@ export function selectCrossReviewers(
 
     // Step 5: Top-K eligible (score > 0)
     const eligible = scoredCandidates.filter(c => c.score > 0);
-    const topK = eligible
+    let topK = eligible
       .slice()
       .sort((a, b) => b.score - a.score)
       .slice(0, Math.min(K, eligible.length));
+
+    // Step 5a: Fallback for all-zero-score pools (fresh agents with no signals)
+    // When no eligible agents exist, fall back to selecting K agents by random
+    // order to ensure findings always get cross-reviewed, even in fresh pools.
+    if (topK.length === 0 && candidates.length > 0) {
+      const shuffled = candidates.map(agent => ({ agent, score: 0 }))
+        .sort(() => Math.random() - 0.5);
+      topK = shuffled.slice(0, Math.min(K, shuffled.length));
+    }
 
     // Step 6: Severity-scaled adaptive epsilon-greedy exploration
     const medianScore = median(scoredCandidates.map(c => c.score));
