@@ -2209,6 +2209,17 @@ Return only valid JSON.`;
     if (partialReview) {
       report.partialReview = true;
     }
+
+    // Store cross-review assignments and coverage for dashboard monitoring
+    report.crossReviewAssignments = Object.fromEntries(
+      Array.from(assignments.entries()).map(([agentId, findingIds]) => [agentId, Array.from(findingIds)]),
+    );
+    report.crossReviewCoverage = findingsForSelection.map(f => ({
+      findingId: f.id,
+      assigned: reviewerCountPerFinding.get(f.id) ?? 0,
+      targetK: findingKMap.get(f.id) ?? 2,
+    }));
+
     return report;
   }
 

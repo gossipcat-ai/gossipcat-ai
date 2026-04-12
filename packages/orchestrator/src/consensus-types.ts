@@ -66,6 +66,16 @@ export interface ConsensusReport {
    * target K (e.g. not enough eligible agents). Set by runSelectedCrossReview.
    */
   partialReview?: boolean;
+  /**
+   * Cross-review assignments: which reviewer was assigned which findings.
+   * Map serialized as Record<reviewerAgentId, findingId[]>.
+   */
+  crossReviewAssignments?: Record<string, string[]>;
+  /**
+   * Per-finding coverage: how many cross-reviewers were assigned vs target K.
+   * Enables dashboard to show under-reviewed findings.
+   */
+  crossReviewCoverage?: Array<{ findingId: string; assigned: number; targetK: number }>;
 }
 
 /** Return type for collect() */
