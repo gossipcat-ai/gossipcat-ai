@@ -47,17 +47,67 @@ For each finding in Phase 1 results:
   eligible = scoredCandidates.filter(c => c.score > 0)
   topK = eligible.sortBy(score, desc).take(min(K, eligible.length))
 
-  // Epsilon-greedy exploration: 15% chance of replacing the weakest
-  // top-K slot with a random below-median agent. Prevents Matthew
-  // effect where strong agents compound advantage and weak agents
-  // starve of cross-review signal data.
-  if (topK.length === K && Math.random() < 0.15) {
-    const median = medianScore(scoredCandidates)
-    const exploreCandidates = scoredCandidates.filter(c =>
-      c.score <= median && !topK.includes(c)
-    )
-    if (exploreCandidates.length > 0) {
-      const pick = exploreCandidates[randomInt(exploreCandidates.length)]
+  // Severity-scaled adaptive epsilon-greedy exploration.
+  //
+  // Two dimensions control epsilon:
+  //   1. Signal starvation of below-median candidates (how much do they need data?)
+  //   2. Finding severity (how expensive is a bad cross-review?)
+  //
+  // Signal-based epsilon (how starved are below-median candidates?):
+  //   - Any candidate has <10 cross-review signals in 30 days → starvation=0.30
+  //   - All candidates have 10-50 signals → starvation=0.15
+  //   - All candidates have >50 signals → starvation=0.05
+  //
+  // Severity scaling (how much accuracy risk can we tolerate?):
+  //   - critical → sevScale=0.15  (explore minimally — accuracy paramount)
+  //   - high     → sevScale=0.35
+  //   - medium   → sevScale=0.70
+  //   - low      → sevScale=1.00  (explore freely — cheapest place to learn)
+  //
+  // Final epsilon = starvation * sevScale
+  // Example: signal-starved (0.30) + critical finding (0.15) → epsilon=0.045
+  // Example: signal-starved (0.30) + low finding (1.00) → epsilon=0.30
+  //
+  // This addresses three v3.1 review findings:
+  //   - 30% epsilon on critical findings was too aggressive (haiku-researcher)
+  //   - Exploration should happen where error cost is lowest (haiku-researcher)
+  //   - getRecentCrossReviewCount is new — must be added to PerformanceReader (sonnet-reviewer)
+  //
+  // NOTE: adaptive epsilon mitigates selection bias, not washout directly.
+  // Agents that regressed after falling out of selection (stale scores) are
+  // caught by the 30-day signal expiry in readSignals() — their old scores
+  // decay toward neutral, increasing their chance of re-entering the below-
+  // median pool and getting explored.
+  const belowMedian = scoredCandidates.filter(c =>
+    c.score <= medianScore(scoredCandidates) && !topK.includes(c)
+  )
+  if (belowMedian.length === 0) { /* no candidates to explore — skip */ }
+  else {
+    const minSignals = Math.min(...belowMedian.map(c =>
+      performanceReader.getRecentCrossReviewCount(c.agent.agentId, 30)
+    ))
+    const starvation = minSignals < 10 ? 0.30
+                     : minSignals > 50 ? 0.05
+                     : 0.15
+    const sevScale = finding.severity === 'critical' ? 0.15
+                   : finding.severity === 'high'     ? 0.35
+                   : finding.severity === 'low'      ? 1.00
+                   : 0.70  // medium (default)
+    const epsilon = starvation * sevScale
+
+    if (topK.length === K && Math.random() < epsilon) {
+      // Weight toward the most signal-starved candidate
+      const weights = belowMedian.map(c => {
+        const signals = performanceReader.getRecentCrossReviewCount(c.agent.agentId, 30)
+        return 1 / (1 + signals)  // inverse signal count — fewer signals = higher weight
+      })
+      const totalWeight = weights.reduce((a, b) => a + b, 0)
+      let r = Math.random() * totalWeight
+      let pick = belowMedian[0]
+      for (let i = 0; i < belowMedian.length; i++) {
+        r -= weights[i]
+        if (r <= 0) { pick = belowMedian[i]; break }
+      }
       topK[topK.length - 1] = pick  // replace weakest top-K slot
     }
   }
@@ -75,7 +125,7 @@ For each finding in Phase 1 results:
 | Zero-category-expert scenario | Falls back to pure accuracy ranking when `categoryAccuracy[category]` is undefined for all candidates (the `?? 0` default handles this) |
 | K per severity | critical=3, high/medium/low=2 |
 | Fewer-than-K eligible | Use `min(K, eligible.length)`, minimum 1. If zero eligible → skip Phase 2 for this finding, tag as `partialReview: true` |
-| Matthew effect / signal starvation | 15% epsilon-greedy exploration replaces the weakest top-K slot with a random below-median agent |
+| Matthew effect / signal starvation | Severity-scaled adaptive epsilon: `starvation * sevScale`. Starvation: 30%/<10 signals, 15%/10-50, 5%/>50. Severity: critical=0.15, high=0.35, medium=0.70, low=1.00. Weighted toward most-starved candidate. Critical findings get ~4.5% max epsilon; low findings get full 30%. |
 
 ### Batching
 
@@ -117,14 +167,19 @@ not true hard enforcement.
 
 Top-K selection reduces cross-review signal volume for non-selected agents.
 At current portfolio (8 agents, K=2-3), each finding generates 2-3 cross-review
-entries instead of 7. The 15% epsilon-greedy exploration partially compensates
-by giving below-median agents occasional exposure. Net effect:
+entries instead of 7. Adaptive epsilon-greedy exploration compensates by giving
+signal-starved agents higher exploration rates (up to 30% for agents with <10
+recent signals). Net effect:
 
-- **Strong agents (acc > 0.6):** signal volume drops ~30% (still sufficient)
-- **Mid-tier agents (0.3-0.6):** signal volume drops ~60%; recovery is slower
-  but not blocked (exploration provides a floor)
-- **Weak agents (acc < 0.3):** mostly excluded except via exploration; this is
-  **correct** — reducing their noise is the whole point
+- **Strong agents (acc > 0.6):** signal volume drops ~30% (still sufficient);
+  epsilon drops to 5% when all below-median agents are well-established
+- **Mid-tier agents (0.3-0.6):** signal volume drops ~40-60%; exploration
+  provides a floor that scales with signal starvation
+- **Weak agents (acc < 0.3):** mostly excluded by score, but new weak agents
+  get 30% epsilon rate until they accumulate 10+ signals — prevents the
+  3-month washout period identified in v2 review
+- **New agents (0 signals):** highest exploration priority via inverse-signal
+  weighting — the system actively seeks signal data for unknowns
 
 ### Grounding
 
@@ -175,7 +230,8 @@ filesystem dependencies.
   returning `Map<agentId, Set<findingId>>`
 - Uses `categoryAccuracy` (not `categoryStrength`), null-guards category,
   excludes circuit-open agents, applies K per severity table
-- 15% epsilon-greedy exploration of below-median agents
+- Severity-scaled adaptive epsilon-greedy exploration
+- Add `getRecentCrossReviewCount(agentId, days)` to `PerformanceReader` (~10 LOC)
 - Server-side `extractCategories()` as authoritative category source
 
 ### Step 3: Default server-side Phase 2 (~50 LOC)
@@ -207,7 +263,12 @@ filesystem dependencies.
 - [ ] Selection: circuit-open agents excluded
 - [ ] Selection: original author excluded
 - [ ] Selection: null category falls back to accuracy-only ranking
-- [ ] Selection: epsilon-greedy fires ~15% of the time (statistical test)
+- [ ] Selection: severity-scaled epsilon (starvation * sevScale) produces correct rates
+- [ ] Selection: critical findings get ~4.5% max epsilon, low findings get ~30%
+- [ ] Selection: inverse-signal weighting biases toward most-starved candidate
+- [ ] Selection: new agent with 0 signals gets highest exploration weight
+- [ ] Selection: belowMedian.length === 0 skips exploration entirely (no Infinity smell)
+- [ ] PerformanceReader.getRecentCrossReviewCount returns correct counts within 30d window
 - [ ] Batching: `Map<agentId, Set<findingId>>` grouping correct
 - [ ] K table: critical=3, high/medium/low=2
 - [ ] Partial-K: 1 eligible → partialReview flag set
