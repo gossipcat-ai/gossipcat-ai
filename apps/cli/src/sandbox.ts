@@ -274,9 +274,9 @@ export function detectBoundaryEscapes(
   if (!mode || mode === 'sequential') return [];
 
   if (mode === 'scoped') {
-    const scope = normalizeScope(meta.scope || '', projectRoot);
-    if (!scope) return []; // no scope declared → cannot evaluate
-    return modifiedFiles.filter(f => !isInsideScope(f, scope) && !isBoundaryAllowed(f));
+    const scopes = (meta.scope || '').split(',').map(s => normalizeScope(s, projectRoot)).filter(Boolean);
+    if (scopes.length === 0) return []; // no scope declared → cannot evaluate
+    return modifiedFiles.filter(f => !scopes.some(s => isInsideScope(f, s)) && !isBoundaryAllowed(f));
   }
 
   if (mode === 'worktree') {
