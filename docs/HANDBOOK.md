@@ -90,15 +90,15 @@ Skills with `status: 'failed'` or `status: 'silent_skill'` are filtered out at `
 - The change is documentation, CSS, test data adjustments, or log-string-only
 - Under 10 lines, no side effects on shared state, no security surface
 
-### Consensus protocol — 5 steps, not 2
+### Consensus protocol — 3 steps
 
-When you dispatch with `mode: "consensus"`, there are **five** steps. Stopping at step 2 produces fake-consensus results.
+When you dispatch with `mode: "consensus"`, the orchestrator follows **three** steps. Phase 2 cross-review runs server-side automatically.
 
 1. `gossip_dispatch(mode: "consensus", tasks: [...])` — Phase 1 dispatched
 2. Run native `Agent()` calls + `gossip_relay` each result
-3. `gossip_collect(task_ids, consensus: true)` — triggers Phase 2 cross-review
-4. Run cross-review `Agent()` calls + `gossip_relay_cross_review` each (different tool!)
-5. `gossip_collect(consensus: true)` again — final synthesized consensus
+3. `gossip_collect(task_ids, consensus: true)` — triggers server-side Phase 2 (cross-reviewer selection + cross-review + synthesis) and returns the final consensus report
+
+The server selects cross-reviewers via `selectCrossReviewers` (epsilon-greedy, severity-scaled), runs `crossReviewForAgent` with verifier tools (`file_read`, `file_grep`, etc.), and synthesizes the final report — all inside a single `gossip_collect` call. If server-side Phase 2 fails, it falls back to the legacy 5-step manual path (orchestrator dispatches cross-review agents individually).
 
 ### Signal recording is mandatory, not deferrable
 
@@ -265,7 +265,7 @@ Early versions optimized for one audience and confused the other. Machine tokens
 ## Glossary
 
 - **Agent** — an LLM worker with an `agent_id`, runtime (native/relay), provider, and model. Defined in `.gossip/agents/<id>/instructions.md`.
-- **Consensus round** — a 2-phase multi-agent review with an 8-hex-8-hex ID like `1537efbb-2b44492d`. Phase 1 is parallel findings; Phase 2 is cross-review.
+- **Consensus round** — a 2-phase multi-agent review with an 8-hex-8-hex ID like `1537efbb-2b44492d`. Phase 1 is parallel findings; Phase 2 is server-side cross-review (automated via `selectCrossReviewers` + `crossReviewForAgent` with verifier tools).
 - **Finding** — a single reviewer observation, wrapped in `<agent_finding>` tags, with a mandatory `file:line` citation.
 - **Finding ID** — `<consensusId>:<agentId>:fN` — the primary key linking a signal back to the exact finding that produced it.
 - **Signal** — a recorded outcome from verification: `agreement`, `disagreement`, `unique_confirmed`, `hallucination_caught`, `impl_test_pass`, etc. Stored in `.gossip/agent-performance.jsonl`.
