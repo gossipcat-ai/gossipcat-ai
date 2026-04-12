@@ -71,9 +71,11 @@ export function startConsensusTimeout(consensusId: string): void {
         const { join } = require('path');
         const reportsDir = join(process.cwd(), '.gossip', 'consensus-reports');
         mkdirSync(reportsDir, { recursive: true });
+        const topic = snapshot.allResults?.find((r: any) => r.task)?.task?.slice(0, 120) || '';
         writeFileSync(join(reportsDir, `${consensusId}.json`), JSON.stringify({
           id: consensusId,
           timestamp: new Date().toISOString(),
+          topic,
           agentCount: report.agentCount,
           rounds: report.rounds,
           confirmed: report.confirmed || [],
@@ -254,9 +256,11 @@ export async function handleRelayCrossReview(
       const reportsDir = join(process.cwd(), '.gossip', 'consensus-reports');
       mkdirSync(reportsDir, { recursive: true });
       const reportPath = join(reportsDir, `${consensus_id}.json`);
+      const topic = synthSnapshot.allResults?.find((r: any) => r.task)?.task?.slice(0, 120) || '';
       writeFileSync(reportPath, JSON.stringify({
         id: consensus_id,
         timestamp: new Date().toISOString(),
+        topic,
         agentCount: report.agentCount,
         rounds: report.rounds,
         confirmed: report.confirmed || [],

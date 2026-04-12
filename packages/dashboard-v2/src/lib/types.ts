@@ -91,6 +91,7 @@ export interface ConsensusReportFinding {
 export interface ConsensusReport {
   id: string;
   timestamp: string;
+  topic?: string;
   agentCount: number;
   rounds: number;
   confirmed: ConsensusReportFinding[];

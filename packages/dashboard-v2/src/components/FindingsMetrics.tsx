@@ -37,6 +37,14 @@ const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: st
   { key: 'insight', label: 'Insight', cls: 'text-zinc-500 border-zinc-500/20 hover:border-zinc-500/40', activeCls: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/40' },
 ];
 
+const SEV_FILTER_CHIPS: { key: 'all' | 'critical' | 'high' | 'medium' | 'low'; label: string; cls: string; activeCls: string }[] = [
+  { key: 'all', label: 'All', cls: 'text-muted-foreground border-border/40 hover:border-border/60', activeCls: 'text-foreground bg-muted border-border' },
+  { key: 'critical', label: 'Critical', cls: 'text-red-400/50 border-red-400/20 hover:border-red-400/40', activeCls: 'text-red-400 bg-red-400/10 border-red-400/40' },
+  { key: 'high', label: 'High', cls: 'text-orange-400/50 border-orange-400/20 hover:border-orange-400/40', activeCls: 'text-orange-400 bg-orange-400/10 border-orange-400/40' },
+  { key: 'medium', label: 'Medium', cls: 'text-yellow-400/50 border-yellow-400/20 hover:border-yellow-400/40', activeCls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/40' },
+  { key: 'low', label: 'Low', cls: 'text-muted-foreground/50 border-border/40 hover:border-border/60', activeCls: 'text-muted-foreground bg-muted/50 border-border' },
+];
+
 const SEVERITY_CLS: Record<string, string> = {
   critical: 'text-red-400 bg-red-500/10',
   high: 'text-orange-400 bg-orange-500/10',
@@ -161,6 +169,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
   const hasMore = !showAll && consensus.runs.length > MAX_RUNS;
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
+  const [sevFilter, setSevFilter] = useState<'all' | 'critical' | 'high' | 'medium' | 'low'>('all');
 
   const [reportPage, setReportPage] = useState(1);
   const [loadedReports, setLoadedReports] = useState<ConsensusReport[]>([]);
@@ -293,9 +302,10 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               ...report.unique,
               ...(report.insights || []),
             ];
-            const filteredFindings = filter === 'all' ? allFindings
+            const typeFiltered = filter === 'all' ? allFindings
               : filter === 'insight' ? allFindings.filter(f => f.findingType === 'insight' || f.findingType === 'suggestion')
               : allFindings.filter(f => f.tag === filter);
+            const filteredFindings = sevFilter === 'all' ? typeFiltered : typeFiltered.filter(f => f.severity === sevFilter);
             const isExpanded = expandedId === report.id;
 
             const total = allFindings.length || 1;
@@ -400,6 +410,11 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                         </span>
                       ))}
                     </div>
+                    {report.topic && (
+                      <div className="mt-1 truncate text-[11px] text-muted-foreground/70" style={{ fontFamily: "'Inter', sans-serif", maxWidth: '500px' }}>
+                        {report.topic}
+                      </div>
+                    )}
                   </div>
                   {/* Chevron */}
                   <span className={`mt-1 shrink-0 font-mono text-[10px] text-muted-foreground/40 transition-transform duration-150 ${isExpanded ? 'rotate-90 text-primary/60' : 'group-hover:text-muted-foreground/60'}`}>
@@ -409,11 +424,21 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
 
                 {isExpanded && (
                   <div className="border-t border-border/20 px-4 pb-4 pt-3">
-                    <div className="mb-2 flex gap-2">
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="font-mono text-[10px] text-muted-foreground/50">Type:</span>
                       {FILTER_CHIPS.map(tab => (
                         <button key={tab.key} onClick={() => setFilter(tab.key)}
                           className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${filter === tab.key ? tab.activeCls : tab.cls}`}>
                           {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="font-mono text-[10px] text-muted-foreground/50">Severity:</span>
+                      {SEV_FILTER_CHIPS.map(chip => (
+                        <button key={chip.key} onClick={() => setSevFilter(chip.key)}
+                          className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${sevFilter === chip.key ? chip.activeCls : chip.cls}`}>
+                          {chip.label}
                         </button>
                       ))}
                     </div>

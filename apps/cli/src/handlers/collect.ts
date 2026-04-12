@@ -533,9 +533,11 @@ export async function handleCollect(
       mdr(reportsDir, { recursive: true });
       const reportId = consensusReport.signals?.[0]?.consensusId || Date.now().toString();
       const reportPath = jr(reportsDir, `${reportId}.json`);
+      const topic = allResults?.find((r: any) => r.task)?.task?.slice(0, 120) || '';
       wfr(reportPath, JSON.stringify({
         id: reportId,
         timestamp: new Date().toISOString(),
+        topic,
         agentCount: consensusReport.agentCount,
         rounds: consensusReport.rounds,
         confirmed: consensusReport.confirmed || [],
