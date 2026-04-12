@@ -70,24 +70,24 @@ function ReportFinding({ f, reviewInfo }: { f: ConsensusReportFinding; reviewInf
   const identifier = citeMatch ? citeMatch[1] : null;
 
   return (
-    <div className="rounded-md border border-border/30 bg-card/30 px-3 py-2.5">
+    <div className="rounded-md border border-border/40 hover:border-border/60 transition-colors bg-card/30 px-4 py-3.5">
       {/* Row 1: Tags + Identifier + Agent */}
       <div className="flex items-center gap-2 mb-1.5">
-        <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold ${tagCls}`}>
+        <span className={`shrink-0 rounded border px-2 py-1 font-mono text-[10px] font-bold ${tagCls}`}>
           {f.tag.toUpperCase()}
         </span>
         {f.severity && (
-          <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold ${sevCls}`}>
+          <span className={`shrink-0 rounded border px-2 py-1 font-mono text-[10px] font-bold ${sevCls}`}>
             {f.severity.toUpperCase()}
           </span>
         )}
         {typeLabel && (
-          <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold ${typeCls}`}>
+          <span className={`shrink-0 rounded border px-2 py-1 font-mono text-[10px] font-bold ${typeCls}`}>
             {typeLabel}
           </span>
         )}
         {identifier && (
-          <span className="rounded bg-blue-500/10 px-1.5 py-0.5 font-mono text-[9px] text-blue-400">
+          <span className="bg-blue-500/10 px-2 py-1 font-mono text-[10px] text-blue-400 border border-blue-500/15 rounded">
             {identifier}
           </span>
         )}
@@ -127,6 +127,7 @@ function ReportFinding({ f, reviewInfo }: { f: ConsensusReportFinding; reviewInf
       )}
       {/* Finding text */}
       <div className={`text-xs leading-relaxed text-muted-foreground ${CITE_STYLES}`}
+        style={{ fontFamily: "'Inter', sans-serif" }}
         dangerouslySetInnerHTML={{ __html: cleanFindingTags(f.finding) }} />
       {/* Cross-review coverage badge row */}
       {reviewInfo && (
@@ -411,12 +412,12 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                     <div className="mb-2 flex gap-2">
                       {FILTER_CHIPS.map(tab => (
                         <button key={tab.key} onClick={() => setFilter(tab.key)}
-                          className={`rounded-full border px-2.5 py-1 font-mono text-[10px] font-medium transition ${filter === tab.key ? tab.activeCls : tab.cls}`}>
+                          className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${filter === tab.key ? tab.activeCls : tab.cls}`}>
                           {tab.label}
                         </button>
                       ))}
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       {filteredFindings.length === 0 ? (
                         <div className="py-4 text-center text-xs text-muted-foreground">No findings match this filter.</div>
                       ) : (
