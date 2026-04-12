@@ -67,6 +67,8 @@ export interface ConsensusEngineConfig {
   projectRoot?: string;
   agentLlm?: (agentId: string) => ILLMProvider | undefined;
   verifierToolRunner?: (agentId: string, toolName: string, args: Record<string, unknown>) => Promise<string>;
+  /** Optional PerformanceReader for cross-reviewer selection (Step 2). Step 3 will wire this in. */
+  performanceReader?: import('./performance-reader').PerformanceReader;
 }
 
 export class ConsensusEngine {

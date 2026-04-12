@@ -119,6 +119,24 @@ export class PerformanceReader {
   }
 
   /**
+   * Count how many cross-review signals an agent has received in the last `days` days.
+   * Cross-review signal types: agreement, disagreement, unverified, new_finding.
+   * Uses readSignals() which already applies the 30-day expiry — the `days` param
+   * narrows that window further for callers that want a shorter lookback.
+   */
+  getRecentCrossReviewCount(agentId: string, days: number): number {
+    const CROSS_REVIEW_SIGNALS = new Set<ConsensusSignal['signal']>(['agreement', 'disagreement', 'unverified', 'new_finding']);
+    const cutoffMs = Date.now() - days * 86400000;
+    const signals = this.readSignals();
+    return signals.filter(s => {
+      if (s.agentId !== agentId) return false;
+      if (!CROSS_REVIEW_SIGNALS.has(s.signal)) return false;
+      const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
+      return isFinite(ts) && ts > cutoffMs;
+    }).length;
+  }
+
+  /**
    * Returns count of (correct, hallucinated) signals for an agent in a given
    * category, where signal timestamp >= sinceMs.
    *

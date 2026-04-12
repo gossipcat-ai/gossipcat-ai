@@ -232,12 +232,15 @@ export async function handleCollect(
       const verifierFs = new FileTools(new Sandbox(process.cwd()));
       const verifierGit = new GitTools(process.cwd());
       const verifierMemory = new MemorySearcher(process.cwd());
+      const { PerformanceReader } = await import('@gossip/orchestrator');
+      const performanceReader = new PerformanceReader(process.cwd());
 
       const engine = new ConsensusEngine({
         llm: mainLlm,
         registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
         projectRoot: process.cwd(),
         agentLlm: (id: string) => agentLlmCache.get(id),
+        performanceReader,
         verifierToolRunner: async (agentId: string, toolName: string, args: Record<string, unknown>): Promise<string> => {
           try {
             switch (toolName) {
