@@ -1,7 +1,7 @@
-# Relay-Only Consensus Phase 2
+# Orchestrator-Selected Cross-Review (formerly Relay-Only Consensus Phase 2)
 
-**Date:** 2026-04-10
-**Status:** Spec (revised after 3-agent review)
+**Date:** 2026-04-10 (revised 2026-04-12)
+**Status:** Spec (revised — NEEDS ANOTHER PASS before implementation)
 **Branch:** TBD
 **Designed via:** 3-agent parallel analysis + orchestrator synthesis
 **Reviewed by:** sonnet-reviewer, haiku-researcher, gemini-reviewer (2026-04-10)
@@ -24,172 +24,176 @@ The MCP server **cannot** launch native Agent() calls — only the host LLM can.
 This causes:
 - Protocol fragility: conversation drops mid-round → round lost
 - UX friction: ~15-20 tool calls per consensus round
-- Implementation complexity: ~230 LOC two-phase block in `collect.ts:209-438`
+- Fixed runtime assignment: every participating agent does Phase 2, regardless of whether they're the best choice for cross-review
 
-## Revised Proposal (post-review)
+## Key Insight (from user)
 
-### Default: Keep 5-step protocol (no change)
+The real design question is NOT "native vs relay for Phase 2" — it's **"which
+agents are best qualified to cross-review these specific findings?"** The
+orchestrator already has the data to answer this: per-agent accuracy scores,
+per-category competency profiles, and the categories of the actual findings in
+the round.
 
-The 5-step protocol remains the default. It was introduced specifically to fix
-quality issues with relay-only consensus, and the data does not support reverting
-that decision:
+Cross-reviewer selection should be driven by:
+1. Agent accuracy score (prefer high-accuracy reviewers)
+2. Category match (prefer reviewers strong in the finding's category)
+3. Not-self (an agent doesn't cross-review its own findings)
+4. Runtime cost (prefer relay when quality is comparable — faster, no tool-call friction)
 
-- gemini-reviewer accuracy is 0.11 (6x hallucination rate vs sonnet)
-- Cross-review is the adversarial phase most likely to surface hallucinations
-- The relay-only path (`collect.ts:205-207`) has NO `file_read`/`file_grep` tools
-  (see Critical Finding below)
+This is orthogonal to the native/relay split. A strong relay agent should
+cross-review instead of a weak native one. A strong native agent should
+cross-review instead of a weak relay one. The orchestrator picks the best
+advisors for each round.
 
-### Opt-in fast path: `fast_consensus: true`
+## Revised Proposal
 
-Add `fast_consensus: true` parameter to `gossip_collect` for when speed > quality:
+### Orchestrator-selected Phase 2 cross-reviewers
 
-1. `gossip_dispatch(mode: "consensus", tasks: [...])`
-2. Run native `Agent()` calls + `gossip_relay` each
-3. `gossip_collect(consensus: true, fast_consensus: true)` — server runs Phase 2
-   internally via relay agents, returns final result
+`gossip_collect(consensus: true)` becomes:
 
-**When to use:** iterative/low-stakes reviews, rapid prototyping, non-security code.
-**When NOT to use:** security audits, correctness reviews, anything where
-hallucinated findings would cause harm.
+1. Server synthesizes Phase 1 findings
+2. Server asks `PerformanceReader` which agents are best qualified to
+   cross-review each finding (by category match + accuracy score)
+3. Top-K reviewers are picked per finding (K=2 or K=3 depending on severity)
+4. Reviewers execute Phase 2 via the shared cross-review tool loop
+   (file_read, file_grep, file_search, memory_query, git_log — all runtimes)
+5. Final synthesized consensus returned
 
-### Future: Score-gated auto-selection
+Result:
+- No native/relay protocol split
+- Orchestrator (server) picks advisors based on competency data
+- Phase 2 becomes a server-side operation like the current relay-only path,
+  but with **selection** driving which agents participate
+- Users don't need to reason about `fast_consensus: true` vs enhanced — the
+  system auto-picks the best available cross-reviewers
 
-When relay reviewers reach an accuracy threshold (e.g., `hallucination_rate < 5%`),
-relay-only could become the auto-default. Until then, the opt-in flag is the
-correct UX contract.
+### Tool-blindness must be fixed first (prerequisite)
 
-## Critical Finding: Tool-Blindness Regression
+The existing `consensus-engine.ts:crossReviewForAgent` path calls
+`llm.generate(messages)` with no tools. Any relay agent taking that path is
+tool-blind — it cannot verify citations by reading code. This must be fixed
+before orchestrator-selected cross-review ships, because the new path routes
+MORE traffic through `crossReviewForAgent`, not less.
 
-**Found by:** sonnet-reviewer (2026-04-10 review)
+Move the `file_read`/`file_grep`/`file_search`/`memory_query`/`git_log` inline
+tool loop from `collect.ts:262-318` into
+`consensus-engine.ts:crossReviewForAgent` (lines 481-509). All cross-reviewers
+— native or relay — get the same tool set.
 
-The two code paths in `collect.ts` are **NOT equivalent**:
+`MAX_VERIFIER_TURNS` bumps from 6 to 7 to accommodate the expanded tool set.
 
-- **Two-phase path** (`collect.ts:208-438`): cross-reviewers get `file_read` +
-  `file_grep` via inline tool loop at `collect.ts:262-318`
-- **Relay-only path** (`collect.ts:205-207`): calls `engine.run()` →
-  `crossReviewForAgent` at `consensus-engine.ts:494` — `llm.generate(messages)`
-  with **no tools argument**. Raw text generation only.
+### Cross-reviewer selection heuristic
 
-The original spec acknowledged relay cross-reviewers were "tool-blind" and that
-the inline tool loop fixed it — then proposed defaulting to the path that **never
-received that fix**. This was a direct contradiction.
+```
+For each finding in Phase 1 results:
+  category = finding.category  // already extracted by consensus-engine
+  candidates = allAgents - finding.originalAuthor
+  scoredCandidates = candidates.map(agent => ({
+    agent,
+    score: (agent.accuracy * 0.7) + (agent.categoryStrength[category] * 0.3)
+  }))
+  topK = scoredCandidates.sortBy(score).take(K)  // K=2 for medium, K=3 for critical
+  reviewers[finding.id] = topK.map(c => c.agent)
+```
 
-### Required prerequisite (before `fast_consensus` can ship)
+Reviewers accumulate per finding, so a single finding can be checked by the
+best 2-3 agents across the portfolio, regardless of runtime.
 
-Move the `file_read`/`file_grep` tool loop from the two-phase block into
-`consensus-engine.ts:crossReviewForAgent` (lines 481-509) so that relay
-cross-reviewers ALWAYS have tool access, regardless of which path is taken.
+### Degenerate cases
 
-Without this fix, `fast_consensus: true` would silently revert the tool-blindness
-fix for all opt-in rounds.
+- **Single-reviewer round**: if only one eligible reviewer exists, skip Phase 2
+  and return Phase 1 results with a `consensus_verified: false` flag. Rare in
+  practice (8 agents on relay today).
+- **All reviewers below threshold**: if top-K all have accuracy < 0.3, emit a
+  warning but proceed — low-quality consensus is still more grounded than no
+  consensus. Dashboard should flag these rounds for operator review.
+- **Tool unavailable**: if `crossReviewForAgent` can't load verifier tools
+  (sandbox error, git unavailable), log and fall back to text-only review with
+  a warning signal recorded.
 
-## Evidence (from 3-agent review)
+## Implementation plan
 
-### All 3 agents converged on:
+### Step 1: Port tool loop to consensus-engine (~100 LOC)
 
-1. **Don't make relay-only the default** — quality contract must be preserved
-2. **Implementation is technically sound** — the conditional flip works
-3. **Quality tradeoff NOT acceptable** at current gemini accuracy (0.11)
+Move `file_read`/`file_grep`/`file_search`/`memory_query`/`git_log` inline tool
+access from `collect.ts:262-318` into
+`consensus-engine.ts:crossReviewForAgent` (lines 481-509). This ensures all
+cross-reviewers have tools regardless of selection path.
 
-### Enforcement asymmetry shifts, not solved (haiku-researcher)
+Bump `MAX_VERIFIER_TURNS` from 6 to 7 to accommodate the expanded tool set.
 
-Relay-only Phase 2 converts the enforcement problem from "orchestrator skips
-steps 3-5" to "orchestrator skips calling gossip_collect entirely." The Stage 1
-hard rejection hotfix from `project_consensus_enforcement.md` is still needed
-regardless of this spec.
+### Step 2: Add cross-reviewer selection (~80 LOC)
 
-### Signal pipeline loss (haiku-researcher)
+Add a `selectCrossReviewers(findings, allAgents, performanceReader)` function
+to `consensus-engine.ts` that implements the selection heuristic above. Wire it
+into `generateCrossReviewPrompts` so the returned prompts target the selected
+reviewers, not every agent in the round.
 
-If Phase 2 defaults to relay-only, sonnet-reviewer stops accumulating cross-review
-signals (agreement, disagreement, hallucination_caught). Round 694fd69a shows 10+
-of sonnet-reviewer's 15 signals per round are cross-review actions. Removing this
-removes the adversarial training that keeps it sharp.
+### Step 3: Default server-side Phase 2 (~50 LOC)
 
-### Resilience regression (sonnet-reviewer)
+Make `gossip_collect(consensus: true)` always run Phase 2 server-side via the
+selected reviewers. The current two-phase block in `collect.ts:208-438` stays
+only as a fallback when server-side Phase 2 fails (error path).
 
-The two-phase flow persists `ctx.pendingConsensusRounds` at `collect.ts:389`,
-allowing recovery on MCP restart. The relay-only path calls `runConsensus`
-directly — synchronous, no intermediate persistence. MCP restart during
-`engine.run()` loses the entire round with no recovery path.
+### Step 4: Update dispatch + docs (~30 LOC)
 
-### Self-assessment (gemini-reviewer)
+- `gossip_dispatch(mode: "consensus")` response no longer emits the 5-step warning
+- New response: "Phase 1 dispatched. Run native Agent() calls, relay results,
+  then call gossip_collect(consensus: true). Phase 2 cross-review is automatic
+  and orchestrator-selected."
+- Update CLAUDE.md + HANDBOOK.md consensus protocol section
+- Document selection heuristic + degenerate cases
 
-gemini-reviewer self-assessed: "my hallucination rate makes me a net negative as
-default cross-reviewer." Requested specialized skills + explicit self-correction
-loop before taking this role. Also flagged that silent relay cross-review failures
-(collect.ts:319-331) are dangerous — should fail loudly, not soft-log.
+### Step 5: Dashboard visibility (~30 LOC)
 
-### Middle-ground: relay auto + optional native merge (haiku-researcher)
+Show per-round cross-reviewer selection rationale in consensus report view:
+"gemini-tester chosen for data_integrity finding (accuracy=0.25, category
+strength=0.6)". Makes the selection auditable.
 
-A hybrid approach preserves the 3-step UX while allowing quality opt-in:
-- Phase 2a (auto): relay agents cross-review server-side
-- Phase 2b (optional): orchestrator can add native cross-review results merged
-  before synthesis
-- Infrastructure supports this: `findingId`-based merging at
-  `consensus-engine.ts:748-768`, pending native handling at `collect.ts:362-389`
+## Future work
 
-This is a future enhancement, not in scope for the initial implementation.
+- **Durable coordinator**: persist state to JSON, recover on restart
+- **Score-gated auto-default**: already implicit in selection — low-score
+  agents naturally drop out of top-K
+- **Native merge hybrid**: no longer needed — selection handles this
 
-## Implementation plan (revised)
+## Open issues from 2026-04-12 review
 
-### Step 1: Port tool loop to consensus-engine (~80 LOC)
+Spec reviewed by sonnet-reviewer + haiku-researcher. 12 issues must be resolved before implementation:
 
-Move `file_read`/`file_grep` inline tool access from `collect.ts:262-318` into
-`consensus-engine.ts:crossReviewForAgent` (lines 481-509). This ensures relay
-cross-reviewers always have tools regardless of which path is taken.
+### Critical bugs in spec math (HIGH)
 
-Expand the cross-review verifier tool set from 2 tools to 5:
+1. **`categoryStrength` is unbounded** — performance-reader.ts:359 accumulates additively, not as a ratio. Can reach 3.7+. Breaks the 0.7/0.3 weighting math. **Fix:** use `categoryAccuracy[category]` instead — proper [0,1] ratio with MIN_CATEGORY_N=5 gate.
+2. **Category is agent-declared, not server-verified** — consensus-engine.ts:1562 reads whatever the agent wrote. Null category produces NaN in sort. **Fix:** call `extractCategories()` as authoritative, or add null guard that drops the category term when missing.
+3. **Single-reviewer `consensus_verified:false` is wrong signal** — Phase 1 results were never cross-reviewed, not disputed. **Fix:** use `partialReview:true` flag, define partial-K as `min(K, eligibleCount)` requiring at least 1.
+4. **K per severity undefined for HIGH** — spec says "K=2 medium, K=3 critical" but not K for HIGH. Fewer-than-K eligible case ambiguous. **Fix:** prescriptive table (critical=3, high/medium/low=2) + partial-K behavior.
 
-| Tool | Purpose in cross-review |
-|------|------------------------|
-| `file_read` | Verify cited code exists at claimed line (already have) |
-| `file_grep` | Search for identifiers in findings (already have) |
-| `file_search` | Find related files when a finding names a function but not a file (NEW) |
-| `memory_query` | Recall prior findings, prevent re-discovery and self-contradiction (NEW) |
-| `git_log` | Verify "introduced in commit X" claims, check recency (NEW) |
+### Architectural concerns (HIGH)
 
-Currently relay cross-reviewers get only `file_read` + `file_grep`
-(collect.ts:262). Phase 1 relay workers have the full tool set via the Tool
-Server (`mcp-server-sdk.ts:398`), but Phase 2 doesn't. Without memory access,
-cross-reviewers can't check "did I already flag this?" The memory system exists
-to prevent re-discovery and self-contradiction; excluding it from cross-review
-defeats that purpose.
+5. **Missing epsilon-greedy exploration** — top-K without exploration creates self-reinforcing advantage (Matthew effect). Weak agents starve. **Fix:** allocate 10-15% slots to below-median agents via round-robin or weighted-random.
+6. **Signal pipeline starvation** — volume drops 50-90% for most agents under top-K. Mid-tier recovery slows due to confidence-gating. **Fix:** acknowledge tradeoff explicitly, consider batching to preserve signal volume.
+7. **Enforcement asymmetry NOT solved** — two-phase path still requires orchestrator to call `gossip_relay_cross_review`. "Server-side enforcement" is aspirational for relay-only path only. **Fix:** acknowledge this is a soft enforcement improvement, not a hard one.
+8. **Selection bias risk** — scoring miscalibration compounds in selectively-grounded path. **Fix:** dashboard monitoring of per-agent/category coverage.
 
-Also bump `MAX_VERIFIER_TURNS` from 6 to 7 to accommodate the expanded tool set.
+### Implementation gaps (MEDIUM)
 
-### Step 2: Add `fast_consensus` parameter (~50 LOC)
+9. **K multiplier dispatch cost** — batching unspecified. 10 findings × K=2 = 20 naive dispatches vs 4 batched. **Fix:** `selectCrossReviewers` returns `Map<agentId, Set<findingId>>`, batches prompts per reviewer.
+10. **FileTools/Sandbox dependency** — lives in apps/cli, not packages/orchestrator. ConsensusEngine can't import it. **Fix:** callback injection pattern — add `verifierToolRunner` to `ConsensusEngineConfig`.
+11. **Zero-category-expert fallback undocumented** — e.g., "reentrancy" in a web-app codebase. **Fix:** explicit fallback — rank by accuracy alone when no agent has positive category strength.
 
-In `apps/cli/src/handlers/collect.ts`:
-- Add `fast_consensus` as optional param to `gossip_collect` tool schema
-  (`mcp-server-sdk.ts` schema + `collect.ts` handler signature)
-- At `collect.ts:205`, change condition to:
-  `if (nativeAgentIds.size === 0 || fast_consensus)`
-- The ~230 LOC two-phase block stays intact as the default path
+### Quick wins (INSIGHT)
 
-### Step 3: Update dispatch instructions (~20 LOC)
+12. **Exclude circuit-open agents** — `PerformanceReader.isCircuitOpen()` not referenced in spec. One-line filter: `candidates.filter(a => !perfReader.isCircuitOpen(a.agentId))`.
 
-- `gossip_dispatch(mode: "consensus")` response keeps the 5-step warning
-- Add note: "For faster rounds with relay-only cross-review, pass
-  `fast_consensus: true` to gossip_collect"
-
-### Step 4: Update CLAUDE.md + HANDBOOK.md (~10 lines)
-
-- Document `fast_consensus: true` flag with guidance on when to use it
-- Keep 5-step as the documented default protocol
-
-### Future work (separate PRs)
-
-- **Durable coordinator**: persist coordinator state to JSON, recover on restart
-- **Accuracy-weighted assignment**: route Phase 2 to strongest available reviewer
-- **Score-gated auto-default**: auto-select relay-only when accuracy threshold met
-- **Native merge hybrid**: relay auto Phase 2 + optional native merge
+Before implementation: another design pass incorporating all 12 fixes. P3 is deferred from this session's work.
 
 ## Test plan
 
-- [ ] 5-step consensus continues to work as default (no regression)
-- [ ] `fast_consensus: true` activates relay-only Phase 2
-- [ ] Relay cross-reviewers have `file_read`/`file_grep` in BOTH paths
-- [ ] Verify `synthesize()` produces identical output regardless of reviewer identity
+- [ ] Tool loop port: verify file_read/file_grep/file_search/memory_query/git_log all work in crossReviewForAgent
+- [ ] Selection heuristic: top-K by accuracy * 0.7 + category * 0.3
+- [ ] Reviewer excludes the finding's original author
+- [ ] Single-reviewer degenerate case returns consensus_verified: false
+- [ ] Low-quality warning when top-K all < 0.3 accuracy
+- [ ] MAX_VERIFIER_TURNS bump: no regressions on existing cross-review tests
+- [ ] Dashboard shows selection rationale per finding
 - [ ] Run existing 82 consensus-engine tests (no regressions)
-- [ ] Test: relay cross-review failure produces visible warning, not silent skip
-- [ ] Test: MCP restart mid-round in fast_consensus mode → clear error state
