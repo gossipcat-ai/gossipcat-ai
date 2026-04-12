@@ -242,19 +242,32 @@ export async function handleCollect(
         agentLlm: (id: string) => agentLlmCache.get(id),
         performanceReader,
         verifierToolRunner: async (agentId: string, toolName: string, args: Record<string, unknown>): Promise<string> => {
+          const toolStart = Date.now();
           try {
+            let result: string;
             switch (toolName) {
-              case 'file_read': return await verifierFs.fileRead(args as any);
-              case 'file_grep': return await verifierFs.fileGrep(args as any);
-              case 'file_search': return await verifierFs.fileSearch(args as any);
+              case 'file_read': result = await verifierFs.fileRead(args as any); break;
+              case 'file_grep': result = await verifierFs.fileGrep(args as any); break;
+              case 'file_search': result = await verifierFs.fileSearch(args as any); break;
               case 'memory_query': {
                 const results = verifierMemory.search(agentId, (args as any).query ?? '', 5);
-                return results.length ? results.map(r => `[${r.source}] ${r.name}: ${r.snippets.join(' | ')}`).join('\n---\n') : 'No memory results found.';
+                result = results.length ? results.map(r => `[${r.source}] ${r.name}: ${r.snippets.join(' | ')}`).join('\n---\n') : 'No memory results found.';
+                break;
               }
-              case 'git_log': return await verifierGit.gitLog(args as any);
-              default: return `Unknown tool: ${toolName}`;
+              case 'git_log': result = await verifierGit.gitLog(args as any); break;
+              default: result = `Unknown tool: ${toolName}`;
             }
+            const argSummary = toolName === 'file_read' ? (args as any).path
+              : toolName === 'file_grep' ? `"${(args as any).pattern}" in ${(args as any).path ?? '.'}`
+              : toolName === 'file_search' ? (args as any).pattern
+              : toolName === 'memory_query' ? `"${(args as any).query}"`
+              : '';
+            const now = new Date(); const stamp = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
+            process.stderr.write(`${stamp} 🤝 [consensus] 🔧 ${agentId} tool_call: ${toolName}(${argSummary}) → ${result.length}B (${Date.now() - toolStart}ms)\n`);
+            return result;
           } catch (e) {
+            const now = new Date(); const stamp = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
+            process.stderr.write(`${stamp} 🤝 [consensus] 🔧 ${agentId} tool_call: ${toolName} → ERROR (${Date.now() - toolStart}ms)\n`);
             return `Tool error: ${(e as Error).message}`;
           }
         },

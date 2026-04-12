@@ -481,10 +481,11 @@ SOURCE FILES: Always cite original source files, not compiled/bundled build outp
 
 VERIFICATION RULES:
 - If a finding has an <anchor> block, use the code shown to verify the claim
+- If a finding LACKS an anchor or the anchor is insufficient, use the file_read and file_grep tools to look up the cited code yourself before marking UNVERIFIED. Only mark UNVERIFIED after you have attempted tool-based verification and still cannot confirm or refute.
 - AGREE only if you can confirm the claim is factually correct — cite your evidence
 - DISAGREE only if you have concrete evidence the finding is WRONG — the code contradicts the claim
-- UNVERIFIED if an anchor is missing for a cited file, the line number is wrong, or the code in the anchor is insufficient to verify the claim. UNVERIFIED is the correct default when you lack context — it is NOT a failure. Use it freely whenever you cannot confidently verify or refute.
-- ⚠ warnings mean the agent's citation is unresolvable (file not found, line out of range, or blank line). Treat these as UNVERIFIED — do NOT agree with findings that have broken citations.
+- UNVERIFIED only as a last resort after attempting tool-based verification — when the file doesn't exist, the tool returned an error, or the code is genuinely ambiguous
+- ⚠ warnings mean the agent's citation is unresolvable (file not found, line out of range, or blank line). Use file_read/file_grep to attempt verification before falling back to UNVERIFIED.
 - Do NOT agree with a finding just because it sounds plausible — verify it
 - Agreeing without verification is WORSE than disagreeing — a false confirmation poisons the system
 
@@ -533,7 +534,9 @@ Return only valid JSON.`;
         while (true) {
           response = await llm.generate(messages, { temperature: 0, tools: VERIFIER_TOOLS });
           const calls = response.toolCalls ?? [];
+          _log('consensus', `🔧 ${agent.agentId} verifier response: ${calls.length} tool call(s), text=${response.text?.length ?? 0}chars`);
           if (calls.length === 0) break;
+          _log('consensus', `🔧 ${agent.agentId} verifier turn ${turn + 1}: ${calls.length} tool call(s) [${calls.map(c => c.name).join(', ')}]`);
           if (turn >= MAX_VERIFIER_TURNS) {
             messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: calls } as LLMMessage);
             await runToolCalls(calls);
