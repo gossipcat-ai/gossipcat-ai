@@ -99,11 +99,12 @@ export function selectCrossReviewers(
     const medianScore = median(scoredCandidates.map(c => c.score));
     const topKSet = new Set(topK.map(c => c.agent.agentId));
     const belowMedian = scoredCandidates.filter(
-      c => c.score <= medianScore && !topKSet.has(c.agent.agentId),
+      c => c.score > 0 && c.score <= medianScore && !topKSet.has(c.agent.agentId),
     );
 
     if (belowMedian.length > 0) {
       // Signal starvation — look at the most signal-starved below-median candidate
+      // Note: belowMedian is already filtered to score > 0 in the filter above
       const signalCounts = belowMedian.map(c =>
         performanceReader.getRecentCrossReviewCount(c.agent.agentId, 30),
       );
