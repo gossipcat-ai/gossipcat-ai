@@ -2045,13 +2045,37 @@ server.tool(
         };
       });
 
-      writer.appendSignals(formatted);
+      // Dedup gate: reject signals whose finding_id already exists in the performance file.
+      // Prevents duplicate scoring when a future session re-verifies stale UNVERIFIED findings.
+      const existingFindingIds = new Set<string>();
+      try {
+        const { readFileSync } = await import('fs');
+        const perfPath = require('path').join(process.cwd(), '.gossip', 'agent-performance.jsonl');
+        const lines = readFileSync(perfPath, 'utf-8').split('\n').filter(Boolean);
+        for (const line of lines) {
+          try {
+            const rec = JSON.parse(line);
+            if (rec.findingId) existingFindingIds.add(rec.findingId);
+          } catch { /* skip malformed lines */ }
+        }
+      } catch { /* file may not exist yet */ }
+
+      const dupes: string[] = [];
+      const deduped = formatted.filter(s => {
+        if (s.type === 'consensus' && s.findingId && existingFindingIds.has(s.findingId)) {
+          dupes.push(`${s.findingId} (${s.agentId}/${s.signal})`);
+          return false;
+        }
+        return true;
+      });
+
+      if (deduped.length > 0) writer.appendSignals(deduped);
 
       // Auto-convert hallucination signals into skill gap suggestions.
       // Reuses the category derived above (formatted[i].category) so the suggestion
       // pipeline and the signal pipeline always agree on which category fired.
       type ConsensusPS = Extract<PS, { type: 'consensus' }>;
-      const hallucinationSignals = formatted.filter(
+      const hallucinationSignals = deduped.filter(
         (s): s is ConsensusPS => s.type === 'consensus' && s.signal === 'hallucination_caught',
       );
       if (hallucinationSignals.length > 0) {
@@ -2073,7 +2097,7 @@ server.tool(
       }
 
       // Detect severity miscalibration: auto-record when orchestrator overrides agent's severity
-      for (const s of formatted) {
+      for (const s of deduped) {
         if (s.type !== 'consensus') continue;
         if (!s.severity || !s.findingId) continue;
         const originalSeverity = lookupFindingSeverity(s.findingId, process.cwd());
@@ -2214,19 +2238,22 @@ server.tool(
         'impl_peer_approved',
       ]);
       const byAgent = new Map<string, { pos: number; neg: number }>();
-      for (const s of signals) {
-        const entry = byAgent.get(s.agent_id) || { pos: 0, neg: 0 };
+      for (const s of deduped) {
+        const entry = byAgent.get(s.agentId) || { pos: 0, neg: 0 };
         if (POSITIVE_SIGNALS.has(s.signal)) entry.pos++;
         else entry.neg++;
-        byAgent.set(s.agent_id, entry);
+        byAgent.set(s.agentId, entry);
       }
 
       const summary = Array.from(byAgent.entries())
         .map(([id, { pos, neg }]) => `  ${id}: +${pos} / -${neg}`)
         .join('\n');
 
-      const taskIdList = formatted.map(f => `  ${f.agentId}: ${f.taskId}`).join('\n');
-      let baseReceipt = `Recorded ${signals.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\nThese will influence future agent selection via dispatch weighting.`;
+      const taskIdList = deduped.map(f => `  ${f.agentId}: ${f.taskId}`).join('\n');
+      let baseReceipt = `Recorded ${deduped.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\nThese will influence future agent selection via dispatch weighting.`;
+      if (dupes.length > 0) {
+        baseReceipt += `\n\n⚠️ ${dupes.length} duplicate signal(s) skipped (finding_id already recorded):\n  ${dupes.join('\n  ')}`;
+      }
 
       // Post-write check: nudge orchestrator toward skill development when this batch
       // moved an agent into a weak state. Best-effort, never blocks the receipt.
@@ -2234,7 +2261,7 @@ server.tool(
         const { PerformanceReader, SkillGapTracker } = await import('@gossip/orchestrator');
         const reader = new PerformanceReader(process.cwd());
         const scores = reader.getScores();
-        const batchAgentIds = Array.from(new Set(formatted.map(f => f.agentId)));
+        const batchAgentIds = Array.from(new Set(deduped.map(f => f.agentId)));
         const triggers: string[] = [];
 
         for (const agentId of batchAgentIds) {
