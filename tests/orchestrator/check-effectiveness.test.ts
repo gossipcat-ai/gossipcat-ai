@@ -322,3 +322,25 @@ describe('checkEffectiveness — delta-from-delta regression', () => {
     expect(['passed', 'failed', 'inconclusive']).toContain(v.status);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Test 8 — NaN guard on invalid bound_at
+// ---------------------------------------------------------------------------
+
+describe('checkEffectiveness — NaN guard on invalid bound_at', () => {
+  it('should return pending (not crash) when bound_at is an invalid date string', () => {
+    const snap: SkillSnapshot = { ...baseSnapshot, bound_at: 'not-a-date' };
+    const delta = { correct: 130, hallucinated: 10 };
+    const v = resolveVerdict(snap, delta, Date.now());
+    expect(v.status).toBe('pending');
+    expect(v.shouldUpdate).toBe(false);
+  });
+
+  it('should return pending when bound_at is empty string', () => {
+    const snap: SkillSnapshot = { ...baseSnapshot, bound_at: '' };
+    const delta = { correct: 130, hallucinated: 10 };
+    const v = resolveVerdict(snap, delta, Date.now());
+    expect(v.status).toBe('pending');
+    expect(v.shouldUpdate).toBe(false);
+  });
+});

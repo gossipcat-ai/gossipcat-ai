@@ -2,15 +2,15 @@
 
 function ts(): string {
   const d = new Date();
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  const ss = String(d.getUTCSeconds()).padStart(2, '0');
+  const ms = String(d.getUTCMilliseconds()).padStart(3, '0');
   return `${hh}:${mm}:${ss}.${ms}`;
 }
 
-/** Tag → emoji prefix for visual scanning in mcp.log */
-const TAG_EMOJI: Record<string, string> = {
+/** Tag → emoji prefix for visual scanning in mcp.log. Null-prototype to avoid __proto__ traversal. */
+const TAG_EMOJI: Record<string, string> = Object.assign(Object.create(null), {
   gossipcat:     '🐱',
   consensus:     '🤝',
   worker:        '⚙️',
@@ -21,7 +21,7 @@ const TAG_EMOJI: Record<string, string> = {
   Gemini:        '🔮',
   GeminiProvider:'🔮',
   google:        '🔮',
-};
+});
 
 function emojiFor(tag: string): string {
   // Direct match

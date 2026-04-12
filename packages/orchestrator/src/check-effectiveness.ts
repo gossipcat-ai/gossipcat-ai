@@ -85,6 +85,9 @@ export function resolveVerdict(
 
   // Timeout check (against original bound_at, not inconclusive epoch)
   const boundAtMs = new Date(snapshot.bound_at).getTime();
+  if (isNaN(boundAtMs)) {
+    return { status: 'pending' as const, shouldUpdate: false };
+  }
   const elapsedMs = nowMs - boundAtMs;
   const timedOut = elapsedMs >= TIMEOUT_MS;
 
