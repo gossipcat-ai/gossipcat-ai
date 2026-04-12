@@ -9,7 +9,7 @@ function shortConsensusId(): string {
   const hex = randomUUID().replace(/-/g, '');
   return hex.slice(0, 8) + '-' + hex.slice(8, 16);
 }
-import { LLMMessage } from '@gossip/types';
+import { LLMMessage, ToolDefinition } from '@gossip/types';
 import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry } from './consensus-types';
@@ -51,12 +51,22 @@ function budgetForAgent(preset: string): number {
 const MIN_FINDINGS_PER_PEER = 2;
 const VALID_ACTIONS = new Set(['agree', 'disagree', 'unverified', 'new']);
 const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
+const MAX_VERIFIER_TURNS = 7;
+
+const VERIFIER_TOOLS: ToolDefinition[] = [
+  { name: 'file_read', description: 'Read file contents', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Absolute or project-relative file path' }, startLine: { type: 'number', description: 'First line to read (1-based)' }, endLine: { type: 'number', description: 'Last line to read (inclusive)' } }, required: ['path'] } },
+  { name: 'file_grep', description: 'Search file contents by regex', parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Regex pattern to search for' }, path: { type: 'string', description: 'Directory or file to search in' }, maxResults: { type: 'number', description: 'Maximum number of results to return' } }, required: ['pattern'] } },
+  { name: 'file_search', description: 'Find files by glob pattern', parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Glob pattern to match files' }, path: { type: 'string', description: 'Root directory to search from' } }, required: ['pattern'] } },
+  { name: 'memory_query', description: 'Search agent memory by keyword', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Keyword or phrase to search memory' } }, required: ['query'] } },
+  { name: 'git_log', description: 'Show git log for a file or path', parameters: { type: 'object', properties: { path: { type: 'string', description: 'File or directory to show history for' }, maxCount: { type: 'number', description: 'Maximum number of commits to return' } }, required: [] } },
+];
 
 export interface ConsensusEngineConfig {
   llm: ILLMProvider;
   registryGet: (agentId: string) => AgentConfig | undefined;
   projectRoot?: string;
   agentLlm?: (agentId: string) => ILLMProvider | undefined;
+  verifierToolRunner?: (agentId: string, toolName: string, args: Record<string, unknown>) => Promise<string>;
 }
 
 export class ConsensusEngine {
@@ -477,6 +487,8 @@ Return only valid JSON.`;
 
   /**
    * Build the cross-review prompt for a single agent and call the LLM.
+   * When `config.verifierToolRunner` is set, runs an inline tool loop so the
+   * reviewer can verify file contents before emitting findings.
    */
   private async crossReviewForAgent(
     agent: TaskEntry,
@@ -491,7 +503,47 @@ Return only valid JSON.`;
 
     try {
       const llm = this.config.agentLlm?.(agent.agentId) ?? this.config.llm;
-      const response = await llm.generate(messages, { temperature: 0 });
+      const { verifierToolRunner } = this.config;
+
+      let response: Awaited<ReturnType<typeof llm.generate>>;
+
+      if (verifierToolRunner) {
+        const runToolCalls = async (calls: any[]) => {
+          for (const tc of calls) {
+            let out: string;
+            try {
+              out = await verifierToolRunner(agent.agentId, tc.name, tc.arguments as Record<string, unknown>);
+            } catch (e) {
+              out = `Error: ${(e as Error).message}`;
+            }
+            if (out.length > 8000) out = out.slice(0, 8000) + '\n…[truncated]';
+            messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content: out } as LLMMessage);
+          }
+        };
+
+        let turn = 0;
+        while (true) {
+          response = await llm.generate(messages, { temperature: 0, tools: VERIFIER_TOOLS });
+          const calls = response.toolCalls ?? [];
+          if (calls.length === 0) break;
+          if (turn >= MAX_VERIFIER_TURNS) {
+            messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: calls } as LLMMessage);
+            await runToolCalls(calls);
+            messages.push({
+              role: 'user',
+              content: 'You have reached the maximum verification turns. Emit your cross-review findings now in the required JSON format. Do not request additional tools.',
+            } as LLMMessage);
+            response = await llm.generate(messages, { temperature: 0 });
+            break;
+          }
+          messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: calls } as LLMMessage);
+          await runToolCalls(calls);
+          turn++;
+        }
+      } else {
+        response = await llm.generate(messages, { temperature: 0 });
+      }
+
       if (!response.text?.trim()) {
         _log('consensus', `${agent.agentId} returned empty cross-review response`);
         return [];

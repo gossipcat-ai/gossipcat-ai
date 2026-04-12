@@ -3,6 +3,16 @@
     "gossipcat"
   ],
   "enableAllProjectMcpServers": true,
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "Bash(git *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(node *)"
+    ]
+  },
   "hooks": {
     "UserPromptSubmit": [
       {

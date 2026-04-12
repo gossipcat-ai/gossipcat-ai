@@ -5,7 +5,8 @@
 import { ctx } from '../mcp-context';
 import { startConsensusTimeout, persistPendingConsensus } from './relay-cross-review';
 import { persistRelayTasks } from './relay-tasks';
-import { FILE_TOOLS, FileTools, Sandbox } from '@gossip/tools';
+import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
+import { MemorySearcher } from '@gossip/orchestrator';
 
 export async function handleCollect(
   task_ids: string[],
@@ -226,11 +227,34 @@ export async function handleCollect(
       if (!mainLlm) {
         return { content: [{ type: 'text' as const, text: 'Error: No LLM configured for consensus. Check gossip_setup.' }] };
       }
+
+      // Hoisted so verifierToolRunner callback can close over it when building the engine config.
+      const verifierFs = new FileTools(new Sandbox(process.cwd()));
+      const verifierGit = new GitTools(process.cwd());
+      const verifierMemory = new MemorySearcher(process.cwd());
+
       const engine = new ConsensusEngine({
         llm: mainLlm,
         registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
         projectRoot: process.cwd(),
         agentLlm: (id: string) => agentLlmCache.get(id),
+        verifierToolRunner: async (agentId: string, toolName: string, args: Record<string, unknown>): Promise<string> => {
+          try {
+            switch (toolName) {
+              case 'file_read': return await verifierFs.fileRead(args as any);
+              case 'file_grep': return await verifierFs.fileGrep(args as any);
+              case 'file_search': return await verifierFs.fileSearch(args as any);
+              case 'memory_query': {
+                const results = verifierMemory.search(agentId, (args as any).query ?? '', 5);
+                return results.length ? results.map(r => `[${r.source}] ${r.name}: ${r.snippets.join(' | ')}`).join('\n---\n') : 'No memory results found.';
+              }
+              case 'git_log': return await verifierGit.gitLog(args as any);
+              default: return `Unknown tool: ${toolName}`;
+            }
+          } catch (e) {
+            return `Tool error: ${(e as Error).message}`;
+          }
+        },
       });
 
       // Phase 2a: Generate cross-review prompts for all agents
@@ -260,7 +284,6 @@ export async function handleCollect(
       // file_grep through a small inline tool loop so reviewers can verify
       // identifiers and snippets against the actual repo.
       const verifierTools = FILE_TOOLS.filter(t => t.name === 'file_read' || t.name === 'file_grep');
-      const verifierFs = new FileTools(new Sandbox(process.cwd()));
       const MAX_VERIFIER_TURNS = 6;
 
       const runOneRelayCrossReview = async (p: any, attempt: number): Promise<void> => {
