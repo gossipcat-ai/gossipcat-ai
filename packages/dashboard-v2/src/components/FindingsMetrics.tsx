@@ -46,7 +46,13 @@ const SEVERITY_CLS: Record<string, string> = {
 
 const CITE_STYLES = '[&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400 [&_.inline-code]:rounded [&_.inline-code]:bg-muted [&_.inline-code]:px-1 [&_.inline-code]:py-0.5 [&_.inline-code]:font-mono [&_.inline-code]:text-[11px] [&_.inline-code]:text-foreground/80 [&_.inline-code-block]:my-1.5 [&_.inline-code-block]:block [&_.inline-code-block]:rounded [&_.inline-code-block]:bg-muted/70 [&_.inline-code-block]:p-2 [&_.inline-code-block]:font-mono [&_.inline-code-block]:text-[11px] [&_.inline-code-block]:text-foreground/70 [&_.inline-code-block]:overflow-x-auto';
 
-function ReportFinding({ f }: { f: ConsensusReportFinding }) {
+interface FindingReviewInfo {
+  reviewers: string[];
+  assigned: number;
+  targetK: number;
+}
+
+function ReportFinding({ f, reviewInfo }: { f: ConsensusReportFinding; reviewInfo?: FindingReviewInfo }) {
   const tagCls = f.tag === 'confirmed' ? 'text-confirmed bg-confirmed/10 border-confirmed/20'
     : f.tag === 'disputed' ? 'text-disputed bg-disputed/10 border-disputed/20'
     : f.tag === 'unverified' ? 'text-unverified bg-unverified/10 border-unverified/20'
@@ -122,6 +128,29 @@ function ReportFinding({ f }: { f: ConsensusReportFinding }) {
       {/* Finding text */}
       <div className={`text-xs leading-relaxed text-muted-foreground ${CITE_STYLES}`}
         dangerouslySetInnerHTML={{ __html: cleanFindingTags(f.finding) }} />
+      {/* Cross-review coverage badge row */}
+      {reviewInfo && (
+        <div className="mt-1.5 flex items-center gap-1.5">
+          {reviewInfo.reviewers.map(rid => (
+            <span
+              key={rid}
+              title={rid}
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full font-mono text-[7px] font-bold text-background opacity-70"
+              style={{ backgroundColor: agentColor(rid) }}
+            >
+              {agentInitials(rid)}
+            </span>
+          ))}
+          <span className={`rounded px-1.5 py-0.5 font-mono text-[9px] font-bold ${
+            reviewInfo.assigned >= reviewInfo.targetK
+              ? 'text-confirmed/70 bg-confirmed/5'
+              : 'text-unverified/70 bg-unverified/5'
+          }`}>
+            {reviewInfo.assigned >= reviewInfo.targetK ? '\u2713' : '\u26A0'}{' '}
+            {reviewInfo.assigned}/{reviewInfo.targetK}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -227,6 +256,35 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
             const currentBucket = showAll ? dateBucket(report.timestamp) : null;
             const prevBucket = showAll && prev ? dateBucket(prev.timestamp) : null;
             const showBucketHeader = showAll && currentBucket !== prevBucket;
+            // Build cross-review lookup: findingId → FindingReviewInfo
+            const reviewLookup: Record<string, FindingReviewInfo> = {};
+            if (report.crossReviewAssignments || report.crossReviewCoverage) {
+              // Invert assignments: reviewerAgentId → findingId[] into findingId → reviewerAgentId[]
+              const findingReviewers: Record<string, string[]> = {};
+              if (report.crossReviewAssignments) {
+                for (const [reviewerId, findingIds] of Object.entries(report.crossReviewAssignments)) {
+                  for (const fid of findingIds) {
+                    (findingReviewers[fid] ??= []).push(reviewerId);
+                  }
+                }
+              }
+              // Build from coverage array
+              if (report.crossReviewCoverage) {
+                for (const cov of report.crossReviewCoverage) {
+                  reviewLookup[cov.findingId] = {
+                    reviewers: findingReviewers[cov.findingId] || [],
+                    assigned: cov.assigned,
+                    targetK: cov.targetK,
+                  };
+                }
+              } else {
+                // Fallback: only assignments, no coverage — synthesize from reviewer count
+                for (const [fid, reviewers] of Object.entries(findingReviewers)) {
+                  reviewLookup[fid] = { reviewers, assigned: reviewers.length, targetK: reviewers.length };
+                }
+              }
+            }
+
             const allFindings = [
               ...report.confirmed,
               ...report.disputed,
@@ -362,7 +420,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       {filteredFindings.length === 0 ? (
                         <div className="py-4 text-center text-xs text-muted-foreground">No findings match this filter.</div>
                       ) : (
-                        filteredFindings.map((f, j) => <ReportFinding key={j} f={f} />)
+                        filteredFindings.map((f, j) => <ReportFinding key={j} f={f} reviewInfo={f.id ? reviewLookup[f.id] : undefined} />)
                       )}
                     </div>
                   </div>
