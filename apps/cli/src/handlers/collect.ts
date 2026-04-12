@@ -232,6 +232,22 @@ export async function handleCollect(
       const verifierFs = new FileTools(new Sandbox(process.cwd()));
       const verifierGit = new GitTools(process.cwd());
       const verifierMemory = new MemorySearcher(process.cwd());
+
+      // Resolve short file paths (e.g. "cross-reviewer-selection.ts") to full project-relative
+      // paths. LLMs often cite just the filename without the directory prefix.
+      const resolveToolPath = async (filePath: string): Promise<string> => {
+        if (!filePath) return filePath;
+        // Try as-is first — if Sandbox validates it, the file exists
+        try { new Sandbox(process.cwd()).validatePath(filePath); return filePath; } catch { /* not found */ }
+        // Search via file_search for the bare filename
+        const fileName = filePath.split('/').pop() ?? filePath;
+        try {
+          const searchResult = await verifierFs.fileSearch({ pattern: fileName });
+          const firstMatch = searchResult.split('\n')[0]?.trim();
+          if (firstMatch && firstMatch !== 'No files found') return firstMatch;
+        } catch { /* search failed */ }
+        return filePath; // return original, let fileRead produce a clear error
+      };
       const { PerformanceReader } = await import('@gossip/orchestrator');
       const performanceReader = new PerformanceReader(process.cwd());
 
@@ -246,8 +262,16 @@ export async function handleCollect(
           try {
             let result: string;
             switch (toolName) {
-              case 'file_read': result = await verifierFs.fileRead(args as any); break;
-              case 'file_grep': result = await verifierFs.fileGrep(args as any); break;
+              case 'file_read': {
+                const resolvedPath = await resolveToolPath((args as any).path);
+                result = await verifierFs.fileRead({ ...args, path: resolvedPath } as any);
+                break;
+              }
+              case 'file_grep': {
+                const grepPath = (args as any).path ? await resolveToolPath((args as any).path) : undefined;
+                result = await verifierFs.fileGrep({ ...args, ...(grepPath ? { path: grepPath } : {}) } as any);
+                break;
+              }
               case 'file_search': result = await verifierFs.fileSearch(args as any); break;
               case 'memory_query': {
                 const results = verifierMemory.search(agentId, (args as any).query ?? '', 5);
@@ -267,7 +291,7 @@ export async function handleCollect(
             return result;
           } catch (e) {
             const now = new Date(); const stamp = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
-            process.stderr.write(`${stamp} 🤝 [consensus] 🔧 ${agentId} tool_call: ${toolName} → ERROR (${Date.now() - toolStart}ms)\n`);
+            process.stderr.write(`${stamp} 🤝 [consensus] 🔧 ${agentId} tool_call: ${toolName}(${JSON.stringify(args).slice(0, 200)}) → ERROR: ${(e as Error).message} (${Date.now() - toolStart}ms)\n`);
             return `Tool error: ${(e as Error).message}`;
           }
         },
