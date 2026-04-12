@@ -8,6 +8,17 @@
 
 import { PerformanceReader } from './performance-reader';
 import { extractCategories } from './category-extractor';
+import { randomBytes } from 'crypto';
+
+/** Fisher-Yates shuffle — uniform distribution, unlike sort(Math.random()-0.5). */
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = randomBytes(4).readUInt32BE(0) % (i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
 export interface FindingForSelection {
   id: string;
@@ -99,8 +110,7 @@ export function selectCrossReviewers(
     // When no eligible agents exist, fall back to selecting K agents by random
     // order to ensure findings always get cross-reviewed, even in fresh pools.
     if (topK.length === 0 && candidates.length > 0) {
-      const shuffled = candidates.map(agent => ({ agent, score: 0 }))
-        .sort(() => Math.random() - 0.5);
+      const shuffled = shuffle(candidates.map(agent => ({ agent, score: 0 })));
       topK = shuffled.slice(0, Math.min(K, shuffled.length));
     }
 
@@ -122,10 +132,10 @@ export function selectCrossReviewers(
         : minSignals > 50 ? 0.05
         : 0.15;
 
-      const sevScale = finding.severity === 'critical' ? 0.15
-        : finding.severity === 'high' ? 0.35
-        : finding.severity === 'low' ? 1.00
-        : 0.70; // medium (default)
+      const SEV_SCALE: Record<FindingForSelection['severity'], number> = {
+        critical: 0.15, high: 0.35, medium: 0.70, low: 1.00,
+      };
+      const sevScale = SEV_SCALE[finding.severity];
 
       const epsilon = starvation * sevScale;
 

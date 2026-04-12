@@ -81,7 +81,7 @@ describe('Cross-Reviewer Selection', () => {
 
       // Should assign K=2 reviewers for medium severity
       expect(assignments.size).toBe(2);
-      expect(Array.from(assignments.keys())).toEqual(['agent-b', 'agent-c']);
+      expect(Array.from(assignments.keys()).sort()).toEqual(['agent-b', 'agent-c']);
     });
 
     it('should handle case where there are fewer candidates than K', () => {
