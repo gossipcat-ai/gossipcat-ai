@@ -24,6 +24,9 @@ docs/reddit-*
 docs/specs/
 skills-lock.json
 *.tsbuildinfo
+# Prevent stale .js/.d.ts build artifacts in source dirs from shadowing .ts files
+apps/cli/src/**/*.js
+apps/cli/src/**/*.d.ts
 .DS_Store
 **/.DS_Store
 settings.local.json
