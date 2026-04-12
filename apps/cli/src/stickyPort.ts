@@ -1,11 +1,11 @@
 // Sticky per-project port selection.
 //
 // Motivation: running multiple parallel gossipcat instances on one machine used
-// to fight over hardcoded ports (24420 relay, 24421 HTTP MCP). Relay already
-// falls back to port 0 (OS-assigned); HTTP MCP still hardcodes 24421.
-// Letting the OS assign every boot makes dashboard bookmarks and MCP client
-// configs break across restarts. Sticky port files give each project a stable
-// port that survives reboots but yields gracefully to collisions.
+// to fight over hardcoded ports (24420 relay, 24421 HTTP MCP). Both now use
+// pickStickyPort (env → sticky file → OS-assigned) so parallel instances
+// yield gracefully to collisions. Letting the OS assign every boot would
+// break dashboard bookmarks and MCP client configs across restarts — sticky
+// port files give each project a stable port that survives reboots.
 //
 // Policy (see pickStickyPort):
 //   1. Env var wins unconditionally (no sticky read, no fallback).
