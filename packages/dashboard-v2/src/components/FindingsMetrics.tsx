@@ -411,8 +411,11 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       ))}
                     </div>
                     {report.topic && (
-                      <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground/70" style={{ fontFamily: "'Inter', sans-serif" }}>
-                        {report.topic}
+                      <div className="mt-1.5 flex items-start gap-2">
+                        <span className="shrink-0 rounded border border-border/30 bg-muted/30 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-muted-foreground/50">Topic</span>
+                        <span className="text-[11px] leading-relaxed text-muted-foreground/70" style={{ fontFamily: "'Inter', sans-serif" }}>
+                          {report.topic}
+                        </span>
                       </div>
                     )}
                   </div>
