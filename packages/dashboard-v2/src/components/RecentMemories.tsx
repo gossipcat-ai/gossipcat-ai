@@ -103,7 +103,7 @@ export function RecentMemories({ memories }: RecentMemoriesProps) {
                 </button>
                 {isOpen && (
                   <div className="border-t border-border/10 px-4 py-2">
-                    <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap font-inter text-[11px] leading-relaxed text-muted-foreground">
+                    <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground">
                       {mem.content}
                     </pre>
                   </div>
