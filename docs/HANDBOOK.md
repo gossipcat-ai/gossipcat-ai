@@ -190,9 +190,11 @@ Skills sit in `pending` until ≥120 post-bind signals accumulate in the categor
 
 **Workaround for paper-style validation**: build a curated eval suite with paired before/after runs on a fixed task corpus. Use McNemar's test on paired outcomes (smaller N needed, detects ~15pp shifts at N=30). This is on the roadmap but not shipped.
 
-### No CI pipeline on the repo yet
+### CI pipeline
 
-There's no GitHub Actions workflow as of 2026-04-10. Tests pass locally; contributions should be manually verified before merging. Adding minimal CI (`jest` + `tsc --noEmit`) is a high-ROI follow-up.
+GitHub Actions runs on every push to `master` and every PR: workspace builds in
+topological order, `tsc --noEmit` for CLI + orchestrator, `npm test --ci`, MCP bundle
+build + 5MB size guard. See `.github/workflows/ci.yml`. All PRs must pass before merge.
 
 ### Gemini provider cascades on bad keys
 
