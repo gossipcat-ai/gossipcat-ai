@@ -411,7 +411,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       ))}
                     </div>
                     {report.topic && (
-                      <div className="mt-1 truncate text-[11px] text-muted-foreground/70" style={{ fontFamily: "'Inter', sans-serif", maxWidth: '500px' }}>
+                      <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground/70" style={{ fontFamily: "'Inter', sans-serif" }}>
                         {report.topic}
                       </div>
                     )}
