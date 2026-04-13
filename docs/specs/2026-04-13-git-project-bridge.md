@@ -1,0 +1,333 @@
+---
+status: proposal
+---
+
+# Git Project Bridge — Design Spec
+
+> Give remote agentic LLM providers access to the local project's source code via
+> prompt-injected git clone/patch instructions.
+
+## Problem
+
+Remote agents (OpenClaw, future providers) run in isolated environments with their own
+toolchains. They cannot read the local filesystem. When dispatched to review code, they
+hallucinate "file does not exist" because their `file_read` resolves against their own
+workspace, not the user's project.
+
+Verified: openclaw runs at `/root/.openclaw/workspace` via SSH tunnel. It has `exec`,
+`file_read/write`, `web_fetch`, and `git` available. It CAN `git clone` — confirmed live
+(session 2026-04-13).
+
+## Two-Tier Strategy
+
+Different agents need different strategies based on capability:
+
+| Agent capability | Strategy | Example agents |
+|-----------------|----------|----------------|
+| Has `exec` (shell commands) | Git clone + patch delivery | openclaw, future remote-agentic |
+| No `exec` (prompt-only) | Smart context injection (existing) | Gemini, OpenAI relay |
+
+This spec covers the **exec-capable** tier. The prompt-injection tier is the existing
+`assemblePrompt` path with room for smarter file selection (separate work).
+
+## Design
+
+### Core function
+
+New module `packages/orchestrator/src/git-bridge.ts` (~150 LOC):
+
+```typescript
+export async function buildGitBridgeBlock(opts: {
+  projectRoot: string;
+  agentConfig: AgentConfig;
+  keyProvider?: (provider: string) => Promise<string | null>;
+}): Promise<string>
+```
+
+Returns a formatted `--- PROJECT BRIDGE ---` block to inject into the task prompt.
+
+### Git state detection (at dispatch time)
+
+Three states, detected synchronously:
+
+| State | Detection | Bridge form |
+|-------|-----------|-------------|
+| Committed + pushed | `git rev-list --count @{u}..HEAD` = 0 | Clone/fetch at HEAD SHA |
+| Committed, not pushed | count > 0 | Clone at push-base + apply unpushed diff |
+| Uncommitted changes | `git status --porcelain` non-empty | Clone at HEAD + apply working-tree diff |
+
+**Note on uncommitted changes:** When dirty working tree is detected, the orchestrator
+MUST warn the developer before sending the diff to a remote agent. Uncommitted changes
+may contain WIP code, debug statements, or sensitive data (`.env` edits, API keys).
+The bridge should log a visible warning and, in future, support an opt-in flag.
+
+### Bridge block template
+
+```
+--- PROJECT BRIDGE v1 ---
+This task requires access to the project's source code. The project is a git repository
+hosted at: <REPO_URL>
+
+Follow these steps BEFORE beginning your analysis:
+
+STEP 1 — Acquire the codebase:
+<CLONE_OR_FETCH_COMMANDS>
+
+STEP 2 — Verify you are at the correct state:
+cd <WORKSPACE_PATH>
+git log --oneline -1
+# Expected: <HEAD_SHA_SHORT> <COMMIT_MESSAGE>
+
+STEP 3 — If any patch is provided below, apply it now:
+<PATCH_BLOCK or "No patch — working tree was clean at dispatch time.">
+
+STEP 4 — Confirm readiness:
+Run: git status
+If status shows uncommitted changes from the patch, that is expected and correct.
+If 'git apply' failed, report the error in your findings immediately — do NOT review
+stale code silently.
+
+PROJECT ROOT INSIDE YOUR WORKSPACE: <WORKSPACE_PATH>
+All file paths in your findings must be relative to this root.
+
+⚠ SECURITY: Do not echo repository URLs, credentials, or patch data in your output.
+--- END PROJECT BRIDGE ---
+```
+
+### Clone/fetch commands (3 forms)
+
+**Form A — Clean + pushed (happy path):**
+```bash
+WORKSPACE=<REMOTE_WORKSPACE_PATH>
+BRANCH=<CURRENT_BRANCH>
+SHA=<HEAD_SHA>
+if [ -d "$WORKSPACE/.git" ]; then
+  cd "$WORKSPACE" && git fetch --depth=1 origin "$BRANCH" && git checkout FETCH_HEAD && git reset --hard FETCH_HEAD && git clean -fd
+else
+  git clone --depth=1 --branch "$BRANCH" <REPO_URL> "$WORKSPACE"
+  cd "$WORKSPACE"
+fi
+# Verify we have the right commit
+test "$(git rev-parse HEAD)" = "$SHA" || echo "WARNING: HEAD does not match expected SHA"
+```
+
+**Key change from v0:** Uses `--branch <ref>` + `FETCH_HEAD` instead of fetching by raw
+SHA. GitHub does not guarantee `git fetch --depth=1 origin <SHA>` for non-tip commits
+(`uploadpack.allowReachableSHA1InWant` is not universally enabled). Fetching by branch
+name is reliable across all git hosts.
+
+**Workspace reset:** Uses `git reset --hard` + `git clean -fd` instead of `git checkout .`
+to ensure both tracked modifications AND untracked files from prior patches are removed.
+
+**Form B — Unpushed commits:**
+Same clone as Form A (targeting the upstream branch), then applies unpushed diff:
+
+```bash
+# Write patch to temp file for validation before applying
+cat <<'__GOSSIPCAT_PATCH_EOF__' | base64 -d > /tmp/gossipcat-patch.diff
+<BASE64_PATCH_DATA>
+__GOSSIPCAT_PATCH_EOF__
+
+# Validate patch file exists and is non-empty
+if [ -s /tmp/gossipcat-patch.diff ]; then
+  cd "$WORKSPACE" && git apply --whitespace=fix /tmp/gossipcat-patch.diff
+  rm /tmp/gossipcat-patch.diff
+else
+  echo "ERROR: Patch file is empty or corrupted"
+fi
+```
+
+**Key changes from v0:**
+- Uses `__GOSSIPCAT_PATCH_EOF__` delimiter (safe from appearing in diff content)
+- Writes to temp file before applying (prevents mid-stream corruption)
+- Validates file before `git apply`
+
+**Form C — Dirty working tree:**
+Same as Form A targeting HEAD SHA (already on remote), then applies working-tree patch
+using the same temp-file pattern as Form B. Synthetic hunks for untracked files are
+**only generated in Form C** (not Form B) to avoid `git apply` collisions with committed
+content.
+
+### Diff generation
+
+For unpushed commits:
+```bash
+git diff @{u}..HEAD -- . ':!.gossip' ':!node_modules' ':!*.lock' ':!dist'
+```
+
+For uncommitted changes:
+```bash
+git diff HEAD -- . ':!.gossip' ':!node_modules' ':!*.lock' ':!dist'
+```
+
+**Note:** Uses `@{u}` (upstream tracking branch) consistently — both in detection
+(`git rev-list --count @{u}..HEAD`) and diff generation. The previous `origin/HEAD` ref
+is fragile and may not be set on all repos.
+
+**Untracked files (Form C only):** Generated as synthetic `diff -u /dev/null <file>` hunks
+for non-ignored, non-binary files enumerated via `git ls-files --others --exclude-standard`.
+Binary untracked files are excluded — a note is added to the bridge block listing their
+paths without content.
+
+**Diff exclusion:** The pathspec `':!.gossip' ':!node_modules' ':!*.lock' ':!dist'` covers
+the common cases. For project-specific exclusions, `.gitignore` already handles most build
+artifacts (`.tsbuildinfo`, `.turbo/`, `coverage/`, `build/`). The explicit exclusions are
+a safety net for files that might not be gitignored.
+
+### Prompt placement
+
+The bridge block is appended to the assembled prompt **after** the 30K-char truncation
+check. This means:
+
+- The main prompt (skills, memory, lens, etc.) is capped at 30K as before
+- The bridge block is appended unconditionally after the cap
+- If the bridge block itself exceeds 500KB, fall back to skip-bridge (v1 — no partial bridge)
+
+This places the bridge at the **structural end** of the prompt, not second in priority.
+The agent sees it last, which is fine — the bridge is operational setup ("clone this repo")
+not analytical context. The `assemblePrompt` function accepts a new `projectBridge?: string`
+parameter for this.
+
+### Session-scoped clone reuse
+
+Multiple tasks in one session reuse the same clone. This is handled entirely by the
+**shell guard** in the bridge commands (`if [ -d "$WORKSPACE/.git" ]`), not by server-side
+state tracking. Each task's bridge block includes the full clone-or-fetch logic; the
+shell guard determines which path runs.
+
+Each task targets by **SHA (immutable)**, never by branch name as the checkout target.
+Branch name is used only for `git fetch` (to ensure the ref is fetchable); the final
+checkout is `FETCH_HEAD` verified against the expected SHA.
+
+## Config schema
+
+### AgentConfig additions (types.ts)
+
+```typescript
+/** Enable git project bridge for this agent. Auto-detected as true when
+ *  provider === 'openclaw'. Set explicitly to force-enable for other remote
+ *  providers or force-disable. */
+enableGitBridge?: boolean;
+
+/** Override the repository URL (defaults to 'origin' remote, converted to HTTPS). */
+gitBridgeRepoUrl?: string;
+
+/** Sparse checkout paths for large monorepos. Triggers --sparse --filter=blob:none. */
+sparseCheckoutPaths?: string[];
+
+/** Workspace path on the remote agent's machine.
+ *  Default: /root/.openclaw/workspace/<repo-name> */
+remoteWorkspacePath?: string;
+```
+
+**Required type change:** Add `'openclaw'` to the `AgentConfig.provider` union in
+`types.ts` (currently `'anthropic' | 'openai' | 'google' | 'local'`).
+
+### Private repos — credential handling
+
+**Do NOT embed tokens in HTTPS URLs.** Tokens in URLs leak to:
+- Shell history (`~/.bash_history`)
+- Process list (`/proc/<pid>/cmdline`)
+- `.git/config` (persisted after clone)
+
+Instead, use a `GIT_ASKPASS` helper script:
+
+```bash
+# Bridge injects this before the clone command:
+cat > /tmp/git-askpass.sh << 'ASKPASS_EOF'
+#!/bin/sh
+echo "<TOKEN>"
+ASKPASS_EOF
+chmod 700 /tmp/git-askpass.sh
+
+GIT_ASKPASS=/tmp/git-askpass.sh git clone --depth=1 --branch "$BRANCH" https://github.com/owner/repo "$WORKSPACE"
+
+# Immediately clean up
+rm /tmp/git-askpass.sh
+```
+
+Token is retrieved at dispatch time via `keyProvider('git-bridge-token')` (same keychain
+pattern already used in `DispatchPipelineConfig`). The `keyProvider` callback must be
+stored as a class field on `DispatchPipeline` (currently only passed to
+`ConsensusCoordinator` at line 141 — not available at dispatch call site).
+
+### Large repos
+
+- Default: `--depth=1` (shallow clone, no history)
+- With `sparseCheckoutPaths`: `--filter=blob:none --sparse` + `git sparse-checkout set <paths>`
+  - Note: `--filter=blob:none` must come before `--sparse` in some git versions
+  - Sparse checkout is task-scoped: if task 1 checks out path A and task 2 needs path B,
+    the bridge adds path B via `git sparse-checkout add` (not `set`)
+- Binary files excluded from diffs (noted in bridge block)
+
+## Edge cases
+
+- **Patch > 500KB**: Skip bridge entirely for v1 (fall back to existing prompt injection).
+  Future: file-by-file injection for task-referenced files via `assemblePrompt`
+- **Binary files**: Excluded from diff. Untracked binary files listed by path only (no content)
+- **git apply failure**: Bridge instructs agent to report the error, not review stale code
+- **No git remote**: Skip bridge, fall back to prompt injection
+- **No git repo**: Skip bridge entirely
+- **No upstream tracking branch** (`@{u}` fails): Treat as "all commits unpushed", diff against
+  `origin/main` or `origin/master` (whichever exists)
+
+## Implementation scope
+
+| File | Change |
+|------|--------|
+| `packages/orchestrator/src/git-bridge.ts` | NEW — ~150 LOC |
+| `packages/orchestrator/src/types.ts` | Add 4 optional fields to AgentConfig + `'openclaw'` to provider union |
+| `packages/orchestrator/src/dispatch-pipeline.ts` | Store `keyProvider` as class field, detect `enableGitBridge`, call `buildGitBridgeBlock`, pass result to `assemblePrompt` |
+| `packages/orchestrator/src/prompt-assembler.ts` | Accept `projectBridge?: string` param, append after truncation cap |
+| `tests/orchestrator/git-bridge.test.ts` | NEW — state detection, patch gen, template rendering, GIT_ASKPASS |
+
+## What this does NOT do
+
+- No git push on behalf of the developer (read-only bridge)
+- No persistent remote clone management (ephemeral per session)
+- No agent writeback via git (changes come back through task result text)
+- No new MCP tools (everything is prompt injection)
+- No new external dependencies
+
+## Prior art
+
+| Framework | Approach | Handles uncommitted? |
+|-----------|----------|---------------------|
+| Cursor/Windsurf | Local FS via LSP | Yes |
+| Copilot Workspace | Cloud container clone | No |
+| Devin | Local agent process | Yes |
+| SWE-Agent | Git clone per task | No |
+| OpenHands | Docker volume mount | Yes |
+
+Gossipcat's bridge is closest to **SWE-Agent's pattern** but with session-scoped reuse
+and patch delivery for uncommitted changes — which no framework above handles for remote
+agents via prompt injection.
+
+## Consensus review findings (2026-04-13)
+
+Full consensus round with sonnet-reviewer + haiku-researcher. All high/medium findings
+addressed in this revision:
+
+| Finding | Agent | Resolution |
+|---------|-------|------------|
+| SHA fetch unreliable on GitHub | both | Fixed: use `--branch` + `FETCH_HEAD` |
+| Token leakage in HTTPS URL | both | Fixed: use `GIT_ASKPASS` script |
+| `git checkout .` incomplete reset | sonnet | Fixed: `git reset --hard` + `git clean -fd` |
+| `base64 -d` cross-platform + heredoc collision | sonnet | Fixed: temp file + `__GOSSIPCAT_PATCH_EOF__` |
+| `origin/HEAD` inconsistent with `@{u}` | both | Fixed: use `@{u}` everywhere |
+| `provider` union missing `'openclaw'` | both | Fixed: added to scope table |
+| `remoteWorkspace` naming ambiguous | haiku | Fixed: renamed to `enableGitBridge` |
+| Priority placement paradox | sonnet | Fixed: clarified as post-truncation append |
+| Uncommitted changes exposure | haiku | Fixed: added developer warning requirement |
+| `keyProvider` not stored as class field | sonnet | Fixed: added to scope table |
+| Sparse checkout + patch interaction | haiku | Fixed: use `sparse-checkout add` not `set` |
+| 500KB fallback underspecified | sonnet | Fixed: skip bridge entirely for v1 |
+| `git bundle` alternative | both | Noted: worth evaluating, deferred to v2 |
+| Bridge version marker | sonnet | Fixed: added `v1` to block header |
+
+## Research sources
+
+- sonnet-reviewer: 7-scenario design + consensus review (session 2026-04-13)
+- haiku-researcher: framework comparison + consensus review (session 2026-04-13)
+- gemini-reviewer: pre-consensus security review (session 2026-04-13)
+- Prior memory: project_openclaw_context_injection.md (2026-04-08, live curl validation)
