@@ -100,6 +100,26 @@ When you dispatch with `mode: "consensus"`, the orchestrator follows **three** s
 
 The server selects cross-reviewers via `selectCrossReviewers` (epsilon-greedy, severity-scaled), runs `crossReviewForAgent` with verifier tools (`file_read`, `file_grep`, etc.), and synthesizes the final report — all inside a single `gossip_collect` call. If server-side Phase 2 fails, it falls back to the legacy 5-step manual path (orchestrator dispatches cross-review agents individually).
 
+#### Cross-reviewer selection heuristic
+
+`selectCrossReviewers` at `packages/orchestrator/src/cross-reviewer-selection.ts` picks who reviews each finding:
+
+| Severity | Target K (reviewers per finding) |
+|----------|----------------------------------|
+| critical | 3 |
+| high, medium, low | 2 |
+
+**Scoring:** `accuracy * 0.7 + categoryAccuracy * 0.3` — agents with category expertise get preference. When no category data exists, compete on accuracy alone.
+
+**Exploration:** severity-scaled epsilon-greedy. The exploration rate is `starvation * sevScale`:
+- Starvation: 0.30 (< 10 signals), 0.15 (10-50), 0.05 (> 50)
+- sevScale: critical=0.15, high=0.35, medium=0.70, low=1.00
+- Critical epsilon cap: 0.30 × 0.15 = 4.5% — critical findings rarely get experimental reviewers
+
+**All-zero fallback:** When no agents have scores (fresh pool), findings are assigned via Fisher-Yates shuffle (`crypto.randomBytes`) to ensure uniform distribution.
+
+**Dashboard visibility:** Each consensus report stores `crossReviewAssignments` (who reviewed what) and `crossReviewCoverage` (assigned vs targetK per finding). The dashboard shows reviewer badges and coverage indicators on each finding card, with yellow warnings for under-reviewed findings.
+
 ### Signal recording is mandatory, not deferrable
 
 When you verify a finding as real (or catch a hallucination), **record the signal immediately** via `gossip_signals`. Don't batch signals at session end. Don't ask the user permission to record. This is the action immediately after verification.

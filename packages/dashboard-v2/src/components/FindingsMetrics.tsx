@@ -442,6 +442,66 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                         </button>
                       ))}
                     </div>
+                    {(report.crossReviewAssignments || report.crossReviewCoverage) && (() => {
+                      // Invert assignments: reviewerId → findingIds
+                      const assignments = report.crossReviewAssignments || {};
+                      const reviewerEntries = Object.entries(assignments);
+                      // Count under-reviewed findings from coverage data
+                      const coverage = report.crossReviewCoverage || [];
+                      const totalCovered = coverage.length;
+                      const underReviewed = coverage.filter(c => c.assigned < c.targetK);
+                      return (
+                        <details className="mb-3 rounded-md border border-border/30 bg-card/30">
+                          <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground select-none">
+                            Cross-Review Assignments
+                            {report.partialReview && (
+                              <span className="rounded border border-unverified/15 bg-unverified/5 px-1.5 py-0.5 font-mono text-[9px] font-bold normal-case tracking-normal text-unverified">
+                                partial
+                              </span>
+                            )}
+                            <span className="ml-auto font-mono text-[9px] font-normal normal-case tracking-normal text-muted-foreground/50">
+                              {reviewerEntries.length} reviewers · {totalCovered} findings
+                            </span>
+                          </summary>
+                          <div className="border-t border-border/20 px-3 pb-3 pt-2 space-y-2">
+                            {reviewerEntries.map(([reviewerId, findingIds]) => (
+                              <div key={reviewerId} className="flex items-center gap-2">
+                                <span
+                                  title={reviewerId}
+                                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[8px] font-bold text-background"
+                                  style={{ backgroundColor: agentColor(reviewerId) }}
+                                >
+                                  {agentInitials(reviewerId)}
+                                </span>
+                                <span className="font-mono text-[10px] text-muted-foreground">{reviewerId}</span>
+                                <span className="font-mono text-[10px] text-muted-foreground/40">({findingIds.length})</span>
+                                <div className="flex flex-wrap gap-1 ml-1">
+                                  {findingIds.map(fid => (
+                                    <span key={fid} className="rounded bg-muted/50 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
+                                      {fid.length > 12 ? fid.slice(0, 12) + '…' : fid}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                            {/* Coverage summary */}
+                            {totalCovered > 0 && (
+                              <div className="mt-1 pt-1.5 border-t border-border/15">
+                                {underReviewed.length > 0 ? (
+                                  <span className="rounded border border-unverified/15 bg-unverified/5 px-2 py-1 font-mono text-[10px] font-semibold text-unverified">
+                                    ⚠ {underReviewed.length} of {totalCovered} findings under-reviewed
+                                  </span>
+                                ) : (
+                                  <span className="font-mono text-[10px] font-semibold text-confirmed/60">
+                                    ✓ All {totalCovered} findings fully covered
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      );
+                    })()}
                     <div className="space-y-3">
                       {filteredFindings.length === 0 ? (
                         <div className="py-4 text-center text-xs text-muted-foreground">No findings match this filter.</div>

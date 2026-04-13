@@ -102,6 +102,7 @@ export interface ConsensusReport {
   newFindings: Array<{ agentId: string; finding: string; evidence: string; confidence: number }>;
   crossReviewAssignments?: Record<string, string[]>;
   crossReviewCoverage?: Array<{ findingId: string; assigned: number; targetK: number }>;
+  partialReview?: boolean;
 }
 
 export interface ConsensusReportsData {
