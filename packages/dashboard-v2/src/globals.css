@@ -41,6 +41,7 @@
 
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
+  --font-inter: 'Inter', system-ui, sans-serif;
 
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;

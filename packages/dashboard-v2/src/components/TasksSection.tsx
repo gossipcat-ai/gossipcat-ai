@@ -58,7 +58,7 @@ export function TasksSection({ tasks }: TasksSectionProps) {
                 );
               })()}
               <span className="shrink-0 font-mono text-xs font-bold text-foreground">{task.agentId}</span>
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" style={{ fontFamily: "'Inter', sans-serif" }}>
+              <span className="min-w-0 flex-1 truncate font-inter text-[11px] text-muted-foreground">
                 {truncate(task.task, 50)}
               </span>
               <span className="shrink-0 font-mono text-[10px] text-muted-foreground/50">{timeAgo(task.timestamp)}</span>

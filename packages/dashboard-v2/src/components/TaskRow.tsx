@@ -59,7 +59,7 @@ export function TaskRow({ task, onClick }: TaskRowProps) {
           {task.agentId}
         </a>
       </td>
-      <td className="py-2.5 pr-3 text-sm text-foreground/80" style={{ fontFamily: "'Inter', sans-serif" }}>
+      <td className="py-2.5 pr-3 font-inter text-sm text-foreground/80">
         {(() => { const line = task.task.replace(/\n.*/s, ''); return line.length > 100 ? line.slice(0, 100) + '…' : line; })()}
       </td>
       <td className="py-2.5 pr-3 font-mono text-xs text-muted-foreground">

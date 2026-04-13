@@ -134,8 +134,7 @@ function ReportFinding({ f, reviewInfo }: { f: ConsensusReportFinding; reviewInf
         </div>
       )}
       {/* Finding text */}
-      <div className={`text-xs leading-relaxed text-muted-foreground ${CITE_STYLES}`}
-        style={{ fontFamily: "'Inter', sans-serif" }}
+      <div className={`font-inter text-xs leading-relaxed text-muted-foreground ${CITE_STYLES}`}
         dangerouslySetInnerHTML={{ __html: cleanFindingTags(f.finding) }} />
       {/* Cross-review coverage badge row */}
       {reviewInfo && (
@@ -358,7 +357,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               >
                 <button
                   className="flex w-full items-start gap-3 px-3 py-2.5 text-left"
-                  onClick={() => setExpandedId(isExpanded ? null : report.id)}
+                  onClick={() => { setExpandedId(isExpanded ? null : report.id); setFilter('all'); setSevFilter('all'); }}
                 >
                   <div className="flex-1 min-w-0">
                     {/* Row 1: count + agents + time */}
@@ -413,7 +412,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                     {report.topic && (
                       <div className="mt-1.5 flex items-start gap-2">
                         <span className="shrink-0 rounded border border-border/30 bg-muted/30 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-muted-foreground/50">Topic</span>
-                        <span className="text-[11px] leading-relaxed text-muted-foreground/70" style={{ fontFamily: "'Inter', sans-serif" }}>
+                        <span className="font-inter text-[11px] leading-relaxed text-muted-foreground/70">
                           {report.topic}
                         </span>
                       </div>
@@ -566,7 +565,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               <div key={run.taskId + i} className={`rounded-md border bg-card transition ${isOpen ? 'border-primary/25' : 'border-border'}`}>
                 {/* Header — clickable */}
                 <button
-                  onClick={() => setExpandedId(isOpen ? null : run.taskId)}
+                  onClick={() => { setExpandedId(isOpen ? null : run.taskId); setFilter('all'); setSevFilter('all'); }}
                   className="flex w-full items-center p-3 text-left transition hover:bg-accent/50"
                 >
                   <span className={`mr-3 font-mono text-xs text-muted-foreground transition ${isOpen ? 'text-primary' : ''}`}>

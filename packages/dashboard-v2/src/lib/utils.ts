@@ -131,9 +131,9 @@ export function formatDuration(ms?: number): string {
 }
 
 export function agentInitials(id: string): string {
-  const parts = id.split('-');
+  const parts = id.split('-').filter(Boolean);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return id.slice(0, 2).toUpperCase();
+  return (parts[0] || id).slice(0, 2).toUpperCase();
 }
 
 const AGENT_COLORS = [
