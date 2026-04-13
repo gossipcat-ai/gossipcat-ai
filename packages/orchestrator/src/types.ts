@@ -224,6 +224,8 @@ export interface TaskEntry {
   outputTokens?: number;
   toolCalls?: number;
   lastEventAt?: number;
+  /** Whether the agent called memory_query at least once during task execution. */
+  memoryQueryCalled?: boolean;
 }
 
 // ── TaskGraph Event Types ────────────────────────────────────────────────

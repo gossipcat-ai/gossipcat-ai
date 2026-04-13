@@ -208,8 +208,9 @@ export class DispatchPipeline {
       }
     }
 
-    // 2. Load memory
+    // 2. Load memory (agent knowledge files) + pre-fetch consensus findings
     const memory = this.memReader.loadMemory(agentId, task);
+    const consensusFindings = this.memReader.prefetchConsensusFindingsText(task);
 
     // 3. Check skill coverage
     const skillWarnings = this.catalog
@@ -278,6 +279,7 @@ export class DispatchPipeline {
       consensusSummary: options?.consensus,
       specReviewContext,
       projectStructure: this.getProjectStructure(),
+      consensusFindings: consensusFindings.length > 0 ? consensusFindings : undefined,
     });
 
     // 6. Record TaskGraph created
@@ -330,6 +332,7 @@ export class DispatchPipeline {
             entry.inputTokens = event.payload.inputTokens;
             entry.outputTokens = event.payload.outputTokens;
             entry.completedAt = Date.now();
+            entry.memoryQueryCalled = event.payload.memoryQueryCalled ?? false;
             if (entry.writeMode === 'scoped') this.scopeTracker.release(entry.id);
             // Visibility fix (Option A): emit log + persist task.completed so async dispatch results
             // are debuggable. Without this, the result lives only in this.tasks Map until gossip_collect
@@ -344,6 +347,7 @@ export class DispatchPipeline {
                 agentId: entry.agentId,
                 durationMs: elapsedMs,
                 resultLength: (event.payload.result || '').length,
+                memoryQueryCalled: entry.memoryQueryCalled,
                 timestamp: new Date().toISOString(),
               }) + '\n');
             } catch { /* best-effort visibility — never crash dispatch on log/write failure */ }

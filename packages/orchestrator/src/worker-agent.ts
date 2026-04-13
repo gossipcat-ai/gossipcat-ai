@@ -20,6 +20,7 @@ export type TaskCompleteCallback = (event: {
   taskId: string;
   toolCalls: number;
   durationMs: number;
+  memoryQueryCalled: boolean;
 }) => void;
 
 const MAX_TOOL_TURNS = 15;
@@ -126,6 +127,8 @@ export class WorkerAgent {
     memory_query: 10,
     self_identity: 3,
   };
+  /** Tracks whether the agent called memory_query during the current task. Reset per task. */
+  private memoryQueryCalled = false;
   private pendingToolCalls: Map<string, {
     resolve: (result: string) => void;
     reject: (err: Error) => void;
@@ -210,6 +213,7 @@ export class WorkerAgent {
     yield logAndYield(`executeTask started — task: "${task.slice(0, 100)}..." webSearch=${this.webSearchEnabled} tools=${this.tools.length}`);
     this.gossipQueue = []; // clear gossip from previous task
     this.toolCallBudget = new Map(); // reset per-tool call budgets per task
+    this.memoryQueryCalled = false; // reset memory_query tracking per task
     const startTime = Date.now();
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
@@ -308,8 +312,8 @@ export class WorkerAgent {
 
         if (!response.toolCalls?.length) {
           yield logAndYield(`turn ${turn} — NO tool calls, exiting. Text preview: "${(response.text || '').slice(0, 200)}"`);
-          this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-          yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: response.text || '[No response from agent]', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+          this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime, memoryQueryCalled: this.memoryQueryCalled });
+          yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: response.text || '[No response from agent]', inputTokens: totalInputTokens, outputTokens: totalOutputTokens, memoryQueryCalled: this.memoryQueryCalled }, timestamp: Date.now() };
           return;
         }
 
@@ -319,8 +323,8 @@ export class WorkerAgent {
           repeatCount++;
           if (repeatCount >= 2) {
             yield logAndYield(`turn ${turn} — STUCK: repeating same tool calls ${repeatCount + 1}x, exiting`);
-            this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-            yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: response.text || 'Task completed (agent was repeating the same action).', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+            this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime, memoryQueryCalled: this.memoryQueryCalled });
+            yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: response.text || 'Task completed (agent was repeating the same action).', inputTokens: totalInputTokens, outputTokens: totalOutputTokens, memoryQueryCalled: this.memoryQueryCalled }, timestamp: Date.now() };
             return;
           }
         } else {
@@ -370,8 +374,8 @@ export class WorkerAgent {
           yield logAndYield(`turn ${turn} — all ${response.toolCalls.length} tool calls errored (streak: ${consecutiveErrors})`);
           if (consecutiveErrors >= 3) {
             yield logAndYield(`turn ${turn} — ERROR LOOP: 3 consecutive all-error turns, exiting`);
-            this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-            yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: response.text || 'Task incomplete — agent stuck in error loop. Simplify the approach or check the error messages above.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+            this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime, memoryQueryCalled: this.memoryQueryCalled });
+            yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: response.text || 'Task incomplete — agent stuck in error loop. Simplify the approach or check the error messages above.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens, memoryQueryCalled: this.memoryQueryCalled }, timestamp: Date.now() };
             return;
           }
         } else {
@@ -384,16 +388,16 @@ export class WorkerAgent {
         messages.push({ role: 'user', content: 'Your turn budget is exhausted. Summarize what you accomplished and what remains unfinished. List files created/modified.' });
         const summary = await this.llm.generate(messages);
         if (summary.usage) { totalInputTokens += summary.usage.inputTokens; totalOutputTokens += summary.usage.outputTokens; }
-        this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: summary.text || 'Task completed (turn budget exhausted).', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+        this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime, memoryQueryCalled: this.memoryQueryCalled });
+        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: summary.text || 'Task completed (turn budget exhausted).', inputTokens: totalInputTokens, outputTokens: totalOutputTokens, memoryQueryCalled: this.memoryQueryCalled }, timestamp: Date.now() };
       } catch {
-        this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
-        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'Task incomplete — agent exhausted its turn budget.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens }, timestamp: Date.now() };
+        this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime, memoryQueryCalled: this.memoryQueryCalled });
+        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'Task incomplete — agent exhausted its turn budget.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens, memoryQueryCalled: this.memoryQueryCalled }, timestamp: Date.now() };
       }
     } catch (err) {
       const errorMessage = `FATAL ERROR in executeTask: ${(err as Error).message}`;
       yield logAndYield(errorMessage);
-      this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime });
+      this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime, memoryQueryCalled: this.memoryQueryCalled });
       yield { type: TaskStreamEventType.ERROR, payload: { error: errorMessage }, timestamp: Date.now() };
     }
   }
@@ -408,6 +412,11 @@ export class WorkerAgent {
         return `Error: ${name} per-task budget exhausted (${cap} calls). The result of your previous ${name} call is in conversation history — re-read it instead of calling again.`;
       }
       this.toolCallBudget.set(name, used + 1);
+    }
+
+    // Track whether the agent used memory_query at least once during this task
+    if (name === 'memory_query') {
+      this.memoryQueryCalled = true;
     }
 
     const requestId = randomUUID();

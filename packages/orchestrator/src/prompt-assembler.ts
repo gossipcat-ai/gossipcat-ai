@@ -184,6 +184,8 @@ export function assemblePrompt(parts: {
   consensusSummary?: boolean;
   specReviewContext?: string;
   projectStructure?: string;
+  /** Pre-fetched consensus finding snippets to inject under MEMORY block. */
+  consensusFindings?: string[];
 }): string {
   const blocks: string[] = [];
 
@@ -215,8 +217,18 @@ export function assemblePrompt(parts: {
   }
 
   // SUPPLEMENTARY — memory and session context are useful but expendable under truncation
-  if (parts.memory) {
-    blocks.push(`\n\n--- MEMORY ---\n${parts.memory}\n--- END MEMORY ---`);
+  if (parts.memory || (parts.consensusFindings && parts.consensusFindings.length > 0)) {
+    const memParts: string[] = [];
+    if (parts.memory) memParts.push(parts.memory);
+    if (parts.consensusFindings && parts.consensusFindings.length > 0) {
+      // Total budget: ~600 chars (3 × 200), injected as a subsection so agents
+      // can distinguish these from their own knowledge files.
+      const findingsBlock =
+        '### Recent Consensus Findings\n' +
+        parts.consensusFindings.map((f, i) => `${i + 1}. ${f}`).join('\n');
+      memParts.push(findingsBlock);
+    }
+    blocks.push(`\n\n--- MEMORY ---\n${memParts.join('\n\n')}\n--- END MEMORY ---`);
   }
 
   if (parts.memoryDir) {

@@ -1,6 +1,11 @@
 import { readFileSync, readdirSync, existsSync, writeFileSync, statSync } from 'fs';
 import { join } from 'path';
 
+const FINDINGS_MAX_RESULTS = 3;
+const FINDINGS_MAX_CHARS = 150;
+const FINDINGS_STALE_DAYS = 30;
+const FINDINGS_MIN_SCORE = 1;
+
 export class AgentMemoryReader {
   constructor(private projectRoot: string) {}
 
@@ -52,6 +57,103 @@ export class AgentMemoryReader {
     }
 
     return parts.join('\n\n');
+  }
+
+  /**
+   * Pre-fetch relevant consensus findings from implementation-findings.jsonl.
+   * Returns top-N findings as short text snippets, capped at FINDINGS_MAX_CHARS each.
+   * Skips findings older than FINDINGS_STALE_DAYS. Returns [] when file absent or no matches.
+   * Latency: <10ms (one synchronous file read, no LLM calls).
+   */
+  prefetchConsensusFindingsText(taskText: string): string[] {
+    const findingsPath = join(this.projectRoot, '.gossip', 'implementation-findings.jsonl');
+    if (!existsSync(findingsPath)) return [];
+
+    let raw: string;
+    try {
+      raw = readFileSync(findingsPath, 'utf-8');
+    } catch {
+      return [];
+    }
+
+    const keywords = this.extractKeywords(taskText);
+    if (keywords.length === 0) return [];
+
+    const cutoffMs = Date.now() - FINDINGS_STALE_DAYS * 86_400_000;
+    const scored: Array<{ text: string; score: number }> = [];
+
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      let entry: Record<string, unknown>;
+      try {
+        entry = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+
+      // Only include peer-confirmed findings (74% of corpus)
+      const confirmed = entry.confirmedBy;
+      if (!Array.isArray(confirmed) || confirmed.length === 0) continue;
+
+      // Age filter — require timestamp field
+      const ts = entry.timestamp;
+      if (ts) {
+        const ms = typeof ts === 'number' ? ts : new Date(ts as string).getTime();
+        if (!isNaN(ms) && ms < cutoffMs) continue;
+      }
+
+      // Build searchable text from common finding fields
+      const body = [
+        entry.finding,
+        entry.description,
+        entry.text,
+        entry.summary,
+        entry.task,
+      ]
+        .filter(Boolean)
+        .join(' ');
+
+      if (!body) continue;
+
+      const score = this.scoreKeywords(keywords, body);
+      if (score >= FINDINGS_MIN_SCORE) {
+        const snippet = body.slice(0, FINDINGS_MAX_CHARS).replace(/\s+/g, ' ').trim();
+        scored.push({ text: snippet, score });
+      }
+    }
+
+    return scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, FINDINGS_MAX_RESULTS)
+      .map(s => s.text);
+  }
+
+  /** Simple word-boundary keyword overlap scoring (no LLM). */
+  private extractKeywords(taskText: string): string[] {
+    const words = taskText.toLowerCase().split(/[\s,/.;:!?()\[\]{}]+/);
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const w of words) {
+      if (w.length > 3 && !seen.has(w)) {
+        seen.add(w);
+        result.push(w);
+      }
+    }
+    return result;
+  }
+
+  private scoreKeywords(keywords: string[], text: string): number {
+    const lower = text.toLowerCase();
+    let score = 0;
+    for (const kw of keywords) {
+      // Word-boundary match (whole word = 2 pts, substring = 1 pt)
+      const re = new RegExp(`\\b${kw}\\b`);
+      if (re.test(lower)) score += 2;
+      else if (lower.includes(kw)) score += 1;
+    }
+    return score;
   }
 
   private selectKnowledgeFiles(knowledgeDir: string, taskText: string, maxFiles = 5): Array<{ path: string; score: number }> {
