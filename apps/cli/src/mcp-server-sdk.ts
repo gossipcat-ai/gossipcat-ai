@@ -1893,7 +1893,8 @@ server.tool(
   'gossip_signals',
   'Record or retract consensus performance signals. Use action "record" (default) to record signals after cross-referencing agent findings — call IMMEDIATELY when you verify. Use action "retract" to undo a previously recorded signal.',
   {
-    action: z.enum(['record', 'retract']).default('record').describe('Action: "record" to add signals, "retract" to undo a previous signal'),
+    action: z.enum(['record', 'retract', 'bulk_from_consensus']).default('record').describe('Action: "record" to add signals, "retract" to undo a previous signal, "bulk_from_consensus" to auto-record signals for all findings in a consensus report'),
+    consensus_id: z.string().optional().describe('Consensus report ID (8-8 hex format, e.g. "5e8a7194-73e240da"). Required for action: "bulk_from_consensus".'),
     // record params
     task_id: z.string().optional().describe('Task ID to link signals to. For record: optional (synthetic ID if omitted). For retract: required.'),
     task_start_time: z.string().optional().describe('ISO-8601 timestamp of the underlying task/consensus round. Used as the per-batch fallback timestamp so bulk-recording from a backlog preserves true chronology. Falls back to wall-clock if omitted.'),
@@ -1913,7 +1914,7 @@ server.tool(
     agent_id: z.string().optional().describe('Agent whose signal to retract (required for action: "retract")'),
     reason: z.string().optional().describe('Why this signal is being retracted (required for action: "retract")'),
   },
-  async ({ action, task_id, task_start_time, signals, agent_id, reason }) => {
+  async ({ action, task_id, task_start_time, signals, agent_id, reason, consensus_id }) => {
     await boot();
 
     if (action === 'retract') {
@@ -1941,6 +1942,71 @@ server.tool(
         return { content: [{ type: 'text' as const, text: `Retracted signal for ${agent_id} on task ${task_id}.\nReason: ${reason}\n\nThe original signal remains in the audit log but will be excluded from scoring.` }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed to retract: ${(err as Error).message}` }] };
+      }
+    }
+
+    if (action === 'bulk_from_consensus') {
+      if (!consensus_id || consensus_id.trim().length === 0) {
+        return { content: [{ type: 'text' as const, text: 'Error: consensus_id is required for bulk_from_consensus.' }] };
+      }
+      try {
+        const { readFileSync } = await import('fs');
+        const { join } = await import('path');
+        const reportPath = join(process.cwd(), '.gossip', 'consensus-reports', `${consensus_id}.json`);
+        let report: any;
+        try {
+          report = JSON.parse(readFileSync(reportPath, 'utf-8'));
+        } catch {
+          return { content: [{ type: 'text' as const, text: `Error: consensus report not found: ${consensus_id}` }] };
+        }
+
+        // Load existing finding IDs for dedup
+        const existingFindingIds = new Set<string>();
+        try {
+          const perfPath = join(process.cwd(), '.gossip', 'agent-performance.jsonl');
+          const lines = readFileSync(perfPath, 'utf-8').split('\n').filter(Boolean);
+          for (const line of lines) {
+            try { const rec = JSON.parse(line); if (rec.findingId) existingFindingIds.add(rec.findingId); } catch { /* skip */ }
+          }
+        } catch { /* file may not exist yet */ }
+
+        const { PerformanceWriter } = await import('@gossip/orchestrator');
+        const writer = new PerformanceWriter(process.cwd());
+        const batchTs = report.timestamp || new Date().toISOString();
+        const batchTaskId = task_id || `bulk-${consensus_id}`;
+
+        type PS = import('@gossip/orchestrator').PerformanceSignal;
+        const toRecord: PS[] = [];
+        const dupes: string[] = [];
+        let agreementCount = 0, disagreementCount = 0, uniqueCount = 0;
+
+        const addSignal = (signalType: string, f: any) => {
+          const fid = f.id as string | undefined;
+          if (fid && existingFindingIds.has(fid)) { dupes.push(fid); return; }
+          toRecord.push({
+            type: 'consensus',
+            signal: signalType as any,
+            agentId: f.originalAgentId,
+            taskId: batchTaskId,
+            findingId: fid,
+            severity: f.severity,
+            evidence: (f.finding || '').slice(0, 2000),
+            timestamp: batchTs,
+          } as Extract<PS, { type: 'consensus' }>);
+        };
+
+        for (const f of report.confirmed ?? []) { addSignal('agreement', f); agreementCount++; }
+        for (const f of report.disputed ?? []) { addSignal('disagreement', f); disagreementCount++; }
+        for (const f of report.unique ?? []) { addSignal('unique_unconfirmed', f); uniqueCount++; }
+
+        if (toRecord.length > 0) writer.appendSignals(toRecord);
+
+        const skipped = dupes.length;
+        let receipt = `Recorded ${agreementCount} agreement, ${disagreementCount} disagreement, ${uniqueCount} unique signals from ${consensus_id}. ${skipped} duplicate(s) skipped.`;
+        if (dupes.length > 0) receipt += `\nSkipped finding_ids: ${dupes.join(', ')}`;
+        return { content: [{ type: 'text' as const, text: receipt }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `bulk_from_consensus failed: ${(err as Error).message}` }] };
       }
     }
 
