@@ -211,6 +211,9 @@ export class DispatchPipeline {
     // 2. Load memory (agent knowledge files) + pre-fetch consensus findings
     const memory = this.memReader.loadMemory(agentId, task);
     const consensusFindings = this.memReader.prefetchConsensusFindingsText(task);
+    if (consensusFindings.length > 0) {
+      log(`📋 pre-fetched ${consensusFindings.length} consensus findings for ${agentId}`);
+    }
 
     // 3. Check skill coverage
     const skillWarnings = this.catalog
@@ -960,13 +963,14 @@ export class DispatchPipeline {
 
     // 2. Write agent memory (task log + knowledge extraction)
     try {
+      const agentScore = this.perfReader?.getAgentScore(t.agentId);
       await this.memWriter.writeTaskEntry(t.agentId, {
         taskId: t.id, task: t.task,
         skills: this.registryGet(t.agentId)?.skills || [],
         scores: {
           relevance: (t.result && t.result.length > 200) ? 4 : 3,
-          accuracy: 4,
-          uniqueness: 3,
+          accuracy: agentScore ? Math.max(1, Math.round(agentScore.accuracy * 5)) : 3,
+          uniqueness: agentScore ? Math.max(1, Math.round(agentScore.uniqueness * 5)) : 3,
         },
       });
       if (t.result) {
