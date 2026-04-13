@@ -2189,6 +2189,12 @@ Return only valid JSON.`;
           }
         }
 
+        // Scoped summaries design: the reviewer sees full peer output for context,
+        // but buildCrossReviewPrompt scopes the actual review to assigned findings
+        // via the prompt instructions. The raw text provides context (understanding
+        // what the peer was analyzing); the prompt provides scope (which specific
+        // findings to evaluate). This is intentional — reviewers need surrounding
+        // context to judge a finding accurately, not just the finding in isolation.
         const scopedSummaries = new Map<string, string>();
         const scopedRaw = new Map<string, string>();
         // Include the reviewer's own summary (needed by buildCrossReviewPrompt)

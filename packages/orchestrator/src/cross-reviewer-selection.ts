@@ -20,6 +20,11 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
+/** Crypto-secure random float in [0, 1) */
+function secureRandom(): number {
+  return randomBytes(4).readUInt32BE(0) / 0x100000000;
+}
+
 export interface FindingForSelection {
   id: string;
   originalAuthor: string;
@@ -139,18 +144,22 @@ export function selectCrossReviewers(
 
       const epsilon = starvation * sevScale;
 
-      if (topK.length === K && Math.random() < epsilon) {
+      if (topK.length > 0 && secureRandom() < epsilon) {
         // Weighted selection toward most signal-starved candidate
         const weights = belowMedian.map((_c, i) => 1 / (1 + signalCounts[i]));
         const totalWeight = weights.reduce((a, b) => a + b, 0);
-        let r = Math.random() * totalWeight;
+        let r = secureRandom() * totalWeight;
         let pick = belowMedian[0];
         for (let i = 0; i < belowMedian.length; i++) {
           r -= weights[i];
           if (r <= 0) { pick = belowMedian[i]; break; }
         }
-        // Replace weakest top-K slot (last element after desc sort)
-        topK[topK.length - 1] = pick;
+        // Replace weakest top-K slot or append if under capacity
+        if (topK.length >= K) {
+          topK[topK.length - 1] = pick;
+        } else {
+          topK.push(pick);
+        }
       }
     }
 

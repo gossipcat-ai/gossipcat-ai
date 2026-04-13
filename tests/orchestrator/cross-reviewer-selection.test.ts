@@ -5,12 +5,41 @@
  * the selection fallback ensures at least K agents are assigned per finding.
  */
 
-import { selectCrossReviewers, FindingForSelection, AgentCandidate } from '../../packages/orchestrator/src/cross-reviewer-selection';
 import { PerformanceReader } from '../../packages/orchestrator/src/performance-reader';
 import { join } from 'path';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
+let mockRandomBytesValue: Buffer | null = null;
+
+jest.mock('crypto', () => {
+  const actual = jest.requireActual('crypto');
+  return {
+    ...actual,
+    randomBytes: (...args: any[]) => {
+      if (mockRandomBytesValue !== null) return mockRandomBytesValue;
+      return actual.randomBytes(...args);
+    },
+  };
+});
+
+// Must import AFTER jest.mock so the mock is in place
+import { selectCrossReviewers, FindingForSelection, AgentCandidate } from '../../packages/orchestrator/src/cross-reviewer-selection';
 
 const TEST_ROOT = '/tmp/gossip-cross-review-test-' + process.pid;
+
+/**
+ * Mock secureRandom() to return a deterministic value.
+ * secureRandom() uses randomBytes(4).readUInt32BE(0) / 0x100000000.
+ */
+function mockSecureRandom(value: number) {
+  const uint32 = Math.floor(value * 0x100000000);
+  const buf = Buffer.alloc(4);
+  buf.writeUInt32BE(uint32);
+  mockRandomBytesValue = buf;
+}
+
+function clearMockSecureRandom() {
+  mockRandomBytesValue = null;
+}
 
 function setupTestDir() {
   try { rmSync(TEST_ROOT, { recursive: true, force: true }); } catch {}
@@ -428,7 +457,7 @@ describe('Cross-Reviewer Selection', () => {
       };
     }
 
-    it('should sometimes swap weakest top-K with signal-starved candidate when Math.random triggers', () => {
+    it('should sometimes swap weakest top-K with signal-starved candidate when secureRandom triggers', () => {
       // Set up a pool where below-median candidates exist and are signal-starved
       const signals = [
         // agent-b: high accuracy (top candidate)
@@ -462,9 +491,8 @@ describe('Cross-Reviewer Selection', () => {
         { agentId: 'agent-d' },
       ];
 
-      // Force Math.random to always return a small value (triggers exploration)
-      const origRandom = Math.random;
-      Math.random = () => 0.001; // always below any reasonable epsilon
+      // Force secureRandom to always return a small value (triggers exploration)
+      mockSecureRandom(0.001);
 
       try {
         const reader = new PerformanceReader(TEST_ROOT);
@@ -477,11 +505,11 @@ describe('Cross-Reviewer Selection', () => {
         // agent-d should be included via exploration swap
         expect(assignedAgents).toContain('agent-d');
       } finally {
-        Math.random = origRandom;
+        clearMockSecureRandom();
       }
     });
 
-    it('should NOT explore when Math.random is above epsilon', () => {
+    it('should NOT explore when secureRandom is above epsilon', () => {
       const signals = [
         // agent-b: high accuracy
         sig('agreement', 'agent-b', 'tb1'),
@@ -514,9 +542,8 @@ describe('Cross-Reviewer Selection', () => {
         { agentId: 'agent-d' },
       ];
 
-      // Force Math.random to return 0.99 — well above any epsilon
-      const origRandom = Math.random;
-      Math.random = () => 0.99;
+      // Force secureRandom to return 0.99 — well above any epsilon
+      mockSecureRandom(0.99);
 
       try {
         const reader = new PerformanceReader(TEST_ROOT);
@@ -527,7 +554,7 @@ describe('Cross-Reviewer Selection', () => {
         // All 3 agents should be assigned (K=3 for critical, 3 candidates)
         expect(assignedAgents.length).toBe(3);
       } finally {
-        Math.random = origRandom;
+        clearMockSecureRandom();
       }
     });
 
@@ -566,12 +593,7 @@ describe('Cross-Reviewer Selection', () => {
       ];
 
       // Force exploration to trigger, then weight selection picks the first starved
-      const origRandom = Math.random;
-      let callCount = 0;
-      Math.random = () => {
-        callCount++;
-        return 0.001; // always triggers exploration + picks first weighted candidate
-      };
+      mockSecureRandom(0.001);
 
       try {
         const reader = new PerformanceReader(TEST_ROOT);
@@ -579,10 +601,8 @@ describe('Cross-Reviewer Selection', () => {
 
         // K=2 for low: top 2 by score, but exploration replaces weakest
         expect(assignments.size).toBe(2);
-        // The exploration mechanism should have been invoked (Math.random called >= 2 times)
-        expect(callCount).toBeGreaterThanOrEqual(2);
       } finally {
-        Math.random = origRandom;
+        clearMockSecureRandom();
       }
     });
   });
@@ -640,8 +660,7 @@ describe('Cross-Reviewer Selection', () => {
       ];
 
       // High random → no exploration, pure score-based selection
-      const origRandom = Math.random;
-      Math.random = () => 0.99;
+      mockSecureRandom(0.99);
 
       try {
         const reader = new PerformanceReader(TEST_ROOT);
@@ -653,7 +672,7 @@ describe('Cross-Reviewer Selection', () => {
         expect(assignments.has('agent-b')).toBe(true);
         expect(assignments.has('agent-e')).toBe(true);
       } finally {
-        Math.random = origRandom;
+        clearMockSecureRandom();
       }
     });
   });
@@ -700,8 +719,7 @@ describe('Cross-Reviewer Selection', () => {
       ];
 
       // Force exploration to trigger
-      const origRandom = Math.random;
-      Math.random = () => 0.001;
+      mockSecureRandom(0.001);
 
       try {
         const reader = new PerformanceReader(TEST_ROOT);
@@ -711,7 +729,7 @@ describe('Cross-Reviewer Selection', () => {
         expect(assignments.size).toBe(2);
         expect(assignments.has('agent-d')).toBe(true);
       } finally {
-        Math.random = origRandom;
+        clearMockSecureRandom();
       }
     });
   });
