@@ -360,4 +360,64 @@ describe('RelayServer dashboard integration', () => {
     expect(data).toHaveProperty('agentsOnline');
     expect(data).toHaveProperty('totalSignals');
   });
+
+  // Regression for "Team page shows empty list on fresh install". The boot
+  // snapshot at mcp-server-sdk.ts:365 runs once; if the user calls
+  // gossip_setup AFTER boot, the dashboard stays empty until /mcp reconnect
+  // unless the MCP server calls setAgentConfigs() to push the new team.
+  it('setAgentConfigs updates /dashboard/api/agents without restart', async () => {
+    // Authenticate first so we can call the API.
+    const postBody = JSON.stringify({ key: server.dashboardKey });
+    const authRes = await new Promise<{ cookie: string }>((resolve, reject) => {
+      const req = http.request(`http://localhost:${server.port}/dashboard/api/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postBody) },
+      }, (res) => {
+        let body = '';
+        res.on('data', (chunk) => body += chunk);
+        res.on('end', () => resolve({
+          cookie: (res.headers['set-cookie']?.[0] ?? '').split(';')[0],
+        }));
+      });
+      req.on('error', reject);
+      req.write(postBody);
+      req.end();
+    });
+
+    const fetchAgents = async (): Promise<any[]> => {
+      const res = await new Promise<{ body: string }>((resolve, reject) => {
+        const req = http.request(`http://localhost:${server.port}/dashboard/api/agents`, {
+          headers: { Cookie: authRes.cookie },
+        }, (r) => {
+          let body = '';
+          r.on('data', (c) => body += c);
+          r.on('end', () => resolve({ body }));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      return JSON.parse(res.body);
+    };
+
+    // Start: empty team (boot snapshot with no agents).
+    expect(await fetchAgents()).toEqual([]);
+
+    // Simulate gossip_setup writing config.json and calling setAgentConfigs.
+    server.setAgentConfigs([
+      {
+        id: 'sonnet-reviewer',
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        preset: 'reviewer',
+        skills: ['code_review'],
+        native: true,
+      },
+    ]);
+
+    // Dashboard reflects the new team without /mcp reconnect.
+    const after = await fetchAgents();
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe('sonnet-reviewer');
+    expect(after[0].native).toBe(true);
+  });
 });

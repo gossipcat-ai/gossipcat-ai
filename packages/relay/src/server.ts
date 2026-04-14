@@ -299,4 +299,15 @@ export class RelayServer {
       connectedAgentIds: this.connectionManager.getAll().map(c => c.agentId),
     });
   }
+
+  /**
+   * Update the dashboard's cached agent configs. Call from the MCP server
+   * after gossip_setup writes config.json so the Team page reflects the new
+   * team without requiring /mcp reconnect. The boot-time snapshot
+   * (mcp-server-sdk.ts:365) still wins on initial boot — this method is a
+   * post-setup override, not a replacement.
+   */
+  setAgentConfigs(configs: Array<{ id: string; provider: string; model: string; preset?: string; skills: string[]; native?: boolean }>): void {
+    this.dashboardRouter?.updateContext({ agentConfigs: configs });
+  }
 }
