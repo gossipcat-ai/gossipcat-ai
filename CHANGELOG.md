@@ -4,6 +4,12 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-04-14
+
+README-only republish. 0.4.1's install instructions (both on the npm package page and in the GitHub README) shipped before the README normalization PRs #67/#68 merged, so users landing on npmjs.com saw the old `https://github.com/.../releases/latest/download/gossipcat.tgz` one-liner instead of the shorter `npm install -g gossipcat` form. No code changes — the tarball is byte-identical to 0.4.1 except for `README.md` + the `package.json` version bump.
+
+If you installed 0.4.1, upgrading to 0.4.2 is a no-op for behavior. This exists purely so the npm package page matches the GitHub README.
+
 ## [0.4.1] — 2026-04-14
 
 A round of hardening driven by two consensus rounds (`0a7c34cb-91624bd4`, `20c17ac3-03bb4f25`) that reviewed 0.4.0's own PRs and caught real security + correctness regressions that the original review missed. Three stacked PRs close every HIGH/MEDIUM/LOW finding plus two silent-failure modes in already-merged 0.4.0 code.
