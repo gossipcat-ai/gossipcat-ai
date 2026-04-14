@@ -39,17 +39,17 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
   return (
     <a
       href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
-      className="group relative block rounded-xl border border-border bg-card p-4 transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:bg-card/90"
+      className="group relative block rounded-xl border border-border bg-card p-3 transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:bg-card/90"
     >
       {/* Flatten pass: the card used to layer gradient + inset highlight line
           + outer shadow + hover ring + per-agent avatar halo blur, which felt
           skeuomorphic and fought the metric bars for attention. Single card
           background + subtle hover lift reads cleaner in the 2x2 hero grid. */}
-      <div className="mb-3.5 flex items-center gap-3">
+      <div className="mb-2.5 flex items-center gap-2.5">
         <div className="relative shrink-0">
           <NeuralAvatar
             agentId={agent.id}
-            size={60}
+            size={48}
             animate={agent.online}
             signals={s.signals}
             accuracy={s.accuracy}
@@ -85,7 +85,7 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
       </div>
 
       {/* Metric bars — neutral inset panel without the extra shadow layer */}
-      <div className="space-y-2 rounded-lg border border-border/30 bg-background/40 px-3.5 py-3">
+      <div className="space-y-1.5 rounded-lg border border-border/30 bg-background/40 px-2.5 py-2">
         <BarRow
           label="accuracy"
           value={s.accuracy}

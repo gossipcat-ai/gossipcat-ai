@@ -2,6 +2,7 @@ import { overviewHandler } from '@gossip/relay/dashboard/api-overview';
 import { agentsHandler } from '@gossip/relay/dashboard/api-agents';
 import { skillsGetHandler, skillsBindHandler } from '@gossip/relay/dashboard/api-skills';
 import { memoryHandler } from '@gossip/relay/dashboard/api-memory';
+import { autoMemoryHandler } from '@gossip/relay/dashboard/api-auto-memory';
 import { tasksHandler } from '@gossip/relay/dashboard/api-tasks';
 import { signalsHandler } from '@gossip/relay/dashboard/api-signals';
 import { consensusHandler } from '@gossip/relay/dashboard/api-consensus';
@@ -239,6 +240,57 @@ describe('Memory API', () => {
     const result = await memoryHandler(projectRoot, 'test-agent');
     expect(result.fileCount).toBe(2);
     expect(result.cognitiveCount).toBe(1);
+  });
+});
+
+describe('Auto-Memory API', () => {
+  let fakeHome: string;
+  let projectRoot: string;
+  let memDir: string;
+
+  beforeEach(() => {
+    fakeHome = mkdtempSync(join(tmpdir(), 'gossip-home-'));
+    // Pick a synthetic project root — test encoding is `-Users-test-work-demo`.
+    projectRoot = '/Users/test/work/demo';
+    memDir = join(fakeHome, '.claude', 'projects', '-Users-test-work-demo', 'memory');
+  });
+
+  it('returns empty knowledge when dir is absent', async () => {
+    const result = await autoMemoryHandler(projectRoot, fakeHome);
+    expect(result).toEqual({ knowledge: [] });
+  });
+
+  it('reads .md files without frontmatter', async () => {
+    mkdirSync(memDir, { recursive: true });
+    writeFileSync(join(memDir, 'session_2026_04_15.md'), '# Session notes\n\nSome content');
+    const result = await autoMemoryHandler(projectRoot, fakeHome);
+    expect(result.knowledge).toHaveLength(1);
+    expect(result.knowledge[0].filename).toBe('session_2026_04_15.md');
+    expect(result.knowledge[0].frontmatter).toEqual({});
+    expect(result.knowledge[0].content).toContain('Session notes');
+    expect(result.knowledge[0].agentId).toBe('_auto');
+  });
+
+  it('parses frontmatter when present', async () => {
+    mkdirSync(memDir, { recursive: true });
+    writeFileSync(
+      join(memDir, 'project_example.md'),
+      '---\nname: example\ntype: project\n---\nBody text here',
+    );
+    const result = await autoMemoryHandler(projectRoot, fakeHome);
+    expect(result.knowledge).toHaveLength(1);
+    expect(result.knowledge[0].frontmatter.name).toBe('example');
+    expect(result.knowledge[0].frontmatter.type).toBe('project');
+    expect(result.knowledge[0].content).toBe('Body text here');
+  });
+
+  it('ignores non-md files', async () => {
+    mkdirSync(memDir, { recursive: true });
+    writeFileSync(join(memDir, 'keep.md'), 'ok');
+    writeFileSync(join(memDir, 'ignore.txt'), 'no');
+    writeFileSync(join(memDir, 'notes.json'), '{}');
+    const result = await autoMemoryHandler(projectRoot, fakeHome);
+    expect(result.knowledge.map((k) => k.filename)).toEqual(['keep.md']);
   });
 });
 

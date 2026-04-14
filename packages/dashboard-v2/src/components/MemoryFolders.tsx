@@ -134,7 +134,7 @@ export function MemoryFolders({ memories }: MemoryFoldersProps) {
   return (
     <section className="flex h-full flex-col">
       <h2 className="mb-3 font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-        Memory <span className="text-foreground">{unique.length}</span>
+        Memory <span className="text-primary">{unique.length}</span>
       </h2>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {DISPLAY_TYPES.map(({ type, label, blurb }) => {

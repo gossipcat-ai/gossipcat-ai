@@ -4,6 +4,7 @@ import { overviewHandler } from './api-overview';
 import { agentsHandler } from './api-agents';
 import { skillsGetHandler, skillsBindHandler } from './api-skills';
 import { memoryHandler } from './api-memory';
+import { autoMemoryHandler } from './api-auto-memory';
 import { consensusHandler } from './api-consensus';
 import { signalsHandler } from './api-signals';
 import { learningsHandler } from './api-learnings';
@@ -230,6 +231,13 @@ export class DashboardRouter {
 
       if (url === '/dashboard/api/logs' && req.method === 'GET') {
         const data = logsHandler(this.projectRoot, query ?? undefined);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      // Auto-memory: /dashboard/api/auto-memory (Claude Code project memory)
+      if (url === '/dashboard/api/auto-memory' && req.method === 'GET') {
+        const data = await autoMemoryHandler(this.projectRoot);
         this.json(res, 200, data);
         return true;
       }

@@ -22,7 +22,7 @@ export function TeamHero({ agents }: TeamHeroProps) {
 
   return (
     <section>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between">
         <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
           Team <span className="text-primary">{agents.length}</span>
         </h2>
@@ -32,7 +32,7 @@ export function TeamHero({ agents }: TeamHeroProps) {
           </a>
         )}
       </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {visible.map((agent) => (
           <AgentCardBig key={agent.id} agent={agent} />
         ))}
