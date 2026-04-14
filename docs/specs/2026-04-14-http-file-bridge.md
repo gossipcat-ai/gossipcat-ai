@@ -284,9 +284,75 @@ sonnet-reviewer + haiku-researcher). Key findings addressed:
   Added when gossipcat wants to surface agent work as PRs rather than direct
   edits. Requires inbound commit-content scanner (~100 LOC new).
 
+## Known gaps — resolve before implementation PR
+
+Pre-merge audit (tasks `6902e935` sonnet + `fcfcba5a` haiku, 2026-04-14) surfaced
+the gaps below. Each must be resolved in the implementation PR — either by
+design decision folded into the spec at that time, or by explicit deferral with
+rationale. The spec intentionally does not pre-commit to specific solutions
+here; the implementation PR's code-level consensus review is the right place
+to lock them in.
+
+**HIGH — block implementation until resolved:**
+
+- **Error response body shape.** The 6 endpoints define success bodies but not
+  error bodies for `401`/`403`/`412`/`413`/`429`. Pick a standard shape
+  (e.g. `{ error: string, message: string }`) and apply uniformly.
+- **Rate limiting per token.** TTL + 10MB payload cap alone permit a looping
+  agent to saturate CPU. Define per-endpoint RPS caps with `429` + `Retry-After`
+  response. Particularly important for `/file-list`, `/file-grep`, `/run-tests`.
+- **HTTP sentinel wording (this spec, earlier text).** The claim at the
+  "Sentinel verification" subsection that the HTTP /sentinel endpoint "makes a
+  silent bypass impossible" is stronger than supported; it catches agents that
+  follow the bridge but reach the wrong workspace, not agents that skip the
+  bridge block entirely. Align with the git-bridge spec's tightened wording
+  before implementation — orchestrator-side result parsing is the only backstop
+  against full bridge-block skip.
+
+**MEDIUM — fold into impl-PR design:**
+
+- **Observability.** No log format, rotation policy, or metrics emission
+  defined. Pick a JSON-line log format with `{taskId, method, path, status,
+  bytes, durationMs}`, daily rotation to `.gossip/bridge.log.N.gz`, and
+  task-scoped stats returned in the task metadata for dashboard surfacing.
+- **Wire-protocol versioning.** Git bridge has an explicit `v1` marker in the
+  prompt block header; HTTP bridge has none. Add an `X-Bridge-Version: 1`
+  response header plus an optional `GET /bridge-info` endpoint so future
+  endpoint changes fail loudly rather than silently misinterpret.
+- **Multi-task concurrent-read visibility.** Spec addresses concurrent writes
+  (ETag + worktree mode) but not reads. Two tasks reading the same scope at
+  different times can see different content if the developer edits between —
+  not a bug, but the spec must state the isolation model so readers don't
+  assume stronger guarantees. Worktree mode is the only fully-isolated tier.
+- **Scope extraction LOC estimate (both audits confirm).** The "~80% code reuse
+  from `tool-server.ts:234-318`" claim overstates by ~2x. The clean-extractable
+  portion is `canonicalizeForBoundary` (~15 LOC) + a `validatePathInScope`
+  helper (~10 LOC). The HTTP bridge needs its own per-endpoint enforcement
+  logic adapted from ToolServer's pattern — not a drop-in import. Update
+  `scope.ts` estimate to ~50 LOC, `http-bridge-server.ts` to ~200, total ~650
+  stands but distribution changes.
+
+**LOW — polish before implementation:**
+
+- **ETag serialization.** `sha256(mtime || size || content_hash)[:16]` does not
+  specify a delimiter between inputs. Without one, `mtime=12,size=345` and
+  `mtime=123,size=45` hash to the same value. Document explicit canonical
+  encoding (e.g., `sha256(mtime + "|" + size + "|" + content_hash)`).
+- **Streaming semantics.** Spec says `/file-read` streams chunks "when
+  requested" and `/file-write` rejects over-cap payloads with 413, but doesn't
+  detail the chunking protocol (offset param + `X-Truncated`/`X-Remaining-Bytes`
+  response headers?) or the size-check mechanism (Content-Length pre-check vs
+  body-read). Spell out the exact contract.
+- **Sentinel file vs endpoint clarifier.** Add one sentence distinguishing the
+  git bridge's file-based sentinel (`.gossipcat-bridge-sentinel` on disk) from
+  this spec's endpoint-based sentinel (`GET /sentinel` over the bridge URL) so
+  readers of both specs don't conflate them.
+
 ## Research sources
 
 - sonnet-reviewer + haiku-researcher consensus `b3bf13c0-e821417b` (this spec's origin)
+- sonnet-reviewer + haiku-researcher pre-merge audit tasks `6902e935` + `fcfcba5a`
+  (2026-04-14) — source of the Known gaps section above
 - Existing Tool Server implementation: `packages/tools/src/tool-server.ts`
 - Existing relay: `packages/relay/src/server.ts` (127.0.0.1 binding precedent)
 - Git project bridge: `docs/specs/2026-04-13-git-project-bridge.md` (sibling spec)

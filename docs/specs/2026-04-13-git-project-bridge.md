@@ -112,17 +112,27 @@ it reads files from the wrong workspace and produces fabrications about a
 different project. Gossipcat cannot intercept or redirect the agent's native
 tools — this is a structural limit of prompt-injection integration.
 
-Mitigation: the bridge block generates a sentinel file at `.gossipcat-bridge-sentinel`
-inside the workspace and injects a cryptographically random token into the prompt.
-The agent's first action must be to read the sentinel and verify the token matches.
+Mitigation: when the bridge block executes, it writes a sentinel file at
+`.gossipcat-bridge-sentinel` inside the workspace containing a cryptographically
+random token. The agent is instructed to read the sentinel and verify the token
+before any analysis.
 
 - Sentinel content: 128 bits of entropy from `crypto.randomBytes(16).toString('hex')`.
-- Path: always `<WORKSPACE_PATH>/.gossipcat-bridge-sentinel` — the workspace-relative
-  form means a misdirected `file_read` targets the agent's own workspace, where no
-  matching sentinel exists.
-- Failure mode: sentinel missing or token mismatch → agent halts and reports
-  "bridge not active". This converts a silent fallback (agent reviewing the wrong
-  project) into an explicit failure that the orchestrator logs as a task error.
+- Path: `<WORKSPACE_PATH>/.gossipcat-bridge-sentinel` (workspace-relative).
+
+**What this catches:** an agent that runs Form A against the wrong SHA, or
+against a stale/divergent workspace. The sentinel was written with a
+dispatch-specific token; if the agent reads a sentinel from a prior dispatch or
+from a different workspace, the token mismatches and the agent halts.
+
+**What this does NOT catch:** an agent whose LLM ignores the bridge block
+entirely and never executes Form A. In that case the sentinel is never written,
+the verification step is never reached, and the agent silently reads its own
+local workspace. This failure mode is structural to prompt-injection
+integration — gossipcat cannot force the agent's runtime to execute the bash.
+The mitigation is orchestrator-side: the agent's result text is parsed for the
+sentinel-verification marker; results that did not emit it are flagged as
+unverified (no sentinel evidence) rather than silently trusted.
 
 For the future HTTP/REST bridge (Architecture 2 in docs/specs/2026-04-14-http-file-bridge.md),
 the sentinel is read via the bridge endpoint, not the local filesystem, providing
