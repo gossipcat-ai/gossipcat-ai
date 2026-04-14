@@ -111,7 +111,9 @@ export interface ConsensusSignal {
     | 'category_confirmed'
     | 'consensus_verified'
     | 'signal_retracted'
-    | 'severity_miscalibrated';
+    | 'severity_miscalibrated'
+    | 'task_timeout'
+    | 'task_empty';
   agentId: string;
   counterpartId?: string;
   skill?: string;

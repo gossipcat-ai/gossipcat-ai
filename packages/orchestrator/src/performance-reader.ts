@@ -7,7 +7,7 @@
 
 import { readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
-import { ConsensusSignal } from './consensus-types';
+import { ConsensusSignal, ImplSignal, PerformanceSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
 
 export interface AgentScore {
@@ -36,6 +36,7 @@ export interface CategoryCounters {
 
 const CIRCUIT_BREAKER_THRESHOLD = 3; // consecutive failures → open circuit
 const NEGATIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement']);
+const NEGATIVE_IMPL_SIGNALS = new Set(['impl_test_fail', 'impl_peer_rejected']);
 const SIGNAL_EXPIRY_DAYS = 30;
 
 /** Known consensus signal types — used to filter valid signals in computeScores */
@@ -51,6 +52,8 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   consensus_verified: true,
   signal_retracted: true,
   severity_miscalibrated: true,
+  task_timeout: true,
+  task_empty: true,
 };
 
 const SEVERITY_MULTIPLIER: Record<string, number> = {
@@ -130,6 +133,7 @@ export class PerformanceReader {
     const signals = this.readSignals();
     return signals.filter(s => {
       if (s.agentId !== agentId) return false;
+      if (s.type !== 'consensus') return false;
       if (!CROSS_REVIEW_SIGNALS.has(s.signal)) return false;
       const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
       return isFinite(ts) && ts > cutoffMs;
@@ -220,22 +224,26 @@ export class PerformanceReader {
     }
   }
 
-  private readSignals(): ConsensusSignal[] {
+  private readSignals(): PerformanceSignal[] {
     if (!existsSync(this.filePath)) return [];
     try {
       const expiryMs = Date.now() - SIGNAL_EXPIRY_DAYS * 86400000;
 
       const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
       const all = lines.map(line => {
-        try { return JSON.parse(line) as ConsensusSignal; }
+        try { return JSON.parse(line) as PerformanceSignal; }
         catch { return null; }
-      }).filter((s): s is ConsensusSignal =>
-        s !== null && s.type === 'consensus' && typeof s.agentId === 'string' && s.agentId.length > 0
+      }).filter((s): s is PerformanceSignal =>
+        s !== null &&
+        (s.type === 'consensus' || s.type === 'impl') &&
+        typeof s.agentId === 'string' && s.agentId.length > 0
       );
 
       // Collect retraction keys: agentId + taskId + signalType combos that have been retracted
+      // Only consensus signals can carry retractions.
       const retracted = new Set<string>();
       for (const s of all) {
+        if (s.type !== 'consensus') continue;
         if (s.signal === 'signal_retracted') {
           const taskKey = s.taskId || s.timestamp;
           if (s.retractedSignal) {
@@ -250,14 +258,16 @@ export class PerformanceReader {
 
       // Filter: exclude expired, retracted, and retraction signals themselves
       return all.filter(s => {
-        if (s.signal === 'signal_retracted') return false;
+        if (s.type === 'consensus' && s.signal === 'signal_retracted') return false;
         // Expire old signals — missing/bad timestamps are treated as expired
         const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
         if (!isFinite(ts) || ts === 0 || ts < expiryMs) return false;
-        // Skip retracted signals (check both scoped and wildcard keys)
-        const taskKey = s.taskId || s.timestamp;
-        if (retracted.has(s.agentId + ':' + taskKey + ':' + s.signal)) return false;
-        if (retracted.has(s.agentId + ':' + taskKey + ':*')) return false;
+        // Skip retracted signals (check both scoped and wildcard keys; impl signals are never retracted)
+        if (s.type === 'consensus') {
+          const taskKey = s.taskId || s.timestamp;
+          if (retracted.has(s.agentId + ':' + taskKey + ':' + s.signal)) return false;
+          if (retracted.has(s.agentId + ':' + taskKey + ':*')) return false;
+        }
         return true;
       });
     } catch {
@@ -265,11 +275,17 @@ export class PerformanceReader {
     }
   }
 
-  private computeScores(signals: ConsensusSignal[]): Map<string, AgentScore> {
+  private computeScores(signals: PerformanceSignal[]): Map<string, AgentScore> {
     const DECAY_HALF_LIFE = 50; // tasks
 
     const TIME_DECAY_HALF_LIFE_DAYS = 7; // scores drift toward neutral after a week of inactivity
     const now = Date.now();
+
+    // Split into typed arrays once so remaining code keeps narrow types.
+    // consensusSignals → scoring + streak building.
+    // implSignals      → streak building only (scoring is handled separately by getImplScore).
+    const consensusSignals = signals.filter((s): s is ConsensusSignal => s.type === 'consensus');
+    const implSignals = signals.filter((s): s is ImplSignal => s.type === 'impl');
 
     // Per-agent accumulators for ratio-based scoring
     const acc = new Map<string, {
@@ -307,7 +323,7 @@ export class PerformanceReader {
 
     // Index task order per agent for decay calculation
     // Index both agentId and counterpartId so winners get correct decay
-    for (const signal of signals) {
+    for (const signal of consensusSignals) {
       const taskKey = signal.taskId || signal.timestamp;
       const a = ensure(signal.agentId);
       if (!a.tasksSeen.has(taskKey)) {
@@ -321,12 +337,12 @@ export class PerformanceReader {
       }
     }
 
-    const peerDiversity = this.computePeerDiversity(signals);
+    const peerDiversity = this.computePeerDiversity(consensusSignals);
 
     // Build per-agent retraction index so computeScores skips retracted signals
     // even when called with a raw (unfiltered) signal array (e.g. directly from tests).
     const retractedKeys = new Set<string>();
-    for (const signal of signals) {
+    for (const signal of consensusSignals) {
       if (signal.signal === 'signal_retracted') {
         const taskKey = signal.taskId || signal.timestamp;
         if (signal.retractedSignal) {
@@ -337,7 +353,7 @@ export class PerformanceReader {
       }
     }
 
-    for (const signal of signals) {
+    for (const signal of consensusSignals) {
       const isKnown = KNOWN_SIGNALS[signal.signal];
       if (!isKnown) continue;
       if (signal.signal === 'signal_retracted') continue;
@@ -436,16 +452,28 @@ export class PerformanceReader {
           }
           break;
         }
+        case 'task_timeout':
+        case 'task_empty':
+          // Transport/provider failure — contributes nothing to any scoring accumulator.
+          // Does not affect accuracy, uniqueness, reliability, or circuit breaker.
+          break;
       }
     }
 
-    // Circuit breaker: count consecutive trailing failures per agent
+    // Circuit breaker: count consecutive trailing failures per agent.
+    // Accepts both consensus signals (using KNOWN_SIGNALS + NEGATIVE_SIGNALS) and impl
+    // signals (using NEGATIVE_IMPL_SIGNALS), so a clean impl run can reset a stale
+    // consensus-side streak and vice versa.
     const consecutiveFailures = new Map<string, number>();
-    // Group signals by agent in order, then count trailing negatives
-    const signalsByAgent = new Map<string, ConsensusSignal[]>();
-    for (const signal of signals) {
+    // Group eligible signals by agent; preserve insertion order for sort.
+    const signalsByAgent = new Map<string, (ConsensusSignal | ImplSignal)[]>();
+    for (const signal of consensusSignals) {
       if (!KNOWN_SIGNALS[signal.signal]) continue;
-      if (signal.type !== 'consensus') continue;
+      const list = signalsByAgent.get(signal.agentId) || [];
+      list.push(signal);
+      signalsByAgent.set(signal.agentId, list);
+    }
+    for (const signal of implSignals) {
       const list = signalsByAgent.get(signal.agentId) || [];
       list.push(signal);
       signalsByAgent.set(signal.agentId, list);
@@ -460,9 +488,14 @@ export class PerformanceReader {
         return ((a as any).consensusId || '').localeCompare((b as any).consensusId || '');
       });
       let streak = 0;
-      // Walk from newest to oldest — count consecutive negatives at tail
+      // Walk from newest to oldest — count consecutive negatives at tail.
+      // A non-negative signal (positive consensus or positive impl) breaks the streak.
       for (let i = agentSignals.length - 1; i >= 0; i--) {
-        if (NEGATIVE_SIGNALS.has(agentSignals[i].signal)) streak++;
+        const sig = agentSignals[i];
+        const isNegative =
+          (sig.type === 'consensus' && NEGATIVE_SIGNALS.has(sig.signal)) ||
+          (sig.type === 'impl' && NEGATIVE_IMPL_SIGNALS.has(sig.signal));
+        if (isNegative) streak++;
         else break;
       }
       consecutiveFailures.set(agentId, streak);
@@ -553,6 +586,21 @@ export class PerformanceReader {
         categoryHallucinated: { ...a.categoryHallucinated },
         categoryAccuracy,
       });
+    }
+
+    // Agents that have ONLY impl signals (no consensus signals) won't appear in `acc`
+    // but may have a non-zero consecutiveFailures from the streak loop above.
+    // Emit a neutral score entry for them so circuit-breaker state is visible.
+    for (const [agentId, consec] of consecutiveFailures) {
+      if (!scores.has(agentId)) {
+        scores.set(agentId, {
+          agentId, accuracy: 0.5, uniqueness: 0.5, reliability: 0.5, impactScore: 0.5,
+          totalSignals: 0, agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
+          consecutiveFailures: consec,
+          circuitOpen: consec >= CIRCUIT_BREAKER_THRESHOLD,
+          categoryStrengths: {}, categoryCorrect: {}, categoryHallucinated: {}, categoryAccuracy: {},
+        });
+      }
     }
 
     return scores;

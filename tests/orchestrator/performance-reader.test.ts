@@ -521,3 +521,164 @@ describe('PerformanceReader — circuit breaker: unique_unconfirmed removed from
     expect(score.circuitOpen).toBe(false);
   });
 });
+
+describe('PerformanceReader — circuit breaker Changes 2 & 3 (2026-04-14-circuit-breaker-fix.md)', () => {
+  // Change 2: task_timeout and task_empty are neutral transport signals, not
+  // evidence of agent correctness failure. They must not tick the streak counter.
+  //
+  // Change 3: impl signals (impl_test_pass, impl_peer_approved, impl_test_fail,
+  // impl_peer_rejected) now participate in streak building. A positive impl signal
+  // breaks a trailing run of consensus negatives; a negative impl signal extends it.
+
+  function ts(daysAgo: number, ms = 0): string {
+    return new Date(Date.now() - daysAgo * 86400000 + ms).toISOString();
+  }
+
+  // ── Change 2 tests ──────────────────────────────────────────────────────────
+
+  it('C2-1: 5 consecutive task_timeout → consecutiveFailures === 0, circuitOpen === false', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't1', evidence: 'Task timed out — no response', timestamp: ts(4) },
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't2', evidence: 'Task timed out — no response', timestamp: ts(3) },
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't3', evidence: 'Task timed out — no response', timestamp: ts(2) },
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't4', evidence: 'Task timed out — no response', timestamp: ts(1) },
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't5', evidence: 'Task timed out — no response', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agt')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C2-2: 5 consecutive task_empty → consecutiveFailures === 0, circuitOpen === false', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't1', evidence: 'Empty response — agent produced no output', timestamp: ts(4) },
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't2', evidence: 'Empty response — agent produced no output', timestamp: ts(3) },
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't3', evidence: 'Empty response — agent produced no output', timestamp: ts(2) },
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't4', evidence: 'Empty response — agent produced no output', timestamp: ts(1) },
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't5', evidence: 'Empty response — agent produced no output', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agt')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C2: task_timeout and task_empty contribute nothing to accuracy scoring', () => {
+    // task_timeout / task_empty must not add to weightedTotal or weightedCorrect,
+    // so accuracy stays at 0.5 (neutral) when there are no other signals.
+    writeSignals([
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't1', evidence: '', timestamp: ts(1) },
+      { type: 'consensus', signal: 'task_empty',   agentId: 'agt', taskId: 't2', evidence: '', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agt')!;
+    expect(score.accuracy).toBeCloseTo(0.5, 1);
+    expect(score.consecutiveFailures).toBe(0);
+  });
+
+  // ── Change 3 tests ──────────────────────────────────────────────────────────
+
+  it('C3-1: impl_test_pass resets a trailing consensus streak', () => {
+    // Tail order (oldest → newest): hallucination, hallucination, impl_test_pass
+    // impl_test_pass is a positive impl signal → streak walk stops at impl_test_pass → streak = 0.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_test_pass',       agentId: 'impl-agent', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('impl-agent')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C3-2: impl_test_fail extends a trailing consensus streak', () => {
+    // Tail order: hallucination, hallucination, impl_test_fail
+    // impl_test_fail is in NEGATIVE_IMPL_SIGNALS → extends the streak → streak = 3.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_test_fail',        agentId: 'impl-agent', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('impl-agent')!;
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('C3-3: impl_peer_rejected extends a trailing consensus streak', () => {
+    // Tail order: hallucination, hallucination, impl_peer_rejected
+    // impl_peer_rejected is in NEGATIVE_IMPL_SIGNALS → streak = 3.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_peer_rejected',   agentId: 'impl-agent', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('impl-agent')!;
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('C3-4: mixed recovery — agreement in middle caps trailing impl_test_fail streak at 2', () => {
+    // Tail order (oldest → newest):
+    //   hallucination, hallucination, agreement, impl_test_fail, impl_test_fail
+    // Walk: impl_test_fail (neg, streak=1) → impl_test_fail (neg, streak=2) → agreement (non-neg, STOP)
+    // consecutiveFailures = 2, circuit open (>= threshold 3) = false.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-z', taskId: 't1', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-z', taskId: 't2', evidence: 'bad', timestamp: ts(3) },
+      { type: 'consensus', signal: 'agreement',             agentId: 'agent-z', counterpartId: 'p', taskId: 't3', evidence: 'ok', timestamp: ts(2) },
+      { type: 'impl',      signal: 'impl_test_fail',        agentId: 'agent-z', taskId: 't4', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_test_fail',        agentId: 'agent-z', taskId: 't5', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-z')!;
+    expect(score.consecutiveFailures).toBe(2);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C3-5: pure impl streak of 3 impl_test_fail opens the circuit', () => {
+    // Agent with no consensus history, only 3 trailing impl_test_fail signals.
+    // Each is in NEGATIVE_IMPL_SIGNALS → consecutiveFailures = 3 → circuitOpen = true.
+    writeSignals([
+      { type: 'impl', signal: 'impl_test_fail', agentId: 'impl-only', taskId: 't1', timestamp: ts(2) },
+      { type: 'impl', signal: 'impl_test_fail', agentId: 'impl-only', taskId: 't2', timestamp: ts(1) },
+      { type: 'impl', signal: 'impl_test_fail', agentId: 'impl-only', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('impl-only')!;
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('C3-6 (regression): unique_unconfirmed still does not bench (Change 1 carry-over)', () => {
+    // Regression guard: unique_unconfirmed must remain out of NEGATIVE_SIGNALS
+    // regardless of the Change 3 streak-loop rewrite.
+    writeSignals([
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't1', evidence: '', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't2', evidence: '', timestamp: ts(3) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't3', evidence: '', timestamp: ts(2) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't4', evidence: '', timestamp: ts(1) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't5', evidence: '', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('rg-agent')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C3: impl_peer_approved resets a trailing consensus streak', () => {
+    // impl_peer_approved is a positive impl signal (not in NEGATIVE_IMPL_SIGNALS) → streak-breaker.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-q', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-q', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_peer_approved',   agentId: 'agent-q', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-q')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+});
