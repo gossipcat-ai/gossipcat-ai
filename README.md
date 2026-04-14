@@ -185,8 +185,7 @@ Add to `~/.claude/mcp_settings.json`:
 {
   "mcpServers": {
     "gossipcat": {
-      "command": "gossipcat",
-      "args": ["mcp"]
+      "command": "gossipcat"
     }
   }
 }
@@ -199,7 +198,7 @@ Or project-local in `.mcp.json`:
   "mcpServers": {
     "gossipcat": {
       "command": "npx",
-      "args": ["gossipcat", "mcp"]
+      "args": ["gossipcat"]
     }
   }
 }
@@ -224,7 +223,7 @@ Gossipcat ships from **[GitHub Releases](https://github.com/gossipcat-ai/gossipc
 
 **Pin to a specific version:**
 ```bash
-npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.1.1/gossipcat-0.1.1.tgz
+npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.4.1/gossipcat-0.4.1.tgz
 ```
 
 **Project-local install** (each project gets its own gossipcat):
