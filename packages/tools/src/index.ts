@@ -7,5 +7,6 @@ export { GitTools } from './git-tools';
 export { ALL_TOOLS, FILE_TOOLS, SHELL_TOOLS, GIT_TOOLS, SKILL_TOOLS, MEMORY_TOOLS, IDENTITY_TOOLS } from './definitions';
 export type { MemorySearcherLike, AgentIdentity, AgentLookup } from './tool-server';
 export { formatIdentityBlock } from './tool-server';
+export { canonicalizeForBoundary, validatePathInScope, CASE_INSENSITIVE_FS } from './scope';
 export { SkillTools } from './skill-tools';
 export type { SuggestSkillArgs, GapSuggestion, GapResolution, GapEntry } from './skill-tools';

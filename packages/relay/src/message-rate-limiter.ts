@@ -1,9 +1,14 @@
 /**
  * Message Rate Limiter
  *
- * Prevents a single agent from flooding the server with too many messages
- * in a short period. Uses a sliding window algorithm.
+ * Per-agent message-count gate on a sliding window. This is now a thin
+ * adapter over the generic `RateLimiter` in `@gossip/orchestrator` so the
+ * relay's count-mode gate and the HTTP file bridge's weighted-sum quota
+ * share one substrate. Public API is preserved so existing test importers
+ * and any future relay wiring continue to work without changes.
  */
+
+import { RateLimiter } from '@gossip/orchestrator/rate-limiter';
 
 export interface RateLimiterConfig {
   maxMessages: number;
@@ -11,42 +16,23 @@ export interface RateLimiterConfig {
 }
 
 export class MessageRateLimiter {
-  private messageTimestamps = new Map<string, number[]>();
-  private readonly maxMessages: number;
-  private readonly windowMs: number;
+  private readonly inner: RateLimiter;
 
   constructor(config: RateLimiterConfig) {
-    this.maxMessages = config.maxMessages;
-    this.windowMs = config.windowMs;
+    this.inner = new RateLimiter(config.windowMs, config.maxMessages);
   }
 
   /**
-   * Records a message from an agent and checks if they have exceeded the rate limit.
-   *
-   * @param agentId The ID of the agent sending the message.
-   * @returns True if the agent is allowed to send the message, false otherwise.
+   * Records a message from an agent and checks whether they are within the
+   * rate limit. Returns `true` if the message is allowed, `false` if the
+   * agent has exceeded their quota for the current window.
    */
   public isAllowed(agentId: string): boolean {
-    const now = Date.now();
-    const timestamps = this.messageTimestamps.get(agentId) || [];
-
-    // Remove timestamps older than the window
-    const windowStart = now - this.windowMs;
-    const recentTimestamps = timestamps.filter(ts => ts > windowStart);
-
-    if (recentTimestamps.length >= this.maxMessages) {
-      return false; // Limit exceeded
-    }
-
-    recentTimestamps.push(now);
-    this.messageTimestamps.set(agentId, recentTimestamps);
-    return true;
+    return this.inner.record(agentId, 1);
   }
 
-  /**
-   * Clears all tracking data (for testing).
-   */
+  /** Clears all tracking data (for testing). */
   public clear(): void {
-    this.messageTimestamps.clear();
+    this.inner.clear();
   }
 }

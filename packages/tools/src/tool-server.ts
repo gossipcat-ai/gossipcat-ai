@@ -8,40 +8,8 @@ import { GitTools } from './git-tools';
 import { SkillTools } from './skill-tools';
 import { Sandbox } from './sandbox';
 import { isKnownTool, validateToolArgs } from './tool-schemas';
-import { resolve, dirname, basename, join } from 'path';
-import { realpathSync, existsSync } from 'fs';
-
-// Case-insensitive filesystems (darwin/win32) require case-folded path compares,
-// otherwise a scope of `packages/relay/` can be bypassed by a path like
-// `packages/RELAY/evil.ts` — the OS treats them as the same directory but
-// `startsWith` is case-sensitive.
-const CASE_INSENSITIVE_FS = process.platform === 'darwin' || process.platform === 'win32';
-
-/**
- * Resolve a path to its canonical form for boundary comparison:
- *   1. Follow symlinks via realpathSync so a planted symlink in-scope cannot
- *      escape to an out-of-scope target. If the target does not exist yet
- *      (common for file_write), resolve the parent and re-attach the basename.
- *   2. Case-fold on case-insensitive filesystems.
- *   3. Append a trailing slash so sibling-prefix bypass (e.g. `packages/relay2/`
- *      matching scope `packages/relay/`) is impossible.
- */
-function canonicalizeForBoundary(p: string): string {
-  let out = p;
-  if (existsSync(out)) {
-    try { out = realpathSync(out); } catch { /* best-effort */ }
-  } else {
-    // Path does not exist — resolve symlinks in the parent directory instead,
-    // then reattach the basename. This prevents symlinks in ancestor dirs from
-    // hiding an escape during file_write.
-    const parent = dirname(out);
-    if (parent !== out && existsSync(parent)) {
-      try { out = join(realpathSync(parent), basename(out)); } catch { /* best-effort */ }
-    }
-  }
-  if (CASE_INSENSITIVE_FS) out = out.toLowerCase();
-  return out.endsWith('/') ? out : out + '/';
-}
+import { resolve } from 'path';
+import { canonicalizeForBoundary, validatePathInScope } from './scope';
 
 /**
  * Structural shape of MemorySearcher from @gossip/orchestrator. Defined here as
@@ -242,13 +210,13 @@ export class ToolServer {
         // case-insensitive filesystems, and appends a trailing slash so
         // sibling-prefix bypass is impossible. scope is already canonical.
         const canonical = canonicalizeForBoundary(resolve(this.sandbox.projectRoot, filePath));
-        if (!canonical.startsWith(scope)) {
+        if (!validatePathInScope(scope, canonical)) {
           throw new Error(`Write blocked: "${filePath}" is outside scope "${scope}"`);
         }
       }
       if (root) {
         const canonical = canonicalizeForBoundary(resolve(root, filePath));
-        if (!canonical.startsWith(root)) {
+        if (!validatePathInScope(root, canonical)) {
           throw new Error(`Write blocked: "${filePath}" is outside worktree root "${root}"`);
         }
       }
@@ -289,7 +257,7 @@ export class ToolServer {
       const filePath = args.path as string;
       if (scope) {
         const canonical = canonicalizeForBoundary(resolve(this.sandbox.projectRoot, filePath));
-        if (!canonical.startsWith(scope)) {
+        if (!validatePathInScope(scope, canonical)) {
           throw new Error(`Delete blocked: "${filePath}" is outside scope "${scope}"`);
         }
       }
@@ -297,7 +265,7 @@ export class ToolServer {
         // Match file_write hardening: resolve symlinks + trailing-slash guard
         // so planted symlinks and sibling-prefix roots cannot escape.
         const canonical = canonicalizeForBoundary(resolve(root, filePath));
-        if (!canonical.startsWith(root)) {
+        if (!validatePathInScope(root, canonical)) {
           throw new Error(`Delete blocked: "${filePath}" is outside worktree root "${root}"`);
         }
       }
@@ -350,7 +318,7 @@ export class ToolServer {
           // canonicalizeForBoundary follows symlinks so a planted symlink
           // inside scope cannot redirect the read to an out-of-scope target.
           const canonical = canonicalizeForBoundary(resolve(this.sandbox.projectRoot, args.path as string));
-          if (!canonical.startsWith(readScope)) {
+          if (!validatePathInScope(readScope, canonical)) {
             throw new Error(`Read blocked: "${args.path}" is outside scope "${readScope}"`);
           }
         }
