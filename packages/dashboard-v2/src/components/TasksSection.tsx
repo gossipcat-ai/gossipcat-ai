@@ -2,10 +2,11 @@ import type { TasksData } from '@/lib/types';
 import { timeAgo } from '@/lib/utils';
 import { EmptyState } from './EmptyState';
 
-const PAGE_SIZE = 8;
+const DEFAULT_PAGE_SIZE = 8;
 
 interface TasksSectionProps {
   tasks: TasksData;
+  limit?: number;
 }
 
 const STATUS_PILL: Record<string, { cls: string; symbol: string }> = {
@@ -20,9 +21,9 @@ function truncate(str: string, max: number): string {
   return str.length > max ? str.slice(0, max) + '…' : str;
 }
 
-export function TasksSection({ tasks }: TasksSectionProps) {
-  const visible = tasks.items.slice(0, PAGE_SIZE);
-  const hasMore = tasks.items.length > PAGE_SIZE;
+export function TasksSection({ tasks, limit = DEFAULT_PAGE_SIZE }: TasksSectionProps) {
+  const visible = tasks.items.slice(0, limit);
+  const hasMore = tasks.items.length > limit;
 
   return (
     <section className="flex h-full flex-col">

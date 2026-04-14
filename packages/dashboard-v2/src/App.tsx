@@ -449,15 +449,13 @@ function Dashboard() {
           {agents && <CircuitAlerts agents={agents} />}
         </aside>
 
-        {/* Main: Active tasks + Team hero + Consensus + Tasks + Memories */}
+        {/* Main: Active tasks + Recent tasks + Team hero + Consensus + Memories */}
         <main className="min-w-0 space-y-6">
           <ActiveTasksBanner onCountChange={setActiveTaskCount} />
+          {tasks && <TasksSection tasks={tasks} limit={5} />}
           {agents && <TeamHero agents={agents} />}
           <FindingsMetrics consensus={consensus} reports={consensusReports} />
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            {tasks && <TasksSection tasks={tasks} />}
-            {memories && <RecentMemories memories={memories} />}
-          </div>
+          {memories && <RecentMemories memories={memories} />}
         </main>
       </div>
     );
