@@ -353,10 +353,10 @@ describe('PerformanceReader — circuit breaker chronology (signal-timestamp-fro
       { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 't1', evidence: 'x', timestamp: ts(5) },
       { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 't2', evidence: 'x', timestamp: ts(4) },
       { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 't3', evidence: 'x', timestamp: ts(3) },
-      // 3 negatives more recent
+      // 3 negatives more recent (unique_unconfirmed removed from NEGATIVE_SIGNALS — use hallucination instead)
       { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't4', evidence: 'bad', timestamp: ts(2) },
       { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 't5', evidence: 'bad', timestamp: ts(1) },
-      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rev', taskId: 't6', evidence: 'bad', timestamp: ts(0) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't6', evidence: 'bad', timestamp: ts(0) },
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     expect(reader.isCircuitOpen('rev')).toBe(true);
@@ -423,5 +423,101 @@ describe('PerformanceReader — circuit breaker chronology (signal-timestamp-fro
     expect(reader.isCircuitOpen('rev')).toBe(false);
     // Run twice to confirm idempotence under tiebreaker.
     expect(reader.isCircuitOpen('rev')).toBe(false);
+  });
+});
+
+describe('PerformanceReader — circuit breaker: unique_unconfirmed removed from NEGATIVE_SIGNALS', () => {
+  // Change 1 from docs/specs/2026-04-14-circuit-breaker-fix.md
+  // Consensus round: 4d6406d5-b0e147a5
+  // Rationale: unique_unconfirmed covers 3 ambiguous conditions (peer couldn't verify,
+  // task timed out, empty output). None indicate hallucination. The weighted scoring
+  // loop already treats it as near-neutral. Removing it only relaxes the binary
+  // circuit-breaker streak count.
+
+  function ts(daysAgo: number, ms = 0): string {
+    return new Date(Date.now() - daysAgo * 86400000 + ms).toISOString();
+  }
+
+  it('5 consecutive unique_unconfirmed: consecutiveFailures === 0, circuitOpen === false', () => {
+    // unique_unconfirmed no longer benches — peer couldn't verify / timeout / empty
+    // output do not constitute evidence of agent error.
+    writeSignals([
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't1', evidence: '', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't2', evidence: '', timestamp: ts(3) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't3', evidence: '', timestamp: ts(2) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't4', evidence: '', timestamp: ts(1) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't5', evidence: '', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-a')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('3 consecutive hallucination_caught still bench: consecutiveFailures === 3, circuitOpen === true', () => {
+    // hallucination_caught remains in NEGATIVE_SIGNALS — real correctness error.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-b', counterpartId: 'peer', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-b', counterpartId: 'peer', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-b', counterpartId: 'peer', taskId: 't3', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-b')!;
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('3 consecutive disagreement (loser) still bench: circuitOpen === true', () => {
+    // disagreement remains in NEGATIVE_SIGNALS — agentId is the loser.
+    // Only the loser gets a disagreement signal record; winner gets no streak tick.
+    writeSignals([
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', taskId: 't3', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-c')!;
+    expect(score.circuitOpen).toBe(true);
+    // Winner must NOT be penalized
+    const winnerScore = reader.getAgentScore('winner');
+    expect(winnerScore?.circuitOpen ?? false).toBe(false);
+  });
+
+  it('unique_unconfirmed in middle breaks the streak: only trailing 3 hallucinations count', () => {
+    // Signal sequence (oldest → newest):
+    //   hallucination, hallucination, unique_unconfirmed, hallucination, hallucination, hallucination
+    //
+    // With unique_unconfirmed no longer negative, it acts as a streak-breaker
+    // (non-negative signal stops the backwards walk). The trailing 3 hallucinations
+    // form a streak of 3, not 5 (the earlier 2 are cut off by the non-negative signal).
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't1', evidence: 'bad', timestamp: ts(5) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't2', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-d', taskId: 't3', evidence: '', timestamp: ts(3) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't4', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't5', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't6', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-d')!;
+    // Backwards walk: 3 hallucinations at tail → streak = 3. unique_unconfirmed is not
+    // negative, so it stops the walk. The two earlier hallucinations do not extend the streak.
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('positive signal after unique_unconfirmed run resets streak: consecutiveFailures === 0', () => {
+    // 3 unique_unconfirmed (now non-negative) followed by 1 agreement at tail.
+    // The tail is positive → streak walks back 0 consecutive negatives.
+    writeSignals([
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-e', taskId: 't1', evidence: '', timestamp: ts(3) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-e', taskId: 't2', evidence: '', timestamp: ts(2) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-e', taskId: 't3', evidence: '', timestamp: ts(1) },
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-e', counterpartId: 'peer', taskId: 't4', evidence: 'ok', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-e')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
   });
 });

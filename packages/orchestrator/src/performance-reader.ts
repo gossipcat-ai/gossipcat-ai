@@ -35,7 +35,7 @@ export interface CategoryCounters {
 }
 
 const CIRCUIT_BREAKER_THRESHOLD = 3; // consecutive failures → open circuit
-const NEGATIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement', 'unique_unconfirmed']);
+const NEGATIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement']);
 const SIGNAL_EXPIRY_DAYS = 30;
 
 /** Known consensus signal types — used to filter valid signals in computeScores */
