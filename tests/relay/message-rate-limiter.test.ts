@@ -54,12 +54,13 @@ describe('MessageRateLimiter', () => {
     // Wait for half the window
     await new Promise(resolve => setTimeout(resolve, config.windowMs / 2));
 
-    // Send more messages to fill the window
-    for (let i = 0; i < config.maxMessages - 2; i++) {
+    // Send more messages up to one-below the cap so the next call lands
+    // exactly at the cap (returns true), and the call after exceeds (false).
+    for (let i = 0; i < config.maxMessages - 3; i++) {
       limiter.isAllowed(agentId);
     }
-    expect(limiter.isAllowed(agentId)).toBe(true); // Should be at the limit now
-    expect(limiter.isAllowed(agentId)).toBe(false); // Should exceed the limit
+    expect(limiter.isAllowed(agentId)).toBe(true); // 5th in window — at the limit
+    expect(limiter.isAllowed(agentId)).toBe(false); // 6th in window — exceeds
 
     // Wait for the first messages to expire
     await new Promise(resolve => setTimeout(resolve, config.windowMs / 2 + 100));
