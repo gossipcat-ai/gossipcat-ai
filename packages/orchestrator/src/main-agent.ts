@@ -239,6 +239,7 @@ export class MainAgent {
   setDispatchDifferentiator(differ: any): void { this.pipeline.setDispatchDifferentiator(differ); }
   getSkillGapSuggestions() { return this.pipeline.getSkillGapSuggestions(); }
   setSkillIndex(index: any): void { this.pipeline.setSkillIndex(index); }
+  invalidateProjectStructureCache(): void { this.pipeline.invalidateProjectStructureCache(); }
   setSummaryLlm(llm: any): void { this.pipeline.setSummaryLlm(llm); }
   getSessionConsensusHistory() { return this.pipeline.getSessionConsensusHistory(); }
   getSessionStartTime() { return this.pipeline.getSessionStartTime(); }

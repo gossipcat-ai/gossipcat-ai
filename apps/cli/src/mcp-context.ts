@@ -59,9 +59,18 @@ export interface McpContext {
   nativeTaskMap: Map<string, NativeTaskInfo>;
   nativeResultMap: Map<string, NativeResultInfo>;
   nativeAgentConfigs: Map<string, { model: string; instructions: string; description: string; skills: string[] }>;
+  /**
+   * Identity registry — agentId → runtime/provider/model. Read by the
+   * ToolServer's self_identity tool for relay agents (native agents get
+   * the identity block injected directly into their prompt). Mutated at
+   * boot AND on every syncWorkersViaKeychain so newly-added agents are
+   * visible to self_identity without /mcp reconnect.
+   */
+  identityRegistry: Map<string, { agent_id: string; runtime: 'native' | 'relay'; provider: string; model: string }>;
   pendingConsensusRounds: Map<string, PendingConsensusRound>;
   nativeUtilityConfig: { model: string } | null;
   mainProvider: string;
+  mainModel: string;
   /** Actual bound HTTP MCP port (0/null if transport disabled). Set after listen(). */
   httpMcpPort: number | null;
   /** Source of the relay port: 'env' | 'sticky' | 'auto'. Used by gossip_status. */
@@ -84,9 +93,11 @@ export const ctx: McpContext = {
   nativeTaskMap: new Map(),
   nativeResultMap: new Map(),
   nativeAgentConfigs: new Map(),
+  identityRegistry: new Map(),
   pendingConsensusRounds: new Map(),
   nativeUtilityConfig: null,
   mainProvider: 'google',
+  mainModel: 'gemini-2.5-pro',
   httpMcpPort: null,
   relayPortSource: null,
   httpMcpPortSource: null,

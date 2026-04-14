@@ -149,6 +149,17 @@ export class DispatchPipeline {
     return this.projectStructureCache || undefined;
   }
 
+  /**
+   * Invalidate the cached project structure so the next prompt regenerates it.
+   * Call this when the project layout has changed mid-session (e.g. new
+   * top-level packages, agent scaffold, gossip_setup adding agent dirs).
+   * Without this, every prompt sees the boot-time-cached layout and agents
+   * reason against stale structure. Drift audit haiku #8.
+   */
+  public invalidateProjectStructureCache(): void {
+    this.projectStructureCache = null;
+  }
+
   constructor(config: DispatchPipelineConfig) {
     this.projectRoot = config.projectRoot;
     this.workers = config.workers;
