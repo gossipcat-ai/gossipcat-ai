@@ -141,4 +141,41 @@ describe('AgentMemoryReader.prefetchConsensusFindingsText', () => {
 
     expect(results[0]).toContain('dispatch pipeline consensus relay memory');
   });
+
+  // Regression guard: a task containing markdown emphasis markers (**, _, ~, `)
+  // was crashing the whole dispatch with "Invalid regular expression" because
+  // extractKeywords didn't split on those characters and scoreKeywords passed the
+  // raw token into `new RegExp`. Observed live as `/\b**what\b/: Nothing to repeat`.
+  it('does not throw when task text contains markdown emphasis markers', () => {
+    const now = new Date().toISOString();
+    const finding = JSON.stringify({ finding: 'dispatch pipeline memory eviction', timestamp: now, confirmedBy: ['gemini-tester'] });
+    writeFileSync(findingsPath, finding + '\n');
+
+    const reader = new AgentMemoryReader(testDir);
+
+    // Each of these would have thrown "Invalid regular expression" pre-fix
+    expect(() => reader.prefetchConsensusFindingsText('**what** is dispatch pipeline')).not.toThrow();
+    expect(() => reader.prefetchConsensusFindingsText('_italic_ dispatch pipeline')).not.toThrow();
+    expect(() => reader.prefetchConsensusFindingsText('`code` dispatch pipeline')).not.toThrow();
+    expect(() => reader.prefetchConsensusFindingsText('~strike~ dispatch pipeline')).not.toThrow();
+    // Regex metachars embedded mid-token must also not escape the splitter
+    expect(() => reader.prefetchConsensusFindingsText('foo(bar dispatch pipeline')).not.toThrow();
+    expect(() => reader.prefetchConsensusFindingsText('a[b dispatch pipeline')).not.toThrow();
+  });
+
+  it('still matches the inner word when wrapped in markdown emphasis', () => {
+    const now = new Date().toISOString();
+    const finding = JSON.stringify({
+      finding: 'dispatch pipeline memory eviction',
+      timestamp: now,
+      confirmedBy: ['gemini-tester'],
+    });
+    writeFileSync(findingsPath, finding + '\n');
+
+    const reader = new AgentMemoryReader(testDir);
+    // `**dispatch**` should yield keyword `dispatch`, matching the finding text
+    const results = reader.prefetchConsensusFindingsText('**dispatch** **pipeline** memory');
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]).toContain('dispatch pipeline');
+  });
 });
