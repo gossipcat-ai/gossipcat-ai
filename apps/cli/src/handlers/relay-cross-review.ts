@@ -85,6 +85,7 @@ export function startConsensusTimeout(consensusId: string): void {
           insights: report.insights || [],
           newFindings: report.newFindings || [],
           timedOut: missingAgents,
+          ...(report.droppedFindingsByType ? { droppedFindingsByType: report.droppedFindingsByType } : {}),
         }, null, 2));
       } catch { /* best-effort */ }
 
@@ -269,6 +270,7 @@ export async function handleRelayCrossReview(
         unique: report.unique || [],
         insights: report.insights || [],
         newFindings: report.newFindings || [],
+        ...(report.droppedFindingsByType ? { droppedFindingsByType: report.droppedFindingsByType } : {}),
       }, null, 2));
     } catch { /* best-effort */ }
 

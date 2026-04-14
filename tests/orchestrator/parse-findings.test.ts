@@ -1,0 +1,287 @@
+import {
+  parseAgentFindingsStrict,
+  PARSE_FINDINGS_LIMITS,
+} from '@gossip/orchestrator';
+
+describe('parseAgentFindingsStrict', () => {
+  describe('canonical types', () => {
+    it('parses type="finding" / "suggestion" / "insight"', () => {
+      const raw = `
+<agent_finding type="finding" severity="high">Missing Secure cookie flag at routes.ts:126</agent_finding>
+<agent_finding type="suggestion">Consider changing SameSite=Lax to SameSite=Strict</agent_finding>
+<agent_finding type="insight">Session tokens use 256-bit entropy — sufficient</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(3);
+      expect(res.findings.map(f => f.type)).toEqual(['finding', 'suggestion', 'insight']);
+      expect(res.findings[0].severity).toBe('high');
+      expect(res.findings[1].severity).toBeUndefined();
+      expect(res.findings[2].severity).toBeUndefined();
+      expect(res.droppedShortContent).toBe(0);
+      expect(res.droppedMissingType).toBe(0);
+      expect(Object.keys(res.droppedUnknownType)).toHaveLength(0);
+    });
+
+    it('attaches findingIdx sequentially (1-based)', () => {
+      const raw = `
+<agent_finding type="finding" severity="high">First finding content here</agent_finding>
+<agent_finding type="finding" severity="low">Second finding content here</agent_finding>
+<agent_finding type="insight">Third finding content here</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings.map(f => f.findingIdx)).toEqual([1, 2, 3]);
+    });
+
+    it('applies idPrefix to produce agentId:fN ids', () => {
+      const raw = `<agent_finding type="finding" severity="high">First finding content here</agent_finding>
+<agent_finding type="suggestion">Second finding content here</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw, { idPrefix: 'sonnet-reviewer' });
+      expect(res.findings.map(f => f.id)).toEqual([
+        'sonnet-reviewer:f1',
+        'sonnet-reviewer:f2',
+      ]);
+    });
+
+    it('falls back to f<N> when no idPrefix is supplied', () => {
+      const raw = `<agent_finding type="finding" severity="high">Some finding content here</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings[0].id).toBe('f1');
+    });
+  });
+
+  describe('unknown types', () => {
+    const UNKNOWN_TYPES = [
+      'approval',
+      'concern',
+      'risk',
+      'recommendation',
+      'confirmed',
+      'issue',
+      'bug',
+      'warning',
+      'verdict',
+    ];
+
+    it.each(UNKNOWN_TYPES)('drops + counts type="%s"', (type) => {
+      const raw = `<agent_finding type="${type}" severity="high">Some finding with enough content here</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.droppedUnknownType[type]).toBe(1);
+      expect(res.rawTagCount).toBe(1);
+    });
+
+    it('fires onUnknownType callback once per drop with lowercased type', () => {
+      const raw = `
+<agent_finding type="approval" severity="high">First dropped tag here content</agent_finding>
+<agent_finding type="Approval" severity="low">Second dropped tag here content</agent_finding>
+<agent_finding type="concern">Third dropped tag here content</agent_finding>
+`;
+      const calls: Array<{ type: string; body: string }> = [];
+      const res = parseAgentFindingsStrict(raw, {
+        onUnknownType: (type, body) => calls.push({ type, body }),
+      });
+      expect(res.findings).toHaveLength(0);
+      expect(calls).toHaveLength(3);
+      // Normalized to lowercase in both the callback and the counter
+      expect(calls.map(c => c.type)).toEqual(['approval', 'approval', 'concern']);
+      expect(res.droppedUnknownType).toEqual({ approval: 2, concern: 1 });
+      expect(calls[0].body).toContain('First dropped tag');
+    });
+
+    it('does not advance findingIdx on drops — accepted tags keep sequential ids', () => {
+      const raw = `
+<agent_finding type="approval" severity="high">Dropped tag content here one</agent_finding>
+<agent_finding type="finding" severity="high">Accepted tag content here one</agent_finding>
+<agent_finding type="concern">Dropped tag content here two</agent_finding>
+<agent_finding type="finding" severity="low">Accepted tag content here two</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw, { idPrefix: 'agent' });
+      expect(res.findings.map(f => f.id)).toEqual(['agent:f1', 'agent:f2']);
+      expect(res.findings.map(f => f.findingIdx)).toEqual([1, 2]);
+      expect(res.droppedUnknownType).toEqual({ approval: 1, concern: 1 });
+    });
+  });
+
+  describe('type attribute syntax', () => {
+    it('accepts case-insensitive type value (type="FINDING")', () => {
+      const raw = `<agent_finding type="FINDING" severity="high">Uppercase type value content</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+      expect(res.findings[0].type).toBe('finding');
+    });
+
+    it('accepts mixed-case type value (type="Suggestion")', () => {
+      const raw = `<agent_finding type="Suggestion">Mixed case type value content</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+      expect(res.findings[0].type).toBe('suggestion');
+    });
+
+    it('drops typos (type="findng")', () => {
+      const raw = `<agent_finding type="findng" severity="high">Typo in type attribute content</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.droppedUnknownType.findng).toBe(1);
+    });
+
+    it('drops tags with missing type attribute', () => {
+      const raw = `<agent_finding severity="high">Missing type attribute content here</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.droppedMissingType).toBe(1);
+      expect(Object.keys(res.droppedUnknownType)).toHaveLength(0);
+    });
+
+    it("drops single-quoted type (type='finding') — stays strict on quote style", () => {
+      const raw = `<agent_finding type='finding' severity="high">Single-quoted type attribute content</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      // No type= double-quoted pattern matched → treated as missing.
+      expect(res.droppedMissingType).toBe(1);
+    });
+
+    it('drops tags with whitespace around "=" (type = "finding")', () => {
+      const raw = `<agent_finding type = "finding" severity="high">Whitespace around equals content</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.droppedMissingType).toBe(1);
+    });
+  });
+
+  describe('content length', () => {
+    it('drops content < 15 chars + counts it', () => {
+      const raw = `
+<agent_finding type="finding" severity="high">too short</agent_finding>
+<agent_finding type="finding" severity="high">just long enough content</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+      expect(res.droppedShortContent).toBe(1);
+      expect(res.rawTagCount).toBe(2);
+    });
+
+    it('drops empty content', () => {
+      const raw = `<agent_finding type="finding" severity="high"></agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.droppedShortContent).toBe(1);
+    });
+
+    it('truncates content over MAX_FINDING_CONTENT and fires onTruncated', () => {
+      const long = 'x'.repeat(PARSE_FINDINGS_LIMITS.MAX_FINDING_CONTENT + 500);
+      const raw = `<agent_finding type="finding" severity="high">${long}</agent_finding>`;
+      let truncatedLen = -1;
+      const res = parseAgentFindingsStrict(raw, {
+        onTruncated: (rawLength) => { truncatedLen = rawLength; },
+      });
+      expect(res.findings).toHaveLength(1);
+      expect(res.findings[0].truncated).toBe(true);
+      expect(res.findings[0].content.length).toBeGreaterThan(PARSE_FINDINGS_LIMITS.MAX_FINDING_CONTENT);
+      expect(res.findings[0].content).toMatch(/\[truncated\]$/);
+      expect(truncatedLen).toBe(PARSE_FINDINGS_LIMITS.MAX_FINDING_CONTENT + 500);
+    });
+  });
+
+  describe('malformed input', () => {
+    it('ignores unclosed tags without crashing', () => {
+      const raw = `<agent_finding type="finding" severity="high">never closed content here`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.rawTagCount).toBe(0);
+    });
+
+    it('ignores malformed tag with missing closing angle bracket', () => {
+      const raw = `<agent_finding type="finding" severity="high"content never closes`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+    });
+
+    it('round-trips nested angle brackets in content (e.g., generics)', () => {
+      const raw = `<agent_finding type="finding" severity="high">Map<string, Array<number>> should be Record instead at foo.ts:10</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+      expect(res.findings[0].content).toContain('Map<string, Array<number>>');
+    });
+
+    it('handles multi-line attribute body — pinned current behavior (same-line attrs only)', () => {
+      // Attributes on one line, content spans multiple lines: should parse.
+      const raw = `<agent_finding type="finding" severity="high">
+Multi-line body with cite tag="file">foo.ts:12</cite>
+and a second paragraph.
+</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+      expect(res.findings[0].content).toContain('foo.ts:12');
+      expect(res.findings[0].content).toContain('second paragraph');
+    });
+
+    it('still parses when attribute line has extra whitespace before >', () => {
+      const raw = `<agent_finding type="finding" severity="high" >Content with trailing attr whitespace</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+    });
+  });
+
+  describe('severity + category extraction', () => {
+    it('extracts severity when present', () => {
+      const raw = `
+<agent_finding type="finding" severity="critical">Critical severity content</agent_finding>
+<agent_finding type="finding" severity="high">High severity content here</agent_finding>
+<agent_finding type="finding" severity="medium">Medium severity content here</agent_finding>
+<agent_finding type="finding" severity="low">Low severity content here</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings.map(f => f.severity)).toEqual([
+        'critical', 'high', 'medium', 'low',
+      ]);
+    });
+
+    it('leaves severity undefined when attribute missing or invalid', () => {
+      const raw = `
+<agent_finding type="finding">No severity attribute content</agent_finding>
+<agent_finding type="finding" severity="urgent">Invalid severity value content</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(2);
+      expect(res.findings[0].severity).toBeUndefined();
+      expect(res.findings[1].severity).toBeUndefined();
+    });
+
+    it('extracts lowercase category attribute', () => {
+      const raw = `<agent_finding type="finding" severity="high" category="type_safety">Content with category</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings[0].category).toBe('type_safety');
+    });
+  });
+
+  describe('hasAnchor detection', () => {
+    it('detects file:line anchors in content', () => {
+      const raw = `<agent_finding type="finding" severity="high">Bug at src/foo.ts:42 in handler</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings[0].hasAnchor).toBe(true);
+    });
+
+    it('returns false when no file:line anchor is present', () => {
+      const raw = `<agent_finding type="finding" severity="high">Generic observation without a citation</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings[0].hasAnchor).toBe(false);
+    });
+  });
+
+  describe('counters', () => {
+    it('reports rawTagCount regardless of drop reasons', () => {
+      const raw = `
+<agent_finding type="finding" severity="high">accepted content here ok</agent_finding>
+<agent_finding type="approval" severity="high">dropped unknown type content</agent_finding>
+<agent_finding type="finding" severity="high">tiny</agent_finding>
+<agent_finding severity="high">missing type attribute content</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.rawTagCount).toBe(4);
+      expect(res.findings).toHaveLength(1);
+      expect(res.droppedUnknownType).toEqual({ approval: 1 });
+      expect(res.droppedShortContent).toBe(1);
+      expect(res.droppedMissingType).toBe(1);
+    });
+  });
+});

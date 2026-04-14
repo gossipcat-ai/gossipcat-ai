@@ -19,20 +19,7 @@
 7. **Verify** — run the reproduction again; confirm no regression in related tests
 
 ## Output Format
-When reporting a debugging session:
-```
-## Root Cause
-[One sentence: what was wrong and why]
-
-## How It Was Found
-[The reproduction steps and the hypothesis that proved correct]
-
-## Fix Applied
-[File and change summary]
-
-## Regression Test Added
-[Yes/No and location]
-```
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't make multiple changes at once — you won't know which one fixed it

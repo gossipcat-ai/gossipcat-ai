@@ -19,10 +19,7 @@
 7. **Validation** — reject invalid input at the boundary with a 422 and field-level error details
 
 ## Output Format
-When designing or reviewing an API:
-- List each endpoint: `METHOD /path — purpose`
-- Flag any inconsistencies with REST conventions
-- Note any missing error cases
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't return 200 for errors — ever

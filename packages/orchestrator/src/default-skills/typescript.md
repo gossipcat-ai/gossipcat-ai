@@ -19,10 +19,7 @@
 7. Use `satisfies` operator to validate shape without widening type
 
 ## Output Format
-When reviewing or implementing TypeScript code:
-- Flag type issues with severity: **[critical]**, **[warning]**, **[style]**
-- Show the corrected snippet inline
-- Explain the type safety risk briefly (one line)
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't use `as` casts to silence errors — fix the types instead

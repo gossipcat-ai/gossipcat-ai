@@ -19,18 +19,7 @@
 7. Summarize findings at the top before inline comments
 
 ## Output Format
-```
-## Summary
-[1-2 sentence overview of the change and overall assessment]
-
-## Findings
-- [critical] <file>:<line> — <issue and fix>
-- [warning]  <file>:<line> — <issue and suggestion>
-- [style]    <file>:<line> — <optional improvement>
-
-## Positives
-- [what was done well]
-```
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't nitpick style issues that a linter should catch

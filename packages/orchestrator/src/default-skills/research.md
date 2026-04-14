@@ -18,23 +18,7 @@
 6. **Recommend next steps** — if further information would change the answer, say what and how to get it
 
 ## Output Format
-```
-## Bottom Line
-[One paragraph: the answer to the question, stated directly]
-
-## Evidence
-- [source/type] <finding that supports the conclusion>
-- [source/type] <finding that supports the conclusion>
-
-## Conflicting Information
-- [what contradicts the conclusion and why it was discounted]
-
-## Gaps
-- [what is unknown and what would resolve it]
-
-## Sources
-- [URL or citation]
-```
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't present a conclusion without evidence

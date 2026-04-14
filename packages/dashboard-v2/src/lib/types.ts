@@ -103,6 +103,13 @@ export interface ConsensusReport {
   crossReviewAssignments?: Record<string, string[]>;
   crossReviewCoverage?: Array<{ findingId: string; assigned: number; targetK: number }>;
   partialReview?: boolean;
+  /**
+   * Unknown type values (lowercased) → total drop count. Populated by the
+   * strict `<agent_finding>` parser when an agent uses an invented type
+   * ("approval", "concern", etc). Surfaces silent type-drift that would
+   * otherwise show as a round with 0 findings despite agent output.
+   */
+  droppedFindingsByType?: Record<string, number>;
 }
 
 export interface ConsensusReportsData {

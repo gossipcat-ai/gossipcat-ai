@@ -14,6 +14,7 @@ import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry } from './consensus-types';
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
+import { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
 
 export type {
   ConsensusReport,
@@ -278,14 +279,12 @@ export class ConsensusEngine {
     // Fall back to summaries when rawResults isn't provided (legacy callers / tests).
     const findingSource = rawResults ?? summaries;
 
-    const agentFindingPattern = /<agent_finding\s+([^>]*)>([\s\S]*?)<\/agent_finding>/g;
     const MAX_ANCHORS_PER_SUMMARY = 15;
-    // Content cap — see parseAgentFindings() for the full rationale. Must match
-    // MAX_FINDING_CONTENT over there so findingIdx stays in lockstep with
-    // synthesize()'s own pass, otherwise wrong findings get confirmed/disputed.
-    const MAX_FINDING_CONTENT = 8000;
 
     // --- Phase A: Extract all peer findings (preserving order + IDs) ---
+    // Delegates to parseAgentFindingsStrict so the findingIdx counter stays
+    // in lockstep with synthesize() — drift between the two parsers
+    // previously confirmed the wrong finding.
     interface ParsedFinding {
       id: string; attrs: string; content: string;
       type: 'finding' | 'suggestion' | 'insight';
@@ -304,27 +303,14 @@ export class ConsensusEngine {
       const preset = peerConfig?.preset ?? 'unknown';
       const peerFindingText = findingSource.get(peerId) ?? peerSummary;
 
-      const findings: ParsedFinding[] = [];
-      let afMatch: RegExpExecArray | null;
-      const pattern = new RegExp(agentFindingPattern.source, agentFindingPattern.flags);
-      let findingIdx = 0;
-      while ((afMatch = pattern.exec(peerFindingText)) !== null) {
-        const attrs = afMatch[1];
-        let content = afMatch[2].trim();
-        if (!content || content.length < 15) continue;
-        const typeMatch = attrs.match(/type="(finding|suggestion|insight)"/);
-        if (!typeMatch) continue;
-        if (content.length > MAX_FINDING_CONTENT) {
-          content = content.slice(0, MAX_FINDING_CONTENT) + '\n…[truncated]';
-        }
-        findingIdx++;
-        const sevMatch = attrs.match(/severity="(\w+)"/);
-        findings.push({
-          id: `${peerId}:f${findingIdx}`, attrs, content,
-          type: typeMatch[1] as ParsedFinding['type'],
-          severity: sevMatch?.[1]?.toLowerCase() ?? 'medium',
-        });
-      }
+      const parseRes = parseAgentFindingsStrict(peerFindingText, { idPrefix: peerId });
+      const findings: ParsedFinding[] = parseRes.findings.map(f => ({
+        id: f.id,
+        attrs: f.attrs,
+        content: f.content,
+        type: f.type,
+        severity: f.severity ?? 'medium',
+      }));
       peers.push({ peerId, preset, peerSummary, findings, fallback: findings.length === 0 });
     }
 
@@ -640,6 +626,10 @@ Return only valid JSON.`;
     // findingId → findingMap key lookup (for cross-review matching by ID)
     const findingIdToKey = new Map<string, string>();
 
+    // Aggregate dropped-type counts across all agents in this round so the
+    // ConsensusReport can surface them to the dashboard.
+    const droppedFindingsByType: Record<string, number> = {};
+
     for (const r of successful) {
       // Parse findings from the FULL raw result so tags placed before the
       // `## Consensus Summary` header (or past the fallback truncation window)
@@ -649,21 +639,28 @@ Return only valid JSON.`;
       const summary = this.extractSummary(r.result!);
 
       // Primary: parse <agent_finding> tags from the full raw result
-      const parsed = this.parseAgentFindings(r.agentId, raw);
-      let findingIdx = 0;
+      const parseResult = this.parseAgentFindingsWithLogs(r.agentId, raw, consensusId);
+      const parsed = parseResult.findings;
+
+      // Roll up this agent's unknown-type drops into the round-level counter.
+      for (const [type, count] of Object.entries(parseResult.droppedUnknownType)) {
+        droppedFindingsByType[type] = (droppedFindingsByType[type] ?? 0) + count;
+      }
+
       for (const p of parsed) {
-        findingIdx++;
         const key = `${r.agentId}::${p.content}`;
 
-        // Register stable findingId matching the IDs assigned in buildCrossReviewPrompt
-        const findingId = `${r.agentId}:f${findingIdx}`;
+        // Register stable findingId matching the IDs assigned in buildCrossReviewPrompt.
+        // parseAgentFindingsStrict produces "agentId:fN" ids already; trust them
+        // rather than rebuilding, so both parsers stay in lockstep.
+        const findingId = p.id;
         findingIdToKey.set(findingId, key);
 
         findingMap.set(key, {
           originalAgentId: r.agentId,
           authorFindingId: findingId,
           finding: p.content,
-          findingType: p.findingType,
+          findingType: p.type,
           severity: p.severity,
           category: p.category,
           confirmedBy: [],
@@ -672,15 +669,27 @@ Return only valid JSON.`;
           confidences: p.hasAnchor ? [] : [2],
         });
       }
-      let agentFindingsFound = parsed.length;
+      const agentFindingsFound = parsed.length;
 
-      // Per-agent fallback: if THIS agent produced no tags, use legacy bullet parsing
+      // Per-agent fallback: if THIS agent produced no accepted tags, use legacy bullet parsing.
+      // Split the warning: "no tags at all" vs "tags present but all had bad types" point at
+      // different root causes (skill conflict vs type-enum drift) and need different fixes.
       if (agentFindingsFound === 0) {
-        _log('consensus',
-          `⚠ agent "${r.agentId}" emitted ZERO <agent_finding> tags — falling back to bullet parsing. ` +
-          `Cross-review IDs will not roundtrip and dashboard results will be incomplete. ` +
-          `Fix: ensure the agent uses <agent_finding type="finding" severity="..."> wrapping (see CONSENSUS_OUTPUT_FORMAT).`
-        );
+        if (parseResult.rawTagCount === 0) {
+          _log('consensus',
+            `⚠ agent "${r.agentId}" emitted ZERO tags — falling back to bullet parsing. ` +
+            `Check if skill Output Format conflicts with FINDING TAG SCHEMA.`
+          );
+        } else {
+          const offending = Object.entries(parseResult.droppedUnknownType)
+            .map(([t, n]) => `${t}:${n}`)
+            .join(',') || '(missing type attribute)';
+          _log('consensus',
+            `⚠ agent "${r.agentId}" emitted ${parseResult.rawTagCount} tags but ALL had ` +
+            `unknown/invalid type attributes — falling back to bullet parsing. ` +
+            `Offending types: ${offending}.`
+          );
+        }
         const lines = summary.split('\n').filter(l => l.trimStart().startsWith('-'));
         for (const line of lines) {
           let finding = line.replace(/^\s*-\s*/, '').trim();
@@ -1110,6 +1119,9 @@ Return only valid JSON.`;
       newFindings,
       signals,
       summary,
+      // Only surface when at least one unknown type was dropped — keeps clean
+      // reports clean and avoids empty objects in the JSON payload.
+      ...(Object.keys(droppedFindingsByType).length > 0 ? { droppedFindingsByType } : {}),
     };
   }
 
@@ -1586,59 +1598,75 @@ Return only valid JSON.`;
 
   /**
    * Parse <agent_finding> tags from raw agent output into structured findings.
-   * Extracted so it can be unit-tested independently of synthesize().
+   * Thin wrapper over `parseAgentFindingsStrict` from parse-findings.ts so the
+   * cross-review prompt builder and synthesize() stay in lockstep on the type
+   * enum + findingIdx counter.
+   *
+   * Per-drop and per-round warning logging happens here (it needs the agentId
+   * + roundId context that the pure parser does not have). The drop counters
+   * are returned via parsed.droppedUnknownType so synthesize() can roll them
+   * up onto the ConsensusReport.
    */
-  private parseAgentFindings(_agentId: string, raw: string): Array<{
+  private parseAgentFindingsWithLogs(
+    agentId: string,
+    raw: string,
+    roundId?: string,
+  ): import('./parse-findings').ParseFindingsResult {
+    const result = parseAgentFindingsStrict(raw, {
+      idPrefix: agentId,
+      onUnknownType: (type, body) => {
+        // Per-drop visibility — surfaces silent type-drift the moment it happens.
+        const sample = body.slice(0, 80).replace(/\s+/g, ' ');
+        const findingIdxLabel = result.findings.length + 1; // 1-based; what THIS would have been
+        _log('consensus',
+          `⚠ DROPPED <agent_finding> agent=${agentId} reason=unknown_type type="${type}" ` +
+          `round=${roundId ?? 'n/a'} finding_idx=${findingIdxLabel} sample="${sample}"`
+        );
+      },
+      onTruncated: (rawLength) => {
+        _log('consensus',
+          `⚠ agent "${agentId}" emitted an <agent_finding> of ${rawLength} chars ` +
+          `(cap ${PARSE_FINDINGS_LIMITS.MAX_FINDING_CONTENT}) — truncating rather than dropping. ` +
+          `Consider splitting into multiple tagged findings.`
+        );
+      },
+    });
+
+    // Per-round drop summary — easier to grep than per-drop lines when the
+    // dashboard shows "0 findings" and you want to know why.
+    const droppedTotal = Object.values(result.droppedUnknownType).reduce((a, b) => a + b, 0);
+    if (droppedTotal > 0) {
+      const typeBreakdown = Object.entries(result.droppedUnknownType)
+        .map(([t, n]) => `${t}:${n}`)
+        .join(',');
+      _log('consensus',
+        `⚠ DROP_SUMMARY agent=${agentId} round=${roundId ?? 'n/a'} ` +
+        `dropped=${droppedTotal} types=[${typeBreakdown}]`
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Back-compat shim used by call sites that don't (yet) need the drop counters.
+   * Returns the same legacy shape as the old parseAgentFindings().
+   */
+  private parseAgentFindings(agentId: string, raw: string, roundId?: string): Array<{
     findingType: 'finding' | 'suggestion' | 'insight';
     severity?: 'critical' | 'high' | 'medium' | 'low';
     category?: string;
     content: string;
     hasAnchor: boolean;
   }> {
-    // Cap is generous (8 KB) so that long-form findings from verbose agents
-    // (gemini-reviewer has emitted 5–6 KB single blocks) still parse. The old
-    // 2 KB cap silently dropped them, which forced bullet-fallback and broke
-    // finding-ID roundtrip to cross-review — see consensus round
-    // c8dae78e-b6334267 for the canonical example. Over-cap findings are
-    // truncated (with an ellipsis marker) rather than rejected so the signal
-    // is preserved even for runaway outputs.
-    const MAX_FINDING_CONTENT = 8000;
-    const agentFindingPattern = /<agent_finding\s+([^>]*)>([\s\S]*?)<\/agent_finding>/g;
-    const out: Array<{
-      findingType: 'finding' | 'suggestion' | 'insight';
-      severity?: 'critical' | 'high' | 'medium' | 'low';
-      category?: string;
-      content: string;
-      hasAnchor: boolean;
-    }> = [];
-    let afMatch: RegExpExecArray | null;
-    while ((afMatch = agentFindingPattern.exec(raw)) !== null) {
-      const attrs = afMatch[1];
-      let content = afMatch[2].trim();
-      if (!content || content.length < 15) continue;
-      if (content.length > MAX_FINDING_CONTENT) {
-        _log('consensus',
-          `⚠ agent "${_agentId}" emitted an <agent_finding> of ${content.length} chars ` +
-          `(cap ${MAX_FINDING_CONTENT}) — truncating rather than dropping. ` +
-          `Consider splitting into multiple tagged findings.`
-        );
-        content = content.slice(0, MAX_FINDING_CONTENT) + '\n…[truncated]';
-      }
-
-      const typeMatch = attrs.match(/type="(finding|suggestion|insight)"/);
-      if (!typeMatch) continue;
-      const severityMatch = attrs.match(/severity="(critical|high|medium|low)"/);
-      const categoryMatch = attrs.match(/category="([a-z_]+)"/);
-
-      out.push({
-        findingType: typeMatch[1] as 'finding' | 'suggestion' | 'insight',
-        severity: severityMatch?.[1] as 'critical' | 'high' | 'medium' | 'low' | undefined,
-        category: categoryMatch?.[1],
-        content,
-        hasAnchor: ANCHOR_PATTERN.test(content),
-      });
-    }
-    return out;
+    const { findings } = this.parseAgentFindingsWithLogs(agentId, raw, roundId);
+    return findings.map(f => ({
+      findingType: f.type,
+      severity: f.severity,
+      category: f.category,
+      content: f.content,
+      hasAnchor: f.hasAnchor,
+    }));
   }
 
   /**
