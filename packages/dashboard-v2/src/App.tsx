@@ -10,7 +10,7 @@ import { TeamHero } from '@/components/TeamHero';
 import { NeuralAvatar } from '@/components/NeuralAvatar';
 import { TaskDetailModal } from '@/components/TaskDetailModal';
 import { TasksSection } from '@/components/TasksSection';
-import { RecentMemories } from '@/components/RecentMemories';
+import { MemoryFolders } from '@/components/MemoryFolders';
 import { AgentPage } from '@/components/AgentPage';
 import { LogsPage } from '@/components/LogsPage';
 import { TaskRow } from '@/components/TaskRow';
@@ -455,7 +455,7 @@ function Dashboard() {
           {tasks && <TasksSection tasks={tasks} limit={5} />}
           {agents && <TeamHero agents={agents} />}
           <FindingsMetrics consensus={consensus} reports={consensusReports} />
-          {memories && <RecentMemories memories={memories} />}
+          {memories && <MemoryFolders memories={memories} />}
         </main>
       </div>
     );
