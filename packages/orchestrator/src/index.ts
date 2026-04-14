@@ -40,6 +40,7 @@ export { GossipPublisher } from './gossip-publisher';
 export { DispatchPipeline } from './dispatch-pipeline';
 export type { DispatchPipelineConfig, ToolServerCallbacks, SkillGapSuggestionResult } from './dispatch-pipeline';
 export { ScopeTracker } from './scope-tracker';
+export { RateLimiter } from './rate-limiter';
 export { WorktreeManager } from './worktree-manager';
 export { BootstrapGenerator } from './bootstrap';
 export type { BootstrapResult } from './bootstrap';
