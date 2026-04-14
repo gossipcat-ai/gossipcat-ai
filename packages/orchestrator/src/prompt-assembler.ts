@@ -125,16 +125,34 @@ Before completing:
 
 /**
  * Assemble memory, lens, skills, context, and gossip into a single prompt string.
- * Priority order (highest first — survives truncation):
- *   PROJECT → CHAIN CONTEXT → SKILLS → [CONSENSUS FORMAT | FINDING SCHEMA] → [LENS] → [SPEC REVIEW] → MEMORY → SESSION → context
- * Bracketed items are optional — only present when relevant to the task. The
- * slim FINDING TAG SCHEMA is injected for non-consensus dispatches that carry
- * any meaningful content (so the agent's <agent_finding> tags parse correctly
- * when surfaced retroactively by tools like gossip_dispatch).
- * Skills are behavioral methodology (iron laws, methodology, quality gates) — they define
- * HOW the agent thinks. They must survive truncation over supplementary context like memory/session.
+ *
+ * Block order (truncation-aware):
+ *   PREFIX (truncatable):  IDENTITY → PROJECT → CHAIN CONTEXT → INSTRUCTIONS → SKILLS
+ *   SUFFIX (preserved):    [CONSENSUS FORMAT | FINDING SCHEMA] → [LENS] →
+ *                          [SPEC REVIEW] → MEMORY → AGENT MEMORY → SESSION →
+ *                          context → TASK
+ *
+ * Bracketed items are optional — only present when relevant to the task.
+ *
+ * The slim FINDING TAG SCHEMA is injected for non-consensus dispatches that
+ * carry any meaningful content, so the agent's <agent_finding> tags parse
+ * correctly when surfaced retroactively by tools like gossip_dispatch.
+ *
+ * Skills are behavioral methodology (iron laws, methodology, quality gates) —
+ * they define HOW the agent thinks. They go in the truncatable prefix on the
+ * theory that they are large but also the most expendable single block: we'd
+ * rather truncate skills than lose the output schema or the task.
+ *
+ * The `task` and schema blocks are in the always-preserved suffix because if
+ * they are severed the agent cannot do its job — with no task it has nothing
+ * to do, and without the schema it emits prose that the consensus parser
+ * silently drops.
  */
 export function assemblePrompt(parts: {
+  /** Identity block (## Identity ...) — placed first, truncatable under memory pressure. */
+  identity?: string;
+  /** Raw instructions text (agent role/system prompt body). Placed after SKILLS in the truncatable prefix. */
+  instructions?: string;
   memory?: string;
   memoryDir?: string;
   lens?: string;
@@ -147,26 +165,41 @@ export function assemblePrompt(parts: {
   projectStructure?: string;
   /** Pre-fetched consensus finding snippets to inject under MEMORY block. */
   consensusFindings?: string[];
+  /** The actual task to perform — placed last, always preserved under truncation. */
+  task?: string;
 }): string {
-  const blocks: string[] = [];
+  const prefix: string[] = [];
+  const suffix: string[] = [];
 
-  // HIGH PRIORITY — project layout and chain context for plan continuity
+  // ── PREFIX (truncatable) ───────────────────────────────────────────────
+  if (parts.identity) {
+    // Identity block is already self-delimited with "## Identity" heading.
+    prefix.push(parts.identity);
+  }
+
   if (parts.projectStructure) {
-    blocks.push(`\n\n--- PROJECT ---\n${parts.projectStructure}\n--- END PROJECT ---`);
+    prefix.push(`\n\n--- PROJECT ---\n${parts.projectStructure}\n--- END PROJECT ---`);
   }
 
   if (parts.chainContext) {
-    blocks.push(`\n\n${parts.chainContext}`);
+    prefix.push(`\n\n${parts.chainContext}`);
   }
 
-  // BEHAVIORAL — skills define how the agent thinks, must survive truncation
+  if (parts.instructions) {
+    // Instructions are raw prose (agent role / system prompt body). Kept raw
+    // to avoid breaking tests that match on existing instruction substrings.
+    prefix.push(`\n\n${parts.instructions}`);
+  }
+
+  // BEHAVIORAL — skills define how the agent thinks
   if (parts.skills) {
-    blocks.push(`\n\n--- SKILLS ---\n${parts.skills}\n--- END SKILLS ---`);
+    prefix.push(`\n\n--- SKILLS ---\n${parts.skills}\n--- END SKILLS ---`);
   }
 
+  // ── SUFFIX (preserved under truncation) ────────────────────────────────
   if (parts.consensusSummary) {
     // Consensus dispatches need the full cross-review framing.
-    blocks.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---`);
+    suffix.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---`);
   } else {
     // Non-consensus dispatches still need the type enum + anti-invention rule
     // so agent output is parseable when the dashboard retroactively shows it.
@@ -175,26 +208,26 @@ export function assemblePrompt(parts: {
     // Skip entirely when no other content is present (e.g. assemblePrompt({}))
     // so tests + callers that deliberately ask for an empty prompt still get one.
     const hasAnyMeaningfulPart = !!(
+      parts.identity || parts.instructions ||
       parts.memory || parts.memoryDir || parts.lens || parts.skills ||
       parts.context || parts.sessionContext || parts.chainContext ||
       parts.specReviewContext || parts.projectStructure ||
+      parts.task ||
       (parts.consensusFindings && parts.consensusFindings.length > 0)
     );
     if (hasAnyMeaningfulPart) {
-      blocks.push(`\n\n--- FINDING TAG SCHEMA ---\n${FINDING_TAG_SCHEMA}\n--- END FINDING TAG SCHEMA ---`);
+      suffix.push(`\n\n--- FINDING TAG SCHEMA ---\n${FINDING_TAG_SCHEMA}\n--- END FINDING TAG SCHEMA ---`);
     }
   }
 
   if (parts.lens) {
-    blocks.push(`\n\n--- LENS ---\n${parts.lens}\n--- END LENS ---`);
+    suffix.push(`\n\n--- LENS ---\n${parts.lens}\n--- END LENS ---`);
   }
 
-  // SPEC REVIEW — cross-reference material, must survive truncation over memory/session
   if (parts.specReviewContext) {
-    blocks.push(`\n\n--- SPEC REVIEW ---\n${parts.specReviewContext}\n--- END SPEC REVIEW ---`);
+    suffix.push(`\n\n--- SPEC REVIEW ---\n${parts.specReviewContext}\n--- END SPEC REVIEW ---`);
   }
 
-  // SUPPLEMENTARY — memory and session context are useful but expendable under truncation
   if (parts.memory || (parts.consensusFindings && parts.consensusFindings.length > 0)) {
     const memParts: string[] = [];
     if (parts.memory) memParts.push(parts.memory);
@@ -206,11 +239,11 @@ export function assemblePrompt(parts: {
         parts.consensusFindings.map((f, i) => `${i + 1}. ${f}`).join('\n');
       memParts.push(findingsBlock);
     }
-    blocks.push(`\n\n--- MEMORY ---\n${memParts.join('\n\n')}\n--- END MEMORY ---`);
+    suffix.push(`\n\n--- MEMORY ---\n${memParts.join('\n\n')}\n--- END MEMORY ---`);
   }
 
   if (parts.memoryDir) {
-    blocks.push(`\n\n--- AGENT MEMORY ---
+    suffix.push(`\n\n--- AGENT MEMORY ---
 Your persistent memory directory: ${parts.memoryDir}
 Save important learnings using file_write to this directory.
 What to save: technology choices, file structure, key patterns, architectural decisions, gotchas.
@@ -220,21 +253,30 @@ Keep entries concise (5-10 lines each). Update existing files rather than creati
   }
 
   if (parts.sessionContext) {
-    blocks.push(`\n\n${parts.sessionContext}`);
+    suffix.push(`\n\n${parts.sessionContext}`);
   }
 
   if (parts.context) {
-    blocks.push(`\n\nContext:\n${parts.context}`);
+    suffix.push(`\n\nContext:\n${parts.context}`);
   }
 
-  let assembled = blocks.join('');
+  // TASK last — the most important surviving element.
+  if (parts.task) {
+    suffix.push(`\n\n---\n\nTask: ${parts.task}`);
+  }
 
   // Cap total prompt size to prevent context window overflow.
-  // ~30K chars ≈ ~8K tokens — leaves room for system prompt + task + tool results.
+  // ~30K chars ≈ ~8K tokens — leaves room for system prompt + tool results.
+  // Truncate only the prefix so the suffix (schema + task) always survives.
+  // See consensus finding 12827629-fa9a4660:f8 (native consensus block-order
+  // regression) — concatenating then truncating could sever CONSENSUS OUTPUT
+  // FORMAT, causing silent consensus degradation.
   const MAX_PROMPT_CHARS = 30_000;
-  if (assembled.length > MAX_PROMPT_CHARS) {
-    assembled = assembled.slice(0, MAX_PROMPT_CHARS) + '\n\n[Context truncated to fit budget]';
+  const suffixStr = suffix.join('');
+  let prefixStr = prefix.join('');
+  const budget = Math.max(0, MAX_PROMPT_CHARS - suffixStr.length);
+  if (prefixStr.length > budget) {
+    prefixStr = prefixStr.slice(0, budget) + '\n\n[Context truncated to fit budget]';
   }
-
-  return assembled;
+  return prefixStr + suffixStr;
 }

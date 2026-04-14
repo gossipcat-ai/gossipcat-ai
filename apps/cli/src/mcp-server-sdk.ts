@@ -1629,6 +1629,20 @@ server.tool(
     mkdirSync(join(root, '.gossip'), { recursive: true });
     writeFileSync(join(root, '.gossip', 'config.json'), JSON.stringify(config, null, 2));
 
+    // Refresh dashboard's cached agent configs so the Team page reflects the
+    // new team without requiring /mcp reconnect. The boot-time snapshot at
+    // :365 still wins on initial boot — this is a post-setup override for
+    // the common "boot before setup" fresh-install flow. Only fires on create
+    // modes (merge/replace); update_instructions returns earlier at :1504.
+    try {
+      const m = await getModules();
+      const freshConfig = m.loadConfig(join(root, '.gossip', 'config.json'));
+      const freshAgentConfigs = m.configToAgentConfigs(freshConfig);
+      ctx.relay?.setAgentConfigs(freshAgentConfigs);
+    } catch (e) {
+      process.stderr.write(`[gossipcat] gossip_setup: failed to refresh dashboard agent configs: ${e}\n`);
+    }
+
     // Generate host-appropriate rules file so the IDE knows about the team
     const agentList = Object.entries(config.agents)
       .map(([id, a]: [string, any]) => `- ${id}: ${a.provider}/${a.model} (${a.preset || 'custom'})${a.native ? ' — native' : ''}`)

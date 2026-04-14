@@ -5,7 +5,7 @@
 import { randomUUID } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { CONSENSUS_OUTPUT_FORMAT, loadSkills } from '@gossip/orchestrator';
+import { assemblePrompt, loadSkills } from '@gossip/orchestrator';
 import { formatIdentityBlock } from '@gossip/tools';
 import { ctx, NATIVE_TASK_TTL_MS } from '../mcp-context';
 
@@ -182,18 +182,17 @@ export async function handleDispatchSingle(
       task,
     );
 
-    const identityBlock = buildNativeIdentity(agent_id, nativeConfig.model);
-    let agentPrompt = [
-      identityBlock,
-      nativeConfig.instructions || '',
-      skillResult.content,
-      chainContext ? `\n${chainContext}\n` : '',
-      `\n---\n\nTask: ${task}`,
-    ].filter(Boolean).join('').trim();
-    const MAX_AGENT_PROMPT_CHARS = 30_000;
-    if (agentPrompt.length > MAX_AGENT_PROMPT_CHARS) {
-      agentPrompt = agentPrompt.slice(0, MAX_AGENT_PROMPT_CHARS) + '\n\n[Context truncated to fit budget]';
-    }
+    // Route through assemblePrompt() so the FINDING TAG SCHEMA (PR #56) and
+    // block ordering stay in lock-step with the relay dispatch path — prior
+    // to this change native dispatch built its prompt via manual concat and
+    // silently missed every schema update made to prompt-assembler.ts.
+    let agentPrompt = assemblePrompt({
+      identity: buildNativeIdentity(agent_id, nativeConfig.model),
+      instructions: nativeConfig.instructions || undefined,
+      skills: skillResult.content || undefined,
+      chainContext: chainContext || undefined,
+      task,
+    });
     if (sanitizeResult.sanitized) agentPrompt = prependScopeNote(agentPrompt);
 
     // Record dispatch metadata for the post-task audit
@@ -368,17 +367,18 @@ export async function handleDispatchParallel(
       def.task,
     );
 
-    const parallelIdentityBlock = buildNativeIdentity(def.agent_id, nativeConfig.model);
-    let agentPrompt = [
-      parallelIdentityBlock,
-      nativeConfig.instructions || '',
-      skillResult.content,
-      `\n---\n\nTask: ${def.task}`,
-    ].filter(Boolean).join('').trim();
-    const MAX_AGENT_PROMPT_CHARS = 30_000;
-    if (agentPrompt.length > MAX_AGENT_PROMPT_CHARS) {
-      agentPrompt = agentPrompt.slice(0, MAX_AGENT_PROMPT_CHARS) + '\n\n[Context truncated to fit budget]';
-    }
+    // Route through assemblePrompt() so the FINDING TAG SCHEMA (PR #56) and
+    // block ordering stay in lock-step with relay dispatch. When the caller
+    // flags this batch as consensus (via the outer `consensus` param), use
+    // the full CONSENSUS_OUTPUT_FORMAT instead of the slim schema — peer
+    // cross-review expects the same framing relay agents see.
+    let agentPrompt = assemblePrompt({
+      identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
+      instructions: nativeConfig.instructions || undefined,
+      skills: skillResult.content || undefined,
+      consensusSummary: consensus || undefined,
+      task: def.task,
+    });
     if ((def as any)._sandboxSanitized) agentPrompt = prependScopeNote(agentPrompt);
 
     recordDispatchMetadata(process.cwd(), {
@@ -515,8 +515,11 @@ export async function handleDispatchConsensus(
     if (errors.length) lines.push(`Relay errors: ${errors.join(', ')}`);
   }
 
-  // Native tasks — inject consensus output format into the prompt (same as relay agents via prompt-assembler)
-  const consensusInstruction = `\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n--- END CONSENSUS OUTPUT FORMAT ---`;
+  // Native tasks — route through assemblePrompt() so the CONSENSUS OUTPUT
+  // FORMAT block + block ordering stay in lock-step with relay agents. Prior
+  // to this refactor the native consensus path hand-concatenated its prompt
+  // and silently diverged from prompt-assembler.ts every time a new block
+  // was added there (see PR #56 FINDING TAG SCHEMA miss).
   const nativeInstructions: string[] = [];
   const nativePrompts: Array<{ taskId: string; agentId: string; prompt: string }> = [];
   for (const def of nativeTasks) {
@@ -531,9 +534,11 @@ export async function handleDispatchConsensus(
     process.stderr.write(`[gossipcat] dispatch → ${def.agent_id} (${nativeConfig.model}) [${taskId}]\n`);
 
     const rawLens = precomputedLenses?.get(def.agent_id);
-    const lensSection = rawLens
-      ? `\n\n--- LENS ---\n${rawLens.replace(/---\s*(END )?LENS\s*---/gi, '')}\n--- END LENS ---`
-      : '';
+    // Strip any LENS delimiters the generator may have emitted — assemblePrompt
+    // wraps the lens itself so a nested block would produce duplicate markers.
+    const lensContent = rawLens
+      ? rawLens.replace(/---\s*(END )?LENS\s*---/gi, '').trim()
+      : undefined;
 
     let consensusSkillIndex: ReturnType<typeof ctx.mainAgent.getSkillIndex> | undefined;
     try { consensusSkillIndex = ctx.mainAgent.getSkillIndex() ?? undefined; } catch { /* best-effort */ }
@@ -545,26 +550,19 @@ export async function handleDispatchConsensus(
       def.task,
     );
 
-    // Truncation reserves CONSENSUS_OUTPUT_FORMAT + lens + task — those must survive
-    // or the agent will emit prose instead of <agent_finding> tags (silent consensus
-    // round degradation). Per bench review finding 12827629-fa9a4660:f8, the old
-    // behavior concatenated everything THEN truncated, which could sever the format
-    // block entirely when skill content was large. Now we apply the cap only to the
-    // [instructions + skills] prefix and always append consensusInstruction + lens +
-    // task at full length afterward.
-    const MAX_AGENT_PROMPT_CHARS = 30_000;
-    const suffix = consensusInstruction + lensSection + `\n\n---\n\nTask: ${def.task}`;
-    const prefixBudget = Math.max(0, MAX_AGENT_PROMPT_CHARS - suffix.length);
-    const consensusIdentityBlock = buildNativeIdentity(def.agent_id, nativeConfig.model);
-    let prefix = [
-      consensusIdentityBlock,
-      nativeConfig.instructions || '',
-      skillResultC.content,
-    ].filter(Boolean).join('').trim();
-    if (prefix.length > prefixBudget) {
-      prefix = prefix.slice(0, prefixBudget) + '\n\n[Context truncated to fit budget]';
-    }
-    let agentPrompt = prefix + suffix;
+    // Truncation reserves CONSENSUS OUTPUT FORMAT + lens + task — those must
+    // survive or the agent emits prose instead of <agent_finding> tags (silent
+    // consensus degradation). assemblePrompt() keeps them in the preserved
+    // suffix automatically; the truncatable prefix is [identity + instructions
+    // + skills]. See consensus 12827629-fa9a4660:f8 for the original regression.
+    let agentPrompt = assemblePrompt({
+      identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
+      instructions: nativeConfig.instructions || undefined,
+      skills: skillResultC.content || undefined,
+      consensusSummary: true,
+      lens: lensContent || undefined,
+      task: def.task,
+    });
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
     nativeInstructions.push(
       `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true)` +
