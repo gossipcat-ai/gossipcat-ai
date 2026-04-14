@@ -124,6 +124,8 @@ The server selects cross-reviewers via `selectCrossReviewers` (epsilon-greedy, s
 
 When you verify a finding as real (or catch a hallucination), **record the signal immediately** via `gossip_signals`. Don't batch signals at session end. Don't ask the user permission to record. This is the action immediately after verification.
 
+**Strict order: verify → signal → synthesize.** Not the other way. The common failure mode is recognizing that the signal step is owed, but deciding the synthesis deliverable (a decision table, a PR description, a summary back to the user) feels more urgent — so signals get pushed to "after I present this." That reordering is how signal recording silently stops happening. If you catch yourself writing the summary before signals are recorded, stop and record first. "This deliverable is cleaner" is the disguise the failure mode wears.
+
 **Every signal must include `finding_id`** in the format `<consensusId>:<agentId>:fN`. Without it, the dashboard can't trace back from signal → finding → agent and scoring becomes opaque.
 
 ### Verifying UNVERIFIED findings
