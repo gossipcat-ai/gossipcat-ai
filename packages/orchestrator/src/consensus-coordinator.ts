@@ -15,6 +15,8 @@ export interface ConsensusCoordinatorConfig {
   registryGet: (id: string) => AgentConfig | undefined;
   projectRoot: string;
   keyProvider: ((provider: string) => Promise<string | null>) | null;
+  /** Forwarded to ConsensusEngine so Phase-2 reviewers keep their skills. */
+  getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
 }
 
 type ConsensusPhase = 'idle' | 'review' | 'cross_review' | 'synthesis';
@@ -24,6 +26,7 @@ export class ConsensusCoordinator {
   private registryGet: (id: string) => AgentConfig | undefined;
   private projectRoot: string;
   private keyProvider: ((provider: string) => Promise<string | null>) | null;
+  private getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
   private gossipPublisher: GossipPublisher | null = null;
   private memWriter: MemoryWriter;
 
@@ -36,7 +39,13 @@ export class ConsensusCoordinator {
     this.registryGet = config.registryGet;
     this.projectRoot = config.projectRoot;
     this.keyProvider = config.keyProvider;
+    this.getAgentSkillsContent = config.getAgentSkillsContent;
     this.memWriter = new MemoryWriter(config.projectRoot);
+  }
+
+  /** Late-bind the skills resolver (pipeline wires this after construction). */
+  setAgentSkillsResolver(resolver: (agentId: string, task: string) => string | undefined): void {
+    this.getAgentSkillsContent = resolver;
   }
 
   setGossipPublisher(publisher: GossipPublisher | null): void {
@@ -79,7 +88,13 @@ export class ConsensusCoordinator {
         agentLlm = (agentId: string) => agentLlmCache.get(agentId) ?? undefined;
       }
 
-      const engine = new ConsensusEngine({ llm: this.llm, registryGet: this.registryGet, projectRoot: this.projectRoot, agentLlm });
+      const engine = new ConsensusEngine({
+        llm: this.llm,
+        registryGet: this.registryGet,
+        projectRoot: this.projectRoot,
+        agentLlm,
+        getAgentSkillsContent: this.getAgentSkillsContent,
+      });
       const consensusReport = await engine.run(results);
       const perfWriter = new PerformanceWriter(this.projectRoot);
 

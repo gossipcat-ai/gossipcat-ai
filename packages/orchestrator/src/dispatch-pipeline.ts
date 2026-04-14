@@ -182,6 +182,15 @@ export class DispatchPipeline {
       registryGet: config.registryGet,
       projectRoot: config.projectRoot,
       keyProvider: config.keyProvider ?? null,
+      getAgentSkillsContent: (agentId, task) => {
+        const agentSkills = this.registryGet(agentId)?.skills || [];
+        try {
+          const res = loadSkills(agentId, agentSkills, this.projectRoot, this.skillIndex ?? undefined, task);
+          return res.content || undefined;
+        } catch {
+          return undefined;
+        }
+      },
     });
 
     try { this.catalog = new SkillCatalog(config.projectRoot); }
