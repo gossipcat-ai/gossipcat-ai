@@ -2350,13 +2350,23 @@ server.tool(
           const score: any = scores.get(agentId);
           if (!score) continue;
 
+          // Match the sparse-data gate used by categoryAccuracy (performance-reader.ts:528):
+          // a category needs ≥5 classified signals (correct + hallucinated) before its
+          // strength is eligible to trigger a weak flag. Without this gate the trigger
+          // fires on agents whose only accumulated strength is one decayed agreement,
+          // even when they have 10+ unique_confirmed findings in the category.
+          const MIN_CATEGORY_N_FOR_TRIGGER = 5;
           const cats = score.categoryStrengths;
+          const correctCounts = (score.categoryCorrect || {}) as Record<string, number>;
+          const hallucinatedCounts = (score.categoryHallucinated || {}) as Record<string, number>;
           let weakestCategory: string | null = null;
           let weakestValue = Infinity;
           if (cats && typeof cats === 'object') {
             for (const [k, v] of Object.entries(cats)) {
               const val = v as number;
-              if (val < 0.3 && val !== 0 && val < weakestValue) {
+              const n = (correctCounts[k] ?? 0) + (hallucinatedCounts[k] ?? 0);
+              if (n < MIN_CATEGORY_N_FOR_TRIGGER) continue;
+              if (val < 0.3 && val < weakestValue) {
                 weakestValue = val;
                 weakestCategory = k;
               }

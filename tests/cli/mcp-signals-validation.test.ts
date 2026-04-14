@@ -745,3 +745,88 @@ describe('gossip_signals timestamp resolution + spoofing rejection', () => {
     expect(r.error).toBeUndefined();
   });
 });
+
+// ── 8. Weak-category trigger sparse-data gate ────────────────────────────────
+
+describe('gossip_signals weak-category trigger — sparse-data gate', () => {
+  const MIN_CATEGORY_N_FOR_TRIGGER = 5;
+
+  // Replica of the trigger filter at apps/cli/src/mcp-server-sdk.ts:2353-2370.
+  // If the handler changes, keep this in sync; also see the source-grep guard below.
+  function pickWeakestCategory(score: {
+    categoryStrengths?: Record<string, number>;
+    categoryCorrect?: Record<string, number>;
+    categoryHallucinated?: Record<string, number>;
+  }): { category: string; value: number } | null {
+    const cats = score.categoryStrengths;
+    const correctCounts = score.categoryCorrect || {};
+    const hallucinatedCounts = score.categoryHallucinated || {};
+    let weakestCategory: string | null = null;
+    let weakestValue = Infinity;
+    if (cats && typeof cats === 'object') {
+      for (const [k, v] of Object.entries(cats)) {
+        const val = v as number;
+        const n = (correctCounts[k] ?? 0) + (hallucinatedCounts[k] ?? 0);
+        if (n < MIN_CATEGORY_N_FOR_TRIGGER) continue;
+        if (val < 0.3 && val < weakestValue) {
+          weakestValue = val;
+          weakestCategory = k;
+        }
+      }
+    }
+    return weakestCategory ? { category: weakestCategory, value: weakestValue } : null;
+  }
+
+  it('fires when category has ≥5 classified signals and low strength', () => {
+    const r = pickWeakestCategory({
+      categoryStrengths: { trust_boundaries: 0.15 },
+      categoryCorrect: { trust_boundaries: 4 },
+      categoryHallucinated: { trust_boundaries: 2 }, // n = 6
+    });
+    expect(r).not.toBeNull();
+    expect(r!.category).toBe('trust_boundaries');
+    expect(r!.value).toBeCloseTo(0.15);
+  });
+
+  it('stays silent when category has <5 classified signals (the sparse-data false positive we are fixing)', () => {
+    // Reproduces the sonnet-reviewer citation_grounding case: one old decayed
+    // agreement gives strength ≈ 0.002 which displays "0.00", but the total
+    // classified signals (c + h) is only 1 — not enough to flag.
+    const r = pickWeakestCategory({
+      categoryStrengths: { citation_grounding: 0.002 },
+      categoryCorrect: { citation_grounding: 1 }, // n = 1, below gate
+      categoryHallucinated: {},
+    });
+    expect(r).toBeNull();
+  });
+
+  it('does not fire when category is strong (regression guard)', () => {
+    const r = pickWeakestCategory({
+      categoryStrengths: { data_integrity: 1.2 },
+      categoryCorrect: { data_integrity: 12 },
+      categoryHallucinated: { data_integrity: 1 },
+    });
+    expect(r).toBeNull();
+  });
+
+  it('picks the lowest-strength category among multiple eligible weak ones', () => {
+    const r = pickWeakestCategory({
+      categoryStrengths: { error_handling: 0.25, type_safety: 0.10, concurrency: 0.20 },
+      categoryCorrect: { error_handling: 10, type_safety: 8, concurrency: 6 },
+      categoryHallucinated: {},
+    });
+    expect(r).not.toBeNull();
+    expect(r!.category).toBe('type_safety');
+  });
+
+  it('regression guard: handler source at mcp-server-sdk.ts keeps the MIN_CATEGORY_N gate', () => {
+    const src = readFileSync(
+      join(__dirname, '..', '..', 'apps', 'cli', 'src', 'mcp-server-sdk.ts'),
+      'utf-8',
+    );
+    // Locate the trigger block and assert it preconditions on (correct + hallucinated) >= N
+    expect(src).toMatch(/MIN_CATEGORY_N_FOR_TRIGGER/);
+    expect(src).toMatch(/const n = \(correctCounts\[k\] \?\? 0\) \+ \(hallucinatedCounts\[k\] \?\? 0\);/);
+    expect(src).toMatch(/if \(n < MIN_CATEGORY_N_FOR_TRIGGER\) continue;/);
+  });
+});
