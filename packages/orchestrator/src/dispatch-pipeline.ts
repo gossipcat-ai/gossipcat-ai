@@ -29,6 +29,7 @@ import { SkillCounterTracker } from './skill-counters';
 import { TaskStreamEvent, TaskStreamEventType } from './task-stream';
 import { ConsensusCoordinator } from './consensus-coordinator';
 import { SessionContext } from './session-context';
+import { parseAgentFindingsStrict } from './parse-findings';
 
 import { gossipLog as log } from './log';
 
@@ -61,16 +62,47 @@ type TrackedTask = TaskEntry & {
     finalResultPromise: Promise<TaskExecutionResult>;
 };
 
-/** Mechanical format compliance check — regex only, no LLM judgment */
+/**
+ * Mechanical format compliance check — regex only, no LLM judgment.
+ *
+ * Uses `parseAgentFindingsStrict` so the "accepted" count reflects the same
+ * type enum the consensus engine enforces. Surfaces `tags_dropped_unknown_type`
+ * and `tags_dropped_short_content` separately so downstream consumers (dashboard,
+ * score panel) can tell the difference between "agent emitted nothing" and
+ * "agent emitted tags but all had invalid type=" — the second case points at
+ * a skill/prompt-format drift that instruction edits won't fix.
+ */
 function detectFormatCompliance(result: string): {
   findingCount: number;
   citationCount: number;
   formatCompliant: boolean;
+  tags_total: number;
+  tags_accepted: number;
+  tags_dropped_unknown_type: number;
+  tags_dropped_short_content: number;
 } {
+  const parseRes = parseAgentFindingsStrict(result);
+  const tags_total = parseRes.rawTagCount;
+  const tags_accepted = parseRes.findings.length;
+  const tags_dropped_unknown_type =
+    Object.values(parseRes.droppedUnknownType).reduce((a, b) => a + b, 0) +
+    parseRes.droppedMissingType;
+  const tags_dropped_short_content = parseRes.droppedShortContent;
+  // Preserve legacy raw-tag count (includes dropped tags) for back-compat.
   const findingCount = (result.match(/<agent_finding[\s>]/g) ?? []).length;
   const citationCount = (result.match(/\b[\w./-]+\.\w+:\d+\b/g) ?? []).length;
-  const formatCompliant = findingCount > 0 && citationCount >= findingCount;
-  return { findingCount, citationCount, formatCompliant };
+  // Compliance now requires ACCEPTED tags (previous behavior accepted
+  // dropped-type tags too, which let format-invalid output pass as compliant).
+  const formatCompliant = tags_accepted > 0 && citationCount >= tags_accepted;
+  return {
+    findingCount,
+    citationCount,
+    formatCompliant,
+    tags_total,
+    tags_accepted,
+    tags_dropped_unknown_type,
+    tags_dropped_short_content,
+  };
 }
 
 export class DispatchPipeline {
@@ -363,7 +395,7 @@ export class DispatchPipeline {
               const metaSignals: MetaSignal[] = [
                 { type: 'meta', signal: 'task_completed', agentId: entry.agentId, taskId: entry.id, value: durationMs, timestamp: now },
                 { type: 'meta', signal: 'task_tool_turns', agentId: entry.agentId, taskId: entry.id, value: entry.toolCalls ?? 0, timestamp: now },
-                { type: 'meta', signal: 'format_compliance', agentId: entry.agentId, taskId: entry.id, value: compliance.formatCompliant ? 1 : 0, metadata: { findingCount: compliance.findingCount, citationCount: compliance.citationCount }, timestamp: now },
+                { type: 'meta', signal: 'format_compliance', agentId: entry.agentId, taskId: entry.id, value: compliance.formatCompliant ? 1 : 0, metadata: { findingCount: compliance.findingCount, citationCount: compliance.citationCount, tags_total: compliance.tags_total, tags_accepted: compliance.tags_accepted, tags_dropped_unknown_type: compliance.tags_dropped_unknown_type, tags_dropped_short_content: compliance.tags_dropped_short_content }, timestamp: now },
               ];
               perfWriter.appendSignals(metaSignals);
             } catch { /* best-effort — never crash dispatch on signal write failure */ }

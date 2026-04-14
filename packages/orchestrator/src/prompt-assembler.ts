@@ -1,52 +1,10 @@
 import * as path from 'path';
+import { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT } from './finding-tag-schema';
+
+// Re-exported so existing import sites (`@gossip/orchestrator`) keep working.
+export { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT };
 
 const DOC_EXTENSIONS = new Set(['.md', '.txt', '.rst']);
-
-/**
- * Canonical consensus output format instructions injected into agent prompts.
- * Used by both relay (prompt-assembler) and native (dispatch handler) paths.
- */
-export const CONSENSUS_OUTPUT_FORMAT = `⚠ CRITICAL — OUTPUT PARSING:
-Your output is parsed by regex looking for <agent_finding> tags. Findings written as prose, numbered lists, or bullet points will NOT appear correctly in the consensus dashboard, will NOT match peer cross-review, and will NOT count as findings. EVERY finding you want recorded MUST be wrapped in an <agent_finding> tag. This is not optional. The format is shown below.
-
-End your response with a section titled "## Consensus Summary".
-
-SOURCE FILES:
-- Always cite original source files, NOT compiled/bundled build output (dist/, build/, out/, *.min.js)
-- Build artifacts have different line numbers than source — citing them causes false verification failures
-- When in doubt, look for the file with the original extension (.ts, .tsx, .py, .go) not the compiled one (.js, .d.ts)
-
-CITATION RULES:
-- Use <cite> tags to reference code. The system resolves these for cross-reviewers automatically.
-  Two modes:
-    <cite tag="file">auth.ts:38</cite>  — file:line citation, system fetches code snippet
-    <cite tag="fn">timingSafeEqual</cite>  — function/variable name, system searches codebase
-  Use both when possible: <cite tag="fn">timingSafeEqual</cite> at <cite tag="file">auth.ts:38</cite>
-- Claims without <cite> tags receive LOW confidence and will likely be marked UNVERIFIED
-- Do NOT fabricate file paths or line numbers — broken citations are worse than no citation
-
-FINDING FORMAT:
-Wrap each finding in an <agent_finding> tag. Do NOT use bullet points for findings.
-
-<agent_finding type="finding" severity="high">
-Missing Secure cookie flag <cite tag="file">routes.ts:126</cite>
-</agent_finding>
-
-<agent_finding type="finding" severity="medium">
-<cite tag="fn">authAttempts</cite> map is unbounded <cite tag="file">routes.ts:34</cite>
-</agent_finding>
-
-<agent_finding type="suggestion">
-Consider changing SameSite=Lax to SameSite=Strict
-</agent_finding>
-
-<agent_finding type="insight">
-Session tokens use 256-bit entropy — sufficient for production
-</agent_finding>
-
-Types: finding (factual, verifiable), suggestion (recommendation), insight (observation)
-Severity (for findings only): critical, high, medium, low
-Attributes can appear in any order. Do NOT include confirmations.`;
 const SPEC_PATH_PATTERN = /(?:docs\/|specs\/|[\w-]+-(?:design|spec)\.md)/;
 const FILE_REF_PATTERN = /(?:`([^`]+\.[a-z]{1,6})`|([a-zA-Z][\w/.@-]+\.[a-z]{1,6})(?::\d+)?)/g;
 
@@ -168,8 +126,11 @@ Before completing:
 /**
  * Assemble memory, lens, skills, context, and gossip into a single prompt string.
  * Priority order (highest first — survives truncation):
- *   PROJECT → CHAIN CONTEXT → SKILLS → [CONSENSUS FORMAT] → [LENS] → [SPEC REVIEW] → MEMORY → SESSION → context
- * Bracketed items are optional — only present when relevant to the task.
+ *   PROJECT → CHAIN CONTEXT → SKILLS → [CONSENSUS FORMAT | FINDING SCHEMA] → [LENS] → [SPEC REVIEW] → MEMORY → SESSION → context
+ * Bracketed items are optional — only present when relevant to the task. The
+ * slim FINDING TAG SCHEMA is injected for non-consensus dispatches that carry
+ * any meaningful content (so the agent's <agent_finding> tags parse correctly
+ * when surfaced retroactively by tools like gossip_dispatch).
  * Skills are behavioral methodology (iron laws, methodology, quality gates) — they define
  * HOW the agent thinks. They must survive truncation over supplementary context like memory/session.
  */
@@ -204,7 +165,24 @@ export function assemblePrompt(parts: {
   }
 
   if (parts.consensusSummary) {
+    // Consensus dispatches need the full cross-review framing.
     blocks.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---`);
+  } else {
+    // Non-consensus dispatches still need the type enum + anti-invention rule
+    // so agent output is parseable when the dashboard retroactively shows it.
+    // Slim block — no cross-review framing.
+    //
+    // Skip entirely when no other content is present (e.g. assemblePrompt({}))
+    // so tests + callers that deliberately ask for an empty prompt still get one.
+    const hasAnyMeaningfulPart = !!(
+      parts.memory || parts.memoryDir || parts.lens || parts.skills ||
+      parts.context || parts.sessionContext || parts.chainContext ||
+      parts.specReviewContext || parts.projectStructure ||
+      (parts.consensusFindings && parts.consensusFindings.length > 0)
+    );
+    if (hasAnyMeaningfulPart) {
+      blocks.push(`\n\n--- FINDING TAG SCHEMA ---\n${FINDING_TAG_SCHEMA}\n--- END FINDING TAG SCHEMA ---`);
+    }
   }
 
   if (parts.lens) {

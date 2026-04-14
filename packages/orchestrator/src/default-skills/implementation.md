@@ -26,10 +26,7 @@
 - [ ] Function names describe the action, not the mechanism
 
 ## Output Format
-When reporting implementation work:
-- List files created or modified
-- Note any assumptions made about requirements
-- Flag anything that should be followed up (tech debt, deferred edge cases)
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't copy-paste large blocks — extract a shared function

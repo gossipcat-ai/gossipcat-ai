@@ -18,10 +18,7 @@
 6. **Diagrams** — prefer text-based (Mermaid) over image files so they stay in version control
 
 ## Output Format
-When writing or auditing documentation:
-- List what is documented, what is missing, and what is stale
-- Flag public APIs with no docs as **[missing]**
-- Flag docs that contradict the code as **[stale]**
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't document what the code already says clearly — no `// increment i by 1`

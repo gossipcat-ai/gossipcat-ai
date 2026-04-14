@@ -19,20 +19,7 @@
 7. **Trade-offs** — document at least two alternatives and why the chosen approach wins
 
 ## Output Format
-```
-## Components
-- <Name>: <responsibility> | interface: <key methods or API>
-
-## Data Flow
-[Numbered steps tracing one key request end-to-end]
-
-## Failure Modes
-- <Component> fails → <system behavior and recovery>
-
-## Trade-offs
-- Chose X over Y because: <reason>
-- Deferred Z because: <reason>
-```
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't add components without a clear, single responsibility

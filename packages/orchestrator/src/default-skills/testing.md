@@ -25,10 +25,7 @@
 - Concurrent or repeated calls if the function has state
 
 ## Output Format
-When writing or reviewing tests:
-- List what scenarios are covered
-- Flag any untested code paths
-- Note if mocking strategy is over-reaching (testing mocks, not code)
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't test private methods directly — test through the public API

@@ -76,6 +76,15 @@ export interface ConsensusReport {
    * Enables dashboard to show under-reviewed findings.
    */
   crossReviewCoverage?: Array<{ findingId: string; assigned: number; targetK: number }>;
+  /**
+   * Map of unknown type values (lowercased) → total drop count across all
+   * agents in this round. Populated only when the strict parser rejected at
+   * least one `<agent_finding>` tag for an invalid `type=` value (e.g.
+   * `approval`, `concern`, `risk`, `recommendation`, `confirmed`). Surfaces
+   * silent type-drift to the dashboard so you can see WHY a round is empty
+   * despite agents producing content.
+   */
+  droppedFindingsByType?: Record<string, number>;
 }
 
 /** Return type for collect() */

@@ -394,6 +394,19 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       >
                         {report.id.slice(0, 8)}
                       </span>
+                      {report.droppedFindingsByType && Object.keys(report.droppedFindingsByType).length > 0 && (() => {
+                        const entries = Object.entries(report.droppedFindingsByType);
+                        const total = entries.reduce((n, [, c]) => n + c, 0);
+                        const detail = entries.map(([t, c]) => `${t}:${c}`).join(', ');
+                        return (
+                          <span
+                            className="shrink-0 rounded border border-unverified/20 bg-unverified/5 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-unverified"
+                            title={`Silently dropped <agent_finding> tags with invalid type=: ${detail}. These never reach the dashboard, scores, or signals.`}
+                          >
+                            {total} dropped
+                          </span>
+                        );
+                      })()}
                       <span className="ml-auto font-mono text-[10px] text-muted-foreground/50 shrink-0">
                         {timeAgo(report.timestamp)}
                       </span>

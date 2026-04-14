@@ -24,20 +24,7 @@
 12. **Resource cleanup** — Are timers cleared on shutdown? Connections closed? Maps and caches pruned with TTL? What happens to in-flight tasks when a worker disconnects mid-execution?
 
 ## Output Format
-```
-## Security Findings
-
-### [critical] <Title>
-- Location: <file>:<line>
-- Risk: <what an attacker can do>
-- Fix: <concrete remediation>
-
-### [high/medium/low] <Title>
-...
-
-## No Issues Found
-[List areas that were checked and found clean]
-```
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review.
 
 ## Don't
 - Don't report theoretical vulnerabilities with no realistic attack path

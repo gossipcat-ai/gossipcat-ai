@@ -546,6 +546,8 @@ export async function handleCollect(
         unique: consensusReport.unique || [],
         insights: consensusReport.insights || [],
         newFindings: consensusReport.newFindings || [],
+        // Surface silent type-drift — only present when strict parser dropped at least one tag
+        ...(consensusReport.droppedFindingsByType ? { droppedFindingsByType: consensusReport.droppedFindingsByType } : {}),
       }, null, 2));
     } catch { /* best-effort */ }
   }
