@@ -98,23 +98,49 @@ All file paths in your findings must be relative to this root.
 
 **Form A — Clean + pushed (happy path):**
 ```bash
+set -e
 WORKSPACE=<REMOTE_WORKSPACE_PATH>
 BRANCH=<CURRENT_BRANCH>
 SHA=<HEAD_SHA>
+
+fetch_or_fail() {
+  # Fetch the exact SHA directly. GitHub and GitLab both enable
+  # uploadpack.allowReachableSHA1InWant, so shallow fetch-by-SHA works there.
+  # If the host forbids it, fall back to fetching the branch tip and verify.
+  git fetch --depth=1 origin "$SHA" 2>/dev/null \
+    || git fetch --depth=1 origin "$BRANCH"
+}
+
 if [ -d "$WORKSPACE/.git" ]; then
-  cd "$WORKSPACE" && git fetch --depth=1 origin "$BRANCH" && git checkout FETCH_HEAD && git reset --hard FETCH_HEAD && git clean -fd
+  cd "$WORKSPACE"
+  fetch_or_fail
 else
   git clone --depth=1 --branch "$BRANCH" <REPO_URL> "$WORKSPACE"
   cd "$WORKSPACE"
+  # Fetch the SHA in case branch advanced between clone and checkout.
+  git fetch --depth=1 origin "$SHA" 2>/dev/null || true
 fi
-# Verify we have the right commit
-test "$(git rev-parse HEAD)" = "$SHA" || echo "WARNING: HEAD does not match expected SHA"
+
+# Hard fail if the expected SHA is not in the local object store
+# (branch advanced AND host rejected fetch-by-SHA). Brace group — NOT a subshell —
+# so `exit 1` aborts the outer script. `set -e` above covers the checkout/reset
+# paths below.
+git cat-file -e "$SHA" 2>/dev/null || {
+  echo "ERROR: SHA $SHA not fetchable. Branch may have advanced; ask the user to push or rebase." >&2
+  exit 1
+}
+
+git checkout "$SHA"
+git reset --hard "$SHA"
+git clean -fd
 ```
 
-**Key change from v0:** Uses `--branch <ref>` + `FETCH_HEAD` instead of fetching by raw
-SHA. GitHub does not guarantee `git fetch --depth=1 origin <SHA>` for non-tip commits
-(`uploadpack.allowReachableSHA1InWant` is not universally enabled). Fetching by branch
-name is reliable across all git hosts.
+**Key change from v0:** Fetches the exact SHA (fallback to branch), verifies the SHA
+exists locally with `git cat-file -e`, then checks out by SHA. This prevents a race where
+the developer's branch advances on origin between dispatch and remote execution — the
+script hard-fails with a clear diagnostic (via a brace group, not a subshell, so `exit 1`
+actually terminates the script). `set -e` guards the downstream commands so a checkout or
+reset failure aborts rather than silently reviewing stale code.
 
 **Workspace reset:** Uses `git reset --hard` + `git clean -fd` instead of `git checkout .`
 to ensure both tracked modifications AND untracked files from prior patches are removed.
@@ -167,7 +193,7 @@ is fragile and may not be set on all repos.
 **Untracked files (Form C only):** Generated as synthetic `diff -u /dev/null <file>` hunks
 for non-ignored, non-binary files enumerated via `git ls-files --others --exclude-standard`.
 Binary untracked files are excluded — a note is added to the bridge block listing their
-paths without content.
+paths without content. Synthetic untracked hunks count toward the 500KB bridge-block cap.
 
 **Diff exclusion:** The pathspec `':!.gossip' ':!node_modules' ':!*.lock' ':!dist'` covers
 the common cases. For project-specific exclusions, `.gitignore` already handles most build
@@ -196,8 +222,10 @@ state tracking. Each task's bridge block includes the full clone-or-fetch logic;
 shell guard determines which path runs.
 
 Each task targets by **SHA (immutable)**, never by branch name as the checkout target.
-Branch name is used only for `git fetch` (to ensure the ref is fetchable); the final
-checkout is `FETCH_HEAD` verified against the expected SHA.
+Fetch-by-SHA is attempted first (reliable on GitHub/GitLab); branch-tip fetch is a fallback.
+The final checkout is `git checkout "$SHA"`, preceded by a `git cat-file -e "$SHA"` guard
+that hard-fails if the SHA is not in the local object store (branch advanced AND host
+rejected fetch-by-SHA).
 
 ## Config schema
 
@@ -270,6 +298,9 @@ stored as a class field on `DispatchPipeline` (currently only passed to
 - **No git repo**: Skip bridge entirely
 - **No upstream tracking branch** (`@{u}` fails): Treat as "all commits unpushed", diff against
   `origin/main` or `origin/master` (whichever exists)
+- **Excludes list completeness**: Hardcoded pathspec (`':!.gossip' ':!node_modules' ':!*.lock' ':!dist'`) 
+  combined with `.gitignore` coverage covers standard build artifacts; project-specific exclusions 
+  should be added to `.gitignore` rather than the bridge code
 
 ## Implementation scope
 
@@ -288,6 +319,7 @@ stored as a class field on `DispatchPipeline` (currently only passed to
 - No agent writeback via git (changes come back through task result text)
 - No new MCP tools (everything is prompt injection)
 - No new external dependencies
+- No file-by-file fallback in v1: patch > 500KB skips bridge entirely (no partial bridge). File-by-file injection per task is deferred to v2.
 
 ## Prior art
 
@@ -310,7 +342,7 @@ addressed in this revision:
 
 | Finding | Agent | Resolution |
 |---------|-------|------------|
-| SHA fetch unreliable on GitHub | both | Fixed: use `--branch` + `FETCH_HEAD` |
+| SHA fetch unreliable on GitHub + branch-advancement race | both + latent | Fixed: fetch-by-SHA with branch-tip fallback, `git cat-file -e` guard, `set -e` + brace-group `exit 1` on mismatch |
 | Token leakage in HTTPS URL | both | Fixed: use `GIT_ASKPASS` script |
 | `git checkout .` incomplete reset | sonnet | Fixed: `git reset --hard` + `git clean -fd` |
 | `base64 -d` cross-platform + heredoc collision | sonnet | Fixed: temp file + `__GOSSIPCAT_PATCH_EOF__` |
@@ -324,10 +356,13 @@ addressed in this revision:
 | 500KB fallback underspecified | sonnet | Fixed: skip bridge entirely for v1 |
 | `git bundle` alternative | both | Noted: worth evaluating, deferred to v2 |
 | Bridge version marker | sonnet | Fixed: added `v1` to block header |
+| File-by-file fallback unspecified (f9) | consensus | Fixed: no file-by-file in v1, explicitly deferred to v2 |
+| Synthetic hunks format underspecified (f10) | consensus | Fixed: confirmed `diff -u /dev/null <file>` format, added size-budget note |
+| Excludes list incomplete (f21) | consensus | Fixed: clarified pathspec + `.gitignore` combination rationale in edge case |
 
 ## Research sources
 
-- sonnet-reviewer: 7-scenario design + consensus review (session 2026-04-13)
-- haiku-researcher: framework comparison + consensus review (session 2026-04-13)
+- sonnet-reviewer: 7-scenario design + consensus review + audit of race-fix revision (session 2026-04-13/14)
+- haiku-researcher: framework comparison + consensus review + f9/f10/f21 revision (session 2026-04-13/14)
 - gemini-reviewer: pre-consensus security review (session 2026-04-13)
 - Prior memory: project_openclaw_context_injection.md (2026-04-08, live curl validation)
