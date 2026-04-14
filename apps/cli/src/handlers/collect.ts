@@ -8,6 +8,30 @@ import { persistRelayTasks } from './relay-tasks';
 import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
 
+/**
+ * Canonical shape for a consensus round identifier. `<8hex>-<8hex>`.
+ * Exported so handlers and tests share one source of truth.
+ */
+export const CONSENSUS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{8}$/;
+
+/** True when `id` is a valid `<8hex>-<8hex>` consensus ID string. */
+export function isValidConsensusId(id: unknown): id is string {
+  return typeof id === 'string' && CONSENSUS_ID_RE.test(id);
+}
+
+/**
+ * Extract the consensus round ID from a finding ID. Findings carry IDs in
+ * "<consensusId>:<agentId>:fN" (modern) or "<consensusId>:fN" (legacy) shape.
+ * Returns undefined if the first segment doesn't match the canonical shape —
+ * callers must fall back rather than silently attributing signals to a
+ * malformed ID. F13 hardening from consensus 20c17ac3-03bb4f25.
+ */
+export function extractConsensusIdFromFindingId(findingId: unknown): string | undefined {
+  if (typeof findingId !== 'string') return undefined;
+  const first = findingId.split(':')[0];
+  return isValidConsensusId(first) ? first : undefined;
+}
+
 export async function handleCollect(
   task_ids: string[],
   timeout_ms: number,
@@ -619,10 +643,19 @@ export async function handleCollect(
       // shape. The consensusId is itself a single token "<8hex>-<8hex>" where
       // the dash is NOT a colon, so the first colon-segment is the full
       // consensusId in both shapes.
+      //
+      // Validate the shape before accepting it — malformed first-finding IDs
+      // (e.g. free-form strings from a legacy/custom producer) would otherwise
+      // silently route provisional signals under the wrong consensusId.
+      // Prefer the authoritative consensusId emitted on the report's signals
+      // (same source formatReport and the report file use); fall back to
+      // parsing findings only when the report has no signals. F13 hardening
+      // from consensus 20c17ac3-03bb4f25. Helpers are exported from this
+      // module — see isValidConsensusId + extractConsensusIdFromFindingId.
+      const authoritativeId = consensusReport?.signals?.[0]?.consensusId;
       const provisionalConsensusId =
-        allFindings.length > 0 && typeof allFindings[0].id === 'string'
-          ? allFindings[0].id.split(':')[0]
-          : undefined;
+        (isValidConsensusId(authoritativeId) ? authoritativeId : undefined) ??
+        (allFindings.length > 0 ? extractConsensusIdFromFindingId(allFindings[0].id) : undefined);
 
       // Only record provisional signals for finding authors NOT already covered.
       // CRITICAL: taskId and findingId must have DISTINCT semantics for the

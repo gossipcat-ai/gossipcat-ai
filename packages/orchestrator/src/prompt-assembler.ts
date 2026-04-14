@@ -169,7 +169,13 @@ export function assemblePrompt(parts: {
   task?: string;
 }): string {
   const prefix: string[] = [];
-  const suffix: string[] = [];
+  // Suffix segments carry a priority: lower number = keep-first when over
+  // budget. PRIORITY 0 is mandatory (TASK + SCHEMA) and never dropped.
+  // See F14 (consensus 20c17ac3-03bb4f25) — earlier versions only truncated
+  // the prefix, so oversized MEMORY/SPEC blocks silently exceeded the 30K
+  // cap. The output order below is fixed; priority controls drop-order, not
+  // insertion order.
+  const suffix: Array<{ priority: number; text: string }> = [];
 
   // ── PREFIX (truncatable) ───────────────────────────────────────────────
   if (parts.identity) {
@@ -196,10 +202,17 @@ export function assemblePrompt(parts: {
     prefix.push(`\n\n--- SKILLS ---\n${parts.skills}\n--- END SKILLS ---`);
   }
 
-  // ── SUFFIX (preserved under truncation) ────────────────────────────────
+  // ── SUFFIX (preserved under truncation, priority-ordered drop) ─────────
+  // Priority 0: schema + task (mandatory).
+  // Priority 1: LENS (directs the review).
+  // Priority 2: SPEC REVIEW (spec-specific framing).
+  // Priority 3: MEMORY + consensus findings.
+  // Priority 4: AGENT MEMORY (generic write pointer).
+  // Priority 5: sessionContext.
+  // Priority 6: context (freeform — least critical).
   if (parts.consensusSummary) {
     // Consensus dispatches need the full cross-review framing.
-    suffix.push(`\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---`);
+    suffix.push({ priority: 0, text: `\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---` });
   } else {
     // Non-consensus dispatches still need the type enum + anti-invention rule
     // so agent output is parseable when the dashboard retroactively shows it.
@@ -216,16 +229,16 @@ export function assemblePrompt(parts: {
       (parts.consensusFindings && parts.consensusFindings.length > 0)
     );
     if (hasAnyMeaningfulPart) {
-      suffix.push(`\n\n--- FINDING TAG SCHEMA ---\n${FINDING_TAG_SCHEMA}\n--- END FINDING TAG SCHEMA ---`);
+      suffix.push({ priority: 0, text: `\n\n--- FINDING TAG SCHEMA ---\n${FINDING_TAG_SCHEMA}\n--- END FINDING TAG SCHEMA ---` });
     }
   }
 
   if (parts.lens) {
-    suffix.push(`\n\n--- LENS ---\n${parts.lens}\n--- END LENS ---`);
+    suffix.push({ priority: 1, text: `\n\n--- LENS ---\n${parts.lens}\n--- END LENS ---` });
   }
 
   if (parts.specReviewContext) {
-    suffix.push(`\n\n--- SPEC REVIEW ---\n${parts.specReviewContext}\n--- END SPEC REVIEW ---`);
+    suffix.push({ priority: 2, text: `\n\n--- SPEC REVIEW ---\n${parts.specReviewContext}\n--- END SPEC REVIEW ---` });
   }
 
   if (parts.memory || (parts.consensusFindings && parts.consensusFindings.length > 0)) {
@@ -239,40 +252,63 @@ export function assemblePrompt(parts: {
         parts.consensusFindings.map((f, i) => `${i + 1}. ${f}`).join('\n');
       memParts.push(findingsBlock);
     }
-    suffix.push(`\n\n--- MEMORY ---\n${memParts.join('\n\n')}\n--- END MEMORY ---`);
+    suffix.push({ priority: 3, text: `\n\n--- MEMORY ---\n${memParts.join('\n\n')}\n--- END MEMORY ---` });
   }
 
   if (parts.memoryDir) {
-    suffix.push(`\n\n--- AGENT MEMORY ---
+    suffix.push({ priority: 4, text: `\n\n--- AGENT MEMORY ---
 Your persistent memory directory: ${parts.memoryDir}
 Save important learnings using file_write to this directory.
 What to save: technology choices, file structure, key patterns, architectural decisions, gotchas.
 Use descriptive filenames like: tech-stack.md, project-structure.md, patterns.md
 Keep entries concise (5-10 lines each). Update existing files rather than creating new ones.
---- END AGENT MEMORY ---`);
+--- END AGENT MEMORY ---` });
   }
 
   if (parts.sessionContext) {
-    suffix.push(`\n\n${parts.sessionContext}`);
+    suffix.push({ priority: 5, text: `\n\n${parts.sessionContext}` });
   }
 
   if (parts.context) {
-    suffix.push(`\n\nContext:\n${parts.context}`);
+    suffix.push({ priority: 6, text: `\n\nContext:\n${parts.context}` });
   }
 
-  // TASK last — the most important surviving element.
+  // TASK last — the most important surviving element, mandatory priority.
   if (parts.task) {
-    suffix.push(`\n\n---\n\nTask: ${parts.task}`);
+    suffix.push({ priority: 0, text: `\n\n---\n\nTask: ${parts.task}` });
   }
 
   // Cap total prompt size to prevent context window overflow.
   // ~30K chars ≈ ~8K tokens — leaves room for system prompt + tool results.
-  // Truncate only the prefix so the suffix (schema + task) always survives.
-  // See consensus finding 12827629-fa9a4660:f8 (native consensus block-order
-  // regression) — concatenating then truncating could sever CONSENSUS OUTPUT
-  // FORMAT, causing silent consensus degradation.
-  const suffixStr = suffix.join('');
+  //
+  // F14 hardening (consensus 20c17ac3-03bb4f25): the suffix is ALSO capped.
+  // Earlier versions only truncated the prefix on the theory that "the suffix
+  // fits by construction", but MEMORY and SPEC REVIEW can each carry many KB
+  // of agent-supplied or consensus-injected content. When they don't fit,
+  // drop the lowest-priority optional suffix blocks (highest `priority`
+  // value first) until the suffix is under its reserved budget. Priority-0
+  // segments (SCHEMA + TASK) always survive.
+  const SUFFIX_RESERVE = Math.floor(MAX_ASSEMBLED_PROMPT_CHARS * 0.6);
+  const dropOrderDesc = [...suffix].sort((a, b) => b.priority - a.priority);
+  const dropped = new Set<number>();
+  const suffixLen = () => suffix
+    .filter((_, i) => !dropped.has(i))
+    .reduce((acc, seg) => acc + seg.text.length, 0);
+  for (const seg of dropOrderDesc) {
+    if (seg.priority === 0) break;
+    if (suffixLen() <= SUFFIX_RESERVE) break;
+    const idx = suffix.indexOf(seg);
+    if (idx >= 0) dropped.add(idx);
+  }
+  const suffixStr = suffix
+    .filter((_, i) => !dropped.has(i))
+    .map(seg => seg.text)
+    .join('');
   let prefixStr = prefix.join('');
+  // After suffix is finalized, truncate the prefix to whatever budget remains.
+  // Past consensus 12827629-fa9a4660:f8 flagged the prefix-truncation risk
+  // of severing CONSENSUS OUTPUT FORMAT; that's handled here by reserving
+  // suffix first, then shrinking the prefix.
   const budget = Math.max(0, MAX_ASSEMBLED_PROMPT_CHARS - suffixStr.length);
   if (prefixStr.length > budget) {
     prefixStr = prefixStr.slice(0, budget) + '\n\n[Context truncated to fit budget]';
