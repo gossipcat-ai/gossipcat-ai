@@ -402,16 +402,20 @@ async function doBoot() {
   // (Claude Code Agent()) don't go through ToolServer, so this registry only
   // serves relay workers — but we record both runtimes here for symmetry with
   // the dispatch-time prompt injection.
-  const identityRegistry = new Map<string, { agent_id: string; runtime: 'native' | 'relay'; provider: string; model: string }>();
+  // Use ctx.identityRegistry so syncWorkersViaKeychain can refresh it for
+  // agents added after boot (e.g. via gossip_setup or hand-edits to
+  // .claude/agents/*.md). Without this, newly-added relay agents calling
+  // self_identity get undefined — drift audit haiku #5.
+  ctx.identityRegistry.clear();
   for (const a of agentConfigs as Array<{ id: string; provider: string; model: string; native?: boolean }>) {
-    identityRegistry.set(a.id, {
+    ctx.identityRegistry.set(a.id, {
       agent_id: a.id,
       runtime: a.native ? 'native' : 'relay',
       provider: a.provider,
       model: a.model,
     });
   }
-  const agentLookup = (id: string) => identityRegistry.get(id);
+  const agentLookup = (id: string) => ctx.identityRegistry.get(id);
 
   ctx.toolServer = new m.ToolServer({
     relayUrl: ctx.relay.url,
@@ -453,7 +457,7 @@ async function doBoot() {
     // Prepend identity block so the agent knows its own agentId/runtime/model
     // without needing to call self_identity. self_identity remains available
     // for re-checks after context summarization.
-    const identity = identityRegistry.get(ac.id);
+    const identity = ctx.identityRegistry.get(ac.id);
     const identityBlock = identity ? m.formatIdentityBlock(identity) + '\n' : '';
     const instructions = (identityBlock + baseInstructions).trim() || undefined;
     const enableWebSearch = ac.preset === 'researcher' || (ac.skills ?? []).includes('research');
@@ -485,6 +489,8 @@ async function doBoot() {
       // Map model tier for Agent tool dispatch
       const modelTier = sa.model.includes('opus') ? 'opus' : sa.model.includes('haiku') ? 'haiku' : 'sonnet';
       ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions: sa.instructions, description: sa.description, skills: ac.skills || [] });
+      // Register in identityRegistry so self_identity returns runtime/provider/model
+      ctx.identityRegistry.set(ac.id, { agent_id: ac.id, runtime: 'native', provider: ac.provider, model: ac.model });
       process.stderr.write(`[gossipcat] 🤖 Registered native agent: ${sa.id} (${modelTier})\n`);
     }
   }
@@ -524,6 +530,7 @@ async function doBoot() {
     }
   }
   ctx.mainProvider = mainProvider;
+  ctx.mainModel = mainModel;
   const supaKey = await ctx.keychain.getKey('supabase');
   const supaTeamSalt = await ctx.keychain.getKey('supabase-team-salt');
   ctx.mainAgent = new m.MainAgent({
@@ -783,9 +790,30 @@ async function doSyncWorkers() {
     const config = m.loadConfig(configPath);
     const agentConfigs = m.configToAgentConfigs(config);
 
+    // Warn if main_agent provider/model has been changed in config since boot.
+    // ctx.mainAgent is constructed once at boot with a baked-in provider; we
+    // can't hot-swap the LLM live (too risky — MainAgent has provider state
+    // throughout). Surface the divergence so the user knows /mcp reconnect
+    // is required for the new orchestrator LLM to take effect. Drift audit
+    // haiku #4. Skip on first call from boot when ctx.mainProvider matches.
+    if (config.main_agent && (config.main_agent.provider !== ctx.mainProvider || config.main_agent.model !== ctx.mainModel)) {
+      process.stderr.write(
+        `[gossipcat] ⚠ main_agent changed in config: ${ctx.mainProvider}/${ctx.mainModel} → ${config.main_agent.provider}/${config.main_agent.model}. ` +
+        `Restart Claude Code (/mcp reconnect) for the new orchestrator LLM to take effect.\n`
+      );
+    }
+
     // Register any new agent configs (including native flag)
     for (const ac of agentConfigs) {
       ctx.mainAgent.registerAgent(ac);
+      // Refresh identityRegistry — without this, newly-added relay agents
+      // get undefined from the self_identity tool. Drift audit haiku #5.
+      ctx.identityRegistry.set(ac.id, {
+        agent_id: ac.id,
+        runtime: ac.native ? 'native' : 'relay',
+        provider: ac.provider,
+        model: ac.model,
+      });
       // [H2 fix] Populate nativeAgentConfigs for config-defined native agents
       if (ac.native && !ctx.nativeAgentConfigs.has(ac.id)) {
         const { existsSync: ex, readFileSync: rf } = require('fs');
@@ -815,6 +843,7 @@ async function doSyncWorkers() {
         // [H2 fix] Populate nativeAgentConfigs for hot-reloaded subagents
         const modelTier = sa.model.includes('opus') ? 'opus' : sa.model.includes('haiku') ? 'haiku' : 'sonnet';
         ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions: sa.instructions, description: sa.description, skills: ac.skills || [] });
+        ctx.identityRegistry.set(ac.id, { agent_id: ac.id, runtime: 'native', provider: ac.provider, model: ac.model });
       }
     }
 
@@ -830,6 +859,30 @@ async function doSyncWorkers() {
       }
       process.stderr.write(`[gossipcat] 🔄 Synced: ${ctx.workers.size} relay workers + ${ctx.nativeAgentConfigs.size} native agents\n`);
     }
+
+    // Re-seed the skill index for any newly-added agents so they get the
+    // global permanent defaults (memory-retrieval) AND their config skills
+    // bound. Without this, agents added via gossip_setup don't have any
+    // skill slots and loadSkills() falls back to the agent's bare config
+    // skills list — missing memory-retrieval and any future global default.
+    // Drift audit haiku #6.
+    try {
+      const skillIndex = ctx.mainAgent.getSkillIndex?.();
+      if (skillIndex) {
+        const merged = [...agentConfigs, ...claudeSubagentsToConfigs(claudeSubagents)];
+        skillIndex.seedFromConfigs(merged.map((ac: any) => ({ id: ac.id, skills: ac.skills || [] })));
+        const allIds = merged.map((ac: any) => ac.id).filter((id: any) => typeof id === 'string' && id.length > 0);
+        if (allIds.length > 0) skillIndex.ensureBoundWithMode(['memory-retrieval'], allIds, 'permanent');
+      }
+    } catch { /* skill re-seed is best-effort */ }
+
+    // Invalidate the project-structure cache so prompts regenerate against
+    // the current layout. New agents typically arrive together with new
+    // packages/dirs (e.g. gossip_setup for a fresh project) — without this,
+    // every dispatch sees the boot-time-cached layout. Drift audit haiku #8.
+    try {
+      ctx.mainAgent.invalidateProjectStructureCache?.();
+    } catch { /* cache invalidate is best-effort */ }
 
     // Push the merged agent list to the dashboard so the Team page reflects
     // the current roster. Covers both gossip_setup (which calls us directly)
