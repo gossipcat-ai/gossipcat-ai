@@ -26,9 +26,9 @@ import { randomUUID, randomBytes, timingSafeEqual } from 'crypto';
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'http';
 
 // ── Extracted modules ────────────────────────────────────────────────────
-import { ctx, NATIVE_TASK_TTL_MS } from './mcp-context';
+import { ctx } from './mcp-context';
 import { getGossipcatVersion } from './version';
-import { evictStaleNativeTasks, persistNativeTaskMap, restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher } from './handlers/native-tasks';
+import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';
 import { restorePendingConsensus } from './handlers/relay-cross-review';
@@ -1770,94 +1770,19 @@ server.tool(
 
     const isNative = ctx.nativeAgentConfigs.has(agent_id);
 
-    // Sandbox mitigation 1: sanitize project paths in the task prompt
-    let _runSanitized = false;
-    try {
-      const { relativizeProjectPaths, readSandboxMode, shouldSanitize } = require('./sandbox');
-      if (readSandboxMode(process.cwd()) !== 'off') {
-        const preset = (() => {
-          try { return ctx.mainAgent.getAgentList?.().find((a: any) => a.id === agent_id)?.preset; } catch { return undefined; }
-        })();
-        if (shouldSanitize(write_mode, preset)) {
-          const { sanitized, replacements } = relativizeProjectPaths(task, process.cwd());
-          if (replacements > 0) {
-            process.stderr.write(`[gossipcat] 🧹 sanitized ${replacements} project path(s) in task for ${agent_id}\n`);
-          }
-          task = sanitized;
-          _runSanitized = true;
-        }
-      }
-    } catch { /* best-effort */ }
+    if (isNative) {
+      // Delegate to handleDispatchSingle — single source of truth for native prompt
+      // assembly (identity + skills + FINDING_TAG_SCHEMA + chainContext + memory + task)
+      // after PR #59 unified the path. Previously gossip_run manually concatenated its
+      // own bare prompt and silently skipped the schema; consensus round
+      // b0cc4995-0cd34dc7 surfaced this as the reason fresh-install agents produced
+      // prose tables instead of <agent_finding> tags.
+      return handleDispatchSingle(agent_id, task, write_mode, scope);
+    }
 
     const options: any = {};
     if (write_mode) options.writeMode = write_mode;
     if (scope) options.scope = scope;
-
-    if (isNative) {
-      // Native agent — validate scope, record task, return instructions for host
-      if (write_mode === 'scoped') {
-        if (!scope) {
-          return { content: [{ type: 'text' as const, text: 'Error: scoped write mode requires a scope path' }] };
-        }
-        const overlap = ctx.mainAgent.scopeTracker.hasOverlap(scope);
-        if (overlap.overlaps) {
-          return { content: [{ type: 'text' as const, text: `Error: Scope "${scope}" conflicts with running task ${overlap.conflictTaskId} at "${overlap.conflictScope}"` }] };
-        }
-      }
-
-      evictStaleNativeTasks();
-      const taskId = require('crypto').randomUUID().slice(0, 8);
-      const relayToken = require('crypto').randomUUID().slice(0, 12);
-      ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken });
-      spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
-      persistNativeTaskMap();
-      try { ctx.mainAgent.recordNativeTask(taskId, agent_id, task); } catch { /* best-effort */ }
-
-      // Register scope so subsequent dispatches see it
-      if (write_mode === 'scoped' && scope) {
-        ctx.mainAgent.scopeTracker.register(scope, taskId);
-      }
-      const config = ctx.nativeAgentConfigs.get(agent_id)!;
-
-      // Use agent's .claude/agents/<id>.md instructions as the system prompt
-      const basePrompt = config.instructions
-        || `You are a skilled ${config.description || 'agent'}. Complete the task thoroughly.`;
-
-      // Inject scope restriction for scoped write mode
-      const scopePrefix = (write_mode === 'scoped' && scope)
-        ? `SCOPE RESTRICTION: Only modify files within ${scope}. Do not edit files outside this directory.\n\n`
-        : '';
-
-      let agentPrompt = `${scopePrefix}${basePrompt}\n\n---\n\nTask: ${task}`;
-      if (_runSanitized) {
-        try {
-          const { prependScopeNote } = require('./sandbox');
-          agentPrompt = prependScopeNote(agentPrompt);
-        } catch { /* best-effort */ }
-      }
-      // Record dispatch metadata for post-task audit
-      try {
-        const { recordDispatchMetadata } = require('./sandbox');
-        recordDispatchMetadata(process.cwd(), {
-          taskId, agentId: agent_id, writeMode: write_mode, scope, timestamp: Date.now(),
-        });
-      } catch { /* best-effort */ }
-      // config.model is already the short tier ('sonnet', 'opus', 'haiku') from boot
-      const modelShort = config.model || 'sonnet';
-
-      return {
-        content: [
-          { type: 'text' as const, text:
-            `Dispatched to ${agent_id} (native). Task ID: ${taskId}\n\n` +
-            `⚠️ EXECUTE NOW — launch this Agent and relay the result:\n\n` +
-            `1. Agent(model: "${modelShort}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true) — pass the AGENT_PROMPT:${taskId} content item verbatim\n` +
-            `2. When agent completes → gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<full agent output>")\n\n` +
-            `Do BOTH steps in your next response. Do not wait for user input between them.`
-          },
-          { type: 'text' as const, text: `AGENT_PROMPT:${taskId} (${agent_id})\n${agentPrompt}` },
-        ],
-      };
-    }
 
     // Relay worker — dispatch and collect in one call
     // Sync workers lazily: if this agent isn't connected yet (e.g. added after boot), spin it up now
