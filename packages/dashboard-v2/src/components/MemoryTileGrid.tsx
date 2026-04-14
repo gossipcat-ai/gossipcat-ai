@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { MemoryFile } from '@/lib/types';
 import { DISPLAY_TYPES, type DisplayType } from '@/lib/memory-taxonomy';
+import { timeAgo } from '@/lib/utils';
 import { EmptyState } from './EmptyState';
 
 interface MemoryTileGridProps {
@@ -12,18 +13,31 @@ interface MemoryTileGridProps {
 
 const TYPE_ACCENT: Record<DisplayType, string> = {
   backlog: 'text-primary',
-  record: 'text-confirmed',
-  session: 'text-unverified',
-  rule: 'text-unique',
+  record: 'text-text-dim',
+  session: 'text-confirmed',
+  rule: 'text-unverified',
+};
+
+const TYPE_TAG_RING: Record<DisplayType, string> = {
+  backlog: 'border-primary/30 bg-primary/[0.06]',
+  record: 'border-text-dim/30 bg-text-dim/[0.08]',
+  session: 'border-confirmed/30 bg-confirmed/[0.06]',
+  rule: 'border-unverified/30 bg-unverified/[0.06]',
 };
 
 /**
  * Drilled-in folder view. Shows a breadcrumb back to "Memory" and a grid of
  * memory tiles for the selected folder.
+ *
+ * Tile layout (mockup lines 204-224):
+ *   [ tag ]              ← own line, colored pill
+ *   Title text...        ← two-line clamp
+ *   context     2h ago   ← mono meta row
  */
 export function MemoryTileGrid({ folder, memories, onBack, onOpen }: MemoryTileGridProps) {
   const meta = DISPLAY_TYPES.find((d) => d.type === folder)!;
   const accent = TYPE_ACCENT[folder];
+  const tagRing = TYPE_TAG_RING[folder];
 
   const sorted = useMemo(
     () => [...memories].sort((a, b) => (a.filename < b.filename ? 1 : -1)),
@@ -56,26 +70,27 @@ export function MemoryTileGrid({ folder, memories, onBack, onOpen }: MemoryTileG
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {sorted.map((mem) => {
             const title = titleOf(mem);
-            const owner = mem.agentId === '_project' ? 'project' : mem.agentId || 'unknown';
+            const context = contextOf(mem);
+            const ts = pickTimestamp(mem.frontmatter);
             return (
               <button
                 key={`${mem.agentId || ''}/${mem.filename}`}
                 onClick={() => onOpen(mem)}
-                className="group flex flex-col gap-1 rounded-md border border-border/40 bg-card/80 p-3 text-left transition hover:border-primary/40 hover:bg-accent/30"
+                className="group flex flex-col gap-1.5 rounded-md border border-border/40 bg-muted p-3 text-left transition hover:border-primary/30 hover:bg-accent/40"
               >
-                <div className="flex items-center gap-2">
-                  <span className={`shrink-0 rounded-sm border border-border/30 px-1 py-0.5 font-mono text-[9px] font-bold uppercase ${accent}`}>
-                    {meta.label}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs font-semibold text-foreground group-hover:text-primary">
-                    {title}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between font-mono text-[10px] text-muted-foreground/60">
-                  <span className="truncate">{mem.filename}</span>
-                  <span className="shrink-0 rounded-sm border border-border/40 bg-card px-1.5 py-0.5 text-muted-foreground">
-                    {owner}
-                  </span>
+                <span
+                  className={`inline-block w-fit rounded-sm border px-1.5 py-[1px] font-mono text-[9px] font-bold uppercase tracking-[0.14em] ${tagRing} ${accent}`}
+                >
+                  {meta.label}
+                </span>
+                <span
+                  className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground group-hover:text-primary"
+                >
+                  {title}
+                </span>
+                <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-muted-foreground/70">
+                  <span className="min-w-0 truncate">{context}</span>
+                  {ts && <span className="shrink-0">{timeAgo(ts)}</span>}
                 </div>
               </button>
             );
@@ -99,4 +114,29 @@ function titleOf(mem: MemoryFile): string {
     if (stripped) return stripped.slice(0, 80);
   }
   return mem.filename.replace(/\.md$/, '');
+}
+
+/**
+ * Left-side meta cell: prefer the filename (stable author-chosen identifier)
+ * and fall back to owner. Gives each tile a grep-able anchor without the
+ * redundant "project" badge that used to live on the right.
+ */
+function contextOf(mem: MemoryFile): string {
+  const fname = mem.filename.replace(/\.md$/, '');
+  if (fname) return fname;
+  return mem.agentId === '_project' ? 'project' : mem.agentId || 'unknown';
+}
+
+/**
+ * Pull the most likely timestamp from frontmatter. Memory files don't carry
+ * mtime through the dashboard API, so we fall back to common frontmatter keys
+ * authors actually use; returns undefined if none parse to a real Date.
+ */
+function pickTimestamp(fm?: Record<string, string>): string | undefined {
+  if (!fm) return undefined;
+  for (const key of ['timestamp', 'updated', 'updatedAt', 'modified', 'created', 'date']) {
+    const v = fm[key];
+    if (v && !isNaN(new Date(v).getTime())) return v;
+  }
+  return undefined;
 }

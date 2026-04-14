@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import type { JSX } from 'react';
 import type { MemoryFile } from '@/lib/types';
 import { DISPLAY_TYPES, toDisplayType, type DisplayType } from '@/lib/memory-taxonomy';
 import { MemoryTileGrid } from './MemoryTileGrid';
@@ -8,25 +9,66 @@ interface MemoryFoldersProps {
   memories: MemoryFile[];
 }
 
+/**
+ * Per-folder accent — text color class applied to count + icon stroke.
+ * Mirrors mockup lines 118-122 where each category owns a semantic color.
+ */
 const TYPE_ACCENT: Record<DisplayType, string> = {
   backlog: 'text-primary',
-  record: 'text-confirmed',
-  session: 'text-unverified',
-  rule: 'text-unique',
+  record: 'text-text-dim',
+  session: 'text-confirmed',
+  rule: 'text-unverified',
 };
 
-const TYPE_DOT: Record<DisplayType, string> = {
-  backlog: 'bg-primary',
-  record: 'bg-confirmed',
-  session: 'bg-unverified',
-  rule: 'bg-unique',
+/**
+ * Activity-dot background + matching glow color. The glow (box-shadow) uses
+ * the same hue at low alpha to mimic mockup line 152 (`0 0 8px primary-soft`).
+ */
+const TYPE_DOT: Record<DisplayType, { bg: string; glow: string }> = {
+  backlog: { bg: 'bg-primary', glow: 'rgba(139, 92, 246, 0.6)' },
+  record: { bg: 'bg-text-dim', glow: 'rgba(102, 102, 116, 0.55)' },
+  session: { bg: 'bg-confirmed', glow: 'rgba(52, 211, 153, 0.55)' },
+  rule: { bg: 'bg-unverified', glow: 'rgba(251, 191, 36, 0.55)' },
 };
 
-const TYPE_GLYPH: Record<DisplayType, string> = {
-  backlog: '◐',
-  record: '◉',
-  session: '◍',
-  rule: '◆',
+/**
+ * Icon box tint — faint category background + soft ring. Keyed per folder so
+ * each tile reads as its own "chapter" at a glance (mockup lines 117-122).
+ */
+const TYPE_ICON_BOX: Record<DisplayType, string> = {
+  backlog: 'bg-primary/[0.06] border-primary/30',
+  record: 'bg-text-dim/[0.08] border-text-dim/20',
+  session: 'bg-confirmed/[0.06] border-confirmed/25',
+  rule: 'bg-unverified/[0.06] border-unverified/25',
+};
+
+/**
+ * SVG glyphs — inline paths adapted from the mockup. Each folder gets a shape
+ * that matches its semantic role in the hybrid taxonomy spec:
+ *   - backlog → folder (open work container)
+ *   - record  → bookmark/book (archived reference)
+ *   - session → clock (time-ordered recaps)
+ *   - rule    → chat bubble (feedback / directives)
+ */
+const TYPE_ICON: Record<DisplayType, JSX.Element> = {
+  backlog: (
+    <path d="M20 7h-7L10.3 4.3A1 1 0 0 0 9.6 4H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" />
+  ),
+  record: (
+    <>
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+    </>
+  ),
+  session: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </>
+  ),
+  rule: (
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  ),
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -36,8 +78,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * with counts and a recent-activity indicator. Clicking a folder drills into a
  * tile grid; clicking a tile opens the full memory in a dialog.
  *
- * Uses the dashboard's existing visual language (purple primary, mono caps
- * headings, shadcn-style card panels) — no new design tokens introduced.
+ * Visual language follows docs/designs/memory-brain-v3.html (3-column tile
+ * grid: icon | name+desc | count).
  *
  * Spec: docs/specs/2026-04-15-memory-taxonomy-hybrid.md
  */
@@ -100,38 +142,57 @@ export function MemoryFolders({ memories }: MemoryFoldersProps) {
           const active = byFolder.recent[type];
           const accent = TYPE_ACCENT[type];
           const dot = TYPE_DOT[type];
-          const glyph = TYPE_GLYPH[type];
+          const iconBox = TYPE_ICON_BOX[type];
           const empty = count === 0;
           return (
             <button
               key={type}
               onClick={() => setFolder(type)}
               disabled={empty}
-              className={`group relative flex h-full flex-col gap-2 rounded-md border bg-card/80 p-4 text-left transition ${
+              className={`group relative grid grid-cols-[auto_1fr_auto] grid-rows-[auto_auto] items-center gap-x-3 gap-y-1 rounded-md border bg-muted p-3.5 text-left transition ${
                 empty
-                  ? 'cursor-default border-border/20 opacity-60'
-                  : 'border-border/40 hover:border-primary/40 hover:bg-accent/30'
+                  ? 'cursor-default border-border/20 opacity-55'
+                  : 'border-border/40 hover:border-primary/30 hover:bg-accent/40'
               }`}
             >
               {active && (
                 <span
-                  className={`absolute right-3 top-3 h-1.5 w-1.5 rounded-full ${dot}`}
+                  className={`pointer-events-none absolute right-2.5 top-2.5 h-1.5 w-1.5 rounded-full ${dot.bg}`}
+                  style={{ boxShadow: `0 0 8px ${dot.glow}` }}
                   data-tooltip="Activity in the last 24h"
                   aria-label="Activity in the last 24h"
                 />
               )}
-              <div className="flex items-center gap-2">
-                <span className={`font-mono text-base ${accent}`} aria-hidden>{glyph}</span>
-                <span className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-                  {label}
-                </span>
-              </div>
-              <div className={`font-mono text-2xl font-bold tabular-nums ${empty ? 'text-muted-foreground/40' : accent}`}>
+              <span
+                className={`row-span-2 flex h-9 w-9 items-center justify-center rounded-sm border ${iconBox} ${accent}`}
+                aria-hidden
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  {TYPE_ICON[type]}
+                </svg>
+              </span>
+              <span className="self-end font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+                {label}
+              </span>
+              <span
+                className={`row-span-2 self-center font-mono text-sm font-bold tabular-nums ${
+                  empty ? 'text-muted-foreground/40' : accent
+                }`}
+              >
                 {count}
-              </div>
-              <div className="font-mono text-[10px] leading-snug text-muted-foreground/70">
+              </span>
+              <span className="self-start font-mono text-[10px] leading-snug text-muted-foreground/70">
                 {blurb}
-              </div>
+              </span>
             </button>
           );
         })}
