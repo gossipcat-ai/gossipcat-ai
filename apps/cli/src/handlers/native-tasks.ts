@@ -334,8 +334,17 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
 
   // 4. Publish gossip so other running agents can see this result
   // Skip when native utility is configured — fire-and-forget gossip block below replaces this
+  // Awaited here (not fire-and-forget) so the summary is available for compact return.
+  let cogSummary: string | null = null;
   if (!error && !taskInfo.utilityType && !ctx.nativeUtilityConfig) {
     await ctx.mainAgent.publishNativeGossip(agentId, result.slice(0, 50000)).catch(() => {}); // intentional 50k cap — memory protection
+    // Grab the freshly-written summary from the in-memory session gossip cache.
+    // publishNativeGossip awaits summarizeAndStoreGossip, so the entry is present now.
+    try {
+      const gossipEntries = ctx.mainAgent.getSessionGossip();
+      const latest = [...gossipEntries].reverse().find((e: any) => e.agentId === agentId);
+      if (latest?.taskSummary) cogSummary = latest.taskSummary;
+    } catch { /* best-effort — fall back to truncated preview */ }
   }
 
   if (!error && taskInfo.utilityType) {
@@ -409,9 +418,40 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     }
   }
 
-  const status = error ? `failed (${elapsed}ms): ${error}` : `completed (${elapsed}ms)`;
-  let responseText = `Result relayed for ${agentId} [${task_id}]: ${status}\n\nThe result is now available for gossip_collect and consensus cross-review.`;
+  // ── Compact return payload (consensus 2f25318c/634c3c43) ─────────────────────
+  // Never echo the full result back — it wastes ~3000 tokens per relay.
+  // Primary payload: ≤400-char cognitive summary when available; otherwise a
+  // truncated 800-char preview with an explicit note that summarization was skipped.
+  const status = error ? `failed (${elapsed}ms): ${error.slice(0, 200)}` : `completed (${elapsed}ms)`;
+  const resultLen = result?.length ?? 0;
+  const retrievalHint = `Full result (${resultLen} chars) stored in session-gossip.jsonl; use gossip_remember(${agentId}, query) for depth`;
 
+  let payloadLines: string[];
+  if (error || taskInfo.utilityType) {
+    // Error path or utility tasks: no summary; short status only
+    payloadLines = [
+      `relay: ${agentId} [${task_id}] ${status}`,
+      ...(error ? [] : [retrievalHint]),
+    ];
+  } else if (cogSummary) {
+    // Happy path: LLM-generated ≤400-char summary available
+    payloadLines = [
+      `relay: ${agentId} [${task_id}] ${status}`,
+      `summary: ${cogSummary}`,
+      retrievalHint,
+    ];
+  } else {
+    // nativeUtilityConfig path or summarization failed: truncated preview
+    const preview = result ? result.slice(0, 800) : '';
+    const truncNote = result && result.length > 800 ? ` [truncated — summarization pending/failed; full result ${result.length} chars]` : '';
+    payloadLines = [
+      `relay: ${agentId} [${task_id}] ${status}`,
+      `preview: ${preview}${truncNote}`,
+      retrievalHint,
+    ];
+  }
+
+  let responseText = payloadLines.join('\n');
   if (utilityBlocks.length > 0) {
     responseText += `\n\n⚠️ EXECUTE NOW — ${utilityBlocks.length} utility task(s) queued:\n\n${utilityBlocks.join('\n\n')}`;
   }

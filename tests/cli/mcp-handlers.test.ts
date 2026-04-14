@@ -1159,3 +1159,67 @@ describe('handleDispatchSingle — native skill injection', () => {
     expect(result.content[0].text).toContain('[Context truncated to fit budget]');
   });
 });
+
+// ── handleNativeRelay — compact return payload (consensus 2f25318c/634c3c43) ──
+
+describe('handleNativeRelay — compact return payload', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = makeTmpDir('compact-relay');
+    resetCtx({}, testDir);
+  });
+
+  afterEach(() => {
+    restoreCtx();
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('return payload stays under 1200 chars even for a 10K-char agent result', async () => {
+    const bigResult = 'x'.repeat(10_000);
+    const now = Date.now();
+    ctx.nativeTaskMap.set('task-big', {
+      agentId: 'native-claude',
+      task: 'Audit large file',
+      startedAt: now - 500,
+      timeoutMs: 30000,
+    });
+    // publishNativeGossip is mocked to resolve; getSessionGossip returns no entry
+    // so handler falls back to truncated preview path
+    ctx.mainAgent = makeMainAgent({
+      projectRoot: testDir,
+      publishNativeGossip: jest.fn().mockResolvedValue(undefined),
+      getSessionGossip: jest.fn().mockReturnValue([]),
+    });
+
+    const result = await handleNativeRelay('task-big', bigResult);
+    const text = result.content[0].text;
+    expect(text.length).toBeLessThan(1200);
+  });
+
+  it('exercises summarizeAndStoreGossip (via publishNativeGossip) before return', async () => {
+    const now = Date.now();
+    const summaryEntry = { agentId: 'native-claude', taskSummary: 'Found 2 race conditions in worker pool.', timestamp: now };
+    const publishNativeGossip = jest.fn().mockResolvedValue(undefined);
+    const getSessionGossip = jest.fn().mockReturnValue([summaryEntry]);
+
+    ctx.mainAgent = makeMainAgent({
+      projectRoot: testDir,
+      publishNativeGossip,
+      getSessionGossip,
+    });
+    ctx.nativeTaskMap.set('task-summ', {
+      agentId: 'native-claude',
+      task: 'Review worker pool',
+      startedAt: now - 800,
+      timeoutMs: 30000,
+    });
+
+    const result = await handleNativeRelay('task-summ', 'Full detailed output here');
+    // publishNativeGossip must have been called (which calls summarizeAndStoreGossip internally)
+    expect(publishNativeGossip).toHaveBeenCalledTimes(1);
+    // Summary from session gossip is included in the return value
+    const text = result.content[0].text;
+    expect(text).toContain('Found 2 race conditions in worker pool.');
+  });
+});
