@@ -81,7 +81,16 @@ git log --oneline -1
 STEP 3 — If any patch is provided below, apply it now:
 <PATCH_BLOCK or "No patch — working tree was clean at dispatch time.">
 
-STEP 4 — Confirm readiness:
+STEP 4 — Verify the bridge is active (sentinel check):
+Read the sentinel file at <WORKSPACE_PATH>/.gossipcat-bridge-sentinel
+Expected contents: <SENTINEL_TOKEN>
+If the sentinel read fails OR contents do not match, HALT. Report
+"bridge not active — sentinel check failed" and do not continue. A
+missing sentinel means your file_read is resolving against the wrong
+workspace and any findings you produce will be fabrications about a
+different project.
+
+STEP 5 — Confirm readiness:
 Run: git status
 If status shows uncommitted changes from the patch, that is expected and correct.
 If 'git apply' failed, report the error in your findings immediately — do NOT review
@@ -90,9 +99,34 @@ stale code silently.
 PROJECT ROOT INSIDE YOUR WORKSPACE: <WORKSPACE_PATH>
 All file paths in your findings must be relative to this root.
 
-⚠ SECURITY: Do not echo repository URLs, credentials, or patch data in your output.
+⚠ SECURITY: Do not echo repository URLs, credentials, sentinel tokens, or patch data in your output.
 --- END PROJECT BRIDGE ---
 ```
+
+### Sentinel check (closed-toolchain bypass mitigation)
+
+A remote agent with a closed toolchain (openclaw) has its own `file_read` that
+resolves against its local workspace (e.g. `/root/.openclaw/workspace`). If the
+agent's LLM ignores the bridge-block instructions and calls `file_read` directly,
+it reads files from the wrong workspace and produces fabrications about a
+different project. Gossipcat cannot intercept or redirect the agent's native
+tools — this is a structural limit of prompt-injection integration.
+
+Mitigation: the bridge block generates a sentinel file at `.gossipcat-bridge-sentinel`
+inside the workspace and injects a cryptographically random token into the prompt.
+The agent's first action must be to read the sentinel and verify the token matches.
+
+- Sentinel content: 128 bits of entropy from `crypto.randomBytes(16).toString('hex')`.
+- Path: always `<WORKSPACE_PATH>/.gossipcat-bridge-sentinel` — the workspace-relative
+  form means a misdirected `file_read` targets the agent's own workspace, where no
+  matching sentinel exists.
+- Failure mode: sentinel missing or token mismatch → agent halts and reports
+  "bridge not active". This converts a silent fallback (agent reviewing the wrong
+  project) into an explicit failure that the orchestrator logs as a task error.
+
+For the future HTTP/REST bridge (Architecture 2 in docs/specs/2026-04-14-http-file-bridge.md),
+the sentinel is read via the bridge endpoint, not the local filesystem, providing
+the same guarantee at a different layer.
 
 ### Clone/fetch commands (3 forms)
 
@@ -133,6 +167,10 @@ git cat-file -e "$SHA" 2>/dev/null || {
 git checkout "$SHA"
 git reset --hard "$SHA"
 git clean -fd
+
+# Sentinel — written by the orchestrator's template-renderer, not the agent.
+# Token is a fresh 128-bit hex value baked into this bash block at dispatch time.
+echo "<SENTINEL_TOKEN>" > "$WORKSPACE/.gossipcat-bridge-sentinel"
 ```
 
 **Key change from v0:** Fetches the exact SHA (fallback to branch), verifies the SHA
@@ -359,6 +397,7 @@ addressed in this revision:
 | File-by-file fallback unspecified (f9) | consensus | Fixed: no file-by-file in v1, explicitly deferred to v2 |
 | Synthetic hunks format underspecified (f10) | consensus | Fixed: confirmed `diff -u /dev/null <file>` format, added size-budget note |
 | Excludes list incomplete (f21) | consensus | Fixed: clarified pathspec + `.gitignore` combination rationale in edge case |
+| Closed-toolchain bypass (consensus `b3bf13c0-e821417b:f5`, critical) | sonnet | Fixed: sentinel-canary verification step — agent halts if sentinel read fails, converting silent wrong-workspace fallback into explicit error |
 
 ## Research sources
 
