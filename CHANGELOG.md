@@ -4,6 +4,53 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-04-14
+
+A round of hardening driven by two consensus rounds (`0a7c34cb-91624bd4`, `20c17ac3-03bb4f25`) that reviewed 0.4.0's own PRs and caught real security + correctness regressions that the original review missed. Three stacked PRs close every HIGH/MEDIUM/LOW finding plus two silent-failure modes in already-merged 0.4.0 code.
+
+### Security (merge-blockers caught in cross-review)
+
+- **`gossip_plan` native utility now issues a `relay_token`.** The initial 0.4.0 implementation of the native-utility re-entry path (PR #64) created a `nativeTaskMap` entry without a token, so any caller who guessed or observed the 8-hex `taskId` in the 120s window could POST a fabricated decomposition via `gossip_relay`, feeding `decomposeFromRaw` + `registerPlan` an attacker-chosen plan. Now matches the `gossip_verify_memory` hardening pattern: token issued at dispatch, echoed in the EXECUTE NOW instructions, enforced by `handleNativeRelay`. (#64)
+- **Re-entry path validates stash before mutating maps.** `gossip_plan` used to delete `_pendingPlanData`, `nativeResultMap`, and `nativeTaskMap` entries for `_utility_task_id` *before* the `if (!stashed)` guard. A caller passing any live task's ID could purge its native state (cross-tool DoS). Order flipped: validate first, delete after. (#64)
+
+### Cache-drift fixes on `syncWorkersViaKeychain` (#63)
+
+Shared invariants cached at boot but never refreshed when agents are added/removed surfaced as stale state minutes or hours into a session.
+
+- `identityRegistry` lifted onto `ctx.identityRegistry`; `.clear()` runs before every repopulation so removed/renamed agents no longer keep stale `self_identity` entries.
+- `main_agent` provider/model change warning now compares against the **original** boot-time config values (new `ctx.mainProviderConfig`/`ctx.mainModelConfig`), not the post-fallback runtime — users whose primary key was missing at boot no longer get a spurious warning on every dispatch. Self-heals after warning fires.
+- `SkillIndex.seedFromConfigs()` + `ensureBoundWithMode(['memory-retrieval'], …, 'permanent')` called on every sync so new agents get the baseline skill.
+- `DispatchPipeline.invalidateProjectStructureCache()` added (delegated via `MainAgent`) and called on every sync so prompts regenerate against the current layout.
+- Native `task_completed` meta-signal now emitted alongside `format_compliance` (parity with the relay path). `task_tool_turns` intentionally **not** emitted for native agents — tool-use is unobservable to the relay and emitting `value: 0` poisoned skill-gap detection. Stderr logging added on meta-signal write failure (previously silent catch).
+
+### Consensus engine + prompt assembler hardening (#64, #65)
+
+- **Phase-2 cross-reviewers now keep their skills.** `ConsensusEngine` takes a `getAgentSkillsContent(agentId, task)` callback and appends the agent's skills block to the cross-review system prompt. Without this, reviewers trained on `citation_grounding` / `security-audit` lost that methodology the moment the prompt flipped to cross-review. Wired via `ConsensusCoordinator` → `DispatchPipeline` using the existing `loadSkills()` + `skillIndex`. (#64)
+- **`gossip_plan` works on pure-native teams.** Added the `_utility_task_id` re-entry branch matching `gossip_skills`/`gossip_session_save`. Decomposition dispatches to a native subagent; re-entry resumes via `TaskDispatcher.decomposeFromRaw()`. `classifyWriteModes` degrades to all-read (no second LLM hop available) — users can still dispatch; per-task defaults apply at `gossip_dispatch` time. (#64)
+- **`TaskDispatcher` split:** `buildDecomposeMessages` + `decomposeFromRaw` + `classifyWriteModesFallback`. `decomposeFromRaw` now validates the `strategy` enum (unknown → `single`) and subtask shape (non-string descriptions dropped, `requiredSkills` filtered to strings) so untrusted native-utility output can't smuggle malformed plans into `registerPlan`. (#64)
+- **`assembleUtilityPrompt()` helper** formats the `EXECUTE NOW` + `AGENT_PROMPT:<taskId>` pair used by every native-utility call site, with optional `relayToken` in the relay step. `gossip_plan` adopts it first; other sites can migrate incrementally. `MAX_ASSEMBLED_PROMPT_CHARS` exported from `@gossip/orchestrator` so utility builders share one 30K budget. (#64)
+- **Suffix cap on `assemblePrompt`.** Earlier versions only truncated the prefix, so oversized `MEMORY` / `SPEC REVIEW` / session blocks silently exceeded the 30K cap. Suffix segments now carry priority 0-6 (0 = mandatory: TASK + schema). When total suffix exceeds a 60% reserve (18K), lowest-priority segments drop first until it fits. Schema + task always survive. (#65)
+- **`provisionalConsensusId` validation.** `allFindings[0].id.split(':')[0]` silently accepted any string, so free-form finding IDs from legacy or custom producers routed provisional signals under the wrong consensusId. Exported `CONSENSUS_ID_RE` / `isValidConsensusId` / `extractConsensusIdFromFindingId` helpers; prefer the authoritative consensusId on `consensusReport.signals[0]`, fall back to parsed-and-validated first-finding ID only when no signals are available. (#65)
+
+### Cleanup
+
+- Removed dead `setAgentSkillsResolver` late-binder from `ConsensusCoordinator`. (#64)
+- `gossip_plan` reentrant-call instruction now uses `JSON.stringify(task)` so backslashes, newlines, and quotes escape correctly. (#64)
+
+### Tests
+
++32 tests net across the three PRs:
+
+- `assembleUtilityPrompt` shape + relay_token include/omit + reentrant verbatim (6 tests).
+- `decomposeFromRaw` fallback behavior: non-JSON input, unknown strategy, valid strategy, subtask shape filtering, all-invalid collapse, `requiredSkills` filter (6 tests).
+- `getAgentSkillsContent` callback: injection when callback returns content, safe containment on throw (2 tests).
+- `invalidateProjectStructureCache` public method sanity (2 tests).
+- Native `format_compliance` signal emission + `task_tool_turns` suppression for native agents (1 test).
+- `CONSENSUS_ID_RE` / `isValidConsensusId` / `extractConsensusIdFromFindingId` validator suite (11 tests).
+- Priority-ordered suffix drop: TASK+SCHEMA always survive, lowest-priority first, AGENT_MEMORY before MEMORY, multi-drop ordering, no-op when everything fits (5 tests).
+
+Test suite: 1495 passing (was 1463 at 0.4.0 release), 1 skipped, 121 suites green.
+
 ## [0.4.0] — 2026-04-14
 
 Combines the unreleased 0.3.0 work (server-side cross-review, memory pre-fetch, scoring, dashboard polish) with three new streams: HTTP file bridge infrastructure, the consensus type-contract fix, and a long-standing test bug cleanup.
