@@ -625,16 +625,17 @@ export async function handleCollect(
           : undefined;
 
       // Only record provisional signals for finding authors NOT already covered.
-      // CRITICAL: populate findingId (not just taskId) so dashboard back-search
-      // can resolve signal → consensus round → score adjustment. The previous
-      // writer set taskId = f.id but left findingId undefined, leaving these
-      // signals invisible to the dashboard pipeline (consensus round 4c88bcd3
-      // confirmed this gap, sonnet-reviewer:f3).
+      // CRITICAL: taskId and findingId must have DISTINCT semantics for the
+      // dashboard back-search. Prior writer set taskId = f.id (same as findingId),
+      // conflating the two — gemini-reviewer:f1 in drift audit b0cc4995-0cd34dc7
+      // caught this. Fix: taskId groups signals by consensus round (not the
+      // specific finding), findingId points at the specific finding using the
+      // full <consensusId>:<agentId>:fN format that f.id already carries.
       const provisionalSignals = allFindings
         .filter((f: any) => !alreadySignaled.has(f.originalAgentId))
         .map((f: any) => ({
           type: 'consensus' as const,
-          taskId: f.id || '',
+          taskId: provisionalConsensusId || '',
           consensusId: provisionalConsensusId,
           findingId: typeof f.id === 'string' ? f.id : undefined,
           signal: tagToSignal[f.tag] || 'unique_unconfirmed',
