@@ -11,6 +11,19 @@ import { Codec, MessageEnvelope } from '@gossip/types';
 const codec = new Codec();
 
 /**
+ * Per-socket liveness state for the heartbeat loop in server.ts.
+ *
+ * Kept as a module-level WeakMap instead of extending the WebSocket prototype
+ * so we don't collide with `ws` internals and so stale entries GC automatically
+ * when the socket object is released. Server-side heartbeat reads and writes
+ * `pendingPong`; the `pong` handler below clears it on every live reply.
+ */
+export interface HeartbeatState {
+  pendingPong: boolean;
+}
+export const livenessMap: WeakMap<WebSocket, HeartbeatState> = new WeakMap();
+
+/**
  * AgentConnection wraps a WebSocket for a single authenticated agent session.
  */
 export class AgentConnection {
@@ -27,6 +40,15 @@ export class AgentConnection {
 
     ws.on('close', () => {
       this.active = false;
+    });
+
+    // Heartbeat pong handler — the relay's heartbeat interval (server.ts)
+    // marks each client as pendingPong=true before calling ws.ping(). When
+    // the pong arrives, clear the flag so the next tick doesn't terminate
+    // a live connection.
+    ws.on('pong', () => {
+      const entry = livenessMap.get(ws);
+      if (entry) entry.pendingPong = false;
     });
   }
 

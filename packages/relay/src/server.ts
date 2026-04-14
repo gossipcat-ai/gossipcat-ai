@@ -11,7 +11,7 @@ import { randomUUID, timingSafeEqual } from 'crypto';
 import { Codec } from '@gossip/types';
 import { ConnectionManager } from './connection-manager';
 import { MessageRouter } from './router';
-import { AgentConnection } from './agent-connection';
+import { AgentConnection, livenessMap } from './agent-connection';
 import { DashboardAuth } from './dashboard/auth';
 import { DashboardRouter } from './dashboard/routes';
 import { DashboardWs } from './dashboard/ws';
@@ -27,6 +27,13 @@ export interface RelayServerConfig {
   authTimeoutMs?: number;
   apiKey?: string;  // If set, clients must provide this exact key to authenticate
   dashboard?: DashboardConfig;  // If set, enables the dashboard UI
+  /**
+   * Heartbeat interval in milliseconds. Every tick, the server pings each
+   * client; clients that haven't responded to the previous ping are
+   * terminated. Default: 30_000 (30 s). Set to 0 to disable heartbeats
+   * (mostly useful for tests).
+   */
+  heartbeatIntervalMs?: number;
 }
 
 export class RelayServer {
@@ -44,11 +51,14 @@ export class RelayServer {
   private dashboardRouter: DashboardRouter | null = null;
   private dashboardWs: DashboardWs | null = null;
   private dashboardUpgrader: WebSocketServer | null = null; // single instance — avoids per-request leak
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly heartbeatIntervalMs: number;
 
   constructor(private config: RelayServerConfig) {
     this.connectionManager = new ConnectionManager();
     this.router = new MessageRouter(this.connectionManager);
     this.authTimeoutMs = config.authTimeoutMs ?? 5000;
+    this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? 30_000;
   }
 
   get port(): number { return this._port; }
@@ -75,8 +85,9 @@ export class RelayServer {
         );
       }
 
-      this.wss = new WebSocketServer({ noServer: true, maxPayload: 1 * 1024 * 1024 });
+      this.wss = new WebSocketServer({ noServer: true, maxPayload: 1 * 1024 * 1024, clientTracking: true });
       this.wss.on('connection', this.handleConnection.bind(this));
+      this.startHeartbeat();
 
       this.httpServer.on('upgrade', (req, socket, head) => {
         const url = req.url ?? '';
@@ -113,6 +124,7 @@ export class RelayServer {
 
   async stop(): Promise<void> {
     this.router.stop();  // stop presence tracker interval
+    this.stopHeartbeat();
     // Close dashboard clients and upgrader
     if (this.dashboardWs) {
       this.dashboardWs.stopLogWatcher();
@@ -133,6 +145,56 @@ export class RelayServer {
         this.httpServer.close(() => resolve());
       });
     });
+  }
+
+  /**
+   * Start the WS heartbeat loop.
+   *
+   * Every `heartbeatIntervalMs`, iterate `wss.clients`. For each socket:
+   *   - if it still has `pendingPong === true` from the previous tick, the
+   *     peer missed a round-trip → terminate it so the router unregisters.
+   *   - otherwise mark `pendingPong = true` and send a ws-level ping. The
+   *     `pong` handler in agent-connection.ts clears the flag when the
+   *     peer replies.
+   *
+   * This detects half-open TCP connections (NAT silently dropping state,
+   * Wi-Fi roam, VM suspend) faster than the default ~2 min TCP keepalive.
+   * Non-agent sockets (dashboard WS) run on `dashboardUpgrader` and are
+   * unaffected. Rollback = no-op the body of this method.
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeatIntervalMs <= 0) return; // disabled (mostly for tests)
+    if (this.heartbeatInterval) return;        // already running
+    this.heartbeatInterval = setInterval(() => {
+      for (const client of this.wss.clients) {
+        const state = livenessMap.get(client);
+        if (state && state.pendingPong) {
+          // Peer never answered the previous ping — treat as dead.
+          client.terminate();
+          livenessMap.delete(client);
+          continue;
+        }
+        if (!state) {
+          livenessMap.set(client, { pendingPong: true });
+        } else {
+          state.pendingPong = true;
+        }
+        try {
+          client.ping();
+        } catch {
+          // If ping throws (socket already closed), the next tick will clean it up.
+        }
+      }
+    }, this.heartbeatIntervalMs);
+    // Don't hold the event loop open just for heartbeats.
+    this.heartbeatInterval.unref?.();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
   }
 
   private handleConnection(ws: WebSocket, req: IncomingMessage): void {
