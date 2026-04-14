@@ -16,6 +16,24 @@ export interface AgentConfig {
    *  Dispatched via Claude Code's Agent tool instead of the gossipcat relay.
    *  Results are fed back via gossip_relay for consensus/gossip. */
   native?: boolean;
+
+  // ─── HTTP File Bridge (spec 2026-04-14) ───────────────────────────────────
+  // Wired by PR-C (dispatch-pipeline). Defined here so AgentConfig consumers
+  // that read these fields typecheck cleanly even before the pipeline branch
+  // lands. See docs/specs/2026-04-14-http-file-bridge.md §Config schema.
+
+  /** Enable HTTP file bridge for this agent. */
+  enableHttpBridge?: boolean;
+
+  /** Bridge mode: "read" | "scoped" | "worktree". Defaults to "read". */
+  bridgeWriteMode?: 'read' | 'scoped' | 'worktree';
+
+  /** Path scope relative to project root. Defaults to project root (full access). */
+  bridgeScope?: string;
+
+  /** If true, bind bridge to tunnel-accessible interface instead of 127.0.0.1 only.
+   *  Requires TLS + cert-pinning to be configured. */
+  bridgeRemoteAccess?: boolean;
 }
 
 /** Result of a worker agent completing a sub-task */

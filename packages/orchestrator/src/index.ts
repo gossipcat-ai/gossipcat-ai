@@ -41,6 +41,8 @@ export { DispatchPipeline } from './dispatch-pipeline';
 export type { DispatchPipelineConfig, ToolServerCallbacks, SkillGapSuggestionResult } from './dispatch-pipeline';
 export { ScopeTracker } from './scope-tracker';
 export { RateLimiter } from './rate-limiter';
+export { createHttpBridgeServer, BridgeConfigError } from './http-bridge-server';
+export type { HttpBridgeServer, HttpBridgeServerOptions } from './http-bridge-server';
 export { WorktreeManager } from './worktree-manager';
 export { BootstrapGenerator } from './bootstrap';
 export type { BootstrapResult } from './bootstrap';
