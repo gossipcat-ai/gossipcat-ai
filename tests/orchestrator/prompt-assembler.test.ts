@@ -213,3 +213,79 @@ describe('MAX_ASSEMBLED_PROMPT_CHARS', () => {
     expect(MAX_ASSEMBLED_PROMPT_CHARS).toBeLessThan(100_000);
   });
 });
+
+describe('assemblePrompt suffix cap (F14 — priority-ordered drop)', () => {
+  const BIG = (label: string) => `${label}:` + 'x'.repeat(25_000);
+
+  it('preserves TASK and SCHEMA even when lower-priority blocks are dropped', () => {
+    const result = assemblePrompt({
+      task: 'do the thing',
+      memory: BIG('huge memory'),
+      context: BIG('huge context'),
+      sessionContext: BIG('huge session'),
+    });
+    expect(result).toContain('Task: do the thing');
+    expect(result).toContain('--- FINDING TAG SCHEMA ---');
+    expect(result.length).toBeLessThanOrEqual(MAX_ASSEMBLED_PROMPT_CHARS + 100);
+  });
+
+  it('drops lowest-priority suffix first when suffix exceeds its reserve', () => {
+    // context is priority 6 (lowest), memory is priority 3.
+    const result = assemblePrompt({
+      task: 'do the thing',
+      memory: 'small memory block',
+      context: BIG('oversized context'),
+    });
+    // Small memory must survive; oversized freeform context must be dropped.
+    expect(result).toContain('small memory block');
+    expect(result).not.toContain('oversized context');
+  });
+
+  it('drops AGENT MEMORY before MEMORY when only one drop is needed (priority 4 > priority 3)', () => {
+    // Size MEMORY just over the reserve budget so AGENT_MEMORY's removal
+    // alone brings total back under reserve. Schema ~600 + AGENT_MEMORY ~500
+    // + task tiny → memory body of ~17100 pushes total just over 18K reserve.
+    const memoryBlock = 'actual memory: ' + 'y'.repeat(17_100);
+    const result = assemblePrompt({
+      task: 'x',
+      memory: memoryBlock,
+      memoryDir: '/tmp/agent-dir',
+    });
+    expect(result).toContain('actual memory:');
+    expect(result).not.toContain('--- AGENT MEMORY ---');
+  });
+
+  it('drops multiple suffix blocks in priority order when one drop is insufficient', () => {
+    // Oversized memory forces BOTH AGENT_MEMORY and MEMORY to drop.
+    // MEMORY is still dropped AFTER lower-priority blocks try first.
+    const result = assemblePrompt({
+      task: 'x',
+      memory: 'm'.repeat(25_000),
+      memoryDir: '/tmp/agent-dir',
+      context: 'small context',
+      sessionContext: 'small session',
+    });
+    // task + schema always survive
+    expect(result).toContain('Task: x');
+    expect(result).toContain('--- FINDING TAG SCHEMA ---');
+    // Oversized MEMORY cannot be kept
+    expect(result).not.toContain('m'.repeat(100));
+    // AGENT_MEMORY (priority 4) was dropped before us getting here
+    expect(result).not.toContain('--- AGENT MEMORY ---');
+  });
+
+  it('keeps everything when combined size fits the budget', () => {
+    const result = assemblePrompt({
+      task: 'x',
+      memory: 'small',
+      context: 'small',
+      sessionContext: 'small',
+      memoryDir: '/tmp/d',
+      lens: 'focus',
+    });
+    expect(result).toContain('--- MEMORY ---');
+    expect(result).toContain('--- AGENT MEMORY ---');
+    expect(result).toContain('--- LENS ---');
+    expect(result).toContain('Context:');
+  });
+});
