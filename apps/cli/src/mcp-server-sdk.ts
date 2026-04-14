@@ -830,6 +830,18 @@ async function doSyncWorkers() {
       }
       process.stderr.write(`[gossipcat] 🔄 Synced: ${ctx.workers.size} relay workers + ${ctx.nativeAgentConfigs.size} native agents\n`);
     }
+
+    // Push the merged agent list to the dashboard so the Team page reflects
+    // the current roster. Covers both gossip_setup (which calls us directly)
+    // and hand-edits to .gossip/config.json / .claude/agents/*.md (picked up
+    // at the next auto-dispatch via the lazy syncWorkersViaKeychain call).
+    // Without this, the boot-time snapshot at :365 is the ONLY agent source
+    // the dashboard ever sees — PR #59 fixed it for gossip_setup, but
+    // hand-edits stayed stale.
+    try {
+      const merged = [...agentConfigs, ...claudeSubagentsToConfigs(claudeSubagents)];
+      ctx.relay?.setAgentConfigs(merged);
+    } catch { /* dashboard refresh is best-effort */ }
   } catch (err) {
     process.stderr.write(`[gossipcat] ❌ syncWorkers failed: ${(err as Error).message}\n`);
   }
@@ -1629,18 +1641,19 @@ server.tool(
     mkdirSync(join(root, '.gossip'), { recursive: true });
     writeFileSync(join(root, '.gossip', 'config.json'), JSON.stringify(config, null, 2));
 
-    // Refresh dashboard's cached agent configs so the Team page reflects the
-    // new team without requiring /mcp reconnect. The boot-time snapshot at
-    // :365 still wins on initial boot — this is a post-setup override for
-    // the common "boot before setup" fresh-install flow. Only fires on create
-    // modes (merge/replace); update_instructions returns earlier at :1504.
+    // Refresh all runtime caches of .gossip/config.json state — dashboard,
+    // ctx.nativeAgentConfigs, ctx.workers, and ctx.mainAgent registry — so
+    // the new team is fully dispatchable without /mcp reconnect. PR #59
+    // only refreshed the dashboard; that left the dispatch pipeline stale
+    // (e.g. gossip_dispatch(agent_id: "new-agent") returned "unknown agent"
+    // until the next lazy syncWorkers). syncWorkersViaKeychain now also
+    // pushes to the dashboard at its tail, so one call refreshes everything.
+    // Only fires on create modes (merge/replace); update_instructions
+    // returns earlier at :1504.
     try {
-      const m = await getModules();
-      const freshConfig = m.loadConfig(join(root, '.gossip', 'config.json'));
-      const freshAgentConfigs = m.configToAgentConfigs(freshConfig);
-      ctx.relay?.setAgentConfigs(freshAgentConfigs);
+      await syncWorkersViaKeychain();
     } catch (e) {
-      process.stderr.write(`[gossipcat] gossip_setup: failed to refresh dashboard agent configs: ${e}\n`);
+      process.stderr.write(`[gossipcat] gossip_setup: failed to refresh agent state: ${e}\n`);
     }
 
     // Generate host-appropriate rules file so the IDE knows about the team

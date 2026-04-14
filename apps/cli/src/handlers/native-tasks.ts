@@ -295,6 +295,35 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     } catch { /* best-effort */ }
   }
 
+  // 0c. Emit format_compliance meta signal — parity with the relay path at
+  // dispatch-pipeline.ts:398. Without this, native agents' tag-emission
+  // compliance is never scored, and skill-development loops can't detect
+  // schema drift in sonnet/haiku output. After PR #59 + #60 native agents
+  // receive FINDING_TAG_SCHEMA, so they can and should be measured.
+  if (!error && !taskInfo.utilityType && agentId !== '_utility') {
+    try {
+      const { PerformanceWriter, detectFormatCompliance } = await import('@gossip/orchestrator');
+      const compliance = detectFormatCompliance(result ?? '');
+      const metaWriter = new PerformanceWriter(process.cwd());
+      metaWriter.appendSignals([{
+        type: 'meta' as const,
+        signal: 'format_compliance',
+        agentId,
+        taskId: task_id,
+        value: compliance.formatCompliant ? 1 : 0,
+        metadata: {
+          findingCount: compliance.findingCount,
+          citationCount: compliance.citationCount,
+          tags_total: compliance.tags_total,
+          tags_accepted: compliance.tags_accepted,
+          tags_dropped_unknown_type: compliance.tags_dropped_unknown_type,
+          tags_dropped_short_content: compliance.tags_dropped_short_content,
+        },
+        timestamp: new Date().toISOString(),
+      } as any]);
+    } catch { /* best-effort */ }
+  }
+
   // 0b. Record plan step result so subsequent steps get chain context
   if (taskInfo.planId && taskInfo.step && !error) {
     try { ctx.mainAgent.recordPlanStepResult(taskInfo.planId, taskInfo.step, result); } catch { /* best-effort */ }

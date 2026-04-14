@@ -72,7 +72,7 @@ type TrackedTask = TaskEntry & {
  * "agent emitted tags but all had invalid type=" — the second case points at
  * a skill/prompt-format drift that instruction edits won't fix.
  */
-function detectFormatCompliance(result: string): {
+export function detectFormatCompliance(result: string): {
   findingCount: number;
   citationCount: number;
   formatCompliant: boolean;
