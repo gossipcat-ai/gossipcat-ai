@@ -233,7 +233,7 @@ export class GossipAgent extends EventEmitter {
     this._connected = false;
     this.ws = null;
     const label = WS_CLOSE_LABELS[code] ?? 'UNKNOWN';
-    console.log(`[GossipAgent] Closed: ${label} (${code}) ${reason?.toString() || ''}`);
+    console.warn(`[GossipAgent] Closed: ${label} (${code}) ${reason?.toString() || ''}`);
     if (!this.intentionalDisconnect) {
       this.emit('disconnect', code);
       this.attemptReconnect();
@@ -252,13 +252,13 @@ export class GossipAgent extends EventEmitter {
       30000
     );
     this.reconnectAttempts++;
-    console.log(`[GossipAgent] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    console.warn(`[GossipAgent] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimer = setTimeout(async () => {
       if (this.intentionalDisconnect) return;
       try {
         await this.connect();
-        console.log('[GossipAgent] Reconnected');
+        console.warn('[GossipAgent] Reconnected');
         // Re-subscribe to all channels after reconnection
         for (const ch of this.subscribedChannels) {
           const msg = Message.createSubscription(this.config.agentId, ch, undefined, { seq: this.seq++ });
