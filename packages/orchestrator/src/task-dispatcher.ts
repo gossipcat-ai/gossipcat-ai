@@ -21,11 +21,16 @@ export class TaskDispatcher {
    * Decompose a task into a DispatchPlan using the LLM.
    * On parse failure, falls back to a single sub-task.
    */
-  async decompose(task: string): Promise<DispatchPlan> {
+  /**
+   * Build the LLM messages used by decompose(). Exposed so native-utility
+   * orchestrators (Claude Code) can dispatch the decomposition as an Agent()
+   * call and feed the raw result back through decomposeFromRaw().
+   */
+  buildDecomposeMessages(task: string): LLMMessage[] {
     const availableSkills = this.getAvailableSkills();
     const skillList = availableSkills.length > 0 ? availableSkills.join(', ') : 'general';
 
-    const messages: LLMMessage[] = [
+    return [
       {
         role: 'system',
         content: `You are a task decomposition engine. Break work into tasks that use the FULL team.
@@ -61,39 +66,64 @@ Use "sequential" ONLY when a later task genuinely needs output from an earlier o
       },
       { role: 'user', content: task },
     ];
+  }
 
-    const response = await this.llm.generate(messages, { temperature: 0 });
+  /**
+   * Parse a raw LLM response into a DispatchPlan. Used by both the in-process
+   * decompose() path and the native-utility re-entry path — same fallback
+   * logic, one place to keep it honest.
+   *
+   * Strategy/subtask shape validation was previously implicit (trusted-LLM
+   * output). The native-utility path feeds raw subagent output through here
+   * untrusted, so we validate explicitly: unknown strategies fall back to
+   * 'single', non-string descriptions or missing description fields skip the
+   * subtask, and if nothing survives we fall through to the single-task
+   * default. This is F17 hardening from consensus 0a7c34cb-91624bd4.
+   */
+  decomposeFromRaw(task: string, rawText: string): DispatchPlan {
+    const VALID_STRATEGIES = new Set(['single', 'parallel', 'sequential']);
+    const singleTaskFallback = (): DispatchPlan => ({
+      originalTask: task,
+      strategy: 'single',
+      subTasks: [{
+        id: randomUUID(),
+        description: task,
+        requiredSkills: [],
+        status: 'pending' as const,
+      }],
+      warnings: [],
+    });
 
     try {
-      const jsonMatch = response.text.match(/\{[\s\S]*\}/);
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('No JSON in response');
       const plan = JSON.parse(jsonMatch[0]);
 
-      return {
-        originalTask: task,
-        strategy: plan.strategy || 'single',
-        subTasks: (plan.subTasks || []).map((st: { description: string; requiredSkills?: string[] }) => ({
+      const strategy = VALID_STRATEGIES.has(plan.strategy) ? plan.strategy : 'single';
+      const rawSubTasks = Array.isArray(plan.subTasks) ? plan.subTasks : [];
+      const subTasks = rawSubTasks
+        .filter((st: any) => st && typeof st.description === 'string' && st.description.trim().length > 0)
+        .map((st: { description: string; requiredSkills?: unknown }) => ({
           id: randomUUID(),
           description: st.description,
-          requiredSkills: st.requiredSkills || [],
+          requiredSkills: Array.isArray(st.requiredSkills)
+            ? st.requiredSkills.filter((s: any): s is string => typeof s === 'string')
+            : [],
           status: 'pending' as const,
-        })),
-        warnings: [],
-      };
+        }));
+
+      if (subTasks.length === 0) return singleTaskFallback();
+
+      return { originalTask: task, strategy, subTasks, warnings: [] };
     } catch {
-      // Fallback: single sub-task with no specific skills
-      return {
-        originalTask: task,
-        strategy: 'single',
-        subTasks: [{
-          id: randomUUID(),
-          description: task,
-          requiredSkills: [],
-          status: 'pending' as const,
-        }],
-        warnings: [],
-      };
+      return singleTaskFallback();
     }
+  }
+
+  async decompose(task: string): Promise<DispatchPlan> {
+    const messages = this.buildDecomposeMessages(task);
+    const response = await this.llm.generate(messages, { temperature: 0 });
+    return this.decomposeFromRaw(task, response.text);
   }
 
   /**
@@ -188,13 +218,22 @@ Respond as JSON array:
         };
       });
     } catch {
-      // Fallback: all read-only
-      return plan.subTasks.map(st => ({
-        agentId: st.assignedAgent || '',
-        task: st.description,
-        access: 'read' as const,
-      }));
+      return this.classifyWriteModesFallback(plan);
     }
+  }
+
+  /**
+   * All-read fallback mapping used when no LLM is available (e.g. pure-native
+   * teams using the native-utility path for decomposition but lacking a
+   * second round-trip budget for classification). Also used internally by
+   * classifyWriteModes() on LLM failure.
+   */
+  classifyWriteModesFallback(plan: DispatchPlan): PlannedTask[] {
+    return plan.subTasks.map(st => ({
+      agentId: st.assignedAgent || '',
+      task: st.description,
+      access: 'read' as const,
+    }));
   }
 
   /** Collect all unique skills from registered agents */

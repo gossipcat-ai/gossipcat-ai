@@ -271,12 +271,59 @@ Keep entries concise (5-10 lines each). Update existing files rather than creati
   // See consensus finding 12827629-fa9a4660:f8 (native consensus block-order
   // regression) — concatenating then truncating could sever CONSENSUS OUTPUT
   // FORMAT, causing silent consensus degradation.
-  const MAX_PROMPT_CHARS = 30_000;
   const suffixStr = suffix.join('');
   let prefixStr = prefix.join('');
-  const budget = Math.max(0, MAX_PROMPT_CHARS - suffixStr.length);
+  const budget = Math.max(0, MAX_ASSEMBLED_PROMPT_CHARS - suffixStr.length);
   if (prefixStr.length > budget) {
     prefixStr = prefixStr.slice(0, budget) + '\n\n[Context truncated to fit budget]';
   }
   return prefixStr + suffixStr;
+}
+
+/**
+ * Hard cap on assembled-prompt length, in characters. ~30K chars ≈ ~8K tokens.
+ * Exported so utility-prompt callers (native subagent dispatches, cross-review
+ * builders) can share one budget instead of guessing their own.
+ */
+export const MAX_ASSEMBLED_PROMPT_CHARS = 30_000;
+
+/**
+ * Build the `{ text }` pair used by native-utility dispatches: one EXECUTE NOW
+ * instruction block + one `AGENT_PROMPT:<taskId>` block carrying the system
+ * and user messages. All native-utility call sites (skill_develop,
+ * session_summary, plan, verify_memory) used to inline this shape; now they
+ * share one formatter so the instruction text stays consistent.
+ */
+export function assembleUtilityPrompt(args: {
+  taskId: string;
+  modelShort: string;
+  system: string;
+  user: string;
+  /** Human-readable summary shown in the instruction header, e.g. "skill prompt built". */
+  intro: string;
+  /** Re-call instruction shown after relay: e.g. `gossip_skills(action: "develop", ...)` */
+  reentrantCall: string;
+  /**
+   * One-time token issued at dispatch time. When present, the relay step in
+   * the EXECUTE NOW block includes `relay_token: "<token>"` so handleNativeRelay
+   * can reject spoofed task-ID submissions. Omit only for internal utility
+   * tasks where the token check is intentionally bypassed.
+   */
+  relayToken?: string;
+}): Array<{ type: 'text'; text: string }> {
+  const { taskId, modelShort, system, user, intro, reentrantCall, relayToken } = args;
+  const relayArgs = relayToken
+    ? `task_id: "${taskId}", relay_token: "${relayToken}", result: "<full agent output>"`
+    : `task_id: "${taskId}", result: "<full agent output>"`;
+  return [
+    { type: 'text' as const, text:
+      `${intro}\n\n` +
+      `⚠️ EXECUTE NOW — launch this Agent and re-call the tool:\n\n` +
+      `1. Agent(model: "${modelShort}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true) — pass the AGENT_PROMPT:${taskId} content item verbatim\n` +
+      `2. When agent completes → gossip_relay(${relayArgs})\n` +
+      `3. Then re-call: ${reentrantCall}\n\n` +
+      `Do ALL steps in order. Do not wait for user input between them.`
+    },
+    { type: 'text' as const, text: `AGENT_PROMPT:${taskId} (_utility)\n${system}\n\n---\n\n${user}` },
+  ];
 }

@@ -228,6 +228,11 @@ const _pendingSkillData = new Map<string, { agentId: string; category: string; s
 // the file and re-validate inputs on the second call.
 const _pendingVerifyData = new Map<string, { memory_path: string; absPath: string; claim: string }>();
 
+// Re-entry stash for gossip_plan native-utility dispatch. Pure-native teams
+// (no relay API keys) use the native subagent for decomposition instead of
+// failing with "No API keys available".
+const _pendingPlanData = new Map<string, { task: string; strategy?: 'parallel' | 'sequential' | 'single' }>();
+
 // Cache modules after first import
 let _modules: any = null;
 
@@ -496,6 +501,10 @@ async function doBoot() {
   }
 
   // Try main agent key first, fall back to any available provider key, then "none"
+  // Capture the ORIGINAL config values before any fallback — used later by
+  // syncWorkersViaKeychain to detect genuine config edits (F14 hardening).
+  ctx.mainProviderConfig = config.main_agent.provider;
+  ctx.mainModelConfig = config.main_agent.model;
   let mainProvider = config.main_agent.provider;
   let mainModel = config.main_agent.model;
   let mainKey: string | null = null;
@@ -796,12 +805,25 @@ async function doSyncWorkers() {
     // throughout). Surface the divergence so the user knows /mcp reconnect
     // is required for the new orchestrator LLM to take effect. Drift audit
     // haiku #4. Skip on first call from boot when ctx.mainProvider matches.
-    if (config.main_agent && (config.main_agent.provider !== ctx.mainProvider || config.main_agent.model !== ctx.mainModel)) {
+    // F14 hardening: compare against the ORIGINAL config values, not the
+    // post-fallback runtime. Users whose configured key was missing at boot
+    // were getting this warning on every sync because ctx.mainProvider held
+    // the fallback (e.g. anthropic) while config.main_agent still says google.
+    if (config.main_agent && (config.main_agent.provider !== ctx.mainProviderConfig || config.main_agent.model !== ctx.mainModelConfig)) {
       process.stderr.write(
-        `[gossipcat] ⚠ main_agent changed in config: ${ctx.mainProvider}/${ctx.mainModel} → ${config.main_agent.provider}/${config.main_agent.model}. ` +
+        `[gossipcat] ⚠ main_agent changed in config: ${ctx.mainProviderConfig}/${ctx.mainModelConfig} → ${config.main_agent.provider}/${config.main_agent.model}. ` +
         `Restart Claude Code (/mcp reconnect) for the new orchestrator LLM to take effect.\n`
       );
+      // Update the config mirror so we don't warn again for the same edit.
+      ctx.mainProviderConfig = config.main_agent.provider;
+      ctx.mainModelConfig = config.main_agent.model;
     }
+
+    // F15 hardening: clear identityRegistry before repopulating. The previous
+    // sync only called .set() on current agents, so removed/renamed agents
+    // retained stale entries — self_identity could return the wrong
+    // runtime/provider for a since-deleted agent_id.
+    ctx.identityRegistry.clear();
 
     // Register any new agent configs (including native flag)
     for (const ac of agentConfigs) {
@@ -918,6 +940,70 @@ const server = new McpServer(
 );
 
 // ── Plan: decompose with write-mode classification ────────────────────────
+
+/**
+ * Render the planner result as the user-facing text blob. Shared by the
+ * in-process path AND the native-utility re-entry path so both produce the
+ * same response shape.
+ */
+function buildPlanResponseText(args: {
+  task: string;
+  plan: any;
+  planned: any[];
+  planId: string;
+}): string {
+  const { task, plan, planned, planId } = args;
+
+  const taskLines = planned.map((t: any, i: number) => {
+    const tag = t.access === 'write' ? '[WRITE]' : '[READ]';
+    let line = `  ${i + 1}. ${tag} ${t.agentId || 'unassigned'} → "${t.task}"`;
+    if (t.writeMode) {
+      line += `\n     write_mode: ${t.writeMode}`;
+      if (t.scope) line += ` | scope: ${t.scope}`;
+    }
+    return line;
+  }).join('\n');
+
+  const assignedTasks = planned.filter((t: any) => t.agentId);
+  const unassignedTasks = planned.filter((t: any) => !t.agentId);
+
+  const planJson = {
+    strategy: plan.strategy,
+    tasks: assignedTasks.map((t: any, i: number) => {
+      const entry: Record<string, any> = { agent_id: t.agentId, task: t.task };
+      if (t.writeMode) entry.write_mode = t.writeMode;
+      if (t.scope) entry.scope = t.scope;
+      entry.plan_id = planId;
+      entry.step = i + 1;
+      return entry;
+    }),
+  };
+
+  let warnings = '';
+  if (plan.warnings?.length) {
+    warnings = `\nWarnings:\n${plan.warnings.map((w: string) => `  - ${w}`).join('\n')}\n`;
+  }
+  if (unassignedTasks.length) {
+    warnings += `\nUnassigned (excluded from PLAN_JSON — no matching agent):\n${unassignedTasks.map((t: any) => `  - "${t.task}"`).join('\n')}\n`;
+  }
+
+  let dispatchBlock: string;
+  if (plan.strategy === 'sequential' || plan.strategy === 'single') {
+    const steps = planJson.tasks.map((t: Record<string, any>, i: number) => {
+      const args2 = [`agent_id: "${t.agent_id}"`, `task: "${t.task}"`];
+      if (t.write_mode) args2.push(`write_mode: "${t.write_mode}"`);
+      if (t.scope) args2.push(`scope: "${t.scope}"`);
+      args2.push(`plan_id: "${planId}"`, `step: ${i + 1}`);
+      return `Step ${i + 1}: gossip_dispatch(${args2.join(', ')})\n         then: gossip_collect()`;
+    });
+    dispatchBlock = `Execute sequentially:\n${steps.join('\n\n')}`;
+  } else {
+    dispatchBlock = `PLAN_JSON (pass to gossip_dispatch with mode:"parallel"):\n${JSON.stringify(planJson)}`;
+  }
+
+  return `Plan: "${task}"\nPlan ID: ${planId}\n\nStrategy: ${plan.strategy}\n\nTasks:\n${taskLines}\n${warnings}\n---\n${dispatchBlock}`;
+}
+
 server.tool(
   'gossip_plan',
   'Plan a task with write-mode suggestions. Decomposes into sub-tasks, assigns agents, and classifies each as read or write with suggested write mode. Returns dispatch-ready JSON for approval before execution. Use this before gossip_dispatch(mode:"parallel") for implementation tasks.',
@@ -925,13 +1011,15 @@ server.tool(
     task: z.string().describe('Task description (e.g. "fix the scope validation bug in packages/tools/")'),
     strategy: z.enum(['parallel', 'sequential', 'single']).optional()
       .describe('Override decomposition strategy. Omit to let the orchestrator decide.'),
+    _utility_task_id: z.string().optional().describe('Internal: utility task ID for re-entry after native decomposition'),
   },
-  async ({ task, strategy }) => {
+  async ({ task, strategy, _utility_task_id }) => {
     await boot();
     await syncWorkersViaKeychain();
 
-    // Re-entrant guard: if already inside a plan execution, don't re-decompose
-    if (planExecutionDepth > 0) {
+    // Re-entrant guard: if already inside a plan execution, don't re-decompose.
+    // _utility_task_id calls are a legitimate second hop — let them through.
+    if (planExecutionDepth > 0 && !_utility_task_id) {
       return { content: [{ type: 'text' as const, text:
         'Skipped: already inside a plan step. Execute the task directly instead of re-planning.' }] };
     }
@@ -950,6 +1038,52 @@ server.tool(
 
       const { createProvider } = await import('@gossip/orchestrator');
 
+      // ── Re-entry: native utility decomposition completed ──
+      if (_utility_task_id) {
+        // F12 hardening: validate the stash BEFORE mutating any shared maps.
+        // The previous ordering let a caller purge another tool's native state
+        // by passing its task_id as _utility_task_id. Match the
+        // gossip_verify_memory re-entry pattern (validate, then delete).
+        const stashed = _pendingPlanData.get(_utility_task_id);
+        if (!stashed) {
+          return { content: [{ type: 'text' as const, text:
+            `Plan error: no stashed data for utility task ${_utility_task_id}. Re-run gossip_plan.` }] };
+        }
+        const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
+        _pendingPlanData.delete(_utility_task_id);
+        ctx.nativeResultMap.delete(_utility_task_id);
+        ctx.nativeTaskMap.delete(_utility_task_id);
+        if (!utilityResult || utilityResult.status !== 'completed' || !utilityResult.result) {
+          process.stderr.write(`[gossipcat] gossip_plan native utility ${_utility_task_id} failed/timed out\n`);
+          return { content: [{ type: 'text' as const, text:
+            `Plan error: native decomposition failed or timed out. Configure an API key (gossipcat setup) and retry.` }] };
+        }
+
+        // No LLM available — use the native result as the decomposition, then
+        // degrade to classifyWriteModesFallback (all-read). Users can still
+        // dispatch; write_mode defaults kick in per-task at the dispatch tool.
+        const dispatcher = new TaskDispatcher(null as any, registry);
+        const plan = dispatcher.decomposeFromRaw(stashed.task, utilityResult.result);
+        if (stashed.strategy) plan.strategy = stashed.strategy;
+        dispatcher.assignAgents(plan);
+        const planned = dispatcher.classifyWriteModesFallback(plan);
+
+        const planId = randomUUID().slice(0, 8);
+        const assignedTasks = planned.filter((t: any) => t.agentId);
+        const planState = {
+          id: planId, task: stashed.task, strategy: plan.strategy,
+          steps: assignedTasks.map((t: any, i: number) => ({
+            step: i + 1, agentId: t.agentId, task: t.task, writeMode: t.writeMode, scope: t.scope,
+          })),
+          createdAt: Date.now(),
+        };
+        ctx.mainAgent.registerPlan(planState);
+
+        const text = buildPlanResponseText({ task: stashed.task, plan, planned, planId });
+        return { content: [{ type: 'text' as const, text:
+          `${text}\n\nNote: write-mode classification unavailable on this native-only install — all tasks default to read. Configure a relay API key to enable full classification.` }] };
+      }
+
       // Try main agent first, fall back to any agent with a working key
       let llm: any;
       const mainKey = await ctx.keychain.getKey(config.main_agent.provider);
@@ -965,7 +1099,58 @@ server.tool(
             break;
           }
         }
-        if (!llm) return { content: [{ type: 'text' as const, text: 'No API keys available. Run gossipcat setup to configure keys.' }] };
+        if (!llm) {
+          // ── Native-utility branch: dispatch decomposition to a native subagent ──
+          if (ctx.nativeUtilityConfig) {
+            const utilityTaskId = randomUUID().slice(0, 8);
+            // F11 hardening: issue a one-time relay_token so handleNativeRelay
+            // enforces the token check on gossip_relay. Without this, any
+            // caller who guesses the 8-hex taskId in the 120s window can POST
+            // a fabricated decomposition that registerPlan accepts as real.
+            const relayToken = randomUUID().slice(0, 12);
+            const dispatcher = new TaskDispatcher(null as any, registry);
+            const messages = dispatcher.buildDecomposeMessages(task);
+            const asString = (c: string | any[] | undefined): string =>
+              typeof c === 'string' ? c : (Array.isArray(c) ? c.map((x: any) => typeof x === 'string' ? x : (x?.text ?? '')).join('') : '');
+            const system = asString(messages.find(m => m.role === 'system')?.content);
+            const user = asString(messages.find(m => m.role === 'user')?.content);
+
+            _pendingPlanData.set(utilityTaskId, { task, strategy });
+            const UTILITY_TTL_MS = 120_000;
+            ctx.nativeTaskMap.set(utilityTaskId, {
+              agentId: '_utility',
+              task: `plan:${task.slice(0, 120)}`,
+              startedAt: Date.now(),
+              timeoutMs: UTILITY_TTL_MS,
+              utilityType: 'plan',
+              relayToken,
+            });
+            spawnTimeoutWatcher(utilityTaskId, ctx.nativeTaskMap.get(utilityTaskId)!);
+            // F13 hardening: evict the stash if the orchestrator never
+            // re-enters (agent crash, Claude restart). Matches the
+            // _pendingVerifyData pattern.
+            const STASH_TTL_MS = UTILITY_TTL_MS + 30_000;
+            setTimeout(() => {
+              _pendingPlanData.delete(utilityTaskId);
+            }, STASH_TTL_MS).unref();
+
+            const { assembleUtilityPrompt } = await import('@gossip/orchestrator');
+            const modelShort = ctx.nativeUtilityConfig.model;
+            return {
+              content: assembleUtilityPrompt({
+                taskId: utilityTaskId,
+                modelShort,
+                system,
+                user,
+                relayToken,
+                intro: 'No API keys available. Dispatching native utility for decomposition.',
+                // F19: JSON.stringify handles backslashes + newlines + quotes correctly.
+                reentrantCall: `gossip_plan(task: ${JSON.stringify(task)}, _utility_task_id: "${utilityTaskId}")`,
+              }),
+            };
+          }
+          return { content: [{ type: 'text' as const, text: 'No API keys available. Run gossipcat setup to configure keys.' }] };
+        }
       }
 
       const dispatcher = new TaskDispatcher(llm, registry);
@@ -981,21 +1166,8 @@ server.tool(
       const planned = await dispatcher.classifyWriteModes(plan);
 
       // 4. Build response
-      const taskLines = planned.map((t: any, i: number) => {
-        const tag = t.access === 'write' ? '[WRITE]' : '[READ]';
-        let line = `  ${i + 1}. ${tag} ${t.agentId || 'unassigned'} → "${t.task}"`;
-        if (t.writeMode) {
-          line += `\n     write_mode: ${t.writeMode}`;
-          if (t.scope) line += ` | scope: ${t.scope}`;
-        }
-        return line;
-      }).join('\n');
-
-      const assignedTasks = planned.filter((t: any) => t.agentId);
-      const unassignedTasks = planned.filter((t: any) => !t.agentId);
-
-      // Store plan state for chain threading
       const planId = randomUUID().slice(0, 8);
+      const assignedTasks = planned.filter((t: any) => t.agentId);
       const planState = {
         id: planId,
         task,
@@ -1011,45 +1183,7 @@ server.tool(
       };
       ctx.mainAgent.registerPlan(planState);
 
-      const planJson = {
-        strategy: plan.strategy,
-        tasks: assignedTasks.map((t: any, i: number) => {
-          const entry: Record<string, any> = { agent_id: t.agentId, task: t.task };
-          if (t.writeMode) entry.write_mode = t.writeMode;
-          if (t.scope) entry.scope = t.scope;
-          entry.plan_id = planId;
-          entry.step = i + 1;
-          return entry;
-        }),
-      };
-
-      let warnings = '';
-      if (plan.warnings?.length) {
-        warnings = `\nWarnings:\n${plan.warnings.map((w: string) => `  - ${w}`).join('\n')}\n`;
-      }
-      if (unassignedTasks.length) {
-        warnings += `\nUnassigned (excluded from PLAN_JSON — no matching agent):\n${unassignedTasks.map((t: any) => `  - "${t.task}"`).join('\n')}\n`;
-      }
-
-      // Format dispatch instructions based on strategy
-      let dispatchBlock: string;
-      if (plan.strategy === 'sequential' || plan.strategy === 'single') {
-        // Sequential: output individual gossip_dispatch calls
-        const steps = planJson.tasks.map((t: Record<string, any>, i: number) => {
-          const args = [`agent_id: "${t.agent_id}"`, `task: "${t.task}"`];
-          if (t.write_mode) args.push(`write_mode: "${t.write_mode}"`);
-          if (t.scope) args.push(`scope: "${t.scope}"`);
-          args.push(`plan_id: "${planId}"`, `step: ${i + 1}`);
-          return `Step ${i + 1}: gossip_dispatch(${args.join(', ')})\n         then: gossip_collect()`;
-        });
-        dispatchBlock = `Execute sequentially:\n${steps.join('\n\n')}`;
-      } else {
-        // Parallel: output gossip_dispatch payload
-        dispatchBlock = `PLAN_JSON (pass to gossip_dispatch with mode:"parallel"):\n${JSON.stringify(planJson)}`;
-      }
-
-      const text = `Plan: "${task}"\nPlan ID: ${planId}\n\nStrategy: ${plan.strategy}\n\nTasks:\n${taskLines}\n${warnings}\n---\n${dispatchBlock}`;
-
+      const text = buildPlanResponseText({ task, plan, planned, planId });
       return { content: [{ type: 'text' as const, text }] };
     } catch (err: any) {
       return { content: [{ type: 'text' as const, text: `Plan error: ${err.message}` }] };

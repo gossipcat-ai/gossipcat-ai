@@ -71,6 +71,15 @@ export interface ConsensusEngineConfig {
   verifierToolRunner?: (agentId: string, toolName: string, args: Record<string, unknown>) => Promise<string>;
   /** Optional PerformanceReader for cross-reviewer selection (Step 2). Step 3 will wire this in. */
   performanceReader?: import('./performance-reader').PerformanceReader;
+  /**
+   * Resolve the skills block to inject into the Phase-2 cross-review system
+   * prompt for `agentId`. Without this, cross-reviewers run without their
+   * methodology skills (how to verify claims, what counts as evidence, etc.),
+   * which is inconsistent with Phase 1 — agents effectively lose their
+   * specialty the moment they switch into cross-review. Called once per
+   * reviewer per round. Return `undefined` to skip injection.
+   */
+  getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
 }
 
 export class ConsensusEngine {
@@ -461,6 +470,19 @@ Return ONLY a JSON array. Use findingId to reference findings:
   { "action": "agree"|"disagree"|"unverified"|"new", "findingId": "agent:f1", "finding": "brief summary", "evidence": "your reasoning", "confidence": 1-5 }
 ]`;
 
+    // Inject the reviewer's skills (if any) so their Phase-2 methodology
+    // matches Phase 1. Without this, a reviewer trained on citation_grounding
+    // loses that skill the moment the system prompt flips to cross-review.
+    let skillsBlock = '';
+    if (this.config.getAgentSkillsContent) {
+      try {
+        const skills = this.config.getAgentSkillsContent(agent.agentId, agent.task);
+        if (skills && skills.trim().length > 0) {
+          skillsBlock = `\n\n--- SKILLS ---\n${skills}\n--- END SKILLS ---`;
+        }
+      } catch { /* skill resolution is best-effort */ }
+    }
+
     const system = `You are a code reviewer performing cross-review. Your job is to verify peer findings against actual code — catch errors, but also confirm good work.
 
 SOURCE FILES: Always cite original source files, not compiled/bundled build output (dist/, build/, out/). Build artifacts have different line numbers — citing them causes false verification failures.
@@ -475,7 +497,7 @@ VERIFICATION RULES:
 - Do NOT agree with a finding just because it sounds plausible — verify it
 - Agreeing without verification is WORSE than disagreeing — a false confirmation poisons the system
 
-Return only valid JSON.`;
+Return only valid JSON.${skillsBlock}`;
 
     return { system, user };
   }
