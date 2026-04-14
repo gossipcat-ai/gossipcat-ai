@@ -384,6 +384,7 @@ describe('gossip_signals formatting — taskId synthesis, evidence truncation, t
       counterpartId: s.counterpart_id,
       findingId: s.finding_id,
       severity: s.severity,
+      source: 'manual' as const,
       evidence: ((s.evidence || s.finding) ?? '').slice(0, MAX_EVIDENCE_LENGTH),
       timestamp,
     }));
@@ -481,9 +482,41 @@ describe('gossip_signals formatting — taskId synthesis, evidence truncation, t
       expect(line.agentId).toBe('gemini-reviewer');
       expect(line.signal).toBe('unique_confirmed');
       expect(line.taskId).toBe('write-task-001');
+      // Regression: source='manual' must persist so gossip_status pending-signals
+      // detector (mcp-server-sdk.ts filters sig.source !== 'manual') sees coverage.
+      expect(line.source).toBe('manual');
     } finally {
       rmSync(testDir, { recursive: true, force: true });
     }
+  });
+
+  // Regression guards for the real handler in mcp-server-sdk.ts — the handler is
+  // not unit-testable (inline registerTool callback), so we grep the source to
+  // ensure both write sites set source:'manual'. If either regresses, the
+  // pending-signals detector silently stops clearing after signal recording.
+  it('handler sets source:"manual" in the record-consensus branch', () => {
+    const src = readFileSync(
+      join(__dirname, '..', '..', 'apps', 'cli', 'src', 'mcp-server-sdk.ts'),
+      'utf-8',
+    );
+    // Match the consensus-type return object in the record handler (not the IMPL branch)
+    const consensusReturn = src.match(
+      /return \{\s*type: 'consensus',[\s\S]{0,600}?timestamp: ts,\s*\};/,
+    );
+    expect(consensusReturn).not.toBeNull();
+    expect(consensusReturn![0]).toContain("source: 'manual'");
+  });
+
+  it('handler sets source:"manual" in the bulk_from_consensus branch', () => {
+    const src = readFileSync(
+      join(__dirname, '..', '..', 'apps', 'cli', 'src', 'mcp-server-sdk.ts'),
+      'utf-8',
+    );
+    const bulkPush = src.match(
+      /toRecord\.push\(\{\s*type: 'consensus',[\s\S]{0,600}?timestamp: batchTs,\s*\}/,
+    );
+    expect(bulkPush).not.toBeNull();
+    expect(bulkPush![0]).toContain("source: 'manual'");
   });
 });
 

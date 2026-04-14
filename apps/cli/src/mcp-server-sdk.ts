@@ -1990,6 +1990,7 @@ server.tool(
             taskId: batchTaskId,
             findingId: fid,
             severity: f.severity,
+            source: 'manual',
             evidence: (f.finding || '').slice(0, 2000),
             timestamp: batchTs,
           } as Extract<PS, { type: 'consensus' }>);
@@ -2106,6 +2107,7 @@ server.tool(
           findingId: s.finding_id,
           severity: s.severity,
           category: s.category ?? inferCategory(s),
+          source: 'manual',
           evidence,
           timestamp: ts,
         };

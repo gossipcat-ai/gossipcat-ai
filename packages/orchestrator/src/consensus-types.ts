@@ -120,6 +120,7 @@ export interface ConsensusSignal {
   severity?: 'critical' | 'high' | 'medium' | 'low';
   claimedSeverity?: 'critical' | 'high' | 'medium' | 'low';
   retractedSignal?: string;
+  source?: 'auto' | 'manual';
   evidence: string;
   timestamp: string;
 }
