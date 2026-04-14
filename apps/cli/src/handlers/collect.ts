@@ -177,7 +177,9 @@ export async function handleCollect(
         type: 'consensus' as const,
         taskId: r.id || '',
         // Use disagreement for empty/timeout (reliability failure), hallucination only for actual errors
-        signal: r.status === 'failed' ? 'disagreement' as const : 'unique_unconfirmed' as const,
+        signal: r.status === 'failed' ? 'disagreement' as const
+          : r.status === 'timed_out' ? 'task_timeout' as const
+          : 'task_empty' as const,
         agentId: r.agentId,
         evidence: r.status === 'failed' ? `Task failed: ${r.error || 'unknown error'}`
           : r.status === 'timed_out' ? 'Task timed out — no response'

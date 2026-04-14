@@ -7,6 +7,7 @@ const VALID_CONSENSUS_SIGNALS = new Set([
   'agreement', 'disagreement', 'unverified', 'unique_confirmed',
   'unique_unconfirmed', 'new_finding', 'hallucination_caught',
   'category_confirmed', 'consensus_verified', 'signal_retracted',
+  'task_timeout', 'task_empty',
 ]);
 
 const VALID_IMPL_SIGNALS = new Set([
