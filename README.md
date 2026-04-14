@@ -168,8 +168,7 @@ Both types participate equally in consensus, cross-review, and skill development
 ### One-liner
 
 ```bash
-npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/latest/download/gossipcat.tgz && \
-claude mcp add gossipcat -s user -- gossipcat
+npm install -g gossipcat && claude mcp add gossipcat -s user -- gossipcat
 ```
 
 Restart Claude Code. Then in any project, ask:
@@ -208,7 +207,7 @@ Or project-local in `.mcp.json`:
 
 Claude Code will call `gossip_setup()` to scaffold `.gossip/config.json` and your agent team. First-run bootstrap also writes the dispatch rules and tool catalog so Claude Code knows how to use gossipcat — no manual config needed.
 
-Gossipcat ships from **[GitHub Releases](https://github.com/gossipcat-ai/gossipcat-ai/releases)**, not the npm registry. The install URL above always points at the latest release. `npm` downloads the tarball directly, installs it globally, and drops a `gossipcat` binary on your `PATH` — no `npm publish` involved.
+Gossipcat is on **[npm](https://www.npmjs.com/package/gossipcat)** and **[GitHub Releases](https://github.com/gossipcat-ai/gossipcat-ai/releases)** — both carry the same bundle. `npm install -g gossipcat` pulls from the registry and is the shortest path; the GitHub release URL is useful when you want to pin to a specific tarball (see [Alternative install paths](#alternative-install-paths) below). Either way, npm drops a `gossipcat` binary on your `PATH`.
 
 ### What the install ships
 
@@ -221,7 +220,12 @@ Gossipcat ships from **[GitHub Releases](https://github.com/gossipcat-ai/gossipc
 
 ### Alternative install paths
 
-**Pin to a specific version:**
+**Pin to a specific npm version:**
+```bash
+npm install -g gossipcat@0.4.1
+```
+
+**Pin to a specific GitHub release tarball** (version-locked, bypasses npm registry):
 ```bash
 npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.4.1/gossipcat-0.4.1.tgz
 ```
@@ -229,7 +233,7 @@ npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0
 **Project-local install** (each project gets its own gossipcat):
 ```bash
 cd your-project
-npm install --save-dev https://github.com/gossipcat-ai/gossipcat-ai/releases/latest/download/gossipcat.tgz
+npm install --save-dev gossipcat
 ```
 The postinstall writes `.mcp.json` to your project root. Open Claude Code in that directory and gossipcat connects automatically — no `claude mcp add` needed.
 
@@ -244,9 +248,9 @@ claude mcp add gossipcat -s user -- node "$PWD/dist-mcp/mcp-server.js"
 
 ### Upgrading
 
-Re-run the one-liner — npm will fetch the latest release tarball and replace the installed version:
+Re-run the install — npm will fetch the latest version and replace the installed binary:
 ```bash
-npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/latest/download/gossipcat.tgz
+npm install -g gossipcat@latest
 ```
 Or in-session, ask Claude Code: *"Check for gossipcat updates"* — the `gossip_update` tool fetches the latest release notes and applies the upgrade with your confirmation.
 
