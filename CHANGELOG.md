@@ -4,7 +4,46 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
-## [0.3.0] — 2026-04-13
+## [0.4.0] — 2026-04-14
+
+Combines the unreleased 0.3.0 work (server-side cross-review, memory pre-fetch, scoring, dashboard polish) with three new streams: HTTP file bridge infrastructure, the consensus type-contract fix, and a long-standing test bug cleanup.
+
+> **Note:** v0.3.0 was published to npm on 2026-04-13 but never cut a matching GitHub release. Its changes are included here under 0.4.0 rather than retroactively tagged — the CHANGELOG entries below merge both cycles for a single coherent release. If you installed 0.3.0 from npm, upgrading to 0.4.0 is additive; behavior changes are called out explicitly in the "Behavior changes" subsection.
+
+### Behavior changes (read before upgrading)
+
+- **`formatCompliant` now requires `tags_accepted > 0`.** Previously an agent that emitted `<agent_finding>` tags with non-canonical `type` values (e.g. `approval`, `concern`, `risk`) was counted as format-compliant because the raw tag count was non-zero. The parser silently dropped those tags, but the meta-signal stayed positive. The new behavior is stricter: compliance requires that at least one tag survived the type-enum filter. Agents producing only invented types will now correctly fail the compliance check. Downstream consumers (signals pipeline, per-agent accuracy, dashboard) will see a short-term shift in the `format_compliance` signal distribution — this is a correction, not a regression. See PR #56.
+
+### HTTP file bridge — foundation (#54, #55)
+
+Two stacked PRs land the groundwork for live tool proxying to closed-toolchain remote agents (openclaw and future HTTP-only providers). **The bridge is dead code in this release — it ships behind the `enableHttpBridge` AgentConfig flag (default off) and is not wired into dispatch yet.** A follow-up PR will land the dispatch-pipeline integration (token issuance, cleanup paths, prompt block, sentinel detector) in a future release. What's in 0.4.0:
+
+- `packages/tools/src/scope.ts` — extracted `canonicalizeForBoundary` + `validatePathInScope` from `tool-server.ts` as a shared security primitive. Both branches of the original function (including the security-critical non-existent-path branch for `/file-write`) preserved verbatim. Exported from `@gossip/tools` barrel.
+- `packages/orchestrator/src/rate-limiter.ts` — generic sliding-window `RateLimiter` supporting both count mode (weight=1) and weighted-sum mode (variable weights for in-flight byte quotas). Purges expired entries on every access. Rejects single events whose weight exceeds `maxWeight` (strict interpretation for bytes quota).
+- `packages/relay/src/message-rate-limiter.ts` — rewritten as a thin adapter over the generic limiter. Public API (`isAllowed`, `clear`, `RateLimiterConfig`) unchanged.
+- `packages/orchestrator/src/http-bridge-server.ts` + `http-bridge-handlers.ts` — factory `createHttpBridgeServer()` returning the `HttpBridgeServer` interface (`listen`/`issueToken`/`revoke`/`close`). Seven endpoints (`/file-read`, `/file-write`, `/file-list`, `/file-grep`, `/run-tests`, `/sentinel`, `/bridge-info`), per-task bearer tokens, 127.0.0.1 binding by default, pre-body Content-Length check on writes (not `express.json`), ETag with pipe-delimited hash, per-token RPS + in-flight-bytes quotas, `BridgeConfigError` thrown when `bridgeRemoteAccess: true` without TLS cert. 32 new tests.
+- 4 new optional `AgentConfig` fields (`enableHttpBridge`, `bridgeWriteMode`, `bridgeScope`, `bridgeRemoteAccess`) — all default off.
+
+Spec at `docs/specs/2026-04-14-http-file-bridge.md`, updated from a 3-agent pre-implementation review (#53) that caught 5 HIGH spec inaccuracies before code was written.
+
+### Consensus type contract — strict parser, loud drops (#56)
+
+Fixes a silent-drop bug where agents emitted `<agent_finding type="approval|concern|risk|recommendation|confirmed">` tags and the parser silently discarded them, leaving the dashboard showing "0 findings" despite 14+ tagged observations.
+
+- New `packages/orchestrator/src/finding-tag-schema.ts` — single source of truth for the tag contract. Exports `FINDING_TAG_SCHEMA` (the ~6-line type-enum + anti-invention rule) and `CONSENSUS_OUTPUT_FORMAT` (schema + consensus-specific framing) with a prominent "⚠ UNKNOWN TYPES ARE SILENTLY DROPPED" header.
+- 10 default skills flattened — `## Output Format` sections replaced with a canonical 2-line pointer to the system-prompt schema. Skills now describe methodology only; output format is the orchestrator's responsibility.
+- `prompt-assembler.ts` now injects a format block on every skill-bearing dispatch (full `CONSENSUS_OUTPUT_FORMAT` for consensus, slim `FINDING_TAG_SCHEMA` for non-consensus) — previously non-consensus tasks had no tag-schema guidance at all.
+- New `packages/orchestrator/src/parse-findings.ts` — shared `parseAgentFindingsStrict()` helper replaces two duplicated regex sites in `consensus-engine.ts`. Preserves `findingIdx` sequential IDs (load-bearing for cross-review matching). Returns per-type drop counters via `onUnknownType` callback.
+- Per-drop `⚠ DROPPED` log + per-round `⚠ DROP_SUMMARY` log at both parser sites. Misleading "ZERO tags" warning split into three paths (zero raw tags / all invalid / missing type attribute).
+- New `droppedFindingsByType: Record<string, number>` field on `ConsensusReport`, populated in synthesis, persisted from `collect.ts` and `relay-cross-review.ts`. Dashboard surface: `FindingsMetrics.tsx` shows a "dropped findings" badge with tooltip listing offending types.
+- `format_compliance` meta-signal extended with `{tags_total, tags_accepted, tags_dropped_unknown_type, tags_dropped_short_content}` for empirical fix verification.
+- 35 new unit tests covering canonical types, unknown types, typos, missing type attr, case sensitivity, single-quote rejection, whitespace rejection, multi-line bodies, unclosed tags, nested angle brackets, short-content drops.
+
+Diagnosed via a 3-agent consensus round (sonnet-reviewer + haiku-researcher + gemini-reviewer, 26 findings confirmed). Parser enum intentionally **not broadened** — broadening would normalize bad input and invite further drift.
+
+### Message-rate-limiter windowing test fix
+
+`tests/relay/message-rate-limiter.test.ts` "should not let old messages affect the current window" had an off-by-one (sent 5 messages then asserted the 6th call returns true with `maxMessages=5`). Fix is a 1-char change: `maxMessages - 2` → `maxMessages - 3`. Suite removed from `KNOWN_BROKEN_SUITES` — no longer skipped in CI.
 
 ### Server-side cross-review with epsilon-greedy reviewer selection (#45)
 

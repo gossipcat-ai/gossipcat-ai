@@ -217,7 +217,7 @@ Gossipcat ships from **[GitHub Releases](https://github.com/gossipcat-ai/gossipc
 |---|---|
 | **MCP server** | Bundled binary at `dist-mcp/mcp-server.js`, wired as the `gossipcat` command on `PATH` |
 | **Dashboard** | Prebuilt static assets in `dist-dashboard/` — launches automatically on a dynamic port (ask Claude Code *"what's my gossipcat dashboard URL?"*). Override with `GOSSIPCAT_PORT=24420` if you want a stable port. |
-| **Default skills + rules + archetypes** | 18 bundled skill templates, operational rules, and project archetypes copied into the install |
+| **Default skills + rules + archetypes** | 16 bundled skill templates, operational rules, and project archetypes copied into the install |
 | **Postinstall wizard** | Writes `.mcp.json` with correct absolute paths for your machine |
 
 ### Alternative install paths

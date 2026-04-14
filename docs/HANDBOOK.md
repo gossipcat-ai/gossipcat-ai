@@ -73,6 +73,20 @@ Skills with `status: 'failed'` or `status: 'silent_skill'` are filtered out at `
 
 **Do not** add a second filter site. Filtering is a read-only operation at load-for-injection time; frontmatter is never mutated.
 
+### 8. `FINDING_TAG_SCHEMA` is the single source of truth — parsers are strict, prompts are explicit, drops are loud
+
+The `<agent_finding>` tag contract lives in `packages/orchestrator/src/finding-tag-schema.ts`. Type MUST be one of `finding | suggestion | insight`. Any other value (e.g. `approval`, `concern`, `risk`, `recommendation`, `confirmed`) is silently dropped by the parser, counted in `droppedFindingsByType`, logged at both `parseAgentFindingsStrict` call sites, and surfaced in the dashboard as a "dropped findings" badge with tooltip listing the offending types.
+
+**Do not** broaden the parser enum to "accept" new types. Every accepted synonym teaches the next agent the enum is negotiable. Drift is unbounded — today it's `approval`, tomorrow it's `verdict`, `observation`, `critique`. The fix is to make the contract loud, not to normalize bad input.
+
+`FINDING_TAG_SCHEMA` is injected on every skill-bearing dispatch — full `CONSENSUS_OUTPUT_FORMAT` (schema + cross-review framing) for consensus rounds, slim schema-only block for non-consensus. Default skills point to the system-prompt schema with a 2-line pointer; they do not define their own `## Output Format`. User-editable skills at `.gossip/agents/<id>/skills/*.md` are not touched automatically — if you fork a default skill, use the pointer pattern.
+
+### 9. `formatCompliant` requires accepted tags, not raw-count tags
+
+`detectFormatCompliance` in `dispatch-pipeline.ts` computes compliance as `tags_accepted > 0 && citationCount >= tags_accepted`. An agent that emits 14 `<agent_finding>` tags all with `type="approval"` is NOT compliant — the tags are dropped by the type-enum filter, `tags_accepted` is zero, and the compliance signal correctly fails. The `format_compliance` meta-signal payload includes `{tags_total, tags_accepted, tags_dropped_unknown_type, tags_dropped_short_content}` so drift can be tracked empirically.
+
+If you see an agent scoring badly on compliance despite emitting tags, check `droppedFindingsByType` on the consensus report — the invented type will be named there.
+
 ---
 
 ## Operator playbook (for orchestrator LLMs)
