@@ -69,8 +69,19 @@ export interface McpContext {
   identityRegistry: Map<string, { agent_id: string; runtime: 'native' | 'relay'; provider: string; model: string }>;
   pendingConsensusRounds: Map<string, PendingConsensusRound>;
   nativeUtilityConfig: { model: string } | null;
+  /** Post-fallback runtime provider actually being used by the orchestrator LLM. */
   mainProvider: string;
+  /** Post-fallback runtime model actually being used by the orchestrator LLM. */
   mainModel: string;
+  /**
+   * Original main_agent values from config.json at boot, BEFORE any fallback.
+   * Used by syncWorkersViaKeychain to detect genuine config changes — comparing
+   * config.main_agent against the post-fallback `mainProvider`/`mainModel`
+   * falsely reports a change every sync for any user whose primary key was
+   * missing at boot.
+   */
+  mainProviderConfig: string;
+  mainModelConfig: string;
   /** Actual bound HTTP MCP port (0/null if transport disabled). Set after listen(). */
   httpMcpPort: number | null;
   /** Source of the relay port: 'env' | 'sticky' | 'auto'. Used by gossip_status. */
@@ -98,6 +109,8 @@ export const ctx: McpContext = {
   nativeUtilityConfig: null,
   mainProvider: 'google',
   mainModel: 'gemini-2.5-pro',
+  mainProviderConfig: 'google',
+  mainModelConfig: 'gemini-2.5-pro',
   httpMcpPort: null,
   relayPortSource: null,
   httpMcpPortSource: null,

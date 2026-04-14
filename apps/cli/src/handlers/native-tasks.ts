@@ -309,9 +309,13 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       const compliance = detectFormatCompliance(result ?? '');
       const metaWriter = new PerformanceWriter(process.cwd());
       const now = new Date().toISOString();
+      // F16: skip task_tool_turns for native agents — tool-use happens inside
+      // Claude Code's subagent framework and isn't observable from the relay.
+      // Emitting value: 0 would make downstream scorers treat native agents
+      // as never-using-tools and fire spurious skill-gap alerts. task_completed
+      // and format_compliance stay (both ARE observable from our side).
       metaWriter.appendSignals([
         { type: 'meta' as const, signal: 'task_completed', agentId, taskId: task_id, value: elapsed, timestamp: now } as any,
-        { type: 'meta' as const, signal: 'task_tool_turns', agentId, taskId: task_id, value: 0, timestamp: now } as any,
         {
           type: 'meta' as const,
           signal: 'format_compliance',

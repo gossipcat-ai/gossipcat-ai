@@ -72,36 +72,51 @@ Use "sequential" ONLY when a later task genuinely needs output from an earlier o
    * Parse a raw LLM response into a DispatchPlan. Used by both the in-process
    * decompose() path and the native-utility re-entry path — same fallback
    * logic, one place to keep it honest.
+   *
+   * Strategy/subtask shape validation was previously implicit (trusted-LLM
+   * output). The native-utility path feeds raw subagent output through here
+   * untrusted, so we validate explicitly: unknown strategies fall back to
+   * 'single', non-string descriptions or missing description fields skip the
+   * subtask, and if nothing survives we fall through to the single-task
+   * default. This is F17 hardening from consensus 0a7c34cb-91624bd4.
    */
   decomposeFromRaw(task: string, rawText: string): DispatchPlan {
+    const VALID_STRATEGIES = new Set(['single', 'parallel', 'sequential']);
+    const singleTaskFallback = (): DispatchPlan => ({
+      originalTask: task,
+      strategy: 'single',
+      subTasks: [{
+        id: randomUUID(),
+        description: task,
+        requiredSkills: [],
+        status: 'pending' as const,
+      }],
+      warnings: [],
+    });
+
     try {
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('No JSON in response');
       const plan = JSON.parse(jsonMatch[0]);
 
-      return {
-        originalTask: task,
-        strategy: plan.strategy || 'single',
-        subTasks: (plan.subTasks || []).map((st: { description: string; requiredSkills?: string[] }) => ({
+      const strategy = VALID_STRATEGIES.has(plan.strategy) ? plan.strategy : 'single';
+      const rawSubTasks = Array.isArray(plan.subTasks) ? plan.subTasks : [];
+      const subTasks = rawSubTasks
+        .filter((st: any) => st && typeof st.description === 'string' && st.description.trim().length > 0)
+        .map((st: { description: string; requiredSkills?: unknown }) => ({
           id: randomUUID(),
           description: st.description,
-          requiredSkills: st.requiredSkills || [],
+          requiredSkills: Array.isArray(st.requiredSkills)
+            ? st.requiredSkills.filter((s: any): s is string => typeof s === 'string')
+            : [],
           status: 'pending' as const,
-        })),
-        warnings: [],
-      };
+        }));
+
+      if (subTasks.length === 0) return singleTaskFallback();
+
+      return { originalTask: task, strategy, subTasks, warnings: [] };
     } catch {
-      return {
-        originalTask: task,
-        strategy: 'single',
-        subTasks: [{
-          id: randomUUID(),
-          description: task,
-          requiredSkills: [],
-          status: 'pending' as const,
-        }],
-        warnings: [],
-      };
+      return singleTaskFallback();
     }
   }
 

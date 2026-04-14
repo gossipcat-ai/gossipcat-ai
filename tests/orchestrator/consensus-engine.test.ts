@@ -716,6 +716,44 @@ Summary: 1 agree, 1 disagree.`;
       expect(mockLlm.generate).not.toHaveBeenCalled();
     });
 
+    it('injects the agent\'s skills block into the cross-review system prompt when getAgentSkillsContent returns content (F8)', async () => {
+      const getAgentSkillsContent = jest.fn((agentId: string, task: string) => {
+        if (agentId === 'agent-a') return `Skill body for ${agentId} on task ${task}`;
+        return undefined;
+      });
+
+      const engineWithSkills = new ConsensusEngine({ ...baseConfig, getAgentSkillsContent });
+      const results: TaskEntry[] = [
+        createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- Finding A at file.ts:10'),
+        createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- Finding B at other.ts:20'),
+      ];
+
+      const { prompts } = await engineWithSkills.generateCrossReviewPrompts(results);
+      const promptA = prompts.find(p => p.agentId === 'agent-a');
+      const promptB = prompts.find(p => p.agentId === 'agent-b');
+
+      expect(getAgentSkillsContent).toHaveBeenCalledWith('agent-a', 'review the code');
+      expect(getAgentSkillsContent).toHaveBeenCalledWith('agent-b', 'review the code');
+
+      // agent-a gets the injected block; agent-b (callback returned undefined) does not.
+      expect(promptA!.system).toContain('--- SKILLS ---');
+      expect(promptA!.system).toContain('Skill body for agent-a on task review the code');
+      expect(promptA!.system).toContain('--- END SKILLS ---');
+      expect(promptB!.system).not.toContain('--- SKILLS ---');
+    });
+
+    it('survives a throw from getAgentSkillsContent without aborting the round (F8)', async () => {
+      const getAgentSkillsContent = jest.fn(() => { throw new Error('skill loader blew up'); });
+      const engineWithBad = new ConsensusEngine({ ...baseConfig, getAgentSkillsContent });
+      const results: TaskEntry[] = [
+        createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- Finding A'),
+        createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- Finding B'),
+      ];
+
+      // Should not throw — the error is contained.
+      await expect(engineWithBad.generateCrossReviewPrompts(results)).resolves.toBeDefined();
+    });
+
     it('falls back to default llm when agentLlm returns undefined', async () => {
       const agentLlm = jest.fn((_agentId: string): ILLMProvider | undefined => undefined);
 

@@ -501,6 +501,10 @@ async function doBoot() {
   }
 
   // Try main agent key first, fall back to any available provider key, then "none"
+  // Capture the ORIGINAL config values before any fallback — used later by
+  // syncWorkersViaKeychain to detect genuine config edits (F14 hardening).
+  ctx.mainProviderConfig = config.main_agent.provider;
+  ctx.mainModelConfig = config.main_agent.model;
   let mainProvider = config.main_agent.provider;
   let mainModel = config.main_agent.model;
   let mainKey: string | null = null;
@@ -801,12 +805,25 @@ async function doSyncWorkers() {
     // throughout). Surface the divergence so the user knows /mcp reconnect
     // is required for the new orchestrator LLM to take effect. Drift audit
     // haiku #4. Skip on first call from boot when ctx.mainProvider matches.
-    if (config.main_agent && (config.main_agent.provider !== ctx.mainProvider || config.main_agent.model !== ctx.mainModel)) {
+    // F14 hardening: compare against the ORIGINAL config values, not the
+    // post-fallback runtime. Users whose configured key was missing at boot
+    // were getting this warning on every sync because ctx.mainProvider held
+    // the fallback (e.g. anthropic) while config.main_agent still says google.
+    if (config.main_agent && (config.main_agent.provider !== ctx.mainProviderConfig || config.main_agent.model !== ctx.mainModelConfig)) {
       process.stderr.write(
-        `[gossipcat] ⚠ main_agent changed in config: ${ctx.mainProvider}/${ctx.mainModel} → ${config.main_agent.provider}/${config.main_agent.model}. ` +
+        `[gossipcat] ⚠ main_agent changed in config: ${ctx.mainProviderConfig}/${ctx.mainModelConfig} → ${config.main_agent.provider}/${config.main_agent.model}. ` +
         `Restart Claude Code (/mcp reconnect) for the new orchestrator LLM to take effect.\n`
       );
+      // Update the config mirror so we don't warn again for the same edit.
+      ctx.mainProviderConfig = config.main_agent.provider;
+      ctx.mainModelConfig = config.main_agent.model;
     }
+
+    // F15 hardening: clear identityRegistry before repopulating. The previous
+    // sync only called .set() on current agents, so removed/renamed agents
+    // retained stale entries — self_identity could return the wrong
+    // runtime/provider for a since-deleted agent_id.
+    ctx.identityRegistry.clear();
 
     // Register any new agent configs (including native flag)
     for (const ac of agentConfigs) {
@@ -1023,16 +1040,19 @@ server.tool(
 
       // ── Re-entry: native utility decomposition completed ──
       if (_utility_task_id) {
+        // F12 hardening: validate the stash BEFORE mutating any shared maps.
+        // The previous ordering let a caller purge another tool's native state
+        // by passing its task_id as _utility_task_id. Match the
+        // gossip_verify_memory re-entry pattern (validate, then delete).
         const stashed = _pendingPlanData.get(_utility_task_id);
-        _pendingPlanData.delete(_utility_task_id);
-        const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
-        ctx.nativeResultMap.delete(_utility_task_id);
-        ctx.nativeTaskMap.delete(_utility_task_id);
-
         if (!stashed) {
           return { content: [{ type: 'text' as const, text:
             `Plan error: no stashed data for utility task ${_utility_task_id}. Re-run gossip_plan.` }] };
         }
+        const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
+        _pendingPlanData.delete(_utility_task_id);
+        ctx.nativeResultMap.delete(_utility_task_id);
+        ctx.nativeTaskMap.delete(_utility_task_id);
         if (!utilityResult || utilityResult.status !== 'completed' || !utilityResult.result) {
           process.stderr.write(`[gossipcat] gossip_plan native utility ${_utility_task_id} failed/timed out\n`);
           return { content: [{ type: 'text' as const, text:
@@ -1083,6 +1103,11 @@ server.tool(
           // ── Native-utility branch: dispatch decomposition to a native subagent ──
           if (ctx.nativeUtilityConfig) {
             const utilityTaskId = randomUUID().slice(0, 8);
+            // F11 hardening: issue a one-time relay_token so handleNativeRelay
+            // enforces the token check on gossip_relay. Without this, any
+            // caller who guesses the 8-hex taskId in the 120s window can POST
+            // a fabricated decomposition that registerPlan accepts as real.
+            const relayToken = randomUUID().slice(0, 12);
             const dispatcher = new TaskDispatcher(null as any, registry);
             const messages = dispatcher.buildDecomposeMessages(task);
             const asString = (c: string | any[] | undefined): string =>
@@ -1091,14 +1116,23 @@ server.tool(
             const user = asString(messages.find(m => m.role === 'user')?.content);
 
             _pendingPlanData.set(utilityTaskId, { task, strategy });
+            const UTILITY_TTL_MS = 120_000;
             ctx.nativeTaskMap.set(utilityTaskId, {
               agentId: '_utility',
               task: `plan:${task.slice(0, 120)}`,
               startedAt: Date.now(),
-              timeoutMs: 120_000,
+              timeoutMs: UTILITY_TTL_MS,
               utilityType: 'plan',
+              relayToken,
             });
             spawnTimeoutWatcher(utilityTaskId, ctx.nativeTaskMap.get(utilityTaskId)!);
+            // F13 hardening: evict the stash if the orchestrator never
+            // re-enters (agent crash, Claude restart). Matches the
+            // _pendingVerifyData pattern.
+            const STASH_TTL_MS = UTILITY_TTL_MS + 30_000;
+            setTimeout(() => {
+              _pendingPlanData.delete(utilityTaskId);
+            }, STASH_TTL_MS).unref();
 
             const { assembleUtilityPrompt } = await import('@gossip/orchestrator');
             const modelShort = ctx.nativeUtilityConfig.model;
@@ -1108,8 +1142,10 @@ server.tool(
                 modelShort,
                 system,
                 user,
+                relayToken,
                 intro: 'No API keys available. Dispatching native utility for decomposition.',
-                reentrantCall: `gossip_plan(task: "${task.replace(/"/g, '\\"')}", _utility_task_id: "${utilityTaskId}")`,
+                // F19: JSON.stringify handles backslashes + newlines + quotes correctly.
+                reentrantCall: `gossip_plan(task: ${JSON.stringify(task)}, _utility_task_id: "${utilityTaskId}")`,
               }),
             };
           }

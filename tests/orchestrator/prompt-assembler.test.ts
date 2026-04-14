@@ -1,4 +1,4 @@
-import { assemblePrompt, parseSpecFrontMatter, buildSpecReviewEnrichment } from '@gossip/orchestrator';
+import { assemblePrompt, assembleUtilityPrompt, MAX_ASSEMBLED_PROMPT_CHARS, parseSpecFrontMatter, buildSpecReviewEnrichment } from '@gossip/orchestrator';
 
 describe('assemblePrompt', () => {
   it('assembles memory + skills', () => {
@@ -155,5 +155,61 @@ describe('buildSpecReviewEnrichment', () => {
     const result = buildSpecReviewEnrichment([], 'proposal');
     expect(result).toBeTruthy();
     expect(result).toContain('PROPOSAL');
+  });
+});
+
+describe('assembleUtilityPrompt', () => {
+  const baseArgs = {
+    taskId: 'abc12345',
+    modelShort: 'haiku',
+    system: 'You are a planner.',
+    user: 'Decompose this task.',
+    intro: 'Planner ready.',
+    reentrantCall: 'gossip_plan(task: "x", _utility_task_id: "abc12345")',
+  };
+
+  it('produces two content items: instructions + AGENT_PROMPT', () => {
+    const result = assembleUtilityPrompt(baseArgs);
+    expect(result).toHaveLength(2);
+    expect(result[0].type).toBe('text');
+    expect(result[1].type).toBe('text');
+    expect(result[1].text).toContain('AGENT_PROMPT:abc12345');
+    expect(result[1].text).toContain('You are a planner.');
+    expect(result[1].text).toContain('Decompose this task.');
+  });
+
+  it('includes the three-step EXECUTE NOW block with the task id', () => {
+    const text = assembleUtilityPrompt(baseArgs)[0].text;
+    expect(text).toContain('EXECUTE NOW');
+    expect(text).toContain('Agent(model: "haiku"');
+    expect(text).toContain('AGENT_PROMPT:abc12345');
+    expect(text).toMatch(/1\. Agent/);
+    expect(text).toMatch(/2\. When agent completes/);
+    expect(text).toMatch(/3\. Then re-call/);
+  });
+
+  it('includes relay_token in the relay step when supplied', () => {
+    const text = assembleUtilityPrompt({ ...baseArgs, relayToken: 'tok-xyz' })[0].text;
+    expect(text).toContain('relay_token: "tok-xyz"');
+    expect(text).toContain('task_id: "abc12345"');
+  });
+
+  it('omits relay_token from the relay step when not supplied', () => {
+    const text = assembleUtilityPrompt(baseArgs)[0].text;
+    expect(text).not.toContain('relay_token');
+    expect(text).toContain('task_id: "abc12345"');
+  });
+
+  it('echoes the caller-supplied re-entrant call verbatim', () => {
+    const text = assembleUtilityPrompt(baseArgs)[0].text;
+    expect(text).toContain(baseArgs.reentrantCall);
+  });
+});
+
+describe('MAX_ASSEMBLED_PROMPT_CHARS', () => {
+  it('is exported as a positive number around 30K chars', () => {
+    expect(typeof MAX_ASSEMBLED_PROMPT_CHARS).toBe('number');
+    expect(MAX_ASSEMBLED_PROMPT_CHARS).toBeGreaterThan(10_000);
+    expect(MAX_ASSEMBLED_PROMPT_CHARS).toBeLessThan(100_000);
   });
 });

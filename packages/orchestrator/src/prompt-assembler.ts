@@ -303,14 +303,24 @@ export function assembleUtilityPrompt(args: {
   intro: string;
   /** Re-call instruction shown after relay: e.g. `gossip_skills(action: "develop", ...)` */
   reentrantCall: string;
+  /**
+   * One-time token issued at dispatch time. When present, the relay step in
+   * the EXECUTE NOW block includes `relay_token: "<token>"` so handleNativeRelay
+   * can reject spoofed task-ID submissions. Omit only for internal utility
+   * tasks where the token check is intentionally bypassed.
+   */
+  relayToken?: string;
 }): Array<{ type: 'text'; text: string }> {
-  const { taskId, modelShort, system, user, intro, reentrantCall } = args;
+  const { taskId, modelShort, system, user, intro, reentrantCall, relayToken } = args;
+  const relayArgs = relayToken
+    ? `task_id: "${taskId}", relay_token: "${relayToken}", result: "<full agent output>"`
+    : `task_id: "${taskId}", result: "<full agent output>"`;
   return [
     { type: 'text' as const, text:
       `${intro}\n\n` +
       `⚠️ EXECUTE NOW — launch this Agent and re-call the tool:\n\n` +
       `1. Agent(model: "${modelShort}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true) — pass the AGENT_PROMPT:${taskId} content item verbatim\n` +
-      `2. When agent completes → gossip_relay(task_id: "${taskId}", result: "<full agent output>")\n` +
+      `2. When agent completes → gossip_relay(${relayArgs})\n` +
       `3. Then re-call: ${reentrantCall}\n\n` +
       `Do ALL steps in order. Do not wait for user input between them.`
     },

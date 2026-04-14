@@ -490,6 +490,47 @@ describe('handleNativeRelay', () => {
     expect(stored!.status).toBe('completed');
     expect(stored!.result).toBe('Better late than never!');
   });
+
+  it('emits a format_compliance meta-signal and skips task_tool_turns for native agents (F7 + F16)', async () => {
+    const now = Date.now();
+    ctx.nativeTaskMap.set('task-fmt', {
+      agentId: 'native-claude',
+      task: 'Review x',
+      startedAt: now - 1000,
+      timeoutMs: 30000,
+    });
+
+    // Well-formed <agent_finding> with a file citation — should be format-compliant.
+    const agentOutput = '<agent_finding type="finding" severity="medium">The thing at src/foo.ts:42 is off</agent_finding>';
+    await handleNativeRelay('task-fmt', agentOutput);
+
+    const { readFileSync, existsSync } = require('fs');
+    const { join } = require('path');
+    const perfPath = join(testDir, '.gossip', 'agent-performance.jsonl');
+    if (!existsSync(perfPath)) throw new Error(`expected ${perfPath} to exist after relay`);
+    const lines = readFileSync(perfPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const signals = lines.map((l: string) => JSON.parse(l));
+
+    const formatCompliance = signals.find((s: any) => s.signal === 'format_compliance');
+    expect(formatCompliance).toBeDefined();
+    expect(formatCompliance.agentId).toBe('native-claude');
+    expect(formatCompliance.taskId).toBe('task-fmt');
+    expect(formatCompliance.value).toBe(1);
+    expect(formatCompliance.metadata).toMatchObject({
+      findingCount: expect.any(Number),
+      citationCount: expect.any(Number),
+      tags_total: expect.any(Number),
+      tags_accepted: expect.any(Number),
+    });
+
+    // task_completed should also be emitted (observable from our side).
+    const taskCompleted = signals.find((s: any) => s.signal === 'task_completed' && s.taskId === 'task-fmt');
+    expect(taskCompleted).toBeDefined();
+
+    // task_tool_turns must NOT be emitted for native agents — not observable from relay.
+    const toolTurns = signals.find((s: any) => s.signal === 'task_tool_turns' && s.taskId === 'task-fmt');
+    expect(toolTurns).toBeUndefined();
+  });
 });
 
 // ── handleNativeRelay — utility tasks ────────────────────────────────────────

@@ -43,11 +43,6 @@ export class ConsensusCoordinator {
     this.memWriter = new MemoryWriter(config.projectRoot);
   }
 
-  /** Late-bind the skills resolver (pipeline wires this after construction). */
-  setAgentSkillsResolver(resolver: (agentId: string, task: string) => string | undefined): void {
-    this.getAgentSkillsContent = resolver;
-  }
-
   setGossipPublisher(publisher: GossipPublisher | null): void {
     this.gossipPublisher = publisher;
   }
