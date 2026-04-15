@@ -142,6 +142,18 @@ When you verify a finding as real (or catch a hallucination), **record the signa
 
 **Every signal must include `finding_id`** in the format `<consensusId>:<agentId>:fN`. Without it, the dashboard can't trace back from signal → finding → agent and scoring becomes opaque.
 
+### Skill-develop cooldown gate
+
+`gossip_skills(action: "develop")` is throttled to prevent churn. Redeveloping the same skill while its effectiveness window is still accumulating evidence resets the `MIN_EVIDENCE=120` counter and collapses the statistical signal. Cooldown is verdict-aware:
+
+- `pending` — no gate (skill may need 60-120d to reach MIN_EVIDENCE)
+- `silent_skill` / `insufficient_evidence` — 30d
+- `inconclusive` — 60d (preserves strike rotation)
+- `passed` / `failed` — hard-block (terminal)
+- missing `bound_at` — allow (pre-schema files)
+
+When blocked, the error message shows age + remaining cooldown + override instruction. Pass `force: true` to bypass; every override is appended to `.gossip/forced-skill-develops.jsonl` for auditability. Chronic override patterns on an agent+category pair are a signal that the skill prompt is ineffective or `MIN_EVIDENCE` is miscalibrated for that category — investigate before reflexively forcing.
+
 ### Verifying UNVERIFIED findings
 
 When a consensus report has `UNVERIFIED` findings (cross-reviewer couldn't check), **you must verify them yourself before presenting results**. UNVERIFIED means "the peer didn't have the tools or context to check" — you do. Read the cited files, grep for the identifiers, confirm or reject. Do not show raw consensus output with unexamined UNVERIFIED findings.
