@@ -1,6 +1,10 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { normalizeSkillName } from './skill-name';
+import { readSkillFreshness } from './skill-freshness';
+
+/** 24-hour freshness window for upstream skill-suggest suppression. */
+export const SKILL_FRESHNESS_MS = 24 * 60 * 60 * 1_000;
 
 export interface GapSuggestion {
   type: 'suggestion';
@@ -33,9 +37,11 @@ const TRUNCATE_TO = 1000;
 export class SkillGapTracker {
   private readonly gapLogPath: string;
   private readonly resolutionsPath: string;
+  private readonly projectRoot: string;
   private resolutionsCache: Record<string, string> | null = null;
 
   constructor(projectRoot: string) {
+    this.projectRoot = projectRoot;
     this.gapLogPath = join(projectRoot, '.gossip', 'skill-gaps.jsonl');
     this.resolutionsPath = join(projectRoot, '.gossip', 'skill-resolutions.json');
     this.migrateResolutions();
@@ -86,6 +92,29 @@ export class SkillGapTracker {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     appendFileSync(this.gapLogPath, JSON.stringify(suggestion) + '\n');
     this.truncateIfNeeded();
+  }
+
+  /**
+   * Return true if a skill file for (agentId, category) exists and was bound
+   * within `withinMs` milliseconds of now.
+   *
+   * Uses readSkillFreshness for frontmatter parsing — no SkillEngine import,
+   * no file mutation. If bound_at is absent or unparseable, returns false
+   * (treat as not fresh → allow re-develop suggestion to surface).
+   *
+   * Both the MCP develop path and the collect.ts auto-develop path call
+   * getSkillGapSuggestions(), which filters via this method — covering both
+   * attack surfaces with a single upstream chokepoint.
+   */
+  isSkillFresh(agentId: string, category: string, withinMs: number = SKILL_FRESHNESS_MS): boolean {
+    try {
+      const { boundAt } = readSkillFreshness(agentId, category, this.projectRoot);
+      if (!boundAt) return false;
+      const ageMs = Date.now() - new Date(boundAt).getTime();
+      return ageMs >= 0 && ageMs < withinMs;
+    } catch {
+      return false;
+    }
   }
 
   private getPendingSkills(): string[] {

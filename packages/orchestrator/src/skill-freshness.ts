@@ -24,6 +24,21 @@ export interface SkillFreshnessResult {
   path: string;
 }
 
+/**
+ * Discriminated union returned by computeCooldown.
+ *
+ * - `pre_schema`  — file has no status field; no cooldown applies (first-develop or legacy file).
+ * - `no_cooldown` — status is known but maps to 0ms (e.g. "pending" — evidence still accumulating).
+ * - `cooldown`    — a positive cooldown applies; caller checks ageMs vs cooldownMs.
+ *
+ * Pattern-match on `kind` — the old numeric return is gone. The pre_schema vs pending split
+ * is now explicit so callers and the audit log can distinguish them correctly.
+ */
+export type CooldownDecision =
+  | { kind: 'pre_schema' }
+  | { kind: 'no_cooldown'; status: string }
+  | { kind: 'cooldown'; status: string; cooldownMs: number };
+
 // ── Constants ─────────────────────────────────────────────────────────────
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -108,17 +123,21 @@ export function readSkillFreshness(
 }
 
 /**
- * Return the cooldown duration in milliseconds for a given verdict status.
+ * Return a CooldownDecision for a given verdict status.
  *
- * - `null` / unknown status → 0 (no gate: pre-schema or first-develop case).
- * - `pending` → 0 (allowed, evidence still accumulating).
- * - `silent_skill` | `insufficient_evidence` → 30 days.
- * - `inconclusive` → 60 days (preserves strike rotation window).
- * - `passed` | `failed` → Infinity (terminal states, hard-block).
+ * - `null` / absent → `{kind: 'pre_schema'}` (no cooldown; pre-schema or first-develop).
+ * - `pending`       → `{kind: 'no_cooldown', status: 'pending'}` (evidence accumulating, allow).
+ * - `silent_skill` | `insufficient_evidence` → `{kind: 'cooldown', cooldownMs: 30d}`.
+ * - `inconclusive`  → `{kind: 'cooldown', cooldownMs: 60d}` (preserves strike rotation window).
+ * - `passed` | `failed` → `{kind: 'cooldown', cooldownMs: Infinity}` (terminal hard-block).
+ * - unknown status  → `{kind: 'no_cooldown', status}` (forward-compatible: new statuses skip gate).
  */
-export function computeCooldown(status: string | null): number {
-  if (!status) return 0;
-  return COOLDOWN_MS[status] ?? 0;
+export function computeCooldown(status: string | null): CooldownDecision {
+  if (!status) return { kind: 'pre_schema' };
+  const ms = COOLDOWN_MS[status];
+  if (ms === undefined) return { kind: 'no_cooldown', status };
+  if (ms === 0) return { kind: 'no_cooldown', status };
+  return { kind: 'cooldown', status, cooldownMs: ms };
 }
 
 /**
