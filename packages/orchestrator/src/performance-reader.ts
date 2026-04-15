@@ -369,12 +369,12 @@ export class PerformanceReader {
           const diversityMul = (signal.signal === 'agreement')
             ? (peerDiversity.get(signal.agentId) ?? 1) : 1;
           a.weightedCorrect += sevMul * decay * diversityMul;
-          a.weightedTotal += sevMul * decay;
+          a.weightedTotal += sevMul * decay * diversityMul;
           a.agreements++;
           a.weightedImpact += sevMul * decay;
           a.weightedConfirmedCount += decay;
           if (signal.category) {
-            a.categoryStrengths[signal.category] = (a.categoryStrengths[signal.category] ?? 0) + sevMul * decay * 0.15;
+            a.categoryStrengths[signal.category] = (a.categoryStrengths[signal.category] ?? 0) + sevMul * decay * 0.15 * diversityMul;
             a.categoryCorrect[signal.category] = (a.categoryCorrect[signal.category] ?? 0) + 1;
           }
           break;
@@ -386,8 +386,9 @@ export class PerformanceReader {
             const winner = ensure(signal.counterpartId);
             const wi = winner.tasksSeen.get(taskKey) ?? winner.taskCounter - 1;
             const wd = Math.pow(0.5, Math.max(0, winner.taskCounter - wi - 1) / DECAY_HALF_LIFE);
-            winner.weightedCorrect += sevMul * wd;
-            winner.weightedTotal += sevMul * wd;
+            const winnerDiversityMul = peerDiversity.get(signal.counterpartId) ?? 1;
+            winner.weightedCorrect += sevMul * wd * winnerDiversityMul;
+            winner.weightedTotal += sevMul * wd * winnerDiversityMul;
             if (signalMs > winner.lastSignalMs) winner.lastSignalMs = signalMs;
           }
           if (signal.category) {
