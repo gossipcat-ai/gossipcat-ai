@@ -120,11 +120,24 @@ export function selectCrossReviewers(
     }
 
     // Step 6: Severity-scaled adaptive epsilon-greedy exploration
-    const medianScore = median(scoredCandidates.map(c => c.score));
+    // Median is computed over the `eligible` set (score > 0) — not over all
+    // `scoredCandidates`. Including fresh zero-score agents would collapse the
+    // median to 0 when ≥50% of the pool is fresh, making the `score <= median`
+    // predicate impossible to satisfy (since eligible requires score > 0) and
+    // silently disabling exploration exactly when uncertainty is highest.
+    // When `eligible` is empty (all-fresh pool), skip exploration entirely —
+    // topK was already filled by the shuffle fallback above, and there is no
+    // below-median calibrated peer to explore toward.
     const topKSet = new Set(topK.map(c => c.agent.agentId));
-    const belowMedian = scoredCandidates.filter(
-      c => c.score > 0 && c.score <= medianScore && !topKSet.has(c.agent.agentId),
-    );
+    const belowMedian: ScoredCandidate[] = [];
+    if (eligible.length > 0) {
+      const medianScore = median(eligible.map(c => c.score));
+      for (const c of eligible) {
+        if (c.score <= medianScore && !topKSet.has(c.agent.agentId)) {
+          belowMedian.push(c);
+        }
+      }
+    }
 
     if (belowMedian.length > 0) {
       // Signal starvation — look at the most signal-starved below-median candidate
