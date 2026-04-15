@@ -2831,14 +2831,39 @@ server.tool(
         const { readSkillFreshness: rsf, computeCooldown: cc, formatCooldownMessage: fcm } = await import('@gossip/orchestrator');
         const freshness = rsf(agent_id, category, process.cwd());
         _freshnessForAudit = freshness;
-        const cooldownMs = cc(freshness.status);
-        if (freshness.boundAt && cooldownMs > 0) {
+        const decision = cc(freshness.status);
+        if (decision.kind === 'cooldown' && freshness.boundAt) {
           const ageMs = Date.now() - new Date(freshness.boundAt).getTime();
-          if (ageMs < cooldownMs) {
-            const remainingMs = cooldownMs - ageMs;
+          if (ageMs < decision.cooldownMs) {
+            const remainingMs = decision.cooldownMs - ageMs;
+            const { appendSkillDevelopAudit } = await import('./handlers/skill-develop-audit');
+            appendSkillDevelopAudit({
+              timestamp: new Date().toISOString(),
+              agent_id,
+              category,
+              bound_at_before: freshness.boundAt,
+              status_before: freshness.status,
+              gated: true,
+              gate_reason: decision.status,
+              forced: false,
+              source: 'mcp',
+            });
             return { content: [{ type: 'text' as const, text: fcm(agent_id, category, freshness.boundAt, freshness.status, remainingMs) }] };
           }
         }
+        // Gate passed — log the pass for audit trail
+        const { appendSkillDevelopAudit } = await import('./handlers/skill-develop-audit');
+        appendSkillDevelopAudit({
+          timestamp: new Date().toISOString(),
+          agent_id,
+          category,
+          bound_at_before: freshness.boundAt,
+          status_before: freshness.status,
+          gated: false,
+          gate_reason: null,
+          forced: false,
+          source: 'mcp',
+        });
       }
       if (force && !_utility_task_id) {
         // Capture freshness for audit even when bypassing the gate check
@@ -2846,13 +2871,17 @@ server.tool(
           const { readSkillFreshness: rsf } = await import('@gossip/orchestrator');
           _freshnessForAudit = rsf(agent_id, category, process.cwd());
         }
-        const { appendForcedSkillDevelop } = await import('./handlers/forced-skill-develops');
-        appendForcedSkillDevelop({
+        const { appendSkillDevelopAudit } = await import('./handlers/skill-develop-audit');
+        appendSkillDevelopAudit({
           timestamp: new Date().toISOString(),
           agent_id,
           category,
           bound_at_before: _freshnessForAudit.boundAt,
           status_before: _freshnessForAudit.status,
+          gated: false,
+          gate_reason: null,
+          forced: true,
+          source: 'mcp',
         });
       }
       // ── End cooldown gate ─────────────────────────────────────────────────

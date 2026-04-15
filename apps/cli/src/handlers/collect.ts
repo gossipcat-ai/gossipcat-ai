@@ -728,10 +728,13 @@ export async function handleCollect(
   try {
     const gaps = ctx.mainAgent.getSkillGapSuggestions();
     if (gaps.length > 0 && ctx.skillEngine) {
-      const { normalizeSkillName: nsn } = await import('@gossip/orchestrator');
+      const { normalizeSkillName: nsn, readSkillFreshness: rsf } = await import('@gossip/orchestrator');
+      const { appendSkillDevelopAudit } = await import('./skill-develop-audit');
       const developed: string[] = [];
       const failed: string[] = [];
       for (const gap of gaps) {
+        // Capture pre-develop freshness for audit
+        const freshnessSnapshot = rsf(gap.agentId, gap.category, process.cwd());
         try {
           await ctx.skillEngine.generate(gap.agentId, gap.category);
           const skillName = nsn(gap.category);
@@ -742,6 +745,17 @@ export async function handleCollect(
           if (pipeline?.suppressSkillGapAlert) {
             pipeline.suppressSkillGapAlert(gap.agentId, gap.category);
           }
+          appendSkillDevelopAudit({
+            timestamp: new Date().toISOString(),
+            agent_id: gap.agentId,
+            category: gap.category,
+            bound_at_before: freshnessSnapshot.boundAt,
+            status_before: freshnessSnapshot.status,
+            gated: false,
+            gate_reason: null,
+            forced: false,
+            source: 'auto_collect',
+          });
           developed.push(`${gap.agentId}/${skillName}`);
         } catch {
           // Don't suppress — gap will resurface on next collect for retry

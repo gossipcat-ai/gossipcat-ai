@@ -37,7 +37,7 @@ import {
   computeCooldown,
   formatCooldownMessage,
 } from '../../packages/orchestrator/src/skill-freshness';
-import { appendForcedSkillDevelop } from '../../apps/cli/src/handlers/forced-skill-develops';
+import { appendSkillDevelopAudit } from '../../apps/cli/src/handlers/skill-develop-audit';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const HOUR_MS = 60 * 60 * 1_000;
@@ -80,23 +80,27 @@ function simulateGate(opts: {
   const { utility_task_id, force } = opts;
   if (!utility_task_id && !force) {
     const freshness = readSkillFreshness(AGENT_ID, CATEGORY, SKILL_ROOT);
-    const cooldownMs = computeCooldown(freshness.status);
-    if (freshness.boundAt && cooldownMs > 0) {
+    const decision = computeCooldown(freshness.status);
+    if (decision.kind === 'cooldown' && freshness.boundAt) {
       const ageMs = Date.now() - new Date(freshness.boundAt).getTime();
-      if (ageMs < cooldownMs) {
-        const remainingMs = cooldownMs - ageMs;
+      if (ageMs < decision.cooldownMs) {
+        const remainingMs = decision.cooldownMs - ageMs;
         return formatCooldownMessage(AGENT_ID, CATEGORY, freshness.boundAt, freshness.status, remainingMs);
       }
     }
   }
   if (force && !utility_task_id) {
     const freshness = readSkillFreshness(AGENT_ID, CATEGORY, SKILL_ROOT);
-    appendForcedSkillDevelop({
+    appendSkillDevelopAudit({
       timestamp: new Date().toISOString(),
       agent_id: AGENT_ID,
       category: CATEGORY,
       bound_at_before: freshness.boundAt,
       status_before: freshness.status,
+      gated: false,
+      gate_reason: null,
+      forced: true,
+      source: 'mcp',
     });
   }
   return null; // allowed
@@ -181,15 +185,28 @@ it('allows develop with force: true on 1h-old insufficient_evidence skill and ap
   const result = simulateGate({ force: true });
   expect(result).toBeNull(); // allowed via force
 
-  // Audit entry must be appended
-  expect(mockAppendFileSync).toHaveBeenCalledTimes(1);
-  const [filePath, rawEntry] = mockAppendFileSync.mock.calls[0];
-  expect(filePath).toContain('forced-skill-develops.jsonl');
-  const entry = JSON.parse((rawEntry as string).trim());
+  // Audit entries must be appended (canonical + legacy dual-write = 2 calls)
+  expect(mockAppendFileSync).toHaveBeenCalledTimes(2);
+
+  // Find the canonical audit file call
+  const auditCall = mockAppendFileSync.mock.calls.find(
+    ([path]) => String(path).includes('skill-develop-audit.jsonl'),
+  );
+  expect(auditCall).toBeDefined();
+  const entry = JSON.parse((auditCall![1] as string).trim());
   expect(entry.agent_id).toBe(AGENT_ID);
   expect(entry.category).toBe(CATEGORY);
   expect(entry.status_before).toBe('insufficient_evidence');
+  expect(entry.forced).toBe(true);
+  expect(entry.gated).toBe(false);
+  expect(entry.source).toBe('mcp');
   expect(typeof entry.timestamp).toBe('string');
+
+  // Legacy alias must also be present
+  const legacyCall = mockAppendFileSync.mock.calls.find(
+    ([path]) => String(path).includes('forced-skill-develops.jsonl'),
+  );
+  expect(legacyCall).toBeDefined();
 });
 
 // ── Case 8: rejection message includes all required fields ────────────────

@@ -101,40 +101,57 @@ describe('readSkillFreshness — file present', () => {
   });
 });
 
-// ── computeCooldown ────────────────────────────────────────────────────────
+// ── computeCooldown — discriminated union ─────────────────────────────────
 
 describe('computeCooldown', () => {
-  it('returns 0 for null status (no cooldown)', () => {
-    expect(computeCooldown(null)).toBe(0);
+  // Spec test #11: null → pre_schema
+  it('returns {kind: "pre_schema"} for null status (no status field in file)', () => {
+    expect(computeCooldown(null)).toEqual({ kind: 'pre_schema' });
   });
 
-  it('returns 0 for pending (evidence still accumulating)', () => {
-    expect(computeCooldown('pending')).toBe(0);
+  // Spec test #10: pending → no_cooldown
+  it('returns {kind: "no_cooldown", status: "pending"} for pending (evidence still accumulating)', () => {
+    expect(computeCooldown('pending')).toEqual({ kind: 'no_cooldown', status: 'pending' });
   });
 
-  it('returns 30 days ms for silent_skill', () => {
-    expect(computeCooldown('silent_skill')).toBe(30 * DAY_MS);
+  // Spec test #12: insufficient_evidence → cooldown 30d
+  it('returns {kind: "cooldown", cooldownMs: 30d} for insufficient_evidence', () => {
+    expect(computeCooldown('insufficient_evidence')).toEqual({
+      kind: 'cooldown',
+      status: 'insufficient_evidence',
+      cooldownMs: 30 * DAY_MS,
+    });
   });
 
-  it('returns 30 days ms for insufficient_evidence', () => {
-    expect(computeCooldown('insufficient_evidence')).toBe(30 * DAY_MS);
+  it('returns {kind: "cooldown", cooldownMs: 30d} for silent_skill', () => {
+    expect(computeCooldown('silent_skill')).toEqual({
+      kind: 'cooldown',
+      status: 'silent_skill',
+      cooldownMs: 30 * DAY_MS,
+    });
   });
 
-  it('returns 60 days ms for inconclusive', () => {
-    expect(computeCooldown('inconclusive')).toBe(60 * DAY_MS);
+  it('returns {kind: "cooldown", cooldownMs: 60d} for inconclusive', () => {
+    expect(computeCooldown('inconclusive')).toEqual({
+      kind: 'cooldown',
+      status: 'inconclusive',
+      cooldownMs: 60 * DAY_MS,
+    });
   });
 
-  it('returns Infinity for passed (terminal state)', () => {
-    expect(computeCooldown('passed')).toBe(Infinity);
+  it('returns {kind: "cooldown", cooldownMs: Infinity} for passed (terminal state)', () => {
+    expect(computeCooldown('passed')).toEqual({ kind: 'cooldown', status: 'passed', cooldownMs: Infinity });
   });
 
-  it('returns Infinity for failed (terminal state)', () => {
-    expect(computeCooldown('failed')).toBe(Infinity);
+  it('returns {kind: "cooldown", cooldownMs: Infinity} for failed (terminal state)', () => {
+    expect(computeCooldown('failed')).toEqual({ kind: 'cooldown', status: 'failed', cooldownMs: Infinity });
   });
 
-  it('returns 0 for unknown/future status (no cooldown by default)', () => {
-    expect(computeCooldown('flagged_for_manual_review')).toBe(0);
-    expect(computeCooldown('some_future_status')).toBe(0);
+  it('returns {kind: "no_cooldown"} for unknown/future status (forward-compatible)', () => {
+    const r1 = computeCooldown('flagged_for_manual_review');
+    expect(r1.kind).toBe('no_cooldown');
+    const r2 = computeCooldown('some_future_status');
+    expect(r2.kind).toBe('no_cooldown');
   });
 });
 

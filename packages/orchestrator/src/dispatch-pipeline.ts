@@ -1235,6 +1235,17 @@ export class DispatchPipeline {
           // Suppress if already suggested this session
           const key = `${score.agentId}::${cat}`;
           if (this.suggestedSkillGaps.has(key)) continue;
+          // Upstream freshness filter: skip if skill was bound within the 24h window.
+          // Covers BOTH the auto-develop path (here) and the MCP develop path
+          // (mcp-server-sdk.ts) from a single upstream chokepoint. Evidence windows
+          // cannot accumulate when bound_at is reset on every pending-phase develop —
+          // suppressing the suggestion prevents churn before it reaches skill-engine.
+          if (this.gapTracker.isSkillFresh(score.agentId, cat)) {
+            process.stderr.write(
+              `[gossipcat] skill-suggestion suppressed: ${score.agentId}/${cat} bound within 24h freshness window\n`,
+            );
+            continue;
+          }
           // NOTE: do NOT suppress here — caller must suppress after successful action
           suggestions.push({ agentId: score.agentId, category: cat, score: catScore, median });
         }
