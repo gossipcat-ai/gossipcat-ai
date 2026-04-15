@@ -122,3 +122,24 @@ When an agent is dispatched with `write_mode: "scoped"`:
 - **Worktree agents** have full shell + git access within their isolated branch
 
 This is intentional: scoped agents write files, the orchestrator validates and commits.
+
+---
+
+## Memory hygiene (gossipcat convention)
+
+When saving a `project_*` memory, include a `status` field in the frontmatter:
+
+- `status: open` — active backlog item, work in progress, or decision pending
+  revisit. These items decay and need `gossip_verify_memory` before acting.
+- `status: shipped` — the work it describes has landed. Reference only. No
+  verification needed; changes to the described behavior should produce a new
+  memory, not mutate this one.
+- `status: closed` — decision was made not to pursue. Archive semantics.
+
+This field is not required by Claude Code's auto-memory system; it's a
+gossipcat-specific convention so the dashboard can distinguish open backlog
+from shipped records. Whether Claude Code's auto-memory writer picks up this
+per-repo convention may or may not propagate to new memory files — unknown.
+Treat it as best-effort: if it works, new users adopt `status` over time; if
+not, the dashboard mapper still behaves correctly (legacy files without
+`status` render as `backlog` by safe default).

@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import type { TaskItem } from '@/lib/types';
 import { timeAgo, agentColor } from '@/lib/utils';
 
@@ -6,11 +7,103 @@ interface TaskRowProps {
   onClick?: (task: TaskItem) => void;
 }
 
-const STATUS_PILL: Record<string, { cls: string; label: string }> = {
-  completed: { cls: 'text-confirmed bg-confirmed/8', label: 'Done' },
-  failed: { cls: 'text-destructive bg-destructive/8', label: 'Failed' },
-  running: { cls: 'text-unverified bg-unverified/8', label: 'Running' },
-  cancelled: { cls: 'text-muted-foreground bg-muted/50', label: 'Cancelled' },
+/**
+ * Canonical status buckets the indicator renders. We normalise incoming status
+ * strings (including aliases we may receive from older task sources) into one
+ * of these five keys so the icon-box treatment stays exhaustive.
+ */
+type StatusKey = 'completed' | 'running' | 'failed' | 'cancelled' | 'unknown';
+
+/**
+ * Normalise a free-form task status into one of our canonical buckets. The
+ * TaskItem type currently narrows to four literals, but collect/relay can
+ * surface aliases ("done", "error", "in_progress", etc.) — we fold those in
+ * rather than letting them fall through to the gray "unknown" fallback.
+ */
+function normaliseStatus(status: string): StatusKey {
+  const s = status.toLowerCase();
+  if (s === 'completed' || s === 'done' || s === 'success' || s === 'succeeded') return 'completed';
+  if (s === 'running' || s === 'active' || s === 'in_progress' || s === 'pending') return 'running';
+  if (s === 'failed' || s === 'error' || s === 'errored' || s === 'timeout' || s === 'timed_out') return 'failed';
+  if (s === 'cancelled' || s === 'canceled' || s === 'queued' || s === 'waiting') return 'cancelled';
+  return 'unknown';
+}
+
+/**
+ * Per-status visual treatment: label, icon box tint, text color, and whether
+ * the icon box animates. Mirrors the MemoryFolders icon-box pattern (faint
+ * tinted background + 1px border ring in the same hue) so the dashboard's
+ * semantic palette stays consistent across panels.
+ */
+const STATUS_META: Record<StatusKey, {
+  label: string;
+  iconBox: string;   // bg tint + border ring on the 22px square
+  text: string;      // icon stroke + label color
+  pulse: boolean;    // subtle breathing outline for in-flight tasks
+}> = {
+  completed: {
+    label: 'Done',
+    iconBox: 'bg-confirmed/10 border-confirmed/30',
+    text: 'text-confirmed',
+    pulse: false,
+  },
+  running: {
+    label: 'Running',
+    iconBox: 'bg-unverified/10 border-unverified/30',
+    text: 'text-unverified',
+    pulse: true,
+  },
+  failed: {
+    label: 'Failed',
+    iconBox: 'bg-destructive/10 border-destructive/30',
+    text: 'text-destructive',
+    pulse: false,
+  },
+  cancelled: {
+    label: 'Cancelled',
+    iconBox: 'bg-muted-foreground/10 border-muted-foreground/25',
+    text: 'text-muted-foreground',
+    pulse: false,
+  },
+  unknown: {
+    label: 'Unknown',
+    iconBox: 'bg-muted-foreground/10 border-muted-foreground/25',
+    text: 'text-muted-foreground',
+    pulse: false,
+  },
+};
+
+/**
+ * Inline SVG glyphs — no icon library, stroke="currentColor" so the parent's
+ * text color drives hue, and strokeWidth="1.5" matches MemoryFolders.
+ *
+ *   completed → check
+ *   running   → concentric dot (reads as "in progress" and pulses)
+ *   failed    → x
+ *   cancelled → horizontal bar (dash)
+ *   unknown   → question mark
+ */
+const STATUS_ICON: Record<StatusKey, JSX.Element> = {
+  completed: <polyline points="5 12 10 17 19 7" />,
+  running: (
+    <>
+      <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="8" opacity="0.45" />
+    </>
+  ),
+  failed: (
+    <>
+      <line x1="6" y1="6" x2="18" y2="18" />
+      <line x1="18" y1="6" x2="6" y2="18" />
+    </>
+  ),
+  cancelled: <line x1="6" y1="12" x2="18" y2="12" />,
+  unknown: (
+    <>
+      <path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .9-1 1.7" />
+      <line x1="12" y1="16.5" x2="12" y2="16.5" />
+    </>
+  ),
 };
 
 function formatDurationNice(ms?: number): string {
@@ -28,11 +121,8 @@ function formatDurationNice(ms?: number): string {
 }
 
 export function TaskRow({ task, onClick }: TaskRowProps) {
-  const pill = STATUS_PILL[task.status] ?? STATUS_PILL.cancelled;
-  const dotColor = task.status === 'completed' ? 'bg-confirmed'
-    : task.status === 'failed' ? 'bg-destructive'
-    : task.status === 'running' ? 'bg-unverified'
-    : 'bg-muted-foreground/40';
+  const key = normaliseStatus(task.status);
+  const meta = STATUS_META[key];
 
   return (
     <tr
@@ -43,9 +133,27 @@ export function TaskRow({ task, onClick }: TaskRowProps) {
       } : undefined}
     >
       <td className="py-2.5 pl-4 pr-2">
-        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[10px] font-semibold ${pill.cls}`}>
-          <span className={`inline-block h-1.5 w-1.5 rounded-full ${dotColor}`} />
-          {pill.label}
+        <span className="inline-flex items-center gap-2" aria-label={`Status: ${meta.label}`}>
+          <span
+            className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border ${meta.iconBox} ${meta.text} ${meta.pulse ? 'animate-pulse' : ''}`}
+            aria-hidden
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              {STATUS_ICON[key]}
+            </svg>
+          </span>
+          <span className={`font-mono text-[10px] font-semibold uppercase tracking-wider ${meta.text}`}>
+            {meta.label}
+          </span>
         </span>
       </td>
       <td className="py-2.5 pr-3">
@@ -63,7 +171,7 @@ export function TaskRow({ task, onClick }: TaskRowProps) {
         {(() => { const line = task.task.replace(/\n.*/s, ''); return line.length > 100 ? line.slice(0, 100) + '…' : line; })()}
       </td>
       <td className="py-2.5 pr-3 font-mono text-xs text-muted-foreground">
-        {task.status === 'running' ? 'running' : formatDurationNice(task.duration)}
+        {key === 'running' ? 'running' : formatDurationNice(task.duration)}
       </td>
       <td className="py-2.5 pr-4 text-right font-mono text-xs text-muted-foreground">
         {timeAgo(task.timestamp)}

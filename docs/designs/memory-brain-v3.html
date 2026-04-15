@@ -1,0 +1,467 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Memory · v3 · actual theme</title>
+<style>
+  /* Copied from packages/dashboard-v2/src/globals.css */
+  :root {
+    --bg: #0a0a0f;
+    --fg: #f0f0f5;
+    --card: #13131a;
+    --muted: #1c1c26;
+    --muted-fg: #9898a8;
+    --border: rgba(139, 92, 246, 0.12);
+    --primary: #8b5cf6;
+    --primary-soft: rgba(139, 92, 246, 0.3);
+    --primary-faint: rgba(139, 92, 246, 0.06);
+    --confirmed: #34d399;
+    --disputed: #f87171;
+    --unverified: #fbbf24;
+    --unique: #c084fc;
+    --impact: #60a5fa;
+    --text-dim: #666674;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--fg);
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 14px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  body::after {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 9998;
+    background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 65%, rgba(0, 0, 0, 0.2) 100%);
+  }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  h1 {
+    margin: 0 0 4px; font-size: 14px; letter-spacing: 0.04em;
+    color: var(--fg); font-weight: 600;
+  }
+  .sub {
+    color: var(--muted-fg); font-size: 12px;
+    margin-bottom: 20px;
+  }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+  .panel {
+    border: 1px solid var(--border); border-radius: 0.5rem;
+    background: var(--card); overflow: hidden;
+    position: relative;
+  }
+  .panel-label {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted-fg);
+  }
+  .panel-label .accent { color: var(--primary); font-weight: 600; }
+
+  /* ========================= TOP LEVEL (LEFT) ========================= */
+  .top-view {
+    padding: 20px; height: 560px;
+    display: flex; flex-direction: column;
+  }
+  .section-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+  .section-head .title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--fg); font-weight: 600;
+  }
+  .section-head .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: var(--muted-fg);
+  }
+
+  .folder-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .folder-tile {
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 14px;
+    background: var(--muted);
+    cursor: pointer;
+    transition: all 140ms ease;
+    position: relative;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 4px 12px;
+    align-items: center;
+  }
+  .folder-tile:hover {
+    border-color: var(--primary-soft);
+    background: #1e1e2b;
+  }
+  .folder-tile .icon {
+    grid-row: 1 / span 2;
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--primary);
+    background: var(--primary-faint);
+    border-radius: 0.25rem;
+    border: 1px solid var(--primary-soft);
+  }
+  /* per-category accent using semantic colors */
+  .folder-tile.c-user .icon { color: var(--impact); background: rgba(96,165,250,0.06); border-color: rgba(96,165,250,0.25); }
+  .folder-tile.c-feedback .icon { color: var(--unverified); background: rgba(251,191,36,0.06); border-color: rgba(251,191,36,0.25); }
+  .folder-tile.c-project .icon { color: var(--primary); background: var(--primary-faint); border-color: var(--primary-soft); }
+  .folder-tile.c-session .icon { color: var(--confirmed); background: rgba(52,211,153,0.06); border-color: rgba(52,211,153,0.25); }
+  .folder-tile.c-reference .icon { color: var(--text-dim); background: rgba(102,102,116,0.08); border-color: rgba(102,102,116,0.2); }
+  .folder-tile.empty { opacity: 0.55; }
+
+  .folder-tile .name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--fg); font-weight: 600;
+    align-self: end;
+  }
+  .folder-tile .count {
+    grid-row: 1 / span 2;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px; color: var(--fg); font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .folder-tile.c-user .count, .folder-tile.c-user.empty .count { color: var(--impact); }
+  .folder-tile.c-feedback .count { color: var(--unverified); }
+  .folder-tile.c-project .count { color: var(--primary); }
+  .folder-tile.c-session .count { color: var(--confirmed); }
+  .folder-tile.c-reference .count { color: var(--text-dim); }
+
+  .folder-tile .desc {
+    font-size: 11px; color: var(--muted-fg);
+    align-self: start;
+  }
+  .folder-tile.recent::before {
+    content: ''; position: absolute;
+    top: 10px; right: 10px;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--primary);
+    box-shadow: 0 0 8px var(--primary-soft);
+  }
+
+  /* ========================= DRILLED (RIGHT) ========================= */
+  .drill-view {
+    height: 560px;
+    display: flex; flex-direction: column;
+  }
+  .breadcrumb {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  .breadcrumb .icon-sm {
+    width: 14px; height: 14px; color: var(--primary);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .breadcrumb .crumb-root { color: var(--muted-fg); cursor: pointer; text-transform: uppercase; letter-spacing: 0.1em; }
+  .breadcrumb .crumb-root:hover { color: var(--fg); }
+  .breadcrumb .sep { color: var(--muted-fg); }
+  .breadcrumb .crumb-here { color: var(--primary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; }
+  .breadcrumb .count { color: var(--muted-fg); font-size: 10px; margin-left: auto; }
+
+  .tile-grid {
+    flex: 1; padding: 14px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    align-content: start;
+    overflow: hidden;
+    position: relative;
+  }
+  .tile {
+    border: 1px solid var(--border);
+    background: var(--muted);
+    padding: 11px 13px;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: all 140ms ease;
+    position: relative;
+  }
+  .tile:hover {
+    border-color: var(--primary-soft);
+    background: #1e1e2b;
+  }
+  .tile.selected {
+    border-color: var(--primary);
+    background: #1e1e2b;
+    box-shadow: 0 0 0 1px var(--primary-soft);
+  }
+  .tile .tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--primary); margin-bottom: 6px; font-weight: 700;
+    padding: 1px 6px;
+    border: 1px solid var(--primary-soft);
+    border-radius: 2px;
+    background: var(--primary-faint);
+  }
+  .tile .title {
+    font-size: 13px; color: var(--fg); font-weight: 500; line-height: 1.4;
+    margin-bottom: 6px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .tile .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: var(--muted-fg);
+    display: flex; justify-content: space-between;
+  }
+
+  /* ========================= DIALOG ========================= */
+  .dialog-scrim {
+    position: absolute; inset: 0;
+    background: rgba(10, 10, 15, 0.7);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    z-index: 10;
+  }
+  .dialog {
+    width: 100%; max-width: 500px;
+    background: var(--card);
+    border: 1px solid var(--primary-soft);
+    border-radius: 0.5rem;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 0 3px var(--primary-faint);
+    overflow: hidden;
+    max-height: 100%;
+    display: flex; flex-direction: column;
+  }
+  .dialog-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .dialog-header .icon-sm { width: 16px; height: 16px; color: var(--primary); }
+  .dialog-header .tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--primary); font-weight: 700;
+    padding: 2px 8px; border: 1px solid var(--primary-soft); border-radius: 2px;
+    background: var(--primary-faint);
+  }
+  .dialog-header .title {
+    font-size: 13px; color: var(--fg); font-weight: 500; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .dialog-header .close {
+    color: var(--muted-fg); font-size: 16px; cursor: pointer;
+    width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+    border-radius: 4px;
+  }
+  .dialog-header .close:hover { color: var(--fg); background: var(--muted); }
+  .dialog-body {
+    padding: 16px; overflow: auto;
+    font-size: 13px; line-height: 1.6; color: var(--fg);
+    flex: 1;
+  }
+  .dialog-body .section-h {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--primary); font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; margin: 14px 0 6px; font-weight: 600;
+  }
+  .dialog-body .section-h:first-child { margin-top: 0; }
+  .dialog-body p { margin: 0 0 10px; color: var(--fg); }
+  .dialog-body .muted { color: var(--muted-fg); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .dialog-body code {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--muted); padding: 2px 6px; border-radius: 3px;
+    color: var(--primary); font-size: 12px;
+  }
+  .dialog-footer {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: var(--muted-fg);
+  }
+
+  .notes {
+    margin-top: 24px; padding: 16px;
+    border: 1px solid var(--border); border-radius: 0.5rem;
+    background: var(--card);
+    font-size: 13px; color: var(--muted-fg); line-height: 1.6;
+  }
+  .notes b { color: var(--primary); font-weight: 600; }
+  .notes code {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--muted); padding: 1px 6px; border-radius: 3px;
+    color: var(--fg); font-size: 12px;
+  }
+  .notes ul { margin: 6px 0 0; padding-left: 18px; }
+  .notes li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+  <h1>Memory <span class="mono" style="color: var(--muted-fg); font-size: 11px;">· v3 · actual theme</span></h1>
+  <div class="sub">purple primary · dark navy · Inter + JetBrains Mono · matches <code class="mono" style="color:var(--primary); background:var(--muted); padding:1px 6px; border-radius:3px; font-size:12px;">packages/dashboard-v2/globals.css</code></div>
+
+  <div class="split">
+    <!-- ================== LEFT: TOP LEVEL ================== -->
+    <div class="panel">
+      <div class="panel-label"><span class="accent">State 1 —</span> Top level</div>
+      <div class="top-view">
+        <div class="section-head">
+          <span class="title">Memory</span>
+          <span class="meta">165 entries · 5 folders</span>
+        </div>
+        <div class="folder-grid">
+
+          <div class="folder-tile c-user">
+            <div class="icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </div>
+            <div class="name">User</div>
+            <div class="count">1</div>
+            <div class="desc">profile · preferences</div>
+          </div>
+
+          <div class="folder-tile c-feedback recent">
+            <div class="icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="name">Feedback</div>
+            <div class="count">48</div>
+            <div class="desc">corrections · rules</div>
+          </div>
+
+          <div class="folder-tile c-project recent">
+            <div class="icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-7L10.3 4.3A1 1 0 0 0 9.6 4H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/></svg>
+            </div>
+            <div class="name">Project</div>
+            <div class="count">98</div>
+            <div class="desc">backlog · specs · decisions</div>
+          </div>
+
+          <div class="folder-tile c-session recent">
+            <div class="icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <div class="name">Session</div>
+            <div class="count">17</div>
+            <div class="desc">recaps · chronological</div>
+          </div>
+
+          <div class="folder-tile c-reference empty">
+            <div class="icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            </div>
+            <div class="name">Reference</div>
+            <div class="count">0</div>
+            <div class="desc">external · trackers</div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ================== RIGHT: DRILLED + DIALOG ================== -->
+    <div class="panel">
+      <div class="panel-label"><span class="accent">State 2 —</span> Drilled · memory selected · dialog open</div>
+      <div class="drill-view">
+        <div class="breadcrumb">
+          <span class="crumb-root">Memory</span>
+          <span class="sep">›</span>
+          <span class="icon-sm">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-7L10.3 4.3A1 1 0 0 0 9.6 4H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/></svg>
+          </span>
+          <span class="crumb-here">Project</span>
+          <span class="count">98 memories</span>
+        </div>
+        <div class="tile-grid">
+          <div class="tile">
+            <span class="tag">Project</span>
+            <div class="title">Consensus verdict-coverage display gap</div>
+            <div class="meta"><span>formatReport</span><span>2h ago</span></div>
+          </div>
+          <div class="tile selected">
+            <span class="tag">Project</span>
+            <div class="title">Peer-diversity drag on accuracy</div>
+            <div class="meta"><span>performance-reader</span><span>5h ago</span></div>
+          </div>
+          <div class="tile">
+            <span class="tag">Project</span>
+            <div class="title">Circuit-breaker benching overloaded</div>
+            <div class="meta"><span>unique_unconfirmed</span><span>1d ago</span></div>
+          </div>
+          <div class="tile">
+            <span class="tag">Project</span>
+            <div class="title">Starvation gate two-tier design</div>
+            <div class="meta"><span>cross-reviewer</span><span>3d ago</span></div>
+          </div>
+          <div class="tile">
+            <span class="tag">Project</span>
+            <div class="title">Git Project Bridge spec</div>
+            <div class="meta"><span>remote agent</span><span>4d ago</span></div>
+          </div>
+          <div class="tile">
+            <span class="tag">Project</span>
+            <div class="title">OpenClaw ecosystem-scale</div>
+            <div class="meta"><span>~300K stars</span><span>5d ago</span></div>
+          </div>
+        </div>
+
+        <div class="dialog-scrim">
+          <div class="dialog">
+            <div class="dialog-header">
+              <span class="icon-sm">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-7L10.3 4.3A1 1 0 0 0 9.6 4H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/></svg>
+              </span>
+              <span class="tag">Project</span>
+              <span class="title">Peer-diversity drag on accuracy</span>
+              <span class="close">✕</span>
+            </div>
+            <div class="dialog-body">
+              <div class="section-h">Description</div>
+              <p>Agreement signals scale numerator but not denominator by <code>diversityMul</code>; small peer pools cap accuracy even when correct.</p>
+              <div class="section-h">Why</div>
+              <p>Observed <code>0.83 → 0.65</code> drag on sonnet 2026-04-14. Five consensus rounds, same peer pool, 12:2 positive:negative ratio.</p>
+              <div class="section-h">How to apply</div>
+              <p>Before reading accuracy as quality signal, check whether the agent has been running repeated rounds with a tiny peer pool. If so, the drop may be pool-diversity drag, not regression.</p>
+              <div class="section-h">File</div>
+              <p class="muted">project_scoring_diversity_drag.md</p>
+            </div>
+            <div class="dialog-footer">
+              <span>2 backlinks</span>
+              <span>updated 5h ago</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <b>What actually matches the dashboard now:</b>
+    <ul>
+      <li>Colors from <code>globals.css</code>: <code>#8b5cf6</code> primary (purple), <code>#0a0a0f</code> bg, <code>#13131a</code> cards, semantic finding colors for per-type accents (User=impact blue, Feedback=unverified amber, Project=primary purple, Session=confirmed emerald, Reference=dim gray).</li>
+      <li>Fonts: Inter 400/500/600 for body, JetBrains Mono for labels/metadata/code. Sizes match the 15px body / 10-13px mono ratio in globals.css.</li>
+      <li>Radii match (<code>0.25rem</code> / <code>0.375rem</code> / <code>0.5rem</code>). Cards use shadcn-style borders with <code>rgba(139,92,246,0.12)</code> default.</li>
+      <li>Recent-activity dot is purple, not amber. Matches primary ring color.</li>
+    </ul>
+    <br>
+    <b>Blocking decisions (your call before I build):</b>
+    <ul>
+      <li><b>Which taxonomy wins?</b> MEMORY.md uses <code>user / feedback / project / reference / session</code>. Existing <code>MemoryCard.tsx:8-21</code> uses <code>inferType()</code> which returns <code>cognitive / skill / session / review / task / memory</code>. These don't match. Pick one, I align everything to it. I'd lean MEMORY.md's 5-type taxonomy — it's the documented contract and matches filename prefixes.</li>
+      <li><b>Drift fix before UI?</b> 14+ session files have <code>type: project</code> in frontmatter. Folder counts will be wrong until fixed. 5-min shell script to normalize.</li>
+      <li><b>Keep empty Reference folder?</b> Renders dim in current mockup. Options: (a) show anyway, (b) hide until populated, (c) replace with a 4th functional folder.</li>
+    </ul>
+  </div>
+</body>
+</html>
