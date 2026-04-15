@@ -7,7 +7,24 @@ import { MemoryDialog } from './MemoryDialog';
 
 interface MemoryFoldersProps {
   memories: MemoryFile[];
+  /**
+   * Section heading override. Defaults to "Memory" for backward-compat with
+   * the pre-split single-section layout; pass "Gossip Memory" when rendering
+   * the `.gossip/memory/` store alongside a sibling `<NativeMemories>` block.
+   */
+  heading?: string;
+  /**
+   * When true, show an additional status-based filter (open / shipped / all).
+   * Used by the gossip-memory view per the native-vs-gossip separation spec.
+   * Native memories don't carry a canonical `status` field, so the filter is
+   * off by default.
+   */
+  statusFilter?: boolean;
 }
+
+/** Status values that count as "shipped/closed" in the status filter. */
+const SHIPPED_STATUSES = new Set(['shipped', 'closed']);
+type StatusFilter = 'all' | 'open' | 'shipped';
 
 /**
  * Per-folder accent — text color class applied to count + icon stroke.
@@ -83,9 +100,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  *
  * Spec: docs/specs/2026-04-15-memory-taxonomy-hybrid.md
  */
-export function MemoryFolders({ memories }: MemoryFoldersProps) {
+export function MemoryFolders({ memories, heading = 'Memory', statusFilter = false }: MemoryFoldersProps) {
   const [folder, setFolder] = useState<DisplayType | null>(null);
   const [open, setOpen] = useState<MemoryFile | null>(null);
+  const [statusView, setStatusView] = useState<StatusFilter>('all');
 
   // De-dupe by filename: the same file can be returned for both its agent and
   // _project when an agent shares it.
@@ -93,6 +111,19 @@ export function MemoryFolders({ memories }: MemoryFoldersProps) {
     () => memories.filter((m, i, arr) => arr.findIndex((x) => x.filename === m.filename) === i),
     [memories],
   );
+
+  // Apply status filter (gossip-memory only). Native store doesn't carry status
+  // consistently, so we only filter when the caller opts in.
+  const filtered = useMemo(() => {
+    if (!statusFilter || statusView === 'all') return unique;
+    return unique.filter((m) => {
+      const s = (m.frontmatter?.status || '').toLowerCase();
+      if (statusView === 'shipped') return SHIPPED_STATUSES.has(s);
+      // 'open' means explicitly open OR missing — missing status is treated as
+      // open backlog per the memory-taxonomy default-to-backlog rule.
+      return s === 'open' || !s;
+    });
+  }, [unique, statusFilter, statusView]);
 
   // Group memories by display folder, plus per-folder "active in last 24h" flag.
   const byFolder = useMemo(() => {
@@ -109,13 +140,13 @@ export function MemoryFolders({ memories }: MemoryFoldersProps) {
       rule: false,
     };
     const now = Date.now();
-    for (const m of unique) {
+    for (const m of filtered) {
       const t = toDisplayType(m);
       buckets[t].push(m);
       if (!recent[t] && isRecent(m, now)) recent[t] = true;
     }
     return { buckets, recent };
-  }, [unique]);
+  }, [filtered]);
 
   if (folder) {
     return (
@@ -133,9 +164,30 @@ export function MemoryFolders({ memories }: MemoryFoldersProps) {
 
   return (
     <section className="flex h-full flex-col">
-      <h2 className="mb-3 font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-        Memory <span className="text-primary">{unique.length}</span>
-      </h2>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
+          {heading} <span className="text-primary">{filtered.length}</span>
+        </h2>
+        {statusFilter && (
+          <div className="flex gap-1 font-mono text-[10px]" role="tablist" aria-label="Status filter">
+            {(['all', 'open', 'shipped'] as const).map((s) => (
+              <button
+                key={s}
+                role="tab"
+                aria-selected={statusView === s}
+                onClick={() => setStatusView(s)}
+                className={`rounded-sm border px-2 py-0.5 uppercase tracking-widest transition ${
+                  statusView === s
+                    ? 'border-primary/50 bg-primary/10 text-primary'
+                    : 'border-border/30 text-muted-foreground hover:border-primary/30 hover:text-foreground'
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {DISPLAY_TYPES.map(({ type, label, blurb }) => {
           const count = byFolder.buckets[type].length;
@@ -209,11 +261,81 @@ export function MemoryFolders({ memories }: MemoryFoldersProps) {
 function isRecent(mem: MemoryFile, now: number): boolean {
   const fm = mem.frontmatter;
   if (!fm) return false;
-  for (const key of ['timestamp', 'updated', 'updatedAt', 'modified', 'created', 'date']) {
+  // lastAccessed is the canonical gossip-memory freshness key (see
+  // memory-writer.ts frontmatter schema); updated is included as a duplicate
+  // for the native store's "updated" convention. The extra keys stay for
+  // defensive parsing across both stores.
+  for (const key of ['lastAccessed', 'updated', 'timestamp', 'updatedAt', 'modified', 'created', 'date']) {
     const v = fm[key];
     if (!v) continue;
     const t = new Date(v).getTime();
     if (!isNaN(t) && now - t <= DAY_MS) return true;
   }
   return false;
+}
+
+/**
+ * Gossip-memory wrapper — 4-folder taxonomy with status filter. Used to render
+ * `.gossip/memory/` entries alongside `<NativeMemories>` in the dashboard per
+ * docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md.
+ */
+export function GossipMemories({ memories }: { memories: MemoryFile[] }) {
+  return <MemoryFolders memories={memories} heading="Gossip Memory" statusFilter />;
+}
+
+/**
+ * Native-memory wrapper — flat list view of Claude Code's auto-memory. No
+ * taxonomy, no status filter (Claude Code doesn't write a canonical status).
+ * The separation invariant (spec risk matrix) forbids merging native + gossip
+ * arrays; render them as two distinct sections.
+ */
+export function NativeMemories({ memories }: { memories: MemoryFile[] }) {
+  const [open, setOpen] = useState<MemoryFile | null>(null);
+  const unique = useMemo(
+    () => memories.filter((m, i, arr) => arr.findIndex((x) => x.filename === m.filename) === i),
+    [memories],
+  );
+  const now = Date.now();
+
+  return (
+    <section className="flex h-full flex-col">
+      <h2 className="mb-3 font-mono text-xs font-bold uppercase tracking-widest text-foreground">
+        Native Memory <span className="text-primary">{unique.length}</span>
+      </h2>
+      {unique.length === 0 ? (
+        <p className="font-mono text-[11px] text-muted-foreground">No native memories yet.</p>
+      ) : (
+        <ul className="space-y-1 font-mono text-[11px]">
+          {unique.slice(0, 20).map((m) => {
+            const recent = isRecent(m, now);
+            const desc = m.frontmatter?.description || m.frontmatter?.name || '';
+            return (
+              <li key={m.filename}>
+                <button
+                  onClick={() => setOpen(m)}
+                  className="flex w-full items-center justify-between gap-3 rounded-sm border border-border/20 bg-muted/40 px-3 py-2 text-left transition hover:border-primary/30 hover:bg-accent/40"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    {recent && (
+                      <span
+                        className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                        style={{ boxShadow: '0 0 8px rgba(139, 92, 246, 0.6)' }}
+                        aria-label="Activity in the last 24h"
+                      />
+                    )}
+                    <span className="truncate text-foreground">{m.filename}</span>
+                  </span>
+                  {desc && <span className="shrink-0 truncate text-muted-foreground/80">{desc.slice(0, 60)}</span>}
+                </button>
+              </li>
+            );
+          })}
+          {unique.length > 20 && (
+            <li className="pl-3 text-[10px] text-muted-foreground">… and {unique.length - 20} more</li>
+          )}
+        </ul>
+      )}
+      <MemoryDialog memory={open} onClose={() => setOpen(null)} />
+    </section>
+  );
 }

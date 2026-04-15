@@ -2,7 +2,7 @@ import { overviewHandler } from '@gossip/relay/dashboard/api-overview';
 import { agentsHandler } from '@gossip/relay/dashboard/api-agents';
 import { skillsGetHandler, skillsBindHandler } from '@gossip/relay/dashboard/api-skills';
 import { memoryHandler } from '@gossip/relay/dashboard/api-memory';
-import { autoMemoryHandler } from '@gossip/relay/dashboard/api-auto-memory';
+import { autoMemoryHandler } from '@gossip/relay/dashboard/api-native-memory';
 import { tasksHandler } from '@gossip/relay/dashboard/api-tasks';
 import { signalsHandler } from '@gossip/relay/dashboard/api-signals';
 import { consensusHandler } from '@gossip/relay/dashboard/api-consensus';

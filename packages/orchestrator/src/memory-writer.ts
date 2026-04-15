@@ -40,6 +40,50 @@ function sanitizeTaskId(taskId: string): string {
   return taskId.replace(/[/\\:*?"<>|\0]/g, '_');
 }
 
+/**
+ * The three artifacts produced by a session save, plus the metadata needed
+ * to write them. Returned by `prepareSessionArtifacts*` so the caller can
+ * control write order + per-artifact try/catch semantics.
+ *
+ * Write order (mandatory):
+ *   1. next-session.md       (bootstrap continuity)
+ *   2. cognitive knowledge   (LRU store)
+ *   3. .gossip/memory/*.md   (dashboard visibility)
+ *
+ * Spec: docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md
+ */
+export interface SessionArtifacts {
+  /** The processed summary body (post STALE/PINNED cleanup, pre-write). */
+  summaryBody: string;
+  /** One-line session summary extracted from SUMMARY: or fallback heuristic. */
+  summaryOneLiner: string;
+  /** ISO-ish timestamp used for cognitive-store filename (YYYY-MM-DDTHH-mm-ss). */
+  timestamp: string;
+  /** Calendar date (YYYY-MM-DD). */
+  today: string;
+  /** True if the LLM flagged the session as PINNED. */
+  pinned: boolean;
+
+  /** Absolute path of the cognitive knowledge file (.gossip/agents/_project/memory/knowledge/<ts>-session.md). */
+  knowledgePath: string;
+  /** Content to write to knowledgePath. */
+  knowledgeContent: string;
+
+  /** Absolute path of .gossip/next-session.md. */
+  nextSessionPath: string;
+  /** Content to write to nextSessionPath. */
+  nextSessionContent: string;
+
+  /** Directory containing the dashboard-visible gossip memory files (.gossip/memory/). */
+  gossipMemoryDir: string;
+  /** Absolute path of the gossip-memory session file. */
+  gossipMemoryPath: string;
+  /** Content to write to gossipMemoryPath. */
+  gossipMemoryContent: string;
+  /** Resolved status derived from the summary's "Open for next session" section ("open" | "shipped"). */
+  gossipStatus: 'open' | 'shipped';
+}
+
 export class MemoryWriter {
   private summaryLlm: ILLMProvider | null = null;
 
@@ -308,33 +352,41 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
   }
 
   /**
-   * Write session summary from raw LLM output (skips the LLM call).
-   * Used by the native utility path after Agent() completes.
+   * Prepare session artifacts from raw LLM output without writing the three
+   * main files. The caller is responsible for writing them in order:
+   *   1. next-session.md     (bootstrap continuity — highest priority)
+   *   2. cognitive knowledge (LRU store)
+   *   3. .gossip/memory/     (dashboard visibility — best-effort)
+   *
+   * Book-keeping side effects (STALE normalization, LRU pruning, tasks.jsonl
+   * entry, MEMORY.md rebuild, compaction) happen during preparation because
+   * they are internal to the cognitive store and orthogonal to the three
+   * artifact writes. Used by the native utility path after Agent() completes.
    */
-  async writeSessionSummaryFromRaw(data: {
+  async prepareSessionArtifactsFromRaw(data: {
     gossip: string;
     consensus: string;
     performance: string;
     gitLog: string;
     notes?: string;
     raw: string;
-  }): Promise<string> {
+  }): Promise<SessionArtifacts> {
     const { memDir, knowledgeDir, timestamp, today, rawInput, existingFiles } = this.sessionSummaryData(data);
     return this.processSessionResponse(data.raw, rawInput, knowledgeDir, memDir, today, timestamp, existingFiles);
   }
 
   /**
-   * Write a session summary to the _project virtual agent's memory.
-   * Dedicated method with higher output cap (4000 chars) and session-specific prompt.
-   * Falls back to raw data save if LLM fails.
+   * Prepare session artifacts using the configured summary LLM (with fallback).
+   * The caller (see apps/cli/src/mcp-server-sdk.ts session_save handler) is
+   * responsible for writing the three files in order.
    */
-  async writeSessionSummary(data: {
+  async prepareSessionArtifacts(data: {
     gossip: string;
     consensus: string;
     performance: string;
     gitLog: string;
     notes?: string;
-  }): Promise<string> {
+  }): Promise<SessionArtifacts> {
     const SESSION_SUMMARY_MAX_CHARS = 4000;
     const { memDir, knowledgeDir, timestamp, today, rawInput, existingFiles } = this.sessionSummaryData(data);
 
@@ -367,8 +419,87 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
   }
 
   /**
+   * Convenience wrapper: prepare artifacts AND write the three files in order.
+   * Preserved for backward-compat with existing callers/tests that rely on the
+   * single-call signature returning the summary body string.
+   *
+   * New callers should prefer `prepareSessionArtifactsFromRaw` + `writeSessionArtifacts`
+   * so each write can have its own try/catch with caller-owned semantics.
+   */
+  async writeSessionSummaryFromRaw(data: {
+    gossip: string;
+    consensus: string;
+    performance: string;
+    gitLog: string;
+    notes?: string;
+    raw: string;
+  }): Promise<string> {
+    const artifacts = await this.prepareSessionArtifactsFromRaw(data);
+    this.writeSessionArtifacts(artifacts);
+    return artifacts.summaryBody;
+  }
+
+  /** Convenience wrapper: prepare + write all three files. See prepareSessionArtifacts() for the separated API. */
+  async writeSessionSummary(data: {
+    gossip: string;
+    consensus: string;
+    performance: string;
+    gitLog: string;
+    notes?: string;
+  }): Promise<string> {
+    const artifacts = await this.prepareSessionArtifacts(data);
+    this.writeSessionArtifacts(artifacts);
+    return artifacts.summaryBody;
+  }
+
+  /**
+   * Write the three session artifacts in mandatory order:
+   *   1. next-session.md       — bootstrap continuity; throws on failure
+   *   2. cognitive knowledge   — LRU store; logged & continued on failure
+   *   3. .gossip/memory/       — dashboard visibility; logged & continued on failure
+   *
+   * Per-artifact failure isolation: a failure in (2) or (3) must not prevent
+   * (1) from being persisted, and must not cause the session save to report
+   * failure to the user. See docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md.
+   */
+  writeSessionArtifacts(a: SessionArtifacts): void {
+    // (1) next-session.md — must succeed; bootstrap continuity is the highest-priority artifact.
+    try {
+      writeFileSync(a.nextSessionPath, a.nextSessionContent);
+    } catch (err) {
+      gossipLog(`next-session.md write failed: ${(err as Error).message}`);
+      throw err;
+    }
+
+    // (2) cognitive knowledge file — best-effort but logged loudly; cognitive store degraded is not fatal.
+    try {
+      writeFileSync(a.knowledgePath, a.knowledgeContent);
+    } catch (err) {
+      gossipLog(`cognitive knowledge write failed: ${(err as Error).message}`);
+    }
+
+    // (3) .gossip/memory/session_*.md — best-effort dashboard visibility.
+    try {
+      mkdirSync(a.gossipMemoryDir, { recursive: true });
+      writeFileSync(a.gossipMemoryPath, a.gossipMemoryContent);
+    } catch (err) {
+      gossipLog(`.gossip/memory write failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
    * Shared post-processing for session summary responses.
-   * Validates, truncates, extracts metadata, handles STALE/PINNED, writes files.
+   * Validates, truncates, extracts metadata, handles STALE/PINNED.
+   *
+   * Prepares the three artifact contents (next-session.md, cognitive knowledge,
+   * gossip-memory session file) and returns them in a SessionArtifacts record.
+   * Internal book-keeping side effects (STALE normalization, LRU pruning,
+   * tasks.jsonl append, MEMORY.md rebuild, compaction) happen here because
+   * they are cognitive-store internals, not dashboard-visible artifacts.
+   *
+   * The three main writes are deliberately NOT performed here — the caller
+   * controls order, try/catch boundaries, and per-artifact failure semantics
+   * per docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md.
    */
   private async processSessionResponse(
     raw: string,
@@ -379,7 +510,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     timestamp: string,
     existingFiles: string[],
     isFallback = false,
-  ): Promise<string> {
+  ): Promise<SessionArtifacts> {
     const SESSION_SUMMARY_MAX_CHARS = 4000;
     const filename = `${timestamp}-session.md`;
     let summaryBody: string;
@@ -474,7 +605,8 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     // Prune AFTER staleness downgrades so demoted files are eviction candidates
     this.pruneProjectKnowledge(knowledgeDir);
 
-    const content = [
+    // (a) cognitive knowledge file content
+    const knowledgeContent = [
       '---',
       `name: Session ${today} — ${summaryOneLiner}`,
       `description: ${summaryOneLiner}`,
@@ -486,10 +618,9 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
       '',
       summaryBody,
     ].filter(l => l !== '').join('\n');
+    const knowledgePath = join(knowledgeDir, filename);
 
-    writeFileSync(join(knowledgeDir, filename), content);
-
-    // Write next-session.md with ONLY the priorities section (≤1500 chars).
+    // (b) next-session.md — ONLY the priorities section (≤1500 chars).
     // Full session detail stays in the knowledge file for on-demand retrieval.
     // This keeps bootstrap context lean — agents get priorities, not history.
     const nextSessionPath = join(this.projectRoot, '.gossip', 'next-session.md');
@@ -498,7 +629,33 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     const nextSessionContent = openMatch
       ? `# Next Session\n\n${openMatch[0].trim()}\n`
       : `# Next Session\n\n${truncateAtWord(summaryBody, NEXT_SESSION_MAX_CHARS)}\n`;
-    writeFileSync(nextSessionPath, nextSessionContent);
+
+    // (c) .gossip/memory/session_YYYY_MM_DD.md — canonical dashboard-visible artifact.
+    // Separate store from cognitive knowledge: dashboard-facing, pruned on its own
+    // schedule, never a destination for cognitive-store importance values (always 0.4).
+    // Same-date collision: second save overwrites first (semantics pinned in spec
+    // invariant 4). Cognitive store retains per-timestamp versions for recall.
+    const gossipMemoryDir = join(this.projectRoot, '.gossip', 'memory');
+    const gossipMemoryFilename = `session_${today.replace(/-/g, '_')}.md`;
+    const gossipMemoryPath = join(gossipMemoryDir, gossipMemoryFilename);
+    const gossipStatus = openMatch && openMatch[0].trim().length > '## Open for next session'.length + 5
+      ? 'open'
+      : 'shipped';
+    const gossipName = sanitizeYamlValue(`Session ${today} — ${summaryOneLiner}`).slice(0, 120);
+    const gossipMemoryContent = [
+      '---',
+      `name: ${gossipName}`,
+      `description: ${summaryOneLiner}`,
+      `status: ${gossipStatus}`,
+      `type: session`,
+      `importance: 0.4`,
+      `lastAccessed: ${today}`,
+      `updated: ${today}`,
+      `accessCount: 0`,
+      '---',
+      '',
+      summaryBody,
+    ].join('\n');
 
     // One-time migration: normalize old importance=1.0 entries
     const migrationTasksPath = join(memDir, 'tasks.jsonl');
@@ -517,7 +674,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
       } catch { /* best-effort */ }
     }
 
-    // Write task entry for session tracking
+    // Write task entry for session tracking (internal cognitive-store bookkeeping)
     await this.writeTaskEntry('_project', {
       taskId: `session-${timestamp}`,
       task: `Session ${today}: ${summaryOneLiner}`,
@@ -533,7 +690,21 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
       compactor.compactIfNeeded('_project', 15);
     } catch { /* best-effort compaction */ }
 
-    return summaryBody;
+    return {
+      summaryBody,
+      summaryOneLiner,
+      timestamp,
+      today,
+      pinned,
+      knowledgePath,
+      knowledgeContent,
+      nextSessionPath,
+      nextSessionContent,
+      gossipMemoryDir,
+      gossipMemoryPath,
+      gossipMemoryContent,
+      gossipStatus,
+    };
   }
 
   /** Warmth-aware pruning for _project knowledge files */

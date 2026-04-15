@@ -4,7 +4,8 @@ import { overviewHandler } from './api-overview';
 import { agentsHandler } from './api-agents';
 import { skillsGetHandler, skillsBindHandler } from './api-skills';
 import { memoryHandler } from './api-memory';
-import { autoMemoryHandler } from './api-auto-memory';
+import { autoMemoryHandler } from './api-native-memory';
+import { gossipMemoryHandler } from './api-gossip-memory';
 import { consensusHandler } from './api-consensus';
 import { signalsHandler } from './api-signals';
 import { learningsHandler } from './api-learnings';
@@ -235,9 +236,24 @@ export class DashboardRouter {
         return true;
       }
 
-      // Auto-memory: /dashboard/api/auto-memory (Claude Code project memory)
-      if (url === '/dashboard/api/auto-memory' && req.method === 'GET') {
+      // Native memory: /dashboard/api/native-memory (Claude Code auto-memory, flat).
+      // Legacy alias `/dashboard/api/auto-memory` is kept for one release — the
+      // dashboard now calls the canonical path; remove the alias after the next
+      // dashboard bundle ships to all users.
+      if (
+        (url === '/dashboard/api/native-memory' || url === '/dashboard/api/auto-memory')
+        && req.method === 'GET'
+      ) {
         const data = await autoMemoryHandler(this.projectRoot);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      // Gossip memory: /dashboard/api/gossip-memory — gossipcat-owned `.gossip/memory/`
+      // store with 4-folder taxonomy. Parallel to native-memory but a different
+      // store; dashboard must render them as two separate sections (spec invariant).
+      if (url === '/dashboard/api/gossip-memory' && req.method === 'GET') {
+        const data = await gossipMemoryHandler(this.projectRoot);
         this.json(res, 200, data);
         return true;
       }

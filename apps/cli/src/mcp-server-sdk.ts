@@ -220,6 +220,52 @@ let bootPromise: Promise<void> | null = null;
 let planExecutionDepth = 0;
 // Stash gathered session data between utility dispatch and re-entry (keyed by task ID)
 const _pendingSessionData = new Map<string, { gossip: string; consensus: string; performance: string; gitLog: string; notes?: string }>();
+
+/**
+ * Write the three session-save artifacts in mandatory order per
+ * docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md:
+ *   1. next-session.md       → bootstrap continuity (throws on failure)
+ *   2. cognitive knowledge   → LRU store (logged & continues on failure)
+ *   3. .gossip/memory/       → dashboard visibility (logged & continues on failure)
+ *
+ * Each write lives in its own try/catch so a failure in (2) or (3) does NOT
+ * prevent (1) from having landed, and does not cause session_save to report
+ * a top-level failure. Returns the summary body (empty string if write-order
+ * invariant is violated and (1) fails hard — in that case caller surfaces error).
+ */
+async function writeArtifactsInOrder(
+  a: import('@gossip/orchestrator').SessionArtifacts,
+): Promise<string> {
+  const { writeFileSync: wf, mkdirSync: md } = await import('fs');
+  const { dirname } = await import('path');
+
+  // (1) next-session.md — highest priority; bootstrap continuity depends on it.
+  try {
+    md(dirname(a.nextSessionPath), { recursive: true });
+    wf(a.nextSessionPath, a.nextSessionContent);
+  } catch (err) {
+    process.stderr.write(`[gossipcat] next-session.md write FAILED: ${(err as Error).message}\n`);
+    throw err;
+  }
+
+  // (2) cognitive knowledge file — best-effort; cognitive store degraded is not fatal.
+  try {
+    md(dirname(a.knowledgePath), { recursive: true });
+    wf(a.knowledgePath, a.knowledgeContent);
+  } catch (err) {
+    process.stderr.write(`[gossipcat] cognitive knowledge write failed: ${(err as Error).message}\n`);
+  }
+
+  // (3) .gossip/memory/session_*.md — best-effort dashboard visibility.
+  try {
+    md(a.gossipMemoryDir, { recursive: true });
+    wf(a.gossipMemoryPath, a.gossipMemoryContent);
+  } catch (err) {
+    process.stderr.write(`[gossipcat] .gossip/memory write failed: ${(err as Error).message}\n`);
+  }
+
+  return a.summaryBody;
+}
 // Stash skill develop prompt metadata between native-utility dispatch and re-entry (keyed by task ID)
 const _pendingSkillData = new Map<string, { agentId: string; category: string; skillName: string; skillPath: string; baseline_accuracy_correct: number; baseline_accuracy_hallucinated: number; bound_at: string }>();
 
@@ -3011,20 +3057,24 @@ server.tool(
       const writer = new MemoryWriter(process.cwd());
       try { if (ctx.mainAgent.getLLM()) writer.setSummaryLlm(ctx.mainAgent.getLLM()); } catch {}
 
-      let summary: string;
+      // Prepare artifacts (no writes yet). Write order is enforced below per
+      // docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md.
+      let artifacts;
       if (utilityResult?.status === 'completed' && utilityResult.result) {
         try {
-          summary = await writer.writeSessionSummaryFromRaw({ ...summaryData, raw: utilityResult.result });
+          artifacts = await writer.prepareSessionArtifactsFromRaw({ ...summaryData, raw: utilityResult.result });
         } catch (err) {
           process.stderr.write(`[gossipcat] Native session summary post-processing failed: ${(err as Error).message}\n`);
-          summary = await writer.writeSessionSummary(summaryData);
+          artifacts = await writer.prepareSessionArtifacts(summaryData);
         }
       } else {
         process.stderr.write(`[gossipcat] Native session summary utility ${_utility_task_id} failed/timed out, falling back to LLM\n`);
-        summary = await writer.writeSessionSummary(summaryData);
+        artifacts = await writer.prepareSessionArtifacts(summaryData);
       }
       ctx.nativeResultMap.delete(_utility_task_id);
       ctx.nativeTaskMap.delete(_utility_task_id);
+
+      const summary = await writeArtifactsInOrder(artifacts);
 
       // Auto-resolve findings that appear in recent commits (same as normal path)
       if (summaryData.gitLog) {
@@ -3297,8 +3347,11 @@ server.tool(
       };
     }
 
-    // Normal path (no re-entry): call LLM directly
-    summary = await writer.writeSessionSummary(summaryData);
+    // Normal path (no re-entry): call LLM directly. Prepare artifacts without
+    // writing, then perform the three writes in mandatory order with per-artifact
+    // try/catch (docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md).
+    const artifacts = await writer.prepareSessionArtifacts(summaryData);
+    summary = await writeArtifactsInOrder(artifacts);
 
     // 5d. Append open findings to next-session.md as structured data (outside LLM prose)
     if (findingsTable) {

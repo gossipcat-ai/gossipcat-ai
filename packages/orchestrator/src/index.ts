@@ -33,6 +33,7 @@ export { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-finding
 export type { ParsedFinding, ParseFindingsResult, ParseFindingsOptions, FindingType, Severity } from './parse-findings';
 export { AgentMemoryReader } from './agent-memory';
 export { MemoryWriter } from './memory-writer';
+export type { SessionArtifacts } from './memory-writer';
 export { MemoryCompactor } from './memory-compactor';
 export { TaskGraph } from './task-graph';
 export { TaskGraphSync } from './task-graph-sync';

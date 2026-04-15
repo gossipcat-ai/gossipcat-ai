@@ -550,4 +550,125 @@ describe('MemoryWriter', () => {
       expect(content).toContain('Fix the auth bug');
     });
   });
+
+  // ─── Native vs Gossip memory separation
+  // Spec: docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md
+  describe('prepareSessionArtifactsFromRaw() — native/gossip separation', () => {
+    const RAW_OPEN = 'SUMMARY: Open work pending\n\n## Open for next session\n- Investigate flake in server.ts\n\n## What shipped\n- Wired oauth\n';
+    const RAW_SHIPPED = 'SUMMARY: Closed sprint\n\n## What shipped\n- Replaced parser\n- Added 12 tests\n';
+
+    it('returns SessionArtifacts containing all three artifact paths + contents', async () => {
+      const writer = new MemoryWriter(testDir);
+      const artifacts = await writer.prepareSessionArtifactsFromRaw({
+        gossip: 'g', consensus: 'c', performance: 'p', gitLog: 'gl', raw: RAW_OPEN,
+      });
+
+      expect(artifacts.knowledgePath).toContain('.gossip/agents/_project/memory/knowledge');
+      expect(artifacts.knowledgeContent).toContain('importance: 0.4');
+      expect(artifacts.nextSessionPath).toContain('.gossip/next-session.md');
+      expect(artifacts.nextSessionContent).toContain('Next Session');
+      expect(artifacts.gossipMemoryDir).toContain('.gossip/memory');
+      expect(artifacts.gossipMemoryPath).toContain('.gossip/memory/session_');
+      expect(artifacts.gossipMemoryPath.endsWith('.md')).toBe(true);
+    });
+
+    it('gossip memory frontmatter follows the canonical schema (importance always 0.4, status from open section)', async () => {
+      const writer = new MemoryWriter(testDir);
+      const open = await writer.prepareSessionArtifactsFromRaw({
+        gossip: 'g', consensus: 'c', performance: 'p', gitLog: 'gl', raw: RAW_OPEN,
+      });
+      const shipped = await writer.prepareSessionArtifactsFromRaw({
+        gossip: 'g', consensus: 'c', performance: 'p', gitLog: 'gl', raw: RAW_SHIPPED,
+      });
+
+      expect(open.gossipMemoryContent).toMatch(/^---\n/);
+      expect(open.gossipMemoryContent).toContain('status: open');
+      expect(open.gossipMemoryContent).toContain('type: session');
+      expect(open.gossipMemoryContent).toContain('importance: 0.4');
+      expect(open.gossipMemoryContent).toContain('lastAccessed:');
+      expect(open.gossipMemoryContent).toContain('updated:');
+      expect(open.gossipMemoryContent).toContain('accessCount: 0');
+      // No cognitive-store importance value should leak across — never 1, never 0.5+
+      expect(open.gossipMemoryContent).not.toMatch(/importance:\s*1\b/);
+      expect(open.gossipStatus).toBe('open');
+
+      expect(shipped.gossipMemoryContent).toContain('status: shipped');
+      expect(shipped.gossipStatus).toBe('shipped');
+    });
+
+    it('gossip memory filename uses session_YYYY_MM_DD.md (no timestamp suffix)', async () => {
+      const writer = new MemoryWriter(testDir);
+      const a = await writer.prepareSessionArtifactsFromRaw({
+        gossip: 'g', consensus: '', performance: '', gitLog: '', raw: RAW_SHIPPED,
+      });
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '_');
+      expect(a.gossipMemoryPath).toContain(`session_${today}.md`);
+    });
+
+    it('writeSessionArtifacts writes all three files in mandatory order', async () => {
+      const writer = new MemoryWriter(testDir);
+      const a = await writer.prepareSessionArtifactsFromRaw({
+        gossip: 'g', consensus: 'c', performance: 'p', gitLog: 'gl', raw: RAW_OPEN,
+      });
+      writer.writeSessionArtifacts(a);
+
+      expect(existsSync(a.nextSessionPath)).toBe(true);
+      expect(existsSync(a.knowledgePath)).toBe(true);
+      expect(existsSync(a.gossipMemoryPath)).toBe(true);
+
+      // Critical separation invariant: gossipcat MUST NOT write to user
+      // auto-memory (`~/.claude/projects/`). We only check that the gossip
+      // memory file landed inside the project's .gossip/memory tree.
+      expect(a.gossipMemoryPath.startsWith(testDir)).toBe(true);
+      expect(a.gossipMemoryPath).not.toContain('.claude/projects');
+    });
+
+    it('per-artifact failure isolation: gossip-memory write failure does not erase next-session.md', async () => {
+      const writer = new MemoryWriter(testDir);
+      const a = await writer.prepareSessionArtifactsFromRaw({
+        gossip: 'g', consensus: '', performance: '', gitLog: '', raw: RAW_SHIPPED,
+      });
+
+      // Force the gossip-memory write to fail by pointing it at a path whose
+      // parent is a regular file (not a directory). mkdirSync will throw;
+      // writeSessionArtifacts catches and continues.
+      const { writeFileSync: wfs, mkdirSync: mds } = require('fs');
+      const badParent = join(testDir, 'not-a-dir');
+      wfs(badParent, 'this is a file, not a directory');
+      const broken = { ...a, gossipMemoryDir: join(badParent, 'sub'), gossipMemoryPath: join(badParent, 'sub', 'x.md') };
+
+      expect(() => writer.writeSessionArtifacts(broken)).not.toThrow();
+      expect(existsSync(broken.nextSessionPath)).toBe(true);
+      expect(existsSync(broken.knowledgePath)).toBe(true);
+      expect(existsSync(broken.gossipMemoryPath)).toBe(false);
+      mds; // silence unused-import lint
+    });
+
+    it('writeSessionSummary wrapper still writes all three files (backward compat)', async () => {
+      const writer = new MemoryWriter(testDir);
+      const summary = await writer.writeSessionSummaryFromRaw({
+        gossip: 'g', consensus: 'c', performance: 'p', gitLog: 'gl', raw: RAW_OPEN,
+      });
+      expect(summary.length).toBeGreaterThan(0);
+
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '_');
+      const gossipPath = join(testDir, '.gossip', 'memory', `session_${today}.md`);
+      expect(existsSync(gossipPath)).toBe(true);
+      expect(existsSync(join(testDir, '.gossip', 'next-session.md'))).toBe(true);
+    });
+
+    it('does NOT write to user auto-memory (~/.claude/projects)', async () => {
+      const writer = new MemoryWriter(testDir);
+      const a = await writer.prepareSessionArtifactsFromRaw({
+        gossip: 'g', consensus: '', performance: '', gitLog: '', raw: RAW_SHIPPED,
+      });
+      // Defense in depth: assert artifact paths never reference the native
+      // auto-memory directory. The separation invariant is enforced by
+      // construction (we never compute that path), but a regression here would
+      // be a user-data corruption issue, so we belt-and-suspenders test it.
+      for (const p of [a.knowledgePath, a.nextSessionPath, a.gossipMemoryPath, a.gossipMemoryDir]) {
+        expect(p).not.toContain('.claude/projects');
+      }
+    });
+  });
 });

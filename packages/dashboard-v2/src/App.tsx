@@ -10,7 +10,7 @@ import { TeamHero } from '@/components/TeamHero';
 import { NeuralAvatar } from '@/components/NeuralAvatar';
 import { TaskDetailModal } from '@/components/TaskDetailModal';
 import { TasksSection } from '@/components/TasksSection';
-import { MemoryFolders } from '@/components/MemoryFolders';
+import { NativeMemories, GossipMemories } from '@/components/MemoryFolders';
 import { AgentPage } from '@/components/AgentPage';
 import { LogsPage } from '@/components/LogsPage';
 import { TaskRow } from '@/components/TaskRow';
@@ -407,7 +407,7 @@ function FindingsPage({
 
 function Dashboard() {
   const route = useRoute();
-  const { overview, agents, tasks, consensus, consensusReports, memories, loading, refresh } = useDashboardData();
+  const { overview, agents, tasks, consensus, consensusReports, nativeMemories, gossipMemories, loading, refresh } = useDashboardData();
   const [activeTaskCount, setActiveTaskCount] = useState(0);
 
   const handleWsEvent = useCallback((event: DashboardEvent) => {
@@ -455,7 +455,8 @@ function Dashboard() {
           {tasks && <TasksSection tasks={tasks} limit={5} />}
           {agents && <TeamHero agents={agents} />}
           <FindingsMetrics consensus={consensus} reports={consensusReports} />
-          {memories && <MemoryFolders memories={memories} />}
+          {gossipMemories && <GossipMemories memories={gossipMemories} />}
+          {nativeMemories && <NativeMemories memories={nativeMemories} />}
         </main>
       </div>
     );

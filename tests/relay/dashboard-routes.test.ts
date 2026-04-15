@@ -191,6 +191,54 @@ describe('URL query string handling', () => {
     await router.handle(req, res);
     expect(res._status).toBe(200);
   });
+
+  // ─── Native vs Gossip memory routing
+  // Spec: docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md
+  it('routes /dashboard/api/native-memory to native handler (canonical name)', async () => {
+    const req = mockReq('GET', '/dashboard/api/native-memory', validCookie);
+    const res = mockRes();
+    await router.handle(req, res);
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body).toHaveProperty('knowledge');
+    expect(Array.isArray(body.knowledge)).toBe(true);
+  });
+
+  it('routes /dashboard/api/auto-memory to native handler (legacy alias kept for one release)', async () => {
+    const req = mockReq('GET', '/dashboard/api/auto-memory', validCookie);
+    const res = mockRes();
+    await router.handle(req, res);
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body).toHaveProperty('knowledge');
+  });
+
+  it('routes /dashboard/api/gossip-memory to gossip handler (returns empty knowledge when dir missing)', async () => {
+    const req = mockReq('GET', '/dashboard/api/gossip-memory', validCookie);
+    const res = mockRes();
+    await router.handle(req, res);
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body).toEqual({ knowledge: [] });
+  });
+
+  it('routes /dashboard/api/gossip-memory and surfaces a real session_*.md file', async () => {
+    const memDir = join(projectRoot, '.gossip', 'memory');
+    mkdirSync(memDir, { recursive: true });
+    const fs = require('fs');
+    fs.writeFileSync(
+      join(memDir, 'session_2026_04_15.md'),
+      `---\nname: x\ndescription: y\nstatus: open\ntype: session\nimportance: 0.4\nlastAccessed: 2026-04-15\nupdated: 2026-04-15\naccessCount: 0\n---\nbody`,
+    );
+    const req = mockReq('GET', '/dashboard/api/gossip-memory', validCookie);
+    const res = mockRes();
+    await router.handle(req, res);
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body.knowledge).toHaveLength(1);
+    expect(body.knowledge[0].filename).toBe('session_2026_04_15.md');
+    expect(body.knowledge[0].frontmatter.status).toBe('open');
+  });
 });
 
 describe('SPA catch-all routing', () => {

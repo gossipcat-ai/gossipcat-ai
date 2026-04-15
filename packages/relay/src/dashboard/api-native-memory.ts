@@ -3,15 +3,19 @@ import { join } from 'path';
 import { homedir } from 'os';
 
 /**
- * Auto-memory API — exposes Claude Code's project-scoped auto-memory directory
- * (`~/.claude/projects/-<encoded-cwd>/memory/`). Separate from api-memory.ts,
- * which serves gossipcat per-agent cognitive memory under .gossip/agents/*.
+ * Native memory API — exposes Claude Code's project-scoped auto-memory directory
+ * (`~/.claude/projects/-<encoded-cwd>/memory/`). "Native" because Claude Code
+ * owns the write side (append-only from gossipcat's view); gossipcat never
+ * writes here. Separate from api-memory.ts (per-agent cognitive memory under
+ * .gossip/agents/*) and api-gossip-memory.ts (the canonical .gossip/memory/
+ * store written by gossipcat's session-save pipeline).
  *
  * Claude Code encodes the absolute cwd by replacing every `/` with `-`. The
  * directory path is derived from `projectRoot` at request time so it follows
  * the user's project, not a hardcoded path.
  *
- * Spec: docs/specs/2026-04-15-memory-taxonomy-hybrid.md (Path B)
+ * Route: GET /dashboard/api/native-memory (canonical), /dashboard/api/auto-memory (legacy alias).
+ * Spec: docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md
  */
 
 const FILENAME_RE = /^[A-Za-z0-9_.-]+\.md$/;
@@ -26,6 +30,9 @@ interface KnowledgeFile {
 export interface AutoMemoryResponse {
   knowledge: KnowledgeFile[];
 }
+
+/** Canonical alias for AutoMemoryResponse (same shape, clearer name). */
+export type NativeMemoryResponse = AutoMemoryResponse;
 
 /** Resolve the Claude Code auto-memory directory for `projectRoot`.
  *  Claude Code replaces every `/` in the absolute cwd with `-`. Because
@@ -70,7 +77,7 @@ export async function autoMemoryHandler(projectRoot: string, home?: string): Pro
   return { knowledge };
 }
 
-function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; content: string } {
+export function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; content: string } {
   if (!raw.startsWith('---')) return { frontmatter: {}, content: raw };
   // Frontmatter delimiter is `---` on its own line. Search from position 3 for
   // the next `---` occurrence to locate the closing fence.
@@ -87,3 +94,8 @@ function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; c
   if (rest.startsWith('\n')) rest = rest.slice(1);
   return { frontmatter: fm, content: rest.trim() };
 }
+
+/** Canonical alias: nativeMemoryHandler === autoMemoryHandler (legacy name). */
+export const nativeMemoryHandler = autoMemoryHandler;
+/** Canonical alias: nativeMemoryDir === autoMemoryDir (legacy name). */
+export const nativeMemoryDir = autoMemoryDir;
