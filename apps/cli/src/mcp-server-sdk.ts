@@ -2520,13 +2520,20 @@ server.tool(
           const score: any = scores.get(agentId);
           if (!score) continue;
 
-          // Match the sparse-data gate used by categoryAccuracy (performance-reader.ts:528):
-          // a category needs ≥5 classified signals (correct + hallucinated) before its
-          // strength is eligible to trigger a weak flag. Without this gate the trigger
-          // fires on agents whose only accumulated strength is one decayed agreement,
-          // even when they have 10+ unique_confirmed findings in the category.
+          // Two-factor gate for weak-category trigger:
+          //   1. signal count ≥ MIN_CATEGORY_N_FOR_TRIGGER (correct + hallucinated)
+          //   2. per-category accuracy below WEAKNESS_ACCURACY_THRESHOLD
+          //
+          // We key off `categoryAccuracy` (correct/(correct+hallucinated)) rather than
+          // `categoryStrengths`. `categoryStrengths` is an additive reliability-weighted
+          // score that rewards volume, so a highly active agent can read as "strong"
+          // even while hallucinating often. Accuracy is the UX-aligned label.
+          // Note: performance-reader.ts:528 already enforces the N ≥ 5 gate on
+          // categoryAccuracy, but we re-check here to keep the trigger self-documenting
+          // and robust if the reader's gate is ever relaxed.
           const MIN_CATEGORY_N_FOR_TRIGGER = 5;
-          const cats = score.categoryStrengths;
+          const WEAKNESS_ACCURACY_THRESHOLD = 0.3;
+          const cats = (score.categoryAccuracy || {}) as Record<string, number>;
           const correctCounts = (score.categoryCorrect || {}) as Record<string, number>;
           const hallucinatedCounts = (score.categoryHallucinated || {}) as Record<string, number>;
           let weakestCategory: string | null = null;
@@ -2536,7 +2543,7 @@ server.tool(
               const val = v as number;
               const n = (correctCounts[k] ?? 0) + (hallucinatedCounts[k] ?? 0);
               if (n < MIN_CATEGORY_N_FOR_TRIGGER) continue;
-              if (val < 0.3 && val < weakestValue) {
+              if (val < WEAKNESS_ACCURACY_THRESHOLD && val < weakestValue) {
                 weakestValue = val;
                 weakestCategory = k;
               }
@@ -2628,8 +2635,12 @@ server.tool(
             line += `\n    impl: passRate=${impl.passRate.toFixed(2)} peerApproval=${impl.peerApproval.toFixed(2)} reliability=${impl.reliability.toFixed(2)} implWeight=${iw.toFixed(2)}`;
           }
 
-          // Show category strengths/weaknesses from ATI competency profiles
-          const cats = (s as any).categoryStrengths;
+          // Show category strengths/weaknesses from ATI competency profiles.
+          // We label the displayed column "accuracy" because that's what the user
+          // sees next to agent-level accuracy — using categoryStrengths (additive,
+          // volume-rewarding) under an "accuracy" banner is misleading. Strengths
+          // remain available via the raw score object; the UI surface uses accuracy.
+          const cats = (s as any).categoryAccuracy;
           if (cats && Object.keys(cats).length > 0) {
             const sorted = Object.entries(cats).sort((a: any, b: any) => b[1] - a[1]);
             const strong = sorted.filter(([, v]) => (v as number) >= 0.6).map(([k, v]) => `${k}(${(v as number).toFixed(1)})`);
