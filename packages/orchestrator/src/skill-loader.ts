@@ -8,6 +8,16 @@ import { gossipLog, log as _log } from './log';
 const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
 const MAX_CONTEXTUAL_SKILLS = 3;
+/**
+ * Fractional boost added to a contextual skill's raw hit count when its
+ * `category` frontmatter is in the task's extracted categories. Chosen as 0.5
+ * to preserve integer-tie semantics against raw hits:
+ *   - non-category 2-hit (2.0) still beats category 1-hit (1.5)
+ *   - category 1-hit (1.5) beats non-category 1-hit (1.0)
+ *   - 0 raw hits + boost (0.5) does NOT pass MIN_KEYWORD_HITS=1 threshold
+ * See consensus f2ff0fac-fb384daa for the pinned design.
+ */
+const CATEGORY_BOOST = 0.5;
 // Lowered from 2 → 1 (consensus c8977bda-37564212): cross-cutting skills
 // (citation_grounding, error_handling) starved on well-framed tasks where
 // only a single keyword matched. MAX_CONTEXTUAL_SKILLS=3 remains the budget
@@ -51,6 +61,16 @@ export interface LoadSkillsResult {
 }
 
 /**
+ * Compute the category match boost for a contextual skill.
+ * Returns CATEGORY_BOOST (0.5) if the skill's category is in the task's
+ * extracted categories, otherwise 0. Zero-category tasks always return 0.
+ */
+function categoryBoost(skillCategory: string | undefined, categories: string[]): number {
+  if (!skillCategory || categories.length === 0) return 0;
+  return categories.includes(skillCategory) ? CATEGORY_BOOST : 0;
+}
+
+/**
  * Load skill files for an agent and return structured result.
  *
  * Resolution order per skill:
@@ -58,16 +78,32 @@ export interface LoadSkillsResult {
  * 2. Project skills: .gossip/skills/
  * 3. Default skills: packages/orchestrator/src/default-skills/
  *
- * Permanent skills are always loaded. Contextual skills require 2+ keyword
- * hits (word-boundary match) against the task string, capped at MAX_CONTEXTUAL_SKILLS.
+ * Permanent skills are always loaded. Contextual skills require MIN_KEYWORD_HITS
+ * (word-boundary match) against the task string, capped at MAX_CONTEXTUAL_SKILLS.
+ *
+ * When `taskCategories` is provided, skills whose frontmatter `category` is in
+ * that array receive a fractional boost (CATEGORY_BOOST) applied to raw hits
+ * BEFORE the threshold gate. A 0-hit skill with boost 0.5 still fails the
+ * MIN_KEYWORD_HITS=1 gate (effective 0.5 < 1). A 1-hit skill with boost gets
+ * 1.5 effective hits — enough to outrank a non-category 1-hit but not a
+ * non-category 2-hit. See consensus f2ff0fac-fb384daa.
  */
-export function loadSkills(agentId: string, skills: string[], projectRoot: string, index?: SkillIndex, task?: string): LoadSkillsResult {
+export function loadSkills(
+  agentId: string,
+  skills: string[],
+  projectRoot: string,
+  index?: SkillIndex,
+  task?: string,
+  taskCategories?: string[],
+): LoadSkillsResult {
   const effectiveSkills = index && index.getAgentSlots(agentId).length > 0
     ? index.getEnabledSkills(agentId)
     : skills;
 
+  const categories = taskCategories ?? [];
+
   const permanent: Array<{ name: string; content: string }> = [];
-  const contextualCandidates: Array<{ name: string; content: string; hits: number }> = [];
+  const contextualCandidates: Array<{ name: string; content: string; hits: number; rawHits: number; boost: number }> = [];
   const loaded: string[] = [];
   const dropped: DroppedSkill[] = [];
   const activatedContextual: string[] = [];
@@ -98,11 +134,21 @@ export function loadSkills(agentId: string, skills: string[], projectRoot: strin
     if (mode === 'permanent') {
       permanent.push({ name: skill, content });
     } else if (task) {
-      const hits = countKeywordHits(content, skill, task);
-      if (hits >= MIN_KEYWORD_HITS) {
-        contextualCandidates.push({ name: skill, content, hits });
+      const rawHits = countKeywordHits(content, skill, task);
+      const frontmatter = parseSkillFrontmatter(content);
+      const boost = categoryBoost(frontmatter?.category, categories);
+      const effectiveHits = rawHits + boost;
+      // Threshold applied to effective hits. With CATEGORY_BOOST=0.5 and
+      // MIN_KEYWORD_HITS=1, a 0-hit skill with boost still fails (0.5 < 1)
+      // but a 1-hit skill with boost passes (1.5 >= 1) and outranks plain
+      // 1-hit candidates during the descending sort below.
+      if (effectiveHits >= MIN_KEYWORD_HITS) {
+        contextualCandidates.push({ name: skill, content, hits: effectiveHits, rawHits, boost });
       } else {
-        dropped.push({ skill, reason: 'below-keyword-threshold', hits });
+        // Report raw hits so operators see the real keyword-match count; boost
+        // already failed to rescue, so recording effective hits would hide the
+        // fact that the skill had 0 keyword matches.
+        dropped.push({ skill, reason: 'below-keyword-threshold', hits: rawHits });
       }
     } else {
       // No task provided — record the silent drop so it shows up in observability
@@ -111,8 +157,15 @@ export function loadSkills(agentId: string, skills: string[], projectRoot: strin
     }
   }
 
-  // Sort contextual by hit count (descending), apply budget
-  contextualCandidates.sort((a, b) => b.hits - a.hits);
+  // Sort contextual by effective hit count (descending), with alphabetical
+  // name as a deterministic tiebreaker. Node's Array.sort has been stable
+  // since v12, but relying on input order here would leak skill-index
+  // iteration order into activation decisions — the name tiebreaker makes
+  // ties deterministic regardless of discovery order.
+  contextualCandidates.sort((a, b) => {
+    if (b.hits !== a.hits) return b.hits - a.hits;
+    return a.name.localeCompare(b.name);
+  });
   const accepted = contextualCandidates.slice(0, MAX_CONTEXTUAL_SKILLS);
   const rejected = contextualCandidates.slice(MAX_CONTEXTUAL_SKILLS);
 

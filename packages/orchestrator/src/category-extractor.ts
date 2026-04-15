@@ -12,6 +12,10 @@ const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
   type_safety: [/type.?safe/i, /typescript/i, /type.?narrow/i, /\bany\[?\]?\b/i, /type.?assert/i, /type.?guard/i],
   error_handling: [/error.?handl/i, /\bexception\b/i, /\bfallback\b/i, /try.?catch/i, /unhandled/i],
   data_integrity: [/data.?corrupt/i, /\bintegrity\b/i, /\bconsistency\b/i, /idempoten/i, /non.?atomic/i],
+  // Fabrication-class failures: agent cites code that does not match repo state.
+  // Kept in sync with DEFAULT_KEYWORDS.citation_grounding in skill-loader.ts —
+  // both tables drive contextual activation and must agree.
+  citation_grounding: [/\bcite\b/i, /citation/i, /fabricat/i, /hallucin/i, /\bverify\b/i, /does not exist/i],
 };
 
 export function extractCategories(findingText: string): string[] {

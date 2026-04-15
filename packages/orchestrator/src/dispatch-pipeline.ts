@@ -30,6 +30,7 @@ import { TaskStreamEvent, TaskStreamEventType } from './task-stream';
 import { ConsensusCoordinator } from './consensus-coordinator';
 import { SessionContext } from './session-context';
 import { parseAgentFindingsStrict } from './parse-findings';
+import { extractCategories } from './category-extractor';
 
 import { gossipLog as log } from './log';
 
@@ -245,7 +246,12 @@ export class DispatchPipeline {
     const agentSkills = this.registryGet(agentId)?.skills || [];
 
     // 1. Load skills (index takes precedence when available, contextual filtered by task)
-    const skillResult = loadSkills(agentId, agentSkills, this.projectRoot, this.skillIndex ?? undefined, task);
+    //    Extract task categories (regex-driven, zero LLM cost) so contextual
+    //    skills get a fractional boost when their category matches the task's
+    //    inferred category set. See skill-loader.categoryBoost and consensus
+    //    f2ff0fac-fb384daa.
+    const taskCategories = extractCategories(task);
+    const skillResult = loadSkills(agentId, agentSkills, this.projectRoot, this.skillIndex ?? undefined, task, taskCategories);
     const skills = skillResult.content;
     if (skillResult.dropped.length > 0) {
       const dropSummary = skillResult.dropped.map(d => `${d.skill} (${d.reason}${d.hits ? `, hits=${d.hits}` : ''})`).join(', ');
