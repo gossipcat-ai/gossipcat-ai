@@ -677,6 +677,232 @@ describe('Cross-Reviewer Selection', () => {
     });
   });
 
+  describe('Median Collapse Bug — Fresh Agents Excluded from Median', () => {
+    function sig(signal: string, agentId: string, taskId: string) {
+      return {
+        type: 'consensus',
+        signal,
+        agentId,
+        taskId,
+        timestamp: new Date().toISOString(),
+        evidence: '',
+      };
+    }
+
+    it('should skip exploration block gracefully when pool is fully fresh (all score=0)', () => {
+      // 4 agents, no performance history at all — pure fresh pool.
+      writeFileSync(join(TEST_ROOT, '.gossip', 'agent-performance.jsonl'), '');
+
+      const findings: FindingForSelection[] = [
+        {
+          id: 'agent-a:f1',
+          originalAuthor: 'agent-a',
+          content: 'Some finding about error_handling',
+          severity: 'medium', // K=2
+        },
+      ];
+
+      const agents: AgentCandidate[] = [
+        { agentId: 'agent-b' },
+        { agentId: 'agent-c' },
+        { agentId: 'agent-d' },
+        { agentId: 'agent-e' },
+      ];
+
+      // Force exploration dice low — if the bug were present, would try to
+      // explore over an empty/zero-score below-median set.
+      mockSecureRandom(0.001);
+
+      try {
+        const reader = new PerformanceReader(TEST_ROOT);
+        // Must not throw / must not crash even when median over eligible is 0-length.
+        const assignments = selectCrossReviewers(findings, agents, reader);
+
+        // Fallback shuffle gave us K=2 reviewers; exploration is a no-op.
+        expect(assignments.size).toBe(2);
+      } finally {
+        clearMockSecureRandom();
+      }
+    });
+
+    it('should compute median over eligible (scored) agents only in a 50%-fresh pool', () => {
+      // 2 fresh (score=0, no file entries) + 3 scored candidates.
+      // Scored agent accuracies (over cross-review signals):
+      //   agent-c: 1/1 = 1.0 → score ≈ 1.0 (but capped/scaled by scoring formula)
+      //   agent-d: 4/5 = 0.8 → higher
+      //   agent-e: below-median small score
+      // The exact accuracy numbers come from the scoring pipeline; what matters:
+      // if median were computed over ALL scoredCandidates (including 0s),
+      // the median of [0, 0, x1, x2, x3] with eligible.length < all would still
+      // collapse to a much lower number — here we just verify the bug-scenario
+      // shape holds and behavior is sane.
+      const signals = [
+        // agent-c: perfect accuracy, few signals
+        sig('agreement', 'agent-c', 'tc1'),
+        // agent-d: high accuracy, many signals
+        sig('agreement', 'agent-d', 'td1'),
+        sig('agreement', 'agent-d', 'td2'),
+        sig('agreement', 'agent-d', 'td3'),
+        sig('agreement', 'agent-d', 'td4'),
+        sig('hallucination_caught', 'agent-d', 'td5'),
+        // agent-e: lower accuracy — should be the below-median candidate
+        sig('agreement', 'agent-e', 'te1'),
+        sig('hallucination_caught', 'agent-e', 'te2'),
+        sig('hallucination_caught', 'agent-e', 'te3'),
+      ];
+      const lines = signals.map(s => JSON.stringify(s)).join('\n') + '\n';
+      writeFileSync(join(TEST_ROOT, '.gossip', 'agent-performance.jsonl'), lines);
+
+      const findings: FindingForSelection[] = [
+        {
+          id: 'agent-a:f1',
+          originalAuthor: 'agent-a',
+          content: 'Low severity style issue about error_handling',
+          severity: 'low', // K=2, sevScale=1.0 — exploration most likely
+        },
+      ];
+
+      const agents: AgentCandidate[] = [
+        { agentId: 'agent-fresh-1' }, // score=0
+        { agentId: 'agent-fresh-2' }, // score=0
+        { agentId: 'agent-c' },
+        { agentId: 'agent-d' },
+        { agentId: 'agent-e' },
+      ];
+
+      // Force exploration: if eligible has ≥ 1 below-median member, agent-e
+      // should get swapped into top-K. If the bug existed (median collapses
+      // to 0 due to two fresh zeros), belowMedian would be empty and agent-e
+      // would NOT be explored toward.
+      mockSecureRandom(0.001);
+
+      try {
+        const reader = new PerformanceReader(TEST_ROOT);
+        const assignments = selectCrossReviewers(findings, agents, reader);
+
+        // K=2 — exploration replaced weakest top-K with below-median candidate.
+        expect(assignments.size).toBe(2);
+
+        // The signal-starved below-median candidate (agent-e) should appear
+        // via exploration.
+        expect(assignments.has('agent-e')).toBe(true);
+      } finally {
+        clearMockSecureRandom();
+      }
+    });
+
+    it('regression: pure scored pool (no fresh agents) behaves identically', () => {
+      // 4 scored candidates — no score=0 agents in the pool.
+      const signals = [
+        // agent-b: 4 agreements, top
+        sig('agreement', 'agent-b', 'tb1'),
+        sig('agreement', 'agent-b', 'tb2'),
+        sig('agreement', 'agent-b', 'tb3'),
+        sig('agreement', 'agent-b', 'tb4'),
+        // agent-c: 3 agreements, 1 fail
+        sig('agreement', 'agent-c', 'tc1'),
+        sig('agreement', 'agent-c', 'tc2'),
+        sig('agreement', 'agent-c', 'tc3'),
+        sig('hallucination_caught', 'agent-c', 'tc4'),
+        // agent-d: 1/2
+        sig('agreement', 'agent-d', 'td1'),
+        sig('hallucination_caught', 'agent-d', 'td2'),
+        // agent-e: 1/3 — bottom
+        sig('agreement', 'agent-e', 'te1'),
+        sig('hallucination_caught', 'agent-e', 'te2'),
+        sig('hallucination_caught', 'agent-e', 'te3'),
+      ];
+      const lines = signals.map(s => JSON.stringify(s)).join('\n') + '\n';
+      writeFileSync(join(TEST_ROOT, '.gossip', 'agent-performance.jsonl'), lines);
+
+      const findings: FindingForSelection[] = [
+        {
+          id: 'agent-a:f1',
+          originalAuthor: 'agent-a',
+          content: 'Some finding about error_handling',
+          severity: 'medium', // K=2
+        },
+      ];
+
+      const agents: AgentCandidate[] = [
+        { agentId: 'agent-b' },
+        { agentId: 'agent-c' },
+        { agentId: 'agent-d' },
+        { agentId: 'agent-e' },
+      ];
+
+      // High random → skip exploration, pure top-K by score
+      mockSecureRandom(0.99);
+
+      try {
+        const reader = new PerformanceReader(TEST_ROOT);
+        const assignments = selectCrossReviewers(findings, agents, reader);
+
+        // K=2, top 2 by score should be agent-b and agent-c.
+        expect(assignments.size).toBe(2);
+        expect(assignments.has('agent-b')).toBe(true);
+        expect(assignments.has('agent-c')).toBe(true);
+      } finally {
+        clearMockSecureRandom();
+      }
+    });
+
+    it('should handle a single-eligible pool (3 fresh + 1 scored) without crashing', () => {
+      // Only one scored agent — belowMedian filter excludes topK members,
+      // so belowMedian will be empty and exploration will be a no-op.
+      const signals = [
+        sig('agreement', 'agent-scored', 'tsc1'),
+        sig('agreement', 'agent-scored', 'tsc2'),
+        sig('agreement', 'agent-scored', 'tsc3'),
+      ];
+      const lines = signals.map(s => JSON.stringify(s)).join('\n') + '\n';
+      writeFileSync(join(TEST_ROOT, '.gossip', 'agent-performance.jsonl'), lines);
+
+      const findings: FindingForSelection[] = [
+        {
+          id: 'agent-a:f1',
+          originalAuthor: 'agent-a',
+          content: 'Some finding (error_handling)',
+          severity: 'medium', // K=2
+        },
+      ];
+
+      const agents: AgentCandidate[] = [
+        { agentId: 'agent-fresh-1' },
+        { agentId: 'agent-fresh-2' },
+        { agentId: 'agent-fresh-3' },
+        { agentId: 'agent-scored' },
+      ];
+
+      // Force exploration attempt — it should still run without error, but
+      // find no below-median candidate to swap in (single eligible is topK).
+      mockSecureRandom(0.001);
+
+      try {
+        const reader = new PerformanceReader(TEST_ROOT);
+        const assignments = selectCrossReviewers(findings, agents, reader);
+
+        // With 1 eligible agent (agent-scored), topK fills with just that
+        // agent (min(K=2, eligible.length=1) = 1). The shuffle fallback does
+        // NOT fire because topK.length > 0 at the fallback gate.
+        // belowMedian = eligible (score > 0 AND score <= median) minus topK
+        // members → always empty when there is only one eligible agent,
+        // because that agent is already in topK.
+        // The exploration block therefore runs harmlessly (no swap), and no
+        // crash occurs despite secureRandom being forced low.
+        expect(assignments.has('agent-scored')).toBe(true);
+
+        // Exactly 1 reviewer assigned to the finding — pre-existing behavior,
+        // preserved by the fix (scope: don't change fallback or eligibility).
+        const findingAssignedCount = Array.from(assignments.values())
+          .filter(set => set.has('agent-a:f1')).length;
+        expect(findingAssignedCount).toBe(1);
+      } finally {
+        clearMockSecureRandom();
+      }
+    });
+  });
+
   describe('Starvation-Weighted Candidate Selection', () => {
     function sig(signal: string, agentId: string, taskId: string) {
       return {
