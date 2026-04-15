@@ -2745,8 +2745,10 @@ server.tool(
     })).optional().describe('For build: generated skill files to save. Omit for discovery mode.'),
     // Internal: re-entry param for native-utility dispatch path (develop action only)
     _utility_task_id: z.string().optional().describe('Internal: utility task ID for re-entry after native skill generation'),
+    // develop: bypass cooldown gate (audited to .gossip/forced-skill-develops.jsonl)
+    force: z.boolean().optional().describe('Bypass the skill-develop cooldown gate. Audited to .gossip/forced-skill-develops.jsonl.'),
   },
-  async ({ action, agent_id, skill, enabled, category, skill_names, skills, _utility_task_id }) => {
+  async ({ action, agent_id, skill, enabled, category, skill_names, skills, _utility_task_id, force }) => {
     await boot();
 
     // ── list ──
@@ -2817,6 +2819,43 @@ server.tool(
       if (!ctx.skillEngine) {
         return { content: [{ type: 'text' as const, text: 'Skill engine not available. Check boot logs.' }] };
       }
+
+      // ── Cooldown gate (MUST run BEFORE buildPrompt / saveFromRaw) ─────────
+      // Invariant: injectSnapshotFields at skill-engine.ts:293,306 rewrites
+      // bound_at on every develop. Reading after buildPrompt() always sees a
+      // fresh timestamp — this gate MUST precede the re-entry branch too.
+      // Gate is scoped to !_utility_task_id to allow the legitimate re-entry
+      // path to complete without being blocked mid-flight.
+      let _freshnessForAudit: { boundAt: string | null; status: string | null } | undefined;
+      if (!_utility_task_id && !force) {
+        const { readSkillFreshness: rsf, computeCooldown: cc, formatCooldownMessage: fcm } = await import('@gossip/orchestrator');
+        const freshness = rsf(agent_id, category, process.cwd());
+        _freshnessForAudit = freshness;
+        const cooldownMs = cc(freshness.status);
+        if (freshness.boundAt && cooldownMs > 0) {
+          const ageMs = Date.now() - new Date(freshness.boundAt).getTime();
+          if (ageMs < cooldownMs) {
+            const remainingMs = cooldownMs - ageMs;
+            return { content: [{ type: 'text' as const, text: fcm(agent_id, category, freshness.boundAt, freshness.status, remainingMs) }] };
+          }
+        }
+      }
+      if (force && !_utility_task_id) {
+        // Capture freshness for audit even when bypassing the gate check
+        if (!_freshnessForAudit) {
+          const { readSkillFreshness: rsf } = await import('@gossip/orchestrator');
+          _freshnessForAudit = rsf(agent_id, category, process.cwd());
+        }
+        const { appendForcedSkillDevelop } = await import('./handlers/forced-skill-develops');
+        appendForcedSkillDevelop({
+          timestamp: new Date().toISOString(),
+          agent_id,
+          category,
+          bound_at_before: _freshnessForAudit.boundAt,
+          status_before: _freshnessForAudit.status,
+        });
+      }
+      // ── End cooldown gate ─────────────────────────────────────────────────
 
       // ── Re-entry fast path (native utility returned) ──
       if (_utility_task_id) {
