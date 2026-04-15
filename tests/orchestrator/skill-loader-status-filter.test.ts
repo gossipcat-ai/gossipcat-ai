@@ -83,7 +83,8 @@ describe('loadSkills — effectiveness status filtering', () => {
     const result = loadSkills('test-agent', [], tmpDir, index);
     expect(result.content).not.toContain('Failed skill body.');
     expect(result.loaded).not.toContain('failed');
-    expect(result.dropped).toContain('failed');
+    expect(result.dropped.map(d => d.skill)).toContain('failed');
+    expect(result.dropped.find(d => d.skill === 'failed')?.reason).toBe('status-failed');
   });
 
   it('FILTERS OUT skill with status: silent_skill', () => {
@@ -91,7 +92,8 @@ describe('loadSkills — effectiveness status filtering', () => {
     const result = loadSkills('test-agent', [], tmpDir, index);
     expect(result.content).not.toContain('Silent skill body.');
     expect(result.loaded).not.toContain('silent');
-    expect(result.dropped).toContain('silent');
+    expect(result.dropped.map(d => d.skill)).toContain('silent');
+    expect(result.dropped.find(d => d.skill === 'silent')?.reason).toBe('status-silent');
   });
 
   it('injects passed + pending, drops failed + silent in same dispatch', () => {
@@ -112,8 +114,9 @@ describe('loadSkills — effectiveness status filtering', () => {
     expect(result.loaded).not.toContain('bad-failed');
     expect(result.loaded).not.toContain('bad-silent');
 
-    expect(result.dropped).toContain('bad-failed');
-    expect(result.dropped).toContain('bad-silent');
+    const droppedNames = result.dropped.map(d => d.skill);
+    expect(droppedNames).toContain('bad-failed');
+    expect(droppedNames).toContain('bad-silent');
   });
 
   it('includes insufficient_evidence and flagged_for_manual_review in dispatch', () => {

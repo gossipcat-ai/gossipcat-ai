@@ -248,7 +248,8 @@ export class DispatchPipeline {
     const skillResult = loadSkills(agentId, agentSkills, this.projectRoot, this.skillIndex ?? undefined, task);
     const skills = skillResult.content;
     if (skillResult.dropped.length > 0) {
-      log(`Dropped ${skillResult.dropped.length} contextual skill(s) for ${agentId}: ${skillResult.dropped.join(', ')}`);
+      const dropSummary = skillResult.dropped.map(d => `${d.skill} (${d.reason}${d.hits ? `, hits=${d.hits}` : ''})`).join(', ');
+      log(`Dropped ${skillResult.dropped.length} skill(s) for ${agentId}: ${dropSummary}`);
     }
     // Track contextual skill activations for lifecycle management
     if (this.skillCounters && this.skillIndex) {

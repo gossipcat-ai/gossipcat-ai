@@ -1,7 +1,7 @@
 export { MainAgent } from './main-agent';
 export { detectFormatCompliance } from './dispatch-pipeline';
 export { loadSkills, DEFAULT_KEYWORDS, resolveSkillExists } from './skill-loader';
-export type { LoadSkillsResult } from './skill-loader';
+export type { LoadSkillsResult, DroppedSkill } from './skill-loader';
 export { SkillCounterTracker } from './skill-counters';
 export type { MainAgentConfig } from './main-agent';
 export { WorkerAgent } from './worker-agent';
