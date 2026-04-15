@@ -38,6 +38,17 @@ export class AgentConnection {
     this.agentId = agentId;
     this.ws = ws;
 
+    // Seed the liveness entry immediately so the first heartbeat tick sees
+    // `pendingPong === false` and sends the initial ping rather than
+    // terminating a freshly-connected worker. Without this seed, server.ts's
+    // fallback (`if (!state) livenessMap.set(client, { pendingPong: true })`)
+    // still pings on tick N, but a slow/scheduling-delayed client can miss
+    // the pong window before tick N+1, causing spurious terminations
+    // observed as a 4-way disconnect burst ~38s after MCP boot on PR #75.
+    // Seeding to false here gives every new connection one full interval
+    // to establish before any liveness check applies.
+    livenessMap.set(ws, { pendingPong: false });
+
     ws.on('close', () => {
       this.active = false;
     });

@@ -397,13 +397,25 @@ async function doBoot() {
   // stdio close) or a user Ctrl-C (SIGINT) killed this process.
   const cleanupPid = () => { try { delPid(pidFile); } catch { /* ignore */ } };
   process.once('exit', cleanupPid);
-  process.once('SIGTERM', () => {
+  // Shared guard across SIGTERM and SIGINT: a double-fire (e.g. parent sends
+  // SIGTERM then Ctrl-C escalates to SIGINT, or vice-versa) must NOT race two
+  // concurrent relay.stop() calls. The first signal wins; subsequent signals
+  // no-op. Also closes the prior gap where neither handler called stop(),
+  // leaking the WS server and heartbeat interval on shutdown.
+  let shuttingDown = false;
+  process.once('SIGTERM', async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     process.stderr.write(`[relay] shutdown reason=SIGTERM pid=${process.pid}\n`);
+    try { await ctx.relay.stop(); } catch { /* ignore */ }
     cleanupPid();
     process.exit(0);
   });
-  process.once('SIGINT',  () => {
+  process.once('SIGINT',  async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     process.stderr.write(`[relay] shutdown reason=SIGINT pid=${process.pid}\n`);
+    try { await ctx.relay.stop(); } catch { /* ignore */ }
     cleanupPid();
     process.exit(0);
   });
