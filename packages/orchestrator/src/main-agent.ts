@@ -349,9 +349,13 @@ export class MainAgent {
       const hadKeySnapshot = this.lastKeyByAgent.has(ac.id);
       const prevKey = this.lastKeyByAgent.get(ac.id) ?? null;
 
-      if (existing && hadKeySnapshot && prevKey === key) {
-        // No-op: worker is live and the keychain value matches what we built
-        // it with. Do NOT teardown, do NOT increment added.
+      if (existing && (!hadKeySnapshot || prevKey === key)) {
+        // No-op: worker is live, and either (a) the keychain value matches
+        // what we built it with, or (b) we have no prior snapshot because
+        // the worker was created outside syncWorkers (e.g. at MCP boot in
+        // mcp-server-sdk.ts:488). In case (b), record the current key as
+        // the snapshot so subsequent calls can compare. Do NOT teardown.
+        if (!hadKeySnapshot) this.lastKeyByAgent.set(ac.id, key);
         continue;
       }
 
