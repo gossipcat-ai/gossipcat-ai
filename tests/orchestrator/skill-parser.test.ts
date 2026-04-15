@@ -24,6 +24,11 @@ Check endpoints.`;
       generated_by: 'orchestrator',
       sources: '3 suggestions from sonnet-reviewer',
       status: 'active',
+      // task_type coerces to 'any' when omitted — see skill-parser.ts ternary.
+      task_type: 'any',
+      // category/mode remain undefined but are surfaced as own properties.
+      category: undefined,
+      mode: undefined,
     });
   });
 

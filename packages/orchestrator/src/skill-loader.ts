@@ -43,7 +43,19 @@ export const DEFAULT_KEYWORDS: Record<string, string[]> = {
 
 export interface DroppedSkill {
   skill: string;
-  reason: 'status-failed' | 'status-silent' | 'below-keyword-threshold' | 'no-task-provided' | 'budget-exceeded';
+  reason:
+    | 'status-failed'
+    | 'status-silent'
+    | 'below-keyword-threshold'
+    | 'no-task-provided'
+    | 'budget-exceeded'
+    /**
+     * Skill declared `task_type` that does not match the dispatch's inferred
+     * type (e.g. a review-only skill on an implement dispatch). Evaluated
+     * BEFORE keyword-hit threshold and category boost so mismatched skills
+     * never consume the contextual budget.
+     */
+    | 'task-type-mismatch';
   hits: number;
 }
 
@@ -95,6 +107,18 @@ export function loadSkills(
   index?: SkillIndex,
   task?: string,
   taskCategories?: string[],
+  /**
+   * Dispatch task type. When provided, skills whose frontmatter `task_type`
+   * is set to a CONCRETE type ('review'|'implement'|'research') that does
+   * not match are hard-rejected with `task-type-mismatch` BEFORE the
+   * keyword-hit gate. Skills with `task_type: 'any'` (the default for
+   * unlabelled skills) are unaffected, preserving backwards-compat.
+   *
+   * When undefined, the filter is skipped entirely (same as pre-migration
+   * behaviour) — call sites that don't yet know the dispatch type retain
+   * today's semantics.
+   */
+  dispatchTaskType?: 'review' | 'implement' | 'research',
 ): LoadSkillsResult {
   const effectiveSkills = index && index.getAgentSlots(agentId).length > 0
     ? index.getEnabledSkills(agentId)
@@ -127,6 +151,19 @@ export function loadSkills(
     }
     if (frontmatterStatus === 'flagged_for_manual_review') {
       gossipLog(`Injecting flagged_for_manual_review skill ${agentId}/${skill} — manual review recommended`);
+    }
+
+    // Task-type axis filter. Evaluated BEFORE keyword-hit counting and the
+    // contextual budget, so a mismatched skill never starves a valid one
+    // out of the MAX_CONTEXTUAL_SKILLS slots. Skills without an explicit
+    // task_type parse to 'any' (see skill-parser coercion), which passes
+    // the gate for every dispatch — backwards-compat by default.
+    if (dispatchTaskType) {
+      const skillTaskType = parseSkillFrontmatter(content)?.task_type ?? 'any';
+      if (skillTaskType !== 'any' && skillTaskType !== dispatchTaskType) {
+        dropped.push({ skill, reason: 'task-type-mismatch', hits: 0 });
+        continue;
+      }
     }
 
     const mode = index?.getSkillMode(agentId, skill) ?? 'permanent';

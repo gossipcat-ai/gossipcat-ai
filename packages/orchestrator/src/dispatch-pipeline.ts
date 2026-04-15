@@ -31,6 +31,7 @@ import { ConsensusCoordinator } from './consensus-coordinator';
 import { SessionContext } from './session-context';
 import { parseAgentFindingsStrict } from './parse-findings';
 import { extractCategories } from './category-extractor';
+import { inferTaskType } from './task-type-inference';
 
 import { gossipLog as log } from './log';
 
@@ -251,7 +252,12 @@ export class DispatchPipeline {
     //    inferred category set. See skill-loader.categoryBoost and consensus
     //    f2ff0fac-fb384daa.
     const taskCategories = extractCategories(task);
-    const skillResult = loadSkills(agentId, agentSkills, this.projectRoot, this.skillIndex ?? undefined, task, taskCategories);
+    // Dispatch-side task type: prefer caller-provided, else infer from write
+    // mode + task verb. Passed through to loadSkills so skills declared with
+    // `task_type: implement|review|research` get filtered before the keyword
+    // gate. Skills without the axis (default 'any') still activate for all.
+    const dispatchTaskType = options?.taskType ?? inferTaskType(task, options?.writeMode);
+    const skillResult = loadSkills(agentId, agentSkills, this.projectRoot, this.skillIndex ?? undefined, task, taskCategories, dispatchTaskType);
     const skills = skillResult.content;
     if (skillResult.dropped.length > 0) {
       const dropSummary = skillResult.dropped.map(d => `${d.skill} (${d.reason}${d.hits ? `, hits=${d.hits}` : ''})`).join(', ');

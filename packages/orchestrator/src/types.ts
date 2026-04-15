@@ -169,6 +169,13 @@ export interface DispatchOptions {
   step?: number;
   lens?: string;  // NEW — focus lens from adaptive team intelligence
   consensus?: boolean;  // Enable cross-review consensus
+  /**
+   * Explicit dispatch task type. When omitted, the dispatch pipeline calls
+   * `inferTaskType(task, writeMode)` to derive one before calling loadSkills.
+   * Callers that already know the type (e.g. internal orchestrator paths)
+   * should pass it through to avoid re-inference.
+   */
+  taskType?: 'review' | 'implement' | 'research';
 }
 
 /** Result of analyzing skill overlap between co-dispatched agents */

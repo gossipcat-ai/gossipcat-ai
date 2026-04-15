@@ -12,7 +12,14 @@ import type { SkillCatalog } from './skill-catalog';
 export interface FindBestMatchOptions {
   taskText?: string;
   catalog?: SkillCatalog;
-  taskType?: 'review' | 'impl';
+  /**
+   * Dispatch task type. Vocabulary unified 2026-04-15 from 'review'|'impl'
+   * to 'review'|'implement'|'research' so it matches the skill frontmatter
+   * axis in `SkillFrontmatter.task_type`. The SKILL side also accepts 'any'
+   * as a catch-all sentinel; the DISPATCH side does not — a dispatch always
+   * resolves to exactly one concrete type. See `task-type-inference.ts`.
+   */
+  taskType?: 'review' | 'implement' | 'research';
   taskCategory?: string;
 }
 
@@ -112,7 +119,11 @@ export class AgentRegistry {
       if (this.perfReader?.isCircuitOpen(agent.id)) {
         perfWeight = 0.3; // circuit breaker overrides all scoring
       } else if (this.perfReader) {
-        perfWeight = options?.taskType === 'impl'
+        // Only 'implement' uses the impl-specific weight; 'review' and
+        // 'research' both share the generic dispatch weight. The impl
+        // weight is seeded from impl_test_pass/fail + impl_peer_approved
+        // signals, which don't have a research analogue yet.
+        perfWeight = options?.taskType === 'implement'
           ? this.perfReader.getImplDispatchWeight(agent.id)
           : this.perfReader.getDispatchWeight(agent.id);
       }

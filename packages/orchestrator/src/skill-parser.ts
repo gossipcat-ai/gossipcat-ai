@@ -16,6 +16,17 @@ export type SkillStatus =
   | 'silent_skill'
   | 'insufficient_evidence';
 
+/**
+ * Task-type scope for a skill. Controls which dispatch types the skill
+ * activates for (see skill-loader filter at :119).
+ *
+ * Vocabulary asymmetry (intentional): skills may declare `task_type: 'any'`
+ * to mean "match every dispatch". A dispatch itself always resolves to one
+ * of 'review' | 'implement' | 'research' — never 'any'. See
+ * `task-type-inference.ts` for the dispatch-side inference.
+ */
+export type SkillTaskType = 'review' | 'implement' | 'research' | 'any';
+
 export interface SkillFrontmatter {
   name: string;
   description: string;
@@ -25,6 +36,13 @@ export interface SkillFrontmatter {
   generated_by?: string;
   sources?: string;
   status: SkillStatus;
+  /**
+   * Dispatch scope. Default 'any' preserves backwards-compatibility with skills
+   * authored before this axis was introduced — they activate for all dispatches.
+   * Explicit values ('review'|'implement'|'research') hard-reject on mismatch in
+   * the skill-loader BEFORE the keyword-hit / category-boost gates run.
+   */
+  task_type?: SkillTaskType;
 }
 
 export function parseSkillFrontmatter(content: string): SkillFrontmatter | null {
@@ -54,6 +72,17 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     }
   }
 
+  // Silent coercion mirrors the `mode` field's ternary treatment: an unknown
+  // or malformed value collapses to the safe default ('any') instead of
+  // rejecting the whole skill. Rationale: skill authors shouldn't lose a
+  // whole contextual skill to a typo in an optional axis. The dispatch-side
+  // filter still gates activation on the coerced value.
+  const rawTaskType = fields.task_type;
+  const task_type: SkillTaskType = (
+    rawTaskType === 'review' || rawTaskType === 'implement' ||
+    rawTaskType === 'research' || rawTaskType === 'any'
+  ) ? rawTaskType : 'any';
+
   return {
     name: normalizeSkillName(fields.name),
     description: fields.description,
@@ -63,5 +92,6 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     generated_by: fields.generated_by,
     sources: fields.sources,
     status: fields.status as SkillStatus,
+    task_type,
   };
 }
