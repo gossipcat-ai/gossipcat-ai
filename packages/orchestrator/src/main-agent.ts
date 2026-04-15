@@ -96,6 +96,14 @@ export class MainAgent {
   private registry: AgentRegistry;
   private dispatcher: TaskDispatcher;
   private workers: Map<string, WorkerAgent> = new Map();
+  /**
+   * Tracks the API key most recently used to build each worker. syncWorkers
+   * skips teardown+rebuild when the key (and existence) hasn't changed,
+   * preventing the relay-disconnect burst observed on every dispatch.
+   * Future improvement: hash full config (model, provider, base_url, skills)
+   * to detect non-key drift.
+   */
+  private lastKeyByAgent: Map<string, string | null> = new Map();
   private relayUrl: string;
   private relayApiKey: string | undefined;
   private apiKeys: Record<string, string>;
@@ -197,6 +205,10 @@ export class MainAgent {
       const enableWebSearch = config.preset === 'researcher' || config.skills.includes('research');
       const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey);
       await worker.start();
+      // Record the key snapshot so the first syncWorkers call can short-circuit
+      // when the keychain hasn't changed — otherwise every dispatch tears down
+      // the freshly-started workers.
+      this.lastKeyByAgent.set(config.id, apiKey ?? null);
       this.workers.set(config.id, worker);
     }
 
@@ -327,16 +339,30 @@ export class MainAgent {
     for (const ac of this.registry.getAll()) {
       if (ac.native) continue; // native agents use host's Agent tool, not relay
 
+      // Fetch the current key first so we can compare against the snapshot taken
+      // when the existing worker was built. If nothing changed we leave the
+      // worker (and its live relay connection) alone — this kills the disconnect
+      // burst observed on every dispatch (see relay logs showing 4 workers
+      // RELAY DISCONNECTED + reconnected within 30ms per dispatch).
+      const key = await keyProvider(ac.provider);
+      const existing = this.workers.get(ac.id);
+      const hadKeySnapshot = this.lastKeyByAgent.has(ac.id);
+      const prevKey = this.lastKeyByAgent.get(ac.id) ?? null;
+
+      if (existing && hadKeySnapshot && prevKey === key) {
+        // No-op: worker is live and the keychain value matches what we built
+        // it with. Do NOT teardown, do NOT increment added.
+        continue;
+      }
+
       // Stop existing worker before recreating — ensures fresh API key from keychain.
       // Without this, MCP reconnects reuse workers with stale cached keys, causing
       // "API key not valid" errors when the key is rotated or refreshed.
-      const existing = this.workers.get(ac.id);
       if (existing) {
         await existing.stop();
         this.workers.delete(ac.id);
       }
 
-      const key = await keyProvider(ac.provider);
       const llm = createProvider(ac.provider, ac.model, key ?? undefined, undefined, (ac as any).base_url);
 
       const instructionsPath = join(this.projectRoot, '.gossip', 'agents', ac.id, 'instructions.md');
@@ -347,6 +373,7 @@ export class MainAgent {
       const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey);
       await worker.start();
       this.workers.set(ac.id, worker);
+      this.lastKeyByAgent.set(ac.id, key);
       added++;
     }
     return added;
@@ -358,6 +385,7 @@ export class MainAgent {
     if (worker) {
       await worker.stop();
       this.workers.delete(agentId);
+      this.lastKeyByAgent.delete(agentId);
     }
   }
 
@@ -368,6 +396,7 @@ export class MainAgent {
       await worker.stop();
     }
     this.workers.clear();
+    this.lastKeyByAgent.clear();
   }
 
   /** Handle a user message via cognitive (tool-calling) orchestration. */
