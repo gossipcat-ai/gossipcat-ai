@@ -130,7 +130,19 @@ export function shouldSanitize(
 }
 
 const SCOPE_NOTE =
-  'SCOPE NOTE: This task has been sanitized. All project paths are relative to the workspace root. Use relative paths (./x) — do NOT reconstruct absolute paths.\n\n';
+  'SCOPE NOTE: SANDBOXED WRITE BOUNDARY.\n' +
+  'This task runs in an isolated worktree. You MUST use only relative paths (./package/file.ts).\n' +
+  'Any write outside the worktree — absolute paths (/Users/...), parent-escape (../), or cd-into-parent\n' +
+  '— is a BOUNDARY ESCAPE. Detected post-task, recorded as a `disagreement` signal under\n' +
+  '`trust_boundaries`, logged to .gossip/boundary-escapes.jsonl, and PENALIZES YOUR ACCURACY SCORE.\n' +
+  '\n' +
+  'Rules:\n' +
+  '- Tools: use Edit/Write/Read/Glob/Grep with relative paths only.\n' +
+  '- Never run `cd`, `realpath`, `pwd -P`, or any shell command that emits an absolute path.\n' +
+  '- Never reconstruct a path you see in task context back to absolute form — treat such paths as\n' +
+  '  opaque relative references even if they look absolute.\n' +
+  '- Project root is `./`. Nothing else.\n' +
+  '\n';
 
 /** Prepend the SCOPE NOTE to a prompt. Idempotent — won't double-prepend. */
 export function prependScopeNote(prompt: string): string {
