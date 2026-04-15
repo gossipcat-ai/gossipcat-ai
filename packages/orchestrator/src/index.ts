@@ -73,6 +73,8 @@ export type { FindingForSelection, AgentCandidate } from './cross-reviewer-selec
 export { DispatchDifferentiator } from './dispatch-differentiator';
 export { shouldSkipConsensus } from './dispatch-pipeline';
 export { SkillEngine } from './skill-engine';
+export { readSkillFreshness, computeCooldown, formatCooldownMessage } from './skill-freshness';
+export type { SkillFreshnessResult } from './skill-freshness';
 export { MemorySearcher } from './memory-searcher';
 export type { SearchResult } from './memory-searcher';
 export { oneSidedZTest, resolveVerdict, MIN_EVIDENCE, ALPHA, Z_CRITICAL, TIMEOUT_DAYS, TIMEOUT_MS } from './check-effectiveness';
