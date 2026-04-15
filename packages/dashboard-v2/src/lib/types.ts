@@ -85,6 +85,7 @@ export interface ConsensusReportFinding {
   tag: string;
   confirmedBy: string[];
   disputedBy?: Array<{ agentId: string; reason: string; evidence: string }>;
+  unverifiedBy?: Array<{ agentId: string; reason: string }>;
   confidence: number;
 }
 

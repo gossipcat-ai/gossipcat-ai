@@ -121,6 +121,15 @@ function ReportFinding({ f, reviewInfo }: { f: ConsensusReportFinding; reviewInf
             {f.disputedBy.length} ⚡
           </span>
         )}
+        {f.unverifiedBy && f.unverifiedBy.length > 0 && (
+          <span
+            className="cursor-help rounded px-1 py-0.5 font-mono text-[10px] text-unverified/50 transition hover:bg-unverified/10"
+            data-tooltip={`Unverified by:\n${f.unverifiedBy.map(u => u.agentId).join(', ')}`}
+            data-tooltip-pos="left"
+          >
+            {f.unverifiedBy.length} ◇
+          </span>
+        )}
       </div>
       {/* Row 2: Disputed by details (if disputed) */}
       {f.disputedBy && f.disputedBy.length > 0 && (

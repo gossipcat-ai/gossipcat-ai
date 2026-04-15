@@ -1825,7 +1825,10 @@ Return only valid JSON.${skillsBlock}`;
         const origPreset = this.config.registryGet(f.originalAgentId)?.preset || f.originalAgentId;
         const confirmerPresets = f.confirmedBy.map(id => this.config.registryGet(id)?.preset || id).join(', ');
         const sev = f.severity ? ` [${f.severity.toUpperCase()}]` : '';
-        lines.push(`  ✓ [${origPreset} + ${confirmerPresets}]${sev} ${f.finding}`);
+        const unvPresets = f.unverifiedBy && f.unverifiedBy.length > 0
+          ? `, unverified by ${f.unverifiedBy.map(u => this.config.registryGet(u.agentId)?.preset || u.agentId).join(', ')}`
+          : '';
+        lines.push(`  ✓ [${origPreset} + ${confirmerPresets}${unvPresets}]${sev} ${f.finding}`);
       }
       lines.push('');
     }
