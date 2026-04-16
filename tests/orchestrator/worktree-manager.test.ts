@@ -1,6 +1,6 @@
 import { WorktreeManager } from '../../packages/orchestrator/src/worktree-manager';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -53,6 +53,31 @@ describe('WorktreeManager', () => {
     // Verify branch is actually deleted
     const branches = execFileSync('git', ['branch', '--list', 'gossip-test-4'], { cwd: testDir }).toString().trim();
     expect(branches).toBe('');
+  });
+
+  it('runs pre-merge-commit hook on non-ff merge', async () => {
+    const hookDir = join(testDir, '.git', 'hooks');
+    const sentinel = join(tmpdir(), `gossip-hook-sentinel-${Date.now()}`);
+    const hookPath = join(hookDir, 'pre-merge-commit');
+    writeFileSync(hookPath, `#!/bin/sh\ntouch ${sentinel}\nexit 0\n`);
+    chmodSync(hookPath, 0o755);
+
+    const { path } = await manager.create('test-hook');
+    writeFileSync(join(path, 'wt-only.txt'), 'x');
+    execFileSync('git', ['add', '.'], { cwd: path });
+    execFileSync('git', ['commit', '-m', 'wt'], { cwd: path });
+
+    // Force non-ff by adding a commit on main after worktree branched
+    writeFileSync(join(testDir, 'main-only.txt'), 'y');
+    execFileSync('git', ['add', '.'], { cwd: testDir });
+    execFileSync('git', ['commit', '-m', 'main'], { cwd: testDir });
+
+    await manager.merge('test-hook');
+    expect(existsSync(sentinel)).toBe(true);
+
+    rmSync(hookPath, { force: true });
+    rmSync(sentinel, { force: true });
+    await manager.cleanup('test-hook', path);
   });
 
   it('detects merge conflicts', async () => {
