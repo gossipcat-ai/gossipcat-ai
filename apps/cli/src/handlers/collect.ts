@@ -574,6 +574,10 @@ export async function handleCollect(
         newFindings: consensusReport.newFindings || [],
         // Surface silent type-drift — only present when strict parser dropped at least one tag
         ...(consensusReport.droppedFindingsByType ? { droppedFindingsByType: consensusReport.droppedFindingsByType } : {}),
+        // Per-author parse diagnostics (HTML_ENTITY_ENCODED_TAGS etc). Dashboard
+        // renders a banner on the consensus card when present, so this MUST
+        // round-trip through the JSON payload or the feature is invisible.
+        ...(consensusReport.authorDiagnostics ? { authorDiagnostics: consensusReport.authorDiagnostics } : {}),
       }, null, 2));
     } catch { /* best-effort */ }
   }

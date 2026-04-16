@@ -32,8 +32,68 @@ const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|y
 
 const CANONICAL_TYPES: ReadonlySet<string> = new Set(['finding', 'suggestion', 'insight']);
 
+// HTML-entity-encoded versions of `<agent_finding>` and related tokens. When
+// an agent's output goes through a layer that HTML-escapes everything (e.g.
+// a markdown renderer applied before raw parsing, or an upstream relay that
+// sanitizes its own output for display), tags arrive as `&lt;agent_finding...&gt;`
+// and the strict parser cannot see them. Those rounds silently produce zero
+// findings. The producers in parseAgentFindingsStrict emit
+// HTML_ENTITY_ENCODED_TAGS / HTML_ENTITY_MIXED_PAYLOAD diagnostics so the
+// failure surfaces loudly instead of masquerading as "agent emitted nothing."
+const HTML_ENTITY_OPEN_PATTERN = /&lt;agent_finding\b/gi;
+const HTML_ENTITY_CLOSE_PATTERN = /&lt;\/agent_finding&gt;/gi;
+
 export type FindingType = 'finding' | 'suggestion' | 'insight';
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
+
+/**
+ * Structured diagnostic attached to a parse result when the raw agent output
+ * exhibits a recognizable failure mode. Surfaced on `ConsensusReport.authorDiagnostics`
+ * so the dashboard can render a banner explaining why a round has 0 findings
+ * despite agents producing content.
+ *
+ * Discriminated union on `code`. HTML_ENTITY_* producers ship in Phase 1;
+ * SCHEMA_DRIFT_* codes are reserved here as type definitions so downstream
+ * consumers can exhaustively switch without a follow-up type change when
+ * Phase 2 adds the producers.
+ */
+export type ParseDiagnostic =
+  | {
+      code: 'HTML_ENTITY_ENCODED_TAGS';
+      /** Short human-readable summary for the dashboard banner. */
+      message: string;
+      /** Count of `&lt;agent_finding` occurrences detected in the raw text. */
+      entityTagCount: number;
+    }
+  | {
+      code: 'HTML_ENTITY_MIXED_PAYLOAD';
+      message: string;
+      /** Count of raw `<agent_finding` tags (parsed) in the output. */
+      rawTagCount: number;
+      /** Count of `&lt;agent_finding` entity-encoded tags detected. */
+      entityTagCount: number;
+    }
+  | {
+      /** Reserved for Phase 2 — producer not implemented yet. */
+      code: 'SCHEMA_DRIFT_UNKNOWN_TYPE';
+      message: string;
+      /** Offending type values (lowercased) with their counts. */
+      offendingTypes: Record<string, number>;
+    }
+  | {
+      /** Reserved for Phase 2 — producer not implemented yet. */
+      code: 'SCHEMA_DRIFT_MISSING_TYPE';
+      message: string;
+      /** Count of tags missing a `type=` attribute. */
+      count: number;
+    }
+  | {
+      /** Reserved for Phase 2 — producer not implemented yet. */
+      code: 'SCHEMA_DRIFT_SHORT_CONTENT';
+      message: string;
+      /** Count of tags dropped for sub-minimum content length. */
+      count: number;
+    };
 
 export interface ParsedFinding {
   type: FindingType;
@@ -61,6 +121,14 @@ export interface ParseFindingsResult {
   droppedMissingType: number;
   /** Total raw `<agent_finding>` tags matched (before any drops). */
   rawTagCount: number;
+  /**
+   * Structured diagnostics describing recognizable parse failure modes in the
+   * raw input. Empty when the parse is clean. HTML_ENTITY_* diagnostics are
+   * emitted by this parser directly; SCHEMA_DRIFT_* codes are reserved for a
+   * later phase (producers not implemented yet — the type exists so
+   * downstream consumers can exhaustively switch without a follow-up change).
+   */
+  diagnostics: ParseDiagnostic[];
 }
 
 export interface ParseFindingsOptions {
@@ -86,6 +154,7 @@ export function parseAgentFindingsStrict(
 ): ParseFindingsResult {
   const findings: ParsedFinding[] = [];
   const droppedUnknownType: Record<string, number> = {};
+  const diagnostics: ParseDiagnostic[] = [];
   let droppedShortContent = 0;
   let droppedMissingType = 0;
   let rawTagCount = 0;
@@ -158,12 +227,54 @@ export function parseAgentFindingsStrict(
     });
   }
 
+  // Detect HTML-entity-encoded tags. These fire regardless of whether any raw
+  // tags parsed: a mixed payload (some raw + some entity-encoded) is just as
+  // diagnostic as a pure entity-encoded output, and callers need both signals
+  // to distinguish upstream-pipeline bugs from agent output bugs.
+  //
+  // Matching is case-insensitive on the opening token because some renderers
+  // emit `&LT;` in addition to the conventional lowercase form. Count only
+  // opening occurrences (closing tags are redundant for detection and can
+  // appear in prose discussing the tag syntax).
+  const entityMatches = raw.match(HTML_ENTITY_OPEN_PATTERN);
+  const entityTagCount = entityMatches ? entityMatches.length : 0;
+  if (entityTagCount > 0) {
+    if (rawTagCount === 0) {
+      diagnostics.push({
+        code: 'HTML_ENTITY_ENCODED_TAGS',
+        message:
+          `Output contains ${entityTagCount} HTML-entity-encoded <agent_finding> ` +
+          `tag(s) (&lt;agent_finding...&gt;) and NO raw tags. The parser cannot ` +
+          `recognize entity-encoded tags — this round silently produced 0 findings. ` +
+          `Likely cause: an upstream layer HTML-escaped the agent output before ` +
+          `it reached the parser (markdown renderer, sanitizer, or display-mode ` +
+          `serialization).`,
+        entityTagCount,
+      });
+    } else {
+      diagnostics.push({
+        code: 'HTML_ENTITY_MIXED_PAYLOAD',
+        message:
+          `Output contains ${rawTagCount} raw <agent_finding> tag(s) AND ` +
+          `${entityTagCount} HTML-entity-encoded <agent_finding> tag(s). The ` +
+          `entity-encoded tags are invisible to the parser — some of the agent's ` +
+          `findings may have been silently dropped depending on which tags were ` +
+          `entity-encoded.`,
+        rawTagCount,
+        entityTagCount,
+      });
+    }
+  }
+  // Suppress unused-variable in the close-pattern until Phase 2 needs it.
+  void HTML_ENTITY_CLOSE_PATTERN;
+
   return {
     findings,
     droppedUnknownType,
     droppedShortContent,
     droppedMissingType,
     rawTagCount,
+    diagnostics,
   };
 }
 

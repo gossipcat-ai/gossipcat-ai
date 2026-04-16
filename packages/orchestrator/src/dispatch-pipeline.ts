@@ -74,7 +74,7 @@ type TrackedTask = TaskEntry & {
  * "agent emitted tags but all had invalid type=" — the second case points at
  * a skill/prompt-format drift that instruction edits won't fix.
  */
-export function detectFormatCompliance(result: string): {
+export interface FormatComplianceResult {
   findingCount: number;
   citationCount: number;
   formatCompliant: boolean;
@@ -82,7 +82,16 @@ export function detectFormatCompliance(result: string): {
   tags_accepted: number;
   tags_dropped_unknown_type: number;
   tags_dropped_short_content: number;
-} {
+  /**
+   * Structured diagnostics from the strict parser (HTML_ENTITY_* etc). Empty
+   * array on clean output. Plumbed through to the `format_compliance`
+   * meta-signal as `diagnostic_codes` so the dashboard can render a banner
+   * identifying WHY a round appears empty.
+   */
+  diagnostics: import('./parse-findings').ParseDiagnostic[];
+}
+
+export function detectFormatCompliance(result: string): FormatComplianceResult {
   const parseRes = parseAgentFindingsStrict(result);
   const tags_total = parseRes.rawTagCount;
   const tags_accepted = parseRes.findings.length;
@@ -104,6 +113,7 @@ export function detectFormatCompliance(result: string): {
     tags_accepted,
     tags_dropped_unknown_type,
     tags_dropped_short_content,
+    diagnostics: parseRes.diagnostics,
   };
 }
 
@@ -428,7 +438,7 @@ export class DispatchPipeline {
               const metaSignals: MetaSignal[] = [
                 { type: 'meta', signal: 'task_completed', agentId: entry.agentId, taskId: entry.id, value: durationMs, timestamp: now },
                 { type: 'meta', signal: 'task_tool_turns', agentId: entry.agentId, taskId: entry.id, value: entry.toolCalls ?? 0, timestamp: now },
-                { type: 'meta', signal: 'format_compliance', agentId: entry.agentId, taskId: entry.id, value: compliance.formatCompliant ? 1 : 0, metadata: { findingCount: compliance.findingCount, citationCount: compliance.citationCount, tags_total: compliance.tags_total, tags_accepted: compliance.tags_accepted, tags_dropped_unknown_type: compliance.tags_dropped_unknown_type, tags_dropped_short_content: compliance.tags_dropped_short_content }, timestamp: now },
+                { type: 'meta', signal: 'format_compliance', agentId: entry.agentId, taskId: entry.id, value: compliance.formatCompliant ? 1 : 0, metadata: { findingCount: compliance.findingCount, citationCount: compliance.citationCount, tags_total: compliance.tags_total, tags_accepted: compliance.tags_accepted, tags_dropped_unknown_type: compliance.tags_dropped_unknown_type, tags_dropped_short_content: compliance.tags_dropped_short_content, diagnostic_codes: compliance.diagnostics.map(d => d.code) }, timestamp: now },
               ];
               perfWriter.appendSignals(metaSignals);
             } catch { /* best-effort — never crash dispatch on signal write failure */ }

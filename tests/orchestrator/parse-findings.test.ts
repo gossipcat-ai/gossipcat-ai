@@ -268,6 +268,70 @@ and a second paragraph.
     });
   });
 
+  describe('HTML entity diagnostics', () => {
+    it('emits no diagnostic for a clean raw-tag-only payload', () => {
+      const raw = `<agent_finding type="finding" severity="high">Raw tag at foo.ts:12 content</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+      expect(res.diagnostics).toEqual([]);
+    });
+
+    it('emits HTML_ENTITY_ENCODED_TAGS when output is entity-encoded only', () => {
+      // `<agent_finding type="finding" severity="high">body at foo.ts:12</agent_finding>`
+      // escaped to entity form. The parser cannot see tags → 0 findings, but
+      // the diagnostic MUST fire loudly.
+      const raw =
+        `&lt;agent_finding type="finding" severity="high"&gt;body at foo.ts:12 some content&lt;/agent_finding&gt;`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.rawTagCount).toBe(0);
+      expect(res.diagnostics).toHaveLength(1);
+      expect(res.diagnostics[0].code).toBe('HTML_ENTITY_ENCODED_TAGS');
+      if (res.diagnostics[0].code === 'HTML_ENTITY_ENCODED_TAGS') {
+        expect(res.diagnostics[0].entityTagCount).toBe(1);
+        // The message must mention the failure mode so the dashboard banner is
+        // self-explanatory without the dashboard having to compose prose.
+        expect(res.diagnostics[0].message).toMatch(/entity-encoded/i);
+      }
+    });
+
+    it('emits HTML_ENTITY_MIXED_PAYLOAD when raw + entity-encoded tags mix', () => {
+      const raw = `
+<agent_finding type="finding" severity="high">raw visible tag foo.ts:10 content</agent_finding>
+&lt;agent_finding type="finding" severity="high"&gt;hidden entity-encoded tag bar.ts:20&lt;/agent_finding&gt;
+`;
+      const res = parseAgentFindingsStrict(raw);
+      // Raw tag parses, entity-encoded one silently drops (but the diagnostic fires).
+      expect(res.findings).toHaveLength(1);
+      expect(res.rawTagCount).toBe(1);
+      expect(res.diagnostics).toHaveLength(1);
+      expect(res.diagnostics[0].code).toBe('HTML_ENTITY_MIXED_PAYLOAD');
+      if (res.diagnostics[0].code === 'HTML_ENTITY_MIXED_PAYLOAD') {
+        expect(res.diagnostics[0].rawTagCount).toBe(1);
+        expect(res.diagnostics[0].entityTagCount).toBe(1);
+      }
+    });
+
+    it("XSS sanitizer smoke test: diagnostic message survives literal `<script>` escape path", () => {
+      // Pathological input: entity-encoded tag whose content includes a raw
+      // `<script>` payload. The diagnostic message returned by the parser
+      // must NOT contain an unescaped `<script>` tag — escaping happens at
+      // the dashboard render layer (`escapeHtml` in packages/dashboard-v2/src/lib/sanitize.ts),
+      // but the parser itself MUST NOT include the attacker-controlled tag body
+      // in the diagnostic message at all.
+      const raw =
+        `&lt;agent_finding type="finding" severity="high"&gt;<script>alert("xss")</script>&lt;/agent_finding&gt;`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.diagnostics).toHaveLength(1);
+      expect(res.diagnostics[0].code).toBe('HTML_ENTITY_ENCODED_TAGS');
+      // The diagnostic message summarizes the failure mode; it must not reflect
+      // the raw script payload into its text.
+      expect(res.diagnostics[0].message).not.toContain('<script>');
+      expect(res.diagnostics[0].message).not.toContain('alert(');
+    });
+  });
+
   describe('counters', () => {
     it('reports rawTagCount regardless of drop reasons', () => {
       const raw = `
