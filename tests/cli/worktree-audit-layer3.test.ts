@@ -21,7 +21,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'fs';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import {
   auditFilesystemSinceSentinel,
@@ -161,6 +161,19 @@ describeOnPosix('buildAuditExclusions', () => {
   it('omits worktree exclusion when ownWorktree is undefined', () => {
     const excl = buildAuditExclusions('/tmp/proj', undefined);
     expect(excl.some(e => e.includes('gossip-wt'))).toBe(false);
+  });
+
+  it('excludes user-level OS/app churn dirs (~/Library, ~/.cache, ~/.npm, ~/.claude/projects)', () => {
+    // Live-fire 2026-04-16: 44 "boundary escape" violations were 100% OS noise
+    // (Chrome cookies, Spotify cache, Claude Code session logs). These user-
+    // level dirs are unreachable through Tool Server sandbox or Layer 2 hook,
+    // so false positives under them are pure noise.
+    const excl = buildAuditExclusions('/tmp/projectroot', undefined);
+    const home = homedir();
+    expect(excl.some(e => e === `${home}/Library`)).toBe(true);
+    expect(excl.some(e => e === `${home}/.cache`)).toBe(true);
+    expect(excl.some(e => e === `${home}/.npm`)).toBe(true);
+    expect(excl.some(e => e === `${home}/.claude/projects`)).toBe(true);
   });
 });
 
@@ -521,6 +534,127 @@ describeOnPosix('auditFilesystemSinceSentinel — macOS TCC partial stdout parse
       });
 
       expect(res.violations).toEqual([]);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(scanRoot, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describeOnPosix('auditFilesystemSinceSentinel — user-level OS/app dir exclusions', () => {
+  /**
+   * Live-fire 2026-04-16 produced 44 boundary-escape violations that were
+   * 100% OS-level churn under $HOME/Library (Chrome cookies, Spotify cache)
+   * and $HOME/.claude/projects (Claude Code session logs). These dirs are
+   * unreachable through the Tool Server sandbox or Layer 2 hook, so
+   * violations under them are noise.
+   *
+   * We use a synthetic find shim to emit candidate paths that would
+   * otherwise NOT be filtered by `find -not -path` (since the shim ignores
+   * its args and just prints). This tests the downstream filter logic.
+   * Actually, the production `find` filters via args — so what we really
+   * want to verify is that the exclusion args are PASSED to find. The
+   * simplest way: confirm audit output ignores matching paths regardless of
+   * how find surfaces them, by asserting on the real find with files in the
+   * excluded dirs. But we can't write to ~/Library in a test.
+   *
+   * Pragmatic approach: shim echoes candidate paths including one under
+   * $HOME/Library and one under $HOME/some-other-dir. The shim does NOT
+   * filter (real find would). That means the audit itself MUST NOT post-
+   * filter either — exclusions are enforced via find args, not code. So a
+   * shim-based "does NOT flag ~/Library" test would incorrectly fail even
+   * after the fix. Instead, we verify the args-passed behavior: the shim
+   * writes the full argv to a side-channel file, and we assert the
+   * exclusion flags are present.
+   */
+  itOnPosix('passes $HOME/Library exclusion arg to find', () => {
+    const projectRoot = mkTmp();
+    const scanRoot = mkTmp('gossip-l3-scan-');
+    const binDir = mkTmp('gossip-l3-bin-');
+    const shim = join(binDir, 'arg-capture-find');
+    const argLog = join(binDir, 'args.log');
+    try {
+      // Shim writes its argv (one per line) to argLog, then exits 0 with no
+      // stdout. This lets us assert on the exact args the audit passed.
+      writeFileSync(
+        shim,
+        `#!/bin/sh\nfor a in "$@"; do echo "$a" >> '${argLog}'; done\nexit 0\n`,
+      );
+      chmodSync(shim, 0o755);
+
+      const sentinel = stampTaskSentinel(projectRoot, 'arg-capture')!;
+      const meta: DispatchMetadata = {
+        taskId: 'arg-capture',
+        agentId: 'opus-implementer',
+        writeMode: 'worktree',
+        timestamp: Date.now(),
+        sentinelPath: sentinel,
+      };
+
+      auditFilesystemSinceSentinel(projectRoot, meta, {
+        scanRoots: [scanRoot],
+        findBinary: shim,
+        logFailures: false,
+      });
+
+      const args = readFileSync(argLog, 'utf-8').split('\n').filter(Boolean);
+      const home = homedir();
+      // Each exclusion is passed as `-not -path <excl>` and `-not -path <excl>/*`.
+      expect(args).toContain(`${home}/Library`);
+      expect(args).toContain(`${home}/Library/*`);
+      expect(args).toContain(`${home}/.cache`);
+      expect(args).toContain(`${home}/.npm`);
+      expect(args).toContain(`${home}/.claude/projects`);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(scanRoot, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  itOnPosix('still flags files in $HOME outside the exclusion list (no over-exclusion)', () => {
+    // Guards against the fix being too broad — e.g. if someone accidentally
+    // excluded all of $HOME. A real agent bypass to $HOME/some-other-dir must
+    // still surface.
+    const projectRoot = mkTmp();
+    const scanRoot = mkTmp('gossip-l3-scan-');
+    const binDir = mkTmp('gossip-l3-bin-');
+    const shim = join(binDir, 'echo-find');
+    const home = homedir();
+    const flaggedPath = `${home}/some-other-dir/file.txt`;
+    const excludedPath = `${home}/Library/foo.log`;
+    try {
+      // Shim ignores args and echoes both candidate paths. Real `find` would
+      // filter via -not -path, but since this shim doesn't implement filtering,
+      // both paths come back. The audit code does NOT post-filter — filtering
+      // is delegated to find. So this test documents that contract: if find
+      // emits a path, the audit surfaces it. The REAL protection is at the
+      // find-args level, which the sibling arg-capture test verifies.
+      writeFileSync(
+        shim,
+        `#!/bin/sh\necho '${flaggedPath}'\necho '${excludedPath}'\nexit 0\n`,
+      );
+      chmodSync(shim, 0o755);
+
+      const sentinel = stampTaskSentinel(projectRoot, 'no-over-exclude')!;
+      const meta: DispatchMetadata = {
+        taskId: 'no-over-exclude',
+        agentId: 'opus-implementer',
+        writeMode: 'worktree',
+        timestamp: Date.now(),
+        sentinelPath: sentinel,
+      };
+
+      const res = auditFilesystemSinceSentinel(projectRoot, meta, {
+        scanRoots: [scanRoot],
+        findBinary: shim,
+        logFailures: false,
+      });
+
+      // The non-excluded $HOME path must still surface — fix must not be
+      // over-broad.
+      expect(res.violations).toContain(flaggedPath);
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       rmSync(scanRoot, { recursive: true, force: true });

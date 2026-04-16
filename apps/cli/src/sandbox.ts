@@ -619,6 +619,16 @@ export function buildAuditExclusions(
   const root = canonicalize(projectRoot);
   for (const v of expandTmpVariants(`${root}/.gossip`)) excl.add(v);
   for (const v of expandTmpVariants(`${root}/.claude`)) excl.add(v);
+  // User-level OS/app churn dirs. These are unreachable through the Tool
+  // Server sandbox or Layer 2 hook, so violations under them are pure noise
+  // (Chrome cookies, Spotify cache, Claude Code session logs, npm cache, etc.).
+  // Real agent writes anywhere else in $HOME are still caught.
+  try {
+    const home = canonicalize(homedir());
+    for (const sub of ['Library', '.cache', '.npm', '.claude/projects']) {
+      for (const v of expandTmpVariants(`${home}/${sub}`)) excl.add(v);
+    }
+  } catch { /* homedir() failure — best-effort, never block audit */ }
   if (ownWorktree) {
     const wt = canonicalize(ownWorktree);
     for (const v of expandTmpVariants(wt)) excl.add(v);
