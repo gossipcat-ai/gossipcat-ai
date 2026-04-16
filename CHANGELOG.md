@@ -4,6 +4,29 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-04-16
+
+Layer 3 audit overhaul — scoped-mode noise drops 99.9%, worktree-mode 82%. Shipped via #107 which stacks two commits:
+
+### Fixed
+
+- **`find -prune` instead of `-not -path`** for L3 exclusions. `-not -path` only filters `find`'s output; the scan still descends into every excluded directory. On macOS that means `find` enters `~/Library/Application Support/{Safari,Photos,Group Containers}/` and hits TCC "Operation not permitted" every dispatch, producing a noisy `find partial failure` log entry even though `err.stdout` parsing (v0.4.4) recovers real violations. `-prune` skips the subtree entirely — no descent, no permission errors, clean stderr. (`apps/cli/src/sandbox.ts`)
+
+- **Mode-aware scan roots + expanded exclusions.** Design consensus from two parallel investigations (haiku-researcher + sonnet-reviewer, 2026-04-16) produced two load-bearing findings:
+  - **Scoped mode scanning `$HOME` has zero true-positive capacity.** Tool Server's `shell_exec` for scoped agents is hard-restricted to read-only git. A scoped agent cannot write outside scope via any Tool Server primitive, so every violation reported from a `$HOME` scan was noise by design. `defaultScanRoots('scoped', projectRoot)` now returns `[projectRoot]` only. Worktree mode keeps the broad scan (relay `shell_exec` can still escape).
+  - **Orchestrator git activity runs inside `collect()` BEFORE `runLayer3Audit`.** `worktreeManager.merge()` + `cleanup()` at `dispatch-pipeline.ts:697-699` write to `.git/refs`, `.git/logs`, `.git/index`, `.git/objects/*` — all were being flagged as "agent violations." Added `${projectRoot}/.git` to exclusions.
+
+  Also broadens `$HOME/.claude/projects` → whole `$HOME/.claude` (harness adds new subtrees per release: `tasks`, `history.jsonl`, `file-history`, `backups`, `shell-snapshots`, `todos`) and adds tmpdir OS-app prefixes `com.apple.*`, `itunescloudd`, `TemporaryItems` so macOS apps squatting in `/var/folders/<a>/<b>/T/` don't inflate violations.
+
+### Live-fire results (2026-04-16)
+
+| Mode | Before v0.4.7 | After v0.4.7 | Reduction |
+|------|---------------|--------------|-----------|
+| Worktree dispatch (gemini-implementer) | 44 violations | 8 | **82%** |
+| Scoped dispatch (gemini-implementer) | 1064 violations | 1 | **99.9%** |
+
+The remaining 8 worktree entries are all legitimate "outside worktree" writes (orchestrator activity + sibling-repo noise + Node compile cache). The remaining 1 scoped entry is the agent's own in-scope write (`docs/<file>`) — L3 in scoped mode doesn't currently consult the scope boundary; follow-up item.
+
 ## [0.4.6] — 2026-04-16
 
 ### Fixed
