@@ -31,7 +31,7 @@ export class WorktreeManager {
     if (!log.stdout.trim()) return { merged: true };
 
     try {
-      await execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', 'merge', branch, '--no-edit'], { cwd: this.projectRoot });
+      await execFileAsync('git', ['merge', branch, '--no-edit'], { cwd: this.projectRoot });
       return { merged: true };
     } catch {
       await execFileAsync('git', ['merge', '--abort'], { cwd: this.projectRoot });
