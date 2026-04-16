@@ -322,7 +322,7 @@ export class ToolServer {
             throw new Error(`Read blocked: "${args.path}" is outside scope "${readScope}"`);
           }
         }
-        return this.fileTools.fileRead(args as { path: string; startLine?: number; endLine?: number });
+        return this.fileTools.fileRead(args as { path: string; startLine?: number; endLine?: number }, agentRoot);
       }
       case 'file_write': {
         // Check cap BEFORE write to avoid write-success-with-false-error
@@ -333,20 +333,20 @@ export class ToolServer {
             throw new Error(`Agent ${callerId} exceeded max tracked file writes (${ToolServer.MAX_WRITTEN_FILES_PER_AGENT})`);
           }
         }
-        const result = await this.fileTools.fileWrite(args as { path: string; content: string });
+        const result = await this.fileTools.fileWrite(args as { path: string; content: string }, agentRoot);
         if (callerId) {
           this.agentWrittenFiles.get(callerId)!.add(args.path as string);
         }
         return result;
       }
       case 'file_delete':
-        return this.fileTools.fileDelete(args as { path: string });
+        return this.fileTools.fileDelete(args as { path: string }, agentRoot);
       case 'file_search':
-        return this.fileTools.fileSearch(args as { pattern: string });
+        return this.fileTools.fileSearch(args as { pattern: string }, agentRoot);
       case 'file_grep':
-        return this.fileTools.fileGrep(args as { pattern: string; path?: string });
+        return this.fileTools.fileGrep(args as { pattern: string; path?: string }, agentRoot);
       case 'file_tree':
-        return this.fileTools.fileTree(args as { path?: string; depth?: number });
+        return this.fileTools.fileTree(args as { path?: string; depth?: number }, agentRoot);
       case 'shell_exec':
         return this.shellTools.shellExec({
           ...(args as { command: string; timeout?: number }),

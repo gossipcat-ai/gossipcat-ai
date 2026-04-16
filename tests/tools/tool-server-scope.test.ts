@@ -250,4 +250,126 @@ describe('ToolServer scope enforcement', () => {
       }
     });
   });
+
+  describe('union-of-roots (agent worktree)', () => {
+    // Previously, worktree-mode agents were gated correctly at enforceWriteScope
+    // (against agentRoots) but then FileTools → Sandbox.validatePath re-checked
+    // against projectRoot only, rejecting every absolute worktree path because
+    // worktrees live under os.tmpdir() by construction. These tests verify the
+    // fix: validatePath accepts path if it resolves inside projectRoot OR any
+    // entry in allowedRoots, while preserving all existing security properties
+    // (symlink resolve, trailing-slash root compare, case-fold on darwin/win32).
+    let wtRoot: string;
+    let agentId: string;
+
+    beforeEach(() => {
+      // Use a real directory under os.tmpdir() so we exercise the same
+      // "root lives outside projectRoot" geometry production has.
+      wtRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gossip-wt-'));
+      agentId = 'agent-wt-union';
+      server.assignRoot(agentId, wtRoot);
+    });
+
+    afterEach(() => {
+      try { fs.rmSync(wtRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    });
+
+    it('a) allows absolute path inside agent worktree root', async () => {
+      // Pre-create the intermediate `sub/` dir so canonicalizeForBoundary in
+      // enforceWriteScope can resolve symlinks on an existing ancestor; this
+      // keeps the test focused on the Sandbox-layer union-of-roots fix rather
+      // than tangling with the scope-layer walk-to-ancestor behavior.
+      fs.mkdirSync(path.join(wtRoot, 'sub'), { recursive: true });
+      const target = path.join(wtRoot, 'sub', 'file.txt');
+      const result = await server.executeTool(
+        'file_write',
+        { path: target, content: 'hello' },
+        agentId,
+      );
+      expect(result).toContain('Written');
+      expect(fs.existsSync(target)).toBe(true);
+      expect(fs.readFileSync(target, 'utf-8')).toBe('hello');
+    });
+
+    it('b) rejects absolute path outside both roots', async () => {
+      await expect(
+        server.executeTool(
+          'file_write',
+          { path: '/etc/passwd', content: 'evil' },
+          agentId,
+        ),
+      ).rejects.toThrow(/outside worktree root|outside project root/);
+    });
+
+    it('c) relative path still resolves against projectRoot (unchanged)', async () => {
+      // Register a scope-less agent so the write only exercises the Sandbox
+      // gate, not enforceWriteScope's worktree guard (which would reject
+      // writes outside the worktree root even if projectRoot contains them).
+      // Instead, we read an existing projectRoot file — this path exercises
+      // Sandbox.validatePath with agentRoot populated but a relative path
+      // inside projectRoot, and must succeed (union semantics).
+      const innerFile = path.join(projectRoot, 'inside.txt');
+      fs.writeFileSync(innerFile, 'ok');
+      const content = await server.executeTool(
+        'file_read',
+        { path: 'inside.txt' },
+        agentId,
+      );
+      expect(content).toContain('ok');
+    });
+
+    it('d) blocks sibling-prefix bypass against worktree root', async () => {
+      // Root is `<tmp>/gossip-wt-XXXX`; create a sibling under the same
+      // parent named `<same>XYZ` and verify a write into it is rejected
+      // even though the name shares a prefix with the assigned root.
+      const siblingRoot = wtRoot + 'XYZ';
+      fs.mkdirSync(siblingRoot, { recursive: true });
+      const victim = path.join(siblingRoot, 'file.txt');
+      try {
+        await expect(
+          server.executeTool(
+            'file_write',
+            { path: victim, content: 'x' },
+            agentId,
+          ),
+        ).rejects.toThrow(/outside worktree root|outside project root/);
+      } finally {
+        fs.rmSync(siblingRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('e) blocks symlink escape planted inside worktree', async () => {
+      // Create a symlink inside the worktree pointing at an out-of-root
+      // directory (here: /etc). A write through the symlink must be
+      // rejected because validatePath follows the symlink before the
+      // membership check.
+      const link = path.join(wtRoot, 'bounce');
+      try {
+        fs.symlinkSync('/etc', link);
+      } catch {
+        // On some CI filesystems symlink creation may fail; skip gracefully.
+        return;
+      }
+      await expect(
+        server.executeTool(
+          'file_write',
+          { path: path.join(link, 'evil.txt'), content: 'x' },
+          agentId,
+        ),
+      ).rejects.toThrow(/outside worktree root|outside project root/);
+    });
+
+    it('f) agent without assigned root falls back to projectRoot-only check', async () => {
+      // A non-write agent with no scope/root should behave exactly as
+      // before — absolute paths outside projectRoot get rejected by the
+      // Sandbox, even though allowedRoots defaults to [].
+      await expect(
+        server.executeTool(
+          'file_read',
+          { path: '/etc/hosts' },
+          'agent-no-root',
+        ),
+      ).rejects.toThrow(/outside project root/);
+    });
+  });
 });

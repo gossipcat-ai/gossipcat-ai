@@ -5,8 +5,12 @@ import { Sandbox } from './sandbox';
 export class FileTools {
   constructor(private sandbox: Sandbox) {}
 
-  async fileRead(args: { path: string; startLine?: number; endLine?: number }): Promise<string> {
-    const absPath = this.sandbox.validatePath(args.path);
+  async fileRead(
+    args: { path: string; startLine?: number; endLine?: number },
+    agentRoot?: string,
+  ): Promise<string> {
+    const allowed = agentRoot ? [agentRoot] : [];
+    const absPath = this.sandbox.validatePath(args.path, allowed);
     try {
       const content = await readFile(absPath, 'utf-8');
       const lines = content.split('\n');
@@ -24,30 +28,40 @@ export class FileTools {
     }
   }
 
-  async fileWrite(args: { path: string; content: string }): Promise<string> {
-    const absPath = this.sandbox.validatePath(args.path);
+  async fileWrite(
+    args: { path: string; content: string },
+    agentRoot?: string,
+  ): Promise<string> {
+    const allowed = agentRoot ? [agentRoot] : [];
+    const absPath = this.sandbox.validatePath(args.path, allowed);
     const dir = resolve(absPath, '..');
     await mkdir(dir, { recursive: true });
     await writeFile(absPath, args.content, 'utf-8');
     return `Written ${args.content.length} bytes to ${args.path}`;
   }
 
-  async fileDelete(args: { path: string }): Promise<string> {
-    const absPath = this.sandbox.validatePath(args.path);
+  async fileDelete(args: { path: string }, agentRoot?: string): Promise<string> {
+    const allowed = agentRoot ? [agentRoot] : [];
+    const absPath = this.sandbox.validatePath(args.path, allowed);
     await unlink(absPath);
     return `Deleted ${args.path}`;
   }
 
-  async fileSearch(args: { pattern: string }): Promise<string> {
+  async fileSearch(args: { pattern: string }, agentRoot?: string): Promise<string> {
     const results: string[] = [];
-    await this.walkDir(this.sandbox.projectRoot, args.pattern, results, 0, 10);
+    const root = agentRoot || this.sandbox.projectRoot;
+    await this.walkDir(root, args.pattern, results, 0, 10);
     return results.join('\n') || 'No files found';
   }
 
-  async fileGrep(args: { pattern: string; path?: string }): Promise<string> {
+  async fileGrep(
+    args: { pattern: string; path?: string },
+    agentRoot?: string,
+  ): Promise<string> {
+    const allowed = agentRoot ? [agentRoot] : [];
     const searchRoot = args.path
-      ? this.sandbox.validatePath(args.path)
-      : this.sandbox.projectRoot;
+      ? this.sandbox.validatePath(args.path, allowed)
+      : (agentRoot || this.sandbox.projectRoot);
     let regex: RegExp;
     try {
       regex = new RegExp(args.pattern);
@@ -59,10 +73,14 @@ export class FileTools {
     return results.join('\n') || 'No matches found';
   }
 
-  async fileTree(args: { path?: string; depth?: number }): Promise<string> {
+  async fileTree(
+    args: { path?: string; depth?: number },
+    agentRoot?: string,
+  ): Promise<string> {
+    const allowed = agentRoot ? [agentRoot] : [];
     const root = args.path
-      ? this.sandbox.validatePath(args.path)
-      : this.sandbox.projectRoot;
+      ? this.sandbox.validatePath(args.path, allowed)
+      : (agentRoot || this.sandbox.projectRoot);
     const maxDepth = args.depth || 3;
     const lines: string[] = [];
     await this.buildTree(root, '', lines, 0, maxDepth);
