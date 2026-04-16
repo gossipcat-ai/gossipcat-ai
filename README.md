@@ -573,7 +573,7 @@ Check `~/.gossip/mcp.log` (or `<your-project>/.gossip/mcp.log`) for the boot log
 - **Conflicting `.gossip/relay.pid`** from a crashed previous boot — delete it and restart Claude Code
 - **`GOSSIPCAT_PORT` set to a port already in use** — unset the env var or pick a free port
 
-### "Boot says 'No gossip.agents.json found' and nothing happens"
+### "Boot says 'No .gossip/config.json found' and nothing happens"
 This was a critical bug in v0.1.0 — fixed in v0.1.1. Upgrade with the install one-liner above. v0.1.1+ boots in degraded mode (dashboard + relay only) so you can run `gossip_setup` from inside Claude Code.
 
 ### "Agents keep returning empty findings"

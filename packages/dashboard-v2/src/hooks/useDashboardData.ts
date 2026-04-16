@@ -1,6 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile } from '@/lib/types';
+
+/**
+ * Polling interval for /api/agents and friends. Backs the "Team page updates
+ * after gossip_setup without a full page reload" contract:
+ * setAgentConfigs (server.ts:455) pushes new configs into ctx, but the SPA
+ * needs to actually fetch them. 10s balances freshness vs request volume.
+ */
+const REFRESH_INTERVAL_MS = 10_000;
 
 interface MemoryApiResponse { knowledge: MemoryFile[] }
 
@@ -37,8 +45,15 @@ export function useDashboardData() {
     nativeMemories: null, gossipMemories: null, memories: null,
     loading: true, error: null,
   });
+  // In-flight guard: prevents piling up overlapping requests if one poll is
+  // slower than REFRESH_INTERVAL_MS (e.g., cold native-memory read on a
+  // project with thousands of auto-memory files). Skipping is safe — the next
+  // tick fires a fresh request.
+  const inFlight = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       const [overview, agents, tasks, consensus, consensusReports, nativeResp, gossipResp] = await Promise.all([
         api<OverviewData>('overview'),
@@ -72,10 +87,22 @@ export function useDashboardData() {
       });
     } catch (err) {
       setState((s) => ({ ...s, loading: false, error: (err as Error).message }));
+    } finally {
+      inFlight.current = false;
     }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Poll every REFRESH_INTERVAL_MS so the Team page, tasks list, and consensus
+  // history pick up post-boot mutations (gossip_setup adding agents, new tasks
+  // being dispatched, consensus rounds completing) without a full page reload.
+  // Separate useEffect keeps cleanup clean — the interval is owned here, not
+  // tangled with the initial fetch above.
+  useEffect(() => {
+    const id = setInterval(() => { refresh(); }, REFRESH_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [refresh]);
 
   return { ...state, refresh };
 }
