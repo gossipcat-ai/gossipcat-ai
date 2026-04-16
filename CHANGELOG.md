@@ -4,6 +4,18 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-04-16
+
+Point release closing two Layer 3 sandbox bugs surfaced by live-fire verification against the freshly-released v0.4.3 (consensus task `56641e6e`, 2026-04-16).
+
+### Fixed
+
+- **Layer 3 `worktreePath` patch was a no-op** (#101). The F2 fix in #99 called `ctx.mainAgent.getTask(taskId)` after `collect()`, but `DispatchPipeline.collect()` deletes the task entry from its `this.tasks` Map before returning (default `consume: true`). Every relay worktree dispatch since #99 recorded `worktreePath: undefined`, so the Layer 3 audit never excluded the agent's own worktree from its scan. Fix reads `worktreeInfo.path` directly off the result entry (`collectResult.results[0]`), which already carries it from `dispatch-pipeline.ts`'s `results.map` builder. (`apps/cli/src/mcp-server-sdk.ts`)
+
+- **macOS TCC silently hid Layer 3 violations** (#101). `execFileSync` in `auditFilesystemSinceSentinel` threw on any non-zero exit from `find`, and macOS TCC returns "Operation not permitted" whenever `find` crosses into sandboxed Library paths (Safari Group Containers, Photos, etc.). `find` then exits non-zero even when it had successfully captured real violations on stdout — the entire scan root's output was discarded. Fix parses `err.stdout` on throw before logging, so permission errors still log to stderr but real violations survive. Catch binding narrowed from `(err as Error)` to structural type `{ stdout?: Buffer | string; message?: string }` to reach Node's `ExecFileException` fields without `as any`. (`apps/cli/src/sandbox.ts`)
+
+Tests: Layer 3 suite 29 → 31 (synthetic `findBinary` shim that emits stdout then exits non-zero, plus a negative case proving empty-stdout failures do not fabricate violations).
+
 ## [0.4.3] — 2026-04-16
 
 Headline: **worktree filesystem sandbox** — the multi-layer defense for issue #90 ships end-to-end. Agents dispatched with `write_mode: "worktree"` are now soft-blocked from writing outside their isolated worktree by a PreToolUse hook (Layer 2), with a post-dispatch `find -newer` audit as a backstop (Layer 3) for escape paths the hook can't see. Plus a round of scoring corrections, dashboard polish, and relay resilience fixes driven by recent consensus rounds.
