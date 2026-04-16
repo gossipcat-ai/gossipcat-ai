@@ -538,4 +538,47 @@ describe('DispatchPipeline', () => {
       expect(() => pipeline.invalidateProjectStructureCache()).not.toThrow();
     });
   });
+
+  describe('detectFormatCompliance → format_compliance meta-signal round-trip', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { detectFormatCompliance } = require('@gossip/orchestrator');
+
+    it('passes through ParseDiagnostic codes to the meta-signal payload shape', () => {
+      // The meta-signal emit site at dispatch-pipeline.ts:431 builds
+      // `diagnostic_codes: compliance.diagnostics.map(d => d.code)`. Verify
+      // that detectFormatCompliance produces diagnostics in the right shape
+      // for that mapping to succeed end-to-end. Uses entity-encoded output to
+      // trigger HTML_ENTITY_ENCODED_TAGS.
+      const entityOnlyOutput =
+        `&lt;agent_finding type="finding" severity="high"&gt;body at foo.ts:12 some content&lt;/agent_finding&gt;`;
+      const compliance = detectFormatCompliance(entityOnlyOutput);
+      expect(compliance.tags_accepted).toBe(0);
+      expect(compliance.diagnostics).toHaveLength(1);
+      expect(compliance.diagnostics[0].code).toBe('HTML_ENTITY_ENCODED_TAGS');
+      // Simulate the meta-signal payload shape (dispatch-pipeline.ts:431).
+      const diagnosticCodes = compliance.diagnostics.map((d: { code: string }) => d.code);
+      expect(diagnosticCodes).toEqual(['HTML_ENTITY_ENCODED_TAGS']);
+    });
+
+    it('emits empty diagnostic_codes array on clean output', () => {
+      const cleanOutput =
+        `<agent_finding type="finding" severity="high">Clean raw tag at foo.ts:42 content</agent_finding>`;
+      const compliance = detectFormatCompliance(cleanOutput);
+      expect(compliance.tags_accepted).toBe(1);
+      expect(compliance.diagnostics).toEqual([]);
+      const diagnosticCodes = compliance.diagnostics.map((d: { code: string }) => d.code);
+      expect(diagnosticCodes).toEqual([]);
+    });
+
+    it('emits HTML_ENTITY_MIXED_PAYLOAD code when raw and entity tags mix', () => {
+      const mixed = `
+<agent_finding type="finding" severity="high">raw tag foo.ts:10 content here</agent_finding>
+&lt;agent_finding type="finding" severity="low"&gt;entity tag bar.ts:20 content&lt;/agent_finding&gt;
+`;
+      const compliance = detectFormatCompliance(mixed);
+      expect(compliance.tags_accepted).toBe(1);
+      const codes = compliance.diagnostics.map((d: { code: string }) => d.code);
+      expect(codes).toEqual(['HTML_ENTITY_MIXED_PAYLOAD']);
+    });
+  });
 });

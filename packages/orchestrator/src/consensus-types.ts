@@ -85,6 +85,16 @@ export interface ConsensusReport {
    * despite agents producing content.
    */
   droppedFindingsByType?: Record<string, number>;
+  /**
+   * Per-author parse diagnostics from `parseAgentFindingsStrict` (e.g.
+   * HTML_ENTITY_ENCODED_TAGS when an upstream layer HTML-escaped the agent
+   * output before the parser saw it). Populated only for agents whose raw
+   * output produced at least one diagnostic — clean rounds keep this
+   * undefined. The dashboard renders a per-finding-card banner on first
+   * occurrence per `(consensusId, agentId, code)` tuple to make silent parse
+   * failures loud. Keyed by `originalAgentId`.
+   */
+  authorDiagnostics?: Record<string, import('./parse-findings').ParseDiagnostic[]>;
 }
 
 /** Return type for collect() */

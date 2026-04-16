@@ -432,6 +432,40 @@ Summary: 1 agree, 1 disagree.`;
         expect(report.newFindings[0].finding).toBe('A totally new idea');
         expect(report.newFindings[0].agentId).toBe('agent-2');
       });
+
+      it('populates authorDiagnostics when agent output contains entity-encoded tags', async () => {
+        // agent-html is emitting `&lt;agent_finding&gt;` instead of `<agent_finding>`.
+        // parseAgentFindingsStrict produces 0 findings (tags invisible), but the
+        // HTML_ENTITY_ENCODED_TAGS diagnostic MUST appear on the ConsensusReport
+        // so the dashboard can surface the silent parse failure.
+        const entityResults: TaskEntry[] = [
+          createTaskEntry('agent-html', 'completed',
+            `&lt;agent_finding type="finding" severity="high"&gt;entity-encoded body at foo.ts:12 content&lt;/agent_finding&gt;`),
+          createTaskEntry('agent-clean', 'completed',
+            `<agent_finding type="finding" severity="high">Clean raw tag at bar.ts:34 some content</agent_finding>`),
+        ];
+        const report = await engine.synthesize(entityResults, []);
+        expect(report.authorDiagnostics).toBeDefined();
+        expect(report.authorDiagnostics!['agent-html']).toBeDefined();
+        expect(report.authorDiagnostics!['agent-html']).toHaveLength(1);
+        expect(report.authorDiagnostics!['agent-html'][0].code).toBe('HTML_ENTITY_ENCODED_TAGS');
+        // Clean agent MUST NOT appear — populating for clean output would
+        // flood every report with empty diagnostic arrays.
+        expect(report.authorDiagnostics!['agent-clean']).toBeUndefined();
+      });
+
+      it('omits authorDiagnostics entirely when no agent output triggers a diagnostic', async () => {
+        // Pure raw-tag output from both agents → parser sees every tag, no
+        // diagnostic fires, and the field stays absent from the report.
+        const cleanResults: TaskEntry[] = [
+          createTaskEntry('agent-1', 'completed',
+            `<agent_finding type="finding" severity="high">Clean tag at foo.ts:1 content here</agent_finding>`),
+          createTaskEntry('agent-2', 'completed',
+            `<agent_finding type="finding" severity="low">Clean tag at bar.ts:2 content here</agent_finding>`),
+        ];
+        const report = await engine.synthesize(cleanResults, []);
+        expect(report.authorDiagnostics).toBeUndefined();
+      });
   });
 
   describe('deduplicateFindings()', () => {

@@ -652,6 +652,10 @@ Return only valid JSON.${skillsBlock}`;
     // Aggregate dropped-type counts across all agents in this round so the
     // ConsensusReport can surface them to the dashboard.
     const droppedFindingsByType: Record<string, number> = {};
+    // Per-author ParseDiagnostic list — attached to ConsensusReport so the
+    // dashboard can render a banner when agent output was unparseable (e.g.
+    // HTML-entity-encoded tags from an upstream-sanitizer layer).
+    const authorDiagnostics: Record<string, import('./parse-findings').ParseDiagnostic[]> = {};
 
     for (const r of successful) {
       // Parse findings from the FULL raw result so tags placed before the
@@ -668,6 +672,16 @@ Return only valid JSON.${skillsBlock}`;
       // Roll up this agent's unknown-type drops into the round-level counter.
       for (const [type, count] of Object.entries(parseResult.droppedUnknownType)) {
         droppedFindingsByType[type] = (droppedFindingsByType[type] ?? 0) + count;
+      }
+
+      // Capture this agent's structured parse diagnostics so the ConsensusReport
+      // can surface them to the dashboard. Only record when non-empty — clean
+      // rounds keep the field undefined in the final report.
+      if (parseResult.diagnostics.length > 0) {
+        authorDiagnostics[r.agentId] = [
+          ...(authorDiagnostics[r.agentId] ?? []),
+          ...parseResult.diagnostics,
+        ];
       }
 
       for (const p of parsed) {
@@ -1171,6 +1185,8 @@ Return only valid JSON.${skillsBlock}`;
       // Only surface when at least one unknown type was dropped — keeps clean
       // reports clean and avoids empty objects in the JSON payload.
       ...(Object.keys(droppedFindingsByType).length > 0 ? { droppedFindingsByType } : {}),
+      // Same pattern for per-author parse diagnostics.
+      ...(Object.keys(authorDiagnostics).length > 0 ? { authorDiagnostics } : {}),
     };
   }
 
