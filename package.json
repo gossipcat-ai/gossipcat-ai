@@ -1,6 +1,6 @@
 {
   "name": "gossipcat",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Multi-agent orchestration for Claude Code — parallel review, consensus, adaptive dispatch",
   "mcpName": "io.github.ataberk-xyz/gossipcat",
   "repository": {

@@ -4,6 +4,26 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-04-16
+
+Tool Server cwd divergence fix + sandbox hardening follow-ups. Shipped via #109 and #110.
+
+### Fixed
+
+- **Tool Server cwd divergence on worktree `file_*` tools** (#110). `Sandbox.validatePath` unconditionally resolved relative paths against `projectRoot`, while `shell_exec` / `git_commit` correctly used `agentRoot`. Net effect: a worktree agent calling `file_write('output.txt')` wrote to `projectRoot/output.txt`; subsequent `git_commit` inside the worktree saw no staged changes and failed silently. Fix: resolve relative paths against `allowedRoots[0]` when provided (worktree), fallback to `projectRoot` otherwise. Union-of-roots for absolute paths preserved by the downstream containment check. Test matrix extended: rewrote the test that codified the bug as spec; added 5 cases covering worktree relative/absolute writes, sequential and scoped fallbacks, and projectRoot-via-absolute read. (`packages/tools/src/sandbox.ts`, `tests/tools/tool-server-scope.test.ts`)
+
+- **L3 audit scoped-mode false-positive** (#109). In scoped dispatches, `buildAuditExclusions` only excluded `ownWorktree`; it had no equivalent for `scope`, so every in-scope write by a scoped agent was flagged as a boundary escape. Fix: thread `scope` through `Layer3AuditOptions` → `runLayer3Audit` → `buildAuditExclusions`, and exclude `${projectRoot}/${scope}` when present. (`apps/cli/src/sandbox.ts`)
+
+- **`node-compile-cache` dominates tmpdir scan noise** (#109). Node 22+ emits many compile-cache files per dispatch to `$TMPDIR/node-compile-cache/*`. These were 6 of 8 remaining worktree-mode violations in live fire. Added `node-compile-cache` to the tmpdir pattern list alongside `com.apple.*`, `itunescloudd`, `TemporaryItems`. Scoped mode already narrows to `projectRoot` (v0.4.7) so unaffected. (`apps/cli/src/sandbox.ts`)
+
+- **`spawn git ENOENT` retry + explicit env** (#109). Worker dispatches hit intermittent `posix_spawn` failures on `execFile('git', ...)` calls in `git-tools.ts` and `worktree-manager.ts` — likely libuv transient failure under subprocess-spawn load (nodejs/node#48440 family). Consistent with the pattern mismatch vs `shell-tools.ts` which passes `env` explicitly and never fails. Fix: new `execGit` helper in both files passes `env: { ...process.env }` explicitly and retries once after 100ms on `ENOENT`. Defensive hardening — does not address the deeper cause but mitigates the observed symptoms. (`packages/tools/src/git-tools.ts`, `packages/orchestrator/src/worktree-manager.ts`)
+
+### Live-fire validation (2026-04-16)
+
+Task 7919c908 (pre-fix): worktree dispatch → `file_write('CHANGELOG.md')` landed in `projectRoot`, `git_commit` in worktree saw nothing, task failed silently in 179s.
+
+Task ad66d36e (post-fix): same dispatch → file landed in worktree, `git_diff` saw the change, `git_commit` produced hash `3e2f7e2`, task succeeded in 106s. Main tree `CHANGELOG.md` untouched — no silent drift.
+
 ## [0.4.7] — 2026-04-16
 
 Layer 3 audit overhaul — scoped-mode noise drops 99.9%, worktree-mode 82%. Shipped via #107 which stacks two commits:
