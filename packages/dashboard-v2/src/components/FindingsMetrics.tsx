@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import type { ConsensusData, ConsensusReportsData, ConsensusReportFinding, ConsensusReport } from '@/lib/types';
+import type { ConsensusData, ConsensusReportsData, ConsensusReportFinding, ConsensusReport, ParseDiagnostic } from '@/lib/types';
 import { api } from '@/lib/api';
 import { timeAgo, cleanFindingTags, agentInitials, agentColor } from '@/lib/utils';
+import { escapeHtml } from '@/lib/sanitize';
 import { EmptyState } from './EmptyState';
 
 interface FindingsMetricsProps {
@@ -60,7 +61,29 @@ interface FindingReviewInfo {
   targetK: number;
 }
 
-function ReportFinding({ f, reviewInfo }: { f: ConsensusReportFinding; reviewInfo?: FindingReviewInfo }) {
+/**
+ * One-line label per diagnostic code — used inside the finding-card banner so
+ * the human-facing summary stays short even when the raw `message` field is
+ * a full paragraph explaining the root cause.
+ */
+const DIAGNOSTIC_LABELS: Record<ParseDiagnostic['code'], string> = {
+  HTML_ENTITY_ENCODED_TAGS: 'HTML-entity-encoded <agent_finding> tags — parser saw 0 tags',
+  HTML_ENTITY_MIXED_PAYLOAD: 'Mixed raw + HTML-entity-encoded tags — some findings dropped',
+  SCHEMA_DRIFT_UNKNOWN_TYPE: 'Unknown type attribute on <agent_finding>',
+  SCHEMA_DRIFT_MISSING_TYPE: 'Missing type attribute on <agent_finding>',
+  SCHEMA_DRIFT_SHORT_CONTENT: 'Content below MIN_FINDING_CONTENT',
+};
+
+function ReportFinding({ f, reviewInfo, diagnostics }: {
+  f: ConsensusReportFinding;
+  reviewInfo?: FindingReviewInfo;
+  /**
+   * ParseDiagnostic entries for this finding's author. The card banner shows
+   * only the FIRST occurrence per `(consensusId, agentId, code)` tuple —
+   * dedup is applied by the parent before this prop is passed.
+   */
+  diagnostics?: ParseDiagnostic[];
+}) {
   const tagCls = f.tag === 'confirmed' ? 'text-confirmed bg-confirmed/10 border-confirmed/20'
     : f.tag === 'disputed' ? 'text-disputed bg-disputed/10 border-disputed/20'
     : f.tag === 'unverified' ? 'text-unverified bg-unverified/10 border-unverified/20'
@@ -131,6 +154,31 @@ function ReportFinding({ f, reviewInfo }: { f: ConsensusReportFinding; reviewInf
           </span>
         )}
       </div>
+      {/* Parse diagnostic banner — rendered only on first occurrence per
+          (consensus_id, agentId, code) tuple (dedup handled by parent). Uses
+          `escapeHtml` on the `message` field because it may contain
+          entity-style samples (e.g. `&lt;agent_finding&gt;`) that MUST stay
+          literal text; without escaping they'd be re-decoded and rendered as
+          actual tags. */}
+      {diagnostics && diagnostics.length > 0 && (
+        <div className="mt-1.5 mb-1 space-y-1">
+          {diagnostics.map((d, di) => (
+            <div
+              key={di}
+              className="rounded border border-unverified/20 bg-unverified/5 px-2.5 py-1.5"
+              data-diagnostic-code={d.code}
+            >
+              <div className="font-mono text-[10px] font-bold uppercase tracking-wider text-unverified/80">
+                ⚠ {d.code}
+              </div>
+              <div
+                className="mt-0.5 text-[11px] text-muted-foreground/80"
+                dangerouslySetInnerHTML={{ __html: escapeHtml(DIAGNOSTIC_LABELS[d.code]) + ' — ' + escapeHtml(d.message) }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
       {/* Row 2: Disputed by details (if disputed) */}
       {f.disputedBy && f.disputedBy.length > 0 && (
         <div className="mt-1.5 mb-1 rounded border border-disputed/10 bg-disputed/5 px-2.5 py-1.5">
@@ -315,6 +363,26 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               : allFindings.filter(f => f.tag === filter);
             const filteredFindings = sevFilter === 'all' ? typeFiltered : typeFiltered.filter(f => f.severity === sevFilter);
             const isExpanded = expandedId === report.id;
+
+            // Diagnostic dedup: within this consensus round, show each
+            // (agentId, code) pair on exactly ONE finding card — the first
+            // one rendered in the filtered list for that agent. Without this,
+            // an agent with 5 findings and an HTML_ENTITY_ENCODED_TAGS
+            // diagnostic would stamp the banner on all 5, flooding the UI.
+            const diagnosticsForFinding = (() => {
+              const shown = new Set<string>(); // `${agentId}:${code}`
+              return (f: ConsensusReportFinding): ParseDiagnostic[] | undefined => {
+                const authorDiags = report.authorDiagnostics?.[f.originalAgentId];
+                if (!authorDiags || authorDiags.length === 0) return undefined;
+                const fresh = authorDiags.filter(d => {
+                  const key = `${f.originalAgentId}:${d.code}`;
+                  if (shown.has(key)) return false;
+                  shown.add(key);
+                  return true;
+                });
+                return fresh.length > 0 ? fresh : undefined;
+              };
+            })();
 
             const total = allFindings.length || 1;
             const confirmedCount = report.confirmed.length;
@@ -532,7 +600,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       {filteredFindings.length === 0 ? (
                         <div className="py-4 text-center text-xs text-muted-foreground">No findings match this filter.</div>
                       ) : (
-                        filteredFindings.map((f, j) => <ReportFinding key={j} f={f} reviewInfo={f.id ? reviewLookup[f.id] : undefined} />)
+                        filteredFindings.map((f, j) => <ReportFinding key={j} f={f} reviewInfo={f.id ? reviewLookup[f.id] : undefined} diagnostics={diagnosticsForFinding(f)} />)
                       )}
                     </div>
                   </div>

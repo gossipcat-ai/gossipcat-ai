@@ -111,7 +111,21 @@ export interface ConsensusReport {
    * otherwise show as a round with 0 findings despite agent output.
    */
   droppedFindingsByType?: Record<string, number>;
+  /**
+   * Per-author parse diagnostics (e.g. HTML_ENTITY_ENCODED_TAGS). Keyed by
+   * `originalAgentId`. Populated only when the strict parser emitted at
+   * least one diagnostic for that agent's output. The dashboard renders a
+   * banner on affected finding cards so silent parse failures become loud.
+   */
+  authorDiagnostics?: Record<string, ParseDiagnostic[]>;
 }
+
+export type ParseDiagnostic =
+  | { code: 'HTML_ENTITY_ENCODED_TAGS'; message: string; entityTagCount: number }
+  | { code: 'HTML_ENTITY_MIXED_PAYLOAD'; message: string; rawTagCount: number; entityTagCount: number }
+  | { code: 'SCHEMA_DRIFT_UNKNOWN_TYPE'; message: string; offendingTypes: Record<string, number> }
+  | { code: 'SCHEMA_DRIFT_MISSING_TYPE'; message: string; count: number }
+  | { code: 'SCHEMA_DRIFT_SHORT_CONTENT'; message: string; count: number };
 
 export interface ConsensusReportsData {
   reports: ConsensusReport[];

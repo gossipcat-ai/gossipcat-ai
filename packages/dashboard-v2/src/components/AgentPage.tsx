@@ -5,7 +5,8 @@ import { CategoryStrengths } from './CategoryStrengths';
 import { SignalTimeline } from './SignalTimeline';
 import { TaskRow } from './TaskRow';
 import { timeAgo, cleanFindingTags } from '@/lib/utils';
-import type { AgentData, TasksData, ConsensusData, MemoryData, MemoryFile } from '@/lib/types';
+import { escapeHtml } from '@/lib/sanitize';
+import type { AgentData, TasksData, ConsensusData, ConsensusReport, ConsensusReportsData, MemoryData, MemoryFile, ParseDiagnostic } from '@/lib/types';
 
 interface AgentPageProps {
   agentId: string;
@@ -14,9 +15,16 @@ interface AgentPageProps {
   consensus: ConsensusData | null;
 }
 
+/** Persistent-banner threshold. Agent detail page shows the banner when the
+ * same diagnostic code has fired at least this many times for this agent in
+ * the trailing 30d window. Matches the spec threshold (≥3 / 30d). */
+const DIAGNOSTIC_BANNER_THRESHOLD = 3;
+const DIAGNOSTIC_BANNER_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
 export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps) {
   const agent = agents.find(a => a.id === agentId);
   const [memories, setMemories] = useState<MemoryFile[]>([]);
+  const [reports, setReports] = useState<ConsensusReport[]>([]);
   const [expandedMem, setExpandedMem] = useState<string | null>(null);
   const [expandedRun, setExpandedRun] = useState<number | null>(null);
   const [runFilter, setRunFilter] = useState<'all' | 'confirmed' | 'disputed' | 'unverified' | 'unique'>('all');
@@ -28,6 +36,39 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       setMemories(data.knowledge || []);
     }).catch(() => setMemories([]));
   }, [agentId]);
+
+  // Fetch consensus reports to compute per-agent diagnostic frequency.
+  // Uses the same pagination the FindingsMetrics "view all" path uses; page
+  // size of 200 covers the 30d window on any realistic project size.
+  useEffect(() => {
+    let cancelled = false;
+    api<ConsensusReportsData>('consensus-reports?page=1&pageSize=200')
+      .then(data => {
+        if (!cancelled) setReports(data.reports || []);
+      })
+      .catch(() => { if (!cancelled) setReports([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Roll up diagnostic code → count (within 30d) for THIS agent, across all
+  // reports where they appeared in authorDiagnostics. The banner fires when
+  // any code crosses DIAGNOSTIC_BANNER_THRESHOLD.
+  const diagnosticBanner = useMemo(() => {
+    const now = Date.now();
+    const counts = new Map<ParseDiagnostic['code'], number>();
+    for (const r of reports) {
+      const ts = Date.parse(r.timestamp);
+      if (Number.isNaN(ts) || now - ts > DIAGNOSTIC_BANNER_WINDOW_MS) continue;
+      const diags = r.authorDiagnostics?.[agentId];
+      if (!diags) continue;
+      for (const d of diags) counts.set(d.code, (counts.get(d.code) ?? 0) + 1);
+    }
+    const fired: Array<{ code: ParseDiagnostic['code']; count: number }> = [];
+    for (const [code, count] of counts) {
+      if (count >= DIAGNOSTIC_BANNER_THRESHOLD) fired.push({ code, count });
+    }
+    return fired;
+  }, [reports, agentId]);
 
   if (!agent) {
     return (
@@ -88,6 +129,40 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               {s.consecutiveFailures}+ consecutive failures. Agent will be deprioritized until clean signals recorded.
             </span>
           </div>
+        </div>
+      )}
+
+      {/* Persistent parse-diagnostic banner — fires when the same diagnostic
+          code has tripped at least DIAGNOSTIC_BANNER_THRESHOLD times in the
+          trailing 30d window for this agent. Distinct from the one-off
+          per-finding banner on the consensus card: this tracks a pattern, so
+          the operator knows the agent's pipeline (not just one round) is
+          producing unparseable output. */}
+      {diagnosticBanner.length > 0 && (
+        <div className="mb-6 space-y-2">
+          {diagnosticBanner.map(({ code, count }) => (
+            <div
+              key={code}
+              className="rounded-lg border border-unverified/30 bg-unverified/5 px-4 py-3"
+              data-diagnostic-code={code}
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs font-bold text-unverified">PARSE DIAGNOSTIC</span>
+                <span
+                  className="font-mono text-[11px] text-unverified/80"
+                  dangerouslySetInnerHTML={{ __html: escapeHtml(code) }}
+                />
+                <span className="font-mono text-[11px] text-unverified/60">
+                  · {count} fires in 30d
+                </span>
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground/80">
+                This agent's raw output has repeatedly tripped <span className="font-mono">{code}</span>.
+                Inspect recent consensus rounds on this page for the per-finding banner, or check
+                upstream pipeline layers (sanitizer / renderer / relay encoding).
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
