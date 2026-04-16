@@ -221,12 +221,17 @@ ${edit_paths}"
     #   cat /wt/safe && cp /wt/src /etc/x
     #
     # Broaden the pre-slash delimiter class to cover shell metacharacters:
-    #   whitespace, =, >, <, ;, |, (, ), {, }, ,, &
+    #   whitespace, =, >, <, ;, |, (, ), {, }, ,, &, `
+    # Backtick matters: `x=`cat /wt/safe`/etc/passwd` encloses a command
+    # substitution that returns a path, and the literal `/etc/passwd` after
+    # the closing backtick is appended as a string. Without ` in the
+    # delimiter class, grep would refuse to split at the backtick and the
+    # absolute-path token `/etc/passwd` would be missed.
     cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     if [ -n "$cmd" ]; then
       candidates="$(printf '%s\n' "$cmd" \
-        | grep -oE '(^|[[:space:]=><;\|(){},&])/[^[:space:]"'"'"'`;\|><(){},&]+' 2>/dev/null \
-        | sed -E -e 's/^[[:space:]=><;\|(){},&]//')"
+        | grep -oE '(^|[[:space:]=><;\|(){},&`])/[^[:space:]"'"'"'`;\|><(){},&]+' 2>/dev/null \
+        | sed -E -e 's/^[[:space:]=><;\|(){},&`]//')"
     fi
     ;;
   *)
@@ -235,8 +240,15 @@ ${edit_paths}"
     ;;
 esac
 
-# Strip any blank lines and bail early if nothing to check.
-candidates="$(printf '%s' "$candidates" | sed -E '/^[[:space:]]*$/d')"
+# Trim leading whitespace from each candidate BEFORE blank-line strip, then
+# drop blank lines. Leading whitespace matters because:
+#   1. An attacker could submit `{"file_path":" /etc/passwd"}` — jq extracts
+#      the value verbatim, and a purely blank-line strip leaves a line whose
+#      first character is a space, not `/`. The later `case [!/]*` match
+#      would then mis-classify it as a relative path and allow it.
+#   2. For Bash candidates the grep output already starts at the path, but
+#      being defensive here costs nothing.
+candidates="$(printf '%s' "$candidates" | sed -E 's/^[[:space:]]+//; /^[[:space:]]*$/d')"
 if [ -z "$candidates" ]; then
   exit 0
 fi

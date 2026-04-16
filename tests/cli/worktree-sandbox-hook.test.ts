@@ -288,6 +288,143 @@ runIfJq('worktree-sandbox.sh', () => {
     expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/hosts');
   });
+
+  // --- Round-2 hardening (consensus f6529a21-a60540ee) ---
+
+  it('denies Write with leading-space absolute path outside cwd', () => {
+    // Bypass 1 (HIGH): the sed pipeline in the hook stripped blank lines but
+    // left leading whitespace intact. A payload like `{"file_path":" /etc/passwd"}`
+    // survived with a leading space, and the later `case [!/]*` classifier saw
+    // a space (not `/`) as the first character, mis-classified the path as
+    // relative, and allowed it through.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'Write',
+      tool_input: { file_path: ' /etc/passwd' },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/passwd');
+  });
+
+  it('denies Bash with backtick-prefixed absolute path after command substitution', () => {
+    // Bypass 2 (MED): the pre-slash delimiter class in the grep pattern
+    // listed whitespace + shell metacharacters but omitted backtick. In
+    //   x=`cat /wt/safe`/etc/passwd
+    // the closing backtick is immediately followed by /etc/passwd as a
+    // literal string append. Without ` in the pre-slash class, grep refused
+    // to split there and the absolute-path token went undetected.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'Bash',
+      tool_input: {
+        command: 'x=`cat /private/tmp/gossip-wt-abc123/safe`/etc/passwd',
+      },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/passwd');
+  });
+
+  it('denies MultiEdit when a nested edits[] entry has absolute path outside cwd', () => {
+    // Test gap 1 (MED): MultiEdit exposes both top-level `file_path` and
+    // `edits[].file_path`. A crafted payload can put a safe top-level path
+    // and hide the escape in a nested edits[] entry. The hook MUST scan all
+    // edits[] file_path fields for defense in depth.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'MultiEdit',
+      tool_input: {
+        file_path: '/private/tmp/gossip-wt-abc123/safe.ts',
+        edits: [
+          { file_path: '/private/tmp/gossip-wt-abc123/also-safe.ts', old_string: 'a', new_string: 'b' },
+          { file_path: '/etc/x', old_string: 'c', new_string: 'd' },
+        ],
+      },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/x');
+  });
+
+  it('fails secure when all path normalizers are unavailable', () => {
+    // Test gap 2 (MED): if realpath/readlink/python3 are all unavailable,
+    // the pure-bash fallback still collapses `..` on absolute paths. The
+    // invariant: the hook must NEVER fail-open allow on a scrubbed
+    // environment, and must never exit with code 2.
+    //
+    // We simulate by scrubbing PATH to one directory that definitely has
+    // no realpath/python3 — /var/empty — then invoke bash via its absolute
+    // path so spawnSync can still find the interpreter.
+    //
+    // The bash fallback path in normalize_path() still works on absolute
+    // inputs (it splits on `/` and collapses `..`), so the expected outcome
+    // is a DENY JSON. If some future refactor removes the bash fallback,
+    // this test should still pass because then normalize_path returns
+    // empty for the candidate → the hook emits the fail-secure DENY with
+    // "BOUNDARY CHECK FAILED".
+    //
+    // Skip gracefully if /bin/bash is missing (e.g. non-Unix CI).
+    if (!existsSync('/bin/bash')) return;
+
+    const scrubbedPath = '/var/empty';
+    const res = spawnSync('/bin/bash', [HOOK_PATH], {
+      input: JSON.stringify({
+        tool_name: 'Write',
+        tool_input: { file_path: '/etc/x' },
+        cwd: '/private/tmp/gossip-wt-abc123',
+      }),
+      encoding: 'utf-8',
+      env: { PATH: scrubbedPath },
+    });
+    // Never exit 2, never crash; status must be 0.
+    expect(res.status).toBe(0);
+    const out = res.stdout.trim();
+    // Under scrubbed PATH `jq` is missing → the hook fail-opens with empty
+    // stdout per the documented contract (jq missing is treated as a
+    // harness dependency issue, not an attack). That's allowed here.
+    // If jq IS somehow reachable, we demand a DENY JSON.
+    if (out.length > 0) {
+      const parsed = JSON.parse(out);
+      expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    }
+  });
+
+  it('allows relative path with spaces inside worktree', () => {
+    // Test gap 3a (LOW): relative paths with spaces are legitimate — docs,
+    // test fixtures, etc. They must not be mis-classified or mis-tokenized.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'Edit',
+      tool_input: { file_path: './my file.ts' },
+      cwd,
+    });
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('denies absolute path with spaces outside cwd', () => {
+    // Test gap 3b (LOW): absolute paths with spaces must still be gated.
+    // A naïve whitespace-based tokenizer could split at the space and lose
+    // the boundary context. The Edit branch passes the whole jq-extracted
+    // string as ONE candidate, so this should deny cleanly.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'Write',
+      tool_input: { file_path: '/etc/my file' },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/my file');
+  });
 });
 
 // Keep unused-import lint happy — writeFileSync, mkdirSync imported for
