@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'child_process';
-import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 
@@ -141,7 +141,159 @@ runIfJq('worktree-sandbox.sh', () => {
     });
     expect(() => JSON.parse(stdout)).not.toThrow();
   });
+
+  // --- Hardening regression coverage (consensus a551cb7c-954c48a9) ---
+
+  it('denies compound Bash with && where second path escapes cwd', () => {
+    // The previous version used `head -n1` on grep output and dropped every
+    // absolute token after the first — an attacker could hide the escape
+    // behind a safe-looking initial path.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'Bash',
+      tool_input: {
+        command: 'cat /private/tmp/gossip-wt-abc123/safe && cp /private/tmp/gossip-wt-abc123/src /etc/x',
+      },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/x');
+  });
+
+  it('denies Bash with > redirect to absolute outside path', () => {
+    // Previous delimiter class `(^|[[:space:]=])` missed `>` so
+    // `echo data>/outside/path` leaked through undetected.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'Bash',
+      tool_input: { command: 'echo data>/outside/path' },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/outside/path');
+  });
+
+  it('denies Bash with ; separator where second path escapes', () => {
+    // Same class of bug as &&: compound commands with ; separators were
+    // only checked against the first absolute token.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'Bash',
+      tool_input: {
+        command: 'echo /private/tmp/gossip-wt-abc123/safe; rm /etc/passwd',
+      },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/passwd');
+  });
+
+  it('denies Write via symlink that points outside cwd', () => {
+    // Without realpath normalization, the prefix check only saw the symlink
+    // path (inside cwd) and missed the fact that its target was outside.
+    //
+    // Must create the tmp dir under /tmp/gossip-wt-* so the hook's
+    // worktree-namespace guard matches; otherwise the hook short-circuits.
+    const tmp = mkdtempSync('/tmp/gossip-wt-sym-');
+    try {
+      // macOS resolves /tmp → /private/tmp; use `pwd -P` to mirror what the
+      // hook sees from realpath.
+      const real = execFileSync('bash', ['-c', `cd "${tmp}" && pwd -P`], { encoding: 'utf-8' }).trim();
+      const outsideTarget = '/etc/passwd';
+      const symlinkPath = join(real, 'escape-link');
+      symlinkSync(outsideTarget, symlinkPath);
+
+      const { stdout, status } = runHook({
+        tool_name: 'Write',
+        tool_input: { file_path: symlinkPath },
+        cwd: real,
+      });
+      expect(status).toBe(0);
+      const parsed = JSON.parse(stdout);
+      expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+      expect(parsed.hookSpecificOutput.permissionDecisionReason.toLowerCase()).toContain('/etc/passwd');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('denies Write with .. segment that escapes cwd', () => {
+    // Naïve prefix match against the literal string missed path traversal
+    // like /cwd/subdir/../../etc/passwd, which string-equals a prefix of
+    // cwd but normalizes to /etc/passwd.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'Write',
+      tool_input: { file_path: '/private/tmp/gossip-wt-abc123/subdir/../../../../etc/passwd' },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason.toLowerCase()).toContain('/etc/passwd');
+  });
+
+  it('exits 0 (fail-open) on invalid JSON payload', () => {
+    // The previous version used `set -euo pipefail`, so failing jq on
+    // invalid JSON caused the hook to exit with code 5 — a contract
+    // violation. Malformed payloads are harness bugs, not attacks.
+    const res = spawnSync('bash', [HOOK_PATH], { input: 'not valid json', encoding: 'utf-8' });
+    expect(res.status).toBe(0);
+    // Nothing to emit because we're not denying.
+    expect(res.stdout.trim()).toBe('');
+  });
+
+  it('exits 0 (fail-open) on empty stdin', () => {
+    // Same contract: empty input must not crash or emit an error.
+    const res = spawnSync('bash', [HOOK_PATH], { input: '', encoding: 'utf-8' });
+    expect(res.status).toBe(0);
+    expect(res.stdout.trim()).toBe('');
+  });
+
+  it('denies lowercase tool name (edit) with absolute path outside cwd', () => {
+    // The case-insensitive match guards against upstream casing drift —
+    // any tool_name like "edit"/"Edit"/"EDIT" should be gated the same way.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'edit',
+      tool_input: { file_path: '/etc/passwd' },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/passwd');
+  });
+
+  it('denies MultiEdit with absolute path outside cwd', () => {
+    // MultiEdit uses the same file_path field as Edit/Write; it must be
+    // gated even if the installer matcher is later broadened.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const { stdout, status } = runHook({
+      tool_name: 'MultiEdit',
+      tool_input: {
+        file_path: '/etc/hosts',
+        edits: [{ old_string: 'a', new_string: 'b' }],
+      },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/hosts');
+  });
 });
+
+// Keep unused-import lint happy — writeFileSync, mkdirSync imported for
+// potential future fixture setup; symlinkSync is used above.
+void writeFileSync;
+void mkdirSync;
 
 // Suppress unused-import lint noise under the skip branch.
 void execFileSync;
