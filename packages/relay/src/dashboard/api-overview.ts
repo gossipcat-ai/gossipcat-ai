@@ -77,8 +77,11 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
           } else if (ev.type === 'task.completed') {
             if (ev.taskId) finished.add(ev.taskId);
             tasksCompleted++;
-            // Exclude durations exceeding 30 days — they indicate a fake/guessed timestamp
-            const MAX_VALID_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+            // Exclude durations exceeding 4 hours — anything longer indicates a fake/guessed
+            // dispatched_at_ms. Real tasks top out around ~4h for the slowest consensus rounds;
+            // the prior 30d clamp was defense-in-depth but left legacy bogus rows (181-365 days
+            // from synthesized timestamps pre-PR #88) free to skew avgDurationMs into the hours.
+            const MAX_VALID_DURATION_MS = 4 * 60 * 60 * 1000;
             if (typeof ev.duration === 'number' && ev.duration > 0 && ev.duration <= MAX_VALID_DURATION_MS) {
               totalDuration += ev.duration;
               durationCount++;
