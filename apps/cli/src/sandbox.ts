@@ -155,8 +155,8 @@ const SCOPE_NOTE =
   'SCOPE NOTE: SANDBOXED WRITE BOUNDARY.\n' +
   'This task runs in an isolated worktree. You MUST use only relative paths (./package/file.ts).\n' +
   'Any write outside the worktree — absolute paths (/Users/...), parent-escape (../), or cd-into-parent\n' +
-  '— is a BOUNDARY ESCAPE. Detected post-task, recorded as a `disagreement` signal under\n' +
-  '`trust_boundaries`, logged to .gossip/boundary-escapes.jsonl, and PENALIZES YOUR ACCURACY SCORE.\n' +
+  '— is a BOUNDARY ESCAPE. Detected post-task and logged to .gossip/boundary-escapes.jsonl.\n' +
+  'In block mode the task fails; in warn mode it may be reviewed by the orchestrator.\n' +
   '\n' +
   'Rules:\n' +
   '- Tools: use Edit/Write/Read/Glob/Grep with relative paths only.\n' +
@@ -592,9 +592,16 @@ function canonicalize(p: string): string {
  *                primitive. Scanning $HOME has zero true-positive capacity
  *                (live-fire 2026-04-16: 1064 violations per dispatch were
  *                100% orchestrator/OS noise).
- *   - worktree / sequential / undefined: broad scan ($HOME + tmpdir + /tmp
- *                + /private/tmp). Relay shell_exec can escape $HOME and
- *                tmpdir, so bypasses under these roots ARE reachable.
+ *   - worktree / sequential / undefined: narrow scan (projectRoot + tmpdir
+ *                + /tmp + /private/tmp). Worktree/sequential historically
+ *                scanned $HOME to catch relay shell_exec bypasses to
+ *                ~/.zshrc, ~/.gitconfig, ~/Library/LaunchAgents, etc. That
+ *                scan produced unbounded false positives from unrelated
+ *                process churn (sibling gossipcat projects, Docker buildx,
+ *                vitest caches). PR1 accepts a temporary regression in
+ *                coverage of those persistence vectors; PR2 will restore
+ *                via a sensitive-targets pass with vetted watchlist +
+ *                disagreement signal.
  */
 export function defaultScanRoots(
   writeMode: DispatchWriteMode,
@@ -608,8 +615,10 @@ export function defaultScanRoots(
     try { out.add(canonicalize(projectRoot)); } catch { /* ignore */ }
     return Array.from(out);
   }
-  // Worktree / sequential: broad scan — relay shell_exec can escape $HOME/tmpdir.
-  try { out.add(canonicalize(homedir())); } catch { /* ignore */ }
+  // Worktree / sequential: narrow scan — projectRoot catches peer-worktree
+  // leaks; tmpdir + /tmp + /private/tmp catch the classic bypass drops.
+  // $HOME is intentionally excluded — see docstring for the trade-off.
+  try { out.add(canonicalize(projectRoot)); } catch { /* ignore */ }
   try { out.add(canonicalize(tmpdir())); } catch { /* ignore */ }
   // macOS's shell-level TMPDIR often points into /var/folders/..., but
   // `/tmp` and `/private/tmp` are the classic bypass drops. Include both
