@@ -550,6 +550,8 @@ interface Layer3AuditOptions {
   /** Extra cwd the agent ran in. When set, files under it are excluded
    * from the audit (they are legitimate writes to the worktree). */
   worktreePath?: string;
+  /** Agent's scope when writeMode=scoped — treated as a permitted write root. */
+  scope?: string;
   /** Override the scan roots (tests). Defaults to `defaultScanRoots(writeMode,
    * projectRoot)`. */
   scanRoots?: string[];
@@ -642,6 +644,7 @@ export function expandTmpVariants(path: string): string[] {
 export function buildAuditExclusions(
   projectRoot: string,
   ownWorktree: string | undefined,
+  scope?: string,
 ): string[] {
   const excl = new Set<string>();
   const root = canonicalize(projectRoot);
@@ -671,13 +674,19 @@ export function buildAuditExclusions(
   // tmpdir is still flagged.
   try {
     const tmp = canonicalize(tmpdir());
-    for (const pat of ['com.apple.*', 'itunescloudd', 'TemporaryItems']) {
+    for (const pat of ['com.apple.*', 'itunescloudd', 'TemporaryItems', 'node-compile-cache']) {
       for (const v of expandTmpVariants(`${tmp}/${pat}`)) excl.add(v);
     }
   } catch { /* tmpdir() failure — best-effort */ }
   if (ownWorktree) {
     const wt = canonicalize(ownWorktree);
     for (const v of expandTmpVariants(wt)) excl.add(v);
+  }
+  if (scope) {
+    // In scoped mode, the agent's own writes inside its scope are permitted.
+    // The `scope` path is relative to projectRoot.
+    const s = canonicalize(join(projectRoot, scope));
+    for (const v of expandTmpVariants(s)) excl.add(v);
   }
   return Array.from(excl);
 }
@@ -765,7 +774,7 @@ export function auditFilesystemSinceSentinel(
     options.writeMode ?? meta.writeMode,
     projectRoot,
   );
-  const exclusions = buildAuditExclusions(projectRoot, meta.worktreePath);
+  const exclusions = buildAuditExclusions(projectRoot, meta.worktreePath, options.scope);
   const findBin = options.findBinary ?? 'find';
 
   const violations: string[] = [];
@@ -878,6 +887,7 @@ function recordLayer3Violations(
  * Idempotent with respect to sentinel cleanup — always runs regardless of
  * outcome. Fail-open: any internal error (including missing metadata, dead
  * sentinel, or `find` crash) is logged and swallowed. The caller never
+
  * sees a thrown error.
  */
 export function runLayer3Audit(
@@ -897,6 +907,7 @@ export function runLayer3Audit(
     try {
       const l3 = auditFilesystemSinceSentinel(projectRoot, meta, {
         writeMode: meta.writeMode,
+        scope: meta.scope,
       });
       if (l3.violations && l3.violations.length > 0) {
         const list = l3.violations.slice(0, 20).join(', ');

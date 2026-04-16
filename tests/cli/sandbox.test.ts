@@ -3,7 +3,7 @@
  */
 import { mkdtempSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import {
   relativizeProjectPaths,
   shouldSanitize,
@@ -15,6 +15,7 @@ import {
   readSandboxMode,
   isInsideScope,
   DispatchMetadata,
+  buildAuditExclusions,
 } from '../../apps/cli/src/sandbox';
 
 describe('relativizeProjectPaths', () => {
@@ -342,5 +343,43 @@ describe('readSandboxMode', () => {
       JSON.stringify({ sandboxEnforcement: 'chaos' }),
     );
     expect(readSandboxMode(tmp)).toBe('warn');
+  });
+});
+
+describe('buildAuditExclusions', () => {
+  const root = resolve('/tmp/fakeproject');
+
+  it('includes node-compile-cache in tmpdir exclusions', () => {
+    const exclusions = buildAuditExclusions(root, undefined, undefined);
+    const tmp = resolve(tmpdir());
+    expect(exclusions).toContain(`${tmp}/node-compile-cache`);
+  });
+
+  it('adds the agent scope to exclusions when provided', () => {
+    const scope = 'packages/tools';
+    const exclusions = buildAuditExclusions(root, undefined, scope);
+    const expected = resolve(root, scope);
+    expect(exclusions).toContain(expected);
+  });
+
+  it('does not add a scope exclusion when scope is undefined', () => {
+    const exclusions = buildAuditExclusions(root, undefined, undefined);
+    // A bit of a negative test; we check that no exclusion *ends with* a package
+    // name, which is a proxy for "no scope was added".
+    expect(exclusions.some(e => e.endsWith('packages/tools'))).toBe(false);
+    expect(exclusions.some(e => e.endsWith('apps/cli'))).toBe(false);
+  });
+
+  it('includes the worktree path when provided', () => {
+    const worktree = '/tmp/gossip-wt-123';
+    const exclusions = buildAuditExclusions(root, worktree, undefined);
+    expect(exclusions).toContain(resolve(worktree));
+  });
+
+  it('always includes .gossip, .claude, and .git', () => {
+    const exclusions = buildAuditExclusions(root, undefined, undefined);
+    expect(exclusions).toContain(resolve(root, '.gossip'));
+    expect(exclusions).toContain(resolve(root, '.claude'));
+    expect(exclusions).toContain(resolve(root, '.git'));
   });
 });
