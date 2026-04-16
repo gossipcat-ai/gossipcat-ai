@@ -2111,8 +2111,9 @@ server.tool(
       // needed by the Layer 3 audit to exclude the agent's own worktree.
       if (write_mode === 'worktree') {
         try {
-          const task = ctx.mainAgent.getTask(taskId);
-          const wtPath = (task as any)?.worktreeInfo?.path;
+          // collect() consumes the task entry, so ctx.mainAgent.getTask(taskId) would
+          // return undefined here. The result entry already carries worktreeInfo.
+          const wtPath = (entry as any)?.worktreeInfo?.path;
           if (wtPath) {
             const { updateDispatchMetadata } = require('./sandbox');
             updateDispatchMetadata(process.cwd(), taskId, { worktreePath: wtPath });

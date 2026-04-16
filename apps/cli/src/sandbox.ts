@@ -709,12 +709,23 @@ export function auditFilesystemSinceSentinel(
         violations.push(p);
       }
     } catch (err) {
-      // Fail-open: log and continue. Audit failure must not block the
-      // dispatch result from returning to the orchestrator.
+      // find exits non-zero on ANY permission error (macOS TCC is the common
+      // case — Library/Group Containers etc). But stdout still contains the
+      // files it COULD see. Parse that before fail-opening, otherwise every
+      // real violation on macOS gets silently dropped.
+      const e = err as { stdout?: Buffer | string; message?: string };
+      const partial = typeof e.stdout === 'string'
+        ? e.stdout
+        : (e.stdout?.toString?.('utf-8') ?? '');
+      for (const line of partial.split('\n')) {
+        const p = line.trim();
+        if (p) violations.push(p);
+      }
       if (logFailures) {
-        const msg = (err as Error).message || String(err);
+        const msg = e.message || String(err);
+        const parsedCount = partial ? partial.split('\n').filter(Boolean).length : 0;
         process.stderr.write(
-          `[gossipcat] Layer 3 audit: find failed under '${canonRoot}': ${msg}\n`,
+          `[gossipcat] Layer 3 audit: find partial failure under '${canonRoot}' (stdout parsed, ${parsedCount} entries): ${msg}\n`,
         );
       }
       continue;
