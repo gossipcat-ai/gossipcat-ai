@@ -54,8 +54,12 @@ export class Sandbox {
    *                  callers are unchanged.
    */
   validatePath(filePath: string, allowedRoots: string[] = []): string {
-    // Resolve relative to project root
-    const resolved = resolve(this.root, filePath);
+    // Resolve relative paths against the agent's root when provided (worktree
+    // mode), otherwise the project root. Absolute paths are handled by
+    // path.resolve ignoring the base, so union-of-roots semantics are preserved
+    // by the downstream containment check against candidateRoots.
+    const resolutionBase = allowedRoots[0] || this.root;
+    const resolved = resolve(resolutionBase, filePath);
 
     // Walk up to deepest existing ancestor (handles file_write to new paths)
     let checkPath = resolved;

@@ -3,6 +3,7 @@ const vi = jest;
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { join } from 'path';
 import { ToolServer } from '../../packages/tools/src/tool-server';
 
 // We need to test the enforcement without a live relay.
@@ -39,13 +40,16 @@ describe('ToolServer scope enforcement', () => {
   });
 
   describe('scoped agents', () => {
+    const agentId = 'agent-scoped';
+
     beforeEach(() => {
-      server.assignScope('agent-1', 'packages/relay/');
+      server.assignScope(agentId, 'packages/relay/');
+      fs.mkdirSync(join(projectRoot, 'packages/relay'), { recursive: true });
     });
 
     it('blocks file_write outside scope', async () => {
       await expect(
-        server.executeTool('file_write', { path: 'packages/tools/foo.ts', content: 'x' }, 'agent-1')
+        server.executeTool('file_write', { path: 'packages/tools/foo.ts', content: 'x' }, agentId)
       ).rejects.toThrow(/outside scope/);
     });
 
@@ -53,7 +57,7 @@ describe('ToolServer scope enforcement', () => {
       // This will fail at the file level (no actual file), but NOT at the scope level
       // So we just verify it doesn't throw a scope error
       try {
-        await server.executeTool('file_write', { path: 'packages/relay/foo.ts', content: 'x' }, 'agent-1');
+        await server.executeTool('file_write', { path: 'packages/relay/foo.ts', content: 'x' }, agentId);
       } catch (err) {
         expect((err as Error).message).not.toContain('outside scope');
       }
@@ -61,19 +65,19 @@ describe('ToolServer scope enforcement', () => {
 
     it('blocks shell_exec for scoped agents', async () => {
       await expect(
-        server.executeTool('shell_exec', { command: 'ls' }, 'agent-1')
+        server.executeTool('shell_exec', { command: 'ls' }, agentId)
       ).rejects.toThrow(/shell_exec is restricted in scoped write mode/);
     });
 
     it('blocks git_commit for scoped agents', async () => {
       await expect(
-        server.executeTool('git_commit', { message: 'test' }, 'agent-1')
+        server.executeTool('git_commit', { message: 'test' }, agentId)
       ).rejects.toThrow(/Git commit blocked/);
     });
 
     it('blocks file_read outside scope', async () => {
       await expect(
-        server.executeTool('file_read', { path: 'packages/tools/bar.ts' }, 'agent-1')
+        server.executeTool('file_read', { path: 'packages/tools/bar.ts' }, agentId)
       ).rejects.toThrow(/outside scope/);
     });
 
@@ -81,20 +85,31 @@ describe('ToolServer scope enforcement', () => {
       // Test that scope 'packages/relay/' doesn't allow 'packages/relay2/evil.ts'
       // (This should work since assignScope normalizes trailing slash)
       await expect(
-        server.executeTool('file_write', { path: 'packages/relay2/evil.ts', content: 'x' }, 'agent-1')
+        server.executeTool('file_write', { path: 'packages/relay2/evil.ts', content: 'x' }, agentId)
       ).rejects.toThrow(/outside scope/);
     });
 
     it('blocks git_branch for scoped agents', async () => {
       await expect(
-        server.executeTool('git_branch', { name: 'evil-branch' }, 'agent-1')
+        server.executeTool('git_branch', { name: 'evil-branch' }, agentId)
       ).rejects.toThrow(/Git branch blocked/);
     });
 
     it('blocks file_write using path traversal to escape scope', async () => {
       await expect(
-        server.executeTool('file_write', { path: 'packages/relay/../tools/evil.ts', content: 'x' }, 'agent-1')
+        server.executeTool('file_write', { path: 'packages/relay/../tools/evil.ts', content: 'x' }, agentId)
       ).rejects.toThrow(/outside scope/);
+    });
+
+    it('relative path still resolves against projectRoot', async () => {
+      server.assignScope('agent-scoped-writer', 'some-scope-dir');
+      fs.mkdirSync(join(projectRoot, 'some-scope-dir'));
+      await server.executeTool(
+        'file_write',
+        { path: 'some-scope-dir/file.txt', content: 'scoped' },
+        'agent-scoped-writer'
+      );
+      expect(fs.existsSync(join(projectRoot, 'some-scope-dir', 'file.txt'))).toBe(true);
     });
   });
 
@@ -106,7 +121,7 @@ describe('ToolServer scope enforcement', () => {
     it('blocks file_write outside worktree root', async () => {
       await expect(
         server.executeTool('file_write', { path: '/other/path/foo.ts', content: 'x' }, 'agent-2')
-      ).rejects.toThrow(/outside worktree root/);
+      ).rejects.toThrow(/outside worktree root|outside project root or agent root/);
     });
 
     it('allows shell_exec for worktree agents', async () => {
@@ -186,7 +201,7 @@ describe('ToolServer scope enforcement', () => {
       fs.writeFileSync(victim, 'x');
       await expect(
         server.executeTool('file_delete', { path: victim }, 'agent-wt')
-      ).rejects.toThrow(/outside worktree root/);
+      ).rejects.toThrow(/outside worktree root|outside project root or agent root/);
     });
   });
 
@@ -251,7 +266,7 @@ describe('ToolServer scope enforcement', () => {
     });
   });
 
-  describe('union-of-roots (agent worktree)', () => {
+  describe('union-of-roots (agent worktree) -- CWD DIVERGENCE FIX', () => {
     // Previously, worktree-mode agents were gated correctly at enforceWriteScope
     // (against agentRoots) but then FileTools → Sandbox.validatePath re-checked
     // against projectRoot only, rejecting every absolute worktree path because
@@ -298,24 +313,19 @@ describe('ToolServer scope enforcement', () => {
           { path: '/etc/passwd', content: 'evil' },
           agentId,
         ),
-      ).rejects.toThrow(/outside worktree root|outside project root/);
+      ).rejects.toThrow(/outside worktree root|outside project root or agent root/);
     });
 
-    it('c) relative path still resolves against projectRoot (unchanged)', async () => {
-      // Register a scope-less agent so the write only exercises the Sandbox
-      // gate, not enforceWriteScope's worktree guard (which would reject
-      // writes outside the worktree root even if projectRoot contains them).
-      // Instead, we read an existing projectRoot file — this path exercises
-      // Sandbox.validatePath with agentRoot populated but a relative path
-      // inside projectRoot, and must succeed (union semantics).
-      const innerFile = path.join(projectRoot, 'inside.txt');
-      fs.writeFileSync(innerFile, 'ok');
+    // REWRITTEN TEST
+    it('c) relative path resolves against agentRoot when in worktree mode', async () => {
+      const innerFile = path.join(wtRoot, 'inside-wt.txt');
+      fs.writeFileSync(innerFile, 'wt-content');
       const content = await server.executeTool(
         'file_read',
-        { path: 'inside.txt' },
+        { path: 'inside-wt.txt' },
         agentId,
       );
-      expect(content).toContain('ok');
+      expect(content).toContain('wt-content');
     });
 
     it('d) blocks sibling-prefix bypass against worktree root', async () => {
@@ -332,7 +342,7 @@ describe('ToolServer scope enforcement', () => {
             { path: victim, content: 'x' },
             agentId,
           ),
-        ).rejects.toThrow(/outside worktree root|outside project root/);
+        ).rejects.toThrow(/outside worktree root|outside project root or agent root/);
       } finally {
         fs.rmSync(siblingRoot, { recursive: true, force: true });
       }
@@ -356,7 +366,7 @@ describe('ToolServer scope enforcement', () => {
           { path: path.join(link, 'evil.txt'), content: 'x' },
           agentId,
         ),
-      ).rejects.toThrow(/outside worktree root|outside project root/);
+      ).rejects.toThrow(/outside worktree root|outside project root or agent root/);
     });
 
     it('f) agent without assigned root falls back to projectRoot-only check', async () => {
@@ -370,6 +380,63 @@ describe('ToolServer scope enforcement', () => {
           'agent-no-root',
         ),
       ).rejects.toThrow(/outside project root/);
+    });
+
+    // NEW TESTS START HERE
+
+    it('worktree agent: file_write with relative path lands in agentRoot, not projectRoot', async () => {
+      await server.executeTool(
+        'file_write',
+        { path: 'output.txt', content: 'hello' },
+        agentId,
+      );
+      expect(fs.existsSync(join(wtRoot, 'output.txt'))).toBe(true);
+      expect(fs.existsSync(join(projectRoot, 'output.txt'))).toBe(false);
+    });
+
+    it('worktree agent: file_read with relative path reads from agentRoot', async () => {
+      fs.writeFileSync(join(wtRoot, 'input.txt'), 'wt-content');
+      fs.writeFileSync(join(projectRoot, 'input.txt'), 'pr-content');
+      const content = await server.executeTool(
+        'file_read',
+        { path: 'input.txt' },
+        agentId,
+      );
+      expect(content).toContain('wt-content');
+    });
+
+    it('worktree agent: absolute path to projectRoot file still works (union preserved)', async () => {
+      fs.writeFileSync(join(projectRoot, 'pr-file.txt'), 'pr-content');
+      const content = await server.executeTool(
+        'file_read',
+        { path: join(projectRoot, 'pr-file.txt') },
+        agentId,
+      );
+      expect(content).toContain('pr-content');
+    });
+
+    it('sequential agent (no root): relative path resolves against projectRoot', async () => {
+      const sequentialAgentId = 'agent-seq';
+      // This agent has no assigned root or scope
+      await server.executeTool(
+        'file_write',
+        { path: 'seq-output.txt', content: 'seq' },
+        sequentialAgentId
+      );
+      expect(fs.existsSync(join(projectRoot, 'seq-output.txt'))).toBe(true);
+    });
+
+    it('scoped agent: relative path still resolves against projectRoot', async () => {
+      const scopedAgentId = 'agent-scoped-2';
+      const scopeDir = 'some-scope-dir-2';
+      server.assignScope(scopedAgentId, scopeDir);
+      fs.mkdirSync(join(projectRoot, scopeDir), { recursive: true });
+      await server.executeTool(
+        'file_write',
+        { path: `${scopeDir}/file.txt`, content: 'scoped' },
+        scopedAgentId,
+      );
+      expect(fs.existsSync(join(projectRoot, scopeDir, 'file.txt'))).toBe(true);
     });
   });
 });
