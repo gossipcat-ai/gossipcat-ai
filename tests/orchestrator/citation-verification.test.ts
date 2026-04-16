@@ -165,8 +165,13 @@ describe('ConsensusEngine.synthesize — citation verification integration', () 
   });
 
   test('fabricated dispute citing non-existent file does not suppress valid finding', async () => {
+    // Finding text includes "authentication" so extractCategories yields
+    // trust_boundaries — the category-enforcement check added in
+    // docs/specs/2026-04-16-hallucination-decay-tune.md drops hallucination_caught
+    // signals that cannot be attributed to any category, so the test fixture now
+    // must carry a categorizable keyword.
     const results = [
-      { id: 'task-1', agentId: 'agent-a', task: 'review', status: 'completed' as const, result: '## Consensus Summary\n- Empty agentId allows invalid dispatch', startedAt: Date.now() },
+      { id: 'task-1', agentId: 'agent-a', task: 'review', status: 'completed' as const, result: '## Consensus Summary\n- Empty agentId allows invalid dispatch (authentication bypass)', startedAt: Date.now() },
       { id: 'task-2', agentId: 'agent-b', task: 'review', status: 'completed' as const, result: '## Consensus Summary\n- Some other finding', startedAt: Date.now() },
     ];
 
@@ -175,7 +180,7 @@ describe('ConsensusEngine.synthesize — citation verification integration', () 
         action: 'disagree' as const,
         agentId: 'agent-b',
         peerAgentId: 'agent-a',
-        finding: 'Empty agentId allows invalid dispatch',
+        finding: 'Empty agentId allows invalid dispatch (authentication bypass)',
         evidence: 'The code at nonexistent-module.ts:3 explicitly throws an error.',
         confidence: 4,
       },
@@ -195,6 +200,9 @@ describe('ConsensusEngine.synthesize — citation verification integration', () 
       s => s.signal === 'hallucination_caught',
     );
     expect(hallucinationSignal).toBeDefined();
+    // Category enforcement: the emitted signal must have a category (trust_boundaries)
+    // derived either from the confirmed finding or the reviewer's evidence.
+    expect(hallucinationSignal!.category).toBeTruthy();
   });
 });
 

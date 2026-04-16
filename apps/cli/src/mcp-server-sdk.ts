@@ -2350,6 +2350,29 @@ server.tool(
         };
       });
 
+      // Category enforcement for hallucination_caught: if inferCategory failed
+      // above AND we can't derive from the finding text via extractCategories,
+      // drop the signal rather than persist it without a category. Category-less
+      // hallucinations are invisible to getCountersSince / skill-gap analysis
+      // and have grown into a 47% data gap — stop writing new ones at the source.
+      // Write-time only; legacy signals are not backfilled.
+      const { extractCategories } = await import('@gossip/orchestrator');
+      const categoryEnforced = formatted.filter((s, i) => {
+        if (s.type !== 'consensus' || s.signal !== 'hallucination_caught') return true;
+        if (s.category) return true;
+        const srcFinding = signals[i]?.finding ?? '';
+        const srcEvidence = signals[i]?.evidence ?? '';
+        const extracted = extractCategories(`${srcFinding} ${srcEvidence}`)[0];
+        if (extracted) {
+          (s as { category?: string }).category = extracted;
+          return true;
+        }
+        process.stderr.write(
+          `[gossip_signals] dropped hallucination_caught for ${s.agentId}: no category could be derived. finding="${srcFinding.slice(0, 80)}"\n`,
+        );
+        return false;
+      });
+
       // Dedup gate: reject signals whose finding_id already exists in the performance file.
       // Prevents duplicate scoring when a future session re-verifies stale UNVERIFIED findings.
       const existingFindingIds = new Set<string>();
@@ -2366,7 +2389,7 @@ server.tool(
       } catch { /* file may not exist yet */ }
 
       const dupes: string[] = [];
-      const deduped = formatted.filter(s => {
+      const deduped = categoryEnforced.filter(s => {
         if (s.type === 'consensus' && s.findingId && existingFindingIds.has(s.findingId)) {
           dupes.push(`${s.findingId} (${s.agentId}/${s.signal})`);
           return false;

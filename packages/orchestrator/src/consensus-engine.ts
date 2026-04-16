@@ -15,6 +15,7 @@ import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry } from './consensus-types';
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
 import { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
+import { extractCategories } from './category-extractor';
 
 export type {
   ConsensusReport,
@@ -827,6 +828,19 @@ Return only valid JSON.${skillsBlock}`;
       if (!hasFabricatedCitation) return false;
       const hasHallucinationKeywords = this.detectHallucination(entry.finding);
       if (!hasHallucinationKeywords) return false;
+      // Category enforcement: prefer explicit, fall back to extractCategories over
+      // the finding text. If neither path yields a category, drop the signal
+      // rather than persist a category-less hallucination_caught — those entries
+      // are invisible to skill-gap analysis and bloat the "category-less halluc"
+      // data gap. Do NOT backfill legacy signals; write-time only.
+      const extracted = extractCategories(entry.finding);
+      const category = entry.category || extracted[0];
+      if (!category) {
+        process.stderr.write(
+          `[consensus-engine] dropped hallucination_caught for ${entry.originalAgentId}: no category (pre-filter). finding="${entry.finding.slice(0, 80)}"\n`,
+        );
+        return true; // still "detected" for control-flow purposes; just not persisted as a signal
+      }
       signals.push({
         type: 'consensus',
         taskId: getTaskId(entry.originalAgentId),
@@ -837,7 +851,7 @@ Return only valid JSON.${skillsBlock}`;
         evidence: capEvidence(`Finding cites non-existent code: "${entry.finding.slice(0, 200)}"`),
         timestamp: new Date().toISOString(),
         severity: capAutoSeverity(entry.severity),
-        category: entry.category,
+        category,
       });
       return true;
     };
@@ -924,19 +938,32 @@ Return only valid JSON.${skillsBlock}`;
             // && isCitationFabricated, so the second half is guaranteed true by construction.
             // The previous ternary `isCitationFabricated ? 'fabricated_citation' : 'incorrect'`
             // had an unreachable 'incorrect' branch. See consensus 82a3c123-19db41e7 Tier 1A Fix #2.
-            signals.push({
-              type: 'consensus',
-              taskId: getTaskId(entry.agentId),
-              consensusId,
-              signal: 'hallucination_caught',
-              agentId: entry.agentId,
-              counterpartId: entry.peerAgentId,
-              outcome: 'fabricated_citation',
-              evidence: capEvidence(entry.evidence),
-              timestamp: now,
-              severity: capAutoSeverity(f.severity),
-              category: f.category,
-            });
+            // Category enforcement: prefer the original finding's category, else
+            // try to derive from the reviewer's disagreement evidence, else
+            // fall back to the finding text. Drop (with warning) if all three
+            // fail — a category-less hallucination_caught is invisible to
+            // skill-gap analysis.
+            const extractedCat = extractCategories(entry.evidence || '')[0] || extractCategories(f.finding || '')[0];
+            const halluCategory = f.category || extractedCat;
+            if (!halluCategory) {
+              process.stderr.write(
+                `[consensus-engine] dropped hallucination_caught for ${entry.agentId}: no category (dispute path). evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
+              );
+            } else {
+              signals.push({
+                type: 'consensus',
+                taskId: getTaskId(entry.agentId),
+                consensusId,
+                signal: 'hallucination_caught',
+                agentId: entry.agentId,
+                counterpartId: entry.peerAgentId,
+                outcome: 'fabricated_citation',
+                evidence: capEvidence(entry.evidence),
+                timestamp: now,
+                severity: capAutoSeverity(f.severity),
+                category: halluCategory,
+              });
+            }
           } else {
             const sanitizeEvidence = (t: string) => t.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
             f.disputedBy.push({

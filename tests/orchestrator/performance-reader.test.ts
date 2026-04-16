@@ -682,3 +682,84 @@ describe('PerformanceReader — circuit breaker Changes 2 & 3 (2026-04-14-circui
     expect(score.circuitOpen).toBe(false);
   });
 });
+
+describe('PerformanceReader — hallucination decay tune (HALLUCINATION_DECAY_HALF_LIFE = 20)', () => {
+  // Shorter half-life for hallucination penalties so historical mistakes fade
+  // ~2.5x faster than the generic DECAY_HALF_LIFE=50. See spec
+  // docs/specs/2026-04-16-hallucination-decay-tune.md.
+
+  function tsRecent(secondsAgo: number): string {
+    return new Date(Date.now() - secondsAgo * 1000).toISOString();
+  }
+
+  it('halluc-decay-20: hallucination 20 tasks ago decays ~34% more than the old 50-task curve', () => {
+    // Construct 21 distinct tasks for one agent: the oldest is a hallucination,
+    // followed by 20 agreements. Task-order-based decay makes tasksSince for the
+    // hallucination = 21 - 0 - 1 = 20, so hallucDecay = 0.5^(20/20) = 0.5 under
+    // the new constant (vs 0.5^(20/50) ≈ 0.7579 under the old DECAY_HALF_LIFE=50).
+    //
+    // Observable effect via accuracy: with weightedHallucinations = 0.5, the
+    // hallucinationMultiplier is 1/(1+0.5*0.3) ≈ 0.8696. With the old decay
+    // (weightedHallucinations ≈ 0.7579) it would be ≈ 0.8147 — a ~6.7% shift
+    // downstream on accuracy. Assertion band is tight enough that only the
+    // new constant produces a passing result.
+    const sigs: any[] = [];
+    // Oldest signal: hallucination_caught at task index 0.
+    sigs.push({
+      type: 'consensus', signal: 'hallucination_caught', agentId: 'ag',
+      taskId: 'halluc-old', evidence: 'bad', timestamp: tsRecent(210),
+    });
+    // 20 agreements at task indices 1..20 (newer).
+    for (let i = 1; i <= 20; i++) {
+      sigs.push({
+        type: 'consensus', signal: 'agreement', agentId: 'ag', counterpartId: 'peer',
+        taskId: `agree-${i}`, evidence: 'ok', timestamp: tsRecent(210 - i * 10),
+      });
+    }
+    writeSignals(sigs);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('ag')!;
+
+    // Under the new constant: accuracy ≈ 0.958 * 0.8696 ≈ 0.833.
+    // Under the old constant: accuracy ≈ 0.958 * 0.8147 ≈ 0.780.
+    // Band [0.82, 0.87] excludes the old-constant result and permits the new one.
+    expect(score.accuracy).toBeGreaterThan(0.82);
+    expect(score.accuracy).toBeLessThan(0.87);
+    expect(score.hallucinations).toBe(1);
+  });
+
+  it('empty-category-rejected: getCountersSince skips signals with empty-string category', () => {
+    // Align with computeScores behavior at :392, :450 (both use `if (signal.category)`
+    // to gate category-specific accumulators). A signal with category: '' should
+    // never satisfy a category-specific counter query.
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'ag', category: '', taskId: 't1', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'ag', category: '', taskId: 't2', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'agreement', agentId: 'ag', category: 'cat-a', taskId: 't3', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    // Query for cat-a: only the one cat-a signal counts; the empty-category ones are skipped.
+    const counters = reader.getCountersSince('ag', 'cat-a', 0);
+    expect(counters).toEqual({ correct: 1, hallucinated: 0 });
+  });
+
+  it('category-undefined-legacy: hallucination_caught with category=undefined still penalizes weightedHallucinations', () => {
+    // Legacy-accept path at computeScores :442-453 has no category guard —
+    // a hallucination without category still decrements accuracy via the
+    // hallucinationMultiplier. This preserves backwards compatibility with
+    // legacy signals written before category enforcement was added.
+    // Observable: agent accuracy drops below neutral (0.5) when dominated by
+    // category-less hallucinations.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'legacy', taskId: 't1', evidence: 'bad', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'legacy', taskId: 't2', evidence: 'bad', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'legacy', taskId: 't3', evidence: 'bad', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('legacy')!;
+    // All three hallucinations count — weightedHallucinations > 0, so accuracy
+    // is pulled toward 0 by the multiplier even with no category attached.
+    expect(score.hallucinations).toBe(3);
+    expect(score.accuracy).toBeLessThan(0.5);
+  });
+});

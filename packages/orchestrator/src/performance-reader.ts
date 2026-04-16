@@ -158,7 +158,12 @@ export class PerformanceReader {
 
     for (const s of allSignals) {
       if (s.agentId !== agentId) continue;
-      if (normalizeSkillName(s.category ?? '') !== normalizedTarget) continue;
+      // Empty/missing category is not a match. Aligns with `computeScores` at
+      // :392, :450 (both guard with `if (signal.category)` before populating
+      // categoryStrengths/categoryHallucinated) — an empty-string category
+      // should never satisfy a category-specific counter query.
+      if (!s.category) continue;
+      if (normalizeSkillName(s.category) !== normalizedTarget) continue;
       const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
       if (!isFinite(ts) || ts === 0 || ts < sinceMs) continue;
 
@@ -277,6 +282,15 @@ export class PerformanceReader {
 
   private computeScores(signals: PerformanceSignal[]): Map<string, AgentScore> {
     const DECAY_HALF_LIFE = 50; // tasks
+    // Shorter half-life for hallucination penalties so agents can recover from old
+    // mistakes faster once they stop repeating them. Empirical calibration: 20 gives
+    // gemini-reviewer (17 historical hallucinations) an accuracy of ~0.52 vs the
+    // 0.28 the 50-task half-life produced — enough headroom to come off the
+    // "avoid as sole reviewer" list after a clean run, without erasing the
+    // penalty entirely. Decay tune alone is sufficient; do NOT also adjust the
+    // 0.3 coefficient on hallucinationMultiplier below. See spec
+    // docs/specs/2026-04-16-hallucination-decay-tune.md.
+    const HALLUCINATION_DECAY_HALF_LIFE = 20; // tasks
 
     const TIME_DECAY_HALF_LIFE_DAYS = 7; // scores drift toward neutral after a week of inactivity
     const now = Date.now();
@@ -444,7 +458,13 @@ export class PerformanceReader {
             signal.outcome === 'fabricated_citation' ||
             signal.outcome === 'confirmed_hallucination'
           ) ? 3.0 : 1.0;
-          a.weightedHallucinations += severity * decay;
+          // Use a dedicated (shorter) half-life for the hallucination counter so
+          // past mistakes can be outrun by recent good behavior. `weightedTotal`
+          // keeps the original DECAY_HALF_LIFE so the denominator that defines
+          // "overall cross-review activity" stays stable — only the numerator on
+          // the penalty side fades faster.
+          const hallucDecay = Math.pow(0.5, tasksSince / HALLUCINATION_DECAY_HALF_LIFE);
+          a.weightedHallucinations += severity * hallucDecay;
           a.weightedTotal += decay;
           a.hallucinations++;
           if (signal.category) {
