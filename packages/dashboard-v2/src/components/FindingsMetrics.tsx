@@ -69,9 +69,9 @@ interface FindingReviewInfo {
 const DIAGNOSTIC_LABELS: Record<ParseDiagnostic['code'], string> = {
   HTML_ENTITY_ENCODED_TAGS: 'HTML-entity-encoded <agent_finding> tags — parser saw 0 tags',
   HTML_ENTITY_MIXED_PAYLOAD: 'Mixed raw + HTML-entity-encoded tags — some findings dropped',
-  SCHEMA_DRIFT_UNKNOWN_TYPE: 'Unknown type attribute on <agent_finding>',
-  SCHEMA_DRIFT_MISSING_TYPE: 'Missing type attribute on <agent_finding>',
-  SCHEMA_DRIFT_SHORT_CONTENT: 'Content below MIN_FINDING_CONTENT',
+  SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS: 'Schema drift — Phase-2 consensus verdict types emitted (confirmed/disputed/unique/verdict)',
+  SCHEMA_DRIFT_INVENTED_TYPE_TOKENS: 'Schema drift — invented <agent_finding> type names (valid: finding | suggestion | insight)',
+  SCHEMA_DRIFT_NESTED_SUBTAGS: 'Schema drift — nested <type>...</type> subtags instead of type="..." attribute',
 };
 
 function ReportFinding({ f, reviewInfo, diagnostics }: {

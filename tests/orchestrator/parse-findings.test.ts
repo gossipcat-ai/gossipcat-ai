@@ -348,4 +348,131 @@ and a second paragraph.
       expect(res.droppedMissingType).toBe(1);
     });
   });
+
+  // Schema-drift diagnostics — see docs/specs/2026-04-16-schema-drift-diagnostic.md
+  // Six cases mandated by the spec's "Validation" section.
+  describe('schema drift diagnostics', () => {
+    it('emits no drift diagnostic when all types are valid', () => {
+      // Spec validation case #1.
+      const raw = `
+<agent_finding type="finding" severity="high">Anchored at foo.ts:12 valid content</agent_finding>
+<agent_finding type="suggestion">Consider refactoring this logic</agent_finding>
+<agent_finding type="insight">Observation about the codebase shape</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(3);
+      // No SCHEMA_DRIFT_* diagnostic should appear — a clean round stays silent.
+      const driftCodes = res.diagnostics
+        .map(d => d.code)
+        .filter(c => c.startsWith('SCHEMA_DRIFT_'));
+      expect(driftCodes).toEqual([]);
+    });
+
+    it('fires SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS when `type="confirmed"` is dropped with zero accepted', () => {
+      // Spec validation case #2. Full-drift: reviewer emitted Phase-2 verdict
+      // format and nothing parsed.
+      const raw = `
+<agent_finding type="confirmed" severity="high">Legacy verdict format at foo.ts:10</agent_finding>
+<agent_finding type="disputed" severity="high">Another legacy verdict bar.ts:20</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      const phase2 = res.diagnostics.find(d => d.code === 'SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS');
+      expect(phase2).toBeDefined();
+      if (phase2 && phase2.code === 'SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS') {
+        // matchedTokens contains both drifted tokens, lowercased.
+        expect(phase2.matchedTokens.sort()).toEqual(['confirmed', 'disputed']);
+        // The message must name the Phase-2 verdict framing for the operator.
+        expect(phase2.message).toMatch(/Phase-2/);
+        expect(phase2.message).toContain('confirmed');
+        expect(phase2.message).toContain('disputed');
+      }
+    });
+
+    it('fires SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS on partial drift (some valid, some Phase-2 tokens)', () => {
+      // Spec validation case #3. Partial-drift: the diagnostic STILL fires
+      // even though some tags parsed successfully — per consensus round
+      // 2c0c1e0b-66cf4919:f10, partial-drift is in scope.
+      const raw = `
+<agent_finding type="finding" severity="high">Valid finding content at foo.ts:10</agent_finding>
+<agent_finding type="confirmed" severity="high">Drifted Phase-2 verdict format</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+      expect(res.rawTagCount).toBe(2);
+      const phase2 = res.diagnostics.find(d => d.code === 'SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS');
+      expect(phase2).toBeDefined();
+      if (phase2 && phase2.code === 'SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS') {
+        expect(phase2.matchedTokens).toEqual(['confirmed']);
+      }
+    });
+
+    it('fires SCHEMA_DRIFT_INVENTED_TYPE_TOKENS when only invented tokens are dropped', () => {
+      // Spec validation case #4. No Phase-2 overlap → invented fires.
+      const raw = `
+<agent_finding type="risk" severity="high">Security risk identified bar.ts:30</agent_finding>
+<agent_finding type="bug" severity="high">Bug at foo.ts:40 some content</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      const invented = res.diagnostics.find(d => d.code === 'SCHEMA_DRIFT_INVENTED_TYPE_TOKENS');
+      expect(invented).toBeDefined();
+      if (invented && invented.code === 'SCHEMA_DRIFT_INVENTED_TYPE_TOKENS') {
+        expect(invented.matchedTokens.sort()).toEqual(['bug', 'risk']);
+        expect(invented.message).toContain('finding | suggestion | insight');
+      }
+      // Phase-2 diagnostic MUST NOT fire when no verdict tokens present.
+      expect(
+        res.diagnostics.find(d => d.code === 'SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS'),
+      ).toBeUndefined();
+    });
+
+    it('only fires SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS when both verdict AND invented tokens present (precedence)', () => {
+      // Spec validation case #5. Phase-2 takes precedence because it points
+      // to a specific known regression (legacy prompt).
+      const raw = `
+<agent_finding type="confirmed" severity="high">Phase-2 verdict format at foo.ts:10</agent_finding>
+<agent_finding type="risk" severity="high">Invented type at bar.ts:20</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      const codes = res.diagnostics.map(d => d.code);
+      expect(codes).toContain('SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS');
+      expect(codes).not.toContain('SCHEMA_DRIFT_INVENTED_TYPE_TOKENS');
+    });
+
+    it('fires SCHEMA_DRIFT_NESTED_SUBTAGS when droppedMissingType > 0 and <type> subtags present', () => {
+      // Spec validation case #6. Nested-subtag drift hits droppedMissingType
+      // (not droppedUnknownType) because the outer tag has no `type="..."`
+      // attribute.
+      const raw = `
+<agent_finding severity="high"><type>finding</type>Body with anchor foo.ts:50</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.droppedMissingType).toBe(1);
+      const nested = res.diagnostics.find(d => d.code === 'SCHEMA_DRIFT_NESTED_SUBTAGS');
+      expect(nested).toBeDefined();
+      if (nested && nested.code === 'SCHEMA_DRIFT_NESTED_SUBTAGS') {
+        expect(nested.subtagTypes).toEqual(['finding']);
+        // Message names the attribute-form fix.
+        expect(nested.message).toMatch(/attribute form/);
+      }
+    });
+
+    it('does NOT fire SCHEMA_DRIFT_NESTED_SUBTAGS when droppedMissingType is 0 (even if <type> prose appears)', () => {
+      // Guard: the nested-subtag regex only runs when there's actually a
+      // missing-type drop. A raw string containing `<type>foo</type>` prose
+      // outside any <agent_finding> tag must not trigger.
+      const raw = `
+<agent_finding type="finding" severity="high">Doc says <type>finding</type> is the canonical type at foo.ts:10</agent_finding>
+`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+      expect(res.droppedMissingType).toBe(0);
+      expect(
+        res.diagnostics.find(d => d.code === 'SCHEMA_DRIFT_NESTED_SUBTAGS'),
+      ).toBeUndefined();
+    });
+  });
 });

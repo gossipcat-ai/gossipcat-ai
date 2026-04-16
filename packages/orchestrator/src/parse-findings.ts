@@ -43,6 +43,67 @@ const CANONICAL_TYPES: ReadonlySet<string> = new Set(['finding', 'suggestion', '
 const HTML_ENTITY_OPEN_PATTERN = /&lt;agent_finding\b/gi;
 const HTML_ENTITY_CLOSE_PATTERN = /&lt;\/agent_finding&gt;/gi;
 
+/**
+ * Schema-drift token buckets — see `docs/specs/2026-04-16-schema-drift-diagnostic.md`.
+ *
+ * Two non-overlapping sets so the diagnostic can distinguish legacy Phase-2
+ * consensus verdict drift (high-signal: reviewer prompt teaches the wrong
+ * format) from generic type invention (lower-signal: reviewer made up a type
+ * name that doesn't match the schema).
+ *
+ * Membership is exhaustive by intent, not by enumeration: token lists are
+ * curated from observed drift patterns. See consensus round `2c0c1e0b-66cf4919:f16`
+ * for the split rationale.
+ */
+const PHASE2_VERDICT_TOKENS: ReadonlySet<string> = new Set([
+  'confirmed',
+  'disputed',
+  'unique',
+  'verdict',
+]);
+
+const INVENTED_TYPE_TOKENS: ReadonlySet<string> = new Set([
+  'approval',
+  'rejection',
+  'concern',
+  'risk',
+  'recommendation',
+  'observation',
+  'critique',
+  'bug',
+  'issue',
+  'warning',
+]);
+
+// Matches a `<type>value</type>` nested subtag. Used ONLY when
+// `droppedMissingType > 0` — the nested-subtag drift mode hits the missing-
+// type bucket because the parser looks for a `type="..."` attribute on the
+// outer `<agent_finding>`, not a child tag. See consensus round
+// `2c0c1e0b-66cf4919:f9`.
+const NESTED_SUBTAG_PATTERN = /<type>\s*([a-z_]+)\s*<\/type>/gi;
+
+/**
+ * Escape HTML-significant characters in strings that are interpolated into
+ * diagnostic messages. The parser runs orchestrator-side and must not import
+ * from the dashboard package (backward dependency), so the helper is mirrored
+ * here. Keep in sync with `packages/dashboard-v2/src/lib/sanitize.ts`.
+ *
+ * Design note: we considered promoting `escapeHtml` to a shared package
+ * (`packages/common/` or similar) but the orchestrator has no other need for
+ * HTML escaping and creating a new package for a 5-line helper is more churn
+ * than it's worth. A second-order mirror is the right call until a third
+ * consumer appears — at which point `packages/common/src/html.ts` becomes
+ * the obvious home.
+ */
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export type FindingType = 'finding' | 'suggestion' | 'insight';
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
 
@@ -52,10 +113,23 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low';
  * so the dashboard can render a banner explaining why a round has 0 findings
  * despite agents producing content.
  *
- * Discriminated union on `code`. HTML_ENTITY_* producers ship in Phase 1;
- * SCHEMA_DRIFT_* codes are reserved here as type definitions so downstream
- * consumers can exhaustively switch without a follow-up type change when
- * Phase 2 adds the producers.
+ * Discriminated union on `code`.
+ *
+ * **HTML_ENTITY_* (Phase 1)** — upstream layer HTML-escaped the agent output
+ * before it reached the parser.
+ *
+ * **SCHEMA_DRIFT_* (Phase 2)** — reviewer instructions conflict with the
+ * schema. Three failure modes:
+ *   - `PHASE2_VERDICT_TOKENS`: reviewer emitted types matching legacy Phase-2
+ *     consensus verdict format (`confirmed`, `disputed`, `unique`, `verdict`).
+ *   - `INVENTED_TYPE_TOKENS`: reviewer emitted types not in the schema (e.g.
+ *     `approval`, `risk`, `bug`) but not a Phase-2 verdict either. Fires only
+ *     when PHASE2_VERDICT_TOKENS did NOT fire (Phase 2 takes precedence).
+ *   - `NESTED_SUBTAGS`: reviewer emitted `<agent_finding><type>foo</type>...</agent_finding>`
+ *     (child subtag) instead of the attribute form `<agent_finding type="foo">`.
+ *
+ * See `docs/specs/2026-04-16-schema-drift-diagnostic.md` for detection logic
+ * and consensus rounds behind the split.
  */
 export type ParseDiagnostic =
   | {
@@ -74,25 +148,36 @@ export type ParseDiagnostic =
       entityTagCount: number;
     }
   | {
-      /** Reserved for Phase 2 — producer not implemented yet. */
-      code: 'SCHEMA_DRIFT_UNKNOWN_TYPE';
+      code: 'SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS';
       message: string;
-      /** Offending type values (lowercased) with their counts. */
-      offendingTypes: Record<string, number>;
+      /**
+       * Subset of `droppedUnknownType` keys that matched the
+       * Phase-2 verdict token list (`confirmed`, `disputed`, `unique`, `verdict`).
+       * Lowercased.
+       */
+      matchedTokens: string[];
     }
   | {
-      /** Reserved for Phase 2 — producer not implemented yet. */
-      code: 'SCHEMA_DRIFT_MISSING_TYPE';
+      code: 'SCHEMA_DRIFT_INVENTED_TYPE_TOKENS';
       message: string;
-      /** Count of tags missing a `type=` attribute. */
-      count: number;
+      /**
+       * Subset of `droppedUnknownType` keys that matched the invented-type
+       * token list (`approval`, `risk`, `bug`, etc.). Lowercased. Fires ONLY
+       * when no PHASE2_VERDICT_TOKENS overlap exists — Phase-2 drift takes
+       * precedence because it points to a specific upstream cause (legacy
+       * reviewer prompt).
+       */
+      matchedTokens: string[];
     }
   | {
-      /** Reserved for Phase 2 — producer not implemented yet. */
-      code: 'SCHEMA_DRIFT_SHORT_CONTENT';
+      code: 'SCHEMA_DRIFT_NESTED_SUBTAGS';
       message: string;
-      /** Count of tags dropped for sub-minimum content length. */
-      count: number;
+      /**
+       * Nested `<type>value</type>` subtag values detected in the raw text
+       * when `droppedMissingType > 0`. Lowercased. May contain duplicates if
+       * the same subtag type appears multiple times.
+       */
+      subtagTypes: string[];
     };
 
 export interface ParsedFinding {
@@ -123,10 +208,9 @@ export interface ParseFindingsResult {
   rawTagCount: number;
   /**
    * Structured diagnostics describing recognizable parse failure modes in the
-   * raw input. Empty when the parse is clean. HTML_ENTITY_* diagnostics are
-   * emitted by this parser directly; SCHEMA_DRIFT_* codes are reserved for a
-   * later phase (producers not implemented yet — the type exists so
-   * downstream consumers can exhaustively switch without a follow-up change).
+   * raw input. Empty when the parse is clean. Both HTML_ENTITY_* and
+   * SCHEMA_DRIFT_* codes are emitted by this parser directly — see the
+   * `ParseDiagnostic` union doc for failure mode descriptions.
    */
   diagnostics: ParseDiagnostic[];
 }
@@ -265,8 +349,93 @@ export function parseAgentFindingsStrict(
       });
     }
   }
-  // Suppress unused-variable in the close-pattern until Phase 2 needs it.
+  // Suppress unused-variable in the close-pattern. Kept in source because it
+  // documents the intended boundary for future diagnostics that want to count
+  // entity-encoded closers independently of openers.
   void HTML_ENTITY_CLOSE_PATTERN;
+
+  // --- Schema-drift diagnostics (Phase 2) -----------------------------------
+  //
+  // All three fire regardless of `rawTagCount` / accepted-findings count —
+  // partial-drift (some valid, some drifted) is in scope per consensus round
+  // `2c0c1e0b-66cf4919:f10`. The dashboard banners are dedup'd at render time,
+  // not by the parser.
+  //
+  // Token interpolations into `message` strings are routed through `escapeHtml`
+  // because the message is rendered via `dangerouslySetInnerHTML` downstream
+  // (gemini-reviewer `2c0c1e0b-66cf4919:f1`). Even though `droppedUnknownType`
+  // keys are already constrained by TYPE_ATTR_PATTERN (`[a-zA-Z]+`), and the
+  // nested-subtag regex is `[a-z_]+`, escaping is applied defensively so a
+  // future regex relaxation does not silently introduce an XSS sink.
+
+  const unknownTypeKeys = Object.keys(droppedUnknownType);
+
+  // Order matters: Phase-2 verdict precedence. When a single round has BOTH
+  // verdict-token drops AND invented-token drops, we surface only the Phase-2
+  // diagnostic — it points to a specific, well-known prompt regression
+  // (legacy Phase-2 consensus verdict format) and is higher-signal than the
+  // generic invented-type hint.
+  const phase2Matches = unknownTypeKeys.filter(k => PHASE2_VERDICT_TOKENS.has(k));
+  let phase2Fired = false;
+  if (phase2Matches.length > 0) {
+    phase2Fired = true;
+    const tokenList = phase2Matches.map(escapeHtml).join(', ');
+    diagnostics.push({
+      code: 'SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS',
+      message:
+        `Reviewer emitted <agent_finding> tag type(s) [${tokenList}] that were ` +
+        `dropped as unknown. These look like Phase-2 consensus verdicts, not ` +
+        `Phase-1 finding types. The reviewer's instructions likely teach the ` +
+        `legacy CONFIRMED/DISPUTED/UNIQUE format. Valid Phase-1 types are ` +
+        `finding | suggestion | insight (handbook invariant #8).`,
+      matchedTokens: phase2Matches,
+    });
+  }
+
+  if (!phase2Fired) {
+    const inventedMatches = unknownTypeKeys.filter(k => INVENTED_TYPE_TOKENS.has(k));
+    if (inventedMatches.length > 0) {
+      const tokenList = inventedMatches.map(escapeHtml).join(', ');
+      diagnostics.push({
+        code: 'SCHEMA_DRIFT_INVENTED_TYPE_TOKENS',
+        message:
+          `Reviewer emitted invented <agent_finding> tag type(s) [${tokenList}] ` +
+          `that were dropped as unknown. Valid types are ` +
+          `finding | suggestion | insight (handbook invariant #8). Check the ` +
+          `reviewer's instructions for schema drift.`,
+        matchedTokens: inventedMatches,
+      });
+    }
+  }
+
+  // Nested-subtag drift: the reviewer emitted `<agent_finding><type>finding</type>`
+  // form instead of attribute form. These tags fail the TYPE_ATTR_PATTERN
+  // check on the outer tag and land in `droppedMissingType`. We only scan
+  // when `droppedMissingType > 0` because the regex scan is O(text length)
+  // and most rounds have no missing-type drops.
+  if (droppedMissingType > 0) {
+    // Fresh regex per call — NESTED_SUBTAG_PATTERN is shared module-scope so
+    // we must reset .lastIndex via a new instance.
+    const subtagRe = new RegExp(NESTED_SUBTAG_PATTERN.source, NESTED_SUBTAG_PATTERN.flags);
+    const subtagTypes: string[] = [];
+    let subMatch: RegExpExecArray | null;
+    while ((subMatch = subtagRe.exec(raw)) !== null) {
+      subtagTypes.push(subMatch[1].toLowerCase());
+    }
+    if (subtagTypes.length > 0) {
+      const escapedList = subtagTypes.map(escapeHtml).join(', ');
+      diagnostics.push({
+        code: 'SCHEMA_DRIFT_NESTED_SUBTAGS',
+        message:
+          `Reviewer emitted nested <type>...</type> subtag(s) [${escapedList}] ` +
+          `inside <agent_finding> instead of using the attribute form ` +
+          `<agent_finding type="...">. ${droppedMissingType} tag(s) were dropped ` +
+          `for missing the type attribute. Handbook invariant #8 requires the ` +
+          `attribute form.`,
+        subtagTypes,
+      });
+    }
+  }
 
   return {
     findings,
