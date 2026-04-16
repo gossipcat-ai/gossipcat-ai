@@ -211,17 +211,18 @@ describeOnPosix('buildAuditExclusions', () => {
 });
 
 describeOnPosix('defaultScanRoots', () => {
-  it('worktree mode includes $HOME, tmpdir, /tmp, /private/tmp (dedup)', () => {
+  it('worktree mode includes projectRoot + tmpdir + /tmp + /private/tmp and EXCLUDES $HOME (PR1 issue #113)', () => {
     const roots = defaultScanRoots('worktree', '/some/project');
     // Should contain at least one of these.
     expect(roots.length).toBeGreaterThan(0);
     // Unique values only (Set semantics)
     expect(new Set(roots).size).toBe(roots.length);
-    // projectRoot MUST NOT be in worktree scan-roots — it's covered via
-    // $HOME traversal AND worktrees legitimately write inside projectRoot/
-    // .claude/worktrees, which is already excluded separately.
+    expect(roots).toContain('/some/project');
     expect(roots).toContain('/tmp');
     expect(roots).toContain('/private/tmp');
+    // $HOME dropped in PR1 — sibling-process churn produced unbounded false
+    // positives. PR2 will restore coverage via sensitive-targets pass.
+    expect(roots).not.toContain(homedir());
   });
 
   it('scoped mode returns ONLY canonicalized projectRoot (no $HOME scan)', () => {
@@ -238,19 +239,31 @@ describeOnPosix('defaultScanRoots', () => {
     expect(roots).not.toContain('/private/tmp');
   });
 
-  it('undefined writeMode behaves as worktree (broad scan)', () => {
+  it('undefined writeMode behaves as worktree (narrow scan, no $HOME)', () => {
     const roots = defaultScanRoots(undefined, '/some/project');
-    // Must include the broad-scan entries.
+    expect(roots).toContain('/some/project');
     expect(roots).toContain('/tmp');
     expect(roots).toContain('/private/tmp');
-    // Must include $HOME and tmpdir (canonicalized).
-    expect(roots.length).toBeGreaterThanOrEqual(3);
+    expect(roots).not.toContain(homedir());
   });
 
-  it('sequential writeMode behaves as worktree (broad scan)', () => {
+  it('sequential writeMode behaves as worktree (narrow scan, no $HOME)', () => {
     const roots = defaultScanRoots('sequential', '/some/project');
+    expect(roots).toContain('/some/project');
     expect(roots).toContain('/tmp');
     expect(roots).toContain('/private/tmp');
+    expect(roots).not.toContain(homedir());
+  });
+
+  it('regression #113: sibling .gossip dir in $HOME is not a scan root for worktree/sequential', () => {
+    // Live-fire 2026-04-16: sibling gossipcat projects under $HOME attributed
+    // 830 writes per dispatch via mtime (no per-process attribution in find).
+    // Verify homedir() never appears as a scan root for any mode that might
+    // catch a sibling project.
+    for (const mode of ['worktree', 'sequential', undefined] as const) {
+      const roots = defaultScanRoots(mode, '/some/project');
+      expect(roots).not.toContain(homedir());
+    }
   });
 });
 
