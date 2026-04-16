@@ -6,6 +6,21 @@ import { tmpdir } from 'os';
 
 const execFileAsync = promisify(execFile);
 
+async function execGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+  const opts = { cwd, env: { ...process.env } };
+  try {
+    return await execFileAsync('git', args, opts);
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      // libuv transient posix_spawn failure — retry once after 100ms
+      await new Promise(r => setTimeout(r, 100));
+      return await execFileAsync('git', args, opts);
+    }
+    throw err;
+  }
+}
+
 export class WorktreeManager {
   constructor(private projectRoot: string) {}
 
@@ -13,11 +28,11 @@ export class WorktreeManager {
     const branch = `gossip-${taskId}`;
     const wtPath = await mkdtemp(join(tmpdir(), 'gossip-wt-'));
 
-    await execFileAsync('git', ['branch', branch, 'HEAD'], { cwd: this.projectRoot });
+    await execGit(['branch', branch, 'HEAD'], this.projectRoot);
     try {
-      await execFileAsync('git', ['worktree', 'add', wtPath, branch], { cwd: this.projectRoot });
+      await execGit(['worktree', 'add', wtPath, branch], this.projectRoot);
     } catch (err) {
-      try { await execFileAsync('git', ['branch', '-D', branch], { cwd: this.projectRoot }); } catch {}
+      try { await execGit(['branch', '-D', branch], this.projectRoot); } catch {}
       throw err;
     }
 
@@ -27,15 +42,15 @@ export class WorktreeManager {
   async merge(taskId: string): Promise<{ merged: boolean; conflicts?: string[] }> {
     const branch = `gossip-${taskId}`;
 
-    const log = await execFileAsync('git', ['log', `HEAD..${branch}`, '--oneline'], { cwd: this.projectRoot });
+    const log = await execGit(['log', `HEAD..${branch}`, '--oneline'], this.projectRoot);
     if (!log.stdout.trim()) return { merged: true };
 
     try {
-      await execFileAsync('git', ['merge', branch, '--no-edit'], { cwd: this.projectRoot });
+      await execGit(['merge', branch, '--no-edit'], this.projectRoot);
       return { merged: true };
     } catch {
-      await execFileAsync('git', ['merge', '--abort'], { cwd: this.projectRoot });
-      const diff = await execFileAsync('git', ['diff', '--name-only', `HEAD...${branch}`], { cwd: this.projectRoot });
+      await execGit(['merge', '--abort'], this.projectRoot);
+      const diff = await execGit(['diff', '--name-only', `HEAD...${branch}`], this.projectRoot);
       const files = diff.stdout.trim();
       return { merged: false, conflicts: files ? files.split('\n') : [] };
     }
@@ -43,25 +58,25 @@ export class WorktreeManager {
 
   async cleanup(taskId: string, wtPath: string): Promise<void> {
     const branch = `gossip-${taskId}`;
-    try { await execFileAsync('git', ['worktree', 'remove', wtPath, '--force'], { cwd: this.projectRoot }); } catch { /* already removed */ }
-    try { await execFileAsync('git', ['branch', '-D', branch], { cwd: this.projectRoot }); } catch { /* branch in use */ }
+    try { await execGit(['worktree', 'remove', wtPath, '--force'], this.projectRoot); } catch { /* already removed */ }
+    try { await execGit(['branch', '-D', branch], this.projectRoot); } catch { /* branch in use */ }
   }
 
   async pruneOrphans(): Promise<void> {
     try {
-      const result = await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: this.projectRoot });
+      const result = await execGit(['worktree', 'list', '--porcelain'], this.projectRoot);
       const orphans = result.stdout.split('\n\n')
         .filter(block => block.includes('gossip-wt-'))
         .map(block => block.match(/worktree (.+)/)?.[1])
         .filter(Boolean);
       for (const wtPath of orphans) {
-        try { await execFileAsync('git', ['worktree', 'remove', wtPath!, '--force'], { cwd: this.projectRoot }); } catch {}
+        try { await execGit(['worktree', 'remove', wtPath!, '--force'], this.projectRoot); } catch {}
       }
-      await execFileAsync('git', ['worktree', 'prune'], { cwd: this.projectRoot });
-      const branchResult = await execFileAsync('git', ['branch', '--list', 'gossip-*'], { cwd: this.projectRoot });
+      await execGit(['worktree', 'prune'], this.projectRoot);
+      const branchResult = await execGit(['branch', '--list', 'gossip-*'], this.projectRoot);
       const branches = branchResult.stdout.trim().split('\n').map(b => b.trim().replace(/^\*\s*/, '')).filter(Boolean);
       for (const b of branches) {
-        try { await execFileAsync('git', ['branch', '-D', b], { cwd: this.projectRoot }); } catch {}
+        try { await execGit(['branch', '-D', b], this.projectRoot); } catch {}
       }
     } catch { /* git not available or no worktrees */ }
   }

@@ -6,13 +6,33 @@ const execFileAsync = promisify(execFile);
 export class GitTools {
   constructor(private cwd: string) {}
 
+  private async execGit(args: string[]): Promise<{ stdout: string; stderr: string }> {
+    const opts = { cwd: this.cwd, env: { ...process.env } };
+    try {
+      return await execFileAsync('git', args, opts);
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        // libuv transient posix_spawn failure — retry once after 100ms
+        await new Promise(r => setTimeout(r, 100));
+        return await execFileAsync('git', args, opts);
+      }
+      throw err;
+    }
+  }
+
   private async git(...args: string[]): Promise<string> {
     try {
-      const { stdout } = await execFileAsync('git', args, { cwd: this.cwd });
+      const { stdout } = await this.execGit(args);
       return stdout.trim();
     } catch (err: unknown) {
-      const error = err as Error & { stderr?: string };
-      const msg = error.stderr ? error.stderr.trim() : error.message;
+      const error = err as (Error & { stderr?: string });
+      let msg = 'Unknown error';
+      if (error && typeof error.stderr === 'string') {
+        msg = error.stderr.trim();
+      } else if (error && typeof error.message === 'string') {
+        msg = error.message;
+      }
       throw new Error(`git ${args[0]} failed: ${msg}`);
     }
   }
@@ -41,12 +61,11 @@ export class GitTools {
     for (const file of untrackedFiles) {
       try {
         // git diff --no-index exits 1 when files differ — that's expected
-        const { stdout } = await execFileAsync(
-          'git', ['diff', '--no-index', '/dev/null', file],
-          { cwd: this.cwd },
+        const { stdout } = await this.execGit(
+          ['diff', '--no-index', '/dev/null', file],
         ).catch((err: unknown) => {
-          const e = err as Error & { stdout?: string };
-          return { stdout: e.stdout || '' };
+          const e = err as Partial<Error & { stdout: string; stderr: string }>;
+          return { stdout: e.stdout || '', stderr: e.stderr || '' };
         });
         if (stdout) diffs.push(stdout.trim());
       } catch (err) {
