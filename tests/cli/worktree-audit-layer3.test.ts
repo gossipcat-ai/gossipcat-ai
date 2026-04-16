@@ -730,9 +730,15 @@ describeOnPosix('auditFilesystemSinceSentinel — user-level OS/app dir exclusio
     }
   });
 
-  itOnPosix('end-to-end arg shape has exactly one ( ) -prune -o group', () => {
+  itOnPosix('end-to-end arg shape has exactly one ( ) -prune -o group (main pass)', () => {
     // Guards against duplicate grouping (e.g. one -prune group per scan root
     // inside a loop). The per-root build emits exactly ONE group.
+    //
+    // NOTE PR2: the shim is also invoked by the sensitive-targets pass for
+    // any watchlist path that exists on the host. Their args get appended
+    // to the same log. We slice to the FIRST invocation (main pass) by
+    // locating the scanRoot marker — subsequent invocations start with a
+    // different first-arg (the sensitive target path).
     const projectRoot = mkTmp();
     const scanRoot = mkTmp('gossip-l3-scan-');
     const binDir = mkTmp('gossip-l3-bin-');
@@ -760,12 +766,19 @@ describeOnPosix('auditFilesystemSinceSentinel — user-level OS/app dir exclusio
         logFailures: false,
       });
 
-      const args = readFileSync(argLog, 'utf-8').split('\n').filter(Boolean);
+      const allArgs = readFileSync(argLog, 'utf-8').split('\n').filter(Boolean);
 
-      // Only ONE '(' and ONE ')' — no nested grouping.
+      // Isolate the first invocation (main pass). Each invocation's argv
+      // ends with '-print'; subsequent invocations start with a different
+      // first token. Slice up through the first '-print'.
+      const firstPrintIdx = allArgs.indexOf('-print');
+      expect(firstPrintIdx).toBeGreaterThan(-1);
+      const args = allArgs.slice(0, firstPrintIdx + 1);
+
+      // Only ONE '(' and ONE ')' in the main-pass invocation.
       expect(args.filter(a => a === '(').length).toBe(1);
       expect(args.filter(a => a === ')').length).toBe(1);
-      // Only ONE -prune, one -print.
+      // Only ONE -prune, one -print in the main-pass invocation.
       expect(args.filter(a => a === '-prune').length).toBe(1);
       expect(args.filter(a => a === '-print').length).toBe(1);
       // -type f -newer <sentinel> comes AFTER the `-prune -o` pair, never
@@ -919,7 +932,9 @@ describeOnPosix('auditFilesystemSinceSentinel — boundary-escapes.jsonl logging
       for (const entry of parsed) {
         expect(entry.taskId).toBe('logged');
         expect(entry.agentId).toBe('opus-implementer');
-        expect(entry.source).toBe('layer3-audit');
+        // PR2 renamed source: 'layer3-audit' → 'layer3-main' to distinguish
+        // from the new 'layer3-sensitive' pass.
+        expect(entry.source).toBe('layer3-main');
         // F6: shape matches Layer 2's violatingPaths array — 1 element per line.
         expect(Array.isArray(entry.violatingPaths)).toBe(true);
         expect(entry.violatingPaths.length).toBe(1);

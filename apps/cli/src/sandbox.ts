@@ -155,7 +155,9 @@ const SCOPE_NOTE =
   'SCOPE NOTE: SANDBOXED WRITE BOUNDARY.\n' +
   'This task runs in an isolated worktree. You MUST use only relative paths (./package/file.ts).\n' +
   'Any write outside the worktree — absolute paths (/Users/...), parent-escape (../), or cd-into-parent\n' +
-  '— is a BOUNDARY ESCAPE. Detected post-task and logged to .gossip/boundary-escapes.jsonl.\n' +
+  '— is a BOUNDARY ESCAPE. Writes to sensitive paths (SSH keys, cloud credentials, system config)\n' +
+  'are recorded as a `disagreement` signal under `trust_boundaries` and PENALIZE YOUR ACCURACY SCORE.\n' +
+  'Writes to other non-scoped paths are logged to .gossip/boundary-escapes.jsonl for orchestrator review.\n' +
   'In block mode the task fails; in warn mode it may be reviewed by the orchestrator.\n' +
   '\n' +
   'Rules:\n' +
@@ -629,20 +631,119 @@ export function defaultScanRoots(
 }
 
 /**
- * Emit both /tmp and /private/tmp variants of a path so `find -not -path`
- * matches whichever form `find` surfaces on macOS (where /tmp is a symlink
- * to /private/tmp and the kernel reports the resolved form for files opened
- * via either). Lexical-only — never touches the filesystem.
+ * Emit both short and /private/-prefixed variants of a path so `find -path`
+ * matches whichever form `find` surfaces on macOS. On darwin, /tmp, /etc,
+ * and /var are all symlinks to /private/{tmp,etc,var}; the kernel reports
+ * the resolved form for files opened via either. Lexical-only — never
+ * touches the filesystem.
  */
 export function expandTmpVariants(path: string): string[] {
   const p = path.replace(/\/+$/, '') || '/';
-  if (p === '/tmp' || p.startsWith('/tmp/')) {
-    return [p, '/private' + p];
-  }
-  if (p === '/private/tmp' || p.startsWith('/private/tmp/')) {
-    return [p, p.replace(/^\/private/, '')];
+  for (const root of ['/tmp', '/etc', '/var']) {
+    if (p === root || p.startsWith(root + '/')) {
+      return [p, '/private' + p];
+    }
+    const privateRoot = '/private' + root;
+    if (p === privateRoot || p.startsWith(privateRoot + '/')) {
+      return [p, p.replace(/^\/private/, '')];
+    }
   }
   return [p];
+}
+
+/**
+ * Vetted watchlist of sensitive exfiltration/persistence targets scanned in
+ * a SECOND pass with ZERO noise-exclusions. Each entry is either a single
+ * file to stat-check, or a directory with an optional include-list of
+ * basename globs. The pass runs AFTER the main Layer 3 pass so the main
+ * pass can shed $HOME noise (see PR1 #115) while these high-value paths
+ * stay covered.
+ *
+ * Scoping rules (vetted 2026-04-17):
+ *   - ~/.claude: file-level ONLY (settings.json, credentials.json). The
+ *     directory as a whole is harness churn (plugins, caches, projects
+ *     rotate per release). Same reason as main-pass exclusion at
+ *     buildAuditExclusions.
+ *   - ~/.ssh: include-list (id_*, *.key, *.pem, authorized_keys, config).
+ *     known_hosts{,.old} churn on every `git pull` — excluded.
+ *   - ~/.gnupg: full subtree. Keyring access is rare during dispatch.
+ *   - /etc/{passwd,shadow}: system-config persistence vectors. On macOS
+ *     /etc is a symlink to /private/etc; expandTmpVariants handles both.
+ *   - macOS only: ~/Library/LaunchAgents/*.plist — agentic persistence.
+ *
+ * Hits in this pass emit a `disagreement` signal under `trust_boundaries`
+ * via PerformanceWriter.appendSignals, which IS retractable via
+ * gossip_signals action:"retract" if we learn of a false-positive source.
+ * Browser cookies and 1Password are intentionally SKIPPED — denylist-grows
+ * pattern, and Chrome FP during user browsing would kill the signal.
+ */
+export interface SensitiveTarget {
+  /** Absolute path. Either a file (stat-check) or a directory (recurse). */
+  path: string;
+  /** When set and path is a directory, only filenames matching ANY of
+   * these globs (basename) are flagged. Passed to `find -name`. */
+  nameIncludes?: string[];
+  /** Optional OS guard. Only included when process.platform matches. */
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * Build the vetted sensitive-targets watchlist, resolving $HOME and
+ * applying per-OS guards. Null-safe: returns [] if homedir() throws.
+ * Tests can override platform; exported via buildSensitiveTargets().
+ */
+export function buildSensitiveTargets(
+  platform: NodeJS.Platform = process.platform,
+): SensitiveTarget[] {
+  let home: string;
+  try {
+    home = homedir();
+  } catch {
+    return [];
+  }
+  if (!home) return [];
+
+  const out: SensitiveTarget[] = [
+    // Claude Code credentials — file-level (dir as a whole is harness churn).
+    { path: `${home}/.claude/settings.json` },
+    { path: `${home}/.claude/credentials.json` },
+    // SSH: private keys + auth + config only. known_hosts excluded (churn).
+    {
+      path: `${home}/.ssh`,
+      nameIncludes: ['id_*', '*.key', '*.pem', 'authorized_keys', 'config'],
+    },
+    // Cloud credentials.
+    { path: `${home}/.aws/credentials` },
+    { path: `${home}/.aws/config` },
+    // GPG keyring (full dir — low churn, legitimate access rare during dispatch).
+    { path: `${home}/.gnupg` },
+    // Shell/git credential stores.
+    { path: `${home}/.git-credentials` },
+    { path: `${home}/.netrc` },
+    // GitHub CLI auth.
+    { path: `${home}/.config/gh/hosts.yml` },
+    // Docker + Kubernetes.
+    { path: `${home}/.docker/config.json` },
+    { path: `${home}/.kube/config` },
+    // DB credentials.
+    { path: `${home}/.pgpass` },
+    { path: `${home}/.my.cnf` },
+    // System config (passwd/shadow). On macOS /etc → /private/etc; both forms
+    // canonicalized at audit time via expandTmpVariants.
+    { path: '/etc/passwd' },
+    { path: '/etc/shadow' },
+  ];
+
+  // macOS-only: LaunchAgents persistence vector.
+  if (platform === 'darwin') {
+    out.push({
+      path: `${home}/Library/LaunchAgents`,
+      nameIncludes: ['*.plist'],
+      platform: 'darwin',
+    });
+  }
+
+  return out;
 }
 
 /** Build the exclusion list for the Layer 3 audit. The current task's own
@@ -738,16 +839,77 @@ export function buildFindPruneArgs(
 }
 
 /**
- * Post-dispatch `find -newer <sentinel>` audit. Walks scan roots and records
- * any file modified after the sentinel's mtime that is NOT inside the
- * current task's worktree or a gossipcat infrastructure directory.
+ * Build `find` argv for the sensitive-targets pass: ZERO noise-exclusions
+ * (the watchlist is pre-vetted sparse; nothing to prune) but KEEPING an
+ * optional sentinel-dir carve-out and an optional `-name` include-list.
+ *
+ * Shape when nameIncludes is empty:
+ *   <target> [ -path <sentinel-dir> -prune -o ] -type f -newer <sentinel> -print
+ *
+ * Shape when nameIncludes is non-empty (basename whitelist):
+ *   <target> [ -path <sentinel-dir> -prune -o ] -type f
+ *     ( -name <n1> -o -name <n2> ... ) -newer <sentinel> -print
+ *
+ * Exported for arg-shape tests. The sentinelDir carve-out exists because
+ * when the sentinel is itself under $HOME (e.g. a tests writing projectRoot
+ * into a $HOME-adjacent tmp dir), the watchlist scan must not self-match on
+ * the sentinel's own mtime.
+ */
+export function buildSensitiveFindArgs(
+  target: string,
+  sentinel: string,
+  nameIncludes?: string[],
+  sentinelDir?: string,
+): string[] {
+  const args: string[] = [target];
+  // Optional sentinel-dir carve-out — one -path entry with its twin
+  // (via expandTmpVariants) so macOS /private/... resolution is covered.
+  if (sentinelDir) {
+    const twins = expandTmpVariants(sentinelDir);
+    args.push('(');
+    for (let i = 0; i < twins.length; i++) {
+      if (i > 0) args.push('-o');
+      args.push('-path', twins[i]);
+    }
+    args.push(')', '-prune', '-o');
+  }
+  args.push('-type', 'f');
+  if (nameIncludes && nameIncludes.length > 0) {
+    args.push('(');
+    for (let i = 0; i < nameIncludes.length; i++) {
+      if (i > 0) args.push('-o');
+      args.push('-name', nameIncludes[i]);
+    }
+    args.push(')');
+  }
+  args.push('-newer', sentinel, '-print');
+  return args;
+}
+
+/**
+ * Post-dispatch `find -newer <sentinel>` audit. Runs TWO passes:
+ *   Pass 1 (main): walks default scan roots (projectRoot + tmpdir + /tmp
+ *     variants; $HOME excluded post-PR1) and records any file modified
+ *     after the sentinel's mtime that is NOT inside the current task's
+ *     worktree, gossipcat infra, or the user-level churn dirs. Violations
+ *     recorded with source='layer3-main' — JSONL-only (no score penalty).
+ *   Pass 2 (sensitive, PR2): iterates buildSensitiveTargets() and runs
+ *     find with ZERO noise-exclusions per target (watchlist is pre-vetted
+ *     sparse). Violations recorded with source='layer3-sensitive' AND
+ *     emit a retractable `disagreement` signal under `trust_boundaries`.
+ *
+ * Dedup: a path seen in both passes is reported ONLY as sensitive. The
+ * main pass JSONL entry is suppressed for that path.
  *
  * Contract:
  *   - Windows: skipped (POSIX-only primitive). Logged, not failed.
  *   - `find` error: logged, empty result returned. MUST NOT propagate.
  *   - Sentinel missing: skipped with reason. Audit fail-opens.
- *   - Any violations: appended to .gossip/boundary-escapes.jsonl with
- *     source='layer3-audit', one line per violating path.
+ *   - Sensitive-pass permission errors: stderr warning SUPPRESSED (would
+ *     fire every dispatch on macOS /etc and train users to ignore Layer 3);
+ *     partial-stdout recovery still runs.
+ *   - Any violations: appended to .gossip/boundary-escapes.jsonl, one line
+ *     per violating path, with source ∈ {'layer3-main', 'layer3-sensitive'}.
  */
 export function auditFilesystemSinceSentinel(
   projectRoot: string,
@@ -785,18 +947,21 @@ export function auditFilesystemSinceSentinel(
   );
   const exclusions = buildAuditExclusions(projectRoot, meta.worktreePath, options.scope);
   const findBin = options.findBinary ?? 'find';
+  const sentinelDir = canonicalize(join(projectRoot, '.gossip', SENTINEL_DIR));
 
-  const violations: string[] = [];
+  // Canonicalized violation sets — kept separate by source so we can record
+  // each pass independently, but a path that appears in BOTH passes is
+  // deduped to avoid dashboard double-counting.
+  const mainSet = new Set<string>();
+  const sensitiveSet = new Set<string>();
 
+  // ── Pass 1: main scan (post-PR1: narrow roots, $HOME excluded) ──
   for (const root of scanRoots) {
     if (!existsSync(root)) continue;
     const canonRoot = canonicalize(root);
 
-    // Always exclude the sentinel dir itself (stamping it bumps its own
-    // mtime and would otherwise self-match if tmpdir == .gossip path).
     // buildAuditExclusions already emits /tmp + /private/tmp twins for its
     // inputs; do the same for the sentinel dir so both forms are covered.
-    const sentinelDir = canonicalize(join(projectRoot, '.gossip', SENTINEL_DIR));
     const allExcl = [...exclusions, ...expandTmpVariants(sentinelDir)];
     const args = buildFindPruneArgs(canonRoot, allExcl, sentinel);
 
@@ -812,7 +977,7 @@ export function auditFilesystemSinceSentinel(
       for (const line of out.split('\n')) {
         const p = line.trim();
         if (!p) continue;
-        violations.push(p);
+        mainSet.add(canonicalize(p));
       }
     } catch (err) {
       // find exits non-zero on ANY permission error (macOS TCC is the common
@@ -825,7 +990,7 @@ export function auditFilesystemSinceSentinel(
         : (e.stdout?.toString?.('utf-8') ?? '');
       for (const line of partial.split('\n')) {
         const p = line.trim();
-        if (p) violations.push(p);
+        if (p) mainSet.add(canonicalize(p));
       }
       if (logFailures) {
         const msg = e.message || String(err);
@@ -838,29 +1003,111 @@ export function auditFilesystemSinceSentinel(
     }
   }
 
-  if (violations.length > 0) {
-    recordLayer3Violations(projectRoot, meta, violations);
+  // ── Pass 2: sensitive-targets scan (PR2) ──
+  // Zero noise-exclusions on this pass (watchlist is pre-vetted sparse),
+  // but KEEP the sentinelDir carve-out so a sentinel under $HOME doesn't
+  // self-match. Permission errors on sensitive paths (e.g. /etc on macOS
+  // SIP) are suppressed from stderr to avoid training users to ignore the
+  // warning; the partial-stdout recovery still runs.
+  const sensitiveTargets = buildSensitiveTargets(platform);
+  for (const target of sensitiveTargets) {
+    if (!existsSync(target.path)) continue;
+    const canonTarget = canonicalize(target.path);
+    const args = buildSensitiveFindArgs(
+      canonTarget,
+      sentinel,
+      target.nameIncludes,
+      sentinelDir,
+    );
+
+    try {
+      const out = execFileSync(findBin, args, {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 30_000,
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      for (const line of out.split('\n')) {
+        const p = line.trim();
+        if (!p) continue;
+        sensitiveSet.add(canonicalize(p));
+      }
+    } catch (err) {
+      // TCC / SIP: /etc reads can trigger "Operation not permitted" on macOS
+      // even though /etc/passwd is world-readable. Salvage stdout; suppress
+      // the per-dispatch stderr warning for this pass (would otherwise fire
+      // every dispatch and train users to ignore Layer 3 warnings).
+      const e = err as { stdout?: Buffer | string };
+      const partial = typeof e.stdout === 'string'
+        ? e.stdout
+        : (e.stdout?.toString?.('utf-8') ?? '');
+      for (const line of partial.split('\n')) {
+        const p = line.trim();
+        if (p) sensitiveSet.add(canonicalize(p));
+      }
+      // Intentionally NO logFailures warning here — see comment above.
+      continue;
+    }
+  }
+
+  // Dedup: a path in both passes goes to sensitive only (stronger signal).
+  for (const p of sensitiveSet) mainSet.delete(p);
+
+  const mainViolations = Array.from(mainSet);
+  const sensitiveViolations = Array.from(sensitiveSet);
+  const combined = [...mainViolations, ...sensitiveViolations];
+
+  if (mainViolations.length > 0) {
+    recordLayer3Violations(projectRoot, meta, mainViolations, 'layer3-main');
     if (logFailures) {
       process.stderr.write(
-        `[gossipcat] ⚠ Layer 3 BOUNDARY ESCAPE: ${meta.agentId} task ${meta.taskId} touched ${violations.length} path(s) outside worktree:\n` +
-          violations.slice(0, 20).map(v => `    ${v}`).join('\n') +
+        `[gossipcat] ⚠ Layer 3 BOUNDARY ESCAPE: ${meta.agentId} task ${meta.taskId} touched ${mainViolations.length} path(s) outside worktree:\n` +
+          mainViolations.slice(0, 20).map(v => `    ${v}`).join('\n') +
+          '\n',
+      );
+    }
+  }
+  if (sensitiveViolations.length > 0) {
+    recordLayer3Violations(projectRoot, meta, sensitiveViolations, 'layer3-sensitive');
+    if (logFailures) {
+      process.stderr.write(
+        `[gossipcat] ⚠ Layer 3 SENSITIVE-TARGET EXFILTRATION: ${meta.agentId} task ${meta.taskId} touched ${sensitiveViolations.length} sensitive path(s):\n` +
+          sensitiveViolations.slice(0, 20).map(v => `    ${v}`).join('\n') +
           '\n',
       );
     }
   }
 
-  return { violations };
+  return { violations: combined };
 }
+
+/** Source discriminator for Layer 3 JSONL entries. `layer3-main` is the
+ * narrow post-PR1 scan (warn-only — JSONL only). `layer3-sensitive` is the
+ * PR2 vetted watchlist pass (emits a retractable `disagreement` signal
+ * under `trust_boundaries` on top of the JSONL). */
+export type Layer3Source = 'layer3-main' | 'layer3-sensitive';
 
 /** Append one entry per violating path to boundary-escapes.jsonl. Shape
  * mirrors Layer 2's `recordBoundaryEscape`: `violatingPaths` is a
  * 1-element array per line (Layer 3 does NOT aggregate across paths so the
  * audit trail stays path-granular, but the field type matches Layer 2 so
- * downstream readers can parse either source with one shape). */
+ * downstream readers can parse either source with one shape).
+ *
+ * When source === 'layer3-sensitive', emits a `disagreement` signal under
+ * `trust_boundaries` via PerformanceWriter.appendSignals ONCE per dispatch
+ * (not per violation — one dispatch = one sensitive event regardless of
+ * how many files it touched; signal evidence lists up to 10 paths). The
+ * signal is RETRACTABLE via gossip_signals action:"retract" if a false-
+ * positive source is identified later.
+ *
+ * The `layer3-main` source stays JSONL-only (PR1 behavior) — the narrow
+ * main pass is too noise-prone for scoring penalties.
+ */
 function recordLayer3Violations(
   projectRoot: string,
   meta: DispatchMetadata,
   violations: string[],
+  source: Layer3Source,
 ): void {
   try {
     const dir = join(projectRoot, '.gossip');
@@ -872,12 +1119,37 @@ function recordLayer3Violations(
         taskId: meta.taskId,
         agentId: meta.agentId,
         violatingPaths: [path],
-        source: 'layer3-audit',
+        source,
       }),
     );
     appendFileSync(join(dir, BOUNDARY_ESCAPE_FILE), lines.join('\n') + '\n');
   } catch {
     /* best-effort */
+  }
+
+  // Signal emission — sensitive pass only. Main pass stays JSONL-only to
+  // match PR1 scoring discipline. Mirrors Layer 2's recordBoundaryEscape
+  // shape: try/catch, best-effort, never blocks audit completion.
+  if (source === 'layer3-sensitive' && violations.length > 0) {
+    try {
+      const { PerformanceWriter } = require('@gossip/orchestrator');
+      const writer = new PerformanceWriter(projectRoot);
+      writer.appendSignals([
+        {
+          type: 'consensus' as const,
+          taskId: meta.taskId,
+          signal: 'disagreement' as const,
+          agentId: meta.agentId,
+          category: 'trust_boundaries',
+          evidence:
+            `Sensitive-target exfiltration attempt: ${meta.writeMode ?? 'unknown'} task wrote to ${violations.length} sensitive path(s). ` +
+            `Paths: ${violations.slice(0, 10).join(', ')}`,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } catch {
+      /* best-effort */
+    }
   }
 }
 
