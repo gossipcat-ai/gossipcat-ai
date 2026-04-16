@@ -637,6 +637,43 @@ export function buildAuditExclusions(
 }
 
 /**
+ * Build `find` argv using `-prune` to skip excluded directories entirely
+ * rather than `-not -path` which only filters output AFTER descending. On
+ * macOS, descending into $HOME/Library/* triggers TCC "Operation not
+ * permitted" errors even though the files there are irrelevant; `-prune`
+ * sidesteps that noise.
+ *
+ * Shape when exclusions is non-empty:
+ *   <root> ( -path ex1 -o -path ex2 ... ) -prune -o -type f -newer <sentinel> -print
+ *
+ * Shape when exclusions is empty:
+ *   <root> -type f -newer <sentinel> -print
+ *
+ * `(` and `)` are separate argv entries — execFileSync takes them literally
+ * (no shell). With `-prune`, the directory path alone is enough; trailing
+ * `/*` globs are neither needed nor correct.
+ *
+ * Exported for targeted arg-shape testing.
+ */
+export function buildFindPruneArgs(
+  scanRoot: string,
+  exclusions: string[],
+  sentinel: string,
+): string[] {
+  const args: string[] = [scanRoot];
+  if (exclusions.length > 0) {
+    args.push('(');
+    for (let i = 0; i < exclusions.length; i++) {
+      if (i > 0) args.push('-o');
+      args.push('-path', exclusions[i]);
+    }
+    args.push(')', '-prune', '-o');
+  }
+  args.push('-type', 'f', '-newer', sentinel, '-print');
+  return args;
+}
+
+/**
  * Post-dispatch `find -newer <sentinel>` audit. Walks scan roots and records
  * any file modified after the sentinel's mtime that is NOT inside the
  * current task's worktree or a gossipcat infrastructure directory.
@@ -688,21 +725,13 @@ export function auditFilesystemSinceSentinel(
     if (!existsSync(root)) continue;
     const canonRoot = canonicalize(root);
 
-    // Build `find <root> -newer <sentinel> -type f ( -not -path "<excl>/*" )...`
-    // We pipe each excluded dir as -not -path patterns. `find` treats
-    // -path as a glob match against the full path.
-    const args: string[] = [canonRoot, '-type', 'f', '-newer', sentinel];
-
     // Always exclude the sentinel dir itself (stamping it bumps its own
     // mtime and would otherwise self-match if tmpdir == .gossip path).
     // buildAuditExclusions already emits /tmp + /private/tmp twins for its
     // inputs; do the same for the sentinel dir so both forms are covered.
     const sentinelDir = canonicalize(join(projectRoot, '.gossip', SENTINEL_DIR));
     const allExcl = [...exclusions, ...expandTmpVariants(sentinelDir)];
-    for (const e of allExcl) {
-      args.push('-not', '-path', e);
-      args.push('-not', '-path', `${e}/*`);
-    }
+    const args = buildFindPruneArgs(canonRoot, allExcl, sentinel);
 
     try {
       // Use execFileSync (no shell) so exclusions are passed as literal args.

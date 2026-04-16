@@ -26,6 +26,7 @@ import { join } from 'path';
 import {
   auditFilesystemSinceSentinel,
   buildAuditExclusions,
+  buildFindPruneArgs,
   cleanupTaskSentinel,
   defaultScanRoots,
   DispatchMetadata,
@@ -568,7 +569,7 @@ describeOnPosix('auditFilesystemSinceSentinel — user-level OS/app dir exclusio
    * writes the full argv to a side-channel file, and we assert the
    * exclusion flags are present.
    */
-  itOnPosix('passes $HOME/Library exclusion arg to find', () => {
+  itOnPosix('passes $HOME/Library exclusion arg to find using -prune shape', () => {
     const projectRoot = mkTmp();
     const scanRoot = mkTmp('gossip-l3-scan-');
     const binDir = mkTmp('gossip-l3-bin-');
@@ -600,17 +601,157 @@ describeOnPosix('auditFilesystemSinceSentinel — user-level OS/app dir exclusio
 
       const args = readFileSync(argLog, 'utf-8').split('\n').filter(Boolean);
       const home = homedir();
-      // Each exclusion is passed as `-not -path <excl>` and `-not -path <excl>/*`.
+
+      // Exclusion paths are passed as literal -path args inside a
+      // ( ... ) -prune group. The bare exclusion path MUST appear.
       expect(args).toContain(`${home}/Library`);
-      expect(args).toContain(`${home}/Library/*`);
       expect(args).toContain(`${home}/.cache`);
       expect(args).toContain(`${home}/.npm`);
       expect(args).toContain(`${home}/.claude/projects`);
+
+      // The new shape must include the -prune skeleton.
+      expect(args).toContain('(');
+      expect(args).toContain(')');
+      expect(args).toContain('-prune');
+      expect(args).toContain('-o');
+      expect(args).toContain('-print');
+      expect(args).toContain('-type');
+      expect(args).toContain('f');
+      expect(args).toContain('-newer');
+      expect(args).toContain(sentinel);
+
+      // Legacy -not syntax MUST be gone — it descends into TCC-denied dirs
+      // before filtering, which is exactly the noise the -prune fix eliminates.
+      expect(args).not.toContain('-not');
+
+      // No `<path>/*` trailing-glob variants. With -prune, the directory path
+      // itself is enough — find never descends, so descendant matching is
+      // unnecessary and wrong.
+      expect(args.some(a => a.endsWith('/*'))).toBe(false);
+
+      // Structural check: first positional arg is the scan root, then the
+      // exclusion group opens with '(' and closes with ')' followed by
+      // '-prune', '-o'.
+      expect(args[0]).toBe(scanRoot);
+      const openIdx = args.indexOf('(');
+      const closeIdx = args.indexOf(')');
+      expect(openIdx).toBeGreaterThan(0);
+      expect(closeIdx).toBeGreaterThan(openIdx);
+      expect(args[closeIdx + 1]).toBe('-prune');
+      expect(args[closeIdx + 2]).toBe('-o');
+
+      // -print is the terminator for the right-hand side of -prune -o ...
+      // Without it, find prints nothing.
+      expect(args[args.length - 1]).toBe('-print');
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       rmSync(scanRoot, { recursive: true, force: true });
       rmSync(binDir, { recursive: true, force: true });
     }
+  });
+
+  itOnPosix('end-to-end arg shape has exactly one ( ) -prune -o group', () => {
+    // Guards against duplicate grouping (e.g. one -prune group per scan root
+    // inside a loop). The per-root build emits exactly ONE group.
+    const projectRoot = mkTmp();
+    const scanRoot = mkTmp('gossip-l3-scan-');
+    const binDir = mkTmp('gossip-l3-bin-');
+    const shim = join(binDir, 'arg-capture-find-2');
+    const argLog = join(binDir, 'args.log');
+    try {
+      writeFileSync(
+        shim,
+        `#!/bin/sh\nfor a in "$@"; do echo "$a" >> '${argLog}'; done\nexit 0\n`,
+      );
+      chmodSync(shim, 0o755);
+
+      const sentinel = stampTaskSentinel(projectRoot, 'shape-check')!;
+      const meta: DispatchMetadata = {
+        taskId: 'shape-check',
+        agentId: 'opus-implementer',
+        writeMode: 'worktree',
+        timestamp: Date.now(),
+        sentinelPath: sentinel,
+      };
+
+      auditFilesystemSinceSentinel(projectRoot, meta, {
+        scanRoots: [scanRoot],
+        findBinary: shim,
+        logFailures: false,
+      });
+
+      const args = readFileSync(argLog, 'utf-8').split('\n').filter(Boolean);
+
+      // Only ONE '(' and ONE ')' — no nested grouping.
+      expect(args.filter(a => a === '(').length).toBe(1);
+      expect(args.filter(a => a === ')').length).toBe(1);
+      // Only ONE -prune, one -print.
+      expect(args.filter(a => a === '-prune').length).toBe(1);
+      expect(args.filter(a => a === '-print').length).toBe(1);
+      // -type f -newer <sentinel> comes AFTER the `-prune -o` pair, never
+      // before `(`.
+      const openIdx = args.indexOf('(');
+      const typeIdx = args.indexOf('-type');
+      expect(typeIdx).toBeGreaterThan(openIdx);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(scanRoot, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describeOnPosix('buildFindPruneArgs', () => {
+  const SENT = '/tmp/fake-sentinel';
+
+  it('emits the full ( ... ) -prune -o -type f -newer <sentinel> -print shape with multiple exclusions', () => {
+    const args = buildFindPruneArgs('/scan/root', ['/home/a', '/home/b', '/home/c'], SENT);
+    expect(args).toEqual([
+      '/scan/root',
+      '(',
+      '-path', '/home/a',
+      '-o',
+      '-path', '/home/b',
+      '-o',
+      '-path', '/home/c',
+      ')', '-prune', '-o',
+      '-type', 'f',
+      '-newer', SENT,
+      '-print',
+    ]);
+  });
+
+  it('emits no parens/-prune/-o when exclusions is empty — just <root> -type f -newer <sentinel> -print', () => {
+    // Defensive branch: if buildAuditExclusions AND expandTmpVariants both
+    // ever returned empty, the args must degenerate cleanly. Find with a
+    // dangling `( ) -prune -o` would crash.
+    const args = buildFindPruneArgs('/scan/root', [], SENT);
+    expect(args).toEqual(['/scan/root', '-type', 'f', '-newer', SENT, '-print']);
+    expect(args).not.toContain('(');
+    expect(args).not.toContain(')');
+    expect(args).not.toContain('-prune');
+    expect(args).not.toContain('-o');
+  });
+
+  it('emits a single exclusion without a dangling -o', () => {
+    const args = buildFindPruneArgs('/scan/root', ['/home/only'], SENT);
+    expect(args).toEqual([
+      '/scan/root',
+      '(', '-path', '/home/only', ')', '-prune', '-o',
+      '-type', 'f', '-newer', SENT, '-print',
+    ]);
+    // Exactly one -o (the one after ')' ), none inside the group.
+    expect(args.filter(a => a === '-o').length).toBe(1);
+  });
+
+  it('never emits a trailing-glob `<path>/*` variant — -prune skips descent so dir path alone suffices', () => {
+    const args = buildFindPruneArgs('/scan/root', ['/home/a', '/home/b'], SENT);
+    expect(args.some(a => a.endsWith('/*'))).toBe(false);
+  });
+
+  it('never emits legacy -not syntax', () => {
+    const args = buildFindPruneArgs('/scan/root', ['/home/a'], SENT);
+    expect(args).not.toContain('-not');
   });
 
   itOnPosix('still flags files in $HOME outside the exclusion list (no over-exclusion)', () => {
