@@ -4,6 +4,55 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-04-16
+
+Headline: **worktree filesystem sandbox** — the multi-layer defense for issue #90 ships end-to-end. Agents dispatched with `write_mode: "worktree"` are now soft-blocked from writing outside their isolated worktree by a PreToolUse hook (Layer 2), with a post-dispatch `find -newer` audit as a backstop (Layer 3) for escape paths the hook can't see. Plus a round of scoring corrections, dashboard polish, and relay resilience fixes driven by recent consensus rounds.
+
+### Worktree FS sandbox — layered defense (#90)
+
+Prior to this release, `write_mode: "worktree"` was advisory only — the Claude Code harness accepts absolute paths anywhere on disk and gossipcat had no enforcement point. Three layers of defense now ship together:
+
+- **Layer 2 — PreToolUse hook (#94).** A bash hook installed into `.claude/settings.json` intercepts `Edit`/`Write`/`MultiEdit` calls before they reach the filesystem and denies absolute paths that fall outside the agent's worktree cwd. Recognizes both namespaces: `/tmp/gossip-wt-*` (relay-managed) and `.claude/worktrees/agent-*` (Claude Code native). `gossip_setup` wires the hook automatically on merge; existing installs pick it up on next setup refresh. 3 consensus rounds found and fixed 8 bypasses (tilde expansion, env vars, glob, `cd`, `pushd`, `$()`, backtick, process substitution) + 2 contract violations.
+- **Layer 3 — post-dispatch `find -newer` audit (#99).** POSIX `find` runs after every `scoped`/`worktree` dispatch and flags any file whose mtime is newer than the task's sentinel and whose path falls outside the task's worktree. Catches shell-expanded, tilde-expanded, env-var-derived, and backtick-substituted paths that the hook can't see at parse time. Fail-open on `find` errors so a broken audit never blocks a task result. Windows: audit is POSIX-only and no-ops with a skip log.
+- **Merge runs git hooks (#92).** Removing `-c core.hooksPath=/dev/null` from `worktreeManager.merge` was the prerequisite for pre-commit validators (linter, typecheck) to actually run when a worktree lands.
+
+### Scoring corrections
+
+- **Hallucination decay tune + category enforcement (#98).** Per-task decay half-life reduced so a handful of fabricated findings from months ago no longer dominate the current accuracy score. Category-level accuracy is now enforced as a hard gate for cross-reviewer selection rather than a soft preference.
+- **Task-timeout and task-empty signals (#81).** Relay dispatches that time out or return empty content now emit explicit negative meta-signals instead of silently vanishing. Implementation agents also reset their streak counter on these events so a run of timeouts can't masquerade as a clean streak.
+- **`unique_unconfirmed` dropped from circuit-breaker (#71).** Uncontested findings that were never cross-reviewed no longer count as negative signals against the originating agent — they're reviewer-pool artifacts, not hallucinations. Circuit-breaker decisions use `hallucination_caught` + `disagreement` only.
+- **`diversityMul` applied symmetrically (#70).** The peer-diversity multiplier was scaling the agreement numerator but not the denominator, capping small-pool accuracy at the diversity ratio even for correct findings. Now applied at all 3 sites.
+- **Cross-reviewer median excludes fresh agents (#80).** `medianScore` was computed over `scoredCandidates` (including fresh agents seeded to 0), so when ≥50% of the pool was fresh the median collapsed and the `belowMedian` filter became impossible to satisfy — silently disabling epsilon-greedy exploration exactly when uncertainty was highest. Now computed over `eligible` (score > 0) with a clean short-circuit for all-fresh pools.
+
+### Dashboard
+
+- **Live-refresh with Bearer auth (#97).** The dashboard now polls its API with the correct `Authorization: Bearer <key>` header instead of the older query-string key, and refreshes pages without a hard reload. Degraded-mode log no longer misreports "OK" when a subsystem is down.
+- **Avg-duration clamp tightened to 4h (#95).** Older reports with `duration_ms` in the 30-day range were inflating the average on team cards; clamp lowered to 4h so one runaway long-dispatch can't skew the dashboard.
+- **Memory taxonomy 4-folder display remap (#74).** Five-type auto-memory schema (user/feedback/project/reference/session) now renders as four semantic buckets (active/reference/notes/history) on the dashboard with a status nudge for legacy files missing `status`.
+- **UNVERIFIED peers surfaced on CONFIRMED findings (#76).** Finding cards now show `+N peers verified, +M unverified` instead of only listing the AGREE confirmers — masking peer-pool saturation was hiding real signal from the reviewer team.
+
+### Relay resilience
+
+- **Server-side `dispatched_at_ms` fallback + 30d clamp (#88).** Missing dispatch timestamps from older relay paths were causing task cards to show "dispatched 1970" or NaN durations. Server now fills in `dispatched_at_ms` at arrival time and clamps to 30d for display sanity.
+- **WebSocket heartbeat + PID diagnostic (#75).** Added a lightweight ping/pong on the relay socket plus a PID field in the diagnostic endpoint so orphaned worker processes are identifiable during a disconnect cycle.
+- **`syncWorkersViaKeychain` self-heal on first sync (#77).** `lastKeyByAgent` snapshot was empty on the first sync, so subsequent "key changed?" checks were comparing against undefined and producing false positives.
+
+### Skills + memory
+
+- **Upstream freshness filter (#86).** `skill-develop` now filters the gap-tracker against skill-file mtime so a fresh gap doesn't immediately trigger a re-develop on a just-generated skill. Audit log expanded to include the verdict at develop time, not just the trigger.
+- **Verdict-aware cooldown gate (#84).** `gossip_skills develop` is now throttled per-verdict: `pending` no gate, `silent_skill`/`insufficient_evidence` 30d, `inconclusive` 60d (preserves strike rotation), `passed`/`failed` hard-block. Force override is logged to `.gossip/forced-skill-develops.jsonl`.
+- **Skill-loader observability + category boost (#78).** Skill injection events are logged per-task with category + verdict so the dashboard can show which skills were active. Category-boost applied when a skill matches the extracted finding category.
+- **Separate native + gossip memory stores (#83).** Gossipcat's memory writes no longer collide with Claude Code's native auto-memory. Ordered writes ensure read consistency within a session.
+
+### Security
+
+- **Dependabot: 7 vulnerabilities resolved (#82).** `npm audit fix` run against the full workspace tree. No breaking changes.
+
+### Docs
+
+- **Sandbox SCOPE_NOTE hardening + throttle doc (#85).** The advisory scope note now includes a concrete "what gossipcat does / does not enforce" list. Skill-develop throttle semantics documented in HANDBOOK.
+- **Socket badge in README (#79).** Cosmetic.
+
 ## [0.4.2] — 2026-04-14
 
 README-only republish. 0.4.1's install instructions (both on the npm package page and in the GitHub README) shipped before the README normalization PRs #67/#68 merged, so users landing on npmjs.com saw the old `https://github.com/.../releases/latest/download/gossipcat.tgz` one-liner instead of the shorter `npm install -g gossipcat` form. No code changes — the tarball is byte-identical to 0.4.1 except for `README.md` + the `package.json` version bump.
