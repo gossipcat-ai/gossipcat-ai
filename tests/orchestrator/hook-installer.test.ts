@@ -44,7 +44,7 @@ describe('installWorktreeSandboxHook', () => {
 
     const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
     expect(settings.hooks.PreToolUse).toHaveLength(1);
-    expect(settings.hooks.PreToolUse[0].matcher).toBe('Bash|Edit|Write');
+    expect(settings.hooks.PreToolUse[0].matcher).toBe('Bash|Edit|Write|MultiEdit|NotebookEdit');
     expect(settings.hooks.PreToolUse[0].hooks[0]).toEqual({
       type: 'command',
       command: HOOK_COMMAND,

@@ -16,7 +16,7 @@ export interface HookInstallResult {
 
 const HOOK_FILENAME = 'worktree-sandbox.sh';
 const HOOK_COMMAND = '$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-sandbox.sh';
-const HOOK_MATCHER = 'Bash|Edit|Write';
+const HOOK_MATCHER = 'Bash|Edit|Write|MultiEdit|NotebookEdit';
 
 /**
  * Resolve the bundled hook asset. We try multiple candidate paths because
