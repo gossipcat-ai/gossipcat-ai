@@ -7,6 +7,7 @@ import { ILLMProvider } from './llm-client';
 import { LLMMessage } from '@gossip/types';
 import { ProjectSignals, ToolResult } from './types';
 import { ArchetypeCatalog } from './archetype-catalog';
+import { installWorktreeSandboxHook } from './hook-installer';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, lstatSync } from 'fs';
 import { join, resolve } from 'path';
 
@@ -230,6 +231,20 @@ Respond with JSON:
       agents,
     };
     writeFileSync(join(gossipDir, 'config.json'), JSON.stringify(config, null, 2));
+
+    // Layer 2 sandbox: install the PreToolUse hook so worktree-isolated
+    // agents get denied at the tool boundary when they try absolute writes.
+    // Never block setup on failure — the hook is belt-and-suspenders, Layers
+    // 1 (prompt) and 3 (post-hoc audit) remain active even when Layer 2
+    // cannot be materialized.
+    const hookResult = installWorktreeSandboxHook(projectRoot);
+    if (!hookResult.installed) {
+      try {
+        process.stderr.write(
+          `[gossipcat] worktree sandbox hook skipped: ${hookResult.reason ?? 'unknown reason'}\n`,
+        );
+      } catch { /* best-effort logging */ }
+    }
   }
 
   private safeExists(root: string, target: string): boolean {

@@ -1905,6 +1905,22 @@ server.tool(
     mkdirSync(join(root, '.gossip'), { recursive: true });
     writeFileSync(join(root, '.gossip', 'config.json'), JSON.stringify(config, null, 2));
 
+    // Layer 2 sandbox (issue #90): install the PreToolUse hook that denies
+    // absolute-path writes from worktree-isolated agents. Idempotent, and
+    // never blocks setup — Layers 1 (prompt) and 3 (audit) still ship if the
+    // hook can't be materialized for any reason.
+    let hookSummary = '';
+    try {
+      const { installWorktreeSandboxHook } = require('@gossip/orchestrator') as typeof import('@gossip/orchestrator');
+      const hookResult = installWorktreeSandboxHook(root);
+      hookSummary = hookResult.installed
+        ? 'Sandbox hook: .claude/hooks/worktree-sandbox.sh installed (Layer 2)'
+        : `Sandbox hook: skipped (${hookResult.reason ?? 'unknown'})`;
+    } catch (e) {
+      hookSummary = `Sandbox hook: skipped (${(e as Error).message})`;
+      process.stderr.write(`[gossipcat] gossip_setup: sandbox hook install failed: ${e}\n`);
+    }
+
     // Refresh all runtime caches of .gossip/config.json state — dashboard,
     // ctx.nativeAgentConfigs, ctx.workers, and ctx.mainAgent registry — so
     // the new team is fully dispatchable without /mcp reconnect. PR #59
@@ -1950,6 +1966,7 @@ server.tool(
     }
     lines.push(`\nMode: ${mode} | Config: .gossip/config.json (${Object.keys(config.agents).length} agents total)`);
     lines.push(`Rules: ${env.rulesFile} (${env.host} will read this on next session)`);
+    if (hookSummary) lines.push(hookSummary);
     lines.push('Agents will connect to relay on first gossip_dispatch() call.');
     if (nativeCreated.length > 0) {
       lines.push(`\nTip: Native agents may prompt for file write permissions. To auto-allow, add to .claude/settings.local.json:`);

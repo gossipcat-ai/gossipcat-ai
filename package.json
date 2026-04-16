@@ -29,7 +29,7 @@
     "test": "jest --config jest.config.base.js",
     "clean": "rm -rf packages/*/dist apps/*/dist dist-mcp/ dist-dashboard/",
     "postinstall": "node scripts/postinstall.js",
-    "build:mcp": "rm -rf dist-mcp && npx esbuild apps/cli/src/mcp-server-sdk.ts --bundle --platform=node --target=node22 --outfile=dist-mcp/mcp-server.js --external:ws --external:@modelcontextprotocol/sdk --tsconfig=tsconfig.json && cp -r packages/orchestrator/src/default-skills dist-mcp/default-skills && cp -r packages/orchestrator/src/default-rules dist-mcp/default-rules && mkdir -p dist-mcp/data && cp data/archetypes.json dist-mcp/data/archetypes.json && chmod +x dist-mcp/mcp-server.js",
+    "build:mcp": "rm -rf dist-mcp && npx esbuild apps/cli/src/mcp-server-sdk.ts --bundle --platform=node --target=node22 --outfile=dist-mcp/mcp-server.js --external:ws --external:@modelcontextprotocol/sdk --tsconfig=tsconfig.json && cp -r packages/orchestrator/src/default-skills dist-mcp/default-skills && cp -r packages/orchestrator/src/default-rules dist-mcp/default-rules && cp -r assets dist-mcp/assets && mkdir -p dist-mcp/data && cp data/archetypes.json dist-mcp/data/archetypes.json && chmod +x dist-mcp/mcp-server.js && chmod +x dist-mcp/assets/hooks/worktree-sandbox.sh",
     "build:dashboard": "cd packages/dashboard-v2 && npx vite build --outDir ../../dist-dashboard --emptyOutDir",
     "prepublishOnly": "npm run build:mcp && npm run build:dashboard",
     "gossipcat": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts",
