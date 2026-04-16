@@ -4,6 +4,34 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.5] — 2026-04-16
+
+Tool Server union-of-roots — worktree-mode relay agents can now actually write inside their own worktrees.
+
+### Fixed
+
+- **Tool Server was worktree-blind on 6 file_* tools** (#103). `ToolServer.enforceWriteScope` correctly gated against the agent's assigned worktree root, but then `FileTools.fileWrite` called `Sandbox.validatePath` which re-resolved against `projectRoot` only. Worktrees live under `os.tmpdir()/gossip-wt-*` — always outside `projectRoot` — so every absolute worktree path was rejected with the misleading `"resolves outside project root"` error, and every relative path silently landed at repo root (diverging from `shell_exec`'s `agentRoot` cwd). Fix threads `agentRoot` through `FileTools` + `Sandbox.validatePath` accepts an optional `allowedRoots` array so a path is valid if it's inside `projectRoot` OR the caller's worktree root. Scope: `file_read`, `file_write`, `file_delete`, `file_search`, `file_grep`, `file_tree`. (`packages/tools/src/{sandbox,file-tools,tool-server}.ts`)
+
+### Preserved security properties
+
+- Normalize before check (`path.resolve` on candidate + every allowed root)
+- `realpathSync` symlink resolution before membership check — in-worktree symlinks pointing outside are still rejected
+- Trailing-slash canonical form — blocks sibling-prefix bypass (e.g. `/tmp/gossip-wt-AB` vs `/tmp/gossip-wt-ABXYZ`)
+- Case-fold on darwin/win32 — matches existing Sandbox behavior, no new logic
+- Per-agent keyed `agentRoots` Map — no path-derived root lookup
+- Existing `Sandbox.validatePath` callers that don't pass `allowedRoots` are unchanged
+
+### Out of scope (intentional, captured for follow-up)
+
+- `shell_exec` and `git_*` already use `agentRoot` as cwd — unchanged.
+- `run_tests`, `run_typecheck`, `verify_write` still use `projectRoot`-only scope — extending to worktrees is a separate concern.
+- Relative-path resolution base still resolves against `projectRoot` — known Tool-vs-shell_exec cwd divergence tracked separately.
+- `scope.ts::canonicalizeForBoundary` only walks up one directory to find an existing ancestor (unlike `sandbox.ts::validatePath` which walks N levels) — deep non-existent subtrees under a worktree fail silently in the enforceWriteScope guard. Discovered while writing tests. Separate follow-up.
+
+Design consensus: parallel investigation by `haiku-researcher` (task `21e974c8`) and `sonnet-reviewer` (task `9e737678`), 2026-04-16.
+
+Tests: `tests/tools/` 83 → 89 (+6 union-of-roots cases covering inside/outside roots, sibling-prefix bypass, symlink escape, no-root fallback, relative-path sanity).
+
 ## [0.4.4] — 2026-04-16
 
 Point release closing two Layer 3 sandbox bugs surfaced by live-fire verification against the freshly-released v0.4.3 (consensus task `56641e6e`, 2026-04-16).
