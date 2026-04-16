@@ -50,6 +50,13 @@ function markTimedOut(taskId: string, info: { agentId: string; task: string; sta
   persistNativeTaskMap();
   // Release scope on timeout so it doesn't block future dispatches
   try { ctx.mainAgent?.scopeTracker.release(taskId); } catch { /* best-effort */ }
+  // Idempotent sentinel cleanup: even a timed-out task leaves a sentinel on
+  // disk. Leaking these across sessions grows .gossip/sentinels/ unbounded.
+  try {
+    const { lookupDispatchMetadata, cleanupTaskSentinel } = require('../sandbox');
+    const meta = lookupDispatchMetadata(process.cwd(), taskId);
+    if (meta?.sentinelPath) cleanupTaskSentinel(meta.sentinelPath);
+  } catch { /* best-effort */ }
   // Don't record timeout signals for utility tasks — _utility is not a real agent
   if (info.agentId !== '_utility') {
     recordTimeoutSignal(taskId, info.agentId);
@@ -252,13 +259,13 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     return { content: [{ type: 'text' as const, text: msg }] };
   }
 
-  // Sandbox mitigation 2: post-task boundary audit
+  // Sandbox mitigation 2 + 3: post-task boundary audit
   // Runs BEFORE the result is stored, so "block" mode can mark the task failed
   // and prevent the dirty result from entering consensus/memory.
   let auditBlockError: string | null = null;
   let auditPrefix = '';
   try {
-    const { auditDispatchBoundary, readSandboxMode } = require('../sandbox');
+    const { auditDispatchBoundary, readSandboxMode, runLayer3Audit } = require('../sandbox');
     const enforcement = readSandboxMode(process.cwd());
     if (enforcement !== 'off' && !error && !taskInfo.utilityType) {
       const audit = auditDispatchBoundary(process.cwd(), task_id);
@@ -269,6 +276,17 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         } else {
           auditPrefix = `⚠ BOUNDARY ESCAPE (warn): wrote outside ${taskInfo.writeMode || 'scope'} — ${list}\n\n`;
         }
+      }
+
+      // Layer 3: `find -newer` filesystem audit. Catches shell-quoted,
+      // tilde-expanded, and env-var derived path bypasses that Layer 2
+      // (PreToolUse hook) cannot see. Fail-open on any error — must not
+      // block the relay result. The helper also handles sentinel cleanup.
+      const { blockError: l3Block, warnPrefix: l3Warn } = runLayer3Audit(process.cwd(), task_id);
+      if (l3Block && !auditBlockError) {
+        auditBlockError = l3Block;
+      } else if (l3Warn) {
+        auditPrefix += l3Warn;
       }
     }
   } catch (auditErr) {
