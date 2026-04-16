@@ -4,6 +4,12 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-04-16
+
+### Fixed
+
+- **Layer 3 audit now excludes user-level app directories** (#105). Live-fire verification against v0.4.5 produced 44 "boundary escape" violations that were 100% OS-level churn — Chrome cookies, Spotify cache, NordVPN data, Claude Code's own `~/.claude/projects/*.jsonl` session logs — not a single agent action. These app directories are unreachable through the Tool Server sandbox or the Layer 2 PreToolUse hook, so false positives from them were pure noise drowning out any real signal. `buildAuditExclusions` now adds `$HOME/Library`, `$HOME/.cache`, `$HOME/.npm`, `$HOME/.claude/projects` to the `find -not -path` list. Broad `$HOME` scan is preserved for defense-in-depth against `shell_exec` bypass; real agent violations anywhere else in `$HOME` are still caught. (`apps/cli/src/sandbox.ts`)
+
 ## [0.4.5] — 2026-04-16
 
 Tool Server union-of-roots — worktree-mode relay agents can now actually write inside their own worktrees.
