@@ -11,6 +11,7 @@
  * own-worktree exclusion, peer-worktree inclusion, and Windows gating.
  */
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -431,6 +432,99 @@ describeOnPosix('auditFilesystemSinceSentinel — fail-open on find errors', () 
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       rmSync(scanRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describeOnPosix('auditFilesystemSinceSentinel — macOS TCC partial stdout parse (Bug B)', () => {
+  /**
+   * macOS Transparency, Consent, and Control (TCC) denies `find` read access
+   * to sandboxed Library paths (Group Containers, Safari SandboxBroker, etc.)
+   * even when the parent scan root is readable. `find` prints a permission
+   * error to stderr, writes the files it COULD see to stdout, and exits
+   * non-zero. execFileSync throws on non-zero exit, but the error object
+   * still carries `.stdout` — we must parse it instead of dropping it.
+   */
+  itOnPosix('parses err.stdout when find exits non-zero with partial output', () => {
+    const projectRoot = mkTmp();
+    const scanRoot = mkTmp('gossip-l3-scan-');
+    // Synthetic find shim that emits two partial paths then exits 1.
+    // Mirrors macOS TCC behavior: some paths visible, process exits non-zero.
+    const binDir = mkTmp('gossip-l3-bin-');
+    const shim = join(binDir, 'fake-find');
+    const leakedA = join(scanRoot, 'leaked-a.txt');
+    const leakedB = join(scanRoot, 'leaked-b.txt');
+    try {
+      writeFileSync(
+        shim,
+        `#!/bin/sh\n` +
+          `echo '${leakedA}'\n` +
+          `echo '${leakedB}'\n` +
+          `echo "find: /Users/x/Library/Group Containers/com.apple.x: Operation not permitted" 1>&2\n` +
+          `exit 1\n`,
+      );
+      chmodSync(shim, 0o755);
+
+      const sentinel = stampTaskSentinel(projectRoot, 'tcc-partial')!;
+      const meta: DispatchMetadata = {
+        taskId: 'tcc-partial',
+        agentId: 'opus-implementer',
+        writeMode: 'worktree',
+        timestamp: Date.now(),
+        sentinelPath: sentinel,
+      };
+
+      const res = auditFilesystemSinceSentinel(projectRoot, meta, {
+        scanRoots: [scanRoot],
+        findBinary: shim,
+        logFailures: false,
+      });
+
+      // Both paths from stdout MUST end up in violations, even though find exited 1.
+      expect(res.violations).toContain(leakedA);
+      expect(res.violations).toContain(leakedB);
+      expect(res.violations.length).toBe(2);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(scanRoot, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  itOnPosix('returns empty violations when find exits non-zero with NO stdout', () => {
+    const projectRoot = mkTmp();
+    const scanRoot = mkTmp('gossip-l3-scan-');
+    const binDir = mkTmp('gossip-l3-bin-');
+    const shim = join(binDir, 'fake-find-empty');
+    try {
+      // Exit 1 with stderr only — nothing to parse. Audit must not throw and
+      // must not invent violations from nothing.
+      writeFileSync(
+        shim,
+        `#!/bin/sh\necho "find: permission denied" 1>&2\nexit 1\n`,
+      );
+      chmodSync(shim, 0o755);
+
+      const sentinel = stampTaskSentinel(projectRoot, 'tcc-empty')!;
+      const meta: DispatchMetadata = {
+        taskId: 'tcc-empty',
+        agentId: 'opus-implementer',
+        writeMode: 'worktree',
+        timestamp: Date.now(),
+        sentinelPath: sentinel,
+      };
+
+      const res = auditFilesystemSinceSentinel(projectRoot, meta, {
+        scanRoots: [scanRoot],
+        findBinary: shim,
+        logFailures: false,
+      });
+
+      expect(res.violations).toEqual([]);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(scanRoot, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
     }
   });
 });
