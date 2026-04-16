@@ -14,6 +14,7 @@ import { activeTasksHandler } from './api-active-tasks';
 import { logsHandler } from './api-logs';
 import { readFileSync, existsSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
+import { createHash, timingSafeEqual } from 'crypto';
 
 interface AgentConfigLike {
   id: string;
@@ -88,8 +89,36 @@ export class DashboardRouter {
       return this.handleAuth(req, res);
     }
 
-    // All other /dashboard/api/* routes require session
+    // All other /dashboard/api/* routes require session OR a valid Bearer key.
+    //
+    // Two auth flows:
+    //   1. Cookie: POST /dashboard/api/auth → Set-Cookie: dashboard_session=…
+    //      (web UI; HttpOnly, SameSite=Strict).
+    //   2. Bearer: `Authorization: Bearer <key>` (programmatic/external
+    //      orchestrators that don't want cookie gymnastics). The key is the
+    //      same one the web UI posts — we timing-safe-compare its sha256 to
+    //      the in-memory key, matching auth.ts:40's comparison.
+    //
+    // Bearer failures rate-limit the same way cookie failures do so an
+    // attacker can't brute-force via either channel.
     if (url.startsWith('/dashboard/api/')) {
+      const bearer = this.extractBearerKey(req);
+      if (bearer !== null) {
+        const ip = req.socket?.remoteAddress || 'unknown';
+        if (this.isIpLockedOut(ip)) {
+          this.json(res, 429, { error: 'Too many attempts. Try again later.' });
+          return true;
+        }
+        if (this.validateBearerKey(bearer)) {
+          // Successful bearer auth — clear any prior failed-attempt counter
+          this.authAttempts.delete(ip);
+          return this.handleApi(req, res, url, query);
+        }
+        // Invalid bearer — bump the same counter cookie-auth uses
+        this.recordFailedAuthAttempt(ip);
+        this.json(res, 401, { error: 'Unauthorized' });
+        return true;
+      }
       const token = this.extractSessionToken(req);
       if (!token || !this.auth.validateSession(token)) {
         this.json(res, 401, { error: 'Unauthorized' });
@@ -115,16 +144,8 @@ export class DashboardRouter {
   }
 
   private async handleAuth(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-    // Rate limiting per IP — prune expired entries to prevent memory leak
-    const now = Date.now();
     const ip = req.socket?.remoteAddress || 'unknown';
-    if (this.authAttempts.size > 100) {
-      for (const [k, v] of this.authAttempts) {
-        if (v.lockedUntil > 0 && v.lockedUntil < now) this.authAttempts.delete(k);
-      }
-    }
-    const attempt = this.authAttempts.get(ip);
-    if (attempt && attempt.lockedUntil > now) {
+    if (this.isIpLockedOut(ip)) {
       this.json(res, 429, { error: 'Too many attempts. Try again later.' });
       return true;
     }
@@ -134,13 +155,7 @@ export class DashboardRouter {
       const { key } = JSON.parse(body);
       const token = this.auth.createSession(key);
       if (!token) {
-        const current = this.authAttempts.get(ip) || { count: 0, lockedUntil: 0 };
-        current.count++;
-        if (current.count >= AUTH_MAX_ATTEMPTS) {
-          current.lockedUntil = Date.now() + AUTH_LOCKOUT_MS;
-          current.count = 0;
-        }
-        this.authAttempts.set(ip, current);
+        this.recordFailedAuthAttempt(ip);
         this.json(res, 401, { error: 'Invalid key' });
         return true;
       }
@@ -155,6 +170,65 @@ export class DashboardRouter {
       this.json(res, 400, { error: 'Invalid request body' });
     }
     return true;
+  }
+
+  /**
+   * Shared rate-limit check for both cookie and Bearer auth. Pruning runs
+   * opportunistically when the map grows past 100 to cap memory on abusive
+   * scans without paying the cost on every request.
+   */
+  private isIpLockedOut(ip: string): boolean {
+    const now = Date.now();
+    if (this.authAttempts.size > 100) {
+      for (const [k, v] of this.authAttempts) {
+        if (v.lockedUntil > 0 && v.lockedUntil < now) this.authAttempts.delete(k);
+      }
+    }
+    const attempt = this.authAttempts.get(ip);
+    return !!(attempt && attempt.lockedUntil > now);
+  }
+
+  /**
+   * Bump the failed-attempt counter for an IP and start the lockout window
+   * once we hit AUTH_MAX_ATTEMPTS. Cookie and Bearer failures share one
+   * counter so an attacker can't double-dip.
+   */
+  private recordFailedAuthAttempt(ip: string): void {
+    const current = this.authAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+    current.count++;
+    if (current.count >= AUTH_MAX_ATTEMPTS) {
+      current.lockedUntil = Date.now() + AUTH_LOCKOUT_MS;
+      current.count = 0;
+    }
+    this.authAttempts.set(ip, current);
+  }
+
+  /**
+   * Parse `Authorization: Bearer <key>` into the raw key. Returns `null` when
+   * the header is absent or malformed so callers can fall back to cookie
+   * auth. An empty Bearer value (`Authorization: Bearer`) returns an empty
+   * string — that still routes through the invalid-key path (401 +
+   * rate-limit) so clients can't probe without penalty.
+   */
+  private extractBearerKey(req: IncomingMessage): string | null {
+    const header = req.headers['authorization'];
+    if (!header || typeof header !== 'string') return null;
+    const match = header.match(/^Bearer\s+(.*)$/i);
+    if (!match) return null;
+    return match[1].trim();
+  }
+
+  /**
+   * Timing-safe comparison between the presented Bearer key and the server's
+   * live dashboard key. Hashes both to sha256 before comparing so we don't
+   * leak length information — same pattern as auth.ts:40 for cookie auth.
+   */
+  private validateBearerKey(presented: string): boolean {
+    const expected = this.auth.getKey();
+    if (!presented || !expected) return false;
+    const a = createHash('sha256').update(presented).digest();
+    const b = createHash('sha256').update(expected).digest();
+    return timingSafeEqual(a, b);
   }
 
   private async handleApi(req: IncomingMessage, res: ServerResponse, url: string, query: URLSearchParams | null): Promise<boolean> {

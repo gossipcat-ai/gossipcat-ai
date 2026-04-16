@@ -151,6 +151,112 @@ describe('DashboardRouter', () => {
     const body = JSON.parse(res._body);
     expect(body).toHaveProperty('agentsOnline');
   });
+
+  // ─── Bearer token auth (programmatic/external orchestrator access) ───────
+  // Mirrors the cookie flow: same key, same rate limiter, same validator.
+  // Callers set `Authorization: Bearer <key>` and skip the /dashboard/api/auth
+  // round-trip entirely.
+  describe('Bearer token auth', () => {
+    it('accepts Authorization: Bearer <correct-key> on /dashboard/api/overview → 200', async () => {
+      const req = mockReq('GET', '/dashboard/api/overview', {
+        authorization: `Bearer ${auth.getKey()}`,
+      });
+      const res = mockRes();
+      await router.handle(req, res);
+      expect(res._status).toBe(200);
+      const body = JSON.parse(res._body);
+      expect(body).toHaveProperty('agentsOnline');
+    });
+
+    it('rejects Authorization: Bearer <wrong-key> → 401', async () => {
+      const req = mockReq('GET', '/dashboard/api/overview', {
+        authorization: 'Bearer not-the-real-key',
+      });
+      const res = mockRes();
+      await router.handle(req, res);
+      expect(res._status).toBe(401);
+    });
+
+    it('rejects malformed Authorization header (no Bearer prefix)', async () => {
+      // No Bearer prefix → treated as absent → falls through to cookie check
+      // which fails because no cookie is set. Either way: 401.
+      const req = mockReq('GET', '/dashboard/api/overview', {
+        authorization: auth.getKey(),
+      });
+      const res = mockRes();
+      await router.handle(req, res);
+      expect(res._status).toBe(401);
+    });
+
+    it('rate-limits repeated bad Bearer attempts from same IP', async () => {
+      // Fire 10 bad bearer attempts (AUTH_MAX_ATTEMPTS) to trip the lockout.
+      // Each mockReq gives us a fresh emitter, but mockReq doesn't set
+      // req.socket — override so the ip resolves consistently.
+      const ip = '10.20.30.40';
+      const fireBadBearer = async () => {
+        const req = mockReq('GET', '/dashboard/api/overview', {
+          authorization: 'Bearer wrong',
+        });
+        (req as any).socket = { remoteAddress: ip };
+        const res = mockRes();
+        await router.handle(req, res);
+        return res._status;
+      };
+
+      // First 10 should be plain 401 (invalid key)
+      for (let i = 0; i < 10; i++) {
+        expect(await fireBadBearer()).toBe(401);
+      }
+      // 11th should be 429 (locked out)
+      expect(await fireBadBearer()).toBe(429);
+
+      // And even a CORRECT bearer from the same IP is blocked while locked
+      const rejectedReq = mockReq('GET', '/dashboard/api/overview', {
+        authorization: `Bearer ${auth.getKey()}`,
+      });
+      (rejectedReq as any).socket = { remoteAddress: ip };
+      const rejectedRes = mockRes();
+      await router.handle(rejectedReq, rejectedRes);
+      expect(rejectedRes._status).toBe(429);
+    });
+
+    it('cookie auth still works in parallel with Bearer support', async () => {
+      // Regression guard: adding Bearer must not break the cookie flow.
+      const token = auth.createSession(auth.getKey())!;
+      const cookieReq = mockReq('GET', '/dashboard/api/overview', {
+        cookie: `dashboard_session=${token}`,
+      });
+      const cookieRes = mockRes();
+      await router.handle(cookieReq, cookieRes);
+      expect(cookieRes._status).toBe(200);
+
+      const bearerReq = mockReq('GET', '/dashboard/api/overview', {
+        authorization: `Bearer ${auth.getKey()}`,
+      });
+      const bearerRes = mockRes();
+      await router.handle(bearerReq, bearerRes);
+      expect(bearerRes._status).toBe(200);
+    });
+
+    it('successful Bearer clears prior failed-attempt counter for that IP', async () => {
+      // A legitimate client that mistyped the key once should not stay
+      // penalized after presenting the correct key.
+      const ip = '10.20.30.41';
+      const badReq = mockReq('GET', '/dashboard/api/overview', {
+        authorization: 'Bearer wrong',
+      });
+      (badReq as any).socket = { remoteAddress: ip };
+      await router.handle(badReq, mockRes());
+
+      const goodReq = mockReq('GET', '/dashboard/api/overview', {
+        authorization: `Bearer ${auth.getKey()}`,
+      });
+      (goodReq as any).socket = { remoteAddress: ip };
+      const goodRes = mockRes();
+      await router.handle(goodReq, goodRes);
+      expect(goodRes._status).toBe(200);
+    });
+  });
 });
 
 describe('URL query string handling', () => {

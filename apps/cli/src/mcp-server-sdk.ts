@@ -369,7 +369,11 @@ async function doBoot() {
   if (configPath) {
     config = m.loadConfig(configPath);
   } else {
-    process.stderr.write('[gossipcat] ⚠️  No gossip.agents.json found — booting in degraded mode (dashboard + relay only). Run gossip_setup inside Claude Code to create your agent team.\n');
+    // Match the search order in apps/cli/src/config.ts:34 — .gossip/config.json
+    // is the primary lookup, gossip.agents.json is a legacy fallback. Name the
+    // primary path so "No config found" error messages match what users see
+    // when they inspect the project directory.
+    process.stderr.write('[gossipcat] ⚠️  No .gossip/config.json found — booting in degraded mode (dashboard + relay only). Run gossip_setup inside Claude Code to create your agent team.\n');
     config = {
       main_agent: { provider: 'none', model: 'none' },
       utility_model: { provider: 'none', model: 'none' },
