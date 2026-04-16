@@ -169,6 +169,44 @@ export function restoreNativeTaskMap(projectRoot: string): void {
   } catch { /* best-effort — corrupt file is fine, just start fresh */ }
 }
 
+/** 30-day sanity clamp in ms — durations beyond this indicate a fake/guessed timestamp */
+export const RELAY_DURATION_CLAMP_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Compute relay duration with server-side fallback and sanity clamp.
+ *
+ * Priority:
+ *   1. caller-supplied agentStartedAt (actual Agent() launch time)
+ *   2. taskInfo.startedAt (server-side dispatch time, always stamped at nativeTaskMap.set)
+ *   3. null — no reference time available
+ *
+ * If the computed duration exceeds RELAY_DURATION_CLAMP_MS (30 days), the
+ * caller passed a fake/guessed epoch; treat as null and log a warning.
+ */
+export function computeRelayDuration(
+  agentStartedAt: number | undefined,
+  dispatchedAtMs: number | undefined,
+): { durationMs: number | null; source: 'caller' | 'server' | 'none' } {
+  const now = Date.now();
+  const refTime = agentStartedAt ?? dispatchedAtMs;
+
+  if (refTime === undefined) {
+    return { durationMs: null, source: 'none' };
+  }
+
+  const source = agentStartedAt !== undefined ? 'caller' : 'server';
+  const raw = now - refTime;
+
+  if (raw > RELAY_DURATION_CLAMP_MS) {
+    process.stderr.write(
+      `[gossipcat] ⚠️  relay duration clamped: raw=${raw}ms exceeds 30d (source=${source}, refTime=${refTime}) — likely a fake timestamp; emitting null\n`
+    );
+    return { durationMs: null, source };
+  }
+
+  return { durationMs: raw, source };
+}
+
 /** Handle native agent relay — feed Agent tool results back into pipeline */
 export async function handleNativeRelay(task_id: string, result: string, error?: string, agentStartedAt?: number, relayToken?: string) {
   await ctx.boot(); // [H3 fix] ensure mainAgent/pipeline are available
@@ -238,9 +276,13 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   }
 
   // Move to result map BEFORE running pipeline — prevents data loss if pipeline crashes
-  // Use agentStartedAt (actual Agent() launch time) if provided, otherwise fall back to dispatch time
-  const effectiveStart = agentStartedAt ?? taskInfo.startedAt;
-  const elapsed = Date.now() - effectiveStart;
+  // Compute duration with server-side fallback + 30d sanity clamp.
+  // dispatchedAtMs = taskInfo.startedAt (stamped at nativeTaskMap.set time).
+  const { durationMs, source: _durationSource } = computeRelayDuration(agentStartedAt, taskInfo.startedAt);
+  const elapsed = durationMs;
+  // For startedAt on the result record: prefer the original dispatch time so
+  // completedAt - startedAt is always meaningful for dashboard queries.
+  const effectiveStart = taskInfo.startedAt;
   const effectiveError = auditBlockError || error;
   const effectiveResult = auditBlockError
     ? undefined
@@ -259,7 +301,8 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   evictStaleNativeTasks();
 
   if (!taskInfo.utilityType) {
-    process.stderr.write(`[gossipcat] ${error ? '❌' : '✅'} relay ← ${taskInfo.agentId} [${task_id}] ${error ? 'FAILED' : 'OK'} (${(elapsed / 1000).toFixed(1)}s, ${result?.length ?? 0} chars)\n`);
+    const durationLabel = elapsed !== null ? `${(elapsed / 1000).toFixed(1)}s` : 'duration=unknown';
+    process.stderr.write(`[gossipcat] ${error ? '❌' : '✅'} relay ← ${taskInfo.agentId} [${task_id}] ${error ? 'FAILED' : 'OK'} (${durationLabel}, ${result?.length ?? 0} chars)\n`);
   }
 
   // Release scope if this native task held one
@@ -276,7 +319,8 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   })();
 
   // 0. Record in TaskGraph (makes native tasks visible to CLI + Supabase sync)
-  try { ctx.mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined, elapsed); } catch { /* best-effort */ }
+  // Pass null duration through — recordNativeTaskCompleted handles undefined/null via ?? -1
+  try { ctx.mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined, elapsed ?? undefined); } catch { /* best-effort */ }
 
   // 0a. Auto-record impl signal for write-mode tasks (gate on error param only — string heuristics are unreliable)
   if (taskInfo.writeMode && !taskInfo.utilityType && agentId !== '_utility') {
@@ -315,7 +359,9 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       // as never-using-tools and fire spurious skill-gap alerts. task_completed
       // and format_compliance stay (both ARE observable from our side).
       metaWriter.appendSignals([
-        { type: 'meta' as const, signal: 'task_completed', agentId, taskId: task_id, value: elapsed, timestamp: now } as any,
+        // Skip task_completed signal when duration is null — emitting value: null
+        // would produce misleading analytics (treated as 0ms by downstream scorers).
+        ...(elapsed !== null ? [{ type: 'meta' as const, signal: 'task_completed', agentId, taskId: task_id, value: elapsed, timestamp: now } as any] : []),
         {
           type: 'meta' as const,
           signal: 'format_compliance',
@@ -394,7 +440,8 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     const utilityLabel = taskInfo.utilityType === 'summary' ? 'cognitive-summary'
       : taskInfo.utilityType === 'gossip' ? 'gossip-publish'
       : taskInfo.utilityType;
-    process.stderr.write(`[gossipcat] ✅ utility ← ${utilityLabel} [${task_id}] OK (${(elapsed / 1000).toFixed(1)}s)\n`);
+    const utilDurationLabel = elapsed !== null ? `${(elapsed / 1000).toFixed(1)}s` : 'duration=unknown';
+    process.stderr.write(`[gossipcat] ✅ utility ← ${utilityLabel} [${task_id}] OK (${utilDurationLabel})\n`);
   }
 
   // Result already stored in nativeResultMap at top of handler (crash-safe)
@@ -465,7 +512,8 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // Never echo the full result back — it wastes ~3000 tokens per relay.
   // Primary payload: ≤400-char cognitive summary when available; otherwise a
   // truncated 800-char preview with an explicit note that summarization was skipped.
-  const status = error ? `failed (${elapsed}ms): ${error.slice(0, 200)}` : `completed (${elapsed}ms)`;
+  const elapsedLabel = elapsed !== null ? `${elapsed}ms` : 'unknown';
+  const status = error ? `failed (${elapsedLabel}): ${error.slice(0, 200)}` : `completed (${elapsedLabel})`;
   const resultLen = result?.length ?? 0;
   const retrievalHint = `Full result (${resultLen} chars) stored in session-gossip.jsonl; use gossip_remember(${agentId}, query) for depth`;
 
