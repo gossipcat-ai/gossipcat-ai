@@ -86,13 +86,7 @@ export function startConsensusTimeout(consensusId: string): void {
           newFindings: report.newFindings || [],
           timedOut: missingAgents,
           ...(report.droppedFindingsByType ? { droppedFindingsByType: report.droppedFindingsByType } : {}),
-          // authorDiagnostics is a new ConsensusReport field; cast during the
-          // worktree/master split so this file builds while master's dist
-          // hasn't picked up the field yet. Once this branch merges and the
-          // next build runs in master, the cast can be removed.
-          ...((report as unknown as { authorDiagnostics?: Record<string, unknown[]> }).authorDiagnostics
-            ? { authorDiagnostics: (report as unknown as { authorDiagnostics?: Record<string, unknown[]> }).authorDiagnostics }
-            : {}),
+          ...(report.authorDiagnostics ? { authorDiagnostics: report.authorDiagnostics } : {}),
         }, null, 2));
       } catch { /* best-effort */ }
 
@@ -278,10 +272,7 @@ export async function handleRelayCrossReview(
         insights: report.insights || [],
         newFindings: report.newFindings || [],
         ...(report.droppedFindingsByType ? { droppedFindingsByType: report.droppedFindingsByType } : {}),
-        // See note above about worktree/master split.
-        ...((report as unknown as { authorDiagnostics?: Record<string, unknown[]> }).authorDiagnostics
-          ? { authorDiagnostics: (report as unknown as { authorDiagnostics?: Record<string, unknown[]> }).authorDiagnostics }
-          : {}),
+        ...(report.authorDiagnostics ? { authorDiagnostics: report.authorDiagnostics } : {}),
       }, null, 2));
     } catch { /* best-effort */ }
 

@@ -123,9 +123,9 @@ export interface ConsensusReport {
 export type ParseDiagnostic =
   | { code: 'HTML_ENTITY_ENCODED_TAGS'; message: string; entityTagCount: number }
   | { code: 'HTML_ENTITY_MIXED_PAYLOAD'; message: string; rawTagCount: number; entityTagCount: number }
-  | { code: 'SCHEMA_DRIFT_UNKNOWN_TYPE'; message: string; offendingTypes: Record<string, number> }
-  | { code: 'SCHEMA_DRIFT_MISSING_TYPE'; message: string; count: number }
-  | { code: 'SCHEMA_DRIFT_SHORT_CONTENT'; message: string; count: number };
+  | { code: 'SCHEMA_DRIFT_PHASE2_VERDICT_TOKENS'; message: string; matchedTokens: string[] }
+  | { code: 'SCHEMA_DRIFT_INVENTED_TYPE_TOKENS'; message: string; matchedTokens: string[] }
+  | { code: 'SCHEMA_DRIFT_NESTED_SUBTAGS'; message: string; subtagTypes: string[] };
 
 export interface ConsensusReportsData {
   reports: ConsensusReport[];
