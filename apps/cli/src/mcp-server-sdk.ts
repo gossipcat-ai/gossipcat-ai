@@ -2093,7 +2093,12 @@ server.tool(
       try {
         const { recordDispatchMetadata } = require('./sandbox');
         recordDispatchMetadata(process.cwd(), {
-          taskId, agentId: agent_id, writeMode: write_mode, scope, timestamp: Date.now(),
+          taskId, agentId: agent_id, writeMode: write_mode, scope,
+          // worktreePath is learned AFTER WorktreeManager.create() runs
+          // inside dispatchPipeline. It's filled in via updateDispatchMetadata
+          // below once the pipeline completes and getTask exposes the path.
+          worktreePath: undefined,
+          timestamp: Date.now(),
         });
       } catch { /* best-effort */ }
       persistRelayTasks(); // Survive MCP reconnects — mirrors dispatch.ts pattern
@@ -2101,14 +2106,47 @@ server.tool(
       persistRelayTasks(); // Clear completed task from relay-tasks.json
       const entry = collectResult.results[0];
 
+      // Write back the worktree path if this was a worktree dispatch — it
+      // was created by WorktreeManager during pipeline execution and is
+      // needed by the Layer 3 audit to exclude the agent's own worktree.
+      if (write_mode === 'worktree') {
+        try {
+          const task = ctx.mainAgent.getTask(taskId);
+          const wtPath = (task as any)?.worktreeInfo?.path;
+          if (wtPath) {
+            const { updateDispatchMetadata } = require('./sandbox');
+            updateDispatchMetadata(process.cwd(), taskId, { worktreePath: wtPath });
+          }
+        } catch { /* best-effort */ }
+      }
+
+      // Layer 3 `find -newer` filesystem audit. Catches shell-quoted,
+      // tilde-expanded, and env-var derived path bypasses that Layer 2
+      // (PreToolUse hook) cannot see. Fail-open — never propagates.
+      let auditWarn = '';
+      let auditBlock: string | null = null;
+      if (entry && entry.status === 'completed' && (write_mode === 'scoped' || write_mode === 'worktree')) {
+        try {
+          const { runLayer3Audit } = require('./sandbox');
+          const { blockError, warnPrefix } = runLayer3Audit(process.cwd(), taskId);
+          auditBlock = blockError;
+          auditWarn = warnPrefix;
+        } catch { /* best-effort — audit failure must not break dispatch */ }
+      }
+
       if (!entry) {
         return { content: [{ type: 'text' as const, text: `Task ${taskId} returned no result.` }] };
       }
 
       const elapsed = (entry.completedAt || Date.now()) - (entry.startedAt || Date.now());
-      const output = entry.status === 'completed'
-        ? entry.result || '[No response from agent]'
-        : `Error: ${entry.error || 'Task failed'}`;
+      let output: string;
+      if (auditBlock) {
+        output = `Error: ${auditBlock}`;
+      } else if (entry.status === 'completed') {
+        output = auditWarn + (entry.result || '[No response from agent]');
+      } else {
+        output = `Error: ${entry.error || 'Task failed'}`;
+      }
 
       return {
         content: [{ type: 'text' as const, text: `[${taskId}] ${agent_id} (${elapsed}ms):\n${output}` }],

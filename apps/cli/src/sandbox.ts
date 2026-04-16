@@ -4,20 +4,38 @@
  * Claude Code's Agent isolation:"worktree" and gossipcat's write_mode:"scoped"
  * are ADVISORY only at the harness layer: Edit/Write tools accept absolute
  * paths and silently bypass containment. Until that ships, gossipcat adds its
- * own soft enforcement via two mitigations:
+ * own soft enforcement via three layers:
  *
- *   1. relativizeProjectPaths — rewrite absolute project paths in the task
- *      prompt to relative paths, so agents don't learn the absolute prefix.
- *   2. auditDispatchBoundary — after a task relays its result, run
- *      `git status --porcelain` and flag any modified files outside the
- *      declared scope/worktree boundary.
+ *   Layer 1. relativizeProjectPaths — rewrite absolute project paths in the
+ *      task prompt to relative paths, so agents don't learn the absolute prefix.
+ *   Layer 2. PreToolUse hook (assets/hooks/worktree-sandbox.sh) — deny
+ *      absolute-path writes by worktree agents at harness time. Catches
+ *      literal absolute paths.
+ *   Layer 3. auditFilesystemSinceSentinel — POSIX `find -newer` audit that
+ *      runs after dispatch. Catches bypasses Layer 2 cannot see: shell-quoted
+ *      paths, tilde expansion (~/x), env-var derived paths ($HOME/y). Scans
+ *      the real filesystem for any file touched during the dispatch window.
+ *   Also: auditDispatchBoundary — `git status --porcelain` audit that flags
+ *      modified tracked/untracked files outside the declared scope.
  *
- * Both are best-effort. A determined agent can still invoke shell tools or
+ * All are best-effort. A determined agent can still invoke shell tools or
  * reconstruct paths. The durable fix is a Claude Code harness change.
  */
-import { execSync } from 'child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
-import { isAbsolute, join, normalize, relative, sep } from 'path';
+import { execFileSync, execSync } from 'child_process';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'fs';
+import { homedir, tmpdir } from 'os';
+import { isAbsolute, join, normalize, relative, resolve, sep } from 'path';
 
 export type SandboxMode = 'off' | 'warn' | 'block';
 
@@ -33,10 +51,14 @@ export interface DispatchMetadata {
   /** Pre-task git status snapshot. Used to distinguish agent-created files
    * from pre-existing untracked files during boundary audit. */
   preTaskFiles?: string[];
+  /** Absolute path to the per-task sentinel file stamped at dispatch time.
+   * Its mtime is the `-newer` anchor for the Layer 3 filesystem audit. */
+  sentinelPath?: string;
 }
 
 const METADATA_FILE = 'dispatch-metadata.jsonl';
 const BOUNDARY_ESCAPE_FILE = 'boundary-escapes.jsonl';
+const SENTINEL_DIR = 'sentinels';
 
 // Paths that agents legitimately write outside their declared boundary.
 // These are infrastructure artifacts, not application code — false-positive
@@ -167,7 +189,9 @@ export function readSandboxMode(projectRoot: string): SandboxMode {
 /** Append a dispatch metadata record to .gossip/dispatch-metadata.jsonl.
  * Captures a pre-task git status snapshot when writeMode is scoped/worktree
  * so the boundary audit can subtract pre-existing untracked files from the
- * violation set. */
+ * violation set. Also stamps a per-task sentinel file whose mtime serves as
+ * the `-newer` anchor for the Layer 3 filesystem audit (see
+ * auditFilesystemSinceSentinel). */
 export function recordDispatchMetadata(projectRoot: string, meta: DispatchMetadata): void {
   try {
     const dir = join(projectRoot, '.gossip');
@@ -182,10 +206,97 @@ export function recordDispatchMetadata(projectRoot: string, meta: DispatchMetada
         });
         snapshotted.preTaskFiles = parseGitStatus(porcelain);
       } catch { /* git unavailable — audit will treat all files as new */ }
+
+      // Stamp a per-task sentinel. Concurrent dispatches race if they share a
+      // single sentinel, so every task gets its own file keyed by taskId.
+      try {
+        const sentinelPath = stampTaskSentinel(projectRoot, meta.taskId);
+        if (sentinelPath) snapshotted.sentinelPath = sentinelPath;
+      } catch { /* best-effort — audit fail-opens if sentinel missing */ }
     }
     appendFileSync(join(dir, METADATA_FILE), JSON.stringify(snapshotted) + '\n');
   } catch {
     /* best-effort */
+  }
+}
+
+/**
+ * Merge a partial patch into the LAST matching dispatch metadata record for
+ * the given task ID. Use this when information learned AFTER dispatch (e.g.
+ * the worktree path returned by WorktreeManager.create() or by Claude Code's
+ * Agent({isolation:"worktree"}) invocation) must be written back so the
+ * post-dispatch Layer 3 audit can exclude the task's own worktree.
+ *
+ * Best-effort: silently returns false on any I/O or parse failure. Rewrites
+ * the entire JSONL file; callers should not rely on exact line ordering.
+ */
+export function updateDispatchMetadata(
+  projectRoot: string,
+  taskId: string,
+  patch: Partial<DispatchMetadata>,
+): boolean {
+  try {
+    const p = join(projectRoot, '.gossip', METADATA_FILE);
+    if (!existsSync(p)) return false;
+    const raw = readFileSync(p, 'utf-8');
+    const lines = raw.split('\n');
+    let patched = false;
+    // Iterate from the tail so the LAST matching record wins.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line) as DispatchMetadata;
+        if (entry.taskId === taskId) {
+          const merged = { ...entry, ...patch };
+          lines[i] = JSON.stringify(merged);
+          patched = true;
+          break;
+        }
+      } catch {
+        /* skip corrupt line */
+      }
+    }
+    if (!patched) return false;
+    writeFileSync(p, lines.join('\n'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Create (or refresh) a per-task sentinel file. mtime = dispatch start.
+ * Returns the absolute path or null on failure. Pure helper — no logging. */
+export function stampTaskSentinel(projectRoot: string, taskId: string): string | null {
+  if (!taskId) return null;
+  try {
+    const dir = join(projectRoot, '.gossip', SENTINEL_DIR);
+    mkdirSync(dir, { recursive: true });
+    // Sanitize taskId to a filesystem-safe slug. Task IDs are already
+    // [a-zA-Z0-9_-] per dispatch validation, but belt-and-suspenders.
+    const slug = taskId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const path = join(dir, `${slug}.sentinel`);
+    // Open O_CREAT|O_WRONLY to create empty, then utimes to stamp NOW with
+    // millisecond precision. `find -newer` on most POSIX systems uses whole
+    // seconds, but on platforms that support mtim we get better resolution.
+    const fd = openSync(path, 'w');
+    closeSync(fd);
+    // Backdate 2s so files written in the same second as the stamp are included by find -newer (strictly-greater semantics + 1s filesystem granularity).
+    const stampTime = new Date(Date.now() - 2000);
+    utimesSync(path, stampTime, stampTime);
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+/** Remove a per-task sentinel. Idempotent — missing file is fine. */
+export function cleanupTaskSentinel(sentinelPath: string | undefined): void {
+  if (!sentinelPath) return;
+  try {
+    unlinkSync(sentinelPath);
+  } catch {
+    /* idempotent — file may have been cleaned already */
   }
 }
 
@@ -401,11 +512,319 @@ function recordBoundaryEscape(
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Layer 3: post-dispatch `find -newer` filesystem audit
+//
+// Layer 2 (PreToolUse hook) gates literal-string path arguments. It cannot see
+// tilde expansion, env-var derived paths, or shell-quoted paths — those are
+// resolved by the shell or Node after the hook has already returned allow.
+// Layer 3 closes that gap by scanning the filesystem after the agent finishes
+// for any file modified during the dispatch window.
+//
+// Scope roots (what we scan):
+//   - $HOME          — catches ~/x and $HOME/x bypasses
+//   - tmpdir()       — catches /tmp/x bypasses (also covers /private/tmp on
+//                      macOS because tmpdir() returns /var/folders/..., but
+//                      we add /tmp and /private/tmp explicitly for macOS's
+//                      shell-default $TMPDIR habit)
+//
+// Exclusions (not a bypass — legitimate write targets):
+//   - The current task's own worktree (meta.worktreePath), if set. For
+//     relay dispatch via WorktreeManager this is /tmp/gossip-wt-<hash>;
+//     we also generate the /private/tmp/... twin on macOS.
+//   - Native Claude Code worktrees live under <projectRoot>/.claude/worktrees/
+//     — covered by the blanket .claude exclusion, so meta.worktreePath can
+//     stay undefined for native dispatch without false positives.
+//   - .gossip/ — sentinel dir, metadata JSONL, etc.
+//   - Peer worktrees are INTENTIONALLY NOT excluded. They are separate
+//     isolation zones; writes to a peer's worktree are cross-contamination
+//     bypasses, not legitimate traffic.
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface Layer3AuditResult {
+  violations: string[];
+  skipped?: string;
+}
+
+interface Layer3AuditOptions {
+  /** Extra cwd the agent ran in. When set, files under it are excluded
+   * from the audit (they are legitimate writes to the worktree). */
+  worktreePath?: string;
+  /** Override the scan roots (tests). Defaults to $HOME + tmpdir() + /tmp +
+   * /private/tmp (dedup'd). */
+  scanRoots?: string[];
+  /** Override `process.platform` (tests). */
+  platform?: NodeJS.Platform;
+  /** Override the find binary (tests). */
+  findBinary?: string;
+  /** Swallow child_process errors — defaults to true. Tests can flip this. */
+  logFailures?: boolean;
+}
+
+/** Canonicalize a path for comparison — resolve symlinks when the file exists
+ * and always strip a trailing separator. Never throws. */
+function canonicalize(p: string): string {
+  try {
+    // `realpathSync` would resolve symlinks, but it throws on non-existent
+    // paths. We prefer `resolve` (normalizes + absolutizes without touching
+    // the filesystem) so this function is total. Symlink mismatch between
+    // /tmp and /private/tmp on macOS is handled by including both in the
+    // scan/exclusion lists.
+    return resolve(p).replace(/\/+$/, '') || '/';
+  } catch {
+    return p.replace(/\/+$/, '') || '/';
+  }
+}
+
+/** Compute the default scan roots. Exposed for tests. */
+export function defaultScanRoots(): string[] {
+  const out = new Set<string>();
+  try { out.add(canonicalize(homedir())); } catch { /* ignore */ }
+  try { out.add(canonicalize(tmpdir())); } catch { /* ignore */ }
+  // macOS's shell-level TMPDIR often points into /var/folders/..., but
+  // `/tmp` and `/private/tmp` are the classic bypass drops. Include both
+  // defensively — find will silently skip missing roots.
+  out.add('/tmp');
+  out.add('/private/tmp');
+  return Array.from(out);
+}
+
+/**
+ * Emit both /tmp and /private/tmp variants of a path so `find -not -path`
+ * matches whichever form `find` surfaces on macOS (where /tmp is a symlink
+ * to /private/tmp and the kernel reports the resolved form for files opened
+ * via either). Lexical-only — never touches the filesystem.
+ */
+export function expandTmpVariants(path: string): string[] {
+  const p = path.replace(/\/+$/, '') || '/';
+  if (p === '/tmp' || p.startsWith('/tmp/')) {
+    return [p, '/private' + p];
+  }
+  if (p === '/private/tmp' || p.startsWith('/private/tmp/')) {
+    return [p, p.replace(/^\/private/, '')];
+  }
+  return [p];
+}
+
+/** Build the exclusion list for the Layer 3 audit. The current task's own
+ * worktree is excluded; peer worktrees stay in scope (they are separate
+ * isolation zones — cross-contamination IS a bypass). For /tmp paths both
+ * /tmp and /private/tmp variants are emitted so macOS realpath quirks don't
+ * produce false positives. */
+export function buildAuditExclusions(
+  projectRoot: string,
+  ownWorktree: string | undefined,
+): string[] {
+  const excl = new Set<string>();
+  const root = canonicalize(projectRoot);
+  for (const v of expandTmpVariants(`${root}/.gossip`)) excl.add(v);
+  for (const v of expandTmpVariants(`${root}/.claude`)) excl.add(v);
+  if (ownWorktree) {
+    const wt = canonicalize(ownWorktree);
+    for (const v of expandTmpVariants(wt)) excl.add(v);
+  }
+  return Array.from(excl);
+}
+
+/**
+ * Post-dispatch `find -newer <sentinel>` audit. Walks scan roots and records
+ * any file modified after the sentinel's mtime that is NOT inside the
+ * current task's worktree or a gossipcat infrastructure directory.
+ *
+ * Contract:
+ *   - Windows: skipped (POSIX-only primitive). Logged, not failed.
+ *   - `find` error: logged, empty result returned. MUST NOT propagate.
+ *   - Sentinel missing: skipped with reason. Audit fail-opens.
+ *   - Any violations: appended to .gossip/boundary-escapes.jsonl with
+ *     source='layer3-audit', one line per violating path.
+ */
+export function auditFilesystemSinceSentinel(
+  projectRoot: string,
+  meta: DispatchMetadata,
+  options: Layer3AuditOptions = {},
+): Layer3AuditResult {
+  const platform = options.platform ?? process.platform;
+  const logFailures = options.logFailures ?? true;
+
+  if (platform === 'win32') {
+    if (logFailures) {
+      process.stderr.write(
+        `[gossipcat] Layer 3 audit skipped (win32: find -newer is POSIX-only)\n`,
+      );
+    }
+    return { violations: [], skipped: 'win32' };
+  }
+
+  const sentinel = meta.sentinelPath;
+  if (!sentinel || !existsSync(sentinel)) {
+    return { violations: [], skipped: 'sentinel missing' };
+  }
+
+  // Sanity check: sentinel must be newer than the epoch. `find -newer` on
+  // a broken sentinel would return everything.
+  let sentinelMtimeMs = 0;
+  try { sentinelMtimeMs = statSync(sentinel).mtimeMs; } catch { /* ignore */ }
+  if (sentinelMtimeMs === 0) {
+    return { violations: [], skipped: 'sentinel stat failed' };
+  }
+
+  const scanRoots = options.scanRoots ?? defaultScanRoots();
+  const exclusions = buildAuditExclusions(projectRoot, meta.worktreePath);
+  const findBin = options.findBinary ?? 'find';
+
+  const violations: string[] = [];
+
+  for (const root of scanRoots) {
+    if (!existsSync(root)) continue;
+    const canonRoot = canonicalize(root);
+
+    // Build `find <root> -newer <sentinel> -type f ( -not -path "<excl>/*" )...`
+    // We pipe each excluded dir as -not -path patterns. `find` treats
+    // -path as a glob match against the full path.
+    const args: string[] = [canonRoot, '-type', 'f', '-newer', sentinel];
+
+    // Always exclude the sentinel dir itself (stamping it bumps its own
+    // mtime and would otherwise self-match if tmpdir == .gossip path).
+    // buildAuditExclusions already emits /tmp + /private/tmp twins for its
+    // inputs; do the same for the sentinel dir so both forms are covered.
+    const sentinelDir = canonicalize(join(projectRoot, '.gossip', SENTINEL_DIR));
+    const allExcl = [...exclusions, ...expandTmpVariants(sentinelDir)];
+    for (const e of allExcl) {
+      args.push('-not', '-path', e);
+      args.push('-not', '-path', `${e}/*`);
+    }
+
+    try {
+      // Use execFileSync (no shell) so exclusions are passed as literal args.
+      // Set a hard timeout to prevent a stuck find from blocking relay.
+      const out = execFileSync(findBin, args, {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 30_000,
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      for (const line of out.split('\n')) {
+        const p = line.trim();
+        if (!p) continue;
+        violations.push(p);
+      }
+    } catch (err) {
+      // Fail-open: log and continue. Audit failure must not block the
+      // dispatch result from returning to the orchestrator.
+      if (logFailures) {
+        const msg = (err as Error).message || String(err);
+        process.stderr.write(
+          `[gossipcat] Layer 3 audit: find failed under '${canonRoot}': ${msg}\n`,
+        );
+      }
+      continue;
+    }
+  }
+
+  if (violations.length > 0) {
+    recordLayer3Violations(projectRoot, meta, violations);
+    if (logFailures) {
+      process.stderr.write(
+        `[gossipcat] ⚠ Layer 3 BOUNDARY ESCAPE: ${meta.agentId} task ${meta.taskId} touched ${violations.length} path(s) outside worktree:\n` +
+          violations.slice(0, 20).map(v => `    ${v}`).join('\n') +
+          '\n',
+      );
+    }
+  }
+
+  return { violations };
+}
+
+/** Append one entry per violating path to boundary-escapes.jsonl. Shape
+ * mirrors Layer 2's `recordBoundaryEscape`: `violatingPaths` is a
+ * 1-element array per line (Layer 3 does NOT aggregate across paths so the
+ * audit trail stays path-granular, but the field type matches Layer 2 so
+ * downstream readers can parse either source with one shape). */
+function recordLayer3Violations(
+  projectRoot: string,
+  meta: DispatchMetadata,
+  violations: string[],
+): void {
+  try {
+    const dir = join(projectRoot, '.gossip');
+    mkdirSync(dir, { recursive: true });
+    const ts = new Date().toISOString();
+    const lines = violations.map(path =>
+      JSON.stringify({
+        timestamp: ts,
+        taskId: meta.taskId,
+        agentId: meta.agentId,
+        violatingPaths: [path],
+        source: 'layer3-audit',
+      }),
+    );
+    appendFileSync(join(dir, BOUNDARY_ESCAPE_FILE), lines.join('\n') + '\n');
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Run the full Layer 3 audit flow for a task: look up metadata, run
+ * `find -newer` audit, format the violation message, clean the sentinel.
+ *
+ * Returns:
+ *   - `blockError`: populated when enforcement is "block" and violations
+ *     were detected. Callers should mark the task as failed and surface
+ *     this error to consensus/memory.
+ *   - `warnPrefix`: populated when enforcement is "warn" and violations
+ *     were detected. Callers should prepend this to the task output so the
+ *     violation shows up in the result.
+ *
+ * Idempotent with respect to sentinel cleanup — always runs regardless of
+ * outcome. Fail-open: any internal error (including missing metadata, dead
+ * sentinel, or `find` crash) is logged and swallowed. The caller never
+ * sees a thrown error.
+ */
+export function runLayer3Audit(
+  projectRoot: string,
+  taskId: string,
+): { blockError: string | null; warnPrefix: string } {
+  let blockError: string | null = null;
+  let warnPrefix = '';
+  try {
+    const enforcement = readSandboxMode(projectRoot);
+    if (enforcement === 'off') return { blockError, warnPrefix };
+    const meta = lookupDispatchMetadata(projectRoot, taskId);
+    if (!meta) return { blockError, warnPrefix };
+    if (meta.writeMode !== 'scoped' && meta.writeMode !== 'worktree') {
+      return { blockError, warnPrefix };
+    }
+    try {
+      const l3 = auditFilesystemSinceSentinel(projectRoot, meta);
+      if (l3.violations && l3.violations.length > 0) {
+        const list = l3.violations.slice(0, 20).join(', ');
+        if (enforcement === 'block') {
+          blockError = `LAYER 3 BOUNDARY ESCAPE — task touched ${l3.violations.length} path(s) outside worktree. First: ${list}`;
+        } else {
+          warnPrefix = `⚠ LAYER 3 BOUNDARY ESCAPE (warn): ${l3.violations.length} path(s) touched outside worktree — ${list}\n\n`;
+        }
+      }
+    } catch (l3Err) {
+      process.stderr.write(`[gossipcat] Layer 3 audit failed: ${(l3Err as Error).message}\n`);
+    } finally {
+      // Idempotent sentinel cleanup: always remove regardless of outcome.
+      cleanupTaskSentinel(meta.sentinelPath);
+    }
+  } catch (err) {
+    process.stderr.write(`[gossipcat] runLayer3Audit failed: ${(err as Error).message}\n`);
+  }
+  return { blockError, warnPrefix };
+}
+
 // Internal helpers exported for tests
 export const __test__ = {
   normalizeScope,
   isSystemPath,
   isBoundaryAllowed,
+  canonicalize,
+  expandTmpVariants,
   SYSTEM_PREFIXES,
   BOUNDARY_ALLOWLIST,
+  SENTINEL_DIR,
 };

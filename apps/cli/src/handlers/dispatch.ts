@@ -195,12 +195,18 @@ export async function handleDispatchSingle(
     });
     if (sanitizeResult.sanitized) agentPrompt = prependScopeNote(agentPrompt);
 
-    // Record dispatch metadata for the post-task audit
+    // Record dispatch metadata for the post-task audit.
+    // For native worktree dispatch the path is created by Claude Code's
+    // Agent({isolation:"worktree"}) out-of-process and not returned to us;
+    // it stays undefined. The Layer 3 audit relies on its blanket
+    // `.claude/worktrees/` exclusion (see buildAuditExclusions) so native
+    // worktree writes are not falsely flagged.
     recordDispatchMetadata(process.cwd(), {
       taskId,
       agentId: agent_id,
       writeMode: write_mode,
       scope,
+      worktreePath: undefined,
       timestamp: Date.now(),
     });
 
@@ -236,11 +242,17 @@ export async function handleDispatchSingle(
 
   try {
     const { taskId } = ctx.mainAgent.dispatch(agent_id, task, dispatchOptions as any);
+    // For relay worktree dispatch the path is filled in by the async
+    // runTask() inside dispatch-pipeline after WorktreeManager.create().
+    // Record undefined here; the callback side (gossip_run completion or
+    // collect path) updates the metadata via updateDispatchMetadata once
+    // getTask exposes `worktreeInfo.path`.
     recordDispatchMetadata(process.cwd(), {
       taskId,
       agentId: agent_id,
       writeMode: write_mode,
       scope,
+      worktreePath: undefined,
       timestamp: Date.now(),
     });
     persistRelayTasks(); // Survive MCP reconnects
@@ -305,11 +317,14 @@ export async function handleDispatchParallel(
       const t = ctx.mainAgent.getTask(tid);
       lines.push(`  ${tid} → ${t?.agentId || 'unknown'} (relay)`);
       if (def) {
+        // Relay worktree path is async (created during pipeline runTask());
+        // record undefined here and fill via updateDispatchMetadata later.
         recordDispatchMetadata(process.cwd(), {
           taskId: tid,
           agentId: def.agent_id,
           writeMode: def.write_mode as any,
           scope: def.scope,
+          worktreePath: undefined,
           timestamp: Date.now(),
         });
       }
@@ -386,6 +401,10 @@ export async function handleDispatchParallel(
       agentId: def.agent_id,
       writeMode: def.write_mode as any,
       scope: def.scope,
+      // Native worktree = Claude Code's Agent({isolation:"worktree"}) which
+      // we cannot observe from here; stays undefined. The `.claude/worktrees/`
+      // exclusion in buildAuditExclusions covers native worktrees.
+      worktreePath: undefined,
       timestamp: Date.now(),
     });
 
