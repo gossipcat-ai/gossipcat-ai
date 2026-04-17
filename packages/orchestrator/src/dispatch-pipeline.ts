@@ -13,8 +13,8 @@ import { TaskGraph } from './task-graph';
 import { SkillCatalog } from './skill-catalog';
 import { SkillGapTracker } from './skill-gap-tracker';
 import { GossipPublisher } from './gossip-publisher';
-import { PerformanceWriter } from './performance-writer';
-import { MetaSignal } from './consensus-types';
+import { PerformanceWriter, rotateJsonlIfNeeded } from './performance-writer';
+import { MetaSignal, PipelineSignal } from './consensus-types';
 import { ScopeTracker } from './scope-tracker';
 import { WorktreeManager } from './worktree-manager';
 import { TaskGraphSync } from './task-graph-sync';
@@ -419,7 +419,9 @@ export class DispatchPipeline {
             try {
               const elapsedMs = (entry.completedAt ?? Date.now()) - entry.startedAt;
               log(`✅ relay ← ${entry.agentId} [${entry.id}] OK (${(elapsedMs / 1000).toFixed(1)}s, ${(event.payload.result || '').length} chars)`);
-              appendFileSync(join(this.projectRoot, '.gossip', 'task-graph.jsonl'), JSON.stringify({
+              const taskGraphPath = join(this.projectRoot, '.gossip', 'task-graph.jsonl');
+              rotateJsonlIfNeeded(taskGraphPath);
+              appendFileSync(taskGraphPath, JSON.stringify({
                 type: 'task.completed',
                 taskId: entry.id,
                 agentId: entry.agentId,
@@ -440,7 +442,27 @@ export class DispatchPipeline {
                 { type: 'meta', signal: 'task_tool_turns', agentId: entry.agentId, taskId: entry.id, value: entry.toolCalls ?? 0, timestamp: now },
                 { type: 'meta', signal: 'format_compliance', agentId: entry.agentId, taskId: entry.id, value: compliance.formatCompliant ? 1 : 0, metadata: { findingCount: compliance.findingCount, citationCount: compliance.citationCount, tags_total: compliance.tags_total, tags_accepted: compliance.tags_accepted, tags_dropped_unknown_type: compliance.tags_dropped_unknown_type, tags_dropped_short_content: compliance.tags_dropped_short_content, diagnostic_codes: compliance.diagnostics.map(d => d.code) }, timestamp: now },
               ];
-              perfWriter.appendSignals(metaSignals);
+              // Priority pipeline emission: finding_dropped_format. Fires whenever
+              // parseAgentFindingsStrict drops tags by unknown type or short
+              // content. This is the event that would have caught the drop-gate
+              // bug in-session. Zero extra LLM cost; reuses detectFormatCompliance.
+              const droppedTotal = compliance.tags_dropped_unknown_type + compliance.tags_dropped_short_content;
+              const pipelineSignals: PipelineSignal[] = droppedTotal > 0 ? [{
+                type: 'pipeline',
+                signal: 'finding_dropped_format',
+                agentId: entry.agentId,
+                taskId: entry.id,
+                value: droppedTotal,
+                metadata: {
+                  tags_total: compliance.tags_total,
+                  tags_accepted: compliance.tags_accepted,
+                  tags_dropped_unknown_type: compliance.tags_dropped_unknown_type,
+                  tags_dropped_short_content: compliance.tags_dropped_short_content,
+                  diagnostic_codes: compliance.diagnostics.map(d => d.code),
+                },
+                timestamp: now,
+              }] : [];
+              perfWriter.appendSignals([...metaSignals, ...pipelineSignals]);
             } catch { /* best-effort — never crash dispatch on signal write failure */ }
             return event.payload;
           case TaskStreamEventType.ERROR:
@@ -456,7 +478,9 @@ export class DispatchPipeline {
             try {
               const elapsedMs = (entry.completedAt ?? Date.now()) - entry.startedAt;
               log(`❌ relay ← ${entry.agentId} [${entry.id}] FAILED (${(elapsedMs / 1000).toFixed(1)}s) — ${event.payload.error}`);
-              appendFileSync(join(this.projectRoot, '.gossip', 'task-graph.jsonl'), JSON.stringify({
+              const taskGraphPathF = join(this.projectRoot, '.gossip', 'task-graph.jsonl');
+              rotateJsonlIfNeeded(taskGraphPathF);
+              appendFileSync(taskGraphPathF, JSON.stringify({
                 type: 'task.failed',
                 taskId: entry.id,
                 agentId: entry.agentId,

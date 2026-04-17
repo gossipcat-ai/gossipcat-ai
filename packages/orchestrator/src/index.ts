@@ -57,7 +57,7 @@ export { installWorktreeSandboxHook, findBundledHook } from './hook-installer';
 export type { HookInstallResult } from './hook-installer';
 export { OverlapDetector } from './overlap-detector';
 export { LensGenerator } from './lens-generator';
-export { PerformanceWriter } from './performance-writer';
+export { PerformanceWriter, rotateJsonlIfNeeded, MAX_TELEMETRY_BYTES } from './performance-writer';
 export { PerformanceReader } from './performance-reader';
 export type { AgentScore } from './performance-reader';
 export { ConsensusEngine } from './consensus-engine';

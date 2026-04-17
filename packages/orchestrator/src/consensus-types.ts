@@ -170,5 +170,30 @@ export interface MetaSignal {
   timestamp: string;
 }
 
+/**
+ * Pipeline signal — orchestrator self-telemetry. System-scoped (no agentId
+ * required). Separate from MetaSignal (which is agent-scoped per-task) so
+ * per-agent aggregation in performance-reader is not corrupted by system
+ * events that use the `_system` sentinel. Consensus 2f67418b-e8a74d56.
+ */
+export interface PipelineSignal {
+  type: 'pipeline';
+  signal:
+    | 'dispatch_started'
+    | 'relay_received'
+    | 'finding_dropped_format'
+    | 'synthesis_completed'
+    | 'circuit_open_fired'
+    | 'skill_injection_skipped'
+    | 'signal_retracted';
+  /** Real agentId for agent-scoped events; '_system' for system-scoped events. */
+  agentId: string;
+  taskId: string;
+  consensusId?: string;
+  value?: number;
+  metadata?: Record<string, unknown>;
+  timestamp: string;
+}
+
 /** Union of all performance signal types */
-export type PerformanceSignal = ConsensusSignal | ImplSignal | MetaSignal;
+export type PerformanceSignal = ConsensusSignal | ImplSignal | MetaSignal | PipelineSignal;

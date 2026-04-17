@@ -39,6 +39,11 @@ export const DEFAULT_KEYWORDS: Record<string, string[]> = {
   // Kept in sync with CATEGORY_KEYWORDS in skill-engine.ts — both tables drive contextual activation
   // and auto-inference in gossip_signals, so they must agree.
   citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricat', 'hallucin', 'verify', 'does not exist', 'no such'],
+  // Phase 1 dev-quality extensions (consensus 09693c51-184246e5).
+  observability: ['log', 'logging', 'metric', 'tracing', 'telemetry', 'monitor', 'dashboard', 'stderr', 'observability'],
+  cli_ergonomics: ['cli', 'flag', 'help text', 'error message', 'usage', 'prompt', 'banner', 'spinner'],
+  performance: ['latency', 'slow', 'performance', 'n+1', 'uncached', 'readfilesync', 'synchronous', 'hot path'],
+  testing: ['test', 'tests', 'testing', 'coverage', 'mock', 'fixture', 'unit test', 'integration test', 'e2e', 'test suite'],
 };
 
 export interface DroppedSkill {
