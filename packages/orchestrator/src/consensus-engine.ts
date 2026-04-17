@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from 'fs/promises';
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync, realpathSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { join, resolve } from 'path';
+import { join, resolve, dirname, relative, sep } from 'path';
 import { log as _log } from './log';
 
 /** Generate a short consensus round ID: xxxxxxxx-xxxxxxxx (17 chars from UUID) */
@@ -97,6 +97,16 @@ export class ConsensusEngine {
    * resolutions.
    */
   private currentWorktreeRoots: Set<string> = new Set();
+  /**
+   * Parallel realpath-resolved set of all valid roots (projectRoot + worktrees).
+   * Kept in sync with currentWorktreeRoots (and projectRoot) by
+   * updateWorktreeRoots. Used by isInsideAnyRoot for symlink-safe containment:
+   * comparing realpath(candidate) against realpath(root) prevents symlink-based
+   * escapes where a valid root contains a link into an untrusted location
+   * (e.g. ~/worktrees/feature → /etc). Synchronous realpathSync is safe here
+   * because updateWorktreeRoots is called at most once per consensus round.
+   */
+  private currentRealpathRoots: Set<string> = new Set();
 
   constructor(config: ConsensusEngineConfig) {
     this.config = config;
@@ -133,6 +143,20 @@ export class ConsensusEngine {
     }
     if (changed) {
       this.currentWorktreeRoots = next;
+      // Rebuild realpath-resolved roots in lockstep. Covers projectRoot plus
+      // every active worktree. realpathSync can throw if a root doesn't
+      // exist on disk yet; fall back to resolve() so the containment check
+      // still has a reference (it just can't catch symlinks through that
+      // specific non-existent root).
+      const nextReal = new Set<string>();
+      const addReal = (p: string) => {
+        try { nextReal.add(realpathSync(p)); }
+        catch { nextReal.add(resolve(p)); }
+      };
+      if (this.config.projectRoot) addReal(this.config.projectRoot);
+      for (const wt of next) addReal(wt);
+      this.currentRealpathRoots = nextReal;
+
       // Clear both caches on worktree change. pathCache holds ref→abspath,
       // fileCache holds abspath→content (or null on read failure). If only
       // pathCache clears, a cached null from a previous worktree can shadow
@@ -1440,12 +1464,82 @@ Return only valid JSON.${skillsBlock}`;
    * worktree can still be auto-anchored when consensus runs back in the main
    * MCP process).
    */
-  /** Guard: resolved path must stay inside one of the valid roots */
+  /**
+   * Guard: resolved path must stay inside one of the valid roots, with
+   * symlink-safe containment.
+   *
+   * The naive version of this check used resolve() on both sides and a
+   * prefix match. resolve() normalizes `..` but does NOT follow symlinks, so
+   * if any valid root contained a symlink pointing outside the trust zone
+   * (e.g. ~/worktrees/feature → /etc), a textual prefix match would pass
+   * while stat()/readFile() followed the symlink and leaked content from an
+   * untrusted location.
+   *
+   * Fix: run realpathSync on BOTH the candidate and each root before
+   * comparing. Symmetry matters — on macOS /tmp is a symlink to /private/tmp,
+   * so one-sided normalization would produce spurious mismatches for
+   * legitimate paths. Non-existent candidates (e.g. about to be written)
+   * fall back to resolve(): they can't leak content on their own because
+   * any subsequent readFile will ENOENT.
+   *
+   * Pre-hardening reference: consensus round 50e5278c-6df14665 finding f9
+   * (HIGH). Load-bearing for PR-B (#126 auto-discovery).
+   */
   private isInsideAnyRoot(candidate: string, roots: string[]): boolean {
-    const normalized = resolve(candidate);
+    // Realpath-normalize the candidate. If it doesn't exist, walk up to the
+    // nearest ancestor that does, realpath that, then re-append the missing
+    // tail. This lets us catch symlinked ancestors even for not-yet-created
+    // files without bailing to unsafe prefix-only matching.
+    const resolvedCandidate = resolve(candidate);
+    let normalized = resolvedCandidate;
+    try {
+      normalized = realpathSync(resolvedCandidate);
+    } catch {
+      // Walk ancestors until one exists
+      let cur = resolvedCandidate;
+      const tail: string[] = [];
+      while (true) {
+        const parent = dirname(cur);
+        if (parent === cur) break; // reached root
+        const leaf = cur.slice(parent.length + (parent.endsWith(sep) ? 0 : 1));
+        tail.unshift(leaf);
+        try {
+          const realParent = realpathSync(parent);
+          normalized = tail.length ? join(realParent, ...tail) : realParent;
+          break;
+        } catch {
+          cur = parent;
+          // continue up
+        }
+      }
+      // If nothing in the chain exists, fall through with resolve()'d form.
+    }
+
+    // Resolve each root symmetrically. Prefer the precomputed realpath cache
+    // (populated by updateWorktreeRoots) to avoid repeated syscalls; fall
+    // back to per-call realpathSync/resolve for ad-hoc roots passed in.
     return roots.some(root => {
-      const normalizedRoot = resolve(root);
-      return normalized === normalizedRoot || normalized.startsWith(normalizedRoot + '/');
+      const resolvedRoot = resolve(root);
+      let normalizedRoot: string;
+      if (this.currentRealpathRoots.has(resolvedRoot)) {
+        normalizedRoot = resolvedRoot;
+      } else {
+        // Try cache keyed by realpath (roots may already be realpath-form)
+        let hit: string | undefined;
+        for (const r of this.currentRealpathRoots) {
+          if (r === resolvedRoot) { hit = r; break; }
+        }
+        if (hit) {
+          normalizedRoot = hit;
+        } else {
+          try { normalizedRoot = realpathSync(resolvedRoot); }
+          catch { normalizedRoot = resolvedRoot; }
+        }
+      }
+      if (normalized === normalizedRoot) return true;
+      const rel = relative(normalizedRoot, normalized);
+      // Inside iff relative path doesn't start with '..' and isn't absolute.
+      return rel !== '' && !rel.startsWith('..' + sep) && rel !== '..' && !rel.startsWith('/');
     });
   }
 
