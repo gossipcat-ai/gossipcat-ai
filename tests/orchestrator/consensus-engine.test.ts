@@ -463,6 +463,47 @@ Summary: 1 agree, 1 disagree.`;
         expect(newSignal!.findingId).toBe(rewritten);
       });
 
+      it('new_finding signal has category resolved from finding text when evidence has keyword', async () => {
+        // resolveSignalCategory must be called for new_finding — the field was
+        // previously omitted, making these signals invisible to getCountersSince.
+        const crossReview: CrossReviewEntry[] = [
+          {
+            action: 'new',
+            agentId: 'agent-2',
+            peerAgentId: '',
+            finding: 'Race condition in the shared dispatch map — concurrent writes can corrupt state',
+            evidence: 'Found a race condition in the concurrent map at dispatcher.ts:55',
+            confidence: 4,
+          },
+        ];
+        const report = await engine.synthesize(results, crossReview);
+        const newSignal = report.signals.find(s => s.signal === 'new_finding');
+        expect(newSignal).toBeDefined();
+        // category must be resolved — 'race condition' / 'concurrent' are concurrency keywords
+        expect((newSignal as any).category).toBeDefined();
+        expect((newSignal as any).category).toBe('concurrency');
+      });
+
+      it('new_finding signal persists with undefined category when no keyword matches', async () => {
+        // No drop gate for new_finding — even without a category the signal
+        // contributes to uniqueFindings scoring in performance-reader.
+        const crossReview: CrossReviewEntry[] = [
+          {
+            action: 'new',
+            agentId: 'agent-2',
+            peerAgentId: '',
+            finding: 'Unusual architectural pattern with no keyword match xyz',
+            evidence: 'No recognizable category signals here',
+            confidence: 3,
+          },
+        ];
+        const report = await engine.synthesize(results, crossReview);
+        const newSignal = report.signals.find(s => s.signal === 'new_finding');
+        expect(newSignal).toBeDefined();
+        // Signal must be present even when category resolves to undefined
+        expect(newSignal!.agentId).toBe('agent-2');
+      });
+
       it('populates authorDiagnostics when agent output contains entity-encoded tags', async () => {
         // agent-html is emitting `&lt;agent_finding&gt;` instead of `<agent_finding>`.
         // parseAgentFindingsStrict produces 0 findings (tags invisible), but the

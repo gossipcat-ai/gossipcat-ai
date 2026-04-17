@@ -2382,8 +2382,18 @@ server.tool(
           }
         } catch { /* file may not exist yet */ }
 
-        const { PerformanceWriter, PerformanceReader } = await import('@gossip/orchestrator');
+        const { PerformanceWriter, PerformanceReader, DEFAULT_KEYWORDS: BULK_DK } = await import('@gossip/orchestrator');
         const writer = new PerformanceWriter(process.cwd());
+        const bulkInferCategory = (text: string): string | undefined => {
+          if (!text.trim()) return undefined;
+          let bestCategory = '';
+          let bestHits = 0;
+          for (const [category, keywords] of Object.entries(BULK_DK)) {
+            const hits = (keywords as string[]).filter(kw => text.includes(kw)).length;
+            if (hits > bestHits) { bestHits = hits; bestCategory = category; }
+          }
+          return bestHits >= 1 ? bestCategory : undefined;
+        };
         // Warn if the target round was retracted — signals will be recorded but
         // filtered out at read time by the round tombstone.
         try {
@@ -2400,10 +2410,14 @@ server.tool(
         const toRecord: PS[] = [];
         const dupes: string[] = [];
         let agreementCount = 0, disagreementCount = 0, uniqueCount = 0;
+        let categorizedCount = 0;
 
         const addSignal = (signalType: string, f: any) => {
           const fid = f.id as string | undefined;
           if (fid && existingFindingIds.has(fid)) { dupes.push(fid); return; }
+          const findingText = (f.finding || '').toLowerCase();
+          const category = bulkInferCategory(findingText);
+          if (category) categorizedCount++;
           toRecord.push({
             type: 'consensus',
             signal: signalType as any,
@@ -2411,6 +2425,7 @@ server.tool(
             taskId: batchTaskId,
             findingId: fid,
             severity: f.severity,
+            category,
             source: 'manual',
             evidence: (f.finding || '').slice(0, 2000),
             timestamp: batchTs,
@@ -2424,8 +2439,11 @@ server.tool(
         if (toRecord.length > 0) writer.appendSignals(toRecord);
 
         const skipped = dupes.length;
-        let receipt = `Recorded ${agreementCount} agreement, ${disagreementCount} disagreement, ${uniqueCount} unique signals from ${consensus_id}. ${skipped} duplicate(s) skipped.`;
+        const totalRecorded = toRecord.length;
+        let receipt = `Recorded ${agreementCount} agreement, ${disagreementCount} disagreement, ${uniqueCount} unique signals from ${consensus_id}. ${skipped} duplicate(s) skipped. Categorized ${categorizedCount}/${totalRecorded}.`;
         if (dupes.length > 0) receipt += `\nSkipped finding_ids: ${dupes.join(', ')}`;
+        const uncategorized = toRecord.filter(s => !(s as any).category).map(s => (s as any).findingId).filter(Boolean);
+        if (uncategorized.length > 0) receipt += `\nUncategorized finding_ids: ${uncategorized.join(', ')}`;
         return { content: [{ type: 'text' as const, text: receipt }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `bulk_from_consensus failed: ${(err as Error).message}` }] };

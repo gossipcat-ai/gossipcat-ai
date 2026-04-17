@@ -1045,6 +1045,7 @@ Return only valid JSON.${skillsBlock}`;
           evidence: capEvidence(entry.evidence),
           timestamp: now,
           findingId: newFindingId,
+          category: resolveSignalCategory(undefined, entry.evidence, entry.finding) ?? undefined,
         });
         continue;
       }
