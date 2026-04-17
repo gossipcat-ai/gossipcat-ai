@@ -1,12 +1,21 @@
 import type { OverviewData } from '@/lib/types';
 
-const SEGMENTS: { key: keyof NonNullable<OverviewData['skillVerdictSummary']>; label: string; cls: string }[] = [
-  { key: 'passed', label: 'passed', cls: 'bg-confirmed' },
-  { key: 'pending', label: 'pending', cls: 'bg-unique/60' },
-  { key: 'silent_skill', label: 'silent', cls: 'bg-unverified' },
-  { key: 'insufficient_evidence', label: 'insufficient', cls: 'bg-muted' },
-  { key: 'inconclusive', label: 'inconclusive', cls: 'bg-muted-foreground/40' },
-  { key: 'failed', label: 'failed', cls: 'bg-disputed' },
+// Semantic palette — green=good, red=bad, blue=active/in-progress,
+// yellow=needs attention, orange=stuck, gray=quiet. Uses /15-/20 bg tones
+// for chips + solid text so the legend reads at dashboard scale.
+const SEGMENTS: {
+  key: keyof NonNullable<OverviewData['skillVerdictSummary']>;
+  label: string;
+  bar: string;
+  dot: string;
+  text: string;
+}[] = [
+  { key: 'passed',                label: 'passed',        bar: 'bg-emerald-400',  dot: 'bg-emerald-400',  text: 'text-emerald-400' },
+  { key: 'pending',               label: 'pending',       bar: 'bg-sky-400',      dot: 'bg-sky-400',      text: 'text-sky-400' },
+  { key: 'insufficient_evidence', label: 'insufficient',  bar: 'bg-yellow-400',   dot: 'bg-yellow-400',   text: 'text-yellow-400' },
+  { key: 'inconclusive',          label: 'inconclusive',  bar: 'bg-orange-400',   dot: 'bg-orange-400',   text: 'text-orange-400' },
+  { key: 'silent_skill',          label: 'silent',        bar: 'bg-zinc-500',     dot: 'bg-zinc-500',     text: 'text-zinc-400' },
+  { key: 'failed',                label: 'failed',        bar: 'bg-red-400',      dot: 'bg-red-400',      text: 'text-red-400' },
 ];
 
 export function SkillVerdictsSnapshot({ overview }: { overview: OverviewData | null }) {
@@ -16,14 +25,16 @@ export function SkillVerdictsSnapshot({ overview }: { overview: OverviewData | n
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Skill Verdicts</h3>
-        <span className="text-xs text-muted-foreground">{total} total</span>
+        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+          Skill Verdicts
+        </h3>
+        <span className="font-mono text-[10px] text-muted-foreground/70">{total} total</span>
       </header>
       {!s || total === 0 ? (
-        <p className="text-xs text-muted-foreground">no skill verdicts yet</p>
+        <p className="font-mono text-[11px] text-muted-foreground/60">no skill verdicts yet</p>
       ) : (
         <>
-          <div className="mb-3 flex h-3 w-full overflow-hidden rounded">
+          <div className="mb-3 flex h-2 w-full gap-px overflow-hidden rounded-sm bg-muted/40">
             {SEGMENTS.map((seg) => {
               const n = s[seg.key] ?? 0;
               if (n === 0) return null;
@@ -31,21 +42,24 @@ export function SkillVerdictsSnapshot({ overview }: { overview: OverviewData | n
               return (
                 <div
                   key={seg.key}
-                  className={seg.cls}
+                  className={seg.bar}
                   style={{ width: `${pct}%` }}
                   title={`${seg.label}: ${n}`}
                 />
               );
             })}
           </div>
-          <ul className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+          <ul className="grid grid-cols-3 gap-x-4 gap-y-1.5 font-mono text-[11px]">
             {SEGMENTS.map((seg) => {
               const n = s[seg.key] ?? 0;
+              const muted = n === 0;
               return (
-                <li key={seg.key} className="flex items-center gap-2">
-                  <span className={`h-2 w-2 rounded-sm ${seg.cls}`} />
+                <li key={seg.key} className={`flex items-center gap-1.5 ${muted ? 'opacity-40' : ''}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${seg.dot}`} />
                   <span className="text-muted-foreground">{seg.label}</span>
-                  <span className="ml-auto tabular-nums text-foreground">{n}</span>
+                  <span className={`ml-auto tabular-nums ${muted ? 'text-muted-foreground/50' : seg.text}`}>
+                    {n}
+                  </span>
                 </li>
               );
             })}
