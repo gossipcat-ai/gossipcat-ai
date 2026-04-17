@@ -65,7 +65,8 @@ function inferSource(entry: { signal?: string; source?: string }): SourceBucket 
 export async function signalsHandler(projectRoot: string, query?: URLSearchParams): Promise<SignalsResponse> {
   const agentFilter = query?.get('agent') ?? null;
   const counterpartFilter = query?.get('counterpart') ?? null;
-  const signalFilters = query?.getAll('signal') ?? [];
+  // Cap repeats to prevent memory/CPU DoS via 10000+ repeated ?signal= params.
+  const signalFilters = (query?.getAll('signal') ?? []).slice(0, 50);
   const categoryFilter = query?.get('category') ?? null;
   const severityFilter = query?.get('severity') ?? null;
   const sinceFilter = query?.get('since') ?? null;
