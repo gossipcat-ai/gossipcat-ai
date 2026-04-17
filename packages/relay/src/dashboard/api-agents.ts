@@ -17,12 +17,122 @@ interface LastTask {
   timestamp: string;
 }
 
+export interface ForcedDevelopEntry {
+  timestamp: string;
+  reason?: string;
+}
+
+export type SkillStatus =
+  | 'pending'
+  | 'passed'
+  | 'failed'
+  | 'silent_skill'
+  | 'insufficient_evidence'
+  | 'inconclusive'
+  | 'flagged_for_manual_review';
+
 export interface SkillSlotResponse {
   name: string;
   enabled: boolean;
   source: string;
   mode: 'permanent' | 'contextual';
   boundAt: string;
+  effectiveness?: number | null;
+  status?: SkillStatus;
+  inconclusiveStrikes?: number;
+  inconclusiveAt?: string;
+  forcedDevelops?: ForcedDevelopEntry[];
+}
+
+interface SkillFrontmatter {
+  effectiveness?: number;
+  status?: string;
+  inconclusive_strikes?: number;
+  inconclusive_at?: string;
+}
+
+/** Parse a YAML-like frontmatter block. We avoid pulling a YAML dep and only
+ * extract the 4 scalar keys we need. Returns null on any failure. */
+function readSkillFrontmatter(
+  projectRoot: string,
+  agentId: string,
+  skillName: string,
+): SkillFrontmatter | null {
+  try {
+    const path = join(projectRoot, '.gossip', 'agents', agentId, 'skills', `${skillName}.md`);
+    if (!existsSync(path)) return null;
+    const raw = readFileSync(path, 'utf-8');
+    // Frontmatter must start with --- on the first line.
+    if (!raw.startsWith('---')) return null;
+    const end = raw.indexOf('\n---', 3);
+    if (end === -1) return null;
+    const block = raw.slice(3, end);
+    const out: SkillFrontmatter = {};
+    for (const line of block.split('\n')) {
+      const m = line.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.+?)\s*$/);
+      if (!m) continue;
+      const key = m[1];
+      let value: string = m[2];
+      // Strip surrounding quotes if present.
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      if (key === 'effectiveness') {
+        const n = Number(value);
+        if (Number.isFinite(n)) out.effectiveness = n;
+      } else if (key === 'status') {
+        out.status = value;
+      } else if (key === 'inconclusive_strikes') {
+        const n = Number(value);
+        if (Number.isFinite(n)) out.inconclusive_strikes = n;
+      } else if (key === 'inconclusive_at') {
+        out.inconclusive_at = value;
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+interface ForcedDevelopRow {
+  agent_id?: string;
+  agentId?: string;
+  category?: string;
+  timestamp?: string;
+  reason?: string;
+}
+
+/** Normalize a category key so "input_validation" and "input-validation" match. */
+function normalizeCategory(s: string): string {
+  return s.replace(/[-_]/g, '').toLowerCase();
+}
+
+function readForcedDevelops(
+  projectRoot: string,
+  agentId: string,
+  category: string,
+): ForcedDevelopEntry[] {
+  try {
+    const path = join(projectRoot, '.gossip', 'forced-skill-develops.jsonl');
+    if (!existsSync(path)) return [];
+    const raw = readFileSync(path, 'utf-8');
+    const target = normalizeCategory(category);
+    const out: ForcedDevelopEntry[] = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      let row: ForcedDevelopRow;
+      try { row = JSON.parse(line); } catch { continue; }
+      const rowAgent = row.agent_id ?? row.agentId;
+      if (rowAgent !== agentId) continue;
+      if (!row.category || normalizeCategory(row.category) !== target) continue;
+      if (!row.timestamp) continue;
+      out.push({ timestamp: row.timestamp, reason: row.reason });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 export interface AgentResponse {
@@ -164,13 +274,25 @@ export async function agentsHandler(
     let skillSlots: SkillSlotResponse[] = [];
     try {
       if (skillIndex) {
-        skillSlots = skillIndex.getAgentSlots(config.id).map((slot: SkillSlot) => ({
-          name: slot.skill,
-          enabled: slot.enabled,
-          source: slot.source,
-          mode: slot.mode ?? 'permanent',
-          boundAt: slot.boundAt,
-        }));
+        skillSlots = skillIndex.getAgentSlots(config.id).map((slot: SkillSlot) => {
+          const fm = readSkillFrontmatter(projectRoot, config.id, slot.skill);
+          const forced = readForcedDevelops(projectRoot, config.id, slot.skill);
+          const response: SkillSlotResponse = {
+            name: slot.skill,
+            enabled: slot.enabled,
+            source: slot.source,
+            mode: slot.mode ?? 'permanent',
+            boundAt: slot.boundAt,
+          };
+          if (fm) {
+            if (fm.effectiveness !== undefined) response.effectiveness = fm.effectiveness;
+            if (fm.status !== undefined) response.status = fm.status as SkillStatus;
+            if (fm.inconclusive_strikes !== undefined) response.inconclusiveStrikes = fm.inconclusive_strikes;
+            if (fm.inconclusive_at !== undefined) response.inconclusiveAt = fm.inconclusive_at;
+          }
+          if (forced.length > 0) response.forcedDevelops = forced;
+          return response;
+        });
       }
     } catch { /* return empty on error */ }
 

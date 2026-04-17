@@ -1,7 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { NeuralAvatar } from './NeuralAvatar';
-import { CategoryStrengths } from './CategoryStrengths';
+import { CategoryCompetency } from './CategoryCompetency';
+import { SkillCard } from './SkillCard';
+import { AgentActivityTimeline } from './AgentActivityTimeline';
+import { FindingDetailDrawer } from './FindingDetailDrawer';
 import { SignalTimeline } from './SignalTimeline';
 import { TaskRow } from './TaskRow';
 import { timeAgo, cleanFindingTags } from '@/lib/utils';
@@ -27,8 +30,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
   const [memories, setMemories] = useState<MemoryFile[]>([]);
   const [reports, setReports] = useState<ConsensusReport[]>([]);
   const [expandedMem, setExpandedMem] = useState<string | null>(null);
-  const [expandedRun, setExpandedRun] = useState<number | null>(null);
-  const [runFilter, setRunFilter] = useState<'all' | 'confirmed' | 'disputed' | 'unverified' | 'unique'>('all');
+  const [drawerFinding, setDrawerFinding] = useState<{ consensusId: string; findingId: string } | null>(null);
   const [taskPage, setTaskPage] = useState(0);
   const [memDayIdx, setMemDayIdx] = useState(0);
 
@@ -291,51 +293,49 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           </div>
         </div>
 
-        {/* Right: Category Strengths */}
+        {/* Right: Category Competency — accuracy-first horizontal bars. The
+            legacy CategoryStrengths (severity-weighted sort + sparse rows) is
+            retained for reference but we lead with the ratio view here. */}
         <div>
           <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-            Category Strengths
+            Category Competency
           </h2>
-          <CategoryStrengths
-            strengths={s.categoryStrengths}
-            accuracy={s.categoryAccuracy}
-            correctCounts={s.categoryCorrect}
-            hallucinatedCounts={s.categoryHallucinated}
+          <CategoryCompetency
+            categoryAccuracy={s.categoryAccuracy}
+            categoryCorrect={s.categoryCorrect}
+            categoryHallucinated={s.categoryHallucinated}
           />
         </div>
       </section>
 
-      {/* Skills */}
+      {/* Skills — rich card view with effectiveness, status, strikes, forced-develop history. */}
       {(agent.skillSlots.length > 0 || agent.skills.length > 0) && (
         <section className="mb-8">
           <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
             Skills <span className="text-primary">{agent.skillSlots.length || agent.skills.length}</span>
           </h2>
-          <div className="flex flex-wrap gap-1.5">
-            {agent.skillSlots.length > 0 ? agent.skillSlots.map(slot => (
-              <span
-                key={slot.name}
-                className={`rounded-sm border px-2.5 py-1 font-mono text-xs ${
-                  !slot.enabled
-                    ? 'border-border/50 text-muted-foreground/50 line-through'
-                    : slot.mode === 'contextual'
-                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
-                    : 'border-border bg-card text-muted-foreground'
-                }`}
-                title={`${slot.mode} · ${slot.source} · ${slot.enabled ? 'enabled' : 'disabled'}`}
-              >
-                {slot.mode === 'contextual' && '\u26A1 '}{slot.name}
-              </span>
-            )) : agent.skills.map(skill => (
-              <span key={skill} className="rounded-sm border border-border bg-card px-2.5 py-1 font-mono text-xs text-muted-foreground">
-                {skill}
-              </span>
-            ))}
-          </div>
+          {agent.skillSlots.length > 0 ? (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {agent.skillSlots.map(slot => (
+                <SkillCard key={slot.name} slot={slot} />
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {agent.skills.map(skill => (
+                <span key={skill} className="rounded-sm border border-border bg-card px-2.5 py-1 font-mono text-xs text-muted-foreground">
+                  {skill}
+                </span>
+              ))}
+            </div>
+          )}
         </section>
       )}
 
-      {/* Consensus Participation */}
+      {/* Consensus Participation — per-finding rows open the shared
+          FindingDetailDrawer (PR-F). The legacy inline accordion made users
+          scroll several screens to see one finding's citation + signals; the
+          drawer surfaces both in one click. */}
       <section className="mb-8">
         <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
           Consensus Runs <span className="text-primary">{agentRuns.length}</span>
@@ -346,36 +346,26 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               const c = run.counts;
               const total = (c.agreement || 0) + (c.disagreement || 0) + (c.hallucination || 0) + (c.unverified || 0) + (c.unique || 0) + (c.new || 0);
               const barTotal = total || 1;
-              const isOpen = expandedRun === i;
               const segments = [
                 { key: 'confirmed' as const, count: c.agreement || 0, color: 'bg-confirmed', text: 'text-confirmed' },
                 { key: 'disputed' as const, count: (c.disagreement || 0) + (c.hallucination || 0), color: 'bg-disputed', text: 'text-disputed' },
                 { key: 'unverified' as const, count: c.unverified || 0, color: 'bg-unverified', text: 'text-unverified' },
                 { key: 'unique' as const, count: (c.unique || 0) + (c.new || 0), color: 'bg-unique', text: 'text-unique' },
               ];
-              const tagMap: Record<string, { label: string; filter: string; cls: string }> = {
-                agreement: { label: 'CONFIRMED', filter: 'confirmed', cls: 'text-confirmed bg-confirmed/10' },
-                consensus_verified: { label: 'CONFIRMED', filter: 'confirmed', cls: 'text-confirmed bg-confirmed/10' },
-                disagreement: { label: 'DISPUTED', filter: 'disputed', cls: 'text-disputed bg-disputed/10' },
-                hallucination_caught: { label: 'DISPUTED', filter: 'disputed', cls: 'text-disputed bg-disputed/10' },
-                unverified: { label: 'UNVERIFIED', filter: 'unverified', cls: 'text-unverified bg-unverified/10' },
-                unique_confirmed: { label: 'UNIQUE', filter: 'unique', cls: 'text-unique bg-unique/10' },
-                unique_unconfirmed: { label: 'UNIQUE', filter: 'unique', cls: 'text-unique bg-unique/10' },
-                new_finding: { label: 'NEW', filter: 'unique', cls: 'text-unique bg-unique/10' },
+              const tagMap: Record<string, { label: string; cls: string }> = {
+                agreement: { label: 'CONFIRMED', cls: 'text-confirmed bg-confirmed/10' },
+                consensus_verified: { label: 'CONFIRMED', cls: 'text-confirmed bg-confirmed/10' },
+                disagreement: { label: 'DISPUTED', cls: 'text-disputed bg-disputed/10' },
+                hallucination_caught: { label: 'DISPUTED', cls: 'text-disputed bg-disputed/10' },
+                unverified: { label: 'UNVERIFIED', cls: 'text-unverified bg-unverified/10' },
+                unique_confirmed: { label: 'UNIQUE', cls: 'text-unique bg-unique/10' },
+                unique_unconfirmed: { label: 'UNIQUE', cls: 'text-unique bg-unique/10' },
+                new_finding: { label: 'NEW', cls: 'text-unique bg-unique/10' },
               };
-              const filteredSignals = run.signals.filter(sig => {
-                if (sig.signal === 'signal_retracted') return false;
-                const tag = tagMap[sig.signal];
-                if (!tag) return false;
-                return runFilter === 'all' || tag.filter === runFilter;
-              });
+              const runSignals = run.signals.filter(sig => sig.signal !== 'signal_retracted' && tagMap[sig.signal]);
               return (
-                <div key={run.taskId + i} className={`rounded-md border bg-card transition ${isOpen ? 'border-primary/25' : 'border-border/40'}`}>
-                  <button
-                    onClick={() => { setExpandedRun(isOpen ? null : i); setRunFilter('all'); }}
-                    className="flex w-full items-center p-3 text-left transition hover:bg-accent/50"
-                  >
-                    <span className={`mr-3 font-mono text-xs ${isOpen ? 'text-primary' : 'text-muted-foreground'}`}>{isOpen ? '\u25BE' : '\u25B8'}</span>
+                <div key={run.taskId + i} className="rounded-md border border-border/40 bg-card">
+                  <div className="flex items-center p-3">
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
                         <span className="font-mono text-sm font-semibold text-foreground">{total} findings</span>
@@ -392,51 +382,38 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                         ))}
                       </div>
                     </div>
-                  </button>
-                  {isOpen && (
-                    <div className="border-t border-border px-4 pb-3 pt-3">
-                      {/* Filter chips are neutral. They used to echo the
-                          finding colors (confirmed/disputed/unverified/unique),
-                          which collided visually with the actual count chips
-                          above — users couldn't tell "filter for disputed"
-                          from "there were 3 disputed findings". Matching the
-                          LogsPage filter pattern for consistency. */}
-                      <div className="mb-3 flex gap-1.5">
-                        {(['all', 'confirmed', 'disputed', 'unverified', 'unique'] as const).map(f => (
-                          <button
-                            key={f}
-                            onClick={() => setRunFilter(f)}
-                            className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold transition ${
-                              runFilter === f
-                                ? 'text-foreground bg-muted'
-                                : 'text-muted-foreground hover:text-foreground'
-                            }`}
-                          >
-                            {f.charAt(0).toUpperCase() + f.slice(1)}
-                          </button>
-                        ))}
-                      </div>
-                      {filteredSignals.length === 0 ? (
-                        <div className="py-3 text-center text-xs text-muted-foreground">No findings match this filter.</div>
-                      ) : (
-                        <div className="space-y-1.5">
-                          {filteredSignals.map((sig, j) => {
-                            const tag = tagMap[sig.signal];
-                            if (!tag) return null;
-                            return (
-                              <div key={j} className="flex items-start gap-2">
-                                <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold ${tag.cls}`}>{tag.label}</span>
-                                <div className="min-w-0 flex-1">
-                                  <span className="text-xs text-muted-foreground [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400" dangerouslySetInnerHTML={{ __html: cleanFindingTags(sig.evidence || '') }} />
-                                  <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">
-                                    {sig.agentId}{sig.counterpartId ? ` + ${sig.counterpartId}` : ''}
-                                  </span>
-                                </div>
+                  </div>
+                  {runSignals.length > 0 && (
+                    <div className="border-t border-border/30 px-3 pb-2 pt-2">
+                      <div className="space-y-1">
+                        {runSignals.map((sig, j) => {
+                          const tag = tagMap[sig.signal];
+                          const clickable = !!(sig.findingId && run.taskId);
+                          // run.taskId is the consensusId on the agent-page shape.
+                          const row = (
+                            <div className="flex items-start gap-2 py-1">
+                              <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold ${tag.cls}`}>{tag.label}</span>
+                              <div className="min-w-0 flex-1">
+                                <span className="text-xs text-muted-foreground [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400" dangerouslySetInnerHTML={{ __html: cleanFindingTags(sig.evidence || '') }} />
+                                <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">
+                                  {sig.agentId}{sig.counterpartId ? ` + ${sig.counterpartId}` : ''}
+                                </span>
                               </div>
+                            </div>
+                          );
+                          if (clickable) {
+                            return (
+                              <button
+                                key={j}
+                                type="button"
+                                onClick={() => setDrawerFinding({ consensusId: run.taskId, findingId: sig.findingId! })}
+                                className="block w-full rounded-sm text-left transition hover:bg-accent/40"
+                              >{row}</button>
                             );
-                          })}
-                        </div>
-                      )}
+                          }
+                          return <div key={j}>{row}</div>;
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -447,6 +424,18 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           <div className="py-6 text-center text-sm text-muted-foreground">No consensus participation recorded.</div>
         )}
       </section>
+
+      {/* Activity feed — reverse-chronological signals (+ tasks/skills later) */}
+      <section className="mb-8">
+        <AgentActivityTimeline agentId={agentId} />
+      </section>
+
+      <FindingDetailDrawer
+        open={!!drawerFinding}
+        onOpenChange={(open) => { if (!open) setDrawerFinding(null); }}
+        consensusId={drawerFinding?.consensusId ?? null}
+        findingId={drawerFinding?.findingId ?? null}
+      />
 
       {/* Tasks */}
       <section className="mb-8">

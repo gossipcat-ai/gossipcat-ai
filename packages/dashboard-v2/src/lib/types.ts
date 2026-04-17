@@ -15,6 +15,33 @@ export interface OverviewData {
   hourlyActivity: number[];
 }
 
+export interface ForcedDevelopEntry {
+  timestamp: string;
+  reason?: string;
+}
+
+export type SkillStatus =
+  | 'pending'
+  | 'passed'
+  | 'failed'
+  | 'silent_skill'
+  | 'insufficient_evidence'
+  | 'inconclusive'
+  | 'flagged_for_manual_review';
+
+export interface SkillSlot {
+  name: string;
+  enabled: boolean;
+  source: string;
+  mode: 'permanent' | 'contextual';
+  boundAt: string;
+  effectiveness?: number | null;
+  status?: SkillStatus;
+  inconclusiveStrikes?: number;
+  inconclusiveAt?: string;
+  forcedDevelops?: ForcedDevelopEntry[];
+}
+
 export interface AgentData {
   id: string;
   provider: string;
@@ -22,7 +49,7 @@ export interface AgentData {
   preset?: string;
   native: boolean;
   skills: string[];
-  skillSlots: { name: string; enabled: boolean; source: string; mode: 'permanent' | 'contextual'; boundAt: string }[];
+  skillSlots: SkillSlot[];
   online: boolean;
   totalTokens: number;
   lastTask: { task: string; timestamp: string } | null;
