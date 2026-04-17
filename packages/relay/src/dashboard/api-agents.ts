@@ -45,6 +45,10 @@ export interface AgentResponse {
     agreements: number;
     disagreements: number;
     hallucinations: number;
+    bench: {
+      state: 'benched' | 'kept-for-coverage' | 'none';
+      reason?: 'chronic-low-accuracy' | 'burst-hallucination';
+    };
   };
 }
 
@@ -140,9 +144,22 @@ export async function agentsHandler(
   let skillIndex: SkillIndex | null = null;
   try { skillIndex = new SkillIndex(projectRoot); } catch { /* skill index unavailable */ }
 
+  const allIds = configs.map(c => c.id);
+
   return configs.map(config => {
     const score = scores.get(config.id) ?? { ...DEFAULT_SCORE, agentId: config.id };
     const agentTask = taskDataByAgent.get(config.id) ?? { totalTokens: 0, lastTask: null };
+
+    const categories = Object.keys({ ...score.categoryCorrect, ...score.categoryHallucinated });
+    const benchResult = reader.isBenched(config.id, categories, allIds);
+    const benchState: 'benched' | 'kept-for-coverage' | 'none' =
+      benchResult.benched ? 'benched'
+      : benchResult.safeguardBlocked ? 'kept-for-coverage'
+      : 'none';
+    const bench = {
+      state: benchState,
+      reason: benchResult.reason as 'chronic-low-accuracy' | 'burst-hallucination' | undefined,
+    };
 
     let skillSlots: SkillSlotResponse[] = [];
     try {
@@ -180,6 +197,7 @@ export async function agentsHandler(
         hallucinations: score.hallucinations,
         consecutiveFailures: score.consecutiveFailures ?? 0,
         circuitOpen: score.circuitOpen ?? false,
+        bench,
         // categoryStrengths is an UNBOUNDED severity-weighted accumulator used
         // for dispatch routing (severity × decay × 0.15 per confirmed signal),
         // not a [0,1] ratio. The dashboard must NOT render it as a percentage —

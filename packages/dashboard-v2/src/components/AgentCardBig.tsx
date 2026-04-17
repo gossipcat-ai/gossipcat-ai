@@ -1,6 +1,7 @@
 import type { AgentData } from '@/lib/types';
 import { NeuralAvatar } from './NeuralAvatar';
 import { timeAgo } from '@/lib/utils';
+import { getBenchBadgeKind } from '@/lib/bench';
 
 interface AgentCardBigProps {
   agent: AgentData;
@@ -62,14 +63,34 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{agent.id}</span>
-            {s.circuitOpen && (
-              <span
-                className="shrink-0 rounded-sm bg-destructive/10 px-1 py-0.5 font-mono text-[8px] font-bold text-destructive"
-                data-tooltip="Benched: too many consecutive failures. Deprioritized until new clean signals recover the score."
-              >
-                BENCHED
-              </span>
-            )}
+            {(() => {
+              const kind = getBenchBadgeKind(s);
+              if (kind === 'benched') return (
+                <span
+                  className="shrink-0 rounded-sm bg-destructive/10 px-1 py-0.5 font-mono text-[8px] font-bold text-destructive"
+                  data-tooltip={`Benched (${s.bench.reason ?? 'auto'}). Excluded from dispatch until recovery.`}
+                >
+                  BENCHED
+                </span>
+              );
+              if (kind === 'struggling') return (
+                <span
+                  className="shrink-0 rounded-sm bg-unverified/10 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
+                  data-tooltip="Struggling: consecutive failures tripped the circuit breaker."
+                >
+                  STRUGGLING
+                </span>
+              );
+              if (kind === 'kept-for-coverage') return (
+                <span
+                  className="shrink-0 rounded-sm border border-unverified/40 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
+                  data-tooltip={`Would bench (${s.bench.reason ?? 'rule'}), but kept as sole provider of a category.`}
+                >
+                  KEPT FOR COVERAGE
+                </span>
+              );
+              return null;
+            })()}
           </div>
           <div className="mt-1 flex items-center gap-2 font-inter text-[10px] text-muted-foreground/60">
             <span
