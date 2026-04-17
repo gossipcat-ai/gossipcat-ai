@@ -155,6 +155,8 @@ export interface AgentResponse {
     agreements: number;
     disagreements: number;
     hallucinations: number;
+    unverifiedsEmitted: number;
+    unverifiedsReceived: number;
     bench: {
       state: 'benched' | 'kept-for-coverage' | 'none';
       reason?: 'chronic-low-accuracy' | 'burst-hallucination';
@@ -165,6 +167,7 @@ export interface AgentResponse {
 const DEFAULT_SCORE: AgentScore = {
   agentId: '', accuracy: 0.5, uniqueness: 0.5, reliability: 0.5, impactScore: 0.5,
   totalSignals: 0, agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
+  unverifiedsEmitted: 0, unverifiedsReceived: 0,
   weightedHallucinations: 0,
   consecutiveFailures: 0, circuitOpen: false, categoryStrengths: {},
   categoryCorrect: {}, categoryHallucinated: {}, categoryAccuracy: {},
@@ -317,6 +320,8 @@ export async function agentsHandler(
         agreements: score.agreements,
         disagreements: score.disagreements,
         hallucinations: score.hallucinations,
+        unverifiedsEmitted: score.unverifiedsEmitted ?? 0,
+        unverifiedsReceived: score.unverifiedsReceived ?? 0,
         consecutiveFailures: score.consecutiveFailures ?? 0,
         circuitOpen: score.circuitOpen ?? false,
         bench,

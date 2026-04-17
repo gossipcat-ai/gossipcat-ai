@@ -78,6 +78,7 @@ export interface AgentData {
     accuracy: number; uniqueness: number; reliability: number;
     impactScore: number; dispatchWeight: number; signals: number;
     agreements: number; disagreements: number; hallucinations: number;
+    unverifiedsEmitted?: number; unverifiedsReceived?: number;
     consecutiveFailures: number; circuitOpen: boolean;
     bench: {
       state: 'benched' | 'kept-for-coverage' | 'none';
