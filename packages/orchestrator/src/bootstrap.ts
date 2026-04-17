@@ -213,6 +213,19 @@ To auto-allow writes, add to \`.claude/settings.local.json\`:
       ? `\n## Operating Rules\n\n${demote(rulesContent.trim())}\n`
       : '';
 
+    // Memory Hygiene Convention: injected every session so fresh users pick up the
+    // `status:` frontmatter convention without depending on a pre-seeded CLAUDE.md.
+    // See docs/specs/2026-04-17-memory-hygiene-propagation.md.
+    const memoryHygieneSection = `\n## Memory Hygiene Convention
+
+When saving a \`project_*\` memory, include a \`status\` frontmatter field:
+- \`status: open\` — active backlog, in-progress, or decision pending revisit
+- \`status: shipped\` — work has landed; reference only
+- \`status: closed\` — decided not to pursue; archive semantics
+
+Without it, the dashboard defaults to "backlog" and applies staleness verification conservatively.
+`;
+
     return `# Gossipcat — Multi-Agent Orchestration
 
 ## Your Role
@@ -227,7 +240,7 @@ You are the **orchestrator**, not an implementer. Your job is to dispatch tasks 
 - Change is under 10 lines with no side effects on shared state
 
 When in doubt, dispatch. The cost of a unnecessary dispatch is minutes; the cost of unreviewed code in shared state is bugs that pass all tests.
-${rulesSection}
+${rulesSection}${memoryHygieneSection}
 ## Your Team
 
 ${teamSection}
