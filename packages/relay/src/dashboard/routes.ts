@@ -1,6 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { DashboardAuth } from './auth';
 import { overviewHandler } from './api-overview';
+import { fleetTrendHandler } from './api-fleet-trend';
 import { agentsHandler } from './api-agents';
 import { skillsGetHandler, skillsBindHandler } from './api-skills';
 import { memoryHandler } from './api-memory';
@@ -236,6 +237,12 @@ export class DashboardRouter {
     try {
       if (url === '/dashboard/api/overview' && req.method === 'GET') {
         const data = await overviewHandler(this.projectRoot, this.ctx);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      if (url === '/dashboard/api/fleet-trend' && req.method === 'GET') {
+        const data = await fleetTrendHandler(this.projectRoot, query ?? undefined);
         this.json(res, 200, data);
         return true;
       }

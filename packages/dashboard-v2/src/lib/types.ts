@@ -13,6 +13,27 @@ export interface OverviewData {
   lastConsensusTimestamp: string;
   actionableFindings: number;
   hourlyActivity: number[];
+  skillVerdictSummary?: {
+    pending: number;
+    passed: number;
+    failed: number;
+    silent_skill: number;
+    insufficient_evidence: number;
+    inconclusive: number;
+  };
+  droppedFindingTypeCounts?: Record<string, number>;
+}
+
+export interface FleetTrendPoint {
+  day: string;
+  agentId: string;
+  accuracy: number;
+  signals: number;
+}
+
+export interface FleetTrendResponse {
+  days: number;
+  points: FleetTrendPoint[];
 }
 
 export interface AgentData {

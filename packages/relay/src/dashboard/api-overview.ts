@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 
 interface AgentConfigLike {
@@ -28,6 +28,95 @@ export interface OverviewResponse {
   actionableFindings: number;
   /** Task counts for each of the last 12 hours (index 0 = 12h ago, index 11 = current hour). */
   hourlyActivity: number[];
+  /** Fleet-wide skill verdict counts bucketed by YAML frontmatter `status:` field. */
+  skillVerdictSummary?: {
+    pending: number;
+    passed: number;
+    failed: number;
+    silent_skill: number;
+    insufficient_evidence: number;
+    inconclusive: number;
+  };
+  /** Aggregate count of invalid finding type tokens from the last 20 consensus reports. */
+  droppedFindingTypeCounts?: Record<string, number>;
+}
+
+/**
+ * Hand-rolled frontmatter status parser. Returns the value of `status:` in
+ * the YAML frontmatter block, or null if none. Tolerant of quoted values.
+ */
+function readSkillStatus(path: string): string | null {
+  try {
+    const content = readFileSync(path, 'utf-8');
+    const m = content.match(/^---\n([\s\S]*?)\n---/);
+    if (!m) return null;
+    const block = m[1];
+    for (const line of block.split('\n')) {
+      const sm = line.match(/^status\s*:\s*["']?([A-Za-z_][A-Za-z0-9_-]*)["']?\s*$/);
+      if (sm) return sm[1].toLowerCase();
+    }
+    return null;
+  } catch { return null; }
+}
+
+function computeSkillVerdictSummary(projectRoot: string): OverviewResponse['skillVerdictSummary'] {
+  const agentsDir = join(projectRoot, '.gossip', 'agents');
+  if (!existsSync(agentsDir)) return undefined;
+  const summary = { pending: 0, passed: 0, failed: 0, silent_skill: 0, insufficient_evidence: 0, inconclusive: 0 };
+  let seen = false;
+  try {
+    const agentIds = readdirSync(agentsDir);
+    for (const agentId of agentIds) {
+      const skillsDir = join(agentsDir, agentId, 'skills');
+      if (!existsSync(skillsDir)) continue;
+      let entries: string[];
+      try { entries = readdirSync(skillsDir); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.endsWith('.md')) continue;
+        const status = readSkillStatus(join(skillsDir, entry));
+        if (!status) continue;
+        seen = true;
+        if (status === 'pending') summary.pending++;
+        else if (status === 'passed') summary.passed++;
+        else if (status === 'failed') summary.failed++;
+        else if (status === 'silent_skill') summary.silent_skill++;
+        else if (status === 'insufficient_evidence') summary.insufficient_evidence++;
+        else if (status === 'inconclusive') summary.inconclusive++;
+      }
+    }
+  } catch { return undefined; }
+  return seen ? summary : summary;
+}
+
+function computeDroppedFindingTypeCounts(projectRoot: string): Record<string, number> | undefined {
+  const dir = join(projectRoot, '.gossip', 'consensus-reports');
+  if (!existsSync(dir)) return undefined;
+  try {
+    const files = readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        const full = join(dir, f);
+        try { return { full, mtime: statSync(full).mtimeMs }; } catch { return null; }
+      })
+      .filter((x): x is { full: string; mtime: number } => x !== null)
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, 20);
+    const counts: Record<string, number> = {};
+    let seen = false;
+    for (const { full } of files) {
+      try {
+        const report = JSON.parse(readFileSync(full, 'utf-8'));
+        const dropped = report?.droppedFindingsByType;
+        if (!dropped || typeof dropped !== 'object') continue;
+        for (const [type, count] of Object.entries(dropped)) {
+          if (typeof count !== 'number' || count <= 0) continue;
+          counts[type] = (counts[type] ?? 0) + count;
+          seen = true;
+        }
+      } catch { /* skip */ }
+    }
+    return seen ? counts : counts;
+  } catch { return undefined; }
 }
 
 export async function overviewHandler(projectRoot: string, ctx: OverviewContext): Promise<OverviewResponse> {
@@ -179,5 +268,8 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
 
   const avgDurationMs = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
 
-  return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs, lastConsensusTimestamp, actionableFindings, hourlyActivity };
+  const skillVerdictSummary = computeSkillVerdictSummary(projectRoot);
+  const droppedFindingTypeCounts = computeDroppedFindingTypeCounts(projectRoot);
+
+  return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs, lastConsensusTimestamp, actionableFindings, hourlyActivity, skillVerdictSummary, droppedFindingTypeCounts };
 }

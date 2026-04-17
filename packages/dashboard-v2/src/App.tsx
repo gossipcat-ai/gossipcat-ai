@@ -11,6 +11,10 @@ import { NeuralAvatar } from '@/components/NeuralAvatar';
 import { TaskDetailModal } from '@/components/TaskDetailModal';
 import { TasksSection } from '@/components/TasksSection';
 import { MemoryFolders } from '@/components/MemoryFolders';
+import { FleetHealthTrend } from '@/components/FleetHealthTrend';
+import { SkillVerdictsSnapshot } from '@/components/SkillVerdictsSnapshot';
+import { RecentSignalsPeek } from '@/components/RecentSignalsPeek';
+import { DroppedFindingDrift } from '@/components/DroppedFindingDrift';
 import { AgentPage } from '@/components/AgentPage';
 import { LogsPage } from '@/components/LogsPage';
 import { TaskRow } from '@/components/TaskRow';
@@ -496,6 +500,14 @@ function Dashboard() {
           <ActiveTasksBanner onCountChange={setActiveTaskCount} />
           {tasks && <TasksSection tasks={tasks} limit={5} />}
           {agents && <TeamHero agents={agents} />}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <FleetHealthTrend />
+            <SkillVerdictsSnapshot overview={overview} />
+          </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <RecentSignalsPeek />
+            <DroppedFindingDrift overview={overview} />
+          </div>
           <FindingsMetrics consensus={consensus} reports={consensusReports} />
           {(gossipMemories || nativeMemories) && (
             <MemoryFolders
