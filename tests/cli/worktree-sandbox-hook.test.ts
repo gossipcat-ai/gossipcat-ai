@@ -20,9 +20,13 @@ function hasJq(): boolean {
   return probe.status === 0 && !!probe.stdout.trim();
 }
 
-function runHook(payload: unknown): { stdout: string; status: number | null; stderr: string } {
+function runHook(
+  payload: unknown,
+  env?: Record<string, string>,
+): { stdout: string; status: number | null; stderr: string } {
   const input = JSON.stringify(payload);
-  const res = spawnSync('bash', [HOOK_PATH], { input, encoding: 'utf-8' });
+  const spawnEnv = env ? { ...process.env, ...env } : undefined;
+  const res = spawnSync('bash', [HOOK_PATH], { input, encoding: 'utf-8', env: spawnEnv });
   return { stdout: res.stdout, status: res.status, stderr: res.stderr };
 }
 
@@ -495,6 +499,121 @@ runIfJq('worktree-sandbox.sh', () => {
     expect(status).toBe(0);
     const parsed = JSON.parse(stdout);
     expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+
+  // --- Orchestrator / subagent distinction (fix/sandbox-orchestrator-distinction) ---
+  // $CLAUDE_PROJECT_DIR is the harness-trusted anchor. When set, we only gate
+  // cwd paths that are provably inside a subagent worktree. All other cwd
+  // values — including the project root itself — are treated as the
+  // orchestrator and pass through without path-gating.
+
+  it('[orch] orchestrator allowed — project cwd + CLAUDE_PROJECT_DIR set — Write inside project', () => {
+    // Orchestrator cwd equals CLAUDE_PROJECT_DIR → IS_SUBAGENT=0 → exit 0 immediately.
+    // Even writing outside the "worktree" (because there is no worktree) must be allowed.
+    const { stdout, status } = runHook(
+      { tool_name: 'Write', tool_input: { file_path: '/fake/project/src/foo.ts' }, cwd: '/fake/project' },
+      { CLAUDE_PROJECT_DIR: '/fake/project' },
+    );
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('[orch] orchestrator allowed — external absolute path — CLAUDE_PROJECT_DIR set', () => {
+    // Orchestrator cwd does not match any worktree pattern → IS_SUBAGENT=0 → exit 0.
+    // An absolute path like /Users/goku/anything.md must also be allowed because
+    // the hook does not gate orchestrator tool calls at all.
+    const { stdout, status } = runHook(
+      { tool_name: 'Write', tool_input: { file_path: '/Users/goku/anything.md' }, cwd: '/fake/project' },
+      { CLAUDE_PROJECT_DIR: '/fake/project' },
+    );
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('[subagent] subagent still blocked (no regression) — Write inside project from worktree cwd', () => {
+    // Subagent cwd is <proj>/.claude/worktrees/agent-abc → IS_SUBAGENT=1 → gates.
+    // Target is inside the main project but OUTSIDE the subagent worktree cwd → deny.
+    const { stdout, status } = runHook(
+      {
+        tool_name: 'Write',
+        tool_input: { file_path: '/fake/project/src/foo.ts' },
+        cwd: '/fake/project/.claude/worktrees/agent-abc',
+      },
+      { CLAUDE_PROJECT_DIR: '/fake/project' },
+    );
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/fake/project/src/foo.ts');
+  });
+
+  it('[subagent] subagent path traversal still blocked — Write with .. segment outside worktree', () => {
+    // The .. segment resolves to /fake/project/.claude/worktrees/agent-abc/../etc/passwd
+    // → /fake/project/.claude/worktrees/etc/passwd (still outside worktree) → deny.
+    // More specifically: agent-abc/../../../etc/passwd → /fake/project/.claude/etc/passwd
+    // which is outside the subagent worktree cwd.
+    const { stdout, status } = runHook(
+      {
+        tool_name: 'Write',
+        tool_input: { file_path: '/fake/project/.claude/worktrees/agent-abc/../../../etc/passwd' },
+        cwd: '/fake/project/.claude/worktrees/agent-abc',
+      },
+      { CLAUDE_PROJECT_DIR: '/fake/project' },
+    );
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason.toLowerCase()).toContain('/etc/passwd');
+  });
+
+  it('[subagent] memory-dir allowlist still works from subagent worktree', () => {
+    // IS_SUBAGENT=1 (worktree cwd), but the target is the Claude Code auto-memory
+    // path under ~/.claude/projects/*/memory/* — which is on the allowlist → allow.
+    const home = process.env.HOME ?? '/Users/testuser';
+    const memoryPath = `${home}/.claude/projects/-fake-project/memory/session.md`;
+    const { stdout, status } = runHook(
+      {
+        tool_name: 'Write',
+        tool_input: { file_path: memoryPath },
+        cwd: '/fake/project/.claude/worktrees/agent-abc',
+      },
+      { CLAUDE_PROJECT_DIR: '/fake/project' },
+    );
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('[fallback] CLAUDE_PROJECT_DIR missing → fallback glob — relay worktree cwd → deny /etc/passwd', () => {
+    // No CLAUDE_PROJECT_DIR env: fallback branch fires, matches /tmp/gossip-wt-*
+    // → IS_SUBAGENT=1, then gates the target path.
+    const { stdout, status } = runHook(
+      { tool_name: 'Write', tool_input: { file_path: '/etc/passwd' }, cwd: '/tmp/gossip-wt-X' },
+      { CLAUDE_PROJECT_DIR: '' },  // explicit empty = unset-equivalent for our branch
+    );
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/passwd');
+  });
+
+  it('[fallback] CLAUDE_PROJECT_DIR mismatched — subagent worktree cwd → deny', () => {
+    // CLAUDE_PROJECT_DIR points to a different project than the cwd. The cwd is
+    // /fake/project/.claude/worktrees/agent-abc, but CLAUDE_PROJECT_DIR=/other/proj
+    // so the anchored match for /other/proj/.claude/worktrees/... does NOT fire.
+    // However the fallback glob */.claude/worktrees/agent-* DOES match → IS_SUBAGENT=1
+    // → gate fires → deny.
+    const { stdout, status } = runHook(
+      {
+        tool_name: 'Write',
+        tool_input: { file_path: '/fake/project/src/foo.ts' },
+        cwd: '/fake/project/.claude/worktrees/agent-abc',
+      },
+      { CLAUDE_PROJECT_DIR: '/other/proj' },
+    );
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/fake/project/src/foo.ts');
   });
 });
 

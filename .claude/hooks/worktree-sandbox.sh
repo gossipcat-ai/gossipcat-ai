@@ -180,13 +180,52 @@ if [ -z "$cwd" ]; then
   exit 0
 fi
 
-# Only gate gossipcat-owned worktrees. Any other cwd → allow.
-case "$cwd" in
-  */.claude/worktrees/agent-*) ;;
-  /tmp/gossip-wt-*) ;;
-  /private/tmp/gossip-wt-*) ;;
-  *) exit 0 ;;
-esac
+# Distinguish orchestrator from subagent using $CLAUDE_PROJECT_DIR as anchor.
+# The orchestrator runs with its project dir as cwd; subagents run inside a
+# gossipcat worktree. We only gate subagents.
+#
+# When $CLAUDE_PROJECT_DIR is set and non-empty:
+#   - Normalise it once.
+#   - A cwd that matches <proj>/.claude/worktrees/agent-* or a relay worktree
+#     path means we are in a subagent context → IS_SUBAGENT=1.
+#   - Any other cwd (including the project root itself) → orchestrator → allow.
+#
+# When $CLAUDE_PROJECT_DIR is unset (old harness / tests without env):
+#   - Fall back to glob-only match on well-known namespace patterns. This
+#     preserves relay worktree coverage (/tmp/gossip-wt-*) on old harnesses.
+IS_SUBAGENT=0
+if [ -n "$CLAUDE_PROJECT_DIR" ]; then
+  proj_norm="$(normalize_path "$CLAUDE_PROJECT_DIR")"
+  if [ -n "$proj_norm" ]; then
+    case "$cwd" in
+      "${proj_norm}/.claude/worktrees/agent-"*) IS_SUBAGENT=1 ;;
+      /tmp/gossip-wt-*) IS_SUBAGENT=1 ;;
+      /private/tmp/gossip-wt-*) IS_SUBAGENT=1 ;;
+    esac
+  fi
+  # Defense-in-depth: if the anchored match above did not flag it, still check
+  # the glob fallback. This catches mismatched CLAUDE_PROJECT_DIR (e.g. a
+  # harness bug or a spoofed env that points to the wrong project) while keeping
+  # the known-safe relay worktree patterns gated unconditionally.
+  if [ "$IS_SUBAGENT" -eq 0 ]; then
+    case "$cwd" in
+      */.claude/worktrees/agent-*) IS_SUBAGENT=1 ;;
+      /tmp/gossip-wt-*) IS_SUBAGENT=1 ;;
+      /private/tmp/gossip-wt-*) IS_SUBAGENT=1 ;;
+    esac
+  fi
+else
+  # Fallback: no CLAUDE_PROJECT_DIR env — use glob match only.
+  case "$cwd" in
+    */.claude/worktrees/agent-*) IS_SUBAGENT=1 ;;
+    /tmp/gossip-wt-*) IS_SUBAGENT=1 ;;
+    /private/tmp/gossip-wt-*) IS_SUBAGENT=1 ;;
+  esac
+fi
+
+# Orchestrator (or non-gossipcat cwd) → pass through without gating.
+[ "$IS_SUBAGENT" -eq 0 ] && exit 0
+# Subagent falls through to existing path-gating logic below (unchanged).
 
 # Case-insensitive tool-name match (portable: no bash 4+ ${var,,}).
 tool_name_lc="$(printf '%s' "$tool_name" | tr '[:upper:]' '[:lower:]')"
@@ -275,15 +314,15 @@ while IFS= read -r path_arg; do
   fi
 
   # Allowlist: Claude Code auto-memory lives at ~/.claude/projects/*/memory/*.
-# These files are managed by the built-in memory system, not repo state.                                                                     
-# Blocking them breaks memory-save flow when working inside a worktree.                                    
-home_norm="$(normalize_path "$HOME")"                                                                                                        
-if [ -n "$home_norm" ]; then                                                                               
-  case "$path_norm" in                                                                                                                       
-    "${home_norm}/.claude/projects"/*/memory/*) continue ;;                                                
-  esac                                                                                                                                       
-fi
-                                                                                                                                             
+  # These files are managed by the built-in memory system, not repo state.
+  # Blocking them breaks memory-save flow when working inside a worktree.
+  home_norm="$(normalize_path "$HOME")"
+  if [ -n "$home_norm" ]; then
+    case "$path_norm" in
+      "${home_norm}/.claude/projects"/*/memory/*) continue ;;
+    esac
+  fi
+
   if ! path_is_inside "$cwd_norm" "$path_norm"; then
     emit_deny "BOUNDARY ESCAPE: ${tool_name} targets '${path_arg}' (normalized: '${path_norm}') outside worktree cwd '${cwd_norm}'. Use a relative path (./...) inside the worktree."
   fi
