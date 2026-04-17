@@ -52,8 +52,8 @@ export function CategoryCompetency({ categoryAccuracy, categoryCorrect, category
         return (
           <div
             key={row.key}
-            className="grid grid-cols-[128px_1fr_auto_44px] items-center gap-3"
-            title={title}
+            className={`grid grid-cols-[128px_1fr_auto_44px] items-center gap-3 ${row.n > 0 && row.n < 10 ? 'opacity-50' : ''}`}
+            title={row.n > 0 && row.n < 10 ? `${title} — low sample (n<10)` : title}
           >
             <span className="truncate font-mono text-[11px] text-muted-foreground">
               {row.key.replace(/_/g, ' ')}
