@@ -15,8 +15,8 @@ import { parseFrontmatter } from './api-native-memory';
  *
  * The dashboard consumes this endpoint via `useDashboardData.gossipMemories`
  * and renders it with the 4-folder taxonomy (backlog / record / session / rule)
- * mapped by `memory-taxonomy.ts`. Dashboard must NEVER merge native + gossip
- * arrays — separation is an invariant (see spec risk matrix).
+ * mapped by `memory-taxonomy.ts`. Separation of write paths is an invariant;
+ * display-layer merge is permitted (see docs/specs/2026-04-17-unified-memory-view.md).
  *
  * Route: GET /dashboard/api/gossip-memory
  * Spec: docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md

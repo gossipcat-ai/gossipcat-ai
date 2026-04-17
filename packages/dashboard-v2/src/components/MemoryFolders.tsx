@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
 import type { MemoryFile } from '@/lib/types';
 import { DISPLAY_TYPES, toDisplayType, type DisplayType } from '@/lib/memory-taxonomy';
+import { dedupeMemories } from '@/lib/memory-dedupe';
 import { MemoryTileGrid } from './MemoryTileGrid';
 import { MemoryDialog } from './MemoryDialog';
 
@@ -105,12 +106,13 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
   const [open, setOpen] = useState<MemoryFile | null>(null);
   const [statusView, setStatusView] = useState<StatusFilter>('all');
 
-  // De-dupe by filename: the same file can be returned for both its agent and
-  // _project when an agent shares it.
-  const unique = useMemo(
-    () => memories.filter((m, i, arr) => arr.findIndex((x) => x.filename === m.filename) === i),
-    [memories],
-  );
+  // De-dupe by `${origin}/${filename}`: the same file can be returned for both
+  // its agent and _project when an agent shares it. Including `origin` in the
+  // key preserves cross-store collisions (a same-named file in both gossip and
+  // native stores stays visible) — see spec 2026-04-17-unified-memory-view.md
+  // risk #1. Memories without an origin fall back to the legacy filename-only
+  // key so pre-merge callers behave unchanged.
+  const unique = useMemo(() => dedupeMemories(memories), [memories]);
 
   // Apply status filter (gossip-memory only). Native store doesn't carry status
   // consistently, so we only filter when the caller opts in.
@@ -291,10 +293,7 @@ export function GossipMemories({ memories }: { memories: MemoryFile[] }) {
  */
 export function NativeMemories({ memories }: { memories: MemoryFile[] }) {
   const [open, setOpen] = useState<MemoryFile | null>(null);
-  const unique = useMemo(
-    () => memories.filter((m, i, arr) => arr.findIndex((x) => x.filename === m.filename) === i),
-    [memories],
-  );
+  const unique = useMemo(() => dedupeMemories(memories), [memories]);
   const now = Date.now();
 
   return (

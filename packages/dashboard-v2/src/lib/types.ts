@@ -139,6 +139,13 @@ export interface MemoryFile {
   frontmatter: Record<string, string>;
   content: string;
   agentId?: string;
+  /**
+   * Store the memory originated from. Stamped by the dashboard data hook
+   * (`useDashboardData`) when merging the two memory arrays for display.
+   * Used as part of the dedupe key so a same-named file in both stores is
+   * not silently hidden. Spec: docs/specs/2026-04-17-unified-memory-view.md.
+   */
+  origin?: 'gossip' | 'native';
 }
 
 export interface MemoryData {
