@@ -244,9 +244,12 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
   const [retractionsByConsensusId, setRetractionsByConsensusId] =
     useState<Record<string, { reason: string; retracted_at: string }>>({});
 
-  // When the initial reports prop arrives (page 1 data), seed loadedReports
+  // When the initial reports prop arrives (page 1 data), seed loadedReports.
+  // On showAll pages the dedicated pageSize=200 fetch (see next effect) owns
+  // loadedReports — skip this seeding path so WebSocket refreshes don't
+  // overwrite the full list back to 5 and collapse the paginator.
   useEffect(() => {
-    if (reports?.reports) {
+    if (!showAll && reports?.reports) {
       setLoadedReports(reports.reports);
       setTotalReports(reports.totalReports ?? reports.reports.length);
       setReportPage(1);
@@ -259,7 +262,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
       }
       setRetractionsByConsensusId(map);
     }
-  }, [reports]);
+  }, [reports, showAll]);
 
   // On showAll pages, fetch all reports (not just the initial 5-page preview)
   useEffect(() => {

@@ -37,7 +37,7 @@ export interface ConsensusResponse {
 // Signals that resolve an UNVERIFIED finding
 const RESOLUTION_SIGNALS = new Set(['agreement', 'unique_confirmed', 'consensus_verified']);
 const DEFAULT_PAGE_SIZE = 10;
-const MAX_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 500;
 
 export async function consensusHandler(projectRoot: string, query?: URLSearchParams): Promise<ConsensusResponse> {
   const rawPage = parseInt(query?.get('page') ?? '1', 10);

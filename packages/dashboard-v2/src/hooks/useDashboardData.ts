@@ -64,7 +64,7 @@ export function useDashboardData() {
         // pageSize=50 matches api-consensus MAX_PAGE_SIZE so header aggregates
         // (confirmedTotal/disputedTotal/unverifiedTotal in App.tsx:383-385) cover
         // the full round history instead of the first 10 runs.
-        api<ConsensusData>('consensus?pageSize=50'),
+        api<ConsensusData>('consensus?pageSize=500'),
         api<ConsensusReportsData>('consensus-reports?page=1&pageSize=5').catch(() => ({ reports: [] })),
         // Native + gossip stores are fetched in parallel and kept SEPARATE. The
         // taxonomy/status split only applies to gossip memories. Native memories
