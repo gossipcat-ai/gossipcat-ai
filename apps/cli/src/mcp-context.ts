@@ -89,6 +89,22 @@ export interface McpContext {
   /** Source of the HTTP MCP port. */
   httpMcpPortSource: 'env' | 'sticky' | 'auto' | null;
   booted: boolean;
+  /**
+   * True when `doBoot()` ran without a config file and synthesized an empty
+   * one (fresh-install / degraded-mode). The dashboard boots with 0 agents
+   * in this case — subsequent gossip_setup calls refresh it via
+   * ctx.relay.setAgentConfigs, but the dashboard poll interval (5s) still
+   * imposes a small latency. Used to surface a user-visible advisory in
+   * the gossip_setup response (issue #96).
+   */
+  bootedInDegradedMode: boolean;
+  /**
+   * Result of the last syncWorkersViaKeychain() call. Lets callers (e.g.
+   * gossip_setup) surface agent-count / error info to the user without
+   * having to reach into syncWorkers internals. Issue #96 — dashboard
+   * empty-agent-list on fresh install.
+   */
+  lastSyncResult: { ok: boolean; mergedAgentCount: number; error?: string } | null;
   boot: () => Promise<void>;
   syncWorkersViaKeychain: () => Promise<void>;
   getModules: () => Promise<any>;
@@ -115,6 +131,8 @@ export const ctx: McpContext = {
   relayPortSource: null,
   httpMcpPortSource: null,
   booted: false,
+  bootedInDegradedMode: false,
+  lastSyncResult: null,
   boot: async () => { throw new Error('boot not initialized'); },
   syncWorkersViaKeychain: async () => {},
   getModules: async () => { throw new Error('getModules not initialized'); },

@@ -50,7 +50,7 @@ export function loadConfig(configPath: string): GossipConfig {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error(`Failed to parse config at ${configPath}. Use JSON format for gossip.agents.json.`);
+    throw new Error(`Failed to parse config at ${configPath}. The gossipcat config file must be valid JSON (tried .gossip/config.json and gossip.agents.json legacy path).`);
   }
 
   return validateConfig(parsed);
