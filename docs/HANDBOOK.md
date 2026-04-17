@@ -158,6 +158,24 @@ When blocked, the error message shows age + remaining cooldown + override instru
 
 When a consensus report has `UNVERIFIED` findings (cross-reviewer couldn't check), **you must verify them yourself before presenting results**. UNVERIFIED means "the peer didn't have the tools or context to check" — you do. Read the cited files, grep for the identifiers, confirm or reject. Do not show raw consensus output with unexamined UNVERIFIED findings.
 
+### Reviewing a branch that lives in a git worktree
+
+If you're reviewing code that only exists on a feature branch (e.g. `git worktree add .worktrees/feature-x feature-x`), pass the worktree path via `gossip_collect`:
+
+```
+gossip_collect({
+  task_ids: [...],
+  consensus: true,
+  resolutionRoots: ['.worktrees/feature-x'],
+})
+```
+
+Without `resolutionRoots`, citations to files that only exist in the worktree resolve against `projectRoot` → `⚠ file not found` → every cross-reviewer marks UNVERIFIED → the round produces zero verified findings. `resolutionRoots` runs each path through a validator (NUL reject, `..` reject, realpath, ownership check, git-common-dir match, `git worktree list` membership) before adding it to the citation-resolver trust zone.
+
+Secondary: `consensus.autoDiscoverWorktrees: true` in `.gossip/config.json` auto-discovers all git worktrees at round start (opt-in, default off) — convenience for users who routinely run consensus on feature branches. Same validator applies.
+
+See spec `docs/specs/2026-04-17-issue-126.md` for the full design.
+
 ### Before trusting a memory entry
 
 Backlog memories decay fast. Before acting on any `project_*.md` memory claim older than 48 hours, call `gossip_verify_memory(memory_path, claim)` and handle the verdict:
