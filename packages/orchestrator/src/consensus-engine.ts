@@ -543,9 +543,11 @@ Respond with one of:
 
 IMPORTANT: Use DISAGREE only when you have evidence the finding is WRONG. Use UNVERIFIED when you simply cannot check it.
 
-Return ONLY a JSON array. Use findingId to reference findings:
+Return ONLY a JSON array. findingId format:
+- For agree/disagree/unverified: "<peer_agent_id>:f<N>" referencing a peer's phase-1 finding (e.g., "gemini-reviewer:f1").
+- For new: "self:n<N>" — the server rewrites this to a consensus-wide ID. Do NOT reference a peer.
 [
-  { "action": "agree"|"disagree"|"unverified"|"new", "findingId": "agent:f1", "finding": "brief summary", "evidence": "your reasoning", "confidence": 1-5 }
+  { "action": "agree"|"disagree"|"unverified"|"new", "findingId": "...", "finding": "brief summary", "evidence": "your reasoning", "confidence": 1-5 }
 ]`;
 
     // Inject the reviewer's skills (if any) so their Phase-2 methodology
@@ -650,8 +652,14 @@ Return only valid JSON.${skillsBlock}`;
       if (entries.length === 0) {
         _log('consensus', `${agent.agentId} cross-review parsed to 0 entries (response length: ${response.text.length})`);
       }
-      // Filter: no self-references, peerAgentId must be a real agent in this batch
-      return entries.filter(e => e.peerAgentId !== agent.agentId && validPeerIds.has(e.peerAgentId));
+      // Filter: no self-references, peerAgentId must be a real agent in this batch.
+      // Exception: NEW findings have no peer — the submitter is raising a fresh
+      // issue all agents missed. Rejecting them on self-review (GH #131) drops
+      // ConsensusReport.newFindings[] to empty in every round.
+      return entries.filter(e => {
+        if (e.action === 'new') return true;
+        return e.peerAgentId !== agent.agentId && validPeerIds.has(e.peerAgentId);
+      });
     } catch (err) {
       _log('consensus', `${agent.agentId} cross-review LLM call failed: ${(err as Error).message}`);
       return [];
@@ -966,7 +974,14 @@ Return only valid JSON.${skillsBlock}`;
         // Sanitize before storage — strip XML-like tags that could be re-injected as instructions
         // in future sessions via gossip_remember() or session context loading.
         const sanitize = (t: string) => t.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
-        const newFindingId = `${consensusId}:${entry.agentId}:n${++newFindingIdx}`;
+        // Prefer the pre-rewritten findingId from relay-cross-review
+        // (format: `<consensusId>:new:<agentId>:<counter>`). Falls back to
+        // generating our own when the entry arrived via the in-process
+        // Phase-2 path (runSelectedCrossReview / dispatchCrossReview) which
+        // does not rewrite findingIds.
+        const newFindingId = entry.findingId && entry.findingId.includes(':new:')
+          ? entry.findingId
+          : `${consensusId}:new:${entry.agentId}:${++newFindingIdx}`;
         newFindings.push({
           agentId: entry.agentId,
           finding: sanitize(entry.finding),
