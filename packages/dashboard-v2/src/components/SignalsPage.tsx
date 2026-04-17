@@ -8,8 +8,9 @@ import type { SignalEntry } from '@/lib/types';
 interface SignalsResponse {
   items: SignalEntry[];
   total: number;
-  nextCursor?: string;
 }
+
+interface AgentsListItem { id: string }
 
 const EMPTY_FILTERS: SignalFilters = {
   agents: [],
@@ -41,9 +42,12 @@ const SEVERITY_BADGE: Record<string, string> = {
   low: 'bg-muted text-muted-foreground',
 };
 
-function buildQuery(filters: SignalFilters, cursor?: string, limit = 100): URLSearchParams {
+const PAGE_SIZE = 100;
+
+function buildQuery(filters: SignalFilters, offset: number, limit = PAGE_SIZE): URLSearchParams {
   const q = new URLSearchParams();
   q.set('limit', String(limit));
+  q.set('offset', String(offset));
   if (filters.agents.length === 1) q.set('agent', filters.agents[0]);
   if (filters.counterpart) q.set('counterpart', filters.counterpart);
   for (const s of filters.signals) q.append('signal', s);
@@ -54,7 +58,6 @@ function buildQuery(filters: SignalFilters, cursor?: string, limit = 100): URLSe
   if (filters.consensusId) q.set('consensus_id', filters.consensusId);
   if (filters.findingId) q.set('finding_id', filters.findingId);
   if (filters.source) q.set('source', filters.source);
-  if (cursor) q.set('cursor', cursor);
   return q;
 }
 
@@ -66,7 +69,7 @@ function truncate(s: string | undefined, n: number): string {
 export function SignalsPage() {
   const [filters, setFilters] = useState<SignalFilters>(EMPTY_FILTERS);
   const [rows, setRows] = useState<SignalEntry[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
+  const [page, setPage] = useState(0);
   const [total, setTotal] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,17 +85,16 @@ export function SignalsPage() {
   const latestReqId = useRef(0);
 
   const doFetch = useCallback(
-    async (f: SignalFilters, cursor?: string, append = false) => {
+    async (f: SignalFilters, pageIdx: number) => {
       const reqId = ++latestReqId.current;
       setLoading(true);
       setError(null);
       try {
-        const q = buildQuery(f, cursor);
+        const q = buildQuery(f, pageIdx * PAGE_SIZE);
         const res = await api<SignalsResponse>(`signals?${q.toString()}`);
         // Guard against racing older requests writing over newer results.
         if (reqId !== latestReqId.current) return;
-        setRows((prev) => (append ? [...prev, ...(res.items ?? [])] : res.items ?? []));
-        setNextCursor(res.nextCursor);
+        setRows(res.items ?? []);
         setTotal(res.total ?? 0);
       } catch (e) {
         if (reqId !== latestReqId.current) return;
@@ -104,38 +106,39 @@ export function SignalsPage() {
     []
   );
 
-  // Debounced reset-fetch on filter change
+  // Load the full agent list once on mount so the filter rail shows every agent,
+  // not just those that appear in the current signal window.
+  useEffect(() => {
+    api<AgentsListItem[]>('agents')
+      .then((list) => {
+        const ids = (list ?? []).map((a) => a.id).filter(Boolean).sort();
+        if (ids.length > 0) setAgents(ids);
+      })
+      .catch(() => { /* leave empty; page still works */ });
+  }, []);
+
+  // Reset to page 0 whenever filters change
+  useEffect(() => {
+    setPage(0);
+  }, [filters]);
+
+  // Debounced fetch on filter / page change
   useEffect(() => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
-      doFetch(filters, undefined, false);
+      doFetch(filters, page);
     }, 250);
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
-  }, [filters, doFetch]);
-
-  // Derive agent list from returned rows so the filter rail self-populates as
-  // the user browses. (A dedicated /agents call would be nicer, but this
-  // keeps the page self-contained per the spec.)
-  useEffect(() => {
-    const seen = new Set<string>(agents);
-    for (const r of rows) {
-      if (r.agentId) seen.add(r.agentId);
-      if (r.counterpartId) seen.add(r.counterpartId);
-    }
-    const next = Array.from(seen).sort();
-    if (next.length !== agents.length) setAgents(next);
-  }, [rows, agents]);
+  }, [filters, page, doFetch]);
 
   const onFilterChange = useCallback((patch: Partial<SignalFilters>) => {
     setFilters((prev) => ({ ...prev, ...patch }));
   }, []);
 
-  const onLoadMore = useCallback(() => {
-    if (!nextCursor || loading) return;
-    doFetch(filters, nextCursor, true);
-  }, [nextCursor, loading, filters, doFetch]);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const clampedPage = Math.min(page, totalPages - 1);
 
   const openDrawer = (consensusId?: string, findingId?: string) => {
     if (!consensusId || !findingId) return;
@@ -240,16 +243,27 @@ export function SignalsPage() {
 
           <div className="flex items-center justify-between border-t border-border/60 px-3 py-2">
             <span className="font-mono text-[10px] text-muted-foreground/60">
-              {loading ? 'loading…' : `${rows.length} rows`}
+              {loading
+                ? 'loading…'
+                : `${clampedPage * PAGE_SIZE + 1}–${clampedPage * PAGE_SIZE + rows.length} of ${total}`}
             </span>
-            <button
-              type="button"
-              className="rounded border border-border bg-background px-2 py-1 font-mono text-[10px] text-foreground hover:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={!nextCursor || loading}
-              onClick={onLoadMore}
-            >
-              {nextCursor ? 'Load more' : 'End of results'}
-            </button>
+            <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={clampedPage === 0 || loading}
+                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+              >◂ Prev</button>
+              <span className="tabular-nums">
+                {clampedPage + 1} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={clampedPage >= totalPages - 1 || loading}
+                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+              >Next ▸</button>
+            </div>
           </div>
         </section>
       </div>

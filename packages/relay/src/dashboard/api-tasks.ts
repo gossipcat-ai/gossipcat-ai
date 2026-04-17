@@ -23,7 +23,7 @@ export interface TasksResponse {
 export async function tasksHandler(projectRoot: string, query?: URLSearchParams): Promise<TasksResponse> {
   const rawLimit = parseInt(query?.get('limit') ?? '50', 10);
   const rawOffset = parseInt(query?.get('offset') ?? '0', 10);
-  const limit = isNaN(rawLimit) || rawLimit < 1 ? 50 : Math.min(rawLimit, 200);
+  const limit = isNaN(rawLimit) || rawLimit < 1 ? 50 : Math.min(rawLimit, 2000);
   const offset = isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
 
   const graphPath = join(projectRoot, '.gossip', 'task-graph.jsonl');

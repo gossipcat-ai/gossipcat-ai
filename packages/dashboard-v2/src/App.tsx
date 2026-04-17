@@ -308,7 +308,7 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<import('@/lib/types').TaskItem | null>(null);
-  const PAGE_SIZE = 50;
+  const PAGE_SIZE = 100;
 
   const completed = tasks.items.filter((t) => t.status === 'completed').length;
   const failed = tasks.items.filter((t) => t.status === 'failed').length;
