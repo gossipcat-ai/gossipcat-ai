@@ -173,6 +173,40 @@ describe('SkillEngine — baseline snapshot in frontmatter', () => {
     expect(fm).toMatch(/status:\s*pending/);
   });
 
+  it('preserves bound_at when redeveloping a pending skill (regression: #147)', async () => {
+    const llm = makeStubLLM();
+    const perfReader = makeStubPerfReader(tmpDir, { trust_boundaries: 3 }, { trust_boundaries: 1 });
+    const gen = new SkillEngine(llm, perfReader, tmpDir);
+
+    // First bind — records initial bound_at
+    const first = await gen.generate('test-agent', 'trust_boundaries');
+    const firstFm = readFileSync(first.path, 'utf-8').match(/^---\n([\s\S]*?)\n---/)![1];
+    const firstBoundAt = firstFm.match(/bound_at:\s*(.+)/)![1].trim();
+
+    // Small delay so any new timestamp would differ from the first
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Re-develop — skill is still pending (status was written as pending)
+    const second = await gen.generate('test-agent', 'trust_boundaries');
+    const secondFm = readFileSync(second.path, 'utf-8').match(/^---\n([\s\S]*?)\n---/)![1];
+    const secondBoundAt = secondFm.match(/bound_at:\s*(.+)/)![1].trim();
+
+    expect(secondBoundAt).toBe(firstBoundAt); // bound_at MUST be preserved for pending redevelop
+  });
+
+  it('mints a fresh bound_at when there is no existing skill file (first bind)', async () => {
+    const llm = makeStubLLM();
+    const perfReader = makeStubPerfReader(tmpDir, {}, {});
+    const gen = new SkillEngine(llm, perfReader, tmpDir);
+
+    const before = Date.now();
+    const result = await gen.generate('test-agent', 'trust_boundaries');
+    const fm = readFileSync(result.path, 'utf-8').match(/^---\n([\s\S]*?)\n---/)![1];
+    const boundAtTs = new Date(fm.match(/bound_at:\s*(.+)/)![1].trim()).getTime();
+
+    expect(boundAtTs).toBeGreaterThanOrEqual(before);
+  });
+
   it('writes effectiveness: 0.0 (number, not string)', async () => {
     const llm = makeStubLLM();
     const perfReader = makeStubPerfReader(tmpDir, {}, {});

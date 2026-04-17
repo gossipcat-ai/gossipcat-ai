@@ -15,6 +15,7 @@ import { PerformanceReader } from './performance-reader';
 import { LLMMessage } from '@gossip/types';
 import { ConsensusSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
+import { readSkillFreshness } from './skill-freshness';
 import {
   resolveVerdict,
   TIMEOUT_MS,
@@ -160,7 +161,17 @@ export class SkillEngine {
     const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
     const baseline_accuracy_correct = lifetime.correct;
     const baseline_accuracy_hallucinated = lifetime.hallucinated;
-    const bound_at = new Date().toISOString();
+
+    // Invariant #6: bound_at is set at first-bind and is immutable thereafter.
+    // If the existing skill file is still `pending` (evidence accumulating),
+    // preserve its bound_at so redevelopment refines the prompt without
+    // restarting the MIN_EVIDENCE window. The cooldown gate hard-blocks
+    // redevelop for terminal verdicts (passed/failed/silent_skill/insufficient_evidence),
+    // so this branch is only reachable for pending or fresh skills. See #147.
+    const existing = readSkillFreshness(agentId, category, this.projectRoot);
+    const bound_at = (existing.status === 'pending' && existing.boundAt)
+      ? existing.boundAt
+      : new Date().toISOString();
 
     const skillName = normalizeSkillName(category);
     const skillPath = join(this.projectRoot, '.gossip', 'agents', agentId, 'skills', `${skillName}.md`);
