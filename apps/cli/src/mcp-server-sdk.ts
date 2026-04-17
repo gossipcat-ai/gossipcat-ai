@@ -34,6 +34,7 @@ import { handleCollect } from './handlers/collect';
 import { restorePendingConsensus } from './handlers/relay-cross-review';
 import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
 import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FILE } from './stickyPort';
+import { buildDashboardAdvisory } from './setup-response';
 
 // ── Environment detection ────────────────────────────────────────────────
 
@@ -374,6 +375,7 @@ async function doBoot() {
     // primary path so "No config found" error messages match what users see
     // when they inspect the project directory.
     process.stderr.write('[gossipcat] ⚠️  No .gossip/config.json found — booting in degraded mode (dashboard + relay only). Run gossip_setup inside Claude Code to create your agent team.\n');
+    ctx.bootedInDegradedMode = true;
     config = {
       main_agent: { provider: 'none', model: 'none' },
       utility_model: { provider: 'none', model: 'none' },
@@ -997,9 +999,17 @@ async function doSyncWorkers() {
     try {
       const merged = [...agentConfigs, ...claudeSubagentsToConfigs(claudeSubagents)];
       ctx.relay?.setAgentConfigs(merged);
-    } catch { /* dashboard refresh is best-effort */ }
+      ctx.lastSyncResult = { ok: true, mergedAgentCount: merged.length };
+    } catch (e) {
+      // Dashboard refresh is best-effort, but record the failure so
+      // gossip_setup can surface it instead of the user seeing an empty
+      // dashboard with no explanation. Issue #96.
+      ctx.lastSyncResult = { ok: false, mergedAgentCount: 0, error: (e as Error).message };
+    }
   } catch (err) {
-    process.stderr.write(`[gossipcat] ❌ syncWorkers failed: ${(err as Error).message}\n`);
+    const msg = (err as Error).message;
+    process.stderr.write(`[gossipcat] ❌ syncWorkers failed: ${msg}\n`);
+    ctx.lastSyncResult = { ok: false, mergedAgentCount: 0, error: msg };
   }
 }
 
@@ -1949,10 +1959,19 @@ server.tool(
     // pushes to the dashboard at its tail, so one call refreshes everything.
     // Only fires on create modes (merge/replace); update_instructions
     // returns earlier at :1504.
+    // Reset the sync-result marker so stale data from a prior setup call
+    // can't leak into this response's advisory (issue #96).
+    ctx.lastSyncResult = null;
     try {
       await syncWorkersViaKeychain();
     } catch (e) {
-      process.stderr.write(`[gossipcat] gossip_setup: failed to refresh agent state: ${e}\n`);
+      const msg = (e as Error).message ?? String(e);
+      process.stderr.write(`[gossipcat] gossip_setup: failed to refresh agent state: ${msg}\n`);
+      // Record the failure for the advisory below, in case syncWorkers itself
+      // didn't reach its own result-write (e.g. the call threw synchronously).
+      if (!ctx.lastSyncResult) {
+        ctx.lastSyncResult = { ok: false, mergedAgentCount: 0, error: msg };
+      }
     }
 
     // Generate host-appropriate rules file so the IDE knows about the team
@@ -1990,6 +2009,16 @@ server.tool(
     if (nativeCreated.length > 0) {
       lines.push(`\nTip: Native agents may prompt for file write permissions. To auto-allow, add to .claude/settings.local.json:`);
       lines.push(`  { "permissions": { "allow": ["Edit", "Write"] } }`);
+    }
+
+    // Dashboard refresh advisory — see setup-response.ts for rationale (issue #96).
+    const advisory = buildDashboardAdvisory({
+      syncResult: ctx.lastSyncResult,
+      bootedInDegradedMode: ctx.bootedInDegradedMode,
+    });
+    if (advisory.length > 0) {
+      lines.push('');
+      lines.push(...advisory);
     }
 
     return { content: [{ type: 'text' as const, text: lines.join('\n') }] };

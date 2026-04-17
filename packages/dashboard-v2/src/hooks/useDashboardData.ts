@@ -6,9 +6,11 @@ import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReport
  * Polling interval for /api/agents and friends. Backs the "Team page updates
  * after gossip_setup without a full page reload" contract:
  * setAgentConfigs (server.ts:455) pushes new configs into ctx, but the SPA
- * needs to actually fetch them. 10s balances freshness vs request volume.
+ * needs to actually fetch them. 5s balances freshness vs request volume —
+ * dropped from 10s as part of issue #96 so fresh-install users don't stare
+ * at an empty Team page for up to 10 seconds after running gossip_setup.
  */
-const REFRESH_INTERVAL_MS = 10_000;
+const REFRESH_INTERVAL_MS = 5_000;
 
 interface MemoryApiResponse { knowledge: MemoryFile[] }
 
