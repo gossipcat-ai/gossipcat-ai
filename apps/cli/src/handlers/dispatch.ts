@@ -432,6 +432,13 @@ export async function handleDispatchParallel(
 export async function handleDispatchConsensus(
   taskDefs: Array<{ agent_id: string; task: string }>,
   _utility_task_id?: string,
+  /**
+   * #126 PR-B: optional dispatch-time resolutionRoots (post-validation,
+   * realpath'd absolute paths). Stashed on ctx.pendingDispatchResolutionRoots
+   * keyed by each dispatched task_id so gossip_collect can pick them up.
+   * Collect-time resolutionRoots REPLACE these (not merge).
+   */
+  dispatchResolutionRoots?: readonly string[],
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -588,6 +595,16 @@ export async function handleDispatchConsensus(
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
     );
     nativePrompts.push({ taskId, agentId: def.agent_id, prompt: agentPrompt });
+  }
+
+  // #126 PR-B: stash validated dispatch-time resolutionRoots keyed by each
+  // task_id so gossip_collect can pick them up when no collect-time input
+  // overrides. Collect-time REPLACES dispatch-time (spec, not merges).
+  if (dispatchResolutionRoots && dispatchResolutionRoots.length > 0) {
+    const frozen = Object.freeze([...dispatchResolutionRoots]);
+    for (const tid of allTaskIds) {
+      ctx.pendingDispatchResolutionRoots.set(tid, frozen);
+    }
   }
 
   const collectCall = `gossip_collect(task_ids: [${allTaskIds.map(id => `"${id}"`).join(', ')}], consensus: true)`;

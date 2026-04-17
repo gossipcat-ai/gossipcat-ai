@@ -1302,10 +1302,36 @@ server.tool(
     plan_id: z.string().optional().describe('Plan ID from gossip_plan. Enables chain context from prior steps.'),
     step: z.number().optional().describe('Step number in the plan (1-indexed).'),
     _utility_task_id: z.string().optional().describe('Internal: utility task ID for re-entry after native lens generation'),
+    // #126 PR-B: optional citation resolution roots (user-managed worktrees).
+    // Validated at handler boundary via validateResolutionRoot before reaching
+    // ConsensusEngine. Zod rejects NUL bytes so adversarial input fails at
+    // schema decode. Collect-time value (if any) REPLACES dispatch-time.
+    resolutionRoots: z.array(z.string().min(1).max(4096).refine(
+      (s) => !/[\x00-\x1f]/.test(s),
+      { message: 'resolutionRoots entries must not contain NUL or control characters' },
+    )).max(32).optional().describe('Optional worktree paths for citation resolution (issue #126).'),
   },
-  async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step, _utility_task_id }) => {
+  async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step, _utility_task_id, resolutionRoots }) => {
     // Track plan execution depth for re-entrant guard
     planExecutionDepth++;
+    // #126 PR-B: validate resolutionRoots at the MCP boundary. Fatal (NUL /
+    // control char) outcomes REJECT the round — do not dispatch.
+    let validatedDispatchRoots: string[] = [];
+    if (resolutionRoots && resolutionRoots.length > 0) {
+      const { validateResolutionRoot } = await import('@gossip/orchestrator');
+      for (const raw of resolutionRoots) {
+        const r = await validateResolutionRoot(raw, process.cwd());
+        if (r.valid) {
+          validatedDispatchRoots.push(r.canonical);
+          process.stderr.write(`[consensus] resolutionRoots accepted: ${r.canonical}\n`);
+        } else if (r.fatal) {
+          planExecutionDepth--;
+          return { content: [{ type: 'text' as const, text: `Error: resolutionRoots REJECTED ROUND (adversarial input): ${r.reason} [${r.hashedInput}]` }] };
+        } else {
+          process.stderr.write(`[consensus] resolutionRoots rejected: ${r.reason} [${r.hashedInput}]\n`);
+        }
+      }
+    }
     try {
       if (mode === 'single') {
         if (!agent_id || !task) {
@@ -1323,7 +1349,7 @@ server.tool(
         if (!tasks || tasks.length === 0) {
           return { content: [{ type: 'text' as const, text: 'Error: mode:"consensus" requires a non-empty tasks array.' }] };
         }
-        return handleDispatchConsensus(tasks, _utility_task_id);
+        return handleDispatchConsensus(tasks, _utility_task_id, validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined);
       }
       return { content: [{ type: 'text' as const, text: `Unknown mode: ${mode}` }] };
     } finally {
@@ -1340,8 +1366,53 @@ server.tool(
     task_ids: z.array(z.string()).default([]).describe('Task IDs to collect. Empty array for all.'),
     timeout_ms: z.number().default(300000).describe('Max wait time in ms. Default 5 minutes.'),
     consensus: z.boolean().default(false).describe('Enable cross-review consensus. Agents review each others findings.'),
+    // #126 PR-B: primary surface — collect-time resolutionRoots flow into
+    // every ConsensusEngine construction site (this is the ONE moment they
+    // are needed). REPLACES dispatch-time value per spec.
+    resolutionRoots: z.array(z.string().min(1).max(4096).refine(
+      (s) => !/[\x00-\x1f]/.test(s),
+      { message: 'resolutionRoots entries must not contain NUL or control characters' },
+    )).max(32).optional().describe('Optional user-worktree paths for citation resolution (issue #126). Collect-time overrides dispatch-time.'),
   },
-  async ({ task_ids, timeout_ms, consensus }) => handleCollect(task_ids, timeout_ms, consensus)
+  async ({ task_ids, timeout_ms, consensus, resolutionRoots }) => {
+    // Validate at MCP boundary. Fatal (NUL / control char) REJECTS the round.
+    let validated: string[] | undefined;
+    if (resolutionRoots && resolutionRoots.length > 0) {
+      const { validateResolutionRoot } = await import('@gossip/orchestrator');
+      const out: string[] = [];
+      for (const raw of resolutionRoots) {
+        const r = await validateResolutionRoot(raw, process.cwd());
+        if (r.valid) {
+          out.push(r.canonical);
+          process.stderr.write(`[consensus] resolutionRoots accepted: ${r.canonical}\n`);
+        } else if (r.fatal) {
+          return { content: [{ type: 'text' as const, text: `Error: resolutionRoots REJECTED ROUND (adversarial input): ${r.reason} [${r.hashedInput}]` }] };
+        } else {
+          process.stderr.write(`[consensus] resolutionRoots rejected: ${r.reason} [${r.hashedInput}]\n`);
+        }
+      }
+      validated = out;
+    } else if (task_ids && task_ids.length > 0) {
+      // No collect-time input — fall back to any dispatch-time roots stashed
+      // under these task_ids. If NONE are found but the round has a persisted
+      // value (via PendingConsensusRound), that path is still used inside
+      // relay-cross-review handlers. If the round has evicted via TTL and no
+      // collect-time roots are present, the explicit warn log in handleCollect
+      // surfaces the regression.
+      for (const tid of task_ids) {
+        const stashed = ctx.pendingDispatchResolutionRoots.get(tid);
+        if (stashed && stashed.length > 0) {
+          validated = [...stashed];
+          break;
+        }
+      }
+      // Consume stash once used.
+      if (validated) {
+        for (const tid of task_ids) ctx.pendingDispatchResolutionRoots.delete(tid);
+      }
+    }
+    return handleCollect(task_ids, timeout_ms, consensus, validated);
+  }
 );
 
 // ── Low-level: feed native cross-review results ────────────────────────────

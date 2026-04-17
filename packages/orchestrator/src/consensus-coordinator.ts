@@ -17,6 +17,12 @@ export interface ConsensusCoordinatorConfig {
   keyProvider: ((provider: string) => Promise<string | null>) | null;
   /** Forwarded to ConsensusEngine so Phase-2 reviewers keep their skills. */
   getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
+  /**
+   * Post-validation resolution roots forwarded to ConsensusEngine. Must be
+   * realpath'd absolute paths (validation happens at MCP boundary). Issue
+   * #126 / PR-B.
+   */
+  resolutionRoots?: readonly string[];
 }
 
 type ConsensusPhase = 'idle' | 'review' | 'cross_review' | 'synthesis';
@@ -27,6 +33,7 @@ export class ConsensusCoordinator {
   private projectRoot: string;
   private keyProvider: ((provider: string) => Promise<string | null>) | null;
   private getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
+  private resolutionRoots?: readonly string[];
   private gossipPublisher: GossipPublisher | null = null;
   private memWriter: MemoryWriter;
 
@@ -40,6 +47,7 @@ export class ConsensusCoordinator {
     this.projectRoot = config.projectRoot;
     this.keyProvider = config.keyProvider;
     this.getAgentSkillsContent = config.getAgentSkillsContent;
+    this.resolutionRoots = config.resolutionRoots;
     this.memWriter = new MemoryWriter(config.projectRoot);
   }
 
@@ -89,6 +97,7 @@ export class ConsensusCoordinator {
         projectRoot: this.projectRoot,
         agentLlm,
         getAgentSkillsContent: this.getAgentSkillsContent,
+        resolutionRoots: this.resolutionRoots,
       });
       const consensusReport = await engine.run(results);
       const perfWriter = new PerformanceWriter(this.projectRoot);
