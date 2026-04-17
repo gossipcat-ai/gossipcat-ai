@@ -13,6 +13,7 @@ import { TasksSection } from '@/components/TasksSection';
 import { MemoryFolders } from '@/components/MemoryFolders';
 import { AgentPage } from '@/components/AgentPage';
 import { LogsPage } from '@/components/LogsPage';
+import { SignalsPage } from '@/components/SignalsPage';
 import { TaskRow } from '@/components/TaskRow';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/useWebSocket';
@@ -481,6 +482,8 @@ function Dashboard() {
     content = <FindingsPage consensus={consensus} consensusReports={consensusReports} />;
   } else if (route === '/logs') {
     content = <LogsPage />;
+  } else if (route === '/signals') {
+    content = <SignalsPage />;
   } else {
     // Main dashboard — sidebar + main layout
     content = (
