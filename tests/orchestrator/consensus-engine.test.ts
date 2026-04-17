@@ -433,6 +433,29 @@ Summary: 1 agree, 1 disagree.`;
         expect(report.newFindings[0].agentId).toBe('agent-2');
       });
 
+      it('preserves a pre-rewritten NEW findingId from relay-cross-review (GH #131)', async () => {
+        // When a NEW entry has been rewritten by handleRelayCrossReview to
+        // `<consensusId>:new:<agentId>:<counter>`, synthesize MUST use that
+        // exact ID for the new_finding signal (instead of re-generating).
+        const rewritten = 'deadbeef-1234abcd:new:agent-2:7';
+        const crossReview: CrossReviewEntry[] = [
+          {
+            action: 'new',
+            agentId: 'agent-2',
+            peerAgentId: '',
+            findingId: rewritten,
+            finding: 'NEW with pre-rewritten id',
+            evidence: 'rewritten by relay handler',
+            confidence: 4,
+          },
+        ];
+        const report = await engine.synthesize(results, crossReview);
+        expect(report.newFindings.length).toBe(1);
+        const newSignal = report.signals.find(s => s.signal === 'new_finding');
+        expect(newSignal).toBeDefined();
+        expect(newSignal!.findingId).toBe(rewritten);
+      });
+
       it('populates authorDiagnostics when agent output contains entity-encoded tags', async () => {
         // agent-html is emitting `&lt;agent_finding&gt;` instead of `<agent_finding>`.
         // parseAgentFindingsStrict produces 0 findings (tags invisible), but the

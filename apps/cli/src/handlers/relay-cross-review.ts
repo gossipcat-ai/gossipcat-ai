@@ -148,6 +148,11 @@ export async function handleRelayCrossReview(
     // Filter to round members only — prevents fabricated peerAgentId targeting agents outside the round
     const validPeerIds = new Set(round.allResults.map((r: any) => r.agentId));
     const filtered = entries.filter(e => {
+      // NEW findings have no peer — they are discoveries the submitter surfaces
+      // after reading peer work. Skip the self-review/peer-validity check for
+      // them (see GH #131: otherwise every NEW entry is rejected because agents
+      // naturally emit findingId "<self>:n<N>", which flags as self-review).
+      if (e.action === 'new') return true;
       const selfReview = e.peerAgentId === agent_id;
       const unknownPeer = !validPeerIds.has(e.peerAgentId);
       if (selfReview || unknownPeer) {
@@ -156,6 +161,18 @@ export async function handleRelayCrossReview(
       }
       return true;
     });
+    // Rewrite NEW findingIds to the consensus-wide form
+    // `<consensusId>:new:<agentId>:<counter>`. Counter is scoped to this
+    // submission (restarts at 1 per handler call).
+    let newCounter = 0;
+    for (const e of filtered) {
+      if (e.action === 'new') {
+        e.findingId = `${round.consensusId}:new:${agent_id}:${++newCounter}`;
+        // peerAgentId is meaningless for NEW — clear it so downstream code
+        // doesn't accidentally resolve it as a peer reference.
+        e.peerAgentId = '';
+      }
+    }
     acceptedCount = filtered.length;
     round.nativeCrossReviewEntries.push(...filtered);
     if (parsedCount > 0 && acceptedCount === 0) {
