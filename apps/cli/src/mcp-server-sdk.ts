@@ -2427,9 +2427,23 @@ server.tool(
         return false;
       });
 
-      // Dedup gate: reject signals whose finding_id already exists in the performance file.
-      // Prevents duplicate scoring when a future session re-verifies stale UNVERIFIED findings.
+      // Dedup gate: two-layer.
+      //
+      //   1. Content-anchored cross-round dedup via computeDedupeKey. Catches
+      //      the same bug rediscovered in a later consensus round (new
+      //      consensusId → new finding_id, but same agent + file + content
+      //      + category hashes identically). Spec:
+      //      docs/specs/2026-04-17-cross-round-dedupe-key.md.
+      //   2. Exact finding_id dedup. Preserves legacy behavior — covers the
+      //      replay-within-same-round path where cross-round keys would
+      //      return null (e.g. short content, no citation).
+      //
+      // Content-dedup runs first so we surface the matching prior
+      // finding_id in the receipt rather than the naked round-scoped id.
+      const { computeDedupeKey: computeKey } = await import('@gossip/orchestrator');
+
       const existingFindingIds = new Set<string>();
+      const existingKeyToFindingId = new Map<string, string>();
       try {
         const { readFileSync } = await import('fs');
         const perfPath = require('path').join(process.cwd(), '.gossip', 'agent-performance.jsonl');
@@ -2438,14 +2452,55 @@ server.tool(
           try {
             const rec = JSON.parse(line);
             if (rec.findingId) existingFindingIds.add(rec.findingId);
+            // Only compute dedup keys for consensus-shaped signals.
+            // impl_* signals have a different provenance model and don't
+            // round-trip through cross-round rediscovery.
+            if (rec.type === 'consensus' && rec.agentId) {
+              const key = computeKey({
+                agentId: rec.agentId,
+                content: rec.finding,
+                evidence: rec.evidence,
+                category: rec.category,
+              });
+              if (key && !existingKeyToFindingId.has(key)) {
+                existingKeyToFindingId.set(key, rec.findingId || '');
+              }
+            }
           } catch { /* skip malformed lines */ }
         }
       } catch { /* file may not exist yet */ }
 
       const dupes: string[] = [];
-      const deduped = categoryEnforced.filter(s => {
-        if (s.type === 'consensus' && s.findingId && existingFindingIds.has(s.findingId)) {
+      const dupeReceipts: Array<{ finding_id: string; matched_prior: string; key: string }> = [];
+      const deduped = categoryEnforced.filter((s, i) => {
+        if (s.type !== 'consensus') return true;
+        // Cross-round content-anchored key check first.
+        const src = signals[i];
+        const key = computeKey({
+          agentId: s.agentId,
+          content: src?.finding,
+          evidence: src?.evidence || s.evidence,
+          category: (s as { category?: string }).category,
+        });
+        if (key && existingKeyToFindingId.has(key)) {
+          const matchedPrior = existingKeyToFindingId.get(key) || '(unknown)';
+          const fid = s.findingId ?? '(no-finding-id)';
+          dupes.push(`${fid} (${s.agentId}/${s.signal}) → matches ${matchedPrior}`);
+          dupeReceipts.push({
+            finding_id: fid,
+            matched_prior: matchedPrior,
+            key: key.slice(0, 12),
+          });
+          return false;
+        }
+        // Legacy exact finding_id dedup.
+        if (s.findingId && existingFindingIds.has(s.findingId)) {
           dupes.push(`${s.findingId} (${s.agentId}/${s.signal})`);
+          dupeReceipts.push({
+            finding_id: s.findingId,
+            matched_prior: s.findingId,
+            key: '(exact)',
+          });
           return false;
         }
         return true;
@@ -2648,7 +2703,7 @@ server.tool(
       const taskIdList = deduped.map(f => `  ${f.agentId}: ${f.taskId}`).join('\n');
       let baseReceipt = `Recorded ${deduped.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\nThese will influence future agent selection via dispatch weighting.`;
       if (dupes.length > 0) {
-        baseReceipt += `\n\n⚠️ ${dupes.length} duplicate signal(s) skipped (finding_id already recorded):\n  ${dupes.join('\n  ')}`;
+        baseReceipt += `\n\n⚠️ ${dupes.length} duplicate signal(s) skipped (cross-round content match or exact finding_id):\n  ${dupes.join('\n  ')}`;
       }
 
       // Post-write check: nudge orchestrator toward skill development when this batch

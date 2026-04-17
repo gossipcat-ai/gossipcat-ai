@@ -600,6 +600,11 @@ export async function handleCollect(
       ];
 
       for (const f of findingsToSave) {
+        // Persist `category` alongside the existing fields so cross-round
+        // dedup (see packages/orchestrator/src/dedupe-key.ts) can partition
+        // identical-content findings by their category. Legacy records
+        // without this field still read correctly — downstream code
+        // treats missing category as empty string.
         const entry = {
           timestamp,
           taskId: f.id || null,
@@ -609,6 +614,7 @@ export async function handleCollect(
           tag: f.tag || 'unknown',
           confidence: f.confidence || 0,
           status: 'open',
+          category: (f as { category?: string }).category ?? null,
         };
         af(findingsPath, JSON.stringify(entry) + '\n');
       }
