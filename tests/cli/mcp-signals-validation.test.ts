@@ -520,6 +520,93 @@ describe('gossip_signals formatting — taskId synthesis, evidence truncation, t
   });
 });
 
+// ── 5b. bulk_from_consensus category assignment ───────────────────────────────
+
+/**
+ * The bulk_from_consensus addSignal helper must call bulkInferCategory on the
+ * finding text so signals get a category field. Signals without category are
+ * invisible to getCountersSince() — they count toward signal volume but not
+ * toward skill accuracy. We test the inferCategory logic directly (same
+ * DEFAULT_KEYWORDS table) and assert structural presence in the source.
+ */
+
+function bulkInferCategory(text: string): string | undefined {
+  if (!text.trim()) return undefined;
+  let bestCategory = '';
+  let bestHits = 0;
+  for (const [category, keywords] of Object.entries(DEFAULT_KEYWORDS)) {
+    const hits = (keywords as string[]).filter(kw => text.includes(kw)).length;
+    if (hits > bestHits) { bestHits = hits; bestCategory = category; }
+  }
+  return bestHits >= 1 ? bestCategory : undefined;
+}
+
+describe('bulk_from_consensus — category assignment via bulkInferCategory', () => {
+  it('returns a category when finding text contains a keyword match', () => {
+    // "race condition" is a concurrency keyword
+    const category = bulkInferCategory('race condition in the dispatch loop at dispatcher.ts:42');
+    expect(category).toBeDefined();
+    expect(category).toBe('concurrency');
+  });
+
+  it('returns undefined when finding text has no keyword matches', () => {
+    const category = bulkInferCategory('this finding has no recognizable category keywords xyz');
+    expect(category).toBeUndefined();
+  });
+
+  it('returns undefined for empty finding text', () => {
+    expect(bulkInferCategory('')).toBeUndefined();
+    expect(bulkInferCategory('   ')).toBeUndefined();
+  });
+
+  it('signal with undefined category is still persisted to PerformanceWriter (no drop gate)', () => {
+    const testDir = makeTmpDir('bulk-no-category');
+    try {
+      const writer = new PerformanceWriter(testDir);
+      // Simulate what addSignal does when category is undefined
+      writer.appendSignals([{
+        type: 'consensus' as const,
+        signal: 'agreement',
+        agentId: 'agent-a',
+        taskId: 'bulk-test-001',
+        findingId: 'cid-1234:agent-a:f1',
+        source: 'manual',
+        evidence: 'this finding has no category keywords xyz',
+        timestamp: new Date().toISOString(),
+        // category intentionally omitted — mirrors undefined path
+      }]);
+      const path = join(testDir, '.gossip', 'agent-performance.jsonl');
+      const line = JSON.parse(readFileSync(path, 'utf-8').trim());
+      // Signal must be persisted regardless of missing category
+      expect(line.signal).toBe('agreement');
+      expect(line.agentId).toBe('agent-a');
+      expect(line.category).toBeUndefined();
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('receipt includes "Categorized M/N" substring in the bulk_from_consensus handler', () => {
+    const src = readFileSync(
+      join(__dirname, '..', '..', 'apps', 'cli', 'src', 'mcp-server-sdk.ts'),
+      'utf-8',
+    );
+    expect(src).toContain('Categorized ${categorizedCount}/${totalRecorded}');
+  });
+
+  it('handler assigns category field in the toRecord.push call', () => {
+    const src = readFileSync(
+      join(__dirname, '..', '..', 'apps', 'cli', 'src', 'mcp-server-sdk.ts'),
+      'utf-8',
+    );
+    const bulkPush = src.match(
+      /toRecord\.push\(\{[\s\S]{0,800}?timestamp: batchTs,\s*\}/,
+    );
+    expect(bulkPush).not.toBeNull();
+    expect(bulkPush![0]).toContain('category');
+  });
+});
+
 // ── 6. Retraction validation ──────────────────────────────────────────────────
 
 describe('gossip_signals retraction validation', () => {
