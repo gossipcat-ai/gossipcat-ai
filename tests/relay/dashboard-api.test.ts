@@ -428,12 +428,12 @@ describe('Consensus API pagination', () => {
     expect(page3.page).toBe(3);
   });
 
-  it('caps pageSize at 50', async () => {
-    writeConsensusSignals(60);
-    const result = await consensusHandler(projectRoot, new URLSearchParams({ pageSize: '100' }));
-    expect(result.runs).toHaveLength(50);
-    expect(result.pageSize).toBe(50);
-    expect(result.totalRuns).toBe(60);
+  it('caps pageSize at 500', async () => {
+    writeConsensusSignals(600);
+    const result = await consensusHandler(projectRoot, new URLSearchParams({ pageSize: '1000' }));
+    expect(result.runs).toHaveLength(500);
+    expect(result.pageSize).toBe(500);
+    expect(result.totalRuns).toBe(600);
   });
 
   it('returns empty runs for page beyond total', async () => {
