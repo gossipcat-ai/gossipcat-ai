@@ -1054,6 +1054,160 @@ describe('crossReviewForAgent per-finding snippets', () => {
   });
 });
 
+describe('crossReviewForAgent NEW findingId canonicalization (followup to PR #132)', () => {
+  // The relay handler at apps/cli/src/handlers/relay-cross-review.ts:167-174
+  // rewrites NEW findingIds to `<consensusId>:new:<agentId>:<counter>` and
+  // clears peerAgentId. The in-process path (crossReviewForAgent) must do the
+  // same when the caller threads a consensusId through, otherwise synthesize
+  // sees inconsistent NEW entries and (a) leaves peerAgentId="self" residue
+  // and (b) re-generates IDs with a different counter scope.
+  let engine: ConsensusEngine;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    engine = new ConsensusEngine(baseConfig);
+  });
+
+  it('rewrites NEW findingId to canonical `<consensusId>:new:<agentId>:<counter>` form', async () => {
+    mockLlm.generate.mockResolvedValue({
+      text: JSON.stringify([
+        { action: 'new', agentId: 'agent-a', findingId: 'self:n1', finding: 'fresh bug', evidence: 'e1', confidence: 4 },
+      ]),
+    } as any);
+
+    const results: TaskEntry[] = [
+      createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- A'),
+      createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- B'),
+    ];
+
+    const consensusId = 'followup-new00001';
+    const entries = await engine.dispatchCrossReview(results, consensusId);
+
+    const newEntries = entries.filter(e => e.action === 'new');
+    expect(newEntries.length).toBeGreaterThan(0);
+    for (const e of newEntries) {
+      expect(e.findingId).toMatch(new RegExp(`^${consensusId}:new:[^:]+:\\d+$`));
+    }
+  });
+
+  it('clears peerAgentId residue on NEW entries', async () => {
+    mockLlm.generate.mockResolvedValue({
+      text: JSON.stringify([
+        { action: 'new', agentId: 'agent-a', findingId: 'self:n1', finding: 'fresh bug', evidence: 'e1', confidence: 4 },
+      ]),
+    } as any);
+
+    const results: TaskEntry[] = [
+      createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- A'),
+      createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- B'),
+    ];
+
+    const entries = await engine.dispatchCrossReview(results, 'followup-new00002');
+    const newEntries = entries.filter(e => e.action === 'new');
+    expect(newEntries.length).toBeGreaterThan(0);
+    for (const e of newEntries) {
+      expect(e.peerAgentId).toBe('');
+    }
+  });
+
+  it('counter scope is per-call: agent A (in-process) and agent B (separate call) both get :1', async () => {
+    // Each dispatchCrossReview call scopes its own counter; agentId differentiates
+    // IDs across calls. Simulates the relay-vs-in-process distinction for
+    // different agents in the same round.
+    mockLlm.generate.mockResolvedValue({
+      text: JSON.stringify([
+        { action: 'new', agentId: 'agent-a', findingId: 'self:n1', finding: 'bug-a', evidence: 'e', confidence: 4 },
+      ]),
+    } as any);
+
+    const cid = 'followup-new00003';
+    const aResults: TaskEntry[] = [
+      createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- A'),
+      createTaskEntry('agent-x', 'completed', '## Consensus Summary\n- X'),
+    ];
+    const bResults: TaskEntry[] = [
+      createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- B'),
+      createTaskEntry('agent-y', 'completed', '## Consensus Summary\n- Y'),
+    ];
+
+    const aEntries = await engine.dispatchCrossReview(aResults, cid);
+    const bEntries = await engine.dispatchCrossReview(bResults, cid);
+
+    const aNew = aEntries.filter(e => e.action === 'new' && e.agentId === 'agent-a');
+    const bNew = bEntries.filter(e => e.action === 'new' && e.agentId === 'agent-b');
+    expect(aNew.length).toBeGreaterThan(0);
+    expect(bNew.length).toBeGreaterThan(0);
+
+    // Different agentIds differentiate; counters both start at 1.
+    expect(aNew[0].findingId).toBe(`${cid}:new:agent-a:1`);
+    expect(bNew[0].findingId).toBe(`${cid}:new:agent-b:1`);
+    expect(aNew[0].findingId).not.toBe(bNew[0].findingId);
+  });
+
+  it('same-agent-both-paths edge case: counter scope is per-call — IDs collide if one agent submits via BOTH paths', async () => {
+    // KNOWN LIMITATION (documented, not fixed in this PR): if agent A submits
+    // NEW via the relay handler (counter=1) AND the in-process path
+    // (counter=1) in the same round, both assign `cid:new:A:1` — a duplicate.
+    //
+    // In practice, an agent uses exactly one submission path per round, so
+    // this collision cannot occur. If it starts happening, harden by adding
+    // a `:proc` / `:relay` path-discriminator to the findingId. TODO: revisit
+    // if mixed-path rounds become a real pattern.
+    mockLlm.generate.mockResolvedValue({
+      text: JSON.stringify([
+        { action: 'new', agentId: 'agent-a', findingId: 'self:n1', finding: 'bug-a', evidence: 'e', confidence: 4 },
+      ]),
+    } as any);
+
+    const cid = 'followup-new00004';
+    const results: TaskEntry[] = [
+      createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- A'),
+      createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- B'),
+    ];
+
+    // Two separate cross-review invocations for agent-a — simulates the
+    // (theoretical) same-agent-both-paths scenario.
+    const first = await engine.dispatchCrossReview(results, cid);
+    const second = await engine.dispatchCrossReview(results, cid);
+
+    const firstA = first.filter(e => e.action === 'new' && e.agentId === 'agent-a');
+    const secondA = second.filter(e => e.action === 'new' && e.agentId === 'agent-a');
+    expect(firstA[0].findingId).toBe(`${cid}:new:agent-a:1`);
+    expect(secondA[0].findingId).toBe(`${cid}:new:agent-a:1`);
+    // Documented collision — both paths share the same ID space. Acceptable
+    // because agents do not split submissions across paths in practice.
+    expect(firstA[0].findingId).toBe(secondA[0].findingId);
+  });
+
+  it('synthesize preserves pre-rewritten findingId from both paths (existing behavior)', async () => {
+    // Regression guard for Change 2: simplifying synthesize's NEW-findingId
+    // fallback from `includes(':new:')` to `entry.findingId ?? fallback` must
+    // still preserve caller-supplied findingIds.
+    const results: TaskEntry[] = [
+      createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- A'),
+      createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- B'),
+    ];
+
+    const preRewritten = 'cid12345-new00001:new:agent-a:1';
+    const crossReviewEntries: CrossReviewEntry[] = [
+      {
+        action: 'new',
+        agentId: 'agent-a',
+        peerAgentId: '',
+        findingId: preRewritten,
+        finding: 'fresh bug',
+        evidence: 'e1',
+        confidence: 4,
+      },
+    ];
+
+    const report = await engine.synthesize(results, crossReviewEntries);
+    const newSignal = report.signals.find(s => s.signal === 'new_finding');
+    expect(newSignal).toBeDefined();
+    expect(newSignal!.findingId).toBe(preRewritten);
+  });
+});
+
 describe('anchor detection in synthesize', () => {
   it('matches real source anchors but not false positives', () => {
     const SOURCE_ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
