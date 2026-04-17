@@ -35,11 +35,13 @@ const SIGNAL_TYPES = [
   'format_compliance',
 ];
 
+// Global severity palette — matches FindingsMetrics SEVERITY_CLS so a
+// "high" chip reads the same orange everywhere on the dashboard.
 const SEVERITY_BADGE: Record<string, string> = {
-  critical: 'bg-disputed text-disputed-foreground',
-  high: 'bg-disputed/70 text-disputed-foreground',
-  medium: 'bg-unique/70 text-unique-foreground',
-  low: 'bg-muted text-muted-foreground',
+  critical: 'text-red-400 bg-red-500/10',
+  high: 'text-orange-400 bg-orange-500/10',
+  medium: 'text-yellow-400 bg-yellow-500/10',
+  low: 'text-muted-foreground bg-muted/50',
 };
 
 const PAGE_SIZE = 100;

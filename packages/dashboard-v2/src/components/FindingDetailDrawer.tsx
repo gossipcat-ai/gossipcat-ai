@@ -12,11 +12,12 @@ interface Props {
   findingId: string | null;
 }
 
+// Matches FindingsMetrics SEVERITY_CLS — global severity palette.
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: 'bg-disputed text-disputed-foreground',
-  high: 'bg-disputed/70 text-disputed-foreground',
-  medium: 'bg-unique text-unique-foreground',
-  low: 'bg-muted text-muted-foreground',
+  critical: 'text-red-400 bg-red-500/10',
+  high: 'text-orange-400 bg-orange-500/10',
+  medium: 'text-yellow-400 bg-yellow-500/10',
+  low: 'text-muted-foreground bg-muted/50',
 };
 
 const TAG_COLORS: Record<string, string> = {

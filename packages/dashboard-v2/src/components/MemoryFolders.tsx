@@ -209,18 +209,18 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
                   : 'border-border/40 hover:border-primary/30 hover:bg-accent/40'
               }`}
             >
-              {active && (
-                <span
-                  className={`pointer-events-none absolute right-2.5 top-2.5 h-1.5 w-1.5 rounded-full ${dot.bg}`}
-                  style={{ boxShadow: `0 0 8px ${dot.glow}` }}
-                  data-tooltip="Activity in the last 24h"
-                  aria-label="Activity in the last 24h"
-                />
-              )}
               <span
-                className={`row-span-2 flex h-9 w-9 items-center justify-center rounded-sm border ${iconBox} ${accent}`}
+                className={`relative row-span-2 flex h-9 w-9 items-center justify-center rounded-sm border ${iconBox} ${accent}`}
                 aria-hidden
               >
+                {active && (
+                  <span
+                    className={`pointer-events-none absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full ${dot.bg}`}
+                    style={{ boxShadow: `0 0 8px ${dot.glow}` }}
+                    data-tooltip="Activity in the last 24h"
+                    aria-label="Activity in the last 24h"
+                  />
+                )}
                 <svg
                   width="18"
                   height="18"
