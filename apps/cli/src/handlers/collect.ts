@@ -323,17 +323,31 @@ export async function handleCollect(
         },
       });
 
-      // Server-side Phase 2: engine selects cross-reviewers and runs internally
-      if (engine.hasPerformanceReader) {
+      // Server-side Phase 2: engine selects cross-reviewers and runs internally.
+      //
+      // IMPORTANT: runSelectedCrossReview calls crossReviewForAgent for each
+      // selected reviewer using config.agentLlm(id) ?? config.llm. Native agents
+      // are intentionally excluded from agentLlmCache above (line 242), so any
+      // native reviewer would fall back to mainLlm — which is the orchestrator's
+      // provider, not the native agent's Claude Code runtime. That path silently
+      // returns empty text for all-native teams and tags every finding UNIQUE.
+      // See issue #121.
+      //
+      // When any completed agent is native, skip the server-side path and fall
+      // through to generateCrossReviewPrompts, which correctly emits prompts
+      // for natives so the orchestrator can dispatch them externally.
+      const completedResults = allResults.filter((r: any) => r.status === 'completed');
+      const hasNative = completedResults.some((r: any) => nativeAgentIds.has(r.agentId));
+      if (engine.hasPerformanceReader && !hasNative) {
         try {
-          consensusReport = await engine.runSelectedCrossReview(
-            allResults.filter((r: any) => r.status === 'completed'),
-          );
+          consensusReport = await engine.runSelectedCrossReview(completedResults);
           // Success — skip legacy relay + native dispatch paths
         } catch (err) {
           process.stderr.write(`[consensus] Server-side Phase 2 failed: ${(err as Error).message} — falling back\n`);
           consensusReport = null; // fall through to legacy path
         }
+      } else if (engine.hasPerformanceReader && hasNative) {
+        process.stderr.write(`[consensus] Server-side Phase 2 skipped: ${nativeAgentIds.size} native agent(s) require external dispatch — falling back to legacy two-phase path\n`);
       }
 
       if (!consensusReport) {

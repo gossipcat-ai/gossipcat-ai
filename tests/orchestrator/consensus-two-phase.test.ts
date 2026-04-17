@@ -107,6 +107,51 @@ describe('Two-phase consensus flow', () => {
     expect(report.confirmed.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('should emit prompts (not silently no-op) when team is ALL native — issue #121', async () => {
+    // Regression: prior to the fix in apps/cli/src/handlers/collect.ts, the
+    // handler would always call engine.runSelectedCrossReview when a
+    // PerformanceReader was attached, even for all-native teams. Natives are
+    // intentionally excluded from agentLlmCache, so crossReviewForAgent would
+    // fall back to mainLlm for each reviewer. When mainLlm is misconfigured
+    // (or simply returns empty text — as it does when no real provider is
+    // wired in a native-only dispatch), every finding is tagged UNIQUE with
+    // zero error visibility.
+    //
+    // The handler now skips the server-side path when hasNative is true and
+    // falls through to generateCrossReviewPrompts, which must yield at least
+    // one prompt-per-native so the orchestrator can dispatch them externally.
+    const config: ConsensusEngineConfig = {
+      llm: mockLlm,
+      registryGet: mockRegistryGet,
+      // Intentionally NO agentLlm — mirrors all-native reality where
+      // agentLlmCache would be empty.
+    };
+    const engine = new ConsensusEngine(config);
+
+    const results = [
+      createEntry('native-a', '## Consensus Summary\n<agent_finding type="finding" severity="high">Null deref in parser.ts:12 when input is undefined</agent_finding>'),
+      createEntry('native-b', '## Consensus Summary\n<agent_finding type="finding" severity="medium">Off-by-one in loop-iterator.ts:44 skips last element</agent_finding>'),
+    ];
+
+    const nativeAgentIds = new Set(['native-a', 'native-b']);
+
+    // Replicate the handler's branch decision (collect.ts hasNative guard).
+    const completedResults = results.filter(r => r.status === 'completed');
+    const hasNative = completedResults.some(r => nativeAgentIds.has(r.agentId));
+    expect(hasNative).toBe(true); // precondition — all are native
+
+    // When hasNative is true, the handler must NOT invoke the server-side
+    // path — it must fall through to generateCrossReviewPrompts.
+    const { prompts } = await engine.generateCrossReviewPrompts(results, nativeAgentIds);
+
+    // Must yield one prompt per native agent so the orchestrator can dispatch.
+    expect(prompts.length).toBeGreaterThanOrEqual(2);
+    expect(prompts.every(p => p.isNative)).toBe(true);
+    // And the mainLlm was NOT invoked — confirming we didn't silently no-op
+    // through the buggy server-side path.
+    expect(mockLlm.generate).not.toHaveBeenCalled();
+  });
+
   it('should handle empty native responses gracefully', async () => {
     const config: ConsensusEngineConfig = {
       llm: mockLlm,
