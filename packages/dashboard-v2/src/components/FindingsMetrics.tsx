@@ -12,6 +12,12 @@ interface FindingsMetricsProps {
   showAll?: boolean;
   /** If true, hides the section header. Useful when the parent page provides its own header. */
   hideHeader?: boolean;
+  /**
+   * Optional pre-filtered run list. When provided (e.g. by FindingsPage with
+   * its show/hide retracted toggle), used in place of `consensus.runs` in the
+   * fallback runs view. Does not affect the primary `reports` rendering path.
+   */
+  filteredRuns?: ConsensusData['runs'];
 }
 
 const MAX_RUNS = 5;
@@ -220,9 +226,10 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
   );
 }
 
-export function FindingsMetrics({ consensus, reports, showAll = false, hideHeader = false }: FindingsMetricsProps) {
-  const runs = showAll ? consensus.runs : consensus.runs.slice(0, MAX_RUNS);
-  const hasMore = !showAll && consensus.runs.length > MAX_RUNS;
+export function FindingsMetrics({ consensus, reports, showAll = false, hideHeader = false, filteredRuns }: FindingsMetricsProps) {
+  const sourceRuns = filteredRuns ?? consensus.runs;
+  const runs = showAll ? sourceRuns : sourceRuns.slice(0, MAX_RUNS);
+  const hasMore = !showAll && sourceRuns.length > MAX_RUNS;
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
   const [sevFilter, setSevFilter] = useState<'all' | 'critical' | 'high' | 'medium' | 'low'>('all');
@@ -695,8 +702,27 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               return tag && tag.filter === filter;
             });
 
+            const isRunRetracted = !!run.retracted;
             return (
-              <div key={run.taskId + i} className={`rounded-md border bg-card transition ${isOpen ? 'border-primary/25' : 'border-border'}`}>
+              <div
+                key={run.taskId + i}
+                className={`rounded-md border bg-card transition ${isOpen ? 'border-primary/25' : 'border-border'} ${isRunRetracted ? 'opacity-60' : ''}`}
+                data-retracted={isRunRetracted ? 'true' : undefined}
+                title={isRunRetracted && run.retractionReason ? `Retracted: ${run.retractionReason}` : undefined}
+              >
+                {isRunRetracted && (
+                  <div className="rounded-t-md border-b border-disputed/30 bg-disputed/50 px-3 py-1.5 font-mono text-[10px] text-disputed-foreground" style={{ textDecoration: 'none' }}>
+                    <span className="font-bold uppercase tracking-wider">⚠ Retracted</span>
+                    {run.retractedAt && (
+                      <span className="ml-2 text-disputed-foreground/80">
+                        on {run.retractedAt.slice(0, 10)}
+                      </span>
+                    )}
+                    {run.retractionReason && (
+                      <span className="ml-2 text-muted-foreground/90">— {run.retractionReason}</span>
+                    )}
+                  </div>
+                )}
                 {/* Header — clickable */}
                 <button
                   aria-expanded={isOpen}
@@ -710,7 +736,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <span className="font-mono text-[10px] text-primary/50">{run.taskId}</span>
-                        <span className="font-mono text-sm font-semibold text-foreground">{runTotal} findings</span>
+                        <span className={`font-mono text-sm font-semibold text-foreground ${isRunRetracted ? 'line-through decoration-disputed/40' : ''}`}>{runTotal} findings</span>
                         <div className="flex gap-1.5">
                           {run.agents.slice(0, 4).map((a) => (
                             <span key={a} className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
@@ -727,7 +753,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
 
                     <div className="mt-2 flex gap-2">
                       {segments.map((s) => s.count > 0 && (
-                        <span key={s.key} className={`font-mono text-[10px] font-semibold ${s.text}`}>
+                        <span key={s.key} className={`font-mono text-[10px] font-semibold ${s.text} ${isRunRetracted ? 'line-through decoration-disputed/40' : ''}`}>
                           {s.count} {s.label}
                         </span>
                       ))}

@@ -400,15 +400,24 @@ function FindingsPage({
   consensus: import('@/lib/types').ConsensusData;
   consensusReports: import('@/lib/types').ConsensusReportsData | null;
 }) {
-  const confirmedTotal = consensus.runs.reduce((acc, r) => acc + (r.counts.agreement || 0), 0);
-  const disputedTotal = consensus.runs.reduce((acc, r) => acc + ((r.counts.disagreement || 0) + (r.counts.hallucination || 0)), 0);
-  const unverifiedTotal = consensus.runs.reduce((acc, r) => acc + (r.counts.unverified || 0), 0);
+  const [showRetracted, setShowRetracted] = useState(false);
+  const visibleRuns = showRetracted ? consensus.runs : consensus.runs.filter(r => !r.retracted);
+  const retractedCount = consensus.runs.filter(r => r.retracted).length;
+
+  const confirmedTotal = visibleRuns.reduce((acc, r) => acc + (r.counts.agreement || 0), 0);
+  const disputedTotal = visibleRuns.reduce((acc, r) => acc + ((r.counts.disagreement || 0) + (r.counts.hallucination || 0)), 0);
+  const unverifiedTotal = visibleRuns.reduce((acc, r) => acc + (r.counts.unverified || 0), 0);
 
   return (
     <>
       <div className="mb-6">
         <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Debates <span className="ml-2 text-foreground">{consensus.totalRuns ?? consensus.runs.length}</span>
+          Debates <span className="ml-2 text-foreground">{visibleRuns.length}</span>
+          {!showRetracted && retractedCount > 0 && (
+            <span className="ml-2 font-normal normal-case tracking-normal text-muted-foreground/60">
+              / {consensus.totalRuns ?? consensus.runs.length} total
+            </span>
+          )}
         </h1>
         <div className="mt-2 flex gap-4 font-mono text-[11px] text-muted-foreground">
           <span><span className="text-confirmed">{confirmedTotal}</span> confirmed</span>
@@ -416,8 +425,24 @@ function FindingsPage({
           {unverifiedTotal > 0 && <span><span className="text-unverified">{unverifiedTotal}</span> unverified</span>}
           <span>{consensus.totalSignals} total signals</span>
         </div>
+        {retractedCount > 0 && (
+          <div className="mt-2 flex items-center gap-2 font-mono text-[11px] text-muted-foreground/70">
+            <span>
+              {showRetracted
+                ? `${retractedCount} retracted run${retractedCount === 1 ? '' : 's'} shown`
+                : `${retractedCount} retracted run${retractedCount === 1 ? '' : 's'} hidden`}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowRetracted(v => !v)}
+              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 text-[10px] transition hover:bg-accent/50 hover:text-foreground"
+            >
+              {showRetracted ? 'hide' : 'show'}
+            </button>
+          </div>
+        )}
       </div>
-      <FindingsMetrics consensus={consensus} reports={consensusReports} showAll hideHeader />
+      <FindingsMetrics consensus={consensus} filteredRuns={visibleRuns} reports={consensusReports} showAll hideHeader />
     </>
   );
 }
