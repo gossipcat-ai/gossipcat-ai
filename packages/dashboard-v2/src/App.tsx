@@ -10,7 +10,7 @@ import { TeamHero } from '@/components/TeamHero';
 import { NeuralAvatar } from '@/components/NeuralAvatar';
 import { TaskDetailModal } from '@/components/TaskDetailModal';
 import { TasksSection } from '@/components/TasksSection';
-import { NativeMemories, GossipMemories } from '@/components/MemoryFolders';
+import { MemoryFolders } from '@/components/MemoryFolders';
 import { AgentPage } from '@/components/AgentPage';
 import { LogsPage } from '@/components/LogsPage';
 import { TaskRow } from '@/components/TaskRow';
@@ -455,8 +455,13 @@ function Dashboard() {
           {tasks && <TasksSection tasks={tasks} limit={5} />}
           {agents && <TeamHero agents={agents} />}
           <FindingsMetrics consensus={consensus} reports={consensusReports} />
-          {gossipMemories && <GossipMemories memories={gossipMemories} />}
-          {nativeMemories && <NativeMemories memories={nativeMemories} />}
+          {(gossipMemories || nativeMemories) && (
+            <MemoryFolders
+              memories={[...(gossipMemories ?? []), ...(nativeMemories ?? [])]}
+              heading="Memory"
+              statusFilter
+            />
+          )}
         </main>
       </div>
     );

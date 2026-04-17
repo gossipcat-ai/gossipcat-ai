@@ -71,18 +71,21 @@ export function useDashboardData() {
         api<MemoryApiResponse>('gossip-memory').catch(() => ({ knowledge: [] as MemoryFile[] })),
       ]);
 
-      const nativeMemories = [...(nativeResp.knowledge || [])].sort(
-        (a, b) => (b.filename > a.filename ? 1 : -1),
-      );
-      const gossipMemories = [...(gossipResp.knowledge || [])].sort(
-        (a, b) => (b.filename > a.filename ? 1 : -1),
-      );
+      // Stamp origin on each file so the unified MemoryFolders view can
+      // dedupe by `${origin}/${filename}` and keep cross-store collisions
+      // visible. Spec: docs/specs/2026-04-17-unified-memory-view.md.
+      const nativeMemories = [...(nativeResp.knowledge || [])]
+        .map((m) => ({ ...m, origin: 'native' as const }))
+        .sort((a, b) => (b.filename > a.filename ? 1 : -1));
+      const gossipMemories = [...(gossipResp.knowledge || [])]
+        .map((m) => ({ ...m, origin: 'gossip' as const }))
+        .sort((a, b) => (b.filename > a.filename ? 1 : -1));
 
       setState({
         overview, agents, tasks, consensus, consensusReports,
         nativeMemories,
         gossipMemories,
-        memories: nativeMemories, // deprecated legacy alias — do NOT merge
+        memories: nativeMemories, // deprecated legacy alias
         loading: false, error: null,
       });
     } catch (err) {
