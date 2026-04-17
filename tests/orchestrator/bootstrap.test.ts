@@ -57,6 +57,23 @@ describe('BootstrapGenerator', () => {
     });
   });
 
+  describe('memory hygiene convention', () => {
+    it('bootstrap output includes Memory Hygiene Convention heading in full tier', () => {
+      const dir = join(testDir, 'hygiene-full');
+      mkdirSync(join(dir, '.gossip'), { recursive: true });
+      writeFileSync(join(dir, '.gossip', 'config.json'), JSON.stringify({
+        main_agent: { provider: 'local', model: 'q' },
+        agents: { 'a1': { provider: 'local', model: 'q', skills: ['t'] } }
+      }));
+      const gen = new BootstrapGenerator(dir);
+      const result = gen.generate();
+      expect(result.prompt).toContain('## Memory Hygiene Convention');
+      expect(result.prompt).toContain('status: open');
+      expect(result.prompt).toContain('status: shipped');
+      expect(result.prompt).toContain('status: closed');
+    });
+  });
+
   describe('error handling', () => {
     it('falls back to no-config on malformed config JSON', () => {
       const dir = join(testDir, 'bad-json');

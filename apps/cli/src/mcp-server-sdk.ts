@@ -1925,6 +1925,21 @@ server.tool(
       process.stderr.write(`[gossipcat] gossip_setup: sandbox hook install failed: ${e}\n`);
     }
 
+    // Memory hygiene CLAUDE.md seeding — spec 2026-04-17-memory-hygiene-propagation.
+    // Idempotent: appends convention block if CLAUDE.md exists but lacks the heading;
+    // no-ops if heading present; skips silently if CLAUDE.md missing.
+    try {
+      const { seedMemoryHygiene } = require('@gossip/orchestrator') as typeof import('@gossip/orchestrator');
+      const seedResult = seedMemoryHygiene(root);
+      const msg = seedResult.action === 'appended' ? 'appended'
+        : seedResult.action === 'already-present' ? 'already present'
+        : seedResult.action === 'skipped-no-claude-md' ? 'skipped (no CLAUDE.md)'
+        : `error (${(seedResult as { error: string }).error})`;
+      process.stderr.write(`[gossipcat] gossip_setup: memory hygiene — ${msg}\n`);
+    } catch (e) {
+      process.stderr.write(`[gossipcat] gossip_setup: memory hygiene seed failed: ${(e as Error).message}\n`);
+    }
+
     // Refresh all runtime caches of .gossip/config.json state — dashboard,
     // ctx.nativeAgentConfigs, ctx.workers, and ctx.mainAgent registry — so
     // the new team is fully dispatchable without /mcp reconnect. PR #59
