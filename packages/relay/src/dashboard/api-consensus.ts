@@ -19,6 +19,9 @@ interface ConsensusRun {
   agents: string[];
   signals: { signal: string; agentId: string; counterpartId?: string; findingId?: string; evidence?: string }[];
   counts: { agreement: number; disagreement: number; unverified: number; unique: number; hallucination: number; new: number; insights: number };
+  retracted?: boolean;
+  retractedAt?: string;
+  retractionReason?: string;
 }
 
 export interface ConsensusResponse {
@@ -27,6 +30,8 @@ export interface ConsensusResponse {
   totalSignals: number;
   page: number;
   pageSize: number;
+  retractedConsensusIds?: string[];
+  roundRetractions?: Array<{ consensus_id: string; reason: string; retracted_at: string }>;
 }
 
 // Signals that resolve an UNVERIFIED finding
@@ -40,7 +45,25 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
   const page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
   const pageSize = isNaN(rawPageSize) || rawPageSize < 1 ? DEFAULT_PAGE_SIZE : Math.min(rawPageSize, MAX_PAGE_SIZE);
   const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
-  if (!existsSync(perfPath)) return { runs: [], totalRuns: 0, totalSignals: 0, page, pageSize };
+
+  // Load retraction tombstones so retracted rounds can be annotated (not filtered)
+  // in the response. Mirrors routes.ts:422 pattern.
+  let retractedIds = new Set<string>();
+  let roundRetractions: Array<{ consensus_id: string; reason: string; retracted_at: string }> = [];
+  try {
+    const { PerformanceReader } = require('@gossip/orchestrator');
+    const reader = new PerformanceReader(projectRoot);
+    retractedIds = reader.getRetractedConsensusIds();
+    roundRetractions = reader.getRoundRetractions();
+  } catch { /* reader unavailable — leave empty */ }
+  const retractionByConsensusId = new Map<string, { reason: string; retracted_at: string }>();
+  for (const r of roundRetractions) {
+    // latest-wins for banner reason
+    retractionByConsensusId.set(r.consensus_id, { reason: r.reason, retracted_at: r.retracted_at });
+  }
+  const retractedConsensusIds = Array.from(retractedIds);
+
+  if (!existsSync(perfPath)) return { runs: [], totalRuns: 0, totalSignals: 0, page, pageSize, retractedConsensusIds, roundRetractions };
 
   const signals: ConsensusSignal[] = [];
   try {
@@ -53,7 +76,7 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
         }
       } catch { /* skip malformed */ }
     }
-  } catch { return { runs: [], totalRuns: 0, totalSignals: 0, page, pageSize }; }
+  } catch { return { runs: [], totalRuns: 0, totalSignals: 0, page, pageSize, retractedConsensusIds, roundRetractions }; }
 
   // Group by consensusId (falls back to taskId for old signals)
   const byRun = new Map<string, ConsensusSignal[]>();
@@ -96,6 +119,7 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
 
     // Only show real consensus runs (multiple signals from cross-review), not manual recordings
     if (agents.size >= 2 && taskSignals.length >= 3) {
+      const tombstone = retractionByConsensusId.get(taskId);
       runs.push({
         taskId,
         timestamp: taskSignals[0].timestamp,
@@ -112,6 +136,11 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
           };
         }),
         counts,
+        ...(retractedIds.has(taskId) ? {
+          retracted: true,
+          retractedAt: tombstone?.retracted_at,
+          retractionReason: tombstone?.reason,
+        } : {}),
       });
     }
   }
@@ -124,5 +153,5 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
   const offset = (page - 1) * pageSize;
   const paginatedRuns = runs.slice(offset, offset + pageSize);
 
-  return { runs: paginatedRuns, totalRuns, totalSignals: signals.length, page, pageSize };
+  return { runs: paginatedRuns, totalRuns, totalSignals: signals.length, page, pageSize, retractedConsensusIds, roundRetractions };
 }

@@ -69,6 +69,9 @@ export interface ConsensusRun {
   agents: string[];
   signals: { signal: string; agentId: string; counterpartId?: string; findingId?: string; evidence?: string }[];
   counts: { agreement: number; disagreement: number; unverified: number; unique: number; hallucination: number; new: number; insights: number };
+  retracted?: boolean;
+  retractedAt?: string;
+  retractionReason?: string;
 }
 
 export interface ConsensusData {
@@ -78,6 +81,10 @@ export interface ConsensusData {
   totalSignals: number;
   page: number;
   pageSize: number;
+  /** Consensus round IDs that have been retracted via gossip_signals action:"retract". */
+  retractedConsensusIds?: string[];
+  /** Full tombstone rows preserving duplicates for admin "retracted rounds" views. */
+  roundRetractions?: Array<{ consensus_id: string; reason: string; retracted_at: string }>;
 }
 
 export interface ConsensusReportFinding {
