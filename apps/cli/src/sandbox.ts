@@ -788,6 +788,116 @@ export function buildAuditExclusions(
       for (const v of expandTmpVariants(`${tmp}/${pat}`)) excl.add(v);
     }
   } catch { /* tmpdir() failure — best-effort */ }
+  // Test-fixture exclusion — only active under a real test runner.
+  // JEST_WORKER_ID is set by jest (including --runInBand). NODE_ENV=test is
+  // the universal fallback. Neither is settable by a dispatched agent —
+  // agents run in child processes launched via execFileSync / native bridge,
+  // never inside a jest runner. That makes this gate structurally unforgeable.
+  //
+  // Noise accounting (pre-fix): 6,128 / 8,590 = 71% of entries in
+  // .gossip/boundary-escapes.jsonl came from mkdtempSync(join(tmpdir(),
+  // 'gossip-*')) fixtures during `npm test`. Prefix list enumerated by
+  // grepping `mkdtemp.*'gossip-|join\(tmpdir.*'gossip-` — do NOT collapse
+  // to a bare `gossip-*` glob (too broad even when gated).
+  if (process.env.JEST_WORKER_ID !== undefined || process.env.NODE_ENV === 'test') {
+    try {
+      const tmp = canonicalize(tmpdir());
+      const TEST_FIXTURE_PREFIXES = [
+        // Spec'd core set.
+        'gossip-test-',
+        'gossip-wt-',
+        'gossip-verify-',
+        'gossip-native-prompt-',
+        'gossip-mcp-test-',
+        'gossip-signals-val-',
+        'gossip-pipeline-test-',
+        'gossip-relay-duration-test-',
+        'gossip-hook-ns-',
+        'gossip-memory-test-',
+        'sandbox-test-',
+        'perf-writer-',
+        // Observed via grep (mkdtemp*/join(tmpdir()*) — all test-fixture-only.
+        'gossip-empty-',
+        'gossip-no-mem-',
+        'gossip-symlink-',
+        'gossip-outside-',
+        'gossip-bridge-',
+        'gossip-native-consensus-',
+        'gossip-dash-',
+        'gossip-dash-edge-',
+        'gossip-home-',
+        'gossip-consensus-',
+        'gossip-real-',
+        'gossip-skillgen-',
+        'gossip-signal-types-',
+        'gossip-profile-dispatch-',
+        'gossip-ati-integration-',
+        'gossip-skilldev-integ-',
+        'gossip-migration-',
+        'gossip-cat-hook-',
+        'gossip-hook-install-',
+        'gossip-hook-sentinel-',
+        'gossip-wt-test-',
+        'gossip-skill-tools-test-',
+        'gossip-hygiene-seed-test-',
+        'gossip-searcher-test-',
+        'gossip-registry-test-',
+        'gossip-catalog-test-',
+        'gossip-taskgraph-test-',
+        'gossip-memwriter-test-',
+        'gossip-memwriter-edge-test-',
+        'gossip-memreader-edge-test-',
+        'gossip-prefetch-test-',
+        'gossip-bootstrap-test-',
+        'gossip-bootstrap-spec-test-',
+        'gossip-skill-index-test-',
+        'gossip-gap-tracker-test-',
+        'gossip-gap-tracker-fresh-test-',
+        'gossip-gap-tracker-malformed-',
+        'gossip-gap-test-',
+        'gossip-ctx-',
+        'gossip-lru-',
+        'gossip-task-type-',
+        'gossip-cat-boost-',
+        'gossip-status-filter-',
+        'gossip-discovery-e2e-',
+        'gossip-compactor-test-',
+        'gossip-rules-test-',
+        'gossip-audit-roundtrip-',
+        'gossip-remember-validation-',
+        'gossip-skills-test-',
+        'gossip-verify-mem-',
+        'gossip-fullstack-',
+        'gossip-sim-',
+        'gossip-round-retract-',
+        // NOTE: `gossip-l3-`, `gossip-l3-scan-`, `gossip-l3-bin-` are used by
+        // the Layer-3 audit tests THEMSELVES as scan roots — excluding them
+        // would make those tests silently pass without verifying behavior.
+        // They don't appear in real-world boundary-escapes.jsonl noise; they
+        // exist only as in-test isolation directories and are rmSync'd at
+        // teardown. Intentionally omitted.
+        // Non-gossip test prefixes (scoped fixtures).
+        'scope-tracker-',
+        'scope-outside-',
+        'tg-sync-',
+        'findings-cat-',
+        'signals-dedup-',
+        'cer-',
+        'pcr-',
+        'vrr-',
+        'dgw-',
+        'skill-gen-test-',
+        'skill-eff-test-',
+        'skill-migration-test-',
+        'skill-nan-test-',
+        'skill-safename-test-',
+        'collect-eff-test-',
+      ];
+      for (const prefix of TEST_FIXTURE_PREFIXES) {
+        for (const v of expandTmpVariants(`${tmp}/${prefix}`)) excl.add(v + '*');
+      }
+    } catch { /* tmpdir() failure — best-effort */ }
+  }
   if (ownWorktree) {
     const wt = canonicalize(ownWorktree);
     for (const v of expandTmpVariants(wt)) excl.add(v);

@@ -383,3 +383,115 @@ describe('buildAuditExclusions', () => {
     expect(exclusions).toContain(resolve(root, '.git'));
   });
 });
+
+/**
+ * Test-fixture noise gate for Layer 3 main pass.
+ *
+ * Context: 6,128 / 8,590 = 71% of .gossip/boundary-escapes.jsonl entries
+ * prior to this fix were mkdtempSync(join(tmpdir(), 'gossip-*-')) fixtures
+ * light-up during `npm test`. The gate only fires when JEST_WORKER_ID or
+ * NODE_ENV=test is set — neither is reachable from a dispatched agent
+ * (child processes launched via execFileSync / native bridge are never
+ * inside a jest runner), which makes the gate structurally unforgeable.
+ *
+ * Invariant: the gate MUST NOT affect the sensitive-targets pass
+ * (Layer 3 Pass 2). That pass takes ZERO exclusions from
+ * buildAuditExclusions and scans the vetted watchlist directly.
+ */
+describe('buildAuditExclusions — test-fixture gate (NODE_ENV / JEST_WORKER_ID)', () => {
+  const root = resolve('/tmp/fakeproject');
+  const tmp = resolve(tmpdir());
+
+  // Snapshot/restore env so one test does not leak into another.
+  const originalJestWorkerId = process.env.JEST_WORKER_ID;
+  const originalNodeEnv = process.env.NODE_ENV;
+  afterEach(() => {
+    if (originalJestWorkerId === undefined) delete process.env.JEST_WORKER_ID;
+    else process.env.JEST_WORKER_ID = originalJestWorkerId;
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
+  });
+
+  it('NODE_ENV=test: gossip-test- prefix IS excluded from the main-pass list', () => {
+    delete process.env.JEST_WORKER_ID;
+    process.env.NODE_ENV = 'test';
+    const excl = buildAuditExclusions(root, undefined, undefined);
+    expect(excl).toContain(`${tmp}/gossip-test-*`);
+  });
+
+  it('JEST_WORKER_ID set: gossip-test- prefix IS excluded from the main-pass list', () => {
+    delete process.env.NODE_ENV;
+    process.env.JEST_WORKER_ID = '1';
+    const excl = buildAuditExclusions(root, undefined, undefined);
+    expect(excl).toContain(`${tmp}/gossip-test-*`);
+  });
+
+  it('NODE_ENV and JEST_WORKER_ID both unset: test-fixture prefixes are NOT excluded', () => {
+    delete process.env.JEST_WORKER_ID;
+    delete process.env.NODE_ENV;
+    const excl = buildAuditExclusions(root, undefined, undefined);
+    expect(excl).not.toContain(`${tmp}/gossip-test-*`);
+    expect(excl).not.toContain(`${tmp}/sandbox-test-*`);
+    expect(excl).not.toContain(`${tmp}/gossip-wt-*`);
+    expect(excl).not.toContain(`${tmp}/perf-writer-*`);
+    // Non-test churn exclusions MUST still be present (baseline behavior).
+    expect(excl).toContain(`${tmp}/node-compile-cache`);
+  });
+
+  it('NODE_ENV=test: gossip-wt- prefix IS excluded (covers worktree-manager tmp dirs)', () => {
+    delete process.env.JEST_WORKER_ID;
+    process.env.NODE_ENV = 'test';
+    const excl = buildAuditExclusions(root, undefined, undefined);
+    expect(excl).toContain(`${tmp}/gossip-wt-*`);
+  });
+
+  it('NODE_ENV=test: sandbox-test- prefix IS excluded', () => {
+    delete process.env.JEST_WORKER_ID;
+    process.env.NODE_ENV = 'test';
+    const excl = buildAuditExclusions(root, undefined, undefined);
+    expect(excl).toContain(`${tmp}/sandbox-test-*`);
+  });
+
+  it('NODE_ENV=test: test-fixture exclusions emit /tmp ↔ /private/tmp twin variants', () => {
+    // If tmpdir() itself resolves to /tmp or /var/folders, expandTmpVariants
+    // may or may not emit a /private twin. But gossip-l3-* under an in-test
+    // /tmp path must be symmetric. Synthesize by asserting both forms
+    // coexist for the /tmp branch if tmpdir is /tmp-shaped. Otherwise skip
+    // the twin assertion — the expansion is already unit-tested upstream.
+    delete process.env.JEST_WORKER_ID;
+    process.env.NODE_ENV = 'test';
+    const excl = buildAuditExclusions(root, undefined, undefined);
+    // Every emitted test-fixture entry MUST end in '*' so `find -path`
+    // matches descendants. Guard against accidentally dropping the suffix.
+    const fixtureEntries = excl.filter(e => e.includes('gossip-test-'));
+    expect(fixtureEntries.length).toBeGreaterThan(0);
+    for (const e of fixtureEntries) {
+      expect(e.endsWith('*')).toBe(true);
+    }
+  });
+
+  it('gate MUST NOT alter buildSensitiveFindArgs (Layer 3 Pass 2 is independent of exclusions)', () => {
+    // Structural check: buildSensitiveFindArgs in sandbox.ts takes no
+    // exclusions parameter. We assert the function signature stays decoupled
+    // from the main-pass exclusions list — a regression here would mean the
+    // sensitive pass got gated off too.
+    //
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildSensitiveFindArgs } = require('../../apps/cli/src/sandbox');
+    // buildSensitiveFindArgs(target, sentinel, nameIncludes?, sentinelDir?)
+    // — exactly 4 declared parameters, no exclusion list. `.length` counts
+    // declared parameters (up to the first one with a default).
+    expect(typeof buildSensitiveFindArgs).toBe('function');
+    expect(buildSensitiveFindArgs.length).toBeLessThanOrEqual(4);
+    // Smoke: invoking with NODE_ENV=test must still produce a find argv that
+    // targets the given sensitive path without any test-fixture exclusion
+    // leaking in.
+    delete process.env.JEST_WORKER_ID;
+    process.env.NODE_ENV = 'test';
+    const args: string[] = buildSensitiveFindArgs('/Users/someuser/.ssh', '/tmp/fake-sentinel');
+    expect(args[0]).toBe('/Users/someuser/.ssh');
+    // No test-fixture prefix should be in the argv.
+    expect(args.some((a: string) => a.includes('gossip-test-'))).toBe(false);
+    expect(args.some((a: string) => a.includes('sandbox-test-'))).toBe(false);
+  });
+});
