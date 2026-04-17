@@ -64,6 +64,28 @@ const VERIFIER_TOOLS: ToolDefinition[] = [
   { name: 'git_log', description: 'Show git log for a file or path', parameters: { type: 'object', properties: { path: { type: 'string', description: 'File or directory to show history for' }, maxCount: { type: 'number', description: 'Maximum number of commits to return' } }, required: [] } },
 ];
 
+/**
+ * Resolve the category for a signal write, preferring the explicit field and
+ * falling back to regex extraction over any nearby text. Returns null when
+ * all sources fail — the caller MUST then either drop the signal or log the
+ * miss. See #148: category-less signals are silently dropped by
+ * `performance-reader.getCountersSince` (which skips `!s.category`), so a
+ * write with `category: ''` is effectively lost and makes MIN_EVIDENCE=120
+ * measure the wrong denominator.
+ */
+function resolveSignalCategory(
+  explicit: string | undefined,
+  ...texts: (string | undefined | null)[]
+): string | null {
+  if (explicit && explicit.trim()) return explicit;
+  for (const t of texts) {
+    if (!t) continue;
+    const hit = extractCategories(t)[0];
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export interface ConsensusEngineConfig {
   llm: ILLMProvider;
   registryGet: (agentId: string) => AgentConfig | undefined;
@@ -1033,18 +1055,27 @@ Return only valid JSON.${skillsBlock}`;
         if (matchKey && f) {
           f.confirmedBy.push(entry.agentId);
           f.confidences.push(entry.confidence);
-          signals.push({
-            type: 'consensus',
-            taskId: getTaskId(entry.agentId),
-            consensusId,
-            signal: 'agreement',
-            agentId: entry.agentId,
-            counterpartId: entry.peerAgentId,
-            evidence: capEvidence(entry.evidence),
-            timestamp: now,
-            severity: f.severity,
-            category: f.category,
-          });
+          // #148 — require non-empty category or skip the write. Signals
+          // without category are silently dropped by getCountersSince.
+          const agreeCat = resolveSignalCategory(f.category, entry.evidence, f.finding);
+          if (!agreeCat) {
+            process.stderr.write(
+              `[consensus-engine] dropped agreement for ${entry.agentId}: no category. evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
+            );
+          } else {
+            signals.push({
+              type: 'consensus',
+              taskId: getTaskId(entry.agentId),
+              consensusId,
+              signal: 'agreement',
+              agentId: entry.agentId,
+              counterpartId: entry.peerAgentId,
+              evidence: capEvidence(entry.evidence),
+              timestamp: now,
+              severity: f.severity,
+              category: agreeCat,
+            });
+          }
         }
         continue;
       }
@@ -1103,18 +1134,26 @@ Return only valid JSON.${skillsBlock}`;
               reason: sanitizeEvidence(entry.evidence),
               evidence: sanitizeEvidence(entry.evidence),
             });
-            signals.push({
-              type: 'consensus',
-              taskId: getTaskId(entry.agentId),
-              consensusId,
-              signal: 'disagreement',
-              agentId: entry.agentId,
-              counterpartId: entry.peerAgentId,
-              evidence: capEvidence(entry.evidence),
-              timestamp: now,
-              severity: f.severity,
-              category: f.category,
-            });
+            // #148 — require non-empty category or skip the write.
+            const disagreeCat = resolveSignalCategory(f.category, entry.evidence, f.finding);
+            if (!disagreeCat) {
+              process.stderr.write(
+                `[consensus-engine] dropped disagreement for ${entry.agentId}: no category. evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
+              );
+            } else {
+              signals.push({
+                type: 'consensus',
+                taskId: getTaskId(entry.agentId),
+                consensusId,
+                signal: 'disagreement',
+                agentId: entry.agentId,
+                counterpartId: entry.peerAgentId,
+                evidence: capEvidence(entry.evidence),
+                timestamp: now,
+                severity: f.severity,
+                category: disagreeCat,
+              });
+            }
           }
         }
       }
@@ -1199,17 +1238,25 @@ Return only valid JSON.${skillsBlock}`;
           // Downgrade to unique with softer signal instead of hallucination penalty
           finding.tag = 'unique';
           unique.push(finding);
-          signals.push({
-            type: 'consensus',
-            taskId: getTaskId(entry.originalAgentId),
-            consensusId,
-            signal: 'unique_unconfirmed',
-            agentId: entry.originalAgentId,
-            evidence: capEvidence(`Confirmed finding has unresolvable citation (stale?): "${entry.finding.slice(0, 200)}"`),
-            timestamp: now,
-            severity: entry.severity,
-            category: entry.category,
-          });
+          // #148 — require non-empty category or skip the write.
+          const uniqueUnconfCat = resolveSignalCategory(entry.category, entry.finding);
+          if (!uniqueUnconfCat) {
+            process.stderr.write(
+              `[consensus-engine] dropped unique_unconfirmed for ${entry.originalAgentId}: no category.\n`,
+            );
+          } else {
+            signals.push({
+              type: 'consensus',
+              taskId: getTaskId(entry.originalAgentId),
+              consensusId,
+              signal: 'unique_unconfirmed',
+              agentId: entry.originalAgentId,
+              evidence: capEvidence(`Confirmed finding has unresolvable citation (stale?): "${entry.finding.slice(0, 200)}"`),
+              timestamp: now,
+              severity: entry.severity,
+              category: uniqueUnconfCat,
+            });
+          }
           continue;
         }
         finding.tag = 'confirmed';
@@ -1219,17 +1266,25 @@ Return only valid JSON.${skillsBlock}`;
           other => other !== entry && other.finding === entry.finding && other.originalAgentId !== entry.originalAgentId
         );
         if (isUniquelyDiscovered) {
-          signals.push({
-            type: 'consensus',
-            taskId: getTaskId(entry.originalAgentId),
-            consensusId,
-            signal: 'unique_confirmed',
-            agentId: entry.originalAgentId,
-            evidence: capEvidence(entry.finding),
-            timestamp: now,
-            severity: entry.severity,
-            category: entry.category,
-          });
+          // #148 — require non-empty category or skip the write.
+          const uniqueConfCat = resolveSignalCategory(entry.category, entry.finding);
+          if (!uniqueConfCat) {
+            process.stderr.write(
+              `[consensus-engine] dropped unique_confirmed for ${entry.originalAgentId}: no category.\n`,
+            );
+          } else {
+            signals.push({
+              type: 'consensus',
+              taskId: getTaskId(entry.originalAgentId),
+              consensusId,
+              signal: 'unique_confirmed',
+              agentId: entry.originalAgentId,
+              evidence: capEvidence(entry.finding),
+              timestamp: now,
+              severity: entry.severity,
+              category: uniqueConfCat,
+            });
+          }
         }
       } else if (entry.unverifiedBy.length > 0) {
         // Route suggestions/insights to insights array instead of unverified

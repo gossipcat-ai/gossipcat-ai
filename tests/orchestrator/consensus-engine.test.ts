@@ -340,10 +340,17 @@ Summary: 1 agree, 1 disagree.`;
     });
 
     it('should emit unique_confirmed signal for confirmed unique findings', async () => {
-      const crossReview: CrossReviewEntry[] = [
-        { action: 'agree', agentId: 'agent-2', peerAgentId: 'agent-1', finding: 'Finding A from agent 1', evidence: 'Confirmed', confidence: 5 },
+      // Finding + evidence carry a category keyword ("authentication") so
+      // resolveSignalCategory() can populate the signal's category field —
+      // required after #148 (category-less signals are skipped).
+      const fxResults: TaskEntry[] = [
+        createTaskEntry('agent-1', 'completed', '- Finding A from agent 1 — authentication missing\n- Finding B is also here'),
+        createTaskEntry('agent-2', 'completed', '- Finding C is by agent 2'),
       ];
-      const report = await engine.synthesize(results, crossReview);
+      const crossReview: CrossReviewEntry[] = [
+        { action: 'agree', agentId: 'agent-2', peerAgentId: 'agent-1', finding: 'Finding A from agent 1 — authentication missing', evidence: 'Confirmed', confidence: 5 },
+      ];
+      const report = await engine.synthesize(fxResults, crossReview);
       // Finding A was only found by agent-1 and confirmed by agent-2 → unique_confirmed
       const uniqueConfirmedSignals = report.signals.filter(s => s.signal === 'unique_confirmed');
       expect(uniqueConfirmedSignals.length).toBe(1);
