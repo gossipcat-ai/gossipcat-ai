@@ -87,6 +87,7 @@ function makeStubPerfReader(
           disagreements: 0,
           uniqueFindings: 0,
           hallucinations: 0,
+          weightedHallucinations: 0,
           consecutiveFailures: 0,
           circuitOpen: false,
           categoryStrengths: {},

@@ -21,6 +21,7 @@ export interface AgentScore {
   disagreements: number;
   uniqueFindings: number;
   hallucinations: number;
+  weightedHallucinations: number; // decay-weighted hallucination count (used by auto-bench)
   consecutiveFailures: number; // circuit breaker: consecutive negative signals at tail
   circuitOpen: boolean;        // true when consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD
   categoryStrengths: Record<string, number>;
@@ -119,6 +120,70 @@ export class PerformanceReader {
   isCircuitOpen(agentId: string): boolean {
     const score = this.getAgentScore(agentId);
     return score?.circuitOpen ?? false;
+  }
+
+  /**
+   * Agent auto-bench v1 — chronic-low-accuracy or burst-hallucination gate.
+   *
+   * Returns {benched:false} for healthy agents.
+   * Returns {benched:true, reason} when a bench rule fires AND the safeguard
+   * passes (another unbenched agent covers every category in `categories`).
+   * Returns {benched:false, safeguardBlocked:true, reason} when a bench rule
+   * fires but the candidate is the sole provider of one of the requested
+   * categories (benching would leave that category uncovered).
+   *
+   * Hysteresis: the 5pp margin between the Rule A entry threshold (acc < 0.30)
+   * and the natural recovery point (acc >= 0.35, where `0.30 enter / 0.35 exit`
+   * is the conventional window) acts as implicit hysteresis via the score
+   * window itself. TODO(v2): explicit post-bench clean-streak counter if the
+   * implicit window proves too flappy in production.
+   * TODO: surface bench state as a dashboard badge once the dashboard grows
+   * an agent-health view.
+   */
+  isBenched(
+    agentId: string,
+    categories?: string[],
+    allAgentIds?: string[],
+  ): { benched: boolean; reason?: string; safeguardBlocked?: boolean } {
+    const score = this.getAgentScore(agentId);
+    if (!score) return { benched: false };
+
+    // Rule A: chronic low accuracy (needs enough evidence to be statistically meaningful)
+    const ruleA = score.accuracy < 0.30 && score.totalSignals >= 200;
+    // Rule B: burst hallucinations (absolute floor + rate gate)
+    const hallRate = score.totalSignals > 0
+      ? score.weightedHallucinations / score.totalSignals
+      : 0;
+    const ruleB = score.weightedHallucinations >= 5 && hallRate > 0.4;
+
+    if (!ruleA && !ruleB) return { benched: false };
+
+    const reason = ruleA ? 'chronic-low-accuracy' : 'burst-hallucination';
+
+    // Safeguard: if the caller specified categories the agent covers, ensure
+    // at least one *other* non-benched agent covers each category. If the
+    // candidate is the sole provider of any requested category, refuse to
+    // bench — partial coverage is worse than a struggling reviewer.
+    if (categories && categories.length > 0 && allAgentIds && allAgentIds.length > 0) {
+      for (const cat of categories) {
+        let covered = false;
+        for (const other of allAgentIds) {
+          if (other === agentId) continue;
+          const otherScore = this.getAgentScore(other);
+          if (!otherScore) continue;
+          const otherCats = otherScore.categoryAccuracy || {};
+          if (!(cat in otherCats)) continue;
+          // Recurse with no categories to avoid unbounded stack and to answer
+          // the simple question: "would this *other* agent be benched on its
+          // own merits?" If not, it's a valid fallback reviewer.
+          const otherBench = this.isBenched(other);
+          if (!otherBench.benched) { covered = true; break; }
+        }
+        if (!covered) return { benched: false, safeguardBlocked: true, reason };
+      }
+    }
+
+    return { benched: true, reason };
   }
 
   /**
@@ -599,6 +664,7 @@ export class PerformanceReader {
         disagreements: a.disagreements,
         uniqueFindings: a.uniqueFindings,
         hallucinations: a.hallucinations,
+        weightedHallucinations: a.weightedHallucinations,
         consecutiveFailures: consec,
         circuitOpen: consec >= CIRCUIT_BREAKER_THRESHOLD,
         categoryStrengths: a.categoryStrengths,
@@ -616,6 +682,7 @@ export class PerformanceReader {
         scores.set(agentId, {
           agentId, accuracy: 0.5, uniqueness: 0.5, reliability: 0.5, impactScore: 0.5,
           totalSignals: 0, agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
+          weightedHallucinations: 0,
           consecutiveFailures: consec,
           circuitOpen: consec >= CIRCUIT_BREAKER_THRESHOLD,
           categoryStrengths: {}, categoryCorrect: {}, categoryHallucinated: {}, categoryAccuracy: {},
