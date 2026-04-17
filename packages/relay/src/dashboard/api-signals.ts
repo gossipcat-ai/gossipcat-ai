@@ -7,6 +7,9 @@ interface SignalEntry {
   agentId: string;
   counterpartId?: string;
   taskId?: string;
+  consensusId?: string;
+  findingId?: string;
+  severity?: 'critical' | 'high' | 'medium' | 'low';
   evidence?: string;
   finding?: string;
   timestamp: string;
