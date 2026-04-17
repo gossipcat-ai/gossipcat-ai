@@ -161,7 +161,13 @@ describeOnPosix('buildAuditExclusions', () => {
 
   it('omits worktree exclusion when ownWorktree is undefined', () => {
     const excl = buildAuditExclusions('/tmp/proj', undefined);
-    expect(excl.some(e => e.includes('gossip-wt'))).toBe(false);
+    // When ownWorktree is undefined, no path ending in the worktree dir
+    // itself is added (there's nothing to exclude). Under NODE_ENV=test the
+    // env-gated list does include a `<tmp>/gossip-wt-*` glob as test-fixture
+    // noise exclusion — that is distinct from the ownWorktree entry, which
+    // is the unrooted canonicalized worktree path. Assert no entry exactly
+    // equals a canonicalized worktree-shaped path.
+    expect(excl.some(e => e === '/tmp/proj/gossip-wt' || /^\/private?\/tmp\/gossip-wt-[^*]+$/.test(e))).toBe(false);
   });
 
   it('excludes user-level OS/app churn dirs (~/Library, ~/.cache, ~/.npm, ~/.claude)', () => {
@@ -894,6 +900,127 @@ describeOnPosix('buildFindPruneArgs', () => {
       rmSync(scanRoot, { recursive: true, force: true });
       rmSync(binDir, { recursive: true, force: true });
     }
+  });
+});
+
+describeOnPosix('auditFilesystemSinceSentinel — test-fixture noise gate', () => {
+  /**
+   * Context: 6,128 / 8,590 = 71% of pre-fix boundary-escapes.jsonl entries
+   * came from `mkdtempSync(join(tmpdir(), 'gossip-*-'))` fixtures during
+   * `npm test`. The env-gated exclusion in buildAuditExclusions suppresses
+   * these ONLY when JEST_WORKER_ID or NODE_ENV=test is set — a dispatched
+   * agent running in a child process cannot reach either, so the gate is
+   * structurally unforgeable for production dispatch.
+   */
+  const originalJestWorkerId = process.env.JEST_WORKER_ID;
+  const originalNodeEnv = process.env.NODE_ENV;
+  afterEach(() => {
+    if (originalJestWorkerId === undefined) delete process.env.JEST_WORKER_ID;
+    else process.env.JEST_WORKER_ID = originalJestWorkerId;
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
+  });
+
+  itOnPosix('NODE_ENV=test: gossip-test-* path under tmpdir is EXCLUDED from mainSet', () => {
+    delete process.env.JEST_WORKER_ID;
+    process.env.NODE_ENV = 'test';
+
+    const projectRoot = mkTmp();
+    // Fixture dir sits directly under tmpdir() with the spec-named prefix.
+    const fixtureDir = mkdtempSync(join(tmpdir(), `gossip-test-synthetic-${Date.now()}-`));
+    try {
+      const sentinel = stampTaskSentinel(projectRoot, 'gate-test-1')!;
+      backdateSentinel(sentinel, 5000);
+
+      // Write a file inside the fixture AFTER the sentinel — without the gate,
+      // this would be flagged as a Layer 3 violation.
+      const innerDir = join(fixtureDir, '.gossip');
+      mkdirSync(innerDir, { recursive: true });
+      const fake = join(innerDir, 'fake.jsonl');
+      writeFileSync(fake, '{"x":1}\n');
+
+      const meta: DispatchMetadata = {
+        taskId: 'gate-test-1',
+        agentId: 'opus-implementer',
+        writeMode: 'worktree',
+        timestamp: Date.now(),
+        sentinelPath: sentinel,
+      };
+
+      const res = auditFilesystemSinceSentinel(projectRoot, meta, {
+        scanRoots: [tmpdir()],
+        logFailures: false,
+      });
+
+      // The synthetic fixture file MUST NOT appear — the env-gated prefix
+      // pruned it during the main pass.
+      expect(res.violations.some(v => v.includes('fake.jsonl'))).toBe(false);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  itOnPosix('NODE_ENV / JEST_WORKER_ID both unset: same path IS flagged (gate is closed)', () => {
+    delete process.env.JEST_WORKER_ID;
+    delete process.env.NODE_ENV;
+
+    const projectRoot = mkTmp();
+    const fixtureDir = mkdtempSync(join(tmpdir(), `gossip-test-synthetic-${Date.now()}-`));
+    try {
+      const sentinel = stampTaskSentinel(projectRoot, 'gate-test-2')!;
+      backdateSentinel(sentinel, 5000);
+
+      const innerDir = join(fixtureDir, '.gossip');
+      mkdirSync(innerDir, { recursive: true });
+      const fake = join(innerDir, 'fake.jsonl');
+      writeFileSync(fake, '{"x":1}\n');
+
+      const meta: DispatchMetadata = {
+        taskId: 'gate-test-2',
+        agentId: 'opus-implementer',
+        writeMode: 'worktree',
+        timestamp: Date.now(),
+        sentinelPath: sentinel,
+      };
+
+      const res = auditFilesystemSinceSentinel(projectRoot, meta, {
+        scanRoots: [tmpdir()],
+        logFailures: false,
+      });
+
+      // Gate closed → fixture path surfaces as a violation.
+      expect(res.violations.some(v => v.includes('fake.jsonl'))).toBe(true);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  itOnPosix('sensitive pass IS unaffected by the gate (Pass 2 takes no exclusions)', () => {
+    // We cannot safely write to a real sensitive target (~/.ssh), so this
+    // asserts the structural invariant: buildSensitiveFindArgs does not
+    // consult buildAuditExclusions, so the env gate cannot reach Pass 2.
+    // Regression here would mean the gate inadvertently suppressed a real
+    // sensitive-target hit under NODE_ENV=test.
+    //
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildSensitiveFindArgs } = require('../../apps/cli/src/sandbox');
+    delete process.env.JEST_WORKER_ID;
+    process.env.NODE_ENV = 'test';
+    const args: string[] = buildSensitiveFindArgs(
+      '/Users/someuser/.ssh',
+      '/tmp/fake-sentinel',
+      ['id_*', '*.key'],
+    );
+    // First positional arg is the sensitive target; no test-fixture prefix
+    // can leak in because Pass 2 does not consult the main-pass exclusions.
+    expect(args[0]).toBe('/Users/someuser/.ssh');
+    expect(args.some((a: string) => a.includes('gossip-test-synthetic-'))).toBe(false);
+    expect(args.some((a: string) => a.includes('sandbox-test-'))).toBe(false);
+    // And the -name include-list survived — watchlist semantics intact.
+    expect(args).toContain('-name');
+    expect(args).toContain('id_*');
   });
 });
 
