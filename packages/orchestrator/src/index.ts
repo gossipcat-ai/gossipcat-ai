@@ -33,6 +33,8 @@ export { assemblePrompt, assembleUtilityPrompt, MAX_ASSEMBLED_PROMPT_CHARS, extr
 export type { SpecStatus } from './prompt-assembler';
 export { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
 export type { ParsedFinding, ParseFindingsResult, ParseFindingsOptions, FindingType, Severity, ParseDiagnostic } from './parse-findings';
+export { computeDedupeKey, DEDUPE_KEY_INTERNALS } from './dedupe-key';
+export type { DedupeKeyInput } from './dedupe-key';
 export { AgentMemoryReader } from './agent-memory';
 export { MemoryWriter } from './memory-writer';
 export type { SessionArtifacts } from './memory-writer';
