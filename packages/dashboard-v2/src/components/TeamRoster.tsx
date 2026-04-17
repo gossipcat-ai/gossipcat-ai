@@ -1,5 +1,6 @@
 import type { AgentData } from '@/lib/types';
 import { agentColor, timeAgo } from '@/lib/utils';
+import { getBenchBadgeKind } from '@/lib/bench';
 
 interface TeamRosterProps {
   agents: AgentData[];
@@ -46,11 +47,25 @@ export function TeamRoster({ agents }: TeamRosterProps) {
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate font-mono text-xs font-semibold text-foreground">{agent.id}</span>
-                    {s.circuitOpen && (
-                      <span className="shrink-0 rounded-sm bg-destructive/10 px-1 py-0.5 font-mono text-[8px] font-bold text-destructive">
-                        CIRCUIT OPEN
-                      </span>
-                    )}
+                    {(() => {
+                      const kind = getBenchBadgeKind(s);
+                      if (kind === 'benched') return (
+                        <span className="shrink-0 rounded-sm bg-destructive/10 px-1 py-0.5 font-mono text-[8px] font-bold text-destructive">
+                          BENCHED
+                        </span>
+                      );
+                      if (kind === 'struggling') return (
+                        <span className="shrink-0 rounded-sm bg-unverified/10 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified">
+                          STRUGGLING
+                        </span>
+                      );
+                      if (kind === 'kept-for-coverage') return (
+                        <span className="shrink-0 rounded-sm border border-unverified/40 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified">
+                          KEPT
+                        </span>
+                      );
+                      return null;
+                    })()}
                   </div>
                   <div className="flex shrink-0 items-baseline gap-1.5">
                     <span className={`font-mono text-sm font-bold tabular-nums leading-none ${weightColor}`}>

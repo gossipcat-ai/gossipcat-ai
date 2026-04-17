@@ -18,6 +18,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import { timeAgo, cleanFindingTags } from '@/lib/utils';
+import { getBenchBadgeKind, needsAttention } from '@/lib/bench';
 import type { DashboardEvent, AgentData } from '@/lib/types';
 
 type SortKey = 'weight' | 'accuracy' | 'uniqueness' | 'impact' | 'signals' | 'agreements' | 'hallucinations' | 'lastTask';
@@ -39,7 +40,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
     return m;
   }, [tasks]);
 
-  const circuitOpen = agents.filter((a) => a.scores.circuitOpen).length;
+  const circuitOpen = agents.filter(needsAttention).length;
   const healthy = agents.filter((a) => a.scores.accuracy >= 0.5).length;
   const totalSignals = agents.reduce((acc, a) => acc + a.scores.signals, 0);
   const totalTokens = agents.reduce((acc, a) => acc + a.totalTokens, 0);
@@ -199,12 +200,28 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
                           <span className="truncate font-mono text-xs font-semibold text-foreground group-hover:text-primary">{agent.id}</span>
-                          {s.circuitOpen && (
-                            <span
-                              className="shrink-0 rounded bg-destructive/15 px-1 font-mono text-[8px] font-bold uppercase tracking-wider text-destructive"
-                              data-tooltip="Benched: too many consecutive failures. Deprioritized until new clean signals recover the score."
-                            >benched</span>
-                          )}
+                          {(() => {
+                            const kind = getBenchBadgeKind(s);
+                            if (kind === 'benched') return (
+                              <span
+                                className="shrink-0 rounded bg-destructive/15 px-1 font-mono text-[8px] font-bold uppercase tracking-wider text-destructive"
+                                data-tooltip={`Benched (${s.bench.reason ?? 'auto'}). Excluded from dispatch until recovery.`}
+                              >benched</span>
+                            );
+                            if (kind === 'struggling') return (
+                              <span
+                                className="shrink-0 rounded bg-unverified/15 px-1 font-mono text-[8px] font-bold uppercase tracking-wider text-unverified"
+                                data-tooltip="Struggling: consecutive failures tripped the circuit breaker. Deprioritized until new clean signals recover the score."
+                              >struggling</span>
+                            );
+                            if (kind === 'kept-for-coverage') return (
+                              <span
+                                className="shrink-0 rounded border border-unverified/40 px-1 font-mono text-[8px] font-bold uppercase tracking-wider text-unverified"
+                                data-tooltip={`Would bench (${s.bench.reason ?? 'rule'}), but kept as sole provider of a category.`}
+                              >kept for coverage</span>
+                            );
+                            return null;
+                          })()}
                         </div>
                         <div className="truncate font-mono text-[10px] text-muted-foreground/50">
                           {agent.provider}/{agent.model}

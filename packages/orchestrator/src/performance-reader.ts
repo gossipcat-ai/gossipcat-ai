@@ -137,8 +137,6 @@ export class PerformanceReader {
    * is the conventional window) acts as implicit hysteresis via the score
    * window itself. TODO(v2): explicit post-bench clean-streak counter if the
    * implicit window proves too flappy in production.
-   * TODO: surface bench state as a dashboard badge once the dashboard grows
-   * an agent-health view.
    */
   isBenched(
     agentId: string,

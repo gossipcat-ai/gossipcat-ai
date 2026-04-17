@@ -5,6 +5,7 @@ import { CategoryStrengths } from './CategoryStrengths';
 import { SignalTimeline } from './SignalTimeline';
 import { TaskRow } from './TaskRow';
 import { timeAgo, cleanFindingTags } from '@/lib/utils';
+import { getBenchBadgeKind } from '@/lib/bench';
 import { escapeHtml } from '@/lib/sanitize';
 import type { AgentData, TasksData, ConsensusData, ConsensusReport, ConsensusReportsData, MemoryData, MemoryFile, ParseDiagnostic } from '@/lib/types';
 
@@ -120,17 +121,41 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
 
   return (
     <>
-      {/* Circuit breaker warning */}
-      {s.circuitOpen && (
-        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-xs font-bold text-destructive">CIRCUIT OPEN</span>
-            <span className="text-xs text-destructive/70">
-              {s.consecutiveFailures}+ consecutive failures. Agent will be deprioritized until clean signals recorded.
-            </span>
+      {/* Bench / circuit breaker warning — three-state panel */}
+      {(() => {
+        const kind = getBenchBadgeKind(s);
+        if (kind === 'benched') return (
+          <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs font-bold text-destructive">BENCHED</span>
+              <span className="text-xs text-destructive/70">
+                Auto-bench rule fired ({s.bench.reason ?? 'unknown'}). Agent excluded from dispatch until scores recover.
+              </span>
+            </div>
           </div>
-        </div>
-      )}
+        );
+        if (kind === 'struggling') return (
+          <div className="mb-6 rounded-lg border border-unverified/30 bg-unverified/5 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs font-bold text-unverified">STRUGGLING</span>
+              <span className="text-xs text-unverified/70">
+                {s.consecutiveFailures}+ consecutive failures. Deprioritized until clean signals recorded.
+              </span>
+            </div>
+          </div>
+        );
+        if (kind === 'kept-for-coverage') return (
+          <div className="mb-6 rounded-lg border border-unverified/30 bg-unverified/5 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs font-bold text-unverified">KEPT FOR COVERAGE</span>
+              <span className="text-xs text-unverified/70">
+                Would be benched ({s.bench.reason ?? 'rule'}), but is the sole provider of a category — kept to preserve coverage.
+              </span>
+            </div>
+          </div>
+        );
+        return null;
+      })()}
 
       {/* Persistent parse-diagnostic banner — fires when the same diagnostic
           code has tripped at least DIAGNOSTIC_BANNER_THRESHOLD times in the
@@ -191,11 +216,30 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               {agent.preset && (
                 <span className="rounded-sm bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">{agent.preset}</span>
               )}
-              {s.consecutiveFailures > 0 && !s.circuitOpen && (
-                <span className="rounded-sm bg-unverified/10 px-2 py-0.5 font-mono text-[10px] font-bold text-unverified">
-                  {s.consecutiveFailures} CONSECUTIVE FAILS
-                </span>
-              )}
+              {(() => {
+                const kind = getBenchBadgeKind(s);
+                if (kind === 'benched') return (
+                  <span className="rounded-sm bg-destructive/10 px-2 py-0.5 font-mono text-[10px] font-bold text-destructive">
+                    BENCHED
+                  </span>
+                );
+                if (kind === 'struggling') return (
+                  <span className="rounded-sm bg-unverified/10 px-2 py-0.5 font-mono text-[10px] font-bold text-unverified">
+                    STRUGGLING ({s.consecutiveFailures} FAILS)
+                  </span>
+                );
+                if (kind === 'kept-for-coverage') return (
+                  <span className="rounded-sm border border-unverified/40 px-2 py-0.5 font-mono text-[10px] font-bold text-unverified">
+                    KEPT FOR COVERAGE
+                  </span>
+                );
+                if (s.consecutiveFailures > 0) return (
+                  <span className="rounded-sm bg-unverified/10 px-2 py-0.5 font-mono text-[10px] font-bold text-unverified">
+                    {s.consecutiveFailures} CONSECUTIVE FAILS
+                  </span>
+                );
+                return null;
+              })()}
               <span className="font-mono text-[10px] text-muted-foreground/60">
                 {s.signals} signals{agent.lastTask ? ` · ${timeAgo(agent.lastTask.timestamp)}` : ''}
               </span>
