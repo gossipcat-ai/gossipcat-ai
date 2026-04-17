@@ -18,7 +18,25 @@ const MAX_DAYS = 90;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface CacheEntry { mtime: number; payload: FleetTrendResponse; }
+// LRU-bounded: distinct (projectRoot, days) keys from unknown callers would otherwise
+// grow the Map unbounded with each entry holding a full FleetTrendResponse.
+const CACHE_MAX = 64;
 const cache = new Map<string, CacheEntry>();
+
+function cacheGet(key: string): CacheEntry | undefined {
+  const v = cache.get(key);
+  if (v !== undefined) { cache.delete(key); cache.set(key, v); }
+  return v;
+}
+function cacheSet(key: string, value: CacheEntry): void {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 
 export async function fleetTrendHandler(projectRoot: string, query?: URLSearchParams): Promise<FleetTrendResponse> {
   const rawDays = parseInt(query?.get('days') ?? '', 10);
@@ -28,7 +46,7 @@ export async function fleetTrendHandler(projectRoot: string, query?: URLSearchPa
   if (!existsSync(perfPath)) return { days, points: [] };
   const mtime = statSync(perfPath).mtimeMs;
   const cacheKey = `${projectRoot}::${days}`;
-  const cached = cache.get(cacheKey);
+  const cached = cacheGet(cacheKey);
   if (cached && cached.mtime === mtime) return cached.payload;
 
   const cutoff = Date.now() - days * DAY_MS;
@@ -64,6 +82,11 @@ export async function fleetTrendHandler(projectRoot: string, query?: URLSearchPa
   points.sort((a, b) => a.day.localeCompare(b.day) || a.agentId.localeCompare(b.agentId));
 
   const payload: FleetTrendResponse = { days, points };
-  cache.set(cacheKey, { mtime, payload });
+  // Re-stat after read closes the TOCTOU gap: if the file was appended between the
+  // initial stat and readFileSync, the new mtime differs and we skip the cache write
+  // rather than cache a payload computed from a stale snapshot.
+  let postMtime: number | null = null;
+  try { postMtime = statSync(perfPath).mtimeMs; } catch { /* file gone */ }
+  if (postMtime === mtime) cacheSet(cacheKey, { mtime, payload });
   return payload;
 }
