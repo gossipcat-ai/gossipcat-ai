@@ -8,6 +8,7 @@ import { autoMemoryHandler } from './api-native-memory';
 import { gossipMemoryHandler } from './api-gossip-memory';
 import { consensusHandler } from './api-consensus';
 import { signalsHandler } from './api-signals';
+import { findingHandler } from './api-finding';
 import { learningsHandler } from './api-learnings';
 import { tasksHandler } from './api-tasks';
 import { activeTasksHandler } from './api-active-tasks';
@@ -275,6 +276,19 @@ export class DashboardRouter {
         const result = this.archiveFindings();
         this.json(res, 200, result);
         return true;
+      }
+
+      {
+        const m = url.match(/^\/dashboard\/api\/finding\/([^/]+)\/(.+)$/);
+        if (m && req.method === 'GET') {
+          try {
+            const data = await findingHandler(this.projectRoot, decodeURIComponent(m[1]), decodeURIComponent(m[2]));
+            this.json(res, 200, data);
+          } catch (e: any) {
+            this.json(res, 404, { error: e.message });
+          }
+          return true;
+        }
       }
 
       if (url === '/dashboard/api/signals' && req.method === 'GET') {

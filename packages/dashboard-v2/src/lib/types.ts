@@ -185,6 +185,51 @@ export interface MemoryData {
   cognitiveCount: number;
 }
 
+export interface SignalEntry {
+  signal: string;
+  agentId: string;
+  counterpartId?: string;
+  taskId?: string;
+  consensusId?: string;
+  findingId?: string;
+  severity?: 'critical' | 'high' | 'medium' | 'low';
+  evidence?: string;
+  timestamp: string;
+}
+
+export interface CitationSnippet {
+  file: string;
+  line: number;
+  snippet: string;
+}
+
+export interface FindingDetailSignal {
+  signal: string;
+  agentId: string;
+  counterpartId?: string;
+  evidence?: string;
+  timestamp: string;
+}
+
+export interface FindingDetail {
+  consensusId: string;
+  finding: {
+    id: string;
+    authorFindingId?: string;
+    originalAgentId: string;
+    finding: string;
+    findingType: 'finding' | 'suggestion' | 'insight';
+    severity?: 'critical' | 'high' | 'medium' | 'low';
+    tag: 'confirmed' | 'disputed' | 'unverified' | 'unique' | 'insight' | 'newFinding';
+    confirmedBy: string[];
+    disputedBy: { agentId: string; reason: string }[];
+    confidence: number;
+  };
+  signals: FindingDetailSignal[];
+  citations: CitationSnippet[];
+  retracted?: { reason: string; at: string };
+}
+
 export type DashboardEvent =
   | { type: 'task_dispatched'; taskId: string; agentId: string }
   | { type: 'task_completed'; taskId: string; agentId: string }
