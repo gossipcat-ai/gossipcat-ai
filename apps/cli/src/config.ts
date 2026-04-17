@@ -20,6 +20,18 @@ export interface GossipConfig {
    * Default: "warn"
    */
   sandboxEnforcement?: 'off' | 'warn' | 'block';
+  /**
+   * Consensus-engine configuration. Issue #126 / PR-B.
+   */
+  consensus?: {
+    /**
+     * When true, ConsensusEngine calls `git worktree list -z --porcelain`
+     * once per round() and merges all passing paths through
+     * validateResolutionRoot alongside explicit resolutionRoots. Default
+     * false (no behavior change for default installs).
+     */
+    autoDiscoverWorktrees?: boolean;
+  };
   agents?: Record<string, {
     provider: string;
     model: string;
@@ -73,6 +85,18 @@ export function validateConfig(raw: any): GossipConfig {
     throw new Error(
       `Invalid provider "${raw.main_agent.provider}". Must be one of: ${VALID_PROVIDERS.join(', ')}`
     );
+  }
+
+  if (raw.consensus !== undefined) {
+    if (typeof raw.consensus !== 'object' || raw.consensus === null) {
+      throw new Error('Config "consensus" must be an object');
+    }
+    if (
+      raw.consensus.autoDiscoverWorktrees !== undefined &&
+      typeof raw.consensus.autoDiscoverWorktrees !== 'boolean'
+    ) {
+      throw new Error('Config "consensus.autoDiscoverWorktrees" must be a boolean');
+    }
   }
 
   if (raw.sandboxEnforcement !== undefined) {

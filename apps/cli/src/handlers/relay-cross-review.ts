@@ -28,7 +28,7 @@ export function startConsensusTimeout(consensusId: string): void {
 
     const missingAgents = [...current.pendingNativeAgents];
     // Delete round BEFORE async work to prevent double-synthesis race with concurrent relay
-    const snapshot = { allResults: current.allResults, relayCrossReviewEntries: current.relayCrossReviewEntries, relayCrossReviewSkipped: current.relayCrossReviewSkipped, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries] };
+    const snapshot = { allResults: current.allResults, relayCrossReviewEntries: current.relayCrossReviewEntries, relayCrossReviewSkipped: current.relayCrossReviewSkipped, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries], resolutionRoots: current.resolutionRoots };
     ctx.pendingConsensusRounds.delete(consensusId);
     persistPendingConsensus();
     process.stderr.write(`[gossipcat] ⏰ Consensus ${consensusId} timed out. Missing: ${missingAgents.join(', ')}. Synthesizing with available entries.\n`);
@@ -60,6 +60,7 @@ export function startConsensusTimeout(consensusId: string): void {
         llm: timeoutLlm,
         registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
         projectRoot: process.cwd(),
+        resolutionRoots: snapshot.resolutionRoots,
       });
 
       const allEntries = [...snapshot.relayCrossReviewEntries, ...snapshot.nativeCrossReviewEntries];
@@ -140,6 +141,7 @@ export async function handleRelayCrossReview(
       llm: parseLlm || ({ generate: async () => ({ text: '', usage: { inputTokens: 0, outputTokens: 0 } }) } as any),
       registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
       projectRoot: process.cwd(),
+      resolutionRoots: round.resolutionRoots,
     });
     const entries = engine.parseCrossReviewResponse(agent_id, result, 50);
     parsedCount = entries.length;
@@ -222,6 +224,11 @@ export async function handleRelayCrossReview(
     relayCrossReviewSkipped: round.relayCrossReviewSkipped,
     nativeCrossReviewEntries: [...round.nativeCrossReviewEntries],
     consensusId: round.consensusId,
+    // #126 PR-B: carry resolutionRoots into final synthesis — without this,
+    // feature-branch cites that survived Phase-2 would re-UNVERIFY at the
+    // synthesis step because the engine re-runs projectRoot-only
+    // validation (round-3 consensus e507e375-50c2420b:f10).
+    resolutionRoots: round.resolutionRoots,
   };
   ctx.pendingConsensusRounds.delete(consensus_id);
   persistPendingConsensus();
@@ -237,6 +244,7 @@ export async function handleRelayCrossReview(
       llm: mainLlm,
       registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
       projectRoot: process.cwd(),
+      resolutionRoots: synthSnapshot.resolutionRoots,
     });
 
     const allCrossReviewEntries = [
@@ -330,6 +338,8 @@ export function persistPendingConsensus(): void {
         createdAt: round.createdAt,
         // Only persist prompts for agents that are still pending — completed ones are done
         nativePrompts: (round.nativePrompts || []).filter(p => round.pendingNativeAgents.has(p.agentId)),
+        // #126 PR-B: carry validated resolution roots across reconnects.
+        resolutionRoots: round.resolutionRoots ? [...round.resolutionRoots] : undefined,
       };
     }
     writeFileSync(join(dir, CONSENSUS_FILE), JSON.stringify(rounds));
@@ -367,6 +377,9 @@ export function restorePendingConsensus(projectRoot: string): void {
         deadline: data.deadline,
         createdAt: data.createdAt,
         nativePrompts: data.nativePrompts || [],
+        resolutionRoots: Array.isArray(data.resolutionRoots) && data.resolutionRoots.length > 0
+          ? data.resolutionRoots
+          : undefined,
       });
 
       // Re-arm timeout watcher

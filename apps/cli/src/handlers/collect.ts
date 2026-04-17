@@ -36,6 +36,14 @@ export async function handleCollect(
   task_ids: string[],
   timeout_ms: number,
   consensus: boolean,
+  /**
+   * Post-validation citation resolution roots (issue #126 / PR-B). When
+   * supplied, REPLACES any dispatch-time value persisted on the
+   * PendingConsensusRound. Strings must be realpath'd absolute paths —
+   * validation lives at the MCP handler boundary (mcp-server-sdk.ts calls
+   * validateResolutionRoot before invoking handleCollect).
+   */
+  resolutionRoots?: readonly string[],
 ) {
   await ctx.boot();
 
@@ -274,8 +282,35 @@ export async function handleCollect(
         } catch { /* search failed */ }
         return filePath; // return original, let fileRead produce a clear error
       };
-      const { PerformanceReader } = await import('@gossip/orchestrator');
+      const { PerformanceReader, discoverGitWorktrees } = await import('@gossip/orchestrator');
       const performanceReader = new PerformanceReader(process.cwd());
+
+      // Resolve effective resolution roots (#126 PR-B):
+      //   1. collect-time input (already validated at the MCP boundary)
+      //   2. dispatch-time fallback — NOT loaded here because the pending
+      //      round record is created below (resolutionRoots field flows
+      //      through it for later phases, not for this first synthesis call)
+      //   3. auto-discovery when consensus.autoDiscoverWorktrees=true,
+      //      validated via the same pipeline as explicit roots.
+      // Collect-time REPLACES dispatch-time (not merges) per spec.
+      const explicitRoots: readonly string[] = resolutionRoots ?? [];
+      let effectiveRoots: readonly string[] = explicitRoots;
+      try {
+        const { findConfigPath, loadConfig } = await import('../config');
+        const cfgPath = findConfigPath(process.cwd());
+        const cfg = cfgPath ? loadConfig(cfgPath) : null;
+        if (cfg?.consensus?.autoDiscoverWorktrees) {
+          const { discovered, rejected } = await discoverGitWorktrees(process.cwd(), explicitRoots);
+          if (discovered.length > 0 || rejected.length > 0) {
+            process.stderr.write(
+              `[consensus] auto-discovery: +${discovered.length} discovered, ${rejected.length} rejected\n`,
+            );
+          }
+          effectiveRoots = [...explicitRoots, ...discovered];
+        }
+      } catch (err) {
+        process.stderr.write(`[consensus] auto-discovery failed: ${(err as Error).message}\n`);
+      }
 
       const engine = new ConsensusEngine({
         llm: mainLlm,
@@ -283,6 +318,7 @@ export async function handleCollect(
         projectRoot: process.cwd(),
         agentLlm: (id: string) => agentLlmCache.get(id),
         performanceReader,
+        resolutionRoots: effectiveRoots,
         verifierToolRunner: async (agentId: string, toolName: string, args: Record<string, unknown>): Promise<string> => {
           const toolStart = Date.now();
           try {
@@ -499,6 +535,7 @@ export async function handleCollect(
           deadline: Date.now() + CONSENSUS_TIMEOUT_MS,
           createdAt: Date.now(),
           nativePrompts: nativePrompts.map((p: any) => ({ agentId: p.agentId, system: p.system, user: p.user })),
+          resolutionRoots: effectiveRoots.length > 0 ? [...effectiveRoots] : undefined,
         });
 
         // Start timeout watcher — auto-synthesizes if native agents don't respond

@@ -23,6 +23,15 @@ export interface PendingConsensusRound {
   createdAt: number;
   /** Cross-review prompts for still-pending native agents. Persisted so /mcp reconnect can re-issue EXECUTE NOW. */
   nativePrompts?: NativeCrossReviewPrompt[];
+  /**
+   * Post-validation, post-realpath citation resolution roots. Carried from
+   * dispatch-time or collect-time (collect-time REPLACES dispatch-time —
+   * see #126 spec). Used to seed ConsensusEngineConfig.resolutionRoots at
+   * every construction site (collect, relay-cross-review timeout,
+   * relay-cross-review arrival, synthesis). Persists across /mcp reconnect
+   * via persistPendingConsensus.
+   */
+  resolutionRoots?: readonly string[];
 }
 
 export interface NativeTaskInfo {
@@ -68,6 +77,14 @@ export interface McpContext {
    */
   identityRegistry: Map<string, { agent_id: string; runtime: 'native' | 'relay'; provider: string; model: string }>;
   pendingConsensusRounds: Map<string, PendingConsensusRound>;
+  /**
+   * Dispatch-time resolutionRoots (#126 PR-B) keyed by task_id. Populated
+   * from gossip_dispatch's `resolutionRoots` pass-through; consumed by
+   * gossip_collect when collect-time input is absent. Collect-time REPLACES
+   * dispatch-time per spec (not merges). Entries are deleted on collect to
+   * bound memory.
+   */
+  pendingDispatchResolutionRoots: Map<string, readonly string[]>;
   nativeUtilityConfig: { model: string } | null;
   /** Post-fallback runtime provider actually being used by the orchestrator LLM. */
   mainProvider: string;
@@ -122,6 +139,7 @@ export const ctx: McpContext = {
   nativeAgentConfigs: new Map(),
   identityRegistry: new Map(),
   pendingConsensusRounds: new Map(),
+  pendingDispatchResolutionRoots: new Map(),
   nativeUtilityConfig: null,
   mainProvider: 'google',
   mainModel: 'gemini-2.5-pro',

@@ -81,6 +81,20 @@ export interface ConsensusEngineConfig {
    * reviewer per round. Return `undefined` to skip injection.
    */
   getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
+  /**
+   * Post-validation, post-realpath resolution roots supplied by the caller
+   * (e.g. gossip_collect({ resolutionRoots: [...] })) or derived from
+   * opt-in auto-discovery. Used in addition to projectRoot + TaskEntry
+   * worktree paths for citation resolution and path-traversal guards.
+   *
+   * INVARIANT: strings in this array MUST be post-realpath absolute paths.
+   * Validation lives at the MCP boundary (validateResolutionRoot); supplying
+   * unvalidated input here is a programmer error. Any construction-time
+   * issue throws rather than silent-dropping.
+   *
+   * Issue #126 / PR-B.
+   */
+  resolutionRoots?: readonly string[];
 }
 
 export class ConsensusEngine {
@@ -110,6 +124,36 @@ export class ConsensusEngine {
 
   constructor(config: ConsensusEngineConfig) {
     this.config = config;
+
+    // Seed BOTH root sets from config.resolutionRoots so round-1
+    // getValidRoots() — called before any updateWorktreeRoots invocation —
+    // returns projectRoot + seeded roots. Paths arrive post-validation
+    // and post-realpath (invariant enforced at MCP boundary); mis-supplied
+    // input here is a programmer error that throws immediately.
+    const seeded = config.resolutionRoots;
+    if (seeded && seeded.length > 0) {
+      for (const p of seeded) {
+        if (typeof p !== 'string' || p.length === 0) {
+          throw new Error(
+            'ConsensusEngine: resolutionRoots must be non-empty strings (post-validation form)',
+          );
+        }
+        if (!p.startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(p)) {
+          throw new Error(
+            `ConsensusEngine: resolutionRoots entry "${p}" is not an absolute path — validation layer must return realpath'd form`,
+          );
+        }
+        const abs = resolve(p);
+        this.currentWorktreeRoots.add(abs);
+        // seeded values are already realpath'd by validateResolutionRoot
+        this.currentRealpathRoots.add(abs);
+      }
+      // Also add projectRoot realpath for containment parity.
+      if (config.projectRoot) {
+        try { this.currentRealpathRoots.add(realpathSync(config.projectRoot)); }
+        catch { this.currentRealpathRoots.add(resolve(config.projectRoot)); }
+      }
+    }
   }
 
   /** True when a PerformanceReader is available for orchestrator-selected cross-review (Step 3). */
@@ -124,12 +168,21 @@ export class ConsensusEngine {
    * feature-branch worktree, not in the main project root. Closes the
    * "Consensus auto-anchor resolves against project root, not worktree" gap.
    */
-  private updateWorktreeRoots(results: TaskEntry[]): void {
+  private updateWorktreeRoots(results: TaskEntry[], extraRoots?: readonly string[]): void {
     const next = new Set<string>();
     for (const r of results) {
       const wt = r.worktreeInfo?.path;
       if (wt && typeof wt === 'string') {
         next.add(resolve(wt));
+      }
+    }
+    // extraRoots arrive post-validation (realpath'd absolute paths from
+    // validateResolutionRoot + optional discovery). Union into `next` so
+    // the change-detection path below correctly invalidates caches when
+    // back-to-back rounds use different resolutionRoots.
+    if (extraRoots) {
+      for (const p of extraRoots) {
+        if (typeof p === 'string' && p.length > 0) next.add(resolve(p));
       }
     }
     // Reset path cache only if the worktree set changed — otherwise we'd
@@ -235,7 +288,7 @@ export class ConsensusEngine {
 
     const consensusStart = Date.now();
     _log('consensus', `Starting cross-review for ${successful.length} agents`);
-    this.updateWorktreeRoots(results);
+    this.updateWorktreeRoots(results, this.config.resolutionRoots);
     const crossReviewStart = Date.now();
     const crossReviewEntries = await this.dispatchCrossReview(results);
     const crossReviewMs = Date.now() - crossReviewStart;
@@ -265,7 +318,7 @@ export class ConsensusEngine {
    * Each agent reviews all peer summaries and produces agree/disagree/new entries.
    */
   async dispatchCrossReview(results: TaskEntry[]): Promise<CrossReviewEntry[]> {
-    this.updateWorktreeRoots(results);
+    this.updateWorktreeRoots(results, this.config.resolutionRoots);
     const successful = results.filter(r => r.status === 'completed' && r.result);
     if (successful.length < 2) return [];
 
@@ -617,7 +670,7 @@ Return only valid JSON.${skillsBlock}`;
     summaries: Map<string, string>;
     consensusId: string;
   }> {
-    this.updateWorktreeRoots(results);
+    this.updateWorktreeRoots(results, this.config.resolutionRoots);
     const successful = results.filter(r => r.status === 'completed' && r.result);
     const consensusId = shortConsensusId();
 
@@ -647,7 +700,7 @@ Return only valid JSON.${skillsBlock}`;
    * Phase 3: Synthesize Phase 1 results and Phase 2 cross-review entries into a consensus report.
    */
   async synthesize(results: TaskEntry[], crossReviewEntries: CrossReviewEntry[]): Promise<ConsensusReport> {
-    this.updateWorktreeRoots(results);
+    this.updateWorktreeRoots(results, this.config.resolutionRoots);
     const consensusId = shortConsensusId();
     const signals: ConsensusSignal[] = [];
     const newFindings: ConsensusNewFinding[] = [];
@@ -1547,16 +1600,30 @@ Return only valid JSON.${skillsBlock}`;
     const roots = this.getValidRoots();
     if (roots.length === 0) return null;
     const fileName = fileRef.split('/').pop()!;
+    const isBare = !fileRef.includes('/');
+    const projectRoot = this.config.projectRoot ? resolve(this.config.projectRoot) : null;
 
     // Try every root in order: projectRoot first (most files), then any
     // active worktree paths (for files only present on a feature branch).
     for (const root of roots) {
+      const rootAbs = resolve(root);
+      const isProjectRoot = projectRoot !== null && rootAbs === projectRoot;
+
       // Try the reference as-is (could be a full relative path)
       try {
         const candidate = join(root, fileRef);
         if (this.isInsideAnyRoot(candidate, roots)) {
           await stat(candidate);
-          return candidate;
+          // For non-bare refs, require matchesRelativePath against this root
+          // so a monorepo sibling "packages/other/foo.ts" doesn't satisfy a
+          // cite of "packages/target/foo.ts" by basename collision.
+          if (isBare || this.matchesRelativePath(rootAbs, resolve(candidate), fileRef)) {
+            // Realpath & re-verify containment to close any symlink escape
+            // introduced by the root itself.
+            let real = candidate;
+            try { real = realpathSync(candidate); } catch { /* keep */ }
+            if (this.isInsideAnyRoot(real, roots)) return real;
+          }
         }
       } catch { /* not at this root */ }
 
@@ -1566,15 +1633,25 @@ Return only valid JSON.${skillsBlock}`;
           const candidate = join(root, fileName);
           if (this.isInsideAnyRoot(candidate, roots)) {
             await stat(candidate);
-            return candidate;
+            let real = candidate;
+            try { real = realpathSync(candidate); } catch { /* keep */ }
+            if (this.isInsideAnyRoot(real, roots)) return real;
           }
         } catch { /* not at this root */ }
       }
 
-      // Recursive search in common source directories under this root
+      // Rule 1: no bare-filename recursion outside projectRoot. A citation
+      // like "config.ts" must not match the first config.ts found in some
+      // sibling worktree (cross-project contamination). Feature-branch
+      // citations always carry a relative path; the recursive walk remains
+      // available under projectRoot for well-known top-level files.
+      if (isBare && !isProjectRoot) continue;
+
+      // Recursive search in common source directories under this root.
+      // findFile honors Rule 3 (skip symlinked entries) internally.
       const searchDirs = ['packages', 'src', 'apps', 'tests', 'test', 'tools', 'scripts', 'lib'];
       for (const dir of searchDirs) {
-        const found = await this.findFile(join(root, dir), fileName, roots);
+        const found = await this.findFile(join(root, dir), fileName, roots, rootAbs, fileRef);
         if (found) return found;
       }
     }
@@ -1582,19 +1659,61 @@ Return only valid JSON.${skillsBlock}`;
     return null;
   }
 
-  private async findFile(dir: string, fileName: string, validRoots: string[]): Promise<string | null> {
+  /**
+   * Rule 2 (PR-B #126): for non-bare citations, require that fileRef's
+   * segments match the TRAILING segments of the candidate's relative path
+   * under `root`. `rel` may have extra leading monorepo-prefix segments
+   * (e.g. "packages/foo/bar.ts" matches "bar.ts" cite) but basename-only
+   * collisions are rejected (wrong path, same filename).
+   *
+   * Both `root` and `candidate` MUST be pre-resolved absolute paths.
+   */
+  matchesRelativePath(root: string, candidate: string, fileRef: string): boolean {
+    const rel = relative(root, candidate);
+    if (rel.startsWith('..') || rel === '' || /^[a-zA-Z]:[\\/]|^\//.test(rel)) return false;
+    const refSegs = fileRef.split('/').filter(Boolean);
+    if (refSegs.length === 0) return false;
+    const relSegs = rel.split(sep).filter(Boolean);
+    if (refSegs.length > relSegs.length) return false;
+    const trailing = relSegs.slice(relSegs.length - refSegs.length);
+    return trailing.every((seg, i) => seg === refSegs[i]);
+  }
+
+  private async findFile(
+    dir: string,
+    fileName: string,
+    validRoots: string[],
+    // PR-B: anchor root and original citation for matchesRelativePath + realpath verify.
+    anchorRoot?: string,
+    fileRef?: string,
+  ): Promise<string | null> {
     try {
+      // Rule 3 (PR-B #126): readdir with withFileTypes so we can skip
+      // symlinks during recursion. A symlinked subdir like
+      // `node_modules/evil → /etc` inside an otherwise valid worktree would
+      // otherwise let findFile surface /etc contents as resolution
+      // candidates before the (realpath'd) containment check.
       const entries = await readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
+        // Skip symlinks entirely — neither files nor dirs are followed.
+        if (entry.isSymbolicLink()) continue;
         const fullPath = join(dir, entry.name);
         if (entry.isFile() && entry.name === fileName) {
-          // Path traversal guard — findFile results must be inside one of
-          // the valid roots (projectRoot or any active worktree).
           if (!this.isInsideAnyRoot(fullPath, validRoots)) return null;
-          return fullPath;
+          // Rule 2: require matchesRelativePath for non-bare citations.
+          if (fileRef && anchorRoot && fileRef.includes('/')) {
+            const candidateAbs = resolve(fullPath);
+            if (!this.matchesRelativePath(anchorRoot, candidateAbs, fileRef)) continue;
+          }
+          // Realpath & re-verify containment so a not-yet-followed link
+          // introduced by a future refactor can't escape.
+          let real = fullPath;
+          try { real = realpathSync(fullPath); } catch { /* keep */ }
+          if (!this.isInsideAnyRoot(real, validRoots)) return null;
+          return real;
         }
         if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
-          const found = await this.findFile(fullPath, fileName, validRoots);
+          const found = await this.findFile(fullPath, fileName, validRoots, anchorRoot, fileRef);
           if (found) return found;
         }
       }
@@ -2289,7 +2408,7 @@ Return only valid JSON.${skillsBlock}`;
       };
     }
 
-    this.updateWorktreeRoots(results);
+    this.updateWorktreeRoots(results, this.config.resolutionRoots);
 
     // Build summaries and rawResults maps (same pattern as dispatchCrossReview)
     const summaries = new Map<string, string>();
