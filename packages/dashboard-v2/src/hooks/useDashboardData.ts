@@ -60,7 +60,7 @@ export function useDashboardData() {
       const [overview, agents, tasks, consensus, consensusReports, nativeResp, gossipResp] = await Promise.all([
         api<OverviewData>('overview'),
         api<AgentData[]>('agents'),
-        api<TasksData>('tasks?limit=50'),
+        api<TasksData>('tasks?limit=2000'),
         // pageSize=50 matches api-consensus MAX_PAGE_SIZE so header aggregates
         // (confirmedTotal/disputedTotal/unverifiedTotal in App.tsx:383-385) cover
         // the full round history instead of the first 10 runs.

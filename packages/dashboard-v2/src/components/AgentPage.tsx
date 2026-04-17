@@ -30,6 +30,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
   const [memories, setMemories] = useState<MemoryFile[]>([]);
   const [reports, setReports] = useState<ConsensusReport[]>([]);
   const [expandedMem, setExpandedMem] = useState<string | null>(null);
+  const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [drawerFinding, setDrawerFinding] = useState<{ consensusId: string; findingId: string } | null>(null);
   const [taskPage, setTaskPage] = useState(0);
   const [memDayIdx, setMemDayIdx] = useState(0);
@@ -363,12 +364,24 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                 new_finding: { label: 'NEW', cls: 'text-unique bg-unique/10' },
               };
               const runSignals = run.signals.filter(sig => sig.signal !== 'signal_retracted' && tagMap[sig.signal]);
+              const runKey = run.taskId + ':' + i;
+              const isOpen = expandedRun === runKey;
               return (
-                <div key={run.taskId + i} className="rounded-md border border-border/40 bg-card">
-                  <div className="flex items-center p-3">
+                <div key={runKey} className="rounded-md border border-border/40 bg-card">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedRun(isOpen ? null : runKey)}
+                    disabled={runSignals.length === 0}
+                    className={`flex w-full items-center p-3 text-left transition ${runSignals.length > 0 ? 'hover:bg-accent/20' : 'cursor-default'}`}
+                  >
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
-                        <span className="font-mono text-sm font-semibold text-foreground">{total} findings</span>
+                        <span className="font-mono text-sm font-semibold text-foreground">
+                          {runSignals.length > 0 && (
+                            <span className="mr-1.5 inline-block text-muted-foreground">{isOpen ? '▾' : '▸'}</span>
+                          )}
+                          {total} findings
+                        </span>
                         <span className="font-mono text-xs text-muted-foreground">{timeAgo(run.timestamp)}</span>
                       </div>
                       <div className="mt-1.5 flex gap-2">
@@ -382,8 +395,8 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                         ))}
                       </div>
                     </div>
-                  </div>
-                  {runSignals.length > 0 && (
+                  </button>
+                  {isOpen && runSignals.length > 0 && (
                     <div className="border-t border-border/30 px-3 pb-2 pt-2">
                       <div className="space-y-1">
                         {runSignals.map((sig, j) => {
