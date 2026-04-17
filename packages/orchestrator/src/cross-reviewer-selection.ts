@@ -83,10 +83,17 @@ export function selectCrossReviewers(
       ? extracted[0]
       : (finding.declaredCategory ?? null);
 
-    // Step 2: Filter candidates — exclude original author and circuit-open agents
-    const candidates = allAgents.filter(
-      a => a.agentId !== finding.originalAuthor && !performanceReader.isCircuitOpen(a.agentId),
-    );
+    // Step 2: Filter candidates — exclude original author, circuit-open agents,
+    // and auto-benched agents (issue #93). Pass finding's category + the full
+    // agent pool so isBenched can run its sole-provider safeguard.
+    const allAgentIds = allAgents.map(a => a.agentId);
+    const findingCategories = category !== null ? [category] : undefined;
+    const candidates = allAgents.filter(a => {
+      if (a.agentId === finding.originalAuthor) return false;
+      if (performanceReader.isCircuitOpen(a.agentId)) return false;
+      if (performanceReader.isBenched(a.agentId, findingCategories, allAgentIds).benched) return false;
+      return true;
+    });
 
     // Step 3: Score candidates
     const scoredCandidates: ScoredCandidate[] = candidates.map(agent => {
