@@ -131,11 +131,29 @@ export type ParseDiagnostic =
   | { code: 'SCHEMA_DRIFT_INVENTED_TYPE_TOKENS'; message: string; matchedTokens: string[] }
   | { code: 'SCHEMA_DRIFT_NESTED_SUBTAGS'; message: string; subtagTypes: string[] };
 
+export interface RoundRetraction {
+  consensus_id: string;
+  reason: string;
+  retracted_at: string;
+}
+
 export interface ConsensusReportsData {
   reports: ConsensusReport[];
   totalReports?: number;
   page?: number;
   pageSize?: number;
+  /**
+   * Consensus round IDs that have been retracted via
+   * `gossip_signals({action:'retract', consensus_id, reason})`. The report
+   * page renders a banner + strike-through findings when a report's id
+   * is in this set.
+   */
+  retractedConsensusIds?: string[];
+  /**
+   * Full tombstone rows, preserving duplicates so an admin "retracted
+   * rounds" view can show each retraction reason.
+   */
+  roundRetractions?: RoundRetraction[];
 }
 
 export interface MemoryFile {

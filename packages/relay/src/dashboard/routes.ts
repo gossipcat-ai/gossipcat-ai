@@ -412,10 +412,19 @@ export class DashboardRouter {
     return match ? match[1] : null;
   }
 
-  private getConsensusReports(page = 1, pageSize = 5): { reports: any[]; totalReports: number; page: number; pageSize: number } {
+  private getConsensusReports(page = 1, pageSize = 5): { reports: any[]; totalReports: number; page: number; pageSize: number; retractedConsensusIds: string[]; roundRetractions: Array<{ consensus_id: string; reason: string; retracted_at: string }> } {
     const { readdirSync, readFileSync, existsSync } = require('fs');
     const reportsDir = join(this.projectRoot, '.gossip', 'consensus-reports');
-    if (!existsSync(reportsDir)) return { reports: [], totalReports: 0, page, pageSize };
+    // Load retraction tombstones once so the dashboard can render banners + strike-through.
+    let retractedConsensusIds: string[] = [];
+    let roundRetractions: Array<{ consensus_id: string; reason: string; retracted_at: string }> = [];
+    try {
+      const { PerformanceReader } = require('@gossip/orchestrator');
+      const reader = new PerformanceReader(this.projectRoot);
+      retractedConsensusIds = Array.from(reader.getRetractedConsensusIds()) as string[];
+      roundRetractions = reader.getRoundRetractions();
+    } catch { /* reader unavailable — leave empty */ }
+    if (!existsSync(reportsDir)) return { reports: [], totalReports: 0, page, pageSize, retractedConsensusIds, roundRetractions };
 
     try {
       const { statSync } = require('fs');
@@ -446,8 +455,8 @@ export class DashboardRouter {
         } catch { return null; }
       }).filter(Boolean);
 
-      return { reports, totalReports, page: clampedPage, pageSize: clampedPageSize };
-    } catch { return { reports: [], totalReports: 0, page, pageSize }; }
+      return { reports, totalReports, page: clampedPage, pageSize: clampedPageSize, retractedConsensusIds, roundRetractions };
+    } catch { return { reports: [], totalReports: 0, page, pageSize, retractedConsensusIds, roundRetractions }; }
   }
 
   private archiveFindings(): { archived: number; remaining: number; findingsCleared: number } {

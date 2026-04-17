@@ -7,6 +7,7 @@ const VALID_CONSENSUS_SIGNALS = new Set([
   'agreement', 'disagreement', 'unverified', 'unique_confirmed',
   'unique_unconfirmed', 'new_finding', 'hallucination_caught',
   'category_confirmed', 'consensus_verified', 'signal_retracted',
+  'consensus_round_retracted',
   'task_timeout', 'task_empty',
 ]);
 
@@ -17,6 +18,13 @@ const VALID_IMPL_SIGNALS = new Set([
 const VALID_META_SIGNALS = new Set([
   'task_completed', 'task_tool_turns', 'format_compliance',
 ]);
+
+/**
+ * Sentinel agentId used on round-level tombstone rows. Not a real agent —
+ * readers must skip `agentId === '_system'` rows from any per-agent
+ * aggregation. See docs/specs/2026-04-17-consensus-round-retraction.md.
+ */
+const SYSTEM_SENTINEL_AGENT_ID = '_system';
 
 function validateSignal(signal: PerformanceSignal): void {
   if (!signal || typeof signal !== 'object') {
@@ -72,5 +80,36 @@ export class PerformanceWriter {
     for (const s of signals) validateSignal(s);
     const data = signals.map(s => JSON.stringify(s)).join('\n') + '\n';
     appendFileSync(this.filePath, data);
+  }
+
+  /**
+   * Append a round-level retraction tombstone.
+   *
+   * Tombstone row uses the `_system` sentinel as `agentId`. Readers must
+   * filter `agentId === '_system'` out of per-agent aggregation; signal
+   * scoring uses `consensus_id` to drop every signal whose `findingId`
+   * starts with `<consensus_id>:`. Idempotence is a reader concern — extra
+   * rows from duplicate retractions are harmless audit data that the
+   * reader's `retractedConsensusIds: Set<string>` dedupes.
+   *
+   * See docs/specs/2026-04-17-consensus-round-retraction.md.
+   */
+  recordConsensusRoundRetraction(consensusId: string, reason: string): void {
+    const row: any = {
+      type: 'consensus',
+      signal: 'consensus_round_retracted',
+      agentId: SYSTEM_SENTINEL_AGENT_ID,
+      // taskId is required by validateSignal. Mirror consensus_id so
+      // the tombstone is structurally addressable without inventing a
+      // second identifier.
+      taskId: consensusId,
+      consensus_id: consensusId,
+      reason,
+      retracted_at: new Date().toISOString(),
+      timestamp: new Date().toISOString(),
+      evidence: `Consensus round ${consensusId} retracted: ${reason}`,
+    };
+    validateSignal(row as PerformanceSignal);
+    appendFileSync(this.filePath, JSON.stringify(row) + '\n');
   }
 }

@@ -231,6 +231,11 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
   const [loadedReports, setLoadedReports] = useState<ConsensusReport[]>([]);
   const [totalReports, setTotalReports] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+  // consensus_id → most recent retraction reason. Populated from the
+  // `roundRetractions` field on the consensus-reports API response. Used to
+  // render a banner on retracted rounds and strike through their findings.
+  const [retractionsByConsensusId, setRetractionsByConsensusId] =
+    useState<Record<string, { reason: string; retracted_at: string }>>({});
 
   // When the initial reports prop arrives (page 1 data), seed loadedReports
   useEffect(() => {
@@ -238,6 +243,14 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
       setLoadedReports(reports.reports);
       setTotalReports(reports.totalReports ?? reports.reports.length);
       setReportPage(1);
+    }
+    if (reports?.roundRetractions) {
+      const map: Record<string, { reason: string; retracted_at: string }> = {};
+      // Later entries overwrite earlier ones → latest-wins for the banner.
+      for (const r of reports.roundRetractions) {
+        map[r.consensus_id] = { reason: r.reason, retracted_at: r.retracted_at };
+      }
+      setRetractionsByConsensusId(map);
     }
   }, [reports]);
 
@@ -252,6 +265,13 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
         setLoadedReports(data.reports || []);
         setTotalReports(data.totalReports ?? (data.reports?.length || 0));
         setReportPage(1);
+        if (data.roundRetractions) {
+          const map: Record<string, { reason: string; retracted_at: string }> = {};
+          for (const r of data.roundRetractions) {
+            map[r.consensus_id] = { reason: r.reason, retracted_at: r.retracted_at };
+          }
+          setRetractionsByConsensusId(map);
+        }
       } catch {
         // keep the seeded page-1 data
       }
@@ -415,6 +435,8 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
             )];
             const agentIds = allAgentIds.slice(0, 5);
 
+            const retraction = retractionsByConsensusId[report.id];
+            const isRetracted = !!retraction;
             return (
               <div key={report.id}>
                 {showBucketHeader && (
@@ -428,11 +450,31 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               <div
                 className={`group rounded-md border-l-2 border border-border/40 transition-all duration-150
                   ${dominantBorderCls}
+                  ${isRetracted ? 'opacity-60 line-through decoration-disputed/40' : ''}
                   ${isExpanded
                     ? 'bg-card border-r-border/60 border-t-border/60 border-b-border/60'
                     : 'bg-card/50 hover:bg-card/70 hover:border-r-border/60 hover:border-t-border/60 hover:border-b-border/60 hover:shadow-sm hover:shadow-black/20 hover:-translate-y-px'
                   }`}
+                data-retracted={isRetracted ? 'true' : undefined}
               >
+                {/* Retraction banner — inline per-card (not shared AlertBanner
+                    refactor per spec non-goals). Rendered above the clickable
+                    header so the status is visible in collapsed + expanded
+                    views. Strike-through on the card container handles the
+                    struck-through findings requirement. */}
+                {isRetracted && (
+                  <div className="no-underline rounded-t-md border-b border-disputed/30 bg-disputed/10 px-3 py-2 font-mono text-[11px] text-disputed" style={{ textDecoration: 'none' }}>
+                    <span className="font-bold">⚠ RETRACTED</span>
+                    {retraction!.retracted_at && (
+                      <span className="ml-2 text-disputed/70">
+                        on {retraction!.retracted_at.slice(0, 10)}
+                      </span>
+                    )}
+                    {retraction!.reason && (
+                      <span className="ml-2 text-muted-foreground/80">— {retraction!.reason}</span>
+                    )}
+                  </div>
+                )}
                 <button
                   className="flex w-full items-start gap-3 px-3 py-2.5 text-left"
                   aria-expanded={isExpanded}

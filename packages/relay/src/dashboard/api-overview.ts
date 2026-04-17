@@ -126,9 +126,21 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
         try {
           const entry = JSON.parse(line);
           // totalSignals counts only real consensus signals — impl_*, signal_retracted,
-          // and future metadata rows are not "signals" for this counter.
-          if (entry.type === 'consensus' && typeof entry.signal === 'string') {
+          // consensus_round_retracted tombstones, and future metadata rows are not
+          // "signals" for this counter. Also drop `_system` sentinel rows at the
+          // data layer (round tombstones use agentId='_system').
+          if (
+            entry.type === 'consensus'
+            && typeof entry.signal === 'string'
+            && entry.signal !== 'signal_retracted'
+            && entry.signal !== 'consensus_round_retracted'
+            && entry.agentId !== '_system'
+          ) {
             totalSignals++;
+          }
+          // Skip round-retraction tombstones from per-run aggregation.
+          if (entry.signal === 'consensus_round_retracted' || entry.agentId === '_system') {
+            continue;
           }
           if (entry.type === 'consensus' && (entry.consensusId || entry.taskId)) {
             const runId = entry.consensusId ?? entry.taskId;
