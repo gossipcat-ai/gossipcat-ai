@@ -21,6 +21,10 @@ export interface AgentScore {
   disagreements: number;
   uniqueFindings: number;
   hallucinations: number;
+  /** Unverified signals emitted by this agent as a reviewer — "I can't verify peer's finding". */
+  unverifiedsEmitted: number;
+  /** Unverified signals received by this agent as a finding author — a peer couldn't verify the citation. */
+  unverifiedsReceived: number;
   weightedHallucinations: number; // decay-weighted hallucination count (used by auto-bench)
   consecutiveFailures: number; // circuit breaker: consecutive negative signals at tail
   circuitOpen: boolean;        // true when consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD
@@ -467,6 +471,8 @@ export class PerformanceReader {
       disagreements: number;
       uniqueFindings: number;
       hallucinations: number;
+      unverifiedsEmitted: number;
+      unverifiedsReceived: number;
       totalSignals: number;
       lastSignalMs: number;
       categoryStrengths: Record<string, number>;
@@ -481,6 +487,7 @@ export class PerformanceReader {
         weightedImpact: 0, weightedConfirmedCount: 0,
         tasksSeen: new Map(), taskCounter: 0,
         agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
+        unverifiedsEmitted: 0, unverifiedsReceived: 0,
         totalSignals: 0, lastSignalMs: 0, categoryStrengths: {},
         categoryCorrect: {}, categoryHallucinated: {},
       });
@@ -598,8 +605,16 @@ export class PerformanceReader {
           break;
         }
         case 'unverified': {
-          // Near-neutral cost — "I don't know" is not evidence of incorrectness
+          // Near-neutral cost — "I don't know" is not evidence of incorrectness.
+          // Tracked in both directions for dashboard visibility:
+          // - emitted: this agent couldn't verify a peer's finding (reviewer role)
+          // - received: a peer couldn't verify THIS agent's finding (author role)
           a.weightedTotal += decay * 0.02;
+          a.unverifiedsEmitted++;
+          if (signal.counterpartId && signal.counterpartId.length > 0) {
+            const author = ensure(signal.counterpartId);
+            author.unverifiedsReceived++;
+          }
           break;
         }
         case 'unique_confirmed': {
@@ -770,6 +785,8 @@ export class PerformanceReader {
         disagreements: a.disagreements,
         uniqueFindings: a.uniqueFindings,
         hallucinations: a.hallucinations,
+        unverifiedsEmitted: a.unverifiedsEmitted,
+        unverifiedsReceived: a.unverifiedsReceived,
         weightedHallucinations: a.weightedHallucinations,
         consecutiveFailures: consec,
         circuitOpen: consec >= CIRCUIT_BREAKER_THRESHOLD,
@@ -788,6 +805,7 @@ export class PerformanceReader {
         scores.set(agentId, {
           agentId, accuracy: 0.5, uniqueness: 0.5, reliability: 0.5, impactScore: 0.5,
           totalSignals: 0, agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
+          unverifiedsEmitted: 0, unverifiedsReceived: 0,
           weightedHallucinations: 0,
           consecutiveFailures: consec,
           circuitOpen: consec >= CIRCUIT_BREAKER_THRESHOLD,

@@ -91,11 +91,26 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
     { label: 'impact', value: s.impactScore, fill: 'bg-[var(--color-impact)]' },
   ];
 
+  // Unverified signals carry two meanings depending on whose column they land in:
+  // - emitted: this agent was the reviewer saying "I can't verify this"
+  // - received: this agent's findings were un-verifiable by peers (often bad/missing citations)
+  // Both are signals of friction, not fault, so we render them muted-amber — neither
+  // green like agreements nor red like hallucinations.
+  const unvEmitted = s.unverifiedsEmitted ?? 0;
+  const unvReceived = s.unverifiedsReceived ?? 0;
+  const unvTotal = unvEmitted + unvReceived;
+
   const compactStats = [
     { label: 'Signals', value: String(s.signals), color: 'text-foreground' },
     { label: 'Agreements', value: String(s.agreements), color: 'text-confirmed' },
     { label: 'Disagreements', value: String(s.disagreements), color: 'text-disputed' },
     { label: 'Hallucinations', value: String(s.hallucinations), color: s.hallucinations > 0 ? 'text-disputed' : 'text-muted-foreground' },
+    {
+      label: 'Unverified',
+      value: unvTotal > 0 ? `${unvEmitted}↑ ${unvReceived}↓` : '0',
+      color: unvTotal > 0 ? 'text-unverified' : 'text-muted-foreground',
+      title: unvTotal > 0 ? `${unvEmitted} emitted (as reviewer) · ${unvReceived} received (as author)` : undefined,
+    },
     { label: 'Tokens', value: agent.totalTokens.toLocaleString(), color: 'text-foreground' },
   ];
 
@@ -283,9 +298,13 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                 </div>
               ))}
             </div>
-            <div className="mt-4 grid grid-cols-5 gap-px overflow-hidden rounded-md border border-border/30 bg-border/30">
+            <div className="mt-4 grid grid-cols-6 gap-px overflow-hidden rounded-md border border-border/30 bg-border/30">
               {compactStats.map(st => (
-                <div key={st.label} className="bg-background/60 px-2 py-2 text-center">
+                <div
+                  key={st.label}
+                  className="bg-background/60 px-2 py-2 text-center"
+                  title={(st as { title?: string }).title}
+                >
                   <div className={`font-mono text-sm font-bold tabular-nums ${st.color}`}>{st.value}</div>
                   <div className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground/70">{st.label}</div>
                 </div>
