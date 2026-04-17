@@ -289,13 +289,17 @@ export class ConsensusEngine {
     const consensusStart = Date.now();
     _log('consensus', `Starting cross-review for ${successful.length} agents`);
     this.updateWorktreeRoots(results, this.config.resolutionRoots);
+    // Generate consensusId ONCE per round and thread it through cross-review
+    // and synthesize so NEW findingIds rewritten in crossReviewForAgent match
+    // the consensusId used by synthesize's signal/finding id assembly.
+    const consensusId = shortConsensusId();
     const crossReviewStart = Date.now();
-    const crossReviewEntries = await this.dispatchCrossReview(results);
+    const crossReviewEntries = await this.dispatchCrossReview(results, consensusId);
     const crossReviewMs = Date.now() - crossReviewStart;
     _log('consensus', `Cross-review complete: ${crossReviewEntries.length} entries (${Math.round(crossReviewMs / 1000)}s)`);
 
     const synthesizeStart = Date.now();
-    const report = await this.synthesize(results, crossReviewEntries);
+    const report = await this.synthesize(results, crossReviewEntries, consensusId);
     const synthesizeMs = Date.now() - synthesizeStart;
     // Build per-agent timing from task results
     const perAgent = successful.map(r => ({
@@ -317,7 +321,7 @@ export class ConsensusEngine {
    * Phase 2: Send cross-review prompts to each agent and collect structured responses.
    * Each agent reviews all peer summaries and produces agree/disagree/new entries.
    */
-  async dispatchCrossReview(results: TaskEntry[]): Promise<CrossReviewEntry[]> {
+  async dispatchCrossReview(results: TaskEntry[], consensusId?: string): Promise<CrossReviewEntry[]> {
     this.updateWorktreeRoots(results, this.config.resolutionRoots);
     const successful = results.filter(r => r.status === 'completed' && r.result);
     if (successful.length < 2) return [];
@@ -337,7 +341,7 @@ export class ConsensusEngine {
     const allEntries = await Promise.all(
       successful.map(async agent => {
         const start = Date.now();
-        const entries = await this.crossReviewForAgent(agent, summaries, rawResults);
+        const entries = await this.crossReviewForAgent(agent, summaries, rawResults, consensusId);
         _log('consensus', `${agent.agentId} cross-review: ${entries.length} entries (${Math.round((Date.now() - start) / 1000)}s)`);
         return entries;
       })
@@ -591,6 +595,7 @@ Return only valid JSON.${skillsBlock}`;
     agent: TaskEntry,
     summaries: Map<string, string>,
     rawResults?: Map<string, string>,
+    consensusId?: string,
   ): Promise<CrossReviewEntry[]> {
     const { system, user } = await this.buildCrossReviewPrompt(agent, summaries, rawResults);
     const messages: LLMMessage[] = [
@@ -656,10 +661,31 @@ Return only valid JSON.${skillsBlock}`;
       // Exception: NEW findings have no peer — the submitter is raising a fresh
       // issue all agents missed. Rejecting them on self-review (GH #131) drops
       // ConsensusReport.newFindings[] to empty in every round.
-      return entries.filter(e => {
+      const filtered = entries.filter(e => {
         if (e.action === 'new') return true;
         return e.peerAgentId !== agent.agentId && validPeerIds.has(e.peerAgentId);
       });
+
+      // Canonicalize NEW findingIds to `<consensusId>:new:<agentId>:<counter>`
+      // and clear peerAgentId residue — mirrors relay-cross-review.ts:164-175
+      // so both submission paths produce findings with the same shape before
+      // synthesize sees them (followup to PR #132).
+      //
+      // Counter is per-call: an agent that submits NEW via BOTH the in-process
+      // and relay paths in the same round will collide (`cid:new:A:1` twice).
+      // That scenario is not expected in practice — an agent uses exactly one
+      // submission path per round. If it starts happening, harden by adding a
+      // `:proc` / `:relay` discriminator.
+      if (consensusId) {
+        let newCounter = 0;
+        for (const e of filtered) {
+          if (e.action === 'new') {
+            e.findingId = `${consensusId}:new:${agent.agentId}:${++newCounter}`;
+            e.peerAgentId = '';
+          }
+        }
+      }
+      return filtered;
     } catch (err) {
       _log('consensus', `${agent.agentId} cross-review LLM call failed: ${(err as Error).message}`);
       return [];
@@ -707,9 +733,9 @@ Return only valid JSON.${skillsBlock}`;
   /**
    * Phase 3: Synthesize Phase 1 results and Phase 2 cross-review entries into a consensus report.
    */
-  async synthesize(results: TaskEntry[], crossReviewEntries: CrossReviewEntry[]): Promise<ConsensusReport> {
+  async synthesize(results: TaskEntry[], crossReviewEntries: CrossReviewEntry[], externalConsensusId?: string): Promise<ConsensusReport> {
     this.updateWorktreeRoots(results, this.config.resolutionRoots);
-    const consensusId = shortConsensusId();
+    const consensusId = externalConsensusId ?? shortConsensusId();
     const signals: ConsensusSignal[] = [];
     const newFindings: ConsensusNewFinding[] = [];
     const successful = results.filter(r => r.status === 'completed' && r.result);
@@ -974,14 +1000,14 @@ Return only valid JSON.${skillsBlock}`;
         // Sanitize before storage — strip XML-like tags that could be re-injected as instructions
         // in future sessions via gossip_remember() or session context loading.
         const sanitize = (t: string) => t.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
-        // Prefer the pre-rewritten findingId from relay-cross-review
-        // (format: `<consensusId>:new:<agentId>:<counter>`). Falls back to
-        // generating our own when the entry arrived via the in-process
-        // Phase-2 path (runSelectedCrossReview / dispatchCrossReview) which
-        // does not rewrite findingIds.
-        const newFindingId = entry.findingId && entry.findingId.includes(':new:')
-          ? entry.findingId
-          : `${consensusId}:new:${entry.agentId}:${++newFindingIdx}`;
+        // Both submission paths (relay handler + crossReviewForAgent) now
+        // rewrite NEW findingIds upstream into the canonical form
+        // `<consensusId>:new:<agentId>:<counter>`. This fallback is defensive
+        // only — it fires for legacy callers that invoke synthesize() directly
+        // without threading a consensusId through cross-review (e.g., tests
+        // that construct CrossReviewEntry objects by hand).
+        const newFindingId = entry.findingId ??
+          `${consensusId}:new:${entry.agentId}:${++newFindingIdx}`;
         newFindings.push({
           agentId: entry.agentId,
           finding: sanitize(entry.finding),
@@ -2407,9 +2433,13 @@ Return only valid JSON.${skillsBlock}`;
    */
   async runSelectedCrossReview(
     results: TaskEntry[],
-    _consensusId?: string,
+    externalConsensusId?: string,
   ): Promise<ConsensusReport> {
     const { performanceReader } = this.config;
+    // Generate (or accept caller-provided) consensusId ONCE and thread it
+    // through cross-review and synthesize so NEW findingIds stay consistent
+    // across both stages (followup to PR #132).
+    const consensusId = externalConsensusId ?? shortConsensusId();
     if (!performanceReader) {
       throw new Error('runSelectedCrossReview requires config.performanceReader');
     }
@@ -2461,7 +2491,7 @@ Return only valid JSON.${skillsBlock}`;
     if (findingSeq === 0) {
       // No structured findings — fall back to synthesize with no cross-review entries
       _log('consensus', 'runSelectedCrossReview: no structured findings extracted; synthesizing without cross-review');
-      return this.synthesize(results, []);
+      return this.synthesize(results, [], consensusId);
     }
 
     // Build agent candidates from successful results
@@ -2472,7 +2502,7 @@ Return only valid JSON.${skillsBlock}`;
 
     if (assignments.size === 0) {
       _log('consensus', 'runSelectedCrossReview: no reviewers selected; synthesizing without cross-review');
-      const report = await this.synthesize(results, []);
+      const report = await this.synthesize(results, [], consensusId);
       report.partialReview = true;
       return report;
     }
@@ -2529,13 +2559,13 @@ Return only valid JSON.${skillsBlock}`;
         }
 
         const start = Date.now();
-        const entries = await this.crossReviewForAgent(reviewerEntry, scopedSummaries, scopedRaw);
+        const entries = await this.crossReviewForAgent(reviewerEntry, scopedSummaries, scopedRaw, consensusId);
         _log('consensus', `${reviewerAgentId} selected cross-review: ${entries.length} entries (${Math.round((Date.now() - start) / 1000)}s)`);
         allCrossReviewEntries.push(...entries);
       }),
     );
 
-    const report = await this.synthesize(results, allCrossReviewEntries);
+    const report = await this.synthesize(results, allCrossReviewEntries, consensusId);
     if (partialReview) {
       report.partialReview = true;
     }
