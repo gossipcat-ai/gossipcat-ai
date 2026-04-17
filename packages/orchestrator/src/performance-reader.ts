@@ -52,6 +52,7 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   category_confirmed: true,
   consensus_verified: true,
   signal_retracted: true,
+  consensus_round_retracted: true,
   severity_miscalibrated: true,
   task_timeout: true,
   task_empty: true,
@@ -114,6 +115,57 @@ export class PerformanceReader {
     const impl = this.getImplScore(agentId);
     if (!impl) return 1.0; // no impl data, neutral
     return clamp(0.3 + impl.reliability * 1.7, 0.3, 2.0);
+  }
+
+  /**
+   * Return the set of consensus round IDs that have been retracted via
+   * `gossip_signals({action:'retract', consensus_id, reason})`. Dashboard
+   * uses this to render banners and strike-through on retracted rounds.
+   */
+  getRetractedConsensusIds(): Set<string> {
+    if (!existsSync(this.filePath)) return new Set();
+    try {
+      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      const ids = new Set<string>();
+      for (const line of lines) {
+        try {
+          const r = JSON.parse(line);
+          if (r && r.type === 'consensus' && r.signal === 'consensus_round_retracted' && typeof r.consensus_id === 'string') {
+            ids.add(r.consensus_id);
+          }
+        } catch { /* skip */ }
+      }
+      return ids;
+    } catch {
+      return new Set();
+    }
+  }
+
+  /**
+   * Return all round-retraction tombstone entries, preserving duplicates
+   * so an admin view can see multiple retraction reasons for the same round.
+   */
+  getRoundRetractions(): Array<{ consensus_id: string; reason: string; retracted_at: string }> {
+    if (!existsSync(this.filePath)) return [];
+    try {
+      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      const out: Array<{ consensus_id: string; reason: string; retracted_at: string }> = [];
+      for (const line of lines) {
+        try {
+          const r = JSON.parse(line);
+          if (r && r.type === 'consensus' && r.signal === 'consensus_round_retracted' && typeof r.consensus_id === 'string') {
+            out.push({
+              consensus_id: r.consensus_id,
+              reason: typeof r.reason === 'string' ? r.reason : '',
+              retracted_at: typeof r.retracted_at === 'string' ? r.retracted_at : (r.timestamp || ''),
+            });
+          }
+        } catch { /* skip */ }
+      }
+      return out;
+    } catch {
+      return [];
+    }
   }
 
   /** Check if an agent's circuit breaker is open (3+ consecutive failures) */
@@ -265,7 +317,14 @@ export class PerformanceReader {
 
       // Collect retraction keys: agentId + taskId + signalType combos that have been retracted
       const retracted = new Set<string>();
+      // Collect round-level retracted consensus IDs (tombstone rows).
+      const retractedConsensusIds = new Set<string>();
       for (const s of all) {
+        if (s.signal === 'consensus_round_retracted') {
+          const cid = (s as any).consensus_id;
+          if (typeof cid === 'string' && cid.length > 0) retractedConsensusIds.add(cid);
+          continue;
+        }
         if (s.signal === 'signal_retracted') {
           const taskKey = s.taskId || s.timestamp;
           if (s.retractedSignal) {
@@ -278,9 +337,19 @@ export class PerformanceReader {
         }
       }
 
-      // Filter: exclude retracted signals and the retraction signals themselves
+      // Filter: exclude retracted signals, tombstones, and the retraction signals themselves
       return all.filter(s => {
         if (s.signal === 'signal_retracted') return false;
+        if (s.signal === 'consensus_round_retracted') return false;
+        // Exclude sentinel rows from per-agent aggregation defence-in-depth
+        if (s.agentId === '_system') return false;
+        // Round-level: drop any consensus signal whose findingId sits inside a retracted round
+        if (s.type === 'consensus' && (s as any).findingId) {
+          const fid = (s as any).findingId as string;
+          for (const retractedId of retractedConsensusIds) {
+            if (fid.startsWith(retractedId + ':')) return false;
+          }
+        }
         // Skip retracted signals (check both scoped and wildcard keys)
         const taskKey = s.taskId || s.timestamp;
         if (retracted.has(s.agentId + ':' + taskKey + ':' + s.signal)) return false;
@@ -310,8 +379,15 @@ export class PerformanceReader {
       // Collect retraction keys: agentId + taskId + signalType combos that have been retracted
       // Only consensus signals can carry retractions.
       const retracted = new Set<string>();
+      // Round-level retracted consensus IDs (tombstone rows).
+      const retractedConsensusIds = new Set<string>();
       for (const s of all) {
         if (s.type !== 'consensus') continue;
+        if (s.signal === 'consensus_round_retracted') {
+          const cid = (s as any).consensus_id;
+          if (typeof cid === 'string' && cid.length > 0) retractedConsensusIds.add(cid);
+          continue;
+        }
         if (s.signal === 'signal_retracted') {
           const taskKey = s.taskId || s.timestamp;
           if (s.retractedSignal) {
@@ -324,9 +400,12 @@ export class PerformanceReader {
         }
       }
 
-      // Filter: exclude expired, retracted, and retraction signals themselves
+      // Filter: exclude expired, retracted, tombstones, and retraction signals themselves
       return all.filter(s => {
         if (s.type === 'consensus' && s.signal === 'signal_retracted') return false;
+        if (s.type === 'consensus' && s.signal === 'consensus_round_retracted') return false;
+        // Drop sentinel rows from per-agent aggregation defence-in-depth
+        if (s.agentId === '_system') return false;
         // Expire old signals — missing/bad timestamps are treated as expired
         const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
         if (!isFinite(ts) || ts === 0 || ts < expiryMs) return false;
@@ -335,6 +414,16 @@ export class PerformanceReader {
           const taskKey = s.taskId || s.timestamp;
           if (retracted.has(s.agentId + ':' + taskKey + ':' + s.signal)) return false;
           if (retracted.has(s.agentId + ':' + taskKey + ':*')) return false;
+          // Round-level: drop consensus signals whose findingId sits inside a retracted round.
+          // Use startsWith(cid + ':') — finding_id shapes: `<cid>:fN` (bulk) and
+          // `<cid>:<agent>:fN` (manual). ImplSignal has no findingId so impl signals
+          // are structurally unaffected.
+          const fid = (s as any).findingId;
+          if (typeof fid === 'string' && fid.length > 0) {
+            for (const retractedId of retractedConsensusIds) {
+              if (fid.startsWith(retractedId + ':')) return false;
+            }
+          }
         }
         return true;
       });
@@ -419,7 +508,13 @@ export class PerformanceReader {
     // Build per-agent retraction index so computeScores skips retracted signals
     // even when called with a raw (unfiltered) signal array (e.g. directly from tests).
     const retractedKeys = new Set<string>();
+    const retractedConsensusIds = new Set<string>();
     for (const signal of consensusSignals) {
+      if (signal.signal === 'consensus_round_retracted') {
+        const cid = (signal as any).consensus_id;
+        if (typeof cid === 'string' && cid.length > 0) retractedConsensusIds.add(cid);
+        continue;
+      }
       if (signal.signal === 'signal_retracted') {
         const taskKey = signal.taskId || signal.timestamp;
         if (signal.retractedSignal) {
@@ -434,6 +529,19 @@ export class PerformanceReader {
       const isKnown = KNOWN_SIGNALS[signal.signal];
       if (!isKnown) continue;
       if (signal.signal === 'signal_retracted') continue;
+      if (signal.signal === 'consensus_round_retracted') continue;
+      // Tombstone sentinel rows have no real agent — ignore.
+      if (signal.agentId === '_system') continue;
+
+      // Round-level retraction — drop any signal whose findingId sits inside a retracted round.
+      const fidAny = (signal as any).findingId;
+      if (typeof fidAny === 'string' && fidAny.length > 0) {
+        let dropped = false;
+        for (const retractedId of retractedConsensusIds) {
+          if (fidAny.startsWith(retractedId + ':')) { dropped = true; break; }
+        }
+        if (dropped) continue;
+      }
 
       // Skip signals retracted by a signal_retracted entry
       const taskKey2 = signal.taskId || signal.timestamp;

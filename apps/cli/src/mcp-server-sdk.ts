@@ -2284,10 +2284,10 @@ server.tool(
   'gossip_signals',
   'Record or retract consensus performance signals. Use action "record" (default) to record signals after cross-referencing agent findings — call IMMEDIATELY when you verify. Use action "retract" to undo a previously recorded signal.',
   {
-    action: z.enum(['record', 'retract', 'bulk_from_consensus']).default('record').describe('Action: "record" to add signals, "retract" to undo a previous signal, "bulk_from_consensus" to auto-record signals for all findings in a consensus report'),
-    consensus_id: z.string().optional().describe('Consensus report ID (8-8 hex format, e.g. "5e8a7194-73e240da"). Required for action: "bulk_from_consensus".'),
+    action: z.enum(['record', 'retract', 'bulk_from_consensus']).default('record').describe('Action: "record" to add signals, "retract" to undo a previous signal or an entire consensus round, "bulk_from_consensus" to auto-record signals for all findings in a consensus report'),
+    consensus_id: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{8}$/, 'consensus_id must be 8-8 hex format (e.g. "5e8a7194-73e240da")').optional().describe('Consensus report ID (8-8 hex format, e.g. "5e8a7194-73e240da"). Required for action: "bulk_from_consensus". For action: "retract" — supplying this (with `reason`) retracts ALL signals in that consensus round; mutually exclusive with agent_id+task_id per-signal retraction.'),
     // record params
-    task_id: z.string().optional().describe('Task ID to link signals to. For record: optional (synthetic ID if omitted). For retract: required.'),
+    task_id: z.string().optional().describe('Task ID to link signals to. For record: optional (synthetic ID if omitted). For per-signal retract: required.'),
     task_start_time: z.string().optional().describe('ISO-8601 timestamp of the underlying task/consensus round. Used as the per-batch fallback timestamp so bulk-recording from a backlog preserves true chronology. Falls back to wall-clock if omitted.'),
     signals: z.array(z.object({
       signal: z.enum(['agreement', 'disagreement', 'unique_confirmed', 'unique_unconfirmed', 'new_finding', 'hallucination_caught', 'impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected'])
@@ -2302,22 +2302,43 @@ server.tool(
       timestamp: z.string().optional().describe('ISO-8601 timestamp of when this specific finding occurred. Highest precedence; overrides task_start_time. Use for per-finding chronology when known.'),
     })).optional().describe('Array of consensus signals (required for action: "record")'),
     // retract params
-    agent_id: z.string().optional().describe('Agent whose signal to retract (required for action: "retract")'),
-    reason: z.string().optional().describe('Why this signal is being retracted (required for action: "retract")'),
+    agent_id: z.string().optional().describe('Agent whose signal to retract (required for per-signal action: "retract"; mutually exclusive with consensus_id round-scope form)'),
+    reason: z.string().min(1).max(1024).optional().describe('Why this signal/round is being retracted (required for action: "retract"; 1-1024 chars)'),
   },
   async ({ action, task_id, task_start_time, signals, agent_id, reason, consensus_id }) => {
     await boot();
 
     if (action === 'retract') {
-      // Validate retract params
-      if (!agent_id || agent_id.trim().length === 0) {
-        return { content: [{ type: 'text' as const, text: 'Error: agent_id is required for retraction.' }] };
+      // Branch: round-scope retraction vs per-signal retraction. Mutually exclusive.
+      const hasRound = !!(consensus_id && consensus_id.trim().length > 0);
+      const hasPerSignal = !!((agent_id && agent_id.trim().length > 0) || (task_id && task_id.trim().length > 0));
+      if (hasRound && hasPerSignal) {
+        return { content: [{ type: 'text' as const, text: 'Error: consensus_id and agent_id+task_id are mutually exclusive. Supply either a round-scope retraction (consensus_id + reason) or a per-signal retraction (agent_id + task_id + reason).' }] };
       }
-      if (!task_id || task_id.trim().length === 0) {
-        return { content: [{ type: 'text' as const, text: 'Error: task_id is required for retraction. Use the task ID from the original signal.' }] };
+      if (!hasRound && !hasPerSignal) {
+        return { content: [{ type: 'text' as const, text: 'Error: supply either consensus_id (round-scope) or agent_id+task_id (per-signal) to retract.' }] };
       }
       if (!reason || reason.trim().length === 0) {
         return { content: [{ type: 'text' as const, text: 'Error: reason is required for retraction.' }] };
+      }
+
+      if (hasRound) {
+        try {
+          const { PerformanceWriter } = await import('@gossip/orchestrator');
+          const writer = new PerformanceWriter(process.cwd());
+          writer.recordConsensusRoundRetraction(consensus_id!, reason);
+          return { content: [{ type: 'text' as const, text: `Retracted consensus round ${consensus_id}.\nReason: ${reason}\n\nAll signals whose finding_id starts with "${consensus_id}:" will be excluded from scoring. The tombstone row and original signals remain in the audit log.` }] };
+        } catch (err) {
+          return { content: [{ type: 'text' as const, text: `Failed to retract round: ${(err as Error).message}` }] };
+        }
+      }
+
+      // Per-signal retraction
+      if (!agent_id || agent_id.trim().length === 0) {
+        return { content: [{ type: 'text' as const, text: 'Error: agent_id is required for per-signal retraction.' }] };
+      }
+      if (!task_id || task_id.trim().length === 0) {
+        return { content: [{ type: 'text' as const, text: 'Error: task_id is required for per-signal retraction. Use the task ID from the original signal.' }] };
       }
       try {
         const { PerformanceWriter } = await import('@gossip/orchestrator');
@@ -2361,8 +2382,17 @@ server.tool(
           }
         } catch { /* file may not exist yet */ }
 
-        const { PerformanceWriter } = await import('@gossip/orchestrator');
+        const { PerformanceWriter, PerformanceReader } = await import('@gossip/orchestrator');
         const writer = new PerformanceWriter(process.cwd());
+        // Warn if the target round was retracted — signals will be recorded but
+        // filtered out at read time by the round tombstone.
+        try {
+          const reader = new PerformanceReader(process.cwd());
+          if (reader.getRetractedConsensusIds().has(consensus_id)) {
+            // eslint-disable-next-line no-console
+            console.warn(`[signals] bulk_from_consensus targeted retracted round ${consensus_id}; signals will be filtered out`);
+          }
+        } catch { /* reader unavailable — skip warn */ }
         const batchTs = report.timestamp || new Date().toISOString();
         const batchTaskId = task_id || `bulk-${consensus_id}`;
 

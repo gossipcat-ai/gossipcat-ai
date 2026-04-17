@@ -121,6 +121,7 @@ export interface ConsensusSignal {
     | 'category_confirmed'
     | 'consensus_verified'
     | 'signal_retracted'
+    | 'consensus_round_retracted'
     | 'severity_miscalibrated'
     | 'task_timeout'
     | 'task_empty';
