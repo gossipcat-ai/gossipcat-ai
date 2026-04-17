@@ -2,13 +2,8 @@ import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
 import { EmptyState } from './EmptyState';
-
-interface SignalEntry {
-  signal: string;
-  agentId: string;
-  timestamp: string;
-  evidence?: string;
-}
+import { FindingDetailDrawer } from './FindingDetailDrawer';
+import type { SignalEntry } from '@/lib/types';
 
 interface SignalsResponse {
   items: SignalEntry[];
@@ -40,6 +35,8 @@ const SIGNAL_LABELS: Record<string, string> = {
 export function SignalTimeline({ agentId }: { agentId: string }) {
   const [signals, setSignals] = useState<SignalEntry[]>([]);
   const [total, setTotal] = useState(0);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selected, setSelected] = useState<{ consensusId: string; findingId: string } | null>(null);
 
   useEffect(() => {
     api<SignalsResponse>(`signals?agent=${encodeURIComponent(agentId)}&limit=100`)
@@ -107,15 +104,26 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
         </div>
       </div>
       <div className="flex items-center gap-0.5">
-        {ordered.map((s, i) => (
-          <div
-            key={i}
-            className={`h-4 w-1.5 rounded-sm transition-opacity hover:opacity-80 ${
-              SIGNAL_COLORS[s.signal] || 'bg-muted'
-            }`}
-            title={`${SIGNAL_LABELS[s.signal] || s.signal} — ${timeAgo(s.timestamp)}`}
-          />
-        ))}
+        {ordered.map((s, i) => {
+          const clickable = !!(s.consensusId && s.findingId);
+          return (
+            <button
+              key={i}
+              type="button"
+              disabled={!clickable}
+              onClick={() => {
+                if (s.consensusId && s.findingId) {
+                  setSelected({ consensusId: s.consensusId, findingId: s.findingId });
+                  setDrawerOpen(true);
+                }
+              }}
+              className={`h-4 w-1.5 rounded-sm transition-opacity hover:opacity-80 ${
+                SIGNAL_COLORS[s.signal] || 'bg-muted'
+              } ${clickable ? 'cursor-pointer' : 'cursor-default'}`}
+              title={`${SIGNAL_LABELS[s.signal] || s.signal} — ${timeAgo(s.timestamp)}${clickable ? ' (click for detail)' : ''}`}
+            />
+          );
+        })}
       </div>
       {/* Legend — "Disputed" covers disagreement + hallucination_caught; the
           counts row above uses the same name so a red bar has exactly one
@@ -133,6 +141,12 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
           </div>
         ))}
       </div>
+      <FindingDetailDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        consensusId={selected?.consensusId ?? null}
+        findingId={selected?.findingId ?? null}
+      />
     </div>
   );
 }
