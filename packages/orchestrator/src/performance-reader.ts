@@ -21,10 +21,12 @@ export interface AgentScore {
   disagreements: number;
   uniqueFindings: number;
   hallucinations: number;
-  /** Unverified signals emitted by this agent as a reviewer — "I can't verify peer's finding". */
-  unverifiedsEmitted: number;
-  /** Unverified signals received by this agent as a finding author — a peer couldn't verify the citation. */
-  unverifiedsReceived: number;
+  /** Unverified signals emitted by this agent as a reviewer — "I can't verify peer's finding".
+   *  Optional for back-compat with historical AgentScore fixtures in tests. */
+  unverifiedsEmitted?: number;
+  /** Unverified signals received by this agent as a finding author — a peer couldn't verify the citation.
+   *  Optional for back-compat with historical AgentScore fixtures in tests. */
+  unverifiedsReceived?: number;
   weightedHallucinations: number; // decay-weighted hallucination count (used by auto-bench)
   consecutiveFailures: number; // circuit breaker: consecutive negative signals at tail
   circuitOpen: boolean;        // true when consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD
