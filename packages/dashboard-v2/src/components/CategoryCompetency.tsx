@@ -6,22 +6,21 @@ interface Props {
   categoryHallucinated?: Record<string, number>;
 }
 
-// Matches the overall-accuracy hallucinationMultiplier at
-// `performance-reader.ts:705` — `1 / (1 + h * 0.3)`. Applying it per-category
-// keeps this widget consistent with the scorecard: a category with zero
-// hallucinations keeps its raw accuracy; hallucinations drag the bar the
-// same way they drag the overall score. Previously the widget showed raw
-// `c/(c+h)` which read 95% on a category with 3 hallucinations, even when
-// the agent's overall accuracy was 0.37 — confusing UX.
-function penalize(rawAcc: number, h: number): number {
-  const multiplier = 1 / (1 + h * 0.3);
-  return Math.max(0, Math.min(1, rawAcc * multiplier));
-}
-
-/** Horizontal bars per category. Each bar shows the WEIGHTED accuracy
- * (raw ratio × hallucination-penalty, mirroring the global accuracy
- * formula). Raw c/n + hallucination count shown in the tuple so the
- * composition is visible. */
+/** Horizontal bars per category. Shows raw `c/(c+h)` accuracy — the
+ * honest per-category success rate — with hallucination count visible
+ * as a `·N✗` badge in the tuple so the composition isn't hidden.
+ *
+ * Previous revisions tried to apply the global `1/(1+h*0.3)` penalty
+ * per-category to match the scorecard's 0.37-style overall accuracy,
+ * but that formula is calibrated for overall signal counts (10–50
+ * lifetime), not category slices with 100+ signals. On a 145/147
+ * category, 2 hallucinations = 1.4% error rate — genuinely near-perfect.
+ * Applying the multiplier dragged it to 62%, which was misleading in
+ * the opposite direction. Honest raw display with halluc count wins.
+ *
+ * The scorecard's overall weighted accuracy is shown elsewhere; this
+ * widget answers "where does this agent do well?" not "how much do I
+ * trust this agent overall?" — two different questions. */
 export function CategoryCompetency({ categoryAccuracy, categoryCorrect, categoryHallucinated }: Props) {
   const keys = Object.keys(categoryAccuracy ?? {});
   if (keys.length === 0) {
@@ -36,24 +35,20 @@ export function CategoryCompetency({ categoryAccuracy, categoryCorrect, category
 
   const rows = keys
     .map((k) => {
-      const rawAcc = Math.max(0, Math.min(1, categoryAccuracy![k] ?? 0));
+      const acc = Math.max(0, Math.min(1, categoryAccuracy![k] ?? 0));
       const c = categoryCorrect?.[k] ?? 0;
       const h = categoryHallucinated?.[k] ?? 0;
-      const acc = penalize(rawAcc, h);
-      return { key: k, rawAcc, acc, c, h, n: c + h };
+      return { key: k, acc, c, h, n: c + h };
     })
     .sort((a, b) => b.acc - a.acc);
 
   return (
     <div className="space-y-2">
       {rows.map((row) => {
-        const fill = row.acc >= 0.7 ? 'bg-confirmed' : row.acc >= 0.4 ? 'bg-unverified' : 'bg-disputed';
-        const rawDelta = Math.round((row.rawAcc - row.acc) * 100);
-        const rawPct = Math.round(row.rawAcc * 100);
-        const title =
-          row.n > 0
-            ? `${row.c} correct / ${row.h} hallucinated / ${row.n} total — raw ${rawPct}%${rawDelta > 0 ? `, penalized −${rawDelta}pp for ${row.h} hallucination${row.h === 1 ? '' : 's'}` : ''}`
-            : undefined;
+        const fill = row.acc >= 0.9 ? 'bg-confirmed' : row.acc >= 0.7 ? 'bg-unverified' : 'bg-disputed';
+        const title = row.n > 0
+          ? `${row.c} correct / ${row.h} hallucinated / ${row.n} total`
+          : undefined;
         return (
           <div
             key={row.key}
@@ -63,18 +58,9 @@ export function CategoryCompetency({ categoryAccuracy, categoryCorrect, category
             <span className="truncate font-mono text-[11px] text-muted-foreground">
               {row.key.replace(/_/g, ' ')}
             </span>
-            <div className="relative h-2 overflow-hidden rounded-sm bg-muted/30">
-              {/* Ghost bar at raw accuracy shows the unweighted position,
-                  so a category with penalty has a visible gap between
-                  the ghost (muted/light) and the weighted fill. */}
-              {row.h > 0 && row.rawAcc > row.acc && (
-                <div
-                  className="absolute inset-y-0 left-0 rounded-sm bg-muted/50"
-                  style={{ width: `${row.rawAcc * 100}%` }}
-                />
-              )}
+            <div className="h-2 overflow-hidden rounded-sm bg-muted/30">
               <div
-                className={`absolute inset-y-0 left-0 h-full rounded-sm transition-all ${fill}`}
+                className={`h-full rounded-sm transition-all ${fill}`}
                 style={{ width: `${row.acc * 100}%` }}
               />
             </div>
