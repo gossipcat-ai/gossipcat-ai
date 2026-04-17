@@ -425,6 +425,77 @@ runIfJq('worktree-sandbox.sh', () => {
     expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/etc/my file');
   });
+
+  // --- Auto-memory allowlist (fix/sandbox-hook-allow-memory) ---
+
+  it('allows Write to ~/.claude/projects/*/memory/* (Claude Code auto-memory)', () => {
+    // The memory-save flow triggered by gossip_session_save writes to
+    // ~/.claude/projects/<encoded-cwd>/memory/<slug>.md. Because this path
+    // is outside the worktree cwd, the hook was blocking it — breaking
+    // in-session memory persistence entirely.
+    //
+    // The allowlist MUST fire AFTER normalize_path so that a crafted path
+    // like /wt/../home/user/.claude/projects/x/memory/y cannot bypass the
+    // deny gate via the allowlist route.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const home = process.env.HOME ?? '/Users/testuser';
+    const memoryPath = `${home}/.claude/projects/-Users-goku-Desktop-gossip/memory/session_2026_04_17.md`;
+    const { stdout, status } = runHook({
+      tool_name: 'Write',
+      tool_input: { file_path: memoryPath },
+      cwd,
+    });
+    expect(status).toBe(0);
+    // No deny JSON — hook exits 0 with empty stdout to allow.
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('allows Edit to ~/.claude/projects/*/memory/* (Claude Code auto-memory)', () => {
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const home = process.env.HOME ?? '/Users/testuser';
+    const memoryPath = `${home}/.claude/projects/-Users-goku-Desktop-gossip/memory/project_foo.md`;
+    const { stdout, status } = runHook({
+      tool_name: 'Edit',
+      tool_input: { file_path: memoryPath },
+      cwd,
+    });
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('still denies Write to ~/.claude/projects/*/memory/../../../etc/passwd (path traversal through allowlist)', () => {
+    // The allowlist applies AFTER normalization. A path that traverses out
+    // of the memory directory must normalize to a non-memory path and hit
+    // the deny gate rather than the allowlist continue.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const home = process.env.HOME ?? '/Users/testuser';
+    const escapePath = `${home}/.claude/projects/-gossip/memory/../../../etc/passwd`;
+    const { stdout, status } = runHook({
+      tool_name: 'Write',
+      tool_input: { file_path: escapePath },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(parsed.hookSpecificOutput.permissionDecisionReason.toLowerCase()).toContain('/etc/passwd');
+  });
+
+  it('still denies Write outside ~/.claude/projects/*/memory/ but inside ~/.claude/', () => {
+    // Only the memory subdirectory is allowlisted. Writing to
+    // ~/.claude/settings.json or ~/.claude/CLAUDE.md must still be denied.
+    const cwd = '/private/tmp/gossip-wt-abc123';
+    const home = process.env.HOME ?? '/Users/testuser';
+    const settingsPath = `${home}/.claude/settings.json`;
+    const { stdout, status } = runHook({
+      tool_name: 'Write',
+      tool_input: { file_path: settingsPath },
+      cwd,
+    });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+  });
 });
 
 // Keep unused-import lint happy — writeFileSync, mkdirSync imported for

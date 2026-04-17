@@ -274,6 +274,16 @@ while IFS= read -r path_arg; do
     emit_deny "BOUNDARY CHECK FAILED: unable to normalize '${path_arg}' for ${tool_name}. Refusing to allow without a canonical form."
   fi
 
+  # Allowlist: Claude Code auto-memory lives at ~/.claude/projects/*/memory/*.
+  # These files are managed by the built-in memory system, not repo state.
+  # Blocking them breaks memory-save flow when working inside a worktree.
+  home_norm="$(normalize_path "$HOME")"
+  if [ -n "$home_norm" ]; then
+    case "$path_norm" in
+      "${home_norm}/.claude/projects"/*/memory/*) continue ;;
+    esac
+  fi
+
   if ! path_is_inside "$cwd_norm" "$path_norm"; then
     emit_deny "BOUNDARY ESCAPE: ${tool_name} targets '${path_arg}' (normalized: '${path_norm}') outside worktree cwd '${cwd_norm}'. Use a relative path (./...) inside the worktree."
   fi
