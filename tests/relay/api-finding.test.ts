@@ -1,5 +1,5 @@
 import { findingHandler } from '../../packages/relay/src/dashboard/api-finding';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -57,6 +57,40 @@ describe('findingHandler', () => {
       id: 'abc-def', confirmed: [], disputed: [], unverified: [], unique: [], insights: [], newFindings: [],
     }));
     await expect(findingHandler(root, 'abc-def', 'abc-def:f99')).rejects.toThrow(/not found/i);
+  });
+
+  it('rejects path-traversal consensusId (percent-decoded `..`)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gossip-test-finding-'));
+    mkdirSync(join(root, '.gossip', 'consensus-reports'), { recursive: true });
+    // A file outside the reports dir that the attacker would reach via traversal
+    writeFileSync(join(root, '.gossip', 'secret.json'), JSON.stringify({
+      id: 'secret', confirmed: [{ id: 'secret:f1', originalAgentId: 'x', findingType: 'finding', tag: 'confirmed', finding: 'leak', confirmedBy: [], disputedBy: [], confidence: 1 }],
+      disputed: [], unverified: [], unique: [], insights: [], newFindings: [],
+    }));
+    await expect(findingHandler(root, '../secret', 'secret:f1')).rejects.toThrow(/not found/i);
+    await expect(findingHandler(root, '..%2Fsecret', 'secret:f1')).rejects.toThrow(/not found/i);
+  });
+
+  it('rejects symlink-based citation escape', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gossip-test-finding-sym-'));
+    const outside = mkdtempSync(join(tmpdir(), 'gossip-test-outside-'));
+    mkdirSync(join(root, '.gossip', 'consensus-reports'), { recursive: true });
+    writeFileSync(join(outside, 'secret.txt'), 'OUTSIDE-SECRET\n');
+    try { symlinkSync(join(outside, 'secret.txt'), join(root, 'link.txt')); } catch { return; /* no symlink support */ }
+    if (!existsSync(join(root, 'link.txt'))) return;
+
+    writeFileSync(join(root, '.gossip', 'consensus-reports', 'c1-c2.json'), JSON.stringify({
+      id: 'c1-c2',
+      confirmed: [{
+        id: 'c1-c2:f1', originalAgentId: 'x', findingType: 'finding', tag: 'confirmed',
+        finding: 'read via symlink <cite tag="file">link.txt:1</cite>',
+        confirmedBy: [], disputedBy: [], confidence: 1,
+      }],
+      disputed: [], unverified: [], unique: [], insights: [], newFindings: [],
+    }));
+    const res = await findingHandler(root, 'c1-c2', 'c1-c2:f1');
+    // Symlink target is outside the project root — must be rejected by realpath check.
+    expect(res.citations).toHaveLength(0);
   });
 
   it('rejects path-traversal citations', async () => {
