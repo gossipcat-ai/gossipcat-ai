@@ -976,17 +976,15 @@ Return only valid JSON.${skillsBlock}`;
       const hasHallucinationKeywords = this.detectHallucination(entry.finding);
       if (!hasHallucinationKeywords) return false;
       // Category enforcement: prefer explicit, fall back to extractCategories over
-      // the finding text. If neither path yields a category, drop the signal
-      // rather than persist a category-less hallucination_caught — those entries
-      // are invisible to skill-gap analysis and bloat the "category-less halluc"
-      // data gap. Do NOT backfill legacy signals; write-time only.
+      // the finding text. Record with undefined if neither yields a category —
+      // dropping loses aggregate data (performance-reader.ts:581-585 increments
+      // weightedImpact/weightedConfirmedCount before the per-category guard at :586).
       const extracted = extractCategories(entry.finding);
-      const category = entry.category || extracted[0];
+      const category = entry.category || extracted[0] || undefined;
       if (!category) {
         process.stderr.write(
-          `[consensus-engine] dropped hallucination_caught for ${entry.originalAgentId}: no category (pre-filter). finding="${entry.finding.slice(0, 80)}"\n`,
+          `[consensus-engine] hallucination_caught for ${entry.originalAgentId}: category resolution failed, recorded with undefined. finding="${entry.finding.slice(0, 80)}"\n`,
         );
-        return true; // still "detected" for control-flow purposes; just not persisted as a signal
       }
       signals.push({
         type: 'consensus',
@@ -1055,27 +1053,26 @@ Return only valid JSON.${skillsBlock}`;
         if (matchKey && f) {
           f.confirmedBy.push(entry.agentId);
           f.confidences.push(entry.confidence);
-          // #148 — require non-empty category or skip the write. Signals
-          // without category are silently dropped by getCountersSince.
+          // Record with undefined category when resolution fails — dropping loses
+          // aggregate data (performance-reader.ts:581-585 increments before :586 guard).
           const agreeCat = resolveSignalCategory(f.category, entry.evidence, f.finding);
           if (!agreeCat) {
             process.stderr.write(
-              `[consensus-engine] dropped agreement for ${entry.agentId}: no category. evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
+              `[consensus-engine] agreement for ${entry.agentId}: category resolution failed, recorded with undefined. evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
             );
-          } else {
-            signals.push({
-              type: 'consensus',
-              taskId: getTaskId(entry.agentId),
-              consensusId,
-              signal: 'agreement',
-              agentId: entry.agentId,
-              counterpartId: entry.peerAgentId,
-              evidence: capEvidence(entry.evidence),
-              timestamp: now,
-              severity: f.severity,
-              category: agreeCat,
-            });
           }
+          signals.push({
+            type: 'consensus',
+            taskId: getTaskId(entry.agentId),
+            consensusId,
+            signal: 'agreement',
+            agentId: entry.agentId,
+            counterpartId: entry.peerAgentId,
+            evidence: capEvidence(entry.evidence),
+            timestamp: now,
+            severity: f.severity,
+            category: agreeCat ?? undefined,
+          });
         }
         continue;
       }
@@ -1101,32 +1098,28 @@ Return only valid JSON.${skillsBlock}`;
             // && isCitationFabricated, so the second half is guaranteed true by construction.
             // The previous ternary `isCitationFabricated ? 'fabricated_citation' : 'incorrect'`
             // had an unreachable 'incorrect' branch. See consensus 82a3c123-19db41e7 Tier 1A Fix #2.
-            // Category enforcement: prefer the original finding's category, else
-            // try to derive from the reviewer's disagreement evidence, else
-            // fall back to the finding text. Drop (with warning) if all three
-            // fail — a category-less hallucination_caught is invisible to
-            // skill-gap analysis.
+            // Record with undefined category when resolution fails — dropping loses
+            // aggregate data (performance-reader.ts:581-585 increments before :586 guard).
             const extractedCat = extractCategories(entry.evidence || '')[0] || extractCategories(f.finding || '')[0];
-            const halluCategory = f.category || extractedCat;
+            const halluCategory = f.category || extractedCat || undefined;
             if (!halluCategory) {
               process.stderr.write(
-                `[consensus-engine] dropped hallucination_caught for ${entry.agentId}: no category (dispute path). evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
+                `[consensus-engine] hallucination_caught for ${entry.agentId}: category resolution failed, recorded with undefined. evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
               );
-            } else {
-              signals.push({
-                type: 'consensus',
-                taskId: getTaskId(entry.agentId),
-                consensusId,
-                signal: 'hallucination_caught',
-                agentId: entry.agentId,
-                counterpartId: entry.peerAgentId,
-                outcome: 'fabricated_citation',
-                evidence: capEvidence(entry.evidence),
-                timestamp: now,
-                severity: capAutoSeverity(f.severity),
-                category: halluCategory,
-              });
             }
+            signals.push({
+              type: 'consensus',
+              taskId: getTaskId(entry.agentId),
+              consensusId,
+              signal: 'hallucination_caught',
+              agentId: entry.agentId,
+              counterpartId: entry.peerAgentId,
+              outcome: 'fabricated_citation',
+              evidence: capEvidence(entry.evidence),
+              timestamp: now,
+              severity: capAutoSeverity(f.severity),
+              category: halluCategory,
+            });
           } else {
             const sanitizeEvidence = (t: string) => t.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
             f.disputedBy.push({
@@ -1134,26 +1127,26 @@ Return only valid JSON.${skillsBlock}`;
               reason: sanitizeEvidence(entry.evidence),
               evidence: sanitizeEvidence(entry.evidence),
             });
-            // #148 — require non-empty category or skip the write.
+            // Record with undefined category when resolution fails — dropping loses
+            // aggregate data (performance-reader.ts:581-585 increments before :586 guard).
             const disagreeCat = resolveSignalCategory(f.category, entry.evidence, f.finding);
             if (!disagreeCat) {
               process.stderr.write(
-                `[consensus-engine] dropped disagreement for ${entry.agentId}: no category. evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
+                `[consensus-engine] disagreement for ${entry.agentId}: category resolution failed, recorded with undefined. evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
               );
-            } else {
-              signals.push({
-                type: 'consensus',
-                taskId: getTaskId(entry.agentId),
-                consensusId,
-                signal: 'disagreement',
-                agentId: entry.agentId,
-                counterpartId: entry.peerAgentId,
-                evidence: capEvidence(entry.evidence),
-                timestamp: now,
-                severity: f.severity,
-                category: disagreeCat,
-              });
             }
+            signals.push({
+              type: 'consensus',
+              taskId: getTaskId(entry.agentId),
+              consensusId,
+              signal: 'disagreement',
+              agentId: entry.agentId,
+              counterpartId: entry.peerAgentId,
+              evidence: capEvidence(entry.evidence),
+              timestamp: now,
+              severity: f.severity,
+              category: disagreeCat ?? undefined,
+            });
           }
         }
       }
@@ -1242,21 +1235,20 @@ Return only valid JSON.${skillsBlock}`;
           const uniqueUnconfCat = resolveSignalCategory(entry.category, entry.finding);
           if (!uniqueUnconfCat) {
             process.stderr.write(
-              `[consensus-engine] dropped unique_unconfirmed for ${entry.originalAgentId}: no category.\n`,
+              `[consensus-engine] unique_unconfirmed for ${entry.originalAgentId}: category resolution failed, recorded with undefined.\n`,
             );
-          } else {
-            signals.push({
-              type: 'consensus',
-              taskId: getTaskId(entry.originalAgentId),
-              consensusId,
-              signal: 'unique_unconfirmed',
-              agentId: entry.originalAgentId,
-              evidence: capEvidence(`Confirmed finding has unresolvable citation (stale?): "${entry.finding.slice(0, 200)}"`),
-              timestamp: now,
-              severity: entry.severity,
-              category: uniqueUnconfCat,
-            });
           }
+          signals.push({
+            type: 'consensus',
+            taskId: getTaskId(entry.originalAgentId),
+            consensusId,
+            signal: 'unique_unconfirmed',
+            agentId: entry.originalAgentId,
+            evidence: capEvidence(`Confirmed finding has unresolvable citation (stale?): "${entry.finding.slice(0, 200)}"`),
+            timestamp: now,
+            severity: entry.severity,
+            category: uniqueUnconfCat ?? undefined,
+          });
           continue;
         }
         finding.tag = 'confirmed';
@@ -1266,25 +1258,25 @@ Return only valid JSON.${skillsBlock}`;
           other => other !== entry && other.finding === entry.finding && other.originalAgentId !== entry.originalAgentId
         );
         if (isUniquelyDiscovered) {
-          // #148 — require non-empty category or skip the write.
+          // Record with undefined category when resolution fails — dropping loses
+          // aggregate data (performance-reader.ts:581-585 increments before :586 guard).
           const uniqueConfCat = resolveSignalCategory(entry.category, entry.finding);
           if (!uniqueConfCat) {
             process.stderr.write(
-              `[consensus-engine] dropped unique_confirmed for ${entry.originalAgentId}: no category.\n`,
+              `[consensus-engine] unique_confirmed for ${entry.originalAgentId}: category resolution failed, recorded with undefined.\n`,
             );
-          } else {
-            signals.push({
-              type: 'consensus',
-              taskId: getTaskId(entry.originalAgentId),
-              consensusId,
-              signal: 'unique_confirmed',
-              agentId: entry.originalAgentId,
-              evidence: capEvidence(entry.finding),
-              timestamp: now,
-              severity: entry.severity,
-              category: uniqueConfCat,
-            });
           }
+          signals.push({
+            type: 'consensus',
+            taskId: getTaskId(entry.originalAgentId),
+            consensusId,
+            signal: 'unique_confirmed',
+            agentId: entry.originalAgentId,
+            evidence: capEvidence(entry.finding),
+            timestamp: now,
+            severity: entry.severity,
+            category: uniqueConfCat ?? undefined,
+          });
         }
       } else if (entry.unverifiedBy.length > 0) {
         // Route suggestions/insights to insights array instead of unverified
