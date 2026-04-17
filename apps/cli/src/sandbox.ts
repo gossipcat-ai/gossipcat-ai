@@ -29,6 +29,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   statSync,
   unlinkSync,
   utimesSync,
@@ -59,6 +60,35 @@ export interface DispatchMetadata {
 const METADATA_FILE = 'dispatch-metadata.jsonl';
 const BOUNDARY_ESCAPE_FILE = 'boundary-escapes.jsonl';
 const SENTINEL_DIR = 'sentinels';
+
+/** Max bytes for `.gossip/boundary-escapes.jsonl` before single-slot rotation. */
+export const MAX_BOUNDARY_ESCAPE_BYTES = 5 * 1024 * 1024; // 5MB
+
+/**
+ * Best-effort single-slot size rotation.
+ *
+ * If `filePath` exists and is at least `maxBytes`, rename it to `filePath + '.1'`,
+ * overwriting any pre-existing `.1` slot. No `.2`/`.3`, no compression. Silent
+ * on any error (missing file, EPERM, etc.) — matches the surrounding try/catch
+ * best-effort style for boundary-escape logging.
+ */
+export function rotateIfNeeded(filePath: string, maxBytes: number): void {
+  try {
+    const st = statSync(filePath);
+    if (st.size < maxBytes) return;
+    const rotated = filePath + '.1';
+    // fs.renameSync overwrites an existing destination on POSIX. Wrap in an
+    // unlink+rename for belt-and-suspenders safety across platforms.
+    try {
+      if (existsSync(rotated)) unlinkSync(rotated);
+    } catch {
+      /* best-effort */
+    }
+    renameSync(filePath, rotated);
+  } catch {
+    /* best-effort */
+  }
+}
 
 // Paths that agents legitimately write outside their declared boundary.
 // These are infrastructure artifacts, not application code — false-positive
@@ -508,7 +538,9 @@ function recordBoundaryEscape(
       violatingPaths: violations,
       action: mode, // "warn" or "block"
     };
-    appendFileSync(join(dir, BOUNDARY_ESCAPE_FILE), JSON.stringify(line) + '\n');
+    const escapeFile = join(dir, BOUNDARY_ESCAPE_FILE);
+    rotateIfNeeded(escapeFile, MAX_BOUNDARY_ESCAPE_BYTES);
+    appendFileSync(escapeFile, JSON.stringify(line) + '\n');
   } catch {
     /* best-effort */
   }
@@ -1232,7 +1264,9 @@ function recordLayer3Violations(
         source,
       }),
     );
-    appendFileSync(join(dir, BOUNDARY_ESCAPE_FILE), lines.join('\n') + '\n');
+    const escapeFile = join(dir, BOUNDARY_ESCAPE_FILE);
+    rotateIfNeeded(escapeFile, MAX_BOUNDARY_ESCAPE_BYTES);
+    appendFileSync(escapeFile, lines.join('\n') + '\n');
   } catch {
     /* best-effort */
   }

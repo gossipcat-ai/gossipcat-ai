@@ -1,7 +1,16 @@
 /**
  * Tests for sandbox enforcement — prompt sanitization + boundary audit.
  */
-import { mkdtempSync, writeFileSync, mkdirSync } from 'fs';
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  statSync,
+  rmSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import {
@@ -16,6 +25,8 @@ import {
   isInsideScope,
   DispatchMetadata,
   buildAuditExclusions,
+  rotateIfNeeded,
+  MAX_BOUNDARY_ESCAPE_BYTES,
 } from '../../apps/cli/src/sandbox';
 
 describe('relativizeProjectPaths', () => {
@@ -493,5 +504,94 @@ describe('buildAuditExclusions — test-fixture gate (NODE_ENV / JEST_WORKER_ID)
     // No test-fixture prefix should be in the argv.
     expect(args.some((a: string) => a.includes('gossip-test-'))).toBe(false);
     expect(args.some((a: string) => a.includes('sandbox-test-'))).toBe(false);
+  });
+});
+
+describe('rotateIfNeeded (boundary-escapes.jsonl size rotation)', () => {
+  let tmpDir: string;
+  let filePath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'gossip-test-rotation-'));
+    filePath = join(tmpDir, 'boundary-escapes.jsonl');
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
+  it('does not rotate when file is under the size limit', () => {
+    const line = JSON.stringify({ hello: 'world' }) + '\n';
+    writeFileSync(filePath, line);
+    rotateIfNeeded(filePath, 1024);
+    expect(existsSync(filePath)).toBe(true);
+    expect(existsSync(filePath + '.1')).toBe(false);
+    expect(readFileSync(filePath, 'utf8')).toBe(line);
+  });
+
+  it('does not rotate when the file does not exist', () => {
+    // Missing file → no-op, no throw.
+    rotateIfNeeded(filePath, 1024);
+    expect(existsSync(filePath)).toBe(false);
+    expect(existsSync(filePath + '.1')).toBe(false);
+  });
+
+  it('rotates to .1 when the file is at or over the size limit', () => {
+    const payload = 'x'.repeat(200);
+    writeFileSync(filePath, payload);
+    rotateIfNeeded(filePath, 100);
+    expect(existsSync(filePath)).toBe(false);
+    expect(existsSync(filePath + '.1')).toBe(true);
+    expect(readFileSync(filePath + '.1', 'utf8')).toBe(payload);
+  });
+
+  it('overwrites an existing .1 slot on a second rotation (single slot only)', () => {
+    // First rotation.
+    writeFileSync(filePath, 'first-generation');
+    rotateIfNeeded(filePath, 1);
+    expect(readFileSync(filePath + '.1', 'utf8')).toBe('first-generation');
+    expect(existsSync(filePath)).toBe(false);
+
+    // Second rotation — .1 must be overwritten, never promoted to .2.
+    writeFileSync(filePath, 'second-generation');
+    rotateIfNeeded(filePath, 1);
+    expect(readFileSync(filePath + '.1', 'utf8')).toBe('second-generation');
+    expect(existsSync(filePath + '.2')).toBe(false);
+    expect(existsSync(filePath)).toBe(false);
+  });
+
+  it('allows appends to continue after rotation (new file created fresh)', () => {
+    writeFileSync(filePath, 'old-content-that-is-rotated');
+    rotateIfNeeded(filePath, 1);
+    expect(existsSync(filePath)).toBe(false);
+
+    // Mimic the production call shape: rotateIfNeeded → appendFileSync.
+    const nextLine = JSON.stringify({ taskId: 't1', violatingPaths: ['foo'] }) + '\n';
+    appendFileSync(filePath, nextLine);
+
+    expect(readFileSync(filePath, 'utf8')).toBe(nextLine);
+    expect(readFileSync(filePath + '.1', 'utf8')).toBe('old-content-that-is-rotated');
+
+    // Another append accumulates into the same fresh file.
+    const line2 = JSON.stringify({ taskId: 't2' }) + '\n';
+    appendFileSync(filePath, line2);
+    expect(readFileSync(filePath, 'utf8')).toBe(nextLine + line2);
+  });
+
+  it('exposes a 5MB default limit constant', () => {
+    expect(MAX_BOUNDARY_ESCAPE_BYTES).toBe(5 * 1024 * 1024);
+  });
+
+  it('rotates exactly at the threshold (>= maxBytes)', () => {
+    const payload = 'a'.repeat(100);
+    writeFileSync(filePath, payload);
+    expect(statSync(filePath).size).toBe(100);
+    rotateIfNeeded(filePath, 100); // equal → rotate
+    expect(existsSync(filePath)).toBe(false);
+    expect(readFileSync(filePath + '.1', 'utf8')).toBe(payload);
   });
 });
