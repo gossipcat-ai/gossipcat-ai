@@ -180,6 +180,21 @@ if [ -z "$cwd" ]; then
   exit 0
 fi
 
+# Env-based orchestrator exemption (issue #162 problem 1).
+#
+# When the orchestrator shell cd's into a worktree to inspect/commit a
+# subagent's work (which is a legitimate operation), the cwd-glob logic
+# below pins it as if it were the subagent. Set
+# GOSSIPCAT_ORCHESTRATOR_ROLE=1 on the top-level orchestrator session to
+# short-circuit the gate.
+#
+# The harness does not yet set this env automatically — users must opt in.
+# Setup docs should describe the flag. Subagent harnesses must NOT inherit
+# this env; if that ever breaks, the cwd-glob fallback still applies.
+case "$GOSSIPCAT_ORCHESTRATOR_ROLE" in
+  1|true|TRUE|yes|YES) exit 0 ;;
+esac
+
 # Distinguish orchestrator from subagent using $CLAUDE_PROJECT_DIR as anchor.
 # The orchestrator runs with its project dir as cwd; subagents run inside a
 # gossipcat worktree. We only gate subagents.
@@ -268,7 +283,41 @@ ${edit_paths}"
     # absolute-path token `/etc/passwd` would be missed.
     cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     if [ -n "$cmd" ]; then
-      candidates="$(printf '%s\n' "$cmd" \
+      # Quoted-string false-positive mitigation (issue #162 problem 2).
+      #
+      # The raw grep matches any /path token preceded by a shell metachar,
+      # including tokens inside single-quoted arg bodies like `git commit -m
+      # 'fixes /etc/config'` or `gh pr create --body '... see /etc/passwd
+      # ...'`. These never write to those paths, but they falsely trip the
+      # boundary check.
+      #
+      # Mitigation: if argv[0] (the first whitespace-separated token with
+      # any leading path stripped) is NOT a shell wrapper, strip single-
+      # quoted content before extraction. Shell wrappers (`bash -c`,
+      # `sh -c`, `eval`, `zsh -c`, `ksh -c`) may carry the REAL command
+      # inside single quotes, so we leave their bodies untouched.
+      #
+      # Known bypass: `env bash -c 'cp /wt /etc/x'` — argv[0] is `env`, so
+      # we strip the single-quoted body. The subagent prompt (Layer 1) and
+      # the git porcelain audit (Layer 3) still apply. Documented in
+      # docs/specs/2026-04-18-sandbox-hook-quoted-args.md (if/when we ship it).
+      argv0_raw="$(printf '%s' "$cmd" | awk '{print $1}')"
+      argv0_basename="${argv0_raw##*/}"
+      cmd_for_extraction="$cmd"
+      case "$argv0_basename" in
+        bash|sh|zsh|ksh|dash|eval|exec)
+          # Shell wrapper — keep quoted content for extraction.
+          ;;
+        *)
+          # Non-shell — strip balanced single-quoted spans. POSIX sed, no
+          # state. Caveats: ANSI-C `$'...'` quoting and `'\''` escaped
+          # apostrophe edges leak partial content; these are narrow cases
+          # and the downstream grep still catches any absolute-path token
+          # that survives the strip.
+          cmd_for_extraction="$(printf '%s' "$cmd" | sed "s/'[^']*'//g")"
+          ;;
+      esac
+      candidates="$(printf '%s\n' "$cmd_for_extraction" \
         | grep -oE '(^|[[:space:]=><;\|(){},&`])/[^[:space:]"'"'"'`;\|><(){},&]+' 2>/dev/null \
         | sed -E -e 's/^[[:space:]=><;\|(){},&`]//')"
     fi

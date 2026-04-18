@@ -615,6 +615,87 @@ runIfJq('worktree-sandbox.sh', () => {
     expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain('/fake/project/src/foo.ts');
   });
+
+  // Issue #162 problem 1: GOSSIPCAT_ORCHESTRATOR_ROLE env exemption.
+  it('[orch-env] GOSSIPCAT_ORCHESTRATOR_ROLE=1 allows Write to any path from worktree cwd', () => {
+    const { stdout, status } = runHook(
+      {
+        tool_name: 'Write',
+        tool_input: { file_path: '/Users/someone/outside.txt' },
+        cwd: '/fake/project/.claude/worktrees/agent-abc',
+      },
+      { GOSSIPCAT_ORCHESTRATOR_ROLE: '1', CLAUDE_PROJECT_DIR: '/fake/project' },
+    );
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('[orch-env] GOSSIPCAT_ORCHESTRATOR_ROLE=true allows Bash with external path from worktree cwd', () => {
+    const { stdout, status } = runHook(
+      {
+        tool_name: 'Bash',
+        tool_input: { command: 'cp /fake/project/src/foo.ts /tmp/somewhere-else' },
+        cwd: '/fake/project/.claude/worktrees/agent-abc',
+      },
+      { GOSSIPCAT_ORCHESTRATOR_ROLE: 'true' },
+    );
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  // Issue #162 problem 2 / #161: quoted-string false-positive mitigation.
+  it('[quotes] allows git commit -m with quoted body containing absolute path', () => {
+    const { stdout, status } = runHook({
+      tool_name: 'Bash',
+      tool_input: { command: "git commit -m 'fixes /etc/config reference'" },
+      cwd: '/fake/project/.claude/worktrees/agent-abc',
+    }, { CLAUDE_PROJECT_DIR: '/fake/project' });
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('[quotes] allows gh pr edit --body with quoted body containing absolute path', () => {
+    const { stdout, status } = runHook({
+      tool_name: 'Bash',
+      tool_input: { command: "gh pr edit --body 'see /etc/passwd in the discussion'" },
+      cwd: '/fake/project/.claude/worktrees/agent-abc',
+    }, { CLAUDE_PROJECT_DIR: '/fake/project' });
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('[quotes] still denies unquoted cp to external absolute path', () => {
+    const { stdout, status } = runHook({
+      tool_name: 'Bash',
+      tool_input: { command: 'cp /fake/project/.claude/worktrees/agent-abc/src/foo.ts /etc/passwd' },
+      cwd: '/fake/project/.claude/worktrees/agent-abc',
+    }, { CLAUDE_PROJECT_DIR: '/fake/project' });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+
+  it('[quotes] bash -c keeps quoted body for extraction — deny unchanged', () => {
+    const { stdout, status } = runHook({
+      tool_name: 'Bash',
+      tool_input: { command: "bash -c 'cp /fake/project/.claude/worktrees/agent-abc/src/foo.ts /etc/passwd'" },
+      cwd: '/fake/project/.claude/worktrees/agent-abc',
+    }, { CLAUDE_PROJECT_DIR: '/fake/project' });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+
+  it('[quotes] sh -c absolute path also keeps quoted body — deny unchanged', () => {
+    const { stdout, status } = runHook({
+      tool_name: 'Bash',
+      tool_input: { command: "/bin/sh -c 'cp /fake/project/.claude/worktrees/agent-abc/x /etc/shadow'" },
+      cwd: '/fake/project/.claude/worktrees/agent-abc',
+    }, { CLAUDE_PROJECT_DIR: '/fake/project' });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+  });
 });
 
 // Keep unused-import lint happy — writeFileSync, mkdirSync imported for
