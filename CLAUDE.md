@@ -37,6 +37,13 @@ what's running. Use a code block with this format:
 This is important — relay agents run invisibly without terminal indicators. The user needs
 to see what was dispatched and track task IDs for progress checks.
 
+**Watching signals land live:** Between a `gossip_dispatch` and its matching
+`gossip_collect`, you can call `gossip_watch(cursor)` to see signals as agents record
+them instead of waiting for synthesis. Useful for catching `finding_dropped_format`
+pipeline events mid-round. It's a deferred MCP tool — first use needs
+`ToolSearch(query: "select:mcp__gossipcat__gossip_watch")`, then it's callable freely.
+Pass the returned `next_cursor` on subsequent calls.
+
 **After consensus:** Verify ALL UNVERIFIED findings against the code before presenting
 results. UNVERIFIED means the cross-reviewer couldn't check — you can and must. Do not
 show raw consensus results with unexamined UNVERIFIED findings.

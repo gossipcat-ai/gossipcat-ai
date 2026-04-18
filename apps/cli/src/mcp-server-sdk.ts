@@ -1600,6 +1600,7 @@ server.tool(
         '  "Security audit the payment handler"',
         '  "Research how X works before I touch it"',
         '  "Show me agent scores"',
+        '  "Watch signals live" — gossip_watch(cursor) between dispatches',
         '─────────────────────────────────',
       ].join('\n'));
     } else {
