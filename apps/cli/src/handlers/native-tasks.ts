@@ -326,6 +326,14 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // Release scope if this native task held one
   try { ctx.mainAgent.scopeTracker.release(task_id); } catch { /* best-effort — no scope registered is fine */ }
 
+  // Bug f13: cleanup worktree on native error — mirrors dispatch-pipeline.ts:473-475.
+  // Native worktrees use Claude Code's Agent(isolation:"worktree") so there's no
+  // worktreePath in NativeTaskInfo, but WorktreeManager.cleanup(taskId) is safe to call
+  // with an undefined path — it will prune by taskId from the orphan list.
+  if (error && taskInfo.writeMode === 'worktree') {
+    try { ctx.mainAgent.getWorktreeManager()?.cleanup(task_id, undefined as any).catch(() => {}); } catch { /* best-effort */ }
+  }
+
   // Run the same post-collect pipeline as custom agents:
   // 1. Memory write  2. Knowledge extraction  3. Gossip  4. Compaction
   const agentId = taskInfo.agentId;
@@ -338,7 +346,8 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
 
   // 0. Record in TaskGraph (makes native tasks visible to CLI + Supabase sync)
   // Pass null duration through — recordNativeTaskCompleted handles undefined/null via ?? -1
-  try { ctx.mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined, elapsed ?? undefined); } catch { /* best-effort */ }
+  // Bug f8: thread memoryQueryCalled so TaskGraph records compliance auditing data.
+  try { ctx.mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined, elapsed ?? undefined, taskInfo.memoryQueryCalled); } catch { /* best-effort */ }
 
   // 0a. Auto-record impl signal for write-mode tasks (gate on error param only — string heuristics are unreliable)
   if (taskInfo.writeMode && !taskInfo.utilityType && agentId !== '_utility') {
@@ -357,49 +366,22 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     } catch { /* best-effort */ }
   }
 
-  // 0c. Emit task_completed + task_tool_turns + format_compliance meta signals.
-  // Closes the metrics-asymmetry gap haiku flagged on PR #61: relay dispatches
-  // emit all three at dispatch-pipeline.ts:395-399 but the native completion
-  // path only had format_compliance. Without task_completed (durationMs) and
-  // task_tool_turns (toolCalls), native agents are invisible in dispatcher
-  // performance analytics. Native tool-call count isn't observable from
-  // gossipcat (the Agent() tool runs out-of-process), so we emit 0 — the
-  // signal still slots into the time series even if its value is unknown.
+  // 0c. Emit task_completed + format_compliance + (optional) finding_dropped_format signals.
+  // Uses shared emitCompletionSignals helper — closes the native/relay signal-pipeline
+  // drift (consensus 23687227-1462428b). Bugs addressed: f1 (finding_dropped_format),
+  // f4 (diagnostic_codes in format_compliance), f11 (task_completed always emitted).
+  // F16 preserved: toolCalls left undefined so task_tool_turns is never emitted for
+  // native agents (tool-use is inside Claude Code's subagent framework, unobservable).
   if (!error && !taskInfo.utilityType && agentId !== '_utility') {
-    try {
-      const { PerformanceWriter, detectFormatCompliance } = await import('@gossip/orchestrator');
-      const compliance = detectFormatCompliance(result ?? '');
-      const metaWriter = new PerformanceWriter(process.cwd());
-      const now = new Date().toISOString();
-      // F16: skip task_tool_turns for native agents — tool-use happens inside
-      // Claude Code's subagent framework and isn't observable from the relay.
-      // Emitting value: 0 would make downstream scorers treat native agents
-      // as never-using-tools and fire spurious skill-gap alerts. task_completed
-      // and format_compliance stay (both ARE observable from our side).
-      metaWriter.appendSignals([
-        // Skip task_completed signal when duration is null — emitting value: null
-        // would produce misleading analytics (treated as 0ms by downstream scorers).
-        ...(elapsed !== null ? [{ type: 'meta' as const, signal: 'task_completed', agentId, taskId: task_id, value: elapsed, timestamp: now } as any] : []),
-        {
-          type: 'meta' as const,
-          signal: 'format_compliance',
-          agentId,
-          taskId: task_id,
-          value: compliance.formatCompliant ? 1 : 0,
-          metadata: {
-            findingCount: compliance.findingCount,
-            citationCount: compliance.citationCount,
-            tags_total: compliance.tags_total,
-            tags_accepted: compliance.tags_accepted,
-            tags_dropped_unknown_type: compliance.tags_dropped_unknown_type,
-            tags_dropped_short_content: compliance.tags_dropped_short_content,
-          },
-          timestamp: now,
-        } as any,
-      ]);
-    } catch (err) {
-      process.stderr.write(`[gossipcat] native meta signals: ${(err as Error).message}\n`);
-    }
+    const { emitCompletionSignals } = await import('@gossip/orchestrator');
+    emitCompletionSignals(process.cwd(), {
+      agentId,
+      taskId: task_id,
+      result: result ?? '',
+      elapsedMs: elapsed,
+      // toolCalls intentionally omitted — F16: native tool-call count is unobservable
+      memoryQueryCalled: taskInfo.memoryQueryCalled,
+    });
   }
 
   // 0b. Record plan step result so subsequent steps get chain context
@@ -414,7 +396,14 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       const memWriter = new MemoryWriter(process.cwd());
       // Wire LLM for cognitive summaries — same as relay agents get
       try { if (ctx.mainAgent.getLLM()) memWriter.setSummaryLlm(ctx.mainAgent.getLLM()); } catch {}
-      const scores = defaultImportanceScores();
+      // Bug f9: mirror dispatch-pipeline.ts:1065-1079 — use perfReader accuracy
+      // for importance scores so high-accuracy agents get higher-relevance memory.
+      const agentScore = ctx.mainAgent.getPerfReader()?.getAgentScore(agentId);
+      const scores = agentScore ? {
+        relevance: (result && result.length > 200) ? 4 : 3,
+        accuracy: Math.max(1, Math.round(agentScore.accuracy * 5)),
+        uniqueness: Math.max(1, Math.round(agentScore.uniqueness * 5)),
+      } : defaultImportanceScores();
       await memWriter.writeTaskEntry(agentId, {
         taskId: task_id,
         task: taskInfo.task,
@@ -424,8 +413,12 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
 
       // 2. Extract knowledge from result (files, tech, decisions)
       if (result) {
+        // Bug f9: pass agentAccuracy (reliability) so writeKnowledgeFromResult
+        // can weight knowledge extraction — mirrors dispatch-pipeline.ts:1076-1079.
+        const agentAccuracy = agentScore?.reliability;
         await memWriter.writeKnowledgeFromResult(agentId, {
           taskId: task_id, task: taskInfo.task, result,
+          ...(agentAccuracy !== undefined ? { agentAccuracy } : {}),
         });
       }
 

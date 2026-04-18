@@ -272,6 +272,8 @@ export interface TaskCompletedEvent {
   duration: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** Whether the agent called memory_query during this task (compliance auditing). */
+  memoryQueryCalled?: boolean;
   timestamp: string;
 }
 
@@ -282,6 +284,8 @@ export interface TaskFailedEvent {
   duration: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** Whether the agent called memory_query before failing (compliance auditing). */
+  memoryQueryCalled?: boolean;
   timestamp: string;
 }
 

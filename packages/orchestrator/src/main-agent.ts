@@ -259,6 +259,7 @@ export class MainAgent {
   getSkillIndex(): any { return this.pipeline.getSkillIndex(); }
   getLlm() { return this.pipeline.getLlm(); }
   getAgentConfig(agentId: string) { return this.pipeline.getAgentConfig(agentId); }
+  getPerfReader() { return this.pipeline.getPerfReader(); }
 
   /** Health check for active tasks — diagnostics for "is it working?" */
   getActiveTasksHealth() { return this.pipeline.getActiveTasksHealth(); }
@@ -302,10 +303,15 @@ export class MainAgent {
   }
 
   /** Record a native agent task completion in the TaskGraph */
-  recordNativeTaskCompleted(taskId: string, result: string, error?: string, durationMs?: number): void {
+  recordNativeTaskCompleted(taskId: string, result: string, error?: string, durationMs?: number, memoryQueryCalled?: boolean): void {
     try {
-      this.pipeline.recordNativeTaskCompleted(taskId, result, error, durationMs);
+      this.pipeline.recordNativeTaskCompleted(taskId, result, error, durationMs, memoryQueryCalled);
     } catch { /* best-effort */ }
+  }
+
+  /** Get the WorktreeManager from the dispatch pipeline (for native worktree cleanup). */
+  getWorktreeManager(): import('./worktree-manager').WorktreeManager {
+    return (this.pipeline as any).worktreeManager;
   }
 
   /** Get current orchestrator model info */
