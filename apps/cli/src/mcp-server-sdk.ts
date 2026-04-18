@@ -3681,6 +3681,15 @@ server.tool(
     if (isReservedAgentId(agent_id)) {
       return { content: [{ type: 'text' as const, text: `Error: agent_id "${agent_id}" is reserved (underscore-prefixed ids other than "_project" are not allowed)` }] };
     }
+    // Option 1 attribution (project_memory_query_observability.md): native
+    // subagents reach gossip_remember through the MCP server, not the relay
+    // router, so the router-level hook can't see them. Mirror the same
+    // (agent_id, ts) record into the buffer here so native-tasks.handleRelay
+    // can attribute the call back to the parent dispatch task.
+    try {
+      const { recordMemoryQueryAttribution } = await import('@gossip/relay');
+      recordMemoryQueryAttribution(agent_id, 'gossip_remember');
+    } catch { /* best-effort — attribution never blocks the tool */ }
     const { MemorySearcher } = await import('@gossip/orchestrator');
     const { wrapMemoryEnvelope, recordMemoryQuery } = await import('@gossip/tools');
     const projectRoot = process.cwd();

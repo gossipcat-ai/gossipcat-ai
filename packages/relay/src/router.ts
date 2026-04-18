@@ -6,12 +6,14 @@
  */
 
 import { randomUUID } from 'crypto';
+import { decode as msgpackDecode } from '@msgpack/msgpack';
 import { MessageEnvelope, MessageType } from '@gossip/types';
 import { ConnectionManager } from './connection-manager';
 import { AgentConnection } from './agent-connection';
 import { ChannelManager } from './channels';
 import { SubscriptionManager } from './subscription-manager';
 import { PresenceTracker } from './presence';
+import { recordMemoryQueryAttribution, MEMORY_QUERY_TOOLS } from './memory-query-buffer';
 
 export interface RouterMetrics {
   messagesRouted: number;
@@ -53,6 +55,7 @@ export class MessageRouter {
           this.routeChannel(envelope);
           break;
         case MessageType.RPC_REQUEST:
+          this.attributeMemoryQuery(envelope);
           this.routeToAgent(envelope);
           break;
         case MessageType.RPC_RESPONSE:
@@ -93,6 +96,28 @@ export class MessageRouter {
         );
       } catch { /* ignore */ }
     }
+  }
+
+  /**
+   * Inspect an RPC_REQUEST body for a memory-query tool call and record
+   * (agent_id, ts) into the memory-query buffer. Best-effort: any decode
+   * failure is swallowed — message routing must not be blocked by
+   * attribution bookkeeping.
+   *
+   * RPC body wire format (worker-agent.ts:439): msgpack({ tool, args }).
+   * Only memory_query / gossip_remember are recorded; everything else
+   * short-circuits cheaply via MEMORY_QUERY_TOOLS lookup.
+   */
+  private attributeMemoryQuery(envelope: MessageEnvelope): void {
+    try {
+      if (!envelope.sid || !envelope.body || envelope.body.length === 0) return;
+      const decoded = msgpackDecode(envelope.body) as { tool?: unknown } | null;
+      if (!decoded || typeof decoded !== 'object') return;
+      const tool = decoded.tool;
+      if (typeof tool !== 'string') return;
+      if (!MEMORY_QUERY_TOOLS.has(tool)) return;
+      recordMemoryQueryAttribution(envelope.sid, tool, envelope.ts);
+    } catch { /* best-effort — never block routing */ }
   }
 
   private routeDirect(envelope: MessageEnvelope): void {
