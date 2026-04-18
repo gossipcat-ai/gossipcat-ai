@@ -465,6 +465,15 @@ export class DispatchPipeline {
                 error: event.payload.error,
                 timestamp: new Date().toISOString(),
               }) + '\n');
+              // Emit task_completed with error:true so downstream scorers get failure-rate
+              // and latency data from relay tasks (consensus bac850a6-eeb048e3, f2).
+              emitCompletionSignals(this.projectRoot, {
+                agentId: entry.agentId,
+                taskId: entry.id,
+                result: '',
+                elapsedMs,
+                error: true,
+              });
             } catch { /* best-effort */ }
             throw new Error(event.payload.error);
           default:

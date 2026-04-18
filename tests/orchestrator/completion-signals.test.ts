@@ -153,4 +153,34 @@ More content here to ensure we exceed the minimum length threshold for rejection
       emitCompletionSignals('/nonexistent-path-that-cannot-exist/gossip', BASE_INPUT)
     ).not.toThrow();
   });
+
+  test('memoryQueryCalled:false explicitly serializes as false (not undefined) in task_tool_turns metadata', () => {
+    emitCompletionSignals(testDir, { ...BASE_INPUT, toolCalls: 2, memoryQueryCalled: false });
+    const sigs = readSignals();
+    const toolTurns = sigs.find(s => s.signal === 'task_tool_turns');
+    expect(toolTurns).toBeDefined();
+    expect(toolTurns.metadata).toBeDefined();
+    // Must be false, not undefined — explicit false means "agent had tools but did not query memory"
+    expect(toolTurns.metadata.memoryQueryCalled).toBe(false);
+  });
+
+  test('error:true path — task_completed has metadata.error:true', () => {
+    emitCompletionSignals(testDir, { ...BASE_INPUT, elapsedMs: 3000, error: true });
+    const sigs = readSignals();
+    const completed = sigs.find(s => s.signal === 'task_completed');
+    expect(completed).toBeDefined();
+    expect(completed.value).toBe(3000);
+    expect(completed.metadata?.error).toBe(true);
+    expect(completed.metadata?.estimated).toBeUndefined();
+  });
+
+  test('error:true + elapsedMs:null — task_completed has both estimated:true AND error:true', () => {
+    emitCompletionSignals(testDir, { ...BASE_INPUT, elapsedMs: null, error: true });
+    const sigs = readSignals();
+    const completed = sigs.find(s => s.signal === 'task_completed');
+    expect(completed).toBeDefined();
+    expect(completed.value).toBe(0);
+    expect(completed.metadata?.estimated).toBe(true);
+    expect(completed.metadata?.error).toBe(true);
+  });
 });

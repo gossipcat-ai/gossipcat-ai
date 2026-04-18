@@ -45,6 +45,12 @@ export interface CompletionSignalInput {
    * NativeTaskInfo.memoryQueryCalled (native, after f8 thread).
    */
   memoryQueryCalled?: boolean;
+  /**
+   * Whether this signal is emitted on the error path (task failed).
+   * When true, adds error:true to task_completed metadata so downstream
+   * scorers can compute per-agent failure rate and latency separately.
+   */
+  error?: boolean;
 }
 
 /**
@@ -61,7 +67,7 @@ export interface CompletionSignalInput {
  */
 export function emitCompletionSignals(projectRoot: string, input: CompletionSignalInput): void {
   try {
-    const { agentId, taskId, result, elapsedMs, toolCalls, memoryQueryCalled } = input;
+    const { agentId, taskId, result, elapsedMs, toolCalls, memoryQueryCalled, error } = input;
     const now = new Date().toISOString();
     const compliance = detectFormatCompliance(result ?? '');
 
@@ -71,15 +77,20 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
     // Bug f11: previous native path skipped emission when elapsed === null.
     // Fix: always emit — use value 0 + estimated:true when null so the
     // event lands in the time-series even if its duration isn't meaningful.
+    // error:true is added when the task failed so downstream scorers can
+    // compute per-agent failure rate and latency from the time-series.
     {
       const durationValue = elapsedMs !== null ? elapsedMs : 0;
+      const metadataEntries: Record<string, unknown> = {};
+      if (elapsedMs === null) metadataEntries.estimated = true;
+      if (error) metadataEntries.error = true;
       const meta: MetaSignal = {
         type: 'meta',
         signal: 'task_completed',
         agentId,
         taskId,
         value: durationValue,
-        ...(elapsedMs === null ? { metadata: { estimated: true } } : {}),
+        ...(Object.keys(metadataEntries).length > 0 ? { metadata: metadataEntries } : {}),
         timestamp: now,
       };
       signals.push(meta);

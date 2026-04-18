@@ -326,12 +326,14 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // Release scope if this native task held one
   try { ctx.mainAgent.scopeTracker.release(task_id); } catch { /* best-effort — no scope registered is fine */ }
 
-  // Bug f13: cleanup worktree on native error — mirrors dispatch-pipeline.ts:473-475.
+  // Bug f13: prune orphaned worktrees on native error — mirrors dispatch-pipeline.ts:473-475.
   // Native worktrees use Claude Code's Agent(isolation:"worktree") so there's no
-  // worktreePath in NativeTaskInfo, but WorktreeManager.cleanup(taskId) is safe to call
-  // with an undefined path — it will prune by taskId from the orphan list.
+  // worktreePath in NativeTaskInfo. pruneOrphans() iterates all gossip-wt-* worktrees
+  // and removes any whose task IDs no longer have active entries — broader than a
+  // single-task cleanup but actually works (cleanup(taskId, undefined) would run
+  // `git worktree remove undefined --force` and silently fail).
   if (error && taskInfo.writeMode === 'worktree') {
-    try { ctx.mainAgent.getWorktreeManager()?.cleanup(task_id, undefined as any).catch(() => {}); } catch { /* best-effort */ }
+    try { ctx.mainAgent.getWorktreeManager()?.pruneOrphans().catch(() => {}); } catch { /* best-effort */ }
   }
 
   // Run the same post-collect pipeline as custom agents:
@@ -372,7 +374,9 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // f4 (diagnostic_codes in format_compliance), f11 (task_completed always emitted).
   // F16 preserved: toolCalls left undefined so task_tool_turns is never emitted for
   // native agents (tool-use is inside Claude Code's subagent framework, unobservable).
-  if (!error && !taskInfo.utilityType && agentId !== '_utility') {
+  // Error path now included (skip only utility tasks) so downstream scorers get
+  // task_completed with error:true for failed tasks (consensus bac850a6-eeb048e3, f2).
+  if (!taskInfo.utilityType && agentId !== '_utility') {
     const { emitCompletionSignals } = await import('@gossip/orchestrator');
     emitCompletionSignals(process.cwd(), {
       agentId,
@@ -381,6 +385,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       elapsedMs: elapsed,
       // toolCalls intentionally omitted — F16: native tool-call count is unobservable
       memoryQueryCalled: taskInfo.memoryQueryCalled,
+      error: error ? true : undefined,
     });
   }
 
