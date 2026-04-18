@@ -117,7 +117,7 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
                   setDrawerOpen(true);
                 }
               }}
-              className={`h-4 w-1.5 rounded-sm transition-opacity hover:opacity-80 ${
+              className={`h-4 min-w-[4px] max-w-[12px] flex-1 rounded-sm transition-opacity hover:opacity-80 ${
                 SIGNAL_COLORS[s.signal] || 'bg-muted'
               } ${clickable ? 'cursor-pointer' : 'cursor-default'}`}
               title={`${SIGNAL_LABELS[s.signal] || s.signal} — ${timeAgo(s.timestamp)}${clickable ? ' (click for detail)' : ''}`}
@@ -132,7 +132,8 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
         {[
           { color: 'bg-confirmed', label: 'Confirmed' },
           { color: 'bg-disputed', label: 'Disputed' },
-          { color: 'bg-unique', label: 'Unique' },
+          { color: 'bg-unique', label: 'Unique (confirmed)' },
+          { color: 'bg-unique/50', label: 'Unique (unconfirmed)' },
           { color: 'bg-unverified', label: 'Unverified' },
         ].map((l) => (
           <div key={l.label} className="flex items-center gap-1">
