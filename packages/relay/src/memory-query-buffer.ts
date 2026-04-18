@@ -74,6 +74,22 @@ export function recordMemoryQueryAttribution(agent_id: string, tool_name: string
 }
 
 /**
+ * Drop agent keys whose entries have all expired. Callers don't need this
+ * during normal operation (prune-on-insert keeps active agents tidy) but
+ * it prevents the outer Map from accumulating dead keys for agents that
+ * disconnect and never return. Call from a periodic sweep if desired.
+ */
+export function sweepExpiredAgents(nowMs: number = Date.now()): void {
+  const cutoff = nowMs - RETENTION_MS;
+  for (const [agent_id, entries] of buffer) {
+    while (entries.length > 0 && entries[0].ts < cutoff) {
+      entries.shift();
+    }
+    if (entries.length === 0) buffer.delete(agent_id);
+  }
+}
+
+/**
  * Did `agent_id` invoke any memory-query tool in the half-open window
  * [sinceMs, untilMs)? Returns false for unknown agents.
  */

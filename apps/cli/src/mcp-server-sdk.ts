@@ -3687,6 +3687,8 @@ server.tool(
     // (agent_id, ts) record into the buffer here so native-tasks.handleRelay
     // can attribute the call back to the parent dispatch task.
     try {
+      // `@gossip/relay` was already loaded by boot() → getModules() above,
+      // so this resolves from the module cache with no first-call latency.
       const { recordMemoryQueryAttribution } = await import('@gossip/relay');
       recordMemoryQueryAttribution(agent_id, 'gossip_remember');
     } catch { /* best-effort — attribution never blocks the tool */ }

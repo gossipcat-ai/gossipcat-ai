@@ -6,6 +6,7 @@ import {
   recordMemoryQueryAttribution,
   hasMemoryQuery,
   MEMORY_QUERY_TOOLS,
+  sweepExpiredAgents,
   _resetMemoryQueryBuffer,
 } from '@gossip/relay/memory-query-buffer';
 
@@ -68,5 +69,57 @@ describe('memory-query-buffer', () => {
     expect(MEMORY_QUERY_TOOLS.has('memory_query')).toBe(true);
     expect(MEMORY_QUERY_TOOLS.has('gossip_remember')).toBe(true);
     expect(MEMORY_QUERY_TOOLS.has('file_read')).toBe(false);
+  });
+
+  it('isolates agents under interleaved inserts', () => {
+    const t0 = Date.now();
+    for (let i = 0; i < 10; i++) {
+      recordMemoryQueryAttribution('agent-a', 'memory_query', t0 + i * 2);
+      recordMemoryQueryAttribution('agent-b', 'gossip_remember', t0 + i * 2 + 1);
+    }
+    // Both agents see their own hits.
+    expect(hasMemoryQuery('agent-a', t0, t0 + 1000)).toBe(true);
+    expect(hasMemoryQuery('agent-b', t0, t0 + 1000)).toBe(true);
+    // Narrow window to a slot only agent-a wrote (even offsets): hits agent-a, not agent-b.
+    expect(hasMemoryQuery('agent-a', t0, t0 + 1)).toBe(true);
+    expect(hasMemoryQuery('agent-b', t0, t0 + 1)).toBe(false);
+  });
+
+  it('hasMemoryQuery exclusive upper bound — entry at untilMs is excluded', () => {
+    const at = Date.now();
+    recordMemoryQueryAttribution('agent-edge', 'memory_query', at);
+    // Query with untilMs === at: half-open [at, at) excludes the exact point.
+    expect(hasMemoryQuery('agent-edge', at - 1, at)).toBe(false);
+    // Query with untilMs === at+1 includes it.
+    expect(hasMemoryQuery('agent-edge', at - 1, at + 1)).toBe(true);
+  });
+
+  it('native-tasks integration pattern: record during task window, observe on completion', () => {
+    // Simulates the shape of apps/cli/src/handlers/native-tasks.ts:handleNativeRelay.
+    // Agent dispatch starts at startedAt; mid-task the agent calls gossip_remember
+    // which fires recordMemoryQueryAttribution; on completion the handler checks the buffer
+    // using the same [startedAt, now+2000) window.
+    const startedAt = Date.now();
+    recordMemoryQueryAttribution('opus-implementer', 'gossip_remember', startedAt + 50);
+    const observed = hasMemoryQuery('opus-implementer', startedAt, Date.now() + 2000);
+    expect(observed).toBe(true);
+
+    // Sibling agent never invoked the tool — window returns false cleanly.
+    expect(hasMemoryQuery('sonnet-reviewer', startedAt, Date.now() + 2000)).toBe(false);
+
+    // An earlier task's memoryQueryCalled does not bleed into a fresh task's window.
+    const laterTaskStart = Date.now() + 3000;
+    expect(hasMemoryQuery('opus-implementer', laterTaskStart, laterTaskStart + 2000)).toBe(false);
+  });
+
+  it('sweepExpiredAgents drops dead keys from the outer Map', () => {
+    const longAgo = Date.now() - 10 * 60 * 1000; // older than 5-min retention
+    recordMemoryQueryAttribution('agent-gone', 'memory_query', longAgo);
+    // Before sweep: even though the single entry is older than retention, the
+    // agent key exists in the Map (prune-on-insert only fires on subsequent writes).
+    expect(hasMemoryQuery('agent-gone', longAgo - 1, longAgo + 1)).toBe(true);
+    sweepExpiredAgents(Date.now());
+    // After sweep the key is gone — query returns false because entries is undefined.
+    expect(hasMemoryQuery('agent-gone', longAgo - 1, longAgo + 1)).toBe(false);
   });
 });

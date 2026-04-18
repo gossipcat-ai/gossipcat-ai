@@ -116,7 +116,11 @@ export class MessageRouter {
       const tool = decoded.tool;
       if (typeof tool !== 'string') return;
       if (!MEMORY_QUERY_TOOLS.has(tool)) return;
-      recordMemoryQueryAttribution(envelope.sid, tool, envelope.ts);
+      // Server-authoritative timestamp. envelope.ts is client-stamped and
+      // trusted only for ordering; for attribution windows we use receive
+      // time so a stale/drifting client clock can't push entries outside
+      // the [taskStartedAt, now+slack) query window.
+      recordMemoryQueryAttribution(envelope.sid, tool);
     } catch { /* best-effort — never block routing */ }
   }
 
