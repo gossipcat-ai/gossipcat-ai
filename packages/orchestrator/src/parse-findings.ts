@@ -253,11 +253,12 @@ export function parseAgentFindingsStrict(
     const attrs = match[1];
     let content = match[2].trim();
 
-    if (!content || content.length < MIN_FINDING_CONTENT) {
-      droppedShortContent++;
-      continue;
-    }
-
+    // Type-enum validation MUST precede short-content validation. An invalid
+    // type is a stricter contract violation than short content — if both apply,
+    // the drop must be attributed to `tags_dropped_unknown_type` (or
+    // `tags_dropped_missing_type`), not `tags_dropped_short_content`. Dashboard
+    // drift detection uses these buckets to distinguish agent-prompt schema
+    // regressions from mere verbosity issues; misattribution masks regressions.
     const typeMatch = attrs.match(TYPE_ATTR_PATTERN);
     if (!typeMatch) {
       droppedMissingType++;
@@ -275,6 +276,11 @@ export function parseAgentFindingsStrict(
           // Caller's logger should not break parsing.
         }
       }
+      continue;
+    }
+
+    if (!content || content.length < MIN_FINDING_CONTENT) {
+      droppedShortContent++;
       continue;
     }
 
