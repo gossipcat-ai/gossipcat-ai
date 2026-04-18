@@ -2076,7 +2076,13 @@ server.tool(
     }
     lines.push(`\nMode: ${mode} | Config: .gossip/config.json (${Object.keys(config.agents).length} agents total)`);
     lines.push(`Rules: ${env.rulesFile} (${env.host} will read this on next session)`);
-    if (hookSummary) lines.push(hookSummary);
+    if (hookSummary) {
+      lines.push(hookSummary);
+      lines.push('  ⚠ If the orchestrator cd\'s into a worktree to inspect/commit subagent work,');
+      lines.push('    the hook will gate it as a subagent. Exempt the orchestrator shell with:');
+      lines.push('      export GOSSIPCAT_ORCHESTRATOR_ROLE=1   # add to ~/.zshrc or ~/.bashrc');
+      lines.push('    Then relaunch Claude Code. See issue #162 for rationale.');
+    }
     lines.push('Agents will connect to relay on first gossip_dispatch() call.');
     if (nativeCreated.length > 0) {
       lines.push(`\nTip: Native agents may prompt for file write permissions. To auto-allow, add to .claude/settings.local.json:`);

@@ -373,7 +373,7 @@ while IFS= read -r path_arg; do
   fi
 
   if ! path_is_inside "$cwd_norm" "$path_norm"; then
-    emit_deny "BOUNDARY ESCAPE: ${tool_name} targets '${path_arg}' (normalized: '${path_norm}') outside worktree cwd '${cwd_norm}'. Use a relative path (./...) inside the worktree."
+    emit_deny "BOUNDARY ESCAPE: ${tool_name} targets '${path_arg}' (normalized: '${path_norm}') outside worktree cwd '${cwd_norm}'. Use a relative path (./...) inside the worktree. If you are the orchestrator (not a subagent) and cd'd into a worktree, exempt this shell with: export GOSSIPCAT_ORCHESTRATOR_ROLE=1 and relaunch Claude Code (issue #162)."
   fi
 done <<EOF
 $candidates

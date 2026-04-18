@@ -686,6 +686,19 @@ runIfJq('worktree-sandbox.sh', () => {
     expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
   });
 
+  it('[hints] BOUNDARY ESCAPE deny reason mentions GOSSIPCAT_ORCHESTRATOR_ROLE remediation', () => {
+    const { stdout } = runHook({
+      tool_name: 'Write',
+      tool_input: { file_path: '/Users/someone/secrets.txt' },
+      cwd: '/private/tmp/gossip-wt-abc123',
+    });
+    const parsed = JSON.parse(stdout);
+    const reason = parsed.hookSpecificOutput.permissionDecisionReason;
+    expect(reason).toContain('BOUNDARY ESCAPE');
+    expect(reason).toContain('GOSSIPCAT_ORCHESTRATOR_ROLE=1');
+    expect(reason).toContain('issue #162');
+  });
+
   it('[quotes] sh -c absolute path also keeps quoted body — deny unchanged', () => {
     const { stdout, status } = runHook({
       tool_name: 'Bash',
