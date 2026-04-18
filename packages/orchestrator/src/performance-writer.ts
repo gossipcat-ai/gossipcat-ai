@@ -1,7 +1,28 @@
 // packages/orchestrator/src/performance-writer.ts
-import { appendFileSync, mkdirSync, existsSync } from 'fs';
+import { appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
 import { PerformanceSignal } from './consensus-types';
+
+/**
+ * Max bytes before single-slot rotation of telemetry JSONL files.
+ * Matches the convention in apps/cli/src/sandbox.ts (boundary-escapes.jsonl).
+ */
+export const MAX_TELEMETRY_BYTES = 5 * 1024 * 1024; // 5MB
+
+/**
+ * Best-effort single-slot size rotation. If `filePath` is at least `maxBytes`,
+ * rename it to `filePath + '.1'` (overwriting any pre-existing `.1`). No
+ * `.2`/`.3`, no compression. Silent on any error.
+ */
+export function rotateJsonlIfNeeded(filePath: string, maxBytes: number = MAX_TELEMETRY_BYTES): void {
+  try {
+    const st = statSync(filePath);
+    if (st.size < maxBytes) return;
+    renameSync(filePath, filePath + '.1');
+  } catch {
+    /* file missing or unrenamable — caller's next append re-creates the primary slot */
+  }
+}
 
 const VALID_CONSENSUS_SIGNALS = new Set([
   'agreement', 'disagreement', 'unverified', 'unique_confirmed',
@@ -17,6 +38,12 @@ const VALID_IMPL_SIGNALS = new Set([
 
 const VALID_META_SIGNALS = new Set([
   'task_completed', 'task_tool_turns', 'format_compliance',
+]);
+
+const VALID_PIPELINE_SIGNALS = new Set([
+  'dispatch_started', 'relay_received', 'finding_dropped_format',
+  'synthesis_completed', 'circuit_open_fired', 'skill_injection_skipped',
+  'signal_retracted',
 ]);
 
 /**
@@ -56,10 +83,16 @@ function validateSignal(signal: PerformanceSignal): void {
         throw new Error(`Signal validation failed: unknown meta signal "${signal.signal}"`);
       }
       break;
+    case 'pipeline':
+      if (!VALID_PIPELINE_SIGNALS.has(signal.signal)) {
+        throw new Error(`Signal validation failed: unknown pipeline signal "${signal.signal}"`);
+      }
+      break;
     default:
       throw new Error(`Signal validation failed: unknown type "${(signal as any).type}"`);
   }
 }
+
 
 export class PerformanceWriter {
   private readonly filePath: string;
@@ -72,6 +105,7 @@ export class PerformanceWriter {
 
   appendSignal(signal: PerformanceSignal): void {
     validateSignal(signal);
+    rotateJsonlIfNeeded(this.filePath);
     appendFileSync(this.filePath, JSON.stringify(signal) + '\n');
   }
 
@@ -79,6 +113,7 @@ export class PerformanceWriter {
     if (signals.length === 0) return;
     for (const s of signals) validateSignal(s);
     const data = signals.map(s => JSON.stringify(s)).join('\n') + '\n';
+    rotateJsonlIfNeeded(this.filePath);
     appendFileSync(this.filePath, data);
   }
 

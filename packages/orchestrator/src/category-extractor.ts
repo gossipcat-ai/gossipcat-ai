@@ -16,6 +16,13 @@ const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
   // Kept in sync with DEFAULT_KEYWORDS.citation_grounding in skill-loader.ts —
   // both tables drive contextual activation and must agree.
   citation_grounding: [/\bcite\b/i, /citation/i, /fabricat/i, /hallucin/i, /\bverify\b/i, /does not exist/i],
+  // Phase 1 dev-quality extensions (consensus 09693c51-184246e5). Vocabulary
+  // disjoint from the security buckets above. Word boundaries on log/monitor
+  // to avoid backlog/catalog/dialog/monitor-thread false-positives.
+  observability: [/observability/i, /\blog(ging)?\b/i, /\bmetric/i, /tracing/i, /telemetry/i, /\bmonitor(ing)?\b/i, /dashboard/i, /stderr/i],
+  cli_ergonomics: [/\bcli\b/i, /\bflag\b/i, /help text/i, /error message/i, /\busage\b/i, /\bprompt\b/i, /banner/i, /spinner/i],
+  performance: [/\blatency/i, /slow/i, /performance/i, /\bn\+1\b/i, /uncached/i, /readFileSync/i, /synchronous/i, /hot path/i],
+  testing: [/\btest(s|ing)?\b/i, /coverage/i, /\bmock\b/i, /\bfixture\b/i, /\bunit test/i, /integration test/i, /\be2e\b/i, /test suite/i],
 };
 
 export function extractCategories(findingText: string): string[] {

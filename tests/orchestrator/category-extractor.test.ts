@@ -44,6 +44,37 @@ describe('extractCategories', () => {
     const unique = new Set(cats);
     expect(cats.length).toBe(unique.size);
   });
+
+  // Phase 1 dev-quality extensions
+  test('extracts observability from dashboard/telemetry findings', () => {
+    expect(extractCategories('Dashboard WebSocket broadcasts only log_lines')).toContain('observability');
+    expect(extractCategories('telemetry gap: drop-gate bug hid for weeks')).toContain('observability');
+  });
+
+  test('observability \\blog\\b avoids backlog/catalog/dialog', () => {
+    expect(extractCategories('backlog item stale')).not.toContain('observability');
+    expect(extractCategories('catalog.json is out of date')).not.toContain('observability');
+    expect(extractCategories('dialog box close handler')).not.toContain('observability');
+  });
+
+  test('extracts cli_ergonomics from UX findings', () => {
+    expect(extractCategories('Banner alignment is off; spinner invisible during dispatch')).toContain('cli_ergonomics');
+  });
+
+  test('extracts performance from non-DoS perf findings', () => {
+    expect(extractCategories('readFileSync loads entire jsonl into memory')).toContain('performance');
+    expect(extractCategories('latency in hot path due to uncached lookup')).toContain('performance');
+  });
+
+  test('extracts testing from coverage findings', () => {
+    expect(extractCategories('Native-agent format compliance has zero test coverage')).toContain('testing');
+    expect(extractCategories('test suite missing e2e case for cross-review')).toContain('testing');
+  });
+
+  test('testing \\btest\\b avoids contest/protest/latest', () => {
+    expect(extractCategories('the latest consensus round')).not.toContain('testing');
+    expect(extractCategories('protest against unbounded growth')).not.toContain('testing');
+  });
 });
 
 describe('Post-consensus category extraction integration', () => {

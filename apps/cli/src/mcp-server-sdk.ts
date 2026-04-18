@@ -3940,6 +3940,7 @@ server.tool(
       { name: 'gossip_tools', desc: 'List available tools (this command).' },
       { name: 'gossip_guide', desc: 'Show the gossipcat handbook for humans — invariants, operator playbook, caveats, hallucination patterns, glossary. Read the docs, not LLM context.' },
       { name: 'gossip_progress', desc: 'Show active task progress and consensus phase. No params.' },
+      { name: 'gossip_watch', desc: 'Pull signals recorded since a cursor timestamp. Stateless, cursor-based; max 24h lookback. Use to see consensus signals as they land.' },
       { name: 'gossip_format', desc: 'Return the CONSENSUS_OUTPUT_FORMAT block to paste into ad-hoc Agent() prompts so native subagents emit parseable <agent_finding> tags.' },
       { name: 'gossip_bug_feedback', desc: 'File a GitHub issue on the gossipcat repo from an in-session bug report. Dedupes against open issues.' },
     ];
@@ -4054,6 +4055,28 @@ server.tool(
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
     };
+  },
+);
+
+// ── Tool: gossip_watch — pull signals since a cursor timestamp ───────────
+// Stateless, cursor-based. Orchestrator polls between dispatches to see signals
+// as they land instead of waiting for consensus synthesis. Design: consensus
+// 59e6b6cc-fd9e4d27. Core logic + caps in apps/cli/src/gossip-watch.ts.
+import { filterWatchEvents, WATCH_MAX_EVENTS } from './gossip-watch.js';
+server.tool(
+  'gossip_watch',
+  'Pull signals recorded since a cursor timestamp. Returns {events, next_cursor, count, truncated}. Stateless; pass next_cursor back on subsequent calls. Max 24h lookback, max 500 events per call.',
+  {
+    cursor: z.string().optional().describe('ISO-8601 timestamp. Returns signals with timestamp > cursor. Omit or pass old value to start from 24h ago.'),
+    max_events: z.number().int().positive().max(WATCH_MAX_EVENTS).optional().describe(`Cap events returned (default ${WATCH_MAX_EVENTS}).`),
+  },
+  async ({ cursor, max_events }) => {
+    const { readFileSync, existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const perfPath = join(process.cwd(), '.gossip', 'agent-performance.jsonl');
+    const raw = existsSync(perfPath) ? readFileSync(perfPath, 'utf-8') : '';
+    const result = filterWatchEvents(raw, { cursor, maxEvents: max_events });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
   },
 );
 
