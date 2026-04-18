@@ -349,6 +349,48 @@ and a second paragraph.
     });
   });
 
+  // Drop attribution priority: type-enum check must precede short-content check.
+  // An invalid type is a stricter contract violation than short content; the
+  // attribution bucket must reflect the worst violation so dashboard drift
+  // detection is accurate.
+  describe('drop attribution priority (type-enum before short-content)', () => {
+    it('invalid type + short content → tags_dropped_unknown_type (not tags_dropped_short_content)', () => {
+      // Regression test: previously the short-content check ran first, so this
+      // tag was wrongly attributed to droppedShortContent instead of droppedUnknownType.
+      const raw = `<agent_finding type="approval">pipe test 1</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.rawTagCount).toBe(1);
+      // Must land in the unknown-type bucket, NOT in the short-content bucket.
+      expect(res.droppedUnknownType['approval']).toBe(1);
+      expect(res.droppedShortContent).toBe(0);
+    });
+
+    it('invalid type + valid content → tags_dropped_unknown_type', () => {
+      const raw = `<agent_finding type="approval">This is a long enough content string for the parser</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.droppedUnknownType['approval']).toBe(1);
+      expect(res.droppedShortContent).toBe(0);
+    });
+
+    it('valid type + short content → tags_dropped_short_content (unchanged)', () => {
+      const raw = `<agent_finding type="finding" severity="high">too short</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(0);
+      expect(res.droppedShortContent).toBe(1);
+      expect(Object.keys(res.droppedUnknownType)).toHaveLength(0);
+    });
+
+    it('valid type + valid content → tags_accepted (unchanged)', () => {
+      const raw = `<agent_finding type="finding" severity="high">This is a valid finding with enough content here</agent_finding>`;
+      const res = parseAgentFindingsStrict(raw);
+      expect(res.findings).toHaveLength(1);
+      expect(res.droppedShortContent).toBe(0);
+      expect(Object.keys(res.droppedUnknownType)).toHaveLength(0);
+    });
+  });
+
   // Schema-drift diagnostics — see docs/specs/2026-04-16-schema-drift-diagnostic.md
   // Six cases mandated by the spec's "Validation" section.
   describe('schema drift diagnostics', () => {

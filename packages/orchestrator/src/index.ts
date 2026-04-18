@@ -89,3 +89,5 @@ export { MemorySearcher } from './memory-searcher';
 export type { SearchResult } from './memory-searcher';
 export { oneSidedZTest, resolveVerdict, MIN_EVIDENCE, ALPHA, Z_CRITICAL, TIMEOUT_DAYS, TIMEOUT_MS } from './check-effectiveness';
 export type { VerdictStatus, SkillSnapshot, CategoryCounters, VerdictResult } from './check-effectiveness';
+export { emitCompletionSignals } from './completion-signals';
+export type { CompletionSignalInput } from './completion-signals';

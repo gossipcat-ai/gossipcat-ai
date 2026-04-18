@@ -45,6 +45,12 @@ export interface NativeTaskInfo {
   writeMode?: 'sequential' | 'scoped' | 'worktree';
   /** One-time token that must accompany gossip_relay — prevents task-ID spoofing */
   relayToken?: string;
+  /**
+   * Whether the native agent called memory_query during this task.
+   * Set by gossip_relay when the agent includes memoryQueryCalled in its result metadata.
+   * Threaded to TaskGraph.recordCompleted/recordFailed for compliance auditing.
+   */
+  memoryQueryCalled?: boolean;
 }
 
 export interface NativeResultInfo {

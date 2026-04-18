@@ -13,8 +13,7 @@ import { TaskGraph } from './task-graph';
 import { SkillCatalog } from './skill-catalog';
 import { SkillGapTracker } from './skill-gap-tracker';
 import { GossipPublisher } from './gossip-publisher';
-import { PerformanceWriter, rotateJsonlIfNeeded } from './performance-writer';
-import { MetaSignal, PipelineSignal } from './consensus-types';
+import { rotateJsonlIfNeeded } from './performance-writer';
 import { ScopeTracker } from './scope-tracker';
 import { WorktreeManager } from './worktree-manager';
 import { TaskGraphSync } from './task-graph-sync';
@@ -32,6 +31,7 @@ import { SessionContext } from './session-context';
 import { parseAgentFindingsStrict } from './parse-findings';
 import { extractCategories } from './category-extractor';
 import { inferTaskType } from './task-type-inference';
+import { emitCompletionSignals } from './completion-signals';
 
 import { gossipLog as log } from './log';
 
@@ -431,39 +431,16 @@ export class DispatchPipeline {
                 timestamp: new Date().toISOString(),
               }) + '\n');
             } catch { /* best-effort visibility — never crash dispatch on log/write failure */ }
-            // Emit meta signals for non-consensus dispatch telemetry
-            try {
-              const perfWriter = new PerformanceWriter(this.projectRoot);
-              const now = new Date().toISOString();
-              const durationMs = (entry.completedAt ?? Date.now()) - entry.startedAt;
-              const compliance = detectFormatCompliance(event.payload.result ?? '');
-              const metaSignals: MetaSignal[] = [
-                { type: 'meta', signal: 'task_completed', agentId: entry.agentId, taskId: entry.id, value: durationMs, timestamp: now },
-                { type: 'meta', signal: 'task_tool_turns', agentId: entry.agentId, taskId: entry.id, value: entry.toolCalls ?? 0, timestamp: now },
-                { type: 'meta', signal: 'format_compliance', agentId: entry.agentId, taskId: entry.id, value: compliance.formatCompliant ? 1 : 0, metadata: { findingCount: compliance.findingCount, citationCount: compliance.citationCount, tags_total: compliance.tags_total, tags_accepted: compliance.tags_accepted, tags_dropped_unknown_type: compliance.tags_dropped_unknown_type, tags_dropped_short_content: compliance.tags_dropped_short_content, diagnostic_codes: compliance.diagnostics.map(d => d.code) }, timestamp: now },
-              ];
-              // Priority pipeline emission: finding_dropped_format. Fires whenever
-              // parseAgentFindingsStrict drops tags by unknown type or short
-              // content. This is the event that would have caught the drop-gate
-              // bug in-session. Zero extra LLM cost; reuses detectFormatCompliance.
-              const droppedTotal = compliance.tags_dropped_unknown_type + compliance.tags_dropped_short_content;
-              const pipelineSignals: PipelineSignal[] = droppedTotal > 0 ? [{
-                type: 'pipeline',
-                signal: 'finding_dropped_format',
-                agentId: entry.agentId,
-                taskId: entry.id,
-                value: droppedTotal,
-                metadata: {
-                  tags_total: compliance.tags_total,
-                  tags_accepted: compliance.tags_accepted,
-                  tags_dropped_unknown_type: compliance.tags_dropped_unknown_type,
-                  tags_dropped_short_content: compliance.tags_dropped_short_content,
-                  diagnostic_codes: compliance.diagnostics.map(d => d.code),
-                },
-                timestamp: now,
-              }] : [];
-              perfWriter.appendSignals([...metaSignals, ...pipelineSignals]);
-            } catch { /* best-effort — never crash dispatch on signal write failure */ }
+            // Emit task_completed + task_tool_turns + format_compliance + finding_dropped_format
+            // via shared helper — eliminates native/relay signal-pipeline drift.
+            emitCompletionSignals(this.projectRoot, {
+              agentId: entry.agentId,
+              taskId: entry.id,
+              result: event.payload.result ?? '',
+              elapsedMs: (entry.completedAt ?? Date.now()) - entry.startedAt,
+              toolCalls: entry.toolCalls,
+              memoryQueryCalled: entry.memoryQueryCalled,
+            });
             return event.payload;
           case TaskStreamEventType.ERROR:
             entry.status = 'failed';
@@ -488,6 +465,15 @@ export class DispatchPipeline {
                 error: event.payload.error,
                 timestamp: new Date().toISOString(),
               }) + '\n');
+              // Emit task_completed with error:true so downstream scorers get failure-rate
+              // and latency data from relay tasks (consensus bac850a6-eeb048e3, f2).
+              emitCompletionSignals(this.projectRoot, {
+                agentId: entry.agentId,
+                taskId: entry.id,
+                result: '',
+                elapsedMs,
+                error: true,
+              });
             } catch { /* best-effort */ }
             throw new Error(event.payload.error);
           default:
@@ -1163,12 +1149,12 @@ export class DispatchPipeline {
   }
 
   /** Record a native agent task completion in TaskGraph */
-  recordNativeTaskCompleted(taskId: string, result: string, error?: string, durationMs?: number): void {
+  recordNativeTaskCompleted(taskId: string, result: string, error?: string, durationMs?: number, memoryQueryCalled?: boolean): void {
     const duration = durationMs ?? -1;
     if (error) {
-      this.taskGraph.recordFailed(taskId, error, duration);
+      this.taskGraph.recordFailed(taskId, error, duration, undefined, undefined, memoryQueryCalled);
     } else {
-      this.taskGraph.recordCompleted(taskId, (result || '').slice(0, 4000), duration);
+      this.taskGraph.recordCompleted(taskId, (result || '').slice(0, 4000), duration, undefined, undefined, memoryQueryCalled);
     }
   }
 
@@ -1199,6 +1185,8 @@ export class DispatchPipeline {
   getSessionGossip() { return this.sessionContext.getSessionGossip(); }
   getLlm(): ILLMProvider | null { return this.llm; }
   getAgentConfig(agentId: string): AgentConfig | undefined { return this.registryGet(agentId); }
+  /** Expose perfReader for native path memory writes (bug f9: use accuracy-weighted writeKnowledgeFromResult). */
+  getPerfReader(): PerformanceReader | null { return this.perfReader; }
 
   // Track which (agentId, category) pairs have been suggested this session to avoid repeats
   private suggestedSkillGaps = new Set<string>();
