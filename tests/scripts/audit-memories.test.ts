@@ -322,4 +322,151 @@ describe('CLI smoke', () => {
     const out = execFileSync('node', [SCRIPT_MJS, '--help'], { encoding: 'utf8' });
     expect(out).toMatch(/--include-shipped/);
   });
+
+  it('--help mentions --hygiene', () => {
+    const out = execFileSync('node', [SCRIPT_MJS, '--help'], { encoding: 'utf8' });
+    expect(out).toMatch(/--hygiene/);
+  });
+});
+
+describe('auditHygiene', () => {
+  it('well-formed file with all fields is clean', () => {
+    const body = [
+      '---',
+      'name: Some memory',
+      'description: A thing',
+      'type: feedback',
+      'status: open',
+      'originSessionId: abc-123',
+      '---',
+      'Body text.',
+    ].join('\n');
+    const r = mod.auditHygiene(body);
+    expect(r.has_frontmatter).toBe(true);
+    expect(r.missing_fields).toEqual([]);
+    expect(r.invalid_type).toBeNull();
+    expect(r.invalid_status).toBeNull();
+    expect(r.missing_status).toBe(false);
+    expect(r.missing_origin).toBe(false);
+    expect(r.malformed).toBeNull();
+    expect(mod.hygieneHasIssues(r)).toBe(false);
+  });
+
+  it('missing closing delimiter flags malformed', () => {
+    const body = '---\nname: X\ntype: project\n\nbody here never closes frontmatter';
+    const r = mod.auditHygiene(body);
+    expect(r.has_frontmatter).toBe(false);
+    expect(r.malformed).toBe('missing closing delimiter');
+    expect(mod.hygieneHasIssues(r)).toBe(true);
+  });
+
+  it('no frontmatter at all returns defaults without throwing', () => {
+    const r = mod.auditHygiene('Just body text, no frontmatter.\n');
+    expect(r.has_frontmatter).toBe(false);
+    expect(r.malformed).toBeNull();
+    expect(mod.hygieneHasIssues(r)).toBe(true);
+  });
+
+  it('invalid type is flagged', () => {
+    const body = '---\nname: X\ndescription: Y\ntype: invalid_value\n---\nbody';
+    const r = mod.auditHygiene(body);
+    expect(r.invalid_type).toBe('invalid_value');
+    expect(mod.hygieneHasIssues(r)).toBe(true);
+  });
+
+  it('invalid status is flagged', () => {
+    const body = '---\nname: X\ndescription: Y\ntype: feedback\nstatus: halfclosed\n---\nbody';
+    const r = mod.auditHygiene(body);
+    expect(r.invalid_status).toBe('halfclosed');
+    expect(mod.hygieneHasIssues(r)).toBe(true);
+  });
+
+  it('typed entry without status flags missing_status', () => {
+    const body = '---\nname: X\ndescription: Y\ntype: project\noriginSessionId: abc\n---\nbody';
+    const r = mod.auditHygiene(body);
+    expect(r.missing_status).toBe(true);
+    expect(mod.hygieneHasIssues(r)).toBe(true);
+  });
+
+  it('typed entry without originSessionId flags missing_origin', () => {
+    const body = '---\nname: X\ndescription: Y\ntype: project\nstatus: open\n---\nbody';
+    const r = mod.auditHygiene(body);
+    expect(r.missing_origin).toBe(true);
+    expect(mod.hygieneHasIssues(r)).toBe(true);
+  });
+
+  it('missing required fields are reported', () => {
+    const body = '---\ntype: feedback\n---\nbody';
+    const r = mod.auditHygiene(body);
+    expect(r.missing_fields).toEqual(expect.arrayContaining(['name', 'description']));
+    expect(mod.hygieneHasIssues(r)).toBe(true);
+  });
+
+  it('summarizeHygiene yields em-dash when clean', () => {
+    const r = mod.auditHygiene(
+      '---\nname: X\ndescription: Y\ntype: feedback\nstatus: open\noriginSessionId: abc\n---\nbody'
+    );
+    expect(mod.summarizeHygiene(r)).toBe('—');
+  });
+});
+
+describe('hygieneDir + --hygiene CLI', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-mem-hyg-'));
+    fs.writeFileSync(
+      path.join(tmp, 'clean.md'),
+      '---\nname: Clean\ndescription: Y\ntype: feedback\nstatus: open\noriginSessionId: abc\n---\nbody',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'dirty-missing-status.md'),
+      '---\nname: Dirty\ndescription: Y\ntype: project\noriginSessionId: abc\n---\nbody',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'dirty-malformed.md'),
+      '---\nname: Dirty\ntype: project\nno closing delimiter',
+    );
+    fs.writeFileSync(path.join(tmp, 'MEMORY.md'), 'ignored index');
+    fs.writeFileSync(path.join(tmp, 'not-md.txt'), 'ignored');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('hygieneDir returns one row per .md (excluding MEMORY.md)', () => {
+    const r = mod.hygieneDir(tmp);
+    expect(r.rows).toHaveLength(3);
+    expect(r.rows.map((x: any) => x.file).sort()).toEqual([
+      'clean.md',
+      'dirty-malformed.md',
+      'dirty-missing-status.md',
+    ]);
+  });
+
+  it('dirty files sort before clean files', () => {
+    const r = mod.hygieneDir(tmp);
+    expect(r.rows[0].has_issues).toBe(true);
+    expect(r.rows[r.rows.length - 1].file).toBe('clean.md');
+  });
+
+  it('CLI --hygiene --issues-only filters to dirty rows', () => {
+    const out = execFileSync('node', [SCRIPT_MJS, '--hygiene', '--dir', tmp, '--issues-only', '--json'], {
+      encoding: 'utf8',
+    });
+    const rows = JSON.parse(out);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r: any) => r.has_issues)).toBe(true);
+  });
+
+  it('CLI --hygiene --clean-only filters to clean rows', () => {
+    const out = execFileSync('node', [SCRIPT_MJS, '--hygiene', '--dir', tmp, '--clean-only', '--json'], {
+      encoding: 'utf8',
+    });
+    const rows = JSON.parse(out);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].file).toBe('clean.md');
+    expect(rows[0].has_issues).toBe(false);
+  });
 });
