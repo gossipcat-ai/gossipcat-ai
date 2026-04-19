@@ -27,6 +27,27 @@ async function main() {
     return 0;
   }
   const dir = args.dir ?? lib.defaultMemoryDir(process.cwd(), os.homedir());
+  if (args.hygiene) {
+    let result;
+    try {
+      result = lib.hygieneDir(dir);
+    } catch (err) {
+      process.stderr.write(`error: ${err.message}\n`);
+      return 1;
+    }
+    for (const w of result.warnings) process.stderr.write(w + '\n');
+    let rows = result.rows;
+    if (args.cleanOnly) rows = rows.filter((r) => !r.has_issues);
+    if (args.issuesOnly) rows = rows.filter((r) => r.has_issues);
+    if (args.json) {
+      process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
+    } else {
+      process.stdout.write(`# audit-memories --hygiene — ${dir}\n`);
+      process.stdout.write(`# rows: ${rows.length}\n`);
+      process.stdout.write(lib.renderHygieneTable(rows) + '\n');
+    }
+    return 0;
+  }
   let result;
   try {
     result = lib.auditDir(dir, { codenames: args.codenames, includeShipped: args.includeShipped });

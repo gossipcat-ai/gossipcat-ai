@@ -11,6 +11,10 @@ const { execSync } = require('node:child_process');
 
 const DEFAULT_CODENAMES = ['crab-language', 'gossip-v2'];
 
+const VALID_TYPES = ['user', 'feedback', 'project', 'reference'];
+const VALID_STATUSES = ['open', 'shipped', 'closed'];
+const REQUIRED_FIELDS = ['name', 'description', 'type'];
+
 const HELP = `audit-memories — triage Claude Code auto-memory files.
 
 Usage:
@@ -23,6 +27,12 @@ Options:
   --codenames a,b,c     Extra codename strings to count as provenance.
   --include-shipped     Include files with status:shipped or status:closed
                         (default: those files are forced to DROP).
+  --hygiene             Read-only frontmatter hygiene scan. Validates required
+                        fields (name, description, type), valid type/status
+                        enum, and flags missing status/originSessionId.
+                        Different output; ignores triage flags.
+  --clean-only          With --hygiene: show only files with no issues.
+  --issues-only         With --hygiene: show only files with at least one issue.
   --help                Show this message and exit.
 
 Default dir is derived from the main project root (first success wins):
@@ -43,6 +53,9 @@ function parseArgs(argv) {
     candidatesOnly: false,
     codenames: [],
     includeShipped: false,
+    hygiene: false,
+    cleanOnly: false,
+    issuesOnly: false,
     help: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -51,6 +64,9 @@ function parseArgs(argv) {
     else if (a === '--json') out.json = true;
     else if (a === '--candidates-only') out.candidatesOnly = true;
     else if (a === '--include-shipped') out.includeShipped = true;
+    else if (a === '--hygiene') out.hygiene = true;
+    else if (a === '--clean-only') out.cleanOnly = true;
+    else if (a === '--issues-only') out.issuesOnly = true;
     else if (a === '--dir') out.dir = argv[++i];
     else if (a.startsWith('--dir=')) out.dir = a.slice('--dir='.length);
     else if (a === '--codenames') out.codenames = (argv[++i] || '').split(',').filter(Boolean);
@@ -95,6 +111,87 @@ function parseFrontmatterStatus(body) {
   const fm = m[1];
   const statusMatch = fm.match(/^status:\s*(\w+)\s*$/m);
   return statusMatch ? statusMatch[1] : null;
+}
+
+function auditHygiene(body) {
+  const report = {
+    has_frontmatter: false,
+    missing_fields: [],
+    invalid_type: null,
+    invalid_status: null,
+    missing_status: false,
+    missing_origin: false,
+    malformed: null,
+  };
+  if (!body.startsWith('---')) return report;
+  const firstLineEnd = body.indexOf('\n');
+  const firstLine = body.slice(0, firstLineEnd).replace(/\s+$/, '');
+  if (firstLine !== '---') return report;
+  const rest = body.slice(firstLineEnd + 1);
+  const closeMatch = rest.match(/\r?\n---\s*(?:\r?\n|$)/);
+  if (!closeMatch) {
+    report.has_frontmatter = false;
+    report.malformed = 'missing closing delimiter';
+    return report;
+  }
+  const fm = rest.slice(0, closeMatch.index);
+  report.has_frontmatter = true;
+  if (!fm.trim()) {
+    report.malformed = 'empty frontmatter';
+    return report;
+  }
+  const fields = {};
+  const lineRe = /^(\w+):[ \t]*(.*?)\s*$/gm;
+  let m;
+  while ((m = lineRe.exec(fm)) !== null) {
+    fields[m[1]] = m[2];
+  }
+  for (const f of REQUIRED_FIELDS) {
+    if (!(f in fields) || fields[f].length === 0) report.missing_fields.push(f);
+  }
+  if ('type' in fields && !VALID_TYPES.includes(fields.type)) {
+    report.invalid_type = fields.type;
+  }
+  if ('status' in fields && !VALID_STATUSES.includes(fields.status)) {
+    report.invalid_status = fields.status;
+  }
+  const hasType = 'type' in fields && fields.type.length > 0;
+  if (hasType) {
+    report.missing_status = !('status' in fields);
+    report.missing_origin = !('originSessionId' in fields);
+  }
+  return report;
+}
+
+function hygieneHasIssues(report) {
+  if (!report.has_frontmatter) return true;
+  if (report.malformed) return true;
+  if (report.missing_fields.length > 0) return true;
+  if (report.invalid_type) return true;
+  if (report.invalid_status) return true;
+  if (report.missing_status) return true;
+  if (report.missing_origin) return true;
+  return false;
+}
+
+function summarizeHygiene(report) {
+  const parts = [];
+  if (!report.has_frontmatter) parts.push('no frontmatter');
+  if (report.malformed) parts.push(report.malformed);
+  if (report.missing_fields.length > 0) parts.push(`missing: ${report.missing_fields.join(',')}`);
+  if (report.invalid_type) parts.push(`invalid_type=${report.invalid_type}`);
+  if (report.invalid_status) parts.push(`invalid_status=${report.invalid_status}`);
+  if (report.missing_status) parts.push('missing_status');
+  if (report.missing_origin) parts.push('missing_origin');
+  return parts.length ? parts.join('; ') : '—';
+}
+
+function parseFrontmatterField(body, field) {
+  const m = body.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return null;
+  const re = new RegExp('^' + field + ':[ \\t]*(.*?)\\s*$', 'm');
+  const match = m[1].match(re);
+  return match ? match[1] : null;
 }
 
 function scoreRubric(body) {
@@ -263,13 +360,78 @@ function auditDir(dir, opts) {
   return { rows: sortRows(rows), warnings, dir };
 }
 
+function hygieneDir(dir) {
+  const warnings = [];
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch (err) {
+    const e = new Error(`memory dir not readable: ${dir}`);
+    e.cause = err;
+    e.resolvedDir = dir;
+    throw e;
+  }
+  const rows = [];
+  for (const name of entries.sort()) {
+    if (!name.endsWith('.md')) continue;
+    if (name === 'MEMORY.md') continue;
+    const full = path.join(dir, name);
+    let body;
+    try {
+      const stat = fs.statSync(full);
+      if (!stat.isFile()) continue;
+      body = fs.readFileSync(full, 'utf8');
+    } catch (err) {
+      warnings.push(`warn: skipping unreadable file ${name}: ${err.message}`);
+      continue;
+    }
+    const report = auditHygiene(body);
+    rows.push({
+      file: name,
+      type: parseFrontmatterField(body, 'type'),
+      status: parseFrontmatterField(body, 'status'),
+      ...report,
+      has_issues: hygieneHasIssues(report),
+    });
+  }
+  rows.sort((a, b) => {
+    if (a.has_issues !== b.has_issues) return a.has_issues ? -1 : 1;
+    return a.file.localeCompare(b.file);
+  });
+  return { rows, warnings, dir };
+}
+
+function renderHygieneTable(rows) {
+  const header = ['file', 'type', 'status', 'has_frontmatter', 'issues'];
+  const data = rows.map((r) => [
+    r.file,
+    r.type || '—',
+    r.status || '—',
+    String(r.has_frontmatter),
+    summarizeHygiene(r),
+  ]);
+  const widths = header.map((h, i) =>
+    Math.max(h.length, ...data.map((row) => row[i].length))
+  );
+  const fmt = (cells) => cells.map((c, i) => c.padEnd(widths[i])).join('  ');
+  const sep = widths.map((w) => '-'.repeat(w)).join('  ');
+  return [fmt(header), sep].concat(data.map(fmt)).join('\n');
+}
+
 module.exports = {
   HELP,
   DEFAULT_CODENAMES,
+  VALID_TYPES,
+  VALID_STATUSES,
+  REQUIRED_FIELDS,
   parseArgs,
   resolveProjectRoot,
   defaultMemoryDir,
   parseFrontmatterStatus,
+  parseFrontmatterField,
+  auditHygiene,
+  hygieneHasIssues,
+  summarizeHygiene,
   scoreRubric,
   classify,
   provenanceHits,
@@ -278,4 +440,6 @@ module.exports = {
   sortRows,
   renderTable,
   auditDir,
+  hygieneDir,
+  renderHygieneTable,
 };
