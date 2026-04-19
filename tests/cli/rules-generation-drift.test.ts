@@ -84,14 +84,8 @@ const MANDATORY_CLAUDE_ANCHORS: readonly Anchor[] = [
     note: 'STEP 0 deferred-tool bootstrap call is present on both sides',
   },
   {
-    // Note: '## Your Role' is the heading in the generator output but is NOT
-    // currently present verbatim in root CLAUDE.md (the orchestrator role is
-    // described inline via the DISPATCH RULE section there). We use
-    // gossip_session_save — a session-lifecycle call present verbatim on both
-    // sides — as the anchor for this slot. If CLAUDE.md is updated to include
-    // a ## Your Role heading, swap this back to that anchor.
-    anchor: 'gossip_session_save',
-    note: 'session-save call is documented on both sides (session lifecycle invariant)',
+    anchor: '## Your Role',
+    note: 'orchestrator role heading is published on both sides',
   },
   {
     anchor: 'gossip_skills(action',
