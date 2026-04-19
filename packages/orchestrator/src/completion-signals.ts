@@ -68,8 +68,12 @@ export interface CompletionSignalInput {
 export function emitCompletionSignals(projectRoot: string, input: CompletionSignalInput): void {
   try {
     const { agentId, taskId, result, elapsedMs, toolCalls, memoryQueryCalled, error } = input;
+    if (agentId === '_system') {
+      process.stderr.write(`[gossipcat] emitCompletionSignals refused reserved agentId '_system' (taskId=${taskId})\n`);
+      return;
+    }
     const now = new Date().toISOString();
-    const compliance = detectFormatCompliance(result ?? '');
+    const compliance = detectFormatCompliance(result);
 
     const signals: (MetaSignal | PipelineSignal)[] = [];
 
