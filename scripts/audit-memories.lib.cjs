@@ -7,6 +7,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { execSync } = require('node:child_process');
 
 const DEFAULT_CODENAMES = ['crab-language', 'gossip-v2'];
 
@@ -22,9 +23,14 @@ Options:
   --codenames a,b,c     Extra codename strings to count as provenance.
   --help                Show this message and exit.
 
-Default dir is derived from process.cwd():
-  ~/.claude/projects/<cwd-with-slashes-as-dashes>/memory/
-The leading dash from an absolute path is dropped.
+Default dir is derived from the main project root (first success wins):
+  1. git rev-parse --show-superproject-working-tree
+  2. git rev-parse --git-common-dir  →  parent dir
+  3. git rev-parse --show-toplevel
+  4. process.cwd() fallback
+  Encoded as ~/.claude/projects/<path-with-slashes-as-dashes>/memory/
+  The leading dash from an absolute path is dropped.
+  Running from a worktree resolves to the main project root, not the worktree.
 
 This tool is read-only — it never writes to memory files.`;
 
@@ -49,8 +55,32 @@ function parseArgs(argv) {
   return out;
 }
 
-function defaultMemoryDir(cwd, home) {
-  let encoded = cwd.replace(/\//g, '-');
+function resolveProjectRoot(cwd, _execSync) {
+  const exec = _execSync || execSync;
+  const run = (cmd) => exec(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  try {
+    const superproject = run('git rev-parse --show-superproject-working-tree');
+    if (superproject) return superproject;
+  } catch (_) {}
+  try {
+    const commonDir = run('git rev-parse --git-common-dir');
+    // commonDir is either an absolute path or relative (e.g. ".git" or
+    // "/path/to/.git/worktrees/agent-XXXX/../../.."); resolve then go up one.
+    const resolved = path.isAbsolute(commonDir)
+      ? path.dirname(commonDir)
+      : path.dirname(path.resolve(cwd, commonDir));
+    if (resolved) return resolved;
+  } catch (_) {}
+  try {
+    const toplevel = run('git rev-parse --show-toplevel');
+    if (toplevel) return toplevel;
+  } catch (_) {}
+  return cwd;
+}
+
+function defaultMemoryDir(cwd, home, _execSync) {
+  const root = resolveProjectRoot(cwd, _execSync);
+  let encoded = root.replace(/\//g, '-');
   if (encoded.startsWith('-')) encoded = encoded.slice(1);
   return path.join(home, '.claude', 'projects', encoded, 'memory');
 }
@@ -205,6 +235,7 @@ module.exports = {
   HELP,
   DEFAULT_CODENAMES,
   parseArgs,
+  resolveProjectRoot,
   defaultMemoryDir,
   scoreRubric,
   classify,
