@@ -58,6 +58,7 @@ if (!existsSync(mcpServerPath)) {
   if (isGitClone) {
     console.log('gossipcat: dist-mcp/mcp-server.js not built yet — run: npm run build:mcp');
   } else {
-    console.warn('gossipcat: WARNING — mcp-server.js missing from package. The package may be corrupted.');
+    console.error('gossipcat: FATAL — dist-mcp/mcp-server.js missing from package. Install is corrupted.');
+    process.exit(1);
   }
 }

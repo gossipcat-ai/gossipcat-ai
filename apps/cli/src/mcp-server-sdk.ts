@@ -35,6 +35,7 @@ import { restorePendingConsensus } from './handlers/relay-cross-review';
 import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
 import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FILE } from './stickyPort';
 import { buildDashboardAdvisory } from './setup-response';
+import { generateRulesContent } from './rules-content';
 
 // ── Environment detection ────────────────────────────────────────────────
 
@@ -72,148 +73,6 @@ function detectEnvironment(): EnvironmentInfo {
 const env = detectEnvironment();
 
 import { isReservedAgentId } from './reserved-ids';
-
-// Generate the rules file content for the orchestrator
-function generateRulesContent(agentList: string): string {
-  return `# Gossipcat — Multi-Agent Orchestration
-
-You are the **orchestrator**. Your role is to dispatch tasks to agents, verify results, and record signals — not to implement code directly. Before writing implementation code, call \`gossip_run(agent_id: "auto", task: "...")\` to dispatch to the best agent. Exceptions: user says \`(direct)\`, or the change is docs/CSS/tests/log-strings only, or under 10 lines with no shared-state side effects.
-
-## Team Setup
-When the user asks to set up agents, review code with multiple agents, or build with a team, use the gossipcat MCP tools.
-
-### Creating agents
-Use \`gossip_setup\` with an agents array. Each agent can be:
-- **type: "native"** — Creates a Claude Code subagent (.claude/agents/*.md) that ALSO connects to the gossipcat relay. Works both as a native Agent() and via gossip_dispatch(). Supports consensus cross-review.
-- **type: "custom"** — Any provider (anthropic, openai, google, local). Only accessible via gossip_dispatch().
-
-**Native agent requirements:** Native agents need TWO files to work fully:
-1. \`.gossip/config.json\` entry — with explicit \`skills\` array and \`"native": true\`
-2. \`.claude/agents/<id>.md\` — with frontmatter (name, model, description, tools) and prompt
-
-\`gossip_setup\` creates both automatically. Mid-session agent changes require \`/mcp\` reconnect.
-
-### Dispatching work
-
-**Single-agent tasks** (default):
-\`\`\`
-gossip_run(agent_id: "<id>", task: "Implement X")
-\`\`\`
-\`gossip_run\` is the preferred dispatch. Do NOT use raw Agent() for gossipcat tasks.
-
-**Write modes:** \`gossip_run(agent_id, task, write_mode: "scoped", scope: "./src")\`
-**Parallel:** \`gossip_dispatch(mode:"parallel", tasks) → gossip_collect(task_ids)\`
-**Plan → Execute:** \`gossip_plan(task) → gossip_dispatch(mode:"parallel", tasks) → gossip_collect(ids)\`
-
-## Available Agents
-${agentList}
-
-## When to Use Multi-Agent vs Single Agent
-
-**Use consensus (3+ agents) for:**
-| Task | Why | Split Strategy |
-|------|-----|----------------|
-| Security review | Different agents catch different vuln classes | Split by package/concern |
-| Code review | Cross-validation catches what single reviewers miss | Split by concern |
-| Bug investigation | Competing hypotheses tested in parallel | One hypothesis per agent |
-| Architecture review | Multiple perspectives on trade-offs | Split by dimension |
-| Pre-ship verification | Catch regressions before merge | Split by area changed |
-
-**Single agent is fine for:** quick lookups, running tests, file reads.
-
-## Consensus Workflow — The Complete Flow
-
-### Step 1: Dispatch
-\`\`\`
-gossip_dispatch(mode: "consensus", tasks: [
-  { agent_id: "<reviewer>", task: "Review X for security" },
-  { agent_id: "<researcher>", task: "Review X for architecture" },
-  { agent_id: "<tester>", task: "Review X for test coverage" },
-])
-\`\`\`
-
-### Step 2: Execute native agents, then relay results
-\`gossip_relay(task_id: "<id>", result: "<agent output>")\`
-
-### Step 3: Collect with cross-review
-\`gossip_collect(task_ids, consensus: true, timeout_ms: 300000)\`
-Returns: CONFIRMED, DISPUTED, UNIQUE, UNVERIFIED, NEW tagged findings.
-
-### Step 4: Verify and record signals IMMEDIATELY
-For EACH finding, read the actual code. Record signals AS YOU VERIFY:
-\`\`\`
-gossip_signals(signals: [
-  { signal: "unique_confirmed", agent_id: "reviewer", finding: "XSS in template" },
-  { signal: "hallucination_caught", agent_id: "reviewer", finding: "Claimed X but code shows Y" },
-  { signal: "agreement", agent_id: "reviewer", counterpart_id: "researcher", finding: "Both found it" },
-])
-\`\`\`
-**CRITICAL:** Record \`hallucination_caught\` IMMEDIATELY when a finding is wrong. Don't batch — record inline as you verify. This keeps agent scores accurate.
-
-### Step 5: Verify ALL UNVERIFIED findings.
-UNVERIFIED does not mean "skip." It means the cross-reviewer couldn't check it — YOU can.
-For each UNVERIFIED finding: grep/read the cited code or identifiers, then record the signal.
-Do NOT present raw consensus results with unverified findings to the user.
-
-### Step 6: Fix confirmed issues (only after all signals recorded).
-
-## Performance Signals & Agent Scores
-
-Call \`gossip_scores()\` to see: accuracy (0-1), uniqueness (0-1), dispatchWeight (0.5-1.5).
-- High-accuracy agents → solo tasks, primary reviewers
-- High-uniqueness, low-accuracy → always use in consensus, never solo
-- Check scores periodically to track improvement
-
-## Memory System
-
-Memory persists across sessions automatically:
-- \`.gossip/agents/<id>/memory/knowledge/*.md\` — cognitive summaries
-- \`.gossip/agents/_project/memory/knowledge/\` — shared cross-agent context
-- \`.gossip/next-session.md\` — session continuity priorities
-
-**Call \`gossip_session_save()\` before ending your session.** Without it, the next session starts cold.
-
-## Dashboard
-
-Use \`gossip_status()\` for URL and key. Tabs: Overview, Agents, Consensus, Skills, Memory.
-
-## Subagent Override (IMPORTANT)
-
-When ANY skill or workflow (including subagent-driven-development, executing-plans, or
-any custom skill) instructs you to dispatch work via the Agent() tool, use \`gossip_run\`
-instead. This ensures tasks appear in the dashboard, agent memory is written, and
-performance signals are recorded.
-
-**Flow:** \`gossip_run(agent_id, task)\` → returns Agent() instructions for native agents →
-execute the Agent() → \`gossip_relay(task_id, result)\` to close the loop.
-
-**Exception:** \`gossip_dispatch(mode:"consensus")\` already handles its own native Agent() calls —
-don't double-wrap those.
-
-**Why:** Raw Agent() bypasses the gossipcat pipeline. Tasks won't appear in the activity
-feed, no memory is written, no signals recorded. The agent effectively works off-grid.
-
-## Native Agent Relay Rule
-
-When dispatching native agents: gossip_dispatch → Agent() → gossip_relay. Never skip the relay call.
-
-## Implementation Tasks — Auto-Dispatch
-
-Check Tier 1/2 triggers first (see .claude/rules/gossipcat.md). If no match, call
-gossip_run(agent_id: "auto", task: "<description>") BEFORE writing any code.
-
-Exceptions: (direct) in user message, Tier 3 changes (docs, CSS, tests), or already
-executing inside a dispatched plan step.
-
-gossip_run auto classifies single vs multi and routes appropriately:
-- Single: selects best-fit agent by dispatch weight, dispatches directly
-- Multi: calls gossip_plan for decomposition, presents for approval, then dispatches
-
-## Permissions
-
-Auto-allow writes: \`{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"] } }\`
-`;
-}
 
 // ── Lazy state — populated during boot() ─────────────────────────────────
 let booted = false;
@@ -1025,7 +884,7 @@ const server = new McpServer(
   },
   {
     instructions:
-      'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project. The gossip_status response loads the orchestrator role, dispatch rules, consensus workflow, native agent relay rule, sandbox enforcement, and other operating rules from .gossip/rules.md. These rules are not in this instruction text — they live in the gossip_status output to keep the instruction surface small and to allow per-project customization.',
+      'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and the full operator playbook (docs/HANDBOOK.md inlined into the response). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.',
   }
 );
 
@@ -1655,10 +1514,17 @@ server.tool(
     // hallucination patterns to watch for). This is how earned wisdom transfers
     // across sessions and installations without living only in chat history.
     let handbookSection = '';
+    const { existsSync: exHB } = require('fs');
+    const { join: jHB } = require('path');
+    // Fallback chain: (a) dev-repo cwd, (b) npm-installed __dirname=dist-mcp/ → HANDBOOK sibling, (c) defensive __dirname
+    const handbookCandidates: string[] = [
+      jHB(process.cwd(), 'docs', 'HANDBOOK.md'),
+      jHB(__dirname, '..', 'docs', 'HANDBOOK.md'),
+      jHB(__dirname, 'docs', 'HANDBOOK.md'),
+    ];
     try {
       const { readFileSync: rfHB, statSync: stHB } = require('fs');
-      const { join: jHB } = require('path');
-      const handbookPath = jHB(process.cwd(), 'docs', 'HANDBOOK.md');
+      const handbookPath = handbookCandidates.find(p => exHB(p)) ?? handbookCandidates[0];
       const stat = stHB(handbookPath);
       // Cap at 24KB of handbook content so the status response doesn't balloon
       // beyond the context window on very large handbooks. If capped, append a
@@ -1676,7 +1542,7 @@ server.tool(
         (truncated
           ? `\n\n[handbook truncated at ${HANDBOOK_CAP_BYTES / 1024}KB — full file at docs/HANDBOOK.md, ${stat.size} bytes total]`
           : '');
-    } catch { /* no handbook present — skip silently, this is optional infrastructure */ }
+    } catch { if (!handbookCandidates.some((p: string) => exHB(p))) { process.stderr.write('[gossipcat] gossip_status: HANDBOOK.md not found in any candidate path — add docs/HANDBOOK.md to capture operator wisdom\n'); } }
 
     // Surface Layer-3 signal-pipeline drift inline on the banner. Cheap (single
     // readFileSync of the last row of pipeline-drift.jsonl), and makes drift
@@ -2102,6 +1968,9 @@ server.tool(
     }
     lines.push(`\nMode: ${mode} | Config: .gossip/config.json (${Object.keys(config.agents).length} agents total)`);
     lines.push(`Rules: ${env.rulesFile} (${env.host} will read this on next session)`);
+    if (ctx.relay?.dashboardUrl) {
+      lines.push(`Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKey})`);
+    }
     if (hookSummary) {
       lines.push(hookSummary);
       lines.push('  ⚠ If the orchestrator cd\'s into a worktree to inspect/commit subagent work,');
