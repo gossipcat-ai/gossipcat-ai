@@ -21,6 +21,8 @@ Options:
   --json                Emit JSON array instead of an ASCII table.
   --candidates-only     Hide rows whose proposed_target is DROP.
   --codenames a,b,c     Extra codename strings to count as provenance.
+  --include-shipped     Include files with status:shipped or status:closed
+                        (default: those files are forced to DROP).
   --help                Show this message and exit.
 
 Default dir is derived from the main project root (first success wins):
@@ -40,6 +42,7 @@ function parseArgs(argv) {
     json: false,
     candidatesOnly: false,
     codenames: [],
+    includeShipped: false,
     help: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -47,6 +50,7 @@ function parseArgs(argv) {
     if (a === '--help' || a === '-h') out.help = true;
     else if (a === '--json') out.json = true;
     else if (a === '--candidates-only') out.candidatesOnly = true;
+    else if (a === '--include-shipped') out.includeShipped = true;
     else if (a === '--dir') out.dir = argv[++i];
     else if (a.startsWith('--dir=')) out.dir = a.slice('--dir='.length);
     else if (a === '--codenames') out.codenames = (argv[++i] || '').split(',').filter(Boolean);
@@ -83,6 +87,14 @@ function defaultMemoryDir(cwd, home, _execSync) {
   let encoded = root.replace(/\//g, '-');
   if (encoded.startsWith('-')) encoded = encoded.slice(1);
   return path.join(home, '.claude', 'projects', encoded, 'memory');
+}
+
+function parseFrontmatterStatus(body) {
+  const m = body.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return null;
+  const fm = m[1];
+  const statusMatch = fm.match(/^status:\s*(\w+)\s*$/m);
+  return statusMatch ? statusMatch[1] : null;
 }
 
 function scoreRubric(body) {
@@ -155,18 +167,36 @@ function proposeTarget(rubric, bucket) {
   return 'DROP';
 }
 
-function auditBody(file, body, extraCodenames) {
+function auditBody(file, body, extraCodenames, opts) {
+  opts = opts || {};
+  const includeShipped = !!opts.includeShipped;
   const rubric = scoreRubric(body);
   const bucket = classify(body);
   const hits = provenanceHits(body, extraCodenames);
-  const target = proposeTarget(rubric, bucket);
+  const status = parseFrontmatterStatus(body);
+  const rubricTarget = proposeTarget(rubric, bucket);
+
+  let proposed_target = rubricTarget;
+  let drop_reason;
+
+  if (rubricTarget === 'DROP') {
+    drop_reason = 'low_rubric';
+  }
+
+  if (!includeShipped && (status === 'shipped' || status === 'closed')) {
+    proposed_target = 'DROP';
+    drop_reason = status === 'shipped' ? 'status_shipped' : 'status_closed';
+  }
+
   return {
     file,
     bucket,
+    status: status || null,
     rubric_score: rubric,
     provenance_hits: hits,
     strip_needed: hits > 0,
-    proposed_target: target,
+    proposed_target,
+    drop_reason,
   };
 }
 
@@ -182,10 +212,11 @@ function sortRows(rows) {
 }
 
 function renderTable(rows) {
-  const header = ['file', 'bucket', 'rubric_score', 'provenance_hits', 'strip_needed', 'proposed_target'];
+  const header = ['file', 'bucket', 'status', 'rubric_score', 'provenance_hits', 'strip_needed', 'proposed_target'];
   const data = rows.map((r) => [
     r.file,
     r.bucket,
+    r.status || '—',
     String(r.rubric_score),
     String(r.provenance_hits),
     String(r.strip_needed),
@@ -202,6 +233,7 @@ function renderTable(rows) {
 function auditDir(dir, opts) {
   opts = opts || {};
   const codenames = opts.codenames || [];
+  const includeShipped = opts.includeShipped || false;
   const warnings = [];
   let entries;
   try {
@@ -226,7 +258,7 @@ function auditDir(dir, opts) {
       warnings.push(`warn: skipping unreadable file ${name}: ${err.message}`);
       continue;
     }
-    rows.push(auditBody(name, body, codenames));
+    rows.push(auditBody(name, body, codenames, { includeShipped }));
   }
   return { rows: sortRows(rows), warnings, dir };
 }
@@ -237,6 +269,7 @@ module.exports = {
   parseArgs,
   resolveProjectRoot,
   defaultMemoryDir,
+  parseFrontmatterStatus,
   scoreRubric,
   classify,
   provenanceHits,
