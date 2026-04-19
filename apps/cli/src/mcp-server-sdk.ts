@@ -71,6 +71,8 @@ function detectEnvironment(): EnvironmentInfo {
 
 const env = detectEnvironment();
 
+import { isReservedAgentId } from './reserved-ids';
+
 // Generate the rules file content for the orchestrator
 function generateRulesContent(agentList: string): string {
   return `# Gossipcat — Multi-Agent Orchestration
@@ -1891,9 +1893,8 @@ server.tool(
       } catch { /* no existing config — start fresh */ }
     }
 
-    const RESERVED_IDS = new Set(['_project', '__proto__', 'constructor', 'prototype']);
     for (const agent of agents) {
-      if (RESERVED_IDS.has(agent.id)) {
+      if (isReservedAgentId(agent.id)) {
         errors.push(`${agent.id}: reserved ID, cannot be used for agents`);
         continue;
       }
@@ -3772,31 +3773,41 @@ server.tool(
   {
     agent_id: z.string().describe('Agent ID to search knowledge for'),
     query: z.string().max(500).describe('Search query (max 500 chars)'),
-    max_results: z.number().optional().default(3).describe('Max results (default 3, max 10)'),
+    max_results: z.number().int().min(1).max(10).optional().default(3).describe('Max results (default 3, max 10)'),
   },
   async ({ agent_id, query, max_results }) => {
     await boot();
+    // Spec: docs/specs/2026-04-19-gossip-remember-hardening.md
+    // Part 1: path-prefix split. Part 5: RESERVED_IDS underscore-prefix check.
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(agent_id)) {
       return { content: [{ type: 'text' as const, text: 'Error: agent_id must match /^[a-zA-Z0-9_-]{1,64}$/' }] };
     }
+    if (isReservedAgentId(agent_id)) {
+      return { content: [{ type: 'text' as const, text: `Error: agent_id "${agent_id}" is reserved (underscore-prefixed ids other than "_project" are not allowed)` }] };
+    }
     const { MemorySearcher } = await import('@gossip/orchestrator');
-    const searcher = new MemorySearcher(process.cwd());
+    const { wrapMemoryEnvelope, recordMemoryQuery } = await import('@gossip/tools');
+    const projectRoot = process.cwd();
+    const searcher = new MemorySearcher(projectRoot);
     const results = searcher.search(agent_id, query, max_results);
-    if (results.length === 0) {
-      return { content: [{ type: 'text' as const, text: `No knowledge found for agent "${agent_id}" matching query: "${query}"` }] };
-    }
-    const lines: string[] = [`Knowledge search results for agent "${agent_id}" (query: "${query}"):\n`];
-    for (const r of results) {
-      lines.push(`## ${r.name} (score: ${r.score.toFixed(2)})`);
-      lines.push(`Source: ${r.source}`);
-      if (r.description) lines.push(`Description: ${r.description}`);
-      if (r.snippets.length > 0) {
-        lines.push('Snippets:');
-        for (const s of r.snippets) lines.push(`  - ${s}`);
-      }
-      lines.push('');
-    }
-    return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+
+    // Audit log. agent_id === '_project' is the public-memory sentinel; every
+    // other path is the legacy unauthenticated caller surface (no token wired
+    // yet — marked with _audit: untrusted_caller until a memoryToken primitive
+    // lands).
+    const attributed = agent_id === '_project';
+    recordMemoryQuery(projectRoot, {
+      agentId: agent_id,
+      query,
+      max_results,
+      results_count: results.length,
+      attributed,
+      auditTag: attributed ? undefined : 'untrusted_caller',
+    });
+
+    const emptyText = `No knowledge found for agent "${agent_id}" matching query: "${query}"`;
+    const text = wrapMemoryEnvelope(agent_id, results, emptyText);
+    return { content: [{ type: 'text' as const, text }] };
   }
 );
 
