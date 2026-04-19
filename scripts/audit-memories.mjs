@@ -29,7 +29,7 @@ async function main() {
   const dir = args.dir ?? lib.defaultMemoryDir(process.cwd(), os.homedir());
   let result;
   try {
-    result = lib.auditDir(dir, { codenames: args.codenames });
+    result = lib.auditDir(dir, { codenames: args.codenames, includeShipped: args.includeShipped });
   } catch (err) {
     process.stderr.write(`error: ${err.message}\n`);
     return 1;

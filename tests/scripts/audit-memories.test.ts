@@ -226,10 +226,100 @@ describe('auditDir end-to-end', () => {
   });
 });
 
+describe('parseFrontmatterStatus', () => {
+  it('returns status value from frontmatter', () => {
+    const body = '---\nstatus: shipped\ntitle: foo\n---\nsome body';
+    expect(mod.parseFrontmatterStatus(body)).toBe('shipped');
+  });
+
+  it('returns null when no frontmatter', () => {
+    expect(mod.parseFrontmatterStatus('just plain text')).toBeNull();
+  });
+
+  it('returns null when frontmatter has no status field', () => {
+    const body = '---\ntitle: foo\n---\nbody';
+    expect(mod.parseFrontmatterStatus(body)).toBeNull();
+  });
+
+  it('returns closed for status:closed', () => {
+    const body = '---\nstatus: closed\n---\nbody';
+    expect(mod.parseFrontmatterStatus(body)).toBe('closed');
+  });
+
+  it('returns open for status:open', () => {
+    const body = '---\nstatus: open\n---\nbody';
+    expect(mod.parseFrontmatterStatus(body)).toBe('open');
+  });
+});
+
+describe('auditBody — status filter', () => {
+  // A body that scores rubric 3 + PROTOCOL_BOUND → HANDBOOK (without status filter)
+  const handbookBody = [
+    '2026-04-01 and 2026-04-10 confirm.',
+    'You MUST always call gossip_remember.',
+    'Without it, signals are silently dropped.',
+  ].join('\n');
+
+  it('status:shipped + rubric 3 PROTOCOL_BOUND + includeShipped:false → DROP with drop_reason:status_shipped', () => {
+    const body = '---\nstatus: shipped\n---\n' + handbookBody;
+    const row = mod.auditBody('x.md', body, [], { includeShipped: false });
+    expect(row.proposed_target).toBe('DROP');
+    expect(row.drop_reason).toBe('status_shipped');
+    expect(row.status).toBe('shipped');
+  });
+
+  it('status:shipped + rubric 3 PROTOCOL_BOUND + includeShipped:true → HANDBOOK', () => {
+    const body = '---\nstatus: shipped\n---\n' + handbookBody;
+    const row = mod.auditBody('x.md', body, [], { includeShipped: true });
+    expect(row.proposed_target).toBe('HANDBOOK');
+    expect(row.status).toBe('shipped');
+  });
+
+  it('status:closed → DROP with drop_reason:status_closed (includeShipped:false)', () => {
+    const body = '---\nstatus: closed\n---\n' + handbookBody;
+    const row = mod.auditBody('x.md', body, [], { includeShipped: false });
+    expect(row.proposed_target).toBe('DROP');
+    expect(row.drop_reason).toBe('status_closed');
+    expect(row.status).toBe('closed');
+  });
+
+  it('status:open → normal rubric-based target', () => {
+    const body = '---\nstatus: open\n---\n' + handbookBody;
+    const row = mod.auditBody('x.md', body, [], { includeShipped: false });
+    expect(row.proposed_target).toBe('HANDBOOK');
+    expect(row.status).toBe('open');
+  });
+
+  it('missing status → normal target, no crash', () => {
+    const row = mod.auditBody('x.md', handbookBody, [], { includeShipped: false });
+    expect(row.proposed_target).toBe('HANDBOOK');
+    expect(row.status).toBeNull();
+  });
+
+  it('no frontmatter → normal target, no crash', () => {
+    const row = mod.auditBody('x.md', handbookBody, [], { includeShipped: false });
+    expect(row.proposed_target).toBe('HANDBOOK');
+    expect(row.status).toBeNull();
+    expect(row.drop_reason).toBeUndefined();
+  });
+
+  it('rubric<3 + status:open → drop_reason:low_rubric', () => {
+    // plain body with no rubric signals
+    const row = mod.auditBody('x.md', '---\nstatus: open\n---\nplain text', [], { includeShipped: false });
+    expect(row.proposed_target).toBe('DROP');
+    expect(row.drop_reason).toBe('low_rubric');
+  });
+});
+
 describe('CLI smoke', () => {
   it('--help prints usage and exits 0', () => {
     const out = execFileSync('node', [SCRIPT_MJS, '--help'], { encoding: 'utf8' });
     expect(out).toMatch(/audit-memories/);
     expect(out).toMatch(/--candidates-only/);
+  });
+
+  it('--help mentions --include-shipped', () => {
+    const out = execFileSync('node', [SCRIPT_MJS, '--help'], { encoding: 'utf8' });
+    expect(out).toMatch(/--include-shipped/);
   });
 });
