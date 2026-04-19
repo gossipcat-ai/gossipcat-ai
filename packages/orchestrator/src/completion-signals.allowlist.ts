@@ -21,3 +21,41 @@ export const COMPLETION_SIGNAL_ALLOWLIST: readonly string[] = [
   'format_compliance',
   'finding_dropped_format',
 ] as const;
+
+/**
+ * EMISSION_PATHS — closed enum of code regions permitted to write into
+ * `agent-performance.jsonl` via `PerformanceWriter.appendSignal(s)`.
+ *
+ * Layer 3 drift detector (`pipeline-drift-detector.ts`) tags every row with
+ * the caller's identity (stamped as `_emission_path` on each serialised row)
+ * and fires a drift event when an allowlisted completion-signal name appears
+ * on a non-helper path, or when rows land with `_emission_path === 'unknown'`.
+ *
+ * The parity test `completion-signals-parity.test.ts` asserts every
+ * `appendSignal` or `appendSignals` call site in `packages/orchestrator/src/**`
+ * and `apps/cli/src/**` passes a second argument drawn from this array. To
+ * add a new path, extend this array AND the corresponding call site in the
+ * same PR — see the spec
+ * `docs/specs/2026-04-19-l3-signal-pipeline-drift-detector.md`.
+ *
+ * The TS union `EmissionPath` is derived via `typeof EMISSION_PATHS[number]`,
+ * so the runtime array and the compile-time type share a single source of
+ * truth — there is no mirror to drift.
+ */
+export const EMISSION_PATHS = [
+  'completion-signals-helper',
+  'consensus-coordinator',
+  'consensus-engine',
+  'dispatch-pipeline',
+  'native-tasks',
+  'relay-cross-review',
+  'collect-handler',
+  'sandbox-boundary',
+  'sandbox-trust',
+  'mcp-server-signals',
+  'mcp-server-bulk',
+  'mcp-server-impl',
+  'unknown',
+] as const;
+
+export type EmissionPath = typeof EMISSION_PATHS[number];

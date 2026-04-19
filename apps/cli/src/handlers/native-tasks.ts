@@ -82,7 +82,7 @@ function recordTimeoutSignal(taskId: string, agentId: string): void {
       agentId,
       evidence: 'Native agent timed out — no gossip_relay call received',
       timestamp: new Date().toISOString(),
-    }]);
+    }], 'native-tasks');
     process.stderr.write(`[gossipcat] ⏱️  Auto-recorded timeout signal for ${agentId} [${taskId}]\n`);
   } catch { /* best-effort */ }
 }
@@ -241,7 +241,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
             taskId: task_id,
             evidence: 'Late relay arrived — agent completed successfully after timeout',
             timestamp: new Date().toISOString(),
-          }]);
+          }], 'native-tasks');
           process.stderr.write(`[gossipcat] ↩️  Retracted timeout signal for ${taskInfo.agentId} [${task_id}]\n`);
         } catch { /* best-effort */ }
       }
@@ -364,7 +364,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         source: 'auto',
         evidence: error || undefined,
         timestamp: new Date().toISOString(),
-      }]);
+      }], 'mcp-server-impl');
     } catch { /* best-effort */ }
   }
 

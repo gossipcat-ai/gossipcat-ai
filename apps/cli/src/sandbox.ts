@@ -520,7 +520,7 @@ function recordBoundaryEscape(
           `Violating paths: ${violations.slice(0, 10).join(', ')}`,
         timestamp: new Date().toISOString(),
       },
-    ]);
+    ], 'sandbox-boundary');
   } catch {
     /* best-effort */
   }
@@ -1290,7 +1290,7 @@ function recordLayer3Violations(
             `Paths: ${violations.slice(0, 10).join(', ')}`,
           timestamp: new Date().toISOString(),
         },
-      ]);
+      ], 'sandbox-trust');
     } catch {
       /* best-effort */
     }

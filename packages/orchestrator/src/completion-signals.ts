@@ -155,7 +155,7 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
     }
 
     const writer = new PerformanceWriter(projectRoot);
-    writer.appendSignals(signals);
+    writer.appendSignals(signals, 'completion-signals-helper');
   } catch (err) {
     process.stderr.write(`[gossipcat] emitCompletionSignals failed: ${(err as Error).message}\n`);
   }

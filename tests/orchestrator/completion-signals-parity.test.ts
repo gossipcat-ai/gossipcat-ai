@@ -10,10 +10,13 @@
  * A mismatch in EITHER direction fails — new signals must be allowlisted,
  * and removed signals must be pruned from the allowlist.
  */
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, readdirSync, statSync } from 'fs';
+import { join, relative } from 'path';
 import * as ts from 'typescript';
-import { COMPLETION_SIGNAL_ALLOWLIST } from '../../packages/orchestrator/src/completion-signals.allowlist';
+import {
+  COMPLETION_SIGNAL_ALLOWLIST,
+  EMISSION_PATHS,
+} from '../../packages/orchestrator/src/completion-signals.allowlist';
 
 const HELPER_PATH = join(
   __dirname,
@@ -95,5 +98,111 @@ describe('completion-signals parity (Layer 1 drift guard)', () => {
     }
 
     expect(codeSet).toEqual(allowSet);
+  });
+
+  it('every appendSignal(s) call site passes an EmissionPath second argument', () => {
+    const repoRoot = join(__dirname, '../..');
+    const scanRoots = [
+      join(repoRoot, 'packages/orchestrator/src'),
+      join(repoRoot, 'apps/cli/src'),
+    ];
+    const allowed = new Set<string>(EMISSION_PATHS);
+    const offenders: Array<{ file: string; line: number; col: number; reason: string; raw: string }> = [];
+
+    for (const root of scanRoots) {
+      for (const file of walkTsFiles(root)) {
+        scanFile(file);
+      }
+    }
+
+    function walkTsFiles(dir: string): string[] {
+      const out: string[] = [];
+      let entries: string[] = [];
+      try { entries = readdirSync(dir); } catch { return out; }
+      for (const name of entries) {
+        const full = join(dir, name);
+        let st;
+        try { st = statSync(full); } catch { continue; }
+        if (st.isDirectory()) {
+          out.push(...walkTsFiles(full));
+        } else if (st.isFile() && (name.endsWith('.ts') || name.endsWith('.tsx')) && !name.endsWith('.d.ts')) {
+          out.push(full);
+        }
+      }
+      return out;
+    }
+
+    function scanFile(file: string): void {
+      const source = readFileSync(file, 'utf8');
+      const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+      const rel = relative(repoRoot, file);
+      visit(sf);
+
+      function visit(node: ts.Node): void {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+          const methodName = node.expression.name.text;
+          if (methodName === 'appendSignal' || methodName === 'appendSignals') {
+            // Skip the definition site itself (method declaration, not a call).
+            // Skip writer test helpers that intentionally exercise the default
+            // `'unknown'` path (validateSignal unit tests).
+            if (rel.endsWith('packages/orchestrator/src/performance-writer.ts')) {
+              // The only calls inside the writer are the implementation — no
+              // .appendSignal(s) invocations exist on `this.` beyond method bodies.
+              // Guard is defensive: parity check applies only to external callers.
+              return;
+            }
+            // Ignore the interface-shape declaration in tool-server.ts. That
+            // file declares a minimal duck-typed interface and does not call
+            // the real PerformanceWriter; its one invocation is a separate
+            // local writer and is wired below.
+            const args = node.arguments;
+            if (args.length < 2) {
+              const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+              offenders.push({
+                file: rel,
+                line: pos.line + 1,
+                col: pos.character + 1,
+                reason: `${methodName}() called with ${args.length} argument(s); expected 2 (signals, emissionPath)`,
+                raw: node.getText(sf).slice(0, 120),
+              });
+            } else {
+              const second = args[1];
+              if (!ts.isStringLiteral(second) && !ts.isNoSubstitutionTemplateLiteral(second)) {
+                const pos = sf.getLineAndCharacterOfPosition(second.getStart(sf));
+                offenders.push({
+                  file: rel,
+                  line: pos.line + 1,
+                  col: pos.character + 1,
+                  reason: `${methodName}() second argument is not a string literal`,
+                  raw: second.getText(sf).slice(0, 80),
+                });
+              } else if (!allowed.has(second.text)) {
+                const pos = sf.getLineAndCharacterOfPosition(second.getStart(sf));
+                offenders.push({
+                  file: rel,
+                  line: pos.line + 1,
+                  col: pos.character + 1,
+                  reason: `${methodName}() second argument "${second.text}" is not in EMISSION_PATHS`,
+                  raw: second.getText(sf).slice(0, 80),
+                });
+              }
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      }
+    }
+
+    if (offenders.length > 0) {
+      const msg = [
+        `Emission-path parity drift — ${offenders.length} offending appendSignal(s) call site(s).`,
+        `Every call site under packages/orchestrator/src/ or apps/cli/src/ must pass a string literal`,
+        `from EMISSION_PATHS in completion-signals.allowlist.ts as its second argument.`,
+        '',
+        ...offenders.map(o => `  ${o.file}:${o.line}:${o.col}  ${o.reason}\n    > ${o.raw}`),
+      ].join('\n');
+      throw new Error(msg);
+    }
+    expect(offenders).toEqual([]);
   });
 });

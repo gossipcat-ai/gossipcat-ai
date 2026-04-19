@@ -550,16 +550,13 @@ async function doBoot() {
     const instructions = (identityBlock + baseInstructions).trim() || undefined;
     const enableWebSearch = ac.preset === 'researcher' || (ac.skills ?? []).includes('research');
     const worker = new m.WorkerAgent(ac.id, llm, ctx.relay.url, m.ALL_TOOLS, instructions, enableWebSearch, relayApiKey);
-    // Wire meta signal emission for ATI profiling
-    worker.setOnTaskComplete?.((event: { agentId: string; taskId: string; toolCalls: number; durationMs: number }) => {
-      try {
-        const now = new Date().toISOString();
-        perfWriter.appendSignal({ type: 'meta', signal: 'task_completed', agentId: event.agentId, taskId: event.taskId, value: event.durationMs, timestamp: now } as any);
-        if (event.toolCalls > 0) {
-          perfWriter.appendSignal({ type: 'meta', signal: 'task_tool_turns', agentId: event.agentId, taskId: event.taskId, value: event.toolCalls, timestamp: now } as any);
-        }
-      } catch { /* ATI signal emission is best-effort */ }
-    });
+    // ATI profiling signals (task_completed + task_tool_turns + format_compliance +
+    // finding_dropped_format) are emitted from the dispatch-pipeline via the shared
+    // `emitCompletionSignals` helper on FINAL_RESULT / ERROR. Emitting them here too
+    // would double-count and would be a Layer-3 bypass of the helper path — the
+    // exact drift class L3 is designed to flag. See
+    // docs/specs/2026-04-19-l3-signal-pipeline-drift-detector.md §"Correctness
+    // amendments" #1.
     await worker.start();
     ctx.workers.set(ac.id, worker);
   }
@@ -1679,7 +1676,35 @@ server.tool(
           : '');
     } catch { /* no handbook present — skip silently, this is optional infrastructure */ }
 
-    return { content: [{ type: 'text' as const, text: lines.join('\n') + '\n\n' + agentSections.join('\n') + sessionContextSection + handbookSection }] };
+    // Surface Layer-3 signal-pipeline drift inline on the banner. Cheap (single
+    // readFileSync of the last row of pipeline-drift.jsonl), and makes drift
+    // visible to the orchestrator LLM without requiring dashboard access.
+    // Only render when the detection is within the current session
+    // (1h window — matches session-continuity semantics elsewhere).
+    let driftSection = '';
+    try {
+      const { PipelineDriftDetector } = await import('@gossip/orchestrator');
+      const detector = new PipelineDriftDetector(process.cwd());
+      const last = detector.readLastReport();
+      if (last && last.detectedAt) {
+        const ageMs = Date.now() - Date.parse(last.detectedAt);
+        if (isFinite(ageMs) && ageMs >= 0 && ageMs <= 60 * 60 * 1000) {
+          const first = (last.sampleOffenders && last.sampleOffenders[0]) || undefined;
+          const hhmm = new Date(last.detectedAt).toISOString().slice(11, 16);
+          const parts: string[] = [
+            '',
+            '⚠ Pipeline drift detected (L3):',
+            `    bypass=${last.bypassCount} unknown=${last.unknownCount} window=${last.windowSize} (last seen ${hhmm} UTC)`,
+          ];
+          if (first) {
+            parts.push(`    first offender: signal=${first.signal} path=${first.emissionPath} task=${first.taskId}`);
+          }
+          driftSection = parts.join('\n') + '\n';
+        }
+      }
+    } catch { /* drift surface is best-effort */ }
+
+    return { content: [{ type: 'text' as const, text: lines.join('\n') + '\n\n' + agentSections.join('\n') + sessionContextSection + handbookSection + driftSection }] };
   }
 );
 
@@ -2357,7 +2382,7 @@ server.tool(
           agentId: agent_id,
           evidence: `Retracted: ${reason}`,
           timestamp: new Date().toISOString(),
-        }]);
+        }], 'mcp-server-signals');
         return { content: [{ type: 'text' as const, text: `Retracted signal for ${agent_id} on task ${task_id}.\nReason: ${reason}\n\nThe original signal remains in the audit log but will be excluded from scoring.` }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed to retract: ${(err as Error).message}` }] };
@@ -2443,7 +2468,7 @@ server.tool(
         for (const f of report.disputed ?? []) { addSignal('disagreement', f); disagreementCount++; }
         for (const f of report.unique ?? []) { addSignal('unique_unconfirmed', f); uniqueCount++; }
 
-        if (toRecord.length > 0) writer.appendSignals(toRecord);
+        if (toRecord.length > 0) writer.appendSignals(toRecord, 'mcp-server-bulk');
 
         const skipped = dupes.length;
         const totalRecorded = toRecord.length;
@@ -2661,7 +2686,7 @@ server.tool(
         return true;
       });
 
-      if (deduped.length > 0) writer.appendSignals(deduped);
+      if (deduped.length > 0) writer.appendSignals(deduped, 'mcp-server-signals');
 
       // Auto-convert hallucination signals into skill gap suggestions.
       // Reuses the category derived above (formatted[i].category) so the suggestion
@@ -2705,7 +2730,7 @@ server.tool(
               claimedSeverity: originalSeverity,
               category: 'severity_calibration',
               timestamp: new Date().toISOString(),
-            } as any);
+            } as any, 'mcp-server-signals');
           } catch { /* best-effort */ }
         }
       }

@@ -110,7 +110,7 @@ export class ConsensusCoordinator {
 
       // Write performance signals
       if (consensusReport.signals.length > 0) {
-        perfWriter.appendSignals(consensusReport.signals);
+        perfWriter.appendSignals(consensusReport.signals, 'consensus-coordinator');
 
         try {
           this.memWriter.updateImportanceFromSignals(
@@ -140,7 +140,7 @@ export class ConsensusCoordinator {
               evidence: finding.finding,
               timestamp: new Date(baseMs + i).toISOString(),
               severity: finding.severity,
-            } as any);
+            } as any, 'consensus-coordinator');
             i++;
           }
         }

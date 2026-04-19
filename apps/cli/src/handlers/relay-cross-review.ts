@@ -45,7 +45,7 @@ export function startConsensusTimeout(consensusId: string): void {
         taskId: `timeout-${consensusId}`,
         evidence: 'Cross-review timed out — agent did not respond within deadline',
         timestamp: now,
-      })));
+      })), 'relay-cross-review');
     } catch { /* best-effort */ }
 
     // Synthesize with what we have
@@ -305,7 +305,7 @@ export async function handleRelayCrossReview(
     try {
       const writer = new PerformanceWriter(process.cwd());
       if (report.signals.length > 0) {
-        writer.appendSignals(report.signals);
+        writer.appendSignals(report.signals, 'relay-cross-review');
       }
     } catch { /* best-effort */ }
 

@@ -35,7 +35,10 @@ describe('PerformanceWriter', () => {
     expect(fs.existsSync(filePath)).toBe(true);
     const lines = fs.readFileSync(filePath, 'utf-8').trim().split('\n');
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0])).toEqual(signal);
+    // _emission_path is stamped out-of-band on every row (L3 drift guard);
+    // compare by toMatchObject so existing shape assertions still pass.
+    expect(JSON.parse(lines[0])).toMatchObject(signal);
+    expect(JSON.parse(lines[0])._emission_path).toBe('unknown');
   });
 
   it('appends multiple signals', () => {

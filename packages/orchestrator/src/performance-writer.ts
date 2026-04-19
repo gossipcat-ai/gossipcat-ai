@@ -2,6 +2,9 @@
 import { appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
 import { PerformanceSignal } from './consensus-types';
+import type { EmissionPath } from './completion-signals.allowlist';
+
+export type { EmissionPath } from './completion-signals.allowlist';
 
 /**
  * Max bytes before single-slot rotation of telemetry JSONL files.
@@ -94,27 +97,82 @@ function validateSignal(signal: PerformanceSignal): void {
 }
 
 
+/**
+ * Module-level sampling counter for the L3 drift detector. Reset on process
+ * exit (documented as "best-effort on long-lived processes") — the epoch and
+ * fingerprint cache persist to `.gossip/pipeline-drift.state` so detection
+ * survives CLI restarts even if the in-memory counter does not.
+ */
+let rowsWrittenSinceCheck = 0;
+const DRIFT_SAMPLE_INTERVAL = 50;
+
+function bumpSampleCounter(projectRoot: string, delta: number): void {
+  rowsWrittenSinceCheck += delta;
+  if (rowsWrittenSinceCheck < DRIFT_SAMPLE_INTERVAL) return;
+  rowsWrittenSinceCheck = 0;
+  // Lazy import keeps the circular-dependency risk off the hot path and lets
+  // the detector be tree-shaken if it evolves into optional telemetry.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { PipelineDriftDetector } = require('./pipeline-drift-detector') as {
+      PipelineDriftDetector: new (projectRoot: string) => { run(): unknown };
+    };
+    new PipelineDriftDetector(projectRoot).run();
+  } catch (err) {
+    try {
+      process.stderr.write(`[gossipcat] pipeline drift sampling failed: ${(err as Error).message}\n`);
+    } catch { /* best-effort */ }
+  }
+}
+
+/**
+ * Reset the module-level sampling counter. Intended for unit tests that need
+ * deterministic control over when the L3 detector runs.
+ * @internal
+ */
+export function __resetSampleCounterForTests(): void {
+  rowsWrittenSinceCheck = 0;
+}
+
 export class PerformanceWriter {
   private readonly filePath: string;
+  private readonly projectRoot: string;
 
   constructor(projectRoot: string) {
     const dir = join(projectRoot, '.gossip');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     this.filePath = join(dir, 'agent-performance.jsonl');
+    this.projectRoot = projectRoot;
   }
 
-  appendSignal(signal: PerformanceSignal): void {
+  /**
+   * Append a single signal. Stamps `_emission_path` on the serialised row
+   * (out-of-band from the validated signal envelope) so the L3 drift
+   * detector can distinguish bypass writers from the sanctioned helper path.
+   * `_emission_path` defaults to `'unknown'` — any unset call site shows up
+   * as drift to the detector.
+   */
+  appendSignal(signal: PerformanceSignal, emissionPath: EmissionPath = 'unknown'): void {
     validateSignal(signal);
     rotateJsonlIfNeeded(this.filePath);
-    appendFileSync(this.filePath, JSON.stringify(signal) + '\n');
+    const row = { ...signal, _emission_path: emissionPath };
+    appendFileSync(this.filePath, JSON.stringify(row) + '\n');
+    bumpSampleCounter(this.projectRoot, 1);
   }
 
-  appendSignals(signals: PerformanceSignal[]): void {
+  /**
+   * Append a batch of signals. See `appendSignal` for the `_emission_path`
+   * contract.
+   */
+  appendSignals(signals: PerformanceSignal[], emissionPath: EmissionPath = 'unknown'): void {
     if (signals.length === 0) return;
     for (const s of signals) validateSignal(s);
-    const data = signals.map(s => JSON.stringify(s)).join('\n') + '\n';
+    const data = signals
+      .map(s => JSON.stringify({ ...s, _emission_path: emissionPath }))
+      .join('\n') + '\n';
     rotateJsonlIfNeeded(this.filePath);
     appendFileSync(this.filePath, data);
+    bumpSampleCounter(this.projectRoot, signals.length);
   }
 
   /**
@@ -145,6 +203,7 @@ export class PerformanceWriter {
       evidence: `Consensus round ${consensusId} retracted: ${reason}`,
     };
     validateSignal(row as PerformanceSignal);
-    appendFileSync(this.filePath, JSON.stringify(row) + '\n');
+    const stamped = { ...row, _emission_path: 'mcp-server-signals' as EmissionPath };
+    appendFileSync(this.filePath, JSON.stringify(stamped) + '\n');
   }
 }

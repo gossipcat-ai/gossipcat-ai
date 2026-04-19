@@ -198,7 +198,7 @@ export async function handleCollect(
           ? new Date(r.completedAt).toISOString()
           : new Date(now + i).toISOString(),
       }));
-      writer.appendSignals(autoSignals);
+      writer.appendSignals(autoSignals, 'collect-handler');
       process.stderr.write(`[gossipcat] ⚠️  Auto-recorded ${autoSignals.length} failure signal(s): ${autoSignals.map((s: any) => s.agentId).join(', ')}\n`);
     }
   } catch { /* best-effort */ }
@@ -743,7 +743,7 @@ export async function handleCollect(
         }));
 
       if (provisionalSignals.length > 0) {
-        writer.appendSignals(provisionalSignals);
+        writer.appendSignals(provisionalSignals, 'collect-handler');
         provisionalSignalCount = provisionalSignals.length;
         process.stderr.write(`[gossipcat] Auto-recorded ${provisionalSignalCount} provisional signal(s) with finding_id. Use gossip_signals to override or add nuance; retract with action: "retract".\n`);
       }
