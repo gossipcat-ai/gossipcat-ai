@@ -142,6 +142,12 @@ When you verify a finding as real (or catch a hallucination), **record the signa
 
 **Every signal must include `finding_id`** in the format `<consensusId>:<agentId>:fN`. Without it, the dashboard can't trace back from signal → finding → agent and scoring becomes opaque.
 
+### Relaying native agent output preserves raw angle brackets
+
+When feeding a native `Agent()` result back via `gossip_relay`, the `<agent_finding>` tags must reach the parser as raw angle brackets. If the transport path double-entity-encodes to `&lt;agent_finding&gt;` — common when output is routed through a markdown renderer, a JSON.stringify helper that re-encodes, or a web-UI paste — the strict parser (invariant #8) does a literal `<agent_finding` match, finds zero tags, and scores the agent as format-noncompliant even though the output was correct. Pass the agent's output verbatim.
+
+If `format_compliance` signals a sudden drop for an agent that was fine last round, inspect the raw tags in the consensus report for `&lt;` / `&gt;` entity encoding before investigating further.
+
 ### Skill-develop cooldown gate
 
 `gossip_skills(action: "develop")` is throttled to prevent churn. Redeveloping the same skill while its effectiveness window is still accumulating evidence resets the `MIN_EVIDENCE=120` counter and collapses the statistical signal. Cooldown is verdict-aware:
