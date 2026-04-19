@@ -95,3 +95,5 @@ export { COMPLETION_SIGNAL_ALLOWLIST, EMISSION_PATHS } from './completion-signal
 export type { EmissionPath } from './completion-signals.allowlist';
 export { PipelineDriftDetector } from './pipeline-drift-detector';
 export type { DriftDetectionResult, DriftOffender, PipelineDriftDetectorOptions } from './pipeline-drift-detector';
+export { loadMemoryConfig } from './memory-config';
+export type { MemoryConfig } from './memory-config';

@@ -48,7 +48,7 @@ const DOCUMENTED_PATH_SPECIFIC = new Map<string, string>([
   ['relay_received',            'dispatch-pipeline.ts (relay receive)'],
   ['synthesis_completed',       'consensus-coordinator.ts'],
   ['circuit_open_fired',        'performance-reader.ts / dispatch-pipeline.ts'],
-  ['skill_injection_skipped',   'prompt-assembler.ts'],
+  ['skill_injection_skipped',   'prompt-assembler.ts / skill-loader.ts (ikp §4 kill-switch)'],
 ]);
 
 // ── Exhaustive union of all known signal names ─────────────────────────────
