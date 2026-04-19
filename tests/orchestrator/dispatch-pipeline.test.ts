@@ -581,4 +581,51 @@ describe('DispatchPipeline', () => {
       expect(codes).toEqual(['HTML_ENTITY_MIXED_PAYLOAD']);
     });
   });
+
+  describe('detectFormatCompliance — MAX_COMPLIANCE_INPUT length cap', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { detectFormatCompliance, MAX_COMPLIANCE_INPUT } = require('@gossip/orchestrator');
+
+    it('MAX_COMPLIANCE_INPUT equals 1 MiB (1048576 bytes)', () => {
+      expect(MAX_COMPLIANCE_INPUT).toBe(1_048_576);
+    });
+
+    it('does not emit input_truncated for 100 KB input', () => {
+      const input = 'x'.repeat(100 * 1024);
+      const compliance = detectFormatCompliance(input);
+      const codes = compliance.diagnostics.map((d: { code: string }) => d.code);
+      expect(codes).not.toContain('input_truncated');
+    });
+
+    it('does not emit input_truncated for exactly 1 MiB input', () => {
+      const input = 'x'.repeat(MAX_COMPLIANCE_INPUT);
+      const compliance = detectFormatCompliance(input);
+      const codes = compliance.diagnostics.map((d: { code: string }) => d.code);
+      expect(codes).not.toContain('input_truncated');
+    });
+
+    it('emits input_truncated diagnostic for 1.5 MiB input and counts reflect first MiB only', () => {
+      // Build a 1.5 MiB string that contains an <agent_finding> tag AFTER the 1 MiB boundary.
+      const padding = 'x'.repeat(MAX_COMPLIANCE_INPUT);
+      const suffix = '<agent_finding type="finding" severity="high">Beyond cap foo.ts:99 content</agent_finding>';
+      const oversized = padding + suffix;
+      expect(oversized.length).toBeGreaterThan(MAX_COMPLIANCE_INPUT);
+
+      const compliance = detectFormatCompliance(oversized);
+
+      // The truncation diagnostic must be present.
+      const codes = compliance.diagnostics.map((d: { code: string }) => d.code);
+      expect(codes).toContain('input_truncated');
+
+      // The detail must reference the real input length and cap.
+      const truncDiag = compliance.diagnostics.find((d: { code: string }) => d.code === 'input_truncated') as { code: string; detail: string };
+      expect(truncDiag.detail).toContain(`result length ${oversized.length}`);
+      expect(truncDiag.detail).toContain(`cap ${MAX_COMPLIANCE_INPUT}`);
+
+      // Findings/citations from beyond the cap boundary must not be counted.
+      // The suffix tag is after the cut-off, so tags_accepted must be 0.
+      expect(compliance.tags_accepted).toBe(0);
+      expect(compliance.findingCount).toBe(0);
+    });
+  });
 });
