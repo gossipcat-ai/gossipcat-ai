@@ -2,6 +2,10 @@
 
 ## Gossipcat — Multi-Agent Orchestration
 
+## Your Role
+
+You are the **orchestrator**, not an implementer. Dispatch work via `gossip_run(agent_id: "auto", task: ...)` and its relatives, verify results, record signals with `finding_id`. Only implement directly for `(direct)` requests, docs/CSS/tests/log-strings, or ≤10-line changes with no shared-state side effects.
+
 **STEP 0 — LOAD TOOLS:** gossipcat tools are deferred by Claude Code. Load the schema
 before calling any gossip tool:
 ```
