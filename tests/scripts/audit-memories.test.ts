@@ -125,6 +125,50 @@ describe('defaultMemoryDir', () => {
   });
 });
 
+describe('resolveProjectRoot', () => {
+  it('uses git-common-dir parent when superproject is empty', () => {
+    const fakeExec = (cmd: string) => {
+      if (cmd.includes('--show-superproject-working-tree')) return '';
+      if (cmd.includes('--git-common-dir')) return '/Users/alice/code/proj/.git';
+      throw new Error('unexpected');
+    };
+    const root = mod.resolveProjectRoot('/Users/alice/code/proj/.claude/worktrees/agent-XXXX', fakeExec);
+    // parent of /Users/alice/code/proj/.git is /Users/alice/code/proj
+    expect(root).toBe('/Users/alice/code/proj');
+  });
+
+  it('uses git-common-dir when superproject throws', () => {
+    const fakeExec = (cmd: string) => {
+      if (cmd.includes('--show-superproject-working-tree')) throw new Error('not a superproject');
+      if (cmd.includes('--git-common-dir')) return '/Users/alice/code/proj/.git';
+      throw new Error('unexpected');
+    };
+    const root = mod.resolveProjectRoot('/Users/alice/code/proj/.claude/worktrees/agent-XXXX', fakeExec);
+    expect(root).toBe('/Users/alice/code/proj');
+  });
+
+  it('defaultMemoryDir uses git-common-dir root, not cwd', () => {
+    const fakeExec = (cmd: string) => {
+      if (cmd.includes('--show-superproject-working-tree')) return '';
+      if (cmd.includes('--git-common-dir')) return '/Users/alice/code/proj/.git';
+      throw new Error('unexpected');
+    };
+    const dir = mod.defaultMemoryDir('/Users/alice/code/proj/.claude/worktrees/agent-XXXX', '/home/alice', fakeExec);
+    expect(dir).toBe('/home/alice/.claude/projects/Users-alice-code-proj/memory');
+  });
+
+  it('falls back to cwd when all git commands fail', () => {
+    const fakeExec = () => { throw new Error('not a git repo'); };
+    const root = mod.resolveProjectRoot('/some/non-git/dir', fakeExec);
+    expect(root).toBe('/some/non-git/dir');
+  });
+
+  it('--dir flag overrides derivation (parseArgs test)', () => {
+    const args = mod.parseArgs(['--dir', '/custom/memory/path']);
+    expect(args.dir).toBe('/custom/memory/path');
+  });
+});
+
 describe('parseArgs', () => {
   it('parses flags and values', () => {
     const a = mod.parseArgs(['--json', '--dir', '/tmp/x', '--candidates-only', '--codenames', 'a,b']);
