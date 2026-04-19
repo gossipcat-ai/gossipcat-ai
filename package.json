@@ -33,7 +33,8 @@
     "build:dashboard": "cd packages/dashboard-v2 && npx vite build --outDir ../../dist-dashboard --emptyOutDir",
     "prepublishOnly": "npm run build:mcp && npm run build:dashboard",
     "gossipcat": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts",
-    "start": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts"
+    "start": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts",
+    "audit:memories": "node scripts/audit-memories.mjs"
   },
   "publishConfig": {
     "access": "public"
