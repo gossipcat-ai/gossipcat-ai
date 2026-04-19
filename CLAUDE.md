@@ -132,21 +132,48 @@ This is intentional: scoped agents write files, the orchestrator validates and c
 
 ---
 
-## Memory hygiene (gossipcat convention)
+## Memory hygiene (mandatory for new memories)
 
-When saving a `project_*` memory, include a `status` field in the frontmatter:
+Every memory file you write to `~/.claude/projects/<encoded-cwd>/memory/*.md`
+MUST include complete frontmatter. No exceptions.
 
-- `status: open` — active backlog item, work in progress, or decision pending
-  revisit. These items decay and need `gossip_verify_memory` before acting.
-- `status: shipped` — the work it describes has landed. Reference only. No
-  verification needed; changes to the described behavior should produce a new
-  memory, not mutate this one.
-- `status: closed` — decision was made not to pursue. Archive semantics.
+**Required frontmatter skeleton — copy this exactly, then fill:**
 
-This field is not required by Claude Code's auto-memory system; it's a
-gossipcat-specific convention so the dashboard can distinguish open backlog
-from shipped records. Whether Claude Code's auto-memory writer picks up this
-per-repo convention may or may not propagate to new memory files — unknown.
-Treat it as best-effort: if it works, new users adopt `status` over time; if
-not, the dashboard mapper still behaves correctly (legacy files without
-`status` render as `backlog` by safe default).
+```yaml
+---
+name: <short human-readable title>
+description: <one-line summary, used for recall ranking>
+type: <user | feedback | project | reference>
+status: <open | shipped | closed>   # project_* and feedback_* only; omit for user/reference
+originSessionId: <current session UUID>
+---
+```
+
+**Field rules:**
+
+- `name` — required, every type. Short title.
+- `description` — required, every type. One line; becomes the recall hook.
+- `type` — required, exactly one of `user | feedback | project | reference`. Any
+  other value is invalid and flagged by `audit-memories --hygiene`.
+- `status` — required for `project_*` and `feedback_*` memories, omitted for
+  `user` and `reference`. One of:
+  - `status: open` — active backlog, in-progress, or decision pending. Decays;
+    needs `gossip_verify_memory` before acting on it.
+  - `status: shipped` — the described work has landed. Reference only; never
+    mutate — create a new memory if the behavior changes.
+  - `status: closed` — decision made not to pursue. Archive semantics.
+- `originSessionId` — required for `project_*` and `feedback_*`. Enables
+  multi-session recurrence detection in the audit rubric.
+
+**Why this is now mandatory, not best-effort:**
+
+`scripts/audit-memories.mjs --hygiene` enforces these rules across the whole
+memory directory. On the current corpus ~38% of files fail the scan, mostly
+from missing `status` / `originSessionId`. The `--include-shipped` gate in the
+triage tool also depends on `status:` being present to route
+already-done work out of the propagation candidate pool.
+
+Future sessions should find this block at session start and produce clean
+memories on first write. If you see an existing memory with missing fields,
+leave it alone — back-filling is a human-curated pass (spec §1
+strip-and-generalize, not automated).
