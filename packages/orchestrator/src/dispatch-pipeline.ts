@@ -74,6 +74,9 @@ type TrackedTask = TaskEntry & {
  * "agent emitted tags but all had invalid type=" — the second case points at
  * a skill/prompt-format drift that instruction edits won't fix.
  */
+/** Maximum byte length of `result` fed into `detectFormatCompliance` regex passes. */
+export const MAX_COMPLIANCE_INPUT = 1_048_576;
+
 export interface FormatComplianceResult {
   findingCount: number;
   citationCount: number;
@@ -92,7 +95,11 @@ export interface FormatComplianceResult {
 }
 
 export function detectFormatCompliance(result: string): FormatComplianceResult {
-  const parseRes = parseAgentFindingsStrict(result);
+  // Guard against multi-megabyte inputs blocking the event loop.
+  const truncated = result.length > MAX_COMPLIANCE_INPUT;
+  const body = truncated ? result.slice(0, MAX_COMPLIANCE_INPUT) : result;
+
+  const parseRes = parseAgentFindingsStrict(body);
   const tags_total = parseRes.rawTagCount;
   const tags_accepted = parseRes.findings.length;
   const tags_dropped_unknown_type =
@@ -100,11 +107,20 @@ export function detectFormatCompliance(result: string): FormatComplianceResult {
     parseRes.droppedMissingType;
   const tags_dropped_short_content = parseRes.droppedShortContent;
   // Preserve legacy raw-tag count (includes dropped tags) for back-compat.
-  const findingCount = (result.match(/<agent_finding[\s>]/g) ?? []).length;
-  const citationCount = (result.match(/\b[\w./-]+\.\w+:\d+\b/g) ?? []).length;
+  const findingCount = (body.match(/<agent_finding[\s>]/g) ?? []).length;
+  const citationCount = (body.match(/\b[\w./-]+\.\w+:\d+\b/g) ?? []).length;
   // Compliance now requires ACCEPTED tags (previous behavior accepted
   // dropped-type tags too, which let format-invalid output pass as compliant).
   const formatCompliant = tags_accepted > 0 && citationCount >= tags_accepted;
+
+  const diagnostics = [...parseRes.diagnostics];
+  if (truncated) {
+    diagnostics.push({
+      code: 'input_truncated',
+      detail: `result length ${result.length} > cap ${MAX_COMPLIANCE_INPUT}`,
+    } as unknown as import('./parse-findings').ParseDiagnostic);
+  }
+
   return {
     findingCount,
     citationCount,
@@ -113,7 +129,7 @@ export function detectFormatCompliance(result: string): FormatComplianceResult {
     tags_accepted,
     tags_dropped_unknown_type,
     tags_dropped_short_content,
-    diagnostics: parseRes.diagnostics,
+    diagnostics,
   };
 }
 
