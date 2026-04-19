@@ -10,6 +10,8 @@ import { Sandbox } from './sandbox';
 import { isKnownTool, validateToolArgs } from './tool-schemas';
 import { resolve } from 'path';
 import { canonicalizeForBoundary, validatePathInScope } from './scope';
+import { wrapMemoryEnvelope } from './memory-envelope';
+import { recordMemoryQuery } from './memory-audit';
 
 /**
  * Structural shape of MemorySearcher from @gossip/orchestrator. Defined here as
@@ -407,21 +409,22 @@ export class ToolServer {
     const max = typeof maxRaw === 'string' ? parseInt(maxRaw, 10) : (typeof maxRaw === 'number' ? maxRaw : 3);
     const maxResults = Number.isFinite(max) && max > 0 ? Math.min(max, 10) : 3;
     const results = this.memorySearcher.search(callerId, query, maxResults);
-    if (results.length === 0) {
-      return `No knowledge found for agent "${callerId}" matching query: "${query}"`;
-    }
-    const lines: string[] = [`Knowledge search results for agent "${callerId}" (query: "${query}"):\n`];
-    for (const r of results) {
-      lines.push(`## ${r.name} (score: ${r.score.toFixed(2)})`);
-      lines.push(`Source: ${r.source}`);
-      if (r.description) lines.push(`Description: ${r.description}`);
-      if (r.snippets.length > 0) {
-        lines.push('Snippets:');
-        for (const s of r.snippets) lines.push(`  - ${s}`);
-      }
-      lines.push('');
-    }
-    return lines.join('\n');
+
+    // Audit log. memory_query is always authenticated via envelope.sid
+    // (see line 401-403 refuses calls without callerId), so attributed=true
+    // and no untrusted_caller marker.
+    // Spec: docs/specs/2026-04-19-gossip-remember-hardening.md (Part 6).
+    recordMemoryQuery(this.sandbox.projectRoot, {
+      agentId: callerId,
+      query,
+      max_results: maxResults,
+      results_count: results.length,
+      attributed: true,
+    });
+
+    // Envelope wrap — same shape as gossip_remember. Spec Part 2 + 4.
+    const emptyText = `No knowledge found for agent "${callerId}" matching query: "${query}"`;
+    return wrapMemoryEnvelope(callerId, results, emptyText);
   }
 
   /**
