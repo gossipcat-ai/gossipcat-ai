@@ -97,6 +97,7 @@ describe('completion-signals parity (Layer 1 drift guard)', () => {
       throw new Error(lines.join('\n'));
     }
 
+    expect(extracted.length).toBeGreaterThan(0);
     expect(codeSet).toEqual(allowSet);
   });
 
