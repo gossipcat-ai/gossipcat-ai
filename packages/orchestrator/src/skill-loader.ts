@@ -4,6 +4,8 @@ import type { SkillIndex } from './skill-index';
 import { parseSkillFrontmatter } from './skill-parser';
 import { normalizeSkillName } from './skill-name';
 import { gossipLog, log as _log } from './log';
+import { loadMemoryConfig } from './memory-config';
+import { PerformanceWriter } from './performance-writer';
 
 const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
@@ -60,7 +62,17 @@ export interface DroppedSkill {
      * BEFORE keyword-hit threshold and category boost so mismatched skills
      * never consume the contextual budget.
      */
-    | 'task-type-mismatch';
+    | 'task-type-mismatch'
+    /**
+     * Skill is flagged `propagated: true` and the project's memory-config.json
+     * has `bundledMemories.enabled: false`. All propagated skills are suppressed.
+     */
+    | 'kill-switch'
+    /**
+     * Skill is flagged `propagated: true` and its name appears in
+     * `bundledMemories.exclude`. Only this skill is suppressed.
+     */
+    | 'excluded';
   hits: number;
 }
 
@@ -131,6 +143,10 @@ export function loadSkills(
 
   const categories = taskCategories ?? [];
 
+  // Load kill-switch config once per invocation (not inside the loop).
+  const memConfig = loadMemoryConfig(projectRoot);
+  const perfWriter = new PerformanceWriter(projectRoot);
+
   const permanent: Array<{ name: string; content: string }> = [];
   const contextualCandidates: Array<{ name: string; content: string; hits: number; rawHits: number; boost: number }> = [];
   const loaded: string[] = [];
@@ -156,6 +172,41 @@ export function loadSkills(
     }
     if (frontmatterStatus === 'flagged_for_manual_review') {
       gossipLog(`Injecting flagged_for_manual_review skill ${agentId}/${skill} — manual review recommended`);
+    }
+
+    // Kill-switch filter: propagated skills (ikp §4).
+    // Read propagated from raw frontmatter — SkillFrontmatter interface does not
+    // expose it yet (intentional: this field is for bundled skills only).
+    const isPropagated = /^propagated:\s*true\s*$/m.test(content.split('\n---')[0]);
+    if (isPropagated) {
+      if (!memConfig.bundledMemories.enabled) {
+        const reason = 'kill-switch' as const;
+        _log('skill-loader', `Skipping propagated skill ${agentId}/${skill}: bundledMemories.enabled=false`);
+        perfWriter.appendSignal({
+          type: 'pipeline',
+          signal: 'skill_injection_skipped',
+          agentId,
+          taskId: `skill-loader:${agentId}:${skill}`,
+          metadata: { skillName: skill, reason },
+          timestamp: new Date().toISOString(),
+        }, 'dispatch-pipeline');
+        dropped.push({ skill, reason, hits: 0 });
+        continue;
+      }
+      if (memConfig.bundledMemories.exclude.includes(skill)) {
+        const reason = 'excluded' as const;
+        _log('skill-loader', `Skipping propagated skill ${agentId}/${skill}: listed in bundledMemories.exclude`);
+        perfWriter.appendSignal({
+          type: 'pipeline',
+          signal: 'skill_injection_skipped',
+          agentId,
+          taskId: `skill-loader:${agentId}:${skill}`,
+          metadata: { skillName: skill, reason },
+          timestamp: new Date().toISOString(),
+        }, 'dispatch-pipeline');
+        dropped.push({ skill, reason, hits: 0 });
+        continue;
+      }
     }
 
     // Task-type axis filter. Evaluated BEFORE keyword-hit counting and the
