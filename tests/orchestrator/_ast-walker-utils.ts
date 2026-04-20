@@ -208,16 +208,17 @@ export function collectSymbolBindings(sf: ts.SourceFile): Set<string> {
       }
       // Gap 3: ObjectBindingPattern with computed key from a tracked symbol.
       // Pattern: `const { [sym]: internal } = someObj;`
+      // Issue #199: also accept computed keys whose expression is a
+      // TemplateExpression where any substitution references a tracked name.
       if (ts.isObjectBindingPattern(node.name)) {
         for (const el of node.name.elements) {
           const propName = el.propertyName;
           if (
             propName &&
             ts.isComputedPropertyName(propName) &&
-            ts.isIdentifier(propName.expression) &&
-            bound.has(propName.expression.text) &&
             ts.isIdentifier(el.name) &&
-            !bound.has(el.name.text)
+            !bound.has(el.name.text) &&
+            computedKeyReferencesBound(propName.expression, bound)
           ) {
             bound.add(el.name.text);
             changed = true;
@@ -228,6 +229,33 @@ export function collectSymbolBindings(sf: ts.SourceFile): Set<string> {
   }
 
   return bound;
+}
+
+// ---------------------------------------------------------------------------
+// computedKeyReferencesBound (issue #199)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true when `expr` is a tracked reference, either directly or through
+ * a TemplateExpression whose substitutions include a tracked identifier.
+ *
+ * Issue #199: `const { [`${sym}`]: internal } = writer` and
+ * `writer[`${sym}`](...)` must both track `internal` / flag the call when
+ * `sym` is a tracked reflection-derived binding.
+ */
+export function computedKeyReferencesBound(
+  expr: ts.Expression,
+  bound: Set<string>,
+): boolean {
+  const node = stripNonNull(expr);
+  if (ts.isIdentifier(node) && bound.has(node.text)) return true;
+  if (ts.isTemplateExpression(node)) {
+    for (const span of node.templateSpans) {
+      const e = stripNonNull(span.expression);
+      if (ts.isIdentifier(e) && bound.has(e.text)) return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +293,8 @@ export function scanReflectionBypass(
     // F1 rest-element: `writer[syms[0]](...)` — argument is a chained
     // ElementAccess/method-call whose root is a tracked binding (e.g. `syms`).
     if (arg && isChainedFromTracked(arg as ts.Expression, bound)) return true;
+    // Issue #199: template-literal computed key, e.g. `writer[`${sym}`](...)`.
+    if (arg && computedKeyReferencesBound(arg as ts.Expression, bound)) return true;
     return false;
   }
 

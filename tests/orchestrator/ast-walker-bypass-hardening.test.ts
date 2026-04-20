@@ -654,3 +654,62 @@ describe('Batch A: IIFE and await bypass patterns', () => {
     expect(offenders.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('Issue #199: template-literal computed-key bypass', () => {
+  it('(a) destructuring with template-literal computed key is tracked', () => {
+    const src = [
+      'declare const writer: any;',
+      'const syms = Object.getOwnPropertySymbols(writer);',
+      'const sym = syms[0];',
+      'const { [`${sym}`]: internal } = writer;',
+      'internal.appendSignal({});',
+    ].join('\n');
+    const sf = parseSf('issue-199-destructure.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('internal')).toBe(true);
+  });
+
+  it('(b) direct writer[`${sym}`]() call is flagged', () => {
+    const src = [
+      'declare const writer: any;',
+      'const sym = Object.getOwnPropertySymbols(writer)[0];',
+      'writer[`${sym}`](\'event\');',
+    ].join('\n');
+    const sf = parseSf('issue-199-direct.ts', src);
+    const offenders = scanReflectionBypass(sf, 'issue-199-direct.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(c) template with prefix/suffix substitution is flagged', () => {
+    const src = [
+      'declare const writer: any;',
+      'const sym = Object.getOwnPropertySymbols(writer)[0];',
+      'writer[`prefix_${sym}_suffix`](\'event\');',
+    ].join('\n');
+    const sf = parseSf('issue-199-prefix-suffix.ts', src);
+    const offenders = scanReflectionBypass(sf, 'issue-199-prefix-suffix.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(d) NEGATIVE: no-substitution literal key is NOT flagged', () => {
+    const src = [
+      'declare const writer: any;',
+      'writer[`literal_key`](\'event\');',
+    ].join('\n');
+    const sf = parseSf('issue-199-nc-literal.ts', src);
+    const offenders = scanReflectionBypass(sf, 'issue-199-nc-literal.ts');
+    expect(offenders).toEqual([]);
+  });
+
+  it('(e) NEGATIVE: template substitution of untracked variable is NOT flagged', () => {
+    const src = [
+      'declare const obj: any;',
+      'const plain = "x";',
+      'const { [`${plain}`]: extracted } = obj;',
+      'extracted();',
+    ].join('\n');
+    const sf = parseSf('issue-199-nc-untracked.ts', src);
+    const offenders = scanReflectionBypass(sf, 'issue-199-nc-untracked.ts');
+    expect(offenders).toEqual([]);
+  });
+});
