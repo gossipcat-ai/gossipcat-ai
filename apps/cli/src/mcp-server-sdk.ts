@@ -2459,12 +2459,12 @@ server.tool(
         };
       });
 
-      // Category enforcement for hallucination_caught: if inferCategory failed
-      // above AND we can't derive from the finding text via extractCategories,
-      // drop the signal rather than persist it without a category. Category-less
-      // hallucinations are invisible to getCountersSince / skill-gap analysis
-      // and have grown into a 47% data gap — stop writing new ones at the source.
-      // Write-time only; legacy signals are not backfilled.
+      // Category enforcement for hallucination_caught: if both inferCategory
+      // and extractCategories fail, we PERSIST the signal with category:undefined
+      // (matching consensus-engine.ts:983-999). Per-category skill-gap routing
+      // loses the signal; aggregate accuracy (performance-reader.ts:581-585) still
+      // counts it. droppedNoCategory + stderr + finding_dropped_format pipeline
+      // signal provide observability that the category couldn't be derived.
       const { extractCategories } = await import('@gossip/orchestrator');
       const droppedNoCategory: Array<{ agentId: string; taskId: string; findingId?: string; finding: string }> = [];
       const categoryEnforced = formatted.filter((s, i) => {
@@ -2484,9 +2484,9 @@ server.tool(
           finding: srcFinding.slice(0, 80),
         });
         process.stderr.write(
-          `[gossip_signals] dropped hallucination_caught for ${s.agentId}: no category could be derived. finding="${srcFinding.slice(0, 80)}"\n`,
+          `[gossip_signals] persisted hallucination_caught without category for ${s.agentId}: no category could be derived. finding="${srcFinding.slice(0, 80)}"\n`,
         );
-        return false;
+        return true;
       });
 
       // Dedup gate: two-layer.
@@ -2773,6 +2773,8 @@ server.tool(
         baseReceipt += `\n\n⚠️ ${dupes.length} duplicate signal(s) skipped (cross-round content match or exact finding_id):\n  ${dupes.join('\n  ')}`;
       }
       if (droppedNoCategory.length > 0) {
+        // Note: signals are persisted (category:undefined), not dropped; the
+        // droppedNoCategory name is retained for continuity with earlier PRs.
         const dropBlock = formatDropReceipt(droppedNoCategory);
         if (dropBlock) baseReceipt += dropBlock;
 

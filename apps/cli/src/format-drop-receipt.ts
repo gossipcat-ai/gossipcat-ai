@@ -19,5 +19,5 @@ export function formatDropReceipt(drops: readonly DroppedEntry[]): string | null
   const lines = drops.map(d =>
     `  ${d.agentId}:${d.findingId ?? '?'} finding="${d.finding.slice(0, 60)}"`
   );
-  return `\n\n⚠️ ${drops.length} hallucination_caught signal(s) dropped (no category could be derived):\n${lines.join('\n')}`;
+  return `\n\n⚠️ ${drops.length} hallucination_caught signal(s) persisted without category (category could not be derived):\n${lines.join('\n')}`;
 }
