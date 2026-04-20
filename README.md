@@ -12,7 +12,7 @@
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/stargazers"><img src="https://img.shields.io/github/stars/gossipcat-ai/gossipcat-ai?style=social" alt="GitHub stars" /></a>
-  <a href="https://socket.dev/npm/package/gossipcat"><img src="https://badge.socket.dev/npm/package/gossipcat/0.4.2" alt="Socket Score" /></a>
+  <a href="https://socket.dev/npm/package/gossipcat"><img src="https://badge.socket.dev/npm/package/gossipcat/0.4.14" alt="Socket Score" /></a>
 </p>
 
 <p align="center">
@@ -223,12 +223,12 @@ Gossipcat is on **[npm](https://www.npmjs.com/package/gossipcat)** and **[GitHub
 
 **Pin to a specific npm version:**
 ```bash
-npm install -g gossipcat@0.4.1
+npm install -g gossipcat@0.4.14
 ```
 
 **Pin to a specific GitHub release tarball** (version-locked, bypasses npm registry):
 ```bash
-npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.4.1/gossipcat-0.4.1.tgz
+npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.4.14/gossipcat-0.4.14.tgz
 ```
 
 **Project-local install** (each project gets its own gossipcat):
@@ -585,6 +585,9 @@ Record a `hallucination_caught` signal: ask Claude *"record a hallucination_caug
 ### "I want to use my own model / provider"
 Edit `.gossip/config.json` directly. Any OpenAI-compatible endpoint works via `provider: "openai"` + `base_url`. Local models work via Ollama (`provider: "local"`). See the [Configuration](#configuration) section.
 
+### "An agent produced output but the consensus report is empty"
+The strict `<agent_finding>` parser drops tags whose `type` isn't one of `finding | suggestion | insight` (see invariant #8 in `docs/HANDBOOK.md`). When that happens, the `gossip_signals` receipt surfaces the drop count and a `finding_dropped_format` pipeline signal is emitted. Check the consensus round's `droppedFindingsByType` field on the dashboard — it names the offending type. If you see `&lt;agent_finding&gt;` instead of raw `<agent_finding>`, a transport layer is entity-encoding the output; pass agent output verbatim to `gossip_relay`.
+
 ### "Multiple Claude Code instances all want gossipcat"
 Already supported as of v0.1.1 — each instance gets its own dynamic port. If you want a stable port for one specific instance (e.g. for browser bookmarks), set `GOSSIPCAT_PORT=24420` for that one project's environment.
 
@@ -717,6 +720,9 @@ These tools are called by the internal LLM (the orchestrator — Claude Code wit
 | `gossip_session_save` | Save session context for next session |
 | `gossip_remember` | Search an agent's cognitive memory |
 | `gossip_progress` | Check in-progress task status |
+| `gossip_watch` | Stream signals as agents emit them, between dispatch and collect (catches pipeline drops mid-round) |
+| `gossip_verify_memory` | Verify a memory claim against current code — FRESH / STALE / CONTRADICTED / INCONCLUSIVE — before acting on backlog items |
+| `gossip_reload` | Self-terminate the MCP process so Claude Code respawns with a fresh bundle (dev loop after code changes) |
 | `gossip_tools` | List all available tools |
 | `gossip_update` | Check for or apply gossipcat updates from npm |
 | `gossip_bug_feedback` | File a GitHub issue on the gossipcat repo from an in-session bug report |
@@ -872,6 +878,11 @@ Gossipcat auto-detects the host environment:
 | Statistical skill effectiveness (z-test on per-category accuracy, auto pass/fail verdicts) | ✅ Shipped |
 | Native subagents get skill injection + cognitive memory recall | ✅ Shipped |
 | Relay cross-reviewers get `file_read` + `file_grep` (closes tool-blindness gap with natives) | ✅ Shipped |
+| Worktree-aware consensus (`resolutionRoots` + auto-discover for feature-branch reviews) | ✅ Shipped |
+| Signal pipeline observability (format-drop receipts + `finding_dropped_format` meta-signal + `gossip_watch` stream) | ✅ Shipped |
+| Consensus round retraction (`gossip_signals action: retract` with tombstones) | ✅ Shipped |
+| Worktree sandbox hardening (Layer 1+2+3 boundary enforcement + rotated audit log) | ✅ Shipped |
+| In-session bundle hot-swap (`gossip_reload`) | ✅ Shipped |
 | npm package — one-liner install with bundled MCP server + dashboard | ✅ Shipped |
 | Full implementation workflow (agents write code) | 🔄 In progress |
 | Dashboard enrichment (graphs, trends, session history) | ☐ Planned |
