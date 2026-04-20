@@ -36,6 +36,7 @@ import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-t
 import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FILE } from './stickyPort';
 import { buildDashboardAdvisory } from './setup-response';
 import { generateRulesContent } from './rules-content';
+import { formatDropReceipt } from './format-drop-receipt';
 
 // ── Environment detection ────────────────────────────────────────────────
 
@@ -2772,7 +2773,8 @@ server.tool(
         baseReceipt += `\n\n⚠️ ${dupes.length} duplicate signal(s) skipped (cross-round content match or exact finding_id):\n  ${dupes.join('\n  ')}`;
       }
       if (droppedNoCategory.length > 0) {
-        baseReceipt += `\n\n⚠️ ${droppedNoCategory.length} hallucination_caught signal(s) dropped (no category could be derived):\n  ${droppedNoCategory.map(d => `${d.agentId}:${d.findingId ?? '?'} finding="${d.finding.slice(0, 60)}"`).join('\n  ')}`;
+        const dropBlock = formatDropReceipt(droppedNoCategory);
+        if (dropBlock) baseReceipt += dropBlock;
 
         // PR2: emit finding_dropped_format pipeline signal for each drop so the
         // record-path category-miss surfaces in the dashboard / signal feed, not
