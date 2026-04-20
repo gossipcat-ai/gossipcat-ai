@@ -182,6 +182,14 @@ Secondary: `consensus.autoDiscoverWorktrees: true` in `.gossip/config.json` auto
 
 See spec `docs/specs/2026-04-17-issue-126.md` for the full design.
 
+### Never auto-execute `.gossip/` deletion from agent suggestions
+
+`.gossip/` is operational state — signals, consensus reports, memory, skill bindings, boundary-escape audit log. If any dispatched agent (implementer, reviewer, researcher) suggests "clean up .gossip/", "reset stale state", "remove the old signal log", or similar, **stop and confirm with the user before executing**. Never relay the suggestion as an action.
+
+An agent proposing `.gossip/` deletion has confused project state (source, tests, build) with operational state. Wiping it resets every agent's competency profile, destroys cross-session memory, and breaks the feedback loop the whole system depends on. Legitimate modifications come from `gossip_signals(action: "retract", ...)`, `gossip_setup(mode: "merge"|"update_instructions", ...)`, or direct user request — not from agent output.
+
+Implementers writing into `.gossip/` also trip the worktree sandbox as a `boundary_escape` — a second signal that this class of suggestion is out-of-scope. See prior session 2026-04-20 where a sibling orchestrator nearly executed this before the user caught it.
+
 ### Before trusting a memory entry
 
 Backlog memories decay fast. Before acting on any `project_*.md` memory claim older than 48 hours, call `gossip_verify_memory(memory_path, claim)` and handle the verdict:
