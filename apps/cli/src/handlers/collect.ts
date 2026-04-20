@@ -261,26 +261,6 @@ export async function handleCollect(
         return { content: [{ type: 'text' as const, text: 'Error: No LLM configured for consensus. Check gossip_setup.' }] };
       }
 
-      // Hoisted so verifierToolRunner callback can close over it when building the engine config.
-      const verifierFs = new FileTools(new Sandbox(process.cwd()));
-      const verifierGit = new GitTools(process.cwd());
-      const verifierMemory = new MemorySearcher(process.cwd());
-
-      // Resolve short file paths (e.g. "cross-reviewer-selection.ts") to full project-relative
-      // paths. LLMs often cite just the filename without the directory prefix.
-      const resolveToolPath = async (filePath: string): Promise<string> => {
-        if (!filePath) return filePath;
-        // Try as-is first — if Sandbox validates it, the file exists
-        try { new Sandbox(process.cwd()).validatePath(filePath); return filePath; } catch { /* not found */ }
-        // Search via file_search for the bare filename
-        const fileName = filePath.split('/').pop() ?? filePath;
-        try {
-          const searchResult = await verifierFs.fileSearch({ pattern: fileName });
-          const firstMatch = searchResult.split('\n')[0]?.trim();
-          if (firstMatch && firstMatch !== 'No files found') return firstMatch;
-        } catch { /* search failed */ }
-        return filePath; // return original, let fileRead produce a clear error
-      };
       const { PerformanceReader, discoverGitWorktrees } = await import('@gossip/orchestrator');
       const performanceReader = new PerformanceReader(process.cwd());
 
@@ -311,6 +291,41 @@ export async function handleCollect(
         process.stderr.write(`[consensus] auto-discovery failed: ${(err as Error).message}\n`);
       }
 
+      // Hoisted so verifierToolRunner callback can close over it when building the engine config.
+      // Constructed AFTER effectiveRoots so fileSearch can prioritize matches under a
+      // resolution root (e.g. sibling worktrees) instead of blindly taking the first hit.
+      const verifierFs = new FileTools(new Sandbox(process.cwd()));
+      const verifierGit = new GitTools(process.cwd());
+      const verifierMemory = new MemorySearcher(process.cwd());
+
+      // Resolve short file paths (e.g. "cross-reviewer-selection.ts") to full project-relative
+      // paths. LLMs often cite just the filename without the directory prefix.
+      // Disambiguation rules when multiple matches exist:
+      //   1. Prefer a match whose absolute path starts with any effectiveRoots entry
+      //   2. Else prefer paths inside process.cwd() over paths outside
+      //   3. On ambiguity, emit a stderr warning with the chosen + all candidates
+      const resolveToolPath = async (filePath: string): Promise<string> => {
+        if (!filePath) return filePath;
+        // Try as-is first — if Sandbox validates it, the file exists
+        try { new Sandbox(process.cwd()).validatePath(filePath); return filePath; } catch { /* not found */ }
+        // Search via file_search for the bare filename, passing resolutionRoots so
+        // fileSearch ranks matches inside a resolution root ahead of stray duplicates.
+        const fileName = filePath.split('/').pop() ?? filePath;
+        try {
+          const searchResult = await verifierFs.fileSearch({ pattern: fileName, resolutionRoots: effectiveRoots });
+          const candidates = searchResult.split('\n').map(s => s.trim()).filter(s => s && s !== 'No files found');
+          if (candidates.length === 0) return filePath;
+          const resolved = candidates[0];
+          if (candidates.length > 1) {
+            process.stderr.write(
+              `[consensus] ambiguous filename resolution for "${fileName}": chose "${resolved}" among [${candidates.join(', ')}]\n`,
+            );
+          }
+          return resolved;
+        } catch { /* search failed */ }
+        return filePath; // return original, let fileRead produce a clear error
+      };
+
       const engine = new ConsensusEngine({
         llm: mainLlm,
         registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
@@ -333,7 +348,12 @@ export async function handleCollect(
                 result = await verifierFs.fileGrep({ ...args, ...(grepPath ? { path: grepPath } : {}) } as any);
                 break;
               }
-              case 'file_search': result = await verifierFs.fileSearch(args as any); break;
+              case 'file_search':
+                result = await verifierFs.fileSearch({
+                  ...(args as any),
+                  resolutionRoots: effectiveRoots,
+                });
+                break;
               case 'memory_query': {
                 const results = verifierMemory.search(agentId, (args as any).query ?? '', 5);
                 result = results.length ? results.map(r => `[${r.source}] ${r.name}: ${r.snippets.join(' | ')}`).join('\n---\n') : 'No memory results found.';

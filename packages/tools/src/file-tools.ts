@@ -1,5 +1,6 @@
 import { readFile, writeFile, readdir, stat, mkdir, unlink } from 'fs/promises';
 import { resolve, relative, join } from 'path';
+import { existsSync, realpathSync } from 'fs';
 import { Sandbox } from './sandbox';
 
 export class FileTools {
@@ -47,11 +48,55 @@ export class FileTools {
     return `Deleted ${args.path}`;
   }
 
-  async fileSearch(args: { pattern: string }, agentRoot?: string): Promise<string> {
+  async fileSearch(
+    args: { pattern: string; resolutionRoots?: readonly string[] },
+    agentRoot?: string,
+  ): Promise<string> {
     const results: string[] = [];
     const root = agentRoot || this.sandbox.projectRoot;
     await this.walkDir(root, args.pattern, results, 0, 10);
-    return results.join('\n') || 'No files found';
+    if (results.length === 0) return 'No files found';
+    // Optional ranking: when resolutionRoots are supplied (cross-review path
+    // disambiguation, see apps/cli/src/handlers/collect.ts), prefer matches
+    // whose absolute path sits inside one of those roots, then matches under
+    // the sandbox's projectRoot. Order within each bucket is preserved so the
+    // ranking is deterministic and the no-roots path matches previous output.
+    const roots = (args.resolutionRoots ?? []).filter(Boolean);
+    if (roots.length === 0) return results.join('\n');
+    const projectRoot = this.sandbox.projectRoot;
+    // Realpath roots to match sandbox.projectRoot (which was realpath'd in the
+    // constructor). Without this, on darwin `/tmp/...` vs `/private/tmp/...`
+    // mismatches cause startsWith to always miss, silently disabling ranking.
+    const absRoots = roots.map(r => {
+      const abs = resolve(r);
+      try {
+        return existsSync(abs) ? realpathSync(abs) : abs;
+      } catch {
+        return abs;
+      }
+    });
+    const bucketed: string[][] = absRoots.map(() => []);
+    const projectBucket: string[] = [];
+    const otherBucket: string[] = [];
+    for (const rel of results) {
+      const abs = resolve(projectRoot, rel);
+      let placed = false;
+      for (let i = 0; i < absRoots.length; i++) {
+        const r = absRoots[i];
+        if (abs === r || abs.startsWith(r.endsWith('/') ? r : r + '/')) {
+          bucketed[i].push(rel);
+          placed = true;
+          break;
+        }
+      }
+      if (placed) continue;
+      if (abs === projectRoot || abs.startsWith(projectRoot.endsWith('/') ? projectRoot : projectRoot + '/')) {
+        projectBucket.push(rel);
+      } else {
+        otherBucket.push(rel);
+      }
+    }
+    return [...bucketed.flat(), ...projectBucket, ...otherBucket].join('\n');
   }
 
   async fileGrep(
