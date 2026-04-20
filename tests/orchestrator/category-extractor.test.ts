@@ -2,6 +2,8 @@ import { extractCategories, PerformanceWriter } from '@gossip/orchestrator';
 import { mkdirSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+// L2: sanctioned internal accessor for tests (Step 5 exemption).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 describe('extractCategories', () => {
   test('extracts injection_vectors from injection-related finding', () => {
@@ -93,7 +95,7 @@ describe('Post-consensus category extraction integration', () => {
     for (const f of confirmedFindings) {
       const categories = extractCategories(f.finding);
       for (const category of categories) {
-        writer.appendSignal({
+        writer[WRITER_INTERNAL].appendSignal({
           type: 'consensus',
           signal: 'category_confirmed',
           agentId: f.originalAgentId,

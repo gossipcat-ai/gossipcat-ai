@@ -11,6 +11,8 @@ import { tmpdir } from 'os';
 import { PerformanceWriter, PerformanceReader } from '@gossip/orchestrator';
 import type { PerformanceSignal, ConsensusSignal } from '@gossip/orchestrator/consensus-types';
 import { z } from 'zod';
+// L2: sanctioned internal accessor for tests (Step 5 exemption).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 // Mirrors the mcp-server-sdk.ts zod constraints on the retract payload. If
 // the handler constraint drifts, these tests catch it — keep in sync.
@@ -91,7 +93,7 @@ describe('consensus-round retraction', () => {
   it('filters signals whose findingId starts with retracted cid + ":"', () => {
     const writer = new PerformanceWriter(dir);
     const now = new Date().toISOString();
-    writer.appendSignals([
+    writer[WRITER_INTERNAL].appendSignals([
       // In-scope signal (bulk_from_consensus shape: <cid>:fN)
       {
         type: 'consensus', taskId: 't1', signal: 'agreement',
@@ -125,7 +127,7 @@ describe('consensus-round retraction', () => {
   it('impl signals without findingId are unaffected by round retraction', () => {
     const writer = new PerformanceWriter(dir);
     const now = new Date().toISOString();
-    writer.appendSignals([
+    writer[WRITER_INTERNAL].appendSignals([
       {
         type: 'impl', signal: 'impl_test_pass',
         agentId: 'a1', taskId: 't1', timestamp: now,
@@ -199,7 +201,7 @@ describe('consensus-round retraction', () => {
     const { overviewHandler } = await import('@gossip/relay/dashboard/api-overview');
     const writer = new PerformanceWriter(dir);
     const now = new Date().toISOString();
-    writer.appendSignals([
+    writer[WRITER_INTERNAL].appendSignals([
       {
         type: 'consensus', taskId: 't1', signal: 'agreement',
         agentId: 'a1', counterpartId: 'a2',
@@ -231,7 +233,7 @@ describe('consensus-round retraction', () => {
     writer.recordConsensusRoundRetraction(VALID_CID, 'premise invalid');
     const now = new Date().toISOString();
     // Simulate bulk_from_consensus recording signals for the retracted round.
-    writer.appendSignals([
+    writer[WRITER_INTERNAL].appendSignals([
       {
         type: 'consensus', taskId: 'bulk-t', signal: 'agreement',
         agentId: 'a1', counterpartId: 'a2',

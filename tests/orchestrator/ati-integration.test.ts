@@ -2,6 +2,8 @@ import { PerformanceReader, extractCategories, DispatchDifferentiator, Performan
 import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+// L2: sanctioned internal accessor for tests (Step 5 exemption).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 describe('ATI v3 — full loop integration', () => {
   const testDir = join(tmpdir(), 'gossip-ati-integration-' + Date.now());
@@ -22,12 +24,12 @@ describe('ATI v3 — full loop integration', () => {
 
     for (const f of findingsA) {
       for (const cat of extractCategories(f)) {
-        writer.appendSignal({ type: 'consensus', signal: 'category_confirmed', agentId: 'agent-a', taskId: 'review-1', category: cat, evidence: f, timestamp: new Date().toISOString() });
+        writer[WRITER_INTERNAL].appendSignal({ type: 'consensus', signal: 'category_confirmed', agentId: 'agent-a', taskId: 'review-1', category: cat, evidence: f, timestamp: new Date().toISOString() });
       }
     }
     for (const f of findingsB) {
       for (const cat of extractCategories(f)) {
-        writer.appendSignal({ type: 'consensus', signal: 'category_confirmed', agentId: 'agent-b', taskId: 'review-1', category: cat, evidence: f, timestamp: new Date().toISOString() });
+        writer[WRITER_INTERNAL].appendSignal({ type: 'consensus', signal: 'category_confirmed', agentId: 'agent-b', taskId: 'review-1', category: cat, evidence: f, timestamp: new Date().toISOString() });
       }
     }
 
@@ -62,9 +64,9 @@ describe('ATI v3 — full loop integration', () => {
   test('impl signals tracked via getImplScore', () => {
     // Add impl signals
     for (let i = 0; i < 3; i++) {
-      writer.appendSignal({ type: 'impl', signal: 'impl_test_pass', agentId: 'agent-a', taskId: `impl-${i}`, timestamp: new Date().toISOString() });
+      writer[WRITER_INTERNAL].appendSignal({ type: 'impl', signal: 'impl_test_pass', agentId: 'agent-a', taskId: `impl-${i}`, timestamp: new Date().toISOString() });
     }
-    writer.appendSignal({ type: 'impl', signal: 'impl_test_fail', agentId: 'agent-a', taskId: 'impl-3', timestamp: new Date().toISOString() });
+    writer[WRITER_INTERNAL].appendSignal({ type: 'impl', signal: 'impl_test_fail', agentId: 'agent-a', taskId: 'impl-3', timestamp: new Date().toISOString() });
 
     const reader = new PerformanceReader(testDir);
     const implScore = reader.getImplScore('agent-a');

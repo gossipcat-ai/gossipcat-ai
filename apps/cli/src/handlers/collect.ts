@@ -178,8 +178,7 @@ export async function handleCollect(
         (r.status === 'completed' && (!r.result || r.result.trim().length === 0 || r.result.includes('[No response from'))))
     );
     if (failedResults.length > 0) {
-      const { PerformanceWriter } = await import('@gossip/orchestrator');
-      const writer = new PerformanceWriter(process.cwd());
+      const { emitConsensusSignals } = await import('@gossip/orchestrator');
       const now = Date.now();
       const autoSignals = failedResults.map((r: any, i: number) => ({
         type: 'consensus' as const,
@@ -198,7 +197,7 @@ export async function handleCollect(
           ? new Date(r.completedAt).toISOString()
           : new Date(now + i).toISOString(),
       }));
-      writer.appendSignals(autoSignals, 'collect-handler');
+      emitConsensusSignals(process.cwd(), autoSignals);
       process.stderr.write(`[gossipcat] ⚠️  Auto-recorded ${autoSignals.length} failure signal(s): ${autoSignals.map((s: any) => s.agentId).join(', ')}\n`);
     }
   } catch { /* best-effort */ }
@@ -677,8 +676,7 @@ export async function handleCollect(
 
     // Auto-record provisional signals for consensus findings NOT already covered by engine signals
     try {
-      const { PerformanceWriter } = await import('@gossip/orchestrator');
-      const writer = new PerformanceWriter(process.cwd());
+      const { emitConsensusSignals } = await import('@gossip/orchestrator');
       const timestamp = new Date().toISOString();
 
       const tagToSignal: Record<string, 'unique_confirmed' | 'disagreement' | 'unique_unconfirmed'> = {
@@ -743,7 +741,7 @@ export async function handleCollect(
         }));
 
       if (provisionalSignals.length > 0) {
-        writer.appendSignals(provisionalSignals, 'collect-handler');
+        emitConsensusSignals(process.cwd(), provisionalSignals);
         provisionalSignalCount = provisionalSignals.length;
         process.stderr.write(`[gossipcat] Auto-recorded ${provisionalSignalCount} provisional signal(s) with finding_id. Use gossip_signals to override or add nuance; retract with action: "retract".\n`);
       }

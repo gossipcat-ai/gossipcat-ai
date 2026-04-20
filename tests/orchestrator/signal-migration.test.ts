@@ -3,6 +3,8 @@ import type { ConsensusSignal } from '@gossip/orchestrator';
 import { rmSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+// L2: sanctioned internal accessor for tests (Step 5 exemption).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 describe('Signal migration — empty-taskId retraction', () => {
   const testDir = join(tmpdir(), 'gossip-migration-' + Date.now());
@@ -34,7 +36,7 @@ describe('Signal migration — empty-taskId retraction', () => {
       timestamp: new Date().toISOString(),
     };
     const writer = new PerformanceWriter(testDir);
-    writer.appendSignal(retraction);
+    writer[WRITER_INTERNAL].appendSignal(retraction);
 
     // Verify the reader excludes the retracted signal
     const reader = new PerformanceReader(testDir);

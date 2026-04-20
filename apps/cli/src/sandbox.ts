@@ -504,23 +504,20 @@ function recordBoundaryEscape(
       '\n',
   );
 
-  // 2. Append boundary-escape signal via PerformanceWriter
+  // 2. Append boundary-escape signal via emitSandboxSignals
   try {
-    const { PerformanceWriter } = require('@gossip/orchestrator');
-    const writer = new PerformanceWriter(projectRoot);
-    writer.appendSignals([
-      {
-        type: 'consensus' as const,
-        taskId: meta.taskId,
-        signal: 'disagreement' as const,
-        agentId: meta.agentId,
-        category: 'trust_boundaries',
-        evidence:
-          `Boundary escape: ${meta.writeMode} task wrote outside declared boundary. ` +
-          `Violating paths: ${violations.slice(0, 10).join(', ')}`,
-        timestamp: new Date().toISOString(),
-      },
-    ], 'sandbox-boundary');
+    const { emitSandboxSignals } = require('@gossip/orchestrator');
+    emitSandboxSignals(projectRoot, {
+      type: 'consensus' as const,
+      taskId: meta.taskId,
+      signal: 'disagreement' as const,
+      agentId: meta.agentId,
+      category: 'trust_boundaries',
+      evidence:
+        `Boundary escape: ${meta.writeMode} task wrote outside declared boundary. ` +
+        `Violating paths: ${violations.slice(0, 10).join(', ')}`,
+      timestamp: new Date().toISOString(),
+    });
   } catch {
     /* best-effort */
   }
@@ -1276,21 +1273,18 @@ function recordLayer3Violations(
   // shape: try/catch, best-effort, never blocks audit completion.
   if (source === 'layer3-sensitive' && violations.length > 0) {
     try {
-      const { PerformanceWriter } = require('@gossip/orchestrator');
-      const writer = new PerformanceWriter(projectRoot);
-      writer.appendSignals([
-        {
-          type: 'consensus' as const,
-          taskId: meta.taskId,
-          signal: 'disagreement' as const,
-          agentId: meta.agentId,
-          category: 'trust_boundaries',
-          evidence:
-            `Sensitive-target exfiltration attempt: ${meta.writeMode ?? 'unknown'} task wrote to ${violations.length} sensitive path(s). ` +
-            `Paths: ${violations.slice(0, 10).join(', ')}`,
-          timestamp: new Date().toISOString(),
-        },
-      ], 'sandbox-trust');
+      const { emitSandboxSignals } = require('@gossip/orchestrator');
+      emitSandboxSignals(projectRoot, {
+        type: 'consensus' as const,
+        taskId: meta.taskId,
+        signal: 'disagreement' as const,
+        agentId: meta.agentId,
+        category: 'trust_boundaries',
+        evidence:
+          `Sensitive-target exfiltration attempt: ${meta.writeMode ?? 'unknown'} task wrote to ${violations.length} sensitive path(s). ` +
+          `Paths: ${violations.slice(0, 10).join(', ')}`,
+        timestamp: new Date().toISOString(),
+      });
     } catch {
       /* best-effort */
     }

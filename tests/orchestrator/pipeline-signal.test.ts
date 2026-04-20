@@ -3,6 +3,8 @@ import type { PipelineSignal } from '@gossip/orchestrator';
 import { mkdirSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+// L2: sanctioned internal accessor for tests (Step 5 exemption).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 describe('PipelineSignal', () => {
   const testDir = join(tmpdir(), 'gossip-pipeline-signal-' + Date.now());
@@ -24,7 +26,7 @@ describe('PipelineSignal', () => {
       metadata: { tags_dropped_unknown_type: 3 },
       timestamp: new Date().toISOString(),
     };
-    expect(() => writer.appendSignal(sig)).not.toThrow();
+    expect(() => writer[WRITER_INTERNAL].appendSignal(sig)).not.toThrow();
     const lines = readLines();
     const last = lines[lines.length - 1];
     expect(last.type).toBe('pipeline');
@@ -42,7 +44,7 @@ describe('PipelineSignal', () => {
       consensusId: 'abcd1234-ef567890',
       timestamp: new Date().toISOString(),
     };
-    writer.appendSignal(sig);
+    writer[WRITER_INTERNAL].appendSignal(sig);
     const lines = readLines();
     const last = lines[lines.length - 1];
     expect(last.signal).toBe('synthesis_completed');
@@ -59,7 +61,7 @@ describe('PipelineSignal', () => {
       taskId: 't3',
       timestamp: new Date().toISOString(),
     } as unknown as PipelineSignal;
-    expect(() => writer.appendSignal(bad)).toThrow(/unknown pipeline signal/);
+    expect(() => writer[WRITER_INTERNAL].appendSignal(bad)).toThrow(/unknown pipeline signal/);
   });
 
   test('rejects empty agentId', () => {
@@ -71,7 +73,7 @@ describe('PipelineSignal', () => {
       taskId: 't4',
       timestamp: new Date().toISOString(),
     } as unknown as PipelineSignal;
-    expect(() => writer.appendSignal(bad)).toThrow(/agentId/);
+    expect(() => writer[WRITER_INTERNAL].appendSignal(bad)).toThrow(/agentId/);
   });
 
   test('still requires valid timestamp', () => {
@@ -83,6 +85,6 @@ describe('PipelineSignal', () => {
       taskId: 't5',
       timestamp: 'not-a-date',
     } as unknown as PipelineSignal;
-    expect(() => writer.appendSignal(badTs)).toThrow(/timestamp/);
+    expect(() => writer[WRITER_INTERNAL].appendSignal(badTs)).toThrow(/timestamp/);
   });
 });

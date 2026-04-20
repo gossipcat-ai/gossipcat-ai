@@ -73,16 +73,15 @@ export function cancelTimeoutWatcher(taskId: string): void {
 
 function recordTimeoutSignal(taskId: string, agentId: string): void {
   try {
-    const { PerformanceWriter } = require('@gossip/orchestrator');
-    const writer = new PerformanceWriter(process.cwd());
-    writer.appendSignals([{
+    const { emitConsensusSignals } = require('@gossip/orchestrator');
+    emitConsensusSignals(process.cwd(), [{
       type: 'consensus' as const,
       taskId,
       signal: 'disagreement' as const,
       agentId,
       evidence: 'Native agent timed out — no gossip_relay call received',
       timestamp: new Date().toISOString(),
-    }], 'native-tasks');
+    }]);
     process.stderr.write(`[gossipcat] ⏱️  Auto-recorded timeout signal for ${agentId} [${taskId}]\n`);
   } catch { /* best-effort */ }
 }
@@ -232,16 +231,15 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       // Skip for _utility tasks — no timeout signal was recorded for them
       if (taskInfo.agentId !== '_utility') {
         try {
-          const { PerformanceWriter } = require('@gossip/orchestrator');
-          const writer = new PerformanceWriter(process.cwd());
-          writer.appendSignals([{
+          const { emitConsensusSignals } = require('@gossip/orchestrator');
+          emitConsensusSignals(process.cwd(), [{
             type: 'consensus' as const,
             signal: 'signal_retracted' as const,
             agentId: taskInfo.agentId,
             taskId: task_id,
             evidence: 'Late relay arrived — agent completed successfully after timeout',
             timestamp: new Date().toISOString(),
-          }], 'native-tasks');
+          }]);
           process.stderr.write(`[gossipcat] ↩️  Retracted timeout signal for ${taskInfo.agentId} [${task_id}]\n`);
         } catch { /* best-effort */ }
       }
@@ -354,9 +352,8 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // 0a. Auto-record impl signal for write-mode tasks (gate on error param only — string heuristics are unreliable)
   if (taskInfo.writeMode && !taskInfo.utilityType && agentId !== '_utility') {
     try {
-      const { PerformanceWriter } = await import('@gossip/orchestrator');
-      const implWriter = new PerformanceWriter(process.cwd());
-      implWriter.appendSignals([{
+      const { emitImplSignals } = await import('@gossip/orchestrator');
+      emitImplSignals(process.cwd(), [{
         type: 'impl' as const,
         taskId: task_id,
         signal: error ? 'impl_test_fail' : 'impl_test_pass',
@@ -364,7 +361,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         source: 'auto',
         evidence: error || undefined,
         timestamp: new Date().toISOString(),
-      }], 'mcp-server-impl');
+      }]);
     } catch { /* best-effort */ }
   }
 

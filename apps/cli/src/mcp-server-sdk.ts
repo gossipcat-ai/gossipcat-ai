@@ -2243,16 +2243,15 @@ server.tool(
         return { content: [{ type: 'text' as const, text: 'Error: task_id is required for per-signal retraction. Use the task ID from the original signal.' }] };
       }
       try {
-        const { PerformanceWriter } = await import('@gossip/orchestrator');
-        const writer = new PerformanceWriter(process.cwd());
-        writer.appendSignals([{
+        const { emitConsensusSignals } = await import('@gossip/orchestrator');
+        emitConsensusSignals(process.cwd(), [{
           type: 'consensus' as const,
           taskId: task_id,
           signal: 'signal_retracted',
           agentId: agent_id,
           evidence: `Retracted: ${reason}`,
           timestamp: new Date().toISOString(),
-        }], 'mcp-server-signals');
+        }]);
         return { content: [{ type: 'text' as const, text: `Retracted signal for ${agent_id} on task ${task_id}.\nReason: ${reason}\n\nThe original signal remains in the audit log but will be excluded from scoring.` }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed to retract: ${(err as Error).message}` }] };
@@ -2284,8 +2283,7 @@ server.tool(
           }
         } catch { /* file may not exist yet */ }
 
-        const { PerformanceWriter, PerformanceReader, DEFAULT_KEYWORDS: BULK_DK } = await import('@gossip/orchestrator');
-        const writer = new PerformanceWriter(process.cwd());
+        const { emitConsensusSignals: emitBulkConsensusSignals, PerformanceReader, DEFAULT_KEYWORDS: BULK_DK } = await import('@gossip/orchestrator');
         const bulkInferCategory = (text: string): string | undefined => {
           if (!text.trim()) return undefined;
           let bestCategory = '';
@@ -2338,7 +2336,7 @@ server.tool(
         for (const f of report.disputed ?? []) { addSignal('disagreement', f); disagreementCount++; }
         for (const f of report.unique ?? []) { addSignal('unique_unconfirmed', f); uniqueCount++; }
 
-        if (toRecord.length > 0) writer.appendSignals(toRecord, 'mcp-server-bulk');
+        if (toRecord.length > 0) emitBulkConsensusSignals(process.cwd(), toRecord);
 
         const skipped = dupes.length;
         const totalRecorded = toRecord.length;
@@ -2358,8 +2356,7 @@ server.tool(
     }
 
     try {
-      const { PerformanceWriter } = await import('@gossip/orchestrator');
-      const writer = new PerformanceWriter(process.cwd());
+      const { emitConsensusSignals: emitRecordConsensusSignals, emitScoringAdjustmentSignals: emitScoringAdj, emitImplSignals: emitRecordImplSignals } = await import('@gossip/orchestrator');
       const wallClockMs = Date.now();
       const wallClock = new Date(wallClockMs).toISOString();
       // Sanity window for caller-provided timestamps: 30 days back, 1 hour forward.
@@ -2556,7 +2553,12 @@ server.tool(
         return true;
       });
 
-      if (deduped.length > 0) writer.appendSignals(deduped, 'mcp-server-signals');
+      if (deduped.length > 0) {
+        const dedupedConsensus = deduped.filter(s => s.type === 'consensus');
+        const dedupedImpl = deduped.filter(s => s.type === 'impl');
+        if (dedupedConsensus.length > 0) emitRecordConsensusSignals(process.cwd(), dedupedConsensus);
+        if (dedupedImpl.length > 0) emitRecordImplSignals(process.cwd(), dedupedImpl);
+      }
 
       // Auto-convert hallucination signals into skill gap suggestions.
       // Reuses the category derived above (formatted[i].category) so the suggestion
@@ -2590,7 +2592,7 @@ server.tool(
         const originalSeverity = lookupFindingSeverity(s.findingId, process.cwd());
         if (originalSeverity && originalSeverity !== s.severity) {
           try {
-            writer.appendSignal({
+            emitScoringAdj(process.cwd(), {
               type: 'consensus',
               signal: 'severity_miscalibrated',
               taskId: s.taskId,
@@ -2600,7 +2602,7 @@ server.tool(
               claimedSeverity: originalSeverity,
               category: 'severity_calibration',
               timestamp: new Date().toISOString(),
-            } as any, 'mcp-server-signals');
+            } as any);
           } catch { /* best-effort */ }
         }
       }

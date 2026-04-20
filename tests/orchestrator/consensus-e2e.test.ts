@@ -55,6 +55,7 @@ describe('Consensus Protocol E2E', () => {
     // the consensus engine directly with synthetic Phase 1 results
     const { ConsensusEngine } = await import('../../packages/orchestrator/src/consensus-engine');
     const { PerformanceWriter } = await import('../../packages/orchestrator/src/performance-writer');
+    const { WRITER_INTERNAL } = await import('../../packages/orchestrator/src/_writer-internal');
 
     // Use google provider for cross-review (same as agents)
     const apiKey = getKeyFromKeychain('google');
@@ -137,7 +138,7 @@ describe('Consensus Protocol E2E', () => {
 
     // Write signals to performance file
     const perfWriter = new PerformanceWriter(TEST_PERF_ROOT);
-    perfWriter.appendSignals(report.signals);
+    perfWriter[WRITER_INTERNAL].appendSignals(report.signals);
 
     // Verify performance file was created
     expect(existsSync(PERF_FILE)).toBe(true);

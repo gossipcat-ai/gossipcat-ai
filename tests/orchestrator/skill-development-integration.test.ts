@@ -4,6 +4,8 @@ import { ILLMProvider } from '@gossip/orchestrator';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+// L2: sanctioned internal accessor for tests (Step 5 exemption).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 const VALID_SKILL = `---
 name: injection-audit
@@ -112,10 +114,10 @@ describe('Skill Development — Integration', () => {
   test('prompt includes peer score comparison', async () => {
     const writer = new PerformanceWriter(testDir);
     for (let i = 0; i < 12; i++) {
-      writer.appendSignal({ type: 'meta', signal: 'task_completed', agentId: 'strong-peer', taskId: `sp${i}`, value: 2000, timestamp: new Date().toISOString() } as any);
+      writer[WRITER_INTERNAL].appendSignal({ type: 'meta', signal: 'task_completed', agentId: 'strong-peer', taskId: `sp${i}`, value: 2000, timestamp: new Date().toISOString() } as any);
     }
     for (let i = 0; i < 5; i++) {
-      writer.appendSignal({ type: 'consensus', signal: 'category_confirmed', agentId: 'strong-peer', taskId: `sp${i}`, category: 'injection_vectors', evidence: 'Peer finding', timestamp: new Date().toISOString() } as any);
+      writer[WRITER_INTERNAL].appendSignal({ type: 'consensus', signal: 'category_confirmed', agentId: 'strong-peer', taskId: `sp${i}`, category: 'injection_vectors', evidence: 'Peer finding', timestamp: new Date().toISOString() } as any);
     }
 
     const freshProfiler = new PerformanceReader(testDir);

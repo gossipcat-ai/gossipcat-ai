@@ -3,6 +3,8 @@ import type { PipelineSignal } from '@gossip/orchestrator';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+// L2: sanctioned internal accessor for tests (Step 5 exemption).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 describe('rotateJsonlIfNeeded', () => {
   const testDir = join(tmpdir(), 'gossip-rotate-' + Date.now());
@@ -68,7 +70,7 @@ describe('PerformanceWriter integration with rotation', () => {
       taskId: 't1',
       timestamp: new Date().toISOString(),
     };
-    writer.appendSignal(sig);
+    writer[WRITER_INTERNAL].appendSignal(sig);
 
     // Rotation should have fired: .1 holds the old huge file, primary has one fresh line.
     expect(existsSync(perfPath + '.1')).toBe(true);
