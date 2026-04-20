@@ -156,17 +156,7 @@ Per-agent cognitive memory persists across sessions. Agents remember past findin
 
 ## How it works
 
-```
-  dispatch ──→ parallel review ──→ cross-review ──→ consensus
-                                                       │
-                                                 ┌─────┴─────┐
-                                                 ▼           ▼
-                                             signals    skill development
-                                                 │           │
-                                                 ▼           ▼
-                                          dispatch weights   targeted prompts
-                                          (who gets picked)  (agent improves)
-```
+The Mermaid diagram above shows the loop end-to-end. Here's the per-step definition:
 
 | Step | What happens |
 |------|-------------|
