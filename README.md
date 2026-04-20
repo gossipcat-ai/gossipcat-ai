@@ -905,7 +905,7 @@ Gossipcat auto-detects the host environment:
 | Worktree sandbox hardening (Layer 1+2+3 boundary enforcement + rotated audit log) | ✅ Shipped |
 | In-session bundle hot-swap (`gossip_reload`) | ✅ Shipped |
 | npm package — one-liner install with bundled MCP server + dashboard | ✅ Shipped |
-| Full implementation workflow (agents write code) | 🔄 In progress |
+| Full implementation workflow (agents write code with scoped + worktree isolation) | ✅ Shipped |
 | Dashboard enrichment (graphs, trends, session history) | ☐ Planned |
 | Local Postgres migration (embedded Postgres for tasks/signals/consensus/memory — unblocks full task results, real queries, no more JSONL scans) | ☐ Planned |
 | Full Cursor support | ☐ Planned |
