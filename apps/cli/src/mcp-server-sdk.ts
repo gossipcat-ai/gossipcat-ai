@@ -1889,11 +1889,19 @@ server.tool(
     // hook can't be materialized for any reason.
     let hookSummary = '';
     try {
-      const { installWorktreeSandboxHook } = require('@gossip/orchestrator') as typeof import('@gossip/orchestrator');
+      const { installWorktreeSandboxHook, writeOrchestratorRoleMarker } = require('@gossip/orchestrator') as typeof import('@gossip/orchestrator');
       const hookResult = installWorktreeSandboxHook(root);
       hookSummary = hookResult.installed
         ? 'Sandbox hook: .claude/hooks/worktree-sandbox.sh installed (Layer 2)'
         : `Sandbox hook: skipped (${hookResult.reason ?? 'unknown'})`;
+      // Issue #176: write orchestrator-role marker so the hook auto-exempts
+      // the orchestrator when it cd's into a worktree. Idempotent no-op if
+      // the file already exists. Never throws — best-effort.
+      try {
+        writeOrchestratorRoleMarker(root);
+      } catch (markerErr) {
+        process.stderr.write(`[gossipcat] gossip_setup: orchestrator-role marker write failed: ${markerErr}\n`);
+      }
     } catch (e) {
       hookSummary = `Sandbox hook: skipped (${(e as Error).message})`;
       process.stderr.write(`[gossipcat] gossip_setup: sandbox hook install failed: ${e}\n`);
@@ -1973,10 +1981,9 @@ server.tool(
     }
     if (hookSummary) {
       lines.push(hookSummary);
-      lines.push('  ⚠ If the orchestrator cd\'s into a worktree to inspect/commit subagent work,');
-      lines.push('    the hook will gate it as a subagent. Exempt the orchestrator shell with:');
-      lines.push('      export GOSSIPCAT_ORCHESTRATOR_ROLE=1   # add to ~/.zshrc or ~/.bashrc');
-      lines.push('    Then relaunch Claude Code. See issue #162 for rationale.');
+      lines.push('  Orchestrator-role marker: .gossip/orchestrator-role written (issue #176)');
+      lines.push('  The hook now auto-exempts the orchestrator when it cd\'s into a worktree.');
+      lines.push('  (No manual GOSSIPCAT_ORCHESTRATOR_ROLE env var needed.)');
     }
     lines.push('Agents will connect to relay on first gossip_dispatch() call.');
     if (nativeCreated.length > 0) {
