@@ -3354,19 +3354,16 @@ server.tool(
         try {
           const { readFileSync: rf, writeFileSync: wf } = require('fs');
           const { join: j } = require('path');
+          const { tryAutoResolveFinding } = require('./auto-resolve-finding');
           const findingsPath = j(process.cwd(), '.gossip', 'implementation-findings.jsonl');
           const lines = rf(findingsPath, 'utf-8').trim().split('\n').filter(Boolean);
           let changed = false;
           const updated = lines.map((line: string) => {
             try {
               const f = JSON.parse(line);
-              const fileBase = f.file?.split('/').pop() || '';
-              const findingWords = (f.finding || '').toLowerCase().split(/\s+/).filter((w: string) => w.length > 5).slice(0, 3);
-              const gitLogLower = summaryData.gitLog.toLowerCase();
-              if (f.status === 'open' && fileBase && fileBase.length > 2 && summaryData.gitLog.includes(fileBase) && findingWords.some((w: string) => gitLogLower.includes(w))) {
-                f.status = 'resolved'; f.resolvedAt = new Date().toISOString(); changed = true;
-              }
-              return JSON.stringify(f);
+              const r = tryAutoResolveFinding(f, summaryData.gitLog);
+              if (r.changed) changed = true;
+              return JSON.stringify(r.finding);
             } catch { return line; }
           });
           if (changed) wf(findingsPath, updated.join('\n') + '\n');
@@ -3516,29 +3513,24 @@ server.tool(
     } catch { /* no git */ }
 
     // 5a. Auto-resolve findings that appear in recent commits (best-effort)
+    //
+    // File path is extracted from the finding text's `<cite tag="file">…</cite>`
+    // tag (see auto-resolve-finding.ts). Producers at handlers/collect.ts do not
+    // populate `f.file`, so the previous `f.file?.split(...)` code never fired.
     if (gitLog) {
       try {
         const { readFileSync: rf, writeFileSync: wf } = require('fs');
         const { join: j } = require('path');
+        const { tryAutoResolveFinding } = require('./auto-resolve-finding');
         const findingsPath = j(process.cwd(), '.gossip', 'implementation-findings.jsonl');
         const lines = rf(findingsPath, 'utf-8').trim().split('\n').filter(Boolean);
         let changed = false;
         const updated = lines.map((line: string) => {
           try {
             const f = JSON.parse(line);
-            const fileBase = f.file?.split('/').pop() || '';
-            // Require both filename AND a content keyword from the finding to match git log
-            // Bare filename matching alone produces false positives (e.g., index.ts matches every session)
-            const findingWords = (f.finding || '').toLowerCase().split(/\s+/).filter((w: string) => w.length > 5).slice(0, 3);
-            const gitLogLower = gitLog.toLowerCase();
-            const fileMatch = fileBase && fileBase.length > 2 && gitLog.includes(fileBase);
-            const contentMatch = findingWords.length > 0 && findingWords.some((w: string) => gitLogLower.includes(w));
-            if (f.status === 'open' && fileMatch && contentMatch) {
-              f.status = 'resolved';
-              f.resolvedAt = new Date().toISOString();
-              changed = true;
-            }
-            return JSON.stringify(f);
+            const r = tryAutoResolveFinding(f, gitLog);
+            if (r.changed) changed = true;
+            return JSON.stringify(r.finding);
           } catch { return line; }
         });
         if (changed) {
