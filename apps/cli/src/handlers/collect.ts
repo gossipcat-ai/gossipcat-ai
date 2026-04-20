@@ -452,9 +452,17 @@ export async function handleCollect(
           for (const tc of calls) {
             let out: string;
             try {
-              if (tc.name === 'file_read') out = await verifierFs.fileRead(tc.arguments as any);
-              else if (tc.name === 'file_grep') out = await verifierFs.fileGrep(tc.arguments as any);
-              else out = `Tool ${tc.name} not available to cross-reviewers`;
+              if (tc.name === 'file_read') {
+                const args = { ...(tc.arguments as any) };
+                if (args.path) args.path = await resolveToolPath(args.path);
+                out = await verifierFs.fileRead(args);
+              } else if (tc.name === 'file_grep') {
+                const args = { ...(tc.arguments as any) };
+                if (args.path) args.path = await resolveToolPath(args.path);
+                out = await verifierFs.fileGrep(args);
+              } else {
+                out = `Tool ${tc.name} not available to cross-reviewers`;
+              }
             } catch (e) {
               out = `Error: ${(e as Error).message}`;
             }

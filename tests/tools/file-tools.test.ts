@@ -188,6 +188,26 @@ describe('FileTools', () => {
       const result = await rankTools.fileSearch({ pattern: 'sandbox.ts', resolutionRoots: [] });
       expect(result.split('\n')).toHaveLength(2);
     });
+
+    it('file walked via agentRoot outside projectRoot lands in otherBucket tail', async () => {
+      // agentRoot outside projectRoot makes walkDir produce a relPath with
+      // `..` segments; resolve(projectRoot, rel) then lands outside
+      // projectRoot → otherBucket. With a resolutionRoot pointing inside
+      // projectRoot, the otherBucket entry must still appear, at the tail.
+      const insideRoot = resolve(rankDir, 'apps/cli');
+      const result = await rankTools.fileSearch(
+        { pattern: 'sandbox.ts', resolutionRoots: [insideRoot] },
+        outsideDir, // agentRoot outside projectRoot
+      );
+      const lines = result.split('\n');
+      // The outside sandbox.ts was walked; it is neither under insideRoot
+      // nor under projectRoot, so it must land in otherBucket (tail).
+      expect(lines.length).toBeGreaterThanOrEqual(1);
+      const tail = lines[lines.length - 1];
+      // Relative path from projectRoot to outsideDir/sandbox.ts starts with '..'
+      expect(tail.startsWith('..')).toBe(true);
+      expect(tail).toContain('sandbox.ts');
+    });
   });
 
   // ─── fileGrep ──────────────────────────────────────────────────────────────
