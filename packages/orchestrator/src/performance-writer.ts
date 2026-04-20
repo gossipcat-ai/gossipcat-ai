@@ -33,6 +33,9 @@ const VALID_CONSENSUS_SIGNALS = new Set([
   'category_confirmed', 'consensus_verified', 'signal_retracted',
   'consensus_round_retracted',
   'task_timeout', 'task_empty',
+  // Pre-existing runtime bug fix (spec §4, consensus 78bc92ef-23464bde:f11):
+  // this signal was previously rejected by validateSignal and silently dropped.
+  'severity_miscalibrated',
 ]);
 
 const VALID_IMPL_SIGNALS = new Set([
@@ -134,6 +137,8 @@ export function __resetSampleCounterForTests(): void {
   rowsWrittenSinceCheck = 0;
 }
 
+const INTERNAL = Symbol('performance-writer-internal');
+
 export class PerformanceWriter {
   private readonly filePath: string;
   private readonly projectRoot: string;
@@ -146,37 +151,65 @@ export class PerformanceWriter {
   }
 
   /**
-   * Append a single signal. Stamps `_emission_path` on the serialised row
-   * (out-of-band from the validated signal envelope) so the L3 drift
-   * detector can distinguish bypass writers from the sanctioned helper path.
-   * `_emission_path` defaults to `'unknown'` — any unset call site shows up
-   * as drift to the detector.
+   * Package-internal signal writer, gated by a non-exported Symbol.
+   *
+   * External callers CANNOT access these methods via plain property access —
+   * `appendSignal` and `appendSignals` are no longer public properties on
+   * `PerformanceWriter`. Only code that imports `WRITER_INTERNAL` from
+   * `_writer-internal.ts` can call them, and that import is enforced by the
+   * Step 4 parity test (Layer 1).
+   *
+   * Access pattern (sanctioned callers only):
+   *   import { WRITER_INTERNAL } from './_writer-internal.js';
+   *   writer[WRITER_INTERNAL].appendSignal(signal, emissionPath);
+   *
+   * No `as any` cast is required — TypeScript resolves the Symbol key to
+   * this object type at compile time. (spec §2, consensus 78bc92ef-23464bde:f9)
    */
-  appendSignal(signal: PerformanceSignal, emissionPath: EmissionPath = 'unknown'): void {
-    validateSignal(signal);
-    rotateJsonlIfNeeded(this.filePath);
-    const row = { ...signal, _emission_path: emissionPath };
-    appendFileSync(this.filePath, JSON.stringify(row) + '\n');
-    bumpSampleCounter(this.projectRoot, 1);
-  }
+  [INTERNAL] = {
+    /**
+     * Append a single signal. Stamps `_emission_path` on the serialised row
+     * (out-of-band from the validated signal envelope) so the L3 drift
+     * detector can distinguish bypass writers from the sanctioned helper path.
+     * `_emission_path` defaults to `'unknown'` — any unset call site shows up
+     * as drift to the detector.
+     */
+    appendSignal: (signal: PerformanceSignal, emissionPath: EmissionPath = 'unknown'): void => {
+      validateSignal(signal);
+      rotateJsonlIfNeeded(this.filePath);
+      const row = { ...signal, _emission_path: emissionPath };
+      appendFileSync(this.filePath, JSON.stringify(row) + '\n');
+      bumpSampleCounter(this.projectRoot, 1);
+    },
+
+    /**
+     * Append a batch of signals. See `appendSignal` for the `_emission_path`
+     * contract.
+     */
+    appendSignals: (signals: PerformanceSignal[], emissionPath: EmissionPath = 'unknown'): void => {
+      if (signals.length === 0) return;
+      for (const s of signals) validateSignal(s);
+      const data = signals
+        .map(s => JSON.stringify({ ...s, _emission_path: emissionPath }))
+        .join('\n') + '\n';
+      rotateJsonlIfNeeded(this.filePath);
+      appendFileSync(this.filePath, data);
+      bumpSampleCounter(this.projectRoot, signals.length);
+    },
+  };
 
   /**
-   * Append a batch of signals. See `appendSignal` for the `_emission_path`
-   * contract.
-   */
-  appendSignals(signals: PerformanceSignal[], emissionPath: EmissionPath = 'unknown'): void {
-    if (signals.length === 0) return;
-    for (const s of signals) validateSignal(s);
-    const data = signals
-      .map(s => JSON.stringify({ ...s, _emission_path: emissionPath }))
-      .join('\n') + '\n';
-    rotateJsonlIfNeeded(this.filePath);
-    appendFileSync(this.filePath, data);
-    bumpSampleCounter(this.projectRoot, signals.length);
-  }
-
-  /**
-   * Append a round-level retraction tombstone.
+   * @internal — sanctioned escape hatch for consensus-round retraction.
+   * Writes a `_system`-agent sentinel row that does NOT follow the normal
+   * signal envelope (see 2026-04-17-consensus-round-retraction.md).
+   * The Step 4 parity test allowlists this one call site by method name
+   * (`PerformanceWriter.recordConsensusRoundRetraction`). No new methods
+   * may be added to that allowlist without an explicit consensus decision.
+   *
+   * Note: this method DOES call `validateSignal`, so it is not a raw writer.
+   * It skips `appendSignal(s)` and `bumpSampleCounter` — meaning the L3
+   * drift detector gets no sample tick from retraction events (pre-existing,
+   * documented in consensus fb3ea8fc-6e674462:f16/f20).
    *
    * Tombstone row uses the `_system` sentinel as `agentId`. Readers must
    * filter `agentId === '_system'` out of per-agent aggregation; signal
@@ -207,3 +240,14 @@ export class PerformanceWriter {
     appendFileSync(this.filePath, JSON.stringify(stamped) + '\n');
   }
 }
+
+/**
+ * Re-export the Symbol that gates `appendSignal(s)` access for signal helpers.
+ *
+ * This export is intentionally NOT re-exported from `packages/orchestrator/src/index.ts`.
+ * It is only accessible via `packages/orchestrator/src/_writer-internal.ts`.
+ * The Step 4 parity test enforces this boundary.
+ *
+ * Consensus rounds 78bc92ef-23464bde and fb3ea8fc-6e674462 established this boundary.
+ */
+export { INTERNAL as _WRITER_INTERNAL_FOR_HELPERS_ONLY };
