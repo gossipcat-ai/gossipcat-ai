@@ -12,8 +12,9 @@
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/stargazers"><img src="https://img.shields.io/github/stars/gossipcat-ai/gossipcat-ai?style=social" alt="GitHub stars" /></a>
-  <a href="https://socket.dev/npm/package/gossipcat"><img src="https://socket.dev/api/badge/npm/package/gossipcat" alt="Socket Score" /></a>
   <a href="https://bundlephobia.com/package/gossipcat"><img src="https://img.shields.io/bundlephobia/min/gossipcat?color=0ea5e9" alt="minified bundle size" /></a>
+  <a href="https://github.com/gossipcat-ai/gossipcat-ai/commits/master"><img src="https://img.shields.io/github/last-commit/gossipcat-ai/gossipcat-ai?color=0ea5e9" alt="last commit" /></a>
+  <a href="https://github.com/gossipcat-ai/gossipcat-ai/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gossipcat-ai/gossipcat-ai/ci.yml?branch=master&label=tests" alt="tests" /></a>
 </p>
 
 <p align="center">
@@ -34,11 +35,33 @@ Gossipcat is an MCP server that orchestrates multiple AI agents to review your c
 
 ### It's weightless in-context reinforcement learning
 
-Most RL pipelines update model weights. Gossipcat doesn't touch weights — it learns by **updating the prompt layer**.
+> Most RL pipelines update model weights. **Gossipcat doesn't touch weights** — it learns by updating the prompt layer.
 
 Every finding an agent produces must cite a real `file:line`. Peers verify those citations against actual source code. Verified findings (and caught hallucinations) become **grounded reward signals** — no judge model, no subjective grade, just mechanical checks against ground truth. Those signals update per-agent competency scores, which steer future dispatch. When an agent keeps failing in a category, a targeted skill file is auto-generated from its own failure history and injected into future prompts.
 
-That's the loop: **verify → signal → score → skill → inject**. The "policy update" is a markdown file under `.gossip/agents/<id>/skills/`. No fine-tuning, no RLHF infrastructure, no labelling pipeline. The reward signal is grounded in source code rather than a judge model, which is the piece that makes the loop trustworthy enough to automate. When agents disagree, we check the code — not another LLM's opinion.
+```mermaid
+flowchart LR
+    A([agent review]) -->|cites file:line| B([peer cross-review])
+    B -->|verifies against code| C{verdict}
+    C -->|confirmed| D[reward signal]
+    C -->|hallucination| E[penalty signal]
+    D --> F[competency score]
+    E --> F
+    F -->|steer dispatch| G([next agent pick])
+    E -->|≥3 in category| H[auto-generate skill]
+    H -->|inject into prompt| A
+    G --> A
+    style A fill:#0ea5e9,stroke:#0369a1,color:#fff
+    style H fill:#f59e0b,stroke:#b45309,color:#fff
+    style D fill:#10b981,stroke:#047857,color:#fff
+    style E fill:#ef4444,stroke:#b91c1c,color:#fff
+```
+
+The "policy update" is a markdown file under `.gossip/agents/<id>/skills/`. No fine-tuning, no RLHF infrastructure, no labelling pipeline. The reward signal is grounded in source code rather than a judge model, which is the piece that makes the loop trustworthy enough to automate. When agents disagree, we check the code — not another LLM's opinion.
+
+<br/>
+
+> **The single-reviewer failure mode:** a solo AI reviewer ships hallucinated bugs as critical findings **5–10% of the time**. Gossipcat's cross-review drops that to **under 1%**. That delta is what the whole system exists to produce.
 
 <br/>
 
