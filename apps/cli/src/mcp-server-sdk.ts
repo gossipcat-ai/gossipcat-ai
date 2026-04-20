@@ -2465,7 +2465,7 @@ server.tool(
       // and have grown into a 47% data gap — stop writing new ones at the source.
       // Write-time only; legacy signals are not backfilled.
       const { extractCategories } = await import('@gossip/orchestrator');
-      const droppedNoCategory: Array<{ agentId: string; findingId?: string; finding: string }> = [];
+      const droppedNoCategory: Array<{ agentId: string; taskId: string; findingId?: string; finding: string }> = [];
       const categoryEnforced = formatted.filter((s, i) => {
         if (s.type !== 'consensus' || s.signal !== 'hallucination_caught') return true;
         if (s.category) return true;
@@ -2478,6 +2478,7 @@ server.tool(
         }
         droppedNoCategory.push({
           agentId: s.agentId,
+          taskId: s.taskId,
           findingId: s.findingId,
           finding: srcFinding.slice(0, 80),
         });
@@ -2772,6 +2773,34 @@ server.tool(
       }
       if (droppedNoCategory.length > 0) {
         baseReceipt += `\n\n⚠️ ${droppedNoCategory.length} hallucination_caught signal(s) dropped (no category could be derived):\n  ${droppedNoCategory.map(d => `${d.agentId}:${d.findingId ?? '?'} finding="${d.finding.slice(0, 60)}"`).join('\n  ')}`;
+
+        // PR2: emit finding_dropped_format pipeline signal for each drop so the
+        // record-path category-miss surfaces in the dashboard / signal feed, not
+        // just in stderr + the MCP receipt. Best-effort: failure must NOT break
+        // the record path (secondary observability channel).
+        try {
+          const { emitPipelineSignals } = await import('@gossip/orchestrator');
+          const nowIso = new Date().toISOString();
+          const pipelineSignals = droppedNoCategory.map(d => {
+            const consensusId = d.findingId?.match(/^([0-9a-f]{8}-[0-9a-f]{8}):/)?.[1];
+            return {
+              type: 'pipeline' as const,
+              signal: 'finding_dropped_format' as const,
+              agentId: d.agentId,
+              taskId: d.taskId,
+              ...(consensusId ? { consensusId } : {}),
+              metadata: {
+                reason: 'missing_category',
+                findingId: d.findingId,
+                finding: d.finding,
+              },
+              timestamp: nowIso,
+            };
+          });
+          emitPipelineSignals(process.cwd(), pipelineSignals);
+        } catch (err) {
+          process.stderr.write(`[gossip_signals] pipeline signal emit failed: ${(err as Error).message}\n`);
+        }
       }
 
       // Post-write check: nudge orchestrator toward skill development when this batch
