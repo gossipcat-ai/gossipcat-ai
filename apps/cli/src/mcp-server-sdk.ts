@@ -3903,6 +3903,7 @@ server.tool(
       { name: 'gossip_guide', desc: 'Show the gossipcat handbook for humans — invariants, operator playbook, caveats, hallucination patterns, glossary. Read the docs, not LLM context.' },
       { name: 'gossip_progress', desc: 'Show active task progress and consensus phase. No params.' },
       { name: 'gossip_watch', desc: 'Pull signals recorded since a cursor timestamp. Stateless, cursor-based; max 24h lookback. Use to see consensus signals as they land.' },
+      { name: 'gossip_reload', desc: 'Terminate MCP server so Claude Code respawns with fresh bundle. Use after npm run build:mcp.' },
       { name: 'gossip_format', desc: 'Return the CONSENSUS_OUTPUT_FORMAT block to paste into ad-hoc Agent() prompts so native subagents emit parseable <agent_finding> tags.' },
       { name: 'gossip_bug_feedback', desc: 'File a GitHub issue on the gossipcat repo from an in-session bug report. Dedupes against open issues.' },
     ];
@@ -4039,6 +4040,18 @@ server.tool(
     const raw = existsSync(perfPath) ? readFileSync(perfPath, 'utf-8') : '';
     const result = filterWatchEvents(raw, { cursor, maxEvents: max_events });
     return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
+  },
+);
+
+// ── Tool: gossip_reload — self-terminate so Claude Code respawns fresh bundle ─────
+server.tool(
+  'gossip_reload',
+  "Terminate the MCP server process so Claude Code respawns it with a fresh bundle. Use after 'npm run build:mcp' to hot-reload without quitting Claude Code. Returns a notice, then exits 100ms later.",
+  {},
+  async () => {
+    const text = `Reloading gossipcat MCP (pid ${process.pid}). Next tool call will use the fresh bundle.`;
+    setTimeout(() => process.exit(0), 100).unref();
+    return { content: [{ type: 'text' as const, text }] };
   },
 );
 
