@@ -4,7 +4,15 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.16] — 2026-04-21
+
+Catch-up release: consolidates user-visible work shipped across v0.4.10–v0.4.15 (which were tagged without CHANGELOG entries) plus this session's four new PRs. Highlights: consensus citation correctness on duplicates, first-class `boundary_escape` signal type, MEMORY.md index hygiene, and the dashboard/retraction/worktree-citation work that previously sat under `[Unreleased]`.
+
 ### Added
+
+- **Write-time `status:` tag injection in MEMORY.md index** (PR #215). Claude Code's auto-memory writer regenerates `MEMORY.md` as a title-only index, so `[OPEN]` / `[SHIPPED]` / `[CLOSED]` state was invisible and orchestrators kept re-dispatching shipped work. The memory writer now prepends each entry's frontmatter `status:` value as a bracketed tag at write time, so the index reflects ship state the instant a file is saved.
+
+- **`boundary_escape` signal type** (PR #212). Sandbox policy violations (Layer 2 PreToolUse hook rejections + Layer 3 audit findings) now record as a first-class `boundary_escape` signal instead of being co-mingled with `hallucination_caught`. Enables per-agent boundary-escape rates in the dashboard and clean separation between "agent said something false" and "agent tried to write outside its sandbox." (`packages/orchestrator/src/performance-writer.ts`, signal schema + dashboard surfaces)
 
 - **Consensus-round retraction** (PR #130). `gossip_signals({action:'retract', consensus_id:'<8-8 hex>', reason:'...'})` retracts every signal whose `finding_id` starts with the given `consensus_id + ':'` — mirrors the forward direction of `bulk_from_consensus`. Use case: a consensus round ran on the wrong branch / with stale file state / with a misconfigured team, and every signal it produced is now untrustworthy; one call cascades removal instead of retracting signals one-by-one. Tombstone pattern — append-only, matches cross-round dedupe (`docs/specs/2026-04-17-cross-round-dedupe-key.md`) and existing per-signal retraction. zod enforces `^[0-9a-f]{8}-[0-9a-f]{8}$` on `consensus_id` (typo guard — 1-char error fails validation, not silent mis-retract) and `min(1).max(1024)` on `reason`. Handler XOR-guards `{consensus_id, reason}` vs `{agent_id, task_id}` — mutually exclusive payloads, matches `bulk_from_consensus` flat-object pattern. Tombstone row uses sentinel `agentId: "_system"` to satisfy `validateSignal`. Reader builds `retractedConsensusIds: Set<string>` and filters per-signal, **scoped to `type === 'consensus'`** so `impl_*` / meta signals are structurally unaffected. Dashboard excludes tombstones at the data-fetch layer (`api-overview.ts` `totalSignals`, `api-signals.ts` per-agent, `routes.ts` surface) plus a new `roundRetractions` channel. `FindingsMetrics.tsx` renders an inline banner with the retraction reason on each retracted round card + struck-through container. `bulk_from_consensus` targeting a retracted round emits a warn log (signals still recorded but filtered at read). Symmetric scoring removal: +/- signals both vanish (if round premise is invalid, no signal within it is trustworthy). Irreversible by design — re-run a new round if retracted in error. 19 new tests. Spec `docs/specs/2026-04-17-consensus-round-retraction.md` (v2, ratified by 2 consensus rounds). (`apps/cli/src/mcp-server-sdk.ts`, `packages/orchestrator/src/{consensus-types,performance-writer,performance-reader}.ts`, `packages/relay/src/dashboard/{api-overview,api-signals,routes}.ts`, `packages/dashboard-v2/src/components/FindingsMetrics.tsx`)
 
@@ -13,6 +21,18 @@ All notable changes to gossipcat are documented here. The format is loosely base
 - **Realpath-based containment for `isInsideAnyRoot`** (PR #128). Pre-#126 hardening. Symmetric `realpathSync` on both candidate and root, with a `currentRealpathRoots` cache populated in `updateWorktreeRoots` alongside `currentWorktreeRoots`. Closes a symlink-escape hole that would otherwise be load-bearing when PR-B widened roots to user-supplied paths. No behavior change for non-symlinked paths. (`packages/orchestrator/src/consensus-engine.ts`, `tests/orchestrator/consensus-engine.security.test.ts` new)
 
 - **Auto-benching v2 dashboard badges** (PR #127). Surfaces v1 Rule A/B `isBenched` state in the dashboard — resolves the `performance-reader.ts:140` TODO. New `lib/bench.ts` drives three-state UI: red **benched** (chronic/burst), amber **struggling** (circuitOpen tail failures), amber-outline **kept for coverage** (would-bench-but-sole-provider). `api-agents.ts` passes the union of `categoryCorrect`+`categoryHallucinated` keys so sparse categories aren't dropped by `MIN_CATEGORY_N=5`. `circuitOpen` kept alongside — the two signals measure distinct failure modes and dispatch filters them independently, so a UI drop would create dashboard/dispatch mismatch. `CircuitAlerts` panel retitled "Agents Needing Attention" with per-reason chips. (`packages/dashboard-v2/src/lib/bench.ts` new, `packages/relay/src/dashboard/api-agents.ts`, dashboard-v2 components)
+
+### Fixed
+
+- **Relay cross-reviewers now share the engine's path-resolution plumbing**. `runOneRelayCrossReview`'s inner tool runner was bypassing `resolveToolPath` and the `effectiveRoots` used by the engine-side `verifierToolRunner`, so relay agents invoking `file_read`/`file_grep` on a bare filename (`cross-reviewer-selection.ts`) got raw "file not found" instead of the same worktree-aware disambiguation native Claude reviewers enjoy — producing spurious UNVERIFIED findings. Fixed; relay and engine paths now resolve identically. (`apps/cli/src/handlers/collect.ts:451-472`)
+
+- **Cross-reviewer file citations resolve to the correct duplicate** (PR #213). When a finding cited a filename that existed in multiple directories under `projectRoot`, citation resolution could bind to the wrong copy, causing cross-reviewers to review unrelated code and (in the worst case) mark real findings UNVERIFIED. Resolver now disambiguates via the finding's trailing-path segments instead of bare filename match.
+
+### Docs
+
+- **Orchestrator warning: don't trust the MEMORY.md index line** (PR #214). `.claude/rules/` now instructs orchestrators to read the linked memory file's `status:` frontmatter directly. Index entries rot — the frontmatter is authoritative.
+- **Never auto-execute `.gossip/` deletion from agent suggestions**. CLAUDE.md rule: implementer proposals to "clean up", "reset", or "remove" `.gossip/` must be rejected and confirmed with the user. `.gossip/` is operational training state — wiping it resets every agent's competency profile.
+- **README polish**: reward-loop Mermaid diagram, bundlephobia size badge, weightless-in-context-RL framing, "Full implementation workflow" marked shipped.
 
 ## [0.4.9] — 2026-04-17
 

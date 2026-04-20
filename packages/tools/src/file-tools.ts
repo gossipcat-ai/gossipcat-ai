@@ -62,6 +62,10 @@ export class FileTools {
     // the sandbox's projectRoot. Order within each bucket is preserved so the
     // ranking is deterministic and the no-roots path matches previous output.
     const roots = (args.resolutionRoots ?? []).filter(Boolean);
+    return this.rankByResolutionRoots(results, roots);
+  }
+
+  private rankByResolutionRoots(results: string[], roots: string[]): string {
     if (roots.length === 0) return results.join('\n');
     const projectRoot = this.sandbox.projectRoot;
     // Realpath roots to match sandbox.projectRoot (which was realpath'd in the
@@ -143,6 +147,13 @@ export class FileTools {
       return;
     }
 
+    // Match glob-style pattern: convert * and ? to regex
+    const regexStr = pattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.');
+    const regex = new RegExp(regexStr);
+
     for (const entry of entries) {
       if (entry === 'node_modules' || entry === '.git') continue;
       const fullPath = join(dir, entry);
@@ -156,12 +167,6 @@ export class FileTools {
       if (info.isDirectory()) {
         await this.walkDir(fullPath, pattern, results, depth + 1, maxDepth);
       } else {
-        // Match glob-style pattern: convert * and ? to regex
-        const regexStr = pattern
-          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-          .replace(/\*/g, '.*')
-          .replace(/\?/g, '.');
-        const regex = new RegExp(regexStr);
         const relPath = relative(this.sandbox.projectRoot, fullPath);
         if (regex.test(entry) || regex.test(relPath)) {
           results.push(relPath);
