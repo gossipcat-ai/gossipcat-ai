@@ -494,6 +494,94 @@ describe('F1: ArrayBindingPattern seed in reflection initializer', () => {
 });
 
 // ===========================================================================
+// Batch B: constructor and accessor bypass patterns
+// ===========================================================================
+describe('Batch B: constructor and accessor bypass patterns', () => {
+  it('(a) NewExpression element-access call is flagged', () => {
+    // new PerformanceWriter(sym)[sym]('event')
+    const src = `
+      declare const writer: any;
+      const sym = Object.getOwnPropertySymbols(writer)[0];
+      new PerformanceWriter(sym)[sym]('event');
+    `;
+    const sf = parseSf('batchb-new-expression.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('sym')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'batchb-new-expression.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+    expect(offenders.some(o => /reflection-bypass/.test(o.reason))).toBe(true);
+  });
+
+  it('(b) reflection bypass inside getter body is flagged', () => {
+    const src = `
+      declare const writer: any;
+      class Foo {
+        get bad() {
+          const sym = Object.getOwnPropertySymbols(writer)[0];
+          writer[sym]('event');
+          return sym;
+        }
+      }
+    `;
+    const sf = parseSf('batchb-getter-bypass.ts', src);
+    const offenders = scanReflectionBypass(sf, 'batchb-getter-bypass.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+    expect(offenders.some(o => /reflection-bypass/.test(o.reason))).toBe(true);
+  });
+
+  it('(c) reflection bypass inside setter body is flagged', () => {
+    const src = `
+      declare const writer: any;
+      class Foo {
+        set bad(v: any) {
+          const sym = Object.getOwnPropertySymbols(writer)[0];
+          writer[sym]('event');
+        }
+      }
+    `;
+    const sf = parseSf('batchb-setter-bypass.ts', src);
+    const offenders = scanReflectionBypass(sf, 'batchb-setter-bypass.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+    expect(offenders.some(o => /reflection-bypass/.test(o.reason))).toBe(true);
+  });
+
+  it('(b-signal) signal inside getter body is extracted by extractSignalsFromSource', () => {
+    const src = `
+      class Foo {
+        get bad() {
+          signals.push({ signal: 'getter_bypass_signal', value: 1 });
+          return 1;
+        }
+      }
+    `;
+    const extracted = extractSignalsFromHelper_patched(src);
+    expect(extracted.map(s => s.name)).toContain('getter_bypass_signal');
+  });
+
+  it('(c-signal) signal inside setter body is extracted by extractSignalsFromSource', () => {
+    const src = `
+      class Foo {
+        set bad(v: any) {
+          signals.push({ signal: 'setter_bypass_signal', value: 1 });
+        }
+      }
+    `;
+    const extracted = extractSignalsFromHelper_patched(src);
+    expect(extracted.map(s => s.name)).toContain('setter_bypass_signal');
+  });
+
+  it('negative control: new expression without reflection key is not flagged', () => {
+    const src = `
+      declare const writer: any;
+      const result = new PerformanceWriter('literal')['knownMethod']('event');
+    `;
+    const sf = parseSf('batchb-new-no-reflection-control.ts', src);
+    const offenders = scanReflectionBypass(sf, 'batchb-new-no-reflection-control.ts');
+    expect(offenders).toEqual([]);
+  });
+});
+
+// ===========================================================================
 // F2: NonNull alias tracking (consensus finding)
 // ===========================================================================
 describe('F2: NonNull alias does not break tracking chain', () => {

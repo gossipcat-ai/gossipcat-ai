@@ -257,9 +257,9 @@ export function scanReflectionBypass(
   }
 
   function visit(node: ts.Node): void {
-    if (ts.isCallExpression(node)) {
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
       const callee = node.expression;
-      // Pattern A: writer[sym](...)
+      // Pattern A: writer[sym](...) or new writer[sym](...)
       if (isBypassElementAccess(callee)) {
         const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf));
         offenders.push({
@@ -269,7 +269,7 @@ export function scanReflectionBypass(
           reason: 'reflection-bypass call',
           raw: node.getText(sf).slice(0, 120),
         });
-      } else if (ts.isPropertyAccessExpression(callee) && isBypassElementAccess(callee.expression)) {
+      } else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(callee) && isBypassElementAccess(callee.expression)) {
         // Pattern B: writer[sym].method(...)
         const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf));
         offenders.push({
@@ -314,12 +314,16 @@ export function extractSignalsFromSource(filePath: string, source: string): Extr
   const sf = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
   const found: ExtractedSignal[] = [];
 
-  function isFunctionLike(node: ts.Node): node is ts.FunctionLikeDeclaration {
+  function isFunctionLike(
+    node: ts.Node,
+  ): node is ts.FunctionLikeDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration {
     return (
       ts.isFunctionDeclaration(node) ||
       ts.isFunctionExpression(node) ||
       ts.isArrowFunction(node) ||
-      ts.isMethodDeclaration(node)
+      ts.isMethodDeclaration(node) ||
+      ts.isGetAccessorDeclaration(node) ||
+      ts.isSetAccessorDeclaration(node)
     );
   }
 
