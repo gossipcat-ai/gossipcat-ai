@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <em>agentic orchestration framework — agents that learn, adapt, and get better every round.</em>
+  <em>weightless in-context RL for code review — agents that learn from grounded signals, no weights touched.</em>
 </p>
 
 <p align="center">
@@ -30,6 +30,14 @@
 ## What is Gossipcat?
 
 Gossipcat is an MCP server that orchestrates multiple AI agents to review your code in parallel. Agents independently review, then cross-review each other's findings. Agreements are confirmed. Hallucinations are caught and penalized. Over time, each agent builds an accuracy profile — the system learns who to trust for what.
+
+### It's weightless in-context reinforcement learning
+
+Most RL pipelines update model weights. Gossipcat doesn't touch weights — it learns by **updating the prompt layer**.
+
+Every finding an agent produces must cite a real `file:line`. Peers verify those citations against actual source code. Verified findings (and caught hallucinations) become **grounded reward signals** — no judge model, no subjective grade, just mechanical checks against ground truth. Those signals update per-agent competency scores, which steer future dispatch. When an agent keeps failing in a category, a targeted skill file is auto-generated from its own failure history and injected into future prompts.
+
+That's the loop: **verify → signal → score → skill → inject**. The "policy update" is a markdown file under `.gossip/agents/<id>/skills/`. No fine-tuning, no RLHF infrastructure, no labelling pipeline. The reward signal is grounded in source code rather than a judge model, which is the piece that makes the loop trustworthy enough to automate. When agents disagree, we check the code — not another LLM's opinion.
 
 <br/>
 
