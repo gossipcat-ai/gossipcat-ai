@@ -37,6 +37,18 @@ import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FIL
 import { buildDashboardAdvisory } from './setup-response';
 import { generateRulesContent } from './rules-content';
 import { formatDropReceipt } from './format-drop-receipt';
+import { homedir } from 'os';
+
+/**
+ * Resolve the Claude Code auto-memory directory for a project cwd.
+ * Claude Code encodes the absolute cwd by replacing every `/` with `-`
+ * (e.g. `/Users/goku/Desktop/gossip` → `-Users-goku-Desktop-gossip`).
+ * This mirrors `autoMemoryDir` in packages/relay/src/dashboard/api-native-memory.ts
+ * — kept inline here to avoid importing a dashboard module from MCP boot path.
+ */
+function memoryDirForProject(cwd: string): string {
+  return join(homedir(), '.claude', 'projects', cwd.replaceAll('/', '-'), 'memory');
+}
 
 // ── Environment detection ────────────────────────────────────────────────
 
@@ -1296,6 +1308,15 @@ server.tool(
   {},
   async () => {
     const { findConfigPath, loadConfig, configToAgentConfigs, loadClaudeSubagents } = await import('./config');
+
+    // Refresh MEMORY.md status tags BEFORE building the response, so any
+    // MEMORY.md content later loaded into orchestrator context reflects
+    // current `status:` fields of the linked project_*/feedback_* files.
+    try {
+      const { refreshMemoryIndex } = await import('@gossip/orchestrator');
+      const r = await refreshMemoryIndex(memoryDirForProject(process.cwd()));
+      if (r.error) process.stderr.write(`[gossipcat] refreshMemoryIndex: ${r.error}\n`);
+    } catch (err) { process.stderr.write(`[gossipcat] refreshMemoryIndex failed: ${(err as Error).message}\n`); }
 
     // System status
     const claudeSubagentsList = loadClaudeSubagents(process.cwd());
@@ -3449,6 +3470,13 @@ server.tool(
         wf2(j2(process.cwd(), '.gossip', 'bootstrap.md'), result.prompt);
       } catch { /* best-effort */ }
 
+      // Refresh MEMORY.md status tags in Claude Code native-memory dir
+      try {
+        const { refreshMemoryIndex } = await import('@gossip/orchestrator');
+        const r = await refreshMemoryIndex(memoryDirForProject(process.cwd()));
+        if (r.error) process.stderr.write(`[gossipcat] refreshMemoryIndex: ${r.error}\n`);
+      } catch (err) { process.stderr.write(`[gossipcat] refreshMemoryIndex failed: ${(err as Error).message}\n`); }
+
       // Clear consumed gossip
       try {
         const { writeFileSync: wf } = require('fs');
@@ -3694,6 +3722,13 @@ server.tool(
       wf(j(process.cwd(), '.gossip', 'bootstrap.md'), result.prompt);
       process.stderr.write('[gossipcat] 🔄 Bootstrap regenerated with new session context\n');
     } catch { /* best-effort */ }
+
+    // Refresh MEMORY.md status tags in Claude Code native-memory dir
+    try {
+      const { refreshMemoryIndex } = await import('@gossip/orchestrator');
+      const r = await refreshMemoryIndex(memoryDirForProject(process.cwd()));
+      if (r.error) process.stderr.write(`[gossipcat] refreshMemoryIndex: ${r.error}\n`);
+    } catch (err) { process.stderr.write(`[gossipcat] refreshMemoryIndex failed: ${(err as Error).message}\n`); }
 
     let output = `Session saved to .gossip/agents/_project/memory/\n\n${summary}`;
     if (findingsTable) {
