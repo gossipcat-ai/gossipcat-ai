@@ -643,6 +643,88 @@ runIfJq('worktree-sandbox.sh', () => {
     expect(stdout.trim()).toBe('');
   });
 
+  // Issue #176: marker-file orchestrator exemption.
+  // gossip_setup writes <project_root>/.gossip/orchestrator-role. The hook
+  // exempts sessions where CLAUDE_PROJECT_DIR points to a directory that
+  // contains this file. Subagents have CLAUDE_PROJECT_DIR set to their
+  // worktree dir and cannot see the parent project's marker file.
+
+  it('[marker] orchestrator cd into worktree is allowed when marker file exists at project root', () => {
+    // Simulate: orchestrator session cd'd into a worktree, so cwd matches the
+    // worktree pattern (IS_SUBAGENT=1). CLAUDE_PROJECT_DIR still points to the
+    // project root where gossip_setup wrote .gossip/orchestrator-role.
+    const tmpProject = mkdtempSync(join(tmpdir(), 'hook-marker-test-'));
+    try {
+      // Create the marker file at the project root.
+      mkdirSync(join(tmpProject, '.gossip'), { recursive: true });
+      writeFileSync(join(tmpProject, '.gossip', 'orchestrator-role'), 'marker\n');
+
+      const { stdout, status } = runHook(
+        {
+          tool_name: 'Write',
+          tool_input: { file_path: '/Users/someone/outside.txt' },
+          // cwd looks like a worktree → IS_SUBAGENT=1
+          cwd: `${tmpProject}/.claude/worktrees/agent-abc`,
+        },
+        { CLAUDE_PROJECT_DIR: tmpProject },
+      );
+      expect(status).toBe(0);
+      // Marker file present → allow (empty stdout = no JSON deny).
+      expect(stdout.trim()).toBe('');
+    } finally {
+      rmSync(tmpProject, { recursive: true, force: true });
+    }
+  });
+
+  it('[marker] subagent is still denied when marker exists only at project root (CLAUDE_PROJECT_DIR = worktree)', () => {
+    // Simulate: subagent session. CLAUDE_PROJECT_DIR is the WORKTREE dir.
+    // The marker file lives at the actual project root, which the subagent
+    // cannot see via its CLAUDE_PROJECT_DIR.
+    const tmpProject = mkdtempSync(join(tmpdir(), 'hook-marker-subagent-test-'));
+    try {
+      // Create marker at project root (simulates gossip_setup).
+      mkdirSync(join(tmpProject, '.gossip'), { recursive: true });
+      writeFileSync(join(tmpProject, '.gossip', 'orchestrator-role'), 'marker\n');
+
+      // Worktree dir: the subagent's CLAUDE_PROJECT_DIR (does NOT have the marker).
+      const worktreePath = join(tmpProject, '.claude', 'worktrees', 'agent-abc');
+      mkdirSync(worktreePath, { recursive: true });
+
+      const { stdout, status } = runHook(
+        {
+          tool_name: 'Write',
+          // Target is outside the subagent worktree.
+          tool_input: { file_path: '/etc/passwd' },
+          cwd: worktreePath,
+        },
+        // CLAUDE_PROJECT_DIR points to the WORKTREE, not the project root.
+        { CLAUDE_PROJECT_DIR: worktreePath },
+      );
+      expect(status).toBe(0);
+      // Marker not found at worktree/.gossip/orchestrator-role → subagent falls
+      // through to path-gating → deny.
+      const parsed = JSON.parse(stdout);
+      expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+    } finally {
+      rmSync(tmpProject, { recursive: true, force: true });
+    }
+  });
+
+  it('[marker] missing marker file does not affect normal subagent deny (no regression)', () => {
+    // No marker file anywhere. Subagent cwd → IS_SUBAGENT=1 → path gating → deny.
+    const { stdout, status } = runHook(
+      {
+        tool_name: 'Write',
+        tool_input: { file_path: '/etc/passwd' },
+        cwd: '/fake/project/.claude/worktrees/agent-abc',
+      },
+      { CLAUDE_PROJECT_DIR: '/fake/project' },
+    );
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+
   // Issue #162 problem 2 / #161: quoted-string false-positive mitigation.
   it('[quotes] allows git commit -m with quoted body containing absolute path', () => {
     const { stdout, status } = runHook({
@@ -686,7 +768,7 @@ runIfJq('worktree-sandbox.sh', () => {
     expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny');
   });
 
-  it('[hints] BOUNDARY ESCAPE deny reason mentions GOSSIPCAT_ORCHESTRATOR_ROLE remediation', () => {
+  it('[hints] BOUNDARY ESCAPE deny reason mentions orchestrator-role remediation', () => {
     const { stdout } = runHook({
       tool_name: 'Write',
       tool_input: { file_path: '/Users/someone/secrets.txt' },
@@ -695,8 +777,11 @@ runIfJq('worktree-sandbox.sh', () => {
     const parsed = JSON.parse(stdout);
     const reason = parsed.hookSpecificOutput.permissionDecisionReason;
     expect(reason).toContain('BOUNDARY ESCAPE');
+    // Issue #176: deny message now points to gossip_setup auto-mechanism first,
+    // then the fallback env var.
+    expect(reason).toContain('gossip_setup');
+    expect(reason).toContain('issue #176');
     expect(reason).toContain('GOSSIPCAT_ORCHESTRATOR_ROLE=1');
-    expect(reason).toContain('issue #162');
   });
 
   it('[quotes] sh -c absolute path also keeps quoted body — deny unchanged', () => {

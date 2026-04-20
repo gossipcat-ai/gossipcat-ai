@@ -53,7 +53,7 @@ export { WorktreeManager } from './worktree-manager';
 export { BootstrapGenerator } from './bootstrap';
 export type { BootstrapResult } from './bootstrap';
 export { findBundledRules, ensureRulesFile, readRulesContent } from './rules-loader';
-export { installWorktreeSandboxHook, findBundledHook } from './hook-installer';
+export { installWorktreeSandboxHook, findBundledHook, writeOrchestratorRoleMarker } from './hook-installer';
 export type { HookInstallResult } from './hook-installer';
 export { OverlapDetector } from './overlap-detector';
 export { LensGenerator } from './lens-generator';

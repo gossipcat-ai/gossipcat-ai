@@ -188,9 +188,14 @@ fi
 # GOSSIPCAT_ORCHESTRATOR_ROLE=1 on the top-level orchestrator session to
 # short-circuit the gate.
 #
-# The harness does not yet set this env automatically — users must opt in.
-# Setup docs should describe the flag. Subagent harnesses must NOT inherit
-# this env; if that ever breaks, the cwd-glob fallback still applies.
+# NOTE: gossip_setup (issue #176) now auto-creates a marker file at
+# $CLAUDE_PROJECT_DIR/.gossip/orchestrator-role so this env var no longer
+# needs to be set manually. The marker-file check below fires after
+# IS_SUBAGENT=1 is determined and is safe because each session's
+# CLAUDE_PROJECT_DIR points to its own project root (worktree sessions
+# point to the worktree, not the parent project), so subagents cannot
+# accidentally resolve the orchestrator's marker file.
+# The env var check is kept for backward compatibility (manual opt-in).
 case "$GOSSIPCAT_ORCHESTRATOR_ROLE" in
   1|true|TRUE|yes|YES) exit 0 ;;
 esac
@@ -240,6 +245,25 @@ fi
 
 # Orchestrator (or non-gossipcat cwd) → pass through without gating.
 [ "$IS_SUBAGENT" -eq 0 ] && exit 0
+
+# Marker-file orchestrator exemption (issue #176).
+#
+# gossip_setup writes $CLAUDE_PROJECT_DIR/.gossip/orchestrator-role at the
+# PROJECT ROOT. When the orchestrator cd's into a worktree, IS_SUBAGENT was
+# set to 1 above, but we can still detect the orchestrator because:
+#   - Orchestrator session: CLAUDE_PROJECT_DIR = <project root>
+#     → marker = <project root>/.gossip/orchestrator-role  ← exists
+#   - Subagent session:     CLAUDE_PROJECT_DIR = <worktree root>
+#     → marker = <worktree>/.gossip/orchestrator-role      ← does NOT exist
+# This is naturally self-policing: subagents cannot see the orchestrator's
+# marker file without explicitly reading outside their worktree.
+# Only check when CLAUDE_PROJECT_DIR is set; skip silently when absent.
+if [ -n "$CLAUDE_PROJECT_DIR" ]; then
+  if [ -f "${CLAUDE_PROJECT_DIR}/.gossip/orchestrator-role" ]; then
+    exit 0
+  fi
+fi
+
 # Subagent falls through to existing path-gating logic below (unchanged).
 
 # Case-insensitive tool-name match (portable: no bash 4+ ${var,,}).
@@ -373,7 +397,7 @@ while IFS= read -r path_arg; do
   fi
 
   if ! path_is_inside "$cwd_norm" "$path_norm"; then
-    emit_deny "BOUNDARY ESCAPE: ${tool_name} targets '${path_arg}' (normalized: '${path_norm}') outside worktree cwd '${cwd_norm}'. Use a relative path (./...) inside the worktree. If you are the orchestrator (not a subagent) and cd'd into a worktree, exempt this shell with: export GOSSIPCAT_ORCHESTRATOR_ROLE=1 and relaunch Claude Code (issue #162)."
+    emit_deny "BOUNDARY ESCAPE: ${tool_name} targets '${path_arg}' (normalized: '${path_norm}') outside worktree cwd '${cwd_norm}'. Use a relative path (./...) inside the worktree. If you are the orchestrator, re-run gossip_setup to auto-write the orchestrator-role marker (issue #176). Fallback: export GOSSIPCAT_ORCHESTRATOR_ROLE=1 and relaunch Claude Code."
   fi
 done <<EOF
 $candidates

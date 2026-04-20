@@ -83,6 +83,34 @@ function mergePreToolUseEntry(settings: Record<string, any>): boolean {
   return true;
 }
 
+/** Path to the orchestrator-role marker file relative to projectRoot. */
+const ORCHESTRATOR_ROLE_MARKER = '.gossip/orchestrator-role';
+
+/**
+ * Write `.gossip/orchestrator-role` at `projectRoot` so the worktree-sandbox
+ * hook can identify the orchestrator session without relying on a manually set
+ * env variable (issue #176).
+ *
+ * Idempotent — no-ops if the file already exists. Returns the file path.
+ * Never throws; the caller should handle errors gracefully.
+ */
+export function writeOrchestratorRoleMarker(projectRoot: string): string {
+  const markerPath = join(projectRoot, ORCHESTRATOR_ROLE_MARKER);
+  const markerDir = dirname(markerPath);
+  mkdirSync(markerDir, { recursive: true });
+  if (!existsSync(markerPath)) {
+    writeFileSync(
+      markerPath,
+      '# Written by gossip_setup (issue #176).\n' +
+      '# Presence of this file tells the worktree-sandbox hook that the\n' +
+      '# project root is the orchestrator context, not a subagent worktree.\n' +
+      '# Do not copy this file into worktree dirs.\n',
+      'utf-8',
+    );
+  }
+  return markerPath;
+}
+
 /**
  * Install the worktree sandbox hook at `<projectRoot>/.claude/hooks/` and
  * register it in `<projectRoot>/.claude/settings.json`.
