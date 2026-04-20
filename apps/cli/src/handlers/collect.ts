@@ -348,7 +348,12 @@ export async function handleCollect(
                 result = await verifierFs.fileGrep({ ...args, ...(grepPath ? { path: grepPath } : {}) } as any);
                 break;
               }
-              case 'file_search': result = await verifierFs.fileSearch(args as any); break;
+              case 'file_search':
+                result = await verifierFs.fileSearch({
+                  ...(args as any),
+                  resolutionRoots: effectiveRoots,
+                });
+                break;
               case 'memory_query': {
                 const results = verifierMemory.search(agentId, (args as any).query ?? '', 5);
                 result = results.length ? results.map(r => `[${r.source}] ${r.name}: ${r.snippets.join(' | ')}`).join('\n---\n') : 'No memory results found.';
