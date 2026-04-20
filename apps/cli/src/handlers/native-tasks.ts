@@ -218,6 +218,11 @@ export function computeRelayDuration(
 export async function handleNativeRelay(task_id: string, result: string, error?: string, agentStartedAt?: number, relayToken?: string) {
   await ctx.boot(); // [H3 fix] ensure mainAgent/pipeline are available
 
+  // PR3: per-invocation auto-signal counters — surface silent emissions in the
+  // relay receipt. Receipt consumers were previously blind to impl/completion
+  // auto-signals (consensus 3edbdec8-02684caa). Never-emitted buckets stay 0.
+  const autoSignalsEmitted = { timeout: 0, impl: 0, completion: 0 };
+
   // Cancel timeout watcher if still running
   cancelTimeoutWatcher(task_id);
 
@@ -378,6 +383,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         evidence: error || undefined,
         timestamp: new Date().toISOString(),
       }]);
+      autoSignalsEmitted.impl++;
     } catch { /* best-effort */ }
   }
 
@@ -400,6 +406,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       memoryQueryCalled: taskInfo.memoryQueryCalled,
       error: error ? true : undefined,
     });
+    autoSignalsEmitted.completion++;
   }
 
   // 0b. Record plan step result so subsequent steps get chain context
@@ -572,6 +579,17 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   }
 
   let responseText = payloadLines.join('\n');
+  // PR3: surface auto-signal emissions so receipt consumers aren't blind to
+  // silent pipeline writes. Only nonzero buckets show; line omitted entirely
+  // when all buckets are 0 (utility tasks, error-skipped paths).
+  const totalAuto = autoSignalsEmitted.timeout + autoSignalsEmitted.impl + autoSignalsEmitted.completion;
+  if (totalAuto > 0) {
+    const parts: string[] = [];
+    if (autoSignalsEmitted.timeout > 0) parts.push(`timeout=${autoSignalsEmitted.timeout}`);
+    if (autoSignalsEmitted.impl > 0) parts.push(`impl=${autoSignalsEmitted.impl}`);
+    if (autoSignalsEmitted.completion > 0) parts.push(`completion=${autoSignalsEmitted.completion}`);
+    responseText += `\n⚡ ${totalAuto} auto-signal(s) emitted (${parts.join(', ')})`;
+  }
   if (utilityBlocks.length > 0) {
     responseText += `\n\n⚠️ EXECUTE NOW — ${utilityBlocks.length} utility task(s) queued:\n\n${utilityBlocks.join('\n\n')}`;
   }
