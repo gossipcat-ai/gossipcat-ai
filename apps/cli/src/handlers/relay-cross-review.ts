@@ -35,17 +35,16 @@ export function startConsensusTimeout(consensusId: string): void {
 
     // Record timeout signals for missing agents
     try {
-      const { PerformanceWriter } = await import('@gossip/orchestrator');
-      const writer = new PerformanceWriter(process.cwd());
+      const { emitConsensusSignals } = await import('@gossip/orchestrator');
       const now = new Date().toISOString();
-      writer.appendSignals(missingAgents.map(agentId => ({
+      emitConsensusSignals(process.cwd(), missingAgents.map(agentId => ({
         type: 'consensus' as const,
         signal: 'unique_unconfirmed' as const,
         agentId,
         taskId: `timeout-${consensusId}`,
         evidence: 'Cross-review timed out — agent did not respond within deadline',
         timestamp: now,
-      })), 'relay-cross-review');
+      })));
     } catch { /* best-effort */ }
 
     // Synthesize with what we have
@@ -252,7 +251,7 @@ export async function handleRelayCrossReview(
   process.stderr.write(`[gossipcat] 🔮 All native cross-reviews received. Synthesizing consensus for ${consensus_id}...\n`);
 
   try {
-    const { ConsensusEngine, PerformanceWriter } = await import('@gossip/orchestrator');
+    const { ConsensusEngine } = await import('@gossip/orchestrator');
     const mainLlm = ctx.mainAgent.getLlm();
     if (!mainLlm) {
       return { content: [{ type: 'text' as const, text: 'Error: No LLM configured for consensus synthesis. Check gossip_setup.' }] };
@@ -303,9 +302,9 @@ export async function handleRelayCrossReview(
 
     // Write performance signals
     try {
-      const writer = new PerformanceWriter(process.cwd());
+      const { emitConsensusSignals } = await import('@gossip/orchestrator');
       if (report.signals.length > 0) {
-        writer.appendSignals(report.signals, 'relay-cross-review');
+        emitConsensusSignals(process.cwd(), report.signals);
       }
     } catch { /* best-effort */ }
 
