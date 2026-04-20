@@ -106,6 +106,90 @@ describe('FileTools', () => {
     });
   });
 
+  // ─── fileSearch — resolutionRoots ranking ─────────────────────────────────
+  // Two sandbox.ts files exist in the real repo (packages/tools + apps/cli).
+  // Cross-reviewers cite bare filenames; without ranking, fileSearch returns
+  // whichever the walk hit first — which for "sandbox.ts" is the wrong one
+  // (utility vs. main sandbox). Ranking must prefer matches under an
+  // effectiveRoots entry, then under projectRoot, then deterministic order.
+  describe('fileSearch — resolutionRoots ranking', () => {
+    const rankDir = resolve(tmpdir(), 'gossip-file-tools-rank-' + Date.now());
+    const outsideDir = resolve(tmpdir(), 'gossip-file-tools-outside-' + Date.now());
+    let rankSandbox: Sandbox;
+    let rankTools: FileTools;
+
+    beforeAll(() => {
+      mkdirSync(resolve(rankDir, 'packages/tools/src'), { recursive: true });
+      mkdirSync(resolve(rankDir, 'apps/cli/src'), { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      writeFileSync(resolve(rankDir, 'packages/tools/src/sandbox.ts'), '// utility sandbox\n');
+      writeFileSync(resolve(rankDir, 'apps/cli/src/sandbox.ts'), '// main sandbox\n');
+      writeFileSync(resolve(outsideDir, 'sandbox.ts'), '// outside sandbox\n');
+      rankSandbox = new Sandbox(rankDir);
+      rankTools = new FileTools(rankSandbox);
+    });
+
+    afterAll(() => {
+      try {
+        const { rmSync } = require('fs');
+        rmSync(rankDir, { recursive: true, force: true });
+        rmSync(outsideDir, { recursive: true, force: true });
+      } catch { /* ignore */ }
+    });
+
+    it('no resolutionRoots → behavior matches current (first walk hit)', async () => {
+      const result = await rankTools.fileSearch({ pattern: 'sandbox.ts' });
+      const lines = result.split('\n');
+      // Both in-project matches returned; no ranking applied.
+      expect(lines).toHaveLength(2);
+      expect(lines).toEqual(expect.arrayContaining([
+        'apps/cli/src/sandbox.ts',
+        'packages/tools/src/sandbox.ts',
+      ]));
+    });
+
+    it('one candidate inside a resolutionRoot → inside-root wins', async () => {
+      const insideRoot = resolve(rankDir, 'apps/cli');
+      const result = await rankTools.fileSearch({
+        pattern: 'sandbox.ts',
+        resolutionRoots: [insideRoot],
+      });
+      const lines = result.split('\n');
+      // apps/cli/src/sandbox.ts must be first — it sits under the root.
+      expect(lines[0]).toBe('apps/cli/src/sandbox.ts');
+    });
+
+    it('two candidates both inside resolutionRoots → first root wins', async () => {
+      const rootA = resolve(rankDir, 'apps/cli');
+      const rootB = resolve(rankDir, 'packages/tools');
+      const result = await rankTools.fileSearch({
+        pattern: 'sandbox.ts',
+        resolutionRoots: [rootA, rootB],
+      });
+      const lines = result.split('\n');
+      // Deterministic: the first resolution root takes priority.
+      expect(lines[0]).toBe('apps/cli/src/sandbox.ts');
+      expect(lines[1]).toBe('packages/tools/src/sandbox.ts');
+    });
+
+    it('first root wins is deterministic when order reverses', async () => {
+      const rootA = resolve(rankDir, 'packages/tools');
+      const rootB = resolve(rankDir, 'apps/cli');
+      const result = await rankTools.fileSearch({
+        pattern: 'sandbox.ts',
+        resolutionRoots: [rootA, rootB],
+      });
+      const lines = result.split('\n');
+      expect(lines[0]).toBe('packages/tools/src/sandbox.ts');
+      expect(lines[1]).toBe('apps/cli/src/sandbox.ts');
+    });
+
+    it('empty resolutionRoots array behaves like omitted param', async () => {
+      const result = await rankTools.fileSearch({ pattern: 'sandbox.ts', resolutionRoots: [] });
+      expect(result.split('\n')).toHaveLength(2);
+    });
+  });
+
   // ─── fileGrep ──────────────────────────────────────────────────────────────
 
   describe('fileGrep', () => {
