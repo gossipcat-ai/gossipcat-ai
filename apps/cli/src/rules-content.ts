@@ -144,6 +144,8 @@ Every \`project_*\` memory MUST include a \`status\` field in frontmatter:
 - \`status: shipped\` — work has landed. Reference only; don't mutate.
 - \`status: closed\` — decided not to pursue. Archive semantics.
 
+**Do NOT trust the MEMORY.md index line.** The index snippet is frozen text; the linked file's frontmatter \`status:\` is the truth. Before dispatching work on any \`project_*.md\` backlog item: (1) open the file, (2) read the \`status:\` field, (3) if it's not obviously fresh, call \`gossip_verify_memory(path, claim)\` per "Backlog Hygiene" above. Skipping this re-dispatches shipped work, wastes agent quota, and pollutes scores.
+
 ## Memory System
 
 Memory persists across sessions automatically:
