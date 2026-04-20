@@ -268,6 +268,15 @@ export function scanReflectionBypass(
     return false;
   }
 
+  // Walk a PropertyAccess chain down to the leftmost non-PropertyAccess node
+  // and return true when that root is a bypass ElementAccess. Supports the
+  // nested Pattern B shape `writer[sym].A.B.Foo()` / `new writer[sym].A.B()`.
+  function propertyChainRootsAtBypass(pa: ts.PropertyAccessExpression): boolean {
+    let cur: ts.Expression = pa.expression;
+    while (ts.isPropertyAccessExpression(cur)) cur = cur.expression;
+    return isBypassElementAccess(cur);
+  }
+
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
       const callee = node.expression;
@@ -281,14 +290,17 @@ export function scanReflectionBypass(
           reason: 'reflection-bypass call',
           raw: node.getText(sf).slice(0, 120),
         });
-      } else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(callee) && isBypassElementAccess(callee.expression)) {
-        // Pattern B: writer[sym].method(...)
+      } else if (ts.isPropertyAccessExpression(callee) && propertyChainRootsAtBypass(callee)) {
+        // Pattern B: writer[sym].method(...) AND new writer[sym].Cls()
+        // Walk any depth of PropertyAccess chain (issue #200).
         const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf));
         offenders.push({
           file: fileLabel,
           line: pos.line + 1,
           col: pos.character + 1,
-          reason: 'reflection-bypass method call',
+          reason: ts.isNewExpression(node)
+            ? 'reflection-bypass new-expression method call'
+            : 'reflection-bypass method call',
           raw: node.getText(sf).slice(0, 120),
         });
       }

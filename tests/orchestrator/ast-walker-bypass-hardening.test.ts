@@ -654,3 +654,38 @@ describe('Batch A: IIFE and await bypass patterns', () => {
     expect(offenders.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('Issue #200: NewExpression Pattern B (new writer[sym].Cls())', () => {
+  it('new writer[sym].Foo() is flagged as reflection-bypass new-expression', () => {
+    const src = `
+      declare const writer: any;
+      const sym = Object.getOwnPropertySymbols(writer)[0];
+      new writer[sym].Foo();
+    `;
+    const sf = parseSf('issue-200-new-pattern-b.ts', src);
+    const offenders = scanReflectionBypass(sf, 'issue-200-new-pattern-b.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+    expect(offenders.some(o => /new-expression/.test(o.reason))).toBe(true);
+  });
+
+  it('new writer[sym].Nested.Foo() is flagged through chained property access', () => {
+    const src = `
+      declare const writer: any;
+      const sym = Object.getOwnPropertySymbols(writer)[0];
+      new writer[sym].Nested.Foo();
+    `;
+    const sf = parseSf('issue-200-new-nested.ts', src);
+    const offenders = scanReflectionBypass(sf, 'issue-200-new-nested.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('negative control: new Foo[staticKey].Bar() without reflection is NOT flagged', () => {
+    const src = `
+      declare const Registry: any;
+      new Registry['literalKey'].Foo();
+    `;
+    const sf = parseSf('issue-200-nc-static.ts', src);
+    const offenders = scanReflectionBypass(sf, 'issue-200-nc-static.ts');
+    expect(offenders).toEqual([]);
+  });
+});
