@@ -14,6 +14,10 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { PerformanceWriter, SkillGapTracker, DEFAULT_KEYWORDS } from '@gossip/orchestrator';
+// Test-exemption: WRITER_INTERNAL gates appendSignal(s) access. Tests use it directly
+// to exercise validation/rejection behavior that helpers swallow via try/catch.
+// This import is outside the Step 4 parity-test scan scope (tests/ not scanned).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -475,7 +479,7 @@ describe('gossip_signals formatting — taskId synthesis, evidence truncation, t
 
       // Cast to PerformanceSignal[] — the formatSignals helper widens signal to string
       // for test flexibility; PerformanceWriter validates the actual value at runtime.
-      expect(() => writer.appendSignals(formatted as any)).not.toThrow();
+      expect(() => writer[WRITER_INTERNAL].appendSignals(formatted as any)).not.toThrow();
 
       const path = join(testDir, '.gossip', 'agent-performance.jsonl');
       const line = JSON.parse(readFileSync(path, 'utf-8').trim());

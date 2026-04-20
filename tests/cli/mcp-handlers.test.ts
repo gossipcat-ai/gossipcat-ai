@@ -17,6 +17,12 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { PerformanceWriter } from '@gossip/orchestrator';
+// Test-exemption: WRITER_INTERNAL is the Symbol-keyed accessor for appendSignal(s).
+// Tests access it directly to exercise validation/rejection behavior that helpers
+// (which try/catch) cannot surface. This import is outside the Step 4 parity-test
+// scan scope (tests/ is not scanned). Do NOT copy to src/ or packages/.
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -47,7 +53,7 @@ describe('PerformanceWriter — gossip_signals backing store', () => {
       evidence: 'Both agents agree on the race condition',
       timestamp: new Date().toISOString(),
     };
-    expect(() => writer.appendSignal(signal)).not.toThrow();
+    expect(() => writer[WRITER_INTERNAL].appendSignal(signal)).not.toThrow();
 
     const filePath = join(testDir, '.gossip', 'agent-performance.jsonl');
     expect(existsSync(filePath)).toBe(true);
@@ -66,7 +72,7 @@ describe('PerformanceWriter — gossip_signals backing store', () => {
       evidence: 'Verified: unbounded file growth confirmed in native-tasks.ts',
       timestamp: new Date().toISOString(),
     };
-    writer.appendSignal(signal);
+    writer[WRITER_INTERNAL].appendSignal(signal);
 
     const raw = readFileSync(join(testDir, '.gossip', 'agent-performance.jsonl'), 'utf-8').trim();
     const parsed = JSON.parse(raw);
@@ -84,7 +90,7 @@ describe('PerformanceWriter — gossip_signals backing store', () => {
       evidence: 'Agent claimed ScopeTracker persists to disk — it does not',
       timestamp: new Date().toISOString(),
     };
-    expect(() => writer.appendSignal(signal)).not.toThrow();
+    expect(() => writer[WRITER_INTERNAL].appendSignal(signal)).not.toThrow();
     const raw = readFileSync(join(testDir, '.gossip', 'agent-performance.jsonl'), 'utf-8').trim();
     expect(JSON.parse(raw).signal).toBe('hallucination_caught');
   });
@@ -92,7 +98,7 @@ describe('PerformanceWriter — gossip_signals backing store', () => {
   it('appends multiple signals in one batch', () => {
     const writer = new PerformanceWriter(testDir);
     const ts = new Date().toISOString();
-    writer.appendSignals([
+    writer[WRITER_INTERNAL].appendSignals([
       { type: 'consensus' as const, signal: 'agreement' as const, agentId: 'a1', taskId: 't1', evidence: 'e1', timestamp: ts },
       { type: 'consensus' as const, signal: 'disagreement' as const, agentId: 'a2', taskId: 't2', evidence: 'e2', timestamp: ts },
     ]);
@@ -112,7 +118,7 @@ describe('PerformanceWriter — gossip_signals backing store', () => {
     // consensusId must round-trip through appendSignals unchanged.
     const writer = new PerformanceWriter(testDir);
     const ts = new Date().toISOString();
-    writer.appendSignals([
+    writer[WRITER_INTERNAL].appendSignals([
       {
         type: 'consensus' as const,
         signal: 'unique_unconfirmed' as const,
@@ -137,7 +143,7 @@ describe('PerformanceWriter — gossip_signals backing store', () => {
 
   it('rejects a signal with missing agentId', () => {
     const writer = new PerformanceWriter(testDir);
-    expect(() => writer.appendSignal({
+    expect(() => writer[WRITER_INTERNAL].appendSignal({
       type: 'consensus' as const,
       signal: 'agreement' as const,
       agentId: '',
@@ -149,7 +155,7 @@ describe('PerformanceWriter — gossip_signals backing store', () => {
 
   it('rejects a signal with an unknown signal value', () => {
     const writer = new PerformanceWriter(testDir);
-    expect(() => writer.appendSignal({
+    expect(() => writer[WRITER_INTERNAL].appendSignal({
       type: 'consensus' as const,
       signal: 'not_a_real_signal' as any,
       agentId: 'agent-x',
@@ -161,7 +167,7 @@ describe('PerformanceWriter — gossip_signals backing store', () => {
 
   it('rejects a signal with an invalid timestamp', () => {
     const writer = new PerformanceWriter(testDir);
-    expect(() => writer.appendSignal({
+    expect(() => writer[WRITER_INTERNAL].appendSignal({
       type: 'consensus' as const,
       signal: 'agreement' as const,
       agentId: 'agent-x',
