@@ -91,6 +91,13 @@ export { oneSidedZTest, resolveVerdict, MIN_EVIDENCE, ALPHA, Z_CRITICAL, TIMEOUT
 export type { VerdictStatus, SkillSnapshot, CategoryCounters, VerdictResult } from './check-effectiveness';
 export { emitCompletionSignals } from './completion-signals';
 export type { CompletionSignalInput } from './completion-signals';
+export {
+  emitConsensusSignals,
+  emitSandboxSignals,
+  emitImplSignals,
+  emitScoringAdjustmentSignals,
+  emitPipelineSignals,
+} from './signal-helpers';
 export { COMPLETION_SIGNAL_ALLOWLIST, EMISSION_PATHS } from './completion-signals.allowlist';
 export type { EmissionPath } from './completion-signals.allowlist';
 export { PipelineDriftDetector } from './pipeline-drift-detector';
