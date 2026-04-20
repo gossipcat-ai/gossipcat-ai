@@ -711,7 +711,6 @@ Signals update dispatch weights. Agents that hallucinate get penalized. Agents t
 
 ### Key rules
 
-- **Always follow `⚠️ EXECUTE NOW`** — dispatch those `Agent()` calls in the same response, do not wait.
 - **Never leave UNVERIFIED findings unexamined** — read the code, confirm or deny, record the signal.
 - **`finding_id` is mandatory on every signal** — format: `<consensus_id>:<agent_id>:fN`.
 - **Use `gossip_progress` after reconnect** — if a consensus round was in flight, it re-surfaces the pending EXECUTE NOW prompts.
