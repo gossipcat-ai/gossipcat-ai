@@ -224,6 +224,40 @@ export function collectSymbolBindings(sf: ts.SourceFile): Set<string> {
           }
         }
       }
+      // Batch C (a): ObjectLiteralExpression seeding.
+      // `const o = { x: sym }` or `const o = { sym }` — if ANY property value
+      // references a tracked identifier, `o` becomes tracked.
+      if (
+        ts.isIdentifier(node.name) &&
+        !bound.has(node.name.text) &&
+        ts.isObjectLiteralExpression(init)
+      ) {
+        for (const prop of init.properties) {
+          if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.initializer) && bound.has(prop.initializer.text)) {
+            bound.add(node.name.text);
+            changed = true;
+            break;
+          }
+          // Shorthand: `{ sym }` — name doubles as value reference
+          if (ts.isShorthandPropertyAssignment(prop) && bound.has(prop.name.text)) {
+            bound.add(node.name.text);
+            changed = true;
+            break;
+          }
+        }
+      }
+      // Batch C (b): PropertyAccessExpression read of a tracked object.
+      // `const v = o.x` — if `o` is tracked, `v` becomes tracked.
+      if (
+        ts.isIdentifier(node.name) &&
+        !bound.has(node.name.text) &&
+        ts.isPropertyAccessExpression(init) &&
+        ts.isIdentifier(init.expression) &&
+        bound.has(init.expression.text)
+      ) {
+        bound.add(node.name.text);
+        changed = true;
+      }
     }
   }
 
@@ -265,6 +299,14 @@ export function scanReflectionBypass(
     // F1 rest-element: `writer[syms[0]](...)` — argument is a chained
     // ElementAccess/method-call whose root is a tracked binding (e.g. `syms`).
     if (arg && isChainedFromTracked(arg as ts.Expression, bound)) return true;
+    // Batch C: `writer[o.x](...)` — argument is a PropertyAccessExpression
+    // whose object is a tracked identifier (e.g. `o` from `const o = { x: sym }`).
+    if (
+      arg &&
+      ts.isPropertyAccessExpression(arg) &&
+      ts.isIdentifier(arg.expression) &&
+      bound.has(arg.expression.text)
+    ) return true;
     return false;
   }
 
