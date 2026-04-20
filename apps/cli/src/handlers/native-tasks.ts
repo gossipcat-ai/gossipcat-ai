@@ -3,6 +3,7 @@
  * All state accessed via the shared context object.
  */
 import { randomUUID } from 'crypto';
+import { hasMemoryQuery } from '@gossip/relay';
 import { ctx, NATIVE_TASK_TTL_MS, defaultImportanceScores } from '../mcp-context';
 
 /** Active timeout watchers — keyed by task ID */
@@ -347,6 +348,21 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // 0. Record in TaskGraph (makes native tasks visible to CLI + Supabase sync)
   // Pass null duration through — recordNativeTaskCompleted handles undefined/null via ?? -1
   // Bug f8: thread memoryQueryCalled so TaskGraph records compliance auditing data.
+  //
+  // Option 1 attribution (project_memory_query_observability.md): when the
+  // native agent invoked memory_query / gossip_remember during this task,
+  // the relay router buffered (agent_id, ts) entries. Query the window
+  // [taskInfo.startedAt, now+2s] (small forward slack absorbs clock skew
+  // between MCP call decode time and the relay record time). Only set
+  // memoryQueryCalled when the lookup says true — preserve undefined
+  // semantics so absence is distinguishable from "checked, did not call".
+  if (taskInfo.memoryQueryCalled === undefined && !taskInfo.utilityType && agentId !== '_utility') {
+    try {
+      if (hasMemoryQuery(agentId, taskInfo.startedAt, Date.now() + 2000)) {
+        taskInfo.memoryQueryCalled = true;
+      }
+    } catch { /* best-effort — attribution never blocks completion */ }
+  }
   try { ctx.mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined, elapsed ?? undefined, taskInfo.memoryQueryCalled); } catch { /* best-effort */ }
 
   // 0a. Auto-record impl signal for write-mode tasks (gate on error param only — string heuristics are unreliable)
