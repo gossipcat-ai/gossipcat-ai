@@ -10,165 +10,23 @@
  * A mismatch in EITHER direction fails — new signals must be allowlisted,
  * and removed signals must be pruned from the allowlist.
  */
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative } from 'path';
 import * as ts from 'typescript';
 import {
   COMPLETION_SIGNAL_ALLOWLIST,
   EMISSION_PATHS,
 } from '../../packages/orchestrator/src/completion-signals.allowlist';
+import {
+  extractSignalsFromHelper,
+  ReflectionOffender,
+  scanReflectionBypass,
+} from './_ast-walker-utils';
 
 const HELPER_PATH = join(
   __dirname,
   '../../packages/orchestrator/src/completion-signals.ts',
 );
-
-interface ExtractedSignal {
-  name: string;
-  line: number;
-  column: number;
-}
-
-function extractSignalsFromHelper(filePath: string): ExtractedSignal[] {
-  const source = readFileSync(filePath, 'utf8');
-  const sf = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
-  const found: ExtractedSignal[] = [];
-
-  // Walk only named function declarations at module top-level. This scopes
-  // extraction to the helper's own function bodies and ignores anything
-  // imported or referenced from elsewhere.
-  for (const stmt of sf.statements) {
-    if (ts.isFunctionDeclaration(stmt) && stmt.body) {
-      visit(stmt.body);
-    }
-  }
-
-  function visit(node: ts.Node): void {
-    // Match: { signal: 'literal', ... }
-    if (ts.isPropertyAssignment(node)) {
-      const nameNode = node.name;
-      const keyName = ts.isIdentifier(nameNode)
-        ? nameNode.text
-        : ts.isStringLiteral(nameNode)
-          ? nameNode.text
-          : undefined;
-      if (keyName === 'signal' && ts.isStringLiteral(node.initializer)) {
-        const pos = sf.getLineAndCharacterOfPosition(node.initializer.getStart(sf));
-        found.push({
-          name: node.initializer.text,
-          line: pos.line + 1,
-          column: pos.character + 1,
-        });
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  return found;
-}
-
-/**
- * Walk a TypeScript source file and return every call site matching the
- * reflection-bypass pattern:
- *
- *   const sym = Object.getOwnPropertySymbols(<expr>)[<idx>];
- *   <writer>[sym].<method>(...);
- *   <writer>[sym](...);
- *
- * Handles the intermediate-variable binding case: first pass tracks the
- * names of variables initialised from `Object.getOwnPropertySymbols(...)` at
- * any depth in the same source file. Second pass flags any CallExpression
- * whose callee is an ElementAccessExpression whose argumentExpression is an
- * Identifier whose name matches a tracked binding, OR whose callee is a
- * PropertyAccessExpression whose `.expression` is such an ElementAccess.
- */
-interface ReflectionOffender {
-  file: string;
-  line: number;
-  col: number;
-  reason: string;
-  raw: string;
-}
-
-function collectSymbolBindings(sf: ts.SourceFile): Set<string> {
-  const bound = new Set<string>();
-  function visit(node: ts.Node): void {
-    if (
-      ts.isVariableDeclaration(node) &&
-      node.initializer &&
-      ts.isIdentifier(node.name)
-    ) {
-      if (initializerInvolvesGetOwnPropertySymbols(node.initializer)) {
-        bound.add(node.name.text);
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(sf);
-  return bound;
-}
-
-function initializerInvolvesGetOwnPropertySymbols(node: ts.Expression): boolean {
-  // Match either the direct call `Object.getOwnPropertySymbols(x)` or the
-  // indexed form `Object.getOwnPropertySymbols(x)[N]`.
-  let cur: ts.Node = node;
-  if (ts.isElementAccessExpression(cur)) {
-    cur = cur.expression;
-  }
-  if (!ts.isCallExpression(cur)) return false;
-  const callee = cur.expression;
-  if (!ts.isPropertyAccessExpression(callee)) return false;
-  if (!ts.isIdentifier(callee.expression)) return false;
-  if (callee.expression.text !== 'Object') return false;
-  return callee.name.text === 'getOwnPropertySymbols';
-}
-
-function scanReflectionBypass(
-  sf: ts.SourceFile,
-  fileLabel: string,
-): ReflectionOffender[] {
-  const bound = collectSymbolBindings(sf);
-  const offenders: ReflectionOffender[] = [];
-
-  function isBypassElementAccess(node: ts.Node): node is ts.ElementAccessExpression {
-    if (!ts.isElementAccessExpression(node)) return false;
-    const arg = node.argumentExpression;
-    if (arg && ts.isIdentifier(arg) && bound.has(arg.text)) return true;
-    // Also flag direct inlined form `writer[Object.getOwnPropertySymbols(writer)[0]]`.
-    if (arg && initializerInvolvesGetOwnPropertySymbols(arg)) return true;
-    return false;
-  }
-
-  function visit(node: ts.Node): void {
-    if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      // Pattern A: writer[sym](...)
-      if (isBypassElementAccess(callee)) {
-        const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        offenders.push({
-          file: fileLabel,
-          line: pos.line + 1,
-          col: pos.character + 1,
-          reason: 'reflection-bypass call via Object.getOwnPropertySymbols binding',
-          raw: node.getText(sf).slice(0, 120),
-        });
-      } else if (ts.isPropertyAccessExpression(callee) && isBypassElementAccess(callee.expression)) {
-        // Pattern B: writer[sym].method(...)
-        const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        offenders.push({
-          file: fileLabel,
-          line: pos.line + 1,
-          col: pos.character + 1,
-          reason: 'reflection-bypass method call via Object.getOwnPropertySymbols binding',
-          raw: node.getText(sf).slice(0, 120),
-        });
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(sf);
-  return offenders;
-}
 
 /**
  * Find identifier bindings that reference WRITER_INTERNAL, including:
