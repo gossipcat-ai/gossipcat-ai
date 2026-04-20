@@ -38,6 +38,8 @@ export type { DedupeKeyInput } from './dedupe-key';
 export { AgentMemoryReader } from './agent-memory';
 export { MemoryWriter } from './memory-writer';
 export type { SessionArtifacts } from './memory-writer';
+export { refreshMemoryIndex, applyStatusTags } from './memory-index';
+export type { RefreshResult, MemoryStatus } from './memory-index';
 export { MemoryCompactor } from './memory-compactor';
 export { TaskGraph } from './task-graph';
 export { TaskGraphSync } from './task-graph-sync';
