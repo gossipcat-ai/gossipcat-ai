@@ -608,6 +608,90 @@ describe('F2: NonNull alias does not break tracking chain', () => {
 });
 
 // ===========================================================================
+// Batch C: object property hops
+// ===========================================================================
+describe('Batch C: object property hops', () => {
+  it('(c1) longhand object literal seeding — property access on object is flagged', () => {
+    // const o = { x: Object.getOwnPropertySymbols(writer)[0] }; writer[o.x]('event')
+    const src = `
+      declare const writer: any;
+      const sym = Object.getOwnPropertySymbols(writer)[0];
+      const o = { x: sym };
+      writer[o.x]('event');
+    `;
+    const sf = parseSf('batchc-longhand-object.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('sym')).toBe(true);
+    expect(bound.has('o')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'batchc-longhand-object.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(c2) shorthand object literal seeding — property access on object is flagged', () => {
+    // const sym = ...; const o = { sym }; writer[o.sym]('event')
+    const src = `
+      declare const writer: any;
+      const sym = Object.getOwnPropertySymbols(writer)[0];
+      const o = { sym };
+      writer[o.sym]('event');
+    `;
+    const sf = parseSf('batchc-shorthand-object.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('sym')).toBe(true);
+    expect(bound.has('o')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'batchc-shorthand-object.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(c3) single-hop property access from tracked object is tracked and flagged', () => {
+    // const sym = ...; const o = { x: sym }; const v = o.x; writer[v]('event')
+    const src = `
+      declare const writer: any;
+      const sym = Object.getOwnPropertySymbols(writer)[0];
+      const o = { x: sym };
+      const v = o.x;
+      writer[v]('event');
+    `;
+    const sf = parseSf('batchc-prop-access-hop.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('sym')).toBe(true);
+    expect(bound.has('o')).toBe(true);
+    expect(bound.has('v')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'batchc-prop-access-hop.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(c4) negative control: object with literal value is NOT flagged', () => {
+    // const o = { x: 'literal' }; writer[o.x]('event') — no reflection source
+    const src = `
+      declare const writer: any;
+      const o = { x: 'literal' };
+      writer[o.x]('event');
+    `;
+    const sf = parseSf('batchc-literal-control.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('o')).toBe(false);
+    const offenders = scanReflectionBypass(sf, 'batchc-literal-control.ts');
+    expect(offenders).toEqual([]);
+  });
+
+  it('(c5) negative control: object with safe function call value is NOT flagged', () => {
+    // const o = { x: safeFn() }; writer[o.x]('event') — no reflection source
+    const src = `
+      declare const writer: any;
+      function safeFn() { return 'key'; }
+      const o = { x: safeFn() };
+      writer[o.x]('event');
+    `;
+    const sf = parseSf('batchc-safefn-control.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('o')).toBe(false);
+    const offenders = scanReflectionBypass(sf, 'batchc-safefn-control.ts');
+    expect(offenders).toEqual([]);
+  });
+});
+
+// ===========================================================================
 // Batch A: AwaitExpression / ParenthesizedExpression unwrap + IIFE fixtures
 // ===========================================================================
 describe('Batch A: IIFE and await bypass patterns', () => {
