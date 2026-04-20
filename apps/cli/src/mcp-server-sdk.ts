@@ -4014,7 +4014,7 @@ server.tool(
     try {
       const searchResult = await execFile('gh', [
         'issue', 'list',
-        '--repo', 'ataberk-xyz/gossipcat',
+        '--repo', 'gossipcat-ai/gossipcat-ai',
         '--state', 'open',
         '--search', description.slice(0, 50),
         '--json', 'number,title,url',
@@ -4073,7 +4073,7 @@ Filed via gossip_bug_feedback`;
     try {
       const createResult = await execFile('gh', [
         'issue', 'create',
-        '--repo', 'ataberk-xyz/gossipcat',
+        '--repo', 'gossipcat-ai/gossipcat-ai',
         '--title', title,
         '--body', body,
       ]);
