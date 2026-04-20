@@ -458,7 +458,7 @@ describeOnPosix('recordLayer3Violations — source discriminator + signal emissi
       .map(l => JSON.parse(l));
     const disagreement = perfEntries.find(e =>
       e.type === 'consensus' &&
-      e.signal === 'disagreement' &&
+      e.signal === 'boundary_escape' &&
       e.category === 'trust_boundaries' &&
       e.taskId === 'sig-test',
     );
@@ -509,7 +509,8 @@ describeOnPosix('recordLayer3Violations — source discriminator + signal emissi
         .filter(Boolean)
         .map(l => JSON.parse(l));
       const fromThisTask = perfEntries.filter(e =>
-        e.taskId === 'main-only' && e.signal === 'disagreement',
+        e.taskId === 'main-only' &&
+        (e.signal === 'disagreement' || e.signal === 'boundary_escape'),
       );
       expect(fromThisTask.length).toBe(0);
     }

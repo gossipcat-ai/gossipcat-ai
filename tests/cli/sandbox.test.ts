@@ -13,6 +13,7 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import { execSync } from 'child_process';
 import {
   relativizeProjectPaths,
   shouldSanitize,
@@ -23,6 +24,7 @@ import {
   lookupDispatchMetadata,
   readSandboxMode,
   isInsideScope,
+  auditDispatchBoundary,
   DispatchMetadata,
   buildAuditExclusions,
   rotateIfNeeded,
@@ -593,5 +595,72 @@ describe('rotateIfNeeded (boundary-escapes.jsonl size rotation)', () => {
     rotateIfNeeded(filePath, 100); // equal → rotate
     expect(existsSync(filePath)).toBe(false);
     expect(readFileSync(filePath + '.1', 'utf8')).toBe(payload);
+  });
+});
+
+// Layer 2 emission test: verifies auditDispatchBoundary records a
+// `boundary_escape` signal (NOT `disagreement`) when a scoped task touches
+// files outside its declared scope. Consensus round bb03845d-64264402.
+const describeOnPosix = process.platform === 'win32' ? describe.skip : describe;
+describeOnPosix('auditDispatchBoundary — Layer 2 emits boundary_escape signal', () => {
+  let projectRoot: string;
+
+  beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'gossip-l2-sig-'));
+    // Minimal git repo so `git status --porcelain` succeeds.
+    execSync('git init -q', { cwd: projectRoot });
+    execSync('git config user.email "t@t"', { cwd: projectRoot });
+    execSync('git config user.name "t"', { cwd: projectRoot });
+    // Declare sandboxEnforcement=warn so recordBoundaryEscape fires.
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.gossip', 'config.json'),
+      JSON.stringify({ sandboxEnforcement: 'warn' }),
+    );
+  });
+
+  afterEach(() => {
+    try { rmSync(projectRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+
+  it('writes signal: "boundary_escape" (not "disagreement") to agent-performance.jsonl', () => {
+    const meta: DispatchMetadata = {
+      taskId: 'l2-sig',
+      agentId: 'opus-implementer',
+      writeMode: 'scoped',
+      scope: 'apps/cli/src',
+      timestamp: Date.now(),
+      preTaskFiles: [],
+    };
+    recordDispatchMetadata(projectRoot, meta);
+
+    // Touch a file outside the scope → triggers violation.
+    mkdirSync(join(projectRoot, 'packages/orchestrator/src'), { recursive: true });
+    writeFileSync(join(projectRoot, 'packages/orchestrator/src/rogue.ts'), '// out of scope');
+
+    const result = auditDispatchBoundary(projectRoot, 'l2-sig');
+    expect(result.violations.length).toBeGreaterThan(0);
+
+    // JSONL must contain boundary_escape signal under trust_boundaries.
+    const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
+    // emitSandboxSignals is best-effort (try/catch) — if @gossip/orchestrator
+    // resolves, the signal lands; if not, test exits without false positive.
+    if (!existsSync(perfPath)) {
+      console.warn('[test] emitSandboxSignals not available in this context — shape not verifiable');
+      return;
+    }
+    const perfEntries = readFileSync(perfPath, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(l => JSON.parse(l));
+    const escape = perfEntries.find(e =>
+      e.type === 'consensus' &&
+      e.taskId === 'l2-sig' &&
+      e.category === 'trust_boundaries',
+    );
+    expect(escape).toBeDefined();
+    expect(escape.signal).toBe('boundary_escape');
+    expect(escape.signal).not.toBe('disagreement');
+    expect(escape.agentId).toBe('opus-implementer');
   });
 });

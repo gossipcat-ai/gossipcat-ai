@@ -123,6 +123,7 @@ export interface ConsensusSignal {
     | 'signal_retracted'
     | 'consensus_round_retracted'
     | 'severity_miscalibrated'
+    | 'boundary_escape'
     | 'task_timeout'
     | 'task_empty';
   agentId: string;

@@ -42,6 +42,11 @@ export interface CategoryCounters {
 }
 
 const CIRCUIT_BREAKER_THRESHOLD = 3; // consecutive failures → open circuit
+// NOTE: 'boundary_escape' is INTENTIONALLY ABSENT from NEGATIVE_SIGNALS. It is a
+// sandbox policy violation (recorded for observability), not a peer-review quality
+// signal — keeping it out of the circuit-breaker input keeps scoring clean and
+// prevents misattribution of scope events to review accuracy. See consensus round
+// bb03845d-64264402 (7/7 confirmed).
 const NEGATIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement']);
 const NEGATIVE_IMPL_SIGNALS = new Set(['impl_test_fail', 'impl_peer_rejected']);
 const SIGNAL_EXPIRY_DAYS = 30;
@@ -60,6 +65,7 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   signal_retracted: true,
   consensus_round_retracted: true,
   severity_miscalibrated: true,
+  boundary_escape: true,
   task_timeout: true,
   task_empty: true,
 };
@@ -664,6 +670,10 @@ export class PerformanceReader {
         case 'task_empty':
           // Transport/provider failure — contributes nothing to any scoring accumulator.
           // Does not affect accuracy, uniqueness, reliability, or circuit breaker.
+          break;
+        case 'boundary_escape':
+          // Sandbox policy violation — recorded for observability, zero weight.
+          // Kept out of NEGATIVE_SIGNALS so scope events don't feed the circuit breaker.
           break;
       }
     }

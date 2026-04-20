@@ -128,7 +128,7 @@ Auto-allow writes: `{ "permissions": { "allow": ["Edit", "Write", "Bash(npm *)"]
 `write_mode: "scoped"` and `write_mode: "worktree"` are **advisory** at the Claude Code harness layer. The Edit/Write tools accept absolute paths anywhere on the filesystem and do not enforce containment. Until that ships, gossipcat adds soft enforcement via two mitigations:
 
 1. **Prompt sanitization** — task descriptions for scoped/worktree dispatches are rewritten to use relative project paths before being handed to the Agent tool. Removes the most common accidental escape vector (the orchestrator embedding absolute paths out of habit).
-2. **Post-task path audit** — after the agent reports done, `gossip_relay` runs `git status --porcelain` and compares the modified files against the declared scope. Violations are recorded as `boundary_escape` entries in `.gossip/boundary-escapes.jsonl` and emit a `disagreement` signal with `category: "trust_boundaries"`.
+2. **Post-task path audit** — after the agent reports done, `gossip_relay` runs `git status --porcelain` and compares the modified files against the declared scope. Violations are recorded as `boundary_escape` entries in `.gossip/boundary-escapes.jsonl` and emit a `boundary_escape` signal with `category: "trust_boundaries"`.
 
 Configure via `sandboxEnforcement` in `.gossip/config.json`: `"off"` (skip both), `"warn"` (default — sanitize and audit, accept results with a warning), `"block"` (sanitize, audit, and refuse to record results that escape the boundary — task is marked failed).
 

@@ -186,7 +186,7 @@ const SCOPE_NOTE =
   'This task runs in an isolated worktree. You MUST use only relative paths (./package/file.ts).\n' +
   'Any write outside the worktree — absolute paths (/Users/...), parent-escape (../), or cd-into-parent\n' +
   '— is a BOUNDARY ESCAPE. Writes to sensitive paths (SSH keys, cloud credentials, system config)\n' +
-  'are recorded as a `disagreement` signal under `trust_boundaries` and PENALIZE YOUR ACCURACY SCORE.\n' +
+  'are recorded as a `boundary_escape` signal under `trust_boundaries` for orchestrator review.\n' +
   'Writes to other non-scoped paths are logged to .gossip/boundary-escapes.jsonl for orchestrator review.\n' +
   'In block mode the task fails; in warn mode it may be reviewed by the orchestrator.\n' +
   '\n' +
@@ -510,7 +510,7 @@ function recordBoundaryEscape(
     emitSandboxSignals(projectRoot, {
       type: 'consensus' as const,
       taskId: meta.taskId,
-      signal: 'disagreement' as const,
+      signal: 'boundary_escape' as const,
       agentId: meta.agentId,
       category: 'trust_boundaries',
       evidence:
@@ -700,7 +700,7 @@ export function expandTmpVariants(path: string): string[] {
  *     /etc is a symlink to /private/etc; expandTmpVariants handles both.
  *   - macOS only: ~/Library/LaunchAgents/*.plist — agentic persistence.
  *
- * Hits in this pass emit a `disagreement` signal under `trust_boundaries`
+ * Hits in this pass emit a `boundary_escape` signal under `trust_boundaries`
  * via PerformanceWriter.appendSignals, which IS retractable via
  * gossip_signals action:"retract" if we learn of a false-positive source.
  * Browser cookies and 1Password are intentionally SKIPPED — denylist-grows
@@ -1035,7 +1035,7 @@ export function buildSensitiveFindArgs(
  *   Pass 2 (sensitive, PR2): iterates buildSensitiveTargets() and runs
  *     find with ZERO noise-exclusions per target (watchlist is pre-vetted
  *     sparse). Violations recorded with source='layer3-sensitive' AND
- *     emit a retractable `disagreement` signal under `trust_boundaries`.
+ *     emit a retractable `boundary_escape` signal under `trust_boundaries`.
  *
  * Dedup: a path seen in both passes is reported ONLY as sensitive. The
  * main pass JSONL entry is suppressed for that path.
@@ -1277,7 +1277,7 @@ function recordLayer3Violations(
       emitSandboxSignals(projectRoot, {
         type: 'consensus' as const,
         taskId: meta.taskId,
-        signal: 'disagreement' as const,
+        signal: 'boundary_escape' as const,
         agentId: meta.agentId,
         category: 'trust_boundaries',
         evidence:
