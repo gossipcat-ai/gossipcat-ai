@@ -5,7 +5,7 @@ import { parseSkillFrontmatter } from './skill-parser';
 import { normalizeSkillName } from './skill-name';
 import { gossipLog, log as _log } from './log';
 import { loadMemoryConfig } from './memory-config';
-import { PerformanceWriter } from './performance-writer';
+import { emitPipelineSignals } from './signal-helpers';
 
 const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
@@ -145,7 +145,6 @@ export function loadSkills(
 
   // Load kill-switch config once per invocation (not inside the loop).
   const memConfig = loadMemoryConfig(projectRoot);
-  const perfWriter = new PerformanceWriter(projectRoot);
 
   const permanent: Array<{ name: string; content: string }> = [];
   const contextualCandidates: Array<{ name: string; content: string; hits: number; rawHits: number; boost: number }> = [];
@@ -182,28 +181,28 @@ export function loadSkills(
       if (!memConfig.bundledMemories.enabled) {
         const reason = 'kill-switch' as const;
         _log('skill-loader', `Skipping propagated skill ${agentId}/${skill}: bundledMemories.enabled=false`);
-        perfWriter.appendSignal({
+        emitPipelineSignals(projectRoot, [{
           type: 'pipeline',
           signal: 'skill_injection_skipped',
           agentId,
           taskId: `skill-loader:${agentId}:${skill}`,
           metadata: { skillName: skill, reason },
           timestamp: new Date().toISOString(),
-        }, 'dispatch-pipeline');
+        }]);
         dropped.push({ skill, reason, hits: 0 });
         continue;
       }
       if (memConfig.bundledMemories.exclude.includes(skill)) {
         const reason = 'excluded' as const;
         _log('skill-loader', `Skipping propagated skill ${agentId}/${skill}: listed in bundledMemories.exclude`);
-        perfWriter.appendSignal({
+        emitPipelineSignals(projectRoot, [{
           type: 'pipeline',
           signal: 'skill_injection_skipped',
           agentId,
           taskId: `skill-loader:${agentId}:${skill}`,
           metadata: { skillName: skill, reason },
           timestamp: new Date().toISOString(),
-        }, 'dispatch-pipeline');
+        }]);
         dropped.push({ skill, reason, hits: 0 });
         continue;
       }

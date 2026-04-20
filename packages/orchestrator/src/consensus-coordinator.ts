@@ -2,11 +2,11 @@ import { randomUUID } from 'crypto';
 import { ILLMProvider, createProvider } from './llm-client';
 import { ConsensusEngine } from './consensus-engine';
 import { ConsensusReport } from './consensus-types';
-import { PerformanceWriter } from './performance-writer';
 import { MemoryWriter } from './memory-writer';
 import { AgentConfig, TaskEntry } from './types';
 import { GossipPublisher } from './gossip-publisher';
 import { extractCategories } from './category-extractor';
+import { emitConsensusSignals } from './signal-helpers';
 
 import { gossipLog as log } from './log';
 
@@ -100,8 +100,6 @@ export class ConsensusCoordinator {
         resolutionRoots: this.resolutionRoots,
       });
       const consensusReport = await engine.run(results);
-      const perfWriter = new PerformanceWriter(this.projectRoot);
-
       this.currentPhase = 'cross_review';
 
       const consensusId = consensusReport.signals[0]?.consensusId ?? randomUUID().slice(0, 12);
@@ -110,7 +108,7 @@ export class ConsensusCoordinator {
 
       // Write performance signals
       if (consensusReport.signals.length > 0) {
-        perfWriter.appendSignals(consensusReport.signals, 'consensus-coordinator');
+        emitConsensusSignals(this.projectRoot, consensusReport.signals);
 
         try {
           this.memWriter.updateImportanceFromSignals(
@@ -130,7 +128,7 @@ export class ConsensusCoordinator {
         for (const finding of consensusReport.confirmed) {
           const categories = extractCategories(finding.finding);
           for (const category of categories) {
-            perfWriter.appendSignal({
+            emitConsensusSignals(this.projectRoot, [{
               type: 'consensus',
               signal: 'category_confirmed',
               consensusId,
@@ -140,7 +138,7 @@ export class ConsensusCoordinator {
               evidence: finding.finding,
               timestamp: new Date(baseMs + i).toISOString(),
               severity: finding.severity,
-            } as any, 'consensus-coordinator');
+            } as any]);
             i++;
           }
         }

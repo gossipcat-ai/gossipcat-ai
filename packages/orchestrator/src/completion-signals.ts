@@ -17,6 +17,7 @@
  */
 
 import { PerformanceWriter } from './performance-writer';
+import { WRITER_INTERNAL } from './_writer-internal';
 import { detectFormatCompliance } from './dispatch-pipeline';
 import type { MetaSignal, PipelineSignal } from './consensus-types';
 
@@ -159,7 +160,7 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
     }
 
     const writer = new PerformanceWriter(projectRoot);
-    writer.appendSignals(signals, 'completion-signals-helper');
+    writer[WRITER_INTERNAL].appendSignals(signals, 'completion-signals-helper');
   } catch (err) {
     process.stderr.write(`[gossipcat] emitCompletionSignals failed: ${(err as Error).message}\n`);
   }
