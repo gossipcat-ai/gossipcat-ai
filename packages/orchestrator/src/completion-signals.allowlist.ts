@@ -55,6 +55,14 @@ export const EMISSION_PATHS = [
   'mcp-server-signals',
   'mcp-server-bulk',
   'mcp-server-impl',
+  // L2: typed signal helpers (signal-helpers.ts). Each helper function maps to
+  // one of these paths so the L3 drift detector can distinguish helper-routed
+  // emissions from direct bypass writes.
+  'signal-helpers-consensus',
+  'signal-helpers-sandbox',
+  'signal-helpers-impl',
+  'signal-helpers-scoring',
+  'signal-helpers-pipeline',
   'unknown',
 ] as const;
 
