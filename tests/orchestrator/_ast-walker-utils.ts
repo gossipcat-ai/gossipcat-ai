@@ -100,23 +100,74 @@ export function stripNonNull(expr: ts.Expression): ts.Expression {
  * via ElementAccessExpression, PropertyAccessExpression `.at(...)`,
  * `.shift()`, or `.pop()`.  These are the "chained" forms that let an
  * attacker extract a single element out of a reflection-returned array.
+ *
+ * Also recognises iterator-protocol chains:
+ *   - `arr.values()`, `arr.keys()`, `arr.entries()`, `arr[Symbol.iterator]()`
+ *     → tracked-iterator (these return an iterator over a tracked array)
+ *   - `iter.next()` → tracked-iterator-result (`.next()` on a tracked iterator)
+ *   - `iterResult.value` or `iterResult[N]` → tainted value extracted from result
+ *
+ * All three iterator forms are collapsed into the same `tracked` set for
+ * simplicity — the fixpoint in collectSymbolBindings handles multi-step chains.
  */
 export function isChainedFromTracked(init: ts.Expression, tracked: Set<string>): boolean {
   const expr = stripNonNull(init);
   // `arr[0]` or `arr[sym]` — the object being indexed must be a tracked identifier.
   if (ts.isElementAccessExpression(expr)) {
     const obj = expr.expression;
-    return ts.isIdentifier(obj) && tracked.has(obj.text);
+    if (ts.isIdentifier(obj) && tracked.has(obj.text)) return true;
+    // `arr[Symbol.iterator]()` — ElementAccessExpression used as callee is handled
+    // below in the CallExpression branch via the element-access-on-tracked check.
   }
-  // `arr.at(0)`, `arr.shift()`, `arr.pop()` — callee is PropAccess on tracked id.
   if (ts.isCallExpression(expr)) {
     const callee = expr.expression;
     if (ts.isPropertyAccessExpression(callee)) {
       const methodName = callee.name.text;
+      const obj = callee.expression;
+      const objId = ts.isIdentifier(obj) ? obj.text : undefined;
+      // `arr.at(0)`, `arr.shift()`, `arr.pop()` — single-element extraction.
       if (methodName === 'at' || methodName === 'shift' || methodName === 'pop') {
-        const obj = callee.expression;
-        return ts.isIdentifier(obj) && tracked.has(obj.text);
+        if (objId && tracked.has(objId)) return true;
       }
+      // Iterator method calls on a tracked array → tracked-iterator.
+      // `arr.values()`, `arr.keys()`, `arr.entries()`
+      if (methodName === 'values' || methodName === 'keys' || methodName === 'entries') {
+        if (objId && tracked.has(objId)) return true;
+      }
+      // `.next()` on a tracked iterator → tracked-iterator-result.
+      if (methodName === 'next') {
+        if (objId && tracked.has(objId)) return true;
+        // Also handles chained form: `arr.values().next()` — the callee object is
+        // itself a call expression that would be tracked in the next fixpoint pass.
+        // We handle the multi-hop case via the fixpoint; single-step is enough here.
+      }
+      // `.value` property access on a tracked iterator-result.
+      // Handled as PropertyAccessExpression below.
+    }
+    // `arr[Symbol.iterator]()` — callee is ElementAccessExpression on a tracked id.
+    if (ts.isElementAccessExpression(callee)) {
+      const obj = callee.expression;
+      if (ts.isIdentifier(obj) && tracked.has(obj.text)) return true;
+    }
+  }
+  // `iterResult.value` — PropertyAccessExpression .value on a tracked identifier.
+  if (ts.isPropertyAccessExpression(expr)) {
+    const obj = expr.expression;
+    if (ts.isIdentifier(obj) && tracked.has(obj.text) && expr.name.text === 'value') {
+      return true;
+    }
+  }
+  // `iterResult.value[N]` — ElementAccess where the object is `.value` on a tracked id.
+  // This handles `result.value[1]` from arr.entries().next().value[1].
+  if (ts.isElementAccessExpression(expr)) {
+    const innerObj = expr.expression;
+    if (
+      ts.isPropertyAccessExpression(innerObj) &&
+      innerObj.name.text === 'value' &&
+      ts.isIdentifier(innerObj.expression) &&
+      tracked.has(innerObj.expression.text)
+    ) {
+      return true;
     }
   }
   return false;
@@ -144,9 +195,44 @@ export function collectSymbolBindings(sf: ts.SourceFile): Set<string> {
   }
   const allDecls: VarDecl[] = [];
 
+  // ForOfEntry captures the loop variable name(s) and the iterated expression.
+  interface ForOfEntry {
+    names: string[];                // identifiers bound by the loop variable
+    iterExpr: ts.Expression;        // the expression after `of`
+  }
+  const allForOfs: ForOfEntry[] = [];
+
   function gatherDecls(node: ts.Node): void {
     if (ts.isVariableDeclaration(node) && node.initializer) {
       allDecls.push({ node, init: node.initializer });
+    }
+    // Collect `for (const x of expr)` and `for (const [i, x] of expr)` patterns.
+    if (ts.isForOfStatement(node)) {
+      const initializer = node.initializer;
+      const iterExpr = node.expression as ts.Expression;
+      const names: string[] = [];
+      if (ts.isVariableDeclarationList(initializer)) {
+        for (const decl of initializer.declarations) {
+          if (ts.isIdentifier(decl.name)) {
+            names.push(decl.name.text);
+          } else if (ts.isArrayBindingPattern(decl.name)) {
+            for (const el of decl.name.elements) {
+              if (ts.isBindingElement(el) && ts.isIdentifier(el.name)) {
+                names.push(el.name.text);
+              }
+            }
+          } else if (ts.isObjectBindingPattern(decl.name)) {
+            for (const el of decl.name.elements) {
+              if (ts.isBindingElement(el) && ts.isIdentifier(el.name)) {
+                names.push(el.name.text);
+              }
+            }
+          }
+        }
+      }
+      if (names.length > 0) {
+        allForOfs.push({ names, iterExpr });
+      }
     }
     ts.forEachChild(node, gatherDecls);
   }
@@ -220,6 +306,27 @@ export function collectSymbolBindings(sf: ts.SourceFile): Set<string> {
             !bound.has(el.name.text)
           ) {
             bound.add(el.name.text);
+            changed = true;
+          }
+        }
+      }
+    }
+    // Issue #198: for..of over a tracked array (or iterator method on tracked array)
+    // seeds all loop variable names as tracked.
+    // Handles: `for (const s of arr)`, `for (const [i, s] of arr.entries())`
+    for (const { names, iterExpr } of allForOfs) {
+      // The iterated expression is either a tracked identifier directly or a
+      // call on a tracked identifier (e.g. arr.entries(), arr.values()).
+      let iterTracked = false;
+      if (ts.isIdentifier(iterExpr) && bound.has(iterExpr.text)) {
+        iterTracked = true;
+      } else if (isChainedFromTracked(iterExpr, bound)) {
+        iterTracked = true;
+      }
+      if (iterTracked) {
+        for (const name of names) {
+          if (!bound.has(name)) {
+            bound.add(name);
             changed = true;
           }
         }

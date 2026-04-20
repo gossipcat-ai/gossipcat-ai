@@ -608,6 +608,151 @@ describe('F2: NonNull alias does not break tracking chain', () => {
 });
 
 // ===========================================================================
+// Issue #198: iterator-protocol bypass
+// ===========================================================================
+describe('Issue #198: iterator-protocol bypass', () => {
+  it('(1) arr.values().next().value is flagged when arr is tracked', () => {
+    const src = `
+      declare const writer: any;
+      const arr = Object.getOwnPropertySymbols(writer);
+      const iter = arr.values();
+      const result = iter.next();
+      const sym = result.value;
+      writer[sym]('bypass');
+    `;
+    const sf = parseSf('issue198-values-next-value.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('arr')).toBe(true);
+    expect(bound.has('iter')).toBe(true);
+    expect(bound.has('result')).toBe(true);
+    expect(bound.has('sym')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'issue198-values-next-value.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(2) arr.keys().next().value is flagged when arr is tracked', () => {
+    const src = `
+      declare const writer: any;
+      const arr = Object.getOwnPropertySymbols(writer);
+      const iter = arr.keys();
+      const result = iter.next();
+      const sym2 = result.value;
+      writer[sym2]('bypass');
+    `;
+    const sf = parseSf('issue198-keys-next-value.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('iter')).toBe(true);
+    expect(bound.has('result')).toBe(true);
+    expect(bound.has('sym2')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'issue198-keys-next-value.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(3) arr.entries().next().value[1] is flagged (entries + index)', () => {
+    const src = `
+      declare const writer: any;
+      const arr = Object.getOwnPropertySymbols(writer);
+      const iter = arr.entries();
+      const result = iter.next();
+      const sym3 = result.value[1];
+      writer[sym3]('bypass');
+    `;
+    const sf = parseSf('issue198-entries-next-value-index.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('iter')).toBe(true);
+    expect(bound.has('result')).toBe(true);
+    // result.value[1]: result.value is tracked (PropertyAccess .value), then [1] is tracked.
+    // Both steps go through isChainedFromTracked in the fixpoint.
+    expect(bound.has('sym3')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'issue198-entries-next-value-index.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(4) arr[Symbol.iterator]().next().value is flagged', () => {
+    const src = `
+      declare const writer: any;
+      const arr = Object.getOwnPropertySymbols(writer);
+      const iter = arr[Symbol.iterator]();
+      const result = iter.next();
+      const sym4 = result.value;
+      writer[sym4]('bypass');
+    `;
+    const sf = parseSf('issue198-symbol-iterator.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('iter')).toBe(true);
+    expect(bound.has('result')).toBe(true);
+    expect(bound.has('sym4')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'issue198-symbol-iterator.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(5) for..of over tracked array is flagged', () => {
+    const src = `
+      declare const writer: any;
+      const arr = Object.getOwnPropertySymbols(writer);
+      for (const s of arr) {
+        writer[s]('bypass');
+      }
+    `;
+    const sf = parseSf('issue198-forof-tracked.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('arr')).toBe(true);
+    expect(bound.has('s')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'issue198-forof-tracked.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(6) destructured for..of with arr.entries() is flagged', () => {
+    const src = `
+      declare const writer: any;
+      const arr = Object.getOwnPropertySymbols(writer);
+      for (const [i, s] of arr.entries()) {
+        writer[s]('bypass');
+      }
+    `;
+    const sf = parseSf('issue198-forof-entries-destructured.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('arr')).toBe(true);
+    expect(bound.has('s')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'issue198-forof-entries-destructured.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('negative control (NC-1): normal (non-reflection) array iteration is NOT flagged', () => {
+    const src = `
+      const x = [1, 2, 3];
+      for (const v of x) {
+        console.log(v);
+      }
+    `;
+    const sf = parseSf('issue198-nc1-normal-array.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('x')).toBe(false);
+    expect(bound.has('v')).toBe(false);
+    const offenders = scanReflectionBypass(sf, 'issue198-nc1-normal-array.ts');
+    expect(offenders).toEqual([]);
+  });
+
+  it('negative control (NC-2): .values() on a non-tracked array is NOT flagged', () => {
+    const src = `
+      declare const writer: any;
+      const arr = Object.keys(writer);
+      const iter = arr.values();
+      const result = iter.next();
+      const sym = result.value;
+      writer[sym]('data');
+    `;
+    const sf = parseSf('issue198-nc2-object-keys-iter.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('arr')).toBe(false);
+    expect(bound.has('iter')).toBe(false);
+    expect(bound.has('sym')).toBe(false);
+    const offenders = scanReflectionBypass(sf, 'issue198-nc2-object-keys-iter.ts');
+    expect(offenders).toEqual([]);
+  });
+});
+
+// ===========================================================================
 // Batch A: AwaitExpression / ParenthesizedExpression unwrap + IIFE fixtures
 // ===========================================================================
 describe('Batch A: IIFE and await bypass patterns', () => {
