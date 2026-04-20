@@ -55,8 +55,20 @@ export const REFLECTION_METHODS = new Set<string>([
  */
 export function initializerInvolvesGetOwnPropertySymbols(node: ts.Expression): boolean {
   let cur: ts.Node = node;
+  // Unwrap any number of AwaitExpression / ParenthesizedExpression layers first.
+  // This handles `await Object.getOwnPropertySymbols(x)` and `(Object.getOwnPropertySymbols(x))`.
+  // Order matters: unwrap before the single ElementAccess strip so that
+  // `(await f())[0]` — where ElementAccess wraps the await — is handled in the
+  // next branch, not here.
+  while (ts.isAwaitExpression(cur) || ts.isParenthesizedExpression(cur)) {
+    cur = (cur as ts.AwaitExpression | ts.ParenthesizedExpression).expression;
+  }
   if (ts.isElementAccessExpression(cur)) {
     cur = cur.expression;
+    // Unwrap again after stripping ElementAccess, e.g. `(await f())[0]`.
+    while (ts.isAwaitExpression(cur) || ts.isParenthesizedExpression(cur)) {
+      cur = (cur as ts.AwaitExpression | ts.ParenthesizedExpression).expression;
+    }
   }
   if (!ts.isCallExpression(cur)) return false;
   const callee = cur.expression;
