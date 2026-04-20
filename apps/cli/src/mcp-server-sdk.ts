@@ -2458,6 +2458,7 @@ server.tool(
       // and have grown into a 47% data gap — stop writing new ones at the source.
       // Write-time only; legacy signals are not backfilled.
       const { extractCategories } = await import('@gossip/orchestrator');
+      const droppedNoCategory: Array<{ agentId: string; findingId?: string; finding: string }> = [];
       const categoryEnforced = formatted.filter((s, i) => {
         if (s.type !== 'consensus' || s.signal !== 'hallucination_caught') return true;
         if (s.category) return true;
@@ -2468,6 +2469,11 @@ server.tool(
           (s as { category?: string }).category = extracted;
           return true;
         }
+        droppedNoCategory.push({
+          agentId: s.agentId,
+          findingId: s.findingId,
+          finding: srcFinding.slice(0, 80),
+        });
         process.stderr.write(
           `[gossip_signals] dropped hallucination_caught for ${s.agentId}: no category could be derived. finding="${srcFinding.slice(0, 80)}"\n`,
         );
@@ -2756,6 +2762,9 @@ server.tool(
       let baseReceipt = `Recorded ${deduped.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\nThese will influence future agent selection via dispatch weighting.`;
       if (dupes.length > 0) {
         baseReceipt += `\n\n⚠️ ${dupes.length} duplicate signal(s) skipped (cross-round content match or exact finding_id):\n  ${dupes.join('\n  ')}`;
+      }
+      if (droppedNoCategory.length > 0) {
+        baseReceipt += `\n\n⚠️ ${droppedNoCategory.length} hallucination_caught signal(s) dropped (no category could be derived):\n  ${droppedNoCategory.map(d => `${d.agentId}:${d.findingId ?? '?'} finding="${d.finding.slice(0, 60)}"`).join('\n  ')}`;
       }
 
       // Post-write check: nudge orchestrator toward skill development when this batch
