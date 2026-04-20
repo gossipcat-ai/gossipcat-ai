@@ -12,7 +12,8 @@
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/stargazers"><img src="https://img.shields.io/github/stars/gossipcat-ai/gossipcat-ai?style=social" alt="GitHub stars" /></a>
-  <a href="https://socket.dev/npm/package/gossipcat"><img src="https://badge.socket.dev/npm/package/gossipcat/0.4.14" alt="Socket Score" /></a>
+  <a href="https://socket.dev/npm/package/gossipcat"><img src="https://socket.dev/api/badge/npm/package/gossipcat" alt="Socket Score" /></a>
+  <a href="https://bundlephobia.com/package/gossipcat"><img src="https://img.shields.io/bundlephobia/min/gossipcat?color=0ea5e9" alt="minified bundle size" /></a>
 </p>
 
 <p align="center">
