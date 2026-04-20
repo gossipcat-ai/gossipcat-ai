@@ -58,6 +58,57 @@ jobs:
         run: npx tsc --noEmit
         working-directory: packages/orchestrator
 
+      # L2 boundary enforcement (spec 2026-04-19-l2-signal-writer-visibility).
+      # After L2 lands, every appendSignal(s) call must live in sanctioned
+      # files, and WRITER_INTERNAL must leak only through _writer-internal.ts.
+      # These greps fail CI on any regression — cheaper than re-running the
+      # full consensus round to catch it.
+      - name: L2 boundary — no raw appendSignal(s) outside sanctioned files
+        run: |
+          set -e
+          # Sanctioned callers (file-scoped):
+          #   packages/orchestrator/src/performance-writer.ts   (class definition)
+          #   packages/orchestrator/src/signal-helpers.ts       (helper impls)
+          #   packages/orchestrator/src/completion-signals.ts   (pre-L2 helper)
+          #   *.allowlist.ts                                    (documentation refs)
+          #   tests/**                                          (test exemption via WRITER_INTERNAL)
+          # Also ignore JSDoc / single-line comment lines — they only mention
+          # the method, they don't call it.
+          VIOLATIONS=$(grep -rnE '\.(appendSignal|appendSignals)\s*\(' \
+            packages/orchestrator/src apps/cli/src packages/relay/src 2>/dev/null \
+            | grep -vE '/(performance-writer|signal-helpers|completion-signals)\.ts:' \
+            | grep -vE '\.allowlist\.ts:' \
+            | grep -vE ':\s*(\*|//)' \
+            || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::L2 boundary violated — raw appendSignal(s) call outside sanctioned files:"
+            echo "$VIOLATIONS"
+            echo ""
+            echo "Fix: route through a signal-helpers.ts helper (emitConsensusSignals,"
+            echo "emitImplSignals, emitSandboxSignals, emitPipelineSignals, or"
+            echo "emitScoringAdjustmentSignals)."
+            exit 1
+          fi
+
+      - name: L2 boundary — WRITER_INTERNAL import confined to _writer-internal.ts
+        run: |
+          set -e
+          # Only signal-helpers.ts, completion-signals.ts, and _writer-internal.ts
+          # (the re-export) may import WRITER_INTERNAL. Tests may use it via
+          # the same import pattern (sanctioned test exemption).
+          LEAKS=$(grep -rnE "import\s*\{[^}]*WRITER_INTERNAL" \
+            packages/orchestrator/src apps/cli/src packages/relay/src 2>/dev/null \
+            | grep -vE '/(signal-helpers|completion-signals|_writer-internal|performance-writer)\.ts:' \
+            | grep -vE ':\s*(\*|//)' \
+            || true)
+          if [ -n "$LEAKS" ]; then
+            echo "::error::L2 boundary violated — WRITER_INTERNAL imported outside sanctioned files:"
+            echo "$LEAKS"
+            echo ""
+            echo "Fix: add a new helper to signal-helpers.ts instead of importing the Symbol directly."
+            exit 1
+          fi
+
       # Known-broken suites are excluded via jest.config.base.js
       # (KNOWN_BROKEN_SUITES) so local dev and CI share the same source of
       # truth. Set RUN_KNOWN_BROKEN=1 locally when you're actively fixing
