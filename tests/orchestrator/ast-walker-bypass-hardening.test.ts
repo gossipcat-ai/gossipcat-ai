@@ -518,3 +518,51 @@ describe('F2: NonNull alias does not break tracking chain', () => {
     expect(offenders.some(o => /reflection-bypass/.test(o.reason))).toBe(true);
   });
 });
+
+// ===========================================================================
+// Batch A: AwaitExpression / ParenthesizedExpression unwrap + IIFE fixtures
+// ===========================================================================
+describe('Batch A: IIFE and await bypass patterns', () => {
+  it('(a) sync IIFE — reflection bypass inside sync IIFE is flagged', () => {
+    const src = `
+      declare const writer: any;
+      (() => { const sym = Object.getOwnPropertySymbols(writer)[0]; writer[sym]('event'); })();
+    `;
+    const sf = parseSf('batcha-sync-iife.ts', src);
+    const offenders = scanReflectionBypass(sf, 'batcha-sync-iife.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(b) async IIFE — reflection bypass inside async IIFE with await is flagged', () => {
+    const src = `
+      declare const writer: any;
+      (async () => { const sym = Object.getOwnPropertySymbols(writer)[0]; await writer[sym]('event'); })();
+    `;
+    const sf = parseSf('batcha-async-iife.ts', src);
+    const offenders = scanReflectionBypass(sf, 'batcha-async-iife.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(c) await chain — awaited reflection call seeds binding and downstream call is flagged', () => {
+    const src = `
+      declare const writer: any;
+      const sym = await Object.getOwnPropertySymbols(writer);
+      writer[sym[0]]('event');
+    `;
+    const sf = parseSf('batcha-await-chain.ts', src);
+    const bound = collectSymbolBindings(sf);
+    expect(bound.has('sym')).toBe(true);
+    const offenders = scanReflectionBypass(sf, 'batcha-await-chain.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(d) await inside async IIFE — awaited reflection call inside async IIFE is flagged', () => {
+    const src = `
+      declare const writer: any;
+      (async () => { const sym = await Object.getOwnPropertySymbols(writer); writer[sym[0]]('event'); })();
+    `;
+    const sf = parseSf('batcha-await-iife.ts', src);
+    const offenders = scanReflectionBypass(sf, 'batcha-await-iife.ts');
+    expect(offenders.length).toBeGreaterThanOrEqual(1);
+  });
+});
