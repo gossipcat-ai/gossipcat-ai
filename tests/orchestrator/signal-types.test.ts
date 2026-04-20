@@ -2,6 +2,8 @@ import { PerformanceWriter } from '@gossip/orchestrator';
 import { readFileSync, rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+// L2: sanctioned internal accessor for tests (Step 5 exemption).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 describe('PerformanceWriter — PerformanceSignal support', () => {
   const testDir = join(tmpdir(), 'gossip-signal-types-' + Date.now());
@@ -16,7 +18,7 @@ describe('PerformanceWriter — PerformanceSignal support', () => {
   afterAll(() => rmSync(testDir, { recursive: true, force: true }));
 
   test('writes ImplSignal to JSONL', () => {
-    writer.appendSignal({
+    writer[WRITER_INTERNAL].appendSignal({
       type: 'impl',
       signal: 'impl_test_pass',
       agentId: 'agent-a',
@@ -30,7 +32,7 @@ describe('PerformanceWriter — PerformanceSignal support', () => {
   });
 
   test('writes MetaSignal to JSONL', () => {
-    writer.appendSignal({
+    writer[WRITER_INTERNAL].appendSignal({
       type: 'meta',
       signal: 'task_completed',
       agentId: 'agent-a',
@@ -45,7 +47,7 @@ describe('PerformanceWriter — PerformanceSignal support', () => {
   });
 
   test('appendSignals accepts mixed PerformanceSignal array', () => {
-    writer.appendSignals([
+    writer[WRITER_INTERNAL].appendSignals([
       { type: 'consensus', taskId: 't1', signal: 'agreement', agentId: 'a', evidence: 'ok', timestamp: new Date().toISOString() },
       { type: 'impl', signal: 'impl_test_fail', agentId: 'b', taskId: 't2', timestamp: new Date().toISOString() },
     ]);
@@ -54,7 +56,7 @@ describe('PerformanceWriter — PerformanceSignal support', () => {
   });
 
   test('writes ConsensusSignal with category field', () => {
-    writer.appendSignal({
+    writer[WRITER_INTERNAL].appendSignal({
       type: 'consensus',
       taskId: 't3',
       signal: 'category_confirmed',

@@ -152,6 +152,16 @@ describe('completion-signals parity (Layer 1 drift guard)', () => {
               // Guard is defensive: parity check applies only to external callers.
               return;
             }
+            // L2: signal-helpers.ts is the sanctioned internal caller module.
+            // It accesses appendSignal(s) via the WRITER_INTERNAL Symbol key and
+            // passes typed emissionPath literals from EMISSION_PATHS — the AST
+            // walker sees PropertyAccessExpression on the Symbol-keyed object,
+            // which is a legitimate access. Skip this file at the call-site level;
+            // the Step 4 import-boundary test (PR B) enforces WRITER_INTERNAL
+            // is not imported outside the three sanctioned files.
+            if (rel.endsWith('packages/orchestrator/src/signal-helpers.ts')) {
+              return;
+            }
             // Ignore the interface-shape declaration in tool-server.ts. That
             // file declares a minimal duck-typed interface and does not call
             // the real PerformanceWriter; its one invocation is a separate

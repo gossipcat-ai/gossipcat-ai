@@ -24,6 +24,8 @@ import {
   __resetSampleCounterForTests,
   MAX_TELEMETRY_BYTES,
 } from '../../packages/orchestrator/src/performance-writer';
+// L2: sanctioned internal accessor for tests (Step 5 exemption).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 interface Row {
   type?: string;
@@ -183,7 +185,7 @@ describe('PipelineDriftDetector', () => {
     const writer = new PerformanceWriter(root);
     const a = (async () => {
       for (let i = 0; i < 20; i++) {
-        writer.appendSignals([{
+        writer[WRITER_INTERNAL].appendSignals([{
           type: 'meta', signal: 'task_completed', agentId: 'a', taskId: `a${i}`,
           value: i, timestamp: iso(i),
         } as any], 'completion-signals-helper');
@@ -191,7 +193,7 @@ describe('PipelineDriftDetector', () => {
     })();
     const b = (async () => {
       for (let i = 0; i < 20; i++) {
-        writer.appendSignals([{
+        writer[WRITER_INTERNAL].appendSignals([{
           type: 'meta', signal: 'task_completed', agentId: 'b', taskId: `b${i}`,
           value: i, timestamp: iso(i + 100),
         } as any], 'completion-signals-helper');
@@ -265,7 +267,7 @@ describe('PipelineDriftDetector', () => {
     const writer = new PerformanceWriter(root);
     // Seed so the tagging epoch is established on first sample.
     for (let i = 0; i < 49; i++) {
-      writer.appendSignal({
+      writer[WRITER_INTERNAL].appendSignal({
         type: 'meta', signal: 'task_completed', agentId: 'a', taskId: `t${i}`,
         value: i, timestamp: iso(i),
       } as any, 'completion-signals-helper');
@@ -275,7 +277,7 @@ describe('PipelineDriftDetector', () => {
     // The 50th write should trigger detector.run() — but since all rows are
     // helper-path, no drift row is written. We verify indirectly: the
     // state file should now exist because the detector stamped the epoch.
-    writer.appendSignal({
+    writer[WRITER_INTERNAL].appendSignal({
       type: 'meta', signal: 'task_completed', agentId: 'a', taskId: 't49',
       value: 49, timestamp: iso(49),
     } as any, 'completion-signals-helper');
