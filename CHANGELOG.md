@@ -4,6 +4,14 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.17] — 2026-04-21
+
+Patch release shipping the `OUTPUT_DELIVERY_PROTOCOL` dispatch-prompt fix so sibling instances pick it up via `npm i -g gossipcat@latest`. No data-layer changes; prompt-only.
+
+### Fixed
+
+- **Subagent self-relay failure mode** (PR #219). A fresh-install session observed an `architect` native agent attempt to call `gossip_relay` itself, discover the tool isn't exposed to subagents, and burn 67K tokens + 36 tool uses flailing without returning findings. Root cause: the "orchestrator calls gossip_relay on your behalf" contract was only written in orchestrator-facing dispatch instructions, never in the agent prompt the subagent actually sees. Fix: every assembled dispatch prompt (native + relay, consensus + solo) now carries a priority-0 `OUTPUT_DELIVERY_PROTOCOL` block stating "emit findings as TEXT in your response; do NOT call gossip_relay, gossip_relay_cross_review, or any gossip_* tool yourself; stop when findings are written — don't try to 'submit' or 'finalize'." Kept as a separate constant so `FINDING_TAG_SCHEMA`'s byte size stays stable for the suffix-budget tests in `prompt-assembler.test.ts`. (`packages/orchestrator/src/finding-tag-schema.ts`, `packages/orchestrator/src/prompt-assembler.ts`)
+
 ## [0.4.16] — 2026-04-21
 
 Catch-up release: consolidates user-visible work shipped across v0.4.10–v0.4.15 (which were tagged without CHANGELOG entries) plus this session's four new PRs. Highlights: consensus citation correctness on duplicates, first-class `boundary_escape` signal type, MEMORY.md index hygiene, and the dashboard/retraction/worktree-citation work that previously sat under `[Unreleased]`.
