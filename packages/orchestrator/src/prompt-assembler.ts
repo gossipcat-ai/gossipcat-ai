@@ -1,8 +1,8 @@
 import * as path from 'path';
-import { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT } from './finding-tag-schema';
+import { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL } from './finding-tag-schema';
 
 // Re-exported so existing import sites (`@gossip/orchestrator`) keep working.
-export { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT };
+export { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL };
 
 const DOC_EXTENSIONS = new Set(['.md', '.txt', '.rst']);
 const SPEC_PATH_PATTERN = /(?:docs\/|specs\/|[\w-]+-(?:design|spec)\.md)/;
@@ -213,6 +213,7 @@ export function assemblePrompt(parts: {
   if (parts.consensusSummary) {
     // Consensus dispatches need the full cross-review framing.
     suffix.push({ priority: 0, text: `\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---` });
+    suffix.push({ priority: 0, text: `\n\n${OUTPUT_DELIVERY_PROTOCOL}` });
   } else {
     // Non-consensus dispatches still need the type enum + anti-invention rule
     // so agent output is parseable when the dashboard retroactively shows it.
@@ -230,6 +231,7 @@ export function assemblePrompt(parts: {
     );
     if (hasAnyMeaningfulPart) {
       suffix.push({ priority: 0, text: `\n\n--- FINDING TAG SCHEMA ---\n${FINDING_TAG_SCHEMA}\n--- END FINDING TAG SCHEMA ---` });
+      suffix.push({ priority: 0, text: `\n\n${OUTPUT_DELIVERY_PROTOCOL}` });
     }
   }
 
