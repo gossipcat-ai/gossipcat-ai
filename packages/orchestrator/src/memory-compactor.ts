@@ -81,7 +81,9 @@ export class MemoryCompactor {
             writeFileSync(archivePath, archiveLines.slice(-MAX_ARCHIVE_LINES).join('\n') + '\n');
           }
         }
-      } catch { /* best-effort archive truncation */ }
+      } catch (err) {
+        process.stderr.write(`[memory-compactor] archive truncation failed for ${agentId}: ${(err as Error).message}\n`);
+      }
 
       writeFileSync(tasksPath, toKeep.map(e => e.line).join('\n') + '\n');
 

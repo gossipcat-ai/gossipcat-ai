@@ -1,5 +1,5 @@
 import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, openSync, closeSync, constants } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { TaskMemoryEntry } from './types';
 import { MemoryCompactor } from './memory-compactor';
 import type { ILLMProvider } from './llm-client';
@@ -141,6 +141,7 @@ export class MemoryWriter {
     task: string;
     result: string;
     agentAccuracy?: number;
+    resolutionRoots?: string[];
   }): Promise<void> {
     const memDir = this.ensureDirs(agentId);
     const knowledgeDir = join(memDir, 'knowledge');
@@ -200,6 +201,14 @@ export class MemoryWriter {
     const accuracyLine = data.agentAccuracy !== undefined
       ? `agentAccuracy: ${data.agentAccuracy.toFixed(2)}`
       : null;
+    const citations = this.validateCitations(body, data.resolutionRoots);
+    const citationLines: string[] = [`citationsVerified: ${citations.verified}/${citations.total}`];
+    if (citations.unverified.length > 0) {
+      citationLines.push('citationsFabricated:');
+      for (const u of citations.unverified) {
+        citationLines.push(`  - "${u}"`);
+      }
+    }
     const content = [
       '---',
       `name: ${truncateAtWord(data.task, 80).replace(/\n/g, ' ')}`,
@@ -208,6 +217,7 @@ export class MemoryWriter {
       ...(accuracyLine ? [accuracyLine] : []),
       `lastAccessed: ${today}`,
       `accessCount: 0`,
+      ...citationLines,
       '---',
       '',
       ...(data.agentAccuracy !== undefined && data.agentAccuracy < 0.4
@@ -217,6 +227,66 @@ export class MemoryWriter {
     ].join('\n');
 
     writeFileSync(join(knowledgeDir, filename), content);
+  }
+
+  /**
+   * Annotation-only citation check: scans `body` for file-like tokens (optionally
+   * with a `:NN` line-number suffix), resolves each against `projectRoot` plus any
+   * supplied `resolutionRoots`, and reports how many are real. Never drops or
+   * mutates content — the caller records the counts in frontmatter for later
+   * analysis.
+   */
+  private validateCitations(
+    body: string,
+    resolutionRoots?: string[],
+  ): { total: number; verified: number; unverified: string[] } {
+    // Mirrors extractFacts() regex but also captures an optional :NN suffix.
+    const fileRegex = /(?:^|[\s`"'(\[<])([a-zA-Z0-9_/.-]+\.[a-z]{1,7})(?::(\d+))?(?=[\s`"'):,\]>]|$)/gm;
+    const seen = new Set<string>();
+    const citations: Array<{ path: string; line?: number; key: string }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = fileRegex.exec(body)) !== null) {
+      const path = m[1];
+      // Skip URLs — the extension-ish tail after a URL is not a local citation.
+      // Check the 8 chars before the match for http:// or https:// scheme.
+      const before = body.slice(Math.max(0, m.index - 8), m.index + 1);
+      if (/https?:\/\//.test(before) || /https?:\/\//.test(path)) continue;
+      const line = m[2] ? parseInt(m[2], 10) : undefined;
+      const key = line !== undefined ? `${path}:${line}` : path;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      citations.push({ path, line, key });
+    }
+
+    const roots = [this.projectRoot, ...(resolutionRoots ?? [])];
+    const unverified: string[] = [];
+    let verified = 0;
+    for (const c of citations) {
+      let hit: string | null = null;
+      for (const root of roots) {
+        const abs = resolve(root, c.path);
+        if (existsSync(abs)) { hit = abs; break; }
+      }
+      if (!hit) {
+        unverified.push(c.key);
+        continue;
+      }
+      if (c.line !== undefined) {
+        try {
+          const lineCount = readFileSync(hit, 'utf8').split('\n').length;
+          if (c.line > lineCount || c.line < 1) {
+            unverified.push(c.key);
+            continue;
+          }
+        } catch {
+          unverified.push(c.key);
+          continue;
+        }
+      }
+      verified++;
+    }
+
+    return { total: citations.length, verified, unverified };
   }
 
   /**
