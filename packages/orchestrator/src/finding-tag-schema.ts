@@ -20,6 +20,20 @@ export const FINDING_TAG_SCHEMA = `FINDING TAG SCHEMA (output parsing requires t
 - Do NOT invent new types (e.g., "approval", "concern", "risk", "recommendation", "confirmed", "issue", "bug", "warning") — they will not appear in any dashboard, score, or signal.
 - Cite source files inline: <cite tag="file">path:line</cite>`;
 
+/**
+ * Output-delivery protocol — kept separate from FINDING_TAG_SCHEMA so changes
+ * here don't shift the schema's byte-size (which is load-bearing for suffix
+ * budget tests in assemblePrompt). Injected as its own priority-0 block by
+ * the prompt assembler.
+ *
+ * Why this exists: a sibling-project dispatch observed an `architect` agent
+ * attempt to call `gossip_relay` itself, discover the tool isn't exposed to
+ * subagents, burn 67K tokens flailing, and return no findings. The subagent
+ * is a writer, not a relay caller — the orchestrator handles relay. This
+ * message makes that contract explicit at dispatch time.
+ */
+export const OUTPUT_DELIVERY_PROTOCOL = `OUTPUT DELIVERY — emit findings as TEXT in your response. The orchestrator captures your response and calls gossip_relay on your behalf. Do NOT call gossip_relay, gossip_relay_cross_review, or any gossip_* tool yourself — these are orchestrator-only. Stop when your findings are written; do not try to "submit" or "finalize".`;
+
 export const CONSENSUS_OUTPUT_FORMAT = `⚠ UNKNOWN TYPES ARE SILENTLY DROPPED — only type="finding", type="suggestion", type="insight" are accepted. Any other type value (e.g. approval, concern, risk, recommendation, confirmed) will NOT appear in the dashboard, scores, or signals.
 
 ${FINDING_TAG_SCHEMA}

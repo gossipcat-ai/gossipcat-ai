@@ -243,9 +243,10 @@ describe('assemblePrompt suffix cap (F14 — priority-ordered drop)', () => {
 
   it('drops AGENT MEMORY before MEMORY when only one drop is needed (priority 4 > priority 3)', () => {
     // Size MEMORY just over the reserve budget so AGENT_MEMORY's removal
-    // alone brings total back under reserve. Schema ~600 + AGENT_MEMORY ~500
-    // + task tiny → memory body of ~17100 pushes total just over 18K reserve.
-    const memoryBlock = 'actual memory: ' + 'y'.repeat(17_100);
+    // alone brings total back under reserve. Schema ~600 + OUTPUT_DELIVERY ~400
+    // + AGENT_MEMORY ~500 + task tiny → memory body of ~16700 pushes total
+    // just over 18K reserve.
+    const memoryBlock = 'actual memory: ' + 'y'.repeat(16_700);
     const result = assemblePrompt({
       task: 'x',
       memory: memoryBlock,
