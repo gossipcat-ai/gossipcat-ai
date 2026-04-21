@@ -986,7 +986,11 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     return Math.min(0.85, (scores.relevance + scores.accuracy + scores.uniqueness) / 15);
   }
 
-  writeConsensusKnowledge(agentId: string, findings: Array<{ originalAgentId: string; finding: string; tag?: string }>): void {
+  writeConsensusKnowledge(
+    agentId: string,
+    findings: Array<{ originalAgentId: string; finding: string; tag?: string }>,
+    resolutionRoots?: string[],
+  ): void {
     if (findings.length === 0) return;
     const memDir = this.ensureDirs(agentId);
     const knowledgeDir = join(memDir, 'knowledge');
@@ -1004,15 +1008,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
       confirmed: '✓', disputed: '⚡', unverified: '?', unique: '◇',
     };
 
-    const content = [
-      '---',
-      `name: Peer findings from consensus review`,
-      `description: ${peerFindings.length} findings from peer agents`,
-      `importance: 0.8`,
-      `lastAccessed: ${today}`,
-      `accessCount: 0`,
-      '---',
-      '',
+    const bodyLines = [
       '## Peer Findings (learn from these)',
       '',
       ...peerFindings.map(f => {
@@ -1020,6 +1016,29 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
         const status = f.tag ? ` [${f.tag.toUpperCase()}]` : '';
         return `- ${emoji} [${f.originalAgentId}]${status} ${f.finding}`;
       }),
+    ];
+    const body = bodyLines.join('\n');
+
+    const citations = this.validateCitations(body, resolutionRoots);
+    const citationLines: string[] = [`citationsVerified: ${citations.verified}/${citations.total}`];
+    if (citations.unverified.length > 0) {
+      citationLines.push('citationsFabricated:');
+      for (const u of citations.unverified) {
+        citationLines.push(`  - "${u}"`);
+      }
+    }
+
+    const content = [
+      '---',
+      `name: Peer findings from consensus review`,
+      `description: ${peerFindings.length} findings from peer agents`,
+      `importance: 0.8`,
+      `lastAccessed: ${today}`,
+      `accessCount: 0`,
+      ...citationLines,
+      '---',
+      '',
+      body,
     ].join('\n');
 
     // Warmth-aware pruning — same as writeKnowledgeFromResult
