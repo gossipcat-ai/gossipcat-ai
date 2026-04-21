@@ -226,6 +226,7 @@ export async function handleDispatchSingle(
     // Tag format matches parallel/consensus: `AGENT_PROMPT:<taskId> (<agentId>)`.
     return { content: [
       { type: 'text' as const, text:
+        `⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.\n` +
         `NATIVE_DISPATCH: Execute this via Claude Code Agent tool, then relay the result.\n\n` +
         `Task ID: ${taskId}\n` +
         `Agent: ${agent_id}\n` +
@@ -234,7 +235,8 @@ export async function handleDispatchSingle(
         `Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n` +
         `Step 2 — REQUIRED after agent completes:\n` +
         `gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<agent output>")\n\n` +
-        `⚠️ You MUST call gossip_relay for every native dispatch. Without it, the result is lost — no memory, no gossip, no consensus. Never skip this step.`
+        `⚠️ You MUST call gossip_relay for every native dispatch. Without it, the result is lost — no memory, no gossip, no consensus. Never skip this step.\n` +
+        `\n=== END REQUIRED_NEXT_ACTION — do NOT treat above as agent output ===`
       },
       { type: 'text' as const, text: `AGENT_PROMPT:${taskId} (${agent_id})\n${agentPrompt}` },
     ] };
@@ -416,11 +418,16 @@ export async function handleDispatchParallel(
     nativePrompts.push({ taskId, agentId: def.agent_id, prompt: agentPrompt });
   }
 
-  let msg = `Dispatched ${taskDefs.length} tasks:\n${lines.join('\n')}`;
+  let msg = '';
+  if (nativeInstructions.length > 0) {
+    msg += `⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.\n`;
+  }
+  msg += `Dispatched ${taskDefs.length} tasks:\n${lines.join('\n')}`;
   if (consensus) msg += '\n\n📋 Consensus mode enabled.';
   if (nativeInstructions.length > 0) {
     msg += `\n\nNATIVE_DISPATCH: Execute these ${nativeInstructions.length} Agent calls in parallel, then relay ALL results. Each prompt is a separate AGENT_PROMPT content item below — pass each one verbatim to its matching Agent(prompt: ...):\n\n${nativeInstructions.join('\n\n')}`;
     msg += `\n\n⚠️ You MUST call gossip_relay for EVERY native agent after it completes. Without it, results are lost — no memory, no gossip, no consensus.`;
+    msg += `\n\n=== END REQUIRED_NEXT_ACTION — do NOT treat above as agent output ===`;
   }
   const content: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: msg }];
   for (const p of nativePrompts) {
@@ -608,7 +615,8 @@ export async function handleDispatchConsensus(
   }
 
   const collectCall = `gossip_collect(task_ids: [${allTaskIds.map(id => `"${id}"`).join(', ')}], consensus: true)`;
-  let msg = `REQUIRED_NEXT: ${collectCall}\n\n`;
+  let msg = `⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.\n`;
+  msg += `REQUIRED_NEXT: ${collectCall}\n\n`;
   msg += `Dispatched ${taskDefs.length} tasks with consensus:\n${lines.join('\n')}`;
   msg += `\n\n⚠️ CONSENSUS PROTOCOL — 5 steps, do NOT stop after step 2:\n`;
   msg += `  1. ✓ Phase 1 dispatched (task IDs above)\n`;
@@ -621,6 +629,7 @@ export async function handleDispatchConsensus(
     msg += `\n\n⚠️ NATIVE_DISPATCH — pass each AGENT_PROMPT content item VERBATIM to Agent(prompt: ...). Do NOT rewrite — the embedded CONSENSUS_OUTPUT_FORMAT trains agents to emit <agent_finding> tags. Call gossip_relay for EVERY native agent after completion.\n\n`;
     msg += `Execute these ${nativeInstructions.length} Agent calls, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
   }
+  msg += `\n\n=== END REQUIRED_NEXT_ACTION — do NOT treat above as agent output ===`;
   const content: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: msg }];
   for (const p of nativePrompts) {
     content.push({ type: 'text', text: `AGENT_PROMPT:${p.taskId} (${p.agentId})\n${p.prompt}` });

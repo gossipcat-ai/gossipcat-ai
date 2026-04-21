@@ -115,6 +115,62 @@ don't double-wrap those.
 **Why:** Raw Agent() bypasses the gossipcat pipeline. Tasks won't appear in the activity
 feed, no memory is written, no signals recorded. The agent effectively works off-grid.
 
+## Dispatch Protocol — Self-Diagnostic
+
+The hard contract: when you decide to dispatch, the FIRST tool call after the
+decision is `gossip_run` / `gossip_dispatch`. When that call returns a
+NATIVE_DISPATCH payload, the IMMEDIATE NEXT tool call is the `Agent()` invocation
+it specifies — no intervening reads, greps, status checks, todos, or "let me just
+confirm one thing" side trips. The NATIVE_DISPATCH payload is an instruction to
+act, not a summary of work already done.
+
+### Anti-pattern 1 — Parallel-batch skip
+
+**Trigger:** you are composing a multi-tool response and gossip_run is one of
+several planned calls. You batch it alongside Read/Grep/Edit or other dispatches
+in the same response block, and the Edit/Read executes but gossip_run is quietly
+dropped because it "didn't feel load-bearing."
+
+**Diagnostic:** if gossip_run would be in the same tool-block as a file Edit or
+a competing dispatch, stop. Dispatch FIRST, alone. Everything else waits for the
+NATIVE_DISPATCH return.
+
+### Anti-pattern 2 — Completion-illusion from NATIVE_DISPATCH density
+
+**Trigger:** the NATIVE_DISPATCH response is long — task id, relay token,
+agent prompt, output-file path, instructions to call Agent() then gossip_relay.
+Visually it reads like a completed transcript. You parse it as "the task has
+been run" and move on to summarization, reporting to the user, or the next item.
+
+**Diagnostic:** NATIVE_DISPATCH is a request FOR YOU to call Agent(). If you
+have not yet called Agent() with the payload, the task has not started. A quick
+check: did your last tool call return a NATIVE_DISPATCH? If yes, the next tool
+call must be Agent() — no exceptions, no intervening text to the user.
+
+### Anti-pattern 3 — Context-fatigue exception inflation
+
+**Trigger:** deep into a session, you notice the "≤10-line / docs / CSS / tests
+/ (direct)" exception list in Your Role and mentally expand it. "This is 25
+lines but it's pretty simple." "This touches shared state but only in a
+read-only way." "I'll dispatch the NEXT one." The exception list becomes a
+rationalization surface instead of a filter.
+
+**Diagnostic:** if you are reaching for the exception list to justify a skip,
+you are probably inside this anti-pattern. The exception list is for cases
+where dispatch is obviously overkill on first read — not for cases where you're
+arguing yourself into it. When in doubt, dispatch.
+
+### Self-check before any implementation edit
+
+1. Did I call gossip_run for this task, and is its NATIVE_DISPATCH still
+   unactioned? (If yes → call Agent() now, do not edit.)
+2. Am I inside the exception list because the change is genuinely trivial, or
+   because I'm tired of the dispatch ceremony? (If the latter → dispatch.)
+3. Is this tool call part of a batch that also includes gossip_run? (If yes →
+   unbatch, dispatch first, wait for return.)
+
+All three must pass before the Edit/Write tool fires.
+
 ## Native Agent Relay Rule
 
 When dispatching native agents: gossip_dispatch → Agent() → gossip_relay. Never skip the relay call.

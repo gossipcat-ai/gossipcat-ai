@@ -146,6 +146,28 @@ describe('native dispatch — FINDING TAG SCHEMA injection (non-consensus)', () 
     expect(prompt).not.toContain('--- CONSENSUS OUTPUT FORMAT ---');
   });
 
+  it('handleDispatchSingle: content[0] banner prefix + AGENT_PROMPT security invariant', async () => {
+    ctx.nativeAgentConfigs.set('native-claude', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You are a reviewer.',
+      description: 'Native reviewer',
+      skills: [],
+    });
+
+    const result = await handleDispatchSingle('native-claude', 'Audit x');
+    const orchestratorText = result.content[0].text;
+    expect(orchestratorText.startsWith('⚠️ REQUIRED_NEXT_ACTION:')).toBe(true);
+    expect(orchestratorText).toContain('NATIVE_DISPATCH');
+    expect(orchestratorText).toContain('=== END REQUIRED_NEXT_ACTION');
+    // Security invariant: AGENT_PROMPT items must not leak the relay_token,
+    // and their first line must be `AGENT_PROMPT:<taskId> (<agentId>)`.
+    for (let i = 1; i < result.content.length; i++) {
+      const body = result.content[i].text;
+      expect(body.startsWith('AGENT_PROMPT:')).toBe(true);
+      expect(body).not.toMatch(/relay_token/);
+    }
+  });
+
   it('handleDispatchSingle places the schema AFTER skills (ordering invariant)', async () => {
     writeFileSync(
       join(skillDir, '.gossip', 'skills', 'memory-retrieval.md'),
@@ -189,6 +211,29 @@ describe('native dispatch — FINDING TAG SCHEMA injection (non-consensus)', () 
     expect(prompt).toContain('--- FINDING TAG SCHEMA ---');
     expect(prompt).not.toContain('--- CONSENSUS OUTPUT FORMAT ---');
   });
+
+  it('handleDispatchParallel: content[0] banner prefix + AGENT_PROMPT security invariant', async () => {
+    ctx.nativeAgentConfigs.set('native-claude', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You are a reviewer.',
+      description: 'Native reviewer',
+      skills: [],
+    });
+
+    const result = await handleDispatchParallel(
+      [{ agent_id: 'native-claude', task: 'Audit x' }],
+      false,
+    );
+    const orchestratorText = result.content[0].text;
+    expect(orchestratorText.startsWith('⚠️ REQUIRED_NEXT_ACTION:')).toBe(true);
+    expect(orchestratorText).toContain('NATIVE_DISPATCH');
+    expect(orchestratorText).toContain('=== END REQUIRED_NEXT_ACTION');
+    for (let i = 1; i < result.content.length; i++) {
+      const body = result.content[i].text;
+      expect(body.startsWith('AGENT_PROMPT:')).toBe(true);
+      expect(body).not.toMatch(/relay_token/);
+    }
+  });
 });
 
 describe('native dispatch — CONSENSUS OUTPUT FORMAT injection (consensus)', () => {
@@ -227,6 +272,27 @@ describe('native dispatch — CONSENSUS OUTPUT FORMAT injection (consensus)', ()
     expect(prompt).toContain('--- END CONSENSUS OUTPUT FORMAT ---');
     // Consensus path emits the full block, not the slim schema.
     expect(prompt).not.toContain('--- FINDING TAG SCHEMA ---');
+  });
+
+  it('handleDispatchConsensus: content[0] banner prefix + AGENT_PROMPT security invariant', async () => {
+    ctx.nativeAgentConfigs.set('native-claude', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You are a reviewer.',
+      description: 'Native reviewer',
+      skills: [],
+    });
+
+    const result = await handleDispatchConsensus([
+      { agent_id: 'native-claude', task: 'Audit memory' },
+    ]);
+    const orchestratorText = result.content[0].text;
+    expect(orchestratorText.startsWith('⚠️ REQUIRED_NEXT_ACTION:')).toBe(true);
+    expect(orchestratorText).toContain('=== END REQUIRED_NEXT_ACTION');
+    for (let i = 1; i < result.content.length; i++) {
+      const body = result.content[i].text;
+      expect(body.startsWith('AGENT_PROMPT:')).toBe(true);
+      expect(body).not.toMatch(/relay_token/);
+    }
   });
 
   it('handleDispatchConsensus preserves block ordering: SKILLS < CONSENSUS FORMAT < TASK', async () => {
