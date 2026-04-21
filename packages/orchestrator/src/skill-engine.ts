@@ -153,6 +153,7 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
 export class SkillEngine {
   private techStackCache: string | null | undefined = undefined; // undefined = not yet computed
   private statusMigrationRan = false;
+  private orphanCleanupRan = false;
 
   constructor(
     private llm: ILLMProvider,
@@ -169,6 +170,129 @@ export class SkillEngine {
       process.stderr.write(
         `[gossipcat] skill-engine: one-time status migration failed: ${(err as Error).message}\n`,
       );
+    }
+
+    // Fire-and-forget: sweep orphan underscore duplicates and `.md.bak-*`
+    // migration artifacts from every agent's skills directory. Runs
+    // synchronously, once per instance, guarded by its own flag so it never
+    // reuses statusMigrationRan. try/catch so a corrupt directory cannot
+    // prevent the engine from constructing.
+    try {
+      this.runOrphanCleanup();
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: orphan cleanup failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  /**
+   * One-time startup pass: walks `.gossip/agents/<id>/skills/` and removes
+   * two kinds of detritus left over from prior renames/migrations:
+   *
+   * 1. `*.md.bak-<timestamp>` — leftover backup artifacts never read by
+   *    runtime. Deleted outright.
+   * 2. Underscore-form duplicates (e.g. `trust_boundaries.md`) sitting
+   *    alongside the hyphen-canonical file (`trust-boundaries.md`).
+   *    normalizeSkillName hyphenates, so the underscore copy is unreachable.
+   *
+   *    - Both exist and normalize to the same name → delete the underscore.
+   *    - Only underscore exists → rename it to hyphen canonical, preserving
+   *      the skill content.
+   *
+   * Runs exactly once per SkillEngine instance. Scope is bounded to
+   * `.gossip/agents/<id>/skills/` — no arbitrary directory recursion. Corrupt
+   * entries are skipped silently.
+   */
+  private runOrphanCleanup(): void {
+    if (this.orphanCleanupRan) return;
+    this.orphanCleanupRan = true;
+
+    const agentsDir = join(this.projectRoot, '.gossip', 'agents');
+    if (!existsSync(agentsDir)) return;
+
+    let agentDirs: string[];
+    try {
+      agentDirs = readdirSync(agentsDir);
+    } catch {
+      return;
+    }
+
+    for (const agentId of agentDirs) {
+      const skillsDir = join(agentsDir, agentId, 'skills');
+      if (!existsSync(skillsDir)) continue;
+
+      let entries: string[];
+      try {
+        entries = readdirSync(skillsDir);
+      } catch {
+        continue;
+      }
+
+      // Phase 1: delete *.md.bak-* artifacts.
+      for (const file of entries) {
+        if (!/\.md\.bak-\d+$/.test(file)) continue;
+        const fullPath = join(skillsDir, file);
+        try {
+          unlinkSync(fullPath);
+          process.stderr.write(
+            `[gossipcat] skill-engine: deleted backup artifact ${fullPath}\n`,
+          );
+        } catch (err) {
+          process.stderr.write(
+            `[gossipcat] skill-engine: failed to delete ${fullPath}: ${(err as Error).message}\n`,
+          );
+        }
+      }
+
+      // Phase 2: resolve underscore/hyphen duplicates. Re-list to reflect
+      // post-delete state and ignore any remaining non-.md files.
+      let mdFiles: string[];
+      try {
+        mdFiles = readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+      } catch {
+        continue;
+      }
+
+      const mdSet = new Set(mdFiles);
+      for (const file of mdFiles) {
+        const base = file.slice(0, -3); // strip .md
+        if (!base.includes('_')) continue;
+        const canonical = normalizeSkillName(base);
+        if (!canonical || canonical === base) continue;
+        const canonicalFile = `${canonical}.md`;
+        const underscorePath = join(skillsDir, file);
+        const canonicalPath = join(skillsDir, canonicalFile);
+
+        if (mdSet.has(canonicalFile)) {
+          // Both exist — delete the underscore duplicate.
+          try {
+            unlinkSync(underscorePath);
+            mdSet.delete(file);
+            process.stderr.write(
+              `[gossipcat] skill-engine: deleted underscore duplicate ${underscorePath} (canonical: ${canonicalPath})\n`,
+            );
+          } catch (err) {
+            process.stderr.write(
+              `[gossipcat] skill-engine: failed to delete ${underscorePath}: ${(err as Error).message}\n`,
+            );
+          }
+        } else {
+          // Only underscore exists — rename to canonical form.
+          try {
+            renameSync(underscorePath, canonicalPath);
+            mdSet.delete(file);
+            mdSet.add(canonicalFile);
+            process.stderr.write(
+              `[gossipcat] skill-engine: renamed ${underscorePath} → ${canonicalPath}\n`,
+            );
+          } catch (err) {
+            process.stderr.write(
+              `[gossipcat] skill-engine: failed to rename ${underscorePath}: ${(err as Error).message}\n`,
+            );
+          }
+        }
+      }
     }
   }
 
