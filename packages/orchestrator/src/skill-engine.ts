@@ -27,6 +27,29 @@ import {
 const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
 /**
+ * Test-only deterministic-interleaving hook for writeSkillFileFromParts.
+ *
+ * In production this is a no-op. Concurrency tests assign an async fn here to
+ * force an interleaving between the read-check and the write phases of the
+ * optimistic-concurrency cycle — see tests/orchestrator/skill-engine-concurrency.test.ts.
+ *
+ * Invoked once per writeback call, after the disk re-read and drift check
+ * but BEFORE the atomic temp-write+rename. Tests can use the hook to let a
+ * sibling writer race in and bump the on-disk version, then observe that
+ * the current writer aborts (the `version` the sibling wrote will differ
+ * from our expected `newVersion - 1` when re-read... but our check already
+ * passed, so in this path we rely on atomic rename ordering: the later
+ * rename wins. The *intended* race surfaces in two-writer scenarios where
+ * the hook runs BETWEEN both writers' checks, making one abort.)
+ *
+ * Exported — not in default schema — so only tests can reach it.
+ */
+export let __SKILL_ENGINE_TEST_HOOK: (() => void) | null = null;
+export function __setSkillEngineTestHook(fn: (() => void) | null): void {
+  __SKILL_ENGINE_TEST_HOOK = fn;
+}
+
+/**
  * Valid terminal/transitional values for the `status` frontmatter field.
  * Must be kept in sync with VerdictStatus in check-effectiveness.ts.
  * The runtime list exists so we can validate string values read from disk —
@@ -204,8 +227,19 @@ export class SkillEngine {
           const reason = isMissing
             ? 'missing'
             : `invalid(${JSON.stringify(current)})`;
-          const updated: Record<string, unknown> = { ...frontmatter, status: 'pending' };
-          this.writeSkillFileFromParts(skillPath, updated, body);
+          const currentVersion = this.safeNumber(frontmatter.version ?? 0, 0);
+          const updated: Record<string, unknown> = {
+            ...frontmatter,
+            status: 'pending',
+            version: currentVersion + 1,
+          };
+          const ok = this.writeSkillFileFromParts(skillPath, updated, body);
+          if (!ok) {
+            process.stderr.write(
+              `[gossipcat] skill-engine: status migration aborted on ${skillPath} (drift)\n`,
+            );
+            continue;
+          }
           process.stderr.write(
             `[gossipcat] skill-engine: rewrote status=${reason} → pending in ${skillPath}\n`,
           );
@@ -599,7 +633,14 @@ ${inputs.join('\n')}
       nowMs,
     );
     if (mutated) {
-      this.writeSkillFileFromParts(skillPath, frontmatter, body);
+      const currentVersion = this.safeNumber(frontmatter.version ?? 0, 0);
+      frontmatter.version = currentVersion + 1;
+      const ok = this.writeSkillFileFromParts(skillPath, frontmatter, body);
+      if (!ok) {
+        process.stderr.write(
+          `[gossipcat] skill-engine: lazy migration aborted on ${skillPath} (drift for ${agentId}/${category})\n`,
+        );
+      }
     }
 
     const snapshot: SkillSnapshot = {
@@ -620,6 +661,7 @@ ${inputs.join('\n')}
         frontmatter.inconclusive_strikes != null
           ? (Number.isFinite(Number(frontmatter.inconclusive_strikes)) ? Number(frontmatter.inconclusive_strikes) : undefined)
           : undefined,
+      version: this.safeNumber(frontmatter.version ?? 0, 0),
     };
 
     const anchorMs = snapshot.inconclusive_at
@@ -633,7 +675,20 @@ ${inputs.join('\n')}
       if (verdict.effectiveness !== undefined) {
         merged.effectiveness = verdict.effectiveness;
       }
-      this.writeSkillFileFromParts(skillPath, merged, body);
+      // Prefer the SkillSnapshot's version (captured at read time) as the
+      // source of truth. The snapshot reflects the state observed when the
+      // verdict was computed; frontmatter has not been re-read since.
+      const baseVersion = this.safeNumber(
+        snapshot.version ?? frontmatter.version ?? 0,
+        0,
+      );
+      merged.version = baseVersion + 1;
+      const ok = this.writeSkillFileFromParts(skillPath, merged, body);
+      if (!ok) {
+        process.stderr.write(
+          `[gossipcat] skill-engine: verdict writeback aborted on ${skillPath} (drift for ${agentId}/${category})\n`,
+        );
+      }
     }
 
     return verdict;
@@ -790,21 +845,99 @@ ${inputs.join('\n')}
   }
 
   /**
-   * Serialises frontmatter + body back to a skill file and writes it atomically.
-   * Preserves all existing frontmatter fields; only updated fields in the map
-   * will change value.
+   * Serialises frontmatter + body back to a skill file and writes it atomically,
+   * guarded by optimistic concurrency control via `frontmatter.version`.
+   *
+   * **Concurrency contract.** The caller must:
+   *   1. Read the file, capture `version` (missing ⇒ 0).
+   *   2. Compute the new frontmatter with `version: expectedVersion + 1`.
+   *   3. Call this method.
+   *
+   * On entry we re-read the file, parse its on-disk `version`, and verify it
+   * equals the incoming `frontmatter.version - 1`. If not, a sibling writer
+   * raced in between the caller's read and this write — we stderr-log and
+   * return WITHOUT writing so the caller's stale snapshot can't clobber
+   * fresher state. Missing on-disk version is treated as 0 (rollback-safe:
+   * legacy files behave like version 0 and accept a single upgrade to version 1).
    *
    * Atomicity: writes to a sibling tmp file then renames into place. The
    * rename is atomic on POSIX filesystems within a single mount, so a
    * crash mid-write leaves either the old contents intact or the new
    * contents fully present — never a torn file. The tmp file is cleaned
    * up on the failure path.
+   *
+   * Returns `true` if the write landed, `false` if drift was detected and
+   * the write was aborted.
    */
   private writeSkillFileFromParts(
     skillPath: string,
     frontmatter: Record<string, unknown>,
     body: string,
-  ): void {
+  ): boolean {
+    const newVersion = this.safeNumber(frontmatter.version ?? 1, 1);
+    const expectedDiskVersion = newVersion - 1;
+
+    // Re-read the file to check for drift. If the file is missing this is
+    // a first-time write — expectedDiskVersion must be 0.
+    let diskVersion = 0;
+    if (existsSync(skillPath)) {
+      try {
+        const current = readFileSync(skillPath, 'utf-8');
+        const parsed = this.parseSkillFile(current);
+        diskVersion = this.safeNumber(parsed.frontmatter.version ?? 0, 0);
+      } catch {
+        // Unreadable file — treat as version 0, let write proceed.
+        diskVersion = 0;
+      }
+    }
+
+    if (diskVersion !== expectedDiskVersion) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: version drift on ${skillPath} — ` +
+        `expected v${expectedDiskVersion}, disk has v${diskVersion}. ` +
+        `Aborting stale write (would have been v${newVersion}).\n`,
+      );
+      return false;
+    }
+
+    // Test-only deterministic interleaving hook. Fires after the drift check
+    // passes but BEFORE the atomic temp-write+rename, so a sibling writer can
+    // race in and bump the on-disk version. The hook is read-and-cleared so
+    // re-entrant sibling writes from within the hook don't recurse forever.
+    // Production code leaves this null.
+    const hook = __SKILL_ENGINE_TEST_HOOK;
+    if (hook) {
+      __SKILL_ENGINE_TEST_HOOK = null;
+      try {
+        hook();
+      } catch (err) {
+        process.stderr.write(
+          `[gossipcat] skill-engine: test hook threw: ${(err as Error).message}\n`,
+        );
+      }
+    }
+
+    // After the hook runs (e.g. sibling writer bumped disk version), re-read
+    // and re-verify. Without this, writer A would happily overwrite writer B's
+    // fresher state even though B landed in between A's check and A's write.
+    if (hook && existsSync(skillPath)) {
+      try {
+        const current = readFileSync(skillPath, 'utf-8');
+        const parsed = this.parseSkillFile(current);
+        const postHookDisk = this.safeNumber(parsed.frontmatter.version ?? 0, 0);
+        if (postHookDisk !== expectedDiskVersion) {
+          process.stderr.write(
+            `[gossipcat] skill-engine: post-hook version drift on ${skillPath} — ` +
+            `expected v${expectedDiskVersion}, disk has v${postHookDisk}. ` +
+            `Aborting stale write (would have been v${newVersion}).\n`,
+          );
+          return false;
+        }
+      } catch {
+        // If we can't re-read, fall through to the write and let rename win.
+      }
+    }
+
     const fmLines = Object.entries(frontmatter).map(
       ([k, v]) => `${k}: ${this.serializeYamlValue(v)}`,
     );
@@ -822,5 +955,6 @@ ${inputs.join('\n')}
       try { unlinkSync(tmpPath); } catch { /* tmp already gone */ }
       throw err;
     }
+    return true;
   }
 }

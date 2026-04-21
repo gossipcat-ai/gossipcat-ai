@@ -48,6 +48,13 @@ export interface SkillSnapshot {
   inconclusive_at?: string;
   inconclusive_strikes?: number;
   verdict_method?: 'z-test' | 'wilson_degenerate' | 'wilson_sparse';
+  /**
+   * Monotonic optimistic-concurrency counter. Baseline version read from
+   * disk at the top of checkEffectiveness; every writeback bumps it by +1
+   * after verifying the on-disk value hasn't drifted. Missing/legacy files
+   * are treated as `version: 0` (rollback-safe).
+   */
+  version?: number;
 }
 
 export interface VerdictResult {
