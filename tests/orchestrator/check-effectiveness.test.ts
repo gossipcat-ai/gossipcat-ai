@@ -324,6 +324,88 @@ describe('checkEffectiveness — delta-from-delta regression', () => {
 });
 
 // ---------------------------------------------------------------------------
+// PR 2 — Wilson score interval for degenerate baselines
+// ---------------------------------------------------------------------------
+
+describe('checkEffectiveness — PR 2 Wilson degenerate-baseline path', () => {
+  it('baselineP=0 + sufficient correct → passed + wilson_degenerate', () => {
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 0,
+      baseline_accuracy_hallucinated: 6,
+      bound_at: new Date().toISOString(),
+      status: 'pending',
+      migration_count: 0,
+    };
+    // 120 correct / 0 hallucinated post-bind. z-test would lock out (se=0).
+    const v = resolveVerdict(snap, { correct: 120, hallucinated: 0 }, Date.now());
+    expect(v.status).toBe('passed');
+    expect(v.verdict_method).toBe('wilson_degenerate');
+    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_degenerate');
+    expect(v.newSnapshotFields?.status).toBe('passed');
+  });
+
+  it('baselineP=1 + sufficient hallucinated → failed + wilson_degenerate', () => {
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 6,
+      baseline_accuracy_hallucinated: 0,
+      bound_at: new Date().toISOString(),
+      status: 'pending',
+      migration_count: 0,
+    };
+    // 0 correct / 120 hallucinated post-bind. baselineP=1, se=0, z-test locked.
+    const v = resolveVerdict(snap, { correct: 0, hallucinated: 120 }, Date.now());
+    expect(v.status).toBe('failed');
+    expect(v.verdict_method).toBe('wilson_degenerate');
+    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_degenerate');
+    expect(v.newSnapshotFields?.status).toBe('failed');
+  });
+
+  it('baselineP=0 + insufficient evidence → pending (no Wilson shortcut)', () => {
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 0,
+      baseline_accuracy_hallucinated: 6,
+      bound_at: new Date().toISOString(),
+      status: 'pending',
+      migration_count: 0,
+    };
+    // Only 50 post-bind signals — below MIN_EVIDENCE gate of 120.
+    const v = resolveVerdict(snap, { correct: 50, hallucinated: 0 }, Date.now());
+    expect(v.status).toBe('pending');
+    expect(v.shouldUpdate).toBe(false);
+  });
+
+  it('normal baseline 0.8 + sufficient correct → passed + z-test', () => {
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 80,
+      baseline_accuracy_hallucinated: 20,
+      bound_at: new Date().toISOString(),
+      status: 'pending',
+      migration_count: 0,
+    };
+    // 120 post-bind at 95% → clearly passes.
+    const v = resolveVerdict(snap, { correct: 114, hallucinated: 6 }, Date.now());
+    expect(v.status).toBe('passed');
+    expect(v.verdict_method).toBe('z-test');
+    expect(v.newSnapshotFields?.verdict_method).toBe('z-test');
+  });
+
+  it('normal baseline + no change → pending/inconclusive (not Wilson)', () => {
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 80,
+      baseline_accuracy_hallucinated: 20,
+      bound_at: new Date().toISOString(),
+      status: 'pending',
+      migration_count: 0,
+    };
+    // 120 at p=0.8 ≈ baseline → inconclusive (or close).
+    const v = resolveVerdict(snap, { correct: 96, hallucinated: 24 }, Date.now());
+    expect(['inconclusive', 'pending']).toContain(v.status);
+    // Not Wilson-flavored — baselineP is not degenerate.
+    expect(v.verdict_method).not.toBe('wilson_degenerate');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test 8 — NaN guard on invalid bound_at
 // ---------------------------------------------------------------------------
 

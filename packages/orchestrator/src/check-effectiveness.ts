@@ -9,6 +9,7 @@
  */
 
 import type { CategoryCounters } from './performance-reader';
+import { wilsonVerdict } from './wilson-score';
 
 export { CategoryCounters };
 
@@ -36,12 +37,14 @@ export interface SkillSnapshot {
   migration_count: number;
   inconclusive_at?: string;
   inconclusive_strikes?: number;
+  verdict_method?: 'z-test' | 'wilson_degenerate';
 }
 
 export interface VerdictResult {
   status: VerdictStatus;
   effectiveness?: number; // delta in accuracy (post - baseline)
   zScore?: number;
+  verdict_method?: 'z-test' | 'wilson_degenerate';
   shouldUpdate: boolean; // false if terminal state
   newSnapshotFields?: Partial<SkillSnapshot>; // fields to merge into frontmatter
 }
@@ -121,6 +124,29 @@ export function resolveVerdict(
     return { status: 'pending', shouldUpdate: false };
   }
 
+  // Degenerate-baseline path: z-test cannot reject when baselineP ∈ {0, 1}
+  // because se === 0 (zero variance). Wilson score intervals handle this
+  // naturally. See docs/specs/2026-04-21-skills-pipeline-repair.md PR 2.
+  if (baselineP === 0 || baselineP === 1) {
+    const WILSON_ALPHA = 0.025; // matches oneSidedZTest Z_CRITICAL calibration
+    const wilson = wilsonVerdict(
+      { correct: snapshot.baseline_accuracy_correct, total: baselineTotal },
+      { correct: delta.correct, total: postTotal },
+      WILSON_ALPHA,
+    );
+    if (wilson === 'passed' || wilson === 'failed') {
+      const postP = delta.correct / postTotal;
+      return {
+        status: wilson,
+        effectiveness: postP - baselineP,
+        verdict_method: 'wilson_degenerate',
+        shouldUpdate: true,
+        newSnapshotFields: { status: wilson, verdict_method: 'wilson_degenerate' },
+      };
+    }
+    // Wilson pending → fall through to standard path
+  }
+
   // Gate met — run both one-sided tests at α=0.025 (Bonferroni)
   const positive = oneSidedZTest({ correct: delta.correct, total: postTotal }, baselineP, 'positive');
   const negative = oneSidedZTest({ correct: delta.correct, total: postTotal }, baselineP, 'negative');
@@ -132,8 +158,9 @@ export function resolveVerdict(
       status: 'passed',
       effectiveness,
       zScore: positive.zScore,
+      verdict_method: 'z-test',
       shouldUpdate: true,
-      newSnapshotFields: { status: 'passed' },
+      newSnapshotFields: { status: 'passed', verdict_method: 'z-test' },
     };
   }
   if (negative.rejects) {
@@ -141,8 +168,9 @@ export function resolveVerdict(
       status: 'failed',
       effectiveness,
       zScore: negative.zScore,
+      verdict_method: 'z-test',
       shouldUpdate: true,
-      newSnapshotFields: { status: 'failed' },
+      newSnapshotFields: { status: 'failed', verdict_method: 'z-test' },
     };
   }
 

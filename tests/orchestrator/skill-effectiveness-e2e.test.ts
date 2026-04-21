@@ -185,16 +185,17 @@ describe('skill-effectiveness E2E — graduation pipeline', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Variant B — degenerate baseline (0 correct, 6 hallucinated) → PR 2
+  // Variant B — degenerate baseline (0 correct, 6 hallucinated) → PR 2 SHIPPED
   //
-  // Current z-test: baselineP = 0 / 6 = 0, se = sqrt(0 * 1 / 120) = 0,
-  // oneSidedZTest returns rejects:false. Verdict: `pending` (locked out).
+  // Previously: z-test locked out because baselineP = 0/6 = 0, se = 0,
+  // oneSidedZTest returns rejects:false, verdict pending.
   //
-  // After PR 2 (Wilson score): the degenerate baseline produces a finite,
-  // non-zero upper CI; 120/120 post-bind correct clearly exceeds it, so the
-  // verdict graduates to `passed`.
+  // PR 2 integrated the Wilson score interval for baselineP ∈ {0, 1}:
+  // the degenerate baseline produces a finite, non-zero upper CI;
+  // 120/120 post-bind correct clearly exceeds it, so the verdict graduates
+  // to `passed` via verdict_method: 'wilson_degenerate'.
   // -------------------------------------------------------------------------
-  test.failing('Variant B — degenerate 0/6 baseline → passed after Wilson (PR 2)', async () => {
+  test('Variant B — degenerate 0/6 baseline → passed after Wilson (PR 2)', async () => {
     const boundAt = Date.now() - 1000;
     writeSkillFixture(projectRoot, AGENT, CATEGORY, {
       name: CATEGORY,
