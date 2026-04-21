@@ -12,7 +12,7 @@
  * - never throws on write failure
  */
 
-import { emitCompletionSignals } from '@gossip/orchestrator';
+import { emitCompletionSignals, emitCitationFabricatedSignal } from '@gossip/orchestrator';
 import { readFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -182,5 +182,99 @@ More content here to ensure we exceed the minimum length threshold for rejection
     expect(completed.value).toBe(0);
     expect(completed.metadata?.estimated).toBe(true);
     expect(completed.metadata?.error).toBe(true);
+  });
+});
+
+describe('emitCitationFabricatedSignal', () => {
+  const testDir = join(tmpdir(), 'gossip-citation-fab-' + Date.now());
+  const gossipDir = join(testDir, '.gossip');
+  const perfFile = join(gossipDir, 'agent-performance.jsonl');
+
+  beforeAll(() => mkdirSync(gossipDir, { recursive: true }));
+  afterAll(() => rmSync(testDir, { recursive: true, force: true }));
+
+  const readSignals = () =>
+    readFileSync(perfFile, 'utf-8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map(l => JSON.parse(l));
+
+  beforeEach(() => {
+    try { rmSync(perfFile); } catch { /* may not exist */ }
+  });
+
+  test('emits citation_fabricated pipeline signal with correct shape', () => {
+    emitCitationFabricatedSignal(testDir, {
+      agentId: 'sonnet-reviewer',
+      taskId: 'task-xyz',
+      total: 5,
+      verified: 3,
+      unverifiedCitations: ['fake/one.ts:10', 'fake/two.ts:20'],
+    });
+    const sigs = readSignals();
+    expect(sigs).toHaveLength(1);
+    const sig = sigs[0];
+    expect(sig.type).toBe('pipeline');
+    expect(sig.signal).toBe('citation_fabricated');
+    expect(sig.agentId).toBe('sonnet-reviewer');
+    expect(sig.taskId).toBe('task-xyz');
+    expect(sig.value).toBe(2);
+    expect(sig.metadata.total).toBe(5);
+    expect(sig.metadata.verified).toBe(3);
+    expect(sig.metadata.unverifiedCount).toBe(2);
+    expect(sig.metadata.unverifiedCitations).toEqual(['fake/one.ts:10', 'fake/two.ts:20']);
+  });
+
+  test('does NOT emit when unverifiedCitations is empty (no-op path)', () => {
+    emitCitationFabricatedSignal(testDir, {
+      agentId: 'sonnet-reviewer',
+      taskId: 'task-clean',
+      total: 3,
+      verified: 3,
+      unverifiedCitations: [],
+    });
+    // File should not exist — no signal written.
+    expect(() => readFileSync(perfFile, 'utf-8')).toThrow();
+  });
+
+  test('truncates unverifiedCitations to first 10 entries', () => {
+    const many = Array.from({ length: 25 }, (_, i) => `f${i}.ts:${i}`);
+    emitCitationFabricatedSignal(testDir, {
+      agentId: 'agent-x',
+      taskId: 'task-many',
+      total: 25,
+      verified: 0,
+      unverifiedCitations: many,
+    });
+    const sigs = readSignals();
+    expect(sigs[0].value).toBe(25);
+    expect(sigs[0].metadata.unverifiedCount).toBe(25);
+    expect(sigs[0].metadata.unverifiedCitations).toHaveLength(10);
+    expect(sigs[0].metadata.unverifiedCitations[0]).toBe('f0.ts:0');
+    expect(sigs[0].metadata.unverifiedCitations[9]).toBe('f9.ts:9');
+  });
+
+  test('refuses reserved _system agentId', () => {
+    emitCitationFabricatedSignal(testDir, {
+      agentId: '_system',
+      taskId: 't',
+      total: 1,
+      verified: 0,
+      unverifiedCitations: ['x.ts'],
+    });
+    expect(() => readFileSync(perfFile, 'utf-8')).toThrow();
+  });
+
+  test('never throws on write failure', () => {
+    expect(() =>
+      emitCitationFabricatedSignal('/nonexistent-path-that-cannot-exist/gossip', {
+        agentId: 'a',
+        taskId: 't',
+        total: 1,
+        verified: 0,
+        unverifiedCitations: ['x'],
+      })
+    ).not.toThrow();
   });
 });

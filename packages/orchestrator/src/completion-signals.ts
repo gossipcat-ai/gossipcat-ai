@@ -165,3 +165,56 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
     process.stderr.write(`[gossipcat] emitCompletionSignals failed: ${(err as Error).message}\n`);
   }
 }
+
+export interface CitationFabricatedInput {
+  agentId: string;
+  taskId: string;
+  total: number;
+  verified: number;
+  unverifiedCitations: string[];
+}
+
+/**
+ * Emit `citation_fabricated` (type='pipeline') when the citation annotator
+ * finds unverified file-like tokens in knowledge-file body at write time.
+ *
+ * Mirrors `finding_dropped_format` — telemetry only, never gates the write.
+ * Truncates `unverifiedCitations` to the first 10 entries to bound metadata
+ * size (knowledge bodies can cite many paths; we only need a sample for
+ * observability). `value` carries the count so downstream time-series
+ * aggregators can track fabrication volume without parsing metadata.
+ */
+export function emitCitationFabricatedSignal(
+  projectRoot: string,
+  input: CitationFabricatedInput,
+): void {
+  try {
+    const { agentId, taskId, total, verified, unverifiedCitations } = input;
+    if (agentId === '_system') {
+      process.stderr.write(`[gossipcat] emitCitationFabricatedSignal refused reserved agentId '_system' (taskId=${taskId})\n`);
+      return;
+    }
+    const unverifiedCount = unverifiedCitations.length;
+    if (unverifiedCount === 0) return;
+
+    const signal: PipelineSignal = {
+      type: 'pipeline',
+      signal: 'citation_fabricated',
+      agentId,
+      taskId,
+      value: unverifiedCount,
+      metadata: {
+        total,
+        verified,
+        unverifiedCount,
+        unverifiedCitations: unverifiedCitations.slice(0, 10),
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const writer = new PerformanceWriter(projectRoot);
+    writer[WRITER_INTERNAL].appendSignal(signal, 'completion-signals-helper');
+  } catch (err) {
+    process.stderr.write(`[gossipcat] emitCitationFabricatedSignal failed: ${(err as Error).message}\n`);
+  }
+}

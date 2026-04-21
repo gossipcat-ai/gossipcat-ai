@@ -186,7 +186,8 @@ export interface PipelineSignal {
     | 'synthesis_completed'
     | 'circuit_open_fired'
     | 'skill_injection_skipped'
-    | 'signal_retracted';
+    | 'signal_retracted'
+    | 'citation_fabricated';
   /** Real agentId for agent-scoped events; '_system' for system-scoped events. */
   agentId: string;
   taskId: string;

@@ -17,6 +17,7 @@ const COMPLETION_SIGNALS_EMITTED = new Set<string>([
   'task_tool_turns',   // conditionally (when toolCalls defined)
   'format_compliance',
   'finding_dropped_format',
+  'citation_fabricated', // emitCitationFabricatedSignal (memory-writer call sites)
 ]);
 
 // ── Path-specific signals: not emitted by emitCompletionSignals ──────────────
@@ -68,6 +69,7 @@ const ALL_KNOWN_SIGNAL_NAMES: string[] = [
   // PipelineSignal
   'dispatch_started', 'relay_received', 'finding_dropped_format',
   'synthesis_completed', 'circuit_open_fired', 'skill_injection_skipped',
+  'citation_fabricated',
   // signal_retracted appears in both ConsensusSignal and PipelineSignal
 ];
 

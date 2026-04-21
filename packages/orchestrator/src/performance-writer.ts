@@ -52,7 +52,7 @@ const VALID_META_SIGNALS = new Set([
 const VALID_PIPELINE_SIGNALS = new Set([
   'dispatch_started', 'relay_received', 'finding_dropped_format',
   'synthesis_completed', 'circuit_open_fired', 'skill_injection_skipped',
-  'signal_retracted',
+  'signal_retracted', 'citation_fabricated',
 ]);
 
 /**
