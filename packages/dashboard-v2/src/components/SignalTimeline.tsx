@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
 import { EmptyState } from './EmptyState';
 import { FindingDetailDrawer } from './FindingDetailDrawer';
+import { useElementWidth } from '@/hooks/useElementWidth';
 import type { SignalEntry } from '@/lib/types';
 
 interface SignalsResponse {
@@ -32,46 +33,60 @@ const SIGNAL_LABELS: Record<string, string> = {
   unverified: 'Unverified',
 };
 
+// Pill sizing budget. MIN_PILL_WIDTH gives a slight breathing margin above the
+// CSS `min-w-[4px]` clamp plus the 2px (gap-0.5) separator. MAX_CAP bounds the
+// API request on ultra-wide monitors so we don't ask for unbounded history.
+const MIN_PILL_WIDTH = 6;
+const MAX_CAP = 500;
+const DEFAULT_LIMIT = 100;
+const DEBOUNCE_MS = 150;
+
+function computeCap(width: number): number {
+  if (width <= 0) return DEFAULT_LIMIT;
+  const raw = Math.floor(width / MIN_PILL_WIDTH);
+  return Math.max(1, Math.min(raw, MAX_CAP));
+}
+
 export function SignalTimeline({ agentId }: { agentId: string }) {
   const [signals, setSignals] = useState<SignalEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selected, setSelected] = useState<{ consensusId: string; findingId: string } | null>(null);
+  const [containerRef, containerWidth] = useElementWidth<HTMLDivElement>();
+  const [limit, setLimit] = useState<number>(DEFAULT_LIMIT);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced update of `limit` from measured width. Rapid resizes shouldn't
+  // spam the API; settle for DEBOUNCE_MS then apply.
+  useEffect(() => {
+    if (containerWidth <= 0) return;
+    const next = computeCap(containerWidth);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setLimit((prev) => (prev === next ? prev : next));
+    }, DEBOUNCE_MS);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [containerWidth]);
 
   useEffect(() => {
-    api<SignalsResponse>(`signals?agent=${encodeURIComponent(agentId)}&limit=100`)
+    api<SignalsResponse>(`signals?agent=${encodeURIComponent(agentId)}&limit=${limit}`)
       .then((data) => {
         setSignals(data.items || []);
         setTotal(data.total || 0);
       })
       .catch(() => {});
-  }, [agentId]);
-
-  if (signals.length === 0) {
-    return (
-      <div className="rounded-md border border-border/40 bg-card/80 px-4 py-3">
-        <EmptyState
-          title="No signal history yet"
-          hint="Signals are recorded during consensus rounds."
-          compact
-        />
-      </div>
-    );
-  }
+  }, [agentId, limit]);
 
   // Reverse so oldest is left, newest is right
-  const ordered = [...signals].reverse();
+  const ordered = useMemo(() => [...signals].reverse(), [signals]);
 
   // Summary counts row — computed from the fetched window only (not the full
-  // `total` population). The API hard-caps at limit=100, so with a 500-signal
-  // agent the window is only the most recent slice. Label explicitly says
-  // "Last N" so users don't divide counts by total and get a wrong ratio.
-  const counts = {
-    confirmed: 0,
-    disputed: 0,
-    unique: 0,
-    unverified: 0,
-  };
+  // `total` population). With a capped window the counts still reflect only
+  // the most recent slice. Label explicitly says "Last N" so users don't
+  // divide counts by total and get a wrong ratio.
+  const counts = { confirmed: 0, disputed: 0, unique: 0, unverified: 0 };
   for (const s of signals) {
     if (s.signal === 'agreement' || s.signal === 'consensus_verified') counts.confirmed++;
     // The "disputed" bucket covers both disagreement AND hallucination_caught
@@ -85,8 +100,20 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
   const windowSize = signals.length;
   const isWindowed = total > windowSize;
 
+  if (signals.length === 0) {
+    return (
+      <div ref={containerRef} className="rounded-md border border-border/40 bg-card/80 px-4 py-3">
+        <EmptyState
+          title="No signal history yet"
+          hint="Signals are recorded during consensus rounds."
+          compact
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="rounded-md border border-border/40 bg-card/80 px-4 py-3">
+    <div ref={containerRef} className="rounded-md border border-border/40 bg-card/80 px-4 py-3">
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
           <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
