@@ -1,7 +1,7 @@
 // packages/orchestrator/src/performance-writer.ts
 import { appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
-import { PerformanceSignal } from './consensus-types';
+import { PerformanceSignal, classifySignal } from './consensus-types';
 import type { EmissionPath } from './completion-signals.allowlist';
 
 export type { EmissionPath } from './completion-signals.allowlist';
@@ -61,6 +61,22 @@ const VALID_PIPELINE_SIGNALS = new Set([
  * aggregation. See docs/specs/2026-04-17-consensus-round-retraction.md.
  */
 const SYSTEM_SENTINEL_AGENT_ID = '_system';
+
+/**
+ * Stamp `signal_class` onto the signal if not already set (PR 5 / Option 5B,
+ * 2026-04-21). Write-forward only — existing rows in agent-performance.jsonl
+ * are not backfilled, and any explicit `signal_class` on the input is
+ * preserved. When `classifySignal` returns `undefined` (signal name not yet
+ * categorised) the field is left unset rather than assigned a default — the
+ * field remains genuinely optional so consumers can distinguish "unknown" from
+ * "known performance/operational".
+ */
+function stampSignalClass<T extends PerformanceSignal>(signal: T): T {
+  if (signal.signal_class !== undefined) return signal;
+  const cls = classifySignal(signal.signal);
+  if (cls === undefined) return signal;
+  return { ...signal, signal_class: cls };
+}
 
 function validateSignal(signal: PerformanceSignal): void {
   if (!signal || typeof signal !== 'object') {
@@ -180,7 +196,8 @@ export class PerformanceWriter {
     appendSignal: (signal: PerformanceSignal, emissionPath: EmissionPath = 'unknown'): void => {
       validateSignal(signal);
       rotateJsonlIfNeeded(this.filePath);
-      const row = { ...signal, _emission_path: emissionPath };
+      const stamped = stampSignalClass(signal);
+      const row = { ...stamped, _emission_path: emissionPath };
       appendFileSync(this.filePath, JSON.stringify(row) + '\n');
       bumpSampleCounter(this.projectRoot, 1);
     },
@@ -193,7 +210,7 @@ export class PerformanceWriter {
       if (signals.length === 0) return;
       for (const s of signals) validateSignal(s);
       const data = signals
-        .map(s => JSON.stringify({ ...s, _emission_path: emissionPath }))
+        .map(s => JSON.stringify({ ...stampSignalClass(s), _emission_path: emissionPath }))
         .join('\n') + '\n';
       rotateJsonlIfNeeded(this.filePath);
       appendFileSync(this.filePath, data);
