@@ -26,6 +26,41 @@ import {
 
 const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
+/**
+ * Valid terminal/transitional values for the `status` frontmatter field.
+ * Must be kept in sync with VerdictStatus in check-effectiveness.ts.
+ * The runtime list exists so we can validate string values read from disk —
+ * TypeScript types are erased at runtime and `frontmatter.status` is `unknown`.
+ */
+export const VALID_STATUSES: ReadonlyArray<VerdictStatus> = [
+  'pending',
+  'passed',
+  'failed',
+  'inconclusive',
+  'flagged_for_manual_review',
+  'not_applicable',
+  'silent_skill',
+  'insufficient_evidence',
+];
+
+/**
+ * Runtime-validate a status value read from skill frontmatter. Unknown string
+ * values (e.g. legacy `status: "active"`) are remapped to `pending` with a
+ * stderr warning. `undefined`/`null` also map to `pending` but silently —
+ * that's the expected shape for files written before the status field existed.
+ */
+export function coerceStatus(raw: unknown): VerdictStatus {
+  if (typeof raw === 'string' && (VALID_STATUSES as readonly string[]).includes(raw)) {
+    return raw as VerdictStatus;
+  }
+  if (raw !== undefined && raw !== null && raw !== '') {
+    process.stderr.write(
+      `[gossipcat] skill-engine: invalid status ${JSON.stringify(raw)} remapped to pending\n`,
+    );
+  }
+  return 'pending';
+}
+
 const KNOWN_CATEGORIES = new Set([
   'trust_boundaries', 'injection_vectors', 'input_validation', 'concurrency',
   'resource_exhaustion', 'type_safety', 'error_handling', 'data_integrity',
@@ -94,12 +129,94 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
 
 export class SkillEngine {
   private techStackCache: string | null | undefined = undefined; // undefined = not yet computed
+  private statusMigrationRan = false;
 
   constructor(
     private llm: ILLMProvider,
     private perfReader: PerformanceReader,
     private projectRoot: string,
-  ) {}
+  ) {
+    // Fire-and-forget: rewrite any skill files with missing or invalid status
+    // fields on boot. Runs synchronously, once per instance. Exceptions are
+    // swallowed with a stderr warning — a corrupt skill file must not prevent
+    // the engine from constructing.
+    try {
+      this.runOneTimeStatusMigration();
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: one-time status migration failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  /**
+   * One-time startup pass: walks .gossip/agents/<id>/skills/*.md and rewrites
+   * frontmatter when `status` is missing OR is a string not in VALID_STATUSES
+   * (e.g. legacy `status: "active"`). Writes directly to disk, bypassing
+   * migrateIfNeeded — the lazy migrator is gated behind `migration_count < 2`,
+   * which locks several files already at migration_count=3 despite having
+   * invalid statuses.
+   *
+   * Runs exactly once per SkillEngine instance. Missing files, directories,
+   * or unparseable frontmatter are skipped silently — the guarantee is
+   * "valid files get valid statuses", not "all files become parseable".
+   */
+  private runOneTimeStatusMigration(): void {
+    if (this.statusMigrationRan) return;
+    this.statusMigrationRan = true;
+
+    const agentsDir = join(this.projectRoot, '.gossip', 'agents');
+    if (!existsSync(agentsDir)) return;
+
+    let agentDirs: string[];
+    try {
+      agentDirs = readdirSync(agentsDir);
+    } catch {
+      return;
+    }
+
+    for (const agentId of agentDirs) {
+      const skillsDir = join(agentsDir, agentId, 'skills');
+      if (!existsSync(skillsDir)) continue;
+
+      let files: string[];
+      try {
+        files = readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+      } catch {
+        continue;
+      }
+
+      for (const file of files) {
+        const skillPath = join(skillsDir, file);
+        try {
+          const raw = readFileSync(skillPath, 'utf-8');
+          const { frontmatter, body } = this.parseSkillFile(raw);
+
+          const current = frontmatter.status;
+          const isMissing = current === undefined || current === null || current === '';
+          const isInvalid =
+            typeof current === 'string' &&
+            current !== '' &&
+            !(VALID_STATUSES as readonly string[]).includes(current);
+
+          if (!isMissing && !isInvalid) continue;
+
+          const reason = isMissing
+            ? 'missing'
+            : `invalid(${JSON.stringify(current)})`;
+          const updated: Record<string, unknown> = { ...frontmatter, status: 'pending' };
+          this.writeSkillFileFromParts(skillPath, updated, body);
+          process.stderr.write(
+            `[gossipcat] skill-engine: rewrote status=${reason} → pending in ${skillPath}\n`,
+          );
+        } catch (err) {
+          process.stderr.write(
+            `[gossipcat] skill-engine: skip ${skillPath} during status migration: ${(err as Error).message}\n`,
+          );
+        }
+      }
+    }
+  }
 
   /**
    * Build the LLM prompt strings and metadata needed to generate a skill file.
@@ -495,7 +612,7 @@ ${inputs.join('\n')}
         0,
       ),
       bound_at: String(frontmatter.bound_at ?? new Date(nowMs).toISOString()),
-      status: (frontmatter.status as VerdictStatus) ?? 'pending',
+      status: coerceStatus(frontmatter.status),
       migration_count: this.safeNumber(frontmatter.migration_count ?? 0, 0),
       inconclusive_at:
         typeof frontmatter.inconclusive_at === 'string' ? frontmatter.inconclusive_at : undefined,
@@ -563,6 +680,15 @@ ${inputs.join('\n')}
     if (!boundAt || (nowMs - new Date(boundAt).getTime()) > TIMEOUT_MS) {
       updates.bound_at = new Date(nowMs).toISOString();
       updates.migration_reason = 'v2_stale_baseline_reset';
+    }
+
+    // Step 5: write status if missing. Pre-v2 files had no status field; the
+    // v1→v2 rename migration forgot to backfill it, so 8 files on disk still
+    // lack one. Invalid existing values (e.g. legacy `status: "active"`) are
+    // NOT rewritten here — that's the job of runOneTimeStatusMigration, which
+    // also handles files locked by `migration_count >= 2`.
+    if (frontmatter.status === undefined || frontmatter.status === null) {
+      updates.status = 'pending';
     }
 
     updates.migration_count = 2;
