@@ -15,6 +15,16 @@ export { CategoryCounters };
 
 export const MIN_EVIDENCE = 120;
 export const ALPHA = 0.025;
+/**
+ * Below this baselineTotal, the z-test's variance estimate becomes
+ * unreliable because baselineP is itself noisy. Route through Wilson score
+ * intervals instead (see wilson_sparse branch in resolveVerdict).
+ *
+ * Grounded in Wilson-vs-z-test parity testing: at baselineTotal=20, Wilson CI
+ * width at alpha=0.025 is ~0.4 on a 0.5 proportion; z-test variance becomes
+ * reliable. See docs/specs/2026-04-21-skills-pipeline-repair.md PR 3.
+ */
+export const MIN_BASELINE_FOR_ZTEST = 20;
 export const Z_CRITICAL = 1.96; // one-sided, α=0.025
 export const TIMEOUT_DAYS = 90;
 export const TIMEOUT_MS = TIMEOUT_DAYS * 86400_000;
@@ -37,14 +47,14 @@ export interface SkillSnapshot {
   migration_count: number;
   inconclusive_at?: string;
   inconclusive_strikes?: number;
-  verdict_method?: 'z-test' | 'wilson_degenerate';
+  verdict_method?: 'z-test' | 'wilson_degenerate' | 'wilson_sparse';
 }
 
 export interface VerdictResult {
   status: VerdictStatus;
   effectiveness?: number; // delta in accuracy (post - baseline)
   zScore?: number;
-  verdict_method?: 'z-test' | 'wilson_degenerate';
+  verdict_method?: 'z-test' | 'wilson_degenerate' | 'wilson_sparse';
   shouldUpdate: boolean; // false if terminal state
   newSnapshotFields?: Partial<SkillSnapshot>; // fields to merge into frontmatter
 }
@@ -145,6 +155,32 @@ export function resolveVerdict(
       };
     }
     // Wilson pending → fall through to standard path
+  }
+
+  // Sparse-baseline path: z-test variance estimate is unreliable when
+  // baselineTotal is small (baselineP is itself noisy). Route through Wilson
+  // score intervals instead. Note: baselineTotal===0 reaches here with
+  // baselineP fallback of 0.5; Wilson on baseline {0,0} has interval [0,1]
+  // so it's guaranteed to return 'pending' → falls through to z-test.
+  // See docs/specs/2026-04-21-skills-pipeline-repair.md PR 3.
+  if (baselineTotal < MIN_BASELINE_FOR_ZTEST) {
+    const WILSON_SPARSE_ALPHA = 0.025; // matches oneSidedZTest Z_CRITICAL calibration
+    const wilson = wilsonVerdict(
+      { correct: snapshot.baseline_accuracy_correct, total: baselineTotal },
+      { correct: delta.correct, total: postTotal },
+      WILSON_SPARSE_ALPHA,
+    );
+    if (wilson === 'passed' || wilson === 'failed') {
+      const postP = delta.correct / postTotal;
+      return {
+        status: wilson,
+        effectiveness: postP - baselineP,
+        verdict_method: 'wilson_sparse',
+        shouldUpdate: true,
+        newSnapshotFields: { status: wilson, verdict_method: 'wilson_sparse' },
+      };
+    }
+    // Wilson pending → fall through to z-test
   }
 
   // Gate met — run both one-sided tests at α=0.025 (Bonferroni)
