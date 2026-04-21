@@ -166,6 +166,31 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
   }
 }
 
+/**
+ * Truncate a string to at most `maxBytes` UTF-8 bytes, appending a short
+ * marker when truncation occurred. Respects multi-byte boundaries so we
+ * never emit mojibake in the signal payload.
+ */
+function truncateUtf8(s: string, maxBytes: number): string {
+  const marker = '...[truncated]';
+  if (Buffer.byteLength(s, 'utf8') <= maxBytes) return s;
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(marker, 'utf8'));
+  const buf = Buffer.from(s, 'utf8').subarray(0, budget);
+  // Drop trailing incomplete UTF-8 continuation bytes (10xxxxxx).
+  let end = buf.length;
+  while (end > 0 && (buf[end - 1] & 0b11000000) === 0b10000000) end--;
+  // If we stopped just after a multi-byte lead byte, back off too.
+  if (end > 0) {
+    const lead = buf[end - 1];
+    if ((lead & 0b11100000) === 0b11000000 /* 2-byte lead */
+      || (lead & 0b11110000) === 0b11100000 /* 3-byte lead */
+      || (lead & 0b11111000) === 0b11110000 /* 4-byte lead */) {
+      end--;
+    }
+  }
+  return buf.subarray(0, end).toString('utf8') + marker;
+}
+
 export interface CitationFabricatedInput {
   agentId: string;
   taskId: string;
@@ -207,7 +232,10 @@ export function emitCitationFabricatedSignal(
         total,
         verified,
         unverifiedCount,
-        unverifiedCitations: unverifiedCitations.slice(0, 10),
+        // Per-entry cap: 512 UTF-8 bytes, preserving the 10-entry list cap.
+        // Prevents a single fabricated citation string from bloating the
+        // signal payload (JSONL line size is I/O sensitive).
+        unverifiedCitations: unverifiedCitations.slice(0, 10).map(c => truncateUtf8(c, 512)),
       },
       timestamp: new Date().toISOString(),
     };

@@ -277,4 +277,29 @@ describe('emitCitationFabricatedSignal', () => {
       })
     ).not.toThrow();
   });
+
+  test('Item B: truncates each unverifiedCitation entry to 512 UTF-8 bytes', () => {
+    // Two entries, both over the per-entry cap. The 10-entry list cap still
+    // applies; we only exercise per-entry truncation here.
+    const huge = 'x'.repeat(2000); // 2000 ASCII bytes
+    const multibyte = 'é'.repeat(1000); // 2 bytes/char → 2000 bytes, boundary-sensitive
+    emitCitationFabricatedSignal(testDir, {
+      agentId: 'agent-cap',
+      taskId: 'task-cap',
+      total: 2,
+      verified: 0,
+      unverifiedCitations: [huge, multibyte],
+    });
+    const sigs = readSignals();
+    expect(sigs).toHaveLength(1);
+    const out: string[] = sigs[0].metadata.unverifiedCitations;
+    expect(out).toHaveLength(2);
+    for (const entry of out) {
+      expect(Buffer.byteLength(entry, 'utf8')).toBeLessThanOrEqual(512);
+      // Truncation marker present on entries that exceeded the budget.
+      expect(entry.endsWith('...[truncated]')).toBe(true);
+    }
+    // Multi-byte entry must remain valid UTF-8 after truncation (no mojibake).
+    expect(out[1].includes('�')).toBe(false);
+  });
 });
