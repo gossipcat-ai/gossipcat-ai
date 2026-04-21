@@ -596,6 +596,17 @@ export class PerformanceReader {
           break;
         }
         case 'disagreement': {
+          // PR 4 Part B no-op guard. Operational disagreements (e.g. native-task
+          // timeout in apps/cli/src/handlers/native-tasks.ts:recordTimeoutSignal)
+          // lack a `category` by design — they describe a transport/lifecycle
+          // failure, not a finding-evaluation verdict. Once write sites (Part A)
+          // stamp category on every finding-evaluation disagreement, any signal
+          // still arriving uncategorized is operational and must not touch
+          // weightedTotal/disagreements. Mirrors the task_timeout/task_empty
+          // no-op pattern below at :669-673.
+          if (!signal.category) {
+            continue;
+          }
           a.weightedTotal += sevMul * decay;
           a.disagreements++;
           if (signal.counterpartId && signal.counterpartId.length > 0) {
@@ -607,9 +618,7 @@ export class PerformanceReader {
             winner.weightedTotal += sevMul * wd * winnerDiversityMul;
             if (signalMs > winner.lastSignalMs) winner.lastSignalMs = signalMs;
           }
-          if (signal.category) {
-            a.categoryHallucinated[signal.category] = (a.categoryHallucinated[signal.category] ?? 0) + 1;
-          }
+          a.categoryHallucinated[signal.category] = (a.categoryHallucinated[signal.category] ?? 0) + 1;
           break;
         }
         case 'unverified': {

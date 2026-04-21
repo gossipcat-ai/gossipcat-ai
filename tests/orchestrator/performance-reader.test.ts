@@ -71,9 +71,13 @@ describe('PerformanceReader', () => {
   });
 
   it('tracks agreement and disagreement counts', () => {
+    // PR 4 Part B: disagreement requires category to count — otherwise it's
+    // treated as an operational timeout/transport signal and no-op'd. Tag with
+    // a finding-evaluation category so the assertion still exercises the
+    // review-verdict accumulator path.
     writeSignals([
       { type: 'consensus', signal: 'agreement', agentId: 'rev', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
-      { type: 'consensus', signal: 'disagreement', agentId: 'rev', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', category: 'testing', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
       { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
       { type: 'consensus', signal: 'new_finding', agentId: 'rev', taskId: 't4', evidence: '', timestamp: new Date().toISOString() },
     ]);
@@ -151,11 +155,12 @@ describe('PerformanceReader', () => {
   });
 
   it('boosts winner accuracy and totalSignals when counterpart loses disagreement', () => {
-    // Agent "loser" gets disagreement signals, counterpartId points to "winner"
+    // Agent "loser" gets disagreement signals, counterpartId points to "winner".
+    // PR 4 Part B: category required for finding-evaluation accumulation.
     writeSignals([
-      { type: 'consensus', signal: 'disagreement', agentId: 'loser', taskId: 't1', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
-      { type: 'consensus', signal: 'disagreement', agentId: 'loser', taskId: 't2', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
-      { type: 'consensus', signal: 'disagreement', agentId: 'loser', taskId: 't3', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'loser', category: 'testing', taskId: 't1', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'loser', category: 'testing', taskId: 't2', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'loser', category: 'testing', taskId: 't3', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     // Loser: ratio = 0/3 = 0 (3 disagreements add to total but not correct)
@@ -172,10 +177,13 @@ describe('PerformanceReader', () => {
   });
 
   it('ignores empty counterpartId', () => {
+    // PR 4 Part B: category required; otherwise the guard skips the
+    // counterpartId handling altogether. Still exercises the
+    // empty/null counterpartId branch.
     writeSignals([
-      { type: 'consensus', signal: 'disagreement', agentId: 'a', taskId: 't1', counterpartId: '', evidence: '', timestamp: new Date().toISOString() },
-      { type: 'consensus', signal: 'disagreement', agentId: 'a', taskId: 't2', counterpartId: null, evidence: '', timestamp: new Date().toISOString() },
-      { type: 'consensus', signal: 'disagreement', agentId: 'a', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'a', category: 'testing', taskId: 't1', counterpartId: '', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'a', category: 'testing', taskId: 't2', counterpartId: null, evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'a', category: 'testing', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     const scores = reader.getScores();
@@ -248,13 +256,79 @@ describe('PerformanceReader', () => {
     const threeWeeksAgo = new Date(Date.now() - 21 * 86400000).toISOString();
     writeSignals([
       { type: 'consensus', signal: 'agreement', agentId: 'neutral', taskId: 't1', evidence: '', timestamp: threeWeeksAgo },
-      { type: 'consensus', signal: 'disagreement', agentId: 'neutral', taskId: 't2', evidence: '', timestamp: threeWeeksAgo },
+      // PR 4 Part B: category required so the disagreement counts toward weightedTotal.
+      { type: 'consensus', signal: 'disagreement', agentId: 'neutral', category: 'testing', taskId: 't2', evidence: '', timestamp: threeWeeksAgo },
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     const score = reader.getAgentScore('neutral')!;
     // ~0.5 accuracy, time decay should not push it below 0.5 (since it's ~0.5 already)
     expect(score.reliability).toBeGreaterThanOrEqual(0.3);
     expect(score.reliability).toBeLessThanOrEqual(0.55);
+  });
+
+  // ── PR 4 Part B: operational disagreement no-op guard ──────────────────
+  //
+  // Write sites that emit finding-evaluation disagreements (consensus-engine
+  // synthesis, gossip_signals record, collect provisional signals) MUST stamp
+  // category. Once Part A stamps category at every finding-evaluation site,
+  // any disagreement signal still arriving uncategorized is by definition
+  // operational (e.g. native-tasks.ts:recordTimeoutSignal) and must not touch
+  // weightedTotal/disagreements/categoryHallucinated. Mirrors the
+  // task_timeout/task_empty branch.
+  describe('disagreement no-op guard (PR 4 Part B)', () => {
+    it('orphan disagreement without category does not hit weightedTotal or disagreements', () => {
+      writeSignals([
+        // Anchor with a categorized agreement so the agent exists with
+        // finding-evaluation context (totalSignals=2, 1 real verdict).
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'testing', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+        // Operational disagreement — timeout-shaped, no category by design.
+        { type: 'consensus', signal: 'disagreement', agentId: 'rev', taskId: 't2', evidence: 'agent timed out', timestamp: new Date().toISOString() },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // totalSignals increments before the switch — observability preserved.
+      expect(score.totalSignals).toBe(2);
+      // But the operational disagreement must NOT appear in disagreements
+      // or drag accuracy down.
+      expect(score.disagreements).toBe(0);
+      // weightedCorrect / weightedTotal both advanced only by the categorized
+      // agreement → accuracy ≈ 1.0.
+      expect(score.accuracy).toBeCloseTo(1.0, 1);
+    });
+
+    it('categorized disagreement still accumulates and drags accuracy', () => {
+      writeSignals([
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'testing', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+        { type: 'consensus', signal: 'disagreement', agentId: 'rev', category: 'testing', taskId: 't2', evidence: 'wrong verdict', timestamp: new Date().toISOString() },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      expect(score.disagreements).toBe(1);
+      // 1 agree (correct) / 2 evaluated → ~0.5 accuracy.
+      expect(score.accuracy).toBeGreaterThan(0.4);
+      expect(score.accuracy).toBeLessThan(0.6);
+      // categoryHallucinated should track the disagreement for per-category
+      // graduation math.
+      expect(score.categoryHallucinated?.testing ?? 0).toBe(1);
+    });
+
+    it('operational disagreement does NOT give winner counterpart credit', () => {
+      // Without category, the winner branch is skipped entirely so the
+      // counterpart doesn't get an undeserved boost from a transport event.
+      writeSignals([
+        { type: 'consensus', signal: 'disagreement', agentId: 'loser', counterpartId: 'winner', taskId: 't1', evidence: 'timeout', timestamp: new Date().toISOString() },
+        { type: 'consensus', signal: 'disagreement', agentId: 'loser', counterpartId: 'winner', taskId: 't2', evidence: 'timeout', timestamp: new Date().toISOString() },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const winnerScore = reader.getAgentScore('winner')!;
+      // Winner never accumulated anything — totalSignals stays 0, confirming
+      // the Part B guard skipped the counterpart credit path entirely.
+      // getAgentScore returns a neutral-default row for unknown agents rather
+      // than null, so we assert on the counters, not row presence.
+      expect(winnerScore.totalSignals).toBe(0);
+      expect(winnerScore.agreements).toBe(0);
+      expect(winnerScore.disagreements).toBe(0);
+    });
   });
 });
 

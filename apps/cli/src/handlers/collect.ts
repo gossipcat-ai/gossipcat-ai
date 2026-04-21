@@ -704,7 +704,7 @@ export async function handleCollect(
 
     // Auto-record provisional signals for consensus findings NOT already covered by engine signals
     try {
-      const { emitConsensusSignals } = await import('@gossip/orchestrator');
+      const { emitConsensusSignals, extractCategories } = await import('@gossip/orchestrator');
       const timestamp = new Date().toISOString();
 
       const tagToSignal: Record<string, 'unique_confirmed' | 'disagreement' | 'unique_unconfirmed'> = {
@@ -753,20 +753,32 @@ export async function handleCollect(
       // caught this. Fix: taskId groups signals by consensus round (not the
       // specific finding), findingId points at the specific finding using the
       // full <consensusId>:<agentId>:fN format that f.id already carries.
+      // PR 4 Part A: provisional signals are finding-evaluation signals
+      // (unique_confirmed / disagreement / unique_unconfirmed) and MUST carry a
+      // category so PerformanceReader.computeScores counts them in the
+      // per-category accumulators and the Part B disagreement no-op guard doesn't
+      // drop real review verdicts. ConsensusFinding.category is often undefined
+      // because findings come from synthesis without category threading — fall
+      // back to extractCategories on the finding text. Stays undefined only when
+      // the finding text has no matchable vocabulary (rare); those are logged by
+      // performance-reader for observability.
       const provisionalSignals = allFindings
         .filter((f: any) => !alreadySignaled.has(f.originalAgentId))
-        .map((f: any) => ({
-          type: 'consensus' as const,
-          taskId: provisionalConsensusId || '',
-          consensusId: provisionalConsensusId,
-          findingId: typeof f.id === 'string' ? f.id : undefined,
-          signal: tagToSignal[f.tag] || 'unique_unconfirmed',
-          agentId: f.originalAgentId,
-          evidence: `[provisional] ${(f.finding || '').slice(0, 200)}`,
-          severity: f.severity,
-          category: f.category,
-          timestamp,
-        }));
+        .map((f: any) => {
+          const category = f.category || extractCategories(f.finding || '')[0] || undefined;
+          return {
+            type: 'consensus' as const,
+            taskId: provisionalConsensusId || '',
+            consensusId: provisionalConsensusId,
+            findingId: typeof f.id === 'string' ? f.id : undefined,
+            signal: tagToSignal[f.tag] || 'unique_unconfirmed',
+            agentId: f.originalAgentId,
+            evidence: `[provisional] ${(f.finding || '').slice(0, 200)}`,
+            severity: f.severity,
+            category,
+            timestamp,
+          };
+        });
 
       if (provisionalSignals.length > 0) {
         emitConsensusSignals(process.cwd(), provisionalSignals);

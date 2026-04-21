@@ -118,7 +118,9 @@ describe('symmetric diversityMul fix', () => {
       // third agent needed so teamSize > 1
       { type: 'consensus', taskId: 't3', signal: 'agreement', agentId: 'peer-extra', counterpartId: 'peer-1', evidence: 'ok', timestamp: now },
       // agent-a wins disagreement against saturated agent-b
-      { type: 'consensus', taskId: 't4', signal: 'disagreement', agentId: 'agent-b-sat', counterpartId: 'agent-a-winner', evidence: 'bad', timestamp: now },
+      // PR 4 Part B: category required so the disagreement is treated as a
+      // finding-evaluation verdict (not operational).
+      { type: 'consensus', taskId: 't4', signal: 'disagreement', agentId: 'agent-b-sat', counterpartId: 'agent-a-winner', category: 'testing', evidence: 'bad', timestamp: now },
     ];
     writeSignals(saturatedSignals);
     const reader = new PerformanceReader(TMP);
@@ -178,7 +180,9 @@ describe('symmetric diversityMul fix', () => {
       // peer-1 signals so it appears in recentAgents
       { type: 'consensus', taskId: 't3', signal: 'agreement', agentId: 'peer-1', counterpartId: 'agent-a-mix', evidence: 'ok', timestamp: now },
       // disagreement: peer-1 loses, agent-a-mix wins
-      { type: 'consensus', taskId: 't4', signal: 'disagreement', agentId: 'peer-1', counterpartId: 'agent-a-mix', evidence: 'bad', timestamp: now },
+      // PR 4 Part B: category required so the disagreement is treated as a
+      // finding-evaluation verdict (not operational).
+      { type: 'consensus', taskId: 't4', signal: 'disagreement', agentId: 'peer-1', counterpartId: 'agent-a-mix', category: 'testing', evidence: 'bad', timestamp: now },
     ];
     writeSignals(signals);
     const reader = new PerformanceReader(TMP);
