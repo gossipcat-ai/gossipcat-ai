@@ -160,7 +160,7 @@ export class ConsensusCoordinator {
           }));
           const participants = new Set(results.filter(r => r.status === 'completed').map(r => r.agentId));
           for (const agentId of participants) {
-            this.memWriter.writeConsensusKnowledge(agentId, findings, this.resolutionRoots ? [...this.resolutionRoots] : undefined);
+            this.memWriter.writeConsensusKnowledge(agentId, findings, this.resolutionRoots ? [...this.resolutionRoots] : undefined, consensusId);
           }
           for (const agentId of participants) {
             try { this.memWriter.rebuildIndex(agentId); } catch { /* best-effort */ }

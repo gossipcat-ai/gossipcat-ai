@@ -6,6 +6,7 @@ import type { ILLMProvider } from './llm-client';
 import type { LLMMessage } from '@gossip/types';
 import { discoverProjectStructure } from './project-structure';
 import { gossipLog } from './log';
+import { emitCitationFabricatedSignal } from './completion-signals';
 
 /** Truncate text at a word boundary, appending "..." if truncated */
 function truncateAtWord(text: string, maxLen: number): string {
@@ -208,6 +209,15 @@ export class MemoryWriter {
       for (const u of citations.unverified) {
         citationLines.push(`  - "${u}"`);
       }
+      // Pipeline telemetry — annotator rejections are observability only,
+      // they do NOT gate the write. Helper truncates to first 10 entries.
+      emitCitationFabricatedSignal(this.projectRoot, {
+        agentId,
+        taskId: data.taskId,
+        total: citations.total,
+        verified: citations.verified,
+        unverifiedCitations: citations.unverified,
+      });
     }
     const content = [
       '---',
@@ -990,6 +1000,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     agentId: string,
     findings: Array<{ originalAgentId: string; finding: string; tag?: string }>,
     resolutionRoots?: string[],
+    taskId?: string,
   ): void {
     if (findings.length === 0) return;
     const memDir = this.ensureDirs(agentId);
@@ -1026,6 +1037,16 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
       for (const u of citations.unverified) {
         citationLines.push(`  - "${u}"`);
       }
+      // Pipeline telemetry — observability only, never gates the write.
+      // Fall back to a synthetic per-file taskId when the caller doesn't
+      // thread one; signal validator requires a non-empty taskId.
+      emitCitationFabricatedSignal(this.projectRoot, {
+        agentId,
+        taskId: taskId ?? `consensus-${timestamp}`,
+        total: citations.total,
+        verified: citations.verified,
+        unverifiedCitations: citations.unverified,
+      });
     }
 
     const content = [

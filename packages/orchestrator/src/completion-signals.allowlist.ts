@@ -20,6 +20,7 @@ export const COMPLETION_SIGNAL_ALLOWLIST: readonly string[] = [
   'task_tool_turns',
   'format_compliance',
   'finding_dropped_format',
+  'citation_fabricated',
 ] as const;
 
 /**

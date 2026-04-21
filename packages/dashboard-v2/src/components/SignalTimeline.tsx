@@ -20,6 +20,9 @@ const SIGNAL_COLORS: Record<string, string> = {
   hallucination_caught: 'bg-disputed',
   new_finding: 'bg-unique',
   unverified: 'bg-unverified',
+  // Amber/orange — fabricated citations are write-time warnings, not consensus
+  // errors; keep visually distinct from the red disputed bucket.
+  citation_fabricated: 'bg-amber-500',
 };
 
 const SIGNAL_LABELS: Record<string, string> = {
@@ -31,6 +34,7 @@ const SIGNAL_LABELS: Record<string, string> = {
   hallucination_caught: 'Hallucination',
   new_finding: 'New finding',
   unverified: 'Unverified',
+  citation_fabricated: 'Fabricated citation',
 };
 
 // Pill sizing budget. MIN_PILL_WIDTH gives a slight breathing margin above the
@@ -86,7 +90,7 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
   // `total` population). With a capped window the counts still reflect only
   // the most recent slice. Label explicitly says "Last N" so users don't
   // divide counts by total and get a wrong ratio.
-  const counts = { confirmed: 0, disputed: 0, unique: 0, unverified: 0 };
+  const counts = { confirmed: 0, disputed: 0, unique: 0, unverified: 0, fabricated: 0 };
   for (const s of signals) {
     if (s.signal === 'agreement' || s.signal === 'consensus_verified') counts.confirmed++;
     // The "disputed" bucket covers both disagreement AND hallucination_caught
@@ -95,6 +99,9 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
     else if (s.signal === 'disagreement' || s.signal === 'hallucination_caught') counts.disputed++;
     else if (s.signal === 'unique_confirmed' || s.signal === 'unique_unconfirmed' || s.signal === 'new_finding') counts.unique++;
     else if (s.signal === 'unverified') counts.unverified++;
+    // Separate bucket from consensus-UNVERIFIED: fabricated citations are
+    // write-time annotator rejections, not consensus cross-review outcomes.
+    else if (s.signal === 'citation_fabricated') counts.fabricated++;
   }
 
   const windowSize = signals.length;
@@ -128,6 +135,7 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
           {counts.disputed > 0 && <span className="text-disputed">{counts.disputed} disputed</span>}
           {counts.unique > 0 && <span className="text-unique">{counts.unique} unique</span>}
           {counts.unverified > 0 && <span className="text-unverified">{counts.unverified} unverified</span>}
+          {counts.fabricated > 0 && <span className="text-amber-500">{counts.fabricated} fabricated</span>}
         </div>
       </div>
       <div className="flex items-center gap-0.5">
@@ -162,6 +170,7 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
           { color: 'bg-unique', label: 'Unique (confirmed)' },
           { color: 'bg-unique/50', label: 'Unique (unconfirmed)' },
           { color: 'bg-unverified', label: 'Unverified' },
+          { color: 'bg-amber-500', label: 'Fabricated citation' },
         ].map((l) => (
           <div key={l.label} className="flex items-center gap-1">
             <div className={`h-2 w-2 rounded-sm ${l.color}`} />
