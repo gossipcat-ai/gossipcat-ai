@@ -5,7 +5,9 @@
  *   - One-sided z-test on per-category accuracy = correct / (correct + hallucinated)
  *   - Two simultaneous tests (passed-direction, failed-direction) → Bonferroni α=0.025 each
  *   - Evidence gate: ≥ MIN_EVIDENCE category-tagged signals since last snapshot
- *   - Power: ≥ 80% for detecting +10pp shift at p=0.75 baseline (see spec power table)
+ *   - Power: ≈ 75.5% for detecting +10pp shift at p=0.75 baseline at MIN_EVIDENCE=120
+ *     (verified by independent recomputation; SE_alt=0.03260, z_power=-0.690, Φ(0.690)=0.755).
+ *     Raising MIN_EVIDENCE to ~148 would reach ≥80% power if false-negative cost dominates.
  */
 
 import type { CategoryCounters } from './performance-reader';
