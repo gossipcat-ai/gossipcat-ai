@@ -1,11 +1,86 @@
 import {
   wilsonScoreInterval,
   wilsonVerdict,
+  zForAlpha,
 } from '../../packages/orchestrator/src/wilson-score';
 import { oneSidedZTest } from '../../packages/orchestrator/src/check-effectiveness';
 
 // Matches the Bonferroni-split alpha the z-test uses per arm.
 const ALPHA = 0.025;
+
+describe('zForAlpha — Acklam inverse normal CDF', () => {
+  // Reference values computed from high-precision qnorm: z = Φ⁻¹(1 - α/2).
+  // Range extended to α=0.70 for the Wilson full-replacement calibration
+  // schedule (docs/specs/2026-04-22-wilson-full-replacement.md) — the
+  // sparse-current regime produces α=0.5491, outside the narrow 0.01-0.30
+  // range that covered the prototype.
+  const REFERENCE: Array<[number, number]> = [
+    [0.01, 2.5758293],
+    [0.025, 2.2414027],
+    [0.05, 1.9599640],
+    [0.1, 1.6448536],
+    [0.15, 1.4395315],
+    [0.2, 1.2815516],
+    [0.3, 1.0364334],
+    [0.4, 0.8416212],
+    [0.5, 0.6744898],
+    [0.55, 0.5977601],
+    [0.6, 0.5244005],
+    [0.7, 0.3853205],
+  ];
+
+  it.each(REFERENCE)(
+    'round-trips within 1e-6 at alpha=%f (expect %f)',
+    (alpha, expected) => {
+      const z = zForAlpha(alpha);
+      expect(Math.abs(z - expected)).toBeLessThan(1e-6);
+    },
+  );
+
+  it('is monotonically decreasing across alpha ∈ [0.001, 0.5]', () => {
+    const alphas: number[] = [];
+    for (let a = 0.001; a <= 0.5 + 1e-12; a += 0.001) {
+      alphas.push(Math.round(a * 1000) / 1000);
+    }
+    let prev = Infinity;
+    for (const a of alphas) {
+      const z = zForAlpha(a);
+      expect(z).toBeLessThanOrEqual(prev);
+      prev = z;
+    }
+  });
+
+  it('boundary — alpha→0 produces a large positive z', () => {
+    // At alpha = 1e-12, true z ≈ 7.03. Acklam should comfortably exceed 6.
+    const z = zForAlpha(1e-12);
+    expect(z).toBeGreaterThan(6);
+    expect(Number.isFinite(z)).toBe(true);
+  });
+
+  it('boundary — alpha=0.5 returns Φ⁻¹(0.75) ≈ 0.6745', () => {
+    // Under the two-sided interpretation z = Φ⁻¹(1 − α/2), α=0.5 maps to
+    // the 75th percentile, NOT zero. z=0 is approached as α → 1.
+    const z = zForAlpha(0.5);
+    expect(Math.abs(z - 0.6744897502)).toBeLessThan(1e-6);
+  });
+
+  it('boundary — alpha → 1 drives z → 0', () => {
+    // At α = 0.9999, 1 − α/2 = 0.50005 → z ≈ 0.000125.
+    const z = zForAlpha(0.9999);
+    expect(z).toBeGreaterThan(0);
+    expect(z).toBeLessThan(1e-3);
+  });
+
+  it('boundary — out-of-domain alpha throws RangeError', () => {
+    // Domain (0, 1) is enforced. α ≤ 0 or α ≥ 1 throws; we do not clamp or
+    // silently fall back (the whole point of this rewrite).
+    expect(() => zForAlpha(1)).toThrow(RangeError);
+    expect(() => zForAlpha(0)).toThrow(RangeError);
+    expect(() => zForAlpha(-0.1)).toThrow(RangeError);
+    expect(() => zForAlpha(1.5)).toThrow(RangeError);
+    expect(() => zForAlpha(NaN)).toThrow(RangeError);
+  });
+});
 
 describe('wilsonScoreInterval', () => {
   it('returns full [0,1] when total is zero', () => {

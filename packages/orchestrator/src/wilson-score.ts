@@ -22,22 +22,104 @@
  */
 
 /**
- * Standard normal quantile for (1 - alpha/2).
+ * Inverse standard-normal CDF (Φ⁻¹) for probability p ∈ (0, 1).
  *
- * For the two alpha values this prototype uses (0.025 and 0.05) we inline
- * the constant to avoid pulling in a full inverse-normal implementation for
- * a drop-in experiment.
+ * Implementation: Peter J. Acklam's rational-approximation algorithm
+ * (https://web.archive.org/web/20150910044729/http://home.online.no/~pjacklam/notes/invnorm/),
+ * accurate to ~1.15e-9 over the open interval. Boundaries are handled
+ * explicitly: p=0.5 → 0, p→0 → -∞ proxy, p→1 → +∞ proxy.
  *
- *   alpha = 0.05  → two-sided 95% → z = 1.959964 ≈ 1.96
- *   alpha = 0.025 → two-sided 97.5% → z = 2.241403 ≈ 2.24
+ * This replaces a pair of hard-coded constants (alpha ∈ {0.025, 0.05}) with
+ * a production-grade quantile so Wilson intervals can be requested at any
+ * alpha without silently falling back to z≈1.96.
  */
-function zForAlpha(alpha: number): number {
-  if (Math.abs(alpha - 0.05) < 1e-9) return 1.959964;
-  if (Math.abs(alpha - 0.025) < 1e-9) return 2.241403;
-  // Fallback — Beasley-Springer-Moro would be overkill for a prototype.
-  // Callers outside the {0.025, 0.05} set get a reasonable approximation
-  // from 1.96 but should wire in a real qnorm before production use.
-  return 1.959964;
+function inverseNormalCDF(p: number): number {
+  if (!(p > 0 && p < 1)) {
+    if (p === 0) return -Infinity;
+    if (p === 1) return Infinity;
+    return NaN;
+  }
+
+  // Acklam's coefficients.
+  const a = [
+    -3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2,
+    1.38357751867269e2, -3.066479806614716e1, 2.506628277459239,
+  ];
+  const b = [
+    -5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2,
+    6.680131188771972e1, -1.328068155288572e1,
+  ];
+  const c = [
+    -7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838,
+    -2.549732539343734, 4.374664141464968, 2.938163982698783,
+  ];
+  const d = [
+    7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996,
+    3.754408661907416,
+  ];
+
+  // Break-points.
+  const pLow = 0.02425;
+  const pHigh = 1 - pLow;
+
+  let q: number;
+  let r: number;
+  let x: number;
+
+  if (p < pLow) {
+    // Lower region — rational approximation in log-space.
+    q = Math.sqrt(-2 * Math.log(p));
+    x =
+      (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  } else if (p <= pHigh) {
+    // Central region — rational approximation around the median.
+    q = p - 0.5;
+    r = q * q;
+    x =
+      ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) *
+        q) /
+      (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  } else {
+    // Upper region — mirror of the lower region.
+    q = Math.sqrt(-2 * Math.log(1 - p));
+    x =
+      -(
+        ((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q +
+        c[5]
+      ) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+
+  return x;
+}
+
+/**
+ * Critical z for a two-sided test at significance level alpha.
+ *
+ * Returns Φ⁻¹(1 − alpha/2), i.e. the quantile such that a two-sided
+ * z-test rejects when |z| exceeds it.
+ *
+ *   alpha = 0.05  → 1.959964 (classic 1.96)
+ *   alpha = 0.025 → 2.241403
+ *   alpha = 0.01  → 2.575829
+ *
+ * Domain:
+ *   - alpha ∈ (0, 1): returns a real z. z→+∞ as alpha→0, z→0 as alpha→1.
+ *   - alpha = 0.5: returns Φ⁻¹(0.75) ≈ 0.6745 (NOT zero — zero occurs only as alpha→1).
+ *   - alpha ≥ 1 or alpha ≤ 0: throws RangeError.
+ *   - For alpha > 0.5 the return is still positive but small (e.g. alpha=0.9 → ≈0.126).
+ *     Wilson callers are expected to use alpha ∈ (0, 0.5]; no clamp applied.
+ *
+ * Exported for direct use and for targeted unit tests.
+ */
+export function zForAlpha(alpha: number): number {
+  if (!Number.isFinite(alpha) || alpha <= 0 || alpha >= 1) {
+    throw new RangeError(
+      `zForAlpha: alpha must be in (0, 1), got ${alpha}`,
+    );
+  }
+  return inverseNormalCDF(1 - alpha / 2);
 }
 
 /**
