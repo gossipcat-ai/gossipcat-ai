@@ -1,4 +1,8 @@
-import { parseClaimBlock } from '../../packages/orchestrator/src/claim-types';
+import {
+  MAX_CLAIM_STRING_CHARS,
+  MAX_PATH_CHARS,
+  parseClaimBlock,
+} from '../../packages/orchestrator/src/claim-types';
 
 describe('parseClaimBlock — fail-soft parser', () => {
   it('accepts a valid block with all five claim types', () => {
@@ -108,6 +112,62 @@ describe('parseClaimBlock — fail-soft parser', () => {
     const { block, errors } = parseClaimBlock(raw);
     expect(block!.claims).toHaveLength(2);
     expect(errors.some((e) => e.claim_index === 1)).toBe(true);
+  });
+
+  it('rejects symbol longer than MAX_CLAIM_STRING_CHARS (256) — schema-lint, skipped', () => {
+    const longSymbol = 'a'.repeat(MAX_CLAIM_STRING_CHARS + 1);
+    const raw = JSON.stringify({
+      schema_version: '1',
+      verifier: 'orchestrator',
+      claims: [
+        { type: 'presence_of_symbol', symbol: longSymbol, scope: 'src', modality: 'asserted' },
+      ],
+    });
+    const { block, errors } = parseClaimBlock(raw);
+    expect(block!.claims).toHaveLength(0);
+    expect(errors.some((e) => /symbol_too_long/.test(e.message))).toBe(true);
+  });
+
+  it('rejects file_line path longer than MAX_PATH_CHARS (1024) — schema-lint, skipped', () => {
+    const longPath = 'a/'.repeat(MAX_PATH_CHARS); // length ≫ 1024
+    const raw = JSON.stringify({
+      schema_version: '1',
+      verifier: 'orchestrator',
+      claims: [
+        { type: 'file_line', path: longPath, line: 1, expected_symbol: 'x', modality: 'asserted' },
+      ],
+    });
+    const { block, errors } = parseClaimBlock(raw);
+    expect(block!.claims).toHaveLength(0);
+    expect(errors.some((e) => /path_too_long/.test(e.message))).toBe(true);
+  });
+
+  it('rejects over-long scope across all grep-using claim types', () => {
+    const longScope = 's'.repeat(MAX_CLAIM_STRING_CHARS + 1);
+    for (const type of ['callsite_count', 'absence_of_symbol', 'presence_of_symbol', 'count_relation']) {
+      const claim: Record<string, unknown> = { type, symbol: 'foo', scope: longScope, modality: 'asserted' };
+      if (type === 'callsite_count') claim.expected = 1;
+      if (type === 'count_relation') { claim.relation = '>'; claim.value = 0; }
+      if (type === 'absence_of_symbol') claim.context = 'ctx';
+      const raw = JSON.stringify({ schema_version: '1', verifier: 'orchestrator', claims: [claim] });
+      const { block, errors } = parseClaimBlock(raw);
+      expect(block!.claims).toHaveLength(0);
+      expect(errors.some((e) => /scope_too_long/.test(e.message))).toBe(true);
+    }
+  });
+
+  it('rejects over-long file_line expected_symbol', () => {
+    const longSym = 'x'.repeat(MAX_CLAIM_STRING_CHARS + 1);
+    const raw = JSON.stringify({
+      schema_version: '1',
+      verifier: 'orchestrator',
+      claims: [
+        { type: 'file_line', path: 'src/a.ts', line: 1, expected_symbol: longSym, modality: 'asserted' },
+      ],
+    });
+    const { block, errors } = parseClaimBlock(raw);
+    expect(block!.claims).toHaveLength(0);
+    expect(errors.some((e) => /expected_symbol_too_long/.test(e.message))).toBe(true);
   });
 
   it('accepts an empty claims array', () => {

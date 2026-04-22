@@ -99,6 +99,13 @@ export interface ParseClaimBlockResult {
 const VALID_MODALITIES: Modality[] = ['asserted', 'hedged', 'vague'];
 const VALID_RELATIONS: Relation[] = ['>', '<', '=', '≥', '≤'];
 const MAX_CONTEXT_CHARS = 120;
+/** Upper bound for symbol / scope / expected_symbol regex inputs. Prevents
+ *  megabyte-long pathological regexes from burning CPU before the 500ms
+ *  verifier wallclock fires. */
+export const MAX_CLAIM_STRING_CHARS = 256;
+/** Upper bound for file_line path strings. Paths can reasonably be longer
+ *  than a symbol, but still bounded. */
+export const MAX_PATH_CHARS = 1024;
 
 function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x);
@@ -135,8 +142,16 @@ function validateClaim(raw: unknown, idx: number, errors: ParseError[]): Claim |
         errors.push({ claim_index: idx, message: 'callsite_count: symbol must be non-empty string' });
         return null;
       }
+      if (raw.symbol.length > MAX_CLAIM_STRING_CHARS) {
+        errors.push({ claim_index: idx, message: `callsite_count: symbol_too_long (max ${MAX_CLAIM_STRING_CHARS})` });
+        return null;
+      }
       if (typeof raw.scope !== 'string' || raw.scope.length === 0) {
         errors.push({ claim_index: idx, message: 'callsite_count: scope must be non-empty string' });
+        return null;
+      }
+      if (raw.scope.length > MAX_CLAIM_STRING_CHARS) {
+        errors.push({ claim_index: idx, message: `callsite_count: scope_too_long (max ${MAX_CLAIM_STRING_CHARS})` });
         return null;
       }
       if (typeof raw.expected !== 'number' || !Number.isInteger(raw.expected)) {
@@ -170,12 +185,20 @@ function validateClaim(raw: unknown, idx: number, errors: ParseError[]): Claim |
         errors.push({ claim_index: idx, message: 'file_line: path must be non-empty string' });
         return null;
       }
+      if (raw.path.length > MAX_PATH_CHARS) {
+        errors.push({ claim_index: idx, message: `file_line: path_too_long (max ${MAX_PATH_CHARS})` });
+        return null;
+      }
       if (typeof raw.line !== 'number' || !Number.isInteger(raw.line) || raw.line < 1) {
         errors.push({ claim_index: idx, message: 'file_line: line must be positive integer' });
         return null;
       }
       if (typeof raw.expected_symbol !== 'string' || raw.expected_symbol.length === 0) {
         errors.push({ claim_index: idx, message: 'file_line: expected_symbol must be non-empty string' });
+        return null;
+      }
+      if (raw.expected_symbol.length > MAX_CLAIM_STRING_CHARS) {
+        errors.push({ claim_index: idx, message: `file_line: expected_symbol_too_long (max ${MAX_CLAIM_STRING_CHARS})` });
         return null;
       }
       const out: FileLineClaim = {
@@ -193,8 +216,16 @@ function validateClaim(raw: unknown, idx: number, errors: ParseError[]): Claim |
         errors.push({ claim_index: idx, message: 'absence_of_symbol: symbol must be non-empty string' });
         return null;
       }
+      if (raw.symbol.length > MAX_CLAIM_STRING_CHARS) {
+        errors.push({ claim_index: idx, message: `absence_of_symbol: symbol_too_long (max ${MAX_CLAIM_STRING_CHARS})` });
+        return null;
+      }
       if (typeof raw.scope !== 'string' || raw.scope.length === 0) {
         errors.push({ claim_index: idx, message: 'absence_of_symbol: scope must be non-empty string' });
+        return null;
+      }
+      if (raw.scope.length > MAX_CLAIM_STRING_CHARS) {
+        errors.push({ claim_index: idx, message: `absence_of_symbol: scope_too_long (max ${MAX_CLAIM_STRING_CHARS})` });
         return null;
       }
       if (typeof raw.context !== 'string') {
@@ -225,8 +256,16 @@ function validateClaim(raw: unknown, idx: number, errors: ParseError[]): Claim |
         errors.push({ claim_index: idx, message: 'presence_of_symbol: symbol must be non-empty string' });
         return null;
       }
+      if (raw.symbol.length > MAX_CLAIM_STRING_CHARS) {
+        errors.push({ claim_index: idx, message: `presence_of_symbol: symbol_too_long (max ${MAX_CLAIM_STRING_CHARS})` });
+        return null;
+      }
       if (typeof raw.scope !== 'string' || raw.scope.length === 0) {
         errors.push({ claim_index: idx, message: 'presence_of_symbol: scope must be non-empty string' });
+        return null;
+      }
+      if (raw.scope.length > MAX_CLAIM_STRING_CHARS) {
+        errors.push({ claim_index: idx, message: `presence_of_symbol: scope_too_long (max ${MAX_CLAIM_STRING_CHARS})` });
         return null;
       }
       const out: PresenceOfSymbolClaim = {
@@ -243,8 +282,16 @@ function validateClaim(raw: unknown, idx: number, errors: ParseError[]): Claim |
         errors.push({ claim_index: idx, message: 'count_relation: symbol must be non-empty string' });
         return null;
       }
+      if (raw.symbol.length > MAX_CLAIM_STRING_CHARS) {
+        errors.push({ claim_index: idx, message: `count_relation: symbol_too_long (max ${MAX_CLAIM_STRING_CHARS})` });
+        return null;
+      }
       if (typeof raw.scope !== 'string' || raw.scope.length === 0) {
         errors.push({ claim_index: idx, message: 'count_relation: scope must be non-empty string' });
+        return null;
+      }
+      if (raw.scope.length > MAX_CLAIM_STRING_CHARS) {
+        errors.push({ claim_index: idx, message: `count_relation: scope_too_long (max ${MAX_CLAIM_STRING_CHARS})` });
         return null;
       }
       if (typeof raw.relation !== 'string' || !(VALID_RELATIONS as string[]).includes(raw.relation)) {
