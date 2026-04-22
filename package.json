@@ -23,6 +23,7 @@
     "dist-mcp/",
     "dist-dashboard/",
     "docs/HANDBOOK.md",
+    "docs/RULES.md",
     "scripts/postinstall.js"
   ],
   "scripts": {

@@ -34,6 +34,13 @@ describe('package.json `files` — required tarball entries', () => {
     expect(files).toContain('docs/HANDBOOK.md');
   });
 
+  it('includes docs/RULES.md', () => {
+    // Source of truth for rules-content.ts (which reads it via readFileSync
+    // with the same fallback chain as HANDBOOK.md). A missing entry here ships
+    // a tarball whose generateRulesContent() throws on gossip_setup.
+    expect(files).toContain('docs/RULES.md');
+  });
+
   it('includes dist-mcp/', () => {
     expect(files).toContain('dist-mcp/');
   });
@@ -62,6 +69,26 @@ describe('docs/HANDBOOK.md — file integrity', () => {
     // break when non-essential sections are trimmed.
     const { size } = statSync(handbookPath);
     expect(size).toBeGreaterThan(5000);
+  });
+});
+
+// ── docs/RULES.md integrity ──────────────────────────────────────────────
+
+describe('docs/RULES.md — file integrity', () => {
+  const rulesPath = resolve(PROJECT_ROOT, 'docs', 'RULES.md');
+
+  it('exists on disk', () => {
+    expect(existsSync(rulesPath)).toBe(true);
+  });
+
+  it('contains the {{AGENT_LIST}} placeholder (substitution token present)', () => {
+    const body = readFileSync(rulesPath, 'utf-8');
+    expect(body).toContain('{{AGENT_LIST}}');
+  });
+
+  it('is larger than 3 000 bytes (catches silent truncation)', () => {
+    const { size } = statSync(rulesPath);
+    expect(size).toBeGreaterThan(3000);
   });
 });
 
