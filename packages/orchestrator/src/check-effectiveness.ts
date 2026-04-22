@@ -198,7 +198,8 @@ export function resolveVerdict(
   //       first relevant task arrives.
   //   (b) 0 < postTotal < MIN_EVIDENCE — some history, but below the
   //       statistical gate (MIN_EVIDENCE = 120). Skill is active but
-  //       hasn't accumulated enough signals for the z-test to fire.
+  //       hasn't accumulated enough signals for the Wilson regime check to
+  //       reach a verdict.
   //
   // Both surface as `pending` because the action is the same: wait. The
   // distinction is informational only — dashboards can compute it from
