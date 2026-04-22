@@ -498,13 +498,14 @@ describe('skill-effectiveness E2E — graduation pipeline', () => {
   //
   // Baseline 18c/2h (baselineP = 0.9). Post-bind delta has MIN_EVIDENCE=120
   // signals with a high hallucination share so postP drops well below
-  // baselineP - 0.10. The one-sided negative z-test should reject and the
-  // verdict should land at `failed` via verdict_method: 'z-test'.
+  // baselineP - 0.10. Under the unified Wilson path (post full-replacement),
+  // the typical regime's Wilson CI lands entirely below baselineP and the
+  // verdict should land at `failed` via verdict_method: 'wilson_typical'.
   //
   // Locks the symmetric "negative direction" branch of resolveVerdict that
   // mirrors variant A's positive-direction graduation.
   // -------------------------------------------------------------------------
-  test("Variant F — 120 post-bind signals decline below baseline → failed via z-test", async () => {
+  test("Variant F — 120 post-bind signals decline below baseline → failed via Wilson", async () => {
     const boundAt = Date.now() - 1000;
     const skillPath = writeSkillFixture(projectRoot, AGENT, CATEGORY, {
       name: CATEGORY,
@@ -539,16 +540,19 @@ describe('skill-effectiveness E2E — graduation pipeline', () => {
   // Variant G — inconclusive rotation → flagged_for_manual_review terminal.
   //
   // Three checkEffectiveness calls where each window's postP lands within
-  // ±3pp of baselineP (so neither z-test direction rejects). Each call bumps
+  // ±3pp of baselineP (so Wilson intervals overlap in the typical regime —
+  // neither direction crosses the α threshold). Each call bumps
   // inconclusive_strikes and rotates inconclusive_at to now, so the next call
   // reads counters from the new anchor. On the 3rd strike, resolveVerdict
-  // transitions to `flagged_for_manual_review` with verdict_method='z-test'.
+  // transitions to `flagged_for_manual_review` with the regime's
+  // verdict_method stamped on the return.
   //
   // To keep every round within the ±3pp band we use baselineP = 0.5
   // (60c/60h) and append exactly 60 correct + 60 hallucinated post-anchor
-  // for each round (postP = 0.5 = baselineP → zero effect, can't reject
-  // either direction). The 3-strike terminal check is PR #228's verdict_method
-  // stamp on the flagged_for_manual_review return.
+  // for each round (postP = 0.5 = baselineP → Wilson CIs fully overlap,
+  // resolveVerdict returns pending → inconclusive). The 3-strike terminal
+  // check is PR #228's verdict_method stamp on the flagged_for_manual_review
+  // return.
   // -------------------------------------------------------------------------
   test('Variant G — 3× inconclusive rotation → flagged_for_manual_review', async () => {
     const boundAt = Date.now() - 90 * 86400_000 + 86400_000; // within TIMEOUT_MS
