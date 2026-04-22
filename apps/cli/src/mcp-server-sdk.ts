@@ -28,6 +28,8 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 // ── Extracted modules ────────────────────────────────────────────────────
 import { ctx } from './mcp-context';
 import { getGossipcatVersion } from './version';
+import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
+import { buildUtilityAgentPrompt } from '@gossip/orchestrator';
 import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';
@@ -153,6 +155,12 @@ const _pendingVerifyData = new Map<string, { memory_path: string; absPath: strin
 // (no relay API keys) use the native subagent for decomposition instead of
 // failing with "No API keys available".
 const _pendingPlanData = new Map<string, { task: string; strategy?: 'parallel' | 'sequential' | 'single' }>();
+
+// Pre-dispatch git-status snapshots for utility tasks. Captured at dispatch
+// time, compared on re-entry to detect prompt-injection drift where a sub-agent
+// silently mutated the working tree. See utility-guard.ts and incident logged
+// in 2026-04-22 (Math.min revert at cross-reviewer-selection.ts:155).
+const _utilityGuardSnapshots = new Map<string, string>();
 
 // Cache modules after first import
 let _modules: any = null;
@@ -1015,6 +1023,12 @@ server.tool(
         _pendingPlanData.delete(_utility_task_id);
         ctx.nativeResultMap.delete(_utility_task_id);
         ctx.nativeTaskMap.delete(_utility_task_id);
+        // Utility-guard: detect prompt-injection drift in the sub-agent.
+        const _guardBefore = _utilityGuardSnapshots.get(_utility_task_id);
+        _utilityGuardSnapshots.delete(_utility_task_id);
+        if (_guardBefore !== undefined) {
+          checkUnexpectedChanges(_guardBefore, captureGitStatus(), 'plan', _utility_task_id);
+        }
         if (!utilityResult || utilityResult.status !== 'completed' || !utilityResult.result) {
           process.stderr.write(`[gossipcat] gossip_plan native utility ${_utility_task_id} failed/timed out\n`);
           return { content: [{ type: 'text' as const, text:
@@ -1078,6 +1092,7 @@ server.tool(
             const user = asString(messages.find(m => m.role === 'user')?.content);
 
             _pendingPlanData.set(utilityTaskId, { task, strategy });
+            _utilityGuardSnapshots.set(utilityTaskId, captureGitStatus());
             const UTILITY_TTL_MS = 120_000;
             ctx.nativeTaskMap.set(utilityTaskId, {
               agentId: '_utility',
@@ -3173,6 +3188,12 @@ server.tool(
         const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
         ctx.nativeResultMap.delete(_utility_task_id);
         ctx.nativeTaskMap.delete(_utility_task_id);
+        // Utility-guard: detect prompt-injection drift in the sub-agent.
+        const _guardBefore = _utilityGuardSnapshots.get(_utility_task_id);
+        _utilityGuardSnapshots.delete(_utility_task_id);
+        if (_guardBefore !== undefined) {
+          checkUnexpectedChanges(_guardBefore, captureGitStatus(), 'skill_develop', _utility_task_id);
+        }
 
         if (utilityResult?.status === 'completed' && utilityResult.result && stashedMeta) {
           try {
@@ -3228,6 +3249,7 @@ server.tool(
             await ctx.skillEngine.buildPrompt(agent_id, category);
           const taskId = randomUUID().slice(0, 8);
           _pendingSkillData.set(taskId, { agentId: agent_id, category, skillName, skillPath, baseline_accuracy_correct, baseline_accuracy_hallucinated, bound_at });
+          _utilityGuardSnapshots.set(taskId, captureGitStatus());
           ctx.nativeTaskMap.set(taskId, {
             agentId: '_utility',
             task: `skill_develop:${category}`,
@@ -3248,7 +3270,7 @@ server.tool(
                 `3. Then re-call: gossip_skills(action: "develop", agent_id: "${agent_id}", category: "${category}", _utility_task_id: "${taskId}")\n\n` +
                 `Do ALL steps in order. Do not wait for user input between them.`
               },
-              { type: 'text' as const, text: `AGENT_PROMPT:${taskId} (_utility)\n${system}\n\n---\n\n${user}` },
+              { type: 'text' as const, text: buildUtilityAgentPrompt(taskId, `${system}\n\n---\n\n${user}`) },
             ],
           };
         } catch (err) {
@@ -3399,6 +3421,13 @@ server.tool(
       const stashed = _pendingSessionData.get(_utility_task_id);
       _pendingSessionData.delete(_utility_task_id);
       const summaryData = stashed ?? { gossip: '', consensus: '', performance: '', gitLog: '', notes };
+
+      // Utility-guard: detect prompt-injection drift in the sub-agent.
+      const _guardBefore = _utilityGuardSnapshots.get(_utility_task_id);
+      _utilityGuardSnapshots.delete(_utility_task_id);
+      if (_guardBefore !== undefined) {
+        checkUnexpectedChanges(_guardBefore, captureGitStatus(), 'session_summary', _utility_task_id);
+      }
 
       const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
       const { MemoryWriter } = await import('@gossip/orchestrator');
@@ -3667,6 +3696,7 @@ server.tool(
       const taskId = randomUUID().slice(0, 8);
       // Stash gathered data so re-entry doesn't need to re-gather
       _pendingSessionData.set(taskId, summaryData);
+      _utilityGuardSnapshots.set(taskId, captureGitStatus());
       const UTILITY_TTL_MS = 120_000;
       ctx.nativeTaskMap.set(taskId, {
         agentId: '_utility',
@@ -3689,7 +3719,7 @@ server.tool(
             `3. Then re-call: gossip_session_save(notes: ${JSON.stringify(notes || '')}, _utility_task_id: "${taskId}")\n\n` +
             `Do ALL steps in order. Do not wait for user input between them.`
           },
-          { type: 'text' as const, text: `AGENT_PROMPT:${taskId} (_utility)\n${agentPrompt}` },
+          { type: 'text' as const, text: buildUtilityAgentPrompt(taskId, agentPrompt) },
         ],
       };
     }
@@ -3830,6 +3860,8 @@ server.tool(
       // consensus task result before the consensus collector reads it.
       const stashed = _pendingVerifyData.get(_utility_task_id);
       if (!stashed) {
+        // Don't leak the snapshot if dispatch was never ours.
+        _utilityGuardSnapshots.delete(_utility_task_id);
         return renderResult({
           verdict: 'INCONCLUSIVE',
           evidence: `unknown _utility_task_id: ${_utility_task_id} (not a verify_memory dispatch)`,
@@ -3839,6 +3871,12 @@ server.tool(
       const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
       ctx.nativeResultMap.delete(_utility_task_id);
       ctx.nativeTaskMap.delete(_utility_task_id);
+      // Utility-guard: detect prompt-injection drift in the sub-agent.
+      const _guardBefore = _utilityGuardSnapshots.get(_utility_task_id);
+      _utilityGuardSnapshots.delete(_utility_task_id);
+      if (_guardBefore !== undefined) {
+        checkUnexpectedChanges(_guardBefore, captureGitStatus(), 'verify_memory', _utility_task_id);
+      }
 
       if (!utilityResult || utilityResult.status !== 'completed' || !utilityResult.result) {
         const reason = utilityResult?.error || utilityResult?.status || 'no result';
@@ -3875,6 +3913,7 @@ server.tool(
     // verdict via gossip_relay before the real haiku output lands.
     const relayToken = randomUUID().slice(0, 12);
     _pendingVerifyData.set(taskId, { memory_path, absPath: validation.absPath, claim });
+    _utilityGuardSnapshots.set(taskId, captureGitStatus());
     const UTILITY_TTL_MS = 120_000;
     ctx.nativeTaskMap.set(taskId, {
       agentId: '_utility',
@@ -3905,7 +3944,7 @@ server.tool(
           `3. Then re-call: gossip_verify_memory(memory_path: ${JSON.stringify(memory_path)}, claim: ${JSON.stringify(claim)}, _utility_task_id: "${taskId}")\n\n` +
           `Do ALL steps in order. Do not wait for user input between them.`
         },
-        { type: 'text' as const, text: `AGENT_PROMPT:${taskId} (_utility)\n${prompt}` },
+        { type: 'text' as const, text: buildUtilityAgentPrompt(taskId, prompt) },
       ],
     };
   }
