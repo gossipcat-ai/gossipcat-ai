@@ -2680,8 +2680,12 @@ Return only valid JSON.${skillsBlock}`;
 
     // Surface round-level coverage degradation (0-char dropouts, e.g. Gemini
     // MALFORMED_FUNCTION_CALL). Adds ONE round-level signal alongside the
-    // per-task auto-signal at collect.ts:178.
-    const droppedAgents = results.filter(r => !r.result || r.result.trim().length === 0).map(r => r.agentId);
+    // per-task auto-signal at collect.ts:178. The substring match mirrors
+    // collect.ts:178 so the Gemini sentinel "[No response from Gemini: ...]"
+    // (non-empty, ~50 chars, zero analytical content) is also treated as dropped.
+    const isDropped = (r: { result?: string }): boolean =>
+      !r.result || r.result.trim().length === 0 || r.result.includes('[No response from');
+    const droppedAgents = results.filter(isDropped).map(r => r.agentId);
     const received = results.length - droppedAgents.length;
     if (results.length > 0 && droppedAgents.length > 0) {
       const evidence = `Coverage degraded: ${received}/${results.length} agents returned content (dropped: ${droppedAgents.join(', ')})`;
