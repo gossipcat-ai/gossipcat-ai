@@ -68,6 +68,7 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   boundary_escape: true,
   task_timeout: true,
   task_empty: true,
+  consensus_coverage_degraded: true,
 };
 
 const SEVERITY_MULTIPLIER: Record<string, number> = {
