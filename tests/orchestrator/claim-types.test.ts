@@ -181,4 +181,19 @@ describe('parseClaimBlock — fail-soft parser', () => {
     expect(block!.claims).toHaveLength(0);
     expect(errors).toHaveLength(0);
   });
+
+  it('truncates unknown_type message when agent-supplied type is very long', () => {
+    const longType = 'a'.repeat(5000);
+    const raw = JSON.stringify({
+      schema_version: '1',
+      verifier: 'orchestrator',
+      claims: [{ type: longType, symbol: 'x', scope: 'src', modality: 'asserted' }],
+    });
+    const { errors } = parseClaimBlock(raw);
+    const unknownErr = errors.find(e => e.message.startsWith('unknown_type:'));
+    expect(unknownErr).toBeDefined();
+    // 'unknown_type: ' prefix (15 chars) + up to 200 sanitized chars + '…' = at most 216 chars
+    expect(unknownErr!.message.length).toBeLessThanOrEqual(216);
+    expect(unknownErr!.message).toContain('…');
+  });
 });

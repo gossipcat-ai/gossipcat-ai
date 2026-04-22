@@ -122,3 +122,4 @@ export type {
   ParseError,
 } from './claim-types';
 export { verifyClaims, MAX_CLAIMS_PER_BLOCK, PER_BLOCK_DEADLINE_MS } from './claim-verifier';
+export { sanitizeForLog } from './_sanitize';

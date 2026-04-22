@@ -9,6 +9,8 @@
  * Pure types + fail-soft parser. No I/O, no process spawns.
  */
 
+import { sanitizeForLog } from './_sanitize';
+
 export type Modality = 'asserted' | 'hedged' | 'vague';
 
 export type Relation = '>' | '<' | '=' | '≥' | '≤';
@@ -314,7 +316,7 @@ function validateClaim(raw: unknown, idx: number, errors: ParseError[]): Claim |
       return out;
     }
     default:
-      errors.push({ claim_index: idx, message: `unknown_type: ${t}` });
+      errors.push({ claim_index: idx, message: `unknown_type: ${sanitizeForLog(t)}` });
       return null;
   }
 }

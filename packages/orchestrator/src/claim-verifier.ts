@@ -19,6 +19,7 @@
 import { spawn } from 'child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'fs';
 import { resolve, sep } from 'path';
+import { sanitizeForLog } from './_sanitize';
 import type {
   AbsenceOfSymbolClaim,
   CallsiteCountClaim,
@@ -437,7 +438,7 @@ export async function verifyClaims(
       verdicts.push({
         claim_index: i,
         status: 'unverifiable_by_grep',
-        reason: `verifier_error: ${e instanceof Error ? e.message : String(e)}`,
+        reason: `verifier_error: ${sanitizeForLog(e instanceof Error ? e.message : String(e))}`,
       });
     }
   }
