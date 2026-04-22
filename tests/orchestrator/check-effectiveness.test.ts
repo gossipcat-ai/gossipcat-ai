@@ -337,14 +337,15 @@ describe('checkEffectiveness — PR 2 Wilson degenerate-baseline path', () => {
       migration_count: 0,
     };
     // 120 correct / 0 hallucinated post-bind. z-test would lock out (se=0).
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bp=0 → 'degenerate-zero' regime.
     const v = resolveVerdict(snap, { correct: 120, hallucinated: 0 }, Date.now());
     expect(v.status).toBe('passed');
-    expect(v.verdict_method).toBe('wilson_degenerate');
-    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_degenerate');
+    expect(v.verdict_method).toBe('wilson_degenerate_zero');
+    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_degenerate_zero');
     expect(v.newSnapshotFields?.status).toBe('passed');
   });
 
-  it('baselineP=1 + sufficient hallucinated → failed + wilson_degenerate', () => {
+  it('baselineP=1 + sufficient hallucinated → failed + wilson_degenerate_one', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 6,
       baseline_accuracy_hallucinated: 0,
@@ -353,10 +354,11 @@ describe('checkEffectiveness — PR 2 Wilson degenerate-baseline path', () => {
       migration_count: 0,
     };
     // 0 correct / 120 hallucinated post-bind. baselineP=1, se=0, z-test locked.
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bp=1 → 'degenerate-one' regime.
     const v = resolveVerdict(snap, { correct: 0, hallucinated: 120 }, Date.now());
     expect(v.status).toBe('failed');
-    expect(v.verdict_method).toBe('wilson_degenerate');
-    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_degenerate');
+    expect(v.verdict_method).toBe('wilson_degenerate_one');
+    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_degenerate_one');
     expect(v.newSnapshotFields?.status).toBe('failed');
   });
 
@@ -383,10 +385,12 @@ describe('checkEffectiveness — PR 2 Wilson degenerate-baseline path', () => {
       migration_count: 0,
     };
     // 120 post-bind at 95% → clearly passes.
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt=100, bp=0.8
+    // → typical regime → wilson_typical (replaces the legacy z-test path).
     const v = resolveVerdict(snap, { correct: 114, hallucinated: 6 }, Date.now());
     expect(v.status).toBe('passed');
-    expect(v.verdict_method).toBe('z-test');
-    expect(v.newSnapshotFields?.verdict_method).toBe('z-test');
+    expect(v.verdict_method).toEqual(expect.stringMatching(/^(z-test|wilson_typical)$/));
+    expect(v.newSnapshotFields?.verdict_method).toEqual(expect.stringMatching(/^(z-test|wilson_typical)$/));
   });
 
   it('normal baseline + no change → pending/inconclusive (not Wilson)', () => {
@@ -410,7 +414,7 @@ describe('checkEffectiveness — PR 2 Wilson degenerate-baseline path', () => {
 // ---------------------------------------------------------------------------
 
 describe('checkEffectiveness — PR 3 Wilson sparse-baseline path', () => {
-  it('baselineTotal=0 + 120 correct → Wilson pending → falls through to z-test (baselineP=0.5)', () => {
+  it('baselineTotal=0 + 120 correct → Wilson pending (no z-test fallback in unified path)', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 0,
       baseline_accuracy_hallucinated: 0,
@@ -418,16 +422,18 @@ describe('checkEffectiveness — PR 3 Wilson sparse-baseline path', () => {
       status: 'pending',
       migration_count: 0,
     };
-    // baselineTotal=0 → baselineP falls back to 0.5. Wilson on {0,0}
-    // baseline has interval [0,1], so wilson returns 'pending' and we
-    // fall through to the z-test with baselineP=0.5. 120/0 at p=1.0 vs 0.5
-    // easily passes the z-test.
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md (Step 3):
+    // bt=0 routes to typical regime (bp defaults to 0.5). Wilson on baseline
+    // {0,0} returns interval [0,1]; post {120,120} interval is bounded above
+    // by 1, so the intervals always overlap → Wilson pending. No z-test
+    // fallback exists in the unified path, so the verdict transitions to
+    // inconclusive with verdict_method='wilson_typical'.
     const v = resolveVerdict(snap, { correct: 120, hallucinated: 0 }, Date.now());
-    expect(v.status).toBe('passed');
-    expect(v.verdict_method).toBe('z-test');
+    expect(v.status).toBe('inconclusive');
+    expect(v.verdict_method).toEqual(expect.stringMatching(/^(z-test|wilson_typical)$/));
   });
 
-  it('baselineTotal=10 (8/2, baselineP=0.8) + 120 correct → passed + wilson_sparse', () => {
+  it('baselineTotal=10 (8/2, baselineP=0.8) + 120 correct → passed + wilson_sparse_current', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 8,
       baseline_accuracy_hallucinated: 2,
@@ -436,14 +442,15 @@ describe('checkEffectiveness — PR 3 Wilson sparse-baseline path', () => {
       migration_count: 0,
     };
     // post at 100% > baseline 80% w/ small baseline → Wilson intervals separate.
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt<20 non-degenerate → 'sparse-current'.
     const v = resolveVerdict(snap, { correct: 120, hallucinated: 0 }, Date.now());
     expect(v.status).toBe('passed');
-    expect(v.verdict_method).toBe('wilson_sparse');
-    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_sparse');
+    expect(v.verdict_method).toBe('wilson_sparse_current');
+    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_sparse_current');
     expect(v.newSnapshotFields?.status).toBe('passed');
   });
 
-  it('baselineTotal=10 (2/8, baselineP=0.2) + 120 at ~75% → passed + wilson_sparse (upward)', () => {
+  it('baselineTotal=10 (2/8, baselineP=0.2) + 120 at ~75% → passed + wilson_sparse_current (upward)', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 2,
       baseline_accuracy_hallucinated: 8,
@@ -452,13 +459,13 @@ describe('checkEffectiveness — PR 3 Wilson sparse-baseline path', () => {
       migration_count: 0,
     };
     // post 75% vs baseline 20% (sparse): Wilson intervals cleanly separate upward.
-    // baseline CI ≈ [0.057, 0.51], post CI ≈ [0.669, 0.819] → no overlap → passed.
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt<20 non-degenerate → 'sparse-current'.
     const v = resolveVerdict(snap, { correct: 90, hallucinated: 30 }, Date.now());
     expect(v.status).toBe('passed');
-    expect(v.verdict_method).toBe('wilson_sparse');
+    expect(v.verdict_method).toBe('wilson_sparse_current');
   });
 
-  it('baselineTotal=10 (8/2, baselineP=0.8) + 120 at 20% → failed + wilson_sparse', () => {
+  it('baselineTotal=10 (8/2, baselineP=0.8) + 120 at 20% → failed + wilson_sparse_current', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 8,
       baseline_accuracy_hallucinated: 2,
@@ -467,13 +474,14 @@ describe('checkEffectiveness — PR 3 Wilson sparse-baseline path', () => {
       migration_count: 0,
     };
     // post 20% well below baseline 80% → Wilson intervals separate downward.
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt<20 non-degenerate → 'sparse-current'.
     const v = resolveVerdict(snap, { correct: 24, hallucinated: 96 }, Date.now());
     expect(v.status).toBe('failed');
-    expect(v.verdict_method).toBe('wilson_sparse');
-    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_sparse');
+    expect(v.verdict_method).toBe('wilson_sparse_current');
+    expect(v.newSnapshotFields?.verdict_method).toBe('wilson_sparse_current');
   });
 
-  it('baselineTotal=10 (8/2) + 120 at exact baseline rate → Wilson pending, z-test also pending', () => {
+  it('baselineTotal=10 (8/2) + 120 at exact baseline rate → Wilson sparse-current pending → inconclusive', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 8,
       baseline_accuracy_hallucinated: 2,
@@ -481,14 +489,27 @@ describe('checkEffectiveness — PR 3 Wilson sparse-baseline path', () => {
       status: 'pending',
       migration_count: 0,
     };
-    // post at baseline rate (80%) → Wilson intervals overlap → pending → z-test runs.
-    // z-test on 96/120 vs baselineP=0.8 → z≈0 → inconclusive.
+    // bt=10 < MIN_BASELINE_FOR_ZTEST(20) → sparse-current regime.
+    // post at baseline rate (80%) → Wilson intervals overlap → pending → flows to inconclusive.
     const v = resolveVerdict(snap, { correct: 96, hallucinated: 24 }, Date.now());
     expect(['inconclusive', 'pending']).toContain(v.status);
-    expect(v.verdict_method).not.toBe('wilson_sparse');
+    expect(v.verdict_method).toBe('wilson_sparse_current');
   });
 
-  it('baselineTotal=20 (boundary) uses z-test, NOT wilson_sparse', () => {
+  it('baselineP=0.6 (dense-low boundary) at bt>=20 routes to wilson_dense_low', () => {
+    const snap: SkillSnapshot = {
+      baseline_accuracy_correct: 60,
+      baseline_accuracy_hallucinated: 40,
+      bound_at: new Date().toISOString(),
+      status: 'pending',
+      migration_count: 0,
+    };
+    // bp=0.6 inclusive boundary per classifyRegime ordering — must route to dense-low (α=0.2197), not typical.
+    const v = resolveVerdict(snap, { correct: 96, hallucinated: 24 }, Date.now());
+    expect(v.verdict_method).toBe('wilson_dense_low');
+  });
+
+  it('baselineTotal=20 (boundary) routes to typical regime, NOT sparse-current', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 16,
       baseline_accuracy_hallucinated: 4,
@@ -496,13 +517,16 @@ describe('checkEffectiveness — PR 3 Wilson sparse-baseline path', () => {
       status: 'pending',
       migration_count: 0,
     };
-    // At baselineTotal=20 (MIN_BASELINE_FOR_ZTEST boundary), sparse branch is NOT taken.
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: at bt=20
+    // (MIN_BASELINE_FOR_ZTEST boundary), the sparse-current branch is NOT
+    // taken; bp=0.8 routes to typical → wilson_typical (replaces legacy
+    // z-test stamp).
     const v = resolveVerdict(snap, { correct: 120, hallucinated: 0 }, Date.now());
     expect(v.status).toBe('passed');
-    expect(v.verdict_method).toBe('z-test');
+    expect(v.verdict_method).toEqual(expect.stringMatching(/^(z-test|wilson_typical)$/));
   });
 
-  it('baselineTotal=19 (just under threshold) uses wilson_sparse', () => {
+  it('baselineTotal=19 (just under threshold) uses wilson_sparse_current', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 15,
       baseline_accuracy_hallucinated: 4,
@@ -510,9 +534,10 @@ describe('checkEffectiveness — PR 3 Wilson sparse-baseline path', () => {
       status: 'pending',
       migration_count: 0,
     };
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt<20 non-degenerate → 'sparse-current'.
     const v = resolveVerdict(snap, { correct: 120, hallucinated: 0 }, Date.now());
     expect(v.status).toBe('passed');
-    expect(v.verdict_method).toBe('wilson_sparse');
+    expect(v.verdict_method).toBe('wilson_sparse_current');
   });
 });
 

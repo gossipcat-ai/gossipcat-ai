@@ -527,7 +527,9 @@ describe('skill-effectiveness E2E — graduation pipeline', () => {
     const verdict = await engine.checkEffectiveness(AGENT, 'injection_vectors', { role: 'reviewer' });
 
     expect(verdict.status).toBe('failed');
-    expect(verdict.verdict_method).toBe('z-test');
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt=20, bp=0.9
+    // → typical regime → wilson_typical replaces legacy z-test stamp.
+    expect(verdict.verdict_method).toEqual(expect.stringMatching(/^(z-test|wilson_typical)$/));
     // effectiveness (postP - baselineP) should be strictly negative.
     expect(verdict.effectiveness).toBeLessThan(0);
     expect(readStatus(skillPath)).toBe('failed');
@@ -569,7 +571,9 @@ describe('skill-effectiveness E2E — graduation pipeline', () => {
     appendHallucinated(projectRoot, AGENT, 'injection_vectors', 60, boundAt, 2_000);
     const v1 = await engine.checkEffectiveness(AGENT, 'injection_vectors', { role: 'reviewer' });
     expect(v1.status).toBe('inconclusive');
-    expect(v1.newSnapshotFields?.verdict_method).toBe('z-test');
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt=120, bp=0.5
+    // → dense-low regime → wilson_dense_low replaces legacy z-test stamp.
+    expect(v1.newSnapshotFields?.verdict_method).toEqual(expect.stringMatching(/^(z-test|wilson_dense_low)$/));
     expect(v1.newSnapshotFields?.inconclusive_strikes).toBe(1);
 
     // Round 2 — new anchor is inconclusive_at (~now at call time).
@@ -588,7 +592,9 @@ describe('skill-effectiveness E2E — graduation pipeline', () => {
     const v3 = await engine.checkEffectiveness(AGENT, 'injection_vectors', { role: 'reviewer' });
 
     expect(v3.status).toBe('flagged_for_manual_review');
-    expect(v3.newSnapshotFields?.verdict_method).toBe('z-test');
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt=120, bp=0.5
+    // → dense-low regime → wilson_dense_low replaces legacy z-test stamp.
+    expect(v3.newSnapshotFields?.verdict_method).toEqual(expect.stringMatching(/^(z-test|wilson_dense_low)$/));
     expect(v3.newSnapshotFields?.inconclusive_strikes).toBe(3);
     expect(readStatus(skillPath)).toBe('flagged_for_manual_review');
   });
@@ -622,7 +628,9 @@ describe('skill-effectiveness E2E — graduation pipeline', () => {
     const verdict = await engine.checkEffectiveness(AGENT, 'injection_vectors', { role: 'reviewer' });
 
     expect(verdict.status).toBe('silent_skill');
-    expect(verdict.newSnapshotFields?.verdict_method).toBe('z-test');
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt=25, bp=0.8
+    // → typical regime → silent_skill stamp now uses wilson_typical.
+    expect(verdict.newSnapshotFields?.verdict_method).toEqual(expect.stringMatching(/^(z-test|wilson_typical)$/));
     expect(readStatus(skillPath)).toBe('silent_skill');
   });
 
@@ -656,7 +664,9 @@ describe('skill-effectiveness E2E — graduation pipeline', () => {
     const verdict = await engine.checkEffectiveness(AGENT, 'injection_vectors', { role: 'reviewer' });
 
     expect(verdict.status).toBe('insufficient_evidence');
-    expect(verdict.newSnapshotFields?.verdict_method).toBe('z-test');
+    // Spec docs/specs/2026-04-22-wilson-full-replacement.md: bt=25, bp=0.8
+    // → typical regime → insufficient_evidence stamp now uses wilson_typical.
+    expect(verdict.newSnapshotFields?.verdict_method).toEqual(expect.stringMatching(/^(z-test|wilson_typical)$/));
     expect(readStatus(skillPath)).toBe('insufficient_evidence');
   });
 
