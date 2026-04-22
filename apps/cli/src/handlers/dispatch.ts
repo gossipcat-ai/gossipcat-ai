@@ -3,9 +3,18 @@
  * All state accessed via the shared context object.
  */
 import { randomUUID } from 'crypto';
-import { readFileSync } from 'fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { assemblePrompt, loadSkills } from '@gossip/orchestrator';
+import {
+  assemblePrompt,
+  loadSkills,
+  parseClaimBlock,
+  verifyClaims,
+  emitConsensusSignals,
+  type ClaimBlock,
+  type ClaimVerdict,
+  type PerformanceSignal,
+} from '@gossip/orchestrator';
 import { formatIdentityBlock } from '@gossip/tools';
 import { ctx, NATIVE_TASK_TTL_MS } from '../mcp-context';
 
@@ -27,7 +36,9 @@ import {
   recordDispatchMetadata,
   relativizeProjectPaths,
   readSandboxMode,
+  rotateIfNeeded,
   shouldSanitize,
+  MAX_PREMISE_VERIFICATION_BYTES,
 } from '../sandbox';
 
 /**
@@ -46,6 +57,232 @@ function maybeApplyUnverifiedNote(
     `[gossipcat] ⚠️ unverified-claim detected for ${agentId}: matched "${annotation.matchedText}" (pattern #${annotation.matchedPattern})\n`,
   );
   return prependUnverifiedNote(agentPrompt, annotation.reason || annotation.matchedText || '');
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Stage 2 premise-verification — structured claim-block wire-up.
+//
+// Spec: docs/specs/2026-04-22-premise-verification-stage-2.md
+//   §"Verifier" (invariants), §"Wire-up" (flow), §"Rotation" (jsonl),
+//   §"Signal integration" (signal emission on falsified).
+//
+// Flow per native dispatch:
+//   1. Extract fenced ```premise-claims block from task body — skip if absent.
+//   2. parseClaimBlock(rawJson) — fail-soft; bad JSON → schema-lint prefix only.
+//   3. verifyClaims(block, projectRoot) — in-process rg, 500ms wallclock cap,
+//      no sub-agent dispatch (load-bearing invariant).
+//   4. Falsified verdicts → ⚠ PREMISE-MISMATCH prefix on task.
+//   5. Log JSONL row to .gossip/premise-verification.jsonl with single-slot
+//      rotation at MAX_PREMISE_VERIFICATION_BYTES (mirrors boundary-escapes).
+//   6. Each falsified claim → one hallucination_caught:premise_mismatch signal
+//      carrying the claim's modality for the Stage 2 scaled multiplier.
+//
+// Warn-not-block: dispatch always proceeds regardless of outcome.
+// Relay-path: skipped — mirrors Stage 1; deferred to Stage 2a per spec
+// §Open questions #2.
+// ──────────────────────────────────────────────────────────────────────────
+
+const PREMISE_CLAIMS_FENCE_RE = /```premise-claims\s*\n([\s\S]*?)\n```/;
+const PREMISE_VERIFICATION_LOG = '.gossip/premise-verification.jsonl';
+
+function extractPremiseClaimsBlock(task: string): string | null {
+  if (!task) return null;
+  const m = PREMISE_CLAIMS_FENCE_RE.exec(task);
+  return m ? m[1] : null;
+}
+
+interface PremiseVerificationResult {
+  /** Task body with ⚠ PREMISE-MISMATCH / schema-lint prefix applied (if any). */
+  annotatedTask: string;
+  /** Per-falsified-claim signals ready for emitConsensusSignals. */
+  signals: PerformanceSignal[];
+  /** Whether verification actually ran (a claim block existed + parsed). */
+  ran: boolean;
+  /** Aggregate counts for the JSONL log row. */
+  counts: {
+    claims_total: number;
+    claims_verified: number;
+    claims_falsified: number;
+    claims_unverifiable: number;
+    timeout_fraction: number;
+  };
+}
+
+function summarizeVerdicts(verdicts: ClaimVerdict[]): PremiseVerificationResult['counts'] {
+  let verified = 0;
+  let falsified = 0;
+  let unverifiable = 0;
+  let timeouts = 0;
+  for (const v of verdicts) {
+    if (v.status === 'verified') verified++;
+    else if (v.status === 'falsified') falsified++;
+    else {
+      unverifiable++;
+      if (v.reason === 'timeout') timeouts++;
+    }
+  }
+  return {
+    claims_total: verdicts.length,
+    claims_verified: verified,
+    claims_falsified: falsified,
+    claims_unverifiable: unverifiable,
+    timeout_fraction: verdicts.length > 0 ? timeouts / verdicts.length : 0,
+  };
+}
+
+function formatFalsifiedNote(
+  block: ClaimBlock,
+  verdicts: ClaimVerdict[],
+): string {
+  const lines: string[] = ['⚠ PREMISE-MISMATCH — one or more structured claims were falsified by grep:'];
+  for (const v of verdicts) {
+    if (v.status !== 'falsified') continue;
+    const claim = block.claims[v.claim_index];
+    const type = claim?.type ?? 'unknown';
+    lines.push(
+      `  • claim[${v.claim_index}] (${type}): expected ${JSON.stringify(v.expected)}, observed ${JSON.stringify(v.observed)} [modality=${v.modality}]`,
+    );
+  }
+  lines.push('');
+  lines.push('Re-verify the cited code before writing any patch. See spec §"Signal integration" — a hallucination_caught:premise_mismatch signal has been recorded.');
+  return lines.join('\n');
+}
+
+function writePremiseVerificationLog(
+  projectRoot: string,
+  taskId: string,
+  result: PremiseVerificationResult,
+  opts: { had_stage1_annotation: boolean; skill_bound: string | null; schema_lint?: string },
+): void {
+  try {
+    const logPath = join(projectRoot, PREMISE_VERIFICATION_LOG);
+    // Rotation BEFORE append (same precedent as boundary-escapes.jsonl, PR #135).
+    rotateIfNeeded(logPath, MAX_PREMISE_VERIFICATION_BYTES);
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+    const row: Record<string, unknown> = {
+      ts: new Date().toISOString(),
+      consensus_id: null,
+      task_id: taskId,
+      claims_total: result.counts.claims_total,
+      claims_verified: result.counts.claims_verified,
+      claims_falsified: result.counts.claims_falsified,
+      claims_unverifiable: result.counts.claims_unverifiable,
+      timeout_fraction: result.counts.timeout_fraction,
+      had_stage1_annotation: opts.had_stage1_annotation,
+      skill_bound: opts.skill_bound,
+    };
+    if (opts.schema_lint) row.schema_lint = opts.schema_lint;
+    appendFileSync(logPath, JSON.stringify(row) + '\n');
+  } catch {
+    /* best-effort; dispatch must never fail on logging */
+  }
+}
+
+/**
+ * Parse + verify any ```premise-claims block in a native dispatch task.
+ *
+ * Safe to call on any task string — returns a no-op result when no block is
+ * present. Never throws; dispatch must never fail on verification.
+ *
+ * Caller is responsible for:
+ *   - Gating on native-path only (skip for relay dispatches — spec §Wire-up #6).
+ *   - Passing `annotatedTask` into `assemblePrompt` (not the raw task).
+ *   - Calling `emitConsensusSignals(projectRoot, signals)` once per dispatch.
+ *   - Calling `writePremiseVerificationLog(...)` for the JSONL row.
+ */
+async function maybeVerifyPremiseClaims(
+  task: string,
+  projectRoot: string,
+  taskId: string,
+  agentId: string,
+): Promise<PremiseVerificationResult> {
+  const empty: PremiseVerificationResult = {
+    annotatedTask: task,
+    signals: [],
+    ran: false,
+    counts: {
+      claims_total: 0,
+      claims_verified: 0,
+      claims_falsified: 0,
+      claims_unverifiable: 0,
+      timeout_fraction: 0,
+    },
+  };
+  const rawJson = extractPremiseClaimsBlock(task);
+  if (!rawJson) return empty;
+
+  const { block, errors } = parseClaimBlock(rawJson);
+  if (!block) {
+    // Malformed JSON / shape — prepend schema-lint warning, prose path runs.
+    process.stderr.write(
+      `[gossipcat] ⚠ premise-claims schema violation for ${agentId}: ${errors.map(e => e.message).slice(0, 3).join('; ')}\n`,
+    );
+    const note =
+      '⚠ premise-claims block failed schema validation — treating task as prose-only. ' +
+      `Errors: ${errors.map(e => e.message).slice(0, 3).join('; ')}`;
+    writePremiseVerificationLog(projectRoot, taskId, empty, {
+      had_stage1_annotation: maybeAnnotateUnverifiedClaims(task).annotated,
+      skill_bound: null,
+      schema_lint: 'parse_failed',
+    });
+    return {
+      ...empty,
+      annotatedTask: `${note}\n\n${task}`,
+    };
+  }
+
+  let verdicts: ClaimVerdict[] = [];
+  try {
+    verdicts = await verifyClaims(block, projectRoot);
+  } catch (err) {
+    process.stderr.write(
+      `[gossipcat] ⚠ verifyClaims threw for ${agentId}: ${(err as Error).message}\n`,
+    );
+    return empty;
+  }
+
+  const counts = summarizeVerdicts(verdicts);
+  const falsified = verdicts.filter(v => v.status === 'falsified') as Extract<
+    ClaimVerdict,
+    { status: 'falsified' }
+  >[];
+
+  // Build hallucination_caught signals — one per falsified claim.
+  const signals: PerformanceSignal[] = falsified.map(v => ({
+    type: 'consensus',
+    taskId,
+    signal: 'hallucination_caught',
+    agentId,
+    outcome: 'premise_mismatch',
+    modality: v.modality,
+    evidence: `premise-claim[${v.claim_index}] falsified: expected ${JSON.stringify(
+      v.expected,
+    )}, observed ${JSON.stringify(v.observed)}`,
+    timestamp: new Date().toISOString(),
+  }));
+
+  const annotatedTask = falsified.length > 0
+    ? `${formatFalsifiedNote(block, verdicts)}\n\n${task}`
+    : task;
+
+  const result: PremiseVerificationResult = {
+    annotatedTask,
+    signals,
+    ran: true,
+    counts,
+  };
+
+  // Record schema-lint warnings from the parser (e.g. missing_modality) so
+  // retrospective audit can see silent downgrades. Errors is additive — a
+  // non-null block may still carry per-claim errors.
+  const schemaLint = errors.length > 0 ? errors[0].message : undefined;
+  writePremiseVerificationLog(projectRoot, taskId, result, {
+    had_stage1_annotation: maybeAnnotateUnverifiedClaims(task).annotated,
+    skill_bound: null,
+    schema_lint: schemaLint,
+  });
+
+  return result;
 }
 
 function agentPreset(agentId: string): string | undefined {
@@ -173,6 +410,19 @@ export async function handleDispatchSingle(
     const taskId = randomUUID().slice(0, 8);
     const relayToken = randomUUID().slice(0, 12);
     const timeoutMs = timeout_ms ?? NATIVE_TASK_TTL_MS;
+
+    // Stage 2 premise-verification — parse + verify any ```premise-claims
+    // block in the task. Runs BEFORE assemblePrompt so the PREMISE-MISMATCH
+    // prefix travels inline with the task payload, yielding final ordering
+    // SCOPE > UNVERIFIED > PREMISE-MISMATCH (Stage 1 UNVERIFIED sentinel is
+    // prepended later by maybeApplyUnverifiedNote). Warn-not-block: dispatch
+    // always proceeds.
+    const premiseResult = await maybeVerifyPremiseClaims(task, process.cwd(), taskId, agent_id);
+    task = premiseResult.annotatedTask;
+    if (premiseResult.signals.length > 0) {
+      emitConsensusSignals(process.cwd(), premiseResult.signals);
+    }
+
     ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode, relayToken });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     persistNativeTaskMap();
@@ -386,6 +636,16 @@ export async function handleDispatchParallel(
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id)!;
     const taskId = randomUUID().slice(0, 8);
     const relayToken = randomUUID().slice(0, 12);
+
+    // Stage 2 premise-verification — parse + verify any ```premise-claims
+    // block. See handleDispatchSingle for rationale; same warn-not-block
+    // semantics and ordering rules.
+    const premiseResult = await maybeVerifyPremiseClaims(def.task, process.cwd(), taskId, def.agent_id);
+    def.task = premiseResult.annotatedTask;
+    if (premiseResult.signals.length > 0) {
+      emitConsensusSignals(process.cwd(), premiseResult.signals);
+    }
+
     ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
@@ -584,6 +844,15 @@ export async function handleDispatchConsensus(
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id)!;
     const taskId = randomUUID().slice(0, 8);
     const relayToken = randomUUID().slice(0, 12);
+
+    // Stage 2 premise-verification — parse + verify any ```premise-claims
+    // block. Same warn-not-block semantics as handleDispatchSingle.
+    const premiseResult = await maybeVerifyPremiseClaims(def.task, process.cwd(), taskId, def.agent_id);
+    def.task = premiseResult.annotatedTask;
+    if (premiseResult.signals.length > 0) {
+      emitConsensusSignals(process.cwd(), premiseResult.signals);
+    }
+
     ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
