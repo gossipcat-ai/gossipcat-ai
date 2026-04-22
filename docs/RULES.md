@@ -58,6 +58,18 @@ this convention will inherit the skill automatically. An implementer named
 otherwise (e.g. `claude-writer`) will silently miss the skill — name it
 `claude-writer-implementer` to opt in.
 
+Investigation agents follow the same convention. The `emit-structured-claims`
+skill (premise-verification Stage 2) auto-binds to any agent whose `id` ends
+in `-researcher` or `-reviewer`. Name custom research / review agents with
+one of those suffixes (e.g. `foo-researcher`, `foo-reviewer`) so they inherit
+the skill automatically.
+
+Auto-bind bindings are disjoint by suffix — an agent id may match multiple
+suffixes and will inherit each suffix's defaults once. A hybrid id like
+`foo-researcher-implementer` receives BOTH the `-researcher` defaults
+(`emit-structured-claims`) AND the `-implementer` defaults
+(`verify-the-premise`).
+
 ## When to Use Multi-Agent vs Single Agent
 
 **Use consensus (3+ agents) for:**
