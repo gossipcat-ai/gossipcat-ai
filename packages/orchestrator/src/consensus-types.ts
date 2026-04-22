@@ -171,6 +171,13 @@ export interface ConsensusSignal {
     | 'confirmed_hallucination'
     | 'orchestrator_disputed'
     | 'premise_mismatch';
+  /**
+   * Modality of the claim that produced this signal, from Stage 2
+   * premise-verification. Absent on legacy / non-premise signals — scored
+   * as `'asserted'` for back-compat. See
+   * `docs/specs/2026-04-22-premise-verification-stage-2.md` §Signal integration.
+   */
+  modality?: 'asserted' | 'hedged' | 'vague';
   category?: string;
   findingId?: string;
   severity?: 'critical' | 'high' | 'medium' | 'low';
