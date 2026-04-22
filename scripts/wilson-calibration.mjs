@@ -181,7 +181,7 @@ function bisectAlphaMatch(bt, bp, postTotal, targetPostP, opts = {}) {
   const tolAlpha = opts.tolAlpha ?? 1e-4;
   const tolPostP = opts.tolPostP ?? 1e-3;
   let lo = opts.lo ?? 0.001;
-  let hi = opts.hi ?? 0.5;
+  let hi = opts.hi ?? 0.99;
   const fLo = firstPassedPostP(bt, bp, postTotal, lo);
   const fHi = firstPassedPostP(bt, bp, postTotal, hi);
   // Guard: if both sides miss target same direction, return bound
