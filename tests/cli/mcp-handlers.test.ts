@@ -1206,6 +1206,44 @@ describe('handleDispatchSingle — native skill injection', () => {
     const result = await handleDispatchSingle('native-claude', 'Audit memory');
     expect(result.content[0].text).toContain('[Context truncated to fit budget]');
   });
+
+  it('verify-the-premise skill appears in *-implementer agent prompt when bound', async () => {
+    // No need to seed a file — verify-the-premise ships as a bundled default
+    // skill under packages/orchestrator/src/default-skills/.
+    ctx.mainAgent = makeMainAgent({
+      getSkillIndex: jest.fn().mockReturnValue(makeSkillIndex(['verify-the-premise'])),
+    });
+    ctx.nativeAgentConfigs.set('opus-implementer', {
+      model: 'claude-opus-4-7',
+      instructions: 'You implement.',
+      description: 'Native implementer',
+      skills: ['verify-the-premise'],
+    });
+    const result = await handleDispatchSingle('opus-implementer', 'Add a helper.');
+    // Skill content resolves from bundled defaults via listAvailableSkills.
+    const prompt = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
+    expect(prompt).toContain('--- SKILLS ---');
+    expect(prompt).toContain('verify-the-premise');
+    expect(prompt.toLowerCase()).toContain('iron law');
+  });
+
+  it('verify-the-premise skill does NOT appear in reviewer agent prompt (suffix-match filter)', async () => {
+    // Reviewer agents have no bound verify-the-premise skill. The SkillIndex
+    // stub returns an empty enabled list, replicating the state a reviewer
+    // would see after IMPLEMENTER_PERMANENT_DEFAULTS seeding.
+    ctx.mainAgent = makeMainAgent({
+      getSkillIndex: jest.fn().mockReturnValue(makeSkillIndex([])),
+    });
+    ctx.nativeAgentConfigs.set('sonnet-reviewer', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You review.',
+      description: 'Native reviewer',
+      skills: [],
+    });
+    const result = await handleDispatchSingle('sonnet-reviewer', 'Review this change.');
+    const prompt = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
+    expect(prompt).not.toContain('verify-the-premise');
+  });
 });
 
 // ── handleNativeRelay — compact return payload (consensus 2f25318c/634c3c43) ──

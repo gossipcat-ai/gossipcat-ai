@@ -87,6 +87,16 @@ The `<agent_finding>` tag contract lives in `packages/orchestrator/src/finding-t
 
 If you see an agent scoring badly on compliance despite emitting tags, check `droppedFindingsByType` on the consensus report — the invented type will be named there.
 
+### 10. Implementer agents use the `-implementer` suffix; the convention is load-bearing
+
+The `verify-the-premise` skill (premise-verification Stage 1) auto-binds to every agent whose `id` ends in `-implementer` via `IMPLEMENTER_PERMANENT_DEFAULTS` at `apps/cli/src/mcp-server-sdk.ts:651-666`. The filter is literal `id.endsWith('-implementer')` — case-sensitive, suffix-only.
+
+**Load-bearing implication:** a user who creates a custom implementer named `claude-writer` (no suffix) or `MyImplementer` (wrong case) will **silently miss the premise-verification skill** — the skill that exists specifically to prevent the 2026-04-22 Math.min revert incident. Default agents already follow this convention (`sonnet-implementer`, `opus-implementer`); any new implementer must keep the suffix.
+
+**How to opt in from the user side:** name the agent `<whatever>-implementer` at `gossip_setup` time. The skill will appear in the agent's prompt on the next dispatch. No manual skill-bind needed.
+
+**Rationale:** suffix-match was chosen over (a) a `role` field in agent config (no such field exists today) and (b) a hardcoded list (breaks user-defined implementers). The suffix is self-documenting, idiomatic in the default agent names, and does not require schema migration.
+
 ---
 
 ## Operator playbook (for orchestrator LLMs)

@@ -18,6 +18,8 @@ import {
   relativizeProjectPaths,
   shouldSanitize,
   prependScopeNote,
+  prependUnverifiedNote,
+  maybeAnnotateUnverifiedClaims,
   parseGitStatus,
   detectBoundaryEscapes,
   recordDispatchMetadata,
@@ -662,5 +664,44 @@ describeOnPosix('auditDispatchBoundary — Layer 2 emits boundary_escape signal'
     expect(escape.signal).toBe('boundary_escape');
     expect(escape.signal).not.toBe('disagreement');
     expect(escape.agentId).toBe('opus-implementer');
+  });
+});
+
+describe('maybeAnnotateUnverifiedClaims (premise verification)', () => {
+  it('fires on digit-form anchor-verb claim ("identified 5 sites")', () => {
+    const r = maybeAnnotateUnverifiedClaims('We identified 5 sites that lack the preamble.');
+    expect(r.annotated).toBe(true);
+    expect(r.matchedText?.toLowerCase()).toContain('identified 5 sites');
+    expect(r.matchedPattern).toBe(0);
+  });
+
+  it('fires on word-form claim with EXACT 2026-04-22 incident phrase', () => {
+    // Replays the literal incident sentence from PR #235 design dispatch.
+    const incident = 'Five utility-dispatch sites in apps/cli/src/mcp-server-sdk.ts call assembleUtilityPrompt()';
+    const r = maybeAnnotateUnverifiedClaims(incident);
+    expect(r.annotated).toBe(true);
+    expect(r.matchedText?.toLowerCase()).toContain('five');
+    expect(r.matchedText?.toLowerCase()).toContain('sites');
+  });
+
+  it('passes non-anchor numeric prose ("Apply to 24 files")', () => {
+    const r = maybeAnnotateUnverifiedClaims('Apply to 24 files in the package.');
+    expect(r.annotated).toBe(false);
+  });
+
+  it('passes zero-numeric task unchanged (no bare lacks/missing fire)', () => {
+    // Regression for the dropped `lacks/missing` bare pattern: a plain
+    // "implement the missing X" should NOT trip the auditor.
+    const r = maybeAnnotateUnverifiedClaims('Implement the missing validation helper for the auth flow.');
+    expect(r.annotated).toBe(false);
+  });
+
+  it('prependUnverifiedNote is idempotent on double-prepend', () => {
+    const base = 'Task: do the thing\n';
+    const once = prependUnverifiedNote(base, 'identified 5 sites');
+    const twice = prependUnverifiedNote(once, 'identified 5 sites');
+    expect(once).toBe(twice);
+    expect(once).toContain('═══ UNVERIFIED CLAIM DETECTED ═══');
+    expect(once).toContain('identified 5 sites');
   });
 });

@@ -204,6 +204,99 @@ export function prependScopeNote(prompt: string): string {
   return SCOPE_NOTE + prompt;
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Premise verification — pre-dispatch claim auditor.
+//
+// Spec: docs/specs/2026-04-22-premise-verification.md (Component B).
+// Detects citation-shaped quantitative claims in dispatch tasks ("identified
+// 5 sites", "Five callers lack X") so the implementer agent grep-verifies
+// the premise BEFORE writing code. Pure regex, in-process, no sub-agent
+// dispatch (load-bearing invariant — sub-agent verification would re-introduce
+// the 2026-04-22 incident class). Warn-not-block: dispatch always proceeds.
+// ──────────────────────────────────────────────────────────────────────────
+
+const NUMERAL = '(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)';
+const TARGETS = '(?:sites?|callers?|handlers?|call[- ]sites?|dispatch[- ]sites?|files?|locations?|places?|instances?)';
+// Optional compound-noun modifier between numeral and target ("utility-dispatch
+// sites", "internal helper files"). Up to two hyphenated tokens — keeps the
+// regex narrow enough that false-positive prose ("Apply to 24 random unrelated
+// big files") still has to hit the sentence-initial gate in P2.
+const MODIFIER = '(?:[\\w-]+[ \\t]+){0,2}';
+
+const CLAIM_PATTERNS: RegExp[] = [
+  // P0: anchor-verb + count + (modifier) + target  — "We identified 5 sites",
+  // "lacks 3 callers", "identified five utility-dispatch sites".
+  new RegExp(`\\b(?:identified|found|lacks?|missing from|spread across)\\s+${NUMERAL}\\s+${MODIFIER}${TARGETS}\\b`, 'i'),
+  // P1: count + (modifier) + target + negation anchor — "5 sites don't",
+  // "Five handlers lack", "Five utility-dispatch sites are missing".
+  new RegExp(`\\b${NUMERAL}\\s+${MODIFIER}${TARGETS}\\s+(?:do not|don't|lack|are missing)\\b`, 'i'),
+  // P2: sentence-initial count + (modifier) + target — replays the canonical
+  // 2026-04-22 incident phrase ("Five utility-dispatch sites in ... call
+  // assembleUtilityPrompt()"). Matches only at start-of-string or after a
+  // sentence terminator (. ! ? ; or newline) so middle-of-sentence prose like
+  // "Apply to 24 files" does NOT fire.
+  new RegExp(`(?:^|[.!?;\\n]\\s*)${NUMERAL}\\s+${MODIFIER}${TARGETS}\\b`, 'i'),
+];
+
+const UNVERIFIED_NOTE_SENTINEL = '═══ UNVERIFIED CLAIM DETECTED ═══';
+
+/**
+ * Scan `task` for citation-shaped quantitative claims. Returns whether one
+ * fired plus the matched substring + pattern index for observability. Pure
+ * function — no I/O. Spec §"Regex scope".
+ */
+export function maybeAnnotateUnverifiedClaims(task: string): {
+  annotated: boolean;
+  reason?: string;
+  matchedPattern?: number;
+  matchedText?: string;
+} {
+  if (!task) return { annotated: false };
+  for (let i = 0; i < CLAIM_PATTERNS.length; i++) {
+    const m = CLAIM_PATTERNS[i].exec(task);
+    if (m && m[0]) {
+      return {
+        annotated: true,
+        reason: m[0],
+        matchedPattern: i,
+        matchedText: m[0],
+      };
+    }
+  }
+  return { annotated: false };
+}
+
+/**
+ * Inject an UNVERIFIED CLAIM NOTE into the assembled agent prompt. Mirrors
+ * `prependScopeNote`: idempotent (sentinel guard) and behavioral-only.
+ * Composition order with prependScopeNote: SCOPE NOTE first (enforcement
+ * boundary), then UNVERIFIED note (behavioral nudge layered on top) — see
+ * spec §"Composition order".
+ */
+export function prependUnverifiedNote(agentPrompt: string, reason: string): string {
+  if (agentPrompt.includes(UNVERIFIED_NOTE_SENTINEL)) return agentPrompt;
+  const note =
+    `${UNVERIFIED_NOTE_SENTINEL}\n` +
+    `The dispatch task contains an un-grep-verified quantitative claim:\n` +
+    `  "${reason}"\n` +
+    `\n` +
+    `Before writing the first line of code:\n` +
+    `  1. Grep the cited symbol/count against the actual source.\n` +
+    `  2. If the claim does not match, STOP and report \`premise_mismatch\` with the real count.\n` +
+    `  3. If the claim matches, proceed and cite the verification grep result in your output.\n` +
+    `\n` +
+    `Tests passing is NOT sufficient verification — the 2026-04-22 incident had 2449 passing tests.\n` +
+    `═══ END UNVERIFIED CLAIM NOTE ═══\n`;
+  // Compose AFTER SCOPE NOTE if present so SCOPE_NOTE stays the prefix used by
+  // its own idempotency guard. Use the constant directly (not a literal string
+  // prefix) so a future SCOPE_NOTE whitespace tweak can't desync the two
+  // checks — a desync would silently flip composition order.
+  if (agentPrompt.startsWith(SCOPE_NOTE)) {
+    return SCOPE_NOTE + note + agentPrompt.slice(SCOPE_NOTE.length);
+  }
+  return note + agentPrompt;
+}
+
 /** Read sandboxEnforcement from .gossip/config.json. Defaults to "warn". */
 export function readSandboxMode(projectRoot: string): SandboxMode {
   try {

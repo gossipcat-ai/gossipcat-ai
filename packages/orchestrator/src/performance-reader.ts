@@ -659,7 +659,8 @@ export class PerformanceReader {
         case 'hallucination_caught': {
           const severity = (
             signal.outcome === 'fabricated_citation' ||
-            signal.outcome === 'confirmed_hallucination'
+            signal.outcome === 'confirmed_hallucination' ||
+            signal.outcome === 'premise_mismatch'
           ) ? 3.0 : 1.0;
           // Use a dedicated (shorter) half-life for the hallucination counter so
           // past mistakes can be outrun by recent good behavior. `weightedTotal`
