@@ -75,6 +75,12 @@ export function cancelTimeoutWatcher(taskId: string): void {
 function recordTimeoutSignal(taskId: string, agentId: string): void {
   try {
     const { emitConsensusSignals } = require('@gossip/orchestrator');
+    // PR 4 Part A: operational disagreement — no finding context exists because
+    // the agent never produced a review verdict to tag. Intentionally written
+    // without `category` so the Part B no-op guard in
+    // performance-reader.ts:computeScores treats this as a transport/lifecycle
+    // event rather than a finding-evaluation signal. Routing to the dedicated
+    // task_timeout stream is tracked separately in PR 5.
     emitConsensusSignals(process.cwd(), [{
       type: 'consensus' as const,
       taskId,

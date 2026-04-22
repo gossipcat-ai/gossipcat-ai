@@ -5,15 +5,28 @@
  *   - One-sided z-test on per-category accuracy = correct / (correct + hallucinated)
  *   - Two simultaneous tests (passed-direction, failed-direction) → Bonferroni α=0.025 each
  *   - Evidence gate: ≥ MIN_EVIDENCE category-tagged signals since last snapshot
- *   - Power: ≥ 80% for detecting +10pp shift at p=0.75 baseline (see spec power table)
+ *   - Power: ≈ 75.5% for detecting +10pp shift at p=0.75 baseline at MIN_EVIDENCE=120
+ *     (verified by independent recomputation; SE_alt=0.03260, z_power=-0.690, Φ(0.690)=0.755).
+ *     Raising MIN_EVIDENCE to ~148 would reach ≥80% power if false-negative cost dominates.
  */
 
 import type { CategoryCounters } from './performance-reader';
+import { wilsonVerdict } from './wilson-score';
 
 export { CategoryCounters };
 
 export const MIN_EVIDENCE = 120;
 export const ALPHA = 0.025;
+/**
+ * Below this baselineTotal, the z-test's variance estimate becomes
+ * unreliable because baselineP is itself noisy. Route through Wilson score
+ * intervals instead (see wilson_sparse branch in resolveVerdict).
+ *
+ * Grounded in Wilson-vs-z-test parity testing: at baselineTotal=20, Wilson CI
+ * width at alpha=0.025 is ~0.4 on a 0.5 proportion; z-test variance becomes
+ * reliable. See docs/specs/2026-04-21-skills-pipeline-repair.md PR 3.
+ */
+export const MIN_BASELINE_FOR_ZTEST = 20;
 export const Z_CRITICAL = 1.96; // one-sided, α=0.025
 export const TIMEOUT_DAYS = 90;
 export const TIMEOUT_MS = TIMEOUT_DAYS * 86400_000;
@@ -36,12 +49,21 @@ export interface SkillSnapshot {
   migration_count: number;
   inconclusive_at?: string;
   inconclusive_strikes?: number;
+  verdict_method?: 'z-test' | 'wilson_degenerate' | 'wilson_sparse';
+  /**
+   * Monotonic optimistic-concurrency counter. Baseline version read from
+   * disk at the top of checkEffectiveness; every writeback bumps it by +1
+   * after verifying the on-disk value hasn't drifted. Missing/legacy files
+   * are treated as `version: 0` (rollback-safe).
+   */
+  version?: number;
 }
 
 export interface VerdictResult {
   status: VerdictStatus;
   effectiveness?: number; // delta in accuracy (post - baseline)
   zScore?: number;
+  verdict_method?: 'z-test' | 'wilson_degenerate' | 'wilson_sparse';
   shouldUpdate: boolean; // false if terminal state
   newSnapshotFields?: Partial<SkillSnapshot>; // fields to merge into frontmatter
 }
@@ -121,6 +143,55 @@ export function resolveVerdict(
     return { status: 'pending', shouldUpdate: false };
   }
 
+  // Degenerate-baseline path: z-test cannot reject when baselineP ∈ {0, 1}
+  // because se === 0 (zero variance). Wilson score intervals handle this
+  // naturally. See docs/specs/2026-04-21-skills-pipeline-repair.md PR 2.
+  if (baselineP === 0 || baselineP === 1) {
+    const WILSON_ALPHA = 0.025; // matches oneSidedZTest Z_CRITICAL calibration
+    const wilson = wilsonVerdict(
+      { correct: snapshot.baseline_accuracy_correct, total: baselineTotal },
+      { correct: delta.correct, total: postTotal },
+      WILSON_ALPHA,
+    );
+    if (wilson === 'passed' || wilson === 'failed') {
+      const postP = delta.correct / postTotal;
+      return {
+        status: wilson,
+        effectiveness: postP - baselineP,
+        verdict_method: 'wilson_degenerate',
+        shouldUpdate: true,
+        newSnapshotFields: { status: wilson, verdict_method: 'wilson_degenerate' },
+      };
+    }
+    // Wilson pending → fall through to standard path
+  }
+
+  // Sparse-baseline path: z-test variance estimate is unreliable when
+  // baselineTotal is small (baselineP is itself noisy). Route through Wilson
+  // score intervals instead. Note: baselineTotal===0 reaches here with
+  // baselineP fallback of 0.5; Wilson on baseline {0,0} has interval [0,1]
+  // so it's guaranteed to return 'pending' → falls through to z-test.
+  // See docs/specs/2026-04-21-skills-pipeline-repair.md PR 3.
+  if (baselineTotal < MIN_BASELINE_FOR_ZTEST) {
+    const WILSON_SPARSE_ALPHA = 0.025; // matches oneSidedZTest Z_CRITICAL calibration
+    const wilson = wilsonVerdict(
+      { correct: snapshot.baseline_accuracy_correct, total: baselineTotal },
+      { correct: delta.correct, total: postTotal },
+      WILSON_SPARSE_ALPHA,
+    );
+    if (wilson === 'passed' || wilson === 'failed') {
+      const postP = delta.correct / postTotal;
+      return {
+        status: wilson,
+        effectiveness: postP - baselineP,
+        verdict_method: 'wilson_sparse',
+        shouldUpdate: true,
+        newSnapshotFields: { status: wilson, verdict_method: 'wilson_sparse' },
+      };
+    }
+    // Wilson pending → fall through to z-test
+  }
+
   // Gate met — run both one-sided tests at α=0.025 (Bonferroni)
   const positive = oneSidedZTest({ correct: delta.correct, total: postTotal }, baselineP, 'positive');
   const negative = oneSidedZTest({ correct: delta.correct, total: postTotal }, baselineP, 'negative');
@@ -132,8 +203,9 @@ export function resolveVerdict(
       status: 'passed',
       effectiveness,
       zScore: positive.zScore,
+      verdict_method: 'z-test',
       shouldUpdate: true,
-      newSnapshotFields: { status: 'passed' },
+      newSnapshotFields: { status: 'passed', verdict_method: 'z-test' },
     };
   }
   if (negative.rejects) {
@@ -141,8 +213,9 @@ export function resolveVerdict(
       status: 'failed',
       effectiveness,
       zScore: negative.zScore,
+      verdict_method: 'z-test',
       shouldUpdate: true,
-      newSnapshotFields: { status: 'failed' },
+      newSnapshotFields: { status: 'failed', verdict_method: 'z-test' },
     };
   }
 

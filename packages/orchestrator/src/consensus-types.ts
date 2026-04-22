@@ -105,9 +105,32 @@ export interface CollectResult {
   skillLifecycle?: { disabled: string[]; promoted: string[] };
 }
 
+/**
+ * Signal-class discriminator (PR 5 / Option 5B, 2026-04-21).
+ *
+ * Coarse partition over all PerformanceSignal rows that is ORTHOGONAL to the
+ * existing `type` and `category` axes:
+ *   - `performance` — findings-quality signals that participate in agent
+ *     scoring: agreement, disagreement, unique_confirmed, unique_unconfirmed,
+ *     new_finding, hallucination_caught, impl_*.
+ *   - `operational` — lifecycle / telemetry signals that MUST NOT affect
+ *     scoring: task_completed, task_tool_turns, format_compliance,
+ *     signal_retracted, task_timeout, task_empty, citation_fabricated,
+ *     finding_dropped_format, consensus_round_retracted.
+ *
+ * Optional — missing `signal_class` is explicitly valid (write-forward-only,
+ * no historical backfill). Existing category-based filtering remains the
+ * authoritative reader path; `signal_class` is a forward-compatible hook for
+ * dashboards and future consumers that want the partition without re-deriving
+ * it from (type, signal) tuples.
+ */
+export type SignalClass = 'performance' | 'operational';
+
 /** A consensus signal for agent performance tracking */
 export interface ConsensusSignal {
   type: 'consensus';
+  /** See `SignalClass` — optional, write-forward-only. */
+  signal_class?: SignalClass;
   taskId: string;
   consensusId?: string;
   signal:
@@ -151,6 +174,8 @@ export interface ConsensusSignal {
 /** Implementation quality signal from verify_write */
 export interface ImplSignal {
   type: 'impl';
+  /** See `SignalClass` — optional, write-forward-only. */
+  signal_class?: SignalClass;
   signal: 'impl_test_pass' | 'impl_test_fail' | 'impl_peer_approved' | 'impl_peer_rejected';
   agentId: string;
   taskId: string;
@@ -162,6 +187,8 @@ export interface ImplSignal {
 /** Meta signal from worker-agent telemetry */
 export interface MetaSignal {
   type: 'meta';
+  /** See `SignalClass` — optional, write-forward-only. */
+  signal_class?: SignalClass;
   signal: 'task_completed' | 'task_tool_turns' | 'format_compliance';
   agentId: string;
   taskId: string;
@@ -179,6 +206,8 @@ export interface MetaSignal {
  */
 export interface PipelineSignal {
   type: 'pipeline';
+  /** See `SignalClass` — optional, write-forward-only. */
+  signal_class?: SignalClass;
   signal:
     | 'dispatch_started'
     | 'relay_received'
@@ -199,3 +228,60 @@ export interface PipelineSignal {
 
 /** Union of all performance signal types */
 export type PerformanceSignal = ConsensusSignal | ImplSignal | MetaSignal | PipelineSignal;
+
+/**
+ * Signal-name → SignalClass classifier (PR 5 / Option 5B).
+ *
+ * Returns `undefined` for signal names that aren't yet categorised — callers
+ * must treat that as "no class", NOT as a default. Keeping ambiguous names
+ * undefined avoids committing to a classification before downstream consumers
+ * need it. The reader path ignores the field entirely for this PR, so any
+ * misclassification here is silent data, not a scoring bug.
+ *
+ * Categorisation follows docs/specs/ signal-class spec (spec author: Option
+ * 5B discriminator, 2026-04-21):
+ *   performance:  agreement, disagreement, unique_confirmed, unique_unconfirmed,
+ *                 new_finding, hallucination_caught, and all impl_* signals.
+ *   operational:  task_completed, task_tool_turns, format_compliance,
+ *                 signal_retracted, task_timeout, task_empty,
+ *                 citation_fabricated, finding_dropped_format,
+ *                 consensus_round_retracted, unverified.
+ *
+ * Deliberately conservative: signals not covered by the spec list
+ * (category_confirmed, consensus_verified, severity_miscalibrated,
+ * boundary_escape, dispatch_started, relay_received, synthesis_completed,
+ * circuit_open_fired, skill_injection_skipped) return `undefined`. This keeps
+ * the rollout safe — new callers opt in by updating this map, not by inheriting
+ * a guess.
+ */
+const PERFORMANCE_SIGNAL_NAMES: ReadonlySet<string> = new Set([
+  'agreement',
+  'disagreement',
+  'unique_confirmed',
+  'unique_unconfirmed',
+  'new_finding',
+  'hallucination_caught',
+  'impl_test_pass',
+  'impl_test_fail',
+  'impl_peer_approved',
+  'impl_peer_rejected',
+]);
+
+const OPERATIONAL_SIGNAL_NAMES: ReadonlySet<string> = new Set([
+  'task_completed',
+  'task_tool_turns',
+  'format_compliance',
+  'signal_retracted',
+  'task_timeout',
+  'task_empty',
+  'citation_fabricated',
+  'finding_dropped_format',
+  'consensus_round_retracted',
+  'unverified',
+]);
+
+export function classifySignal(signalName: string): SignalClass | undefined {
+  if (PERFORMANCE_SIGNAL_NAMES.has(signalName)) return 'performance';
+  if (OPERATIONAL_SIGNAL_NAMES.has(signalName)) return 'operational';
+  return undefined;
+}

@@ -33,7 +33,12 @@ export function startConsensusTimeout(consensusId: string): void {
     persistPendingConsensus();
     process.stderr.write(`[gossipcat] ⏰ Consensus ${consensusId} timed out. Missing: ${missingAgents.join(', ')}. Synthesizing with available entries.\n`);
 
-    // Record timeout signals for missing agents
+    // Record timeout signals for missing agents.
+    // PR 4 Part A: operational unique_unconfirmed — the agent never returned a
+    // cross-review so there is no finding-evaluation context to derive a
+    // category from. Intentionally written without `category`; these stay
+    // outside per-category accumulators by design. A dedicated task_timeout
+    // stream covers routing in PR 5.
     try {
       const { emitConsensusSignals } = await import('@gossip/orchestrator');
       const now = new Date().toISOString();

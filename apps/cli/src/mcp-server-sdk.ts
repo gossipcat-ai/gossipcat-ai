@@ -2345,7 +2345,12 @@ server.tool(
           const fid = f.id as string | undefined;
           if (fid && existingFindingIds.has(fid)) { dupes.push(fid); return; }
           const findingText = (f.finding || '').toLowerCase();
-          const category = bulkInferCategory(findingText);
+          // PR 4 Part A: prefer the finding's own category when synthesis
+          // already threaded one, then fall back to keyword inference. Avoids
+          // re-inferring a weaker match when the engine resolved category upstream.
+          const category = (typeof f.category === 'string' && f.category.trim())
+            ? f.category
+            : bulkInferCategory(findingText);
           if (category) categorizedCount++;
           toRecord.push({
             type: 'consensus',

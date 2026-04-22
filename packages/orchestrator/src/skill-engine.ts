@@ -26,6 +26,64 @@ import {
 
 const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
+/**
+ * Test-only deterministic-interleaving hook for writeSkillFileFromParts.
+ *
+ * In production this is a no-op. Concurrency tests assign an async fn here to
+ * force an interleaving between the read-check and the write phases of the
+ * optimistic-concurrency cycle — see tests/orchestrator/skill-engine-concurrency.test.ts.
+ *
+ * Invoked once per writeback call, after the disk re-read and drift check
+ * but BEFORE the atomic temp-write+rename. Tests can use the hook to let a
+ * sibling writer race in and bump the on-disk version, then observe that
+ * the current writer aborts (the `version` the sibling wrote will differ
+ * from our expected `newVersion - 1` when re-read... but our check already
+ * passed, so in this path we rely on atomic rename ordering: the later
+ * rename wins. The *intended* race surfaces in two-writer scenarios where
+ * the hook runs BETWEEN both writers' checks, making one abort.)
+ *
+ * Exported — not in default schema — so only tests can reach it.
+ */
+export let __SKILL_ENGINE_TEST_HOOK: (() => void) | null = null;
+export function __setSkillEngineTestHook(fn: (() => void) | null): void {
+  __SKILL_ENGINE_TEST_HOOK = fn;
+}
+
+/**
+ * Valid terminal/transitional values for the `status` frontmatter field.
+ * Must be kept in sync with VerdictStatus in check-effectiveness.ts.
+ * The runtime list exists so we can validate string values read from disk —
+ * TypeScript types are erased at runtime and `frontmatter.status` is `unknown`.
+ */
+export const VALID_STATUSES: ReadonlyArray<VerdictStatus> = [
+  'pending',
+  'passed',
+  'failed',
+  'inconclusive',
+  'flagged_for_manual_review',
+  'not_applicable',
+  'silent_skill',
+  'insufficient_evidence',
+];
+
+/**
+ * Runtime-validate a status value read from skill frontmatter. Unknown string
+ * values (e.g. legacy `status: "active"`) are remapped to `pending` with a
+ * stderr warning. `undefined`/`null` also map to `pending` but silently —
+ * that's the expected shape for files written before the status field existed.
+ */
+export function coerceStatus(raw: unknown): VerdictStatus {
+  if (typeof raw === 'string' && (VALID_STATUSES as readonly string[]).includes(raw)) {
+    return raw as VerdictStatus;
+  }
+  if (raw !== undefined && raw !== null && raw !== '') {
+    process.stderr.write(
+      `[gossipcat] skill-engine: invalid status ${JSON.stringify(raw)} remapped to pending\n`,
+    );
+  }
+  return 'pending';
+}
+
 const KNOWN_CATEGORIES = new Set([
   'trust_boundaries', 'injection_vectors', 'input_validation', 'concurrency',
   'resource_exhaustion', 'type_safety', 'error_handling', 'data_integrity',
@@ -94,12 +152,229 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
 
 export class SkillEngine {
   private techStackCache: string | null | undefined = undefined; // undefined = not yet computed
+  private statusMigrationRan = false;
+  private orphanCleanupRan = false;
 
   constructor(
     private llm: ILLMProvider,
     private perfReader: PerformanceReader,
     private projectRoot: string,
-  ) {}
+  ) {
+    // Fire-and-forget: rewrite any skill files with missing or invalid status
+    // fields on boot. Runs synchronously, once per instance. Exceptions are
+    // swallowed with a stderr warning — a corrupt skill file must not prevent
+    // the engine from constructing.
+    try {
+      this.runOneTimeStatusMigration();
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: one-time status migration failed: ${(err as Error).message}\n`,
+      );
+    }
+
+    // Fire-and-forget: sweep orphan underscore duplicates and `.md.bak-*`
+    // migration artifacts from every agent's skills directory. Runs
+    // synchronously, once per instance, guarded by its own flag so it never
+    // reuses statusMigrationRan. try/catch so a corrupt directory cannot
+    // prevent the engine from constructing.
+    try {
+      this.runOrphanCleanup();
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: orphan cleanup failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  /**
+   * One-time startup pass: walks `.gossip/agents/<id>/skills/` and removes
+   * two kinds of detritus left over from prior renames/migrations:
+   *
+   * 1. `*.md.bak-<timestamp>` — leftover backup artifacts never read by
+   *    runtime. Deleted outright.
+   * 2. Underscore-form duplicates (e.g. `trust_boundaries.md`) sitting
+   *    alongside the hyphen-canonical file (`trust-boundaries.md`).
+   *    normalizeSkillName hyphenates, so the underscore copy is unreachable.
+   *
+   *    - Both exist and normalize to the same name → delete the underscore.
+   *    - Only underscore exists → rename it to hyphen canonical, preserving
+   *      the skill content.
+   *
+   * Runs exactly once per SkillEngine instance. Scope is bounded to
+   * `.gossip/agents/<id>/skills/` — no arbitrary directory recursion. Corrupt
+   * entries are skipped silently.
+   */
+  private runOrphanCleanup(): void {
+    if (this.orphanCleanupRan) return;
+    this.orphanCleanupRan = true;
+
+    const agentsDir = join(this.projectRoot, '.gossip', 'agents');
+    if (!existsSync(agentsDir)) return;
+
+    let agentDirs: string[];
+    try {
+      agentDirs = readdirSync(agentsDir);
+    } catch {
+      return;
+    }
+
+    for (const agentId of agentDirs) {
+      const skillsDir = join(agentsDir, agentId, 'skills');
+      if (!existsSync(skillsDir)) continue;
+
+      let entries: string[];
+      try {
+        entries = readdirSync(skillsDir);
+      } catch {
+        continue;
+      }
+
+      // Phase 1: delete *.md.bak-* artifacts.
+      for (const file of entries) {
+        if (!/\.md\.bak-\d+$/.test(file)) continue;
+        const fullPath = join(skillsDir, file);
+        try {
+          unlinkSync(fullPath);
+          process.stderr.write(
+            `[gossipcat] skill-engine: deleted backup artifact ${fullPath}\n`,
+          );
+        } catch (err) {
+          process.stderr.write(
+            `[gossipcat] skill-engine: failed to delete ${fullPath}: ${(err as Error).message}\n`,
+          );
+        }
+      }
+
+      // Phase 2: resolve underscore/hyphen duplicates. Re-list to reflect
+      // post-delete state and ignore any remaining non-.md files.
+      let mdFiles: string[];
+      try {
+        mdFiles = readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+      } catch {
+        continue;
+      }
+
+      const mdSet = new Set(mdFiles);
+      for (const file of mdFiles) {
+        const base = file.slice(0, -3); // strip .md
+        if (!base.includes('_')) continue;
+        const canonical = normalizeSkillName(base);
+        if (!canonical || canonical === base) continue;
+        const canonicalFile = `${canonical}.md`;
+        const underscorePath = join(skillsDir, file);
+        const canonicalPath = join(skillsDir, canonicalFile);
+
+        if (mdSet.has(canonicalFile)) {
+          // Both exist — delete the underscore duplicate.
+          try {
+            unlinkSync(underscorePath);
+            mdSet.delete(file);
+            process.stderr.write(
+              `[gossipcat] skill-engine: deleted underscore duplicate ${underscorePath} (canonical: ${canonicalPath})\n`,
+            );
+          } catch (err) {
+            process.stderr.write(
+              `[gossipcat] skill-engine: failed to delete ${underscorePath}: ${(err as Error).message}\n`,
+            );
+          }
+        } else {
+          // Only underscore exists — rename to canonical form.
+          try {
+            renameSync(underscorePath, canonicalPath);
+            mdSet.delete(file);
+            mdSet.add(canonicalFile);
+            process.stderr.write(
+              `[gossipcat] skill-engine: renamed ${underscorePath} → ${canonicalPath}\n`,
+            );
+          } catch (err) {
+            process.stderr.write(
+              `[gossipcat] skill-engine: failed to rename ${underscorePath}: ${(err as Error).message}\n`,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * One-time startup pass: walks .gossip/agents/<id>/skills/*.md and rewrites
+   * frontmatter when `status` is missing OR is a string not in VALID_STATUSES
+   * (e.g. legacy `status: "active"`). Writes directly to disk, bypassing
+   * migrateIfNeeded — the lazy migrator is gated behind `migration_count < 2`,
+   * which locks several files already at migration_count=3 despite having
+   * invalid statuses.
+   *
+   * Runs exactly once per SkillEngine instance. Missing files, directories,
+   * or unparseable frontmatter are skipped silently — the guarantee is
+   * "valid files get valid statuses", not "all files become parseable".
+   */
+  private runOneTimeStatusMigration(): void {
+    if (this.statusMigrationRan) return;
+    this.statusMigrationRan = true;
+
+    const agentsDir = join(this.projectRoot, '.gossip', 'agents');
+    if (!existsSync(agentsDir)) return;
+
+    let agentDirs: string[];
+    try {
+      agentDirs = readdirSync(agentsDir);
+    } catch {
+      return;
+    }
+
+    for (const agentId of agentDirs) {
+      const skillsDir = join(agentsDir, agentId, 'skills');
+      if (!existsSync(skillsDir)) continue;
+
+      let files: string[];
+      try {
+        files = readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+      } catch {
+        continue;
+      }
+
+      for (const file of files) {
+        const skillPath = join(skillsDir, file);
+        try {
+          const raw = readFileSync(skillPath, 'utf-8');
+          const { frontmatter, body } = this.parseSkillFile(raw);
+
+          const current = frontmatter.status;
+          const isMissing = current === undefined || current === null || current === '';
+          const isInvalid =
+            typeof current === 'string' &&
+            current !== '' &&
+            !(VALID_STATUSES as readonly string[]).includes(current);
+
+          if (!isMissing && !isInvalid) continue;
+
+          const reason = isMissing
+            ? 'missing'
+            : `invalid(${JSON.stringify(current)})`;
+          const currentVersion = this.safeNumber(frontmatter.version ?? 0, 0);
+          const updated: Record<string, unknown> = {
+            ...frontmatter,
+            status: 'pending',
+            version: currentVersion + 1,
+          };
+          const ok = this.writeSkillFileFromParts(skillPath, updated, body);
+          if (!ok) {
+            process.stderr.write(
+              `[gossipcat] skill-engine: status migration aborted on ${skillPath} (drift)\n`,
+            );
+            continue;
+          }
+          process.stderr.write(
+            `[gossipcat] skill-engine: rewrote status=${reason} → pending in ${skillPath}\n`,
+          );
+        } catch (err) {
+          process.stderr.write(
+            `[gossipcat] skill-engine: skip ${skillPath} during status migration: ${(err as Error).message}\n`,
+          );
+        }
+      }
+    }
+  }
 
   /**
    * Build the LLM prompt strings and metadata needed to generate a skill file.
@@ -482,7 +757,14 @@ ${inputs.join('\n')}
       nowMs,
     );
     if (mutated) {
-      this.writeSkillFileFromParts(skillPath, frontmatter, body);
+      const currentVersion = this.safeNumber(frontmatter.version ?? 0, 0);
+      frontmatter.version = currentVersion + 1;
+      const ok = this.writeSkillFileFromParts(skillPath, frontmatter, body);
+      if (!ok) {
+        process.stderr.write(
+          `[gossipcat] skill-engine: lazy migration aborted on ${skillPath} (drift for ${agentId}/${category})\n`,
+        );
+      }
     }
 
     const snapshot: SkillSnapshot = {
@@ -495,7 +777,7 @@ ${inputs.join('\n')}
         0,
       ),
       bound_at: String(frontmatter.bound_at ?? new Date(nowMs).toISOString()),
-      status: (frontmatter.status as VerdictStatus) ?? 'pending',
+      status: coerceStatus(frontmatter.status),
       migration_count: this.safeNumber(frontmatter.migration_count ?? 0, 0),
       inconclusive_at:
         typeof frontmatter.inconclusive_at === 'string' ? frontmatter.inconclusive_at : undefined,
@@ -503,6 +785,7 @@ ${inputs.join('\n')}
         frontmatter.inconclusive_strikes != null
           ? (Number.isFinite(Number(frontmatter.inconclusive_strikes)) ? Number(frontmatter.inconclusive_strikes) : undefined)
           : undefined,
+      version: this.safeNumber(frontmatter.version ?? 0, 0),
     };
 
     const anchorMs = snapshot.inconclusive_at
@@ -516,7 +799,20 @@ ${inputs.join('\n')}
       if (verdict.effectiveness !== undefined) {
         merged.effectiveness = verdict.effectiveness;
       }
-      this.writeSkillFileFromParts(skillPath, merged, body);
+      // Prefer the SkillSnapshot's version (captured at read time) as the
+      // source of truth. The snapshot reflects the state observed when the
+      // verdict was computed; frontmatter has not been re-read since.
+      const baseVersion = this.safeNumber(
+        snapshot.version ?? frontmatter.version ?? 0,
+        0,
+      );
+      merged.version = baseVersion + 1;
+      const ok = this.writeSkillFileFromParts(skillPath, merged, body);
+      if (!ok) {
+        process.stderr.write(
+          `[gossipcat] skill-engine: verdict writeback aborted on ${skillPath} (drift for ${agentId}/${category})\n`,
+        );
+      }
     }
 
     return verdict;
@@ -563,6 +859,15 @@ ${inputs.join('\n')}
     if (!boundAt || (nowMs - new Date(boundAt).getTime()) > TIMEOUT_MS) {
       updates.bound_at = new Date(nowMs).toISOString();
       updates.migration_reason = 'v2_stale_baseline_reset';
+    }
+
+    // Step 5: write status if missing. Pre-v2 files had no status field; the
+    // v1→v2 rename migration forgot to backfill it, so 8 files on disk still
+    // lack one. Invalid existing values (e.g. legacy `status: "active"`) are
+    // NOT rewritten here — that's the job of runOneTimeStatusMigration, which
+    // also handles files locked by `migration_count >= 2`.
+    if (frontmatter.status === undefined || frontmatter.status === null) {
+      updates.status = 'pending';
     }
 
     updates.migration_count = 2;
@@ -664,21 +969,99 @@ ${inputs.join('\n')}
   }
 
   /**
-   * Serialises frontmatter + body back to a skill file and writes it atomically.
-   * Preserves all existing frontmatter fields; only updated fields in the map
-   * will change value.
+   * Serialises frontmatter + body back to a skill file and writes it atomically,
+   * guarded by optimistic concurrency control via `frontmatter.version`.
+   *
+   * **Concurrency contract.** The caller must:
+   *   1. Read the file, capture `version` (missing ⇒ 0).
+   *   2. Compute the new frontmatter with `version: expectedVersion + 1`.
+   *   3. Call this method.
+   *
+   * On entry we re-read the file, parse its on-disk `version`, and verify it
+   * equals the incoming `frontmatter.version - 1`. If not, a sibling writer
+   * raced in between the caller's read and this write — we stderr-log and
+   * return WITHOUT writing so the caller's stale snapshot can't clobber
+   * fresher state. Missing on-disk version is treated as 0 (rollback-safe:
+   * legacy files behave like version 0 and accept a single upgrade to version 1).
    *
    * Atomicity: writes to a sibling tmp file then renames into place. The
    * rename is atomic on POSIX filesystems within a single mount, so a
    * crash mid-write leaves either the old contents intact or the new
    * contents fully present — never a torn file. The tmp file is cleaned
    * up on the failure path.
+   *
+   * Returns `true` if the write landed, `false` if drift was detected and
+   * the write was aborted.
    */
   private writeSkillFileFromParts(
     skillPath: string,
     frontmatter: Record<string, unknown>,
     body: string,
-  ): void {
+  ): boolean {
+    const newVersion = this.safeNumber(frontmatter.version ?? 1, 1);
+    const expectedDiskVersion = newVersion - 1;
+
+    // Re-read the file to check for drift. If the file is missing this is
+    // a first-time write — expectedDiskVersion must be 0.
+    let diskVersion = 0;
+    if (existsSync(skillPath)) {
+      try {
+        const current = readFileSync(skillPath, 'utf-8');
+        const parsed = this.parseSkillFile(current);
+        diskVersion = this.safeNumber(parsed.frontmatter.version ?? 0, 0);
+      } catch {
+        // Unreadable file — treat as version 0, let write proceed.
+        diskVersion = 0;
+      }
+    }
+
+    if (diskVersion !== expectedDiskVersion) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: version drift on ${skillPath} — ` +
+        `expected v${expectedDiskVersion}, disk has v${diskVersion}. ` +
+        `Aborting stale write (would have been v${newVersion}).\n`,
+      );
+      return false;
+    }
+
+    // Test-only deterministic interleaving hook. Fires after the drift check
+    // passes but BEFORE the atomic temp-write+rename, so a sibling writer can
+    // race in and bump the on-disk version. The hook is read-and-cleared so
+    // re-entrant sibling writes from within the hook don't recurse forever.
+    // Production code leaves this null.
+    const hook = __SKILL_ENGINE_TEST_HOOK;
+    if (hook) {
+      __SKILL_ENGINE_TEST_HOOK = null;
+      try {
+        hook();
+      } catch (err) {
+        process.stderr.write(
+          `[gossipcat] skill-engine: test hook threw: ${(err as Error).message}\n`,
+        );
+      }
+    }
+
+    // After the hook runs (e.g. sibling writer bumped disk version), re-read
+    // and re-verify. Without this, writer A would happily overwrite writer B's
+    // fresher state even though B landed in between A's check and A's write.
+    if (hook && existsSync(skillPath)) {
+      try {
+        const current = readFileSync(skillPath, 'utf-8');
+        const parsed = this.parseSkillFile(current);
+        const postHookDisk = this.safeNumber(parsed.frontmatter.version ?? 0, 0);
+        if (postHookDisk !== expectedDiskVersion) {
+          process.stderr.write(
+            `[gossipcat] skill-engine: post-hook version drift on ${skillPath} — ` +
+            `expected v${expectedDiskVersion}, disk has v${postHookDisk}. ` +
+            `Aborting stale write (would have been v${newVersion}).\n`,
+          );
+          return false;
+        }
+      } catch {
+        // If we can't re-read, fall through to the write and let rename win.
+      }
+    }
+
     const fmLines = Object.entries(frontmatter).map(
       ([k, v]) => `${k}: ${this.serializeYamlValue(v)}`,
     );
@@ -696,5 +1079,6 @@ ${inputs.join('\n')}
       try { unlinkSync(tmpPath); } catch { /* tmp already gone */ }
       throw err;
     }
+    return true;
   }
 }
