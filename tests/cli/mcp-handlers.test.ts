@@ -291,6 +291,7 @@ describe('handleDispatchSingle', () => {
     const result = await handleDispatchSingle('native-claude', 'Audit memory system');
     const text = result.content[0].text;
     expect(text).toContain('NATIVE_DISPATCH');
+    expect(text).toContain('REQUIRED_NEXT_ACTION');
     expect(text).toContain('gossip_relay');
     expect(text).toContain('native-claude');
     expect(text).toContain('claude-opus-4-5');
