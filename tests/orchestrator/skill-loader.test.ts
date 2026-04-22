@@ -31,6 +31,17 @@ describe('SkillLoader', () => {
     expect(skills).toContain('debugging');
   });
 
+  it('resolves verify-the-premise from bundled default-skills/', () => {
+    // Component C ships this skill with the npm bundle; resolution must work
+    // regardless of the caller's projectRoot (no per-project override needed).
+    const skills = listAvailableSkills('test-agent', process.cwd());
+    expect(skills).toContain('verify-the-premise');
+    const result = loadSkills('opus-implementer', ['verify-the-premise'], process.cwd());
+    expect(result.loaded).toContain('verify-the-premise');
+    expect(result.content).toContain('Iron law');
+    expect(result.content).toContain('grep');
+  });
+
   it('wraps multiple skills with delimiters', () => {
     const result = loadSkills('test-agent', ['typescript'], process.cwd());
     expect(result.content).toMatch(/^[\s\S]*--- SKILLS ---[\s\S]*--- END SKILLS ---[\s\S]*$/);

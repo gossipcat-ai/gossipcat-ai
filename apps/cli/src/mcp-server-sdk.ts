@@ -646,11 +646,20 @@ async function doBoot() {
     // invariant the user raised is enforced by construction: once a slot is
     // bound, its mode is authoritative for that agent and won't be clobbered.
     const GLOBAL_PERMANENT_DEFAULTS = ['memory-retrieval'];
+    // Implementer-only permanent defaults — bound to any agent whose id ends
+    // in `-implementer`. Convention documented in .claude/rules/gossipcat.md.
+    // Spec: docs/specs/2026-04-22-premise-verification.md (Component C).
+    const IMPLEMENTER_PERMANENT_DEFAULTS = ['verify-the-premise'];
     try {
       const allAgentIds = agentConfigs.map((ac: any) => ac.id).filter((id: any) => typeof id === 'string' && id.length > 0);
       if (allAgentIds.length > 0) {
         skillIndex.ensureBoundWithMode(GLOBAL_PERMANENT_DEFAULTS, allAgentIds, 'permanent');
         process.stderr.write(`[gossipcat] 📚 Global permanent defaults seeded: ${GLOBAL_PERMANENT_DEFAULTS.join(', ')} → ${allAgentIds.length} agents\n`);
+      }
+      const implementerIds = allAgentIds.filter((id: string) => id.endsWith('-implementer'));
+      if (implementerIds.length > 0) {
+        skillIndex.ensureBoundWithMode(IMPLEMENTER_PERMANENT_DEFAULTS, implementerIds, 'permanent');
+        process.stderr.write(`[gossipcat] 📚 Implementer permanent defaults seeded: ${IMPLEMENTER_PERMANENT_DEFAULTS.join(', ')} → ${implementerIds.length} agents\n`);
       }
     } catch (seedErr) {
       process.stderr.write(`[gossipcat] ⚠️  Global permanent skill auto-seed failed: ${(seedErr as Error).message}\n`);

@@ -325,3 +325,120 @@ describe('native dispatch — CONSENSUS OUTPUT FORMAT injection (consensus)', ()
     expect(consensusIdx).toBeLessThan(taskIdx);
   });
 });
+
+describe('native dispatch — premise verification (Component B)', () => {
+  let skillDir: string;
+  let prevCwd: string;
+
+  beforeEach(() => {
+    prevCwd = process.cwd();
+    skillDir = mkdtempSync(join(tmpdir(), 'gossip-native-prompt-'));
+    mkdirSync(join(skillDir, '.gossip', 'skills'), { recursive: true });
+    process.chdir(skillDir);
+    resetCtx();
+  });
+
+  afterEach(() => {
+    restoreCtx();
+    process.chdir(prevCwd);
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it('annotates native prompt when dispatch task contains a citation-shaped claim', async () => {
+    ctx.nativeAgentConfigs.set('opus-implementer', {
+      model: 'claude-opus-4-7',
+      instructions: 'You implement.',
+      description: 'Native implementer',
+      skills: [],
+    });
+    const task = 'Five utility-dispatch sites in apps/cli/src/mcp-server-sdk.ts call assembleUtilityPrompt() — patch them.';
+    const result = await handleDispatchSingle('opus-implementer', task);
+    const prompt = extractAgentPrompt(result.content);
+    expect(prompt).toContain('═══ UNVERIFIED CLAIM DETECTED ═══');
+    expect(prompt).toContain('═══ END UNVERIFIED CLAIM NOTE ═══');
+  });
+
+  it('does NOT annotate on clean task without citation-shaped claims', async () => {
+    ctx.nativeAgentConfigs.set('opus-implementer', {
+      model: 'claude-opus-4-7',
+      instructions: 'You implement.',
+      description: 'Native implementer',
+      skills: [],
+    });
+    const result = await handleDispatchSingle('opus-implementer', 'Add a new unit test for the sandbox module.');
+    const prompt = extractAgentPrompt(result.content);
+    expect(prompt).not.toContain('═══ UNVERIFIED CLAIM DETECTED ═══');
+  });
+
+  it('SCOPE NOTE appears before UNVERIFIED sentinel when both fire (composition order)', async () => {
+    ctx.nativeAgentConfigs.set('opus-implementer', {
+      model: 'claude-opus-4-7',
+      instructions: 'You implement.',
+      description: 'Native implementer',
+      skills: [],
+    });
+    // Use a scoped write_mode to trigger SCOPE NOTE, plus a claim phrase to
+    // trigger UNVERIFIED. Include an absolute project path so sanitization
+    // marks the task as sandboxed and prependScopeNote is invoked.
+    const task = `Edit ${process.cwd()}/src/foo.ts — we identified 5 sites that lack the helper.`;
+    const result = await handleDispatchSingle('opus-implementer', task, 'scoped', './src');
+    const prompt = extractAgentPrompt(result.content);
+    const scopeIdx = prompt.indexOf('SCOPE NOTE:');
+    const unverifiedIdx = prompt.indexOf('═══ UNVERIFIED CLAIM DETECTED ═══');
+    expect(scopeIdx).toBeGreaterThan(-1);
+    expect(unverifiedIdx).toBeGreaterThan(-1);
+    expect(scopeIdx).toBeLessThan(unverifiedIdx);
+  });
+
+  it('integration — 2026-04-22 incident replay triggers BOTH annotation AND skill', async () => {
+    // The canonical incident phrase from PR #235 design dispatch. This test
+    // is the success criterion from spec §"Success criteria": if the same
+    // investigation memory were cited today, both Component B (annotation)
+    // and Component C (skill content) would reach the implementer prompt.
+    ctx.mainAgent = makeMainAgent({
+      getSkillIndex: jest.fn().mockReturnValue(makeSkillIndex(['verify-the-premise'])),
+    });
+    ctx.nativeAgentConfigs.set('opus-implementer', {
+      model: 'claude-opus-4-7',
+      instructions: 'You implement.',
+      description: 'Native implementer',
+      skills: ['verify-the-premise'],
+    });
+    const incident = 'Five utility-dispatch sites in apps/cli/src/mcp-server-sdk.ts call assembleUtilityPrompt() — patch each.';
+    const result = await handleDispatchSingle('opus-implementer', incident);
+    const prompt = extractAgentPrompt(result.content);
+    // Component B — annotation preamble fires.
+    expect(prompt).toContain('═══ UNVERIFIED CLAIM DETECTED ═══');
+    // Component C — skill content resolved from bundled defaults.
+    expect(prompt).toContain('verify-the-premise');
+    expect(prompt.toLowerCase()).toContain('iron law');
+  });
+
+  it('does NOT fire on relay-path dispatches (load-bearing invariant)', async () => {
+    // No nativeAgentConfig → dispatch follows the relay path (handleDispatchSingle
+    // calls ctx.mainAgent.dispatch). No AGENT_PROMPT content item is emitted
+    // and no annotation is applied at the handler boundary. Relay agents
+    // inherit the premise-verification nudge through assembleUtilityPrompt's
+    // own preamble, not through Component B.
+    const dispatched: { agentId?: string; task?: string } = {};
+    ctx.mainAgent = makeMainAgent({
+      dispatch: jest.fn((agentId: string, task: string) => {
+        dispatched.agentId = agentId;
+        dispatched.task = task;
+        return { taskId: 'relay-task-123' };
+      }),
+    });
+    // Deliberately DO NOT register nativeAgentConfigs for 'relay-implementer'
+    const result = await handleDispatchSingle(
+      'relay-implementer',
+      'We identified 5 sites that lack the preamble — patch them all.',
+    );
+    // No AGENT_PROMPT content item should be present.
+    const promptItem = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'));
+    expect(promptItem).toBeUndefined();
+    // And the dispatched task string handed to the relay is NOT wrapped with
+    // the UNVERIFIED sentinel (Component B is native-branch-only per spec).
+    expect(dispatched.agentId).toBe('relay-implementer');
+    expect(dispatched.task ?? '').not.toContain('═══ UNVERIFIED CLAIM DETECTED ═══');
+  });
+});

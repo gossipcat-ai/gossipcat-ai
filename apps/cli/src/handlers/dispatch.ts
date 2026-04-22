@@ -22,11 +22,31 @@ import { evictStaleNativeTasks, persistNativeTaskMap, spawnTimeoutWatcher } from
 import { persistRelayTasks } from './relay-tasks';
 import {
   prependScopeNote,
+  prependUnverifiedNote,
+  maybeAnnotateUnverifiedClaims,
   recordDispatchMetadata,
   relativizeProjectPaths,
   readSandboxMode,
   shouldSanitize,
 } from '../sandbox';
+
+/**
+ * Apply the premise-verification annotation to a native dispatch prompt.
+ * Pure regex check at the MCP boundary — no sub-agent dispatch (load-bearing
+ * per spec §"Invariants preserved"). Spec §"Component B".
+ */
+function maybeApplyUnverifiedNote(
+  agentPrompt: string,
+  task: string,
+  agentId: string,
+): string {
+  const annotation = maybeAnnotateUnverifiedClaims(task);
+  if (!annotation.annotated) return agentPrompt;
+  process.stderr.write(
+    `[gossipcat] ⚠️ unverified-claim detected for ${agentId}: matched "${annotation.matchedText}" (pattern #${annotation.matchedPattern})\n`,
+  );
+  return prependUnverifiedNote(agentPrompt, annotation.reason || annotation.matchedText || '');
+}
 
 function agentPreset(agentId: string): string | undefined {
   try {
@@ -194,6 +214,9 @@ export async function handleDispatchSingle(
       task,
     });
     if (sanitizeResult.sanitized) agentPrompt = prependScopeNote(agentPrompt);
+    // Premise verification (Component B). SCOPE NOTE composes first
+    // (enforcement boundary); UNVERIFIED note layered on top (behavioral).
+    agentPrompt = maybeApplyUnverifiedNote(agentPrompt, task, agent_id);
 
     // Record dispatch metadata for the post-task audit.
     // For native worktree dispatch the path is created by Claude Code's
@@ -397,6 +420,8 @@ export async function handleDispatchParallel(
       task: def.task,
     });
     if ((def as any)._sandboxSanitized) agentPrompt = prependScopeNote(agentPrompt);
+    // Premise verification (Component B) — per-def in the native loop.
+    agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
 
     recordDispatchMetadata(process.cwd(), {
       taskId,
@@ -596,6 +621,8 @@ export async function handleDispatchConsensus(
       lens: lensContent || undefined,
       task: def.task,
     });
+    // Premise verification (Component B) — per-def in the consensus native loop.
+    agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
     nativeInstructions.push(
       `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true)` +

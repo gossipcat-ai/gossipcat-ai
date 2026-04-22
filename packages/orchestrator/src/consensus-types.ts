@@ -160,7 +160,8 @@ export interface ConsensusSignal {
     | 'false_negative_claim'
     | 'judge_refuted'
     | 'confirmed_hallucination'
-    | 'orchestrator_disputed';
+    | 'orchestrator_disputed'
+    | 'premise_mismatch';
   category?: string;
   findingId?: string;
   severity?: 'critical' | 'high' | 'medium' | 'low';
