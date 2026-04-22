@@ -113,4 +113,13 @@ describe('scripts/postinstall.js — error-path regression guard', () => {
     // postinstall MUST exit non-zero so npm/npx surfaces the failure.
     expect(source).toContain('process.exit(1)');
   });
+
+  it('wraps writeFileSync in try/catch with console.warn (no EACCES abort on RO install dirs)', () => {
+    // Regression guard: global npm installs (root-owned dirs) MUST NOT abort
+    // with EACCES. The writeFileSync call must be wrapped and fall through to
+    // a warn without process.exit on failure.
+    expect(source).toMatch(/try\s*{[\s\S]*writeFileSync\(mcpConfig[\s\S]*}\s*catch/);
+    expect(source).toContain('console.warn');
+    expect(source).toMatch(/could not write \.mcp\.json/);
+  });
 });

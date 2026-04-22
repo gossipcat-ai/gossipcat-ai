@@ -49,10 +49,13 @@ const config = {
   },
 };
 
-writeFileSync(mcpConfig, JSON.stringify(config, null, 2) + '\n');
-
-const method = isGlobal ? 'global npm' : isGitClone ? 'git clone' : 'local install';
-console.log(`gossipcat: wrote .mcp.json (${method}) → ${mcpServerPath}`);
+try {
+  writeFileSync(mcpConfig, JSON.stringify(config, null, 2) + '\n');
+  const method = isGlobal ? 'global npm' : isGitClone ? 'git clone' : 'local install';
+  console.log(`gossipcat: wrote .mcp.json (${method}) → ${mcpServerPath}`);
+} catch (e) {
+  console.warn(`gossipcat: postinstall could not write .mcp.json (${e.code || e.message}). Run 'gossipcat setup' after install to configure.`);
+}
 
 if (!existsSync(mcpServerPath)) {
   if (isGitClone) {
