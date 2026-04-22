@@ -133,3 +133,64 @@ Any reviewer finding that frames full-Wilson replacement as weakening MIN_EVIDEN
 - Adding new verdict states (`VerdictStatus` enum stays constant; this spec only extends `verdict_method` values)
 - Frontend/dashboard changes (verdict name surfacing, if any, is a follow-up). Note: `verdict_method` field removal is NOT on the table; `'z-test'` literal removal is a separate follow-up (step 5 of implementation outline).
 - Retroactive re-verdicting of skills already in `passed` / `failed` terminal states (invariant: terminal states are immutable)
+
+---
+
+## Calibration results (Artifact 1)
+
+Reproduction: `node scripts/wilson-calibration.mjs` (script introduced on branch `feat/zfor-alpha-acklam`, depends on Artifact 0 at commit `b8e7389`).
+
+### Calibration table
+
+| regime | bt | bp | postTotal | z-test postP_crit | Wilson first-passed postP | α | power @ +10pp | note |
+|--------|----|----|-----------|-------------------|---------------------------|---|---------------|------|
+| typical | 120 | 0.75 | 120 | 0.8275 | 0.8333 | 0.3153 | 74.4% |  |
+| dense-low | 500 | 0.50 | 120 | 0.5895 | 0.5917 | 0.2197 | 61.2% |  |
+| sparse-current | 20 | 0.75 | 120 | 0.8275 | 0.8417 | 0.5000 | 65.9% | **α hit bisection upper bound — see note below** |
+| degenerate-zero | 120 | 0.00 | 120 | n/a | 0.1000 | 0.0127 | n/a | MDE target postP=0.10 |
+| degenerate-one | 120 | 1.00 | 120 | n/a | 0.9000 | 0.0127 | n/a | MDE target postP=0.90 |
+| dense-high | 500 | 0.90 | 120 | 0.9537 | 0.9417 | 0.3153 | 100.0% | uses typical α; divergence -1.2pp |
+
+### Single-α hypothesis check
+
+mean α across non-degenerate regimes = 0.3598 (range 0.2197–0.5000)
+- typical: diff from z-test boundary = −0.25pp
+- dense-low: diff from z-test boundary = −2.28pp
+- sparse-current: diff from z-test boundary = +3.92pp
+
+**Single-α covers all non-degenerate within ±1pp:** **no — piecewise α required.** Consensus hypothesis confirmed.
+
+### Schedule (JSON)
+
+```json
+{
+  "typical":         { "alpha": 0.3152810668945313, "postTotal": 120 },
+  "dense-low":       { "alpha": 0.21970843505859372, "postTotal": 120 },
+  "sparse-current":  { "alpha": 0.49996954345703126, "postTotal": 120 },
+  "degenerate-zero": { "alpha": 0.0126953125,        "postTotal": 120 },
+  "degenerate-one":  { "alpha": 0.0126953125,        "postTotal": 120 },
+  "dense-high":      { "alpha": 0.3152810668945313, "postTotal": 120,
+                       "inherits": "typical", "divergencePp": -1.2 }
+}
+```
+
+### Observations vs. spec LLM estimates
+
+The spec's pre-artifact LLM estimates are significantly off from the empirical results. Recorded here for honesty about where the spec's narrative-level numerics ended up wrong:
+
+| claim | LLM estimate | measured | delta |
+|-------|--------------|----------|-------|
+| typical α for z-test-boundary match | ≈0.30 | 0.315 | close |
+| dense-high divergence at typical's α | +30.6pp | **−1.2pp** | **wrong direction, ~30pp off** |
+| dense-low divergence at typical's α | +13.2pp | **−2.3pp** | **wrong direction, ~15pp off** |
+| Wilson power @ δ=+10pp, α=0.30, bp=0.75 | ≈74.4% | 74.4% | exact |
+
+**Implication for spec §31 ("Key finding from consensus review"):** the claim that single-α produces ±30pp gaps at dense regimes is overstated. Piecewise α is still required (sparse-current genuinely diverges), but the structural-divergence argument for dense-high is weaker than the spec implied. The spec's "dense-high: not calibrated, structural divergence expected" rule remains defensible on principle (CI-width dependence on baselineTotal is real), but the quantitative case is softer — −1.2pp is within most reasonable tolerance bands.
+
+### Open issues from Artifact 1
+
+1. **sparse-current α = 0.5000 is a bisection boundary hit**, not a converged solution. The current bisection range `[0.001, 0.50]` does not admit the true matching α for `bt=20, bp=0.75, postTotal=120`. Needs either a wider search range (up to 0.99) OR acknowledgement that sparse regimes are inherently un-matchable (Wilson CI on n=20 is wide enough that α→1 is required to match the z-test boundary). Decide before moving to implementation.
+
+2. **Degenerate α = 0.0127 is stricter than the current `WILSON_ALPHA = 0.025`**, which means Acceptance Criterion B (wilson-path ±5pp) in Artifact 2 may be sensitive here. Skills currently on the `wilson_degenerate` branch will receive tighter verdicts under the new schedule.
+
+3. **Power-preservation constraint is cleanly met** only at `typical` (74.4%). `dense-low` drops to 61.2%, `sparse-current` to 65.9%. This may be acceptable (z-test's 74.4% is power at bp=0.75 specifically, not a universal claim), but the spec's wording at §25 implies uniform preservation — should be softened to "typical-regime-preserving."
