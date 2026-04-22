@@ -1244,6 +1244,94 @@ describe('handleDispatchSingle — native skill injection', () => {
     const prompt = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
     expect(prompt).not.toContain('verify-the-premise');
   });
+
+  // ── PR B: emit-structured-claims auto-bind (Stage 2) ──
+  // Spec: docs/specs/2026-04-22-premise-verification-stage-2.md
+  // Binds to `-researcher` / `-reviewer` via RESEARCHER_REVIEWER_PERMANENT_DEFAULTS,
+  // disjoint from the `-implementer` filter. These tests assert the dispatch
+  // prompt reflects the expected bound skills — the invariant a hybrid id like
+  // `foo-researcher-implementer` inherits BOTH skills (not one, not neither).
+
+  it('emit-structured-claims skill appears in *-researcher agent prompt when bound', async () => {
+    ctx.mainAgent = makeMainAgent({
+      getSkillIndex: jest.fn().mockReturnValue(makeSkillIndex(['emit-structured-claims'])),
+    });
+    ctx.nativeAgentConfigs.set('haiku-researcher', {
+      model: 'claude-haiku-4-5',
+      instructions: 'You research.',
+      description: 'Native researcher',
+      skills: ['emit-structured-claims'],
+    });
+    const result = await handleDispatchSingle('haiku-researcher', 'Investigate utility dispatch sites.');
+    const prompt = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
+    expect(prompt).toContain('--- SKILLS ---');
+    expect(prompt).toContain('emit-structured-claims');
+    expect(prompt).toContain('premise-claims');
+  });
+
+  it('emit-structured-claims skill appears in *-reviewer agent prompt when bound', async () => {
+    ctx.mainAgent = makeMainAgent({
+      getSkillIndex: jest.fn().mockReturnValue(makeSkillIndex(['emit-structured-claims'])),
+    });
+    ctx.nativeAgentConfigs.set('sonnet-reviewer', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You review.',
+      description: 'Native reviewer',
+      skills: ['emit-structured-claims'],
+    });
+    const result = await handleDispatchSingle('sonnet-reviewer', 'Review this change.');
+    const prompt = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
+    expect(prompt).toContain('--- SKILLS ---');
+    expect(prompt).toContain('emit-structured-claims');
+    expect(prompt).toContain('premise-claims');
+  });
+
+  it('emit-structured-claims skill does NOT appear in *-implementer agent prompt (disjoint-suffix filter)', async () => {
+    // A pure implementer receives only verify-the-premise — emit-structured-claims
+    // is a researcher/reviewer default and must not leak across the suffix
+    // boundary. Guards against accidental multi-suffix extension of the
+    // implementer filter.
+    ctx.mainAgent = makeMainAgent({
+      getSkillIndex: jest.fn().mockReturnValue(makeSkillIndex(['verify-the-premise'])),
+    });
+    ctx.nativeAgentConfigs.set('opus-implementer', {
+      model: 'claude-opus-4-7',
+      instructions: 'You implement.',
+      description: 'Native implementer',
+      skills: ['verify-the-premise'],
+    });
+    const result = await handleDispatchSingle('opus-implementer', 'Add a helper.');
+    const prompt = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
+    expect(prompt).toContain('verify-the-premise');
+    expect(prompt).not.toContain('emit-structured-claims');
+  });
+
+  it('hybrid *-researcher-implementer agent inherits BOTH emit-structured-claims AND verify-the-premise', async () => {
+    // Load-bearing invariant: disjoint suffix sets mean a hybrid id matches
+    // both filters and gets each suffix's defaults once. Simulates the post-
+    // seed SkillIndex state by declaring both skills enabled.
+    ctx.mainAgent = makeMainAgent({
+      getSkillIndex: jest
+        .fn()
+        .mockReturnValue(makeSkillIndex(['emit-structured-claims', 'verify-the-premise'])),
+    });
+    ctx.nativeAgentConfigs.set('foo-researcher-implementer', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'Hybrid researcher-implementer.',
+      description: 'Hybrid native agent',
+      skills: ['emit-structured-claims', 'verify-the-premise'],
+    });
+    const result = await handleDispatchSingle(
+      'foo-researcher-implementer',
+      'Investigate then implement.',
+    );
+    const prompt = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
+    expect(prompt).toContain('--- SKILLS ---');
+    expect(prompt).toContain('emit-structured-claims');
+    expect(prompt).toContain('verify-the-premise');
+    expect(prompt).toContain('premise-claims');
+    expect(prompt.toLowerCase()).toContain('iron law');
+  });
 });
 
 // ── handleNativeRelay — compact return payload (consensus 2f25318c/634c3c43) ──
