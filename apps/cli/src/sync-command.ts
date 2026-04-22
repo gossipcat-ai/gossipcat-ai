@@ -227,8 +227,6 @@ async function runSetup(): Promise<void> {
     console.log(`\n${c.green}Supabase configured (team mode).${c.reset}`);
     console.log(`  Config: .gossip/supabase.json`);
     console.log(`  Key + team salt: stored in keychain`);
-    console.log(`\n  Run the migration SQL in your Supabase dashboard:`);
-    console.log(`  ${c.dim}See docs/migrations/001-taskgraph-schema.sql${c.reset}`);
     console.log(`\n  Then run: ${c.cyan}gossipcat sync${c.reset} to sync existing events.\n`);
   } else {
     rl.close();
@@ -240,8 +238,6 @@ async function runSetup(): Promise<void> {
     console.log(`\n${c.green}Supabase configured.${c.reset}`);
     console.log(`  Config: .gossip/supabase.json`);
     console.log(`  Key: stored in keychain`);
-    console.log(`\n  Run the migration SQL in your Supabase dashboard:`);
-    console.log(`  ${c.dim}See docs/migrations/001-taskgraph-schema.sql${c.reset}`);
     console.log(`\n  Then run: ${c.cyan}gossipcat sync${c.reset} to sync existing events.\n`);
   }
 }

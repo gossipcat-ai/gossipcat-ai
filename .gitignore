@@ -22,6 +22,8 @@ keys.enc
 docs/superpowers/
 docs/reddit-*
 docs/specs/
+docs/designs/
+docs/migrations/
 skills-lock.json
 *.tsbuildinfo
 # Prevent stale .js/.d.ts build artifacts in source dirs from shadowing .ts files
