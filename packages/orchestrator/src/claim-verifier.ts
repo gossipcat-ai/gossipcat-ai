@@ -17,8 +17,8 @@
  */
 
 import { spawn } from 'child_process';
-import { existsSync, readFileSync, statSync } from 'fs';
-import { resolve } from 'path';
+import { existsSync, readFileSync, realpathSync, statSync } from 'fs';
+import { resolve, sep } from 'path';
 import type {
   AbsenceOfSymbolClaim,
   CallsiteCountClaim,
@@ -34,6 +34,55 @@ import type {
 
 export const MAX_CLAIMS_PER_BLOCK = 16;
 export const PER_BLOCK_DEADLINE_MS = 500;
+
+/**
+ * Containment helper: resolve `input` against `projectRoot` and ensure the final
+ * path stays inside `projectRoot`. Protects against two attack vectors:
+ *
+ *  1. Absolute paths — `path.resolve(root, '/etc/shadow')` returns `/etc/shadow`
+ *     because an absolute second arg discards the first.
+ *  2. `../..` escape — `path.resolve(root, '../../etc')` escapes above root.
+ *  3. Symlink escape — an in-tree symlink that points outside the tree is
+ *     detected via `fs.realpathSync`.
+ *
+ * Returns the resolved absolute path on success, or `null` on containment
+ * violation. Callers must map `null` to `missing_path` / `file_not_found`
+ * WITHOUT leaking the attempted input in the reason field.
+ */
+function containWithinProject(projectRoot: string, input: string): string | null {
+  let resolved: string;
+  try {
+    resolved = resolve(projectRoot, input);
+  } catch {
+    return null;
+  }
+  // If the path exists on disk, collapse symlinks to detect escape via link.
+  // If it doesn't exist yet (caller will then emit file_not_found), fall back
+  // to the lexical resolve.
+  let finalPath = resolved;
+  try {
+    if (existsSync(resolved)) {
+      finalPath = realpathSync(resolved);
+    }
+  } catch {
+    // realpath failure — treat as containment failure, safer than permitting.
+    return null;
+  }
+  // Also collapse symlinks inside the root itself (e.g. macOS /var -> /private/var)
+  // so the prefix comparison works.
+  let rootReal = projectRoot;
+  try {
+    if (existsSync(projectRoot)) {
+      rootReal = realpathSync(projectRoot);
+    }
+  } catch {
+    // If we can't resolve root, bail — nothing is safe.
+    return null;
+  }
+  if (finalPath === rootReal) return finalPath;
+  if (finalPath.startsWith(rootReal + sep)) return finalPath;
+  return null;
+}
 
 interface RgResult {
   /** Sum of per-file match counts. 0 if no hits. */
@@ -68,8 +117,8 @@ function runRg(
       resolvePromise({ total: 0, error: 'timeout' });
       return;
     }
-    const scopePath = resolve(projectRoot, scope);
-    if (!existsSync(scopePath)) {
+    const scopePath = containWithinProject(projectRoot, scope);
+    if (scopePath === null || !existsSync(scopePath)) {
       resolvePromise({ total: 0, error: 'missing_path' });
       return;
     }
@@ -190,9 +239,9 @@ async function verifyFileLine(
   projectRoot: string,
 ): Promise<ClaimVerdict> {
   const modality = getModality(claim);
-  const filePath = resolve(projectRoot, claim.path);
+  const filePath = containWithinProject(projectRoot, claim.path);
 
-  if (!existsSync(filePath)) {
+  if (filePath === null || !existsSync(filePath)) {
     return { claim_index: idx, status: 'unverifiable_by_grep', reason: 'file_not_found' };
   }
   let st;

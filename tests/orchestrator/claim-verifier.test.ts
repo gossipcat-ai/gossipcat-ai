@@ -1,5 +1,7 @@
 import { execSync } from 'child_process';
-import { resolve } from 'path';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from 'fs';
+import { tmpdir } from 'os';
+import { join, resolve } from 'path';
 import {
   verifyClaims,
   MAX_CLAIMS_PER_BLOCK,
@@ -228,6 +230,92 @@ function mkBlock(claims: Claim[]): ClaimBlock {
     expect(verdict.status).toBe('verified');
     // `verified` verdict shape is { claim_index, status: 'verified' } only.
     expect(Object.keys(verdict).sort()).toEqual(['claim_index', 'status']);
+  });
+});
+
+(rgAvailable ? describe : describe.skip)('verifyClaims — path containment (hardening)', () => {
+  it('absolute scope path is rejected as scope_not_found, no file read', async () => {
+    const block = mkBlock([
+      {
+        type: 'presence_of_symbol',
+        symbol: 'root',
+        // Absolute path — `resolve(projectRoot, '/etc')` would yield `/etc`
+        // without the containment helper.
+        scope: '/etc',
+        modality: 'asserted',
+      },
+    ]);
+    const [verdict] = await verifyClaims(block, PROJECT_ROOT);
+    expect(verdict.status).toBe('unverifiable_by_grep');
+    if (verdict.status === 'unverifiable_by_grep') {
+      expect(verdict.reason).toBe('scope_not_found');
+    }
+  });
+
+  it('../../etc/passwd scope escape → scope_not_found', async () => {
+    const block = mkBlock([
+      {
+        type: 'presence_of_symbol',
+        symbol: 'root',
+        scope: '../../etc/passwd',
+        modality: 'asserted',
+      },
+    ]);
+    const [verdict] = await verifyClaims(block, PROJECT_ROOT);
+    expect(verdict.status).toBe('unverifiable_by_grep');
+    if (verdict.status === 'unverifiable_by_grep') {
+      expect(verdict.reason).toBe('scope_not_found');
+    }
+  });
+
+  it('absolute file_line path is rejected as file_not_found', async () => {
+    const block = mkBlock([
+      {
+        type: 'file_line',
+        path: '/etc/hosts',
+        line: 1,
+        expected_symbol: 'localhost',
+        modality: 'asserted',
+      },
+    ]);
+    const [verdict] = await verifyClaims(block, PROJECT_ROOT);
+    expect(verdict.status).toBe('unverifiable_by_grep');
+    if (verdict.status === 'unverifiable_by_grep') {
+      expect(verdict.reason).toBe('file_not_found');
+    }
+  });
+
+  it('symlink inside project pointing outside → file_not_found', async () => {
+    // Build a scratch project root that contains a symlink → /tmp/<other>.
+    const scratch = mkdtempSync(join(tmpdir(), 'claim-verifier-contain-'));
+    const outside = mkdtempSync(join(tmpdir(), 'claim-verifier-outside-'));
+    try {
+      const projectRoot = join(scratch, 'proj');
+      mkdirSync(projectRoot);
+      // Put a real file outside so the symlink target actually exists.
+      const targetFile = join(outside, 'secret.txt');
+      writeFileSync(targetFile, 'top secret\n', 'utf-8');
+      // Symlink inside project points at an out-of-tree file.
+      symlinkSync(targetFile, join(projectRoot, 'leak.txt'));
+
+      const block = mkBlock([
+        {
+          type: 'file_line',
+          path: 'leak.txt',
+          line: 1,
+          expected_symbol: 'secret',
+          modality: 'asserted',
+        },
+      ]);
+      const [verdict] = await verifyClaims(block, projectRoot);
+      expect(verdict.status).toBe('unverifiable_by_grep');
+      if (verdict.status === 'unverifiable_by_grep') {
+        expect(verdict.reason).toBe('file_not_found');
+      }
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
