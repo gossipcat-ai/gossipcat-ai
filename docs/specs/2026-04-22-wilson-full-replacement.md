@@ -29,9 +29,11 @@ This spec scopes a **full replacement** of the z-test path with Wilson intervals
 
 ## Key finding from consensus review: single α is insufficient
 
-Preliminary numerical analysis surfaced in consensus round ea59d1d2-b1614aba **(LLM estimate, pending empirical validation)** suggests that **a single α is mathematically insufficient**, not merely a "preferred if achievable" outcome. At α=0.30 (the value that would calibrate the typical operating point `bt=120, bp=0.75, pt=120` exactly), Wilson graduation rates at δ=+10pp diverge from z-test by an estimated **+30.6pp** at dense-high (`bp=0.90`) and **+13.2pp** at dense-low (`bp=0.50`) — both outside the ±5pp tolerance this spec sets. This is not miscalibration; it is a structural consequence of Wilson CI-overlap depending on `baselineTotal` through CI width while the z-test depends on it only through the baselineP point estimate.
+> ⚠ **CORRECTED by Artifact 1 empirical results.** The pre-artifact LLM estimates below (+30.6pp, +13.2pp) are now known to be **wrong by ~30pp each** (real measured values are −1.2pp and −2.3pp; opposite direction). See "Calibration results (Artifact 1) → Observations vs. spec LLM estimates" for the correction table. The piecewise-α conclusion still holds on different grounds (sparse-current +3.9pp divergence at best-single-α), but the dense-high/dense-low divergence magnitudes in the original framing were fabricated. Retained here for historical continuity; do not anchor decisions on these numbers.
 
-**Therefore: piecewise α is a prerequisite, not an option.** The calibration table below treats "single α" as a falsifiable hypothesis to be recorded as rejected in the output, not as the preferred outcome. The calibration script must produce the numerical evidence that confirms or refutes this; do not accept the LLM estimates as load-bearing.
+~~Preliminary numerical analysis surfaced in consensus round ea59d1d2-b1614aba **(LLM estimate, pending empirical validation)** suggests that **a single α is mathematically insufficient**, not merely a "preferred if achievable" outcome. At α=0.30 (the value that would calibrate the typical operating point `bt=120, bp=0.75, pt=120` exactly), Wilson graduation rates at δ=+10pp diverge from z-test by an estimated **+30.6pp** at dense-high (`bp=0.90`) and **+13.2pp** at dense-low (`bp=0.50`) — both outside the ±5pp tolerance this spec sets.~~
+
+**Therefore: piecewise α is a prerequisite, not an option.** The calibration table below confirmed this empirically: sparse-current diverges +3.9pp from z-test at the best single α, outside ±1pp tolerance. The calibration script produced the numerical evidence that confirms the piecewise requirement on empirical grounds — the original LLM-estimated divergences at dense regimes turned out to be ~−1 to −2pp, not +13 to +30pp.
 
 ## Blocking artifacts
 
@@ -100,14 +102,76 @@ Simulation script: `scripts/wilson-graduation-sim.mjs`. Results committed to thi
 
 ## Implementation outline (post-gate, not authorized until artifacts 0, 1, and 2 ship)
 
-**Prereq step (before step 1):** extend the TypeScript union literal type for `verdict_method` at `check-effectiveness.ts:52` (`SkillSnapshot`) and `:66` (`VerdictResult`) to **add** the new regime values from the piecewise schedule (e.g. `'wilson_typical' | 'wilson_dense_low' | 'wilson_sparse_regime'` plus existing values). Retain `'z-test' | 'wilson_degenerate' | 'wilson_sparse'` in the union during migration — do **not** remove them yet. This is a pure type-widening, non-breaking.
+**R4 reordering note:** steps below are ordered so the test suite stays green between steps. A previous draft put "replace z-test block" first, which would have broken tests hardcoding `.toBe('z-test')` before the value-consumer audit ran. Fixed below.
 
-1. Replace the standard-path z-test block (`check-effectiveness.ts:200-225`) with a Wilson call at the calibrated α (piecewise via regime lookup). New writes emit `'wilson_typical'` etc.; old `'z-test'` values on existing snapshots remain readable.
-2. Replace the `wilson_degenerate` (`:149-170`) and `wilson_sparse` (`:177-198`) branches with calls into the unified Wilson path using their regime-specific α from the calibration table. Remove the "fall through to z-test" path at `:169` and `:197` — the unified path returns `pending` for any skill whose Wilson CI cannot reach a verdict at the current postTotal, and `pending` stays `pending` until the next verdict attempt. No z-test fallback exists in the unified path; the degenerate-regime Wilson must be complete in itself. Verify via test cases that a `baselineP=0, postTotal<MIN_EVIDENCE` skill that previously fell through to z-test `inconclusive` now returns `pending` until MIN_EVIDENCE is reached — then the degenerate-regime Wilson either passes (at postP ≥ MIN_DETECTABLE_EFFECT) or records inconclusive-with-strike-rotation.
-3. **Audit value consumers of `verdict_method` BEFORE removing `'z-test'` from the union.** Sonnet's round-2 review found hardcoded `.toBe('z-test')` assertions in `tests/orchestrator/check-effectiveness.test.ts` (lines 388, 427, 502) and `tests/skill-effectiveness-e2e.test.ts` (lines 530, 572, 591, 625, 659). Every value-consumer site must either be updated to expect the new `wilson_<regime>` values OR explicitly grandfathered to preserve the `'z-test'` literal for historical snapshots. Do not treat this migration as non-breaking — the field is preserved, but the values are not, and value-consumers break.
-4. Re-run the check-effectiveness test suite; every test file must either (a) pass unchanged, (b) have its expected-verdict string updated to the new piecewise regime value with a one-line reference back to this spec, or (c) document why the test case is now N/A (rare).
-5. Once steps 1–4 ship and no pre-migration `'z-test'` values remain in live `.gossip/agents/*/skills/*.md` snapshots (verifiable via grep), a follow-up PR may remove `'z-test'` from the union and the grandfather code. This is a separate decision, outside this spec.
-6. Dispatch a consensus round on the diff before merge — this path is load-bearing for every skill effectiveness verdict in the system.
+**Step 0 — Type-union widening (prereq):** extend the TypeScript union literal type for `verdict_method` at `check-effectiveness.ts:52` (`SkillSnapshot`) and `:66` (`VerdictResult`) to this exact union: `'z-test' | 'wilson_degenerate' | 'wilson_sparse' | 'wilson_typical' | 'wilson_dense_low' | 'wilson_sparse_current' | 'wilson_degenerate_zero' | 'wilson_degenerate_one'`. The three existing values are retained during migration; the five new values mirror the final calibration schedule regime names (typical, dense-low, sparse-current, degenerate-zero, degenerate-one). Pure type-widening, non-breaking.
+
+**Step 1 — Audit value consumers of `verdict_method` FIRST.** Sonnet R2 found hardcoded `.toBe('z-test')` assertions in `tests/orchestrator/check-effectiveness.test.ts` (lines 388, 427, 502) and `tests/orchestrator/skill-effectiveness-e2e.test.ts` (lines 530, 572, 591, 625, 659). Before any runtime behavior change:
+   - Update each assertion to use `expect.stringMatching(/^(z-test|wilson_typical)$/)` OR the matcher appropriate for the specific test's intended scope.
+   - Alternatively, add a helper `isStandardPathVerdictMethod(m: string): boolean` and migrate call sites to it.
+   - Do not remove the `'z-test'` literal from the union yet — only broaden the assertions.
+
+**Step 2 — Replace the standard-path z-test block** (`check-effectiveness.ts:200-225`) with a regime-classifier + Wilson call using piecewise α from the calibration table. New writes emit `'wilson_typical'` / `'wilson_dense_low'` etc.; old `'z-test'` values on existing snapshots remain readable.
+
+**Step 3 — Collapse `wilson_degenerate` (`:149-170`) and `wilson_sparse` (`:177-198`) branches** into the unified Wilson path using their regime-specific α from the calibration table. Remove the "fall through to z-test" comments at `:169` and `:197` — the unified path returns `pending` for any skill whose Wilson CI cannot reach a verdict at the current postTotal, and `pending` stays `pending` until the next verdict attempt. No z-test fallback exists in the unified path.
+
+**Step 4 — Re-run the check-effectiveness test suite.** Every test file must either (a) pass unchanged under the widened assertions from step 1, (b) have its expected-verdict string updated to the new piecewise regime value with a one-line reference back to this spec, or (c) document why the test case is now N/A (rare).
+
+**Step 5 — Consensus review on the diff before merge.** This path is load-bearing for every skill effectiveness verdict in the system.
+
+**Step 6 — (follow-up PR, not part of this migration)** Once no pre-migration `'z-test'` values remain in live `.gossip/agents/*/skills/*.md` snapshots (verifiable via grep), a separate PR may remove `'z-test'` from the union and the grandfather code. Outside this spec's scope.
+
+### Regime classification (per R4 consensus)
+
+The standard-path replacement in Step 2 uses a 4-branch threshold classifier grounded in the calibration points. Mirrors the existing sequential-conditional pattern at `check-effectiveness.ts:149-198`:
+
+```
+regime(bt, bp) =
+  if bt === 0                        → 'typical'       (α = 0.3153, bp defaults to 0.5 — uncharted, flag for audit)
+  elif bp === 0                      → 'degenerate-zero' (α = 0.025)
+  elif bp === 1                      → 'degenerate-one'  (α = 0.025)
+  elif bt < MIN_BASELINE_FOR_ZTEST   → 'sparse-current' (α = 0.5491)  // MIN=20, so routes bt ∈ [1, 19]
+  elif bt >= MIN_BASELINE_FOR_ZTEST and bp <= 0.6 → 'dense-low' (α = 0.2197)
+  else                                → 'typical'       (α = 0.3153)
+```
+
+Dense-high collapses into typical (same α by spec design); degenerate-one collapses into degenerate-zero (saturation-asymmetric but same α).
+
+### Known drift and accepted trade-offs (per R4 consensus)
+
+The calibration evidence does NOT fully justify α_typical at arbitrary (bt, bp) outside the calibration point. The following are accepted as known limitations of the first pass, not as "fixed":
+
+### Real skill distribution (empirical, as of 2026-04-22)
+
+Grep of 17 skill files at `.gossip/agents/*/skills/*.md` yields this distribution:
+
+| bucket | count | share | classification regime |
+|--------|-------|-------|----------------------|
+| bt = 0 (no data yet) | 5 | 29% | → typical (bp=0.5 fallback) — uncharted |
+| bp ∈ {0, 1} (degenerate) | 6 | 35% | → degenerate-zero or degenerate-one |
+| bt ∈ [1, 19] non-degenerate (sparse) | 4 | 24% | → sparse-current |
+| bt ≥ 20 non-degenerate (typical/dense-low) | 2 | 12% | → typical |
+| — of which in calibration cluster bt ∈ [80, 200] | **0** | **0%** | → typical |
+
+**The dominant live regime is degenerate (35%), not typical.** Sparse is second (24%). True typical-cluster skills (bt ≥ 80) are **zero** in the current corpus. This inverts the R4-patch framing entirely: sparse-current (α=0.5491) and degenerate (α=0.025) are the load-bearing regimes, not typical.
+
+An earlier draft of this section claimed "~80%+ of skills cluster at bt ∈ [80, 200]". That claim was fabricated during R4 patching without grep verification. R5 consensus (sonnet + gemini, independent) caught and retracted it. The corrected distribution is the one above.
+
+### Known drift (re-framed with real data)
+
+1. **α_typical drift at larger bt.** Calibrated at (bt=120, bp=0.75). At (bt=150, bp=0.80) and other near-typical operating points, Wilson at α=0.3153 is systematically liberal vs. z-test. The magnitude is unquantified. Follow-up: extend `scripts/wilson-calibration.mjs` to calibrate on a grid and report the drift surface. **Re-framed:** this affects only 2 of 17 skills currently (bt=34 and bt=71), both still below the calibration point. The bt=0 fallback case (5 skills) is a more urgent gap — those skills route through `typical` with bp=0.5 default, a combination never calibrated.
+
+2. **sparse/typical boundary discontinuity at bt=20.** α=0.5491 at bt=19 jumps to α=0.3153 at bt=20 — a 1.74× step. (Corrected boundary: the code at `check-effectiveness.ts:177` uses strict `<`, so bt=20 routes to z-test/typical, not sparse. The earlier draft said "bt=20 → sparse, bt=21 → typical" — that was off-by-one.) We haven't eliminated the original z-test/Wilson discontinuity, we've changed its shape. **Re-framed:** sparse is the *second-largest* live regime (24%, not <5% as the earlier draft claimed). This discontinuity affects a real population of skills, not a negligible tail. Flagged for a continuity-preserving follow-up (e.g., α(bt) as a smooth function fit through the calibration points).
+
+3. **dense-low +7.3pp graduation-rate divergence.** At (bt=500, bp=0.50, δ=+10pp), Wilson at α=0.2197 graduates +7.3pp more than z-test at α=0.025. Exempted from Criterion B by design (dense-low is on the z-test path today, not wilson-path). **Accepted trade-off:** the +7.3pp reflects Wilson correctly integrating the 500-sample baseline information the z-test's point-estimate discards. Not a bug, a behavior improvement — but a real behavior change. **Re-framed:** zero live skills are in dense-low regime currently, so the immediate production impact is nil. The change will manifest for future skills that reach bt ≥ 20, bp ≤ 0.6.
+
+4. **Artifact 0 validation range extended.** Tests at `tests/orchestrator/wilson-score.test.ts` now include α ∈ {0.40, 0.50, 0.55, 0.60, 0.70} in the reference-value round-trip set. **Status: shipped** on this branch (see commit). sparse-current α=0.5491 is now within the validated range.
+
+5. **postTotal > MIN_EVIDENCE validation gap (new, R5).** The calibration and simulation are pinned at `postTotal = 120`. At steady-state postTotal (240+, 500+, 1000+), α=0.025 vs α=0.03058 diverge by 1-7 integer thresholds. The schedule pins α=0.025 which is the conservative choice across all postTotal, but no test actually exercises the unified Wilson path at postTotal > 120. Follow-up test should run `wilsonVerdict` at postTotal ∈ {240, 500, 1000, 2000} and confirm decisions are sane.
+
+6. **bt=0 fallback case uncharted.** 5 of 17 live skills have bt=0 (no data yet). The code at `check-effectiveness.ts:106` defaults `baselineP = 0.5` for bt=0. Under the new classifier, these skills route to `typical` (α=0.3153) with an imaginary baselineP=0.5. Whether Wilson at (bc=0, bt=0, bp=0.5, α=0.3153) behaves correctly is unverified. These skills are in `pending` state per the `postTotal < MIN_EVIDENCE` gate anyway, so the question is moot until evidence accumulates — but it should be explicitly noted.
+
+These known limitations are TRADE-OFFS the implementer must acknowledge in the merge-review PR description. They do not block the first pass, but they are not "unknown unknowns" — they are "known knowns" the next spec iteration should address.
 
 ## Consensus context to preserve
 
@@ -342,6 +406,24 @@ Target β=0.785 lies in the gap between the threshold-10 plateau (77.1%) and the
 | B (wilson-path ±5pp per terminal state) | **PASS** (all cells ≤0.70pp) |
 
 Both gates satisfied. Implementation unblocked.
+
+#### Criterion B per-regime table (post-Option (d), α=0.025 for degenerate)
+
+Verbatim output from `node scripts/wilson-graduation-sim.mjs` (seed=42, N=2000):
+
+| regime | δ | Δpassed | Δfailed | gate |
+|--------|---|---------|---------|------|
+| degenerate-zero | +0.0pp | 0.00pp | 0.00pp | PASS |
+| degenerate-zero | +5.0pp | 0.00pp | 0.00pp | PASS |
+| degenerate-zero | +10.0pp | 0.00pp | 0.00pp | PASS |
+| degenerate-one | +0.0pp | 0.00pp | 0.00pp | PASS |
+| degenerate-one | +5.0pp | 0.00pp | 0.00pp | PASS |
+| degenerate-one | +10.0pp | 0.00pp | 0.00pp | PASS |
+| sparse-current | +0.0pp | 0.00pp | -0.70pp | PASS |
+| sparse-current | +5.0pp | 0.00pp | -0.05pp | PASS |
+| sparse-current | +10.0pp | 0.00pp | 0.00pp | PASS |
+
+Overall Criterion B (±5pp per terminal state, all cells): **PASS**. Every cell is within ±0.70pp — degenerate-zero and degenerate-one show exact parity (α=0.025 matches current production). sparse-current shows small Δfailed values from simulation noise at N=2000 (SE ≈ 1.1pp), all well inside tolerance.
 
 ### What this reveals
 

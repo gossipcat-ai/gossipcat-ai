@@ -10,6 +10,10 @@ const ALPHA = 0.025;
 
 describe('zForAlpha — Acklam inverse normal CDF', () => {
   // Reference values computed from high-precision qnorm: z = Φ⁻¹(1 - α/2).
+  // Range extended to α=0.70 for the Wilson full-replacement calibration
+  // schedule (docs/specs/2026-04-22-wilson-full-replacement.md) — the
+  // sparse-current regime produces α=0.5491, outside the narrow 0.01-0.30
+  // range that covered the prototype.
   const REFERENCE: Array<[number, number]> = [
     [0.01, 2.5758293],
     [0.025, 2.2414027],
@@ -18,6 +22,11 @@ describe('zForAlpha — Acklam inverse normal CDF', () => {
     [0.15, 1.4395315],
     [0.2, 1.2815516],
     [0.3, 1.0364334],
+    [0.4, 0.8416212],
+    [0.5, 0.6744898],
+    [0.55, 0.5977601],
+    [0.6, 0.5244005],
+    [0.7, 0.3853205],
   ];
 
   it.each(REFERENCE)(
