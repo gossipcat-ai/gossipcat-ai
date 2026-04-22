@@ -3,6 +3,7 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  statSync,
   existsSync,
   readdirSync,
 } from 'fs';
@@ -129,6 +130,35 @@ describe('SkillEngine orphan cleanup', () => {
     expect(existsSync(regularPath)).toBe(true);
     expect(readFileSync(readmePath, 'utf-8')).toBe(readmeBody);
     expect(readFileSync(regularPath, 'utf-8')).toBe(SKILL_BODY);
+  });
+
+  it('does not rewrite a frontmatter-less README co-located in skills dir', () => {
+    const skillsDir = makeSkillsDir(tmpDir, 'agent-readme');
+    const readmePath = join(skillsDir, 'README.md');
+    const skillPath = join(skillsDir, 'trust-boundaries.md');
+
+    // Plain markdown body — no frontmatter at all. The migration bug would
+    // parse empty frontmatter, see status is missing, and emit a synthesized
+    // { status: 'pending', version: 1 } header that corrupts the file.
+    const readmeBody = `# Skills directory\n\nNotes go here.\n`;
+    writeFile(readmePath, readmeBody);
+
+    // A real skill with missing status so the migration DOES have real work.
+    const skillBody = `---\nname: trust-boundaries\ncategory: trust_boundaries\n---\n\n## Body\nReal skill.\n`;
+    writeFile(skillPath, skillBody);
+
+    const readmeBefore = readFileSync(readmePath, 'utf-8');
+    const readmeMtimeBefore = statSync(readmePath).mtimeMs;
+
+    new SkillEngine(makeStubLLM(), makeStubPerfReader(tmpDir), tmpDir);
+
+    // README must be byte-for-byte untouched.
+    expect(readFileSync(readmePath, 'utf-8')).toBe(readmeBefore);
+    expect(statSync(readmePath).mtimeMs).toBe(readmeMtimeBefore);
+
+    // Real skill file DID get its status rewritten.
+    const skillAfter = readFileSync(skillPath, 'utf-8');
+    expect(skillAfter).toMatch(/status:\s*"?pending"?/);
   });
 
   it('does not throw when no .gossip/agents dir exists', () => {

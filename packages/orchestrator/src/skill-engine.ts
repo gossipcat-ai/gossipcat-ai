@@ -339,6 +339,13 @@ export class SkillEngine {
           const raw = readFileSync(skillPath, 'utf-8');
           const { frontmatter, body } = this.parseSkillFile(raw);
 
+          // Skip non-skill markdown files (README, notes, etc.) that happen to live in
+          // this directory. Skill files always carry a `name` field in frontmatter;
+          // rewriting status on a file without that field would corrupt non-skill content.
+          if (typeof frontmatter.name !== 'string' || frontmatter.name.trim() === '') {
+            continue;
+          }
+
           const current = frontmatter.status;
           const isMissing = current === undefined || current === null || current === '';
           const isInvalid =
