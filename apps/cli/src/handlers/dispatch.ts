@@ -11,6 +11,7 @@ import {
   parseClaimBlock,
   verifyClaims,
   emitConsensusSignals,
+  sanitizeForLog,
   type ClaimBlock,
   type ClaimVerdict,
   type PerformanceSignal,
@@ -215,11 +216,11 @@ async function maybeVerifyPremiseClaims(
   if (!block) {
     // Malformed JSON / shape — prepend schema-lint warning, prose path runs.
     process.stderr.write(
-      `[gossipcat] ⚠ premise-claims schema violation for ${agentId}: ${errors.map(e => e.message).slice(0, 3).join('; ')}\n`,
+      `[gossipcat] ⚠ premise-claims schema violation for ${agentId}: ${errors.map(e => sanitizeForLog(e.message)).slice(0, 3).join('; ')}\n`,
     );
     const note =
       '⚠ premise-claims block failed schema validation — treating task as prose-only. ' +
-      `Errors: ${errors.map(e => e.message).slice(0, 3).join('; ')}`;
+      `Errors: ${errors.map(e => sanitizeForLog(e.message)).slice(0, 3).join('; ')}`;
     writePremiseVerificationLog(projectRoot, taskId, empty, {
       had_stage1_annotation: maybeAnnotateUnverifiedClaims(task).annotated,
       skill_bound: null,
@@ -236,7 +237,7 @@ async function maybeVerifyPremiseClaims(
     verdicts = await verifyClaims(block, projectRoot);
   } catch (err) {
     process.stderr.write(
-      `[gossipcat] ⚠ verifyClaims threw for ${agentId}: ${(err as Error).message}\n`,
+      `[gossipcat] ⚠ verifyClaims threw for ${agentId}: ${sanitizeForLog((err as Error).message ?? String(err))}\n`,
     );
     return empty;
   }
@@ -275,7 +276,7 @@ async function maybeVerifyPremiseClaims(
   // Record schema-lint warnings from the parser (e.g. missing_modality) so
   // retrospective audit can see silent downgrades. Errors is additive — a
   // non-null block may still carry per-claim errors.
-  const schemaLint = errors.length > 0 ? errors[0].message : undefined;
+  const schemaLint = errors.length > 0 ? sanitizeForLog(errors[0].message) : undefined;
   writePremiseVerificationLog(projectRoot, taskId, result, {
     had_stage1_annotation: maybeAnnotateUnverifiedClaims(task).annotated,
     skill_bound: null,

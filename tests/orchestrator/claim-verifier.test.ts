@@ -6,6 +6,7 @@ import {
   verifyClaims,
   MAX_CLAIMS_PER_BLOCK,
 } from '../../packages/orchestrator/src/claim-verifier';
+import { sanitizeForLog } from '../../packages/orchestrator/src/_sanitize';
 import type {
   ClaimBlock,
   CallsiteCountClaim,
@@ -373,5 +374,45 @@ function mkBlock(claims: Claim[]): ClaimBlock {
     } finally {
       Date.now = realNow;
     }
+  });
+});
+
+// ─── sanitizeForLog unit tests ────────────────────────────────────────────────
+
+describe('sanitizeForLog', () => {
+  it('passes through a short, clean string unchanged', () => {
+    expect(sanitizeForLog('file not found')).toBe('file not found');
+  });
+
+  it('truncates a 1000-char message to 200 chars + ellipsis', () => {
+    const long = 'a'.repeat(1000);
+    const result = sanitizeForLog(long);
+    expect(result).toHaveLength(201); // 200 + '…'
+    expect(result.endsWith('…')).toBe(true);
+  });
+
+  it('replaces NUL byte (\\x00) with U+FFFD', () => {
+    const result = sanitizeForLog('bad\x00byte');
+    expect(result).toBe('bad�byte');
+    expect(result).not.toContain('\x00');
+  });
+
+  it('replaces ANSI escape (\\x1b[31m) with U+FFFD placeholders', () => {
+    const result = sanitizeForLog('\x1b[31mred\x1b[0m');
+    // \x1b and [ are both control chars replaced; printable chars kept
+    expect(result).not.toContain('\x1b');
+    expect(result).toContain('red');
+  });
+
+  it('preserves \\t and \\n (allowed control chars)', () => {
+    expect(sanitizeForLog('line1\nline2\ttabbed')).toBe('line1\nline2\ttabbed');
+  });
+
+  it('truncates a long string even when it contains control chars', () => {
+    const long = '\x00'.repeat(500) + 'suffix';
+    const result = sanitizeForLog(long);
+    // After replacement each \x00 → U+FFFD (1 char each), total 506 chars → truncated
+    expect(result.length).toBeLessThanOrEqual(201);
+    expect(result.endsWith('…')).toBe(true);
   });
 });
