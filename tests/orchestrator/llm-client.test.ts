@@ -300,6 +300,23 @@ describe('Multimodal message formatting', () => {
       expect(result.usage).toEqual({ inputTokens: 150, outputTokens: 42 });
     });
 
+    it('returns malformed_function_call sentinel when finishReason=MALFORMED_FUNCTION_CALL with empty parts', () => {
+      const provider = new GeminiProvider('gemini-pro', 'test-key');
+      const mockResponse = {
+        candidates: [{
+          content: { parts: [] },
+          finishReason: 'MALFORMED_FUNCTION_CALL',
+        }],
+      };
+
+      const result = (provider as any).parseGeminiResponse(mockResponse);
+
+      expect(result.text).toContain('malformed_function_call');
+      expect(result.text).toContain('MALFORMED_FUNCTION_CALL');
+      // Preserves collect.ts:178 substring match for auto-signal.
+      expect(result.text).toContain('[No response from');
+    });
+
     it('returns undefined usage when Gemini has no usageMetadata', () => {
       const provider = new GeminiProvider('gemini-pro', 'test-key');
       const mockResponse = {
