@@ -650,6 +650,12 @@ async function doBoot() {
     // in `-implementer`. Convention documented in .claude/rules/gossipcat.md.
     // Spec: docs/specs/2026-04-22-premise-verification.md (Component C).
     const IMPLEMENTER_PERMANENT_DEFAULTS = ['verify-the-premise'];
+    // Researcher/Reviewer permanent defaults — bound to any agent whose id
+    // ends in `-researcher` or `-reviewer`. Disjoint from the implementer
+    // filter: hybrid ids like `foo-researcher-implementer` match BOTH filters
+    // independently and inherit each suffix's defaults once.
+    // Spec: docs/specs/2026-04-22-premise-verification-stage-2.md (PR B).
+    const RESEARCHER_REVIEWER_PERMANENT_DEFAULTS = ['emit-structured-claims'];
     try {
       const allAgentIds = agentConfigs.map((ac: any) => ac.id).filter((id: any) => typeof id === 'string' && id.length > 0);
       if (allAgentIds.length > 0) {
@@ -660,6 +666,13 @@ async function doBoot() {
       if (implementerIds.length > 0) {
         skillIndex.ensureBoundWithMode(IMPLEMENTER_PERMANENT_DEFAULTS, implementerIds, 'permanent');
         process.stderr.write(`[gossipcat] 📚 Implementer permanent defaults seeded: ${IMPLEMENTER_PERMANENT_DEFAULTS.join(', ')} → ${implementerIds.length} agents\n`);
+      }
+      const researcherReviewerIds = allAgentIds.filter(
+        (id: string) => id.endsWith('-researcher') || id.endsWith('-reviewer'),
+      );
+      if (researcherReviewerIds.length > 0) {
+        skillIndex.ensureBoundWithMode(RESEARCHER_REVIEWER_PERMANENT_DEFAULTS, researcherReviewerIds, 'permanent');
+        process.stderr.write(`[gossipcat] 📚 Researcher/Reviewer permanent defaults seeded: ${RESEARCHER_REVIEWER_PERMANENT_DEFAULTS.join(', ')} → ${researcherReviewerIds.length} agents\n`);
       }
     } catch (seedErr) {
       process.stderr.write(`[gossipcat] ⚠️  Global permanent skill auto-seed failed: ${(seedErr as Error).message}\n`);
