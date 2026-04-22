@@ -99,6 +99,31 @@ describe('readSkillFreshness — file present', () => {
     expect(result.boundAt).toBeNull();
     expect(result.status).toBeNull();
   });
+
+  it('normalizes legacy "active" status to pending via coerceStatus', () => {
+    // Consensus round 466933ec-548b45cf f16: readSkillFreshness must not leak
+    // legacy / unknown status strings to callers. coerceStatus remaps them.
+    const boundAt = '2026-04-10T00:00:00.000Z';
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(makeSkillContent(boundAt, 'active') as any);
+    // Silence the expected stderr warning.
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    const result = readSkillFreshness(AGENT_ID, CATEGORY, SKILL_ROOT);
+    expect(result.status).toBe('pending');
+
+    stderrSpy.mockRestore();
+  });
+
+  it('preserves null status (no coerce) when status field is absent', () => {
+    // Null must round-trip so computeCooldown can return pre_schema.
+    const boundAt = '2026-04-10T00:00:00.000Z';
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(makeSkillContent(boundAt, null) as any);
+
+    const result = readSkillFreshness(AGENT_ID, CATEGORY, SKILL_ROOT);
+    expect(result.status).toBeNull();
+  });
 });
 
 // ── computeCooldown — discriminated union ─────────────────────────────────

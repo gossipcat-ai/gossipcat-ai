@@ -77,11 +77,16 @@ describe('signal_class discriminator (PR 5)', () => {
       expect(classifySignal('unverified')).toBe('operational');
     });
 
+    it('classifies category_confirmed / consensus_verified as performance', () => {
+      // These are evidence-of-correctness signals — they affect agent accuracy
+      // and belong in the performance bucket alongside agreement / hallucination_caught.
+      expect(classifySignal('category_confirmed')).toBe('performance');
+      expect(classifySignal('consensus_verified')).toBe('performance');
+    });
+
     it('returns undefined for unclassified (spec-silent) signal names', () => {
       // Intentional: conservative rollout. Leaving ambiguous names undefined
       // avoids committing to a class before a downstream consumer needs it.
-      expect(classifySignal('category_confirmed')).toBeUndefined();
-      expect(classifySignal('consensus_verified')).toBeUndefined();
       expect(classifySignal('severity_miscalibrated')).toBeUndefined();
       expect(classifySignal('boundary_escape')).toBeUndefined();
       expect(classifySignal('dispatch_started')).toBeUndefined();
@@ -198,13 +203,13 @@ describe('signal_class discriminator (PR 5)', () => {
 
   describe('(c) signal_class undefined + category undefined → no regression', () => {
     it('leaves signal_class absent when the classifier cannot decide', () => {
-      // `category_confirmed` is intentionally unclassified for this PR.
+      // `boundary_escape` is intentionally unclassified (observability-only).
       // Write-forward safety: the row still lands, existing reader code still
       // aggregates it exactly as before, signal_class just isn't populated.
       const signal: ConsensusSignal = {
         type: 'consensus',
         taskId: 't1',
-        signal: 'category_confirmed',
+        signal: 'boundary_escape',
         agentId: 'a',
         evidence: 'e',
         timestamp: '2026-04-21T10:00:00Z',
@@ -212,7 +217,7 @@ describe('signal_class discriminator (PR 5)', () => {
       writer[WRITER_INTERNAL].appendSignal(signal);
 
       const [row] = readRows(tmpDir);
-      expect(row.signal).toBe('category_confirmed');
+      expect(row.signal).toBe('boundary_escape');
       expect(row.signal_class).toBeUndefined();
       // Existing fields round-trip untouched — no regression in pre-existing shape.
       expect(row.type).toBe('consensus');
@@ -275,5 +280,25 @@ describe('signal_class discriminator (PR 5)', () => {
   it('exports SignalClass as a reusable type alias', () => {
     const cls: SignalClass = 'performance';
     expect(cls).toBe('performance');
+  });
+
+  // Consensus 466933ec-548b45cf f12: the failed-task bridge in collect.ts
+  // explicitly stamps signal_class:'operational' on disagreement rows emitted
+  // for failed tasks. This hardens the reader guard via a second axis.
+  it('preserves explicit signal_class:operational on a disagreement signal (failed-task bridge)', () => {
+    const signal: ConsensusSignal = {
+      type: 'consensus',
+      signal_class: 'operational',
+      taskId: 't-failed',
+      signal: 'disagreement',
+      agentId: 'gemini-reviewer',
+      evidence: 'Task failed: provider error',
+      timestamp: '2026-04-22T10:00:00Z',
+    };
+    writer[WRITER_INTERNAL].appendSignal(signal);
+
+    const [row] = readRows(tmpDir);
+    expect(row.signal).toBe('disagreement');
+    expect(row.signal_class).toBe('operational');
   });
 });

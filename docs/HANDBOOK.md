@@ -33,7 +33,7 @@ Every finding must cite `file:line`. Peers verify the citation exists and says w
 
 ### 2. `MIN_EVIDENCE = 120` is a real statistical gate, not a bug
 
-The skill effectiveness z-test at `check-effectiveness.ts:15` requires ≥120 post-bind signals before issuing a `passed`/`failed` verdict. This is calibrated for 80% power detecting a +10pp shift at p=0.75 baseline under Bonferroni α=0.025.
+The skill effectiveness z-test at `check-effectiveness.ts:15` requires ≥120 post-bind signals before issuing a `passed`/`failed` verdict. This is calibrated for ≈75.5% power detecting a +10pp shift at p=0.75 baseline under Bonferroni α=0.025 (raising to ~148 signals reaches ≥80% power).
 
 Skills will sit in `pending` for a long time. That is **correct behavior**, not a bug. If you see "stuck at pending" and your first instinct is to lower MIN_EVIDENCE, stop — lowering it weakens the statistical power claim that the whole effectiveness loop depends on. For paper evidence, build a curated eval suite with paired before/after testing (smaller N, McNemar's test, ~15 per category) instead.
 

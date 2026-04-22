@@ -255,8 +255,9 @@ export class PerformanceWriter {
       timestamp: new Date().toISOString(),
       evidence: `Consensus round ${consensusId} retracted: ${reason}`,
     };
-    validateSignal(row as PerformanceSignal);
-    const stamped = { ...row, _emission_path: 'mcp-server-signals' as EmissionPath };
+    const classStamped = stampSignalClass(row as PerformanceSignal);
+    validateSignal(classStamped);
+    const stamped = { ...classStamped, _emission_path: 'mcp-server-signals' as EmissionPath };
     appendFileSync(this.filePath, JSON.stringify(stamped) + '\n');
   }
 }
