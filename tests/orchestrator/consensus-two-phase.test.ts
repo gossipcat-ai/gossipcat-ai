@@ -198,4 +198,27 @@ describe('Two-phase consensus flow', () => {
     expect(covSignals).toHaveLength(1);
     expect(covSignals[0].agentId).toBe('_round');
   });
+
+  it('flags coverageDegraded for Gemini MALFORMED_FUNCTION_CALL sentinel (non-empty dropout)', async () => {
+    const config: ConsensusEngineConfig = { llm: mockLlm, registryGet: mockRegistryGet };
+    const engine = new ConsensusEngine(config);
+
+    // One agent returns the Gemini sentinel — non-empty string, zero analytical content.
+    const sentinel = '[No response from Gemini: malformed_function_call finishReason=MALFORMED_FUNCTION_CALL]';
+    const results = [
+      createEntry('native-a', '## Consensus Summary\n<agent_finding type="finding" severity="high">Bug in auth.ts:10 — missing token validation allows bypass</agent_finding>'),
+      createEntry('native-b', '## Consensus Summary\n<agent_finding type="finding" severity="medium">Missing input validation in api-handler.ts:20 for user-supplied query</agent_finding>'),
+      createEntry('gemini-reviewer', sentinel),
+    ];
+
+    const nativeIds = new Set(['native-a', 'native-b']);
+    const { consensusId } = await engine.generateCrossReviewPrompts(results, nativeIds);
+    const report = await engine.synthesizeWithCrossReview(results, [], consensusId);
+
+    expect(report.coverageDegraded).toBeDefined();
+    expect(report.coverageDegraded!.droppedAgents).toEqual(['gemini-reviewer']);
+    expect(report.coverageDegraded!.received).toBe(2);
+    const covSignals = report.signals.filter(s => s.signal === 'consensus_coverage_degraded');
+    expect(covSignals).toHaveLength(1);
+  });
 });
