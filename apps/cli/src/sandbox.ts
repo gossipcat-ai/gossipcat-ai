@@ -64,6 +64,9 @@ const SENTINEL_DIR = 'sentinels';
 /** Max bytes for `.gossip/boundary-escapes.jsonl` before single-slot rotation. */
 export const MAX_BOUNDARY_ESCAPE_BYTES = 5 * 1024 * 1024; // 5MB
 
+/** Max bytes for `.gossip/premise-verification.jsonl` before single-slot rotation. */
+export const MAX_PREMISE_VERIFICATION_BYTES = 5 * 1024 * 1024; // 5MB
+
 /**
  * Best-effort single-slot size rotation.
  *

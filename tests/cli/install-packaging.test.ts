@@ -92,6 +92,22 @@ describe('docs/RULES.md — file integrity', () => {
   });
 });
 
+// ── apps/cli/src/sandbox.ts — rotation constants ────────────────────────
+
+describe('apps/cli/src/sandbox.ts — exports rotation constants', () => {
+  let source: string;
+  beforeAll(() => {
+    source = readFileSync(resolve(PROJECT_ROOT, 'apps', 'cli', 'src', 'sandbox.ts'), 'utf-8');
+  });
+
+  it('exports MAX_PREMISE_VERIFICATION_BYTES (Stage 2 claim log rotation)', () => {
+    // Source-scan, not import — keeps this test as a file-convention check
+    // with no subprocess. PR C depends on this constant to bound the
+    // .gossip/premise-verification.jsonl log.
+    expect(source).toMatch(/export const MAX_PREMISE_VERIFICATION_BYTES\s*=/);
+  });
+});
+
 // ── scripts/postinstall.js integrity ─────────────────────────────────────
 
 describe('scripts/postinstall.js — error-path regression guard', () => {
