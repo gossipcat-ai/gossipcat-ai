@@ -152,7 +152,7 @@ export function selectCrossReviewers(
       const signalCounts = belowMedian.map(c =>
         performanceReader.getRecentCrossReviewCount(c.agent.agentId, 30),
       );
-      const minSignals = Math.min(...signalCounts);
+      const minSignals = signalCounts.reduce((m, v) => v < m ? v : m, Infinity);
       const starvation = minSignals < 10 ? 0.30
         : minSignals > 50 ? 0.05
         : 0.15;
