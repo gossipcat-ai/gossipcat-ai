@@ -62,6 +62,14 @@ export interface ConsensusReport {
    */
   relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;
   /**
+   * Coverage degraded when an agent dispatched to the round produced an empty
+   * 0-char response (e.g. Gemini MALFORMED_FUNCTION_CALL). The round still
+   * completes but with fewer voices than dispatched; surfaced here so the
+   * orchestrator can see silent dropouts at the round level rather than only
+   * per-task in collect.ts:178 auto-signals.
+   */
+  coverageDegraded?: { expected: number; received: number; droppedAgents: string[] };
+  /**
    * True when at least one finding received fewer cross-reviewers than the
    * target K (e.g. not enough eligible agents). Set by runSelectedCrossReview.
    */
@@ -148,7 +156,8 @@ export interface ConsensusSignal {
     | 'severity_miscalibrated'
     | 'boundary_escape'
     | 'task_timeout'
-    | 'task_empty';
+    | 'task_empty'
+    | 'consensus_coverage_degraded';
   agentId: string;
   counterpartId?: string;
   skill?: string;

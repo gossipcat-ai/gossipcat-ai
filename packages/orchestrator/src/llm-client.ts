@@ -538,7 +538,9 @@ export class GeminiProvider implements ILLMProvider {
       if (finishReason === 'SAFETY') {
         _log('GeminiProvider', 'Response blocked by safety filter');
       }
-      return { text: finishReason === 'SAFETY' ? '[Response blocked by Gemini safety filter]' : '' };
+      return { text: finishReason === 'SAFETY'
+        ? '[Response blocked by Gemini safety filter]'
+        : `[No response from Gemini: malformed_function_call finishReason=${finishReason ?? 'unknown'}]` };
     }
 
     const textParts: string[] = [];

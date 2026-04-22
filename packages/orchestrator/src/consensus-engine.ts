@@ -2678,6 +2678,21 @@ Return only valid JSON.${skillsBlock}`;
       report.summary = report.summary.split(`${internalConsensusId}:`).join(`${consensusId}:`);
     }
 
+    // Surface round-level coverage degradation (0-char dropouts, e.g. Gemini
+    // MALFORMED_FUNCTION_CALL). Adds ONE round-level signal alongside the
+    // per-task auto-signal at collect.ts:178.
+    const droppedAgents = results.filter(r => !r.result || r.result.trim().length === 0).map(r => r.agentId);
+    const received = results.length - droppedAgents.length;
+    if (results.length > 0 && droppedAgents.length > 0) {
+      const evidence = `Coverage degraded: ${received}/${results.length} agents returned content (dropped: ${droppedAgents.join(', ')})`;
+      report.coverageDegraded = { expected: results.length, received, droppedAgents };
+      report.signals.push({
+        type: 'consensus', taskId: '', consensusId, signal: 'consensus_coverage_degraded',
+        signal_class: 'operational', agentId: '_round', evidence, timestamp: new Date().toISOString(),
+      });
+      report.summary += `\n⚠️  ${evidence}\n`;
+    }
+
     // Surface dropped relay agents so the orchestrator can see who silently
     // failed instead of pretending the round was complete.
     if (relayCrossReviewSkipped && relayCrossReviewSkipped.length > 0) {

@@ -174,4 +174,28 @@ describe('Two-phase consensus flow', () => {
     expect(report.confirmed.length).toBe(0);
     expect(report.unique.length + report.unverified.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('flags coverageDegraded and emits consensus_coverage_degraded signal for 0-char dropouts', async () => {
+    const config: ConsensusEngineConfig = { llm: mockLlm, registryGet: mockRegistryGet };
+    const engine = new ConsensusEngine(config);
+
+    // Three dispatched agents, one returns empty text (simulating Gemini MFC).
+    const results = [
+      createEntry('native-a', '## Consensus Summary\n<agent_finding type="finding" severity="high">Bug in auth.ts:10 — missing token validation allows bypass</agent_finding>'),
+      createEntry('native-b', '## Consensus Summary\n<agent_finding type="finding" severity="medium">Missing input validation in api-handler.ts:20 for user-supplied query</agent_finding>'),
+      createEntry('native-c', ''),
+    ];
+
+    const nativeIds = new Set(['native-a', 'native-b', 'native-c']);
+    const { consensusId } = await engine.generateCrossReviewPrompts(results, nativeIds);
+    const report = await engine.synthesizeWithCrossReview(results, [], consensusId);
+
+    expect(report.coverageDegraded).toBeDefined();
+    expect(report.coverageDegraded!.expected).toBe(3);
+    expect(report.coverageDegraded!.received).toBe(2);
+    expect(report.coverageDegraded!.droppedAgents).toEqual(['native-c']);
+    const covSignals = report.signals.filter(s => s.signal === 'consensus_coverage_degraded');
+    expect(covSignals).toHaveLength(1);
+    expect(covSignals[0].agentId).toBe('_round');
+  });
 });
