@@ -1,5 +1,5 @@
 import { MemoryWriter } from '@gossip/orchestrator';
-import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, mkdtempSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -99,5 +99,33 @@ describe('MemoryWriter.validateCitations (annotation-only)', () => {
     expect(result.total).toBe(1);
     expect(result.verified).toBe(1);
     expect(result.unverified).toEqual([]);
+  });
+
+  // Item A regression: when writeConsensusKnowledge is invoked without a
+  // caller-provided taskId, the synthetic fallback was `consensus-${timestamp}`
+  // which collides for two rejections landing in the same millisecond. The fix
+  // appends a short crypto-random suffix so each emitted citation_fabricated
+  // signal gets a distinct taskId even within a single ms.
+  it('Item A: synthetic taskId fallback is collision-distinct within same millisecond', () => {
+    const perfFile = join(projectRoot, '.gossip', 'agent-performance.jsonl');
+    // Body references a fabricated path so validateCitations produces
+    // unverified entries and emitCitationFabricatedSignal fires.
+    const findings = [
+      { originalAgentId: 'peer-a', finding: 'See src/ghost-one.ts for details.', tag: 'unverified' },
+    ];
+    // Two back-to-back calls — same agent, same findings, no taskId passed.
+    // On a fast machine both land within the same millisecond; the format
+    // strip in writeConsensusKnowledge slices to second precision so even
+    // cross-ms this test asserts on the full fallback, not ms drift.
+    writer.writeConsensusKnowledge('opus-implementer', findings);
+    writer.writeConsensusKnowledge('opus-implementer', findings);
+
+    const lines = readFileSync(perfFile, 'utf-8').trim().split('\n').filter(Boolean);
+    const emitted = lines.map(l => JSON.parse(l)).filter(s => s.signal === 'citation_fabricated');
+    expect(emitted.length).toBe(2);
+    const [a, b] = emitted;
+    expect(a.taskId).toMatch(/^consensus-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-f]{6}$/);
+    expect(b.taskId).toMatch(/^consensus-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-f]{6}$/);
+    expect(a.taskId).not.toBe(b.taskId);
   });
 });

@@ -1,5 +1,6 @@
 import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, openSync, closeSync, constants } from 'fs';
 import { join, resolve } from 'path';
+import { randomBytes } from 'crypto';
 import { TaskMemoryEntry } from './types';
 import { MemoryCompactor } from './memory-compactor';
 import type { ILLMProvider } from './llm-client';
@@ -1042,7 +1043,9 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
       // thread one; signal validator requires a non-empty taskId.
       emitCitationFabricatedSignal(this.projectRoot, {
         agentId,
-        taskId: taskId ?? `consensus-${timestamp}`,
+        // Append random suffix to the synthetic taskId so two annotator
+        // rejections landing in the same millisecond don't collide.
+        taskId: taskId ?? `consensus-${timestamp}-${randomBytes(3).toString('hex')}`,
         total: citations.total,
         verified: citations.verified,
         unverifiedCitations: citations.unverified,
