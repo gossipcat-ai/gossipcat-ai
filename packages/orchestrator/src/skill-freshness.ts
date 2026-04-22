@@ -12,6 +12,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { normalizeSkillName } from './skill-name';
+import { coerceStatus } from './skill-engine';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -117,7 +118,11 @@ export function readSkillFreshness(
   }
 
   const boundAt = extractFrontmatterField(content, 'bound_at');
-  const status = extractFrontmatterField(content, 'status');
+  const rawStatus = extractFrontmatterField(content, 'status');
+  // Coerce unknown / legacy values (e.g. "active") to 'pending' so downstream
+  // cooldown logic never sees strings outside the VerdictStatus enum.
+  // Preserve null (absent field) as-is so computeCooldown returns pre_schema.
+  const status = rawStatus === null ? null : coerceStatus(rawStatus);
 
   return { boundAt, status, path };
 }

@@ -188,6 +188,9 @@ export async function handleCollect(
           : r.status === 'timed_out' ? 'task_timeout' as const
           : 'task_empty' as const,
         agentId: r.agentId,
+        // Hardens the safety guard at performance-reader.ts:607 via a second
+        // axis (class, not just category-absence).
+        signal_class: 'operational' as const,
         evidence: r.status === 'failed' ? `Task failed: ${r.error || 'unknown error'}`
           : r.status === 'timed_out' ? 'Task timed out — no response'
           : 'Empty response — agent produced no output',

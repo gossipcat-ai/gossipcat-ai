@@ -24,7 +24,7 @@ export const ALPHA = 0.025;
  *
  * Grounded in Wilson-vs-z-test parity testing: at baselineTotal=20, Wilson CI
  * width at alpha=0.025 is ~0.4 on a 0.5 proportion; z-test variance becomes
- * reliable. See docs/specs/2026-04-21-skills-pipeline-repair.md PR 3.
+ * reliable.
  */
 export const MIN_BASELINE_FOR_ZTEST = 20;
 export const Z_CRITICAL = 1.96; // one-sided, α=0.025
@@ -137,7 +137,7 @@ export function resolveVerdict(
       return {
         status,
         shouldUpdate: true,
-        newSnapshotFields: { status },
+        newSnapshotFields: { status, verdict_method: 'z-test' },
       };
     }
     return { status: 'pending', shouldUpdate: false };
@@ -145,9 +145,12 @@ export function resolveVerdict(
 
   // Degenerate-baseline path: z-test cannot reject when baselineP ∈ {0, 1}
   // because se === 0 (zero variance). Wilson score intervals handle this
-  // naturally. See docs/specs/2026-04-21-skills-pipeline-repair.md PR 2.
+  // naturally.
   if (baselineP === 0 || baselineP === 1) {
-    const WILSON_ALPHA = 0.025; // matches oneSidedZTest Z_CRITICAL calibration
+    const WILSON_ALPHA = 0.025;
+    // Intentionally stricter than z-test (z=2.24 vs 1.96) — degenerate/sparse
+    // baselines deserve extra conservatism; we'd rather under-graduate than
+    // wrongly flip a skill based on thin baseline evidence.
     const wilson = wilsonVerdict(
       { correct: snapshot.baseline_accuracy_correct, total: baselineTotal },
       { correct: delta.correct, total: postTotal },
@@ -171,9 +174,11 @@ export function resolveVerdict(
   // score intervals instead. Note: baselineTotal===0 reaches here with
   // baselineP fallback of 0.5; Wilson on baseline {0,0} has interval [0,1]
   // so it's guaranteed to return 'pending' → falls through to z-test.
-  // See docs/specs/2026-04-21-skills-pipeline-repair.md PR 3.
   if (baselineTotal < MIN_BASELINE_FOR_ZTEST) {
-    const WILSON_SPARSE_ALPHA = 0.025; // matches oneSidedZTest Z_CRITICAL calibration
+    const WILSON_SPARSE_ALPHA = 0.025;
+    // Intentionally stricter than z-test (z=2.24 vs 1.96) — degenerate/sparse
+    // baselines deserve extra conservatism; we'd rather under-graduate than
+    // wrongly flip a skill based on thin baseline evidence.
     const wilson = wilsonVerdict(
       { correct: snapshot.baseline_accuracy_correct, total: baselineTotal },
       { correct: delta.correct, total: postTotal },
@@ -236,7 +241,7 @@ export function resolveVerdict(
     return {
       status: 'flagged_for_manual_review',
       shouldUpdate: true,
-      newSnapshotFields: { status: 'flagged_for_manual_review', inconclusive_strikes: strikes },
+      newSnapshotFields: { status: 'flagged_for_manual_review', inconclusive_strikes: strikes, verdict_method: 'z-test' },
     };
   }
   return {
@@ -247,6 +252,7 @@ export function resolveVerdict(
       status: 'inconclusive',
       inconclusive_at: new Date(nowMs).toISOString(),
       inconclusive_strikes: strikes,
+      verdict_method: 'z-test',
     },
   };
 }

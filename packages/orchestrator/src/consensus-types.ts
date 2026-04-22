@@ -241,18 +241,18 @@ export type PerformanceSignal = ConsensusSignal | ImplSignal | MetaSignal | Pipe
  * Categorisation follows docs/specs/ signal-class spec (spec author: Option
  * 5B discriminator, 2026-04-21):
  *   performance:  agreement, disagreement, unique_confirmed, unique_unconfirmed,
- *                 new_finding, hallucination_caught, and all impl_* signals.
+ *                 new_finding, hallucination_caught, category_confirmed,
+ *                 consensus_verified, and all impl_* signals.
  *   operational:  task_completed, task_tool_turns, format_compliance,
  *                 signal_retracted, task_timeout, task_empty,
  *                 citation_fabricated, finding_dropped_format,
  *                 consensus_round_retracted, unverified.
  *
  * Deliberately conservative: signals not covered by the spec list
- * (category_confirmed, consensus_verified, severity_miscalibrated,
- * boundary_escape, dispatch_started, relay_received, synthesis_completed,
- * circuit_open_fired, skill_injection_skipped) return `undefined`. This keeps
- * the rollout safe — new callers opt in by updating this map, not by inheriting
- * a guess.
+ * (severity_miscalibrated, boundary_escape, dispatch_started, relay_received,
+ * synthesis_completed, circuit_open_fired, skill_injection_skipped) return
+ * `undefined`. This keeps the rollout safe — new callers opt in by updating
+ * this map, not by inheriting a guess.
  */
 const PERFORMANCE_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'agreement',
@@ -261,6 +261,8 @@ const PERFORMANCE_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'unique_unconfirmed',
   'new_finding',
   'hallucination_caught',
+  'category_confirmed',
+  'consensus_verified',
   'impl_test_pass',
   'impl_test_fail',
   'impl_peer_approved',
