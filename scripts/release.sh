@@ -119,6 +119,9 @@ if git rev-parse "$tag" >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "→ Building workspace packages (topological)"
+npm run build:all
+
 echo "→ Building MCP bundle"
 npm run build:mcp
 
