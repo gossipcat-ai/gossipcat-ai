@@ -658,11 +658,24 @@ export class PerformanceReader {
           break;
         }
         case 'hallucination_caught': {
-          const severity = (
+          // Base 3.0× for citation/hallucination outcomes. Stage 2
+          // premise-verification scales ONLY the `premise_mismatch` arm by
+          // `signal.modality` — hedged/vague claims carry less penalty than
+          // asserted ones. Missing modality defaults to 'asserted' (strictest
+          // path / back-compat for pre-Stage-2 signals).
+          // Spec: docs/specs/2026-04-22-premise-verification-stage-2.md §Signal integration.
+          let severity: number;
+          if (signal.outcome === 'premise_mismatch') {
+            const modality = signal.modality ?? 'asserted';
+            severity = modality === 'hedged' ? 1.5 : modality === 'vague' ? 1.0 : 3.0;
+          } else if (
             signal.outcome === 'fabricated_citation' ||
-            signal.outcome === 'confirmed_hallucination' ||
-            signal.outcome === 'premise_mismatch'
-          ) ? 3.0 : 1.0;
+            signal.outcome === 'confirmed_hallucination'
+          ) {
+            severity = 3.0;
+          } else {
+            severity = 1.0;
+          }
           // Use a dedicated (shorter) half-life for the hallucination counter so
           // past mistakes can be outrun by recent good behavior. `weightedTotal`
           // keeps the original DECAY_HALF_LIFE so the denominator that defines
