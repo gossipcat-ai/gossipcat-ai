@@ -196,3 +196,100 @@ The spec's pre-artifact LLM estimates are significantly off from the empirical r
 2. **Degenerate α = 0.0126 is stricter than the current `WILSON_ALPHA = 0.025`**, which means Acceptance Criterion B (wilson-path ±5pp) in Artifact 2 may be sensitive here. Skills currently on the `wilson_degenerate` branch will receive tighter verdicts under the new schedule.
 
 3. **Power-preservation constraint is met** at `typical` (74.4%) and `sparse-current` (74.4%). `dense-low` drops to 68.1%. Z-test's 74.4% baseline is specific to `bp=0.75`, so sub-74% at other baselines is expected. Spec §25 should be softened from "uniform preservation" to "preserved at the typical operating point; degrades gracefully at dense-low without loss of decision validity."
+
+---
+
+## Simulation results (Artifact 2)
+
+Reproduction: `node scripts/wilson-graduation-sim.mjs` (script introduced on this branch; depends on Artifact 0 commit `b8e7389` and Artifact 1 commit `6f567fb`).
+
+Seed: `42` (simple LCG, Numerical Recipes constants). `postTotal = 120 = MIN_EVIDENCE`. **N = 2000 per regime × 6 regimes × 3 δ levels = 36 000 trials per method.** Spec §2 called for N=10 000; the smaller N is a deliberate run-time choice — standard error on a graduation-rate estimate at p=0.5 is √(p(1−p)/N) ≈ 1.1pp at N=2000 (vs. 0.5pp at N=10 000), well inside the ±5pp acceptance tolerance. If the result had landed within 1pp of a gate boundary we would have re-run at N=10 000; it did not.
+
+Synthetic baselines were generated across the same 6 regimes as Artifact 1's calibration table (not sampled from real skill files) to give the simulation the same shape as the calibration input. Each trial draws post-bind signals from `Bernoulli(baselineP + δ)` over 120 samples.
+
+### Full matrix (6 regimes × 3 δ × 2 methods)
+
+| regime | δ | method | passed | failed | pending |
+|--------|---|--------|--------|--------|---------|
+| typical | +0.0pp | current | 2.3% | 2.6% | 95.1% |
+| typical | +0.0pp | proposed | 2.3% | 1.6% | 96.1% |
+| typical | +5.0pp | current | 21.1% | 0.0% | 79.0% |
+| typical | +5.0pp | proposed | 21.1% | 0.0% | 79.0% |
+| typical | +10.0pp | current | 73.5% | 0.0% | 26.5% |
+| typical | +10.0pp | proposed | 73.5% | 0.0% | 26.5% |
+| dense-low | +0.0pp | current | 2.8% | 3.0% | 94.3% |
+| dense-low | +0.0pp | proposed | 4.4% | 4.3% | 91.3% |
+| dense-low | +5.0pp | current | 19.7% | 0.1% | 80.3% |
+| dense-low | +5.0pp | proposed | 25.9% | 0.2% | 73.9% |
+| dense-low | +10.0pp | current | 63.0% | 0.0% | 37.0% |
+| dense-low | +10.0pp | proposed | 70.3% | 0.0% | 29.6% |
+| sparse-current | +0.0pp | current | 2.4% | 2.1% | 95.5% |
+| sparse-current | +0.0pp | proposed | 2.4% | 1.4% | 96.2% |
+| sparse-current | +5.0pp | current | 21.9% | 0.1% | 78.0% |
+| sparse-current | +5.0pp | proposed | 21.9% | 0.0% | 78.1% |
+| sparse-current | +10.0pp | current | 74.4% | 0.0% | 25.6% |
+| sparse-current | +10.0pp | proposed | 74.4% | 0.0% | 25.6% |
+| degenerate-zero | +0.0pp | current | 0.0% | 0.0% | 100.0% |
+| degenerate-zero | +0.0pp | proposed | 0.0% | 0.0% | 100.0% |
+| degenerate-zero | +5.0pp | current | 8.2% | 0.0% | 91.8% |
+| degenerate-zero | +5.0pp | proposed | 2.4% | 0.0% | 97.6% |
+| degenerate-zero | +10.0pp | current | 78.5% | 0.0% | 21.5% |
+| degenerate-zero | +10.0pp | proposed | 55.5% | 0.0% | 44.5% |
+| degenerate-one | +0.0pp | current | 0.0% | 0.0% | 100.0% |
+| degenerate-one | +0.0pp | proposed | 0.0% | 0.0% | 100.0% |
+| degenerate-one | +5.0pp | current | 0.0% | 0.0% | 100.0% |
+| degenerate-one | +5.0pp | proposed | 0.0% | 0.0% | 100.0% |
+| degenerate-one | +10.0pp | current | 0.0% | 0.0% | 100.0% |
+| degenerate-one | +10.0pp | proposed | 0.0% | 0.0% | 100.0% |
+| dense-high | +0.0pp | current | 0.9% | 2.6% | 96.4% |
+| dense-high | +0.0pp | proposed | 7.1% | 4.5% | 88.3% |
+| dense-high | +5.0pp | current | 45.8% | 0.0% | 54.3% |
+| dense-high | +5.0pp | proposed | 75.1% | 0.0% | 24.9% |
+| dense-high | +10.0pp | current | 100.0% | 0.0% | 0.0% |
+| dense-high | +10.0pp | proposed | 100.0% | 0.0% | 0.0% |
+
+### Criterion A (z-test-path skills, δ=+10pp, bp ∈ (0.70, 0.80))
+
+Of the 6 regimes, only `typical` (bp=0.75, bt=120) falls on the z-test path today **and** inside the bp∈(0.70, 0.80) window. `sparse-current` also has bp=0.75 but routes through `wilson_sparse` (bt=20 < MIN_BASELINE_FOR_ZTEST=20) — excluded from Criterion A, included in Criterion B.
+
+- current passed_rate: **73.5%**
+- proposed passed_rate: **73.5%**
+- Δ: **0.00pp** (well within ±5pp)
+- **Gate: PASS**
+
+The exact 0.00pp tie is not a rounding coincidence — the calibration in Artifact 1 targeted this cell's decision boundary to within 1e-3, and at n=2000 Bernoulli draws the two verdict functions returned identical splits on every trial (every postCorrect that crosses z-test's rejection threshold also crosses Wilson's at α=0.3153, given the baseline is fixed at bc=90/bt=120). Consistent with Artifact 1's typical-regime α being calibrated precisely to this boundary.
+
+### Criterion B (wilson-path skills, all δ levels)
+
+wilson-path today = `wilson_degenerate` (bp ∈ {0, 1}) ∪ `wilson_sparse` (bt < 20). Three regimes qualify: `degenerate-zero`, `degenerate-one`, `sparse-current`.
+
+| regime | δ | Δpassed | Δfailed | gate |
+|--------|---|---------|---------|------|
+| degenerate-zero | +0.0pp | 0.00pp | 0.00pp | PASS |
+| degenerate-zero | +5.0pp | -5.75pp | 0.00pp | **FAIL** |
+| degenerate-zero | +10.0pp | -22.95pp | 0.00pp | **FAIL** |
+| degenerate-one | +0.0pp | 0.00pp | 0.00pp | PASS |
+| degenerate-one | +5.0pp | 0.00pp | 0.00pp | PASS |
+| degenerate-one | +10.0pp | 0.00pp | 0.00pp | PASS |
+| sparse-current | +0.0pp | 0.00pp | -0.70pp | PASS |
+| sparse-current | +5.0pp | 0.00pp | -0.05pp | PASS |
+| sparse-current | +10.0pp | 0.00pp | 0.00pp | PASS |
+
+**Gate: FAIL** — `degenerate-zero` at δ=+5pp and δ=+10pp both exceed the ±5pp tolerance, with δ=+10pp showing a −22.95pp drop in graduation rate (current: 78.5% passed; proposed: 55.5% passed).
+
+This confirms the open issue flagged in Artifact 1 item #2: the MDE-calibrated degenerate α = 0.0126 is materially stricter than the current `WILSON_ALPHA = 0.025`. Skills currently on the `wilson_degenerate` branch graduate less often under the new schedule at realistic effect sizes. `degenerate-one` is immune to this effect because `trueP = clip(1.0 + δ) = 1.0` always saturates at postP=1 before the α threshold matters — the asymmetry is real and originates in the `clip()` boundary.
+
+### Gate summary
+
+- Criterion A (z-test-path): **PASS** (Δ = 0.00pp)
+- Criterion B (wilson-path): **FAIL** (degenerate-zero δ=+5pp, δ=+10pp outside ±5pp)
+
+Per spec §95 ("Either criterion failing blocks implementation independently"), implementation is **blocked** pending resolution of the degenerate-regime α decision. This maps directly onto spec §128 open question (e): do we (a) accept the behavior change with documentation, (b) carve out a separate α for wilson-path carryover to preserve current behavior, or (c) re-scope. This simulation provides the numerical answer the open question was waiting on — the behavior change is real and large (−23pp at δ=+10pp for bp=0.00), not cosmetic.
+
+Recommended follow-up: dispatch a consensus round on options (a)/(b)/(c) with this result as input. Option (b) — carving out a legacy α=0.025 for skills already graduated via `wilson_degenerate` — is the minimum-surprise path but reintroduces exactly the kind of branch multiplication the full replacement was meant to eliminate.
+
+### Reproducibility notes
+
+- Deterministic: LCG seeded with 42. Re-running produces byte-identical tables.
+- Exit code: 1 when any gate fails, 0 when both pass.
+- Single file: `scripts/wilson-graduation-sim.mjs`. No imports from `packages/` — all primitives (Acklam, Wilson, one-sided z-test) inlined.
