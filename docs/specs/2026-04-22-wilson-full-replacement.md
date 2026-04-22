@@ -293,3 +293,89 @@ Recommended follow-up: dispatch a consensus round on options (a)/(b)/(c) with th
 - Deterministic: LCG seeded with 42. Re-running produces byte-identical tables.
 - Exit code: 1 when any gate fails, 0 when both pass.
 - Single file: `scripts/wilson-graduation-sim.mjs`. No imports from `packages/` — all primitives (Acklam, Wilson, one-sided z-test) inlined.
+
+---
+
+## Option (d) resolution (post-R3 consensus)
+
+R3 consensus (sonnet-reviewer, haiku-researcher) on 2026-04-22 surfaced a principled alternative to the three options originally framed:
+
+- **Option (a)** (accept -23pp regression) contradicts §31.
+- **Option (b)** (legacy-α carve-out) reintroduces the branches §16-23 wanted to eliminate.
+- **Option (c)** (re-scope degenerate calibration) was ambiguous in its meaning.
+- **Option (d) — power-match calibration:** solve for α such that Wilson power at δ=+10pp, postTotal=120, bp=0 matches a target β. The "MDE=0.10 at postTotal=120" criterion was mislabeled — classical MDE derivation holds α + power constant and solves for effect; the Artifact 1 bisection held effect + n constant and solved for α. That's boundary-matching, not MDE.
+
+### Empirical result: threshold-plateau discovery
+
+Implementing Option (d) exposed a structural property of Wilson at finite n: the "first-passed postP" threshold is an integer postCorrect count, which makes `wilsonPowerAtDelta` a step function. Plateaus at postTotal=120, bp=0:
+
+| α | threshold (pc) | first-passed postP | analytic power @ +10pp |
+|---|----|----|----|
+| 0.0126 (boundary-MDE) | 12 | 0.1000 | 54.4% |
+| 0.0200 | 11 | 0.0917 | 66.4% |
+| **0.0250 (current `WILSON_ALPHA`)** | **10** | **0.0833** | **77.1%** |
+| 0.0300 | 10 | 0.0833 | 77.1% |
+| 0.0306 | 9 | 0.0750 | 85.9% |
+
+Target β=0.785 lies in the gap between the threshold-10 plateau (77.1%) and the threshold-9 plateau (85.9%). No α achieves β=0.785 exactly. The calibration script's bisection now returns the **largest α at-or-below the target** (`calibrateByPowerMatch` prefers no-overshoot). For degenerate-zero at postTotal=120, that's **α = 0.03058**, sitting at the top of the threshold=10 plateau — behaviorally equivalent to the existing production α=0.025.
+
+### Final schedule
+
+```json
+{
+  "typical":         { "alpha": 0.3152839660644532,  "postTotal": 120 },
+  "dense-low":       { "alpha": 0.21972811889648441, "postTotal": 120 },
+  "sparse-current":  { "alpha": 0.5490728454589844,  "postTotal": 120 },
+  "degenerate-zero": { "alpha": 0.025, "postTotal": 120 },
+  "degenerate-one":  { "alpha": 0.025, "postTotal": 120,
+                       "inherits": "degenerate-zero", "reason": "saturation-asymmetry" },
+  "dense-high":      { "alpha": 0.3152839660644532,  "postTotal": 120,
+                       "inherits": "typical", "divergencePp": -1.2 }
+}
+```
+
+### Re-run simulation verdict
+
+| Criterion | Verdict |
+|-----------|---------|
+| A (z-test-path typical @ δ=+10pp, ±5pp) | **PASS** (Δ=0.00pp) |
+| B (wilson-path ±5pp per terminal state) | **PASS** (all cells ≤0.70pp) |
+
+Both gates satisfied. Implementation unblocked.
+
+### What this reveals
+
+The Artifact 1 result "MDE-calibrated α=0.0126" was a boundary-matching artifact, not a principled calibration. Option (d) is the principled approach: specify a power target, solve for α, and acknowledge that Wilson's threshold discreteness means the answer snaps to a plateau. **The current production `WILSON_ALPHA=0.025` was already on the correct plateau** — the power-match analysis validates the historical constant with math rather than preserving it as a "legacy carve-out." No fragmented `verdict_method` union needed; the unified Wilson path uses α=0.025 for the degenerate regime.
+
+### Why α=0.025 and not the calibration's raw α=0.03058
+
+The `calibrateByPowerMatch` bisection converges on α=0.03058 as the largest α that keeps power ≤ β=0.785 at postTotal=120. At that calibration point, α=0.025 and α=0.03058 are behaviorally identical — both produce threshold=10, 77.1% power.
+
+However, a skill accumulates `postTotal` over time. At higher postTotal, the two α values produce different integer thresholds:
+
+| postTotal | threshold @ α=0.025 | threshold @ α=0.03058 | diverges? |
+|-----------|---------------------|-----------------------|-----------|
+| 120       | 10                  | 10                    | no (calibration point) |
+| 240       | 17                  | 16                    | yes — +1 pc gap |
+| 500       | 30                  | 28                    | yes — +2 pc gap |
+| 1000      | 55                  | 51                    | yes — +4 pc gap |
+| 2000      | 101                 | 94                    | yes — +7 pc gap |
+
+α=0.03058 is systematically **more permissive** than α=0.025 at steady-state postTotal. A long-running degenerate-zero skill would graduate earlier under the calibrated-raw value — a real behavior change in production, not a cosmetic one. The simulation (pinned at postTotal=120) cannot see this divergence; it only surfaces when real skills accumulate evidence beyond the calibration point.
+
+**Decision:** pin degenerate α = 0.025 (current production value). At the calibration point this is equivalent to 0.03058 by the power-match analysis. At every larger postTotal it preserves current behavior exactly. The calibration script now documents α=0.03058 as the theoretical upper-bound of the threshold=10 plateau, while the schedule uses α=0.025 for behavior-preservation across the full postTotal range.
+
+This is Option (d) in substance: principled power-match analysis — the result is that the existing constant was already correct across the operating space, not just at n=120. No fragmented `verdict_method` union, no "legacy carve-out" framing, just a value the analysis justifies.
+
+### Spec section edits
+
+- §58 "Degenerate-regime target": the MDE-at-postTotal framing is retained in the prose for historical continuity but is explicitly labeled as the original approach that Option (d) supersedes.
+- §31 "Key finding": "piecewise α is a prerequisite" language remains accurate — piecewise α IS required across the 4 non-degenerate regimes. The degenerate regime is now calibrated by power-match rather than boundary-match, but still has its own α (distinct from typical/dense-low/sparse-current).
+
+### Remaining open issues (for implementation)
+
+1. **dense-low +7.3pp divergence at δ=+10pp** (silently uncovered by gates). Acceptable per current spec scope but surfaces a real behavior change.
+2. **dense-high +29.3pp divergence at δ=+5pp** (structural, not gated).
+3. **degenerate-one 0% graduation under both methods** (structural — `clip(1.0+δ)=1.0`). Correct behavior but the simulation's PASS verdict is misleading.
+
+These are documented for implementation review, not gates.

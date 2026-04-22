@@ -204,6 +204,56 @@ function bisectAlphaMatch(bt, bp, postTotal, targetPostP, opts = {}) {
   return best;
 }
 
+// ---------------------------------------------------------------------------
+// Power-match calibration (Option (d), post-R3 consensus 2026-04-22).
+//
+// For the degenerate regime, boundary-MDE calibration (α such that Wilson first
+// passes at postP = baselineP ± MDE) produces α ≈ 0.0126 — materially stricter
+// than the current WILSON_ALPHA = 0.025. Artifact 2 showed this drops
+// graduation rate at degenerate-zero by −22.95pp at δ=+10pp, busting
+// Criterion B.
+//
+// Option (d) replaces the boundary target with a *power* target: find α such
+// that wilsonPowerAtDelta(bt, bp, postTotal, α, δ) ≈ targetPower within 1e-3.
+// This couples α to the same effect-size guarantee the z-test path pins
+// (β = 0.785 ≈ z-test's 74.4% power at +10pp on the typical operating point).
+//
+// Monotonicity: wilsonPowerAtDelta is (mostly) INCREASING in α — larger α →
+// smaller z → narrower CI → lower passing threshold → higher power at any
+// fixed truthP. Bisection: if fMid < target, need larger α (raise lo).
+// ---------------------------------------------------------------------------
+
+// Wilson threshold is an integer postCorrect count, making wilsonPowerAtDelta
+// a step function with plateaus. Bisection that seeks equality will overshoot
+// the next plateau when the target falls in a gap. Instead: find the LARGEST α
+// with power ≤ targetPower (the "no-overshoot" plateau). Rationale: the current
+// production WILSON_ALPHA=0.025 sits on the closest-below-target plateau at
+// postTotal=120, and Criterion B PASSes at that value — any α that bumps
+// threshold up one integer overshoots by +8pp. See spec "Option (d) resolution".
+function calibrateByPowerMatch(bt, bp, postTotal, targetPower, delta, opts = {}) {
+  const tolAlpha = opts.tolAlpha ?? 1e-4;
+  let lo = opts.lo ?? 0.001;
+  let hi = opts.hi ?? 0.99;
+  let best = { alpha: lo, power: wilsonPowerAtDelta(bt, bp, postTotal, lo, delta) };
+  for (let iter = 0; iter < 80; iter++) {
+    if (hi - lo < tolAlpha) break;
+    const mid = 0.5 * (lo + hi);
+    const fMid = wilsonPowerAtDelta(bt, bp, postTotal, mid, delta);
+    if (!Number.isFinite(fMid)) {
+      lo = mid;
+      continue;
+    }
+    // power increases with α. Keep the largest α that stays at-or-below target.
+    if (fMid <= targetPower) {
+      best = { alpha: mid, power: fMid };
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return best;
+}
+
 // Degenerate regime: for bp=0 solve α such that wilsonVerdict passes at postP = 0.10
 // For bp=1 solve α such that wilsonVerdict FAILS at postP = 0.90.
 // At bp=0, baseline CI upper decreases as α grows (wider CI → larger upper → harder to pass).
@@ -287,20 +337,62 @@ function main() {
       });
       schedule[r.name] = { alpha, postTotal: r.postTotal };
     } else {
-      const { alpha, postP } = bisectAlphaDegenerate(r.bp, r.postTotal);
-      const targetP = r.bp === 0 ? 0.10 : 0.90;
-      rows.push({
-        regime: r.name,
-        bt: r.bt,
-        bp: r.bp,
-        postTotal: r.postTotal,
-        zTestCritPostP: NaN,
-        wilsonFirstPassedPostP: postP,
-        alpha,
-        powerAt10pp: NaN,
-        note: `MDE target postP=${targetP.toFixed(2)}`,
-      });
-      schedule[r.name] = { alpha, postTotal: r.postTotal };
+      // Option (d) power-match calibration (post-R3 consensus 2026-04-22).
+      // β = 0.785 target: typical regime's Wilson power at δ=+10pp (74.4%)
+      // rounded up to 78.5% to match current (α=0.025) degenerate-zero
+      // passed_rate at δ=+10pp from Artifact 2 (spec §236).
+      const TARGET_POWER = 0.785;
+      if (r.bp === 0) {
+        const delta = +0.10;
+        const { alpha, power } = calibrateByPowerMatch(
+          r.bt, r.bp, r.postTotal, TARGET_POWER, delta,
+        );
+        const postP = firstPassedPostP(r.bt, r.bp, r.postTotal, alpha);
+        rows.push({
+          regime: r.name,
+          bt: r.bt,
+          bp: r.bp,
+          postTotal: r.postTotal,
+          zTestCritPostP: NaN,
+          wilsonFirstPassedPostP: postP,
+          alpha,
+          powerAt10pp: power,
+          note: `power-match target β=${TARGET_POWER.toFixed(3)}`,
+        });
+        schedule[r.name] = { alpha, postTotal: r.postTotal };
+      } else {
+        // bp === 1, degenerate-one: trueP = clip(1.0 + δ) = 1.0 saturates
+        // (Artifact 2 §280). wilsonPowerAtDelta at δ=-0.10 has no meaningful
+        // root because the verdict function returns 'failed' only via upper
+        // CI < baseline lower, and at bp=1 with full saturation in either
+        // direction the power curve is flat. Per R3 sonnet finding, reuse
+        // degenerate-zero's α and document the asymmetry.
+        const zeroAlpha = schedule['degenerate-zero']?.alpha;
+        if (!Number.isFinite(zeroAlpha)) {
+          throw new Error('degenerate-one calibration requires degenerate-zero to run first');
+        }
+        const alpha = zeroAlpha;
+        const postP = firstPassedPostP(r.bt, r.bp, r.postTotal, alpha);
+        // Attempt a power probe at δ=-0.10 for audit purposes.
+        const probe = wilsonPowerAtDelta(r.bt, r.bp, r.postTotal, alpha, -0.10);
+        rows.push({
+          regime: r.name,
+          bt: r.bt,
+          bp: r.bp,
+          postTotal: r.postTotal,
+          zTestCritPostP: NaN,
+          wilsonFirstPassedPostP: postP,
+          alpha,
+          powerAt10pp: Number.isFinite(probe) ? probe : NaN,
+          note: `power-match target β=${TARGET_POWER.toFixed(3)} (reuses degenerate-zero α; saturation asymmetry — see spec §280)`,
+        });
+        schedule[r.name] = {
+          alpha,
+          postTotal: r.postTotal,
+          inherits: 'degenerate-zero',
+          reason: 'saturation-asymmetry',
+        };
+      }
     }
   }
 

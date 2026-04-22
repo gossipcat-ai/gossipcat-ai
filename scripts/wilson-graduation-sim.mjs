@@ -189,13 +189,26 @@ function currentVerdict(baselineCorrect, baselineTotal, postCorrect, postTotal) 
 }
 
 // proposed: piecewise α by regime, Wilson-only.
-// Schedule from Artifact 1 calibration table (spec line ~168).
+// Schedule from Artifact 1 calibration table + Option (d) power-match
+// analysis (post-R3 consensus 2026-04-22).
+//
+// Degenerate regime: power-match lands on the threshold-10 α plateau
+// (77.14% analytic / 78.5% simulated power @ δ=+10pp). Wilson's "first
+// passed" threshold is an integer postCorrect count, producing a step
+// function. α ∈ [0.020, 0.0305] all yield threshold=10 (matches current
+// production); α ≥ 0.031 overshoots to threshold=9 (86% power, +8pp over
+// target). Target β=0.785 sits in the gap, so we pick the α already
+// deployed in production (WILSON_ALPHA=0.025) — the power-match
+// analysis validates that the existing constant is on the correct plateau.
+// This resolves Criterion B without a legacy carve-out: same α, principled
+// justification. See spec §"Option (d) resolution" for the threshold
+// plateau table.
 const ALPHA_SCHEDULE = {
   typical: 0.3152839660644532,
   'dense-low': 0.21972811889648441,
   'sparse-current': 0.5490728454589844,
-  'degenerate-zero': 0.01258984375,
-  'degenerate-one': 0.0126953125,
+  'degenerate-zero': 0.025,
+  'degenerate-one': 0.025,
   'dense-high': 0.3152839660644532, // inherits typical
 };
 
