@@ -61,4 +61,16 @@ Check endpoints.`;
     const result = parseSkillFrontmatter(md);
     expect(result?.name).toBe('dos-resilience');
   });
+
+  it('strips surrounding double quotes from scalar values', () => {
+    const md = `---\nname: t\ndescription: d\nkeywords: [k]\nstatus: "pending"\n---\nBody`;
+    const result = parseSkillFrontmatter(md);
+    expect(result?.status).toBe('pending');
+  });
+
+  it('strips surrounding single quotes from scalar values', () => {
+    const md = `---\nname: t\ndescription: d\nkeywords: [k]\nstatus: 'pending'\n---\nBody`;
+    const result = parseSkillFrontmatter(md);
+    expect(result?.status).toBe('pending');
+  });
 });

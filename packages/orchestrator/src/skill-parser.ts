@@ -56,7 +56,17 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
-    const value = line.slice(colonIdx + 1).trim();
+    let value = line.slice(colonIdx + 1).trim();
+    // Strip surrounding "..." or '...' so `status: "pending"` matches the
+    // enum the same way `status: pending` does. Mirrors the quote handling
+    // in skill-engine.ts:parseSkillFile — this parser is the loader's path
+    // and drifted. Inline arrays (keywords) keep their form via the [] check
+    // below, so stripping here is safe.
+    if (value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+         (value.startsWith("'") && value.endsWith("'")))) {
+      value = value.slice(1, -1);
+    }
     fields[key] = value;
   }
 
