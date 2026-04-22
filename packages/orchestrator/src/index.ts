@@ -106,3 +106,19 @@ export { PipelineDriftDetector } from './pipeline-drift-detector';
 export type { DriftDetectionResult, DriftOffender, PipelineDriftDetectorOptions } from './pipeline-drift-detector';
 export { loadMemoryConfig } from './memory-config';
 export type { MemoryConfig } from './memory-config';
+export { parseClaimBlock } from './claim-types';
+export type {
+  Claim,
+  ClaimBlock,
+  ClaimVerdict,
+  Modality,
+  Relation,
+  CallsiteCountClaim,
+  FileLineClaim,
+  AbsenceOfSymbolClaim,
+  PresenceOfSymbolClaim,
+  CountRelationClaim,
+  ParseClaimBlockResult,
+  ParseError,
+} from './claim-types';
+export { verifyClaims, MAX_CLAIMS_PER_BLOCK, PER_BLOCK_DEADLINE_MS } from './claim-verifier';
