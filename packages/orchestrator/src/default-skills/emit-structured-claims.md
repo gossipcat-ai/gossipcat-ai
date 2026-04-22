@@ -97,6 +97,30 @@ Omitting the `modality` field entirely is a schema-lint warning; the
 verifier treats a missing field as `asserted` (strictest path) and logs
 the violation. Always include `modality` explicitly.
 
+### Uncertain about a line number? Use `presence_of_symbol` — scoped to the same file.
+
+Anchor mismatches (wrong line, or worse, wrong file) are the dominant
+observed failure mode. If you are not directly looking at the cited line
+as you write the claim, **do not use `file_line`** — a guessed line
+becomes a fabricated citation, which is the most expensive kind of
+hallucination.
+
+The safe fallback is `presence_of_symbol` scoped to **the specific file
+you believe the symbol lives in** — not a directory. A directory scope
+passes whenever the symbol appears anywhere in the subtree (including
+tests, stale comments, unrelated modules), which turns a line-number
+error into a silent wrong-file error. Same-file scope preserves location
+information even though you've dropped line precision.
+
+- ✅ *"`maybeAnnotate` is in `sandbox.ts`"* (line unknown) →
+  `{ type: "presence_of_symbol", symbol: "maybeAnnotate", scope: "apps/cli/src/sandbox.ts", modality: "asserted" }`
+- ✅ *"`maybeAnnotate` is at `sandbox.ts:207`"* (looking at line 207) →
+  `{ type: "file_line", path: "apps/cli/src/sandbox.ts", line: 207, expected_symbol: "maybeAnnotate", modality: "asserted" }`
+- ❌ *"`maybeAnnotate` lives around line 290 of `sandbox.ts`"* (guessed line)
+  → fabricated citation. Drop the line, keep the file: use `presence_of_symbol` with `scope: "apps/cli/src/sandbox.ts"`.
+- ❌ *"`maybeAnnotate` is somewhere in `apps/cli/src/`"* (directory scope)
+  → masks wrong-file errors. If you don't know the file either, the honest choice is prose with `modality: "vague"` and no claim — not a directory-scoped presence check.
+
 ## When to use `count_relation` vs `negated:true`
 
 - `negated: true` on `callsite_count` — encodes "observed count ≠ expected".
@@ -112,6 +136,37 @@ One prose sentence can pack count + file:line + absence. Decompose into N
 separate claim objects in the `claims` array. The verifier reports
 per-claim outcomes; dispatch annotation cites only the subset that failed
 or could not be verified.
+
+### Example
+
+Prose: *"`persistRelayTasks` is called 3× in `dispatch.ts` and 1× in
+`collect.ts`; `doBoot` at `mcp-server-sdk.ts:465` calls `restoreNativeTaskMap`."*
+
+The realistic compound failure is NOT a malformed "X and Y" symbol — it's
+**silent partial coverage**: emitting one claim, treating the rest as
+covered by prose.
+
+❌ BAD (only the easiest claim emitted; two load-bearing assertions slip
+through as unverified prose):
+```json
+{ "type": "callsite_count", "symbol": "persistRelayTasks",
+  "scope": "apps/cli/src/handlers/dispatch.ts", "expected": 3, "modality": "asserted" }
+```
+
+✅ GOOD (one claim per prose assertion; none of the three load-bearing
+pieces can slip through without verification):
+```json
+{ "type": "callsite_count", "symbol": "persistRelayTasks",
+  "scope": "apps/cli/src/handlers/dispatch.ts", "expected": 3, "modality": "asserted" }
+{ "type": "callsite_count", "symbol": "persistRelayTasks",
+  "scope": "apps/cli/src/handlers/collect.ts", "expected": 1, "modality": "asserted" }
+{ "type": "file_line", "path": "apps/cli/src/mcp-server-sdk.ts", "line": 465,
+  "expected_symbol": "restoreNativeTaskMap", "modality": "asserted" }
+```
+
+If a prose sentence has N verifiable assertions and your `claims[]`
+array has fewer than N entries, the missing assertions become unverified
+prose — no penalty when wrong, no signal when right.
 
 ## Anti-patterns
 
