@@ -13,9 +13,19 @@
  * output so a future drift is caught in CI.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { execSync } from 'child_process';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+
+// Stage 2 premise-verification tests rely on `rg` being on PATH; gate the
+// whole block when it is not available so CI without ripgrep still passes.
+let rgAvailable = true;
+try {
+  execSync('which rg', { stdio: 'ignore' });
+} catch {
+  rgAvailable = false;
+}
 
 import { ctx } from '../../apps/cli/src/mcp-context';
 import {
@@ -442,3 +452,325 @@ describe('native dispatch — premise verification (Component B)', () => {
     expect(dispatched.task ?? '').not.toContain('═══ UNVERIFIED CLAIM DETECTED ═══');
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Stage 2 premise-verification — structured ```premise-claims block wire-up.
+//
+// Spec: docs/specs/2026-04-22-premise-verification-stage-2.md §Wire-up.
+// Covers: parse+verify+annotate, all-verified clean path, malformed JSON
+// schema-lint, SCOPE > UNVERIFIED > PREMISE-MISMATCH ordering, relay skip,
+// Stage 1 regex co-existence.
+// ────────────────────────────────────────────────────────────────────────────
+
+function buildClaimsBlock(
+  claims: Record<string, unknown>[],
+): string {
+  const payload = {
+    schema_version: '1',
+    verifier: 'orchestrator',
+    claims,
+  };
+  return '```premise-claims\n' + JSON.stringify(payload, null, 2) + '\n```';
+}
+
+(rgAvailable ? describe : describe.skip)(
+  'native dispatch — Stage 2 premise-verification (structured claims)',
+  () => {
+    let sandboxDir: string;
+    let prevCwd: string;
+
+    beforeEach(() => {
+      prevCwd = process.cwd();
+      sandboxDir = mkdtempSync(join(tmpdir(), 'gossip-premise-stage2-'));
+      mkdirSync(join(sandboxDir, '.gossip', 'skills'), { recursive: true });
+      mkdirSync(join(sandboxDir, 'src'), { recursive: true });
+      // Fixture source: `alpha` appears once in target.ts (for falsified=expected-5 path
+      // and verified=expected-1 path).
+      writeFileSync(
+        join(sandboxDir, 'src', 'target.ts'),
+        "export function alpha(): void { /* single definition of alpha */ }\n",
+      );
+      process.chdir(sandboxDir);
+      resetCtx();
+    });
+
+    afterEach(() => {
+      restoreCtx();
+      process.chdir(prevCwd);
+      rmSync(sandboxDir, { recursive: true, force: true });
+    });
+
+    it('parses + verifies a claim block and prepends PREMISE-MISMATCH on falsified', async () => {
+      ctx.nativeAgentConfigs.set('opus-implementer', {
+        model: 'claude-opus-4-7',
+        instructions: 'You implement.',
+        description: 'Native implementer',
+        skills: [],
+      });
+      const block = buildClaimsBlock([
+        {
+          type: 'callsite_count',
+          symbol: 'alpha',
+          scope: 'src/target.ts',
+          expected: 5,
+          modality: 'asserted',
+        },
+      ]);
+      const task = `Patch the five alpha sites.\n\n${block}`;
+
+      const result = await handleDispatchSingle('opus-implementer', task);
+      const prompt = extractAgentPrompt(result.content);
+
+      expect(prompt).toContain('⚠ PREMISE-MISMATCH');
+      expect(prompt).toMatch(/observed 1/);
+      expect(prompt).toMatch(/modality=asserted/);
+    });
+
+    it('does NOT prepend PREMISE-MISMATCH when all claims verify', async () => {
+      ctx.nativeAgentConfigs.set('opus-implementer', {
+        model: 'claude-opus-4-7',
+        instructions: 'You implement.',
+        description: 'Native implementer',
+        skills: [],
+      });
+      const block = buildClaimsBlock([
+        {
+          type: 'callsite_count',
+          symbol: 'alpha',
+          scope: 'src/target.ts',
+          expected: 1, // matches fixture
+          modality: 'asserted',
+        },
+      ]);
+      const task = `Patch the one alpha site.\n\n${block}`;
+
+      const result = await handleDispatchSingle('opus-implementer', task);
+      const prompt = extractAgentPrompt(result.content);
+
+      expect(prompt).not.toContain('⚠ PREMISE-MISMATCH');
+    });
+
+    it('falls back to prose path with schema-lint warning on malformed JSON', async () => {
+      ctx.nativeAgentConfigs.set('opus-implementer', {
+        model: 'claude-opus-4-7',
+        instructions: 'You implement.',
+        description: 'Native implementer',
+        skills: [],
+      });
+      // Intentionally malformed — truncated JSON inside the fence.
+      const task =
+        'Something about 3 callers of alpha.\n\n' +
+        '```premise-claims\n{"schema_version": "1", "claims": [\n```\n';
+
+      const result = await handleDispatchSingle('opus-implementer', task);
+      const prompt = extractAgentPrompt(result.content);
+
+      expect(prompt).toContain('⚠ premise-claims block failed schema validation');
+      // Prose path still runs — the rest of the task text is preserved.
+      expect(prompt).toContain('Something about 3 callers of alpha.');
+      // And no PREMISE-MISMATCH is emitted (we never got a valid block to verify).
+      expect(prompt).not.toContain('⚠ PREMISE-MISMATCH');
+    });
+
+    it('preserves ordering SCOPE > UNVERIFIED > PREMISE-MISMATCH when all three fire', async () => {
+      ctx.nativeAgentConfigs.set('opus-implementer', {
+        model: 'claude-opus-4-7',
+        instructions: 'You implement.',
+        description: 'Native implementer',
+        skills: [],
+      });
+      const block = buildClaimsBlock([
+        {
+          type: 'callsite_count',
+          symbol: 'alpha',
+          scope: 'src/target.ts',
+          expected: 5,
+          modality: 'asserted',
+        },
+      ]);
+      // Absolute project path triggers sanitization + SCOPE NOTE.
+      // "we identified 5 sites" triggers Stage 1 UNVERIFIED regex.
+      // The premise-claims block (expected 5, observed 1) triggers PREMISE-MISMATCH.
+      const task = `Edit ${process.cwd()}/src/target.ts — we identified 5 sites that lack alpha.\n\n${block}`;
+
+      const result = await handleDispatchSingle('opus-implementer', task, 'scoped', './src');
+      const prompt = extractAgentPrompt(result.content);
+
+      const scopeIdx = prompt.indexOf('SCOPE NOTE:');
+      const unverifiedIdx = prompt.indexOf('═══ UNVERIFIED CLAIM DETECTED ═══');
+      const premiseIdx = prompt.indexOf('⚠ PREMISE-MISMATCH');
+
+      expect(scopeIdx).toBeGreaterThan(-1);
+      expect(unverifiedIdx).toBeGreaterThan(-1);
+      expect(premiseIdx).toBeGreaterThan(-1);
+      expect(scopeIdx).toBeLessThan(unverifiedIdx);
+      expect(unverifiedIdx).toBeLessThan(premiseIdx);
+    });
+
+    it('relay-path dispatch does NOT run the verifier (load-bearing, mirrors Stage 1)', async () => {
+      // No nativeAgentConfig → handleDispatchSingle takes the relay branch.
+      // Stage 2 verifier runs only inside the native branch; the relay worker
+      // path is deferred to Stage 2a per spec §Open questions #2.
+      const dispatched: { task?: string } = {};
+      ctx.mainAgent = makeMainAgent({
+        dispatch: jest.fn((_agentId: string, task: string) => {
+          dispatched.task = task;
+          return { taskId: 'relay-task-xyz' };
+        }),
+      });
+      const block = buildClaimsBlock([
+        {
+          type: 'callsite_count',
+          symbol: 'alpha',
+          scope: 'src/target.ts',
+          expected: 99,
+          modality: 'asserted',
+        },
+      ]);
+      const task = `Relay task with falsifiable claims.\n\n${block}`;
+
+      const result = await handleDispatchSingle('relay-impl', task);
+
+      // No AGENT_PROMPT content item for relay path.
+      const promptItem = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'));
+      expect(promptItem).toBeUndefined();
+      // And the task handed to the relay MUST NOT have been wrapped with the
+      // PREMISE-MISMATCH preamble — the verifier stayed quiet on this branch.
+      expect(dispatched.task ?? '').not.toContain('⚠ PREMISE-MISMATCH');
+      // The premise-verification log should not exist (no JSONL row emitted
+      // from the relay branch).
+      expect(existsSync(join(process.cwd(), '.gossip', 'premise-verification.jsonl'))).toBe(false);
+    });
+
+    it('co-exists with Stage 1 regex during Phase 0 (both fire in the same dispatch)', async () => {
+      ctx.nativeAgentConfigs.set('opus-implementer', {
+        model: 'claude-opus-4-7',
+        instructions: 'You implement.',
+        description: 'Native implementer',
+        skills: [],
+      });
+      const block = buildClaimsBlock([
+        {
+          type: 'callsite_count',
+          symbol: 'alpha',
+          scope: 'src/target.ts',
+          expected: 7,
+          modality: 'hedged',
+        },
+      ]);
+      const task =
+        'We identified 5 sites that lack the helper — fix each.\n\n' + block;
+
+      const result = await handleDispatchSingle('opus-implementer', task);
+      const prompt = extractAgentPrompt(result.content);
+
+      // Stage 1 regex fires on the prose "5 sites" claim.
+      expect(prompt).toContain('═══ UNVERIFIED CLAIM DETECTED ═══');
+      // Stage 2 verifier fires on the structured claim (expected 7 vs observed 1).
+      expect(prompt).toContain('⚠ PREMISE-MISMATCH');
+      // Modality is propagated through the annotation.
+      expect(prompt).toMatch(/modality=hedged/);
+    });
+  },
+);
+
+// ────────────────────────────────────────────────────────────────────────────
+// Stage 2 — .gossip/premise-verification.jsonl logging + rotation.
+// ────────────────────────────────────────────────────────────────────────────
+
+(rgAvailable ? describe : describe.skip)(
+  'native dispatch — premise-verification.jsonl log + rotation',
+  () => {
+    let sandboxDir: string;
+    let prevCwd: string;
+
+    beforeEach(() => {
+      prevCwd = process.cwd();
+      sandboxDir = mkdtempSync(join(tmpdir(), 'gossip-premise-jsonl-'));
+      mkdirSync(join(sandboxDir, '.gossip', 'skills'), { recursive: true });
+      mkdirSync(join(sandboxDir, 'src'), { recursive: true });
+      writeFileSync(
+        join(sandboxDir, 'src', 'target.ts'),
+        "export function alpha(): void {}\n",
+      );
+      process.chdir(sandboxDir);
+      resetCtx();
+    });
+
+    afterEach(() => {
+      restoreCtx();
+      process.chdir(prevCwd);
+      rmSync(sandboxDir, { recursive: true, force: true });
+    });
+
+    it('writes a JSONL row to .gossip/premise-verification.jsonl on claim-bearing dispatch', async () => {
+      ctx.nativeAgentConfigs.set('opus-implementer', {
+        model: 'claude-opus-4-7',
+        instructions: 'You implement.',
+        description: 'Native implementer',
+        skills: [],
+      });
+      const block = buildClaimsBlock([
+        {
+          type: 'callsite_count',
+          symbol: 'alpha',
+          scope: 'src/target.ts',
+          expected: 1,
+          modality: 'asserted',
+        },
+      ]);
+      const task = `Verify alpha.\n\n${block}`;
+
+      await handleDispatchSingle('opus-implementer', task);
+
+      const logPath = join(process.cwd(), '.gossip', 'premise-verification.jsonl');
+      expect(existsSync(logPath)).toBe(true);
+      const lines = readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean);
+      expect(lines.length).toBeGreaterThanOrEqual(1);
+      const row = JSON.parse(lines[lines.length - 1]);
+      expect(row.claims_total).toBe(1);
+      expect(row.claims_verified).toBe(1);
+      expect(row.claims_falsified).toBe(0);
+      expect(row.task_id).toMatch(/^[a-f0-9-]+$/i);
+      expect(row).toHaveProperty('ts');
+      expect(row).toHaveProperty('had_stage1_annotation');
+      expect(row).toHaveProperty('timeout_fraction');
+    });
+
+    it('rotates the log file when size exceeds MAX_PREMISE_VERIFICATION_BYTES', async () => {
+      // Import the constant by reading from sandbox.ts — we don't inline 5MB
+      // because the assertion only cares about the rotate-before-append
+      // behavior. Pre-seed a 5.1MB file so the next append triggers rotation.
+      const { MAX_PREMISE_VERIFICATION_BYTES } = await import('../../apps/cli/src/sandbox');
+      const logPath = join(process.cwd(), '.gossip', 'premise-verification.jsonl');
+      mkdirSync(join(process.cwd(), '.gossip'), { recursive: true });
+      const padding = 'x'.repeat(1024);
+      const lines = Math.ceil((MAX_PREMISE_VERIFICATION_BYTES + 1024) / padding.length);
+      writeFileSync(logPath, padding.repeat(lines) + '\n');
+
+      ctx.nativeAgentConfigs.set('opus-implementer', {
+        model: 'claude-opus-4-7',
+        instructions: 'You implement.',
+        description: 'Native implementer',
+        skills: [],
+      });
+      const block = buildClaimsBlock([
+        {
+          type: 'callsite_count',
+          symbol: 'alpha',
+          scope: 'src/target.ts',
+          expected: 1,
+          modality: 'asserted',
+        },
+      ]);
+      await handleDispatchSingle('opus-implementer', `Verify alpha.\n\n${block}`);
+
+      // Rotation renames the oversized file to <path>.1 and starts a fresh slot.
+      expect(existsSync(logPath + '.1')).toBe(true);
+      // The fresh slot holds the new row only (not the 5MB padding).
+      const freshContent = readFileSync(logPath, 'utf8');
+      expect(freshContent.length).toBeLessThan(MAX_PREMISE_VERIFICATION_BYTES / 2);
+      expect(freshContent.split('\n').filter(Boolean).length).toBeGreaterThanOrEqual(1);
+    });
+  },
+);
