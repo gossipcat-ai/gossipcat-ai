@@ -30,7 +30,7 @@ import { ctx } from './mcp-context';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
 import { buildUtilityAgentPrompt } from '@gossip/orchestrator';
-import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher } from './handlers/native-tasks';
+import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';
 import { restorePendingConsensus } from './handlers/relay-cross-review';
@@ -337,9 +337,14 @@ async function doBoot() {
   // no-op. Also closes the prior gap where neither handler called stop(),
   // leaking the WS server and heartbeat interval on shutdown.
   let shuttingDown = false;
+  // Schedule BEFORE registering signal handlers so they close over a concrete
+  // stop fn — avoids a narrow race where SIGTERM between handler registration
+  // and timer assignment would have called clearInterval(undefined).
+  const eviction = scheduleNativeTaskEviction();
   process.once('SIGTERM', async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    eviction.stop();
     process.stderr.write(`[relay] shutdown reason=SIGTERM pid=${process.pid}\n`);
     try { await ctx.relay.stop(); } catch { /* ignore */ }
     cleanupPid();
@@ -348,6 +353,7 @@ async function doBoot() {
   process.once('SIGINT',  async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    eviction.stop();
     process.stderr.write(`[relay] shutdown reason=SIGINT pid=${process.pid}\n`);
     try { await ctx.relay.stop(); } catch { /* ignore */ }
     cleanupPid();
