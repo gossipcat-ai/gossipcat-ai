@@ -138,4 +138,17 @@ describe('scripts/postinstall.js — error-path regression guard', () => {
     expect(source).toContain('console.warn');
     expect(source).toMatch(/could not write \.mcp\.json/);
   });
+
+  it('preserves existing .mcp.json entries via merge (no clobber)', () => {
+    // Regression guard (2026-04-24, consensus ce53c4ee-042444c3): postinstall
+    // must read an existing .mcp.json and merge the gossipcat entry, preserving
+    // user-added MCP server entries and unrelated top-level fields. Earlier
+    // behavior unconditionally overwrote the file on every npm install.
+    expect(source).toMatch(/readFileSync\([^)]*mcpConfig/);
+    expect(source).toMatch(/\.\.\.existing\b/);
+    expect(source).toMatch(/\.\.\.existingServers\b/);
+    // Malformed existing config must skip the write, not exit(1) — otherwise
+    // npm install breaks on a corrupt user file we can't parse.
+    expect(source).toMatch(/malformed[\s\S]*process\.exit\(0\)/);
+  });
 });

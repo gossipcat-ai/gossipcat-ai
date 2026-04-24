@@ -6,7 +6,7 @@
  * Never shipped in the package tarball — always regenerated per machine.
  */
 const { join, resolve } = require('path');
-const { existsSync, writeFileSync, statSync } = require('fs');
+const { existsSync, readFileSync, writeFileSync, statSync } = require('fs');
 
 const scriptDir = __dirname;          // .../gossipcat/scripts/
 const packageRoot = resolve(scriptDir, '..'); // .../gossipcat/
@@ -77,8 +77,37 @@ if (!isGlobal && !isGitClone) {
 
 const mcpConfig = join(outputDir, '.mcp.json');
 
+// Preserve existing user-added MCP server entries. An existing .mcp.json may
+// carry servers other than gossipcat (e.g. another MCP tool the user has
+// installed). Unconditional overwrite would silently clobber those entries
+// on every npm install. Merge strategy:
+//   - Parse existing file if present. On JSON error, skip the write (don't
+//     destroy what we can't parse; user can fix manually).
+//   - Preserve every top-level field via spread, preserve every existing
+//     mcpServers entry, and refresh (or insert) the gossipcat entry.
+let existing = {};
+if (existsSync(mcpConfig)) {
+  try {
+    const raw = readFileSync(mcpConfig, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      existing = parsed;
+    }
+  } catch (_) {
+    console.warn(`gossipcat: existing .mcp.json at ${mcpConfig} is malformed — skipping update to avoid clobbering user config`);
+    process.exit(0);
+  }
+}
+
+const existingServers =
+  existing.mcpServers && typeof existing.mcpServers === 'object' && !Array.isArray(existing.mcpServers)
+    ? existing.mcpServers
+    : {};
+
 const config = {
+  ...existing,
   mcpServers: {
+    ...existingServers,
     gossipcat: {
       command: 'node',
       args: [mcpServerPath],
