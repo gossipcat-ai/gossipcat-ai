@@ -93,7 +93,14 @@ function recordTimeoutSignal(taskId: string, agentId: string): void {
   } catch { /* best-effort */ }
 }
 
-/** Evict stale entries from nativeTaskMap and nativeResultMap */
+/** 24-hour TTL for utility result map — longer than the 2h normal TTL so
+ * skill_develop dispatch→relay→re-entry chains that span process restarts
+ * don't silently fall back to stale template skills. */
+const UTILITY_RESULT_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Evict stale entries from nativeTaskMap and nativeResultMap.
+ * nativeUtilityResultMap is NOT swept here — it uses UTILITY_RESULT_TTL_MS
+ * and is only pruned after 24h to protect long-running re-entry chains. */
 export function evictStaleNativeTasks(): void {
   const now = Date.now();
   let changed = false;
@@ -102,6 +109,10 @@ export function evictStaleNativeTasks(): void {
   }
   for (const [id, info] of [...ctx.nativeResultMap]) {
     if (now - info.startedAt > NATIVE_TASK_TTL_MS) { ctx.nativeResultMap.delete(id); changed = true; }
+  }
+  // Prune utility results with the longer 24h TTL — separate from normal eviction
+  for (const [id, info] of [...ctx.nativeUtilityResultMap]) {
+    if (now - info.startedAt > UTILITY_RESULT_TTL_MS) { ctx.nativeUtilityResultMap.delete(id); }
   }
   if (changed) persistNativeTaskMap();
 }
@@ -316,13 +327,21 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     ? undefined
     : (error ? undefined : (result ? (auditPrefix + result).slice(0, 50000) : result));
   ctx.nativeTaskMap.delete(task_id);
-  ctx.nativeResultMap.set(task_id, {
+  const resultRecord = {
     id: task_id, agentId: taskInfo.agentId, task: taskInfo.task,
-    status: effectiveError ? 'failed' : 'completed',
+    status: effectiveError ? 'failed' as const : 'completed' as const,
     result: effectiveResult,
     error: effectiveError || undefined,
     startedAt: effectiveStart, completedAt: Date.now(),
-  });
+  };
+  // skill_develop utility results go to the separate non-evicted map so that
+  // long-running dispatch→relay→re-entry chains (>2h) don't fall back to stale
+  // template skills. All other tasks use the normal nativeResultMap.
+  if (taskInfo.utilityType === 'skill_develop') {
+    ctx.nativeUtilityResultMap.set(task_id, resultRecord);
+  } else {
+    ctx.nativeResultMap.set(task_id, resultRecord);
+  }
   // If audit blocked, treat the rest of the pipeline as a failed task
   if (auditBlockError) error = auditBlockError;
   persistNativeTaskMap();
