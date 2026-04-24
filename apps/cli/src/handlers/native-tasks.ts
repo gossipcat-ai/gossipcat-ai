@@ -98,6 +98,23 @@ function recordTimeoutSignal(taskId: string, agentId: string): void {
  * don't silently fall back to stale template skills. */
 const UTILITY_RESULT_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** Schedule periodic calls to {@link evictStaleNativeTasks}. Returns a
+ * handle whose `stop()` clears the interval. The timer is `.unref()`'d so it
+ * does not block clean process exit. Default interval: 1h.
+ *
+ * Extracted from doBoot() in mcp-server-sdk.ts so the scheduling can be
+ * unit-tested against the real code (consensus 482f0251 HIGH finding on the
+ * earlier tautological test). */
+export function scheduleNativeTaskEviction(
+  intervalMs: number = 60 * 60 * 1000,
+): { stop: () => void } {
+  const timer = setInterval(evictStaleNativeTasks, intervalMs);
+  timer.unref();
+  return {
+    stop: () => clearInterval(timer),
+  };
+}
+
 /** Evict stale entries from nativeTaskMap and nativeResultMap.
  * nativeUtilityResultMap is NOT swept here — it uses UTILITY_RESULT_TTL_MS
  * and is only pruned after 24h to protect long-running re-entry chains. */
