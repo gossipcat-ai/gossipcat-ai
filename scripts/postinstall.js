@@ -121,7 +121,7 @@ if (!existsSync(mcpServerPath)) {
       process.exit(1);
     }
   } else {
-    console.error('gossipcat: FATAL — dist-mcp/mcp-server.js missing from package. Install is corrupted.');
+    console.error('gossipcat: FATAL — dist-mcp/mcp-server.js missing from package. Install is corrupted; reinstall with `npm install -g gossipcat` or clone the repo and run `npm install && npm run build:mcp`.');
     process.exit(1);
   }
 }
