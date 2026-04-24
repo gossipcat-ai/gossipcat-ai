@@ -114,6 +114,25 @@ The `verify-the-premise` skill (premise-verification Stage 1) auto-binds to ever
 - The change is documentation, CSS, test data adjustments, or log-string-only
 - Under 10 lines, no side effects on shared state, no security surface
 
+### When to gate merges on consensus — impact-adjacency, not just LOC
+
+Pre-merge consensus is cheap; bugs in trust-boundary-adjacent code are expensive. Run `gossip_dispatch(mode: "consensus", ...)` on a PR **regardless of size** when the diff touches any of:
+
+- **Shared in-memory state with lifecycle hooks** — any `Map`, `Set`, or cache where entries are added in one path and removed (or expire) in another. Race conditions and memory leaks hide here even in small diffs.
+- **Background cleanup / TTL / timer logic** — scheduled eviction, session expiry, job-queue draining, or any timer whose firing sequence is observable externally. A missed edge case silently accumulates state.
+- **Serialization at persistence boundaries** — code that writes or parses structured files (JSON config, YAML frontmatter, append-only logs, DB migrations). A format regression is invisible until a downstream reader breaks, and the blast radius is multiplicative.
+- **Authentication / authorization boundaries** — middleware, token validation, permission checks, or any decorator that gates access. A single missing condition opens the full surface behind it.
+- **Signal or event pipelines** — pub/sub routing, queue producers/consumers, or any path where message loss, duplication, or ordering is externally observable. Subtle ordering bugs are hard to reproduce after the fact.
+- **Install / bootstrap / initialization paths** — postinstall hooks, config writers, seeding scripts, or startup sequences. These run once and their failures are often silent or hard to roll back.
+
+**Why LOC alone misses these:** risk is proportional to how many concurrent systems depend on implicit assumptions, not to code size. A 40-line change to a cache eviction path or a config merge routine can introduce a memory leak or clobber user state just as easily as a 500-line feature. Let impact adjacency — not file count — trigger consensus.
+
+**Exceptions within impact-adjacent areas:**
+- Small mirror-of-existing-pattern changes (applying a previously-reviewed fix to a sibling file) don't need a fresh round; the pattern is already validated.
+- Pure log-string or comment edits inside these files are fine.
+
+**Remediation when missed:** run post-hoc consensus on the merged diff, file follow-up PRs if findings surface, and document the gap as feedback.
+
 ### Consensus protocol — 3 steps
 
 When you dispatch with `mode: "consensus"`, the orchestrator follows **three** steps. Phase 2 cross-review runs server-side automatically.
