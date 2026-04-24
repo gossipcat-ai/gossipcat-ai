@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { isUtilityAgent } from './utility-agents';
 
 interface ActiveTask {
   taskId: string;
@@ -25,6 +26,7 @@ export async function activeTasksHandler(projectRoot: string): Promise<ActiveTas
       try {
         const ev = JSON.parse(line);
         if (ev.type === 'task.created' && ev.taskId) {
+          if (isUtilityAgent(ev.agentId)) continue;
           created.set(ev.taskId, { agentId: ev.agentId || '', task: ev.task || '', timestamp: ev.timestamp || '' });
         } else if (ev.type === 'task.completed' || ev.type === 'task.failed' || ev.type === 'task.cancelled') {
           finished.add(ev.taskId);
