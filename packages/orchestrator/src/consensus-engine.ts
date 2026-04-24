@@ -1775,7 +1775,11 @@ Return only valid JSON.${skillsBlock}`;
     // PR-B: anchor root and original citation for matchesRelativePath + realpath verify.
     anchorRoot?: string,
     fileRef?: string,
+    depth = 0,
   ): Promise<string | null> {
+    // Cap recursion at 10 levels — deep trees risk runaway traversal on agent-controlled paths;
+    // exceeding the cap degrades gracefully to UNVERIFIED rather than an error.
+    if (depth >= 10) return null;
     try {
       // Rule 3 (PR-B #126): readdir with withFileTypes so we can skip
       // symlinks during recursion. A symlinked subdir like
@@ -1802,7 +1806,7 @@ Return only valid JSON.${skillsBlock}`;
           return real;
         }
         if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
-          const found = await this.findFile(fullPath, fileName, validRoots, anchorRoot, fileRef);
+          const found = await this.findFile(fullPath, fileName, validRoots, anchorRoot, fileRef, depth + 1);
           if (found) return found;
         }
       }
