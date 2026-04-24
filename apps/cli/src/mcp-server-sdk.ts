@@ -3207,7 +3207,12 @@ server.tool(
       if (_utility_task_id) {
         const stashedMeta = _pendingSkillData.get(_utility_task_id);
         _pendingSkillData.delete(_utility_task_id);
-        const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
+        // Check nativeUtilityResultMap first (skill_develop results are routed
+        // there to survive the 2h nativeResultMap TTL). Fall back to
+        // nativeResultMap for any legacy entries written before this change.
+        const utilityResult = ctx.nativeUtilityResultMap.get(_utility_task_id)
+          ?? ctx.nativeResultMap.get(_utility_task_id);
+        ctx.nativeUtilityResultMap.delete(_utility_task_id);
         ctx.nativeResultMap.delete(_utility_task_id);
         ctx.nativeTaskMap.delete(_utility_task_id);
         // Utility-guard: detect prompt-injection drift in the sub-agent.

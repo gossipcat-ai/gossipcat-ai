@@ -73,6 +73,14 @@ export interface McpContext {
   skillEngine: any;
   nativeTaskMap: Map<string, NativeTaskInfo>;
   nativeResultMap: Map<string, NativeResultInfo>;
+  /**
+   * Separate result map for skill_develop utility tasks. Unlike nativeResultMap,
+   * entries here are NOT swept by evictStaleNativeTasks() — utility results
+   * represent orchestrator re-entry intent and must survive the 2h TTL window
+   * so that long-running dispatch→relay→re-entry chains don't fall back to
+   * stale template skills.
+   */
+  nativeUtilityResultMap: Map<string, NativeResultInfo>;
   nativeAgentConfigs: Map<string, { model: string; instructions: string; description: string; skills: string[] }>;
   /**
    * Identity registry — agentId → runtime/provider/model. Read by the
@@ -142,6 +150,7 @@ export const ctx: McpContext = {
   skillEngine: null,
   nativeTaskMap: new Map(),
   nativeResultMap: new Map(),
+  nativeUtilityResultMap: new Map(),
   nativeAgentConfigs: new Map(),
   identityRegistry: new Map(),
   pendingConsensusRounds: new Map(),
