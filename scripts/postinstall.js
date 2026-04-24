@@ -6,7 +6,7 @@
  * Never shipped in the package tarball — always regenerated per machine.
  */
 const { join, resolve } = require('path');
-const { existsSync, writeFileSync } = require('fs');
+const { existsSync, writeFileSync, statSync } = require('fs');
 
 const scriptDir = __dirname;          // .../gossipcat/scripts/
 const packageRoot = resolve(scriptDir, '..'); // .../gossipcat/
@@ -19,22 +19,59 @@ const mcpServerPath = join(packageRoot, 'dist-mcp', 'mcp-server.js');
 const isGlobal = process.env.npm_config_global === 'true';
 const isGitClone = existsSync(join(packageRoot, '.git'));
 
-// For git clones: skip if .mcp.json already exists (developer already set up)
+// For git clones: skip writing if .mcp.json already exists. Still warn if the
+// built server is older than package.json — stale-build warning is the most
+// valuable signal on a developer re-running npm install after a pull.
 if (isGitClone && existsSync(join(packageRoot, '.mcp.json'))) {
+  if (existsSync(mcpServerPath)) {
+    try {
+      const serverMtime = statSync(mcpServerPath).mtime;
+      const pkgMtime = statSync(join(packageRoot, 'package.json')).mtime;
+      if (serverMtime < pkgMtime) {
+        console.log("gossipcat: dist-mcp/ is older than package.json — run 'npm run build:mcp' to rebuild");
+      }
+    } catch (_) { /* stat failure is non-fatal */ }
+  }
   console.log('gossipcat: .mcp.json already exists — skipping (git clone)');
   process.exit(0);
 }
 
 // For project-local installs: write .mcp.json into the consumer project root,
-// not into node_modules/gossipcat. Detect consumer root by walking up from
-// node_modules to the directory that contains it.
+// not into node_modules/gossipcat. Walk up from __dirname until a package.json
+// with a "workspaces" field is found OR filesystem root is reached.
 let outputDir = packageRoot; // default: package dir (global or git clone)
 if (!isGlobal && !isGitClone) {
-  // node_modules/gossipcat → node_modules → project root
-  const nodeModulesDir = resolve(packageRoot, '..');   // node_modules/
-  const projectRoot = resolve(nodeModulesDir, '..');   // project root
-  if (existsSync(join(nodeModulesDir, '..', 'package.json'))) {
-    outputDir = projectRoot;
+  let found = false;
+  // Start the walk ONE level ABOVE packageRoot so we skip gossipcat's own
+  // package.json (which has a "workspaces" field for its own monorepo layout
+  // and would otherwise match on iteration 1, writing .mcp.json into
+  // node_modules/gossipcat/ instead of the consumer's project root).
+  let dir = resolve(packageRoot, '..');
+  while (true) {
+    const pkgPath = join(dir, 'package.json');
+    if (existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(require('fs').readFileSync(pkgPath, 'utf8'));
+        if (pkg.workspaces) {
+          outputDir = dir;
+          found = true;
+          break;
+        }
+      } catch (_) { /* unparseable package.json — keep walking */ }
+    }
+    const parent = resolve(dir, '..');
+    if (parent === dir) break; // filesystem root
+    dir = parent;
+  }
+  if (!found) {
+    // Fallback: two-level walk-up from node_modules (original heuristic)
+    const nodeModulesDir = resolve(packageRoot, '..');
+    const projectRoot = resolve(nodeModulesDir, '..');
+    if (existsSync(join(projectRoot, 'package.json'))) {
+      outputDir = projectRoot;
+    } else {
+      outputDir = process.cwd();
+    }
   }
 }
 
@@ -54,12 +91,35 @@ try {
   const method = isGlobal ? 'global npm' : isGitClone ? 'git clone' : 'local install';
   console.log(`gossipcat: wrote .mcp.json (${method}) → ${mcpServerPath}`);
 } catch (e) {
+  // Soft-fail on write errors: global npm installs often target root-owned dirs
+  // where EACCES is expected. Hard-exiting here would abort `npm install -g`
+  // for every user without sudo — users can re-run `gossipcat setup` after.
+  // Regression guard: tests/cli/install-packaging.test.ts:133-140.
   console.warn(`gossipcat: postinstall could not write .mcp.json (${e.code || e.message}). Run 'gossipcat setup' after install to configure.`);
+}
+
+// Staleness check: warn if dist-mcp/ is older than package.json
+if (existsSync(mcpServerPath)) {
+  try {
+    const serverMtime = statSync(mcpServerPath).mtime;
+    const pkgMtime = statSync(join(packageRoot, 'package.json')).mtime;
+    if (serverMtime < pkgMtime) {
+      console.log("gossipcat: dist-mcp/ is older than package.json — run 'npm run build:mcp' to rebuild");
+    }
+  } catch (_) { /* stat failure is non-fatal */ }
 }
 
 if (!existsSync(mcpServerPath)) {
   if (isGitClone) {
-    console.log('gossipcat: dist-mcp/mcp-server.js not built yet — run: npm run build:mcp');
+    // Git clone: build is required — run it automatically
+    const { execSync } = require('child_process');
+    console.log('gossipcat: dist-mcp/mcp-server.js not built yet — running npm run build:mcp...');
+    try {
+      execSync('npm run build:mcp', { stdio: 'inherit', cwd: packageRoot });
+    } catch (e) {
+      console.error('gossipcat: build failed. Run "npm run build:mcp" manually to complete setup.');
+      process.exit(1);
+    }
   } else {
     console.error('gossipcat: FATAL — dist-mcp/mcp-server.js missing from package. Install is corrupted.');
     process.exit(1);
