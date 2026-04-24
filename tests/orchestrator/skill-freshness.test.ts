@@ -115,6 +115,24 @@ describe('readSkillFreshness — file present', () => {
     stderrSpy.mockRestore();
   });
 
+  it('strips surrounding double-quotes on scalar values so `status: "pending"` parses as pending', () => {
+    // Regression guard (2026-04-24): extractFrontmatterField lacked the
+    // quote-stripping that landed in skill-parser.ts via 8164472. A quoted
+    // status value was returned as `"pending"` (with quotes), then coerced
+    // to pending with a stderr warning on every skill read.
+    const boundAt = '2026-04-10T00:00:00.000Z';
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(makeSkillContent(boundAt, '"pending"') as any);
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    const result = readSkillFreshness(AGENT_ID, CATEGORY, SKILL_ROOT);
+    expect(result.status).toBe('pending');
+    // The quote-stripping must happen before coerceStatus, so no warning fires.
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    stderrSpy.mockRestore();
+  });
+
   it('preserves null status (no coerce) when status field is absent', () => {
     // Null must round-trip so computeCooldown can return pre_schema.
     const boundAt = '2026-04-10T00:00:00.000Z';

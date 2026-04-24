@@ -80,7 +80,17 @@ function extractFrontmatterField(content: string, field: string): string | null 
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
     if (key !== field) continue;
-    const value = line.slice(colonIdx + 1).trim();
+    let value = line.slice(colonIdx + 1).trim();
+    // Strip surrounding "..." or '...' so `status: "pending"` matches the
+    // enum the same way `status: pending` does. Mirrors the quote handling
+    // in skill-parser.ts:65-69 — that fix (commit 8164472) did not propagate
+    // to this loader path, producing stderr "invalid status" noise on every
+    // skill read with quoted scalar values.
+    if (value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+         (value.startsWith("'") && value.endsWith("'")))) {
+      value = value.slice(1, -1);
+    }
     return value.length > 0 ? value : null;
   }
   return null;
