@@ -2,6 +2,7 @@ import { PerformanceReader, AgentScore } from '@gossip/orchestrator/performance-
 import { SkillIndex, SkillSlot } from '@gossip/orchestrator/skill-index';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { isUtilityAgent } from './utility-agents';
 
 interface AgentConfigLike {
   id: string;
@@ -224,6 +225,7 @@ function readTaskGraphByAgent(projectRoot: string): Map<string, AgentTaskData> {
   // Aggregate per agent
   for (const [taskId, createdData] of created) {
     const { agentId, task, timestamp } = createdData;
+    if (isUtilityAgent(agentId)) continue;
     if (!result.has(agentId)) {
       result.set(agentId, { totalTokens: 0, lastTask: null });
     }
