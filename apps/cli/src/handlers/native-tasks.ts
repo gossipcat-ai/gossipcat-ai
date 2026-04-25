@@ -521,7 +521,10 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     const utilityLabel = taskInfo.utilityType === 'summary' ? 'cognitive-summary'
       : taskInfo.utilityType === 'gossip' ? 'gossip-publish'
       : taskInfo.utilityType;
-    const utilDurationLabel = elapsed !== null ? `${(elapsed / 1000).toFixed(1)}s` : 'duration=unknown';
+    // Utility tasks don't pass agentStartedAt, so elapsed measures wall-clock
+    // since dispatch — NOT agent execution time. The orchestrator may delay
+    // gossip_relay long after the agent finished, inflating this number.
+    const utilDurationLabel = elapsed !== null ? `${(elapsed / 1000).toFixed(1)}s since dispatch` : 'duration=unknown';
     process.stderr.write(`[gossipcat] ✅ utility ← ${utilityLabel} [${task_id}] OK (${utilDurationLabel})\n`);
   }
 
