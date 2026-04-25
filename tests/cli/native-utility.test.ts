@@ -147,21 +147,33 @@ describe('Native Utility Provider — integration', () => {
   describe('utility-task task.created log-hygiene', () => {
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
-    const SRC = path.resolve(__dirname, '../../apps/cli/src/mcp-server-sdk.ts');
-    const source = fs.readFileSync(SRC, 'utf8');
+    const MCP_SRC = path.resolve(__dirname, '../../apps/cli/src/mcp-server-sdk.ts');
+    const NATIVE_SRC = path.resolve(__dirname, '../../apps/cli/src/handlers/native-tasks.ts');
+    const sources: Record<string, string> = {
+      'mcp-server-sdk.ts': fs.readFileSync(MCP_SRC, 'utf8'),
+      'native-tasks.ts': fs.readFileSync(NATIVE_SRC, 'utf8'),
+    };
 
-    // Each entry: utilityType literal as it appears in the nativeTaskMap.set
-    // block, plus the descriptor prefix expected in recordNativeTask.
-    const sites: Array<{ utilityType: string; descriptorPrefix: string }> = [
-      { utilityType: 'plan', descriptorPrefix: 'plan:' },
-      { utilityType: 'session_summary', descriptorPrefix: 'session_summary' },
-      { utilityType: 'verify_memory', descriptorPrefix: 'verify_memory:' },
-      // Reference: skill_develop already had the call (PR #260) — guard it too.
-      { utilityType: 'skill_develop', descriptorPrefix: 'skill_develop:' },
+    // Each entry: source file, utilityType literal as it appears in the
+    // nativeTaskMap.set block, plus the descriptor prefix expected in
+    // recordNativeTask.
+    const sites: Array<{ sourceFile: string; utilityType: string; descriptorPrefix: string }> = [
+      // mcp-server-sdk.ts sites
+      { sourceFile: 'mcp-server-sdk.ts', utilityType: 'plan', descriptorPrefix: 'plan:' },
+      // skill_develop reference: already had the call (PR #260) — guard it too.
+      { sourceFile: 'mcp-server-sdk.ts', utilityType: 'skill_develop', descriptorPrefix: 'skill_develop:' },
+      { sourceFile: 'mcp-server-sdk.ts', utilityType: 'session_summary', descriptorPrefix: 'session_summary' },
+      // verify_memory: descriptor is now exact 'verify_memory' (no colon, no basename)
+      // to match session_summary pattern and avoid filename leak.
+      { sourceFile: 'mcp-server-sdk.ts', utilityType: 'verify_memory', descriptorPrefix: 'verify_memory' },
+      // native-tasks.ts sites — utility tasks spawned from handleNativeRelay
+      { sourceFile: 'native-tasks.ts', utilityType: 'summary', descriptorPrefix: 'summary' },
+      { sourceFile: 'native-tasks.ts', utilityType: 'gossip', descriptorPrefix: 'gossip' },
     ];
 
-    for (const { utilityType, descriptorPrefix } of sites) {
-      it(`${utilityType} dispatch records task.created via recordNativeTask`, () => {
+    for (const { sourceFile, utilityType, descriptorPrefix } of sites) {
+      it(`${utilityType} dispatch in ${sourceFile} records task.created via recordNativeTask`, () => {
+        const source = sources[sourceFile];
         // Find the nativeTaskMap.set block that declares this utilityType.
         const blockRegex = new RegExp(
           `nativeTaskMap\\.set\\([\\s\\S]{0,400}?utilityType:\\s*'${utilityType}'[\\s\\S]{0,400}?\\}\\);`,
