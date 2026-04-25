@@ -558,6 +558,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       timeoutMs: UTILITY_TTL_MS,
       utilityType: 'summary',
     });
+    try { ctx.mainAgent.recordNativeTask(summaryTaskId, '_utility', 'summary'); } catch { /* best-effort */ }
     spawnTimeoutWatcher(summaryTaskId, ctx.nativeTaskMap.get(summaryTaskId)!);
     utilityBlocks.push(
       `Task: cognitive summary [${summaryTaskId}]\n` +
@@ -583,6 +584,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         timeoutMs: UTILITY_TTL_MS,
         utilityType: 'gossip',
       });
+      try { ctx.mainAgent.recordNativeTask(gossipTaskId, '_utility', 'gossip'); } catch { /* best-effort */ }
       spawnTimeoutWatcher(gossipTaskId, ctx.nativeTaskMap.get(gossipTaskId)!);
       utilityBlocks.push(
         `Task: gossip publish [${gossipTaskId}]\n` +

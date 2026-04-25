@@ -132,4 +132,63 @@ describe('Native Utility Provider — integration', () => {
       expect(delimited![1]).toContain('race condition');
     });
   });
+
+  // ── Log-hygiene regression: utility-task task.created emission ─────────────
+  //
+  // PR follow-up to #260: every site that registers a utility task in
+  // ctx.nativeTaskMap must ALSO call ctx.mainAgent.recordNativeTask(...) so the
+  // task-graph.jsonl audit trail has a matching task.created for every
+  // task.completed written by recordNativeTaskCompleted. Skipping the call
+  // produces orphaned log entries (see project_utility_task_dashboard_gap.md).
+  //
+  // This test guards against drift by reading the actual mcp-server-sdk.ts
+  // source and asserting that each utility-dispatch site contains the
+  // recordNativeTask call adjacent to its nativeTaskMap.set(...) block.
+  describe('utility-task task.created log-hygiene', () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const MCP_SRC = path.resolve(__dirname, '../../apps/cli/src/mcp-server-sdk.ts');
+    const NATIVE_SRC = path.resolve(__dirname, '../../apps/cli/src/handlers/native-tasks.ts');
+    const sources: Record<string, string> = {
+      'mcp-server-sdk.ts': fs.readFileSync(MCP_SRC, 'utf8'),
+      'native-tasks.ts': fs.readFileSync(NATIVE_SRC, 'utf8'),
+    };
+
+    // Each entry: source file, utilityType literal as it appears in the
+    // nativeTaskMap.set block, plus the descriptor prefix expected in
+    // recordNativeTask.
+    const sites: Array<{ sourceFile: string; utilityType: string; descriptorPrefix: string }> = [
+      // mcp-server-sdk.ts sites
+      { sourceFile: 'mcp-server-sdk.ts', utilityType: 'plan', descriptorPrefix: 'plan:' },
+      // skill_develop reference: already had the call (PR #260) — guard it too.
+      { sourceFile: 'mcp-server-sdk.ts', utilityType: 'skill_develop', descriptorPrefix: 'skill_develop:' },
+      { sourceFile: 'mcp-server-sdk.ts', utilityType: 'session_summary', descriptorPrefix: 'session_summary' },
+      // verify_memory: descriptor is now exact 'verify_memory' (no colon, no basename)
+      // to match session_summary pattern and avoid filename leak.
+      { sourceFile: 'mcp-server-sdk.ts', utilityType: 'verify_memory', descriptorPrefix: 'verify_memory' },
+      // native-tasks.ts sites — utility tasks spawned from handleNativeRelay
+      { sourceFile: 'native-tasks.ts', utilityType: 'summary', descriptorPrefix: 'summary' },
+      { sourceFile: 'native-tasks.ts', utilityType: 'gossip', descriptorPrefix: 'gossip' },
+    ];
+
+    for (const { sourceFile, utilityType, descriptorPrefix } of sites) {
+      it(`${utilityType} dispatch in ${sourceFile} records task.created via recordNativeTask`, () => {
+        const source = sources[sourceFile];
+        // Find the nativeTaskMap.set block that declares this utilityType.
+        const blockRegex = new RegExp(
+          `nativeTaskMap\\.set\\([\\s\\S]{0,400}?utilityType:\\s*'${utilityType}'[\\s\\S]{0,400}?\\}\\);`,
+          'g'
+        );
+        const matches = [...source.matchAll(blockRegex)];
+        expect(matches.length).toBeGreaterThan(0);
+
+        const blockEnd = matches[0].index! + matches[0][0].length;
+        // Look in the next ~400 chars for the recordNativeTask call.
+        const window = source.slice(blockEnd, blockEnd + 400);
+        expect(window).toMatch(/ctx\.mainAgent\.recordNativeTask\s*\(/);
+        expect(window).toContain("'_utility'");
+        expect(window).toContain(descriptorPrefix);
+      });
+    }
+  });
 });

@@ -1145,6 +1145,7 @@ server.tool(
               utilityType: 'plan',
               relayToken,
             });
+            try { ctx.mainAgent.recordNativeTask(utilityTaskId, '_utility', `plan:${task.slice(0, 120)}`); } catch { /* best-effort */ }
             spawnTimeoutWatcher(utilityTaskId, ctx.nativeTaskMap.get(utilityTaskId)!);
             // F13 hardening: evict the stash if the orchestrator never
             // re-enters (agent crash, Claude restart). Matches the
@@ -3785,6 +3786,7 @@ server.tool(
         timeoutMs: UTILITY_TTL_MS,
         utilityType: 'session_summary',
       });
+      try { ctx.mainAgent.recordNativeTask(taskId, '_utility', 'session_summary'); } catch { /* best-effort */ }
       spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
 
       const agentPrompt = `${system}\n\n---\n\n${user}`;
@@ -4003,6 +4005,7 @@ server.tool(
       utilityType: 'verify_memory',
       relayToken,
     });
+    try { ctx.mainAgent.recordNativeTask(taskId, '_utility', 'verify_memory'); } catch { /* best-effort */ }
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     // F3 hardening: spawnTimeoutWatcher only writes a timed_out record into
     // ctx.nativeResultMap; it does not know about _pendingVerifyData. Schedule
