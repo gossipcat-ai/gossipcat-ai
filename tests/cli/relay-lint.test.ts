@@ -94,6 +94,7 @@ function seedConsensusRound(taskId: string, agentId: string): void {
     relayCrossReviewEntries: [],
     relayCrossReviewSkipped: undefined,
     pendingNativeAgents: new Set([agentId]),
+    participatingNativeAgents: new Set([agentId]),
     nativeCrossReviewEntries: [],
     deadline: Date.now() + 60_000,
     createdAt: Date.now(),
@@ -454,5 +455,84 @@ describe('handleNativeRelay — late cross-review relay after round deletion', (
 
     const text = (res.content[0] as { text: string }).text;
     expect(text).toContain('relay_findings_dropped');
+  });
+});
+
+// ── Completion-path under-seed on parse failure (PR #270 v3 review HIGH) ─────
+//
+// Pre-fix: the completion path derived the agent-id snapshot from
+// `nativeCrossReviewEntries[].agentId ∪ final-arrival agent_id`. Agents whose
+// parseCrossReviewResponse threw (or returned zero entries) had ALREADY been
+// deleted from pendingNativeAgents at handler entry, so they were missing from
+// BOTH sources. Their late prose-only relays would then miss the warning even
+// though they were legitimate cross-review participants.
+//
+// Fix: a separate `participatingNativeAgents` set is populated at
+// round-creation and never mutated. The completion path seeds
+// recentConsensusAgentIds from THIS set, guaranteeing every original
+// participant is covered regardless of parse outcome.
+
+describe('handleRelayCrossReview — parse-failure agents seeded into recentConsensusAgentIds', () => {
+  const PARSE_FAIL_CONSENSUS = 'beadbead-feedfeed';
+  const AGENT_A = 'reviewer-a';
+  const AGENT_B = 'reviewer-b';
+  const AGENT_C = 'reviewer-c';
+
+  it('after completion, ALL participating agents (including parse-failed) end up in recentConsensusAgentIds', async () => {
+    // Wire mainAgent so handleRelayCrossReview can build a parse-only engine.
+    // getLlm() returns undefined → handler uses no-op shim, parseCrossReviewResponse runs.
+    ctx.mainAgent = {
+      ...ctx.mainAgent,
+      projectRoot: testDir,
+      getLlm: () => undefined,
+      getAgentConfig: () => undefined,
+    } as any;
+
+    const pending = new Set([AGENT_A, AGENT_B, AGENT_C]);
+    ctx.pendingConsensusRounds.set(PARSE_FAIL_CONSENSUS, {
+      consensusId: PARSE_FAIL_CONSENSUS,
+      allResults: [
+        { agentId: AGENT_A, status: 'completed', result: '<agent_finding type="finding" severity="LOW">a</agent_finding>', task: 't' },
+        { agentId: AGENT_B, status: 'completed', result: '<agent_finding type="finding" severity="LOW">b</agent_finding>', task: 't' },
+        { agentId: AGENT_C, status: 'completed', result: '<agent_finding type="finding" severity="LOW">c</agent_finding>', task: 't' },
+      ],
+      relayCrossReviewEntries: [],
+      relayCrossReviewSkipped: undefined,
+      pendingNativeAgents: pending,
+      participatingNativeAgents: new Set(pending),
+      nativeCrossReviewEntries: [],
+      deadline: Date.now() + 60_000,
+      createdAt: Date.now(),
+      nativePrompts: [],
+    });
+
+    const { handleRelayCrossReview } = await import('../../apps/cli/src/handlers/relay-cross-review');
+
+    // Agent A: malformed payload — parseCrossReviewResponse throws.
+    // Handler catches, records parseError, but does NOT re-add A to pendingNativeAgents.
+    // Pre-fix: A is now invisible to the completion-path snapshot.
+    await handleRelayCrossReview(PARSE_FAIL_CONSENSUS, AGENT_A, '{not valid json at all');
+
+    // Agent B: valid payload, accepted entry (peer references AGENT_A).
+    const validBPayload = JSON.stringify([
+      { action: 'agree', findingId: `${AGENT_A}:f1`, peerAgentId: AGENT_A, finding: 'B agrees with A', confidence: 4 },
+    ]);
+    await handleRelayCrossReview(PARSE_FAIL_CONSENSUS, AGENT_B, validBPayload);
+
+    // Agent C: final arrival, valid payload — triggers completion path.
+    // Synthesis will bail (no LLM), but the seed happens BEFORE that.
+    const validCPayload = JSON.stringify([
+      { action: 'agree', findingId: `${AGENT_B}:f1`, peerAgentId: AGENT_B, finding: 'C agrees with B', confidence: 4 },
+    ]);
+    await handleRelayCrossReview(PARSE_FAIL_CONSENSUS, AGENT_C, validCPayload);
+
+    // Round was deleted by completion path
+    expect(ctx.pendingConsensusRounds.has(PARSE_FAIL_CONSENSUS)).toBe(false);
+
+    // ALL THREE agents must be in recentConsensusAgentIds — including A who
+    // contributed zero parsed entries due to malformed JSON.
+    expect(ctx.recentConsensusAgentIds.has(AGENT_A)).toBe(true);
+    expect(ctx.recentConsensusAgentIds.has(AGENT_B)).toBe(true);
+    expect(ctx.recentConsensusAgentIds.has(AGENT_C)).toBe(true);
   });
 });

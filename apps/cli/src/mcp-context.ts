@@ -18,6 +18,18 @@ export interface PendingConsensusRound {
   /** Relay agents whose phase-2 cross-review failed (quota / parse / network). Surfaced in the final report. */
   relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;
   pendingNativeAgents: Set<string>;
+  /**
+   * Exhaustive set of native cross-review agents that EVER participated in this
+   * round — populated at round-creation alongside `pendingNativeAgents` and NEVER
+   * mutated thereafter (no per-arrival delete). Used by the completion-path
+   * snapshot in relay-cross-review.ts so agents whose cross-review payload failed
+   * to parse (and therefore contributed zero `nativeCrossReviewEntries`) are still
+   * captured in `recentConsensusAgentIds`. Without this, the completion-path
+   * derivation from `nativeCrossReviewEntries[].agentId ∪ final-arrival agent_id`
+   * silently drops earlier parse-failed agents from the agentId fallback.
+   * Spec: PR #270 v3 review (HIGH — completion-path under-seeds on parse failure).
+   */
+  participatingNativeAgents: Set<string>;
   nativeCrossReviewEntries: CrossReviewEntry[];
   deadline: number;
   createdAt: number;

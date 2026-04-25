@@ -30,10 +30,14 @@ export function startConsensusTimeout(consensusId: string): void {
     const missingAgents = [...current.pendingNativeAgents];
     // Delete round BEFORE async work to prevent double-synthesis race with concurrent relay
     const snapshot = { allResults: current.allResults, relayCrossReviewEntries: current.relayCrossReviewEntries, relayCrossReviewSkipped: current.relayCrossReviewSkipped, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries], resolutionRoots: current.resolutionRoots };
-    // PR #270 v2 review (MEDIUM): seed the agent-id fallback BEFORE delete
-    // so late cross-review prose relays from these agents still register as
-    // "in consensus" via taskWasInConsensusRound's agentId branch.
-    seedRecentConsensusAgentIds(Array.from(current.pendingNativeAgents), RECENT_CONSENSUS_TASK_TTL_MS);
+    // PR #270 v3 review (HIGH): seed the agent-id fallback BEFORE delete from
+    // the EXHAUSTIVE participation set, not just the still-pending agents.
+    // Covers two cases: (1) agents that never relayed (still in
+    // pendingNativeAgents — also in participatingNativeAgents), and
+    // (2) agents that relayed before the timeout but whose payload failed to
+    // parse (removed from pendingNativeAgents at handler entry, but still in
+    // participatingNativeAgents). Both deserve the late-relay warning.
+    seedRecentConsensusAgentIds(Array.from(current.participatingNativeAgents), RECENT_CONSENSUS_TASK_TTL_MS);
     ctx.pendingConsensusRounds.delete(consensusId);
     persistPendingConsensus();
     process.stderr.write(`[gossipcat] ⏰ Consensus ${consensusId} timed out. Missing: ${missingAgents.join(', ')}. Synthesizing with available entries.\n`);
@@ -256,21 +260,16 @@ export async function handleRelayCrossReview(
     // validation (round-3 consensus e507e375-50c2420b:f10).
     resolutionRoots: round.resolutionRoots,
   };
-  // PR #270 v2 review (MEDIUM): seed the agent-id fallback BEFORE delete with
-  // every native cross-review agent that participated in this round. By the
-  // time we reach the completion path, pendingNativeAgents is empty (each
-  // arrival deleted itself at handler entry), so derive the set from the
-  // accumulated cross-review entries. Without this, a duplicate-late relay
-  // from one of those agents arriving after delete would miss the warning.
-  const completedCrossReviewAgentIds = new Set<string>();
-  for (const e of synthSnapshot.nativeCrossReviewEntries) {
-    if (e && typeof (e as any).agentId === 'string') completedCrossReviewAgentIds.add((e as any).agentId);
-  }
-  // Belt-and-suspenders: also include the just-completed agent_id (it may
-  // have produced zero parsed entries yet still be a legitimate cross-reviewer
-  // whose late duplicate relay deserves the warning).
-  completedCrossReviewAgentIds.add(agent_id);
-  seedRecentConsensusAgentIds(completedCrossReviewAgentIds, RECENT_CONSENSUS_TASK_TTL_MS);
+  // PR #270 v3 review (HIGH): seed the agent-id fallback BEFORE delete from the
+  // EXHAUSTIVE participation set, not the post-parse derivation. The previous
+  // approach derived the set from `nativeCrossReviewEntries[].agentId ∪ agent_id`
+  // (the final arriving agent), which silently dropped earlier-arriving agents
+  // whose parseCrossReviewResponse threw or returned zero entries — they were
+  // gone from pendingNativeAgents (deleted at handler entry, line 137) AND
+  // absent from nativeCrossReviewEntries. `participatingNativeAgents` is
+  // populated at round-creation and NEVER mutated, so it covers every native
+  // cross-review agent regardless of parse outcome.
+  seedRecentConsensusAgentIds(Array.from(round.participatingNativeAgents), RECENT_CONSENSUS_TASK_TTL_MS);
   ctx.pendingConsensusRounds.delete(consensus_id);
   persistPendingConsensus();
   process.stderr.write(`[gossipcat] 🔮 All native cross-reviews received. Synthesizing consensus for ${consensus_id}...\n`);
@@ -374,6 +373,7 @@ export function persistPendingConsensus(): void {
         relayCrossReviewEntries: round.relayCrossReviewEntries,
         relayCrossReviewSkipped: round.relayCrossReviewSkipped,
         pendingNativeAgents: [...round.pendingNativeAgents],
+        participatingNativeAgents: [...round.participatingNativeAgents],
         nativeCrossReviewEntries: round.nativeCrossReviewEntries,
         deadline: round.deadline,
         createdAt: round.createdAt,
@@ -414,6 +414,14 @@ export function restorePendingConsensus(projectRoot: string): void {
         relayCrossReviewEntries: data.relayCrossReviewEntries || [],
         relayCrossReviewSkipped: data.relayCrossReviewSkipped,
         pendingNativeAgents: new Set(data.pendingNativeAgents || []),
+        // Back-compat: pre-v3 persisted rounds lack participatingNativeAgents.
+        // Fall back to pendingNativeAgents — for restored rounds the still-pending
+        // set is the best available approximation of original participants.
+        participatingNativeAgents: new Set(
+          Array.isArray(data.participatingNativeAgents) && data.participatingNativeAgents.length > 0
+            ? data.participatingNativeAgents
+            : (data.pendingNativeAgents || []),
+        ),
         nativeCrossReviewEntries: data.nativeCrossReviewEntries || [],
         deadline: data.deadline,
         createdAt: data.createdAt,

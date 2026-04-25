@@ -562,6 +562,13 @@ export async function handleCollect(
           relayCrossReviewEntries: relayEntries,
           relayCrossReviewSkipped,
           pendingNativeAgents: new Set(nativePrompts.map((p: any) => p.agentId)),
+          // PR #270 v3 review (HIGH): exhaustive participation set. Mirrors the
+          // initial pendingNativeAgents but is NEVER deleted from on per-arrival.
+          // Read by relay-cross-review.ts completion path to seed
+          // recentConsensusAgentIds with EVERY native cross-review agent —
+          // including those whose payload failed to parse and therefore
+          // contributed zero nativeCrossReviewEntries.
+          participatingNativeAgents: new Set(nativePrompts.map((p: any) => p.agentId)),
           nativeCrossReviewEntries: [],
           deadline: Date.now() + CONSENSUS_TIMEOUT_MS,
           createdAt: Date.now(),
