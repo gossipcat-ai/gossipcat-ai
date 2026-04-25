@@ -130,6 +130,32 @@ describe('PerformanceWriter', () => {
       })).not.toThrow();
     });
 
+    // PR #270 review (CRITICAL): relay_findings_dropped MUST be in the
+    // VALID_PIPELINE_SIGNALS allowlist. Pre-fix, validateSignal threw on it
+    // and the catch in handleNativeRelay silently swallowed every emission,
+    // so the relay-warnings.jsonl file existed but no signal pipeline saw it.
+    it('accepts relay_findings_dropped as a valid pipeline signal', () => {
+      expect(() => writer[WRITER_INTERNAL].appendSignal({
+        type: 'pipeline',
+        signal: 'relay_findings_dropped',
+        agentId: 'sonnet-reviewer',
+        taskId: 't-relay-1',
+        timestamp: '2026-04-25T10:00:00Z',
+        metadata: {
+          reason: 'no_tagged_findings_in_result',
+          resultLength: 248,
+          suspectedReason: 'orchestrator_paraphrase',
+        },
+      } as any)).not.toThrow();
+    });
+
+    it('rejects unknown pipeline signal enum', () => {
+      expect(() => writer[WRITER_INTERNAL].appendSignal({
+        type: 'pipeline', signal: 'fake_pipeline' as any,
+        agentId: 'a', taskId: 't1', timestamp: '2026-03-30T10:00:00Z',
+      })).toThrow('signal');
+    });
+
     it('rejects unknown impl signal enum', () => {
       expect(() => writer[WRITER_INTERNAL].appendSignal({
         type: 'impl', signal: 'fake_impl' as any,

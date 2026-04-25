@@ -6,8 +6,160 @@ import { randomUUID } from 'crypto';
 import { hasMemoryQuery } from '@gossip/relay';
 import { ctx, NATIVE_TASK_TTL_MS, defaultImportanceScores } from '../mcp-context';
 
+/**
+ * Lazy-prune entries in `ctx.recentConsensusTaskIds` whose TTL has expired.
+ * Called on every membership read so the map self-bounds without a separate
+ * scheduler. O(n) over the map; n is bounded by the number of consensus
+ * rounds in the last 10 minutes which is tiny in practice.
+ */
+function pruneExpiredRecentConsensusTaskIds(now: number = Date.now()): void {
+  try {
+    const m = ctx.recentConsensusTaskIds;
+    if (!m || m.size === 0) return;
+    for (const [taskId, expiry] of m) {
+      if (expiry <= now) m.delete(taskId);
+    }
+  } catch { /* defensive — never break relay on prune errors */ }
+}
+
+/**
+ * Seed the fallback membership map with a batch of taskIds at consensus
+ * round-seed time. Called from collect.ts. Each entry expires after
+ * RECENT_CONSENSUS_TASK_TTL_MS (10 minutes by default).
+ */
+export function seedRecentConsensusTaskIds(taskIds: Iterable<string>, ttlMs: number): void {
+  try {
+    const expiry = Date.now() + ttlMs;
+    for (const id of taskIds) {
+      if (typeof id === 'string' && id.length > 0) {
+        ctx.recentConsensusTaskIds.set(id, expiry);
+      }
+    }
+  } catch { /* defensive — observability seed never blocks consensus path */ }
+}
+
+/**
+ * Lazy-prune entries in a `recentConsensusAgentIds`-shaped map whose TTL has
+ * expired. Mirrors {@link pruneExpiredRecentConsensusTaskIds} but accepts the
+ * map as an argument so tests can verify behaviour without mutating ctx.
+ */
+export function pruneExpiredRecentConsensusAgentIds(
+  map: Map<string, number> = ctx.recentConsensusAgentIds,
+  now: number = Date.now(),
+): void {
+  try {
+    if (!map || map.size === 0) return;
+    for (const [agentId, expiry] of map) {
+      if (expiry <= now) map.delete(agentId);
+    }
+  } catch { /* defensive — never break relay on prune errors */ }
+}
+
+/**
+ * Seed the fallback membership map with a batch of agentIds at consensus
+ * round-deletion time. Called from relay-cross-review.ts immediately before
+ * `pendingConsensusRounds.delete(consensusId)` so cross-review native agents
+ * remain reachable for `taskWasInConsensusRound` even after teardown.
+ * Each entry expires after RECENT_CONSENSUS_TASK_TTL_MS (10 minutes).
+ */
+export function seedRecentConsensusAgentIds(agentIds: Iterable<string>, ttlMs: number): void {
+  try {
+    const expiry = Date.now() + ttlMs;
+    for (const id of agentIds) {
+      if (typeof id === 'string' && id.length > 0) {
+        ctx.recentConsensusAgentIds.set(id, expiry);
+      }
+    }
+  } catch { /* defensive — observability seed never blocks consensus path */ }
+}
+
 /** Active timeout watchers — keyed by task ID */
 const timeoutWatchers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+/** Path to the on-disk relay-warnings log (one JSON object per line). Mirrors
+ * the appendFileSync pattern used by handlers/collect.ts for
+ * implementation-findings.jsonl. */
+const RELAY_WARNINGS_FILE = 'relay-warnings.jsonl';
+
+/** Detect whether a relayed task was part of an active consensus round.
+ *
+ * Phase-A heuristic per docs/specs/2026-04-25-relay-lint-hardening.md:
+ *   - Iterate ctx.pendingConsensusRounds; treat the task as "in a consensus
+ *     round" if its taskId appears in any round's allResults[].id, OR its
+ *     agentId appears in any round's pendingNativeAgents set, OR its taskId
+ *     appears anywhere in nativeCrossReviewEntries (best-effort — entries
+ *     don't carry taskId today, so this branch is defensive).
+ *
+ * Best-effort: returns false on any unexpected shape so the relay path never
+ * breaks on observability-only logic. */
+export function taskWasInConsensusRound(
+  taskId: string,
+  agentId: string | undefined,
+  rounds: Map<string, { allResults?: any[]; pendingNativeAgents?: Set<string>; nativeCrossReviewEntries?: any[] }>,
+  recentTaskIds?: Map<string, number>,
+  recentAgentIds?: Map<string, number>,
+): boolean {
+  try {
+    for (const round of rounds.values()) {
+      if (Array.isArray(round.allResults)) {
+        for (const r of round.allResults) {
+          if (r && (r.id === taskId || (agentId && r.agentId === agentId))) return true;
+        }
+      }
+      if (agentId && round.pendingNativeAgents instanceof Set && round.pendingNativeAgents.has(agentId)) {
+        return true;
+      }
+      if (Array.isArray(round.nativeCrossReviewEntries)) {
+        for (const e of round.nativeCrossReviewEntries) {
+          if (e && (e.taskId === taskId || (agentId && e.agentId === agentId))) return true;
+        }
+      }
+    }
+    // Fallback for the round-deletion race (PR #270 review HIGH): if the
+    // live round has already been deleted (timeout completion / synthesis
+    // teardown) but the task was seeded recently, still treat it as "in a
+    // consensus round". Lazy-prune expired entries on read so the map
+    // self-bounds without a scheduler.
+    const fallback = recentTaskIds ?? ctx.recentConsensusTaskIds;
+    if (fallback && fallback.size > 0) {
+      pruneExpiredRecentConsensusTaskIds();
+      const expiry = fallback.get(taskId);
+      if (expiry !== undefined && expiry > Date.now()) return true;
+    }
+    // Companion fallback (PR #270 v2 review MEDIUM): the task-id seed only
+    // covers Phase 1 completed task IDs at round-creation time. Phase 2
+    // cross-review native agents have separate, later-allocated task IDs
+    // that never enter recentConsensusTaskIds. Their `agentId`s ARE captured
+    // in `recentConsensusAgentIds` at round-deletion time (see
+    // relay-cross-review.ts snapshot-before-delete sites). Without this
+    // branch, late prose relays from cross-review agents miss the warning.
+    if (agentId) {
+      const agentFallback = recentAgentIds ?? ctx.recentConsensusAgentIds;
+      if (agentFallback && agentFallback.size > 0) {
+        pruneExpiredRecentConsensusAgentIds(agentFallback);
+        const expiry = agentFallback.get(agentId);
+        if (expiry !== undefined && expiry > Date.now()) return true;
+      }
+    }
+  } catch { /* defensive — never break relay on detection errors */ }
+  return false;
+}
+
+/** Append one warning line to .gossip/relay-warnings.jsonl. Fail-open. */
+function appendRelayWarning(
+  projectRoot: string,
+  entry: { taskId: string; agentId: string; reason: string; resultLength: number; suspectedReason: string; timestamp: string },
+): void {
+  try {
+    const { appendFileSync, mkdirSync } = require('fs');
+    const { join } = require('path');
+    const dir = join(projectRoot, '.gossip');
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, RELAY_WARNINGS_FILE), JSON.stringify(entry) + '\n', 'utf8');
+  } catch (err) {
+    process.stderr.write(`[gossipcat] append relay-warning failed: ${(err as Error).message}\n`);
+  }
+}
 
 /**
  * Spawn a timeout watcher for a native task.
@@ -454,6 +606,58 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     autoSignalsEmitted.completion++;
   }
 
+  // ── Path A relay-lint: detect orchestrator paraphrase that drops findings ──
+  // When the dispatched task was part of an active consensus round and the
+  // relayed result carries ZERO <agent_finding> tags, the orchestrator likely
+  // paraphrased instead of pasting verbatim — silently dropping every finding
+  // from the consensus extractor. Emit `relay_findings_dropped` (pipeline
+  // signal) + persist to .gossip/relay-warnings.jsonl + flag in receipt.
+  //
+  // Spec: docs/specs/2026-04-25-relay-lint-hardening.md
+  // Observability only — wrapped in try/catch so the relay path always succeeds.
+  // The signal name is intentionally NOT added to COMPLETION_SIGNAL_ALLOWLIST,
+  // so the L3 drift detector treats it like any other type='pipeline' signal
+  // and does not flag the emission path (cf. project_drift_bypass_finding_dropped_format.md).
+  let relayLintFired = false;
+  try {
+    if (!error && !taskInfo.utilityType && agentId !== '_utility') {
+      const tagCount = result ? (result.match(/<agent_finding[\s>]/g) || []).length : 0;
+      const inConsensus = taskWasInConsensusRound(task_id, agentId, ctx.pendingConsensusRounds as any, ctx.recentConsensusTaskIds, ctx.recentConsensusAgentIds);
+      if (tagCount === 0 && inConsensus) {
+        relayLintFired = true;
+        const ts = new Date().toISOString();
+        // Prefer mainAgent.projectRoot (mirrors persistNativeTaskMap above);
+        // fall back to process.cwd() when boot hasn't completed yet.
+        const projectRoot = ctx.mainAgent?.projectRoot ?? process.cwd();
+        appendRelayWarning(projectRoot, {
+          taskId: task_id,
+          agentId,
+          reason: 'relay_findings_dropped',
+          resultLength: result?.length ?? 0,
+          suspectedReason: 'orchestrator_paraphrase',
+          timestamp: ts,
+        });
+        try {
+          const { emitPipelineSignals } = await import('@gossip/orchestrator');
+          emitPipelineSignals(projectRoot, [{
+            type: 'pipeline' as const,
+            signal: 'relay_findings_dropped',
+            agentId,
+            taskId: task_id,
+            metadata: {
+              reason: 'no_tagged_findings_in_result',
+              resultLength: result?.length ?? 0,
+              suspectedReason: 'orchestrator_paraphrase',
+            },
+            timestamp: ts,
+          }]);
+        } catch { /* best-effort — disk-side warning already recorded */ }
+      }
+    }
+  } catch (lintErr) {
+    process.stderr.write(`[gossipcat] relay-lint detection failed: ${(lintErr as Error).message}\n`);
+  }
+
   // 0b. Record plan step result so subsequent steps get chain context
   if (taskInfo.planId && taskInfo.step && !error) {
     try { ctx.mainAgent.recordPlanStepResult(taskInfo.planId, taskInfo.step, result); } catch { /* best-effort */ }
@@ -639,6 +843,9 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     if (autoSignalsEmitted.impl > 0) parts.push(`impl=${autoSignalsEmitted.impl}`);
     if (autoSignalsEmitted.completion > 0) parts.push(`completion=${autoSignalsEmitted.completion}`);
     responseText += `\n⚡ ${totalAuto} auto-signal(s) emitted (${parts.join(', ')})`;
+  }
+  if (relayLintFired) {
+    responseText += `\n⚠ relay_findings_dropped: result has 0 <agent_finding> tags but task was a consensus dispatch — orchestrator may have paraphrased; original tagged findings are lost from the dashboard.`;
   }
   if (utilityBlocks.length > 0) {
     responseText += `\n\n⚠️ EXECUTE NOW — ${utilityBlocks.length} utility task(s) queued:\n\n${utilityBlocks.join('\n\n')}`;

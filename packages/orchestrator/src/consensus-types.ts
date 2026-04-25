@@ -233,7 +233,11 @@ export interface PipelineSignal {
     | 'circuit_open_fired'
     | 'skill_injection_skipped'
     | 'signal_retracted'
-    | 'citation_fabricated';
+    | 'citation_fabricated'
+    /** Path A relay-lint hardening (docs/specs/2026-04-25-relay-lint-hardening.md):
+     * orchestrator paraphrased a consensus-dispatched native agent's result,
+     * dropping all `<agent_finding>` tags. Observability-only — never gates. */
+    | 'relay_findings_dropped';
   /** Real agentId for agent-scoped events; '_system' for system-scoped events. */
   agentId: string;
   taskId: string;

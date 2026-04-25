@@ -36,6 +36,7 @@ function seedRound(pendingSet: Set<string>) {
     relayCrossReviewEntries: [],
     relayCrossReviewSkipped: undefined,
     pendingNativeAgents: pendingSet,
+    participatingNativeAgents: new Set(pendingSet),
     nativeCrossReviewEntries: [],
     deadline: Date.now() + 60_000,
     createdAt: Date.now(),

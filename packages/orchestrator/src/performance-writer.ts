@@ -53,6 +53,12 @@ const VALID_PIPELINE_SIGNALS = new Set([
   'dispatch_started', 'relay_received', 'finding_dropped_format',
   'synthesis_completed', 'circuit_open_fired', 'skill_injection_skipped',
   'signal_retracted', 'citation_fabricated',
+  // Path A relay-lint (PR #270, consensus-reviewed): emitted when a native
+  // task that was part of an active consensus round arrives via gossip_relay
+  // with zero <agent_finding> tags — indicates the orchestrator paraphrased
+  // instead of pasting verbatim, dropping all findings. Pre-fix: validateSignal
+  // threw on this name and the catch silently swallowed every emission.
+  'relay_findings_dropped',
 ]);
 
 /**

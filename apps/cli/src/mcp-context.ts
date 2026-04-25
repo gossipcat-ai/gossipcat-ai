@@ -18,6 +18,18 @@ export interface PendingConsensusRound {
   /** Relay agents whose phase-2 cross-review failed (quota / parse / network). Surfaced in the final report. */
   relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;
   pendingNativeAgents: Set<string>;
+  /**
+   * Exhaustive set of native cross-review agents that EVER participated in this
+   * round — populated at round-creation alongside `pendingNativeAgents` and NEVER
+   * mutated thereafter (no per-arrival delete). Used by the completion-path
+   * snapshot in relay-cross-review.ts so agents whose cross-review payload failed
+   * to parse (and therefore contributed zero `nativeCrossReviewEntries`) are still
+   * captured in `recentConsensusAgentIds`. Without this, the completion-path
+   * derivation from `nativeCrossReviewEntries[].agentId ∪ final-arrival agent_id`
+   * silently drops earlier parse-failed agents from the agentId fallback.
+   * Spec: PR #270 v3 review (HIGH — completion-path under-seeds on parse failure).
+   */
+  participatingNativeAgents: Set<string>;
   nativeCrossReviewEntries: CrossReviewEntry[];
   deadline: number;
   createdAt: number;
@@ -92,6 +104,28 @@ export interface McpContext {
   identityRegistry: Map<string, { agent_id: string; runtime: 'native' | 'relay'; provider: string; model: string }>;
   pendingConsensusRounds: Map<string, PendingConsensusRound>;
   /**
+   * Fallback membership map for the relay-lint detector — taskId → expiryEpoch.
+   * Populated at consensus round-seed time (collect.ts) and consulted by
+   * `taskWasInConsensusRound` when the live `pendingConsensusRounds` entry has
+   * already been deleted (timeout or completion). Without this fallback, late
+   * Phase 1 relays that arrive after the round was torn down silently miss
+   * the warning. TTL: 10 minutes; pruned lazily on read.
+   * Spec: PR #270 review (HIGH — round-deletion race).
+   */
+  recentConsensusTaskIds: Map<string, number>;
+  /**
+   * Companion to `recentConsensusTaskIds` — agentId → expiryEpoch. Seeded at
+   * round-deletion time (timeout/completion paths in relay-cross-review.ts)
+   * with the snapshot of `pendingNativeAgents` so late cross-review prose
+   * relays from those agents still register as "in consensus" via the agentId
+   * fallback. Without this, the misleading comment at collect.ts only seeded
+   * Phase 1 task IDs, leaving Phase 2 cross-review native agents uncovered
+   * after the round was torn down. TTL: same as recentConsensusTaskIds
+   * (10 min); pruned lazily on read.
+   * Spec: PR #270 v2 review (MEDIUM — late cross-review relay gap).
+   */
+  recentConsensusAgentIds: Map<string, number>;
+  /**
    * Dispatch-time resolutionRoots (#126 PR-B) keyed by task_id. Populated
    * from gossip_dispatch's `resolutionRoots` pass-through; consumed by
    * gossip_collect when collect-time input is absent. Collect-time REPLACES
@@ -154,6 +188,8 @@ export const ctx: McpContext = {
   nativeAgentConfigs: new Map(),
   identityRegistry: new Map(),
   pendingConsensusRounds: new Map(),
+  recentConsensusTaskIds: new Map(),
+  recentConsensusAgentIds: new Map(),
   pendingDispatchResolutionRoots: new Map(),
   nativeUtilityConfig: null,
   mainProvider: 'google',
@@ -172,6 +208,14 @@ export const ctx: McpContext = {
 };
 
 export const NATIVE_TASK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+/**
+ * TTL for `recentConsensusTaskIds` entries — 10 minutes. Window must outlast
+ * normal Phase 1 latency (timeouts, slow agents, /mcp reconnect) so the
+ * relay-lint fallback still catches late paraphrase-only relays after the
+ * live consensus round has been deleted.
+ */
+export const RECENT_CONSENSUS_TASK_TTL_MS = 10 * 60 * 1000;
 
 export function generateTaskId(): string {
   return randomUUID().slice(0, 8);

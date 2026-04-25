@@ -2,9 +2,10 @@
  * Collect handler — polls for results, merges relay + native, runs consensus.
  * All state accessed via the shared context object.
  */
-import { ctx } from '../mcp-context';
+import { ctx, RECENT_CONSENSUS_TASK_TTL_MS } from '../mcp-context';
 import { startConsensusTimeout, persistPendingConsensus } from './relay-cross-review';
 import { persistRelayTasks } from './relay-tasks';
+import { seedRecentConsensusTaskIds } from './native-tasks';
 import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
 
@@ -561,12 +562,38 @@ export async function handleCollect(
           relayCrossReviewEntries: relayEntries,
           relayCrossReviewSkipped,
           pendingNativeAgents: new Set(nativePrompts.map((p: any) => p.agentId)),
+          // PR #270 v3 review (HIGH): exhaustive participation set. Mirrors the
+          // initial pendingNativeAgents but is NEVER deleted from on per-arrival.
+          // Read by relay-cross-review.ts completion path to seed
+          // recentConsensusAgentIds with EVERY native cross-review agent —
+          // including those whose payload failed to parse and therefore
+          // contributed zero nativeCrossReviewEntries.
+          participatingNativeAgents: new Set(nativePrompts.map((p: any) => p.agentId)),
           nativeCrossReviewEntries: [],
           deadline: Date.now() + CONSENSUS_TIMEOUT_MS,
           createdAt: Date.now(),
           nativePrompts: nativePrompts.map((p: any) => ({ agentId: p.agentId, system: p.system, user: p.user })),
           resolutionRoots: effectiveRoots.length > 0 ? [...effectiveRoots] : undefined,
         });
+
+        // Seed the relay-lint fallback membership map — keeps round-membership
+        // reachable for taskWasInConsensusRound() even after pendingConsensusRounds
+        // is deleted by timeout/synthesis.
+        //
+        // SCOPE: this seed covers ONLY Phase 1 completed task IDs (dispatched
+        // via gossip_dispatch and present in allResults). Phase 2 cross-review
+        // native agents are awaited via a SEPARATE Agent() dispatch path with
+        // their own task IDs, which never enter recentConsensusTaskIds. Those
+        // agents are covered via `recentConsensusAgentIds` — seeded with a
+        // snapshot of `pendingNativeAgents` immediately BEFORE
+        // pendingConsensusRounds.delete in relay-cross-review.ts (both the
+        // timeout path and the completion-synthesis path). See PR #270 v2
+        // review (MEDIUM — late cross-review relay gap).
+        // Spec: PR #270 review (HIGH — round-deletion race).
+        const recentTaskIds: string[] = [
+          ...allResults.filter((r: any) => r.status === 'completed').map((r: any) => r.id as string),
+        ];
+        seedRecentConsensusTaskIds(recentTaskIds, RECENT_CONSENSUS_TASK_TTL_MS);
 
         // Start timeout watcher — auto-synthesizes if native agents don't respond
         startConsensusTimeout(consensusId);
