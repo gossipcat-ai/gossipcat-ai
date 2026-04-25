@@ -74,7 +74,7 @@ export class TaskGraph {
 
   recordCreated(taskId: string, agentId: string, task: string, skills: string[], parentId?: string): void {
     const event: TaskCreatedEvent = {
-      type: 'task.created', taskId, agentId, task, skills,
+      type: 'task.created', taskId, agentId, task: this.redactSecrets(task), skills,
       ...(parentId ? { parentId } : {}),
       timestamp: new Date().toISOString(),
     };
