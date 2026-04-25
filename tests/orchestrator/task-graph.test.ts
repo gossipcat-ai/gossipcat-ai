@@ -228,6 +228,27 @@ describe('TaskGraph', () => {
       expect(task!.error).toContain('[REDACTED_API_KEY]');
     });
 
+    it('redacts secrets from all record* methods (parity)', () => {
+      // Sentinel embeds an sk-<40+ alnum> run that matches redactSecrets sk[-_][a-zA-Z0-9]{40,}
+      const sentinel = 'SECRET_sk-testDEADBEEF1234567890abcdefghijklmnopqrstuvwxyz0123456789';
+      const graph = new TaskGraph(testDir);
+      graph.recordCreated('p1', 'agent', `plan: do thing with ${sentinel}`, ['skill1']);
+      graph.recordCompleted('p1', `result includes ${sentinel}`, 100);
+      graph.recordCreated('p2', 'agent', `another plan ${sentinel}`, []);
+      graph.recordFailed('p2', `failure with ${sentinel}`, 100);
+
+      const lines = readFileSync(graphPath, 'utf-8').trim().split('\n');
+      expect(lines.length).toBe(4);
+      for (const line of lines) {
+        expect(line).not.toContain(sentinel);
+      }
+      // Confirm record types covered
+      const types = lines.map(l => JSON.parse(l).type);
+      expect(types).toEqual([
+        'task.created', 'task.completed', 'task.created', 'task.failed',
+      ]);
+    });
+
     it('persists index and loads on new instance', () => {
       const graph = new TaskGraph(testDir);
       graph.recordCreated('idx-1', 'agent', 'indexed task', ['test']);
