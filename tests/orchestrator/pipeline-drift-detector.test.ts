@@ -292,4 +292,52 @@ describe('PipelineDriftDetector', () => {
   it('statSync is importable from fs (sanity guard for detector test env)', () => {
     expect(typeof statSync).toBe('function');
   });
+
+  // ── Per-signal authorized-path policy ────────────────────────────────────
+  // finding_dropped_format has TWO sanctioned emit sites (the canonical
+  // helper + signal-helpers-pipeline used by gossip_signals(record)). Both
+  // must be treated as non-bypass; a third path must still trigger.
+  it('finding_dropped_format on completion-signals-helper does not trigger bypass', () => {
+    write(root, [
+      { type: 'meta', signal: 'task_completed', agentId: 'a', taskId: 't0', timestamp: iso(0), _emission_path: 'completion-signals-helper' },
+      { type: 'pipeline', signal: 'finding_dropped_format', agentId: 'a', taskId: 't1', timestamp: iso(1), _emission_path: 'completion-signals-helper' },
+    ]);
+    const r = new PipelineDriftDetector(root).run();
+    expect(r.bypassCount).toBe(0);
+    expect(r.triggered).toBe(false);
+  });
+
+  it('finding_dropped_format on signal-helpers-pipeline does not trigger bypass (authorized secondary path)', () => {
+    write(root, [
+      { type: 'meta', signal: 'task_completed', agentId: 'a', taskId: 't0', timestamp: iso(0), _emission_path: 'completion-signals-helper' },
+      { type: 'pipeline', signal: 'finding_dropped_format', agentId: 'a', taskId: 't1', timestamp: iso(1), _emission_path: 'signal-helpers-pipeline' },
+    ]);
+    const r = new PipelineDriftDetector(root).run();
+    expect(r.bypassCount).toBe(0);
+    expect(r.triggered).toBe(false);
+  });
+
+  it('finding_dropped_format on a non-authorized path still triggers bypass', () => {
+    write(root, [
+      { type: 'meta', signal: 'task_completed', agentId: 'a', taskId: 't0', timestamp: iso(0), _emission_path: 'completion-signals-helper' },
+      { type: 'pipeline', signal: 'finding_dropped_format', agentId: 'a', taskId: 't1', timestamp: iso(1), _emission_path: 'native-tasks' },
+    ]);
+    const r = new PipelineDriftDetector(root).run();
+    expect(r.bypassCount).toBe(1);
+    expect(r.triggered).toBe(true);
+    expect(r.sampleOffenders[0]).toMatchObject({
+      signal: 'finding_dropped_format',
+      emissionPath: 'native-tasks',
+    });
+  });
+
+  it('task_completed on signal-helpers-pipeline still triggers (path authorized only for finding_dropped_format)', () => {
+    write(root, [
+      { type: 'meta', signal: 'task_completed', agentId: 'a', taskId: 't0', timestamp: iso(0), _emission_path: 'completion-signals-helper' },
+      { type: 'meta', signal: 'task_completed', agentId: 'a', taskId: 't1', timestamp: iso(1), _emission_path: 'signal-helpers-pipeline' },
+    ]);
+    const r = new PipelineDriftDetector(root).run();
+    expect(r.bypassCount).toBe(1);
+    expect(r.triggered).toBe(true);
+  });
 });

@@ -24,6 +24,35 @@ export const COMPLETION_SIGNAL_ALLOWLIST: readonly string[] = [
 ] as const;
 
 /**
+ * COMPLETION_SIGNAL_AUTHORIZED_PATHS — for each allowlisted signal, the closed
+ * set of `_emission_path` values that the L3 drift detector treats as
+ * sanctioned. Any allowlisted signal landing on a path NOT in its authorized
+ * set is flagged as a bypass.
+ *
+ * Default authorized path is `completion-signals-helper` (the canonical
+ * emit surface). A signal may be authorized for additional paths when there
+ * is a deliberate, documented secondary emit site — see
+ * `finding_dropped_format`, which is also emitted from the gossip_signals
+ * record path via `emitPipelineSignals` (signal-helpers-pipeline) so
+ * category-misses on the record path land in the dashboard, not just stderr.
+ *
+ * Adding a path here is a policy change, not a workaround: it widens the
+ * sanctioned emit surface for that specific signal. Pair every entry with a
+ * comment naming the deliberate caller and the reason.
+ */
+export const COMPLETION_SIGNAL_AUTHORIZED_PATHS: Readonly<Record<string, ReadonlySet<string>>> = {
+  task_completed: new Set(['completion-signals-helper']),
+  task_tool_turns: new Set(['completion-signals-helper']),
+  format_compliance: new Set(['completion-signals-helper']),
+  // finding_dropped_format is also emitted from the gossip_signals(record)
+  // path in apps/cli/src/mcp-server-sdk.ts via emitPipelineSignals, so the
+  // record-path category-miss surfaces in the dashboard. The pipeline helper
+  // is signal-helpers-pipeline; see project_drift_bypass_finding_dropped_format.
+  finding_dropped_format: new Set(['completion-signals-helper', 'signal-helpers-pipeline']),
+  citation_fabricated: new Set(['completion-signals-helper']),
+};
+
+/**
  * EMISSION_PATHS — closed enum of code regions permitted to write into
  * `agent-performance.jsonl` via `PerformanceWriter.appendSignal(s)`.
  *

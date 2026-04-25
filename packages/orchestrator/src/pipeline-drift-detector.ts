@@ -33,7 +33,10 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { COMPLETION_SIGNAL_ALLOWLIST } from './completion-signals.allowlist';
+import {
+  COMPLETION_SIGNAL_ALLOWLIST,
+  COMPLETION_SIGNAL_AUTHORIZED_PATHS,
+} from './completion-signals.allowlist';
 import { rotateJsonlIfNeeded } from './performance-writer';
 
 export interface DriftOffender {
@@ -83,6 +86,19 @@ const DEFAULTS = {
 };
 
 const ALLOWLIST_SET = new Set<string>(COMPLETION_SIGNAL_ALLOWLIST);
+
+/**
+ * For an allowlisted signal, return the set of `_emission_path` values that
+ * are sanctioned for it. Falls back to the canonical helper-only set when a
+ * signal is in the allowlist but missing from the per-signal map (defensive —
+ * the parity test should keep them aligned).
+ */
+function authorizedPathsFor(signal: string): ReadonlySet<string> {
+  return (
+    COMPLETION_SIGNAL_AUTHORIZED_PATHS[signal] ??
+    new Set(['completion-signals-helper'])
+  );
+}
 
 function fingerprint(offender: DriftOffender): string {
   return createHash('sha1')
@@ -223,12 +239,16 @@ export class PipelineDriftDetector {
       return isFinite(ts) && ts >= (tagEpochMs as number);
     });
 
-    // Bypass: allowlisted signal name on any path other than the helper.
+    // Bypass: allowlisted signal name on a path that is NOT in the
+    // signal's authorized path set. Most signals only authorize
+    // `completion-signals-helper`; a few (e.g. finding_dropped_format) have
+    // an additional sanctioned secondary emit site declared in
+    // COMPLETION_SIGNAL_AUTHORIZED_PATHS.
     const bypassRows = postEpoch.filter(r =>
       typeof r.signal === 'string'
       && ALLOWLIST_SET.has(r.signal)
       && typeof r._emission_path === 'string'
-      && r._emission_path !== 'completion-signals-helper',
+      && !authorizedPathsFor(r.signal).has(r._emission_path),
     );
 
     // Unknown: explicit 'unknown' emission-path (NOT "absent" — pre-epoch
