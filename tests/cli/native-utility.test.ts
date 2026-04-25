@@ -132,4 +132,51 @@ describe('Native Utility Provider — integration', () => {
       expect(delimited![1]).toContain('race condition');
     });
   });
+
+  // ── Log-hygiene regression: utility-task task.created emission ─────────────
+  //
+  // PR follow-up to #260: every site that registers a utility task in
+  // ctx.nativeTaskMap must ALSO call ctx.mainAgent.recordNativeTask(...) so the
+  // task-graph.jsonl audit trail has a matching task.created for every
+  // task.completed written by recordNativeTaskCompleted. Skipping the call
+  // produces orphaned log entries (see project_utility_task_dashboard_gap.md).
+  //
+  // This test guards against drift by reading the actual mcp-server-sdk.ts
+  // source and asserting that each utility-dispatch site contains the
+  // recordNativeTask call adjacent to its nativeTaskMap.set(...) block.
+  describe('utility-task task.created log-hygiene', () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const SRC = path.resolve(__dirname, '../../apps/cli/src/mcp-server-sdk.ts');
+    const source = fs.readFileSync(SRC, 'utf8');
+
+    // Each entry: utilityType literal as it appears in the nativeTaskMap.set
+    // block, plus the descriptor prefix expected in recordNativeTask.
+    const sites: Array<{ utilityType: string; descriptorPrefix: string }> = [
+      { utilityType: 'plan', descriptorPrefix: 'plan:' },
+      { utilityType: 'session_summary', descriptorPrefix: 'session_summary' },
+      { utilityType: 'verify_memory', descriptorPrefix: 'verify_memory:' },
+      // Reference: skill_develop already had the call (PR #260) — guard it too.
+      { utilityType: 'skill_develop', descriptorPrefix: 'skill_develop:' },
+    ];
+
+    for (const { utilityType, descriptorPrefix } of sites) {
+      it(`${utilityType} dispatch records task.created via recordNativeTask`, () => {
+        // Find the nativeTaskMap.set block that declares this utilityType.
+        const blockRegex = new RegExp(
+          `nativeTaskMap\\.set\\([\\s\\S]{0,400}?utilityType:\\s*'${utilityType}'[\\s\\S]{0,400}?\\}\\);`,
+          'g'
+        );
+        const matches = [...source.matchAll(blockRegex)];
+        expect(matches.length).toBeGreaterThan(0);
+
+        const blockEnd = matches[0].index! + matches[0][0].length;
+        // Look in the next ~400 chars for the recordNativeTask call.
+        const window = source.slice(blockEnd, blockEnd + 400);
+        expect(window).toMatch(/ctx\.mainAgent\.recordNativeTask\s*\(/);
+        expect(window).toContain("'_utility'");
+        expect(window).toContain(descriptorPrefix);
+      });
+    }
+  });
 });
