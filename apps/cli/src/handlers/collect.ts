@@ -571,9 +571,17 @@ export async function handleCollect(
 
         // Seed the relay-lint fallback membership map — keeps round-membership
         // reachable for taskWasInConsensusRound() even after pendingConsensusRounds
-        // is deleted by timeout/synthesis. Covers BOTH the dispatched task IDs
-        // AND any native agents we're awaiting via cross-review (whose taskIds
-        // come from a separate Agent() dispatch path and aren't in allResults yet).
+        // is deleted by timeout/synthesis.
+        //
+        // SCOPE: this seed covers ONLY Phase 1 completed task IDs (dispatched
+        // via gossip_dispatch and present in allResults). Phase 2 cross-review
+        // native agents are awaited via a SEPARATE Agent() dispatch path with
+        // their own task IDs, which never enter recentConsensusTaskIds. Those
+        // agents are covered via `recentConsensusAgentIds` — seeded with a
+        // snapshot of `pendingNativeAgents` immediately BEFORE
+        // pendingConsensusRounds.delete in relay-cross-review.ts (both the
+        // timeout path and the completion-synthesis path). See PR #270 v2
+        // review (MEDIUM — late cross-review relay gap).
         // Spec: PR #270 review (HIGH — round-deletion race).
         const recentTaskIds: string[] = [
           ...allResults.filter((r: any) => r.status === 'completed').map((r: any) => r.id as string),

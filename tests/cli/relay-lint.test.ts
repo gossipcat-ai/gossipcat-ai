@@ -15,7 +15,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { handleNativeRelay, taskWasInConsensusRound, seedRecentConsensusTaskIds } from '../../apps/cli/src/handlers/native-tasks';
+import {
+  handleNativeRelay,
+  taskWasInConsensusRound,
+  seedRecentConsensusTaskIds,
+  seedRecentConsensusAgentIds,
+  pruneExpiredRecentConsensusAgentIds,
+} from '../../apps/cli/src/handlers/native-tasks';
 import { ctx, RECENT_CONSENSUS_TASK_TTL_MS } from '../../apps/cli/src/mcp-context';
 import * as signalHelpers from '@gossip/orchestrator/signal-helpers';
 
@@ -64,6 +70,7 @@ beforeEach(() => {
   ctx.nativeResultMap = new Map();
   ctx.pendingConsensusRounds = new Map();
   ctx.recentConsensusTaskIds = new Map();
+  ctx.recentConsensusAgentIds = new Map();
   ctx.mainAgent = makeMainAgent(testDir);
   ctx.nativeUtilityConfig = null;
   ctx.booted = true;
@@ -352,5 +359,100 @@ describe('handleNativeRelay — late relay after round deletion still warns', ()
     await handleNativeRelay(TASK_ID, PROSE_PARAPHRASE);
 
     expect(readWarnings()).toHaveLength(0);
+  });
+});
+
+// ── Cross-review-after-deletion fallback (PR #270 v2 review MEDIUM) ──────────
+//
+// The Phase 1 task-id seed at collect.ts only covers task IDs that exist at
+// round-creation time. Phase 2 cross-review native agents are dispatched via
+// a separate Agent() path with their own task IDs, which never enter
+// recentConsensusTaskIds. While the round is alive, pendingNativeAgents.has()
+// catches them at native-tasks.ts. After the round is torn down (timeout or
+// completion), the agentId fallback (recentConsensusAgentIds, seeded
+// snapshot-before-delete in relay-cross-review.ts) MUST keep them reachable.
+
+describe('taskWasInConsensusRound — agentId fallback (cross-review-after-deletion)', () => {
+  it('returns true via recentConsensusAgentIds when live round and taskId fallback are gone', () => {
+    const now = Date.now();
+    const agentMap = new Map<string, number>([[AGENT_ID, now + 60_000]]);
+    expect(
+      taskWasInConsensusRound('cross-review-task-id-not-in-task-fallback', AGENT_ID, new Map(), undefined, agentMap),
+    ).toBe(true);
+  });
+
+  it('lazy-prunes expired agentId entries on read and returns false', () => {
+    const past = Date.now() - 1000;
+    const agentMap = new Map<string, number>([[AGENT_ID, past]]);
+    expect(taskWasInConsensusRound('any-task', AGENT_ID, new Map(), undefined, agentMap)).toBe(false);
+    // Lazy prune dropped the expired entry
+    expect(agentMap.has(AGENT_ID)).toBe(false);
+  });
+
+  it('uses ctx.recentConsensusAgentIds when no explicit agentMap is passed', () => {
+    seedRecentConsensusAgentIds([AGENT_ID], RECENT_CONSENSUS_TASK_TTL_MS);
+    expect(taskWasInConsensusRound('any-task', AGENT_ID, new Map())).toBe(true);
+  });
+
+  it('returns false when agentId is undefined even with seeded fallback', () => {
+    seedRecentConsensusAgentIds([AGENT_ID], RECENT_CONSENSUS_TASK_TTL_MS);
+    expect(taskWasInConsensusRound('any-task', undefined, new Map())).toBe(false);
+  });
+});
+
+describe('pruneExpiredRecentConsensusAgentIds', () => {
+  it('removes only entries whose expiry is <= now', () => {
+    const now = 10_000;
+    const m = new Map<string, number>([
+      ['fresh', now + 1000],
+      ['stale', now - 1],
+      ['exact', now], // expiry === now → expired
+    ]);
+    pruneExpiredRecentConsensusAgentIds(m, now);
+    expect(m.has('fresh')).toBe(true);
+    expect(m.has('stale')).toBe(false);
+    expect(m.has('exact')).toBe(false);
+  });
+
+  it('is a no-op on empty map', () => {
+    const m = new Map<string, number>();
+    expect(() => pruneExpiredRecentConsensusAgentIds(m)).not.toThrow();
+    expect(m.size).toBe(0);
+  });
+
+  it('defaults to ctx.recentConsensusAgentIds when no map is passed', () => {
+    ctx.recentConsensusAgentIds.set('stale-agent', Date.now() - 1000);
+    ctx.recentConsensusAgentIds.set('fresh-agent', Date.now() + 60_000);
+    pruneExpiredRecentConsensusAgentIds();
+    expect(ctx.recentConsensusAgentIds.has('stale-agent')).toBe(false);
+    expect(ctx.recentConsensusAgentIds.has('fresh-agent')).toBe(true);
+  });
+});
+
+describe('handleNativeRelay — late cross-review relay after round deletion', () => {
+  it('warning STILL fires when cross-review agent relays after round was torn down', async () => {
+    // Simulate: cross-review agent had a separate task ID (never in
+    // recentConsensusTaskIds) and was in pendingNativeAgents. The round was
+    // torn down (timeout or completion), but seedRecentConsensusAgentIds
+    // captured the snapshot at the deletion site. A late prose relay from
+    // that agent must still trigger the warning via the agentId fallback.
+    const CROSS_REVIEW_TASK_ID = 'phase-2-task-not-seeded';
+    seedTask(CROSS_REVIEW_TASK_ID, AGENT_ID);
+    seedRecentConsensusAgentIds([AGENT_ID], RECENT_CONSENSUS_TASK_TTL_MS);
+    // No live round, no taskId in recentConsensusTaskIds — only the agentId
+    // fallback can save us here.
+    expect(ctx.pendingConsensusRounds.size).toBe(0);
+    expect(ctx.recentConsensusTaskIds.size).toBe(0);
+
+    const res = await handleNativeRelay(CROSS_REVIEW_TASK_ID, PROSE_PARAPHRASE);
+
+    const warnings = readWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].taskId).toBe(CROSS_REVIEW_TASK_ID);
+    expect(warnings[0].agentId).toBe(AGENT_ID);
+    expect(warnings[0].reason).toBe('relay_findings_dropped');
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('relay_findings_dropped');
   });
 });

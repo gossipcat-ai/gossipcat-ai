@@ -102,6 +102,18 @@ export interface McpContext {
    */
   recentConsensusTaskIds: Map<string, number>;
   /**
+   * Companion to `recentConsensusTaskIds` — agentId → expiryEpoch. Seeded at
+   * round-deletion time (timeout/completion paths in relay-cross-review.ts)
+   * with the snapshot of `pendingNativeAgents` so late cross-review prose
+   * relays from those agents still register as "in consensus" via the agentId
+   * fallback. Without this, the misleading comment at collect.ts only seeded
+   * Phase 1 task IDs, leaving Phase 2 cross-review native agents uncovered
+   * after the round was torn down. TTL: same as recentConsensusTaskIds
+   * (10 min); pruned lazily on read.
+   * Spec: PR #270 v2 review (MEDIUM — late cross-review relay gap).
+   */
+  recentConsensusAgentIds: Map<string, number>;
+  /**
    * Dispatch-time resolutionRoots (#126 PR-B) keyed by task_id. Populated
    * from gossip_dispatch's `resolutionRoots` pass-through; consumed by
    * gossip_collect when collect-time input is absent. Collect-time REPLACES
@@ -165,6 +177,7 @@ export const ctx: McpContext = {
   identityRegistry: new Map(),
   pendingConsensusRounds: new Map(),
   recentConsensusTaskIds: new Map(),
+  recentConsensusAgentIds: new Map(),
   pendingDispatchResolutionRoots: new Map(),
   nativeUtilityConfig: null,
   mainProvider: 'google',

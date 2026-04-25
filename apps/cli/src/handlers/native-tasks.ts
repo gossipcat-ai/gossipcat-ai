@@ -38,6 +38,41 @@ export function seedRecentConsensusTaskIds(taskIds: Iterable<string>, ttlMs: num
   } catch { /* defensive — observability seed never blocks consensus path */ }
 }
 
+/**
+ * Lazy-prune entries in a `recentConsensusAgentIds`-shaped map whose TTL has
+ * expired. Mirrors {@link pruneExpiredRecentConsensusTaskIds} but accepts the
+ * map as an argument so tests can verify behaviour without mutating ctx.
+ */
+export function pruneExpiredRecentConsensusAgentIds(
+  map: Map<string, number> = ctx.recentConsensusAgentIds,
+  now: number = Date.now(),
+): void {
+  try {
+    if (!map || map.size === 0) return;
+    for (const [agentId, expiry] of map) {
+      if (expiry <= now) map.delete(agentId);
+    }
+  } catch { /* defensive — never break relay on prune errors */ }
+}
+
+/**
+ * Seed the fallback membership map with a batch of agentIds at consensus
+ * round-deletion time. Called from relay-cross-review.ts immediately before
+ * `pendingConsensusRounds.delete(consensusId)` so cross-review native agents
+ * remain reachable for `taskWasInConsensusRound` even after teardown.
+ * Each entry expires after RECENT_CONSENSUS_TASK_TTL_MS (10 minutes).
+ */
+export function seedRecentConsensusAgentIds(agentIds: Iterable<string>, ttlMs: number): void {
+  try {
+    const expiry = Date.now() + ttlMs;
+    for (const id of agentIds) {
+      if (typeof id === 'string' && id.length > 0) {
+        ctx.recentConsensusAgentIds.set(id, expiry);
+      }
+    }
+  } catch { /* defensive — observability seed never blocks consensus path */ }
+}
+
 /** Active timeout watchers — keyed by task ID */
 const timeoutWatchers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
@@ -62,6 +97,7 @@ export function taskWasInConsensusRound(
   agentId: string | undefined,
   rounds: Map<string, { allResults?: any[]; pendingNativeAgents?: Set<string>; nativeCrossReviewEntries?: any[] }>,
   recentTaskIds?: Map<string, number>,
+  recentAgentIds?: Map<string, number>,
 ): boolean {
   try {
     for (const round of rounds.values()) {
@@ -89,6 +125,21 @@ export function taskWasInConsensusRound(
       pruneExpiredRecentConsensusTaskIds();
       const expiry = fallback.get(taskId);
       if (expiry !== undefined && expiry > Date.now()) return true;
+    }
+    // Companion fallback (PR #270 v2 review MEDIUM): the task-id seed only
+    // covers Phase 1 completed task IDs at round-creation time. Phase 2
+    // cross-review native agents have separate, later-allocated task IDs
+    // that never enter recentConsensusTaskIds. Their `agentId`s ARE captured
+    // in `recentConsensusAgentIds` at round-deletion time (see
+    // relay-cross-review.ts snapshot-before-delete sites). Without this
+    // branch, late prose relays from cross-review agents miss the warning.
+    if (agentId) {
+      const agentFallback = recentAgentIds ?? ctx.recentConsensusAgentIds;
+      if (agentFallback && agentFallback.size > 0) {
+        pruneExpiredRecentConsensusAgentIds(agentFallback);
+        const expiry = agentFallback.get(agentId);
+        if (expiry !== undefined && expiry > Date.now()) return true;
+      }
     }
   } catch { /* defensive — never break relay on detection errors */ }
   return false;
@@ -571,7 +622,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   try {
     if (!error && !taskInfo.utilityType && agentId !== '_utility') {
       const tagCount = result ? (result.match(/<agent_finding[\s>]/g) || []).length : 0;
-      const inConsensus = taskWasInConsensusRound(task_id, agentId, ctx.pendingConsensusRounds as any, ctx.recentConsensusTaskIds);
+      const inConsensus = taskWasInConsensusRound(task_id, agentId, ctx.pendingConsensusRounds as any, ctx.recentConsensusTaskIds, ctx.recentConsensusAgentIds);
       if (tagCount === 0 && inConsensus) {
         relayLintFired = true;
         const ts = new Date().toISOString();
