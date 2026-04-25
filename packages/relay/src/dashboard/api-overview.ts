@@ -1,5 +1,6 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { isUtilityAgent } from './utility-agents';
 
 interface AgentConfigLike {
   id: string;
@@ -149,6 +150,7 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
         try {
           const ev = JSON.parse(line);
           if (ev.type === 'task.created') {
+            if (ev.agentId && isUtilityAgent(ev.agentId)) continue;
             if (ev.taskId && ev.agentId) {
               created.set(ev.taskId, { agentId: ev.agentId, timestamp: ev.timestamp || '' });
             }

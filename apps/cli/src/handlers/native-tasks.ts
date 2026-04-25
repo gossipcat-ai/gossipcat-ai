@@ -410,7 +410,10 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       }
     } catch { /* best-effort — attribution never blocks completion */ }
   }
-  try { ctx.mainAgent.recordNativeTaskCompleted(task_id, result, error || undefined, elapsed ?? undefined, taskInfo.memoryQueryCalled); } catch { /* best-effort */ }
+  const completionResult = taskInfo.utilityType === 'skill_develop'
+    ? `[utility] ${taskInfo.task} → ${(result || '').length} chars`
+    : result;
+  try { ctx.mainAgent.recordNativeTaskCompleted(task_id, completionResult, error || undefined, elapsed ?? undefined, taskInfo.memoryQueryCalled); } catch { /* best-effort */ }
 
   // 0a. Auto-record impl signal for write-mode tasks (gate on error param only — string heuristics are unreliable)
   if (taskInfo.writeMode && !taskInfo.utilityType && agentId !== '_utility') {

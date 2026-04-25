@@ -3290,6 +3290,7 @@ server.tool(
             timeoutMs: 120_000,
             utilityType: 'skill_develop',
           });
+          try { ctx.mainAgent.recordNativeTask(taskId, '_utility', `skill_develop:${category}`); } catch { /* best-effort */ }
           spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
 
           const modelShort = ctx.nativeUtilityConfig.model;

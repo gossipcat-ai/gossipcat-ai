@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { isUtilityAgent } from './utility-agents';
 
 interface TaskEntry {
   taskId: string;
@@ -70,6 +71,7 @@ export async function tasksHandler(projectRoot: string, query?: URLSearchParams)
 
   const tasks: TaskEntry[] = [];
   for (const [taskId, info] of created) {
+    if (isUtilityAgent(info.agentId)) continue;
     const result = completed.get(taskId);
     tasks.push({
       taskId,
