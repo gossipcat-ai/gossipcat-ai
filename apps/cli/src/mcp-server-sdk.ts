@@ -37,6 +37,7 @@ import { restorePendingConsensus } from './handlers/relay-cross-review';
 import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
 import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FILE } from './stickyPort';
 import { buildDashboardAdvisory } from './setup-response';
+import { refreshNativeAgentFromDisk } from './native-agent-cache';
 import { generateRulesContent } from './rules-content';
 import { formatDropReceipt } from './format-drop-receipt';
 import { homedir } from 'os';
@@ -841,20 +842,26 @@ async function doSyncWorkers() {
         provider: ac.provider,
         model: ac.model,
       });
-      // [H2 fix] Populate nativeAgentConfigs for config-defined native agents
-      if (ac.native && !ctx.nativeAgentConfigs.has(ac.id)) {
-        const { existsSync: ex, readFileSync: rf } = require('fs');
-        const { join: j } = require('path');
-        const claudeAgentPath = j(process.cwd(), '.claude', 'agents', `${ac.id}.md`);
-        const instrPath = j(process.cwd(), '.gossip', 'agents', ac.id, 'instructions.md');
-        let instructions = '';
-        if (ex(claudeAgentPath)) {
-          instructions = rf(claudeAgentPath, 'utf-8').replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
-        } else if (ex(instrPath)) {
-          instructions = rf(instrPath, 'utf-8');
-        }
-        const modelTier = ac.model.includes('opus') ? 'opus' : ac.model.includes('haiku') ? 'haiku' : 'sonnet';
-        ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions, description: ac.role || ac.preset || '', skills: ac.skills || [] });
+      // [H2 fix] Populate / refresh nativeAgentConfigs for config-defined native
+      // agents. The previous version of this branch was guarded with
+      // `!ctx.nativeAgentConfigs.has(ac.id)` — that meant once an agent was
+      // bootstrapped into the cache, subsequent gossip_setup merge calls would
+      // rewrite .claude/agents/<id>.md on disk but the in-memory cache stayed
+      // stale, and dispatch kept emitting the old AGENT_PROMPT (typically the
+      // bootstrap stub). Workaround was killing the relay PID. The fix is to
+      // re-read from disk and update the cache unconditionally on every sync —
+      // doSyncWorkers is the right consolidation point because every config
+      // mutation flows through it. The read+set is extracted to
+      // refreshNativeAgentFromDisk so the invariant is unit-testable in
+      // isolation (see tests/cli/native-agent-cache.test.ts) — the regression
+      // would otherwise re-appear if anyone re-introduces the guard "as a
+      // perf optimization".
+      if (ac.native) {
+        refreshNativeAgentFromDisk(
+          { id: ac.id, model: ac.model, role: ac.role, preset: ac.preset, skills: ac.skills },
+          ctx.nativeAgentConfigs,
+          process.cwd()
+        );
       }
     }
 
