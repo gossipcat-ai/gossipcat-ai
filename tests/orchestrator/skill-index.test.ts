@@ -265,4 +265,77 @@ describe('SkillIndex', () => {
       expect(index.getSlot('agent-a', 'typescript')!.version).toBe(2);
     });
   });
+
+  describe('prune()', () => {
+    it('removes orphan agent entries and returns their ids', () => {
+      const index = new SkillIndex(testDir);
+      index.bind('agent-a', 'typescript');
+      index.bind('agent-b', 'security-audit');
+      index.bind('agent-c', 'code-review');
+
+      const removed = index.prune(['agent-a', 'agent-c']);
+
+      expect(removed.sort()).toEqual(['agent-b']);
+      expect(index.getAgentIds().sort()).toEqual(['agent-a', 'agent-c']);
+      expect(index.getSlot('agent-b', 'security-audit')).toBeUndefined();
+    });
+
+    it('is a no-op when every indexed agent is in the valid list', () => {
+      const index = new SkillIndex(testDir);
+      index.bind('agent-a', 'typescript');
+      index.bind('agent-b', 'security-audit');
+
+      const filePath = join(testDir, '.gossip', 'skill-index.json');
+      const before = readFileSync(filePath, 'utf-8');
+
+      const removed = index.prune(['agent-a', 'agent-b', 'agent-c-not-yet-bound']);
+
+      expect(removed).toEqual([]);
+      expect(index.getAgentIds().sort()).toEqual(['agent-a', 'agent-b']);
+      // File contents unchanged — no rewrite happened
+      expect(readFileSync(filePath, 'utf-8')).toBe(before);
+    });
+
+    it('persists pruned state to disk', () => {
+      const index = new SkillIndex(testDir);
+      index.bind('agent-a', 'typescript');
+      index.bind('ghost-agent', 'security-audit');
+
+      index.prune(['agent-a']);
+
+      // New instance reloads from disk — ghost-agent must be gone
+      const reloaded = new SkillIndex(testDir);
+      expect(reloaded.getAgentIds()).toEqual(['agent-a']);
+      expect(reloaded.getSlot('ghost-agent', 'security-audit')).toBeUndefined();
+
+      // Raw file inspection
+      const filePath = join(testDir, '.gossip', 'skill-index.json');
+      const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+      expect(data['ghost-agent']).toBeUndefined();
+      expect(data['agent-a']).toBeDefined();
+    });
+
+    it('handles empty valid list by removing all entries', () => {
+      const index = new SkillIndex(testDir);
+      index.bind('agent-a', 'typescript');
+      index.bind('agent-b', 'security-audit');
+
+      const removed = index.prune([]);
+
+      expect(removed.sort()).toEqual(['agent-a', 'agent-b']);
+      expect(index.getAgentIds()).toEqual([]);
+    });
+
+    it('ignores invalid ids in valid list (empty / dangerous keys)', () => {
+      const index = new SkillIndex(testDir);
+      index.bind('agent-a', 'typescript');
+
+      // __proto__ etc. should not whitelist anything; agent-a is not in the
+      // sanitized valid list, so it should be pruned.
+      const removed = index.prune(['', '__proto__', 'constructor']);
+
+      expect(removed).toEqual(['agent-a']);
+      expect(index.getAgentIds()).toEqual([]);
+    });
+  });
 });
