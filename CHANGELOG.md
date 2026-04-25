@@ -4,6 +4,34 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.20] — 2026-04-25
+
+Hardening + utility-task observability release. Bundles ten merged PRs (#251–#258, #260, #261) covering postinstall robustness, the skill-develop learning-loop fallback path, periodic eviction scheduling, and dashboard visibility for the RL learning loop. No breaking changes.
+
+### Fixed
+
+- **Utility-task results survive 2h TTL eviction** (PR #254). `gossip_skills(action: "develop")` re-entry reads the agent's relayed result from `nativeResultMap`, but `evictStaleNativeTasks()` swept entries older than `NATIVE_TASK_TTL_MS = 2h` on every relay. When the dispatch → relay → re-entry chain spans >2h (routine for human-in-loop skill development), the result was evicted before re-entry — the fallback then produced a template-shaped skill instead of the freshly-relayed agent-specific content, silently degrading the contextual-RL learning loop. Fix: separate `nativeUtilityResultMap` with a 24h TTL, branched relay write for `utilityType === 'skill_develop'`, re-entry checks utility map first with `??` fallback to legacy entries.
+
+- **Periodic eviction scheduler so quiet processes prune** (PR #257). Post-hoc consensus on PR #254 caught a HIGH finding: `evictStaleNativeTasks` only fires on relay/dispatch traffic. A quiet MCP process that dispatched a utility task, had the agent crash before relay, and received no further traffic would never prune the entry — pinning it for process lifetime, not the 24h TTL the code reads as enforcing. Fix: `scheduleNativeTaskEviction` runs eviction on a 1h `setInterval`, `.unref()`'d so it doesn't block clean process exit, registered in `doBoot()` before SIGTERM/SIGINT handlers (closes the narrow race where a signal between handler registration and timer assignment would `clearInterval(undefined)`).
+
+- **`.mcp.json` postinstall merges existing entries** (PR #256). The previous postinstall path overwrote any user-defined MCP server entries when refreshing the gossipcat block. Fix: read existing `.mcp.json`, spread its servers, then refresh only the `gossipcat` key. Preserves user-defined servers across upgrade.
+
+- **Postinstall staleness bypass + workspace walk-up regression** (PR #251). Two regressions from prior install paths fixed: a staleness check that wrongly fast-pathed past needed regeneration, and a walk-up loop that escaped workspace boundaries when the postinstall ran from a nested directory.
+
+- **Postinstall FATAL error includes recovery instructions** (PR #252). When the postinstall script hits a fatal error, the message now tells the user what to run to recover instead of leaving them at a stack trace.
+
+- **`findFile` recursion depth cap** (PR #253). `consensus-engine.ts:findFile` (the citation-resolver helper used by cross-reviewers) recursed without depth bound. A pathologically nested directory could exhaust the stack. Fix: cap recursion at a small constant; tests verify the cap fires correctly.
+
+- **Skill-freshness frontmatter quote-strip** (PR #255). Commit `8164472` (PR #249) fixed quote-stripping for `skill-parser.ts:parseSkillFrontmatter`, but the parallel loader path in `skill-freshness.ts:extractFrontmatterField` drifted — `status: "pending"` in YAML surfaced as the literal 9-character string `"pending"` (with quote chars), failed `coerceStatus`'s enum check, and emitted `[gossipcat] skill-engine: invalid status "\"pending\"" remapped to pending` on every skill read. Fix: mirror the quote-stripping in the freshness loader path. Both `"..."` and `'...'` covered.
+
+- **Dashboard surfaces `skill_develop` learning loop without phantom-agent pollution** (PR #260). `gossip_skills(action: "develop")` was invisible in the dashboard activity feed: the dispatch site at `mcp-server-sdk.ts:3286` registered the task in `nativeTaskMap` but never called `recordNativeTask`, so `task-graph.jsonl` had no `task.created` event for the utility — meanwhile `recordNativeTaskCompleted` wrote `task.completed` unconditionally, producing an orphan completion the dashboard reader silently dropped. Users saw nothing in the UI when a skill was being developed, despite the RL learning loop being a headline feature. Consensus round `067d01e2-beba4cc2` flipped the originally-proposed gate-the-completion fix, finding it would undo the intentional CLI/Supabase visibility comment at `native-tasks.ts:395`. Fix instead: add the missing `recordNativeTask` call at dispatch (closes the orphan at source), pass an informative result string at completion, and introduce a shared `isUtilityAgent` filter applied to four task-graph readers (`api-tasks`, `api-agents`, `api-overview`, `api-active-tasks`) so the `_utility` pseudo-agent doesn't pollute agent stats / token aggregates / hourly activity buckets.
+
+- **Utility-task duration label clarified as "since dispatch"** (PR #261). `[gossipcat] ✅ utility ← skill_develop [id] OK (Ns)` reported wall-clock since dispatch, not agent execution time, since utility tasks don't pass `agentStartedAt` to `gossip_relay`. Observed 2026-04-24: a 12-second `Agent()` dispatch logged `OK (7637.1s)` because the orchestrator delayed the relay call by ~2h. Both numbers were correct — they measure different things — but the bare seconds suffix invited the assumption that this was agent runtime. Relabel to `"Ns since dispatch"` plus a 3-line comment explaining the semantics. No behavior change.
+
+### Changed
+
+- **Operator handbook adds "When to gate merges on consensus — impact-adjacency, not just LOC"** (PR #258). New section in `docs/HANDBOOK.md`, inlined into every orchestrator's bootstrap via `gossip_status()`, codifying the rule that consensus rounds should fire on six impact-adjacent change classes (shared in-memory state lifecycle, background cleanup / TTL / timer logic, serialization at persistence boundaries, authN/Z, signal/event pipelines, install/bootstrap paths) regardless of diff size. Replaces the prior LOC-only gate. Categories are codebase-agnostic so the rule applies to web apps, APIs, and data pipelines using gossipcat — not just gossipcat's own internals. Sourced from a 2-agent consensus reviewing real merged-without-consensus cases (#254, #256) where post-hoc rounds caught HIGH findings on already-shipped code.
+
 ## [0.4.19] — 2026-04-22
 
 Hardening release for the Stage 2 premise-verification pipeline (PRs #241/#242/#243). A 2-agent consensus audit on the merged range surfaced three HIGH-severity findings; this release ships the fixes plus one skill-prompt correction and one skill-parser noise fix. All changes ride on top of the existing `modality` signal wiring, which audit confirmed correct.
