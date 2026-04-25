@@ -684,6 +684,21 @@ async function doBoot() {
       process.stderr.write(`[gossipcat] ⚠️  Global permanent skill auto-seed failed: ${(seedErr as Error).message}\n`);
     }
 
+    // Reconcile against the live agent roster — drop ghost entries for
+    // agents that have been deleted from .gossip/config.json since the
+    // last boot. Without this, getAgentIds().length below over-reports.
+    try {
+      const validIds = agentConfigs
+        .map((ac: any) => ac.id)
+        .filter((id: any) => typeof id === 'string' && id.length > 0);
+      const pruned = skillIndex.prune(validIds);
+      if (pruned.length > 0) {
+        process.stderr.write(`[gossipcat] 🧹 Skill index pruned ${pruned.length} orphan agent(s): ${pruned.join(', ')}\n`);
+      }
+    } catch (pruneErr) {
+      process.stderr.write(`[gossipcat] ⚠️  Skill index prune failed: ${(pruneErr as Error).message}\n`);
+    }
+
     ctx.mainAgent.setSkillIndex(skillIndex);
     process.stderr.write(`[gossipcat] 📚 Skill index loaded (${skillIndex.getAgentIds().length} agents)\n`);
   } catch (err) {
@@ -3046,9 +3061,9 @@ server.tool(
 // ── Unified skill management ─────────────────────────────────────────────
 server.tool(
   'gossip_skills',
-  'Manage agent skills. Actions: list (show skill index), bind (attach skill to agent), unbind (remove skill from agent), build (create skills from gap suggestions), develop (generate skill from ATI competency data).',
+  'Manage agent skills. Actions: list (show skill index), bind (attach skill to agent), unbind (remove skill from agent), build (create skills from gap suggestions), develop (generate skill from ATI competency data), prune (drop skill-index entries for agents no longer in config.json).',
   {
-    action: z.enum(['list', 'bind', 'unbind', 'build', 'develop']).describe('Action to perform'),
+    action: z.enum(['list', 'bind', 'unbind', 'build', 'develop', 'prune']).describe('Action to perform'),
     // bind/unbind/develop params
     agent_id: z.string().optional().describe('Agent ID (required for bind, unbind, develop)'),
     skill: z.string().optional().describe('Skill name (required for bind, unbind)'),
@@ -3117,6 +3132,37 @@ server.tool(
 
       process.stderr.write(`[gossipcat] Skill "${slot.skill}" ${bindAction} for ${agent_id} (v${slot.version})\n`);
       return { content: [{ type: 'text' as const, text: `Skill "${slot.skill}" ${bindAction} for ${agent_id} (v${slot.version}, ${slot.enabled ? 'enabled' : 'disabled'})` }] };
+    }
+
+    // ── prune ──
+    if (action === 'prune') {
+      const index = ctx.mainAgent.getSkillIndex();
+      if (!index) return { content: [{ type: 'text' as const, text: 'Skill index not initialized.' }] };
+
+      const { findConfigPath, loadConfig, configToAgentConfigs } = await import('./config');
+      const configPath = findConfigPath();
+      if (!configPath) {
+        return { content: [{ type: 'text' as const, text: 'No config found. Cannot determine valid agent ids.' }] };
+      }
+      const config = loadConfig(configPath);
+      const agentConfigs = configToAgentConfigs(config);
+      const validIds = agentConfigs
+        .map((ac: any) => ac.id)
+        .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
+
+      const removed = index.prune(validIds);
+      if (removed.length > 0) {
+        process.stderr.write(`[gossipcat] 🧹 Skill index pruned ${removed.length} orphan agent(s): ${removed.join(', ')}\n`);
+      }
+      const summary = removed.length > 0
+        ? `Pruned ${removed.length} orphan agent(s): ${removed.join(', ')}`
+        : 'No orphan agents — skill index already in sync with config.json.';
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `${summary}\n\n${JSON.stringify({ removed }, null, 2)}`,
+        }],
+      };
     }
 
     // ── unbind ──

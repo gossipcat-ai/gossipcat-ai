@@ -151,6 +151,40 @@ export class SkillIndex {
   /** Get all agent IDs in the index */
   getAgentIds(): string[] { return Object.keys(this.data); }
 
+  /**
+   * Drop entries for agents not in `validAgentIds`. Returns the list of
+   * removed agent ids. Persists to disk if anything changed.
+   *
+   * Reconciles the on-disk skill index against the live agent roster
+   * (e.g. `Object.keys(config.agents)`). Without this, deleted agents
+   * keep ghost entries forever, inflating `getAgentIds().length` in
+   * boot logs and skewing any downstream count.
+   *
+   * Out of scope: agent memory directories under `.gossip/agents/<id>/`.
+   * This only touches the in-process `data` map and the
+   * `.gossip/skill-index.json` file.
+   */
+  prune(validAgentIds: string[]): string[] {
+    const valid = new Set<string>();
+    for (const id of validAgentIds) {
+      if (typeof id === 'string' && id.length > 0 && !DANGEROUS_KEYS.has(id)) {
+        valid.add(id);
+      }
+    }
+    const removed: string[] = [];
+    for (const agentId of Object.keys(this.data)) {
+      if (!valid.has(agentId)) {
+        delete this.data[agentId];
+        removed.push(agentId);
+      }
+    }
+    if (removed.length > 0) {
+      this.dirty = true;
+      this.save();
+    }
+    return removed;
+  }
+
   /** Check if an index file exists (for backward compat detection) */
   exists(): boolean { return this._exists; }
 
