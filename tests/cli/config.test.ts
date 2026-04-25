@@ -61,6 +61,32 @@ describe('Config Validation', () => {
     });
     expect(config.utility_model?.provider).toBe('anthropic');
   });
+
+  // Schema↔runtime alignment regression — VALID_PROVIDERS in config.ts must
+  // accept every value the gossip_setup Zod enum accepts, otherwise some
+  // values pass schema but fail validateConfig (or vice versa). The
+  // documented zero-config token on Claude Code host is "none"; the
+  // Claude-Code-subagent utility path uses "native". Both must be runtime-valid.
+  it('accepts main_provider "none" (Claude Code host zero-config)', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'none', model: 'native' },
+    });
+    expect(config.main_agent.provider).toBe('none');
+  });
+
+  it('accepts main_provider "native"', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'native', model: 'sonnet' },
+    });
+    expect(config.main_agent.provider).toBe('native');
+  });
+
+  it('accepts main_provider "local"', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'local', model: 'llama3' },
+    });
+    expect(config.main_agent.provider).toBe('local');
+  });
 });
 
 describe('findConfigPath', () => {

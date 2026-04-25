@@ -68,7 +68,15 @@ export function loadConfig(configPath: string): GossipConfig {
   return validateConfig(parsed);
 }
 
-const VALID_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'native'];
+// Keep this list aligned with the `main_provider` Zod enum in
+// apps/cli/src/mcp-server-sdk.ts (around the gossip_setup tool definition).
+// "none" is the documented zero-config token on Claude Code host — see the
+// describe() string on the Zod enum and the `provider === 'none'` branch in
+// the orchestrator-bootstrap path that prints "Native Claude Code orchestration
+// enabled". Drift between these two lists means some values pass schema but
+// fail validateConfig (or vice versa) — that is a hard-to-diagnose user-facing
+// bug. If you change one, change the other.
+const VALID_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'native', 'none'];
 
 const CLAUDE_MODEL_MAP: Record<string, { provider: string; model: string }> = {
   opus:   { provider: 'anthropic', model: 'claude-opus-4-6' },
