@@ -6,6 +6,38 @@ import { randomUUID } from 'crypto';
 import { hasMemoryQuery } from '@gossip/relay';
 import { ctx, NATIVE_TASK_TTL_MS, defaultImportanceScores } from '../mcp-context';
 
+/**
+ * Lazy-prune entries in `ctx.recentConsensusTaskIds` whose TTL has expired.
+ * Called on every membership read so the map self-bounds without a separate
+ * scheduler. O(n) over the map; n is bounded by the number of consensus
+ * rounds in the last 10 minutes which is tiny in practice.
+ */
+function pruneExpiredRecentConsensusTaskIds(now: number = Date.now()): void {
+  try {
+    const m = ctx.recentConsensusTaskIds;
+    if (!m || m.size === 0) return;
+    for (const [taskId, expiry] of m) {
+      if (expiry <= now) m.delete(taskId);
+    }
+  } catch { /* defensive — never break relay on prune errors */ }
+}
+
+/**
+ * Seed the fallback membership map with a batch of taskIds at consensus
+ * round-seed time. Called from collect.ts. Each entry expires after
+ * RECENT_CONSENSUS_TASK_TTL_MS (10 minutes by default).
+ */
+export function seedRecentConsensusTaskIds(taskIds: Iterable<string>, ttlMs: number): void {
+  try {
+    const expiry = Date.now() + ttlMs;
+    for (const id of taskIds) {
+      if (typeof id === 'string' && id.length > 0) {
+        ctx.recentConsensusTaskIds.set(id, expiry);
+      }
+    }
+  } catch { /* defensive — observability seed never blocks consensus path */ }
+}
+
 /** Active timeout watchers — keyed by task ID */
 const timeoutWatchers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
@@ -29,6 +61,7 @@ export function taskWasInConsensusRound(
   taskId: string,
   agentId: string | undefined,
   rounds: Map<string, { allResults?: any[]; pendingNativeAgents?: Set<string>; nativeCrossReviewEntries?: any[] }>,
+  recentTaskIds?: Map<string, number>,
 ): boolean {
   try {
     for (const round of rounds.values()) {
@@ -45,6 +78,17 @@ export function taskWasInConsensusRound(
           if (e && (e.taskId === taskId || (agentId && e.agentId === agentId))) return true;
         }
       }
+    }
+    // Fallback for the round-deletion race (PR #270 review HIGH): if the
+    // live round has already been deleted (timeout completion / synthesis
+    // teardown) but the task was seeded recently, still treat it as "in a
+    // consensus round". Lazy-prune expired entries on read so the map
+    // self-bounds without a scheduler.
+    const fallback = recentTaskIds ?? ctx.recentConsensusTaskIds;
+    if (fallback && fallback.size > 0) {
+      pruneExpiredRecentConsensusTaskIds();
+      const expiry = fallback.get(taskId);
+      if (expiry !== undefined && expiry > Date.now()) return true;
     }
   } catch { /* defensive — never break relay on detection errors */ }
   return false;
@@ -527,11 +571,14 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   try {
     if (!error && !taskInfo.utilityType && agentId !== '_utility') {
       const tagCount = result ? (result.match(/<agent_finding[\s>]/g) || []).length : 0;
-      const inConsensus = taskWasInConsensusRound(task_id, agentId, ctx.pendingConsensusRounds as any);
+      const inConsensus = taskWasInConsensusRound(task_id, agentId, ctx.pendingConsensusRounds as any, ctx.recentConsensusTaskIds);
       if (tagCount === 0 && inConsensus) {
         relayLintFired = true;
         const ts = new Date().toISOString();
-        appendRelayWarning(process.cwd(), {
+        // Prefer mainAgent.projectRoot (mirrors persistNativeTaskMap above);
+        // fall back to process.cwd() when boot hasn't completed yet.
+        const projectRoot = ctx.mainAgent?.projectRoot ?? process.cwd();
+        appendRelayWarning(projectRoot, {
           taskId: task_id,
           agentId,
           reason: 'relay_findings_dropped',
@@ -541,7 +588,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         });
         try {
           const { emitPipelineSignals } = await import('@gossip/orchestrator');
-          emitPipelineSignals(process.cwd(), [{
+          emitPipelineSignals(projectRoot, [{
             type: 'pipeline' as const,
             signal: 'relay_findings_dropped',
             agentId,

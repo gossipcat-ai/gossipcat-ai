@@ -92,6 +92,16 @@ export interface McpContext {
   identityRegistry: Map<string, { agent_id: string; runtime: 'native' | 'relay'; provider: string; model: string }>;
   pendingConsensusRounds: Map<string, PendingConsensusRound>;
   /**
+   * Fallback membership map for the relay-lint detector — taskId → expiryEpoch.
+   * Populated at consensus round-seed time (collect.ts) and consulted by
+   * `taskWasInConsensusRound` when the live `pendingConsensusRounds` entry has
+   * already been deleted (timeout or completion). Without this fallback, late
+   * Phase 1 relays that arrive after the round was torn down silently miss
+   * the warning. TTL: 10 minutes; pruned lazily on read.
+   * Spec: PR #270 review (HIGH — round-deletion race).
+   */
+  recentConsensusTaskIds: Map<string, number>;
+  /**
    * Dispatch-time resolutionRoots (#126 PR-B) keyed by task_id. Populated
    * from gossip_dispatch's `resolutionRoots` pass-through; consumed by
    * gossip_collect when collect-time input is absent. Collect-time REPLACES
@@ -154,6 +164,7 @@ export const ctx: McpContext = {
   nativeAgentConfigs: new Map(),
   identityRegistry: new Map(),
   pendingConsensusRounds: new Map(),
+  recentConsensusTaskIds: new Map(),
   pendingDispatchResolutionRoots: new Map(),
   nativeUtilityConfig: null,
   mainProvider: 'google',
@@ -172,6 +183,14 @@ export const ctx: McpContext = {
 };
 
 export const NATIVE_TASK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+/**
+ * TTL for `recentConsensusTaskIds` entries — 10 minutes. Window must outlast
+ * normal Phase 1 latency (timeouts, slow agents, /mcp reconnect) so the
+ * relay-lint fallback still catches late paraphrase-only relays after the
+ * live consensus round has been deleted.
+ */
+export const RECENT_CONSENSUS_TASK_TTL_MS = 10 * 60 * 1000;
 
 export function generateTaskId(): string {
   return randomUUID().slice(0, 8);

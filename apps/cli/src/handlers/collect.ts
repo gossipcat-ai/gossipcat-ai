@@ -2,9 +2,10 @@
  * Collect handler — polls for results, merges relay + native, runs consensus.
  * All state accessed via the shared context object.
  */
-import { ctx } from '../mcp-context';
+import { ctx, RECENT_CONSENSUS_TASK_TTL_MS } from '../mcp-context';
 import { startConsensusTimeout, persistPendingConsensus } from './relay-cross-review';
 import { persistRelayTasks } from './relay-tasks';
+import { seedRecentConsensusTaskIds } from './native-tasks';
 import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
 
@@ -567,6 +568,17 @@ export async function handleCollect(
           nativePrompts: nativePrompts.map((p: any) => ({ agentId: p.agentId, system: p.system, user: p.user })),
           resolutionRoots: effectiveRoots.length > 0 ? [...effectiveRoots] : undefined,
         });
+
+        // Seed the relay-lint fallback membership map — keeps round-membership
+        // reachable for taskWasInConsensusRound() even after pendingConsensusRounds
+        // is deleted by timeout/synthesis. Covers BOTH the dispatched task IDs
+        // AND any native agents we're awaiting via cross-review (whose taskIds
+        // come from a separate Agent() dispatch path and aren't in allResults yet).
+        // Spec: PR #270 review (HIGH — round-deletion race).
+        const recentTaskIds: string[] = [
+          ...allResults.filter((r: any) => r.status === 'completed').map((r: any) => r.id as string),
+        ];
+        seedRecentConsensusTaskIds(recentTaskIds, RECENT_CONSENSUS_TASK_TTL_MS);
 
         // Start timeout watcher — auto-synthesizes if native agents don't respond
         startConsensusTimeout(consensusId);

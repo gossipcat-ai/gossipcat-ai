@@ -15,8 +15,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { handleNativeRelay, taskWasInConsensusRound } from '../../apps/cli/src/handlers/native-tasks';
-import { ctx } from '../../apps/cli/src/mcp-context';
+import { handleNativeRelay, taskWasInConsensusRound, seedRecentConsensusTaskIds } from '../../apps/cli/src/handlers/native-tasks';
+import { ctx, RECENT_CONSENSUS_TASK_TTL_MS } from '../../apps/cli/src/mcp-context';
+import * as signalHelpers from '@gossip/orchestrator/signal-helpers';
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'gossip-relay-lint-test-'));
@@ -62,6 +63,7 @@ beforeEach(() => {
   ctx.nativeTaskMap = new Map();
   ctx.nativeResultMap = new Map();
   ctx.pendingConsensusRounds = new Map();
+  ctx.recentConsensusTaskIds = new Map();
   ctx.mainAgent = makeMainAgent(testDir);
   ctx.nativeUtilityConfig = null;
   ctx.booted = true;
@@ -228,6 +230,127 @@ describe('handleNativeRelay — relay-lint Path A', () => {
     await handleNativeRelay(TASK_ID, '', 'agent crashed mid-run');
 
     // Errors carry their own status — paraphrase detection skipped.
+    expect(readWarnings()).toHaveLength(0);
+  });
+});
+
+// ── emitPipelineSignals invocation (PR #270 review CRITICAL) ─────────────────
+//
+// The Path A relay-lint code calls `emitPipelineSignals` with a `pipeline`-typed
+// `relay_findings_dropped` signal. Pre-fix, that signal name was NOT in
+// VALID_PIPELINE_SIGNALS; validateSignal threw and the catch silently dropped
+// every signal. The disk-side warning persisted, but the signal pipeline (and
+// downstream agent scoring) never saw it. This test asserts the helper is
+// invoked with the correct shape AND that it actually writes a row (proving
+// the allowlist now accepts the name).
+
+describe('handleNativeRelay — emitPipelineSignals invocation', () => {
+  it('emits a pipeline signal with shape={signal,type,agentId,taskId,metadata,timestamp}', async () => {
+    const spy = jest.spyOn(signalHelpers, 'emitPipelineSignals');
+
+    seedTask(TASK_ID, AGENT_ID);
+    seedConsensusRound(TASK_ID, AGENT_ID);
+
+    await handleNativeRelay(TASK_ID, PROSE_PARAPHRASE);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [projectRoot, signals] = spy.mock.calls[0];
+    expect(typeof projectRoot).toBe('string');
+    expect(Array.isArray(signals)).toBe(true);
+    expect(signals).toHaveLength(1);
+    const sig: any = (signals as any[])[0];
+    expect(sig.type).toBe('pipeline');
+    expect(sig.signal).toBe('relay_findings_dropped');
+    expect(sig.agentId).toBe(AGENT_ID);
+    expect(sig.taskId).toBe(TASK_ID);
+    expect(typeof sig.timestamp).toBe('string');
+    expect(sig.metadata).toMatchObject({
+      reason: 'no_tagged_findings_in_result',
+      resultLength: PROSE_PARAPHRASE.length,
+      suspectedReason: 'orchestrator_paraphrase',
+    });
+
+    // End-to-end: the signal lands on disk (proves VALID_PIPELINE_SIGNALS
+    // accepts the name and validateSignal does not throw).
+    const perfPath = join(testDir, '.gossip', 'agent-performance.jsonl');
+    expect(existsSync(perfPath)).toBe(true);
+    const rows = readFileSync(perfPath, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const pipelineRows = rows.filter((r) => r.type === 'pipeline' && r.signal === 'relay_findings_dropped');
+    expect(pipelineRows.length).toBeGreaterThan(0);
+
+    spy.mockRestore();
+  });
+
+  it('does NOT call emitPipelineSignals when the result carries tagged findings', async () => {
+    const spy = jest.spyOn(signalHelpers, 'emitPipelineSignals');
+    seedTask(TASK_ID, AGENT_ID);
+    seedConsensusRound(TASK_ID, AGENT_ID);
+
+    await handleNativeRelay(TASK_ID, TAGGED_RESULT);
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+// ── Round-deletion race fallback (PR #270 review HIGH) ───────────────────────
+//
+// When the live consensus round entry is deleted (timeout teardown or
+// completion synthesis), late Phase 1 relays would lose membership detection
+// and silently miss the warning. The fix maintains a `recentConsensusTaskIds`
+// fallback Map seeded at round-creation time. taskWasInConsensusRound
+// consults the Map when the live round entry is gone.
+
+describe('taskWasInConsensusRound — round-deletion race fallback', () => {
+  it('falls back to recentConsensusTaskIds when the live round is gone', () => {
+    const now = Date.now();
+    const fallback = new Map<string, number>([[TASK_ID, now + 60_000]]);
+    // No live round in pendingConsensusRounds at all.
+    expect(taskWasInConsensusRound(TASK_ID, AGENT_ID, new Map(), fallback)).toBe(true);
+  });
+
+  it('lazy-prunes expired entries on read and returns false', () => {
+    const past = Date.now() - 1000;
+    const fallback = new Map<string, number>([[TASK_ID, past]]);
+    expect(taskWasInConsensusRound(TASK_ID, AGENT_ID, new Map(), fallback)).toBe(false);
+  });
+
+  it('uses ctx.recentConsensusTaskIds when no explicit map is passed', () => {
+    seedRecentConsensusTaskIds([TASK_ID], RECENT_CONSENSUS_TASK_TTL_MS);
+    expect(taskWasInConsensusRound(TASK_ID, AGENT_ID, new Map())).toBe(true);
+  });
+});
+
+describe('handleNativeRelay — late relay after round deletion still warns', () => {
+  it('warning STILL fires when round was seeded then deleted (race fix)', async () => {
+    seedTask(TASK_ID, AGENT_ID);
+    // Simulate the race: seed the round, then DELETE it (mimics Phase 1
+    // timeout teardown at relay-cross-review.ts:32 or completion sweep at
+    // relay-cross-review.ts:254). The fallback membership map MUST keep the
+    // taskId reachable so the late prose relay still triggers the warning.
+    seedConsensusRound(TASK_ID, AGENT_ID);
+    seedRecentConsensusTaskIds([TASK_ID], RECENT_CONSENSUS_TASK_TTL_MS);
+    ctx.pendingConsensusRounds.delete(CONSENSUS_ID);
+    expect(ctx.pendingConsensusRounds.size).toBe(0);
+
+    const res = await handleNativeRelay(TASK_ID, PROSE_PARAPHRASE);
+
+    const warnings = readWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].taskId).toBe(TASK_ID);
+    expect(warnings[0].reason).toBe('relay_findings_dropped');
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('relay_findings_dropped');
+  });
+
+  it('expired fallback entry → no warning even without live round', async () => {
+    seedTask(TASK_ID, AGENT_ID);
+    // Manually seed an already-expired entry; pendingConsensusRounds is empty.
+    ctx.recentConsensusTaskIds.set(TASK_ID, Date.now() - 1000);
+
+    await handleNativeRelay(TASK_ID, PROSE_PARAPHRASE);
+
     expect(readWarnings()).toHaveLength(0);
   });
 });
