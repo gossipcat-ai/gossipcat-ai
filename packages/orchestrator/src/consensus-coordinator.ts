@@ -7,6 +7,7 @@ import { AgentConfig, TaskEntry } from './types';
 import { GossipPublisher } from './gossip-publisher';
 import { extractCategories } from './category-extractor';
 import { emitConsensusSignals } from './signal-helpers';
+import { logUncategorizedFinding } from './uncategorized-logger';
 
 import { gossipLog as log } from './log';
 
@@ -127,6 +128,13 @@ export class ConsensusCoordinator {
         let i = 0;
         for (const finding of consensusReport.confirmed) {
           const categories = extractCategories(finding.finding);
+          if (categories.length === 0) {
+            logUncategorizedFinding(finding.finding, {
+              finding_id: finding.id,
+              agent_id: finding.originalAgentId,
+              taskId: finding.id || undefined,
+            }, this.projectRoot);
+          }
           for (const category of categories) {
             emitConsensusSignals(this.projectRoot, [{
               type: 'consensus',

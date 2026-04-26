@@ -16,6 +16,7 @@ import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
 import { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
 import { extractCategories } from './category-extractor';
+import { logUncategorizedFinding } from './uncategorized-logger';
 
 export type {
   ConsensusReport,
@@ -970,6 +971,7 @@ Return only valid JSON.${skillsBlock}`;
     // "fabricated from the start".
     const emitFabricationHallucinationIfDetected = async (
       entry: { originalAgentId: string; finding: string; severity?: 'critical' | 'high' | 'medium' | 'low'; category?: string },
+      findingId?: string,
     ): Promise<boolean> => {
       const hasFabricatedCitation = await this.verifyCitations(entry.finding, { strict: true });
       if (!hasFabricatedCitation) return false;
@@ -985,6 +987,13 @@ Return only valid JSON.${skillsBlock}`;
         process.stderr.write(
           `[consensus-engine] hallucination_caught for ${entry.originalAgentId}: category resolution failed, recorded with undefined. finding="${entry.finding.slice(0, 80)}"\n`,
         );
+        if (this.config.projectRoot) {
+          logUncategorizedFinding(entry.finding, {
+            agent_id: entry.originalAgentId,
+            taskId: getTaskId(entry.originalAgentId),
+            finding_id: findingId,
+          }, this.config.projectRoot);
+        }
       }
       signals.push({
         type: 'consensus',
@@ -1107,6 +1116,13 @@ Return only valid JSON.${skillsBlock}`;
               process.stderr.write(
                 `[consensus-engine] hallucination_caught for ${entry.agentId}: category resolution failed, recorded with undefined. evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
               );
+              if (this.config.projectRoot) {
+                logUncategorizedFinding(f.finding, {
+                  agent_id: entry.agentId,
+                  taskId: getTaskId(entry.agentId),
+                  finding_id: entry.findingId,
+                }, this.config.projectRoot);
+              }
             }
             signals.push({
               type: 'consensus',
@@ -1221,7 +1237,7 @@ Return only valid JSON.${skillsBlock}`;
         // stale-file downgrade, which only makes sense when peers have
         // confirmed the finding (outside that context we cannot tell
         // "stale after refactor" from "fabricated from the start").
-        if (await emitFabricationHallucinationIfDetected(entry)) {
+        if (await emitFabricationHallucinationIfDetected(entry, finding.id)) {
           finding.tag = 'unique';
           unique.push(finding);
           continue;
@@ -1291,7 +1307,7 @@ Return only valid JSON.${skillsBlock}`;
         // cites non-existent code and contains hallucination keywords, it's
         // an author fabrication even though peers couldn't verify. Fire
         // hallucination_caught instead of the soft unique_unconfirmed.
-        if (await emitFabricationHallucinationIfDetected(entry)) {
+        if (await emitFabricationHallucinationIfDetected(entry, finding.id)) {
           finding.tag = 'unique';
           unique.push(finding);
           continue;
@@ -1313,7 +1329,7 @@ Return only valid JSON.${skillsBlock}`;
       } else {
         // Tier 2: broadened pre-filter. Same fabrication check for findings
         // that fell through without confirmation, dispute, or unverified mark.
-        if (await emitFabricationHallucinationIfDetected(entry)) {
+        if (await emitFabricationHallucinationIfDetected(entry, finding.id)) {
           finding.tag = 'unique';
           unique.push(finding);
           continue;

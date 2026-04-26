@@ -734,7 +734,7 @@ export async function handleCollect(
 
     // Auto-record provisional signals for consensus findings NOT already covered by engine signals
     try {
-      const { emitConsensusSignals, extractCategories } = await import('@gossip/orchestrator');
+      const { emitConsensusSignals, extractCategories, logUncategorizedFinding } = await import('@gossip/orchestrator');
       const timestamp = new Date().toISOString();
 
       const tagToSignal: Record<string, 'unique_confirmed' | 'disagreement' | 'unique_unconfirmed'> = {
@@ -795,7 +795,15 @@ export async function handleCollect(
       const provisionalSignals = allFindings
         .filter((f: any) => !alreadySignaled.has(f.originalAgentId))
         .map((f: any) => {
-          const category = f.category || extractCategories(f.finding || '')[0] || undefined;
+          const extracted = extractCategories(f.finding || '');
+          const category = f.category || extracted[0] || undefined;
+          if (!category) {
+            logUncategorizedFinding(f.finding || '', {
+              finding_id: typeof f.id === 'string' ? f.id : f.findingId,
+              agent_id: f.originalAgentId,
+              taskId: provisionalConsensusId || undefined,
+            }, process.cwd());
+          }
           return {
             type: 'consensus' as const,
             taskId: provisionalConsensusId || '',

@@ -1632,6 +1632,45 @@ server.tool(
           : '');
     } catch { if (!handbookCandidates.some((p: string) => exHB(p))) { process.stderr.write('[gossipcat] gossip_status: HANDBOOK.md not found in any candidate path — add docs/HANDBOOK.md to capture operator wisdom\n'); } }
 
+    // Surface uncategorized-findings count. Streaming line-count (no full-file
+    // read) so a large file doesn't blow up the status response. 7-day window
+    // matches skill-gap decay semantics. Skip entirely when count is 0.
+    let uncategorizedSection = '';
+    try {
+      const { createReadStream } = await import('fs');
+      const { createInterface } = await import('readline');
+      const uncatPath = join(process.cwd(), '.gossip', 'uncategorized-findings.jsonl');
+      const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000;
+      const cutoff = Date.now() - WINDOW_7D_MS;
+      let count = 0;
+      let mostRecentText = '';
+      let mostRecentTs = 0;
+      await new Promise<void>((resolve, reject) => {
+        const stream = createReadStream(uncatPath, { encoding: 'utf8' });
+        stream.on('error', reject);
+        const rl = createInterface({ input: stream, crlfDelay: Infinity });
+        rl.on('line', (line) => {
+          if (!line) return;
+          try {
+            const rec = JSON.parse(line) as { timestamp_iso?: string; text?: string };
+            const ts = rec.timestamp_iso ? Date.parse(rec.timestamp_iso) : 0;
+            if (ts >= cutoff) {
+              count++;
+              if (ts > mostRecentTs) {
+                mostRecentTs = ts;
+                mostRecentText = (rec.text ?? '').slice(0, 80);
+              }
+            }
+          } catch { /* skip malformed line */ }
+        });
+        rl.on('close', resolve);
+        rl.on('error', reject);
+      });
+      if (count > 0) {
+        uncategorizedSection = `\n  Uncategorized findings: ${count} in last 7d (sample: "${mostRecentText}...")`;
+      }
+    } catch { /* file absent or unreadable — skip */ }
+
     // Surface Layer-3 signal-pipeline drift inline on the banner. Cheap (single
     // readFileSync of the last row of pipeline-drift.jsonl), and makes drift
     // visible to the orchestrator LLM without requiring dashboard access.
@@ -1660,7 +1699,7 @@ server.tool(
       }
     } catch { /* drift surface is best-effort */ }
 
-    return { content: [{ type: 'text' as const, text: lines.join('\n') + '\n\n' + agentSections.join('\n') + sessionContextSection + handbookSection + driftSection }] };
+    return { content: [{ type: 'text' as const, text: lines.join('\n') + uncategorizedSection + '\n\n' + agentSections.join('\n') + sessionContextSection + handbookSection + driftSection }] };
   }
 );
 
@@ -2564,7 +2603,7 @@ server.tool(
       // loses the signal; aggregate accuracy (performance-reader.ts:581-585) still
       // counts it. droppedNoCategory + stderr + finding_dropped_format pipeline
       // signal provide observability that the category couldn't be derived.
-      const { extractCategories } = await import('@gossip/orchestrator');
+      const { extractCategories, logUncategorizedFinding } = await import('@gossip/orchestrator');
       const droppedNoCategory: Array<{ agentId: string; taskId: string; findingId?: string; finding: string }> = [];
       const categoryEnforced = formatted.filter((s, i) => {
         if (s.type !== 'consensus' || s.signal !== 'hallucination_caught') return true;
@@ -2585,6 +2624,11 @@ server.tool(
         process.stderr.write(
           `[gossip_signals] persisted hallucination_caught without category for ${s.agentId}: no category could be derived. finding="${srcFinding.slice(0, 80)}"\n`,
         );
+        logUncategorizedFinding(srcFinding, {
+          agent_id: s.agentId,
+          taskId: s.taskId,
+          finding_id: s.findingId,
+        }, process.cwd());
         return true;
       });
 
