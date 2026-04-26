@@ -29,7 +29,7 @@ const SIGNAL_LABELS: Record<string, string> = {
   agreement: 'Confirmed',
   consensus_verified: 'Confirmed',
   unique_confirmed: 'Unique (confirmed)',
-  unique_unconfirmed: 'Unique',
+  unique_unconfirmed: 'Unique (unconfirmed)',
   disagreement: 'Disputed',
   hallucination_caught: 'Hallucination',
   new_finding: 'New finding',
@@ -152,7 +152,11 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
                   setDrawerOpen(true);
                 }
               }}
-              className={`h-4 min-w-[4px] max-w-[12px] flex-1 rounded-sm transition-opacity hover:opacity-80 ${
+              // No max-width cap: pills stretch to fill the row regardless of
+              // viewport so the timeline never has trailing whitespace when
+              // signals.length < the visual width budget. See agent-page UX
+              // memo (project_agent_page_timeline_ux.md).
+              className={`h-4 min-w-[4px] flex-1 rounded-sm transition-opacity hover:opacity-80 ${
                 SIGNAL_COLORS[s.signal] || 'bg-muted'
               } ${clickable ? 'cursor-pointer' : 'cursor-default'}`}
               title={`${SIGNAL_LABELS[s.signal] || s.signal} — ${timeAgo(s.timestamp)}${clickable ? ' (click for detail)' : ''}`}
