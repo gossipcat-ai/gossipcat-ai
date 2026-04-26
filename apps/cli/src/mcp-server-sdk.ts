@@ -2863,10 +2863,15 @@ server.tool(
         const dropBlock = formatDropReceipt(droppedNoCategory);
         if (dropBlock) baseReceipt += dropBlock;
 
-        // PR2: emit finding_dropped_format pipeline signal for each drop so the
-        // record-path category-miss surfaces in the dashboard / signal feed, not
-        // just in stderr + the MCP receipt. Best-effort: failure must NOT break
-        // the record path (secondary observability channel).
+        // Emit finding_dropped_format pipeline signal for each drop so the
+        // record-path category-miss surfaces in the dashboard / signal feed,
+        // not just in stderr + the MCP receipt. This is a deliberate secondary
+        // emit site for finding_dropped_format and is explicitly authorized in
+        // COMPLETION_SIGNAL_AUTHORIZED_PATHS (the L3 drift detector treats
+        // signal-helpers-pipeline as a sanctioned path for this signal — see
+        // packages/orchestrator/src/completion-signals.allowlist.ts and
+        // memory project_drift_bypass_finding_dropped_format).
+        // Best-effort: failure must NOT break the record path.
         try {
           const { emitPipelineSignals } = await import('@gossip/orchestrator');
           const nowIso = new Date().toISOString();
