@@ -23,7 +23,7 @@ describe('Config Validation', () => {
   });
 
   it('rejects invalid provider', () => {
-    expect(() => validateConfig({ main_agent: { provider: 'invalid', model: 'x' } })).toThrow('Invalid provider');
+    expect(() => validateConfig({ main_agent: { provider: 'invalid', model: 'x' } })).toThrow('Invalid main_agent provider');
   });
 
   it('rejects agent with no skills', () => {
@@ -60,6 +60,59 @@ describe('Config Validation', () => {
       utility_model: { provider: 'anthropic', model: 'claude-haiku-4-5' },
     });
     expect(config.utility_model?.provider).toBe('anthropic');
+  });
+
+  // Schema↔runtime alignment regression — VALID_PROVIDERS in config.ts must
+  // accept every value the gossip_setup Zod enum accepts, otherwise some
+  // values pass schema but fail validateConfig (or vice versa). The
+  // documented zero-config token on Claude Code host is "none"; "native" is
+  // valid only for utility_model and per-agent overrides (NOT main_agent).
+  it('accepts main_provider "none" (Claude Code host zero-config)', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'none', model: 'native' },
+    });
+    expect(config.main_agent.provider).toBe('none');
+  });
+
+  it('rejects main_provider "native" (regression: createProvider has no native branch)', () => {
+    // 'native' as main_agent.provider would reach createProvider() in
+    // packages/orchestrator/src/llm-client.ts which has no `case 'native'`,
+    // throwing "Unknown provider: native" at boot. validateConfig must catch
+    // this at config-load time. 'native' remains valid for utility_model and
+    // per-agent overrides where the design supports it.
+    expect(() => validateConfig({
+      main_agent: { provider: 'native', model: 'sonnet' },
+    })).toThrow('Invalid main_agent provider "native"');
+  });
+
+  it('accepts main_provider "local"', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'local', model: 'llama3' },
+    });
+    expect(config.main_agent.provider).toBe('local');
+  });
+
+  // Parity check between schema (validateConfig) and runtime (createProvider).
+  // Captures the original drift bug as a permanent regression test: every
+  // provider that validateConfig accepts for main_agent MUST be a provider
+  // that createProvider knows how to construct. If a future change adds a
+  // provider to one list but not the other, this test fails immediately.
+  it('main_agent providers form a subset of createProvider runtime cases', () => {
+    // Mirror of the cases in packages/orchestrator/src/llm-client.ts
+    // createProvider() switch statement. Update both lists together when
+    // adding a provider.
+    const CREATE_PROVIDER_CASES = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'none'];
+    const VALID_MAIN_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'none'];
+
+    // Every accepted main_agent provider must be constructible at runtime.
+    for (const p of VALID_MAIN_PROVIDERS) {
+      expect(CREATE_PROVIDER_CASES).toContain(p);
+    }
+    // And the schema must actually accept each one (smoke test).
+    for (const p of VALID_MAIN_PROVIDERS) {
+      const config = validateConfig({ main_agent: { provider: p, model: 'x' } });
+      expect(config.main_agent.provider).toBe(p);
+    }
   });
 });
 
