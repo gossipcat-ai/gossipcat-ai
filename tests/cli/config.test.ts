@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { validateConfig, findConfigPath } from '../../apps/cli/src/config';
+import { validateConfig, findConfigPath, VALID_MAIN_PROVIDERS } from '../../apps/cli/src/config';
+import { CREATE_PROVIDER_CASES } from '../../packages/orchestrator/src/llm-client';
 
 describe('Config Validation', () => {
   it('accepts valid config', () => {
@@ -98,13 +99,11 @@ describe('Config Validation', () => {
   // that createProvider knows how to construct. If a future change adds a
   // provider to one list but not the other, this test fails immediately.
   it('main_agent providers form a subset of createProvider runtime cases', () => {
-    // Mirror of the cases in packages/orchestrator/src/llm-client.ts
-    // createProvider() switch statement. Update both lists together when
-    // adding a provider.
-    const CREATE_PROVIDER_CASES = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'none'];
-    const VALID_MAIN_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'none'];
-
-    // Every accepted main_agent provider must be constructible at runtime.
+    // VALID_MAIN_PROVIDERS comes from apps/cli/src/config.ts (schema-side).
+    // CREATE_PROVIDER_CASES comes from packages/orchestrator/src/llm-client.ts
+    // (runtime-side, kept aligned with the createProvider switch). Importing
+    // both ensures this test fails the moment either source-of-truth drifts —
+    // no third hardcoded list to forget to update.
     for (const p of VALID_MAIN_PROVIDERS) {
       expect(CREATE_PROVIDER_CASES).toContain(p);
     }

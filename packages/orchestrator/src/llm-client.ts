@@ -626,6 +626,13 @@ class NullProvider implements ILLMProvider {
 
 // ─── Factory ────────────────────────────────────────────────────────────────
 
+// Runtime-side mirror of the providers the switch below knows how to build.
+// Keep in sync with the `case` arms in createProvider — the parity test in
+// tests/cli/config.test.ts asserts this matches VALID_MAIN_PROVIDERS in
+// apps/cli/src/config.ts so a provider can never pass schema validation but
+// fail at runtime (or vice versa).
+export const CREATE_PROVIDER_CASES = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'none'] as const;
+
 export function createProvider(provider: string, model: string, apiKey?: string, projectRoot?: string, baseUrl?: string): ILLMProvider {
   switch (provider) {
     case 'anthropic': return new AnthropicProvider(apiKey!, model, projectRoot);
