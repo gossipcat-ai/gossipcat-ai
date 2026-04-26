@@ -3,8 +3,30 @@
  * for a finding. Phase 1: visibility only. No scoring impact.
  */
 
-import { appendFileSync, mkdirSync } from 'fs';
+import { appendFileSync, mkdirSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
+
+/** Max bytes for `.gossip/uncategorized-findings.jsonl` before single-slot rotation. */
+export const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
+/**
+ * Best-effort single-slot rotation. Mirrors sandbox.ts rotateIfNeeded.
+ * If the file exists and exceeds maxBytes, rename to `<path>.1` (overwrites).
+ * Errors are silently ignored — this is best-effort telemetry.
+ */
+function rotateIfNeeded(filePath: string, maxBytes: number): void {
+  try {
+    const st = statSync(filePath); // throws ENOENT when file absent — skip rotation
+    if (st.size < maxBytes) return;
+    try {
+      renameSync(filePath, filePath + '.1');
+    } catch (err) {
+      process.stderr.write(`[uncategorized-logger] rotation failed: ${(err as Error).message}\n`);
+    }
+  } catch {
+    /* file absent or unreadable — no rotation needed */
+  }
+}
 
 /** Redact common secret patterns to prevent leaking credentials into the log. */
 function redactSecrets(text: string): string {
@@ -52,6 +74,7 @@ export function logUncategorizedFinding(
   if (ctx.agent_id !== undefined) record.agent_id = ctx.agent_id;
   if (ctx.taskId !== undefined) record.taskId = ctx.taskId;
 
+  rotateIfNeeded(logPath, MAX_FILE_SIZE);
   try {
     appendFileSync(logPath, JSON.stringify(record) + '\n');
   } catch (err) {

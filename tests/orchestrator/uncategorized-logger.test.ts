@@ -1,7 +1,7 @@
-import { readFileSync, rmSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { logUncategorizedFinding } from '../../packages/orchestrator/src/uncategorized-logger';
+import { logUncategorizedFinding, MAX_FILE_SIZE } from '../../packages/orchestrator/src/uncategorized-logger';
 import { extractCategories } from '../../packages/orchestrator/src/category-extractor';
 
 describe('logUncategorizedFinding', () => {
@@ -70,6 +70,51 @@ describe('logUncategorizedFinding', () => {
     expect('taskId' in record).toBe(false);
     expect('finding_id' in record).toBe(false);
     rmSync(emptyCtxDir, { recursive: true, force: true });
+  });
+});
+
+describe('logUncategorizedFinding — log rotation', () => {
+  test('rotation triggers when file exceeds threshold', () => {
+    const dir = join(tmpdir(), 'uncat-rotate-' + Date.now());
+    const logPath = join(dir, '.gossip', 'uncategorized-findings.jsonl');
+    // Seed file above 5MB threshold
+    logUncategorizedFinding('seed', {}, dir); // creates .gossip dir
+    writeFileSync(logPath, Buffer.alloc(MAX_FILE_SIZE + 100, 'x').toString());
+    logUncategorizedFinding('after rotation', { agent_id: 'test' }, dir);
+    // Original file should now be the fresh one (single record)
+    const lines = readFileSync(logPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    const rec = JSON.parse(lines[0]);
+    expect(rec.text).toBe('after rotation');
+    // Rotated backup should exist
+    expect(existsSync(logPath + '.1')).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('no rotation when file is under threshold', () => {
+    const dir = join(tmpdir(), 'uncat-norotate-' + Date.now());
+    logUncategorizedFinding('first', {}, dir);
+    logUncategorizedFinding('second', {}, dir);
+    const logPath = join(dir, '.gossip', 'uncategorized-findings.jsonl');
+    expect(existsSync(logPath + '.1')).toBe(false);
+    const lines = readFileSync(logPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('rotation overwrites existing .1 (single-slot semantic)', () => {
+    const dir = join(tmpdir(), 'uncat-overwrite-' + Date.now());
+    const logPath = join(dir, '.gossip', 'uncategorized-findings.jsonl');
+    // Seed main file above threshold and .1 with sentinel
+    logUncategorizedFinding('seed', {}, dir);
+    writeFileSync(logPath, Buffer.alloc(MAX_FILE_SIZE + 100, 'x').toString());
+    writeFileSync(logPath + '.1', 'sentinel-content\n');
+    logUncategorizedFinding('fresh', { agent_id: 'a1' }, dir);
+    // .1 should now hold the oversized content, not the sentinel
+    const backup = readFileSync(logPath + '.1', 'utf-8');
+    expect(backup).not.toBe('sentinel-content\n');
+    expect(backup.length).toBeGreaterThan(MAX_FILE_SIZE);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
