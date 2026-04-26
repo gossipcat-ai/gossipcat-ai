@@ -29,7 +29,7 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 import { ctx } from './mcp-context';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
-import { buildUtilityAgentPrompt } from '@gossip/orchestrator';
+import { buildUtilityAgentPrompt, getUncategorizedStatusLine } from '@gossip/orchestrator';
 import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';
@@ -1632,53 +1632,11 @@ server.tool(
           : '');
     } catch { if (!handbookCandidates.some((p: string) => exHB(p))) { process.stderr.write('[gossipcat] gossip_status: HANDBOOK.md not found in any candidate path — add docs/HANDBOOK.md to capture operator wisdom\n'); } }
 
-    // Surface uncategorized-findings count. Streaming line-count (no full-file
-    // read) so a large file doesn't blow up the status response. 7-day window
-    // matches skill-gap decay semantics. Skip entirely when count is 0.
-    // Scans both the current file and the single-slot rotation backup (.jsonl.1)
-    // so recent entries aren't lost after rotation.
+    // Surface uncategorized-findings count via extracted helper (testable).
+    // 7-day window matches skill-gap decay semantics. Skip entirely when count is 0.
     let uncategorizedSection = '';
     try {
-      const { createReadStream, existsSync: fsExistsSync } = await import('fs');
-      const { createInterface } = await import('readline');
-      const uncatPath = join(process.cwd(), '.gossip', 'uncategorized-findings.jsonl');
-      const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000;
-      const cutoff = Date.now() - WINDOW_7D_MS;
-      let count = 0;
-      let mostRecentText = '';
-      let mostRecentTs = 0;
-
-      // Helper: stream one file and accumulate into shared count/mostRecent state.
-      const scanFile = (filePath: string): Promise<void> =>
-        new Promise<void>((resolve) => {
-          const stream = createReadStream(filePath, { encoding: 'utf8' });
-          stream.on('error', () => resolve()); // absent or unreadable — skip
-          const rl = createInterface({ input: stream, crlfDelay: Infinity });
-          rl.on('line', (line) => {
-            if (!line) return;
-            try {
-              const rec = JSON.parse(line) as { timestamp_iso?: string; text?: string };
-              const ts = rec.timestamp_iso ? Date.parse(rec.timestamp_iso) : 0;
-              if (ts >= cutoff) {
-                count++;
-                if (ts > mostRecentTs) {
-                  mostRecentTs = ts;
-                  mostRecentText = (rec.text ?? '').slice(0, 80);
-                }
-              }
-            } catch { /* skip malformed line */ }
-          });
-          rl.on('close', resolve);
-          rl.on('error', () => resolve());
-        });
-
-      // Scan current file first, then rotation backup if present.
-      await scanFile(uncatPath);
-      if (fsExistsSync(uncatPath + '.1')) await scanFile(uncatPath + '.1');
-
-      if (count > 0) {
-        uncategorizedSection = `\n  Uncategorized findings: ${count} in last 7d (sample: "${mostRecentText}...")`;
-      }
+      uncategorizedSection = await getUncategorizedStatusLine(process.cwd());
     } catch { /* unexpected error — skip */ }
 
     // Surface Layer-3 signal-pipeline drift inline on the banner. Cheap (single

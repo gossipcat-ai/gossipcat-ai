@@ -1,9 +1,12 @@
 /**
  * UncategorizedLogger — appends a JSONL record when extractCategories returns []
  * for a finding. Phase 1: visibility only. No scoring impact.
+ *
+ * Also exports getUncategorizedStatusLine for use in gossip_status banners.
  */
 
-import { appendFileSync, mkdirSync, statSync, renameSync } from 'fs';
+import { appendFileSync, mkdirSync, statSync, renameSync, createReadStream, existsSync } from 'fs';
+import { createInterface } from 'readline';
 import { join } from 'path';
 
 /** Max bytes for `.gossip/uncategorized-findings.jsonl` before single-slot rotation. */
@@ -80,4 +83,66 @@ export function logUncategorizedFinding(
   } catch (err) {
     process.stderr.write(`[uncategorized-logger] write failed: ${(err as Error).message}\n`);
   }
+}
+
+/**
+ * Scans uncategorized-findings.jsonl files for recent entries and returns a
+ * formatted status line for gossip_status.
+ *
+ * @param projectRoot The root of the project directory.
+ * @param opts Optional parameters for window and current time.
+ * @returns A formatted string or an empty string if no recent findings.
+ */
+export async function getUncategorizedStatusLine(
+  projectRoot: string,
+  opts?: { windowMs?: number; nowMs?: number }
+): Promise<string> {
+  const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000;
+  const now = opts?.nowMs ?? Date.now();
+  const cutoff = now - (opts?.windowMs ?? WINDOW_7D_MS);
+  let count = 0;
+  let mostRecentText = '';
+  let mostRecentTs = 0;
+
+  const uncatPath = join(projectRoot, '.gossip', 'uncategorized-findings.jsonl');
+
+  const scanFile = (filePath: string): Promise<void> =>
+    new Promise<void>((resolve) => {
+      if (!existsSync(filePath)) {
+        return resolve();
+      }
+      const stream = createReadStream(filePath, { encoding: 'utf8' });
+      stream.on('error', () => resolve()); // absent or unreadable — skip
+      const rl = createInterface({ input: stream, crlfDelay: Infinity });
+      rl.on('line', (line) => {
+        if (!line) return;
+        try {
+          const rec = JSON.parse(line) as { timestamp_iso?: string; text?: string };
+          const ts = rec.timestamp_iso ? Date.parse(rec.timestamp_iso) : 0;
+          if (ts >= cutoff) {
+            count++;
+            if (ts > mostRecentTs) {
+              mostRecentTs = ts;
+              mostRecentText = (rec.text ?? '').slice(0, 80);
+            }
+          }
+        } catch {
+          /* skip malformed line */
+        }
+      });
+      rl.on('close', resolve);
+      rl.on('error', () => resolve());
+    });
+
+  // Scan current file first, then rotation backup if present.
+  await scanFile(uncatPath);
+  if (existsSync(uncatPath + '.1')) {
+    await scanFile(uncatPath + '.1');
+  }
+
+  if (count > 0) {
+    return `\n  Uncategorized findings: ${count} in last 7d (sample: "${mostRecentText}...")`;
+  }
+
+  return '';
 }
