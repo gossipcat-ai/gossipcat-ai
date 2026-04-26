@@ -168,13 +168,15 @@ describe('logUncategorizedFinding — secret redaction', () => {
 });
 
 describe('extractCategories empty → logUncategorizedFinding integration', () => {
-  test('CSRF/Origin/Sec-Fetch vocabulary produces no category', () => {
-    // Vocabulary from the task description's Clerk-auth review example that
-    // doesn't match any built-in regex patterns.
+  // Original PR #277 fixture used CSRF/Sec-Fetch as an example of "no
+  // built-in match" — the same vocabulary this PR adds to trust_boundaries.
+  // Update the fixture to use UI/branding text that genuinely has no home
+  // in any of the 14 categories.
+  test('UI/branding vocabulary produces no category', () => {
     const uncategorizedFindings = [
-      'CSRF token missing from middleware handler',
-      'Origin header not checked in Sec-Fetch flow',
-      'Clerk session cookie missing SameSite attribute',
+      'Hover gradient on primary button is too aggressive for the new brand palette',
+      'Onboarding modal padding feels uneven on the right edge',
+      'Copywriting in the empty-state illustration is too playful for the audience',
     ];
     for (const text of uncategorizedFindings) {
       expect(extractCategories(text)).toHaveLength(0);
@@ -183,7 +185,7 @@ describe('extractCategories empty → logUncategorizedFinding integration', () =
 
   test('when extractCategories returns empty, logUncategorizedFinding writes JSONL', () => {
     const integDir = join(tmpdir(), 'uncat-integ-' + Date.now());
-    const finding = 'CSRF token missing from middleware handler';
+    const finding = 'Hover gradient on primary button is too aggressive for the new brand palette';
     const categories = extractCategories(finding);
     if (categories.length === 0) {
       logUncategorizedFinding(finding, { agent_id: 'test-agent', taskId: 'task-123' }, integDir);
