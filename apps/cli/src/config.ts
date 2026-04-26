@@ -76,7 +76,7 @@ export function loadConfig(configPath: string): GossipConfig {
 // enabled". Drift between these two lists means some values pass schema but
 // fail validateConfig (or vice versa) — that is a hard-to-diagnose user-facing
 // bug. If you change one, change the other.
-const VALID_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'native', 'none'];
+export const VALID_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'native', 'none'];
 
 // Subset for `main_agent.provider`: 'native' is excluded because the main
 // agent must be able to invoke a real LLM (the orchestrator that dispatches
@@ -88,7 +88,7 @@ const VALID_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', '
 // `case 'native'`, so a config with `main_agent.provider: 'native'` would
 // throw "Unknown provider: native" at boot. 'native' remains valid for
 // `utility_model.provider` and `agents[*].provider` where it's design-correct.
-const VALID_MAIN_PROVIDERS = VALID_PROVIDERS.filter(p => p !== 'native');
+export const VALID_MAIN_PROVIDERS = VALID_PROVIDERS.filter(p => p !== 'native');
 
 const CLAUDE_MODEL_MAP: Record<string, { provider: string; model: string }> = {
   opus:   { provider: 'anthropic', model: 'claude-opus-4-6' },
