@@ -1,0 +1,105 @@
+import { readFileSync, rmSync, existsSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { logUncategorizedFinding } from '../../packages/orchestrator/src/uncategorized-logger';
+import { extractCategories } from '../../packages/orchestrator/src/category-extractor';
+
+describe('logUncategorizedFinding', () => {
+  const testDir = join(tmpdir(), 'uncat-logger-' + Date.now());
+
+  afterAll(() => rmSync(testDir, { recursive: true, force: true }));
+
+  test('writes a valid JSONL line to .gossip/uncategorized-findings.jsonl', () => {
+    const text = 'CSRF missing Origin validation in middleware';
+    logUncategorizedFinding(text, { agent_id: 'sonnet-reviewer', taskId: 'task-abc', finding_id: 'c1:sonnet-reviewer:f1' }, testDir);
+
+    const logPath = join(testDir, '.gossip', 'uncategorized-findings.jsonl');
+    expect(existsSync(logPath)).toBe(true);
+
+    const lines = readFileSync(logPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+
+    const record = JSON.parse(lines[0]);
+    expect(record.text).toBe(text);
+    expect(record.agent_id).toBe('sonnet-reviewer');
+    expect(record.taskId).toBe('task-abc');
+    expect(record.finding_id).toBe('c1:sonnet-reviewer:f1');
+    expect(typeof record.timestamp_iso).toBe('string');
+    expect(new Date(record.timestamp_iso).getTime()).toBeGreaterThan(0);
+  });
+
+  test('creates .gossip dir if it does not exist', () => {
+    const freshDir = join(tmpdir(), 'uncat-fresh-' + Date.now());
+    logUncategorizedFinding('some finding', {}, freshDir);
+    const logPath = join(freshDir, '.gossip', 'uncategorized-findings.jsonl');
+    expect(existsSync(logPath)).toBe(true);
+    rmSync(freshDir, { recursive: true, force: true });
+  });
+
+  test('truncates text longer than 600 chars', () => {
+    const longText = 'x'.repeat(700);
+    logUncategorizedFinding(longText, {}, testDir);
+
+    const logPath = join(testDir, '.gossip', 'uncategorized-findings.jsonl');
+    const lines = readFileSync(logPath, 'utf-8').trim().split('\n');
+    const last = JSON.parse(lines[lines.length - 1]);
+    expect(last.text.length).toBe(600);
+  });
+
+  test('appends multiple lines without overwriting', () => {
+    const appendDir = join(tmpdir(), 'uncat-append-' + Date.now());
+    logUncategorizedFinding('finding one', { agent_id: 'a1' }, appendDir);
+    logUncategorizedFinding('finding two', { agent_id: 'a2' }, appendDir);
+
+    const logPath = join(appendDir, '.gossip', 'uncategorized-findings.jsonl');
+    const lines = readFileSync(logPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]).text).toBe('finding one');
+    expect(JSON.parse(lines[1]).text).toBe('finding two');
+    rmSync(appendDir, { recursive: true, force: true });
+  });
+
+  test('omits optional fields when not provided', () => {
+    const emptyCtxDir = join(tmpdir(), 'uncat-empty-' + Date.now());
+    logUncategorizedFinding('bare finding', {}, emptyCtxDir);
+
+    const logPath = join(emptyCtxDir, '.gossip', 'uncategorized-findings.jsonl');
+    const record = JSON.parse(readFileSync(logPath, 'utf-8').trim());
+    expect(record.text).toBe('bare finding');
+    expect('agent_id' in record).toBe(false);
+    expect('taskId' in record).toBe(false);
+    expect('finding_id' in record).toBe(false);
+    rmSync(emptyCtxDir, { recursive: true, force: true });
+  });
+});
+
+describe('extractCategories empty → logUncategorizedFinding integration', () => {
+  test('CSRF/Origin/Sec-Fetch vocabulary produces no category', () => {
+    // Vocabulary from the task description's Clerk-auth review example that
+    // doesn't match any built-in regex patterns.
+    const uncategorizedFindings = [
+      'CSRF token missing from middleware handler',
+      'Origin header not checked in Sec-Fetch flow',
+      'Clerk session cookie missing SameSite attribute',
+    ];
+    for (const text of uncategorizedFindings) {
+      expect(extractCategories(text)).toHaveLength(0);
+    }
+  });
+
+  test('when extractCategories returns empty, logUncategorizedFinding writes JSONL', () => {
+    const integDir = join(tmpdir(), 'uncat-integ-' + Date.now());
+    const finding = 'CSRF token missing from middleware handler';
+    const categories = extractCategories(finding);
+    if (categories.length === 0) {
+      logUncategorizedFinding(finding, { agent_id: 'test-agent', taskId: 'task-123' }, integDir);
+    }
+
+    const logPath = join(integDir, '.gossip', 'uncategorized-findings.jsonl');
+    expect(existsSync(logPath)).toBe(true);
+    const record = JSON.parse(readFileSync(logPath, 'utf-8').trim());
+    expect(record.text).toBe(finding);
+    expect(record.agent_id).toBe('test-agent');
+    rmSync(integDir, { recursive: true, force: true });
+  });
+});

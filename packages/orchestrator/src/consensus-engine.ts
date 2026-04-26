@@ -16,6 +16,7 @@ import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
 import { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
 import { extractCategories } from './category-extractor';
+import { logUncategorizedFinding } from './uncategorized-logger';
 
 export type {
   ConsensusReport,
@@ -985,6 +986,12 @@ Return only valid JSON.${skillsBlock}`;
         process.stderr.write(
           `[consensus-engine] hallucination_caught for ${entry.originalAgentId}: category resolution failed, recorded with undefined. finding="${entry.finding.slice(0, 80)}"\n`,
         );
+        if (this.config.projectRoot) {
+          logUncategorizedFinding(entry.finding, {
+            agent_id: entry.originalAgentId,
+            taskId: getTaskId(entry.originalAgentId),
+          }, this.config.projectRoot);
+        }
       }
       signals.push({
         type: 'consensus',
@@ -1107,6 +1114,13 @@ Return only valid JSON.${skillsBlock}`;
               process.stderr.write(
                 `[consensus-engine] hallucination_caught for ${entry.agentId}: category resolution failed, recorded with undefined. evidence="${(entry.evidence || '').slice(0, 80)}"\n`,
               );
+              if (this.config.projectRoot) {
+                logUncategorizedFinding(f.finding, {
+                  agent_id: entry.agentId,
+                  taskId: getTaskId(entry.agentId),
+                  finding_id: entry.findingId,
+                }, this.config.projectRoot);
+              }
             }
             signals.push({
               type: 'consensus',
