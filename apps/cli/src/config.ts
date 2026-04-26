@@ -78,6 +78,18 @@ export function loadConfig(configPath: string): GossipConfig {
 // bug. If you change one, change the other.
 const VALID_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'native', 'none'];
 
+// Subset for `main_agent.provider`: 'native' is excluded because the main
+// agent must be able to invoke a real LLM (the orchestrator that dispatches
+// other agents and runs lens/overlap detection). Several callsites
+// (apps/cli/src/mcp-server-sdk.ts ~line 721 GossipPublisher init, and
+// apps/cli/src/chat.ts ~line 158 LensGenerator init) call
+// `createProvider(config.main_agent.provider, ...)` directly — and
+// `createProvider` in packages/orchestrator/src/llm-client.ts has no
+// `case 'native'`, so a config with `main_agent.provider: 'native'` would
+// throw "Unknown provider: native" at boot. 'native' remains valid for
+// `utility_model.provider` and `agents[*].provider` where it's design-correct.
+const VALID_MAIN_PROVIDERS = VALID_PROVIDERS.filter(p => p !== 'native');
+
 const CLAUDE_MODEL_MAP: Record<string, { provider: string; model: string }> = {
   opus:   { provider: 'anthropic', model: 'claude-opus-4-6' },
   sonnet: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
@@ -89,9 +101,10 @@ export function validateConfig(raw: any): GossipConfig {
   if (!raw.main_agent.provider) throw new Error('Config missing "main_agent.provider"');
   if (!raw.main_agent.model) throw new Error('Config missing "main_agent.model"');
 
-  if (!VALID_PROVIDERS.includes(raw.main_agent.provider)) {
+  if (!VALID_MAIN_PROVIDERS.includes(raw.main_agent.provider)) {
     throw new Error(
-      `Invalid provider "${raw.main_agent.provider}". Must be one of: ${VALID_PROVIDERS.join(', ')}`
+      `Invalid main_agent provider "${raw.main_agent.provider}". Must be one of: ${VALID_MAIN_PROVIDERS.join(', ')}. ` +
+      `Note: 'native' is valid only for utility_model and per-agent overrides, not for main_agent.`
     );
   }
 

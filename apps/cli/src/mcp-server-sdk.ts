@@ -1729,11 +1729,15 @@ server.tool(
   'gossip_setup',
   `Create or update gossipcat team. Default mode is "merge" — adds/updates specified agents while keeping existing ones. Use "replace" to overwrite entire config. Detects host environment (${env.host}) and supports both native Claude Code subagents (.claude/agents/*.md) and custom provider agents (Anthropic, OpenAI, Google Gemini).`,
   {
-    // Keep this enum aligned with VALID_PROVIDERS in apps/cli/src/config.ts —
+    // Keep this enum aligned with VALID_MAIN_PROVIDERS in apps/cli/src/config.ts —
     // schema and runtime must accept the same set, otherwise some values pass
-    // schema but fail validateConfig (or vice versa).
-    main_provider: z.enum(['anthropic', 'openai', 'openclaw', 'google', 'local', 'native', 'none']).default('google')
-      .describe('Provider for the orchestrator LLM. Use "none" when no API key is available — features degrade gracefully to profile-based.'),
+    // schema but fail validateConfig (or vice versa). 'native' is intentionally
+    // excluded here: the main agent must invoke a real LLM (orchestrator,
+    // lens generator, gossip publisher all call createProvider on this value),
+    // and createProvider has no 'native' branch. 'native' remains valid for
+    // utility_model and per-agent overrides.
+    main_provider: z.enum(['anthropic', 'openai', 'openclaw', 'google', 'local', 'none']).default('google')
+      .describe('Provider for the orchestrator LLM. Use "none" when no API key is available — features degrade gracefully to profile-based. Note: "native" is not valid here (use it only for utility_model or per-agent overrides).'),
     main_model: z.string().default('gemini-2.5-pro')
       .describe('Model ID for orchestrator (e.g. gemini-2.5-pro, claude-sonnet-4-6, gpt-4o)'),
     mode: z.enum(['merge', 'replace', 'update_instructions']).default('merge')
