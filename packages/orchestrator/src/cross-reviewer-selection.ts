@@ -147,14 +147,33 @@ export function selectCrossReviewers(
     }
 
     if (belowMedian.length > 0) {
-      // Signal starvation — look at the most signal-starved below-median candidate
-      // Note: belowMedian is already filtered to score > 0 in the filter above
+      // Pool-level signal-starvation pressure — sized from the most starved
+      // below-median candidate, NOT from the candidate ultimately picked by
+      // the weighted draw further down.
+      //
+      // This is intentional, not the bug it might appear to be (cf. issue
+      // #259). Epsilon must be set BEFORE the draw to gate whether
+      // exploration fires at all for this finding; the gate must therefore
+      // measure pool-level pressure, not an individual pick that doesn't
+      // exist yet. Once the gate fires, the weighted draw below uses
+      // 1/(1+signalCount) weights to concentrate the actual selection on
+      // the starved candidate(s) that justified firing in the first place.
+      //
+      // Net behavior: a well-fed agent CAN be selected when the pool has at
+      // least one starved peer pulling epsilon up — but the weighted draw
+      // makes that a low-probability outcome, and the selection is still
+      // a coherent below-median exploration pick. See issue #259 for the
+      // three alternatives considered (compute on selectedIndex post-draw
+      // breaks the gate semantics; hybrid gate/size is architecturally
+      // confused; rename + document is what we picked).
+      //
+      // Note: belowMedian is already filtered to score > 0 in the filter above.
       const signalCounts = belowMedian.map(c =>
         performanceReader.getRecentCrossReviewCount(c.agent.agentId, 30),
       );
-      const minSignals = signalCounts.reduce((m, v) => v < m ? v : m, Infinity);
-      const starvation = minSignals < 10 ? 0.30
-        : minSignals > 50 ? 0.05
+      const poolMinSignals = signalCounts.reduce((m, v) => v < m ? v : m, Infinity);
+      const poolStarvationPressure = poolMinSignals < 10 ? 0.30
+        : poolMinSignals > 50 ? 0.05
         : 0.15;
 
       const SEV_SCALE: Record<FindingForSelection['severity'], number> = {
@@ -162,7 +181,7 @@ export function selectCrossReviewers(
       };
       const sevScale = SEV_SCALE[finding.severity];
 
-      const epsilon = starvation * sevScale;
+      const epsilon = poolStarvationPressure * sevScale;
 
       if (topK.length > 0 && secureRandom() < epsilon) {
         // Weighted selection toward most signal-starved candidate
