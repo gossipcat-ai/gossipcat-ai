@@ -457,11 +457,15 @@ export class GeminiProvider implements ILLMProvider {
 
     if (process.env.GOSSIP_DEBUG) _log('Gemini', `${this.model} — ${messages.length} messages, tools=${toolMode}`);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+    // 5-minute per-call timeout. gemini-tester / gemini-reviewer run agentic
+    // loops where a single big-context turn (refactor + multi-test plan) can
+    // exceed 120s wall-clock. Matches the 600s budget given to openclaw and
+    // the 300_000 default for gossip_dispatch write tasks.
     const res = await fetchWithRetry503(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(300_000),
     }, 'google');
 
     if (!res.ok) {
