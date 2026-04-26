@@ -971,6 +971,7 @@ Return only valid JSON.${skillsBlock}`;
     // "fabricated from the start".
     const emitFabricationHallucinationIfDetected = async (
       entry: { originalAgentId: string; finding: string; severity?: 'critical' | 'high' | 'medium' | 'low'; category?: string },
+      findingId?: string,
     ): Promise<boolean> => {
       const hasFabricatedCitation = await this.verifyCitations(entry.finding, { strict: true });
       if (!hasFabricatedCitation) return false;
@@ -990,6 +991,7 @@ Return only valid JSON.${skillsBlock}`;
           logUncategorizedFinding(entry.finding, {
             agent_id: entry.originalAgentId,
             taskId: getTaskId(entry.originalAgentId),
+            finding_id: findingId,
           }, this.config.projectRoot);
         }
       }
@@ -1235,7 +1237,7 @@ Return only valid JSON.${skillsBlock}`;
         // stale-file downgrade, which only makes sense when peers have
         // confirmed the finding (outside that context we cannot tell
         // "stale after refactor" from "fabricated from the start").
-        if (await emitFabricationHallucinationIfDetected(entry)) {
+        if (await emitFabricationHallucinationIfDetected(entry, finding.id)) {
           finding.tag = 'unique';
           unique.push(finding);
           continue;
@@ -1305,7 +1307,7 @@ Return only valid JSON.${skillsBlock}`;
         // cites non-existent code and contains hallucination keywords, it's
         // an author fabrication even though peers couldn't verify. Fire
         // hallucination_caught instead of the soft unique_unconfirmed.
-        if (await emitFabricationHallucinationIfDetected(entry)) {
+        if (await emitFabricationHallucinationIfDetected(entry, finding.id)) {
           finding.tag = 'unique';
           unique.push(finding);
           continue;
@@ -1327,7 +1329,7 @@ Return only valid JSON.${skillsBlock}`;
       } else {
         // Tier 2: broadened pre-filter. Same fabrication check for findings
         // that fell through without confirmation, dispute, or unverified mark.
-        if (await emitFabricationHallucinationIfDetected(entry)) {
+        if (await emitFabricationHallucinationIfDetected(entry, finding.id)) {
           finding.tag = 'unique';
           unique.push(finding);
           continue;

@@ -73,6 +73,55 @@ describe('logUncategorizedFinding', () => {
   });
 });
 
+describe('logUncategorizedFinding — error resilience', () => {
+  test('does not throw when appendFileSync throws (e.g. EACCES)', () => {
+    // Mock appendFileSync to simulate a permission error
+    const fs = require('fs');
+    const original = fs.appendFileSync;
+    fs.appendFileSync = () => {
+      const err = new Error('EACCES: permission denied');
+      (err as any).code = 'EACCES';
+      throw err;
+    };
+    try {
+      // Should not throw — error is swallowed to stderr
+      expect(() =>
+        logUncategorizedFinding('some finding', { agent_id: 'a1' }, '/tmp/test-dir'),
+      ).not.toThrow();
+    } finally {
+      fs.appendFileSync = original;
+    }
+  });
+});
+
+describe('logUncategorizedFinding — secret redaction', () => {
+  test('redacts OpenAI key before writing', () => {
+    const dir = join(tmpdir(), 'uncat-redact-' + Date.now());
+    const openaiKey = 'sk-' + 'A'.repeat(48); // matches sk-[40+] pattern
+    const finding = `API key exposed: ${openaiKey} in config`;
+    logUncategorizedFinding(finding, {}, dir);
+
+    const logPath = join(dir, '.gossip', 'uncategorized-findings.jsonl');
+    const record = JSON.parse(readFileSync(logPath, 'utf-8').trim());
+    expect(record.text).not.toContain(openaiKey);
+    expect(record.text).toContain('[REDACTED_API_KEY]');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('redacts GitHub token before writing', () => {
+    const dir = join(tmpdir(), 'uncat-redact-gh-' + Date.now());
+    const ghToken = 'ghp_' + 'B'.repeat(36);
+    const finding = `Token leaked: ${ghToken}`;
+    logUncategorizedFinding(finding, {}, dir);
+
+    const logPath = join(dir, '.gossip', 'uncategorized-findings.jsonl');
+    const record = JSON.parse(readFileSync(logPath, 'utf-8').trim());
+    expect(record.text).not.toContain(ghToken);
+    expect(record.text).toContain('[REDACTED_GITHUB_TOKEN]');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('extractCategories empty → logUncategorizedFinding integration', () => {
   test('CSRF/Origin/Sec-Fetch vocabulary produces no category', () => {
     // Vocabulary from the task description's Clerk-auth review example that
