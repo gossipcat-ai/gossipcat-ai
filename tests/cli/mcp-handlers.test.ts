@@ -977,6 +977,76 @@ describe('persistNativeTaskMap + restore', () => {
     expect(timedOut).toBeDefined();
     expect(timedOut!.status).toBe('timed_out');
   });
+
+  // ── Supersession (project_orphaned_task_ids.md) ──────────────────────────
+  // After /mcp reconnect, if a NEWER completion exists for the same agentId
+  // as a persisted-but-still-running task, the orchestrator already moved
+  // on. Re-arming the orphan would leave a ghost "running" task in the
+  // dashboard until the 2h TTL evicts it. Mark the orphan as 'superseded'
+  // instead (terminal status, no timeout watcher).
+  it('marks restored task as superseded when a newer completion exists for same agent', () => {
+    const TTL = 2 * 60 * 60 * 1000;
+    const now = Date.now();
+    const T1 = now - 60_000;          // task A dispatched 60s ago, still on disk
+    const T2 = now - 10_000;          // task B for SAME agent completed 10s ago
+    const gossipDir = join(testDir, '.gossip');
+    mkdirSync(gossipDir, { recursive: true });
+    writeFileSync(join(gossipDir, 'native-tasks.json'), JSON.stringify({
+      tasks: {
+        'orphan-A': {
+          agentId: 'sonnet-implementer', task: 'first dispatch',
+          startedAt: T1, timeoutMs: TTL,
+        },
+      },
+      results: {
+        'fresh-B': {
+          id: 'fresh-B', agentId: 'sonnet-implementer', task: 'second dispatch',
+          status: 'completed', startedAt: T2 - 1000, completedAt: T2,
+        },
+      },
+    }));
+
+    restoreNativeTaskMap(testDir);
+
+    // orphan-A must NOT be re-armed
+    expect(ctx.nativeTaskMap.has('orphan-A')).toBe(false);
+    // orphan-A gets a superseded result entry under its own id
+    const supersededEntry = ctx.nativeResultMap.get('orphan-A');
+    expect(supersededEntry).toBeDefined();
+    expect(supersededEntry!.status).toBe('superseded');
+    expect(supersededEntry!.agentId).toBe('sonnet-implementer');
+    // The fresh result is still present untouched
+    expect(ctx.nativeResultMap.get('fresh-B')!.status).toBe('completed');
+  });
+
+  it('re-arms restored task normally when newer completion is for a DIFFERENT agent', () => {
+    const TTL = 2 * 60 * 60 * 1000;
+    const now = Date.now();
+    const T1 = now - 60_000;
+    const T2 = now - 10_000;
+    const gossipDir = join(testDir, '.gossip');
+    mkdirSync(gossipDir, { recursive: true });
+    writeFileSync(join(gossipDir, 'native-tasks.json'), JSON.stringify({
+      tasks: {
+        'orphan-A': {
+          agentId: 'sonnet-implementer', task: 'first dispatch',
+          startedAt: T1, timeoutMs: TTL,
+        },
+      },
+      results: {
+        'fresh-B': {
+          id: 'fresh-B', agentId: 'haiku-researcher', task: 'unrelated',
+          status: 'completed', startedAt: T2 - 1000, completedAt: T2,
+        },
+      },
+    }));
+
+    restoreNativeTaskMap(testDir);
+
+    // Different agent → no supersession; orphan-A re-armed normally
+    expect(ctx.nativeTaskMap.has('orphan-A')).toBe(true);
+    expect(ctx.nativeResultMap.has('orphan-A')).toBe(false);
+  });
 });
 
 // ── gossip_run auto-path: NullProvider + claude-code delegation ───────────────

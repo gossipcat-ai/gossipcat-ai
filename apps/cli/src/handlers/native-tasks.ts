@@ -327,11 +327,44 @@ export function restoreNativeTaskMap(projectRoot: string): void {
     if (!ex(filePath)) return;
     const raw = JSON.parse(rf(filePath, 'utf-8'));
     const now = Date.now();
+    // Restore results FIRST so the supersession check below sees both
+    // in-memory and on-disk completions when deciding whether to re-arm.
+    if (raw.results) {
+      for (const [id, info] of Object.entries(raw.results) as [string, any][]) {
+        if (now - info.startedAt < NATIVE_TASK_TTL_MS && !ctx.nativeResultMap.has(id)) {
+          ctx.nativeResultMap.set(id, info);
+        }
+      }
+    }
     if (raw.tasks) {
       for (const [id, info] of Object.entries(raw.tasks) as [string, any][]) {
         if (now - info.startedAt >= NATIVE_TASK_TTL_MS) continue;
         if (ctx.nativeTaskMap.has(id)) continue;
         if (ctx.nativeResultMap.has(id)) continue;
+
+        // Supersession check (project_orphaned_task_ids.md): if a NEWER
+        // completion already exists for the same agent, the orchestrator
+        // already moved on after a /mcp reconnect (new gossip_run created
+        // task B for agentId X while task A was still on disk). Re-arming
+        // A would leave a ghost "running" task in the dashboard until TTL
+        // eviction. Mark it 'superseded' instead so dashboards see a
+        // terminal state immediately. Exact-ID dedup above is unchanged.
+        const supersedingResult = (() => {
+          for (const r of ctx.nativeResultMap.values()) {
+            if (r.agentId === info.agentId && r.completedAt > info.startedAt) return r;
+          }
+          return undefined;
+        })();
+        if (supersedingResult) {
+          ctx.nativeResultMap.set(id, {
+            id, agentId: info.agentId, task: info.task,
+            status: 'superseded' as const,
+            error: `Superseded — newer task for ${info.agentId} completed at ${new Date(supersedingResult.completedAt).toISOString()}`,
+            startedAt: info.startedAt, completedAt: now,
+          });
+          process.stderr.write(`[gossipcat] 🔁 restore ← ${info.agentId} [${id}] superseded (newer task completed at ${new Date(supersedingResult.completedAt).toISOString()})\n`);
+          continue;
+        }
 
         ctx.nativeTaskMap.set(id, info);
 
@@ -349,13 +382,6 @@ export function restoreNativeTaskMap(projectRoot: string): void {
         } else {
           spawnTimeoutWatcher(id, { agentId: info.agentId, task: info.task, startedAt: info.startedAt, timeoutMs });
           process.stderr.write(`[gossipcat] 🔁 restore ← ${info.agentId} [${id}] re-armed (${Math.round((timeoutMs - elapsed) / 1000)}s remaining)\n`);
-        }
-      }
-    }
-    if (raw.results) {
-      for (const [id, info] of Object.entries(raw.results) as [string, any][]) {
-        if (now - info.startedAt < NATIVE_TASK_TTL_MS && !ctx.nativeResultMap.has(id)) {
-          ctx.nativeResultMap.set(id, info);
         }
       }
     }
