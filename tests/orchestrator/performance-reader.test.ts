@@ -2,6 +2,19 @@ import { PerformanceReader } from '../../packages/orchestrator/src/performance-r
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 
+/**
+ * Skill-gated hallucination recovery test helpers — write a bound skill file
+ * with the given category frontmatter under
+ * `<TEST_DIR>/.gossip/agents/<agentId>/skills/<name>.md`. Mirrors the
+ * production layout `hasSkillForCategory` walks.
+ */
+function writeBoundSkill(agentId: string, category: string, skillName = 'test-skill'): void {
+  const dir = join(TEST_DIR, '.gossip', 'agents', agentId, 'skills');
+  mkdirSync(dir, { recursive: true });
+  const body = `---\nname: ${skillName}\ncategory: ${category}\nagent: ${agentId}\n---\n\n# ${skillName}\n`;
+  writeFileSync(join(dir, `${skillName}.md`), body);
+}
+
 const TEST_DIR = join(__dirname, '..', '..', '.test-perf-reader');
 
 function writeSignals(signals: any[]): void {
@@ -835,5 +848,120 @@ describe('PerformanceReader — hallucination decay tune (HALLUCINATION_DECAY_HA
     // is pulled toward 0 by the multiplier even with no category attached.
     expect(score.hallucinations).toBe(3);
     expect(score.accuracy).toBeLessThan(0.5);
+  });
+
+  describe('skill-gated hallucination recovery', () => {
+    // Spec: project_skill_gated_recovery.md (verified FRESH 2026-04-25).
+    // Recovery requires BOTH: (a) bound skill matching the hallucination's
+    // category, AND (b) >=3 positive signals (agreement|unique_confirmed)
+    // in the SAME category, timestamped AFTER the hallucination. Multiplier
+    // is 0.4 (60% reduction) on top of existing tasks-elapsed decay.
+
+    function ts(daysAgo: number): string {
+      return new Date(Date.now() - daysAgo * 86400000).toISOString();
+    }
+
+    it('does NOT reduce penalty when 3 clean signals are in a DIFFERENT category (skill bound for halluc category)', () => {
+      writeBoundSkill('rev', 'concurrency');
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'trust_boundaries', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'trust_boundaries', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'trust_boundaries', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // Full hallucination weight retained — clean signals were in unrelated category.
+      // weightedHallucinations should reflect base severity (3.0 for confirmed_hallucination
+      // default arm) * tasks-elapsed decay, NOT scaled by 0.4.
+      expect(score.weightedHallucinations).toBeGreaterThan(0.4);
+    });
+
+    it('does NOT reduce penalty when 3 clean signals match category but NO skill is bound', () => {
+      // Note: no writeBoundSkill() call — agent has no skill file at all.
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // No skill → no recovery, even with 3+ clean signals in matching category.
+      expect(score.weightedHallucinations).toBeGreaterThan(0.4);
+    });
+
+    it('REDUCES penalty (0.4x) when 3+ clean signals match category AND skill is bound', () => {
+      writeBoundSkill('rev', 'concurrency');
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const gatedScore = reader.getAgentScore('rev')!;
+
+      // Compare against the no-skill baseline by recreating signals in a sibling dir.
+      const SIBLING = TEST_DIR + '-noskill';
+      if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      mkdirSync(join(SIBLING, '.gossip'), { recursive: true });
+      const data = [
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ].map(s => JSON.stringify(s)).join('\n') + '\n';
+      writeFileSync(join(SIBLING, '.gossip', 'agent-performance.jsonl'), data);
+      const baselineScore = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+      rmSync(SIBLING, { recursive: true });
+
+      // Gated should be ~0.4 of baseline (multiplier applied on top of identical decay).
+      expect(gatedScore.weightedHallucinations).toBeLessThan(baselineScore.weightedHallucinations);
+      const ratio = gatedScore.weightedHallucinations / baselineScore.weightedHallucinations;
+      expect(ratio).toBeGreaterThan(0.35);
+      expect(ratio).toBeLessThan(0.45);
+    });
+
+    it('does NOT reduce penalty with only 2 matching clean signals (need 3+)', () => {
+      writeBoundSkill('rev', 'concurrency');
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      expect(score.weightedHallucinations).toBeGreaterThan(0.4);
+    });
+
+    it('time-only decay path still works when neither skill nor clean-signal condition applies', () => {
+      // Two hallucinations, no skill, no clean signals — verify the
+      // tasks-elapsed decay still produces weightedHallucinations > 0 and
+      // < raw severity sum (i.e. decay is observably applied).
+      const sigs: any[] = [];
+      for (let i = 0; i < 10; i++) {
+        sigs.push({
+          type: 'consensus',
+          signal: 'agreement',
+          agentId: 'rev',
+          category: 'unrelated',
+          taskId: `pad${i}`,
+          evidence: '',
+          timestamp: ts(20 - i),
+        });
+      }
+      sigs.push({ type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 'h1', evidence: '', timestamp: ts(9) });
+      sigs.push({ type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 'h2', evidence: '', timestamp: ts(1) });
+      writeSignals(sigs);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // Both hallucinations contribute, decayed by tasks-elapsed factor.
+      // Default severity for hallucination_caught (no outcome) = 1.0; with two
+      // hallucinations weightedHallucinations should be in (0, 2.0] range.
+      expect(score.hallucinations).toBe(2);
+      expect(score.weightedHallucinations).toBeGreaterThan(0);
+      expect(score.weightedHallucinations).toBeLessThanOrEqual(2.0);
+    });
   });
 });

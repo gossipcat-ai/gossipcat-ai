@@ -5,10 +5,25 @@
  * Closes the feedback loop: consensus signals → agent scores → dispatch preference.
  */
 
-import { readFileSync, existsSync, statSync } from 'fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { ConsensusSignal, ImplSignal, PerformanceSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
+
+/**
+ * Skill-gated hallucination recovery — minimum clean-signal count in the
+ * matching category required (alongside a bound skill) to apply the recovery
+ * multiplier. Volume of unrelated positive signals must not wash away
+ * category-specific mistakes; see project_skill_gated_recovery.md.
+ */
+const SKILL_GATED_RECOVERY_MIN_CLEAN_SIGNALS = 3;
+/**
+ * Multiplier applied to the per-signal hallucination weight contribution when
+ * BOTH the bound-skill AND clean-signal-count conditions are met. 0.4 = 60%
+ * penalty reduction. Stacks ON TOP of the existing tasks-elapsed decay; does
+ * not replace it.
+ */
+const SKILL_GATED_RECOVERY_MULTIPLIER = 0.4;
 
 export interface AgentScore {
   agentId: string;
@@ -84,12 +99,61 @@ function getSeverityMultiplier(severity?: string): number {
 
 export class PerformanceReader {
   private readonly filePath: string;
+  private readonly projectRoot: string;
   // Cache: avoid re-reading file on every dispatch call
   private cachedScores: Map<string, AgentScore> | null = null;
   private cachedMtimeMs = 0;
 
   constructor(projectRoot: string) {
+    this.projectRoot = projectRoot;
     this.filePath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
+  }
+
+  /**
+   * Skill-gated hallucination recovery — does this agent have a bound skill
+   * file whose `category:` frontmatter matches `category` (after
+   * `normalizeSkillName`)? Skill files live at
+   * `.gossip/agents/<agentId>/skills/*.md`. Cached per `(agentId,category)` for
+   * the lifetime of the cache map passed in so a single computeScores() pass
+   * does not re-walk the filesystem for every hallucination_caught signal.
+   *
+   * Returns false on any IO/parse error — recovery defaults to "no relief"
+   * when we can't prove a skill is bound.
+   */
+  private hasSkillForCategory(
+    agentId: string,
+    category: string,
+    cache: Map<string, boolean>,
+  ): boolean {
+    if (!agentId || !category) return false;
+    const normalizedTarget = normalizeSkillName(category);
+    const cacheKey = agentId + '\x00' + normalizedTarget;
+    const cached = cache.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    let result = false;
+    try {
+      const dir = join(this.projectRoot, '.gossip', 'agents', agentId, 'skills');
+      if (existsSync(dir)) {
+        for (const entry of readdirSync(dir)) {
+          if (!entry.endsWith('.md')) continue;
+          let body = '';
+          try { body = readFileSync(join(dir, entry), 'utf-8'); } catch { continue; }
+          // Front-matter only: bail if the file does not start with `---`.
+          if (!body.startsWith('---')) continue;
+          const end = body.indexOf('\n---', 3);
+          if (end < 0) continue;
+          const fm = body.slice(3, end);
+          // Match `category: <value>` on its own line, allowing optional quotes.
+          const m = fm.match(/^[ \t]*category:[ \t]*['"]?([^'"\n\r]+?)['"]?[ \t]*$/m);
+          if (!m) continue;
+          if (normalizeSkillName(m[1]) === normalizedTarget) { result = true; break; }
+        }
+      }
+    } catch { /* fall through to false */ }
+
+    cache.set(cacheKey, result);
+    return result;
   }
 
   /** Read all signals and compute per-agent scores (cached by file mtime) */
@@ -521,6 +585,42 @@ export class PerformanceReader {
 
     const peerDiversity = this.computePeerDiversity(consensusSignals);
 
+    // Skill-gated hallucination recovery — pre-index per-agent positive
+    // signals (agreement + unique_confirmed) with their normalized category +
+    // timestamp so the hallucination_caught arm can ask "how many clean
+    // signals in THIS category landed AFTER this hallucination?" in O(K) per
+    // hallucination instead of rescanning the global corpus. Per task spec:
+    // operate on per-agent accumulation, do not traverse the global corpus.
+    // Cache for the bound-skill filesystem lookup is also fresh-per-run so a
+    // newly-bound skill takes effect on the next score computation without
+    // process restart.
+    const positiveByAgent = new Map<string, Array<{ category: string; ts: number }>>();
+    for (const s of consensusSignals) {
+      if (s.signal !== 'agreement' && s.signal !== 'unique_confirmed') continue;
+      if (!s.category) continue;
+      const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
+      if (!isFinite(ts) || ts === 0) continue;
+      const list = positiveByAgent.get(s.agentId) || [];
+      list.push({ category: normalizeSkillName(s.category), ts });
+      positiveByAgent.set(s.agentId, list);
+    }
+    const skillCache = new Map<string, boolean>();
+    const categoryCleanSignalsAfter = (
+      agentId: string,
+      category: string,
+      hallucinationTs: number,
+    ): number => {
+      const list = positiveByAgent.get(agentId);
+      if (!list || list.length === 0) return 0;
+      const target = normalizeSkillName(category);
+      let count = 0;
+      for (const s of list) {
+        if (s.category !== target) continue;
+        if (s.ts > hallucinationTs) count++;
+      }
+      return count;
+    };
+
     // Build per-agent retraction index so computeScores skips retracted signals
     // even when called with a raw (unfiltered) signal array (e.g. directly from tests).
     const retractedKeys = new Set<string>();
@@ -682,7 +782,27 @@ export class PerformanceReader {
           // "overall cross-review activity" stays stable — only the numerator on
           // the penalty side fades faster.
           const hallucDecay = Math.pow(0.5, tasksSince / HALLUCINATION_DECAY_HALF_LIFE);
-          a.weightedHallucinations += severity * hallucDecay;
+
+          // Skill-gated hallucination recovery — applied ON TOP of the
+          // tasks-elapsed decay above, never replacing it. Both conditions
+          // must hold: (a) agent has a bound skill file with matching
+          // category frontmatter, AND (b) >=3 positive signals (agreement
+          // or unique_confirmed) in the SAME category landed AFTER this
+          // hallucination's timestamp. Forces the skill development loop:
+          // hallucinate → develop skill → prove it works → recover.
+          // See project_skill_gated_recovery.md (verified FRESH 2026-04-25).
+          let gatedMultiplier = 1.0;
+          const hallucTs = signal.timestamp ? new Date(signal.timestamp).getTime() : 0;
+          if (signal.category && isFinite(hallucTs) && hallucTs > 0) {
+            const skillBound = this.hasSkillForCategory(signal.agentId, signal.category, skillCache);
+            if (skillBound) {
+              const cleanCount = categoryCleanSignalsAfter(signal.agentId, signal.category, hallucTs);
+              if (cleanCount >= SKILL_GATED_RECOVERY_MIN_CLEAN_SIGNALS) {
+                gatedMultiplier = SKILL_GATED_RECOVERY_MULTIPLIER;
+              }
+            }
+          }
+          a.weightedHallucinations += severity * hallucDecay * gatedMultiplier;
           a.weightedTotal += decay;
           a.hallucinations++;
           if (signal.category) {
