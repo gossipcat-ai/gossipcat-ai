@@ -5,10 +5,25 @@
  * Closes the feedback loop: consensus signals → agent scores → dispatch preference.
  */
 
-import { readFileSync, existsSync, statSync } from 'fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { ConsensusSignal, ImplSignal, PerformanceSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
+
+/**
+ * Skill-gated hallucination recovery — minimum clean-signal count in the
+ * matching category required (alongside a bound skill) to apply the recovery
+ * multiplier. Volume of unrelated positive signals must not wash away
+ * category-specific mistakes; see project_skill_gated_recovery.md.
+ */
+const SKILL_GATED_RECOVERY_MIN_CLEAN_SIGNALS = 3;
+/**
+ * Multiplier applied to the per-signal hallucination weight contribution when
+ * BOTH the bound-skill AND clean-signal-count conditions are met. 0.4 = 60%
+ * penalty reduction. Stacks ON TOP of the existing tasks-elapsed decay; does
+ * not replace it.
+ */
+const SKILL_GATED_RECOVERY_MULTIPLIER = 0.4;
 
 export interface AgentScore {
   agentId: string;
@@ -84,12 +99,123 @@ function getSeverityMultiplier(severity?: string): number {
 
 export class PerformanceReader {
   private readonly filePath: string;
+  private readonly projectRoot: string;
   // Cache: avoid re-reading file on every dispatch call
   private cachedScores: Map<string, AgentScore> | null = null;
   private cachedMtimeMs = 0;
+  // Cached parsed skill-index.json (per computeScores pass — see getSkillIndexEnabledMap).
+  private skillIndexCache: Record<string, Record<string, boolean>> | null | undefined = undefined;
 
   constructor(projectRoot: string) {
+    this.projectRoot = projectRoot;
     this.filePath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
+  }
+
+  /**
+   * Skill-gated hallucination recovery — does this agent have a bound skill
+   * file whose `category:` frontmatter matches `category` (after
+   * `normalizeSkillName`)? Skill files live at
+   * `.gossip/agents/<agentId>/skills/*.md`. Cached per `(agentId,category)` for
+   * the lifetime of the cache map passed in so a single computeScores() pass
+   * does not re-walk the filesystem for every hallucination_caught signal.
+   *
+   * Returns false on any IO/parse error — recovery defaults to "no relief"
+   * when we can't prove a skill is bound.
+   */
+  private hasSkillForCategory(
+    agentId: string,
+    category: string,
+    cache: Map<string, boolean>,
+  ): boolean {
+    if (!agentId || !category) return false;
+    const normalizedTarget = normalizeSkillName(category);
+    const cacheKey = agentId + '\x00' + normalizedTarget;
+    const cached = cache.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    // Per-pass cache of skill-index.json — read once per computeScores() so a
+    // disabled skill takes effect on next score computation without restart.
+    const indexMap = this.getSkillIndexEnabledMap();
+    const agentIndex = indexMap?.[agentId];
+
+    let result = false;
+    try {
+      const dir = join(this.projectRoot, '.gossip', 'agents', agentId, 'skills');
+      if (existsSync(dir)) {
+        for (const entry of readdirSync(dir)) {
+          if (!entry.endsWith('.md')) continue;
+          let body = '';
+          try { body = readFileSync(join(dir, entry), 'utf-8'); } catch { continue; }
+          // Normalize CRLF → LF so the front-matter terminator regex/index works
+          // for skill files authored on Windows or saved by editors that emit \r\n.
+          body = body.replace(/\r\n/g, '\n');
+          // Front-matter only: bail if the file does not start with `---`.
+          if (!body.startsWith('---')) continue;
+          const end = body.indexOf('\n---', 3);
+          if (end < 0) continue;
+          const fm = body.slice(3, end);
+          // KNOWN LIMITATION: this regex matches only single-line `category: value`
+          // entries. Multi-line YAML (block scalars `|`/`>`, lists, anchors) for the
+          // category field is not supported — skill files use a single string here
+          // by convention, so we keep parsing cheap and avoid pulling in a YAML lib.
+          // Match `category: <value>` on its own line, allowing optional quotes.
+          const m = fm.match(/^[ \t]*category:[ \t]*['"]?([^'"\n\r]+?)['"]?[ \t]*$/m);
+          if (!m) continue;
+          if (normalizeSkillName(m[1]) !== normalizedTarget) continue;
+          // Skill-index gate: deny ONLY when skill-index.json explicitly marks
+          // this slot disabled (enabled === false). Missing entry / missing
+          // file / parse failure all default to "enabled" so pre-existing
+          // skills not yet recorded in the index keep working (back-compat).
+          const skillName = entry.slice(0, -3); // strip .md
+          if (agentIndex && agentIndex[skillName] === false) continue;
+          result = true;
+          break;
+        }
+      }
+    } catch { /* fall through to false */ }
+
+    cache.set(cacheKey, result);
+    return result;
+  }
+
+  /**
+   * Read and parse `.gossip/skill-index.json` once per computeScores() pass,
+   * returning a flattened `{ agentId: { skillName: enabled } }` map. Returns
+   * `null` when the file is missing OR malformed — callers must treat null as
+   * "no opinion" (back-compat: skills not in the index are assumed enabled).
+   *
+   * Cache is reset by `getScores()` whenever the perf-jsonl mtime changes, so a
+   * fresh disable via `gossip_skills(action:'disable')` is picked up on the
+   * next scoring pass after the next signal write — same TTL behavior as the
+   * rest of the score cache.
+   */
+  private getSkillIndexEnabledMap(): Record<string, Record<string, boolean>> | null {
+    if (this.skillIndexCache !== undefined) return this.skillIndexCache;
+    const path = join(this.projectRoot, '.gossip', 'skill-index.json');
+    let parsed: any;
+    try {
+      if (!existsSync(path)) { this.skillIndexCache = null; return null; }
+      parsed = JSON.parse(readFileSync(path, 'utf-8'));
+    } catch {
+      this.skillIndexCache = null;
+      return null;
+    }
+    if (!parsed || typeof parsed !== 'object') { this.skillIndexCache = null; return null; }
+    const out: Record<string, Record<string, boolean>> = {};
+    for (const agentId of Object.keys(parsed)) {
+      const slots = parsed[agentId];
+      if (!slots || typeof slots !== 'object') continue;
+      const inner: Record<string, boolean> = {};
+      for (const skill of Object.keys(slots)) {
+        const slot = slots[skill];
+        if (slot && typeof slot === 'object' && typeof slot.enabled === 'boolean') {
+          inner[skill] = slot.enabled;
+        }
+      }
+      out[agentId] = inner;
+    }
+    this.skillIndexCache = out;
+    return out;
   }
 
   /** Read all signals and compute per-agent scores (cached by file mtime) */
@@ -100,6 +226,9 @@ export class PerformanceReader {
     if (this.cachedScores && mtimeMs === this.cachedMtimeMs) {
       return this.cachedScores;
     }
+    // Reset per-pass skill-index cache so disable/enable via `gossip_skills`
+    // takes effect on the next score computation (HIGH #1).
+    this.skillIndexCache = undefined;
     const signals = this.readSignals();
     this.cachedScores = this.computeScores(signals);
     this.cachedMtimeMs = mtimeMs;
@@ -521,6 +650,32 @@ export class PerformanceReader {
 
     const peerDiversity = this.computePeerDiversity(consensusSignals);
 
+    // Skill-gated hallucination recovery — per-agent positive-signal index
+    // (agreement + unique_confirmed) with normalized category + timestamp so
+    // the hallucination_caught arm can ask "how many clean signals in THIS
+    // category landed AFTER this hallucination?" in O(K). Built BELOW after
+    // the retraction index, so retracted positive signals are excluded
+    // (HIGH #2 — PR #272 v1 review). Building this earlier than the
+    // retraction index allowed retracted positives to grant unwarranted
+    // recovery.
+    const positiveByAgent = new Map<string, Array<{ category: string; ts: number }>>();
+    const skillCache = new Map<string, boolean>();
+    const categoryCleanSignalsAfter = (
+      agentId: string,
+      category: string,
+      hallucinationTs: number,
+    ): number => {
+      const list = positiveByAgent.get(agentId);
+      if (!list || list.length === 0) return 0;
+      const target = normalizeSkillName(category);
+      let count = 0;
+      for (const s of list) {
+        if (s.category !== target) continue;
+        if (s.ts > hallucinationTs) count++;
+      }
+      return count;
+    };
+
     // Build per-agent retraction index so computeScores skips retracted signals
     // even when called with a raw (unfiltered) signal array (e.g. directly from tests).
     const retractedKeys = new Set<string>();
@@ -539,6 +694,36 @@ export class PerformanceReader {
           retractedKeys.add(signal.agentId + ':' + taskKey + ':*');
         }
       }
+    }
+
+    // Populate positiveByAgent AFTER retraction index is built (HIGH #2).
+    // Apply the same retraction filter the main loop applies, so positive
+    // signals that were retracted (round-level OR signal-level) cannot grant
+    // skill-gated recovery to a later hallucination.
+    for (const s of consensusSignals) {
+      if (s.signal !== 'agreement' && s.signal !== 'unique_confirmed') continue;
+      if (!s.category) continue;
+      if (s.agentId === '_system') continue;
+      // Round-level retraction
+      const fid = (s as any).findingId;
+      if (typeof fid === 'string' && fid.length > 0) {
+        let dropped = false;
+        for (const retractedId of retractedConsensusIds) {
+          if (fid.startsWith(retractedId + ':')) { dropped = true; break; }
+        }
+        if (dropped) continue;
+      }
+      // Signal-level retraction
+      const taskKey = s.taskId || s.timestamp;
+      if (
+        retractedKeys.has(s.agentId + ':' + taskKey + ':' + s.signal) ||
+        retractedKeys.has(s.agentId + ':' + taskKey + ':*')
+      ) continue;
+      const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
+      if (!isFinite(ts) || ts === 0) continue;
+      const list = positiveByAgent.get(s.agentId) || [];
+      list.push({ category: normalizeSkillName(s.category), ts });
+      positiveByAgent.set(s.agentId, list);
     }
 
     for (const signal of consensusSignals) {
@@ -682,7 +867,27 @@ export class PerformanceReader {
           // "overall cross-review activity" stays stable — only the numerator on
           // the penalty side fades faster.
           const hallucDecay = Math.pow(0.5, tasksSince / HALLUCINATION_DECAY_HALF_LIFE);
-          a.weightedHallucinations += severity * hallucDecay;
+
+          // Skill-gated hallucination recovery — applied ON TOP of the
+          // tasks-elapsed decay above, never replacing it. Both conditions
+          // must hold: (a) agent has a bound skill file with matching
+          // category frontmatter, AND (b) >=3 positive signals (agreement
+          // or unique_confirmed) in the SAME category landed AFTER this
+          // hallucination's timestamp. Forces the skill development loop:
+          // hallucinate → develop skill → prove it works → recover.
+          // See project_skill_gated_recovery.md (verified FRESH 2026-04-25).
+          let gatedMultiplier = 1.0;
+          const hallucTs = signal.timestamp ? new Date(signal.timestamp).getTime() : 0;
+          if (signal.category && isFinite(hallucTs) && hallucTs > 0) {
+            const skillBound = this.hasSkillForCategory(signal.agentId, signal.category, skillCache);
+            if (skillBound) {
+              const cleanCount = categoryCleanSignalsAfter(signal.agentId, signal.category, hallucTs);
+              if (cleanCount >= SKILL_GATED_RECOVERY_MIN_CLEAN_SIGNALS) {
+                gatedMultiplier = SKILL_GATED_RECOVERY_MULTIPLIER;
+              }
+            }
+          }
+          a.weightedHallucinations += severity * hallucDecay * gatedMultiplier;
           a.weightedTotal += decay;
           a.hallucinations++;
           if (signal.category) {

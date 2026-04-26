@@ -2,6 +2,19 @@ import { PerformanceReader } from '../../packages/orchestrator/src/performance-r
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 
+/**
+ * Skill-gated hallucination recovery test helpers — write a bound skill file
+ * with the given category frontmatter under
+ * `<TEST_DIR>/.gossip/agents/<agentId>/skills/<name>.md`. Mirrors the
+ * production layout `hasSkillForCategory` walks.
+ */
+function writeBoundSkill(agentId: string, category: string, skillName = 'test-skill'): void {
+  const dir = join(TEST_DIR, '.gossip', 'agents', agentId, 'skills');
+  mkdirSync(dir, { recursive: true });
+  const body = `---\nname: ${skillName}\ncategory: ${category}\nagent: ${agentId}\n---\n\n# ${skillName}\n`;
+  writeFileSync(join(dir, `${skillName}.md`), body);
+}
+
 const TEST_DIR = join(__dirname, '..', '..', '.test-perf-reader');
 
 function writeSignals(signals: any[]): void {
@@ -835,5 +848,300 @@ describe('PerformanceReader — hallucination decay tune (HALLUCINATION_DECAY_HA
     // is pulled toward 0 by the multiplier even with no category attached.
     expect(score.hallucinations).toBe(3);
     expect(score.accuracy).toBeLessThan(0.5);
+  });
+
+  describe('skill-gated hallucination recovery', () => {
+    // Spec: project_skill_gated_recovery.md (verified FRESH 2026-04-25).
+    // Recovery requires BOTH: (a) bound skill matching the hallucination's
+    // category, AND (b) >=3 positive signals (agreement|unique_confirmed)
+    // in the SAME category, timestamped AFTER the hallucination. Multiplier
+    // is 0.4 (60% reduction) on top of existing tasks-elapsed decay.
+
+    function ts(daysAgo: number): string {
+      return new Date(Date.now() - daysAgo * 86400000).toISOString();
+    }
+
+    it('does NOT reduce penalty when 3 clean signals are in a DIFFERENT category (skill bound for halluc category)', () => {
+      writeBoundSkill('rev', 'concurrency');
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'trust_boundaries', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'trust_boundaries', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'trust_boundaries', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // Full hallucination weight retained — clean signals were in unrelated category.
+      // weightedHallucinations should reflect base severity (3.0 for confirmed_hallucination
+      // default arm) * tasks-elapsed decay, NOT scaled by 0.4.
+      expect(score.weightedHallucinations).toBeGreaterThan(0.4);
+    });
+
+    it('does NOT reduce penalty when 3 clean signals match category but NO skill is bound', () => {
+      // Note: no writeBoundSkill() call — agent has no skill file at all.
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // No skill → no recovery, even with 3+ clean signals in matching category.
+      expect(score.weightedHallucinations).toBeGreaterThan(0.4);
+    });
+
+    it('REDUCES penalty (0.4x) when 3+ clean signals match category AND skill is bound', () => {
+      writeBoundSkill('rev', 'concurrency');
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const gatedScore = reader.getAgentScore('rev')!;
+
+      // Compare against the no-skill baseline by recreating signals in a sibling dir.
+      // try/finally guarantees temp-dir cleanup even when an assertion below throws (LOW #5).
+      const SIBLING = TEST_DIR + '-noskill';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip'), { recursive: true });
+        const data = [
+          { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+          { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+          { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+          { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+        ].map(s => JSON.stringify(s)).join('\n') + '\n';
+        writeFileSync(join(SIBLING, '.gossip', 'agent-performance.jsonl'), data);
+        const baselineScore = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+
+        // Gated should be ~0.4 of baseline (multiplier applied on top of identical decay).
+        expect(gatedScore.weightedHallucinations).toBeLessThan(baselineScore.weightedHallucinations);
+        const ratio = gatedScore.weightedHallucinations / baselineScore.weightedHallucinations;
+        expect(ratio).toBeGreaterThan(0.35);
+        expect(ratio).toBeLessThan(0.45);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
+
+    it('does NOT reduce penalty with only 2 matching clean signals (need 3+)', () => {
+      writeBoundSkill('rev', 'concurrency');
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      expect(score.weightedHallucinations).toBeGreaterThan(0.4);
+    });
+
+    it('time-only decay path still works when neither skill nor clean-signal condition applies', () => {
+      // Two hallucinations, no skill, no clean signals — verify the
+      // tasks-elapsed decay still produces weightedHallucinations > 0 and
+      // < raw severity sum (i.e. decay is observably applied).
+      const sigs: any[] = [];
+      for (let i = 0; i < 10; i++) {
+        sigs.push({
+          type: 'consensus',
+          signal: 'agreement',
+          agentId: 'rev',
+          category: 'unrelated',
+          taskId: `pad${i}`,
+          evidence: '',
+          timestamp: ts(20 - i),
+        });
+      }
+      sigs.push({ type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 'h1', evidence: '', timestamp: ts(9) });
+      sigs.push({ type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 'h2', evidence: '', timestamp: ts(1) });
+      writeSignals(sigs);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // Both hallucinations contribute, decayed by tasks-elapsed factor.
+      // Default severity for hallucination_caught (no outcome) = 1.0; with two
+      // hallucinations weightedHallucinations should be in (0, 2.0] range.
+      expect(score.hallucinations).toBe(2);
+      expect(score.weightedHallucinations).toBeGreaterThan(0);
+      expect(score.weightedHallucinations).toBeLessThanOrEqual(2.0);
+    });
+
+    // PR #272 v2 — orchestrator-verified consensus follow-ups.
+
+    it('HIGH #1: skill-index.json enabled:false suppresses recovery (gate does NOT fire)', () => {
+      // Bound skill exists on disk AND 3 matching clean signals — but the
+      // skill-index.json marks the slot disabled. Recovery must NOT apply.
+      writeBoundSkill('rev', 'concurrency');
+      const indexPath = join(TEST_DIR, '.gossip', 'skill-index.json');
+      writeFileSync(indexPath, JSON.stringify({
+        rev: {
+          'test-skill': {
+            skill: 'test-skill',
+            enabled: false,
+            source: 'manual',
+            mode: 'permanent',
+            version: 2,
+            boundAt: new Date().toISOString(),
+          },
+        },
+      }));
+      const sigs = [
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ];
+      writeSignals(sigs);
+      const disabledScore = new PerformanceReader(TEST_DIR).getAgentScore('rev')!;
+
+      // Compare against an enabled-baseline run (no skill-index.json → assumed enabled).
+      const SIBLING = TEST_DIR + '-enabled';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip', 'agents', 'rev', 'skills'), { recursive: true });
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agents', 'rev', 'skills', 'test-skill.md'),
+          `---\nname: test-skill\ncategory: concurrency\nagent: rev\n---\n\n# test-skill\n`,
+        );
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agent-performance.jsonl'),
+          sigs.map(s => JSON.stringify(s)).join('\n') + '\n',
+        );
+        const enabledScore = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+        // Disabled slot → recovery suppressed → weightedHallucinations matches the
+        // baseline (no-recovery) path, which is strictly greater than the enabled (0.4×) run.
+        expect(disabledScore.weightedHallucinations).toBeGreaterThan(enabledScore.weightedHallucinations);
+        const ratio = enabledScore.weightedHallucinations / disabledScore.weightedHallucinations;
+        // Enabled path applies 0.4× multiplier; ratio should land in the recovery window.
+        expect(ratio).toBeGreaterThan(0.35);
+        expect(ratio).toBeLessThan(0.45);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
+
+    it('HIGH #1: skill-index.json missing entry is treated as enabled (back-compat)', () => {
+      // skill-index.json exists but has no entry for this agent's skill → must
+      // default to enabled so pre-existing skills not yet indexed keep working.
+      writeBoundSkill('rev', 'concurrency');
+      const indexPath = join(TEST_DIR, '.gossip', 'skill-index.json');
+      writeFileSync(indexPath, JSON.stringify({ 'other-agent': {} }));
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const score = new PerformanceReader(TEST_DIR).getAgentScore('rev')!;
+      // Recovery should fire (skill not explicitly disabled). Compare against a
+      // raw-baseline (no skill at all) sibling to confirm.
+      const SIBLING = TEST_DIR + '-noskill';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip'), { recursive: true });
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agent-performance.jsonl'),
+          [
+            { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+            { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+          ].map(s => JSON.stringify(s)).join('\n') + '\n',
+        );
+        const baseline = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+        expect(score.weightedHallucinations).toBeLessThan(baseline.weightedHallucinations);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
+
+    it('HIGH #2: retracted positive signals do NOT count toward recovery threshold', () => {
+      // 3 positive signals exist BUT all sit inside a retracted consensus round.
+      // Plus one outside → only 1 valid clean signal → below threshold (3+) → no recovery.
+      writeBoundSkill('rev', 'concurrency');
+      const cid = 'cid-retracted-1';
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        // Three retracted positives — findingId begins with the retracted consensus_id.
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', findingId: `${cid}:rev:f1`, taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', findingId: `${cid}:rev:f2`, taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', findingId: `${cid}:rev:f3`, taskId: 't4', evidence: '', timestamp: ts(3) },
+        // One non-retracted positive — alone, below the 3+ threshold.
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't5', evidence: '', timestamp: ts(2) },
+        // Round-retraction tombstone.
+        { type: 'consensus', signal: 'consensus_round_retracted', agentId: '_system', consensus_id: cid, reason: 'test retraction', taskId: 'tomb', evidence: '', timestamp: ts(1) },
+      ]);
+      const score = new PerformanceReader(TEST_DIR).getAgentScore('rev')!;
+
+      // Compare to a sibling with NO retraction — same data should yield recovery.
+      const SIBLING = TEST_DIR + '-noretract';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip', 'agents', 'rev', 'skills'), { recursive: true });
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agents', 'rev', 'skills', 'test-skill.md'),
+          `---\nname: test-skill\ncategory: concurrency\nagent: rev\n---\n\n# test-skill\n`,
+        );
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agent-performance.jsonl'),
+          [
+            { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+            { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't5', evidence: '', timestamp: ts(2) },
+          ].map(s => JSON.stringify(s)).join('\n') + '\n',
+        );
+        const recovered = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+        // Retracted positives blocked recovery → score's hallucination weight is HIGHER.
+        expect(score.weightedHallucinations).toBeGreaterThan(recovered.weightedHallucinations);
+        const ratio = recovered.weightedHallucinations / score.weightedHallucinations;
+        expect(ratio).toBeGreaterThan(0.35);
+        expect(ratio).toBeLessThan(0.45);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
+
+    it('MEDIUM #3: skill file with CRLF line endings still triggers recovery', () => {
+      // Authored on Windows / saved with \r\n — the front-matter parser must
+      // normalize CRLF before locating the `\n---` terminator.
+      const dir = join(TEST_DIR, '.gossip', 'agents', 'rev', 'skills');
+      mkdirSync(dir, { recursive: true });
+      const crlfBody = `---\r\nname: crlf-skill\r\ncategory: concurrency\r\nagent: rev\r\n---\r\n\r\n# crlf-skill\r\n`;
+      writeFileSync(join(dir, 'crlf-skill.md'), crlfBody);
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const score = new PerformanceReader(TEST_DIR).getAgentScore('rev')!;
+
+      // Compare to a no-skill baseline → CRLF skill must produce a strictly lower penalty.
+      const SIBLING = TEST_DIR + '-noskill-crlf';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip'), { recursive: true });
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agent-performance.jsonl'),
+          [
+            { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+            { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+          ].map(s => JSON.stringify(s)).join('\n') + '\n',
+        );
+        const baseline = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+        expect(score.weightedHallucinations).toBeLessThan(baseline.weightedHallucinations);
+        const ratio = score.weightedHallucinations / baseline.weightedHallucinations;
+        expect(ratio).toBeGreaterThan(0.35);
+        expect(ratio).toBeLessThan(0.45);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
   });
 });
