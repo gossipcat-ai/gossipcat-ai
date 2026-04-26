@@ -69,7 +69,7 @@ export interface NativeResultInfo {
   id: string;
   agentId: string;
   task: string;
-  status: 'completed' | 'failed' | 'timed_out';
+  status: 'completed' | 'failed' | 'timed_out' | 'superseded';
   result?: string;
   error?: string;
   startedAt: number;
