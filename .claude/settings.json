@@ -1,5 +1,20 @@
 {
   "enabledPlugins": {
     "agent-orchestration@claude-code-workflows": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr status:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh repo view:*)",
+      "mcp__gossipcat__gossip_verify_memory"
+    ]
   }
 }
