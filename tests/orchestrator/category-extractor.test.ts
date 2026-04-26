@@ -33,6 +33,15 @@ describe('extractCategories', () => {
     expect(extractCategories('No authentication on relay connection')).toContain('trust_boundaries');
   });
 
+  test('extracts trust_boundaries from web-auth vocabulary (CSRF, sec-fetch, samesite, origin, CORS)', () => {
+    expect(extractCategories('Missing CSRF token validation on POST handler')).toContain('trust_boundaries');
+    expect(extractCategories('Sec-Fetch-Site header not validated before mutation')).toContain('trust_boundaries');
+    expect(extractCategories('Cookie missing SameSite=Strict')).toContain('trust_boundaries');
+    expect(extractCategories('Origin header trusted without allowlist check')).toContain('trust_boundaries');
+    expect(extractCategories('Permissive CORS policy on /api/admin')).toContain('trust_boundaries');
+    expect(extractCategories('JWT signature not verified before token use')).toContain('trust_boundaries');
+  });
+
   test('extracts error_handling from exception finding', () => {
     expect(extractCategories('Unhandled exception in fallback path')).toContain('error_handling');
   });

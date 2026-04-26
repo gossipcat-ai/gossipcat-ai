@@ -4,7 +4,11 @@
  */
 
 const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
-  trust_boundaries: [/trust.?boundar/i, /authenticat/i, /authoriz/i, /impersonat/i, /identity/i, /credential/i],
+  // Web-auth vocabulary added 2026-04-26 after a sibling orchestrator hit 7/31
+  // uncategorized findings on a Clerk-auth review. CSRF / sec-fetch / samesite /
+  // origin-header are auth-boundary concerns and belong with the existing
+  // authenticat/authoriz/credential keywords rather than a separate bucket.
+  trust_boundaries: [/trust.?boundar/i, /authenticat/i, /authoriz/i, /impersonat/i, /identity/i, /credential/i, /\bcsrf\b/i, /sec.?fetch/i, /samesite/i, /origin.?header/i, /\bcors\b/i, /\bjwt\b/i, /session.?fixation/i],
   injection_vectors: [/inject/i, /sanitiz/i, /escape/i, /\bxss\b/i, /sql.?inject/i, /prompt.?inject/i],
   input_validation: [/validat/i, /input.?check/i, /type.?guard/i, /\bschema\b/i, /malform/i],
   concurrency: [/race.?condition/i, /deadlock/i, /\batomic\b/i, /concurrent/i, /\bmutex\b/i, /\btoctou\b/i],
