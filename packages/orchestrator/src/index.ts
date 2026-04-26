@@ -80,7 +80,7 @@ export { normalizeSkillName } from './skill-name';
 export { parseSkillFrontmatter } from './skill-parser';
 export type { SkillFrontmatter } from './skill-parser';
 export { extractCategories } from './category-extractor';
-export { logUncategorizedFinding } from './uncategorized-logger';
+export { logUncategorizedFinding, getUncategorizedStatusLine } from './uncategorized-logger';
 export type { UncategorizedFindingContext, UncategorizedFindingRecord } from './uncategorized-logger';
 export { selectCrossReviewers } from './cross-reviewer-selection';
 export type { FindingForSelection, AgentCandidate } from './cross-reviewer-selection';

@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { logUncategorizedFinding, MAX_FILE_SIZE } from '../../packages/orchestrator/src/uncategorized-logger';
+import { logUncategorizedFinding, getUncategorizedStatusLine, MAX_FILE_SIZE } from '../../packages/orchestrator/src/uncategorized-logger';
 import { extractCategories } from '../../packages/orchestrator/src/category-extractor';
 
 describe('logUncategorizedFinding', () => {
@@ -195,5 +195,84 @@ describe('extractCategories empty → logUncategorizedFinding integration', () =
     expect(record.text).toBe(finding);
     expect(record.agent_id).toBe('test-agent');
     rmSync(integDir, { recursive: true, force: true });
+  });
+});
+
+describe('getUncategorizedStatusLine — cold-start and happy-path', () => {
+  // Helper: make a JSONL line with a timestamp offset from nowMs.
+  const makeLine = (text: string, offsetMs: number, nowMs: number) =>
+    JSON.stringify({ text, timestamp_iso: new Date(nowMs + offsetMs).toISOString() });
+
+  test('cold start — no .gossip dir → empty string, no throw', async () => {
+    const dir = join(tmpdir(), 'uncat-status-cold-' + Date.now());
+    // dir intentionally not created
+    const result = await getUncategorizedStatusLine(dir);
+    expect(result).toBe('');
+  });
+
+  test('cold start — .gossip dir exists but no file → empty string', async () => {
+    const dir = join(tmpdir(), 'uncat-status-nofile-' + Date.now());
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    const result = await getUncategorizedStatusLine(dir);
+    expect(result).toBe('');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('all entries outside 7d window → empty string', async () => {
+    const dir = join(tmpdir(), 'uncat-status-old-' + Date.now());
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    const nowMs = Date.now();
+    const logPath = join(dir, '.gossip', 'uncategorized-findings.jsonl');
+    // Write entries 8 days ago
+    writeFileSync(logPath, makeLine('stale finding', -(8 * 24 * 60 * 60 * 1000), nowMs) + '\n');
+    const result = await getUncategorizedStatusLine(dir, { nowMs });
+    expect(result).toBe('');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('3 fresh entries → line containing "3 in last 7d" and sample text', async () => {
+    const dir = join(tmpdir(), 'uncat-status-fresh-' + Date.now());
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    const nowMs = Date.now();
+    const logPath = join(dir, '.gossip', 'uncategorized-findings.jsonl');
+    const lines = [
+      makeLine('first finding', -1000, nowMs),
+      makeLine('second finding', -2000, nowMs),
+      makeLine('most recent finding', -500, nowMs),
+    ];
+    writeFileSync(logPath, lines.join('\n') + '\n');
+    const result = await getUncategorizedStatusLine(dir, { nowMs });
+    expect(result).toContain('3 in last 7d');
+    expect(result).toContain('most recent finding');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('entries split across .jsonl and .jsonl.1 → combined count', async () => {
+    const dir = join(tmpdir(), 'uncat-status-split-' + Date.now());
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    const nowMs = Date.now();
+    const logPath = join(dir, '.gossip', 'uncategorized-findings.jsonl');
+    writeFileSync(logPath, makeLine('from main file', -1000, nowMs) + '\n');
+    writeFileSync(logPath + '.1', makeLine('from backup file', -2000, nowMs) + '\n');
+    const result = await getUncategorizedStatusLine(dir, { nowMs });
+    expect(result).toContain('2 in last 7d');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('malformed JSON line interleaved with valid → count excludes garbage', async () => {
+    const dir = join(tmpdir(), 'uncat-status-malformed-' + Date.now());
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    const nowMs = Date.now();
+    const logPath = join(dir, '.gossip', 'uncategorized-findings.jsonl');
+    const content = [
+      makeLine('valid one', -1000, nowMs),
+      'this is not json at all',
+      makeLine('valid two', -2000, nowMs),
+      '{broken json',
+    ].join('\n') + '\n';
+    writeFileSync(logPath, content);
+    const result = await getUncategorizedStatusLine(dir, { nowMs });
+    expect(result).toContain('2 in last 7d');
+    rmSync(dir, { recursive: true, force: true });
   });
 });
