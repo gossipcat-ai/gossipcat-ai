@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { TaskItem } from '@/lib/types';
-import { timeAgo, formatDuration, cleanFindingTags, renderMarkdown } from '@/lib/utils';
+import { timeAgo, formatDuration, renderFindingMarkdown, renderMarkdown } from '@/lib/utils';
 
 interface TaskDetailModalProps {
   task: TaskItem | null;
@@ -96,8 +96,8 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
                 Result
               </h3>
               <div
-                className="rounded-md border border-border/40 bg-background/40 p-3 font-mono text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:text-purple-400 [&_.inline-code]:rounded [&_.inline-code]:bg-muted/40 [&_.inline-code]:px-1 [&_.inline-code-block]:my-2 [&_.inline-code-block]:block [&_.inline-code-block]:rounded [&_.inline-code-block]:bg-muted/30 [&_.inline-code-block]:p-2"
-                dangerouslySetInnerHTML={{ __html: cleanFindingTags(task.result) }}
+                className="finding-md rounded-md border border-border/40 bg-background/40 p-3 font-mono text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:text-purple-400 [&_.inline-code]:rounded [&_.inline-code]:bg-muted/40 [&_.inline-code]:px-1 [&_.inline-code-block]:my-2 [&_.inline-code-block]:block [&_.inline-code-block]:rounded [&_.inline-code-block]:bg-muted/30 [&_.inline-code-block]:p-2"
+                dangerouslySetInnerHTML={{ __html: renderFindingMarkdown(task.result) }}
               />
             </section>
           ) : (
