@@ -351,4 +351,114 @@ describe('PerformanceWriter — round counter wiring', () => {
     writer.recordConsensusRoundRetraction(CID, 'test retraction');
     expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
+
+  it('f1 — tombstone write failure does not skip reset (counter ends at 0)', () => {
+    // Emit signals so the counter is non-zero.
+    const N = 3;
+    for (let i = 0; i < N; i++) {
+      writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    }
+    expect(roundCounter.get(tmpDir, CID)).toBe(N);
+
+    // Make the JSONL file read-only so appendFileSync throws.
+    const jsonlPath = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    // Ensure the file exists before chmoding.
+    if (!fs.existsSync(jsonlPath)) {
+      fs.writeFileSync(jsonlPath, '');
+    }
+    fs.chmodSync(jsonlPath, 0o444);
+
+    try {
+      // recordConsensusRoundRetraction may throw because appendFileSync fails,
+      // but via try/finally the reset MUST still fire — counter ends at 0.
+      try {
+        writer.recordConsensusRoundRetraction(CID, 'test retraction with write failure');
+      } catch {
+        // tombstone write failed as expected — ignore the error
+      }
+      // Counter must be 0 regardless of whether the tombstone write succeeded.
+      expect(roundCounter.get(tmpDir, CID)).toBe(0);
+    } finally {
+      fs.chmodSync(jsonlPath, 0o644);
+    }
+  });
+});
+
+// ── Fix 2 follow-up: reset() on read-only filesystem ─────────────────────────
+
+describe('roundCounter — reset() on read-only filesystem (f2)', () => {
+  const CID = 'f2f2f2f2-deadc0de';
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpProjectRoot();
+    roundCounter.__resetForTests();
+  });
+
+  afterEach(() => {
+    roundCounter.__resetForTests();
+    // Restore write permissions before cleanup to allow rmSync to succeed.
+    const gossipDir = path.join(tmpDir, '.gossip');
+    try { fs.chmodSync(gossipDir, 0o755); } catch { /* ignore if already removed */ }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('get() returns 0 after reset() even when filesystem is read-only', () => {
+    // Bump once to persist a non-zero count.
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
+
+    // Make .gossip/ read-only so writeCountersAtomic fails on reset.
+    const gossipDir = path.join(tmpDir, '.gossip');
+    fs.chmodSync(gossipDir, 0o555);
+
+    try {
+      // reset() must not throw, and get() must return 0 even though the
+      // persisted file still has count=1 (read-only fs prevented the write).
+      expect(() => roundCounter.reset(tmpDir, CID)).not.toThrow();
+      expect(roundCounter.get(tmpDir, CID)).toBe(0);
+    } finally {
+      fs.chmodSync(gossipDir, 0o755);
+    }
+  });
+});
+
+// ── Known limitation: concurrent bump RMW ─────────────────────────────────────
+
+describe('roundCounter — concurrent bump (f5 known limitation)', () => {
+  const CID = 'c0c0c0c0-f5f5f5f5';
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpProjectRoot();
+    roundCounter.__resetForTests();
+  });
+
+  afterEach(() => {
+    roundCounter.__resetForTests();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('concurrent bumps from same projectRoot leave file parseable (known RMW race)', async () => {
+    // 10 concurrent bumps on the same CID from a single process.
+    // KNOWN LIMITATION: last-writer-wins RMW means some bumps may be lost,
+    // but the file must ALWAYS remain valid JSON (no truncation/corruption).
+    const CONCURRENCY = 10;
+    await Promise.all(
+      Array.from({ length: CONCURRENCY }, () => Promise.resolve(roundCounter.bump(tmpDir, CID))),
+    );
+
+    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
+    // File must be parseable.
+    let parsed: any;
+    expect(() => { parsed = JSON.parse(fs.readFileSync(file, 'utf8')); }).not.toThrow();
+    expect(parsed._version).toBe(1);
+
+    // Counter must be at least 1 and at most CONCURRENCY.
+    // (Single-process sequential JS means all 10 should land; this guard
+    // documents the RMW semantics rather than asserting an exact value.)
+    const count = roundCounter.get(tmpDir, CID);
+    expect(count).toBeGreaterThanOrEqual(1);
+    expect(count).toBeLessThanOrEqual(CONCURRENCY);
+  });
 });

@@ -284,7 +284,6 @@ export class PerformanceWriter {
     const classStamped = stampSignalClass(row as PerformanceSignal);
     validateSignal(classStamped);
     const stamped = { ...classStamped, _emission_path: 'mcp-server-signals' as EmissionPath };
-    appendFileSync(this.filePath, JSON.stringify(stamped) + '\n');
     // Fix 2 (spec 2026-04-27-self-telemetry-remediation §Fix 2): drop the
     // accumulated round counter for this consensusId. The retraction tombstone
     // does not itself bump the counter (preserving the documented invariant
@@ -293,7 +292,16 @@ export class PerformanceWriter {
     // findingsAll on the next collect() and emit a false-positive
     // signal_loss_suspected. Non-fatal: persistence errors (read-only fs,
     // missing file) must not break the retract path.
-    try { resetRoundCounter(this.projectRoot, consensusId); } catch { /* non-fatal */ }
+    //
+    // try/finally ensures resetRoundCounter runs even if appendFileSync throws
+    // (e.g. disk full, EPERM). The counter must be cleared unconditionally so a
+    // failed tombstone write does not leave a stale count that generates a
+    // false-positive signal_loss_suspected on the next collect().
+    try {
+      appendFileSync(this.filePath, JSON.stringify(stamped) + '\n');
+    } finally {
+      try { resetRoundCounter(this.projectRoot, consensusId); } catch { /* non-fatal */ }
+    }
   }
 }
 
