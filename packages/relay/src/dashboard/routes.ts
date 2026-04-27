@@ -10,6 +10,7 @@ import { gossipMemoryHandler } from './api-gossip-memory';
 import { consensusHandler } from './api-consensus';
 import { signalsHandler } from './api-signals';
 import { findingHandler } from './api-finding';
+import { openFindingsHandler } from './api-open-findings';
 import { learningsHandler } from './api-learnings';
 import { tasksHandler } from './api-tasks';
 import { activeTasksHandler } from './api-active-tasks';
@@ -275,6 +276,12 @@ export class DashboardRouter {
         const page = parseInt(query?.get('page') || '1', 10);
         const pageSize = parseInt(query?.get('pageSize') || '5', 10);
         const data = this.getConsensusReports(page, pageSize);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      if (url === '/dashboard/api/open-findings' && req.method === 'GET') {
+        const data = await openFindingsHandler(this.projectRoot);
         this.json(res, 200, data);
         return true;
       }

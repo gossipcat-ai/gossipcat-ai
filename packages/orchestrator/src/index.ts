@@ -126,3 +126,23 @@ export type {
 export { verifyClaims, MAX_CLAIMS_PER_BLOCK, PER_BLOCK_DEADLINE_MS } from './claim-verifier';
 export { sanitizeForLog } from './_sanitize';
 export { bump as bumpRoundCounter, get as getRoundCounter, reset as resetRoundCounter, deriveConsensusId } from './round-counter';
+export { withResolverLock, RESOLVER_LOCK_INTERNALS } from './file-lock';
+export {
+  appendChainedEntry,
+  computeEntryHash,
+  verifyChain,
+  stableStringify,
+  ZERO_HASH,
+  AUDIT_LOG_FILENAME,
+} from './audit-log-chain';
+export type { AuditEntry, AuditEntryInput } from './audit-log-chain';
+export {
+  resolveFindings,
+  parseCites,
+  validatePath,
+  inferLeadIdentifier,
+  stripJsTsComments,
+  containsToken,
+  FINDING_RESOLVER_INTERNALS,
+} from './finding-resolver';
+export type { ResolveOptions, ResolveResult, ResolveSkipped } from './finding-resolver';

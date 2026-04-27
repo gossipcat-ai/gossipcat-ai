@@ -2295,7 +2295,7 @@ server.tool(
   'gossip_signals',
   'Record or retract consensus performance signals. Use action "record" (default) to record signals after cross-referencing agent findings — call IMMEDIATELY when you verify. Use action "retract" to undo a previously recorded signal.',
   {
-    action: z.enum(['record', 'retract', 'bulk_from_consensus']).default('record').describe('Action: "record" to add signals, "retract" to undo a previous signal or an entire consensus round, "bulk_from_consensus" to auto-record signals for all findings in a consensus report'),
+    action: z.enum(['record', 'retract', 'bulk_from_consensus', 'resolve', 'unresolve']).default('record').describe('Action: "record" to add signals, "retract" to undo a previous signal or an entire consensus round, "bulk_from_consensus" to auto-record signals for all findings in a consensus report, "resolve" to mark an open finding as fixed-by-commit (NOT a retraction — agent score is untouched), "unresolve" to revert a bad auto-resolve back to open status'),
     consensus_id: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{8}$/, 'consensus_id must be 8-8 hex format (e.g. "5e8a7194-73e240da")').optional().describe('Consensus report ID (8-8 hex format, e.g. "5e8a7194-73e240da"). Required for action: "bulk_from_consensus". For action: "retract" — supplying this (with `reason`) retracts ALL signals in that consensus round; mutually exclusive with agent_id+task_id per-signal retraction.'),
     // record params
     task_id: z.string().optional().describe('Task ID to link signals to. For record: optional (synthetic ID if omitted). For per-signal retract: required.'),
@@ -2314,9 +2314,13 @@ server.tool(
     })).optional().describe('Array of consensus signals (required for action: "record")'),
     // retract params
     agent_id: z.string().optional().describe('Agent whose signal to retract (required for per-signal action: "retract"; mutually exclusive with consensus_id round-scope form)'),
-    reason: z.string().min(1).max(1024).optional().describe('Why this signal/round is being retracted (required for action: "retract"; 1-1024 chars)'),
+    reason: z.string().min(1).max(1024).optional().describe('Why this signal/round is being retracted, manually resolved, or unresolved (required for action: "retract", action: "unresolve", and resolved_by:"manual"; 1-1024 chars)'),
+    // resolve / unresolve params
+    finding_id: z.string().optional().describe('Finding ID for action: "resolve" or "unresolve". Format <consensus_id>:<agent>:fN.'),
+    resolved_by: z.enum(['stale_anchor', 'manual']).or(z.string().regex(/^commit:[0-9a-f]{7,40}$/, 'resolved_by must be "stale_anchor", "manual", or "commit:<sha>"')).optional().describe('How the finding was resolved (required for action: "resolve"). One of: "commit:<sha>" (auto-resolved by code change), "stale_anchor" (cited line no longer exists), "manual" (operator explicitly marked it fixed; requires reason).'),
+    operator: z.string().optional().describe('Orchestrator ID recorded in the audit log for manual resolutions. Defaults to "manual" when omitted.'),
   },
-  async ({ action, task_id, task_start_time, signals, agent_id, reason, consensus_id }) => {
+  async ({ action, task_id, task_start_time, signals, agent_id, reason, consensus_id, finding_id, resolved_by, operator }) => {
     await boot();
 
     if (action === 'retract') {
@@ -2365,6 +2369,108 @@ server.tool(
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed to retract: ${(err as Error).message}` }] };
       }
+    }
+
+    if (action === 'resolve' || action === 'unresolve') {
+      // Spec docs/specs/2026-04-27-open-findings-auto-resolve.md (rev2,
+      // consensus b3f57cc6-22c24114).
+      // Distinct from `retract` — `resolve` is a lifecycle event (right
+      // finding, fixed by commit); agent score is untouched.
+      if (!finding_id || finding_id.trim().length === 0) {
+        return { content: [{ type: 'text' as const, text: 'Error: finding_id is required for action: "resolve" or "unresolve".' }] };
+      }
+      const fid = finding_id.trim();
+      const cwd = process.cwd();
+      const findingsPath = require('path').join(cwd, '.gossip', 'implementation-findings.jsonl');
+      const { readFileSync, existsSync, writeFileSync, renameSync } = require('fs');
+      if (!existsSync(findingsPath)) {
+        return { content: [{ type: 'text' as const, text: `No implementation-findings.jsonl found at ${findingsPath}` }] };
+      }
+      const lines = (readFileSync(findingsPath, 'utf-8') as string).split('\n');
+      let matched = false;
+      let alreadyTarget = false;
+      let matchedEntry: any = null;
+      const newLines = lines.map((line) => {
+        if (!line) return line;
+        let entry: any;
+        try { entry = JSON.parse(line); } catch { return line; }
+        const candidates = [entry.taskId, entry.findingId, entry.id].filter(Boolean) as string[];
+        if (!candidates.includes(fid)) return line;
+        matched = true;
+        matchedEntry = entry;
+        if (action === 'resolve') {
+          if (entry.status === 'resolved') {
+            // idempotency guard — return success without writing
+            alreadyTarget = true;
+            return line;
+          }
+          if (action === 'resolve' && resolved_by === 'manual' && (!reason || reason.trim().length === 0)) {
+            // surfaced after the loop
+          }
+          entry.status = 'resolved';
+          entry.resolvedAt = new Date().toISOString();
+          entry.resolvedBy = resolved_by ?? 'manual';
+          return JSON.stringify(entry);
+        } else {
+          // unresolve
+          if (entry.status === 'open' || !entry.status) {
+            alreadyTarget = true;
+            return line;
+          }
+          entry.status = 'open';
+          delete entry.resolvedAt;
+          delete entry.resolvedBy;
+          return JSON.stringify(entry);
+        }
+      });
+      if (!matched) {
+        return { content: [{ type: 'text' as const, text: `No matching finding for finding_id=${fid}.` }] };
+      }
+      // resolved_by:"manual" requires non-empty reason — checked here so we
+      // can return a single error for the entire request.
+      if (action === 'resolve') {
+        const rb = resolved_by ?? 'manual';
+        if (rb === 'manual' && (!reason || reason.trim().length === 0)) {
+          return { content: [{ type: 'text' as const, text: 'Error: resolved_by:"manual" requires a non-empty reason (1-1024 chars).' }] };
+        }
+      } else if (action === 'unresolve') {
+        if (!reason || reason.trim().length === 0) {
+          return { content: [{ type: 'text' as const, text: 'Error: reason is required for action: "unresolve" (1-1024 chars).' }] };
+        }
+      }
+      if (alreadyTarget) {
+        return { content: [{ type: 'text' as const, text: `${action === 'resolve' ? 'Already resolved' : 'Already open'}: ${fid}. No-op (idempotent).` }] };
+      }
+      try {
+        const tmp = findingsPath + '.tmp.' + Date.now();
+        writeFileSync(tmp, newLines.join('\n'));
+        renameSync(tmp, findingsPath);
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Failed to write findings: ${(err as Error).message}` }] };
+      }
+      // Append hash-chained audit entry (best-effort — JSONL stays in sync
+      // because we only reach here on a successful rewrite above).
+      try {
+        const { appendChainedEntry } = await import('@gossip/orchestrator');
+        appendChainedEntry(cwd, {
+          ts: new Date().toISOString(),
+          finding_id: fid,
+          action: action === 'resolve' ? 'resolve' : 'unresolve',
+          ...(action === 'resolve' ? { resolved_by: resolved_by ?? 'manual', after_check: 'absent' } : {}),
+          operator: action === 'resolve' && (resolved_by ?? 'manual') === 'manual' ? (operator ?? 'manual') : (operator ?? 'auto'),
+          ...(reason ? { reason } : {}),
+          before_quote: typeof matchedEntry?.finding === 'string' ? String(matchedEntry.finding).slice(0, 200) : undefined,
+        });
+      } catch (err) {
+        // Audit log write failure: we DO NOT roll back the JSONL flip per
+        // the "Append safety" spec — instead we surface the failure via
+        // stderr. The pair-staying-in-sync invariant is best-effort here
+        // because writeFileSync of a small line is atomic on POSIX.
+        try { process.stderr.write(`[gossipcat] finding-resolutions append failed: ${(err as Error).message}\n`); } catch { /* */ }
+      }
+      const verb = action === 'resolve' ? 'Resolved' : 'Unresolved';
+      const tail = action === 'resolve' ? ` (resolved_by=${resolved_by ?? 'manual'})` : '';
+      return { content: [{ type: 'text' as const, text: `${verb} ${fid}${tail}.${reason ? '\nReason: ' + reason : ''}` }] };
     }
 
     if (action === 'bulk_from_consensus') {
@@ -3008,6 +3114,46 @@ server.tool(
       return { content: [{ type: 'text' as const, text: baseReceipt }] };
     } catch (err) {
       return { content: [{ type: 'text' as const, text: `Failed to record signals: ${(err as Error).message}` }] };
+    }
+  }
+);
+
+// ── Tool: open-findings auto-resolver ─────────────────────────────────────
+//
+// Spec: docs/specs/2026-04-27-open-findings-auto-resolve.md (rev2,
+// consensus b3f57cc6-22c24114). Phase 1 ships the manual trigger only;
+// Phase 2 (round-close auto-invoke) and Phase 3 (post-commit hook) are
+// out of scope for this PR.
+server.tool(
+  'gossip_resolve_findings',
+  'Walk open findings in .gossip/implementation-findings.jsonl and auto-resolve any whose cited code has been fixed (cited identifier absent from the touched file after comment stripping). Conservative — multi-cite AND, file-scoped not range-scoped, structural insight-tag exclusion. Writes a hash-chained audit entry per resolution to .gossip/finding-resolutions.jsonl and advances the watermark. Pass full:true to bypass the watermark and rescan everything.',
+  {
+    full: z.boolean().optional().describe('When true, ignore .gossip/last-resolve-scan.sha and re-scan every reachable commit (manual full-tree sweep). Default false.'),
+    sinceSha: z.string().optional().describe('Override watermark: scan commits since this SHA. Mutually exclusive with `full`.'),
+  },
+  async ({ full, sinceSha }) => {
+    await boot();
+    try {
+      const { resolveFindings } = await import('@gossip/orchestrator');
+      const result = await resolveFindings(process.cwd(), { full, sinceSha });
+      if (!result.ok) {
+        return { content: [{ type: 'text' as const, text: `Resolver skipped: ${result.reason} (another resolver run in progress; try again in a moment).` }] };
+      }
+      const lines: string[] = [];
+      lines.push(`Resolver run complete.`);
+      lines.push(`  scanned: ${result.scanned}`);
+      lines.push(`  resolved: ${result.resolved}`);
+      if (result.resolvedFindingIds.length > 0) {
+        lines.push(`  finding_ids: ${result.resolvedFindingIds.join(', ')}`);
+      }
+      if (result.pathRejections > 0) {
+        lines.push(`  path_validation_rejections: ${result.pathRejections} (see .gossip/finding-resolutions.jsonl)`);
+      }
+      lines.push(`  head_sha: ${result.headSha ?? '(none)'}`);
+      lines.push(`  watermark_advanced: ${result.watermarkAdvanced}`);
+      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Failed to run resolver: ${(err as Error).message}` }] };
     }
   }
 );
