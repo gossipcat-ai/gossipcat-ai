@@ -635,4 +635,23 @@ describe('PerformanceWriter — Fix 5: loud-failure logging at bump catch sites'
     expect(alphaCalls).toHaveLength(1);
     expect(betaCalls).toHaveLength(1);
   });
+
+  it('Fix 5 — first error in batch path logs to stderr (appendSignals)', () => {
+    // Mirrors the appendSignal test above but exercises the symmetric catch
+    // block in appendSignals (performance-writer.ts:283-290) which previously
+    // had no coverage. A regression there would have passed all Fix 5 tests
+    // silently.
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    jest.spyOn(roundCounter, 'bump').mockImplementationOnce(() => {
+      throw new Error('synthetic batch error');
+    });
+
+    // appendSignals([signal]) triggers the batch bump loop; the injected error
+    // must surface via process.stderr.write with [gossipcat] prefix.
+    writer[WRITER_INTERNAL].appendSignals([makeSignal(CID)]);
+
+    const calls = stderrSpy.mock.calls.map(c => String(c[0]));
+    expect(calls.some(m => m.includes('synthetic batch error'))).toBe(true);
+    expect(calls.some(m => m.includes('[gossipcat]'))).toBe(true);
+  });
 });
