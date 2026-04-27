@@ -273,20 +273,20 @@ export class PerformanceWriter {
       // Phase A self-telemetry: count each signal toward its consensus round.
       // Fix 4: skip operational-class signals at the bump site (same rationale
       // as appendSignal — see comment above).
-      try {
-        for (const s of signals) {
+      for (const s of signals) {
+        try {
           const cls = classifySignal(s.signal);
           if (cls !== undefined && cls !== 'performance') continue;
           const cid = deriveConsensusId(s as { consensusId?: string; findingId?: string });
           if (cid) bumpRoundCounter(this.projectRoot, cid);
-        }
-      } catch (e) {
-        const msg = (e as Error)?.message ?? String(e);
-        if (!loggedCounterErrors.has(msg)) {
-          loggedCounterErrors.add(msg);
-          try {
-            process.stderr.write(`[gossipcat] round-counter bump failed: ${msg}\n`);
-          } catch { /* best-effort */ }
+        } catch (e) {
+          const msg = (e as Error)?.message ?? String(e);
+          if (!loggedCounterErrors.has(msg)) {
+            loggedCounterErrors.add(msg);
+            try {
+              process.stderr.write(`[gossipcat] round-counter bump failed: ${msg}\n`);
+            } catch { /* best-effort */ }
+          }
         }
       }
     },

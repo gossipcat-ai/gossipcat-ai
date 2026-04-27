@@ -654,4 +654,36 @@ describe('PerformanceWriter — Fix 5: loud-failure logging at bump catch sites'
     expect(calls.some(m => m.includes('synthetic batch error'))).toBe(true);
     expect(calls.some(m => m.includes('[gossipcat]'))).toBe(true);
   });
+
+  it('Cosmetic B — bump throw on one signal does not stop subsequent bumps in batch (appendSignals)', () => {
+    // Setup: 3 signals in batch, mock bumpRoundCounter to throw on signal #2
+    // only. Per-iteration catch (PR #5) means signal #1 and #3 still land.
+    // Old behavior (outer try/catch): signal #2 throws, loop aborts, only
+    // signal #1 counted → getRoundCounter returns 1.
+    // New behavior (inner try/catch per iteration): signal #2 is caught and
+    // logged, loop continues, signals #1 and #3 counted → counter returns 2.
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    let bumpCallCount = 0;
+    jest.spyOn(roundCounter, 'bump').mockImplementation(() => {
+      bumpCallCount += 1;
+      if (bumpCallCount === 2) {
+        throw new Error('mid-batch synthetic error');
+      }
+    });
+
+    const signals = [makeSignal(CID), makeSignal(CID), makeSignal(CID)];
+    writer[WRITER_INTERNAL].appendSignals(signals);
+
+    // bump was called 3 times (once per signal — per-iteration catch did NOT
+    // short-circuit the loop after the throw on call #2).
+    expect(bumpCallCount).toBe(3);
+
+    // Stderr received exactly one write (the dedup latch fires on the first
+    // occurrence of 'mid-batch synthetic error' and suppresses repeats).
+    const matchingCalls = stderrSpy.mock.calls.filter(c =>
+      String(c[0]).includes('mid-batch synthetic error'),
+    );
+    expect(matchingCalls).toHaveLength(1);
+  });
 });
