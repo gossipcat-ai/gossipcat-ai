@@ -72,6 +72,29 @@ describe('finding-resolver — pure helpers', () => {
     expect(out.fileCites).toEqual([{ path: 'README.md' }]);
   });
 
+  test('parseCites picks up plain-prose path:line citations (PR-299 Bug B)', () => {
+    const out = parseCites('writeFileSync at hook-installer.ts:107 is not atomic');
+    expect(out.fileCites).toContainEqual({ path: 'hook-installer.ts', line: 107 });
+  });
+
+  test('parseCites does not double-count when both structured and plain forms appear', () => {
+    const text = 'Bug at <cite tag="file">src/foo.ts:42</cite> and elsewhere src/foo.ts:42 again.';
+    const out = parseCites(text);
+    // structured cite consumed; plain-prose pass dedupes the same path:line
+    expect(out.fileCites).toEqual([{ path: 'src/foo.ts', line: 42 }]);
+  });
+
+  test('parseCites plain-prose ignores version-like tokens without a known extension', () => {
+    const out = parseCites('Released v1.2:3 yesterday');
+    expect(out.fileCites).toEqual([]);
+  });
+
+  test('parseCites plain-prose handles cross-reviewer-selection.ts:105,110', () => {
+    const out = parseCites('see cross-reviewer-selection.ts:105,110 for details');
+    expect(out.fileCites.length).toBeGreaterThanOrEqual(1);
+    expect(out.fileCites[0]).toEqual({ path: 'cross-reviewer-selection.ts', line: 105 });
+  });
+
   test('inferLeadIdentifier picks first backtick-wrapped identifier', () => {
     expect(inferLeadIdentifier('Use `Math.min` here, then `bar`.')).toBe('Math.min');
     expect(inferLeadIdentifier('no backticks here')).toBeNull();
@@ -209,6 +232,7 @@ describe('finding-resolver — resolveFindings', () => {
       originalAgentId: 'gemini-reviewer',
       finding: 'Stack overflow with `Math.min` spread on large arrays. <cite tag="file">src/foo.ts:1</cite>',
       tag: 'unverified',
+      type: 'finding',
       status: 'open',
     });
     const result = await resolveFindings(root, { full: true });
@@ -243,6 +267,7 @@ describe('finding-resolver — resolveFindings', () => {
       taskId: 'abc-4:f1',
       finding: 'Bad `Math.min` <cite tag="file">src/foo.ts:1</cite>',
       tag: 'finding',
+      type: 'finding',
       status: 'open',
     });
     await resolveFindings(root, { full: true });
@@ -261,6 +286,7 @@ describe('finding-resolver — resolveFindings', () => {
       taskId: 'abc-5:f1',
       finding: 'Bug touches both `Math.min` <cite tag="file">src/foo.ts:1</cite> and <cite tag="file">src/bar.ts:1</cite>.',
       tag: 'finding',
+      type: 'finding',
       status: 'open',
     });
     const result = await resolveFindings(root, { full: true });
@@ -281,6 +307,7 @@ describe('finding-resolver — resolveFindings', () => {
       taskId: 'abc-6:f1',
       finding: 'Bad `Math.min` spread <cite tag="file">src/foo.ts:1</cite>',
       tag: 'finding',
+      type: 'finding',
       status: 'open',
     });
     const result = await resolveFindings(root, { full: true });
@@ -301,6 +328,7 @@ describe('finding-resolver — resolveFindings', () => {
       taskId: 'abc-16:f1',
       finding: 'Bad `Math.min` spread on large arrays <cite tag="file">src/foo.ts:1</cite>',
       tag: 'finding',
+      type: 'finding',
       status: 'open',
     });
     const result = await resolveFindings(root, { full: true });
@@ -319,6 +347,7 @@ describe('finding-resolver — resolveFindings', () => {
       taskId: 'abc-pv:f1',
       finding: 'Bad path <cite tag="file">../escape.ts:1</cite>',
       tag: 'finding',
+      type: 'finding',
       status: 'open',
     });
     const result = await resolveFindings(root, { full: true });
@@ -339,6 +368,7 @@ describe('finding-resolver — resolveFindings', () => {
       taskId: 'abc-7:f1',
       finding: 'Bad `Math.min` <cite tag="file">src/foo.ts:1</cite>',
       tag: 'finding',
+      type: 'finding',
       status: 'open',
     });
     // Without `full`, the resolver should still discover the touched file
@@ -346,6 +376,66 @@ describe('finding-resolver — resolveFindings', () => {
     const result = await resolveFindings(root);
     if (!result.ok) throw new Error();
     expect(result.resolved).toBe(1);
+  });
+
+  test('PR-299 Bug A: row without `type` falls back to consensus report (finding → resolves)', async () => {
+    const { root } = setupGitFixture();
+    fs.mkdirSync(path.join(root, '.gossip', 'consensus-reports'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '.gossip', 'consensus-reports', 'abcd1234-ef567890.json'),
+      JSON.stringify({
+        id: 'abcd1234-ef567890',
+        confirmed: [{ id: 'abcd1234-ef567890:f1', findingType: 'finding', finding: 'x' }],
+      }),
+    );
+    writeFinding(root, {
+      taskId: 'abcd1234-ef567890:f1',
+      finding: 'Bad `Math.min` <cite tag="file">src/foo.ts:1</cite>',
+      tag: 'finding',
+      // no `type` field — must backfill from consensus report
+      status: 'open',
+    });
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error();
+    expect(result.resolved).toBe(1);
+  });
+
+  test('PR-299 Bug A: row without `type`, consensus report shows insight → skip', async () => {
+    const { root } = setupGitFixture();
+    fs.mkdirSync(path.join(root, '.gossip', 'consensus-reports'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '.gossip', 'consensus-reports', 'aaaa1111-bbbb2222.json'),
+      JSON.stringify({
+        id: 'aaaa1111-bbbb2222',
+        insights: [{ id: 'aaaa1111-bbbb2222:f1', findingType: 'insight', finding: 'x' }],
+      }),
+    );
+    writeFinding(root, {
+      taskId: 'aaaa1111-bbbb2222:f1',
+      finding: 'Note: `Math.min` no longer used <cite tag="file">src/foo.ts:1</cite>',
+      tag: 'unique',
+      status: 'open',
+    });
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error();
+    expect(result.resolved).toBe(0);
+    const findings = readFindings(root);
+    expect(findings[0].status).toBe('open');
+  });
+
+  test('PR-299 Bug A: row without `type`, no consensus report → conservative skip', async () => {
+    const { root } = setupGitFixture();
+    writeFinding(root, {
+      taskId: 'cccc3333-dddd4444:f1',
+      finding: 'Bad `Math.min` <cite tag="file">src/foo.ts:1</cite>',
+      tag: 'finding',
+      status: 'open',
+    });
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error();
+    expect(result.resolved).toBe(0);
+    const findings = readFindings(root);
+    expect(findings[0].status).toBe('open');
   });
 
   test('test #8: config.json override is respected', async () => {
@@ -358,6 +448,7 @@ describe('finding-resolver — resolveFindings', () => {
       taskId: 'abc-8:f1',
       finding: 'Bad `Math.min` <cite tag="file">src/foo.ts:1</cite>',
       tag: 'finding',
+      type: 'finding',
       status: 'open',
     });
     const result = await resolveFindings(root);

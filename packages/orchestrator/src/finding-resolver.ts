@@ -134,10 +134,54 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
   let pathRejections = 0;
   const resolvedFindingIds: string[] = [];
 
+  // Per-consensus-report cache for backfill lookups. Loading the same JSON
+  // file once per row would be wasteful when 20+ findings share a round.
+  const consensusReportCache = new Map<string, any | null>();
+
   for (const row of rows) {
     const entry = row.parsed;
     if (entry.status !== 'open') continue;
-    // structural insight-tag exclusion (spec §Heuristic safety #2)
+    // structural insight-tag exclusion (spec §Heuristic safety #2).
+    //
+    // Pre-PR-299 the writer at apps/cli/src/handlers/collect.ts did NOT
+    // persist the `type` field, so this filter was a permanent no-op for
+    // every row in the JSONL. PR-299 fixes the writer; for legacy rows
+    // (and for the small window where a row was written before the writer
+    // fix landed but is read after) we backfill from the consensus report
+    // on disk. The taskId format is `<consensusId>:f<N>` — we slice off
+    // the `:f<N>` suffix and read `.gossip/consensus-reports/<id>.json`.
+    // Conservative: if the report cannot be loaded or the finding is not
+    // present, we DO NOT auto-resolve (skip the row entirely) rather than
+    // risk treating an insight as a bug-fix.
+    if (entry.type === undefined || entry.type === null) {
+      const taskId = String(entry.taskId ?? entry.findingId ?? '');
+      const colonIdx = taskId.lastIndexOf(':f');
+      if (colonIdx > 0) {
+        const consensusId = taskId.slice(0, colonIdx);
+        let report: any | null;
+        if (consensusReportCache.has(consensusId)) {
+          report = consensusReportCache.get(consensusId) ?? null;
+        } else {
+          report = loadConsensusReport(projectRoot, consensusId);
+          consensusReportCache.set(consensusId, report);
+        }
+        if (report) {
+          const found = findFindingInReport(report, taskId, entry.finding);
+          if (found && typeof found.findingType === 'string') {
+            entry.type = found.findingType;
+          } else {
+            // Found nothing or no type info — conservative skip.
+            continue;
+          }
+        } else {
+          // Report missing — conservative skip.
+          continue;
+        }
+      } else {
+        // Malformed taskId — cannot backfill, conservative skip.
+        continue;
+      }
+    }
     if (entry.type === 'insight') continue;
     // tag === 'unverified' is still resolvable when its cited symbol is gone;
     // tag-level filtering is the cross-review verdict, not the bug-vs-insight
@@ -347,6 +391,23 @@ export function validatePath(
 
 const FILE_CITE_RE = /<cite\s+tag="file">([^<]+?)<\/cite>/g;
 const FN_CITE_RE = /<cite\s+tag="fn">([^<]+?)<\/cite>/g;
+// Plain-prose path:line pattern. Matches e.g. `cross-reviewer-selection.ts:105`
+// or `apps/cli/src/sandbox.ts:218` embedded in finding prose. Most carry-over
+// findings (23 of 31 inspected in the PR-299 calibration audit) cite source
+// in plain prose rather than via structured `<cite tag="file">` blocks; the
+// pre-fix parser silently produced zero fileCites for these and the resolver
+// short-circuited at line 148. Constraints:
+//   - must end in a known source extension (avoids matching `vN.M`/version
+//     strings and arbitrary identifiers)
+//   - must have a numeric line component (the resolver requires the file
+//     anyway, but a line anchor confirms this is a citation, not free prose)
+//   - leading boundary excludes `<` and identifier chars so we never
+//     re-match content already inside a `<cite tag=...>` tag (which goes
+//     through FILE_CITE_RE above)
+//   - trailing boundary excludes identifier chars so `foo.ts:1` doesn't
+//     bleed into `:12345abc`
+const PLAIN_FILE_CITE_RE =
+  /(?<![<\w])([a-zA-Z0-9_\-./]+\.(?:tsx|ts|jsx|js|mjs|cjs|md|json|sh|yml|yaml)):(\d+)(?:[,-](\d+))?(?!\w)/g;
 
 export function parseCites(text: string): ParsedCites {
   const fileCites: Array<{ path: string; line?: number }> = [];
@@ -354,7 +415,12 @@ export function parseCites(text: string): ParsedCites {
 
   let m: RegExpExecArray | null;
   FILE_CITE_RE.lastIndex = 0;
+  // Track byte ranges already consumed by structured cites so the plain-
+  // prose pass below does not re-emit the same citation. We keep both
+  // because some prose mixes the two forms in a single finding.
+  const consumedRanges: Array<[number, number]> = [];
   while ((m = FILE_CITE_RE.exec(text)) !== null) {
+    consumedRanges.push([m.index, m.index + m[0].length]);
     const raw = m[1].trim();
     // accept "path:line" or "path"
     const colonIdx = raw.lastIndexOf(':');
@@ -371,6 +437,26 @@ export function parseCites(text: string): ParsedCites {
   while ((m = FN_CITE_RE.exec(text)) !== null) {
     const sym = m[1].trim();
     if (sym) fnCites.push(sym);
+  }
+
+  // Plain-prose pass — only emit when not inside a structured cite range.
+  PLAIN_FILE_CITE_RE.lastIndex = 0;
+  const seenPaths = new Set(fileCites.map(c => `${c.path}:${c.line ?? ''}`));
+  while ((m = PLAIN_FILE_CITE_RE.exec(text)) !== null) {
+    const start = m.index;
+    const end = start + m[0].length;
+    let inside = false;
+    for (const [s, e] of consumedRanges) {
+      if (start >= s && end <= e) { inside = true; break; }
+    }
+    if (inside) continue;
+    const cite: { path: string; line?: number } = { path: m[1] };
+    const lineNum = parseInt(m[2], 10);
+    if (Number.isFinite(lineNum)) cite.line = lineNum;
+    const key = `${cite.path}:${cite.line ?? ''}`;
+    if (seenPaths.has(key)) continue;
+    seenPaths.add(key);
+    fileCites.push(cite);
   }
 
   return { fileCites, fnCites };
@@ -425,6 +511,55 @@ export function containsToken(haystack: string, token: string): boolean {
   // boundaries: anything that's not [A-Za-z0-9_$] OR start/end of string
   const re = new RegExp(`(^|[^A-Za-z0-9_$])${escaped}(?![A-Za-z0-9_$])`);
   return re.test(haystack);
+}
+
+// ─── consensus report backfill ────────────────────────────────────────────
+
+/**
+ * Load a single consensus report JSON. Returns `null` if the file is
+ * missing, unreadable, or unparseable — the caller treats `null` as a
+ * conservative skip (do NOT auto-resolve).
+ */
+function loadConsensusReport(projectRoot: string, consensusId: string): any | null {
+  // Defensive sanitisation: consensusId comes from a JSONL row that
+  // ultimately traces back to agent prose. Block path-escape attempts.
+  if (!/^[A-Za-z0-9_-]+$/.test(consensusId)) return null;
+  const reportPath = path.join(projectRoot, '.gossip', 'consensus-reports', `${consensusId}.json`);
+  try {
+    const raw = fs.readFileSync(reportPath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Look up a finding within a consensus report by composite id (preferred)
+ * or by exact-match prose fallback. Returns the finding object (which has
+ * `findingType: 'finding' | 'suggestion' | 'insight'`) or `null`.
+ */
+function findFindingInReport(report: any, taskId: string, findingProse: unknown): any | null {
+  if (!report || typeof report !== 'object') return null;
+  const buckets: string[] = ['confirmed', 'disputed', 'unverified', 'unique', 'insights', 'newFindings'];
+  // Pass 1 — match by composite id (consensusId:f<N>)
+  for (const bucket of buckets) {
+    const arr = report[bucket];
+    if (!Array.isArray(arr)) continue;
+    for (const f of arr) {
+      if (f && typeof f.id === 'string' && f.id === taskId) return f;
+    }
+  }
+  // Pass 2 — fall back to exact prose match (rare but defensive)
+  if (typeof findingProse === 'string' && findingProse.length > 0) {
+    for (const bucket of buckets) {
+      const arr = report[bucket];
+      if (!Array.isArray(arr)) continue;
+      for (const f of arr) {
+        if (f && typeof f.finding === 'string' && f.finding === findingProse) return f;
+      }
+    }
+  }
+  return null;
 }
 
 // ─── git helpers ──────────────────────────────────────────────────────────
