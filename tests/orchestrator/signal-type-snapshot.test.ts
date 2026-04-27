@@ -37,6 +37,7 @@ const DOCUMENTED_PATH_SPECIFIC = new Map<string, string>([
   ['signal_retracted',          'performance-writer.ts / gossip_signals'],
   ['consensus_round_retracted', 'performance-writer.ts / gossip_signals'],
   ['severity_miscalibrated',    'consensus-engine.ts'],
+  ['consensus_coverage_degraded', 'consensus-engine.ts (post-round dropouts)'],
   ['task_timeout',              'dispatch-pipeline.ts (timeout path)'],
   ['task_empty',                'dispatch-pipeline.ts (empty result path)'],
   // Impl signals — emitted by verify_write / auto-record in native-tasks.ts
@@ -50,6 +51,10 @@ const DOCUMENTED_PATH_SPECIFIC = new Map<string, string>([
   ['synthesis_completed',       'consensus-coordinator.ts'],
   ['circuit_open_fired',        'performance-reader.ts / dispatch-pipeline.ts'],
   ['skill_injection_skipped',   'prompt-assembler.ts / skill-loader.ts (ikp §4 kill-switch)'],
+  // Path A relay-lint — PR #270
+  ['relay_findings_dropped',    'collect.ts / relay-tasks.ts (relay-lint Path A)'],
+  // Phase A self-telemetry: collect-end reconciliation shortfall
+  ['signal_loss_suspected',     'collect.ts (round-reconcile assertion, Phase A self-telemetry)'],
 ]);
 
 // ── Exhaustive union of all known signal names ─────────────────────────────
@@ -61,7 +66,7 @@ const ALL_KNOWN_SIGNAL_NAMES: string[] = [
   'agreement', 'disagreement', 'unverified', 'unique_confirmed', 'unique_unconfirmed',
   'new_finding', 'hallucination_caught', 'category_confirmed', 'consensus_verified',
   'signal_retracted', 'consensus_round_retracted', 'severity_miscalibrated',
-  'task_timeout', 'task_empty',
+  'task_timeout', 'task_empty', 'consensus_coverage_degraded',
   // ImplSignal
   'impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected',
   // MetaSignal
@@ -69,7 +74,9 @@ const ALL_KNOWN_SIGNAL_NAMES: string[] = [
   // PipelineSignal
   'dispatch_started', 'relay_received', 'finding_dropped_format',
   'synthesis_completed', 'circuit_open_fired', 'skill_injection_skipped',
-  'citation_fabricated',
+  'citation_fabricated', 'relay_findings_dropped',
+  // Phase A self-telemetry
+  'signal_loss_suspected',
   // signal_retracted appears in both ConsensusSignal and PipelineSignal
 ];
 

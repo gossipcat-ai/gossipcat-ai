@@ -125,3 +125,4 @@ export type {
 } from './claim-types';
 export { verifyClaims, MAX_CLAIMS_PER_BLOCK, PER_BLOCK_DEADLINE_MS } from './claim-verifier';
 export { sanitizeForLog } from './_sanitize';
+export { bump as bumpRoundCounter, get as getRoundCounter, reset as resetRoundCounter, deriveConsensusId } from './round-counter';

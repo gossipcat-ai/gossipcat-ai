@@ -826,6 +826,51 @@ export async function handleCollect(
     } catch { /* best-effort */ }
   }
 
+  // Phase A self-telemetry: round-counter reconciliation.
+  // After all signal write paths complete, check whether the count of signals
+  // bumped during this process matches the number of findings in the report.
+  // Fires only when actual < expected (tolerate double-log). Non-fatal.
+  if (consensusReport) {
+    try {
+      const { getRoundCounter, resetRoundCounter, emitPipelineSignals } = await import('@gossip/orchestrator');
+      const findingsAll = [
+        ...(consensusReport.confirmed ?? []),
+        ...(consensusReport.disputed ?? []),
+        ...(consensusReport.unverified ?? []),
+        ...(consensusReport.unique ?? []),
+        ...(consensusReport.newFindings ?? []),
+        ...(consensusReport.insights ?? []),
+      ];
+      // Fall back to any finding's id prefix when signals[] is empty (the
+      // low-signal rounds most likely to mask real loss). See consensus
+      // 3aa4a6ef-c8974235:sonnet-reviewer F1.
+      const authId = consensusReport?.signals?.[0]?.consensusId
+        ?? findingsAll.find(f => /^[0-9a-f]{8}-[0-9a-f]{8}:/.test(f.id ?? ''))?.id?.split(':')[0];
+      if (authId) {
+        const findingsCount = findingsAll.length;
+        const actual = getRoundCounter(authId);
+        if (actual < findingsCount) {
+          const shortfall = findingsCount - actual;
+          process.stderr.write(
+            `[round-reconcile] consensusId=${authId} expected_min=${findingsCount} actual=${actual} shortfall=${shortfall}\n`
+          );
+          emitPipelineSignals(process.cwd(), [{
+            type: 'pipeline',
+            signal: 'signal_loss_suspected',
+            agentId: '_system',
+            taskId: authId,
+            consensusId: authId,
+            value: shortfall,
+            metadata: { expected_min: findingsCount, actual },
+            timestamp: new Date().toISOString(),
+          }]);
+          // Clear the counter so a retry / Phase B reader sees fresh state, not the diagnostic's own bump.
+          resetRoundCounter(authId);
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
   // Step 6: Format output
   let output = resultTexts.join('\n\n---\n\n');
 
