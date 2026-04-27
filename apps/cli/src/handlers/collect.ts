@@ -33,6 +33,87 @@ export function extractConsensusIdFromFindingId(findingId: unknown): string | un
   return isValidConsensusId(first) ? first : undefined;
 }
 
+// ── Reconciler helpers (spec 2026-04-27-self-telemetry-remediation) ─────────
+//
+// These pure helpers are extracted so the post-collect reconciler logic is
+// directly testable without spinning up the full handleCollect integration.
+// They mirror the logic embedded in handleCollect's reconciler block; the
+// inline copy MUST stay in sync with these — the tests assert on these
+// exports.
+
+/**
+ * Build the expected-count baseline for the round-counter reconciler.
+ *
+ * Fix 3a: insights are intentionally excluded — the consensus engine skips
+ * signal emission for them at consensus-engine.ts via `continue`, so counting
+ * them here produces spurious shortfalls on every insight-bearing round.
+ * (sonnet-reviewer:f6 in round 2416d1d5-06ca445b.)
+ */
+export function reconcilerFindingsAll(consensusReport: any): any[] {
+  return [
+    ...(consensusReport?.confirmed ?? []),
+    ...(consensusReport?.disputed ?? []),
+    ...(consensusReport?.unverified ?? []),
+    ...(consensusReport?.unique ?? []),
+    ...(consensusReport?.newFindings ?? []),
+  ];
+}
+
+/**
+ * Count of findings that *can* have signals emitted by the consensus engine.
+ *
+ * Cosmetic C: when this is 0, the round produced only ephemeral findings
+ * (newFindings, insights). The shortfall comparison is meaningless because the
+ * engine never emits signals for those buckets — the reconciler must skip.
+ * (haiku-researcher:f6 in round f21444f3-a6294a51.)
+ */
+export function reconcilerReviewableCount(consensusReport: any): number {
+  return (consensusReport?.confirmed?.length ?? 0)
+    + (consensusReport?.disputed?.length ?? 0)
+    + (consensusReport?.unverified?.length ?? 0)
+    + (consensusReport?.unique?.length ?? 0);
+}
+
+/**
+ * Build the dedup set of (agent, finding) pairs already signaled by the
+ * consensus engine.
+ *
+ * Fix 3b: keying by `${agentId}:${findingId}` lets each finding be evaluated
+ * independently. The previous agentId-only key caused undercount when one
+ * agent had findings with mixed verdicts (e.g. confirmed + disputed) — the
+ * confirmed signal made the agent land in the set, and the disputed finding
+ * was skipped here even though no signal had been emitted for it.
+ * (sonnet-reviewer:f8 in round 2416d1d5-06ca445b.)
+ *
+ * Legacy fallback: signals lacking findingId still register as agentId-only.
+ * This partially reintroduces the bug for any agent with even one old-format
+ * signal in the round; remove the fallback once schema migration confirms all
+ * persisted consensus signals carry findingId.
+ */
+export function buildAlreadySignaledSet(signals: any[] | undefined): Set<string> {
+  const out = new Set<string>();
+  for (const s of (signals || [])) {
+    if (s && s.findingId) {
+      out.add(`${s.agentId}:${s.findingId}`);
+    } else if (s) {
+      out.add(s.agentId);
+    }
+  }
+  return out;
+}
+
+/**
+ * Check whether a finding was already signaled by the consensus engine.
+ * Honours both the modern composite key and the legacy agentId-only fallback.
+ */
+export function isFindingAlreadySignaled(
+  alreadySignaled: Set<string>,
+  finding: { originalAgentId: string; id?: string }
+): boolean {
+  const composite = `${finding.originalAgentId}:${finding.id}`;
+  return alreadySignaled.has(composite) || alreadySignaled.has(finding.originalAgentId);
+}
+
 export async function handleCollect(
   task_ids: string[],
   timeout_ms: number,
@@ -744,11 +825,10 @@ export async function handleCollect(
         unique: 'unique_unconfirmed',
       };
 
-      // Build set of agents already signaled by the consensus engine
-      const alreadySignaled = new Set<string>();
-      for (const s of (consensusReport.signals || [])) {
-        alreadySignaled.add(s.agentId);
-      }
+      // Fix 3b (spec 2026-04-27-self-telemetry-remediation): see
+      // buildAlreadySignaledSet — composite (agent, finding) keys, with a
+      // legacy agentId-only fallback for signals that lack findingId.
+      const alreadySignaled = buildAlreadySignaledSet(consensusReport.signals);
 
       const allFindings = [
         ...(consensusReport.confirmed || []),
@@ -793,7 +873,7 @@ export async function handleCollect(
       // the finding text has no matchable vocabulary (rare); those are logged by
       // performance-reader for observability.
       const provisionalSignals = allFindings
-        .filter((f: any) => !alreadySignaled.has(f.originalAgentId))
+        .filter((f: any) => !isFindingAlreadySignaled(alreadySignaled, f))
         .map((f: any) => {
           const extracted = extractCategories(f.finding || '');
           const category = f.category || extracted[0] || undefined;
@@ -833,14 +913,9 @@ export async function handleCollect(
   if (consensusReport) {
     try {
       const { getRoundCounter, resetRoundCounter, emitPipelineSignals } = await import('@gossip/orchestrator');
-      const findingsAll = [
-        ...(consensusReport.confirmed ?? []),
-        ...(consensusReport.disputed ?? []),
-        ...(consensusReport.unverified ?? []),
-        ...(consensusReport.unique ?? []),
-        ...(consensusReport.newFindings ?? []),
-        ...(consensusReport.insights ?? []),
-      ];
+      // Fix 3a (spec 2026-04-27-self-telemetry-remediation): see
+      // reconcilerFindingsAll — insights are excluded from the baseline.
+      const findingsAll = reconcilerFindingsAll(consensusReport);
       // Fall back to any finding's id prefix when signals[] is empty (the
       // low-signal rounds most likely to mask real loss). See consensus
       // 3aa4a6ef-c8974235:sonnet-reviewer F1.
@@ -852,9 +927,19 @@ export async function handleCollect(
         // whole if-block in try/finally so the counter never leaks past
         // collect-end regardless of whether signal_loss_suspected was emitted.
         try {
+          // Cosmetic C (spec 2026-04-27-self-telemetry-remediation,
+          // haiku-researcher:f6 in round f21444f3-a6294a51): suppress the
+          // diagnostic when the round produced only ephemeral findings (i.e.
+          // newFindings, insights). Those don't have signals emitted, so the
+          // shortfall comparison is meaningless and would fire spuriously.
+          // The reviewable bucket = confirmed + disputed + unverified + unique;
+          // when it is empty there is nothing for the engine to have signaled.
+          // Must run BEFORE the shortfall check; the outer try/finally still
+          // calls resetRoundCounter so the counter never leaks.
+          const reviewableCount = reconcilerReviewableCount(consensusReport);
           const findingsCount = findingsAll.length;
           const actual = getRoundCounter(process.cwd(), authId);
-          if (actual < findingsCount) {
+          if (reviewableCount > 0 && actual < findingsCount) {
             const shortfall = findingsCount - actual;
             process.stderr.write(
               `[round-reconcile] consensusId=${authId} expected_min=${findingsCount} actual=${actual} shortfall=${shortfall}\n`
