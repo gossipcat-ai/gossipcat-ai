@@ -37,9 +37,13 @@ export function extractConsensusIdFromFindingId(findingId: unknown): string | un
 //
 // These pure helpers are extracted so the post-collect reconciler logic is
 // directly testable without spinning up the full handleCollect integration.
-// They mirror the logic embedded in handleCollect's reconciler block; the
-// inline copy MUST stay in sync with these — the tests assert on these
-// exports.
+//
+// Note: the inline `allFindings` at the provisional signaling path (~line 753)
+// uses 4 buckets (confirmed/disputed/unverified/unique) and serves a different
+// purpose from `reconcilerFindingsAll` (which also includes newFindings for
+// authId derivation). The shortfall comparison in the reconciler block uses
+// `reviewableCount` — the 4-bucket count — not `findingsAll.length`. The two
+// paths are intentionally different and must NOT be collapsed.
 
 /**
  * Build the expected-count baseline for the round-counter reconciler.
@@ -937,12 +941,18 @@ export async function handleCollect(
           // Must run BEFORE the shortfall check; the outer try/finally still
           // calls resetRoundCounter so the counter never leaks.
           const reviewableCount = reconcilerReviewableCount(consensusReport);
-          const findingsCount = findingsAll.length;
+          // MEDIUM fix (abb91e2d-ce7c478f): use reviewableCount (not
+          // findingsAll.length) as the shortfall baseline. findingsAll includes
+          // newFindings for authId derivation, but the consensus engine never
+          // emits signals for newFindings — comparing against findingsAll.length
+          // on mixed rounds (e.g. 1 confirmed + 3 newFindings) produced
+          // shortfall=3 even when the engine correctly emitted 1 signal.
+          // reviewableCount = confirmed + disputed + unverified + unique only.
           const actual = getRoundCounter(process.cwd(), authId);
-          if (reviewableCount > 0 && actual < findingsCount) {
-            const shortfall = findingsCount - actual;
+          if (reviewableCount > 0 && actual < reviewableCount) {
+            const shortfall = reviewableCount - actual;
             process.stderr.write(
-              `[round-reconcile] consensusId=${authId} expected_min=${findingsCount} actual=${actual} shortfall=${shortfall}\n`
+              `[round-reconcile] consensusId=${authId} expected_min=${reviewableCount} actual=${actual} shortfall=${shortfall}\n`
             );
             emitPipelineSignals(process.cwd(), [{
               type: 'pipeline',
@@ -951,7 +961,7 @@ export async function handleCollect(
               taskId: authId,
               consensusId: authId,
               value: shortfall,
-              metadata: { expected_min: findingsCount, actual },
+              metadata: { expected_min: reviewableCount, actual },
               timestamp: new Date().toISOString(),
             }]);
           }

@@ -158,10 +158,12 @@ describe('Reconciler decision matrix — integration of the three fixes', () => 
   // (reviewableCount > 0 && actual < findingsCount). These cases pin the
   // decision boundaries the three fixes were designed to enforce.
 
+  // MEDIUM fix (abb91e2d-ce7c478f): shortfall comparison now uses reviewableCount
+  // (not findingsAll.length) so newFindings in a mixed round don't inflate the
+  // expected count and produce false-positive signal_loss_suspected emissions.
   function shouldEmit(report: any, actualSignalsRecorded: number): boolean {
-    const findingsCount = reconcilerFindingsAll(report).length;
     const reviewable = reconcilerReviewableCount(report);
-    return reviewable > 0 && actualSignalsRecorded < findingsCount;
+    return reviewable > 0 && actualSignalsRecorded < reviewable;
   }
 
   it('Fix 3a: round with confirmed + insights does NOT emit when actual matches confirmed count', () => {
@@ -178,6 +180,18 @@ describe('Reconciler decision matrix — integration of the three fixes', () => 
   it('Cosmetic C: round with newFindings only does NOT emit even with actual=0', () => {
     const report = { newFindings: [{ id: 'n1' }, { id: 'n2' }] };
     expect(shouldEmit(report, 0)).toBe(false);
+  });
+
+  it('MEDIUM fix: mixed round (1 confirmed + 3 newFindings) does NOT emit when engine emitted 1 signal', () => {
+    // Regression test for abb91e2d-ce7c478f MEDIUM finding:
+    // reviewableCount=1 (confirmed), findingsAll.length=4 (confirmed + newFindings).
+    // Pre-fix: compared actual(1) < findingsAll.length(4) → shortfall=3 → false-positive emit.
+    // Post-fix: compares actual(1) < reviewableCount(1) → no shortfall → no emit.
+    const report = {
+      confirmed: [{ id: 'c1' }],
+      newFindings: [{ id: 'n1' }, { id: 'n2' }, { id: 'n3' }],
+    };
+    expect(shouldEmit(report, 1)).toBe(false);
   });
 
   it('Cosmetic C: insights-only round does NOT emit', () => {
