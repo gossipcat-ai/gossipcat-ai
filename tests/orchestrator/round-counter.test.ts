@@ -9,6 +9,7 @@
 
 import * as roundCounter from '../../packages/orchestrator/src/round-counter';
 import { PerformanceWriter } from '@gossip/orchestrator';
+import { __resetLoggedCounterErrorsForTests } from '../../packages/orchestrator/src/performance-writer';
 import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -549,5 +550,89 @@ describe('PerformanceWriter — Fix 4: operational signals do not bump counter',
     // classifySignal('severity_miscalibrated') returns undefined → preserved as
     // performance-equivalent → counter bumps.
     expect(roundCounter.get(tmpDir, CID)).toBe(1);
+  });
+});
+
+// ── Fix 5: rate-limited stderr logging on round-counter bump errors ────────────
+//
+// Addresses gemini-tester:f3 (consensus f21444f3-a6294a51): empty `} catch {}`
+// at the bump sites in performance-writer.ts silently swallowed counter logic
+// errors. A regex regression in deriveConsensusId would have disabled shortfall
+// detection with no observable symptom.
+
+describe('PerformanceWriter — Fix 5: loud-failure logging at bump catch sites', () => {
+  let tmpDir: string;
+  let writer: PerformanceWriter;
+  const CID = 'f5f5f5f5-baadf00d';
+
+  const makeSignal = (consensusId: string) => ({
+    type: 'consensus' as const,
+    signal: 'unique_confirmed' as const,
+    agentId: 'test-agent',
+    taskId: `task-${consensusId}`,
+    consensusId,
+    evidence: 'test',
+    timestamp: new Date().toISOString(),
+  });
+
+  beforeEach(() => {
+    tmpDir = makeTmpProjectRoot();
+    writer = new PerformanceWriter(tmpDir);
+    roundCounter.__resetForTests();
+    __resetLoggedCounterErrorsForTests();
+  });
+
+  afterEach(() => {
+    roundCounter.__resetForTests();
+    __resetLoggedCounterErrorsForTests();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    jest.restoreAllMocks();
+  });
+
+  it('Fix 5 — first bump error of a kind is written to stderr', () => {
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    jest.spyOn(roundCounter, 'bump').mockImplementationOnce(() => {
+      throw new Error('synthetic test error');
+    });
+
+    // appendSignal triggers the bump path; the injected error should be logged.
+    writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+
+    const calls = stderrSpy.mock.calls.map(c => String(c[0]));
+    expect(calls.some(m => m.includes('synthetic test error'))).toBe(true);
+    expect(calls.some(m => m.includes('[gossipcat]'))).toBe(true);
+  });
+
+  it('Fix 5 — same error message is logged only once per process (deduplication)', () => {
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    // Make bump throw the same message on both calls.
+    jest.spyOn(roundCounter, 'bump').mockImplementation(() => {
+      throw new Error('repeated error message');
+    });
+
+    writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+
+    const matchingCalls = stderrSpy.mock.calls.filter(c =>
+      String(c[0]).includes('repeated error message'),
+    );
+    expect(matchingCalls).toHaveLength(1);
+  });
+
+  it('Fix 5 — two different error messages each log once', () => {
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let callCount = 0;
+    jest.spyOn(roundCounter, 'bump').mockImplementation(() => {
+      callCount += 1;
+      throw new Error(`error variant ${callCount <= 1 ? 'alpha' : 'beta'}`);
+    });
+
+    writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+
+    const alphaCalls = stderrSpy.mock.calls.filter(c => String(c[0]).includes('error variant alpha'));
+    const betaCalls = stderrSpy.mock.calls.filter(c => String(c[0]).includes('error variant beta'));
+    expect(alphaCalls).toHaveLength(1);
+    expect(betaCalls).toHaveLength(1);
   });
 });

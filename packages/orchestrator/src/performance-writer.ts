@@ -5,6 +5,14 @@ import { PerformanceSignal, classifySignal } from './consensus-types';
 import type { EmissionPath } from './completion-signals.allowlist';
 import { bump as bumpRoundCounter, reset as resetRoundCounter, deriveConsensusId } from './round-counter';
 
+/**
+ * Fix 5 (spec 2026-04-27-self-telemetry-remediation §Fix 5): rate-limited
+ * stderr logging for round-counter bump errors. Logs once per unique error
+ * message per process lifetime so a persistent failure (e.g. regex regression
+ * in deriveConsensusId) is observable without flooding stderr.
+ */
+const loggedCounterErrors = new Set<string>();
+
 export type { EmissionPath } from './completion-signals.allowlist';
 
 /**
@@ -169,6 +177,16 @@ export function __resetSampleCounterForTests(): void {
   rowsWrittenSinceCheck = 0;
 }
 
+/**
+ * Reset the module-level set of already-logged counter-error messages.
+ * Intended for unit tests (Fix 5) that verify deduplication behaviour and
+ * need to start each test from a clean slate.
+ * @internal
+ */
+export function __resetLoggedCounterErrorsForTests(): void {
+  loggedCounterErrors.clear();
+}
+
 const INTERNAL = Symbol('performance-writer-internal');
 
 export class PerformanceWriter {
@@ -228,7 +246,15 @@ export class PerformanceWriter {
           const cid = deriveConsensusId(signal as { consensusId?: string; findingId?: string });
           if (cid) bumpRoundCounter(this.projectRoot, cid);
         }
-      } catch { /* non-fatal */ }
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        if (!loggedCounterErrors.has(msg)) {
+          loggedCounterErrors.add(msg);
+          try {
+            process.stderr.write(`[gossipcat] round-counter bump failed: ${msg}\n`);
+          } catch { /* best-effort */ }
+        }
+      }
     },
 
     /**
@@ -254,7 +280,15 @@ export class PerformanceWriter {
           const cid = deriveConsensusId(s as { consensusId?: string; findingId?: string });
           if (cid) bumpRoundCounter(this.projectRoot, cid);
         }
-      } catch { /* non-fatal */ }
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        if (!loggedCounterErrors.has(msg)) {
+          loggedCounterErrors.add(msg);
+          try {
+            process.stderr.write(`[gossipcat] round-counter bump failed: ${msg}\n`);
+          } catch { /* best-effort */ }
+        }
+      }
     },
   };
 
