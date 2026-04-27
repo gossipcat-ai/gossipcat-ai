@@ -826,6 +826,42 @@ export async function handleCollect(
     } catch { /* best-effort */ }
   }
 
+  // Phase A self-telemetry: round-counter reconciliation.
+  // After all signal write paths complete, check whether the count of signals
+  // bumped during this process matches the number of findings in the report.
+  // Fires only when actual < expected (tolerate double-log). Non-fatal.
+  if (consensusReport) {
+    try {
+      const { getRoundCounter, emitPipelineSignals } = await import('@gossip/orchestrator');
+      const authId = consensusReport?.signals?.[0]?.consensusId;
+      if (authId) {
+        const findingsCount =
+          (consensusReport.confirmed?.length ?? 0) +
+          (consensusReport.disputed?.length ?? 0) +
+          (consensusReport.unverified?.length ?? 0) +
+          (consensusReport.unique?.length ?? 0) +
+          (consensusReport.newFindings?.length ?? 0);
+        const actual = getRoundCounter(authId);
+        if (actual < findingsCount) {
+          const shortfall = findingsCount - actual;
+          process.stderr.write(
+            `[round-reconcile] consensusId=${authId} expected_min=${findingsCount} actual=${actual} shortfall=${shortfall}\n`
+          );
+          emitPipelineSignals(process.cwd(), [{
+            type: 'pipeline',
+            signal: 'signal_loss_suspected',
+            agentId: '_system',
+            taskId: authId,
+            consensusId: authId,
+            value: shortfall,
+            metadata: { expected_min: findingsCount, actual },
+            timestamp: new Date().toISOString(),
+          }]);
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
   // Step 6: Format output
   let output = resultTexts.join('\n\n---\n\n');
 

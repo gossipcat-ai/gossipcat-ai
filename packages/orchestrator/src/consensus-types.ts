@@ -237,7 +237,13 @@ export interface PipelineSignal {
     /** Path A relay-lint hardening (docs/specs/2026-04-25-relay-lint-hardening.md):
      * orchestrator paraphrased a consensus-dispatched native agent's result,
      * dropping all `<agent_finding>` tags. Observability-only — never gates. */
-    | 'relay_findings_dropped';
+    | 'relay_findings_dropped'
+    /**
+     * Phase A system self-telemetry: round-counter detected that fewer signals
+     * were written than findings collected. Observability-only — never blocks.
+     * Emitted by the collect handler after consensus report is persisted.
+     */
+    | 'signal_loss_suspected';
   /** Real agentId for agent-scoped events; '_system' for system-scoped events. */
   agentId: string;
   taskId: string;

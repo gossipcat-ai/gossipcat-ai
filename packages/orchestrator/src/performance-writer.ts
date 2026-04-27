@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'fs'
 import { join } from 'path';
 import { PerformanceSignal, classifySignal } from './consensus-types';
 import type { EmissionPath } from './completion-signals.allowlist';
+import { bump as bumpRoundCounter, deriveConsensusId } from './round-counter';
 
 export type { EmissionPath } from './completion-signals.allowlist';
 
@@ -59,6 +60,9 @@ const VALID_PIPELINE_SIGNALS = new Set([
   // instead of pasting verbatim, dropping all findings. Pre-fix: validateSignal
   // threw on this name and the catch silently swallowed every emission.
   'relay_findings_dropped',
+  // Phase A self-telemetry: collect-end reconciliation detected fewer signals
+  // written than findings in the consensus report. Observability-only.
+  'signal_loss_suspected',
 ]);
 
 /**
@@ -206,6 +210,12 @@ export class PerformanceWriter {
       const row = { ...stamped, _emission_path: emissionPath };
       appendFileSync(this.filePath, JSON.stringify(row) + '\n');
       bumpSampleCounter(this.projectRoot, 1);
+      // Phase A self-telemetry: count signals per consensus round so
+      // collect-end can detect shortfalls. Non-throwing by design.
+      try {
+        const cid = deriveConsensusId(signal as { consensusId?: string; findingId?: string });
+        if (cid) bumpRoundCounter(cid);
+      } catch { /* non-fatal */ }
     },
 
     /**
@@ -221,6 +231,13 @@ export class PerformanceWriter {
       rotateJsonlIfNeeded(this.filePath);
       appendFileSync(this.filePath, data);
       bumpSampleCounter(this.projectRoot, signals.length);
+      // Phase A self-telemetry: count each signal toward its consensus round.
+      try {
+        for (const s of signals) {
+          const cid = deriveConsensusId(s as { consensusId?: string; findingId?: string });
+          if (cid) bumpRoundCounter(cid);
+        }
+      } catch { /* non-fatal */ }
     },
   };
 
