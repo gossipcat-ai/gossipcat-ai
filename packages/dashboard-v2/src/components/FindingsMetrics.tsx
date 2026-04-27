@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { ConsensusData, ConsensusReportsData, ConsensusReportFinding, ConsensusReport, ParseDiagnostic } from '@/lib/types';
 import { api } from '@/lib/api';
-import { timeAgo, cleanFindingTags, agentInitials, agentColor } from '@/lib/utils';
+import { timeAgo, renderFindingMarkdown, agentInitials, agentColor } from '@/lib/utils';
 import { escapeHtml } from '@/lib/sanitize';
 import { EmptyState } from './EmptyState';
 
@@ -197,8 +197,8 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
         </div>
       )}
       {/* Finding text */}
-      <div className={`font-inter text-xs leading-relaxed text-muted-foreground ${CITE_STYLES}`}
-        dangerouslySetInnerHTML={{ __html: cleanFindingTags(f.finding) }} />
+      <div className={`finding-md font-inter text-xs leading-relaxed text-muted-foreground ${CITE_STYLES}`}
+        dangerouslySetInnerHTML={{ __html: renderFindingMarkdown(f.finding) }} />
       {/* Cross-review coverage badge row */}
       {reviewInfo && (
         <div className="mt-1.5 flex items-center gap-1.5">
@@ -801,7 +801,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                               </span>
                               <div className="min-w-0 flex-1">
                                 <span className="text-xs text-muted-foreground [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400">
-                                  <span dangerouslySetInnerHTML={{ __html: cleanFindingTags(sig.evidence || '') }} />
+                                  <span className="finding-md" dangerouslySetInnerHTML={{ __html: renderFindingMarkdown(sig.evidence || '') }} />
                                 </span>
                                 <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">
                                   {sig.agentId}{sig.counterpartId ? ` + ${sig.counterpartId}` : ''}

@@ -113,6 +113,95 @@ export function cleanFindingTags(text: string): string {
   return cleaned;
 }
 
+/**
+ * Unified markdown renderer for agent findings, signal evidence, and task results.
+ * Superset of both cleanFindingTags (cite tags, prefix strip) and renderMarkdown
+ * (headings, lists). Use this for all agent-authored content.
+ */
+export function renderFindingMarkdown(text: string): string {
+  // Step 1: HTML-escape everything
+  let out = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  // Step 2: Strip [FINDING]/[SUGGESTION]/[INSIGHT] prefixes
+  out = out.replace(/^\[(FINDING|SUGGESTION|INSIGHT)\]\s*/i, '');
+
+  // Step 3: Strip <agent_finding> wrapper tags (escaped)
+  out = out.replace(/&lt;agent_finding[^&]*&gt;/g, '');
+  out = out.replace(/&lt;\/agent_finding&gt;/g, '');
+
+  // Step 4: Re-apply safe cite tags (on the now-escaped text)
+  // <cite tag="file"> → blue code span
+  out = out.replace(/&lt;cite\s+tag=&quot;file&quot;&gt;([^&]+)&lt;\/cite&gt;/g, '<code class="cite-file">$1</code>');
+  // <cite tag="fn"> → purple code span
+  out = out.replace(/&lt;cite\s+tag=&quot;fn&quot;&gt;([^&]+)&lt;\/cite&gt;/g, '<code class="cite-fn">$1</code>');
+  // Legacy <fn> → purple code span
+  out = out.replace(/&lt;fn&gt;([^&]+)&lt;\/fn&gt;/g, '<code class="cite-fn">$1</code>');
+
+  // Step 5: Code fences (must run before inline backtick pass)
+  out = out.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre class="md-code-block"><code>$2</code></pre>');
+
+  // Step 6: Inline code
+  out = out.replace(/`([^`\n]+)`/g, '<code class="md-inline-code">$1</code>');
+
+  // Step 7: Bold then italic (order matters — ** before *)
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong class="font-semibold text-foreground">$1</strong>');
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+
+  // Step 8: Headings and lists — process line by line
+  const lines = out.split('\n');
+  const processedLines: string[] = [];
+  let inList = false;
+
+  for (const line of lines) {
+    const h3 = line.match(/^###\s+(.+)$/);
+    const h2 = line.match(/^##\s+(.+)$/);
+    const h1 = line.match(/^#\s+(.+)$/);
+
+    if (h3) {
+      if (inList) { processedLines.push('</ul>'); inList = false; }
+      processedLines.push(`<h3 class="md-h3">${h3[1]}</h3>`);
+      continue;
+    }
+    if (h2) {
+      if (inList) { processedLines.push('</ul>'); inList = false; }
+      processedLines.push(`<h2 class="md-h2">${h2[1]}</h2>`);
+      continue;
+    }
+    if (h1) {
+      if (inList) { processedLines.push('</ul>'); inList = false; }
+      processedLines.push(`<h1 class="md-h1">${h1[1]}</h1>`);
+      continue;
+    }
+
+    // Unordered list items: "- " or "* "
+    const li = line.match(/^(\s*)[*-]\s+(.+)$/);
+    if (li) {
+      if (!inList) { processedLines.push('<ul class="md-list">'); inList = true; }
+      processedLines.push(`<li>${li[2]}</li>`);
+      continue;
+    }
+
+    // Blank line closes an open list
+    if (line.trim() === '') {
+      if (inList) { processedLines.push('</ul>'); inList = false; }
+      processedLines.push('');
+      continue;
+    }
+
+    // Regular line — close list if open
+    if (inList) { processedLines.push('</ul>'); inList = false; }
+    processedLines.push(line);
+  }
+
+  if (inList) processedLines.push('</ul>');
+
+  return processedLines.join('\n');
+}
+
 export function timeAgo(ts: string | number): string {
   const now = Date.now();
   const then = typeof ts === 'string' ? new Date(ts).getTime() : ts;
