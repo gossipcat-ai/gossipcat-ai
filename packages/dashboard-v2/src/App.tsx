@@ -240,13 +240,40 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                     <span className={`font-mono text-sm font-bold tabular-nums ${weightColor}`}>{s.dispatchWeight.toFixed(2)}</span>
                   </td>
 
-                  {/* Metrics: three mini bars stacked */}
+                  {/* Metrics: four mini bars stacked */}
                   <td className="py-3 pr-4 align-top">
-                    <div className="space-y-1">
-                      <MiniBar label="A" value={s.accuracy} fillClass={s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed'} />
-                      <MiniBar label="U" value={s.uniqueness} fillClass="bg-unique" />
-                      <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--color-impact)]" />
-                    </div>
+                    {(() => {
+                      const rawDenom = s.agreements + s.uniqueFindings + s.disagreements + s.hallucinations;
+                      const rawRatio = rawDenom > 0
+                        ? (s.agreements + s.uniqueFindings) / rawDenom
+                        : null;
+                      return (
+                        <div className="space-y-1">
+                          <MiniBar
+                            label="A"
+                            value={s.accuracy}
+                            fillClass={s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed'}
+                            tooltip="Adjusted accuracy = raw signal ratio × 1/(1 + weighted hallucinations × 0.3). The penalty is recoverable via skill-gated multiplier in the same category."
+                          />
+                          <MiniBar label="U" value={s.uniqueness} fillClass="bg-unique" />
+                          <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--color-impact)]" />
+                          {rawRatio !== null ? (
+                            <MiniBar
+                              label="R"
+                              value={rawRatio}
+                              fillClass={rawRatio >= 0.7 ? 'bg-confirmed/60' : rawRatio >= 0.4 ? 'bg-unverified/60' : 'bg-disputed/60'}
+                              tooltip="(agreements + unique) / (agreements + unique + disagreements + hallucinations). Unweighted base ratio before the hallucination penalty."
+                            />
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 font-mono text-[8px] uppercase text-muted-foreground/50">R</span>
+                              <div className="h-1 flex-1 overflow-hidden rounded-full bg-background/60" />
+                              <span className="w-8 text-right font-mono text-[10px] tabular-nums text-muted-foreground/30">—</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </td>
 
                   {/* Signals */}
@@ -290,9 +317,9 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
   );
 }
 
-function MiniBar({ label, value, fillClass }: { label: string; value: number; fillClass: string }) {
+function MiniBar({ label, value, fillClass, tooltip }: { label: string; value: number; fillClass: string; tooltip?: string }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2" data-tooltip={tooltip} data-tooltip-pos="top">
       <span className="w-2 font-mono text-[8px] uppercase text-muted-foreground/50">{label}</span>
       <div className="h-1 flex-1 overflow-hidden rounded-full bg-background/60">
         <div className={`h-full rounded-full ${fillClass}`} style={{ width: `${Math.max(0, Math.min(100, value * 100))}%` }} />
