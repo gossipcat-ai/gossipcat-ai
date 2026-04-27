@@ -475,14 +475,13 @@ describe('PerformanceWriter — Fix 4: operational signals do not bump counter',
   const CID = 'f4f4f4f4-deadc0de';
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gossip-fix4-'));
-    fs.mkdirSync(path.join(tmpDir, '.gossip'), { recursive: true });
+    tmpDir = makeTmpProjectRoot();
     writer = new PerformanceWriter(tmpDir);
-    roundCounter.reset(CID);
+    roundCounter.__resetForTests();
   });
 
   afterEach(() => {
-    roundCounter.reset(CID);
+    roundCounter.__resetForTests();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -508,14 +507,14 @@ describe('PerformanceWriter — Fix 4: operational signals do not bump counter',
 
   it('Fix 4 — performance signals bump counter normally (appendSignal)', () => {
     writer[WRITER_INTERNAL].appendSignal(makePerformanceSignal(CID));
-    expect(roundCounter.get(CID)).toBe(1);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
   });
 
   it('Fix 4 — operational signals do NOT bump counter (appendSignal)', () => {
     // task_timeout is classified as 'operational' by classifySignal.
     // Even when it carries a derivable consensusId it must not count.
     writer[WRITER_INTERNAL].appendSignal(makeOperationalSignal(CID));
-    expect(roundCounter.get(CID)).toBe(0);
+    expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
 
   it('Fix 4 — mixed batch: only performance signals bump (appendSignals)', () => {
@@ -526,7 +525,7 @@ describe('PerformanceWriter — Fix 4: operational signals do not bump counter',
       makePerformanceSignal(CID),
     ];
     writer[WRITER_INTERNAL].appendSignals(batch);
-    expect(roundCounter.get(CID)).toBe(2);
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
   });
 
   it('Fix 4 — unknown signal name (classifySignal returns undefined) still bumps (backwards compat)', () => {
@@ -549,6 +548,6 @@ describe('PerformanceWriter — Fix 4: operational signals do not bump counter',
     writer[WRITER_INTERNAL].appendSignal(unknownSignal);
     // classifySignal('severity_miscalibrated') returns undefined → preserved as
     // performance-equivalent → counter bumps.
-    expect(roundCounter.get(CID)).toBe(1);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
   });
 });
