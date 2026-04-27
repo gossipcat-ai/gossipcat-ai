@@ -165,6 +165,16 @@ export interface ConsensusReport {
   crossReviewCoverage?: Array<{ findingId: string; assigned: number; targetK: number }>;
   partialReview?: boolean;
   /**
+   * Relay agents whose cross-review LLM call failed (quota / parse / network).
+   * Matches orchestrator ConsensusReport shape exactly.
+   */
+  relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;
+  /**
+   * Coverage degraded when a dispatched agent produced a 0-char response.
+   * The round still completes but with fewer voices than dispatched.
+   */
+  coverageDegraded?: { expected: number; received: number; droppedAgents: string[] };
+  /**
    * Unknown type values (lowercased) → total drop count. Populated by the
    * strict `<agent_finding>` parser when an agent uses an invented type
    * ("approval", "concern", etc). Surfaces silent type-drift that would
