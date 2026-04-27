@@ -833,14 +833,20 @@ export async function handleCollect(
   if (consensusReport) {
     try {
       const { getRoundCounter, emitPipelineSignals } = await import('@gossip/orchestrator');
-      const authId = consensusReport?.signals?.[0]?.consensusId;
+      const findingsAll = [
+        ...(consensusReport.confirmed ?? []),
+        ...(consensusReport.disputed ?? []),
+        ...(consensusReport.unverified ?? []),
+        ...(consensusReport.unique ?? []),
+        ...(consensusReport.newFindings ?? []),
+      ];
+      // Fall back to any finding's id prefix when signals[] is empty (the
+      // low-signal rounds most likely to mask real loss). See consensus
+      // 3aa4a6ef-c8974235:sonnet-reviewer F1.
+      const authId = consensusReport?.signals?.[0]?.consensusId
+        ?? findingsAll.find(f => /^[0-9a-f]{8}-[0-9a-f]{8}:/.test(f.id ?? ''))?.id?.split(':')[0];
       if (authId) {
-        const findingsCount =
-          (consensusReport.confirmed?.length ?? 0) +
-          (consensusReport.disputed?.length ?? 0) +
-          (consensusReport.unverified?.length ?? 0) +
-          (consensusReport.unique?.length ?? 0) +
-          (consensusReport.newFindings?.length ?? 0);
+        const findingsCount = findingsAll.length;
         const actual = getRoundCounter(authId);
         if (actual < findingsCount) {
           const shortfall = findingsCount - actual;

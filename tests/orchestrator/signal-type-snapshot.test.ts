@@ -37,6 +37,7 @@ const DOCUMENTED_PATH_SPECIFIC = new Map<string, string>([
   ['signal_retracted',          'performance-writer.ts / gossip_signals'],
   ['consensus_round_retracted', 'performance-writer.ts / gossip_signals'],
   ['severity_miscalibrated',    'consensus-engine.ts'],
+  ['consensus_coverage_degraded', 'consensus-engine.ts (post-round dropouts)'],
   ['task_timeout',              'dispatch-pipeline.ts (timeout path)'],
   ['task_empty',                'dispatch-pipeline.ts (empty result path)'],
   // Impl signals — emitted by verify_write / auto-record in native-tasks.ts
@@ -65,7 +66,7 @@ const ALL_KNOWN_SIGNAL_NAMES: string[] = [
   'agreement', 'disagreement', 'unverified', 'unique_confirmed', 'unique_unconfirmed',
   'new_finding', 'hallucination_caught', 'category_confirmed', 'consensus_verified',
   'signal_retracted', 'consensus_round_retracted', 'severity_miscalibrated',
-  'task_timeout', 'task_empty',
+  'task_timeout', 'task_empty', 'consensus_coverage_degraded',
   // ImplSignal
   'impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected',
   // MetaSignal
