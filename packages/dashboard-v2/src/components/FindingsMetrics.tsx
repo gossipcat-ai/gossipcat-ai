@@ -31,7 +31,7 @@ const TAG_MAP: Record<string, { label: string; filter: FilterType; cls: string }
   hallucination_caught: { label: 'DISPUTED', filter: 'disputed', cls: 'text-disputed bg-disputed/10' },
   unverified: { label: 'UNVERIFIED', filter: 'unverified', cls: 'text-unverified bg-unverified/10' },
   unique_confirmed: { label: 'UNIQUE', filter: 'unique', cls: 'text-unique bg-unique/10' },
-  unique_unconfirmed: { label: 'UNIQUE', filter: 'unique', cls: 'text-unique bg-unique/10' },
+  unique_unconfirmed: { label: 'UNIQUE?', filter: 'unique', cls: 'text-unverified bg-unverified/10' },
   new_finding: { label: 'NEW', filter: 'unique', cls: 'text-unique bg-unique/10' },
 };
 
@@ -95,7 +95,7 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
     : f.tag === 'unverified' ? 'text-unverified bg-unverified/10 border-unverified/20'
     : 'text-unique bg-unique/10 border-unique/20';
   const sevCls = f.severity ? SEVERITY_CLS[f.severity] || '' : '';
-  const typeLabel = f.findingType === 'suggestion' ? '💡 SUGGESTION'
+  const typeLabel = f.findingType === 'suggestion' ? 'SUGGESTION'
     : f.findingType === 'insight' ? 'INSIGHT'
     : null;
   const typeCls = f.findingType === 'suggestion' ? 'text-blue-400 bg-blue-500/10'
@@ -206,7 +206,7 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
             <span
               key={rid}
               title={rid}
-              className="inline-flex h-4 w-4 items-center justify-center rounded-full font-mono text-[7px] font-bold text-background opacity-70"
+              className="inline-flex h-5 w-5 items-center justify-center rounded-full font-mono text-[8px] font-bold text-background opacity-70"
               style={{ backgroundColor: agentColor(rid) }}
             >
               {agentInitials(rid)}
@@ -714,15 +714,15 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                 title={isRunRetracted && run.retractionReason ? `Retracted: ${run.retractionReason}` : undefined}
               >
                 {isRunRetracted && (
-                  <div className="rounded-t-md border-b border-disputed/30 bg-disputed/50 px-3 py-1.5 font-mono text-[10px] text-disputed-foreground" style={{ textDecoration: 'none' }}>
+                  <div className="rounded-t-md border-b border-disputed/30 bg-disputed/10 px-3 py-1.5 font-mono text-[10px] text-disputed" style={{ textDecoration: 'none' }}>
                     <span className="font-bold uppercase tracking-wider">⚠ Retracted</span>
                     {run.retractedAt && (
-                      <span className="ml-2 text-disputed-foreground/80">
+                      <span className="ml-2 text-disputed/70">
                         on {run.retractedAt.slice(0, 10)}
                       </span>
                     )}
                     {run.retractionReason && (
-                      <span className="ml-2 text-muted-foreground/90">— {run.retractionReason}</span>
+                      <span className="ml-2 text-muted-foreground/80">— {run.retractionReason}</span>
                     )}
                   </div>
                 )}
