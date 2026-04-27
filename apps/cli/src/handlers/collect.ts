@@ -832,13 +832,14 @@ export async function handleCollect(
   // Fires only when actual < expected (tolerate double-log). Non-fatal.
   if (consensusReport) {
     try {
-      const { getRoundCounter, emitPipelineSignals } = await import('@gossip/orchestrator');
+      const { getRoundCounter, resetRoundCounter, emitPipelineSignals } = await import('@gossip/orchestrator');
       const findingsAll = [
         ...(consensusReport.confirmed ?? []),
         ...(consensusReport.disputed ?? []),
         ...(consensusReport.unverified ?? []),
         ...(consensusReport.unique ?? []),
         ...(consensusReport.newFindings ?? []),
+        ...(consensusReport.insights ?? []),
       ];
       // Fall back to any finding's id prefix when signals[] is empty (the
       // low-signal rounds most likely to mask real loss). See consensus
@@ -863,6 +864,8 @@ export async function handleCollect(
             metadata: { expected_min: findingsCount, actual },
             timestamp: new Date().toISOString(),
           }]);
+          // Clear the counter so a retry / Phase B reader sees fresh state, not the diagnostic's own bump.
+          resetRoundCounter(authId);
         }
       }
     } catch { /* best-effort */ }

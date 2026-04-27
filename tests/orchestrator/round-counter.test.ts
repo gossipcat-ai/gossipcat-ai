@@ -173,4 +173,25 @@ describe('PerformanceWriter — round counter wiring', () => {
     writer[WRITER_INTERNAL].appendSignal(signalWithFindingId);
     expect(roundCounter.get(CID)).toBe(1);
   });
+
+  it('reset after signal_loss_suspected emit leaves counter at 0 (Fix 2 — counter reset)', () => {
+    // Simulate the shortfall path from collect.ts: 3 signals written for a
+    // round that had 4 findings → shortfall detected → signal_loss_suspected
+    // emitted (which self-bumps the counter) → resetRoundCounter called.
+    // After the reset a retry / Phase B reader must see a fresh counter (0).
+    const N = 3;
+    for (let i = 0; i < N; i++) {
+      writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    }
+    expect(roundCounter.get(CID)).toBe(N);
+
+    // Mimic the self-bump that emitPipelineSignals causes when it writes the
+    // signal_loss_suspected diagnostic (pipeline signal carries consensusId).
+    roundCounter.bump(CID);
+    expect(roundCounter.get(CID)).toBe(N + 1);
+
+    // Fix 2: resetRoundCounter is called immediately after emitPipelineSignals.
+    roundCounter.reset(CID);
+    expect(roundCounter.get(CID)).toBe(0);
+  });
 });

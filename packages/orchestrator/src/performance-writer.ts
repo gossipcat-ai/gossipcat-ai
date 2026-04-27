@@ -37,6 +37,9 @@ const VALID_CONSENSUS_SIGNALS = new Set([
   // Pre-existing runtime bug fix (spec §4, consensus 78bc92ef-23464bde:f11):
   // this signal was previously rejected by validateSignal and silently dropped.
   'severity_miscalibrated',
+  // Emitted by consensus-engine when relay cross-review coverage drops;
+  // previously rejected by validateSignal and silently dropped.
+  'consensus_coverage_degraded',
   // Sandbox policy violation — recorded for observability, zero weight in scoring.
   // Consensus round bb03845d-64264402 (7/7 confirmed).
   'boundary_escape',
