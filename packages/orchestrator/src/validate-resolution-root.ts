@@ -88,15 +88,22 @@ export async function gitCommonDir(path: string): Promise<string | null> {
  * List worktree paths via `git -C projectRoot worktree list -z --porcelain`.
  * Skips bare / locked / prunable. Capped at 100 entries. Returns realpath'd
  * absolute paths. Never throws.
+ *
+ * Pass `includeLocked: true` to include locked worktrees (needed when
+ * validating explicit user-supplied resolutionRoots — agent worktrees are
+ * always locked and must not be silently rejected).
  */
-export async function listWorktreePaths(projectRoot: string): Promise<string[]> {
+export async function listWorktreePaths(
+  projectRoot: string,
+  { includeLocked = false }: { includeLocked?: boolean } = {},
+): Promise<string[]> {
   try {
     const { stdout } = await execFileP(
       'git',
       ['worktree', 'list', '-z', '--porcelain'],
       { ...GIT_EXEC_OPTS, cwd: projectRoot },
     );
-    return parseWorktreePorcelain(stdout);
+    return parseWorktreePorcelain(stdout, { includeLocked });
   } catch {
     return [];
   }
@@ -110,9 +117,17 @@ export async function listWorktreePaths(projectRoot: string): Promise<string[]> 
  * Skips bare / locked-* / prunable-* entries (they emit `locked <why>` —
  * prefix match, not equality).
  *
+ * Pass `includeLocked: true` to include locked worktrees in the output
+ * (bare and prunable are still excluded). Required when validating
+ * explicit user-supplied resolutionRoots — active agent worktrees are
+ * always locked and must not be silently dropped on the explicit path.
+ *
  * Cap at 100 entries to bound fanout on pathological repos.
  */
-export function parseWorktreePorcelain(stdout: string): string[] {
+export function parseWorktreePorcelain(
+  stdout: string,
+  { includeLocked = false }: { includeLocked?: boolean } = {},
+): string[] {
   const out: string[] = [];
   const records = stdout.split('\0\0');
   for (const rec of records) {
@@ -125,7 +140,7 @@ export function parseWorktreePorcelain(stdout: string): string[] {
       fields.some(
         (f) =>
           f === 'bare' ||
-          f.startsWith('locked') ||
+          (!includeLocked && f.startsWith('locked')) ||
           f.startsWith('prunable'),
       )
     ) {
@@ -244,7 +259,10 @@ export async function validateResolutionRoot(
   }
 
   // 7. Must appear in `git worktree list`.
-  const worktrees = await listWorktreePaths(projectRoot);
+  // includeLocked: true — active agent worktrees are always locked by git;
+  // rejecting them here would silently break all explicit resolutionRoots
+  // that point at in-use worktrees (root cause of consensus 3aa4a6ef regression).
+  const worktrees = await listWorktreePaths(projectRoot, { includeLocked: true });
   // Project root itself is always a valid worktree by convention — include it.
   let projectRootReal = projectRoot;
   try {
