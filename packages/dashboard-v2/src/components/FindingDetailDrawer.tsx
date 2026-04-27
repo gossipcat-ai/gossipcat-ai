@@ -21,12 +21,12 @@ const SEVERITY_COLORS: Record<string, string> = {
 };
 
 const TAG_COLORS: Record<string, string> = {
-  confirmed: 'bg-confirmed',
-  disputed: 'bg-disputed',
-  unverified: 'bg-unverified',
-  unique: 'bg-unique',
-  insight: 'bg-muted',
-  newFinding: 'bg-unique',
+  confirmed: 'text-confirmed bg-confirmed/10 border border-confirmed/20',
+  disputed: 'text-disputed bg-disputed/10 border border-disputed/20',
+  unverified: 'text-unverified bg-unverified/10 border border-unverified/20',
+  unique: 'text-unique bg-unique/10 border border-unique/20',
+  insight: 'text-muted-foreground bg-muted border border-border/40',
+  newFinding: 'text-unique bg-unique/10 border border-unique/20',
 };
 
 export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId }: Props) {
