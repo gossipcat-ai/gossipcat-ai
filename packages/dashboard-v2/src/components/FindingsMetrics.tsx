@@ -588,6 +588,28 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                         </button>
                       ))}
                     </div>
+                    {report.coverageDegraded && (
+                      <div className="mb-3 rounded-md border border-unverified/20 bg-unverified/8 px-3 py-2">
+                        <p className="font-mono text-[10px] font-semibold text-unverified">
+                          ⚠ Coverage degraded — {report.coverageDegraded.received} of {report.coverageDegraded.expected} agents responded
+                        </p>
+                        {report.coverageDegraded.droppedAgents.length > 0 && (
+                          <p className="mt-0.5 font-mono text-[9px] text-muted-foreground/70">
+                            Dropped: {report.coverageDegraded.droppedAgents.join(', ')}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {report.relayCrossReviewSkipped && report.relayCrossReviewSkipped.length > 0 && (
+                      <div className="mb-3 rounded-md border border-unverified/20 bg-unverified/8 px-3 py-2">
+                        <p className="font-mono text-[10px] font-semibold text-unverified">
+                          ⚠ Cross-review skipped: {report.relayCrossReviewSkipped.length} relay agent{report.relayCrossReviewSkipped.length === 1 ? '' : 's'} failed Phase 2
+                        </p>
+                        <p className="mt-0.5 font-mono text-[9px] text-muted-foreground/70">
+                          {report.relayCrossReviewSkipped.map(s => s.agentId).join(', ')}
+                        </p>
+                      </div>
+                    )}
                     {(report.crossReviewAssignments || report.crossReviewCoverage) && (() => {
                       // Invert assignments: reviewerId → findingIds
                       const assignments = report.crossReviewAssignments || {};
