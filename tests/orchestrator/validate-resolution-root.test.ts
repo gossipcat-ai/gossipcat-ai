@@ -103,6 +103,20 @@ describe('validateResolutionRoot', () => {
     expect(r.valid).toBe(false);
   });
 
+  it('locked worktree — accepted on explicit-path validation (regression: 3aa4a6ef)', async () => {
+    const wt = join(tmp, 'wt-locked');
+    execFileSync('git', ['checkout', '-qb', 'locked-branch'], { cwd: repo });
+    execFileSync('git', ['checkout', '-q', 'main'], { cwd: repo });
+    execFileSync('git', ['worktree', 'add', '-q', wt, 'locked-branch'], { cwd: repo });
+    // Lock the worktree to simulate an in-use agent worktree.
+    execFileSync('git', ['worktree', 'lock', wt], { cwd: repo });
+    const r = await validateResolutionRoot(wt, repo);
+    expect(r.valid).toBe(true);
+    if (r.valid) {
+      expect(r.canonical).toBe(realpathSync(wt));
+    }
+  });
+
   it('hashPath produces sha256:<8 hex>', () => {
     const h = hashPath('anything');
     expect(h).toMatch(/^sha256:[0-9a-f]{8}$/);
@@ -128,6 +142,17 @@ describe('parseWorktreePorcelain', () => {
   it('Test 7 (locked with reason) — skipped', () => {
     const rec = ['worktree /x', 'locked for maintenance'].join('\0');
     expect(parseWorktreePorcelain(rec)).toHaveLength(0);
+  });
+
+  it('includeLocked: true — locked entries are included, bare still excluded', () => {
+    const recLocked = ['worktree /locked-wt', 'HEAD deadbeef', 'locked agent in use'].join('\0');
+    const recBare = ['worktree /bare-wt', 'bare'].join('\0');
+    const recNormal = ['worktree /normal-wt', 'HEAD deadbeef', 'branch refs/heads/main'].join('\0');
+    const stdout = [recLocked, recBare, recNormal].join('\0\0');
+    const paths = parseWorktreePorcelain(stdout, { includeLocked: true });
+    expect(paths.some((p) => p.endsWith('/locked-wt'))).toBe(true);
+    expect(paths.some((p) => p.endsWith('/normal-wt'))).toBe(true);
+    expect(paths.some((p) => p.endsWith('/bare-wt'))).toBe(false);
   });
 
   it('handles trailing \\0\\0 gracefully', () => {
