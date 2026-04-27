@@ -77,7 +77,7 @@ export interface AgentData {
   scores: {
     accuracy: number; uniqueness: number; reliability: number;
     impactScore: number; dispatchWeight: number; signals: number;
-    agreements: number; disagreements: number; hallucinations: number;
+    agreements: number; disagreements: number; hallucinations: number; uniqueFindings: number;
     unverifiedsEmitted?: number; unverifiedsReceived?: number;
     consecutiveFailures: number; circuitOpen: boolean;
     bench: {

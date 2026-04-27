@@ -156,6 +156,7 @@ export interface AgentResponse {
     agreements: number;
     disagreements: number;
     hallucinations: number;
+    uniqueFindings: number;
     unverifiedsEmitted: number;
     unverifiedsReceived: number;
     bench: {
@@ -322,6 +323,7 @@ export async function agentsHandler(
         agreements: score.agreements,
         disagreements: score.disagreements,
         hallucinations: score.hallucinations,
+        uniqueFindings: score.uniqueFindings ?? 0,
         unverifiedsEmitted: score.unverifiedsEmitted ?? 0,
         unverifiedsReceived: score.unverifiedsReceived ?? 0,
         consecutiveFailures: score.consecutiveFailures ?? 0,
