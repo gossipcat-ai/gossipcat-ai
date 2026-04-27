@@ -22,7 +22,7 @@ import { TaskRow } from '@/components/TaskRow';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useDashboardData } from '@/hooks/useDashboardData';
-import { timeAgo, cleanFindingTags } from '@/lib/utils';
+import { timeAgo } from '@/lib/utils';
 import { getBenchBadgeKind, needsAttention } from '@/lib/bench';
 import type { DashboardEvent, AgentData } from '@/lib/types';
 
