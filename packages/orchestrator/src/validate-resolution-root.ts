@@ -123,6 +123,15 @@ export async function listWorktreePaths(
  * always locked and must not be silently dropped on the explicit path.
  *
  * Cap at 100 entries to bound fanout on pathological repos.
+ *
+ * Behavioral split — readers should know:
+ * - Auto-discovery (`discoverGitWorktrees`) calls without `includeLocked` →
+ *   locked entries are skipped (spec test 7 invariant). Locking is treated
+ *   as a "do not auto-pick this worktree" signal.
+ * - Explicit-path validation (`validateResolutionRoot` step 7) passes
+ *   `includeLocked: true` → locked entries are included. Active agent worktrees
+ *   are always locked by git, and explicit user-supplied resolutionRoots
+ *   pointing at them must not be silently rejected (consensus 3aa4a6ef regression).
  */
 export function parseWorktreePorcelain(
   stdout: string,

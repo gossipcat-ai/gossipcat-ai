@@ -854,18 +854,21 @@ export async function handleCollect(
           process.stderr.write(
             `[round-reconcile] consensusId=${authId} expected_min=${findingsCount} actual=${actual} shortfall=${shortfall}\n`
           );
-          emitPipelineSignals(process.cwd(), [{
-            type: 'pipeline',
-            signal: 'signal_loss_suspected',
-            agentId: '_system',
-            taskId: authId,
-            consensusId: authId,
-            value: shortfall,
-            metadata: { expected_min: findingsCount, actual },
-            timestamp: new Date().toISOString(),
-          }]);
-          // Clear the counter so a retry / Phase B reader sees fresh state, not the diagnostic's own bump.
-          resetRoundCounter(authId);
+          try {
+            emitPipelineSignals(process.cwd(), [{
+              type: 'pipeline',
+              signal: 'signal_loss_suspected',
+              agentId: '_system',
+              taskId: authId,
+              consensusId: authId,
+              value: shortfall,
+              metadata: { expected_min: findingsCount, actual },
+              timestamp: new Date().toISOString(),
+            }]);
+          } finally {
+            // Clear the counter so a retry / Phase B reader sees fresh state, not the diagnostic's own bump.
+            resetRoundCounter(authId);
+          }
         }
       }
     } catch { /* best-effort */ }
