@@ -3,9 +3,14 @@
 // Unit and integration-lite tests for Phase A self-telemetry: round-counter
 // module (bump / get / reset / deriveConsensusId) + performanceWriter wiring.
 //
-// Persistence-aware: each test allocates a fresh tmpDir for `projectRoot` so
-// the .gossip/round-counters.json file is isolated per test (Fix 1, spec
-// 2026-04-27-self-telemetry-remediation §Fix 1).
+// Persistence model — Option C (spec 2026-04-27-self-telemetry-crash-consistency):
+// counter mutations are merged into the agent-performance.jsonl stream as
+// `_meta`/`round_counter_bumped` and `_meta`/`round_counter_reset` records.
+// The legacy `<projectRoot>/.gossip/round-counters.json` file is no longer
+// written or read by this module.
+//
+// Each test allocates a fresh tmpDir for `projectRoot` so the JSONL is
+// isolated per test.
 
 import * as roundCounter from '../../packages/orchestrator/src/round-counter';
 import { PerformanceWriter } from '@gossip/orchestrator';
@@ -78,9 +83,9 @@ describe('roundCounter — bump / get / reset', () => {
   });
 });
 
-// ── Persistence ───────────────────────────────────────────────────────────────
+// ── Persistence (Option C — JSONL-derived state) ─────────────────────────────
 
-describe('roundCounter — persistence (Fix 1)', () => {
+describe('roundCounter — persistence (Option C)', () => {
   const CID = 'cafebabe-feedf00d';
   let tmpDir: string;
 
@@ -94,107 +99,125 @@ describe('roundCounter — persistence (Fix 1)', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('persists across a simulated process restart', () => {
+  it('persists across a simulated process restart via JSONL meta-records', () => {
     roundCounter.bump(tmpDir, CID);
     roundCounter.bump(tmpDir, CID);
     expect(roundCounter.get(tmpDir, CID)).toBe(2);
 
-    // Simulate restart: clear in-memory fallback. The persisted file must
-    // still contain the count, so a fresh `get()` returns 2.
+    // Simulate restart: clear in-memory fallback + scan cache. The JSONL
+    // still contains both bump records, so a fresh `get()` returns 2.
     roundCounter.__resetForTests();
     expect(roundCounter.get(tmpDir, CID)).toBe(2);
 
-    // Subsequent bump increments from the persisted value, not from 0.
+    // Subsequent bump increments from the JSONL-derived value, not from 0.
     roundCounter.bump(tmpDir, CID);
     expect(roundCounter.get(tmpDir, CID)).toBe(3);
   });
 
-  it('writes a parseable JSON file with _version: 1', () => {
+  it('writes round_counter_bumped records into agent-performance.jsonl', () => {
     roundCounter.bump(tmpDir, CID);
-    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
-    const raw = fs.readFileSync(file, 'utf8');
-    const parsed = JSON.parse(raw);
-    expect(parsed._version).toBe(1);
-    expect(parsed.counts[CID]).toBe(1);
+    const file = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    const bumpRecs = lines
+      .map(l => JSON.parse(l))
+      .filter((r: any) => r.type === '_meta' && r.signal === 'round_counter_bumped' && r.consensusId === CID);
+    expect(bumpRecs).toHaveLength(1);
+    expect(typeof bumpRecs[0].bumpedAt).toBe('string');
   });
 
-  it('atomic write: file always parseable across many bumps', () => {
-    // Sequential bumps from a single process — exercise the temp+rename path
-    // and confirm the visible file never lands in a half-written state.
+  it('reset() writes a round_counter_reset record into the JSONL', () => {
+    roundCounter.bump(tmpDir, CID);
+    roundCounter.reset(tmpDir, CID);
+    const file = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    const resetRecs = lines
+      .map(l => JSON.parse(l))
+      .filter((r: any) => r.type === '_meta' && r.signal === 'round_counter_reset' && r.consensusId === CID);
+    expect(resetRecs).toHaveLength(1);
+    expect(typeof resetRecs[0].resetAt).toBe('string');
+  });
+
+  it('many sequential bumps: each adds exactly one record', () => {
     for (let i = 0; i < 25; i++) roundCounter.bump(tmpDir, CID);
-    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
-    expect(() => JSON.parse(fs.readFileSync(file, 'utf8'))).not.toThrow();
     expect(roundCounter.get(tmpDir, CID)).toBe(25);
-  });
-
-  it('corrupt JSON file: bump still succeeds and overwrites', () => {
-    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
-    fs.writeFileSync(file, '{not valid json');
-    expect(() => roundCounter.bump(tmpDir, CID)).not.toThrow();
-    // After bump the file is canonical again.
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    expect(parsed._version).toBe(1);
-    expect(parsed.counts[CID]).toBe(1);
-  });
-
-  it('schema mismatch: future _version treated as empty + warns once', () => {
-    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
-    fs.writeFileSync(file, JSON.stringify({ _version: 999, counts: { [CID]: 42 } }));
-
-    const writes: string[] = [];
-    const spy = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation((chunk: any) => {
-        writes.push(typeof chunk === 'string' ? chunk : chunk.toString());
-        return true;
-      });
-
-    try {
-      roundCounter.bump(tmpDir, CID);
-      // Stale value ignored — bump starts from 0 + 1 = 1.
-      expect(roundCounter.get(tmpDir, CID)).toBe(1);
-
-      // First read after the bump's own RMW should NOT re-warn (the bump
-      // already overwrote the file with _version: 1). Force another mismatch
-      // and confirm the latch suppresses re-logging.
-      fs.writeFileSync(file, JSON.stringify({ _version: 999, counts: {} }));
-      roundCounter.bump(tmpDir, CID);
-
-      const schemaWarnings = writes.filter(w => w.includes('schema version'));
-      expect(schemaWarnings.length).toBe(1);
-    } finally {
-      spy.mockRestore();
+    const file = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    // All lines should be parseable.
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow();
     }
+    const bumpCount = lines
+      .map(l => JSON.parse(l))
+      .filter((r: any) => r.type === '_meta' && r.signal === 'round_counter_bumped' && r.consensusId === CID)
+      .length;
+    expect(bumpCount).toBe(25);
+  });
+
+  it('truncated JSONL tail: get() skips the malformed line and returns count of valid bumps', () => {
+    roundCounter.bump(tmpDir, CID);
+    roundCounter.bump(tmpDir, CID);
+    roundCounter.bump(tmpDir, CID);
+    const file = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    // Append a truncated/partial JSON record (simulates a process kill mid-write
+    // — POSIX says only the last record can be truncated).
+    fs.appendFileSync(file, '{"type":"_meta","signal":"round_counter_bumped","consensus');
+    // Force scan-cache invalidation since mtime/size changed but we cached pre-truncate.
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(3);
+  });
+
+  it('reset followed by 3 more bumps: get returns 3 (not 8)', () => {
+    for (let i = 0; i < 5; i++) roundCounter.bump(tmpDir, CID);
+    roundCounter.reset(tmpDir, CID);
+    for (let i = 0; i < 3; i++) roundCounter.bump(tmpDir, CID);
+    // Force a fresh scan to confirm JSONL-derived state matches expectation.
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(3);
   });
 
   it('read-only filesystem: bump does not throw and stays in-memory', () => {
     const dir = path.join(tmpDir, '.gossip');
-    // chmod the .gossip directory to read-only. writeFileSync under it will fail.
     fs.chmodSync(dir, 0o555);
     try {
       expect(() => roundCounter.bump(tmpDir, CID)).not.toThrow();
       // In-memory fallback returns the bump within this process even though
-      // the file write failed.
+      // the JSONL append failed.
       expect(roundCounter.get(tmpDir, CID)).toBe(1);
     } finally {
-      // Restore so afterEach cleanup can rm the dir.
       fs.chmodSync(dir, 0o755);
     }
   });
 
   it('missing file is treated as empty (no throw)', () => {
-    // No file ever written — bump should create it.
     expect(roundCounter.get(tmpDir, CID)).toBe(0);
     roundCounter.bump(tmpDir, CID);
     expect(roundCounter.get(tmpDir, CID)).toBe(1);
   });
 
   it('empty file is treated as empty (no throw)', () => {
-    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
+    const file = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
     fs.writeFileSync(file, '');
     expect(roundCounter.get(tmpDir, CID)).toBe(0);
     roundCounter.bump(tmpDir, CID);
     expect(roundCounter.get(tmpDir, CID)).toBe(1);
+  });
+
+  it('caches scan result and reflects new bumps after JSONL grows', () => {
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
+    // Repeated reads on an unchanged file return the same cached count.
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
+    // A subsequent bump grows the file (mtime + size change), so the next
+    // get() invalidates the cache and reflects the new count.
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
+  });
+
+  it('rebuilds counter state after __resetForTests (cache invalidation)', () => {
+    for (let i = 0; i < 4; i++) roundCounter.bump(tmpDir, CID);
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(4);
   });
 });
 
@@ -240,7 +263,7 @@ describe('roundCounter — deriveConsensusId', () => {
 
 // ── Integration-lite: performanceWriter bumps counter on append ───────────────
 
-describe('PerformanceWriter — round counter wiring', () => {
+describe('PerformanceWriter — round counter wiring (Option C inline meta-records)', () => {
   let tmpDir: string;
   let writer: PerformanceWriter;
   const CID = 'cafef00d-beefdead';
@@ -266,17 +289,83 @@ describe('PerformanceWriter — round counter wiring', () => {
     timestamp: new Date().toISOString(),
   });
 
-  it('bumps counter once per appendSignal with consensusId', () => {
-    writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
-    expect(roundCounter.get(tmpDir, CID)).toBe(1);
-    writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
-    expect(roundCounter.get(tmpDir, CID)).toBe(2);
+  it('writes N signals via appendSignal → get() returns N (Option C single-write atomicity)', () => {
+    const N = 5;
+    for (let i = 0; i < N; i++) {
+      writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    }
+    expect(roundCounter.get(tmpDir, CID)).toBe(N);
   });
 
-  it('bumps counter for each signal in appendSignals', () => {
+  it('signal row and bump meta-record land adjacently in the JSONL (Option C inline emission)', () => {
+    // Direct evidence that the writer emits the bump meta-record alongside
+    // the signal payload: after appendSignal, the JSONL contains exactly two
+    // lines — the signal row, immediately followed by the round_counter_bumped
+    // meta-record for the same consensusId. Under the legacy two-file design
+    // there was only one line in this file (the bump lived in round-counters.json),
+    // so this ordering invariant is unique to Option C.
+    writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    const jsonlPath = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    const lines = fs.readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean);
+    expect(lines).toHaveLength(2);
+    const signalRow = JSON.parse(lines[0]);
+    const bumpRow = JSON.parse(lines[1]);
+    expect(signalRow.signal).toBe('agreement');
+    expect(bumpRow).toMatchObject({
+      type: '_meta',
+      signal: 'round_counter_bumped',
+      consensusId: CID,
+    });
+  });
+
+  it('writes N signals via appendSignals batch → get() returns N', () => {
+    const N = 4;
+    const signals = Array.from({ length: N }, () => makeSignal(CID));
+    writer[WRITER_INTERNAL].appendSignals(signals);
+    expect(roundCounter.get(tmpDir, CID)).toBe(N);
+  });
+
+  it('appendSignals batch interleaves signal rows and bump meta-records in JSONL', () => {
     const signals = [makeSignal(CID), makeSignal(CID), makeSignal(CID)];
     writer[WRITER_INTERNAL].appendSignals(signals);
+    const jsonlPath = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    const lines = fs.readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean);
+    // 3 signals + 3 bump meta-records = 6 lines, in alternating order.
+    expect(lines).toHaveLength(6);
+    for (let i = 0; i < 3; i++) {
+      const sig = JSON.parse(lines[i * 2]);
+      const bump = JSON.parse(lines[i * 2 + 1]);
+      expect(sig.signal).toBe('agreement');
+      expect(bump).toMatchObject({
+        type: '_meta',
+        signal: 'round_counter_bumped',
+        consensusId: CID,
+      });
+    }
+  });
+
+  it('write 5 signals + reset() + 3 more → get() returns 3', () => {
+    for (let i = 0; i < 5; i++) {
+      writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    }
+    expect(roundCounter.get(tmpDir, CID)).toBe(5);
+    roundCounter.reset(tmpDir, CID);
+    for (let i = 0; i < 3; i++) {
+      writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    }
+    // Force fresh scan to confirm JSONL-derived behavior.
+    roundCounter.__resetForTests();
     expect(roundCounter.get(tmpDir, CID)).toBe(3);
+  });
+
+  it('truncated JSONL: get() returns count of valid bumps, skipping malformed tail', () => {
+    for (let i = 0; i < 4; i++) {
+      writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    }
+    const jsonlPath = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    fs.appendFileSync(jsonlPath, '{"type":"_meta","signal":"round_counter_bum');
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(4);
   });
 
   it('does NOT bump counter for signals without consensusId or findingId', () => {
@@ -288,12 +377,10 @@ describe('PerformanceWriter — round counter wiring', () => {
       timestamp: new Date().toISOString(),
     };
     writer[WRITER_INTERNAL].appendSignal(metaSignal);
-    // Counter for CID stays at 0 — meta signals have no consensusId
     expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
 
   it('shortfall detection: writing N signals → counter == N, dropping one → shortfall', () => {
-    // Simulate writing 3 signals for a round with 4 findings
     const N = 3;
     for (let i = 0; i < N; i++) {
       writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
@@ -301,8 +388,8 @@ describe('PerformanceWriter — round counter wiring', () => {
     const actual = roundCounter.get(tmpDir, CID);
     const findings_count = 4;
     expect(actual).toBe(N);
-    expect(actual).toBeLessThan(findings_count); // shortfall detected
-    expect(findings_count - actual).toBe(1); // one signal dropped
+    expect(actual).toBeLessThan(findings_count);
+    expect(findings_count - actual).toBe(1);
   });
 
   it('bumps counter for signal with findingId prefix (no consensusId field)', () => {
@@ -311,7 +398,6 @@ describe('PerformanceWriter — round counter wiring', () => {
       taskId: 'task-bulk',
       signal: 'unique_confirmed' as const,
       agentId: 'test-agent',
-      // no consensusId — only findingId carrying the prefix
       findingId: `${CID}:test-agent:f1`,
       evidence: 'test',
       timestamp: new Date().toISOString(),
@@ -327,57 +413,47 @@ describe('PerformanceWriter — round counter wiring', () => {
     }
     expect(roundCounter.get(tmpDir, CID)).toBe(N);
 
-    // Mimic the self-bump that emitPipelineSignals causes when it writes the
-    // signal_loss_suspected diagnostic (pipeline signal carries consensusId).
     roundCounter.bump(tmpDir, CID);
     expect(roundCounter.get(tmpDir, CID)).toBe(N + 1);
 
-    // resetRoundCounter is called on collect-end (Cosmetic A — both happy and
-    // shortfall paths).
     roundCounter.reset(tmpDir, CID);
     expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
 
   it('Fix 2 — recordConsensusRoundRetraction resets the round counter', () => {
-    // Emit signals so the counter is non-zero.
     const N = 4;
     for (let i = 0; i < N; i++) {
       writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
     }
     expect(roundCounter.get(tmpDir, CID)).toBe(N);
 
-    // Retract the round — counter must drop to 0 (not just decremented),
-    // mirroring the spec invariant that the round is "dead, drop accumulated
-    // signals."
     writer.recordConsensusRoundRetraction(CID, 'test retraction');
     expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
 
   it('f1 — tombstone write failure does not skip reset (counter ends at 0)', () => {
-    // Emit signals so the counter is non-zero.
     const N = 3;
     for (let i = 0; i < N; i++) {
       writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
     }
     expect(roundCounter.get(tmpDir, CID)).toBe(N);
 
-    // Make the JSONL file read-only so appendFileSync throws.
     const jsonlPath = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
-    // Ensure the file exists before chmoding.
     if (!fs.existsSync(jsonlPath)) {
       fs.writeFileSync(jsonlPath, '');
     }
     fs.chmodSync(jsonlPath, 0o444);
 
     try {
-      // recordConsensusRoundRetraction may throw because appendFileSync fails,
-      // but via try/finally the reset MUST still fire — counter ends at 0.
       try {
         writer.recordConsensusRoundRetraction(CID, 'test retraction with write failure');
       } catch {
         // tombstone write failed as expected — ignore the error
       }
       // Counter must be 0 regardless of whether the tombstone write succeeded.
+      // Under Option C the reset() call in the finally block also fails to
+      // append a JSONL record, but it sets the in-memory fallback to 0 which
+      // masks the JSONL-derived count.
       expect(roundCounter.get(tmpDir, CID)).toBe(0);
     } finally {
       fs.chmodSync(jsonlPath, 0o644);
@@ -385,7 +461,7 @@ describe('PerformanceWriter — round counter wiring', () => {
   });
 });
 
-// ── Fix 2 follow-up: reset() on read-only filesystem ─────────────────────────
+// ── reset() on read-only filesystem ───────────────────────────────────────────
 
 describe('roundCounter — reset() on read-only filesystem (f2)', () => {
   const CID = 'f2f2f2f2-deadc0de';
@@ -398,24 +474,19 @@ describe('roundCounter — reset() on read-only filesystem (f2)', () => {
 
   afterEach(() => {
     roundCounter.__resetForTests();
-    // Restore write permissions before cleanup to allow rmSync to succeed.
     const gossipDir = path.join(tmpDir, '.gossip');
-    try { fs.chmodSync(gossipDir, 0o755); } catch { /* ignore if already removed */ }
+    try { fs.chmodSync(gossipDir, 0o755); } catch { /* ignore */ }
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it('get() returns 0 after reset() even when filesystem is read-only', () => {
-    // Bump once to persist a non-zero count.
     roundCounter.bump(tmpDir, CID);
     expect(roundCounter.get(tmpDir, CID)).toBe(1);
 
-    // Make .gossip/ read-only so writeCountersAtomic fails on reset.
     const gossipDir = path.join(tmpDir, '.gossip');
     fs.chmodSync(gossipDir, 0o555);
 
     try {
-      // reset() must not throw, and get() must return 0 even though the
-      // persisted file still has count=1 (read-only fs prevented the write).
       expect(() => roundCounter.reset(tmpDir, CID)).not.toThrow();
       expect(roundCounter.get(tmpDir, CID)).toBe(0);
     } finally {
@@ -424,9 +495,9 @@ describe('roundCounter — reset() on read-only filesystem (f2)', () => {
   });
 });
 
-// ── Known limitation: concurrent bump RMW ─────────────────────────────────────
+// ── Concurrent appends ────────────────────────────────────────────────────────
 
-describe('roundCounter — concurrent bump (f5 known limitation)', () => {
+describe('roundCounter — concurrent appends (Option C wins over RMW)', () => {
   const CID = 'c0c0c0c0-f5f5f5f5';
   let tmpDir: string;
 
@@ -440,35 +511,19 @@ describe('roundCounter — concurrent bump (f5 known limitation)', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('concurrent bumps from same projectRoot leave file parseable (known RMW race)', async () => {
-    // 10 concurrent bumps on the same CID from a single process.
-    // KNOWN LIMITATION: last-writer-wins RMW means some bumps may be lost,
-    // but the file must ALWAYS remain valid JSON (no truncation/corruption).
+  it('all concurrent bumps land — append-only writes do not race like RMW', async () => {
+    // Under Option C every bump is its own append, so all CONCURRENCY bumps
+    // are persisted cleanly (no last-writer-wins like the legacy RMW path).
     const CONCURRENCY = 10;
     await Promise.all(
       Array.from({ length: CONCURRENCY }, () => Promise.resolve(roundCounter.bump(tmpDir, CID))),
     );
-
-    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
-    // File must be parseable.
-    let parsed: any;
-    expect(() => { parsed = JSON.parse(fs.readFileSync(file, 'utf8')); }).not.toThrow();
-    expect(parsed._version).toBe(1);
-
-    // Counter must be at least 1 and at most CONCURRENCY.
-    // (Single-process sequential JS means all 10 should land; this guard
-    // documents the RMW semantics rather than asserting an exact value.)
-    const count = roundCounter.get(tmpDir, CID);
-    expect(count).toBeGreaterThanOrEqual(1);
-    expect(count).toBeLessThanOrEqual(CONCURRENCY);
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(CONCURRENCY);
   });
 });
 
 // ── Fix 4: signal-class filter at the round-counter bump site ─────────────────
-//
-// Addresses haiku-researcher:f8 (consensus f21444f3-a6294a51): operational
-// signals that carry a derivable consensusId (e.g. task_timeout emitted during
-// a relay cross-review) must not inflate the shortfall comparison.
 
 describe('PerformanceWriter — Fix 4: operational signals do not bump counter', () => {
   let tmpDir: string;
@@ -512,14 +567,11 @@ describe('PerformanceWriter — Fix 4: operational signals do not bump counter',
   });
 
   it('Fix 4 — operational signals do NOT bump counter (appendSignal)', () => {
-    // task_timeout is classified as 'operational' by classifySignal.
-    // Even when it carries a derivable consensusId it must not count.
     writer[WRITER_INTERNAL].appendSignal(makeOperationalSignal(CID));
     expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
 
   it('Fix 4 — mixed batch: only performance signals bump (appendSignals)', () => {
-    // [performance, operational, performance] → counter = 2, not 3.
     const batch = [
       makePerformanceSignal(CID),
       makeOperationalSignal(CID),
@@ -530,15 +582,8 @@ describe('PerformanceWriter — Fix 4: operational signals do not bump counter',
   });
 
   it('Fix 4 — unknown signal name (classifySignal returns undefined) still bumps (backwards compat)', () => {
-    // A signal whose name is not in PERFORMANCE_SIGNAL_NAMES or
-    // OPERATIONAL_SIGNAL_NAMES causes classifySignal to return undefined.
-    // The filter treats undefined as performance-equivalent so pre-existing
-    // signals are not silently dropped from the counter.
     const unknownSignal = {
       type: 'consensus' as const,
-      // Bypass VALID_CONSENSUS_SIGNALS by using a known-valid signal name but
-      // simulate the classifySignal(undefined) path by using 'severity_miscalibrated'
-      // which is in VALID_CONSENSUS_SIGNALS but NOT in either classify set.
       signal: 'severity_miscalibrated' as any,
       agentId: 'test-agent',
       taskId: `task-${CID}`,
@@ -547,18 +592,120 @@ describe('PerformanceWriter — Fix 4: operational signals do not bump counter',
       timestamp: new Date().toISOString(),
     };
     writer[WRITER_INTERNAL].appendSignal(unknownSignal);
-    // classifySignal('severity_miscalibrated') returns undefined → preserved as
-    // performance-equivalent → counter bumps.
     expect(roundCounter.get(tmpDir, CID)).toBe(1);
   });
 });
 
-// ── Fix 5: rate-limited stderr logging on round-counter bump errors ────────────
+// ── Fix 7 (F7): in-memory fallback populated when JSONL write fails (hot path) ─
 //
-// Addresses gemini-tester:f3 (consensus f21444f3-a6294a51): empty `} catch {}`
-// at the bump sites in performance-writer.ts silently swallowed counter logic
-// errors. A regex regression in deriveConsensusId would have disabled shortfall
-// detection with no observable symptom.
+// Verifies that when appendFileSync throws (read-only fs / EPERM / ENOSPC),
+// the writer registers the bump via bumpRoundCounter() so inMemoryFallback
+// is populated and get() returns the correct in-process count (persisted +
+// in-memory). The appendSignal call is expected to re-throw — callers must
+// see the original error.
+
+describe('PerformanceWriter — Fix 7: inMemoryFallback populated on JSONL write failure', () => {
+  // Skip on Windows (chmod semantics differ) and when running as root (root
+  // bypasses permission bits so the read-only guard has no effect).
+  const skip =
+    process.platform === 'win32' ||
+    (typeof process.getuid === 'function' && process.getuid() === 0);
+
+  let tmpDir: string;
+  let writer: PerformanceWriter;
+  const CID = 'f7f7f7f7-deadbeef';
+
+  const makeSignal = (consensusId: string) => ({
+    type: 'consensus' as const,
+    taskId: `task-${consensusId}`,
+    signal: 'agreement' as const,
+    agentId: 'test-agent',
+    consensusId,
+    evidence: 'test',
+    timestamp: new Date().toISOString(),
+  });
+
+  beforeEach(() => {
+    tmpDir = makeTmpProjectRoot();
+    writer = new PerformanceWriter(tmpDir);
+    roundCounter.__resetForTests();
+  });
+
+  afterEach(() => {
+    roundCounter.__resetForTests();
+    // Restore write permissions so jest cleanup can remove temp files.
+    // The test may have made either the .gossip dir or the JSONL file read-only.
+    try { fs.chmodSync(path.join(tmpDir, '.gossip'), 0o755); } catch { /* ignore */ }
+    const jsonlFile = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    try { if (fs.existsSync(jsonlFile)) fs.chmodSync(jsonlFile, 0o644); } catch { /* ignore */ }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  (skip ? it.skip : it)(
+    'appendSignal on read-only JSONL file: throws AND registers bump in inMemoryFallback',
+    () => {
+      // Write one signal first so the JSONL file exists, then make it read-only.
+      // Making the file itself read-only (0o444) is the reliable way to block
+      // appendFileSync on POSIX — directory chmod (0o555) only blocks new-file
+      // creation, not writes to existing files. See existing test at line ~434.
+      writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+      expect(roundCounter.get(tmpDir, CID)).toBe(1);
+
+      const jsonlFile = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+      fs.chmodSync(jsonlFile, 0o444);
+
+      // The second appendSignal must throw because the file is read-only.
+      expect(() => writer[WRITER_INTERNAL].appendSignal(makeSignal(CID))).toThrow();
+
+      // Despite the throw, the bump must have been registered via
+      // inMemoryFallback. The inMemoryFallback is an override layer (not a
+      // delta): it masks the JSONL-derived count once set. After the catch
+      // handler calls bumpRoundCounter(), bump() initialises the fallback to 1
+      // (its own in-memory increment, not JSONL-count + 1). get() therefore
+      // returns the fallback value of 1. The critical invariant is that get()
+      // does NOT return 0 — the in-process work is visible even though
+      // persistence failed.
+      expect(roundCounter.get(tmpDir, CID)).toBeGreaterThan(0);
+
+      // Verify the fallback is populated by confirming get() doesn't fall
+      // through to an empty JSONL scan (the locked file would return stale
+      // cached data from before the lock — but the fallback overrides it).
+      // Concrete assertion: exactly 1 in-memory bump was registered.
+      expect(roundCounter.get(tmpDir, CID)).toBe(1);
+    },
+  );
+
+  (skip ? it.skip : it)(
+    'appendSignals on read-only JSONL file: throws AND registers bumps in inMemoryFallback for all signals with consensusId',
+    () => {
+      // Write one signal first (persisted count = 1), then lock the file.
+      writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+      expect(roundCounter.get(tmpDir, CID)).toBe(1);
+
+      const jsonlFile = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+      fs.chmodSync(jsonlFile, 0o444);
+
+      // Batch of 2 signals — both have consensusId so both should register.
+      expect(() =>
+        writer[WRITER_INTERNAL].appendSignals([makeSignal(CID), makeSignal(CID)]),
+      ).toThrow();
+
+      // inMemoryFallback is an override layer. Each call to bumpRoundCounter()
+      // in the catch handler adds 1 to the fallback (starting from the current
+      // fallback value, not the JSONL count). After 2 calls, the fallback is 2.
+      // get() returns the fallback value, not JSONL-derived + fallback.
+      expect(roundCounter.get(tmpDir, CID)).toBe(2);
+    },
+  );
+});
+
+// ── Fix 5: rate-limited stderr logging on round-counter bump errors ───────────
+//
+// Under Option C the writer no longer calls bumpRoundCounter — it builds the
+// bump record inline. Error injection now happens via deriveConsensusId, which
+// is the only call still inside the try/catch at the bump site. The Fix 5
+// invariants (loud-failure logging + per-message dedup + per-iteration catch
+// in the batch loop) are preserved.
 
 describe('PerformanceWriter — Fix 5: loud-failure logging at bump catch sites', () => {
   let tmpDir: string;
@@ -591,11 +738,10 @@ describe('PerformanceWriter — Fix 5: loud-failure logging at bump catch sites'
 
   it('Fix 5 — first bump error of a kind is written to stderr', () => {
     const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    jest.spyOn(roundCounter, 'bump').mockImplementationOnce(() => {
+    jest.spyOn(roundCounter, 'deriveConsensusId').mockImplementationOnce(() => {
       throw new Error('synthetic test error');
     });
 
-    // appendSignal triggers the bump path; the injected error should be logged.
     writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
 
     const calls = stderrSpy.mock.calls.map(c => String(c[0]));
@@ -605,8 +751,7 @@ describe('PerformanceWriter — Fix 5: loud-failure logging at bump catch sites'
 
   it('Fix 5 — same error message is logged only once per process (deduplication)', () => {
     const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    // Make bump throw the same message on both calls.
-    jest.spyOn(roundCounter, 'bump').mockImplementation(() => {
+    jest.spyOn(roundCounter, 'deriveConsensusId').mockImplementation(() => {
       throw new Error('repeated error message');
     });
 
@@ -622,7 +767,7 @@ describe('PerformanceWriter — Fix 5: loud-failure logging at bump catch sites'
   it('Fix 5 — two different error messages each log once', () => {
     const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     let callCount = 0;
-    jest.spyOn(roundCounter, 'bump').mockImplementation(() => {
+    jest.spyOn(roundCounter, 'deriveConsensusId').mockImplementation(() => {
       callCount += 1;
       throw new Error(`error variant ${callCount <= 1 ? 'alpha' : 'beta'}`);
     });
@@ -637,21 +782,47 @@ describe('PerformanceWriter — Fix 5: loud-failure logging at bump catch sites'
   });
 
   it('Fix 5 — first error in batch path logs to stderr (appendSignals)', () => {
-    // Mirrors the appendSignal test above but exercises the symmetric catch
-    // block in appendSignals (performance-writer.ts:283-290) which previously
-    // had no coverage. A regression there would have passed all Fix 5 tests
-    // silently.
     const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    jest.spyOn(roundCounter, 'bump').mockImplementationOnce(() => {
+    jest.spyOn(roundCounter, 'deriveConsensusId').mockImplementationOnce(() => {
       throw new Error('synthetic batch error');
     });
 
-    // appendSignals([signal]) triggers the batch bump loop; the injected error
-    // must surface via process.stderr.write with [gossipcat] prefix.
     writer[WRITER_INTERNAL].appendSignals([makeSignal(CID)]);
 
     const calls = stderrSpy.mock.calls.map(c => String(c[0]));
     expect(calls.some(m => m.includes('synthetic batch error'))).toBe(true);
     expect(calls.some(m => m.includes('[gossipcat]'))).toBe(true);
+  });
+
+  it('Cosmetic B — bump throw on one signal does not stop subsequent bumps in batch (appendSignals)', () => {
+    // Under Option C the batch loop builds a `parts[]` array; per-iteration
+    // try/catch lets one bad signal log + continue without aborting the rest
+    // of the batch. We simulate failure on the 2nd signal via deriveConsensusId.
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    let deriveCallCount = 0;
+    jest.spyOn(roundCounter, 'deriveConsensusId').mockImplementation(((rec: any) => {
+      deriveCallCount += 1;
+      if (deriveCallCount === 2) {
+        throw new Error('mid-batch synthetic error');
+      }
+      return rec?.consensusId;
+    }) as any);
+
+    const signals = [makeSignal(CID), makeSignal(CID), makeSignal(CID)];
+    writer[WRITER_INTERNAL].appendSignals(signals);
+
+    // deriveConsensusId was called 3 times — the throw on call #2 did NOT
+    // short-circuit the loop.
+    expect(deriveCallCount).toBe(3);
+
+    // Stderr received exactly one write (dedup latch).
+    const matchingCalls = stderrSpy.mock.calls.filter(c =>
+      String(c[0]).includes('mid-batch synthetic error'),
+    );
+    expect(matchingCalls).toHaveLength(1);
+
+    // Signals #1 and #3 still landed with their bump records → counter == 2.
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
   });
 });

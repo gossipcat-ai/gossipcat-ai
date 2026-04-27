@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'fs'
 import { join } from 'path';
 import { PerformanceSignal, classifySignal } from './consensus-types';
 import type { EmissionPath } from './completion-signals.allowlist';
-import { bump as bumpRoundCounter, reset as resetRoundCounter, deriveConsensusId } from './round-counter';
+import { bump as bumpRoundCounter, reset as resetRoundCounter, deriveConsensusId, makeBumpRecord } from './round-counter';
 
 /**
  * Fix 5 (spec 2026-04-27-self-telemetry-remediation §Fix 5): rate-limited
@@ -229,22 +229,25 @@ export class PerformanceWriter {
       rotateJsonlIfNeeded(this.filePath);
       const stamped = stampSignalClass(signal);
       const row = { ...stamped, _emission_path: emissionPath };
-      appendFileSync(this.filePath, JSON.stringify(row) + '\n');
-      bumpSampleCounter(this.projectRoot, 1);
-      // Phase A self-telemetry: count signals per consensus round so
-      // collect-end can detect shortfalls. Non-throwing by design.
-      // Fix 4 (spec 2026-04-27-self-telemetry-remediation §Fix 4):
-      // Only count performance-class signals toward the round expected count.
-      // Operational signals (task_timeout, task_empty, consensus_coverage_degraded)
-      // are diagnostic and should not inflate the shortfall comparison. signal_class
-      // is "optional, write-forward-only, no historical backfill" per consensus-types.ts —
-      // when classifySignal returns undefined (unknown signal name), preserve as
-      // performance-equivalent for backwards compatibility.
+      // Option C (spec 2026-04-27-self-telemetry-crash-consistency): build the
+      // counter-bump meta-record and concatenate it with the signal payload so
+      // both land in a single appendFileSync call. This eliminates the
+      // two-file split-write window where a crash between the signal write and
+      // the counter bump could orphan one or the other.
+      //
+      // Fix 4 (spec 2026-04-27-self-telemetry-remediation §Fix 4) is preserved:
+      // operational signals do not contribute a bump record. classifySignal
+      // returning undefined is preserved as performance-equivalent (backwards
+      // compat for unknown signal names).
+      let payload = JSON.stringify(row) + '\n';
       try {
         const cls = classifySignal(signal.signal);
         if (cls === undefined || cls === 'performance') {
           const cid = deriveConsensusId(signal as { consensusId?: string; findingId?: string });
-          if (cid) bumpRoundCounter(this.projectRoot, cid);
+          if (cid) {
+            const bumpRec = makeBumpRecord(cid, emissionPath);
+            payload += JSON.stringify(bumpRec) + '\n';
+          }
         }
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e);
@@ -255,6 +258,27 @@ export class PerformanceWriter {
           } catch { /* best-effort */ }
         }
       }
+      // If the JSONL write fails (read-only fs, EPERM, ENOSPC, etc.), register
+      // the bump via bumpRoundCounter() so get() can still report in-process
+      // work via inMemoryFallback. Re-throw so the caller knows persistence
+      // failed — the contract is: counter is best-effort, error visibility is
+      // mandatory.
+      try {
+        appendFileSync(this.filePath, payload);
+      } catch (writeErr) {
+        const cid = deriveConsensusId(signal as { consensusId?: string; findingId?: string });
+        if (cid) {
+          try {
+            // bump() catches its own JSONL error and falls through to
+            // inMemoryFallback — so on a read-only fs this is a no-op write
+            // plus an in-memory register. No double-bump: the payload that
+            // failed to land never contributed a JSONL record.
+            bumpRoundCounter(this.projectRoot, cid);
+          } catch { /* best-effort */ }
+        }
+        throw writeErr;
+      }
+      bumpSampleCounter(this.projectRoot, 1);
     },
 
     /**
@@ -264,31 +288,56 @@ export class PerformanceWriter {
     appendSignals: (signals: PerformanceSignal[], emissionPath: EmissionPath = 'unknown'): void => {
       if (signals.length === 0) return;
       for (const s of signals) validateSignal(s);
-      const data = signals
-        .map(s => JSON.stringify({ ...stampSignalClass(s), _emission_path: emissionPath }))
-        .join('\n') + '\n';
-      rotateJsonlIfNeeded(this.filePath);
-      appendFileSync(this.filePath, data);
-      bumpSampleCounter(this.projectRoot, signals.length);
-      // Phase A self-telemetry: count each signal toward its consensus round.
-      // Fix 4: skip operational-class signals at the bump site (same rationale
-      // as appendSignal — see comment above).
-      try {
-        for (const s of signals) {
+      // Option C: interleave each signal payload with its counter-bump
+      // meta-record (when applicable) into a single appendFileSync call. The
+      // signal and its bump cannot split across a crash boundary because they
+      // are part of the same write(2). Per-iteration try/catch preserves the
+      // Cosmetic-B invariant that one bad signal does not abort the rest of
+      // the batch (PR #5: feedback_signal_serialization_defer style).
+      const parts: string[] = [];
+      for (const s of signals) {
+        const stamped = stampSignalClass(s);
+        const row = { ...stamped, _emission_path: emissionPath };
+        parts.push(JSON.stringify(row));
+        try {
           const cls = classifySignal(s.signal);
           if (cls !== undefined && cls !== 'performance') continue;
           const cid = deriveConsensusId(s as { consensusId?: string; findingId?: string });
-          if (cid) bumpRoundCounter(this.projectRoot, cid);
-        }
-      } catch (e) {
-        const msg = (e as Error)?.message ?? String(e);
-        if (!loggedCounterErrors.has(msg)) {
-          loggedCounterErrors.add(msg);
-          try {
-            process.stderr.write(`[gossipcat] round-counter bump failed: ${msg}\n`);
-          } catch { /* best-effort */ }
+          if (cid) {
+            const bumpRec = makeBumpRecord(cid, emissionPath);
+            parts.push(JSON.stringify(bumpRec));
+          }
+        } catch (e) {
+          const msg = (e as Error)?.message ?? String(e);
+          if (!loggedCounterErrors.has(msg)) {
+            loggedCounterErrors.add(msg);
+            try {
+              process.stderr.write(`[gossipcat] round-counter bump failed: ${msg}\n`);
+            } catch { /* best-effort */ }
+          }
         }
       }
+      const data = parts.join('\n') + '\n';
+      rotateJsonlIfNeeded(this.filePath);
+      // If the JSONL write fails (read-only fs, EPERM, ENOSPC, etc.), register
+      // bumps via bumpRoundCounter() so get() can still report in-process work
+      // via inMemoryFallback for each signal that had a derivable consensusId.
+      // Re-throw so the caller knows persistence failed.
+      try {
+        appendFileSync(this.filePath, data);
+      } catch (writeErr) {
+        for (const s of signals) {
+          const cid = deriveConsensusId(s as { consensusId?: string; findingId?: string });
+          if (cid) {
+            const cls = classifySignal(s.signal);
+            if (cls === undefined || cls === 'performance') {
+              try { bumpRoundCounter(this.projectRoot, cid); } catch { /* best-effort */ }
+            }
+          }
+        }
+        throw writeErr;
+      }
+      bumpSampleCounter(this.projectRoot, signals.length);
     },
   };
 
