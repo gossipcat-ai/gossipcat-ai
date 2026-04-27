@@ -462,3 +462,92 @@ describe('roundCounter — concurrent bump (f5 known limitation)', () => {
     expect(count).toBeLessThanOrEqual(CONCURRENCY);
   });
 });
+
+// ── Fix 4: signal-class filter at the round-counter bump site ─────────────────
+//
+// Addresses haiku-researcher:f8 (consensus f21444f3-a6294a51): operational
+// signals that carry a derivable consensusId (e.g. task_timeout emitted during
+// a relay cross-review) must not inflate the shortfall comparison.
+
+describe('PerformanceWriter — Fix 4: operational signals do not bump counter', () => {
+  let tmpDir: string;
+  let writer: PerformanceWriter;
+  const CID = 'f4f4f4f4-deadc0de';
+
+  beforeEach(() => {
+    tmpDir = makeTmpProjectRoot();
+    writer = new PerformanceWriter(tmpDir);
+    roundCounter.__resetForTests();
+  });
+
+  afterEach(() => {
+    roundCounter.__resetForTests();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const makePerformanceSignal = (consensusId: string) => ({
+    type: 'consensus' as const,
+    signal: 'unique_confirmed' as const,
+    agentId: 'test-agent',
+    taskId: `task-${consensusId}`,
+    consensusId,
+    evidence: 'test',
+    timestamp: new Date().toISOString(),
+  });
+
+  const makeOperationalSignal = (consensusId: string) => ({
+    type: 'consensus' as const,
+    signal: 'task_timeout' as const,
+    agentId: 'test-agent',
+    taskId: `task-${consensusId}`,
+    consensusId,
+    evidence: 'timeout diagnostic',
+    timestamp: new Date().toISOString(),
+  });
+
+  it('Fix 4 — performance signals bump counter normally (appendSignal)', () => {
+    writer[WRITER_INTERNAL].appendSignal(makePerformanceSignal(CID));
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
+  });
+
+  it('Fix 4 — operational signals do NOT bump counter (appendSignal)', () => {
+    // task_timeout is classified as 'operational' by classifySignal.
+    // Even when it carries a derivable consensusId it must not count.
+    writer[WRITER_INTERNAL].appendSignal(makeOperationalSignal(CID));
+    expect(roundCounter.get(tmpDir, CID)).toBe(0);
+  });
+
+  it('Fix 4 — mixed batch: only performance signals bump (appendSignals)', () => {
+    // [performance, operational, performance] → counter = 2, not 3.
+    const batch = [
+      makePerformanceSignal(CID),
+      makeOperationalSignal(CID),
+      makePerformanceSignal(CID),
+    ];
+    writer[WRITER_INTERNAL].appendSignals(batch);
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
+  });
+
+  it('Fix 4 — unknown signal name (classifySignal returns undefined) still bumps (backwards compat)', () => {
+    // A signal whose name is not in PERFORMANCE_SIGNAL_NAMES or
+    // OPERATIONAL_SIGNAL_NAMES causes classifySignal to return undefined.
+    // The filter treats undefined as performance-equivalent so pre-existing
+    // signals are not silently dropped from the counter.
+    const unknownSignal = {
+      type: 'consensus' as const,
+      // Bypass VALID_CONSENSUS_SIGNALS by using a known-valid signal name but
+      // simulate the classifySignal(undefined) path by using 'severity_miscalibrated'
+      // which is in VALID_CONSENSUS_SIGNALS but NOT in either classify set.
+      signal: 'severity_miscalibrated' as any,
+      agentId: 'test-agent',
+      taskId: `task-${CID}`,
+      consensusId: CID,
+      evidence: 'test',
+      timestamp: new Date().toISOString(),
+    };
+    writer[WRITER_INTERNAL].appendSignal(unknownSignal);
+    // classifySignal('severity_miscalibrated') returns undefined → preserved as
+    // performance-equivalent → counter bumps.
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
+  });
+});

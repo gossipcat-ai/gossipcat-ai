@@ -215,9 +215,19 @@ export class PerformanceWriter {
       bumpSampleCounter(this.projectRoot, 1);
       // Phase A self-telemetry: count signals per consensus round so
       // collect-end can detect shortfalls. Non-throwing by design.
+      // Fix 4 (spec 2026-04-27-self-telemetry-remediation §Fix 4):
+      // Only count performance-class signals toward the round expected count.
+      // Operational signals (task_timeout, task_empty, consensus_coverage_degraded)
+      // are diagnostic and should not inflate the shortfall comparison. signal_class
+      // is "optional, write-forward-only, no historical backfill" per consensus-types.ts —
+      // when classifySignal returns undefined (unknown signal name), preserve as
+      // performance-equivalent for backwards compatibility.
       try {
-        const cid = deriveConsensusId(signal as { consensusId?: string; findingId?: string });
-        if (cid) bumpRoundCounter(this.projectRoot, cid);
+        const cls = classifySignal(signal.signal);
+        if (cls === undefined || cls === 'performance') {
+          const cid = deriveConsensusId(signal as { consensusId?: string; findingId?: string });
+          if (cid) bumpRoundCounter(this.projectRoot, cid);
+        }
       } catch { /* non-fatal */ }
     },
 
@@ -235,8 +245,12 @@ export class PerformanceWriter {
       appendFileSync(this.filePath, data);
       bumpSampleCounter(this.projectRoot, signals.length);
       // Phase A self-telemetry: count each signal toward its consensus round.
+      // Fix 4: skip operational-class signals at the bump site (same rationale
+      // as appendSignal — see comment above).
       try {
         for (const s of signals) {
+          const cls = classifySignal(s.signal);
+          if (cls !== undefined && cls !== 'performance') continue;
           const cid = deriveConsensusId(s as { consensusId?: string; findingId?: string });
           if (cid) bumpRoundCounter(this.projectRoot, cid);
         }
