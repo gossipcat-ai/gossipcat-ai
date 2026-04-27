@@ -798,6 +798,15 @@ export async function handleCollect(
         // identical-content findings by their category. Legacy records
         // without this field still read correctly — downstream code
         // treats missing category as empty string.
+        //
+        // `type` is the bug-vs-insight axis from the parsed
+        // `<agent_finding type="...">` tag. Required by the auto-resolver
+        // (packages/orchestrator/src/finding-resolver.ts) so that
+        // `type === 'insight'` rows are skipped — insights describe an
+        // observation, not a bug whose fix can be detected by symbol
+        // absence. Pre-PR-299 the field was missing entirely and the
+        // `if (entry.type === 'insight') continue` filter was a no-op.
+        const findingType = (f as { findingType?: 'finding' | 'suggestion' | 'insight' }).findingType;
         const entry = {
           timestamp,
           taskId: f.id || null,
@@ -805,6 +814,7 @@ export async function handleCollect(
           confirmedBy: f.confirmedBy || [],
           finding: f.finding,
           tag: f.tag || 'unknown',
+          type: findingType ?? null,
           confidence: f.confidence || 0,
           status: 'open',
           category: (f as { category?: string }).category ?? null,

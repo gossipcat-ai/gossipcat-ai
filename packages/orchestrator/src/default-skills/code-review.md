@@ -19,7 +19,7 @@
 7. Order findings critical → low within your response — every finding still ships as one `<agent_finding>` tag, never as a Markdown heading, `**F1 —**` numbering, or top-of-output summary prose
 
 ## Output Format
-Use the FINDING TAG SCHEMA from the system prompt. Your response MUST contain only `<agent_finding>` tags. Each tag MUST have a `type` attribute set to one of: `finding`, `suggestion`, or `insight`. Any other type (CONFIRMED, BUG, INFO, ISSUE, RISK, etc.) will be silently dropped by the parser. Do NOT use prose, summaries, or markdown headings outside of the tags.
+Use the FINDING TAG SCHEMA from the system prompt. Do NOT invent skill-specific output formats; they break parsing and cross-review. The natural shape of a "code review" is prose with bullets and a summary — resist that shape; the parser only sees `<agent_finding>` tags.
 
 ## Don't
 - Don't nitpick style issues that a linter should catch

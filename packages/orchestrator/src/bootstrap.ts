@@ -253,7 +253,8 @@ ${sessionSection}
 | \`gossip_dispatch(mode, ...)\` | Dispatch tasks. mode:\`"single"\` (agent_id + task), \`"parallel"\` (tasks array), \`"consensus"\` (tasks array + cross-review). |
 | \`gossip_collect(task_ids?, timeout_ms?, consensus?)\` | Collect results. Use \`consensus:true\` with explicit task_ids for cross-review. |
 | \`gossip_relay(task_id, result, error?)\` | Feed native Agent() result back into relay for consensus, memory, and gossip. |
-| \`gossip_signals(action, ...)\` | Record or retract consensus signals. action:\`"record"\` or \`"retract"\`. Call IMMEDIATELY on verify. |
+| \`gossip_signals(action, ...)\` | Record or retract consensus signals. action: \`record\` / \`retract\` / \`bulk_from_consensus\` / \`resolve\` (mark fixed-by-commit, no score adjustment) / \`unresolve\` (revert a bad auto-resolve). Call IMMEDIATELY on verify. |
+| \`gossip_resolve_findings(full?, sinceSha?)\` | Walk open findings and auto-resolve any whose cited code has been fixed (file-scoped grep, comment-stripped, multi-cite AND, structural \`type:insight\` exclusion). Hash-chained audit at \`.gossip/finding-resolutions.jsonl\`. Pass \`full:true\` for a complete sweep. |
 | \`gossip_status()\` | Show system status + agent list. |
 | \`gossip_setup(mode, agents, ...)\` | Create/update team. mode:\`"merge"\`, \`"replace"\`, or \`"update_instructions"\`. |
 | \`gossip_session_save(notes?)\` | Save session summary for next session context. Call before ending session. |
