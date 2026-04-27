@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'fs'
 import { join } from 'path';
 import { PerformanceSignal, classifySignal } from './consensus-types';
 import type { EmissionPath } from './completion-signals.allowlist';
-import { bump as bumpRoundCounter, deriveConsensusId } from './round-counter';
+import { bump as bumpRoundCounter, reset as resetRoundCounter, deriveConsensusId } from './round-counter';
 
 export type { EmissionPath } from './completion-signals.allowlist';
 
@@ -217,7 +217,7 @@ export class PerformanceWriter {
       // collect-end can detect shortfalls. Non-throwing by design.
       try {
         const cid = deriveConsensusId(signal as { consensusId?: string; findingId?: string });
-        if (cid) bumpRoundCounter(cid);
+        if (cid) bumpRoundCounter(this.projectRoot, cid);
       } catch { /* non-fatal */ }
     },
 
@@ -238,7 +238,7 @@ export class PerformanceWriter {
       try {
         for (const s of signals) {
           const cid = deriveConsensusId(s as { consensusId?: string; findingId?: string });
-          if (cid) bumpRoundCounter(cid);
+          if (cid) bumpRoundCounter(this.projectRoot, cid);
         }
       } catch { /* non-fatal */ }
     },
@@ -285,6 +285,15 @@ export class PerformanceWriter {
     validateSignal(classStamped);
     const stamped = { ...classStamped, _emission_path: 'mcp-server-signals' as EmissionPath };
     appendFileSync(this.filePath, JSON.stringify(stamped) + '\n');
+    // Fix 2 (spec 2026-04-27-self-telemetry-remediation §Fix 2): drop the
+    // accumulated round counter for this consensusId. The retraction tombstone
+    // does not itself bump the counter (preserving the documented invariant
+    // that retraction skips appendSignal/bumpSampleCounter), but the round is
+    // dead — leaving the counter at N would compare against the now-empty
+    // findingsAll on the next collect() and emit a false-positive
+    // signal_loss_suspected. Non-fatal: persistence errors (read-only fs,
+    // missing file) must not break the retract path.
+    try { resetRoundCounter(this.projectRoot, consensusId); } catch { /* non-fatal */ }
   }
 }
 

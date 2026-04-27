@@ -2,6 +2,10 @@
 //
 // Unit and integration-lite tests for Phase A self-telemetry: round-counter
 // module (bump / get / reset / deriveConsensusId) + performanceWriter wiring.
+//
+// Persistence-aware: each test allocates a fresh tmpDir for `projectRoot` so
+// the .gossip/round-counters.json file is isolated per test (Fix 1, spec
+// 2026-04-27-self-telemetry-remediation §Fix 1).
 
 import * as roundCounter from '../../packages/orchestrator/src/round-counter';
 import { PerformanceWriter } from '@gossip/orchestrator';
@@ -10,44 +14,186 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
+function makeTmpProjectRoot(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gossip-rc-'));
+  fs.mkdirSync(path.join(dir, '.gossip'), { recursive: true });
+  return dir;
+}
+
 // ── Unit: bump / get / reset ──────────────────────────────────────────────────
 
 describe('roundCounter — bump / get / reset', () => {
   const CID = 'aabbccdd-11223344';
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpProjectRoot();
+    roundCounter.__resetForTests();
+  });
 
   afterEach(() => {
-    roundCounter.reset(CID);
+    roundCounter.__resetForTests();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it('get returns 0 for an unknown consensusId', () => {
-    expect(roundCounter.get(CID)).toBe(0);
+    expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
 
   it('bump increments by 1 each call', () => {
-    roundCounter.bump(CID);
-    expect(roundCounter.get(CID)).toBe(1);
-    roundCounter.bump(CID);
-    expect(roundCounter.get(CID)).toBe(2);
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
   });
 
   it('reset removes the entry', () => {
-    roundCounter.bump(CID);
-    roundCounter.bump(CID);
-    roundCounter.reset(CID);
-    expect(roundCounter.get(CID)).toBe(0);
+    roundCounter.bump(tmpDir, CID);
+    roundCounter.bump(tmpDir, CID);
+    roundCounter.reset(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
 
   it('different consensusIds are tracked independently', () => {
     const CID2 = 'deadbeef-cafebabe';
+    roundCounter.bump(tmpDir, CID);
+    roundCounter.bump(tmpDir, CID);
+    roundCounter.bump(tmpDir, CID2);
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
+    expect(roundCounter.get(tmpDir, CID2)).toBe(1);
+  });
+
+  it('different projectRoots are isolated', () => {
+    const tmpDir2 = makeTmpProjectRoot();
     try {
-      roundCounter.bump(CID);
-      roundCounter.bump(CID);
-      roundCounter.bump(CID2);
-      expect(roundCounter.get(CID)).toBe(2);
-      expect(roundCounter.get(CID2)).toBe(1);
+      roundCounter.bump(tmpDir, CID);
+      roundCounter.bump(tmpDir, CID);
+      roundCounter.bump(tmpDir2, CID);
+      expect(roundCounter.get(tmpDir, CID)).toBe(2);
+      expect(roundCounter.get(tmpDir2, CID)).toBe(1);
     } finally {
-      roundCounter.reset(CID2);
+      fs.rmSync(tmpDir2, { recursive: true, force: true });
     }
+  });
+});
+
+// ── Persistence ───────────────────────────────────────────────────────────────
+
+describe('roundCounter — persistence (Fix 1)', () => {
+  const CID = 'cafebabe-feedf00d';
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpProjectRoot();
+    roundCounter.__resetForTests();
+  });
+
+  afterEach(() => {
+    roundCounter.__resetForTests();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('persists across a simulated process restart', () => {
+    roundCounter.bump(tmpDir, CID);
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
+
+    // Simulate restart: clear in-memory fallback. The persisted file must
+    // still contain the count, so a fresh `get()` returns 2.
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
+
+    // Subsequent bump increments from the persisted value, not from 0.
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(3);
+  });
+
+  it('writes a parseable JSON file with _version: 1', () => {
+    roundCounter.bump(tmpDir, CID);
+    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
+    const raw = fs.readFileSync(file, 'utf8');
+    const parsed = JSON.parse(raw);
+    expect(parsed._version).toBe(1);
+    expect(parsed.counts[CID]).toBe(1);
+  });
+
+  it('atomic write: file always parseable across many bumps', () => {
+    // Sequential bumps from a single process — exercise the temp+rename path
+    // and confirm the visible file never lands in a half-written state.
+    for (let i = 0; i < 25; i++) roundCounter.bump(tmpDir, CID);
+    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
+    expect(() => JSON.parse(fs.readFileSync(file, 'utf8'))).not.toThrow();
+    expect(roundCounter.get(tmpDir, CID)).toBe(25);
+  });
+
+  it('corrupt JSON file: bump still succeeds and overwrites', () => {
+    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
+    fs.writeFileSync(file, '{not valid json');
+    expect(() => roundCounter.bump(tmpDir, CID)).not.toThrow();
+    // After bump the file is canonical again.
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(parsed._version).toBe(1);
+    expect(parsed.counts[CID]).toBe(1);
+  });
+
+  it('schema mismatch: future _version treated as empty + warns once', () => {
+    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
+    fs.writeFileSync(file, JSON.stringify({ _version: 999, counts: { [CID]: 42 } }));
+
+    const writes: string[] = [];
+    const spy = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: any) => {
+        writes.push(typeof chunk === 'string' ? chunk : chunk.toString());
+        return true;
+      });
+
+    try {
+      roundCounter.bump(tmpDir, CID);
+      // Stale value ignored — bump starts from 0 + 1 = 1.
+      expect(roundCounter.get(tmpDir, CID)).toBe(1);
+
+      // First read after the bump's own RMW should NOT re-warn (the bump
+      // already overwrote the file with _version: 1). Force another mismatch
+      // and confirm the latch suppresses re-logging.
+      fs.writeFileSync(file, JSON.stringify({ _version: 999, counts: {} }));
+      roundCounter.bump(tmpDir, CID);
+
+      const schemaWarnings = writes.filter(w => w.includes('schema version'));
+      expect(schemaWarnings.length).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('read-only filesystem: bump does not throw and stays in-memory', () => {
+    const dir = path.join(tmpDir, '.gossip');
+    // chmod the .gossip directory to read-only. writeFileSync under it will fail.
+    fs.chmodSync(dir, 0o555);
+    try {
+      expect(() => roundCounter.bump(tmpDir, CID)).not.toThrow();
+      // In-memory fallback returns the bump within this process even though
+      // the file write failed.
+      expect(roundCounter.get(tmpDir, CID)).toBe(1);
+    } finally {
+      // Restore so afterEach cleanup can rm the dir.
+      fs.chmodSync(dir, 0o755);
+    }
+  });
+
+  it('missing file is treated as empty (no throw)', () => {
+    // No file ever written — bump should create it.
+    expect(roundCounter.get(tmpDir, CID)).toBe(0);
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
+  });
+
+  it('empty file is treated as empty (no throw)', () => {
+    const file = path.join(tmpDir, '.gossip', 'round-counters.json');
+    fs.writeFileSync(file, '');
+    expect(roundCounter.get(tmpDir, CID)).toBe(0);
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
   });
 });
 
@@ -99,14 +245,13 @@ describe('PerformanceWriter — round counter wiring', () => {
   const CID = 'cafef00d-beefdead';
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gossip-rc-'));
-    fs.mkdirSync(path.join(tmpDir, '.gossip'), { recursive: true });
+    tmpDir = makeTmpProjectRoot();
     writer = new PerformanceWriter(tmpDir);
-    roundCounter.reset(CID);
+    roundCounter.__resetForTests();
   });
 
   afterEach(() => {
-    roundCounter.reset(CID);
+    roundCounter.__resetForTests();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -122,15 +267,15 @@ describe('PerformanceWriter — round counter wiring', () => {
 
   it('bumps counter once per appendSignal with consensusId', () => {
     writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
-    expect(roundCounter.get(CID)).toBe(1);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
     writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
-    expect(roundCounter.get(CID)).toBe(2);
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
   });
 
   it('bumps counter for each signal in appendSignals', () => {
     const signals = [makeSignal(CID), makeSignal(CID), makeSignal(CID)];
     writer[WRITER_INTERNAL].appendSignals(signals);
-    expect(roundCounter.get(CID)).toBe(3);
+    expect(roundCounter.get(tmpDir, CID)).toBe(3);
   });
 
   it('does NOT bump counter for signals without consensusId or findingId', () => {
@@ -143,7 +288,7 @@ describe('PerformanceWriter — round counter wiring', () => {
     };
     writer[WRITER_INTERNAL].appendSignal(metaSignal);
     // Counter for CID stays at 0 — meta signals have no consensusId
-    expect(roundCounter.get(CID)).toBe(0);
+    expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
 
   it('shortfall detection: writing N signals → counter == N, dropping one → shortfall', () => {
@@ -152,7 +297,7 @@ describe('PerformanceWriter — round counter wiring', () => {
     for (let i = 0; i < N; i++) {
       writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
     }
-    const actual = roundCounter.get(CID);
+    const actual = roundCounter.get(tmpDir, CID);
     const findings_count = 4;
     expect(actual).toBe(N);
     expect(actual).toBeLessThan(findings_count); // shortfall detected
@@ -171,27 +316,39 @@ describe('PerformanceWriter — round counter wiring', () => {
       timestamp: new Date().toISOString(),
     };
     writer[WRITER_INTERNAL].appendSignal(signalWithFindingId);
-    expect(roundCounter.get(CID)).toBe(1);
+    expect(roundCounter.get(tmpDir, CID)).toBe(1);
   });
 
-  it('reset after signal_loss_suspected emit leaves counter at 0 (Fix 2 — counter reset)', () => {
-    // Simulate the shortfall path from collect.ts: 3 signals written for a
-    // round that had 4 findings → shortfall detected → signal_loss_suspected
-    // emitted (which self-bumps the counter) → resetRoundCounter called.
-    // After the reset a retry / Phase B reader must see a fresh counter (0).
+  it('reset after signal_loss_suspected emit leaves counter at 0', () => {
     const N = 3;
     for (let i = 0; i < N; i++) {
       writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
     }
-    expect(roundCounter.get(CID)).toBe(N);
+    expect(roundCounter.get(tmpDir, CID)).toBe(N);
 
     // Mimic the self-bump that emitPipelineSignals causes when it writes the
     // signal_loss_suspected diagnostic (pipeline signal carries consensusId).
-    roundCounter.bump(CID);
-    expect(roundCounter.get(CID)).toBe(N + 1);
+    roundCounter.bump(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(N + 1);
 
-    // Fix 2: resetRoundCounter is called immediately after emitPipelineSignals.
-    roundCounter.reset(CID);
-    expect(roundCounter.get(CID)).toBe(0);
+    // resetRoundCounter is called on collect-end (Cosmetic A — both happy and
+    // shortfall paths).
+    roundCounter.reset(tmpDir, CID);
+    expect(roundCounter.get(tmpDir, CID)).toBe(0);
+  });
+
+  it('Fix 2 — recordConsensusRoundRetraction resets the round counter', () => {
+    // Emit signals so the counter is non-zero.
+    const N = 4;
+    for (let i = 0; i < N; i++) {
+      writer[WRITER_INTERNAL].appendSignal(makeSignal(CID));
+    }
+    expect(roundCounter.get(tmpDir, CID)).toBe(N);
+
+    // Retract the round — counter must drop to 0 (not just decremented),
+    // mirroring the spec invariant that the round is "dead, drop accumulated
+    // signals."
+    writer.recordConsensusRoundRetraction(CID, 'test retraction');
+    expect(roundCounter.get(tmpDir, CID)).toBe(0);
   });
 });

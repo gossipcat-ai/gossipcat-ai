@@ -847,14 +847,18 @@ export async function handleCollect(
       const authId = consensusReport?.signals?.[0]?.consensusId
         ?? findingsAll.find(f => /^[0-9a-f]{8}-[0-9a-f]{8}:/.test(f.id ?? ''))?.id?.split(':')[0];
       if (authId) {
-        const findingsCount = findingsAll.length;
-        const actual = getRoundCounter(authId);
-        if (actual < findingsCount) {
-          const shortfall = findingsCount - actual;
-          process.stderr.write(
-            `[round-reconcile] consensusId=${authId} expected_min=${findingsCount} actual=${actual} shortfall=${shortfall}\n`
-          );
-          try {
+        // Cosmetic A (spec 2026-04-27-self-telemetry-remediation §Cosmetic A):
+        // the reset must fire on BOTH the shortfall and happy paths. Wrap the
+        // whole if-block in try/finally so the counter never leaks past
+        // collect-end regardless of whether signal_loss_suspected was emitted.
+        try {
+          const findingsCount = findingsAll.length;
+          const actual = getRoundCounter(process.cwd(), authId);
+          if (actual < findingsCount) {
+            const shortfall = findingsCount - actual;
+            process.stderr.write(
+              `[round-reconcile] consensusId=${authId} expected_min=${findingsCount} actual=${actual} shortfall=${shortfall}\n`
+            );
             emitPipelineSignals(process.cwd(), [{
               type: 'pipeline',
               signal: 'signal_loss_suspected',
@@ -865,10 +869,13 @@ export async function handleCollect(
               metadata: { expected_min: findingsCount, actual },
               timestamp: new Date().toISOString(),
             }]);
-          } finally {
-            // Clear the counter so a retry / Phase B reader sees fresh state, not the diagnostic's own bump.
-            resetRoundCounter(authId);
           }
+        } finally {
+          // Always clear the counter at collect-end — a retry or Phase B
+          // reader must see fresh state, not the diagnostic's own bump (on
+          // the shortfall path) and not stale survivors (on the happy path,
+          // where pre-Fix-1 the entry would leak in long-lived processes).
+          resetRoundCounter(process.cwd(), authId);
         }
       }
     } catch { /* best-effort */ }
