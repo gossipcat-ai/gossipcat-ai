@@ -43,6 +43,15 @@ const JSONL_FILENAME = 'agent-performance.jsonl';
  * project roots independent in the same process.
  */
 const inMemoryFallback = new Map<string, number>();
+
+/**
+ * Cap on backfill records appended per single bump() call when recovering from
+ * a read-only filesystem episode. A long ROFS interval can accumulate
+ * thousands of in-memory bumps; flushing them all in one synchronous loop
+ * blocks the event loop and amplifies I/O against a freshly-recovered FS. The
+ * remainder stays in `inMemoryFallback` and is drained by subsequent bumps.
+ */
+const MAX_BACKFILL_PER_BUMP = 100;
 const fallbackKey = (projectRoot: string, consensusId: string): string =>
   `${projectRoot} ${consensusId}`;
 
@@ -188,8 +197,12 @@ export function bump(projectRoot: string, consensusId: string): void {
     // the fallback intact (atomic flush: all-or-nothing).
     const priorCount = inMemoryFallback.get(fbk) ?? 0;
     if (priorCount > 0) {
-      let allFlushed = true;
-      for (let i = 0; i < priorCount; i++) {
+      // Cap per-bump backfill volume to keep the synchronous loop bounded
+      // (f3). The remainder is left in fbk for the next successful bump to
+      // drain.
+      const toFlush = Math.min(priorCount, MAX_BACKFILL_PER_BUMP);
+      let remaining = priorCount;
+      for (let i = 0; i < toFlush; i++) {
         const backfillRecord = {
           type: '_meta',
           signal: 'round_counter_bumped',
@@ -197,15 +210,18 @@ export function bump(projectRoot: string, consensusId: string): void {
           bumpedAt: new Date().toISOString(),
           _emission_path: 'round-counter-bump-backfill',
         };
-        if (!appendMetaRecord(projectRoot, backfillRecord)) {
-          allFlushed = false;
-          break;
-        }
+        if (!appendMetaRecord(projectRoot, backfillRecord)) break;
+        // Persist remainder atomically after each successful append (f1).
+        // If the loop breaks below this point, fbk holds exactly the
+        // not-yet-flushed count, so the next bump retries only the remainder
+        // — never the records already written.
+        remaining -= 1;
+        inMemoryFallback.set(fbk, remaining);
       }
-      if (allFlushed) {
+      if (remaining === 0) {
         inMemoryFallback.delete(fbk);
       }
-      // If !allFlushed, fbk stays at priorCount — next successful bump will retry.
+      // else: fbk holds remainder for next bump retry.
     } else {
       inMemoryFallback.delete(fbk);
     }

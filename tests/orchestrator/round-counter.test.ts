@@ -913,3 +913,183 @@ describe('PerformanceWriter — Fix 5: loud-failure logging at bump catch sites'
     expect(roundCounter.get(tmpDir, CID)).toBe(2);
   });
 });
+
+// ── Partial-flush atomicity + backfill cap (PR #309 follow-up: f1, f3, f4) ────
+//
+// Three failure modes addressed by the post-merge audit on PR #309:
+//   f1 (HIGH)   — partial-flush double-count: a backfill loop that breaks
+//                  mid-flight left fbk = priorCount, so the next bump retried
+//                  the WHOLE batch (including records already written to JSONL)
+//                  and produced duplicates.
+//   f3 (MEDIUM) — unbounded backfill: priorCount could grow to 1000s during a
+//                  long ROFS episode and then synchronously block the event
+//                  loop on a single bump() call when the FS recovered.
+//   f4 (LOW)    — no partial-failure tests existed.
+//
+// These tests gate the fix: per-step `inMemoryFallback.set(fbk, remaining)`
+// after each successful append + a `MAX_BACKFILL_PER_BUMP` cap on the loop.
+
+describe('roundCounter — partial-flush atomicity + backfill cap (f1, f3, f4)', () => {
+  const CID = 'aabbccdd-11223344';
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpProjectRoot();
+    roundCounter.__resetForTests();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    roundCounter.__resetForTests();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function countBumpRecords(): { live: number; backfill: number; total: number } {
+    const jsonlPath = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    if (!fs.existsSync(jsonlPath)) return { live: 0, backfill: 0, total: 0 };
+    const lines = fs.readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean);
+    let live = 0;
+    let backfill = 0;
+    for (const line of lines) {
+      let rec: any;
+      try { rec = JSON.parse(line); } catch { continue; }
+      if (rec?.type !== '_meta' || rec.signal !== 'round_counter_bumped') continue;
+      if (rec._emission_path === 'round-counter-bump-backfill') backfill++;
+      else if (rec._emission_path === 'round-counter-bump') live++;
+    }
+    return { live, backfill, total: live + backfill };
+  }
+
+  it('partial-flush retry does not double-count: 5 ROFS bumps + partial recovery + full recovery = no duplicates', () => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+
+    const gossipDir = path.join(tmpDir, '.gossip');
+
+    // Phase 1: 5 ROFS bumps accumulate in fbk.
+    fs.chmodSync(gossipDir, 0o555);
+    try {
+      for (let i = 0; i < 5; i++) roundCounter.bump(tmpDir, CID);
+    } finally {
+      fs.chmodSync(gossipDir, 0o755);
+    }
+    expect(roundCounter.get(tmpDir, CID)).toBe(5);
+
+    // Phase 2: spy appendFileSync to allow the live append + 2 backfill
+    // appends to succeed, then throw on the 3rd backfill. Mid-flush failure.
+    const real = fs.appendFileSync.bind(fs);
+    let callCount = 0;
+    const fsMod = require('fs');
+    const original = fsMod.appendFileSync;
+    fsMod.appendFileSync = (...args: any[]) => {
+      callCount++;
+      // Call 1: live append. Calls 2-3: first two backfills succeed.
+      // Call 4: third backfill throws → loop breaks with remaining=2.
+      if (callCount === 4) throw new Error('synthetic mid-flush EROFS');
+      return (real as any)(...args);
+    };
+    try {
+      roundCounter.bump(tmpDir, CID);
+    } finally {
+      fsMod.appendFileSync = original;
+    }
+
+    // After partial flush: JSONL has 1 live + 2 backfill = 3 records.
+    let counts = countBumpRecords();
+    expect(counts.live).toBe(1);
+    expect(counts.backfill).toBe(2);
+
+    // Phase 3: full recovery. Next bump must drain ONLY the remaining 3
+    // (priorCount started at 5, 2 already flushed, so 3 left), NOT retry
+    // all 5. After this bump: JSONL has 2 live + 5 backfill = 7 records.
+    roundCounter.bump(tmpDir, CID);
+    counts = countBumpRecords();
+    expect(counts.live).toBe(2);
+    expect(counts.backfill).toBe(5);
+    // Critically: NO duplicates. If the bug were present, backfill would be
+    // 7 (2 from phase 2 + 5 retry from phase 3) and total would be 9.
+    expect(counts.total).toBe(7);
+
+    // fbk fully drained.
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(7);
+  });
+
+  it('MAX_BACKFILL_PER_BUMP caps loop at 100 records per bump; remainder drains on next bump', () => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+
+    const gossipDir = path.join(tmpDir, '.gossip');
+
+    // Phase 1: 150 ROFS bumps. dir-readonly path is the cleanest way to
+    // populate fbk to a target value without mocking.
+    fs.chmodSync(gossipDir, 0o555);
+    try {
+      for (let i = 0; i < 150; i++) roundCounter.bump(tmpDir, CID);
+    } finally {
+      fs.chmodSync(gossipDir, 0o755);
+    }
+    expect(roundCounter.get(tmpDir, CID)).toBe(150);
+
+    // Phase 2: first recovery bump writes 1 live + 100 backfill (cap), leaves
+    // remainder = 50 in fbk.
+    roundCounter.bump(tmpDir, CID);
+    let counts = countBumpRecords();
+    expect(counts.live).toBe(1);
+    expect(counts.backfill).toBe(100);
+    // get() now returns the in-memory fallback value = 50 (remainder).
+    expect(roundCounter.get(tmpDir, CID)).toBe(50);
+
+    // Phase 3: second recovery bump writes 1 live + 50 backfill (drains
+    // remainder), fbk deleted.
+    roundCounter.bump(tmpDir, CID);
+    counts = countBumpRecords();
+    expect(counts.live).toBe(2);
+    expect(counts.backfill).toBe(150);
+    // fbk should be deleted now → get() falls through to JSONL scan.
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(152);
+  });
+
+  it('crash recovery via __resetForTests after partial flush: JSONL holds exactly the persisted records, fbk is gone', () => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+
+    const gossipDir = path.join(tmpDir, '.gossip');
+
+    // Phase 1: 5 ROFS bumps.
+    fs.chmodSync(gossipDir, 0o555);
+    try {
+      for (let i = 0; i < 5; i++) roundCounter.bump(tmpDir, CID);
+    } finally {
+      fs.chmodSync(gossipDir, 0o755);
+    }
+    expect(roundCounter.get(tmpDir, CID)).toBe(5);
+
+    // Phase 2: partial-flush bump — live + 2 backfills succeed, then crash
+    // simulated by failing the 4th call.
+    const real = fs.appendFileSync.bind(fs);
+    let callCount = 0;
+    const fsMod = require('fs');
+    const original = fsMod.appendFileSync;
+    fsMod.appendFileSync = (...args: any[]) => {
+      callCount++;
+      if (callCount === 4) throw new Error('synthetic crash');
+      return (real as any)(...args);
+    };
+    try {
+      roundCounter.bump(tmpDir, CID);
+    } finally {
+      fsMod.appendFileSync = original;
+    }
+
+    // Snapshot JSONL state immediately (before reset, so we measure what was
+    // actually persisted across the simulated crash boundary).
+    const counts = countBumpRecords();
+    expect(counts.live).toBe(1);
+    expect(counts.backfill).toBe(2);
+    expect(counts.total).toBe(3);
+
+    // Phase 3: simulated process crash — wipe ALL in-memory state.
+    // Persisted JSONL survives. Reader rebuilds count from disk only.
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(3);
+  });
+});
