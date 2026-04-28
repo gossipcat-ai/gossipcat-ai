@@ -256,10 +256,23 @@ export function resolveVerdict(
   //
   // The bt>=20 CI-overlap path is UNCHANGED — this block is an early-return guard only.
   if (baselineTotal < MIN_BASELINE_FOR_ZTEST) {
+    // Cap prior at 0.95 — a prior of 1.0 is statistically incoherent here.
+    // When baselineTotal is sparse, opts.agentAccuracy is computed from ALL
+    // signals (including the post-bind window being tested), so it can be
+    // inflated to ~1.0 when the agent's only history is the current skill's
+    // 120/120 run. A prior of 1.0 makes the pass condition (postCI.lower > 1.0)
+    // algebraically impossible — no Wilson CI can have a lower bound above 1.0.
+    // 0.95 is a conservative cap: it still penalises high-accuracy agents
+    // more than the 0.75 default while remaining reachable by a strong result.
+    const MAX_ONE_SAMPLE_PRIOR = 0.95;
     const prior = (opts?.agentAccuracy != null && Number.isFinite(opts.agentAccuracy))
-      ? Math.max(0, Math.min(1, opts.agentAccuracy))
+      ? Math.max(0, Math.min(MAX_ONE_SAMPLE_PRIOR, opts.agentAccuracy))
       : 0.75;
-    const oneSampleAlpha = WILSON_SCHEDULE[regime];
+    // Use sparse-current α regardless of regime for the one-sample path.
+    // WILSON_SCHEDULE regimes were calibrated for two-sample CI-overlap comparison;
+    // applying degenerate-zero α=0.025 to a one-sample vs prior comparison produces
+    // an overly wide CI. sparse-current (0.549) is the calibrated one-sample target.
+    const oneSampleAlpha = WILSON_SCHEDULE['sparse-current'];
     const postCI = wilsonScoreInterval(delta.correct, postTotal, oneSampleAlpha);
     const postP = delta.correct / postTotal;
     const effectiveness = postP - prior;
