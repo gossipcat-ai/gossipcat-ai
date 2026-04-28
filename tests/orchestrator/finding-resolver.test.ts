@@ -19,6 +19,7 @@ import {
   resolveFindings,
   parseCites,
   validatePath,
+  isAutoMemoryPath,
   inferLeadIdentifier,
   stripJsTsComments,
   containsToken,
@@ -152,6 +153,63 @@ describe('finding-resolver — path validation (test #3)', () => {
     fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(root, 'leak.txt'));
     const r = validatePath(root, 'leak.txt');
     expect(r.ok).toBe(false);
+  });
+
+  // Bucket A — absolute path inside projectRoot should be accepted
+  test('accepts absolute path that resolves inside projectRoot', () => {
+    const root = makeTempProject();
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'foo.ts'), 'export const x = 1;\n');
+    const absPath = path.join(root, 'src', 'foo.ts');
+    const r = validatePath(root, absPath);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error();
+    // absPath should be the realpathed form of the file
+    expect(r.absPath).toBeTruthy();
+    expect(r.absPath).toContain('foo.ts');
+  });
+
+  // Bucket A — absolute path OUTSIDE projectRoot should reject with ESCAPE, not ABSOLUTE
+  test('rejects absolute path outside projectRoot with reason ESCAPE', () => {
+    const root = makeTempProject();
+    const r = validatePath(root, '/etc/passwd');
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error();
+    expect(r.reason).toContain('escapes project root');
+  });
+});
+
+describe('isAutoMemoryPath', () => {
+  test('matches ~/.claude/projects/<encoded>/memory/foo.md', () => {
+    // Construct the encoded project root path as Claude Code does it
+    const projectRoot = '/Users/test/myproject';
+    const encoded = projectRoot.replace(/\//g, '-'); // -Users-test-myproject
+    const memPath = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory', 'MEMORY.md');
+    expect(isAutoMemoryPath(projectRoot, memPath)).toBe(true);
+  });
+
+  test('matches nested memory file', () => {
+    const projectRoot = '/Users/test/myproject';
+    const encoded = projectRoot.replace(/\//g, '-');
+    const memPath = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory', 'project_foo.md');
+    expect(isAutoMemoryPath(projectRoot, memPath)).toBe(true);
+  });
+
+  test('does not match a non-memory path', () => {
+    const projectRoot = '/Users/test/myproject';
+    expect(isAutoMemoryPath(projectRoot, '/Users/test/myproject/src/foo.ts')).toBe(false);
+  });
+
+  test('does not match a different project encoded path', () => {
+    const projectRoot = '/Users/test/myproject';
+    const otherEncoded = '-Users-other-project';
+    const memPath = path.join(os.homedir(), '.claude', 'projects', otherEncoded, 'memory', 'foo.md');
+    expect(isAutoMemoryPath(projectRoot, memPath)).toBe(false);
+  });
+
+  test('does not match a relative path', () => {
+    const projectRoot = '/Users/test/myproject';
+    expect(isAutoMemoryPath(projectRoot, 'memory/foo.md')).toBe(false);
   });
 });
 
@@ -454,5 +512,55 @@ describe('finding-resolver — resolveFindings', () => {
     const result = await resolveFindings(root);
     if (!result.ok) throw new Error();
     expect(result.resolved).toBe(1);
+  });
+
+  // Bucket A integration: finding citing absolute in-project path resolves cleanly
+  test('Bucket A: finding with absolute in-project citation resolves when symbol is absent', async () => {
+    const { root } = setupGitFixture();
+    // cite the file using an absolute path — same file as src/foo.ts but absolute
+    const absFilePath = path.join(root, 'src', 'foo.ts');
+    writeFinding(root, {
+      taskId: 'abs-path-test:f1',
+      finding: `Bad \`Math.min\` spread <cite tag="file">${absFilePath}:1</cite>`,
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error();
+    // should resolve (not reject) because Math.min is gone from src/foo.ts
+    expect(result.resolved).toBe(1);
+    expect(result.pathRejections).toBe(0);
+    const findings = readFindings(root);
+    expect(findings[0].status).toBe('resolved');
+  });
+
+  // Bucket B integration: finding citing auto-memory path produces 'skipped' audit entry
+  test('Bucket B: finding citing auto-memory path produces skipped/not_source audit entry', async () => {
+    const { root } = setupGitFixture();
+    // Simulate an auto-memory path for this project root
+    const encoded = root.replace(/\//g, '-');
+    const memPath = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory', 'MEMORY.md');
+    writeFinding(root, {
+      taskId: 'memory-cite-test:f1',
+      finding: `Note: see \`Math.min\` docs at <cite tag="file">${memPath}:1</cite>`,
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error();
+    // should NOT count as a pathRejection
+    expect(result.pathRejections).toBe(0);
+    // should NOT resolve (it's skipped, not resolved)
+    expect(result.resolved).toBe(0);
+    // audit log should contain a 'skipped'/'not_source' entry
+    const auditPath = path.join(root, '.gossip', 'finding-resolutions.jsonl');
+    expect(fs.existsSync(auditPath)).toBe(true);
+    const lines = fs.readFileSync(auditPath, 'utf-8').split('\n').filter(Boolean);
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    const entry = JSON.parse(lines[lines.length - 1]);
+    expect(entry.action).toBe('skipped');
+    expect(entry.after_check).toBe('not_source');
   });
 });

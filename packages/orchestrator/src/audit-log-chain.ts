@@ -37,10 +37,10 @@ export const AUDIT_LOG_FILENAME = 'finding-resolutions.jsonl';
 export interface AuditEntryInput {
   ts: string; // ISO-8601
   finding_id: string;
-  action: 'resolve' | 'unresolve' | 'path_validation_rejected';
+  action: 'resolve' | 'unresolve' | 'path_validation_rejected' | 'skipped';
   resolved_by?: 'commit:' | 'stale_anchor' | 'manual' | string;
   before_quote?: string;
-  after_check?: 'absent' | 'moved' | 'renamed' | 'rejected_path' | string;
+  after_check?: 'absent' | 'moved' | 'renamed' | 'rejected_path' | 'not_source' | string;
   operator?: 'auto' | string;
   reason?: string;
   // Free-form payload for path_validation_rejected diagnostics, etc.
