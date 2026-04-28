@@ -235,6 +235,11 @@ export class PipelineDriftDetector {
     }
 
     const postEpoch = rows.filter(r => {
+      // Exclude _meta rows (round_counter_bumped / round_counter_reset) from
+      // the postEpoch population. These are internal bookkeeping records, not
+      // signal emissions — counting them would dilute unknownRate and bypassRate
+      // denominators against rows that have no meaningful _emission_path policy.
+      if (r.type === '_meta') return false;
       const ts = typeof r.timestamp === 'string' ? Date.parse(r.timestamp) : NaN;
       return isFinite(ts) && ts >= (tagEpochMs as number);
     });

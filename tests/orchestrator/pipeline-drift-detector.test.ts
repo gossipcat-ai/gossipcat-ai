@@ -341,3 +341,62 @@ describe('PipelineDriftDetector', () => {
     expect(r.triggered).toBe(true);
   });
 });
+
+// ── n1: _meta rows excluded from postEpochCount denominator ──────────────────
+//
+// Option C (round-counter): PerformanceWriter interleaves `{type:"_meta",...}`
+// bump records into the same JSONL stream as signals. These records carry no
+// meaningful `_emission_path` policy and must not dilute the unknownRate /
+// bypassRate denominators. Without the type-guard, every bump record counts
+// as a row with _emission_path absent, inflating postEpochCount and suppressing
+// the unknownRate trigger even when real unknown-path signals are present.
+
+describe('PipelineDriftDetector — n1: _meta rows excluded from postEpochCount', () => {
+  let root: string;
+
+  beforeEach(() => { root = mkTmp(); });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it('_meta rows mixed with signal rows: postEpochCount excludes _meta (unknownRate unaffected)', () => {
+    // Write the tagging-epoch anchor (a task_completed via completion-signals-helper).
+    write(root, [
+      { type: 'meta', signal: 'task_completed', agentId: 'a', taskId: 't0', timestamp: iso(0), _emission_path: 'completion-signals-helper' },
+    ]);
+    // Now write 10 _meta bump records (these must NOT count in postEpochCount).
+    for (let i = 0; i < 10; i++) {
+      write(root, [
+        { type: '_meta', signal: 'round_counter_bumped', timestamp: iso(i + 1), _emission_path: 'round-counter-bump' } as Row,
+      ]);
+    }
+    // Write 1 legit signal with a proper emission path so denominator >= minDenominator
+    // would only be met if _meta rows were incorrectly counted (minDenominator default = 100).
+    // With _meta excluded, postEpochCount == 1 — well under minDenominator, so no trigger.
+    write(root, [
+      { type: 'consensus', signal: 'agreement', agentId: 'b', taskId: 't99', timestamp: iso(20), _emission_path: 'completion-signals-helper' },
+    ]);
+    const r = new PipelineDriftDetector(root).run();
+    // postEpochCount must be 2 (task_completed anchor + the agreement signal),
+    // NOT 12 (which would include the 10 _meta rows). With 2 < minDenominator,
+    // unknownRate gate is suppressed and triggered must be false.
+    expect(r.triggered).toBe(false);
+    expect(r.unknownCount).toBe(0);
+  });
+
+  it('_meta rows do not count as unknown-path rows even when _emission_path is absent', () => {
+    // Write tagging anchor.
+    write(root, [
+      { type: 'meta', signal: 'task_completed', agentId: 'a', taskId: 't0', timestamp: iso(0), _emission_path: 'completion-signals-helper' },
+    ]);
+    // Write _meta rows WITHOUT an _emission_path field — these would register
+    // as "unknown" path rows if not filtered, but they must not.
+    for (let i = 0; i < 5; i++) {
+      write(root, [
+        { type: '_meta', signal: 'round_counter_bumped', timestamp: iso(i + 1) } as Row,
+      ]);
+    }
+    const r = new PipelineDriftDetector(root).run();
+    // If _meta rows were counted, unknownCount would be 5. With the fix, it is 0.
+    expect(r.unknownCount).toBe(0);
+    expect(r.triggered).toBe(false);
+  });
+});

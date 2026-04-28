@@ -11,9 +11,14 @@ describe('PipelineSignal', () => {
   beforeAll(() => mkdirSync(join(testDir, '.gossip'), { recursive: true }));
   afterAll(() => rmSync(testDir, { recursive: true, force: true }));
 
+  // Option C (spec 2026-04-27-self-telemetry-crash-consistency): the writer
+  // emits `_meta`/`round_counter_bumped` records inline alongside signal rows.
+  // Tests assert against the last *signal* row, so filter those meta-records
+  // out of `readLines()` rather than walking from the end of the file.
   const readLines = () =>
     readFileSync(join(testDir, '.gossip', 'agent-performance.jsonl'), 'utf-8')
-      .trim().split('\n').map(l => JSON.parse(l));
+      .trim().split('\n').map(l => JSON.parse(l))
+      .filter((r: any) => r.type !== '_meta');
 
   test('accepts valid pipeline signal with agentId', () => {
     const writer = new PerformanceWriter(testDir);

@@ -24,12 +24,17 @@ function makeTmpDir(label: string): string {
 }
 
 function readJsonl(dir: string): any[] {
+  // Option C (spec 2026-04-27-self-telemetry-crash-consistency): the writer
+  // emits `_meta` round-counter records inline alongside signal rows. These
+  // tests assert against the signal stream only, so filter the bookkeeping
+  // records out at read time.
   const path = join(dir, '.gossip', 'agent-performance.jsonl');
   return readFileSync(path, 'utf-8')
     .trim()
     .split('\n')
     .filter(Boolean)
-    .map(line => JSON.parse(line));
+    .map(line => JSON.parse(line))
+    .filter((rec: any) => rec?.type !== '_meta');
 }
 
 const VALID_CID = '1537efbb-2b44492d';
