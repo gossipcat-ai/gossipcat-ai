@@ -4,6 +4,24 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.22] — 2026-04-28
+
+Skill-graduation runtime fix. Bundles three PRs (#305, #306, #307) that together close the end-to-end skill-effectiveness loop: structural blockers in `SkillEngine`, the one-sample Wilson math for sparse baselines, and the runtime detach so the runner actually fires after consensus rounds. No breaking changes.
+
+### Fixed
+
+- **Skill effectiveness runner now actually runs after consensus** (PR #307). `runCheckEffectivenessForAllSkills` was awaited at the tail of `gossip_collect`, and the relay process was being SIGTERM'd within milliseconds of synthesis (12-min disconnect cycle). Across 9 consensus rounds in a diagnosis session: zero invocations, zero graduations — even with skills that mathematically should have passed. Fix: detach via `setImmediate(async () => { ... })` so the runner survives the MCP response close and runs on the next event-loop tick. Closure captures `skillEngine`, `mainAgent`, `registryGet`, `projectRoot` in the outer scope for stability across the boundary.
+
+- **Path-traversal hardening on the runner** (PR #307). `agentId` and skill-file `category` come from `readdirSync` and were used directly in `join()` and downstream calls. Added `SAFE_NAME` regex `/^(?!.*\.\.)[a-zA-Z0-9._-]+$/` — allows dotted model IDs (`gemini-1.5-pro`, `claude-3.5-sonnet`) but rejects any `..` substring via negative lookahead. Skip `_*` synthetic dirs (e.g. `_project`) early.
+
+- **One-sample Wilson for sparse baselines** (PR #306, also released as 0.4.21 hot-path). Skills with zero or near-zero baseline signals now use a one-sample Wilson lower-bound test against the agent's lifetime accuracy prior, instead of the two-sample CI-overlap test that requires both samples to be populated. Cap one-sample prior at 0.95 and pin alpha to the sparse-current side. Skills that previously sat at `pending` indefinitely with bt < 20 can now graduate.
+
+- **Five structural blockers in `SkillEngine`** (PR #305). Removed defensive guards and ordering issues that prevented graduation: `bound_at` reset on touch, `verdict.shouldUpdate` filter inversion, premature `migrationCount` increment, snapshot drift between read and write, and the silent-skill bucket leaking into `passed` candidates.
+
+## [0.4.21] — 2026-04-27
+
+Open-findings auto-resolver. PR #299 + several follow-ups (#300–#303). Walks open findings and auto-resolves any whose cited code has been fixed (file-scoped grep, comment-stripped, multi-cite AND, structural `type:insight` exclusion). Hash-chained audit log at `.gossip/finding-resolutions.jsonl`. New `gossip_resolve_findings` MCP tool. No breaking changes.
+
 ## [0.4.20] — 2026-04-25
 
 Hardening + utility-task observability release. Bundles ten merged PRs (#251–#258, #260, #261) covering postinstall robustness, the skill-develop learning-loop fallback path, periodic eviction scheduling, and dashboard visibility for the RL learning loop. No breaking changes.
