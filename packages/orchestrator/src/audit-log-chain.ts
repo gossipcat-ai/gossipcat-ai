@@ -37,12 +37,33 @@ export const AUDIT_LOG_FILENAME = 'finding-resolutions.jsonl';
 export interface AuditEntryInput {
   ts: string; // ISO-8601
   finding_id: string;
-  action: 'resolve' | 'unresolve' | 'path_validation_rejected' | 'skipped';
+  action:
+    | 'resolve'
+    | 'unresolve'
+    | 'path_validation_rejected'
+    | 'skipped'
+    | 'flag_for_review';
   resolved_by?: 'commit:' | 'stale_anchor' | 'manual' | string;
   before_quote?: string;
-  after_check?: 'absent' | 'moved' | 'renamed' | 'rejected_path' | 'not_source' | string;
+  after_check?:
+    | 'absent'
+    | 'moved'
+    | 'renamed'
+    | 'rejected_path'
+    | 'not_source'
+    | 'present_elsewhere_only'
+    | string;
   operator?: 'auto' | string;
   reason?: string;
+  /**
+   * Conditional invariant (spec 2026-04-28-resolver-line-anchored-staleness §Audit
+   * log entry shape): when `resolved_by === 'stale_anchor'`, both `cited_line`
+   * AND `window` MUST be present. They are typed optional only to preserve
+   * back-compat for legacy entries that predate the line-anchored heuristic;
+   * any new stale_anchor entry will populate both fields.
+   */
+  cited_line?: number;
+  window?: number;
   // Free-form payload for path_validation_rejected diagnostics, etc.
   // Anything additional is hashed verbatim.
   [k: string]: unknown;

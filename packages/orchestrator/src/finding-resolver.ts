@@ -53,7 +53,34 @@ export interface ResolveOptions {
    * `.gossip/config.json` → `resolver.coldStartWindow` if available.
    */
   coldStartWindow?: string;
+  /**
+   * Enable the line-anchored staleness heuristic
+   * (spec docs/specs/2026-04-28-resolver-line-anchored-staleness.md).
+   * Default `false` — when off, behavior matches the pre-PR file-scoped
+   * "absent everywhere" → commit:<sha> path. When on, the resolver also
+   * resolves findings whose cited identifier is absent from a ±window
+   * around the cited line but still present elsewhere in the file
+   * (resolved_by: 'stale_anchor'). See §Heuristic decision matrix.
+   */
+  lineAnchored?: boolean;
 }
+
+/**
+ * Default ±window for the line-anchored staleness heuristic. Conservative
+ * initial pick per spec §Window size; field data drives tuning. Do not
+ * inline this as a magic number — the audit log records it per resolution
+ * so calibration sweeps can correlate window size with unresolve rates.
+ */
+const LINE_ANCHORED_WINDOW = 5;
+
+/**
+ * Three-state symbol-presence classification per `(file, identifier)` pair.
+ * See spec §Heuristic — three-state evaluation.
+ */
+export type SymbolPresence =
+  | { kind: 'absent_everywhere' }
+  | { kind: 'present_at_anchor' }
+  | { kind: 'present_elsewhere' };
 
 export interface ResolveResult {
   ok: true;
@@ -296,41 +323,102 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     }
     if (symbolsToCheck.size === 0) continue;
 
-    let allClear = true;
+    // Three-state classification per (cite, symbol) pair.
+    // Spec §Heuristic — three-state evaluation. We aggregate at the
+    // finding level: every cite must classify the same way for either
+    // the existing absent_everywhere → commit:<sha> path or the new
+    // present_elsewhere → stale_anchor path to fire. Mixed states or
+    // any present_at_anchor leave the finding open.
+    let sawAbsentEverywhere = false;
+    let sawPresentElsewhere = false;
+    let sawPresentAtAnchor = false;
+    let sawCiteWithoutLine = false;
+    let readFailure = false;
     for (const fc of safeFileCites) {
       let body: string;
       try { body = fs.readFileSync(fc.absPath, 'utf8'); }
-      catch { allClear = false; break; }
+      catch { readFailure = true; break; }
       const stripped = stripJsTsComments(body);
       for (const sym of symbolsToCheck) {
-        if (containsToken(stripped, sym)) {
-          allClear = false;
-          break;
+        const presence = classifyPresence(
+          body,
+          stripped,
+          sym,
+          fc.line,
+          LINE_ANCHORED_WINDOW,
+        );
+        if (presence.kind === 'absent_everywhere') {
+          sawAbsentEverywhere = true;
+        } else if (presence.kind === 'present_at_anchor') {
+          sawPresentAtAnchor = true;
+        } else {
+          // present_elsewhere — but if this cite has no line, classifyPresence
+          // returns present_elsewhere (no anchor to test); track for the
+          // "fall back to file-scoped, leave open" rule per spec matrix.
+          sawPresentElsewhere = true;
+          if (fc.line === undefined) sawCiteWithoutLine = true;
         }
       }
-      if (!allClear) break;
     }
-    if (!allClear) continue;
+    if (readFailure) continue;
+
+    // Aggregate per spec §Heuristic decision matrix.
+    const allAbsentEverywhere =
+      sawAbsentEverywhere && !sawPresentElsewhere && !sawPresentAtAnchor;
+    const allPresentElsewhere =
+      sawPresentElsewhere &&
+      !sawAbsentEverywhere &&
+      !sawPresentAtAnchor &&
+      !sawCiteWithoutLine;
+
+    if (!allAbsentEverywhere && !(opts.lineAnchored && allPresentElsewhere)) {
+      // Mixed state, any present_at_anchor, any cite without line, or
+      // line-anchored heuristic disabled → leave open.
+      continue;
+    }
 
     // emit resolution
     const findingId = String(entry.taskId ?? entry.findingId ?? '');
     const beforeQuote = Array.from(symbolsToCheck).slice(0, 3).join(', ');
-    const resolvedBy = headSha ? `commit:${headSha}` : 'manual';
+    const useStaleAnchor = !allAbsentEverywhere && allPresentElsewhere;
+    const resolvedBy = useStaleAnchor
+      ? 'stale_anchor'
+      : (headSha ? `commit:${headSha}` : 'manual');
     try {
       // mutate row in memory; we'll rewrite the file at the end
       entry.status = 'resolved';
       entry.resolvedAt = new Date().toISOString();
       entry.resolvedBy = resolvedBy;
       row.raw = JSON.stringify(entry);
-      appendChainedEntry(projectRoot, {
-        ts: entry.resolvedAt,
-        finding_id: findingId,
-        action: 'resolve',
-        resolved_by: resolvedBy,
-        before_quote: beforeQuote,
-        after_check: 'absent',
-        operator: 'auto',
-      });
+      if (useStaleAnchor) {
+        // Single-line semantics: the audit entry records the cited_line
+        // and window from the FIRST cite. Multi-cite findings with all
+        // cites passing the strict-AND aggregate share the same window
+        // size; the first cite's line is recorded as the anchor for
+        // post-hoc audit. This is documented in spec §Audit log entry shape.
+        const firstCite = safeFileCites[0];
+        appendChainedEntry(projectRoot, {
+          ts: entry.resolvedAt,
+          finding_id: findingId,
+          action: 'resolve',
+          resolved_by: 'stale_anchor',
+          before_quote: beforeQuote,
+          after_check: 'present_elsewhere_only',
+          operator: 'auto',
+          cited_line: firstCite.line as number,
+          window: LINE_ANCHORED_WINDOW,
+        });
+      } else {
+        appendChainedEntry(projectRoot, {
+          ts: entry.resolvedAt,
+          finding_id: findingId,
+          action: 'resolve',
+          resolved_by: resolvedBy,
+          before_quote: beforeQuote,
+          after_check: 'absent',
+          operator: 'auto',
+        });
+      }
       resolvedCount++;
       resolvedFindingIds.push(findingId);
     } catch (err) {
@@ -653,6 +741,61 @@ export function containsToken(haystack: string, token: string): boolean {
   // word boundary, which caused false token matches on dotted-access forms.
   const re = new RegExp(`(^|[^A-Za-z0-9_$.])${escaped}(?![A-Za-z0-9_$])`);
   return re.test(haystack);
+}
+
+/**
+ * Classify presence of `symbol` against (raw `body`, comment-`stripped` body,
+ * `citedLine`, `window`). Returns one of three states per spec §Heuristic.
+ *
+ * Caller contract (spec §Implementation):
+ *  - Caller pre-computes `stripped = stripJsTsComments(body)` once before
+ *    calling. The helper itself is pure: no fs access, no
+ *    comment-stripping side-effects, no surprises.
+ *  - Whole-file presence is checked against `stripped` (so identifiers
+ *    inside comments don't masquerade as real callsites).
+ *  - Anchor-window presence is checked against the RAW `body` (so the
+ *    window line numbers match the citation's frame of reference —
+ *    comment-stripping compresses line numbers and would point at the
+ *    wrong source lines).
+ *
+ * Window semantics:
+ *  - `citedLine` is 1-indexed (editor convention); `body.split('\n')[i]`
+ *    is the (i+1)-th line, so the window's 0-indexed bounds are
+ *    `lo = (citedLine - 1) - window` and `hi = (citedLine - 1) + window`.
+ *  - The slice end is INCLUSIVE: `lines.slice(lo, hi + 1)` (Array.slice's
+ *    end argument is exclusive, so we add 1 to make `hi` inclusive).
+ *  - When `citedLine === undefined`, no anchor window can be computed.
+ *    The helper returns `absent_everywhere` if the symbol is missing
+ *    file-scope, otherwise `present_elsewhere` — the resolver caller
+ *    treats `present_elsewhere` + `cite-without-line` as "leave open"
+ *    per spec decision matrix.
+ */
+export function classifyPresence(
+  body: string,
+  stripped: string,
+  symbol: string,
+  citedLine: number | undefined,
+  window: number,
+): SymbolPresence {
+  const inFile = containsToken(stripped, symbol);
+  if (!inFile) return { kind: 'absent_everywhere' };
+  if (citedLine === undefined) {
+    // No anchor — symbol is somewhere in the file. Treated as
+    // present_elsewhere; the caller will keep this finding open.
+    return { kind: 'present_elsewhere' };
+  }
+  const lines = body.split('\n');
+  if (lines.length === 0) return { kind: 'present_elsewhere' };
+  const lo = Math.max(0, (citedLine - 1) - window);
+  const hi = Math.min(lines.length - 1, (citedLine - 1) + window);
+  // Inclusive end-index: Array.slice's end argument is exclusive, so use
+  // hi + 1. Spec §Implementation explicitly mandates this off-by-one
+  // resolution after consensus round 2 finding f4.
+  const windowText = lines.slice(lo, hi + 1).join('\n');
+  const inWindow = containsToken(windowText, symbol);
+  return inWindow
+    ? { kind: 'present_at_anchor' }
+    : { kind: 'present_elsewhere' };
 }
 
 // ─── consensus report backfill ────────────────────────────────────────────
