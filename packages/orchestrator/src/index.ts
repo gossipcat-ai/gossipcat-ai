@@ -140,6 +140,7 @@ export {
   resolveFindings,
   parseCites,
   validatePath,
+  isAutoMemoryPath,
   inferLeadIdentifier,
   stripJsTsComments,
   containsToken,

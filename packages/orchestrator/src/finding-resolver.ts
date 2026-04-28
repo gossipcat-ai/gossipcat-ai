@@ -25,6 +25,7 @@
 // and Phase 3 (post-commit hook) are out of scope — see spec §Rollout.
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
@@ -191,6 +192,31 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     const cites = parseCites(findingText);
     if (cites.fileCites.length === 0) continue; // no anchor, nothing to check
 
+    // Bucket B — skip findings citing auto-memory paths (not source code).
+    // These are ~/.claude/projects/<encoded-cwd>/memory/ files. They are
+    // not candidates for git-touched-set + symbol-presence resolution.
+    // Emit a 'skipped'/'not_source' audit entry instead of a rejection.
+    let skipAsMemory = false;
+    for (const fc of cites.fileCites) {
+      if (isAutoMemoryPath(projectRoot, fc.path)) {
+        skipAsMemory = true;
+        break;
+      }
+    }
+    if (skipAsMemory) {
+      try {
+        appendChainedEntry(projectRoot, {
+          ts: new Date().toISOString(),
+          finding_id: String(entry.taskId ?? entry.findingId ?? ''),
+          action: 'skipped',
+          after_check: 'not_source',
+          operator: 'auto',
+          reason: 'finding cites auto-memory path, not source code',
+        });
+      } catch { /* best-effort */ }
+      continue;
+    }
+
     // path validation — reject and audit-log any adversarial citation
     const safeFileCites: Array<{ path: string; line?: number; absPath: string }> = [];
     let rejected = false;
@@ -353,6 +379,26 @@ const PATH_REJECT_REASONS = {
   ESCAPE: 'realpath escapes project root',
 } as const;
 
+/**
+ * Detect whether a cited path refers to Claude Code's auto-generated
+ * project-memory directory. These files live at:
+ *   ~/.claude/projects/<encoded-cwd>/memory/<file>
+ * where <encoded-cwd> is the project root with '/' replaced by '-' and
+ * a leading '-' prepended (e.g. /Users/foo/bar → -Users-foo-bar).
+ *
+ * Memory citations are not source code — findings citing them are not
+ * candidates for git-touched-set + symbol-presence resolution. They
+ * should be skipped (not rejected) with a 'skipped'/'not_source' audit
+ * entry so they don't pollute path-rejection counts.
+ */
+export function isAutoMemoryPath(projectRoot: string, citedPath: string): boolean {
+  if (!citedPath || !path.isAbsolute(citedPath)) return false;
+  const encoded = projectRoot.replace(/\//g, '-');
+  // Claude Code encodes leading '/' as leading '-', so encoded starts with '-'
+  const memoryDir = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory') + path.sep;
+  return citedPath.startsWith(memoryDir) || citedPath === memoryDir.slice(0, -1);
+}
+
 export function validatePath(
   projectRoot: string,
   citedPath: string,
@@ -360,13 +406,26 @@ export function validatePath(
   if (!citedPath || typeof citedPath !== 'string') {
     return { ok: false, reason: 'empty or non-string path' };
   }
+  // Order matters: NUL → traversal → tilde → URL → abs-into-root check → realpath/escape
   if (citedPath.includes('\0')) return { ok: false, reason: PATH_REJECT_REASONS.NUL };
   if (citedPath.includes('..')) return { ok: false, reason: PATH_REJECT_REASONS.TRAVERSAL };
-  if (citedPath.startsWith('/')) return { ok: false, reason: PATH_REJECT_REASONS.ABSOLUTE };
   if (citedPath.startsWith('~')) return { ok: false, reason: PATH_REJECT_REASONS.TILDE };
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(citedPath)) return { ok: false, reason: PATH_REJECT_REASONS.URL };
 
-  const resolved = path.resolve(projectRoot, citedPath);
+  // Bucket A — absolute path handling: instead of flat-rejecting every
+  // leading-'/' path, check whether the absolute citation resolves INTO
+  // the project root. If so, accept and let the realpath/escape check
+  // downstream be the real boundary.
+  if (citedPath.startsWith('/')) {
+    const absRel = path.relative(projectRoot, citedPath);
+    if (absRel.startsWith('..') || path.isAbsolute(absRel)) {
+      // absolute path escapes the project root — reject as ESCAPE, not ABSOLUTE
+      return { ok: false, reason: PATH_REJECT_REASONS.ESCAPE };
+    }
+    // falls through to realpath check below with citedPath as the resolved form
+  }
+
+  const resolved = citedPath.startsWith('/') ? citedPath : path.resolve(projectRoot, citedPath);
   const rel = path.relative(projectRoot, resolved);
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     return { ok: false, reason: PATH_REJECT_REASONS.ESCAPE };
