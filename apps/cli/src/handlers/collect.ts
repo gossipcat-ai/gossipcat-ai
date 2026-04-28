@@ -1131,19 +1131,31 @@ export async function handleCollect(
     }
   } catch { /* best-effort */ }
 
-  // Run checkEffectiveness on all skill files — must happen AFTER signals are written above
-  // so per-category counters reflect the current consensus round.
+  // Run checkEffectiveness on all skill files — fire-and-forget via setImmediate.
+  // Per consensus c0663a37: awaiting here meant the runner rode the MCP response
+  // window and was killed by SIGTERM (12-min relay disconnect cycle) before any
+  // skill could graduate. Counters are already written by emitConsensusSignals
+  // above, so the detached runner sees fresh state. Runner has its own internal
+  // try/catch + rate-limited logging.
   if (ctx.skillEngine) {
-    try {
-      const { runCheckEffectivenessForAllSkills } = await import('./check-effectiveness-runner');
-      await runCheckEffectivenessForAllSkills({
-        skillEngine: ctx.skillEngine,
-        registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
-        projectRoot: process.cwd(),
-      });
-    } catch (e) {
-      process.stderr.write(`[gossipcat] checkEffectiveness post-collect run failed: ${(e as Error).message}\n`);
-    }
+    // Snapshot all closure inputs in the outer scope so the detached callback
+    // is robust to ctx mutation (consensus 480ec3e2, sonnet:f8 + gemini:f2).
+    const skillEngine = ctx.skillEngine;
+    const mainAgent = ctx.mainAgent;
+    const registryGet = (id: string) => mainAgent.getAgentConfig(id);
+    const projectRoot = process.cwd();
+    setImmediate(async () => {
+      try {
+        const { runCheckEffectivenessForAllSkills } = await import('./check-effectiveness-runner');
+        await runCheckEffectivenessForAllSkills({
+          skillEngine,
+          registryGet,
+          projectRoot,
+        });
+      } catch (e) {
+        process.stderr.write(`[gossipcat] checkEffectiveness post-collect run failed: ${(e as Error).message}\n`);
+      }
+    });
   }
 
   // Session save reminder — only every 10th task completion to avoid nagging
