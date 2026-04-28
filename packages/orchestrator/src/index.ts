@@ -78,7 +78,7 @@ export { TeamManager } from './team-manager';
 export type { TeamManagerConfig } from './team-manager';
 export { normalizeSkillName } from './skill-name';
 export { parseSkillFrontmatter } from './skill-parser';
-export type { SkillFrontmatter } from './skill-parser';
+export type { SkillFrontmatter, SkillScope } from './skill-parser';
 export { extractCategories } from './category-extractor';
 export { logUncategorizedFinding, getUncategorizedStatusLine } from './uncategorized-logger';
 export type { UncategorizedFindingContext, UncategorizedFindingRecord } from './uncategorized-logger';

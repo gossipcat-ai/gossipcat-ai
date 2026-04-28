@@ -64,6 +64,13 @@ export interface DroppedSkill {
      */
     | 'task-type-mismatch'
     /**
+     * Skill declared a `scope` array (cross-cutting always-load on matching
+     * task types) but the current dispatch's task_type is not in the scope
+     * list. Distinct from `task-type-mismatch` so callers can tell the two
+     * filter axes apart in observability logs.
+     */
+    | 'scope-type-mismatch'
+    /**
      * Skill is flagged `propagated: true` and the project's memory-config.json
      * has `bundledMemories.enabled: false`. All propagated skills are suppressed.
      */
@@ -87,6 +94,13 @@ export interface LoadSkillsResult {
    */
   dropped: DroppedSkill[];
   activatedContextual: string[];
+  /**
+   * Skills activated via the scope axis (task-type-aware always-load).
+   * These are distinct from `activatedContextual` (keyword-gated) and do not
+   * count against the MAX_CONTEXTUAL_SKILLS budget. Populated only when
+   * `dispatchTaskType` is provided and a skill's `scope` array matches it.
+   */
+  loadedScoped: string[];
 }
 
 /**
@@ -147,10 +161,12 @@ export function loadSkills(
   const memConfig = loadMemoryConfig(projectRoot);
 
   const permanent: Array<{ name: string; content: string }> = [];
+  const scoped: Array<{ name: string; content: string }> = [];
   const contextualCandidates: Array<{ name: string; content: string; hits: number; rawHits: number; boost: number }> = [];
   const loaded: string[] = [];
   const dropped: DroppedSkill[] = [];
   const activatedContextual: string[] = [];
+  const loadedScoped: string[] = [];
 
   for (const skill of effectiveSkills) {
     const content = resolveSkill(agentId, skill, projectRoot);
@@ -208,13 +224,42 @@ export function loadSkills(
       }
     }
 
+    // ── Scope axis (Option A from finding c8977bda-37564212:f3) ──────────────
+    // Skills with `scope: [review, ...]` frontmatter are cross-cutting
+    // always-loads for matching task types. They bypass keyword matching and
+    // the contextual budget entirely. If scope is present and the dispatch
+    // type matches → inject unconditionally. If scope is present but the
+    // dispatch type does NOT match → drop as scope-type-mismatch. Skills
+    // without a scope declaration fall through to the existing task-type /
+    // mode / contextual machinery unchanged.
+    //
+    // When dispatchTaskType is undefined (call sites that don't know the type),
+    // scope-declared skills are treated as permanent (injected unconditionally)
+    // so the backwards-compat guarantee is preserved — the same as the
+    // task_type filter, which is also skipped when dispatchTaskType is absent.
+    const frontmatterForScope = parseSkillFrontmatter(content);
+    const skillScope = frontmatterForScope?.scope;
+    if (skillScope && skillScope.length > 0) {
+      if (!dispatchTaskType || skillScope.includes(dispatchTaskType)) {
+        // Scope matches (or no dispatch type known) — inject unconditionally.
+        scoped.push({ name: skill, content });
+      } else {
+        // Scope declared but dispatch type not in the list.
+        dropped.push({ skill, reason: 'scope-type-mismatch', hits: 0 });
+      }
+      // Either way, the scope axis has handled this skill — skip the
+      // task_type / mode / contextual machinery below.
+      continue;
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Task-type axis filter. Evaluated BEFORE keyword-hit counting and the
     // contextual budget, so a mismatched skill never starves a valid one
     // out of the MAX_CONTEXTUAL_SKILLS slots. Skills without an explicit
     // task_type parse to 'any' (see skill-parser coercion), which passes
     // the gate for every dispatch — backwards-compat by default.
     if (dispatchTaskType) {
-      const skillTaskType = parseSkillFrontmatter(content)?.task_type ?? 'any';
+      const skillTaskType = frontmatterForScope?.task_type ?? 'any';
       if (skillTaskType !== 'any' && skillTaskType !== dispatchTaskType) {
         dropped.push({ skill, reason: 'task-type-mismatch', hits: 0 });
         continue;
@@ -262,6 +307,10 @@ export function loadSkills(
   const rejected = contextualCandidates.slice(MAX_CONTEXTUAL_SKILLS);
 
   for (const s of permanent) loaded.push(s.name);
+  for (const s of scoped) {
+    loaded.push(s.name);
+    loadedScoped.push(s.name);
+  }
   for (const s of accepted) {
     loaded.push(s.name);
     activatedContextual.push(s.name);
@@ -272,6 +321,7 @@ export function loadSkills(
   const sanitizeContent = (c: string) => c.replace(/---\s*END SKILLS\s*---/gi, '--- END-SKILLS ---');
   const sections = [
     ...permanent.map(s => sanitizeContent(s.content)),
+    ...scoped.map(s => sanitizeContent(s.content)),
     ...accepted.map(s => sanitizeContent(s.content)),
   ];
 
@@ -279,7 +329,7 @@ export function loadSkills(
     ? '\n\n--- SKILLS ---\n\n' + sections.join('\n\n---\n\n') + '\n\n--- END SKILLS ---\n\n'
     : '';
 
-  return { content: contentStr, loaded, dropped, activatedContextual };
+  return { content: contentStr, loaded, dropped, activatedContextual, loadedScoped };
 }
 
 /** Cache compiled regex patterns to avoid per-dispatch recompilation */
