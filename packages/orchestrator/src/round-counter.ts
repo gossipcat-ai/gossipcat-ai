@@ -183,8 +183,32 @@ export function bump(projectRoot: string, consensusId: string): void {
     const next = (inMemoryFallback.get(fbk) ?? 0) + 1;
     inMemoryFallback.set(fbk, next);
   } else {
-    // Persisted append supersedes any prior fallback entry for this key.
-    inMemoryFallback.delete(fbk);
+    // FS recovered — flush any in-memory bumps accumulated during the read-only
+    // period before clearing the fallback. If any backfill append fails, keep
+    // the fallback intact (atomic flush: all-or-nothing).
+    const priorCount = inMemoryFallback.get(fbk) ?? 0;
+    if (priorCount > 0) {
+      let allFlushed = true;
+      for (let i = 0; i < priorCount; i++) {
+        const backfillRecord = {
+          type: '_meta',
+          signal: 'round_counter_bumped',
+          consensusId,
+          bumpedAt: new Date().toISOString(),
+          _emission_path: 'round-counter-bump-backfill',
+        };
+        if (!appendMetaRecord(projectRoot, backfillRecord)) {
+          allFlushed = false;
+          break;
+        }
+      }
+      if (allFlushed) {
+        inMemoryFallback.delete(fbk);
+      }
+      // If !allFlushed, fbk stays at priorCount — next successful bump will retry.
+    } else {
+      inMemoryFallback.delete(fbk);
+    }
   }
 }
 

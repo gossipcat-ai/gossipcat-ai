@@ -213,6 +213,68 @@ describe('roundCounter — persistence (Option C)', () => {
     }
   });
 
+  it('ROFS-recovery: prior in-memory bumps are flushed to JSONL when FS recovers', () => {
+    // Skip when running as root (chmod has no effect for root).
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+
+    const gossipDir = path.join(tmpDir, '.gossip');
+
+    // Phase 1: filesystem is read-only — 3 bumps accumulate in-memory only.
+    fs.chmodSync(gossipDir, 0o555);
+    try {
+      roundCounter.bump(tmpDir, CID);
+      roundCounter.bump(tmpDir, CID);
+      roundCounter.bump(tmpDir, CID);
+    } finally {
+      fs.chmodSync(gossipDir, 0o755);
+    }
+    // In-memory shadow sees all 3 even though nothing was persisted.
+    expect(roundCounter.get(tmpDir, CID)).toBe(3);
+
+    // Phase 2: filesystem recovers — 4th bump should flush the 3 prior bumps.
+    roundCounter.bump(tmpDir, CID);
+    // get() must now return 4, not 1.
+    expect(roundCounter.get(tmpDir, CID)).toBe(4);
+
+    // Verify persistence: force a fresh JSONL scan (no in-memory state).
+    roundCounter.__resetForTests();
+    // The JSONL now contains 4 bump records (3 backfill + 1 live).
+    expect(roundCounter.get(tmpDir, CID)).toBe(4);
+  });
+
+  it('ROFS file-only readonly: fallback continues to accumulate across bump cycles', () => {
+    // Skip when running as root.
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+
+    const gossipDir = path.join(tmpDir, '.gossip');
+
+    // Phase 1: dir read-only — 2 bumps accumulate in-memory.
+    fs.chmodSync(gossipDir, 0o555);
+    try {
+      roundCounter.bump(tmpDir, CID);
+      roundCounter.bump(tmpDir, CID);
+    } finally {
+      fs.chmodSync(gossipDir, 0o755);
+    }
+    expect(roundCounter.get(tmpDir, CID)).toBe(2);
+
+    // Phase 2: dir is writable but the JSONL file itself is read-only
+    // (FS-flapping scenario). The live bump's append still fails, so the
+    // bump goes through the !ok path — fallback should increment to 3.
+    fs.mkdirSync(gossipDir, { recursive: true });
+    const jsonlFile = path.join(gossipDir, 'agent-performance.jsonl');
+    fs.writeFileSync(jsonlFile, '');
+    fs.chmodSync(jsonlFile, 0o444);
+
+    try {
+      roundCounter.bump(tmpDir, CID);
+      // appendMetaRecord returned false → !ok branch → fbk = priorCount + 1 = 3.
+      expect(roundCounter.get(tmpDir, CID)).toBe(3);
+    } finally {
+      fs.chmodSync(jsonlFile, 0o644);
+    }
+  });
+
   it('missing file is treated as empty (no throw)', () => {
     expect(roundCounter.get(tmpDir, CID)).toBe(0);
     roundCounter.bump(tmpDir, CID);
