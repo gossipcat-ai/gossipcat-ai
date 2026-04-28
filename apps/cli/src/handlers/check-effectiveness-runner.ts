@@ -6,7 +6,7 @@
  * per-category accuracy counters reflect the current consensus round.
  */
 import { existsSync, readdirSync, realpathSync } from 'fs';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import type { SkillEngine } from '@gossip/orchestrator';
 
 export interface RunnerOptions {
@@ -49,7 +49,11 @@ export async function runCheckEffectivenessForAllSkills(opts: RunnerOptions): Pr
     try {
       canonicalSkillsDir = realpathSync(skillsDir);
     } catch { continue; }
-    if (!canonicalSkillsDir.startsWith(resolve(canonicalBaseDir) + '/')) continue;
+    // canonicalBaseDir is already absolute from realpathSync; trailing '/' prevents prefix collisions like '/agents-evil/'
+    if (!canonicalSkillsDir.startsWith(canonicalBaseDir + '/')) {
+      process.stderr.write(`[gossipcat] checkEffectiveness: skipping ${agentId} — skillsDir resolved outside agents tree (canonical=${canonicalSkillsDir})\n`);
+      continue;
+    }
 
     const role = opts.registryGet(agentId)?.role;
     // Implementers never get per-category accuracy checks
