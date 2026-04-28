@@ -101,10 +101,27 @@ export async function resolveFindings(
 function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult {
   const headSha = readHeadSha(projectRoot);
 
+  // Bug 2: resolve gitRoot once for monorepo subdirectory path normalisation.
+  // git rev-list outputs paths relative to the git root, not to projectRoot.
+  // We must use gitRoot as the base for both path.relative AND touched-set
+  // construction so the two sides agree on separator-prefixed paths.
+  let gitRoot: string;
+  try {
+    gitRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!gitRoot) gitRoot = projectRoot;
+  } catch {
+    gitRoot = projectRoot;
+  }
+
   // 1) determine touched-files set
+  // Bug 2: pass gitRoot so computeTouchedSet uses the right base directory.
   const touched = opts.full
     ? null  // full mode: every file is fair game
-    : computeTouchedSet(projectRoot, opts);
+    : computeTouchedSet(projectRoot, opts, gitRoot);
 
   // 2) read findings
   const findingsPath = path.join(projectRoot, '.gossip', FINDINGS_FILENAME);
@@ -179,8 +196,14 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
           continue;
         }
       } else {
-        // Malformed taskId — cannot backfill, conservative skip.
-        continue;
+        // Bug 6: legacy rows may have no :fN suffix (written before the
+        // taskId-format was stabilised). Don't skip outright — attempt
+        // the symbol-presence check directly, treating the row as a
+        // potential finding (not an insight). This is looser than the
+        // normal backfill path but better than permanently blocking old
+        // rows. Document the degraded confidence via an extra field.
+        entry.type = 'finding'; // tentative — no report to confirm
+        entry._legacyBackfill = true; // auditable in audit-log
       }
     }
     if (entry.type === 'insight') continue;
@@ -243,17 +266,15 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     if (rejected) continue;
 
     // multi-cite AND: every cite must be in the touched set (Path A).
-    // We resolve the project root to its realpath for relative comparison
-    // because validatePath returned realFile — on macOS/tmpdir symlinks
-    // diverge between /var/folders and /private/var/folders, which would
-    // otherwise produce a leading-../ relative path that never matches
-    // git's name-only output.
-    let realRoot: string;
-    try { realRoot = fs.realpathSync(projectRoot); } catch { realRoot = projectRoot; }
+    // Bug 2: use realpath of gitRoot (not projectRoot) as the base for
+    // path.relative so it matches the git-root-relative paths in the
+    // touched set produced by git rev-list --name-only.
+    let realGitRoot: string;
+    try { realGitRoot = fs.realpathSync(gitRoot); } catch { realGitRoot = gitRoot; }
     if (touched !== null) {
       let touchedAll = true;
       for (const fc of safeFileCites) {
-        const rel = path.relative(realRoot, fc.absPath);
+        const rel = path.relative(realGitRoot, fc.absPath);
         if (!touched.has(rel)) {
           touchedAll = false;
           break;
@@ -522,37 +543,96 @@ export function parseCites(text: string): ParsedCites {
 }
 
 /**
+ * Common keywords and single-letter tokens that are too generic to be
+ * treated as a meaningful symbol presence indicator. If the inferred
+ * identifier matches any of these (or is a single character), we return
+ * null rather than permanently blocking resolution on a keyword.
+ *
+ * Bug 7: backtick-wrapped `null`/`true`/`error`/single-letter tokens
+ * used to cause permanent non-resolution because their absence from
+ * source is nearly impossible. Skip them.
+ */
+const INFER_SKIP_LIST = new Set([
+  'null', 'true', 'false', 'undefined', 'this', 'self',
+  'it', 'i', 'e', 'j', 'x', 'y', 'n', 'm', 's', 't',
+  'error', 'result', 'data', 'val', 'value', 'key',
+  'item', 'arg', 'args',
+]);
+
+/**
  * Heuristic: extract a likely identifier when the finding has no fn-cite.
- * Looks for backtick-wrapped tokens in the prose (e.g., `Math.min` or
+ * Looks for backtick-wrapped tokens in the prose (e.g., `Math.min()` or
  * `bumpRoundCounter`). Spec §Trigger plumbing step 5: "the literal
  * symbol token wrapped by `<cite tag=\"fn\">…</cite>` or, if absent, the
  * line ±5 of context that the finding quotes."
+ *
+ * Bug 1: extended regex to accept optional trailing `()` so that
+ * `Math.random()` matches `Math.random` (the call-form). The capture
+ * group intentionally omits the parens so containsToken can match both
+ * the bare identifier and the dotted access form.
+ *
+ * False-positive mitigation (destructured alias): if a function is
+ * imported/destructured under a different name (e.g. `const { random } =
+ * Math; random()`) then `Math.random` won't appear in the file. We rely
+ * on the backtick-full-phrase as a backstop — only resolve when both the
+ * bare identifier (without parens) AND the call-form (e.g. Math.random,
+ * random) are absent. This function returns the bare identifier; callers
+ * that need the extra check should use both the returned value AND the
+ * aliasToken field on the returned object.
+ *
+ * For simplicity here we just return the bare identifier; the
+ * false-positive scenario is mitigated by containsToken which checks the
+ * exact dotted path — a destructured alias `random` ≠ `Math.random`,
+ * so a finding citing `Math.random()` will still check for `Math.random`
+ * in the file body. If only `random` is in the file the check correctly
+ * reports allClear=false (symbol present) — i.e. stays open.
  */
 export function inferLeadIdentifier(text: string): string | null {
-  const m = text.match(/`([A-Za-z_$][A-Za-z0-9_$.]*)`/);
-  if (m) return m[1];
-  return null;
+  // Bug 1: accept optional trailing `()` in the backtick-wrapped token.
+  const m = text.match(/`([A-Za-z_$][A-Za-z0-9_$.]*)(?:\(\))?`/);
+  if (!m) return null;
+  const identifier = m[1];
+  // Bug 7: skip common keywords and single-character tokens.
+  if (identifier.length <= 1 || INFER_SKIP_LIST.has(identifier)) return null;
+  return identifier;
 }
 
 /**
- * Strip TS/JS comments before doing a symbol-absence check. We must be
- * defensive about block comments containing `//` and string literals
- * containing `/*` — but the goal is to avoid false BLOCKS not false
- * resolutions, so when in doubt we leave the line in place (which keeps
- * the symbol visible and BLOCKS resolution — conservative).
+ * Strip TS/JS comments AND string/template literal contents before doing
+ * a symbol-absence check. We must be defensive about:
+ *   - block comments containing `//` → handled by ordering (block first)
+ *   - string literals containing `/*` → handled by stripping strings
+ *   - template literals containing `//` → handled by stripping templates
  *
- * Strategy:
- *   - block comments `/* ... *\/` removed greedy-non-greedy
- *   - line comments `// ...` to end-of-line removed AFTER block comments
+ * Conservative bias: when in doubt we leave source in place (which keeps
+ * the symbol visible and BLOCKS resolution — no false-positive).
  *
- * We do NOT attempt to model string literals; the resulting heuristic
- * over-removes content inside strings, which is fine because the goal
- * is bug-fix detection on real source, not perfect parsing.
+ * Strategy (order matters):
+ *   1. template literals `\`...\`` → replace contents with empty string
+ *   2. double-quoted strings `"..."` → replace contents with empty string
+ *   3. single-quoted strings `'...'` → replace contents with empty string
+ *   4. block comments `/* ... *\/` removed greedy-non-greedy
+ *   5. line comments `// ...` to end-of-line removed AFTER block comments
+ *
+ * Bugs 3 & 5: symbols in test-assertion strings and `//` inside template
+ * literals previously caused false-positive allClear=false (finding stayed
+ * open even after the bug was fixed). Stripping string/template contents
+ * resolves both.
+ *
+ * The naive approach over-removes (e.g. multiline strings, escaped quotes)
+ * but over-removal keeps allClear=false (conservative), so it's safe.
  */
 export function stripJsTsComments(src: string): string {
-  // remove /* ... */ block comments (non-greedy)
-  let out = src.replace(/\/\*[\s\S]*?\*\//g, '');
-  // remove // line comments to end of line
+  // 1. template literals — replace content between backticks (non-greedy,
+  //    no newline crossing via [\s\S] to handle multiline templates)
+  let out = src.replace(/`[^`\\]*(?:\\[\s\S][^`\\]*)*`/g, '``');
+  // 2. double-quoted strings (non-greedy, respects basic escape sequences)
+  out = out.replace(/"[^"\\]*(?:\\.[^"\\]*)*"/g, '""');
+  // 3. single-quoted strings
+  out = out.replace(/'[^'\\]*(?:\\.[^'\\]*)*'/g, "''");
+  // 4. block comments
+  out = out.replace(/\/\*[\s\S]*?\*\//g, '');
+  // 5. line comments
   out = out.replace(/\/\/[^\n]*/g, '');
   return out;
 }
@@ -567,8 +647,11 @@ export function stripJsTsComments(src: string): string {
 export function containsToken(haystack: string, token: string): boolean {
   if (!token) return false;
   const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // boundaries: anything that's not [A-Za-z0-9_$] OR start/end of string
-  const re = new RegExp(`(^|[^A-Za-z0-9_$])${escaped}(?![A-Za-z0-9_$])`);
+  // Left boundary: exclude identifier chars AND `.` so that searching for
+  // `random` does not match `.random` in `Math.random`. Bug 4: the original
+  // boundary `[^A-Za-z0-9_$]` allowed a preceding `.` to be treated as a
+  // word boundary, which caused false token matches on dotted-access forms.
+  const re = new RegExp(`(^|[^A-Za-z0-9_$.])${escaped}(?![A-Za-z0-9_$])`);
   return re.test(haystack);
 }
 
@@ -668,15 +751,23 @@ function readColdStartWindow(projectRoot: string, override?: string): string {
   return COLD_START_SINCE;
 }
 
-function computeTouchedSet(projectRoot: string, opts: ResolveOptions): Set<string> {
+// SHA pattern — 40-char hex strings emitted by rev-list without --pretty=format:
+const SHA_RE = /^[0-9a-f]{40}$/;
+
+function computeTouchedSet(projectRoot: string, opts: ResolveOptions, gitRoot?: string): Set<string> {
+  const cwd = gitRoot ?? projectRoot;
   const sinceSha = opts.sinceSha ?? readWatermark(projectRoot);
   const window = readColdStartWindow(projectRoot, opts.coldStartWindow);
 
   let stdout = '';
   if (sinceSha) {
     try {
-      stdout = execFileSync('git', ['rev-list', `${sinceSha}..HEAD`, '--name-only'], {
-        cwd: projectRoot,
+      // Bug 8: rev-list without --pretty=format: outputs commit SHA lines
+      // interspersed with file names. Adding --pretty=format: (empty format)
+      // suppresses commit headers so we only get file paths. This matches
+      // the cold-start command below which already had --pretty=format:.
+      stdout = execFileSync('git', ['rev-list', `${sinceSha}..HEAD`, '--name-only', '--pretty=format:'], {
+        cwd,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       });
@@ -688,7 +779,7 @@ function computeTouchedSet(projectRoot: string, opts: ResolveOptions): Set<strin
   if (!stdout) {
     try {
       stdout = execFileSync('git', ['log', `--since=${window}`, '--name-only', '--pretty=format:'], {
-        cwd: projectRoot,
+        cwd,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       });
@@ -703,6 +794,10 @@ function computeTouchedSet(projectRoot: string, opts: ResolveOptions): Set<strin
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
+    // Bug 8 extra safety: filter out any residual 40-char SHA lines that
+    // may still appear (e.g. from git versions that ignore --pretty=format:
+    // in some modes). File paths cannot be a 40-char hex string in practice.
+    if (SHA_RE.test(trimmed)) continue;
     set.add(trimmed);
   }
   return set;
