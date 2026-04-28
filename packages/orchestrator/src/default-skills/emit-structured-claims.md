@@ -3,13 +3,15 @@ name: emit-structured-claims
 description: Emit a structured premise-claims JSON block alongside prose findings so the orchestrator can grep-verify code-shape claims and close the four Stage-1 bypass classes.
 keywords: []
 category: trust_boundaries
-mode: permanent
+scope: [review, research]
 status: active
 ---
 
 ## When this skill activates
-Always — this is a permanent-mode skill for investigation agents
-(`-researcher`, `-reviewer`). Your finding must include a `premise-claims`
+Always on review and research dispatches — this is a scope-axis skill for
+investigation agents (`-researcher`, `-reviewer`). It does NOT fire on
+implement dispatches (see `scope: [review, research]` above). Your finding
+must include a `premise-claims`
 JSON block whenever it contains ANY of:
 
 1. **A file path + line number** — *"at `apps/cli/src/handlers/dispatch.ts:42`"*.

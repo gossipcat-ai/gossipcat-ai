@@ -27,6 +27,23 @@ export type SkillStatus =
  */
 export type SkillTaskType = 'review' | 'implement' | 'research' | 'any';
 
+/**
+ * Cross-cutting scope declaration for a skill. Unlike `mode: permanent`
+ * (which always loads regardless of task type) and `mode: contextual`
+ * (which requires keyword hits), a skill with `scope` set loads on EVERY
+ * task whose task_type is in the array — no keyword matching required.
+ *
+ * This is the correct model for cross-cutting concerns like citation integrity
+ * that apply to all code-review tasks regardless of topic, but should NOT
+ * fire on implement or research dispatches.
+ *
+ * Scoped skills do NOT count against the MAX_CONTEXTUAL_SKILLS budget. They
+ * are a separate loading axis: task-type-aware always-loads.
+ *
+ * Example frontmatter: `scope: [review]` or `scope: [review, research]`
+ */
+export type SkillScope = ReadonlyArray<'review' | 'implement' | 'research'>;
+
 export interface SkillFrontmatter {
   name: string;
   description: string;
@@ -43,6 +60,21 @@ export interface SkillFrontmatter {
    * the skill-loader BEFORE the keyword-hit / category-boost gates run.
    */
   task_type?: SkillTaskType;
+  /**
+   * Cross-cutting scope array. When present, the skill loads on EVERY dispatch
+   * whose task_type is in this list — no keyword matching, no contextual budget.
+   * Use for concerns that are always relevant to a task type (e.g. citation
+   * integrity on review tasks) but should not fire on other task types.
+   *
+   * Takes priority over mode/contextual machinery: if scope matches the dispatch
+   * task_type, the skill is injected unconditionally. If scope is present but
+   * the dispatch type is not in the list, the skill is dropped as task-type-mismatch.
+   *
+   * Parsed from frontmatter: `scope: [review]` or `scope: [review, research]`
+   * Missing or empty → treated as absent (no scope constraint, falls through to
+   * mode/contextual machinery).
+   */
+  scope?: SkillScope;
 }
 
 export function parseSkillFrontmatter(content: string): SkillFrontmatter | null {
@@ -93,6 +125,26 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     rawTaskType === 'research' || rawTaskType === 'any'
   ) ? rawTaskType : 'any';
 
+  // Parse `scope` field: inline list e.g. `scope: [review, research]`
+  // or bare single value `scope: review`. Unknown tokens are silently
+  // dropped (same coercion philosophy as task_type). An empty parsed
+  // array is treated as absent — callers check `scope && scope.length > 0`.
+  let scope: SkillScope | undefined;
+  if (fields.scope) {
+    const raw = fields.scope.trim();
+    let tokens: string[];
+    if (raw.startsWith('[') && raw.endsWith(']')) {
+      tokens = raw.slice(1, -1).split(',').map(t => t.trim().replace(/^['"]|['"]$/g, ''));
+    } else {
+      tokens = [raw.replace(/^['"]|['"]$/g, '')];
+    }
+    const valid = tokens.filter(
+      (t): t is 'review' | 'implement' | 'research' =>
+        t === 'review' || t === 'implement' || t === 'research',
+    );
+    if (valid.length > 0) scope = valid;
+  }
+
   return {
     name: normalizeSkillName(fields.name),
     description: fields.description,
@@ -103,5 +155,6 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     sources: fields.sources,
     status: fields.status as SkillStatus,
     task_type,
+    scope,
   };
 }
