@@ -5,8 +5,8 @@
  * Called by collect.ts AFTER consensus signals are written, so the
  * per-category accuracy counters reflect the current consensus round.
  */
-import { existsSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readdirSync, realpathSync } from 'fs';
+import { join, resolve } from 'path';
 import type { SkillEngine } from '@gossip/orchestrator';
 
 export interface RunnerOptions {
@@ -33,20 +33,29 @@ const SAFE_NAME = /^(?!.*\.\.)[a-zA-Z0-9._-]+$/;
 export async function runCheckEffectivenessForAllSkills(opts: RunnerOptions): Promise<void> {
   const baseDir = join(opts.projectRoot, '.gossip', 'agents');
   if (!existsSync(baseDir)) return;
+  let canonicalBaseDir: string;
+  try {
+    canonicalBaseDir = realpathSync(baseDir);
+  } catch { return; }
 
-  const agentDirs = readdirSync(baseDir);
+  const agentDirs = readdirSync(canonicalBaseDir);
   for (const agentId of agentDirs) {
     // Skip synthetic/system dirs (e.g. `_project`) — they are not agents.
     if (agentId.startsWith('_')) continue;
     if (!SAFE_NAME.test(agentId)) continue;
-    const skillsDir = join(baseDir, agentId, 'skills');
+    const skillsDir = join(canonicalBaseDir, agentId, 'skills');
     if (!existsSync(skillsDir)) continue;
+    let canonicalSkillsDir: string;
+    try {
+      canonicalSkillsDir = realpathSync(skillsDir);
+    } catch { continue; }
+    if (!canonicalSkillsDir.startsWith(resolve(canonicalBaseDir) + '/')) continue;
 
     const role = opts.registryGet(agentId)?.role;
     // Implementers never get per-category accuracy checks
     if (role === 'implementer') continue;
 
-    const files = readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+    const files = readdirSync(canonicalSkillsDir).filter(f => f.endsWith('.md'));
     for (const file of files) {
       const category = file.replace(/\.md$/, '');
       if (!SAFE_NAME.test(category)) continue;
