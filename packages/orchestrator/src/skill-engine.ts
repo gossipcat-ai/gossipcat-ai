@@ -799,7 +799,15 @@ ${inputs.join('\n')}
       ? new Date(snapshot.inconclusive_at).getTime()
       : new Date(snapshot.bound_at).getTime();
     const delta = this.perfReader.getCountersSince(agentId, category, anchorMs);
-    const verdict = resolveVerdict(snapshot, delta, nowMs, opts);
+    // FIX 4: inject agent-wide accuracy so resolveVerdict uses a realistic
+    // baselineP when baselineTotal=0 (no pre-bind history). Without this,
+    // the 0.5 fallback routes to the 'typical' Wilson regime even for high-
+    // accuracy agents, inflating the evidence bar unnecessarily.
+    const agentScore = this.perfReader.getAgentScore(agentId);
+    const verdictOpts = agentScore != null
+      ? { ...opts, agentAccuracy: agentScore.accuracy }
+      : opts;
+    const verdict = resolveVerdict(snapshot, delta, nowMs, verdictOpts);
 
     if (verdict.shouldUpdate && verdict.newSnapshotFields) {
       const merged: Record<string, unknown> = { ...frontmatter, ...verdict.newSnapshotFields };
@@ -861,9 +869,19 @@ ${inputs.join('\n')}
       updates.baseline_accuracy_hallucinated = lifetime.hallucinated;
     }
 
-    // Step 4: stale bound_at reset
+    // Step 4: stale bound_at reset.
+    // Two sub-cases:
+    //   (a) bound_at is absent entirely — always set it; the system needs an anchor.
+    //   (b) bound_at exists but is > TIMEOUT_MS old — only reset when status:pending
+    //       is NOT set. A pending skill with an existing bound_at is actively
+    //       accumulating delta signals anchored to that timestamp; resetting it would
+    //       void all accumulated history and double the evidence bar for the current
+    //       verdict window. Status missing/null means this is an unmigrated legacy
+    //       file with no in-flight evaluation, so reset is safe there.
     const boundAt = frontmatter.bound_at as string | undefined;
-    if (!boundAt || (nowMs - new Date(boundAt).getTime()) > TIMEOUT_MS) {
+    const hasActivePendingStatus = frontmatter.status === 'pending';
+    const boundAtStale = boundAt != null && (nowMs - new Date(boundAt).getTime()) > TIMEOUT_MS;
+    if (!boundAt || (!hasActivePendingStatus && boundAtStale)) {
       updates.bound_at = new Date(nowMs).toISOString();
       updates.migration_reason = 'v2_stale_baseline_reset';
     }

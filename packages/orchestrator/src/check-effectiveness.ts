@@ -161,7 +161,7 @@ export function resolveVerdict(
   snapshot: SkillSnapshot,
   delta: CategoryCounters,
   nowMs: number,
-  opts?: { role?: string },
+  opts?: { role?: string; agentAccuracy?: number },
 ): VerdictResult {
   // Terminal states short-circuit
   if (opts?.role === 'implementer') {
@@ -178,7 +178,17 @@ export function resolveVerdict(
   const postTotal = delta.correct + delta.hallucinated;
 
   const baselineTotal = snapshot.baseline_accuracy_correct + snapshot.baseline_accuracy_hallucinated;
-  const baselineP = baselineTotal > 0 ? snapshot.baseline_accuracy_correct / baselineTotal : 0.5;
+  // When baselineTotal=0 (no pre-bind history), use agent-wide accuracy as the
+  // baseline probability if provided by the caller. The 0.5 fallback inflates
+  // the Wilson evidence bar for agents with high historical accuracy (e.g. 0.85),
+  // because 0.5 routes to the 'typical' regime (α=0.315) which expects a larger
+  // shift to reject. Agent-wide accuracy yields a tighter, more realistic bar.
+  // Callers that can't supply agentAccuracy continue to receive 0.5 (safe default).
+  const baselineP = baselineTotal > 0
+    ? snapshot.baseline_accuracy_correct / baselineTotal
+    : (opts?.agentAccuracy != null && Number.isFinite(opts.agentAccuracy)
+        ? Math.max(0, Math.min(1, opts.agentAccuracy))
+        : 0.5);
 
   // Timeout check (against original bound_at, not inconclusive epoch)
   const boundAtMs = new Date(snapshot.bound_at).getTime();
