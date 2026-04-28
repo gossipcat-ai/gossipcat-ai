@@ -97,6 +97,10 @@ export class AgentMemoryReader {
       const confirmed = entry.confirmedBy;
       if (!Array.isArray(confirmed) || confirmed.length === 0) continue;
 
+      // Skip insight rows — they are informational, not actionable findings.
+      // type:null legacy rows are preserved (spec §Design cheap variant).
+      if (entry.type === 'insight') continue;
+
       // Age filter — require timestamp field
       const ts = entry.timestamp;
       if (ts) {

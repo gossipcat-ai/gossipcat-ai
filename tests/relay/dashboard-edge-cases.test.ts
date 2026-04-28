@@ -2,6 +2,7 @@ import { overviewHandler } from '@gossip/relay/dashboard/api-overview';
 import { agentsHandler } from '@gossip/relay/dashboard/api-agents';
 import { skillsGetHandler, skillsBindHandler } from '@gossip/relay/dashboard/api-skills';
 import { memoryHandler } from '@gossip/relay/dashboard/api-memory';
+import { openFindingsHandler } from '@gossip/relay/dashboard/api-open-findings';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -134,6 +135,33 @@ describe('Dashboard API: Edge Cases', () => {
       }
       const result = await memoryHandler(projectRoot, 'agent-x');
       expect(result.knowledge).toHaveLength(500);
+    });
+  });
+
+  // Spec: docs/specs/2026-04-28-write-time-insight-filter.md (consensus 7438ce05-25ff407f)
+  describe('api-open-findings: insight filter', () => {
+    it('excludes type:insight rows from count and list, includes type:finding rows', async () => {
+      const insightEntry = JSON.stringify({ taskId: 'task-insight-1', finding: 'Informational insight note', status: 'open', type: 'insight', timestamp: new Date().toISOString() });
+      const findingEntry = JSON.stringify({ taskId: 'task-finding-1', finding: 'Actionable security finding', status: 'open', type: 'finding', timestamp: new Date().toISOString() });
+      writeFileSync(join(projectRoot, '.gossip', 'implementation-findings.jsonl'), [insightEntry, findingEntry].join('\n') + '\n');
+
+      const result = await openFindingsHandler(projectRoot);
+
+      expect(result.totals.open).toBe(1);
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].finding_id).toBe('task-finding-1');
+      expect(result.rows.some(r => r.finding_id === 'task-insight-1')).toBe(false);
+    });
+
+    it('does NOT exclude type:null legacy rows (cheap variant — null stays visible)', async () => {
+      const legacyEntry = JSON.stringify({ taskId: 'task-legacy-1', finding: 'Legacy finding with null type', status: 'open', type: null, timestamp: new Date().toISOString() });
+      writeFileSync(join(projectRoot, '.gossip', 'implementation-findings.jsonl'), legacyEntry + '\n');
+
+      const result = await openFindingsHandler(projectRoot);
+
+      expect(result.totals.open).toBe(1);
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].finding_id).toBe('task-legacy-1');
     });
   });
 });

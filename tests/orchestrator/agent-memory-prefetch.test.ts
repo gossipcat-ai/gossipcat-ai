@@ -178,4 +178,31 @@ describe('AgentMemoryReader.prefetchConsensusFindingsText', () => {
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]).toContain('dispatch pipeline');
   });
+
+  // Spec: docs/specs/2026-04-28-write-time-insight-filter.md (consensus 7438ce05-25ff407f)
+  it('excludes type:insight rows from prefetch results', () => {
+    const now = new Date().toISOString();
+    const insightRow = JSON.stringify({ finding: 'dispatch pipeline insight observation', timestamp: now, confirmedBy: ['sonnet-reviewer'], type: 'insight' });
+    const findingRow = JSON.stringify({ finding: 'dispatch pipeline actionable finding', timestamp: now, confirmedBy: ['sonnet-reviewer'], type: 'finding' });
+    writeFileSync(findingsPath, [insightRow, findingRow].join('\n') + '\n');
+
+    const reader = new AgentMemoryReader(testDir);
+    const results = reader.prefetchConsensusFindingsText('dispatch pipeline');
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toContain('actionable finding');
+    expect(results[0]).not.toContain('insight observation');
+  });
+
+  it('does NOT exclude type:null legacy rows from prefetch results', () => {
+    const now = new Date().toISOString();
+    const legacyRow = JSON.stringify({ finding: 'dispatch pipeline legacy finding', timestamp: now, confirmedBy: ['sonnet-reviewer'], type: null });
+    writeFileSync(findingsPath, legacyRow + '\n');
+
+    const reader = new AgentMemoryReader(testDir);
+    const results = reader.prefetchConsensusFindingsText('dispatch pipeline');
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]).toContain('legacy finding');
+  });
 });

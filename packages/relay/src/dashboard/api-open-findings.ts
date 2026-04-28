@@ -50,6 +50,9 @@ export async function openFindingsHandler(projectRoot: string): Promise<OpenFind
     try { entry = JSON.parse(line); } catch { continue; }
     const findingId = String(entry.taskId ?? entry.findingId ?? entry.id ?? '');
     if (!findingId) continue;
+    // Skip insight rows — they pollute the actionable findings count.
+    // type:null legacy rows are preserved (spec §Design cheap variant).
+    if (entry.type === 'insight') continue;
     let state: 'open' | 'resolved' | 'stale-anchor';
     if (entry.status === 'resolved') {
       state = entry.resolvedBy === 'stale_anchor' ? 'stale-anchor' : 'resolved';
