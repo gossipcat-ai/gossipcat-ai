@@ -118,6 +118,12 @@ export function validateConfig(raw: any): GossipConfig {
     ) {
       throw new Error('Config "consensus.autoDiscoverWorktrees" must be a boolean');
     }
+    if (
+      raw.consensus.autoResolveOnRoundClose !== undefined &&
+      typeof raw.consensus.autoResolveOnRoundClose !== 'boolean'
+    ) {
+      throw new Error('Config "consensus.autoResolveOnRoundClose" must be a boolean');
+    }
   }
 
   if (raw.sandboxEnforcement !== undefined) {

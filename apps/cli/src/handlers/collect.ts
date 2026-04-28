@@ -9,6 +9,14 @@ import { seedRecentConsensusTaskIds } from './native-tasks';
 import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
 
+// ── Phase 2 auto-resolver rate-limited stderr state ─────────────────────────
+// Mirror the PR #296 pattern (loggedCounterErrors Set in performance-writer.ts):
+// deduplicate error messages so a recurring resolver failure logs once per
+// session, not once per consensus round. Module-level so the dedup is
+// effective across multiple collect() calls in the same process lifetime.
+const _autoResolverErrors = new Set<string>();
+let _autoResolverLockWarned = false;
+
 /**
  * Canonical shape for a consensus round identifier. `<8hex>-<8hex>`.
  * Exported so handlers and tests share one source of truth.
@@ -826,6 +834,41 @@ export async function handleCollect(
         process.stderr.write(`[gossipcat] 💾 Auto-persisted ${findingsToSave.length} consensus findings to implementation-findings.jsonl\n`);
       }
     } catch { /* best-effort */ }
+
+    // Phase 2 — round-close auto-invoke of the open-findings resolver.
+    // Spec: docs/specs/2026-04-27-open-findings-auto-resolve.md (rev2) §"Phase 2: round-close auto-invoke"
+    //
+    // Contract: the consensus report and findings MUST be persisted (above) before
+    // we invoke the resolver so resolver failures can never roll back consensus state.
+    // The resolver runs under withResolverLock (5s wait). Lock contention and resolver
+    // errors are swallowed here — consensus result is already complete and returned.
+    // Rate-limited stderr deduplication mirrors the PR #296 pattern (loggedCounterErrors Set).
+    try {
+      const cfgPathAr = (() => { try { const { findConfigPath, loadConfig } = require('../config'); const p = findConfigPath(process.cwd()); return p ? loadConfig(p) : null; } catch { return null; } })();
+      const autoResolveEnabled = cfgPathAr?.consensus?.autoResolveOnRoundClose !== false;
+      if (autoResolveEnabled) {
+        const { resolveFindings: rf } = await import('@gossip/orchestrator');
+        const resolveResult = await rf(process.cwd());
+        if (resolveResult.ok) {
+          if (resolveResult.resolved > 0) {
+            process.stderr.write(
+              `[gossipcat] auto-resolver: ${resolveResult.resolved} finding(s) resolved after round close (scanned ${resolveResult.scanned})\n`,
+            );
+          }
+        } else if (resolveResult.reason === 'lock_contended') {
+          if (!_autoResolverLockWarned) {
+            _autoResolverLockWarned = true;
+            process.stderr.write(`[gossipcat] auto-resolver: lock contention on round close, skipping\n`);
+          }
+        }
+      }
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (!_autoResolverErrors.has(msg)) {
+        _autoResolverErrors.add(msg);
+        try { process.stderr.write(`[gossipcat] auto-resolver: error on round close: ${msg}\n`); } catch { /* best-effort */ }
+      }
+    }
 
     // Auto-record provisional signals for consensus findings NOT already covered by engine signals
     try {
