@@ -29,20 +29,13 @@
 //
 // Backwards compatibility:
 //   - The legacy `<projectRoot>/.gossip/round-counters.json` file is no longer
-//     read or written. `writeCountersAtomic` is retained as an unused export
-//     for any third-party importers but is not exercised by this module.
+//     read or written. The file may still exist on disk from prior versions;
+//     it is silently ignored.
 
 import * as fs from 'fs';
 import * as path from 'path';
 
-const SCHEMA_VERSION = 1;
-const COUNTERS_FILENAME = 'round-counters.json';
 const JSONL_FILENAME = 'agent-performance.jsonl';
-
-interface CountersFile {
-  _version: number;
-  counts: Record<string, number>;
-}
 
 /**
  * In-memory fallback used when the filesystem rejects writes (read-only fs,
@@ -68,10 +61,6 @@ const scanCache = new Map<string, ScanCache>();
 
 function jsonlPath(projectRoot: string): string {
   return path.join(projectRoot, '.gossip', JSONL_FILENAME);
-}
-
-function counterFilePath(projectRoot: string): string {
-  return path.join(projectRoot, '.gossip', COUNTERS_FILENAME);
 }
 
 /**
@@ -154,6 +143,12 @@ function readCountsCached(projectRoot: string): Map<string, number> {
     return new Map();
   }
   const cached = scanCache.get(filePath);
+  // Rotation invariant: rotateJsonlIfNeeded (performance-writer.ts) renames the
+  // JSONL away once it crosses the size threshold (~5MB) and creates a fresh
+  // empty file. Cache key is filePath only, but invalidation is safe because
+  // the new file's size (0B) and mtime differ from any cached entry from the
+  // pre-rotation file (~5MB), forcing a fresh scan that correctly returns 0
+  // bumps for the new stream.
   if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
     return cached.counts;
   }
@@ -161,46 +156,6 @@ function readCountsCached(projectRoot: string): Map<string, number> {
   scanCache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, counts });
   return counts;
 }
-
-/**
- * Write counters atomically to the legacy `round-counters.json` file. RETAINED
- * as a public-but-unused helper for third-party importers; this module no
- * longer calls it. Counter state is derived from the JSONL stream instead
- * (Option C, spec 2026-04-27-self-telemetry-crash-consistency).
- *
- * @deprecated Use the JSONL-derived counter via `bump`/`get`/`reset`. Kept
- * exported for back-compat with any external callers.
- */
-function writeCountersAtomic(projectRoot: string, m: Map<string, number>): boolean {
-  const target = counterFilePath(projectRoot);
-  const dir = path.dirname(target);
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch { /* best-effort */ }
-  const payload: CountersFile = {
-    _version: SCHEMA_VERSION,
-    counts: Object.fromEntries(m),
-  };
-  const tmp = `${target}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(payload));
-  } catch {
-    return false;
-  }
-  try {
-    fs.renameSync(tmp, target);
-    return true;
-  } catch {
-    try { fs.unlinkSync(tmp); } catch { /* best-effort */ }
-    return false;
-  }
-}
-// `writeCountersAtomic` is intentionally unused by this module under Option C.
-// The `void` reference below silences the "declared but never read" linter
-// warning while keeping the function in the module for back-compat.
-void writeCountersAtomic;
-
-let tmpCounter = 0;
 
 /**
  * Increment the signal count for `consensusId` by 1.
