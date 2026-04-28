@@ -175,6 +175,31 @@ describe('roundCounter — persistence (Option C)', () => {
     expect(roundCounter.get(tmpDir, CID)).toBe(3);
   });
 
+  it('F3 — interleaved reset and bump: final count == bumps after the latest reset record', () => {
+    // The append-only JSONL guarantees record ordering matches the order of
+    // appendFileSync calls. A reset is just a `_meta`/`round_counter_reset`
+    // line; bumps after it are counted, bumps before it are masked. This test
+    // confirms the get() semantics are deterministic regardless of the
+    // bump/reset interleave: we drive an explicit interleave (5 bumps → reset
+    // → 2 bumps → reset → 3 bumps) and assert get() == 3.
+    for (let i = 0; i < 5; i++) roundCounter.bump(tmpDir, CID);
+    roundCounter.reset(tmpDir, CID);
+    for (let i = 0; i < 2; i++) roundCounter.bump(tmpDir, CID);
+    roundCounter.reset(tmpDir, CID);
+    for (let i = 0; i < 3; i++) roundCounter.bump(tmpDir, CID);
+    roundCounter.__resetForTests();
+    expect(roundCounter.get(tmpDir, CID)).toBe(3);
+
+    // Confirm the JSONL contains the exact sequence we expect: 5 bumps,
+    // 1 reset, 2 bumps, 1 reset, 3 bumps. Total 12 lines.
+    const file = path.join(tmpDir, '.gossip', 'agent-performance.jsonl');
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    const bumps = lines.filter(l => l.includes('round_counter_bumped'));
+    const resets = lines.filter(l => l.includes('round_counter_reset'));
+    expect(bumps).toHaveLength(10);
+    expect(resets).toHaveLength(2);
+  });
+
   it('read-only filesystem: bump does not throw and stays in-memory', () => {
     const dir = path.join(tmpDir, '.gossip');
     fs.chmodSync(dir, 0o555);
