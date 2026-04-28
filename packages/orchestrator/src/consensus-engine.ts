@@ -1177,7 +1177,16 @@ Return only valid JSON.${skillsBlock}`;
             reason: entry.evidence,
           });
           f.confidences.push(entry.confidence);
-          // Tiny penalty signal — agent couldn't verify, less useful than agree/disagree
+          // Tiny penalty signal — agent couldn't verify, less useful than agree/disagree.
+          // FIX 5: fall back to resolveSignalCategory when f.category is undefined
+          // so unverified signals aren't silently dropped by getCountersSince's
+          // `!s.category` guard (performance-reader.ts:422).
+          const unverifiedCat = resolveSignalCategory(f.category, entry.evidence, f.finding);
+          if (!unverifiedCat) {
+            process.stderr.write(
+              `[consensus-engine] unverified for ${entry.agentId}: category resolution failed, recorded with undefined. finding="${f.finding.slice(0, 80)}"\n`,
+            );
+          }
           signals.push({
             type: 'consensus',
             taskId: getTaskId(entry.agentId),
@@ -1188,7 +1197,7 @@ Return only valid JSON.${skillsBlock}`;
             evidence: capEvidence(entry.evidence),
             timestamp: now,
             severity: f.severity,
-            category: f.category,
+            category: unverifiedCat ?? undefined,
           });
         }
       }
@@ -1315,6 +1324,7 @@ Return only valid JSON.${skillsBlock}`;
         // Peers couldn't verify (wrong line number, missing context) — not a refutation
         finding.tag = 'unverified';
         unverified.push(finding);
+        // FIX 5: resolve category via fallback so getCountersSince counts this signal
         signals.push({
           type: 'consensus',
           taskId: getTaskId(entry.originalAgentId),
@@ -1324,7 +1334,7 @@ Return only valid JSON.${skillsBlock}`;
           evidence: capEvidence(entry.finding),
           timestamp: now,
           severity: entry.severity,
-          category: entry.category,
+          category: resolveSignalCategory(entry.category, entry.finding) ?? undefined,
         });
       } else {
         // Tier 2: broadened pre-filter. Same fabrication check for findings
@@ -1336,6 +1346,7 @@ Return only valid JSON.${skillsBlock}`;
         }
         finding.tag = 'unique';
         unique.push(finding);
+        // FIX 5: resolve category via fallback so getCountersSince counts this signal
         signals.push({
           type: 'consensus',
           taskId: getTaskId(entry.originalAgentId),
@@ -1345,7 +1356,7 @@ Return only valid JSON.${skillsBlock}`;
           evidence: capEvidence(entry.finding),
           timestamp: now,
           severity: entry.severity,
-          category: entry.category,
+          category: resolveSignalCategory(entry.category, entry.finding) ?? undefined,
         });
       }
     }

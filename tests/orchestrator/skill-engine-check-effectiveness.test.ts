@@ -377,11 +377,14 @@ describe('checkEffectiveness — lazy migration', () => {
     expect(fm.migration_reason).toBeUndefined();
   });
 
-  it('resets bound_at to now() AND sets migration_reason when bound_at > 90 days old', async () => {
-    const agentId = 'agent-stale';
+  it('preserves bound_at when status:pending even if > 90 days old (FIX 3)', async () => {
+    // A skill with status:pending is actively accumulating delta signals anchored
+    // to the existing bound_at. Resetting it would void accumulated history and
+    // double the evidence bar. The migration must NOT reset in this case.
+    const agentId = 'agent-stale-pending';
     const category = 'trust_boundaries';
 
-    // 100 days ago — stale
+    // 100 days ago — stale, but status is pending (active evaluation in-flight)
     const hundredDaysAgo = new Date(Date.now() - 100 * 86400_000).toISOString();
 
     const skillPath = writeSkillFile(tmpDir, agentId, category, {
@@ -389,6 +392,38 @@ describe('checkEffectiveness — lazy migration', () => {
       bound_at: hundredDaysAgo,
       status: 'pending',
       // NO baseline_correct, NO migration_count
+    });
+
+    const perfReader = makeStubPerfReader(
+      tmpDir,
+      agentId,
+      { [category]: 30 },
+      { [category]: 10 },
+    );
+    const gen = new SkillEngine(makeStubLLM(), perfReader, tmpDir);
+    await gen.checkEffectiveness(agentId, category);
+
+    const fm = readFrontmatter(skillPath);
+    // bound_at must be PRESERVED (not reset to now) — delta history anchor intact
+    expect(fm.bound_at).toBe(hundredDaysAgo);
+    // migration_reason must NOT be set — no stale reset occurred
+    expect(fm.migration_reason).toBeUndefined();
+    expect(Number(fm.migration_count)).toBe(2);
+  });
+
+  it('resets bound_at to now() AND sets migration_reason when status is absent and bound_at > 90 days old', async () => {
+    // Legacy unmigrated file: no status means no in-flight evaluation,
+    // safe to reset the stale bound_at so the new verdict window starts fresh.
+    const agentId = 'agent-stale-no-status';
+    const category = 'trust_boundaries';
+
+    // 100 days ago — stale, and no status (unmigrated legacy file)
+    const hundredDaysAgo = new Date(Date.now() - 100 * 86400_000).toISOString();
+
+    const skillPath = writeSkillFile(tmpDir, agentId, category, {
+      effectiveness: 0.0,
+      bound_at: hundredDaysAgo,
+      // NO status, NO baseline_correct, NO migration_count
     });
 
     const perfReader = makeStubPerfReader(
