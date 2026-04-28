@@ -101,6 +101,47 @@ describe('finding-resolver — pure helpers', () => {
     expect(inferLeadIdentifier('no backticks here')).toBeNull();
   });
 
+  // Bug 1: inferLeadIdentifier should handle trailing ()
+  test('bug1: inferLeadIdentifier extracts bare identifier from `Math.random()` call-form', () => {
+    expect(inferLeadIdentifier('`Math.random()` is used in `selectCrossReviewers`')).toBe('Math.random');
+  });
+
+  test('bug1: inferLeadIdentifier falls through to next token when call-form is skipped', () => {
+    // The call-form should capture the first backtick token's identifier
+    expect(inferLeadIdentifier('The `computeHash()` function is risky')).toBe('computeHash');
+  });
+
+  // Bug 7: inferLeadIdentifier skip-list
+  test('bug7: inferLeadIdentifier returns null for keyword `null`', () => {
+    expect(inferLeadIdentifier('value is `null` which causes crash')).toBeNull();
+  });
+
+  test('bug7: inferLeadIdentifier returns null for keyword `error`', () => {
+    expect(inferLeadIdentifier('catches `error` and swallows it')).toBeNull();
+  });
+
+  test('bug7: inferLeadIdentifier returns null for keyword `true`', () => {
+    expect(inferLeadIdentifier('returns `true` always')).toBeNull();
+  });
+
+  test('bug7: inferLeadIdentifier returns null for single-letter token `i`', () => {
+    expect(inferLeadIdentifier('loop index `i` is off by one')).toBeNull();
+  });
+
+  // Bug 1 false-positive mitigation: destructured alias
+  // Finding 1384141b-750d4ab9:f1 cites `Math.random()`. If a file only contains
+  // `random` (destructured alias) but NOT `Math.random`, containsToken('Math.random')
+  // correctly returns false → allClear stays false → finding stays open (correct).
+  test('bug1 false-positive: destructured-alias file keeps finding open', () => {
+    // File only has destructured `random`, not `Math.random`
+    const fileWithAlias = `const { random } = Math;\nconst v = random();\n`;
+    // inferLeadIdentifier from the finding returns 'Math.random'
+    expect(inferLeadIdentifier('`Math.random()` is used in `selectCrossReviewers`')).toBe('Math.random');
+    // containsToken should NOT find Math.random in the alias-only file
+    expect(containsToken(fileWithAlias, 'Math.random')).toBe(false);
+    // allClear would remain false → finding stays open → NO false-positive resolution
+  });
+
   test('stripJsTsComments removes both // and /* */ comments', () => {
     const src = `let x = 1; // was: badFn(...)\n/* multi\nline\n */ const y = 2;`;
     const stripped = stripJsTsComments(src);
@@ -108,6 +149,39 @@ describe('finding-resolver — pure helpers', () => {
     expect(stripped).not.toContain('multi');
     expect(stripped).toContain('let x = 1');
     expect(stripped).toContain('const y = 2');
+  });
+
+  // Bug 3: stripJsTsComments must strip string literal contents
+  test('bug3: stripJsTsComments strips double-quoted string contents', () => {
+    const src = `expect(result).toBe("Math.random is insecure");\n`;
+    const stripped = stripJsTsComments(src);
+    // The symbol inside the string should be gone
+    expect(stripped).not.toContain('Math.random');
+    // The surrounding code structure should remain
+    expect(stripped).toContain('expect');
+    expect(stripped).toContain('toBe');
+  });
+
+  test('bug3: stripJsTsComments strips single-quoted string contents', () => {
+    const src = `const msg = 'badFn should not be called';\n`;
+    const stripped = stripJsTsComments(src);
+    expect(stripped).not.toContain('badFn');
+  });
+
+  // Bug 5: regression — // inside template literal must not block resolution
+  test('bug5: stripJsTsComments strips template literal contents (prevents // inside template from keeping symbol visible)', () => {
+    const src = 'const s = `// was: badFn() — now fixed`;\n';
+    const stripped = stripJsTsComments(src);
+    expect(stripped).not.toContain('badFn');
+  });
+
+  // Bug 4: containsToken left boundary must exclude `.`
+  test('bug4: containsToken does not match `random` in `Math.random`', () => {
+    expect(containsToken('const x = Math.random();', 'random')).toBe(false);
+  });
+
+  test('bug4: containsToken matches standalone `random` call', () => {
+    expect(containsToken('const v = random();', 'random')).toBe(true);
   });
 
   test('containsToken respects identifier boundaries', () => {
@@ -533,6 +607,91 @@ describe('finding-resolver — resolveFindings', () => {
     expect(result.pathRejections).toBe(0);
     const findings = readFindings(root);
     expect(findings[0].status).toBe('resolved');
+  });
+
+  // Bug 2: gitRoot path mismatch in monorepo subdirs
+  test('bug2: touched-set resolves correctly when projectRoot is a monorepo subdir', async () => {
+    // Create a git repo with a nested subdir acting as the "project root"
+    const monoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'monorepo-'));
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: monoRoot });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: monoRoot });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: monoRoot });
+    execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: monoRoot });
+    // Create subdir as "packages/app"
+    const pkgDir = path.join(monoRoot, 'packages', 'app');
+    const srcDir = path.join(pkgDir, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.mkdirSync(path.join(pkgDir, '.gossip'), { recursive: true });
+    // Initial commit with Math.min
+    fs.writeFileSync(path.join(srcDir, 'util.ts'), 'export const x = Math.min(1, 2);\n');
+    execFileSync('git', ['add', '-A'], { cwd: monoRoot });
+    execFileSync('git', ['commit', '-q', '-m', 'init', '--no-gpg-sign'], { cwd: monoRoot });
+    const watermarkSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: monoRoot, encoding: 'utf8' }).trim();
+    // Fix: remove Math.min
+    fs.writeFileSync(path.join(srcDir, 'util.ts'), 'export const x = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: monoRoot });
+    execFileSync('git', ['commit', '-q', '-m', 'fix', '--no-gpg-sign'], { cwd: monoRoot });
+    // Write watermark so resolver does incremental scan
+    fs.writeFileSync(path.join(pkgDir, '.gossip', 'last-resolve-scan.sha'), watermarkSha + '\n');
+    // Write finding citing packages/app/src/util.ts
+    const absFile = path.join(srcDir, 'util.ts');
+    const p = path.join(pkgDir, '.gossip', 'implementation-findings.jsonl');
+    fs.writeFileSync(p, JSON.stringify({
+      taskId: 'mono-test:f1',
+      finding: `Bad \`Math.min\` <cite tag="file">${absFile}:1</cite>`,
+      type: 'finding',
+      status: 'open',
+    }) + '\n');
+    // projectRoot = pkgDir (subdir), gitRoot = monoRoot
+    const result = await resolveFindings(pkgDir, {});
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error();
+    expect(result.resolved).toBe(1);
+  });
+
+  // Bug 6: legacy row without :fN suffix should not be skipped
+  test('bug6: legacy row without :fN suffix attempts symbol check (not skip)', async () => {
+    const { root } = setupGitFixture();
+    writeFinding(root, {
+      // No :fN suffix — legacy format
+      taskId: 'legacy-abc123',
+      finding: 'Bad `Math.min` <cite tag="file">src/foo.ts:1</cite>',
+      // No `type` field — would have been permanently skipped with old code
+      status: 'open',
+    });
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error();
+    // Should resolve (not skip) because Math.min is absent and we do loose backfill
+    expect(result.resolved).toBe(1);
+    const findings = readFindings(root);
+    expect(findings[0].status).toBe('resolved');
+  });
+
+  // Bug 8: rev-list must not include SHA lines in touched set
+  test('bug8: rev-list SHA lines do not appear in touched set — finding resolves', async () => {
+    // This is an integration check: the touched-set must only contain file paths.
+    // We verify the resolver works correctly in incremental mode (sinceSha → rev-list).
+    const { root } = setupGitFixture();
+    // Write watermark pointing to the commit BEFORE the fix commit
+    // so the incremental scan covers the fix commit.
+    const firstSha = execFileSync('git', ['rev-list', '--max-parents=0', 'HEAD'], {
+      cwd: root, encoding: 'utf8',
+    }).trim();
+    fs.writeFileSync(path.join(root, '.gossip', 'last-resolve-scan.sha'), firstSha + '\n');
+    writeFinding(root, {
+      taskId: 'sha-filter-test:f1',
+      finding: 'Bad `Math.min` <cite tag="file">src/foo.ts:1</cite>',
+      type: 'finding',
+      status: 'open',
+    });
+    const result = await resolveFindings(root, {});
+    if (!result.ok) throw new Error();
+    // Must resolve: touched set must include 'src/foo.ts', not just SHAs
+    expect(result.resolved).toBe(1);
+    const findings = readFindings(root);
+    expect(findings[0].status).toBe('resolved');
+    // Confirm watermark advanced
+    expect(result.watermarkAdvanced).toBe(true);
   });
 
   // Bucket B integration: finding citing auto-memory path produces 'skipped' audit entry
