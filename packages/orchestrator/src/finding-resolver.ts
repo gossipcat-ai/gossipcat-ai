@@ -371,6 +371,11 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
       !sawPresentAtAnchor &&
       !sawCiteWithoutLine;
 
+    // Resolution gate: absent_everywhere findings ALWAYS resolve via the
+    // commit:<sha> fastpath (flag-independent). The lineAnchored flag gates
+    // only the new stale_anchor path for present_elsewhere findings. Mixed
+    // states leave open per the decision matrix in
+    // docs/specs/2026-04-28-resolver-line-anchored-staleness.md.
     if (!allAbsentEverywhere && !(opts.lineAnchored && allPresentElsewhere)) {
       // Mixed state, any present_at_anchor, any cite without line, or
       // line-anchored heuristic disabled → leave open.
@@ -397,6 +402,12 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
         // size; the first cite's line is recorded as the anchor for
         // post-hoc audit. This is documented in spec §Audit log entry shape.
         const firstCite = safeFileCites[0];
+        // Invariant: stale_anchor path requires a cited line. allPresentElsewhere
+        // implies !sawCiteWithoutLine, so firstCite.line must be defined here.
+        if (firstCite.line === undefined) {
+          throw new Error('finding-resolver invariant: stale_anchor path reached with undefined cited line');
+        }
+        const citedLine = firstCite.line;
         appendChainedEntry(projectRoot, {
           ts: entry.resolvedAt,
           finding_id: findingId,
@@ -405,7 +416,7 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
           before_quote: beforeQuote,
           after_check: 'present_elsewhere_only',
           operator: 'auto',
-          cited_line: firstCite.line as number,
+          cited_line: citedLine,
           window: LINE_ANCHORED_WINDOW,
         });
       } else {
