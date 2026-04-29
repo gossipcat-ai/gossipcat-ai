@@ -53,7 +53,12 @@ describe('handleGossipUpdate — env scrub', () => {
     const { handleGossipUpdate } = await import('../../apps/cli/src/handlers/gossip-update');
     await handleGossipUpdate({ check_only: false, confirm: true });
 
+    // Tighten: assert env: option is present, not just call count.
     expect(mockExecSync).toHaveBeenCalledTimes(1);
+    expect(mockExecSync).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ env: expect.any(Object) }),
+    );
     const [, options] = mockExecSync.mock.calls[0] as [string, { env: NodeJS.ProcessEnv }];
     const envKeys = Object.keys(options.env ?? {});
 
@@ -74,7 +79,38 @@ describe('handleGossipUpdate — env scrub', () => {
     const { handleGossipUpdate } = await import('../../apps/cli/src/handlers/gossip-update');
     await handleGossipUpdate({ check_only: false, confirm: true });
 
-    expect(process.env.GOSSIPCAT_ORCHESTRATOR_ROLE).toBe('orchestrator');
-    expect(process.env.GOSSIPCAT_PORT).toBe('9999');
+    // Loop over all 5 GOSSIPCAT_* keys to ensure none are deleted from process.env.
+    const expectedKeys: Array<[string, string]> = [
+      ['GOSSIPCAT_ORCHESTRATOR_ROLE', 'orchestrator'],
+      ['GOSSIPCAT_PORT', '9999'],
+      ['GOSSIPCAT_HTTP_PORT', '8888'],
+      ['GOSSIPCAT_HTTP_BIND', '127.0.0.1'],
+      ['GOSSIPCAT_HTTP_TOKEN', 'secret-token'],
+    ];
+    for (const [key, value] of expectedKeys) {
+      expect(process.env[key]).toBe(value);
+    }
+  });
+
+  it('scrubs GOSSIPCAT_* env vars on global install path', async () => {
+    const originalGlobal = process.env.npm_config_global;
+    process.env.npm_config_global = 'true';
+    try {
+      const { handleGossipUpdate } = await import('../../apps/cli/src/handlers/gossip-update');
+      await handleGossipUpdate({ check_only: false, confirm: true });
+
+      expect(mockExecSync).toHaveBeenCalledTimes(1);
+      const [cmd, options] = mockExecSync.mock.calls[0] as [string, { env: NodeJS.ProcessEnv }];
+      // Global install uses 'npm install -g ...' command.
+      expect(cmd).toContain('-g');
+      const leaked = Object.keys(options.env ?? {}).filter(k => /^GOSSIPCAT_/i.test(k));
+      expect(leaked).toEqual([]);
+    } finally {
+      if (originalGlobal === undefined) {
+        delete process.env.npm_config_global;
+      } else {
+        process.env.npm_config_global = originalGlobal;
+      }
+    }
   });
 });
