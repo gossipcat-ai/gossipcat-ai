@@ -71,7 +71,7 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
         <div className="flex flex-col items-center justify-center gap-2 py-4 px-3">
           <div className="flex items-center gap-3">
             <div className="flex flex-col items-center gap-0.5">
-              <span className={`font-mono text-2xl font-bold leading-none ${overview.agentsOnline > 0 ? 'text-orange-400' : 'text-foreground'}`}>{overview.agentsOnline}</span>
+              <span className={`font-mono text-2xl font-bold leading-none ${overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}`}>{overview.agentsOnline}</span>
               <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Dispatched</span>
             </div>
             <span className="text-border font-mono text-lg leading-none">·</span>

@@ -213,7 +213,7 @@ export function LogsPage() {
             </div>
           ))}
           {filteredEntries.length === 0 && (
-            <div className="py-8 text-center text-sm text-muted-foreground">
+            <div className="py-8 text-center font-mono text-xs text-muted-foreground">
               {entries.length === 0 ? 'Loading...' : 'No matching log entries.'}
             </div>
           )}

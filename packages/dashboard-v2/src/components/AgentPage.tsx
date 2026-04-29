@@ -234,30 +234,6 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               {agent.preset && (
                 <span className="rounded-sm bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">{agent.preset}</span>
               )}
-              {(() => {
-                const kind = getBenchBadgeKind(s);
-                if (kind === 'benched') return (
-                  <span className="rounded-sm bg-destructive/10 px-2 py-0.5 font-mono text-[10px] font-bold text-destructive">
-                    BENCHED
-                  </span>
-                );
-                if (kind === 'struggling') return (
-                  <span className="rounded-sm bg-unverified/10 px-2 py-0.5 font-mono text-[10px] font-bold text-unverified">
-                    STRUGGLING ({s.consecutiveFailures} FAILS)
-                  </span>
-                );
-                if (kind === 'kept-for-coverage') return (
-                  <span className="rounded-sm border border-unverified/40 px-2 py-0.5 font-mono text-[10px] font-bold text-unverified">
-                    KEPT FOR COVERAGE
-                  </span>
-                );
-                if (s.consecutiveFailures > 0) return (
-                  <span className="rounded-sm bg-unverified/10 px-2 py-0.5 font-mono text-[10px] font-bold text-unverified">
-                    {s.consecutiveFailures} CONSECUTIVE FAILS
-                  </span>
-                );
-                return null;
-              })()}
               <span className="font-mono text-[10px] text-muted-foreground/60">
                 {s.signals} signals{agent.lastTask ? ` · ${timeAgo(agent.lastTask.timestamp)}` : ''}
               </span>

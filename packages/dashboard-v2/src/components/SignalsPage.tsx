@@ -35,6 +35,42 @@ const SIGNAL_TYPES = [
   'format_compliance',
 ];
 
+const SIGNAL_LABELS: Record<string, string> = {
+  agreement: 'Agreement',
+  consensus_verified: 'Consensus verified',
+  unique_confirmed: 'Unique (confirmed)',
+  unique_unconfirmed: 'Unique (unconfirmed)',
+  disagreement: 'Disagreement',
+  hallucination_caught: 'Hallucination',
+  new_finding: 'New finding',
+  unverified: 'Unverified',
+  impl_test_pass: 'Test pass',
+  impl_test_fail: 'Test fail',
+  impl_typecheck_pass: 'Typecheck pass',
+  impl_typecheck_fail: 'Typecheck fail',
+  impl_peer_approved: 'Peer approved',
+  impl_peer_rejected: 'Peer rejected',
+  boundary_escape: 'Boundary escape',
+};
+
+const SIGNAL_CLS: Record<string, string> = {
+  agreement: 'text-confirmed',
+  consensus_verified: 'text-confirmed',
+  impl_test_pass: 'text-confirmed',
+  impl_typecheck_pass: 'text-confirmed',
+  impl_peer_approved: 'text-confirmed',
+  disagreement: 'text-disputed',
+  hallucination_caught: 'text-disputed',
+  impl_test_fail: 'text-disputed',
+  impl_typecheck_fail: 'text-disputed',
+  impl_peer_rejected: 'text-disputed',
+  boundary_escape: 'text-disputed',
+  unique_confirmed: 'text-unique',
+  new_finding: 'text-unique',
+  unique_unconfirmed: 'text-unique/70',
+  unverified: 'text-unverified',
+};
+
 // Global severity palette — matches FindingsMetrics SEVERITY_CLS so a
 // "high" chip reads the same orange everywhere on the dashboard.
 const SEVERITY_BADGE: Record<string, string> = {
@@ -163,7 +199,7 @@ export function SignalsPage() {
     <div className="space-y-4">
       <div className="flex items-baseline justify-between">
         <div>
-          <h1 className="font-mono text-sm font-bold uppercase tracking-widest text-primary">Signals</h1>
+          <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Signals</h1>
           <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/70">
             {headerLabel} — showing {rows.length} of {total}
           </p>
@@ -216,7 +252,7 @@ export function SignalsPage() {
                     >
                       <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/80" title={r.timestamp}>{timeAgo(r.timestamp)}</td>
                       <td className="whitespace-nowrap px-2 py-1 text-foreground">{r.agentId}</td>
-                      <td className="whitespace-nowrap px-2 py-1 text-foreground">{r.signal}</td>
+                      <td className={`whitespace-nowrap px-2 py-1 ${SIGNAL_CLS[r.signal] ?? 'text-foreground'}`}>{SIGNAL_LABELS[r.signal] ?? r.signal}</td>
                       <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/80">{r.counterpartId ?? '—'}</td>
                       <td className="whitespace-nowrap px-2 py-1">
                         {r.severity ? (
