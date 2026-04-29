@@ -289,6 +289,22 @@ export interface FindingDetail {
   retracted?: { reason: string; at: string };
 }
 
+export interface ViolationEntry {
+  taskId: string;
+  agentId: string;
+  preSha: string;
+  postSha: string;
+  detectedAt: string;   // ISO-8601
+  commits: string[];    // "sha subject" strings
+}
+
+export interface ViolationsResponse {
+  items: ViolationEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export type DashboardEvent =
   | { type: 'task_dispatched'; taskId: string; agentId: string }
   | { type: 'task_completed'; taskId: string; agentId: string }

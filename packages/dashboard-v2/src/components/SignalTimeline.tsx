@@ -23,6 +23,7 @@ const SIGNAL_COLORS: Record<string, string> = {
   // Amber/orange — fabricated citations are write-time warnings, not consensus
   // errors; keep visually distinct from the red disputed bucket.
   citation_fabricated: 'bg-amber-500',
+  boundary_escape: 'bg-destructive',
 };
 
 const SIGNAL_LABELS: Record<string, string> = {
@@ -35,6 +36,7 @@ const SIGNAL_LABELS: Record<string, string> = {
   new_finding: 'New finding',
   unverified: 'Unverified',
   citation_fabricated: 'Fabricated citation',
+  boundary_escape: 'Process violation',
 };
 
 // Pill sizing budget. MIN_PILL_WIDTH gives a slight breathing margin above the
