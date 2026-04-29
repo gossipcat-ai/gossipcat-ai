@@ -3,11 +3,8 @@
 // (spec: docs/specs/2026-04-28-impact-adjacency-gate.md).
 //
 // Greps the PR diff for `// @gossip:impact-adjacent:<category>` annotations.
-// If any annotated file is changed, requires:
-//   - a consensus-id in the PR title/body, AND
-//   - a corresponding `.gossip/consensus-reports/<id>.json` file present.
+// If any annotated file is changed, requires a consensus-id in the PR title/body.
 // `waived-pattern-mirror` annotations are logged and skipped.
-// On first deploy of the gate file itself, exempts gate-only diffs once.
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -15,15 +12,9 @@ import * as path from 'node:path';
 
 const ANNOTATION_RE =
   /\/\/\s*@gossip:impact-adjacent:(map-lifecycle|ttl-semantics|config-writes|signal-pipeline|auth-boundaries|bootstrap-paths|shared-state-with-lifecycle|waived-pattern-mirror)\b/g;
-const GATE_FILES = new Set([
-  'scripts/impact-adjacency-gate.mjs',
-  '.github/workflows/impact-adjacency-gate.yml',
-]);
 const ROOT = process.cwd();
 const GOSSIP_DIR = path.join(ROOT, '.gossip');
 const WAIVER_LOG = path.join(GOSSIP_DIR, 'waived-impact-adjacency.jsonl');
-const REPORTS_DIR = path.join(GOSSIP_DIR, 'consensus-reports');
-const BOOTSTRAP_LOG = path.join(GOSSIP_DIR, 'bootstrap-exemptions.jsonl');
 
 const DRY_RUN = process.env.IMPACT_ADJACENCY_DRY_RUN === '1';
 const PR_TITLE = process.env.PR_TITLE ?? '';
@@ -33,6 +24,26 @@ const PR_BODY = process.env.PR_BODY ?? '';
 // which can shadow the workflow's step-level override and make `git diff <ref>...HEAD`
 // fail in shallow-or-otherwise-incomplete clones.
 const BASE = process.env.IMPACT_ADJACENCY_BASE || process.env.GITHUB_BASE_REF || 'origin/master';
+
+// Validate BASE ref format: accept 7-40 hex SHAs or safe ref names.
+// Rejects empty, leading dash (looks like a flag), double-dot (range syntax),
+// double-dash, NUL bytes, and whitespace — all of which could mis-invoke git.
+(function validateBase() {
+  const SHA_RE = /^[0-9a-f]{7,40}$/i;
+  const REF_RE = /^[A-Za-z0-9_.\/\-]+$/;
+  if (
+    !BASE ||
+    BASE.startsWith('-') ||
+    BASE.includes('..') ||
+    BASE.includes('--') ||
+    BASE.includes('\0') ||
+    /\s/.test(BASE) ||
+    (!SHA_RE.test(BASE) && !REF_RE.test(BASE))
+  ) {
+    process.stderr.write(`invalid BASE ref: ${JSON.stringify(BASE)}\n`);
+    process.exit(1);
+  }
+})();
 
 function safeRead(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch { return ''; }
@@ -86,39 +97,13 @@ function annotationsIn(file) {
   return [...cats];
 }
 // Phase 1: PR title/body must contain a consensus-id matching the regex.
-// File-existence verification (Phase 2) requires consensus reports to be
-// available to CI; .gossip/ is currently gitignored, so the per-id JSON files
-// are local-only. Until consensus receipts get a tracked storage (separate
-// public ledger or gh artifact), Phase 1 is declarative: the gate trusts the
-// PR description. Forge protection is a Phase 2 concern.
+// Phase 2 (file-existence verification via consensus-reports.jsonl) is deferred —
+// out of threat model for single-maintainer use. See spec §2.
 function consensusIdInPr() {
-  const re = /consensus[\s\-_:]?id[: ]+([0-9a-f]{8}-[0-9a-f]{8})/i;
+  const re = /\bconsensus[-_]id:\s*([0-9a-f]{8}-[0-9a-f]{8})\b/i;
   const m = PR_TITLE.match(re) || PR_BODY.match(re);
   if (m) return { matched: true, id: m[1].toLowerCase() };
   return { matched: false, id: null };
-}
-function gateNotInBase() {
-  // First-deploy signal: gate workflow file does not exist on the merge base.
-  // Once merged, subsequent runs see it on master and bootstrap exemption
-  // never re-fires. This is a more honest "first deploy" check than counting
-  // gate-file-only diffs.
-  try {
-    execFileSync('git', ['cat-file', '-e', `${BASE}:.github/workflows/impact-adjacency-gate.yml`], {
-      cwd: ROOT, stdio: 'ignore',
-    });
-    return false;
-  } catch { return true; }
-}
-function bootstrapAlreadyExempted() {
-  const txt = safeRead(BOOTSTRAP_LOG);
-  for (const line of txt.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const obj = JSON.parse(line);
-      if (obj && obj.gate === 'impact-adjacency') return true;
-    } catch { /* skip malformed silently */ }
-  }
-  return false;
 }
 
 // Test/fixture files routinely embed annotation strings as string literals
@@ -147,21 +132,7 @@ function main() {
     appendLine(WAIVER_LOG, { file: f, sha, ts });
   }
 
-  // Bootstrap exemption: fires once when the gate is first deployed (workflow
-  // file absent on merge base) and never exempted before in the log.
   const annotatedFiles = annotated.map((a) => a.file);
-  if (annotated.length > 0 && gateNotInBase() && !bootstrapAlreadyExempted()) {
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    appendLine(BOOTSTRAP_LOG, {
-      gate: 'impact-adjacency',
-      deployedAt: ts,
-      expiresAt,
-      headSha: sha,
-    });
-    process.stdout.write('OK (bootstrap exemption — gate first deploy)\n');
-    process.exit(0);
-  }
-
   if (annotated.length === 0) {
     process.stdout.write('OK (no annotated files)\n');
     process.exit(0);

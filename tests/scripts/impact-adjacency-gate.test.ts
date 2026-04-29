@@ -5,6 +5,9 @@
  * commits a base, then commits the change-under-test on a feature branch.
  * The gate is run with GITHUB_BASE_REF pointing at the base commit so
  * `git diff --name-only <BASE>...HEAD` produces a deterministic diff.
+ *
+ * Bootstrap-exemption tests (e) and (i) were removed 2026-04-29 because the
+ * bootstrap-exemption code was deleted (gate deployed in #314; logic is dead).
  */
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -25,20 +28,16 @@ interface RunResult {
   stderr: string;
 }
 
-function mkRepo(opts: { withGateWorkflow?: boolean } = {}): string {
-  const { withGateWorkflow = true } = opts;
+function mkRepo(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iagate-'));
   execSync('git init -q -b master', { cwd: dir });
   execSync('git config user.email t@t.com && git config user.name t', { cwd: dir, shell: '/bin/sh' });
   // Copy the gate script to the same relative path as production.
   fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
   fs.copyFileSync(SCRIPT_SRC, path.join(dir, 'scripts', 'impact-adjacency-gate.mjs'));
-  // By default, baseline assumes the gate is already deployed (workflow file
-  // present on base). Bootstrap-exemption tests use { withGateWorkflow: false }.
-  if (withGateWorkflow) {
-    fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
-    fs.writeFileSync(path.join(dir, '.github', 'workflows', 'impact-adjacency-gate.yml'), 'placeholder\n');
-  }
+  // Gate is already deployed (workflow file present on base).
+  fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.github', 'workflows', 'impact-adjacency-gate.yml'), 'placeholder\n');
   // Seed an initial commit so we have a base ref.
   fs.writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
   execSync('git add -A && git commit -q -m base', { cwd: dir, shell: '/bin/sh' });
@@ -127,29 +126,6 @@ describe('impact-adjacency-gate', () => {
     expect(waiver).toMatch(/"sha":"[0-9a-f]{8}"/);
   });
 
-  it('(e) bootstrap exemption: workflow absent on base → exit 0; second run → exit 1', () => {
-    // Base does NOT contain the gate workflow file (gate not yet deployed).
-    const dir = mkRepo({ withGateWorkflow: false });
-    fs.writeFileSync(
-      path.join(dir, 'src.ts'),
-      '// @gossip:impact-adjacent:map-lifecycle\nexport const x = 1;\n',
-    );
-    // Add the workflow file as part of the same diff so the gate IS being deployed.
-    fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
-    fs.writeFileSync(path.join(dir, '.github', 'workflows', 'impact-adjacency-gate.yml'), 'placeholder\n');
-    commitAll(dir, 'first deploy + annotated file');
-    const base = execSync('git rev-parse HEAD~1', { cwd: dir }).toString().trim();
-    const first = runGate(dir, { GITHUB_BASE_REF: base });
-    expect(first.status).toBe(0);
-    expect(first.stdout).toMatch(/bootstrap exemption/);
-    const exempt = fs.readFileSync(path.join(dir, '.gossip', 'bootstrap-exemptions.jsonl'), 'utf8');
-    expect(exempt).toMatch(/gate":"impact-adjacency/);
-    // Second run must NOT re-exempt (already logged).
-    const second = runGate(dir, { GITHUB_BASE_REF: base });
-    expect(second.status).toBe(1);
-    expect(second.stderr).toMatch(/require multi-agent consensus/);
-  });
-
   it('(f) annotation strings inside tests/ are ignored (fixture false-positive guard)', () => {
     const dir = mkRepo();
     const base = baseSha(dir);
@@ -174,26 +150,75 @@ describe('impact-adjacency-gate', () => {
     expect(res.stderr).toMatch(/could not resolve base ref: does-not-exist/);
   });
 
-  it('(i) bootstrap-exemption log with whitespace JSON keys is recognized via JSON.parse', () => {
+  it('(j) invalid BASE values are rejected before git diff (IMPACT_ADJACENCY_BASE)', () => {
     const dir = mkRepo();
-    // Pre-seed the bootstrap-exemptions log with a whitespace-formatted JSON line.
-    fs.mkdirSync(path.join(dir, '.gossip'), { recursive: true });
+    const base = baseSha(dir);
+    fs.writeFileSync(path.join(dir, 'src.ts'), 'export const x = 1;\n');
+    commitAll(dir, 'plain change');
+    void base; // needed for mkRepo setup; we test with bad BASE values
+
+    // Note: empty string is not testable via IMPACT_ADJACENCY_BASE because the
+    // env-var chain `IMPACT_ADJACENCY_BASE || GITHUB_BASE_REF || 'origin/master'`
+    // treats empty as unset and falls back to the default. The `!BASE` guard in
+    // validateBase() defends against programmatic callers; env-level empty is safe.
+    const badBases = [
+      '--',
+      '; rm -rf /',
+      'master..foo',
+      'branch name with spaces',
+      '-bad-leading-dash',
+    ];
+    for (const bad of badBases) {
+      const res = runGate(dir, { IMPACT_ADJACENCY_BASE: bad });
+      expect(res.status).toBe(1);
+      expect(res.stderr).toMatch(/invalid BASE ref/);
+    }
+  });
+
+  it('(k) consensus-id regex: accepts hyphen and underscore separators, rejects loose forms', () => {
+    const dir = mkRepo();
+    const base = baseSha(dir);
     fs.writeFileSync(
-      path.join(dir, '.gossip', 'bootstrap-exemptions.jsonl'),
-      '{ "gate" : "impact-adjacency", "deployedAt": "2026-04-28T00:00:00Z" }\n',
+      path.join(dir, 'src.ts'),
+      '// @gossip:impact-adjacent:map-lifecycle\nexport const x = 1;\n',
     );
-    // Now stage a gate-only-annotated change. With prior exemption recorded,
-    // the second-time path should NOT re-exempt and should fall through to
-    // the consensus-required failure.
-    const gatePath = path.join(dir, 'scripts', 'impact-adjacency-gate.mjs');
-    const orig = fs.readFileSync(gatePath, 'utf8');
-    const lines = orig.split('\n');
-    const annotated = [lines[0], '// @gossip:impact-adjacent:bootstrap-paths', ...lines.slice(1)].join('\n');
-    fs.writeFileSync(gatePath, annotated);
-    commitAll(dir, 'gate self-annotate after exemption already logged');
-    const base = execSync('git rev-parse HEAD~1', { cwd: dir }).toString().trim();
-    const res = runGate(dir, { GITHUB_BASE_REF: base });
-    expect(res.status).toBe(1);
-    expect(res.stderr).toMatch(/require multi-agent consensus/);
+    commitAll(dir, 'annotated');
+
+    // Accepted: consensus-id: <id>
+    const hyphen = runGate(dir, {
+      GITHUB_BASE_REF: base,
+      PR_TITLE: 'fix: thing (consensus-id: abcdef12-34567890)',
+    });
+    expect(hyphen.status).toBe(0);
+    expect(hyphen.stdout).toMatch(/OK \(annotated/);
+
+    // Accepted: consensus_id: <id>
+    const underscore = runGate(dir, {
+      GITHUB_BASE_REF: base,
+      PR_TITLE: 'fix: thing (consensus_id: abcdef12-34567890)',
+    });
+    expect(underscore.status).toBe(0);
+    expect(underscore.stdout).toMatch(/OK \(annotated/);
+
+    // Rejected: no colon after keyword
+    const noColon = runGate(dir, {
+      GITHUB_BASE_REF: base,
+      PR_TITLE: 'fix: thing consensusid: abcdef12-34567890',
+    });
+    expect(noColon.status).toBe(1);
+
+    // Rejected: space between "consensus" and "id"
+    const spaceId = runGate(dir, {
+      GITHUB_BASE_REF: base,
+      PR_TITLE: 'fix: thing consensus id abcdef12-34567890',
+    });
+    expect(spaceId.status).toBe(1);
+
+    // Rejected: extra space before colon (Consensus Id : <id>)
+    const extraSpace = runGate(dir, {
+      GITHUB_BASE_REF: base,
+      PR_TITLE: 'fix: thing Consensus Id : abcdef12-34567890',
+    });
+    expect(extraSpace.status).toBe(1);
   });
 });
