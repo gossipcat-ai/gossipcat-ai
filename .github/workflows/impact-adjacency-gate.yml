@@ -25,6 +25,6 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          GITHUB_BASE_REF: ${{ github.event.pull_request.base.sha }}
+          IMPACT_ADJACENCY_BASE: ${{ github.event.pull_request.base.sha }}
           IMPACT_ADJACENCY_DRY_RUN: '1'
         run: node scripts/impact-adjacency-gate.mjs

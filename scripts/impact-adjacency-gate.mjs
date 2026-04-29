@@ -28,7 +28,11 @@ const BOOTSTRAP_LOG = path.join(GOSSIP_DIR, 'bootstrap-exemptions.jsonl');
 const DRY_RUN = process.env.IMPACT_ADJACENCY_DRY_RUN === '1';
 const PR_TITLE = process.env.PR_TITLE ?? '';
 const PR_BODY = process.env.PR_BODY ?? '';
-const BASE = process.env.GITHUB_BASE_REF || 'origin/master';
+// IMPACT_ADJACENCY_BASE is preferred over GITHUB_BASE_REF because the latter
+// collides with the runner's built-in env (the base BRANCH name, e.g. "master"),
+// which can shadow the workflow's step-level override and make `git diff <ref>...HEAD`
+// fail in shallow-or-otherwise-incomplete clones.
+const BASE = process.env.IMPACT_ADJACENCY_BASE || process.env.GITHUB_BASE_REF || 'origin/master';
 
 function safeRead(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch { return ''; }
