@@ -46,7 +46,7 @@ export function ViolationsCard() {
             !
           </span>
           <span
-            className={`font-mono text-[11px] font-bold uppercase tracking-widest ${
+            className={`min-w-0 truncate font-mono text-[11px] font-bold uppercase tracking-widest ${
               hasViolations ? 'text-destructive' : 'text-muted-foreground'
             }`}
           >
@@ -54,13 +54,13 @@ export function ViolationsCard() {
           </span>
         </div>
         {hasViolations && (
-          <span className="rounded-full border border-destructive/20 bg-destructive/10 px-2 py-0.5 font-mono text-xs font-bold text-destructive">
+          <span className="shrink-0 rounded-full border border-destructive/20 bg-destructive/10 px-2 py-0.5 font-mono text-xs font-bold text-destructive">
             {total}
           </span>
         )}
       </div>
 
-      <div className="px-3.5 py-3">
+      <div className="min-h-[52px] px-3.5 py-3">
         {err && (
           <p className="font-mono text-[10px] text-muted-foreground">
             failed to load violation data
@@ -83,10 +83,10 @@ export function ViolationsCard() {
               {total} direct master push{total === 1 ? '' : 'es'} detected
             </p>
             {latest && (
-              <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
-                <span>Most recent:</span>
-                <span className="text-foreground">{latest.agentId}</span>
-                <span className="text-muted-foreground/50">{timeAgo(latest.detectedAt)}</span>
+              <div className="mt-1 flex min-w-0 items-center gap-2 font-mono text-[10px] text-muted-foreground">
+                <span className="shrink-0">Most recent:</span>
+                <span className="truncate text-foreground">{latest.agentId}</span>
+                <span className="shrink-0 text-muted-foreground/50">{timeAgo(latest.detectedAt)}</span>
               </div>
             )}
           </>

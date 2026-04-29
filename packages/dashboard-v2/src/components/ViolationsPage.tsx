@@ -18,7 +18,7 @@ function CommitCell({ commits }: { commits: string[] }) {
   const overflow = commits.length - 1;
 
   return (
-    <span className="font-inter text-[11px]">
+    <span className="font-mono text-[11px]">
       <span className="text-foreground">{subject}</span>
       {overflow > 0 && (
         <>
@@ -58,7 +58,7 @@ function ViolationRow({ row }: { row: ViolationEntry }) {
       <td className="whitespace-nowrap py-3 pl-4 pr-4 font-mono text-[10px] text-muted-foreground/80">
         {timeAgo(row.detectedAt)}
       </td>
-      <td className="whitespace-nowrap py-3 pr-4">
+      <td className="max-w-[160px] truncate whitespace-nowrap py-3 pr-4">
         <a
           href={`/dashboard/agent/${encodeURIComponent(row.agentId)}`}
           className="font-mono text-[11px] text-foreground hover:text-primary hover:underline"
@@ -105,12 +105,16 @@ export function ViolationsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Process Violations
+        <div className="flex items-center gap-2">
+          <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+            Process Violations
+          </h1>
           {total > 0 && (
-            <span className="ml-2 text-destructive">{total}</span>
+            <span className="rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 font-mono text-xs font-bold text-destructive">
+              {total}
+            </span>
           )}
-        </h1>
+        </div>
         <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/70">
           Direct master pushes detected by the ref-allowlist enforcer
         </p>
@@ -118,13 +122,13 @@ export function ViolationsPage() {
 
       <div className="overflow-hidden rounded-md border border-border/40 bg-card/80">
         {error && (
-          <div className="border-b border-border/60 bg-disputed/10 px-3 py-2 font-mono text-[10px] text-disputed">
+          <div className="border-b border-border/60 bg-destructive/10 px-3 py-2 font-mono text-[10px] text-destructive">
             {error}
           </div>
         )}
 
         {!error && (
-          <table className="w-full text-left">
+          <table className="w-full table-fixed text-left">
             <thead>
               <tr className="border-b border-border/40 bg-muted/20 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80">
                 <th className="py-2.5 pl-4 pr-4">When</th>
@@ -136,14 +140,14 @@ export function ViolationsPage() {
             <tbody>
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-12 text-center font-mono text-[11px] text-muted-foreground/50">
+                  <td colSpan={4} className="px-4 py-6 text-center font-mono text-[11px] text-muted-foreground/50">
                     No violations recorded
                   </td>
                 </tr>
               )}
               {loading && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center font-mono text-[10px] text-muted-foreground/50">
+                  <td colSpan={4} className="px-4 py-6 text-center font-mono text-[10px] text-muted-foreground/50">
                     Loading…
                   </td>
                 </tr>
