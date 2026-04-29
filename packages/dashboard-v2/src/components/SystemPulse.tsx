@@ -67,23 +67,19 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
       <div className="relative grid grid-cols-2 border-b border-border">
         <span className="pointer-events-none absolute left-0 right-0 top-1/2 h-px bg-border" />
         <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 w-px bg-border" />
-        {/* Three-chip agent stat row */}
-        <div className="flex flex-col items-center justify-center gap-2 py-4 px-3">
-          <div className="flex items-center gap-3">
-            <div className="flex flex-col items-center gap-0.5">
-              <span className={`font-mono text-2xl font-bold leading-none ${overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}`}>{overview.agentsOnline}</span>
-              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Dispatched</span>
-            </div>
-            <span className="text-border font-mono text-lg leading-none">·</span>
-            <div className="flex flex-col items-center gap-0.5">
-              <span className={`font-mono text-2xl font-bold leading-none ${overview.relayConnected > 0 ? 'text-confirmed' : 'text-muted-foreground'}`}>{overview.relayConnected}</span>
-              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Connected</span>
-            </div>
-            <span className="text-border font-mono text-lg leading-none">·</span>
-            <div className="flex flex-col items-center gap-0.5">
-              <span className="font-mono text-2xl font-bold leading-none text-muted-foreground">{totalAgents}</span>
-              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Registered</span>
-            </div>
+        {/* Three-row agent stat (stacked to fit narrow cell) */}
+        <div className="flex flex-col items-stretch justify-center gap-1.5 px-4 py-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Dispatched</span>
+            <span className={`font-mono text-base font-bold leading-none ${overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}`}>{overview.agentsOnline}</span>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Connected</span>
+            <span className={`font-mono text-base font-bold leading-none ${overview.relayConnected > 0 ? 'text-confirmed' : 'text-muted-foreground'}`}>{overview.relayConnected}</span>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Registered</span>
+            <span className="font-mono text-base font-bold leading-none text-muted-foreground">{totalAgents}</span>
           </div>
         </div>
         <BigStat
