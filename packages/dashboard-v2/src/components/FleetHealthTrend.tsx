@@ -72,8 +72,10 @@ export function FleetHealthTrend() {
       )}
       {!err && series.length > 0 && (
         <ul className="space-y-1.5">
-          {series.map((s) => (
-            <li key={s.agentId} className="flex items-center justify-between gap-3 text-xs">
+          {series.map((s) => {
+            const isDormant = s.latest === 0;
+            return (
+            <li key={s.agentId} className={`flex items-center justify-between gap-3 text-xs${isDormant ? ' opacity-40' : ''}`}>
               <span className="truncate font-mono text-foreground">{s.agentId}</span>
               <div className="flex items-center gap-2">
                 <Sparkline values={s.points.map((p) => p.accuracy)} />
@@ -82,7 +84,8 @@ export function FleetHealthTrend() {
                 </span>
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </section>
