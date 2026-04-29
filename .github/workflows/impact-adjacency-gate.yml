@@ -1,0 +1,30 @@
+name: Impact-Adjacency Gate
+
+on:
+  pull_request:
+    branches: [master]
+
+jobs:
+  impact-adjacency-gate:
+    name: impact-adjacency consensus gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run impact-adjacency gate
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          IMPACT_ADJACENCY_BASE: ${{ github.event.pull_request.base.sha }}
+          IMPACT_ADJACENCY_DRY_RUN: '1'
+        run: node scripts/impact-adjacency-gate.mjs

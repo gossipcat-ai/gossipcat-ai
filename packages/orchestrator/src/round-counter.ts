@@ -1,3 +1,4 @@
+// @gossip:impact-adjacent:shared-state-with-lifecycle
 // packages/orchestrator/src/round-counter.ts
 //
 // Per-round signal counter for Phase A system self-telemetry.
