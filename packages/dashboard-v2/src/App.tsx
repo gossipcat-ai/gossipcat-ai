@@ -12,6 +12,8 @@ import { TaskDetailModal } from '@/components/TaskDetailModal';
 import { TasksSection } from '@/components/TasksSection';
 import { MemoryFolders } from '@/components/MemoryFolders';
 import { FleetHealthTrend } from '@/components/FleetHealthTrend';
+import { ViolationsCard } from '@/components/ViolationsCard';
+import { ViolationsPage } from '@/components/ViolationsPage';
 import { SkillVerdictsSnapshot } from '@/components/SkillVerdictsSnapshot';
 import { RecentSignalsPeek } from '@/components/RecentSignalsPeek';
 import { DroppedFindingDrift } from '@/components/DroppedFindingDrift';
@@ -512,14 +514,17 @@ function Dashboard() {
     content = <LogsPage />;
   } else if (route === '/signals') {
     content = <SignalsPage />;
+  } else if (route === '/violations') {
+    content = <ViolationsPage />;
   } else {
     // Main dashboard — sidebar + main layout
     content = (
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr] lg:items-start">
-        {/* Left sidebar: System Pulse + Circuit Alerts */}
+        {/* Left sidebar: System Pulse + Circuit Alerts + Violations */}
         <aside className="space-y-4 lg:sticky lg:top-4">
           <SystemPulse overview={overview} activeTasks={activeTaskCount} />
           {agents && <CircuitAlerts agents={agents} />}
+          <ViolationsCard />
         </aside>
 
         {/* Main: Active tasks + Recent tasks + Team hero + Consensus + Memories */}
