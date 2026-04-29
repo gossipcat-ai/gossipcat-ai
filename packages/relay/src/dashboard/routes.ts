@@ -15,6 +15,7 @@ import { learningsHandler } from './api-learnings';
 import { tasksHandler } from './api-tasks';
 import { activeTasksHandler } from './api-active-tasks';
 import { logsHandler } from './api-logs';
+import { violationsHandler } from './api-violations';
 import { readFileSync, existsSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { createHash, timingSafeEqual } from 'crypto';
@@ -334,6 +335,12 @@ export class DashboardRouter {
 
       if (url === '/dashboard/api/logs' && req.method === 'GET') {
         const data = logsHandler(this.projectRoot, query ?? undefined);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      if (url === '/dashboard/api/violations' && req.method === 'GET') {
+        const data = violationsHandler(this.projectRoot, query ?? undefined);
         this.json(res, 200, data);
         return true;
       }
