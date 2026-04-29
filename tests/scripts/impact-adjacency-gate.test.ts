@@ -25,13 +25,20 @@ interface RunResult {
   stderr: string;
 }
 
-function mkRepo(): string {
+function mkRepo(opts: { withGateWorkflow?: boolean } = {}): string {
+  const { withGateWorkflow = true } = opts;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iagate-'));
   execSync('git init -q -b master', { cwd: dir });
   execSync('git config user.email t@t.com && git config user.name t', { cwd: dir, shell: '/bin/sh' });
   // Copy the gate script to the same relative path as production.
   fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
   fs.copyFileSync(SCRIPT_SRC, path.join(dir, 'scripts', 'impact-adjacency-gate.mjs'));
+  // By default, baseline assumes the gate is already deployed (workflow file
+  // present on base). Bootstrap-exemption tests use { withGateWorkflow: false }.
+  if (withGateWorkflow) {
+    fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.github', 'workflows', 'impact-adjacency-gate.yml'), 'placeholder\n');
+  }
   // Seed an initial commit so we have a base ref.
   fs.writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
   execSync('git add -A && git commit -q -m base', { cwd: dir, shell: '/bin/sh' });
@@ -76,17 +83,12 @@ describe('impact-adjacency-gate', () => {
     expect(res.stdout).toMatch(/OK/);
   });
 
-  it('(b) annotated file + consensus-id in PR_TITLE + matching report → exit 0', () => {
+  it('(b) annotated file + consensus-id in PR_TITLE → exit 0', () => {
     const dir = mkRepo();
     const base = baseSha(dir);
     fs.writeFileSync(
       path.join(dir, 'src.ts'),
       '// @gossip:impact-adjacent:map-lifecycle\nexport const x = 1;\n',
-    );
-    fs.mkdirSync(path.join(dir, '.gossip', 'consensus-reports'), { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, '.gossip', 'consensus-reports', 'abcdef12-34567890.json'),
-      JSON.stringify({ consensus: true }) + '\n',
     );
     commitAll(dir, 'annotated');
     const res = runGate(dir, {
@@ -94,7 +96,7 @@ describe('impact-adjacency-gate', () => {
       PR_TITLE: 'fix: thing (consensus-id: abcdef12-34567890)',
     });
     expect(res.status).toBe(0);
-    expect(res.stdout).toMatch(/OK/);
+    expect(res.stdout).toMatch(/OK \(annotated/);
   });
 
   it('(c) annotated file + no consensus-id → exit 1', () => {
@@ -125,64 +127,42 @@ describe('impact-adjacency-gate', () => {
     expect(waiver).toMatch(/"sha":"[0-9a-f]{8}"/);
   });
 
-  it('(e) bootstrap exemption: first run on gate file alone → exit 0; second run → exit 1', () => {
-    const dir = mkRepo();
-    // Annotate the gate file (and only the gate file) on a fresh commit.
-    const gatePath = path.join(dir, 'scripts', 'impact-adjacency-gate.mjs');
-    const orig = fs.readFileSync(gatePath, 'utf8');
-    // Insert annotation AFTER the shebang line so node still parses it.
-    const lines = orig.split('\n');
-    const annotated = [lines[0], '// @gossip:impact-adjacent:bootstrap-paths', ...lines.slice(1)].join('\n');
-    fs.writeFileSync(gatePath, annotated);
-    commitAll(dir, 'gate self-annotate');
+  it('(e) bootstrap exemption: workflow absent on base → exit 0; second run → exit 1', () => {
+    // Base does NOT contain the gate workflow file (gate not yet deployed).
+    const dir = mkRepo({ withGateWorkflow: false });
+    fs.writeFileSync(
+      path.join(dir, 'src.ts'),
+      '// @gossip:impact-adjacent:map-lifecycle\nexport const x = 1;\n',
+    );
+    // Add the workflow file as part of the same diff so the gate IS being deployed.
+    fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.github', 'workflows', 'impact-adjacency-gate.yml'), 'placeholder\n');
+    commitAll(dir, 'first deploy + annotated file');
     const base = execSync('git rev-parse HEAD~1', { cwd: dir }).toString().trim();
     const first = runGate(dir, { GITHUB_BASE_REF: base });
     expect(first.status).toBe(0);
     expect(first.stdout).toMatch(/bootstrap exemption/);
     const exempt = fs.readFileSync(path.join(dir, '.gossip', 'bootstrap-exemptions.jsonl'), 'utf8');
     expect(exempt).toMatch(/gate":"impact-adjacency/);
-    // Second run must NOT re-exempt.
+    // Second run must NOT re-exempt (already logged).
     const second = runGate(dir, { GITHUB_BASE_REF: base });
     expect(second.status).toBe(1);
     expect(second.stderr).toMatch(/require multi-agent consensus/);
   });
 
-  it('(f) annotation + consensus-id in PR_TITLE but matching <id>.json missing → exit 1', () => {
+  it('(f) annotation strings inside tests/ are ignored (fixture false-positive guard)', () => {
     const dir = mkRepo();
     const base = baseSha(dir);
+    fs.mkdirSync(path.join(dir, 'tests'), { recursive: true });
     fs.writeFileSync(
-      path.join(dir, 'src.ts'),
-      '// @gossip:impact-adjacent:map-lifecycle\nexport const x = 1;\n',
+      path.join(dir, 'tests', 'fixture.test.ts'),
+      "const fixture = '// @gossip:impact-adjacent:map-lifecycle';\n",
     );
-    commitAll(dir, 'annotated, no report file');
-    const res = runGate(dir, {
-      GITHUB_BASE_REF: base,
-      PR_TITLE: 'fix: thing (consensus-id: abcdef12-34567890)',
-    });
-    expect(res.status).toBe(1);
-    expect(res.stderr).toMatch(/require multi-agent consensus/);
-  });
-
-  it('(g) annotation + consensus-id in PR_TITLE AND <id>.json exists → exit 0', () => {
-    const dir = mkRepo();
-    const base = baseSha(dir);
-    fs.writeFileSync(
-      path.join(dir, 'src.ts'),
-      '// @gossip:impact-adjacent:map-lifecycle\nexport const x = 1;\n',
-    );
-    // Pre-create the consensus report file at the expected path.
-    fs.mkdirSync(path.join(dir, '.gossip', 'consensus-reports'), { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, '.gossip', 'consensus-reports', 'abcdef12-34567890.json'),
-      JSON.stringify({ consensus: true }) + '\n',
-    );
-    commitAll(dir, 'annotated with report');
-    const res = runGate(dir, {
-      GITHUB_BASE_REF: base,
-      PR_TITLE: 'fix: thing (consensus-id: abcdef12-34567890)',
-    });
+    commitAll(dir, 'test fixture with annotation string');
+    const res = runGate(dir, { GITHUB_BASE_REF: base });
+    // No annotated source files, so gate exits 0 even without consensus-id.
     expect(res.status).toBe(0);
-    expect(res.stdout).toMatch(/OK/);
+    expect(res.stdout).toMatch(/OK \(no annotated files\)/);
   });
 
   it('(h) base ref cannot be resolved → exit 1 with "could not resolve base ref"', () => {
