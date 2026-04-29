@@ -9,9 +9,11 @@ export function ViolationsCard() {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     api<ViolationsResponse>('violations?pageSize=1')
-      .then(setData)
-      .catch((e) => setErr(String(e?.message ?? e)));
+      .then((res) => { if (!cancelled) setData(res); })
+      .catch((e) => { if (!cancelled) setErr(String(e?.message ?? e)); });
+    return () => { cancelled = true; };
   }, []);
 
   const total = data?.total ?? 0;

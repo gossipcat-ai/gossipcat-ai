@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
-import { href } from '@/lib/router';
 import type { ViolationEntry, ViolationsResponse } from '@/lib/types';
 
 const PAGE_SIZE = 25;
@@ -26,6 +25,7 @@ function CommitCell({ commits }: { commits: string[] }) {
           {' '}
           <button
             type="button"
+            aria-expanded={expanded}
             onClick={() => setExpanded((v) => !v)}
             className="font-mono text-[10px] text-muted-foreground/70 underline hover:text-foreground"
           >
@@ -60,7 +60,7 @@ function ViolationRow({ row }: { row: ViolationEntry }) {
       </td>
       <td className="whitespace-nowrap py-3 pr-4">
         <a
-          href={href(`/agent/${encodeURIComponent(row.agentId)}`)}
+          href={`/dashboard/agent/${encodeURIComponent(row.agentId)}`}
           className="font-mono text-[11px] text-foreground hover:text-primary hover:underline"
         >
           {row.agentId}
@@ -86,15 +86,18 @@ export function ViolationsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
     api<ViolationsResponse>(`violations?page=${page}&pageSize=${PAGE_SIZE}`)
       .then((res) => {
+        if (cancelled) return;
         setRows(res.items ?? []);
         setTotal(res.total ?? 0);
       })
-      .catch((e) => setError(String(e?.message ?? e)))
-      .finally(() => setLoading(false));
+      .catch((e) => { if (!cancelled) setError(String(e?.message ?? e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [page]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
