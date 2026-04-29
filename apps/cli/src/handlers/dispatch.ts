@@ -424,7 +424,16 @@ export async function handleDispatchSingle(
       emitConsensusSignals(process.cwd(), premiseResult.signals);
     }
 
-    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode, relayToken });
+    // Ref-allowlist Phase 1: snapshot origin/master before agent runs so the
+    // relay path can detect a direct push to master (no PR-merge entry).
+    // Runs for ALL write-mode dispatches; null on git failure (offline/no remote).
+    let preDispatchSha: string | null = null;
+    if (write_mode) {
+      const { capturePreDispatchSha } = require('./ref-allowlist-detection');
+      preDispatchSha = capturePreDispatchSha();
+    }
+
+    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode, relayToken, preDispatchSha });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     persistNativeTaskMap();
     process.stderr.write(`[gossipcat] → dispatch → ${agent_id} (${nativeConfig.model}) [${taskId}]\n`);

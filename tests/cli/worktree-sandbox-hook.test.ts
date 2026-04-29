@@ -25,7 +25,13 @@ function runHook(
   env?: Record<string, string>,
 ): { stdout: string; status: number | null; stderr: string } {
   const input = JSON.stringify(payload);
-  const spawnEnv = env ? { ...process.env, ...env } : undefined;
+  // Scrub GOSSIPCAT_ORCHESTRATOR_ROLE from inherited env unless the test
+  // explicitly sets it — orchestrator-session shells set this var to bypass
+  // the worktree sandbox, which short-circuits the hook and breaks the
+  // tests' JSON-parse assertions when run locally.
+  const baseEnv = { ...process.env };
+  delete baseEnv.GOSSIPCAT_ORCHESTRATOR_ROLE;
+  const spawnEnv = env ? { ...baseEnv, ...env } : baseEnv;
   const res = spawnSync('bash', [HOOK_PATH], { input, encoding: 'utf-8', env: spawnEnv });
   return { stdout: res.stdout, status: res.status, stderr: res.stderr };
 }
