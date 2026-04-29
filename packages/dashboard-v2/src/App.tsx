@@ -377,8 +377,7 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
           placeholder="Search tasks by description, agent, id, status..."
           className="w-full max-w-md rounded-md border border-border/40 bg-card/80 px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-primary/40 focus:outline-none"
         />
-        {totalPages > 1 && (
-          <div className="flex shrink-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
+        <div className={`flex shrink-0 items-center gap-2 font-mono text-[11px] text-muted-foreground ${totalPages <= 1 ? 'invisible' : ''}`}>
             <button
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={clampedPage === 0}
@@ -391,7 +390,6 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
               className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
             >Next ▸</button>
           </div>
-        )}
       </div>
 
       <div className="overflow-hidden rounded-md border border-border/40 bg-card/80">
@@ -528,6 +526,7 @@ function Dashboard() {
         {/* Main: Active tasks + Recent tasks + Team hero + Consensus + Memories */}
         <main className="min-w-0 space-y-6">
           <ActiveTasksBanner onCountChange={setActiveTaskCount} />
+          <FindingsMetrics consensus={consensus} reports={consensusReports} />
           {tasks && <TasksSection tasks={tasks} limit={5} />}
           {agents && <TeamHero agents={agents} />}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -538,7 +537,6 @@ function Dashboard() {
             <RecentSignalsPeek />
             <DroppedFindingDrift overview={overview} />
           </div>
-          <FindingsMetrics consensus={consensus} reports={consensusReports} />
           {(gossipMemories || nativeMemories) && (
             <MemoryFolders
               memories={[...(gossipMemories ?? []), ...(nativeMemories ?? [])]}

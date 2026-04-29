@@ -45,7 +45,7 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
   const totalAgents = overview.relayCount + overview.nativeCount;
   const successRate = overview.tasksCompleted + overview.tasksFailed > 0
     ? Math.round((overview.tasksCompleted / (overview.tasksCompleted + overview.tasksFailed)) * 100)
-    : 100;
+    : null;
   const confirmRate = overview.totalFindings > 0
     ? Math.round((overview.confirmedFindings / overview.totalFindings) * 100)
     : 0;
@@ -103,7 +103,7 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
         </div>
         <div className="flex items-center justify-between py-1 font-mono text-[11px]">
           <span className="text-muted-foreground">actionable</span>
-          <span className="font-semibold text-unverified tabular-nums">{overview.actionableFindings}</span>
+          <span className={`font-semibold tabular-nums ${overview.actionableFindings > 0 ? 'text-orange-400' : 'text-foreground'}`}>{overview.actionableFindings}</span>
         </div>
         {overview.tasksFailed > 0 && (
           <div className="flex items-center justify-between py-1 font-mono text-[11px]">
@@ -117,8 +117,8 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
         </div>
         <div className="flex items-center justify-between py-1 font-mono text-[11px]">
           <span className="text-muted-foreground">success rate</span>
-          <span className={`font-semibold tabular-nums ${successRate >= 95 ? 'text-confirmed' : successRate >= 80 ? 'text-unverified' : 'text-destructive'}`}>
-            {successRate}%
+          <span className={`font-semibold tabular-nums ${successRate === null ? 'text-muted-foreground' : successRate >= 95 ? 'text-confirmed' : successRate >= 80 ? 'text-unverified' : 'text-destructive'}`}>
+            {successRate === null ? '—' : `${successRate}%`}
           </span>
         </div>
       </div>
