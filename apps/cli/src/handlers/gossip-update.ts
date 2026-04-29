@@ -91,10 +91,20 @@ export async function handleGossipUpdate({ check_only, confirm }: UpdateOptions)
   }
 
   // Apply the update
+  // Scrub GOSSIPCAT_* vars from the spawned process env — PR #316 pattern.
+  // A postinstall hook reading GOSSIPCAT_ORCHESTRATOR_ROLE could short-circuit
+  // sandbox checks when run from an orchestrator session.
+  const scrubbedEnv: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(scrubbedEnv)) {
+    if (/^GOSSIPCAT_/i.test(key)) delete scrubbedEnv[key];
+  }
   try {
-    execSync(command, { stdio: 'inherit', cwd: method === 'git-clone'
-      ? resolve(__dirname, '..', '..', '..', '..')
-      : process.cwd()
+    execSync(command, {
+      stdio: 'inherit',
+      cwd: method === 'git-clone'
+        ? resolve(__dirname, '..', '..', '..', '..')
+        : process.cwd(),
+      env: scrubbedEnv,
     });
   } catch (err) {
     return {
