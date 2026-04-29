@@ -63,6 +63,13 @@ export interface NativeTaskInfo {
    * Threaded to TaskGraph.recordCompleted/recordFailed for compliance auditing.
    */
   memoryQueryCalled?: boolean;
+  /**
+   * origin/master SHA captured just before the agent was dispatched.
+   * Used by the ref-allowlist detection layer (Phase 1) to detect direct
+   * pushes to master without a PR-merge entry.
+   * Null when git is unavailable (offline / no remote).
+   */
+  preDispatchSha?: string | null;
 }
 
 export interface NativeResultInfo {

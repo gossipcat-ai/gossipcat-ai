@@ -550,6 +550,15 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // Release scope if this native task held one
   try { ctx.mainAgent.scopeTracker.release(task_id); } catch { /* best-effort — no scope registered is fine */ }
 
+  // Ref-allowlist Phase 1: detect direct master push (no PR-merge entry).
+  // Runs for every write-mode task that had a preDispatchSha captured at dispatch.
+  if (taskInfo.writeMode && taskInfo.preDispatchSha) {
+    try {
+      const { checkRefAllowlistViolation } = require('./ref-allowlist-detection');
+      checkRefAllowlistViolation(task_id, taskInfo.agentId, taskInfo.preDispatchSha);
+    } catch { /* best-effort — violation detection must not block relay completion */ }
+  }
+
   // Bug f13: prune orphaned worktrees on native error — mirrors dispatch-pipeline.ts:473-475.
   // Native worktrees use Claude Code's Agent(isolation:"worktree") so there's no
   // worktreePath in NativeTaskInfo. pruneOrphans() iterates all gossip-wt-* worktrees
