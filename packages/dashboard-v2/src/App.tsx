@@ -174,8 +174,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
               const s = agent.scores;
               const lt = lastTaskByAgent.get(agent.id);
               const weightColor = s.dispatchWeight >= 1.2 ? 'text-confirmed' : s.dispatchWeight >= 0.8 ? 'text-foreground' : 'text-disputed';
-              const rankDisplay = sortDir === 'desc' && (sortKey === 'weight' || sortKey === 'accuracy' || sortKey === 'impact')
-                ? i + 1 : null;
+              const rankDisplay = i + 1;
 
               return (
                 <tr
@@ -188,7 +187,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                       rankDisplay === 1 ? 'font-bold text-primary' :
                       rankDisplay === 2 || rankDisplay === 3 ? 'font-semibold text-foreground/80' :
                       'text-muted-foreground/40'
-                    }`}>{rankDisplay ?? '·'}</span>
+                    }`}>{rankDisplay}</span>
                   </td>
 
                   {/* Agent */}
@@ -442,7 +441,7 @@ function FindingsPage({
     <>
       <div className="mb-6">
         <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Debates <span className="ml-2 text-foreground">{visibleRuns.length}</span>
+          Debates <span className="ml-2 text-primary">{visibleRuns.length}</span>
           {!showRetracted && retractedCount > 0 && (
             <span className="ml-2 font-normal normal-case tracking-normal text-muted-foreground/60">
               / {consensus.totalRuns ?? consensus.runs.length} total

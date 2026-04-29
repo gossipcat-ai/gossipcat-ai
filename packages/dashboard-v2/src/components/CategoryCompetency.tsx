@@ -45,7 +45,7 @@ export function CategoryCompetency({ categoryAccuracy, categoryCorrect, category
   return (
     <div className="space-y-2">
       {rows.map((row) => {
-        const fill = row.acc >= 0.9 ? 'bg-confirmed' : row.acc >= 0.7 ? 'bg-unverified' : 'bg-disputed';
+        const fill = row.acc >= 0.7 ? 'bg-confirmed' : row.acc >= 0.4 ? 'bg-unverified' : 'bg-disputed';
         const title = row.n > 0
           ? `${row.c} correct / ${row.h} hallucinated / ${row.n} total`
           : undefined;

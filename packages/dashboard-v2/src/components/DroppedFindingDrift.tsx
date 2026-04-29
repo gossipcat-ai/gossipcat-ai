@@ -25,7 +25,7 @@ export function DroppedFindingDrift({ overview }: { overview: OverviewData | nul
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Dropped Finding Types</h3>
+        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Dropped Finding Types</h3>
         <span className="text-xs text-muted-foreground">last 20 rounds</span>
       </header>
       {total === 0 ? (

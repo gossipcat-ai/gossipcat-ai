@@ -26,14 +26,14 @@ function groupByAgent(points: FleetTrendPoint[]): AgentSeries[] {
   return series;
 }
 
-function Sparkline({ values }: { values: number[] }) {
+function Sparkline({ values, className }: { values: number[]; className?: string }) {
   const W = 120;
   const H = 20;
   if (values.length === 0) return <svg width={W} height={H} />;
   if (values.length === 1) {
     const y = H - values[0] * H;
     return (
-      <svg width={W} height={H}>
+      <svg width={W} height={H} className={className}>
         <circle cx={W / 2} cy={y} r={2} fill="currentColor" />
       </svg>
     );
@@ -41,7 +41,7 @@ function Sparkline({ values }: { values: number[] }) {
   const step = W / (values.length - 1);
   const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(H - v * H).toFixed(1)}`).join(' ');
   return (
-    <svg width={W} height={H} className="text-primary">
+    <svg width={W} height={H} className={className}>
       <polyline points={pts} fill="none" stroke="currentColor" strokeWidth={1.5} />
     </svg>
   );
@@ -78,7 +78,7 @@ export function FleetHealthTrend() {
             <li key={s.agentId} className={`flex items-center justify-between gap-3 text-xs${isDormant ? ' opacity-40' : ''}`}>
               <span className="truncate font-mono text-foreground">{s.agentId}</span>
               <div className="flex items-center gap-2">
-                <Sparkline values={s.points.map((p) => p.accuracy)} />
+                <Sparkline values={s.points.map((p) => p.accuracy)} className={s.latest >= 0.7 ? 'text-confirmed' : s.latest >= 0.4 ? 'text-unverified' : 'text-disputed'} />
                 <span className="w-10 text-right tabular-nums text-muted-foreground">
                   {Math.round(s.latest * 100)}%
                 </span>
