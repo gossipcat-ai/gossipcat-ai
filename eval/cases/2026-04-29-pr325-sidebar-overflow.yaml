@@ -1,0 +1,22 @@
+id: pr325-sidebar-overflow
+title: ViolationsCard sidebar widget overflows its grid cell at narrow widths
+parent_sha: 0424bf8
+fix_sha: d9c6f4a
+fix_pr: 325
+scope:
+  files:
+    - packages/dashboard-v2/src/components/ViolationsCard.tsx
+ground_truth:
+  - id: gt1
+    severity: critical
+    file: packages/dashboard-v2/src/components/ViolationsCard.tsx
+    line_range: [86, 90]
+    summary: Sidebar tile width unconstrained — content overflows grid cell at <=1280px viewports
+    category: visual
+prompt: |
+  Review this dashboard component for layout bugs at narrow viewports.
+  Focus on width constraints, overflow, and grid-cell sizing.
+notes: |
+  Positive design case. The fix landed post-rebase as d9c6f4a (the original
+  pre-rebase SHA was 037f302). Consensus should catch the missing min-width:0 /
+  overflow handling. visual-category findings are the expected anchor.

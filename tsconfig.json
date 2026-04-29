@@ -16,5 +16,5 @@
       "@gossip/orchestrator/*": ["packages/orchestrator/src/*"]
     }
   },
-  "include": ["packages/*/src/**/*", "tests/**/*"]
+  "include": ["packages/*/src/**/*", "apps/cli/src/**/*", "eval/**/*.ts", "tests/**/*"]
 }
