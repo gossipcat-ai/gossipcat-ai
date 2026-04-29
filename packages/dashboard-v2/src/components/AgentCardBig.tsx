@@ -40,7 +40,7 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
   return (
     <a
       href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
-      className="group relative block rounded-xl border border-border bg-card p-3 transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:bg-card/90"
+      className="group relative block rounded-lg border border-border bg-card p-3 transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:bg-card/90"
     >
       {/* Flatten pass: the card used to layer gradient + inset highlight line
           + outer shadow + hover ring + per-agent avatar halo blur, which felt
@@ -83,7 +83,7 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
               );
               if (kind === 'kept-for-coverage') return (
                 <span
-                  className="shrink-0 rounded-sm border border-unverified/40 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
+                  className="shrink-0 rounded-sm border border-unverified/40 bg-unverified/10 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
                   data-tooltip={`Would bench (${s.bench.reason ?? 'rule'}), but kept as sole provider of a category.`}
                 >
                   KEPT FOR COVERAGE

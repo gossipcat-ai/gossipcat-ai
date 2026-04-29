@@ -3,11 +3,11 @@ import type { OverviewData } from '@/lib/types';
 // Deterministic color picker from a palette — no hash randomness to keep
 // the same type the same color across renders.
 const PALETTE = [
-  'bg-disputed',
-  'bg-unverified',
+  'bg-primary/70',
+  'bg-cyan-500/60',
   'bg-unique',
   'bg-muted-foreground/60',
-  'bg-primary/70',
+  'bg-primary/50',
   'bg-confirmed/70',
 ];
 

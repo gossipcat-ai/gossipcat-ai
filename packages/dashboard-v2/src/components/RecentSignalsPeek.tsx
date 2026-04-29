@@ -38,11 +38,11 @@ export function RecentSignalsPeek() {
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Recent Signals</h3>
+        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Recent Signals</h3>
         <button
           type="button"
           onClick={() => navigate('/signals')}
-          className="text-xs text-primary hover:underline"
+          className="font-mono text-[10px] text-muted-foreground hover:underline"
         >
           all signals →
         </button>
@@ -60,7 +60,7 @@ export function RecentSignalsPeek() {
                 {LABELS[s.signal] ?? s.signal}
               </span>
               <span className="w-24 shrink-0 truncate font-mono text-muted-foreground">{s.agentId}</span>
-              <span className="flex-1 truncate text-muted-foreground">{truncate(s.evidence ?? '', 80)}</span>
+              <span className="flex-1 truncate font-mono text-muted-foreground">{truncate(s.evidence ?? '', 80)}</span>
             </li>
           ))}
         </ul>

@@ -23,7 +23,7 @@ function describe(agent: AgentData): Reason {
     return { label: 'benched', cls: 'bg-destructive/15 text-destructive' };
   }
   if (s.bench?.state === 'kept-for-coverage') {
-    return { label: 'kept for coverage', cls: 'border border-unverified/40 text-unverified' };
+    return { label: 'kept for coverage', cls: 'border border-unverified/40 bg-unverified/10 text-unverified' };
   }
   if (s.circuitOpen) {
     return { label: `struggling (${s.consecutiveFailures} fails)`, cls: 'bg-unverified/15 text-unverified' };

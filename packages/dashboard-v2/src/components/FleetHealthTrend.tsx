@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import type { FleetTrendPoint, FleetTrendResponse } from '@/lib/types';
+import { EmptyState } from './EmptyState';
 
 interface AgentSeries {
   agentId: string;
@@ -61,10 +62,11 @@ export function FleetHealthTrend() {
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Fleet Health Trend</h3>
+        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Fleet Health Trend</h3>
         <span className="text-xs text-muted-foreground">last 30d</span>
       </header>
-      {err && <p className="text-xs text-muted-foreground">unavailable</p>}
+      {!data && !err && <EmptyState title="Loading…" compact />}
+      {err && <p className="text-xs text-muted-foreground">failed to load trend data</p>}
       {!err && data && series.length === 0 && (
         <p className="text-xs text-muted-foreground">no recent consensus signals</p>
       )}
