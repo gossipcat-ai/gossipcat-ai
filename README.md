@@ -29,6 +29,15 @@
 
 <br/>
 
+> **The single-reviewer failure mode:** a solo AI reviewer ships hallucinated bugs as critical findings **5–10% of the time** in our internal usage. Gossipcat's cross-review drops that to **under 1%**. That delta is what the whole system exists to produce.
+<!-- TODO: link public benchmark -->
+
+<br/>
+
+Multi-agent consensus code review that catches hallucinations before you act on them — and gets smarter every session.
+
+> Gossipcat is an MCP server for Claude Code that runs 3+ AI agents in parallel to review your code. They independently find bugs, then cross-review each other's findings. Confirmed = real. Caught = hallucination, penalized. Over time, agents accumulate accuracy profiles and the system routes tasks to whoever is most reliable for that category. No weights updated — the "policy" is a markdown skill file.
+
 ## What is Gossipcat?
 
 Gossipcat is an MCP server that orchestrates multiple AI agents to review your code in parallel. Agents independently review, then cross-review each other's findings. Agreements are confirmed. Hallucinations are caught and penalized. Over time, each agent builds an accuracy profile — the system learns who to trust for what.
@@ -61,7 +70,30 @@ The "policy update" is a markdown file under `.gossip/agents/<id>/skills/`. No f
 
 <br/>
 
-> **The single-reviewer failure mode:** a solo AI reviewer ships hallucinated bugs as critical findings **5–10% of the time**. Gossipcat's cross-review drops that to **under 1%**. That delta is what the whole system exists to produce.
+## How Gossipcat compares
+
+| | What you get | Hallucination filtering | Agents improve over time |
+|---|---|---|---|
+| **Gossipcat** | 3+ agents cross-review each other's findings; confirmed bugs only | Yes — peers catch and penalize hallucinations mechanically | Yes — accuracy signals steer dispatch; skill files fix repeat failures |
+| **Single-agent review** (Claude Code built-in, Cursor review) | One model reviews your diff | No — hallucinations ship as findings | No — no feedback loop |
+| **LLM-as-judge cross-review** (most multi-agent frameworks) | One model grades another model's output | Partial — judge can hallucinate too; no ground truth | No — judge scores aren't wired to dispatch |
+| **Traditional review tools** (CodeRabbit, PR-Agent) | Pattern-match + one LLM pass | No | No |
+
+The core difference: gossipcat verifies findings against actual `file:line` citations in your codebase. That ground truth is what makes the reward signal trustworthy enough to automate.
+
+<br/>
+
+## Real-world session
+
+What a typical gossipcat session looks like in practice (2026-04-29):
+
+- **2 PRs shipped** — #317 (env-scrub fix, e180d41) and #318 (test hardening, cac57db), both through full consensus before merge
+- **1 consensus round** on PR #317 — round `591af14b-3f674c9c`, 9 confirmed / 0 disputed findings
+- **1 stale backlog item correctly identified** — write-time insight filter was already shipped in a prior session; the `verify-the-premise` skill caught it before sonnet-implementer started redundant implementation work
+- **1 spec correctly deferred** — age-based archive pruning: full scan found 0 candidates meeting the threshold; design locked in docs, not built (right call)
+- **1 hallucination caught** on haiku-researcher — extrapolated from a 50-row sample when the full dataset was needed; `hallucination_caught` signal recorded, accuracy score updated, no fix shipped on bad data
+
+The signal pipeline ran the whole session. Nothing landed without cross-review. One agent's score dropped for the sample-extrapolation error.
 
 <br/>
 
