@@ -178,9 +178,9 @@ function ActivityBars({ hourly }: ActivityBarsProps) {
             <div
               key={i}
               className={`relative flex-1 cursor-pointer rounded-sm transition-opacity hover:opacity-100 ${
-                isNow ? 'bg-chart opacity-90' : 'bg-chart opacity-40'
+                count === 0 ? 'opacity-0' : isNow ? 'bg-chart opacity-90' : 'bg-chart opacity-40'
               }`}
-              style={{ height: `${Math.max(8, heightPct)}%` }}
+              style={{ height: count === 0 ? '0%' : `${Math.max(8, heightPct)}%` }}
               data-tooltip={`${label}\n${count} task${count === 1 ? '' : 's'}`}
               data-tooltip-pos="bottom"
             />

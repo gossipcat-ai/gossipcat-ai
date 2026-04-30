@@ -21,7 +21,7 @@ const STATUS_CLS: Record<SkillStatus, string> = {
   failed: 'border-disputed/40 bg-disputed/10 text-disputed',
   silent_skill: 'border-unverified/40 bg-unverified/10 text-unverified',
   insufficient_evidence: 'border-unverified/40 bg-unverified/10 text-unverified',
-  inconclusive: 'border-unique/40 bg-unique/10 text-unique',
+  inconclusive: 'border-orange-400/40 bg-orange-500/10 text-orange-400',
   flagged_for_manual_review: 'border-disputed/40 bg-disputed/10 text-disputed',
 };
 
