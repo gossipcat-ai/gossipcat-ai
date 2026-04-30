@@ -173,7 +173,7 @@ export function TaskRow({ task, onClick }: TaskRowProps) {
       <td className="py-2.5 pr-3 font-mono text-xs text-muted-foreground">
         {key === 'running' ? 'running' : formatDurationNice(task.duration)}
       </td>
-      <td className="py-2.5 pr-4 text-right font-mono text-xs text-muted-foreground">
+      <td className="py-2.5 pr-4 text-right font-mono text-xs text-muted-foreground/50">
         {timeAgo(task.timestamp)}
       </td>
     </tr>
