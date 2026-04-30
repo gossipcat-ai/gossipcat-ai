@@ -65,44 +65,46 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
         </div>
       </div>
 
-      {/* Primary 2x2 grid with cross dividers */}
-      <div className="relative grid grid-cols-2 border-b border-border">
-        <span className="pointer-events-none absolute left-0 right-0 top-1/2 h-px bg-border" />
-        <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 w-px bg-border" />
-        {/* Three-row agent stat (stacked to fit narrow cell) */}
-        <div className="flex flex-col items-stretch justify-center gap-1.5 px-4 py-3">
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Agents currently executing a task">Dispatched</span>
-            <span className={`font-mono text-base font-bold leading-none ${overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}`}>{overview.agentsOnline}</span>
+      {/* Primary 2x2 grid with cross dividers, then full-width actionable row below */}
+      <div className="border-b border-border">
+        <div className="relative grid grid-cols-2">
+          <span className="pointer-events-none absolute left-0 right-0 top-1/2 h-px bg-border" />
+          <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 w-px bg-border" />
+          {/* Three-row agent stat (stacked to fit narrow cell) */}
+          <div className="flex flex-col items-stretch justify-center gap-1.5 px-4 py-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Agents currently executing a task">Dispatched</span>
+              <span className={`font-mono text-base font-bold leading-none ${overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}`}>{overview.agentsOnline}</span>
+            </div>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Relay agents with an active WebSocket connection">Connected</span>
+              <span className={`font-mono text-base font-bold leading-none ${overview.relayConnected > 0 ? 'text-confirmed' : 'text-muted-foreground'}`}>{overview.relayConnected}</span>
+            </div>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Total agents in gossipcat config">Registered</span>
+              <span className="font-mono text-base font-bold leading-none text-muted-foreground">{totalAgents}</span>
+            </div>
           </div>
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Relay agents with an active WebSocket connection">Connected</span>
-            <span className={`font-mono text-base font-bold leading-none ${overview.relayConnected > 0 ? 'text-confirmed' : 'text-muted-foreground'}`}>{overview.relayConnected}</span>
-          </div>
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Total agents in gossipcat config">Registered</span>
-            <span className="font-mono text-base font-bold leading-none text-muted-foreground">{totalAgents}</span>
-          </div>
+          <BigStat
+            value={activeTasks}
+            label="Active Tasks"
+            valueClass={activeTasks > 0 ? 'text-unverified' : 'text-muted-foreground'}
+            pulse={activeTasks > 0}
+          />
+          <BigStat
+            value={overview.consensusRuns}
+            label="Consensus"
+            valueClass="text-foreground"
+          />
+          <BigStat
+            value={`${confirmRate}%`}
+            label="Confirmed"
+            valueClass="text-confirmed"
+          />
         </div>
-        <BigStat
-          value={activeTasks}
-          label="Active Tasks"
-          valueClass={activeTasks > 0 ? 'text-unverified' : 'text-muted-foreground'}
-          pulse={activeTasks > 0}
-        />
-        <BigStat
-          value={overview.consensusRuns}
-          label="Consensus"
-          valueClass="text-foreground"
-        />
-        <BigStat
-          value={`${confirmRate}%`}
-          label="Confirmed"
-          valueClass="text-confirmed"
-        />
         <a
           href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
-          className="col-span-2 block cursor-pointer border-t border-border transition-colors hover:bg-accent/30"
+          className="block cursor-pointer border-t border-border transition-colors hover:bg-accent/30"
           aria-label="View actionable findings on Signals page"
         >
           <BigStat
