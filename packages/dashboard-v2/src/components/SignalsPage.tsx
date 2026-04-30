@@ -82,8 +82,8 @@ const SEVERITY_BADGE: Record<string, string> = {
 
 const PAGE_SIZE = 100;
 
-function hydrateFromURL(): SignalFilters {
-  if (typeof window === 'undefined') return EMPTY_FILTERS;
+function hydrateFromURL(): { filters: SignalFilters; hadAny: boolean } {
+  if (typeof window === 'undefined') return { filters: EMPTY_FILTERS, hadAny: false };
   const q = new URLSearchParams(window.location.search);
   const signals = q.getAll('signal').filter(Boolean);
   const agent = q.get('agent');
@@ -104,19 +104,22 @@ function hydrateFromURL(): SignalFilters {
 
   const hasAny = signals.length > 0 || agent || counterpart || category || severity ||
     since || until || consensusId || findingId || source;
-  if (!hasAny) return EMPTY_FILTERS;
+  if (!hasAny) return { filters: EMPTY_FILTERS, hadAny: false };
 
   return {
-    agents: agent ? [agent] : [],
-    signals,
-    counterpart,
-    category,
-    severity,
-    since,
-    until,
-    consensusId,
-    findingId,
-    source,
+    filters: {
+      agents: agent ? [agent] : [],
+      signals,
+      counterpart,
+      category,
+      severity,
+      since,
+      until,
+      consensusId,
+      findingId,
+      source,
+    },
+    hadAny: true,
   };
 }
 
@@ -143,7 +146,8 @@ function truncate(s: string | undefined, n: number): string {
 }
 
 export function SignalsPage() {
-  const [filters, setFilters] = useState<SignalFilters>(() => hydrateFromURL());
+  const [{ filters: initialFilters, hadAny: hadAnyURLParams }] = useState(hydrateFromURL);
+  const [filters, setFilters] = useState<SignalFilters>(initialFilters);
   const [rows, setRows] = useState<SignalEntry[]>([]);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState<number>(0);
@@ -246,12 +250,14 @@ export function SignalsPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_1fr] lg:items-start">
-        <SignalFilterRail
-          filters={filters}
-          onChange={onFilterChange}
-          agents={agents}
-          signalTypes={SIGNAL_TYPES}
-        />
+        <div className={hadAnyURLParams ? 'opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100' : undefined}>
+          <SignalFilterRail
+            filters={filters}
+            onChange={onFilterChange}
+            agents={agents}
+            signalTypes={SIGNAL_TYPES}
+          />
+        </div>
 
         <section className="min-w-0 overflow-hidden rounded-md border border-border/60 bg-card/70">
           {error && (
