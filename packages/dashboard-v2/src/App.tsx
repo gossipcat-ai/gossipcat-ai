@@ -445,7 +445,7 @@ function FindingsPage({
     <>
       <div className="mb-6">
         <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Debates <span className="ml-2 text-primary">{visibleRuns.length}</span>
+          Consensus Rounds <span className="ml-2 text-primary">{visibleRuns.length}</span>
           {!showRetracted && retractedCount > 0 && (
             <span className="ml-2 font-normal normal-case tracking-normal text-muted-foreground/60">
               / {consensus.totalRuns ?? consensus.runs.length} total

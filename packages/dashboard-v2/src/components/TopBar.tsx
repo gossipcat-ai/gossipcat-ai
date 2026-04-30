@@ -6,7 +6,7 @@ import { GlossaryModal } from './GlossaryModal';
 const TABS = [
   { to: '/', label: 'Dashboard', match: (r: string) => r === '/' },
   { to: '/team', label: 'Team', match: (r: string) => r === '/team' || r.startsWith('/agent/') },
-  { to: '/debates', label: 'Debates', match: (r: string) => r === '/debates' },
+  { to: '/debates', label: 'Consensus Rounds', match: (r: string) => r === '/debates' },
   { to: '/tasks', label: 'Tasks', match: (r: string) => r === '/tasks' },
   { to: '/signals', label: 'Signals', match: (r: string) => r === '/signals' },
   { to: '/logs', label: 'Logs', match: (r: string) => r === '/logs' },
