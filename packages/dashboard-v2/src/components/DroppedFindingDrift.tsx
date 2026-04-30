@@ -25,7 +25,7 @@ export function DroppedFindingDrift({ overview }: { overview: OverviewData | nul
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Dropped Finding Types</h3>
+        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Invalid Output Types<span className="text-muted-foreground/50 font-normal normal-case ml-2">agent_finding tags rejected by the parser</span></h3>
         <span className="text-xs text-muted-foreground">last 20 rounds</span>
       </header>
       {total === 0 ? (
