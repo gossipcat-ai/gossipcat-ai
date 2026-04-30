@@ -29,9 +29,12 @@ export function TeamRoster({ agents }: TeamRosterProps) {
           const weightColor =
             s.dispatchWeight >= 1.2 ? 'text-confirmed' :
             s.dispatchWeight >= 0.8 ? 'text-foreground' : 'text-muted-foreground';
-          const barColor =
-            s.accuracy >= 0.7 ? 'bg-confirmed' :
-            s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed';
+          const metricBars = [
+            { label: 'Acc', value: s.accuracy, fill: s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed' },
+            { label: 'Rel', value: s.reliability, fill: 'bg-chart', tooltip: 'Reliability — fraction of dispatched tasks that finished without pipeline error or timeout' },
+            { label: 'Unq', value: s.uniqueness, fill: 'bg-unique' },
+            { label: 'Imp', value: s.impactScore, fill: 'bg-[var(--color-impact)]' },
+          ];
 
           return (
             <a
@@ -77,13 +80,18 @@ export function TeamRoster({ agents }: TeamRosterProps) {
                   </div>
                 </div>
 
-                {/* Line 2: accuracy bar + last active */}
-                <div className="mt-1.5 flex items-center gap-2">
-                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted/30">
-                    <div
-                      className={`h-full rounded-full transition-all ${barColor}`}
-                      style={{ width: `${s.accuracy * 100}%` }}
-                    />
+                {/* Line 2: 4-metric bars + last active */}
+                <div className="mt-1.5 flex items-end gap-2">
+                  <div className="flex-1 space-y-1">
+                    {metricBars.map(m => (
+                      <div key={m.label} className="flex items-center gap-2 text-[9px]">
+                        <span className="w-6 uppercase text-muted-foreground" data-tooltip={m.tooltip}>{m.label}</span>
+                        <div className="h-1 flex-1 overflow-hidden rounded-full bg-background/60">
+                          <div className={`h-full ${m.fill}`} style={{ width: `${m.value * 100}%` }} />
+                        </div>
+                        <span className="w-8 text-right tabular-nums text-foreground">{Math.round(m.value * 100)}%</span>
+                      </div>
+                    ))}
                   </div>
                   {lastTime && (
                     <span className="shrink-0 font-mono text-[10px] text-muted-foreground/40">{lastTime}</span>
