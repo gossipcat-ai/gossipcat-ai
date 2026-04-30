@@ -5,6 +5,16 @@ interface Props {
   slot: SkillSlot;
 }
 
+const STATUS_TOOLTIP: Record<SkillStatus, string> = {
+  silent_skill: 'No signals recorded after bind — skill may not be injecting correctly',
+  insufficient_evidence: 'Fewer than 120 post-bind signals — verdict pending more data',
+  inconclusive: 'Mixed signals — needs further evaluation',
+  passed: 'Skill verified effective',
+  failed: 'Skill verified ineffective',
+  pending: 'Awaiting evidence',
+  flagged_for_manual_review: 'Manual review required',
+};
+
 const STATUS_CLS: Record<SkillStatus, string> = {
   pending: 'border-border/50 bg-muted/30 text-muted-foreground',
   passed: 'border-confirmed/40 bg-confirmed/10 text-confirmed',
@@ -56,7 +66,7 @@ export function SkillCard({ slot }: Props) {
           </div>
         </div>
         {status && (
-          <span className={`shrink-0 rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${statusCls}`}>
+          <span className={`shrink-0 rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${statusCls}`} title={STATUS_TOOLTIP[status]}>
             {status.replace(/_/g, ' ')}
           </span>
         )}

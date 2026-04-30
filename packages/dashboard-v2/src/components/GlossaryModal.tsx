@@ -67,6 +67,12 @@ const TERMS: GlossaryTerm[] = [
     seeAlso: 'Accuracy (Adjusted), Consensus Round',
   },
   {
+    term: 'Reliability',
+    definition:
+      'Task completion rate — the fraction of dispatched tasks that finished without a pipeline error or timeout. Distinct from accuracy, which measures finding correctness.',
+    seeAlso: 'Accuracy (Adjusted)',
+  },
+  {
     term: 'Impact',
     definition:
       'A severity-weighted score for an agent\'s findings. Critical and high findings contribute more than medium or low ones. Impact reflects not just how many findings an agent produces, but how serious those findings tend to be.',
@@ -156,7 +162,7 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
             aria-label="Close glossary"
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-border/40 bg-card font-mono text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
           >
-            x
+            &times;
           </button>
         </div>
 

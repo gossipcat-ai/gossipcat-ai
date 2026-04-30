@@ -144,15 +144,15 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
               </th>
               <th className="py-2.5 pr-4 text-left align-top">
                 <div className="flex items-center gap-2 text-[10px]">
-                  <button onClick={() => toggleSort('accuracy')} className="flex items-center gap-1 hover:text-foreground">
+                  <button onClick={() => toggleSort('accuracy')} className="flex items-center gap-1 hover:text-foreground" data-tooltip="Accuracy — fraction of findings confirmed by cross-review (with hallucination penalty)">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-confirmed" />Acc{arrow('accuracy')}
                   </button>
                   <span className="text-muted-foreground/30">·</span>
-                  <button onClick={() => toggleSort('uniqueness')} className="flex items-center gap-1 hover:text-foreground">
+                  <button onClick={() => toggleSort('uniqueness')} className="flex items-center gap-1 hover:text-foreground" data-tooltip="Uniqueness — findings this agent surfaced that no peer found">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-unique" />Unq{arrow('uniqueness')}
                   </button>
                   <span className="text-muted-foreground/30">·</span>
-                  <button onClick={() => toggleSort('impact')} className="flex items-center gap-1 hover:text-foreground">
+                  <button onClick={() => toggleSort('impact')} className="flex items-center gap-1 hover:text-foreground" data-tooltip="Impact — severity-weighted finding score">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-impact)]" />Imp{arrow('impact')}
                   </button>
                 </div>

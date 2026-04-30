@@ -54,9 +54,9 @@ export function TopBar() {
         <button
           onClick={() => setGlossaryOpen(true)}
           aria-label="Open glossary"
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-border/60 bg-card font-mono text-xs font-semibold text-muted-foreground transition hover:border-border hover:text-foreground"
+          className="flex items-center justify-center rounded-md border border-border/60 bg-card px-2.5 py-1 font-mono text-xs font-semibold text-muted-foreground transition hover:border-border hover:text-foreground"
         >
-          ?
+          Glossary
         </button>
         <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3.5 py-1.5 font-mono text-xs text-muted-foreground">
           <span className={`inline-block h-1.5 w-1.5 rounded-full ${online ? 'bg-confirmed shadow-[0_0_6px_rgba(52,211,153,0.5)]' : 'bg-destructive'}`} />
