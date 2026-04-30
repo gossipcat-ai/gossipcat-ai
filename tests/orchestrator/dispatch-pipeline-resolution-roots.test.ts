@@ -19,7 +19,8 @@
  *     undefined / empty array.
  */
 import { DispatchPipeline, WorkerAgent } from '@gossip/orchestrator';
-import { mkdtempSync, rmSync, existsSync } from 'fs';
+import { TaskStreamEventType } from '@gossip/orchestrator';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -49,7 +50,7 @@ function fakeWorkerAgent(impl: {
 }): any {
   const wa: any = Object.create(WorkerAgent.prototype);
   wa.executeTask = impl.executeTask ?? (async function* () {
-    yield { type: 'final_result', payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+    yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
   });
   wa.subscribeToBatch = jest.fn().mockResolvedValue(undefined);
   wa.unsubscribeFromBatch = jest.fn().mockResolvedValue(undefined);
@@ -60,7 +61,7 @@ function plainRelayWorker(opts?: { result?: string }) {
   return {
     executeTask: jest.fn().mockImplementation(async function* () {
       yield {
-        type: 'final_result',
+        type: TaskStreamEventType.FINAL_RESULT,
         payload: { result: opts?.result ?? 'done', inputTokens: 0, outputTokens: 0 },
         timestamp: Date.now(),
       };
@@ -115,7 +116,7 @@ describe('DispatchPipeline — resolutionRoots → relay tool-call scoping (Path
     const wa = fakeWorkerAgent({
       executeTask: async function* () {
         executeTaskCalledAt = Date.now();
-        yield { type: 'final_result', payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
       },
     });
     workers.set('relay-1', wa);
@@ -149,6 +150,19 @@ describe('DispatchPipeline — resolutionRoots → relay tool-call scoping (Path
     const { finalResultPromise } = pipeline.dispatch('relay-1', 'review', { resolutionRoots: [ghost] });
     await expect(finalResultPromise).rejects.toThrow(/does not exist or is not a directory/);
     expect(ts._calls.filter(c => c.type === 'assignRoot')).toHaveLength(0);
+
+    // Invariant #3 (fail-closed): assert transport_failure signal emitted.
+    // Read the JSONL written by emitConsensusSignals → PerformanceWriter.
+    const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
+    expect(existsSync(perfPath)).toBe(true);
+    const lines = readFileSync(perfPath, 'utf8').trim().split('\n').filter(Boolean);
+    const signals = lines.map(l => JSON.parse(l));
+    const tf = signals.filter(s => s.signal === 'transport_failure');
+    expect(tf).toHaveLength(1);
+    expect(tf[0].agentId).toBe('relay-1');
+    expect(typeof tf[0].taskId).toBe('string');
+    expect(tf[0].taskId.length).toBeGreaterThan(0);
+    expect(tf[0].evidence).toMatch(/does not exist or is not a directory/);
   });
 
   // ── Test 5 — multiple roots: only [0] used ─────────────────────────────
@@ -177,7 +191,7 @@ describe('DispatchPipeline — resolutionRoots → relay tool-call scoping (Path
       workers.set('shared', fakeWorkerAgent({
         executeTask: async function* () {
           await new Promise(r => setTimeout(r, 5));
-          yield { type: 'final_result', payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+          yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
         },
       }));
       const r1 = pipeline.dispatch('shared', 'A', { resolutionRoots: [worktree] });
@@ -208,13 +222,58 @@ describe('DispatchPipeline — resolutionRoots → relay tool-call scoping (Path
     const { workers, pipeline } = buildPipeline(ts);
     workers.set('relay-1', fakeWorkerAgent({
       executeTask: async function* () {
-        yield { type: 'error', payload: { error: 'boom' }, timestamp: Date.now() };
+        yield { type: TaskStreamEventType.ERROR, payload: { error: 'boom' }, timestamp: Date.now() };
       },
     }));
     const { finalResultPromise } = pipeline.dispatch('relay-1', 'review', { resolutionRoots: [worktree] });
     await finalResultPromise.catch(() => {});
     const releases = ts._calls.filter(c => c.type === 'releaseAgent' && c.agentId === 'relay-1');
     expect(releases.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // ── Test 8c — releaseAgent on user-cancellation ───────────────────────
+  it('Test 8c — releaseAgent called when cancelRunningTasks() fires mid-flight', async () => {
+    const ts = mkToolServer();
+    const { workers, pipeline } = buildPipeline(ts);
+    let resolveExecute: () => void = () => {};
+    workers.set('relay-1', fakeWorkerAgent({
+      executeTask: async function* () {
+        await new Promise<void>(r => { resolveExecute = r; });
+        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+      },
+    }));
+    const { finalResultPromise } = pipeline.dispatch('relay-1', 'review', { resolutionRoots: [worktree] });
+    // Yield to runTask so assignRoot fires + entry is registered.
+    await new Promise(r => setImmediate(r));
+    expect(ts._calls.filter(c => c.type === 'assignRoot')).toHaveLength(1);
+    const cancelled = pipeline.cancelRunningTasks();
+    expect(cancelled).toBeGreaterThanOrEqual(1);
+    const releases = ts._calls.filter(c => c.type === 'releaseAgent' && c.agentId === 'relay-1');
+    expect(releases).toHaveLength(1);
+    resolveExecute();
+    await finalResultPromise.catch(() => {});
+  });
+
+  // ── Test 8d — releaseAgent on collect-timeout sweep ────────────────────
+  it('Test 8d — releaseAgent called when collect() times out a stale entry', async () => {
+    const ts = mkToolServer();
+    const { workers, pipeline } = buildPipeline(ts);
+    let resolveExecute: () => void = () => {};
+    workers.set('relay-1', fakeWorkerAgent({
+      executeTask: async function* () {
+        await new Promise<void>(r => { resolveExecute = r; });
+        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+      },
+    }));
+    const { finalResultPromise } = pipeline.dispatch('relay-1', 'review', { resolutionRoots: [worktree] });
+    await new Promise(r => setImmediate(r));
+    expect(ts._calls.filter(c => c.type === 'assignRoot')).toHaveLength(1);
+    // Short timeout forces the sweep at dispatch-pipeline.ts:877-884 to fire.
+    await pipeline.collect(undefined, 50).catch(() => {});
+    const releases = ts._calls.filter(c => c.type === 'releaseAgent' && c.agentId === 'relay-1');
+    expect(releases.length).toBeGreaterThanOrEqual(1);
+    resolveExecute();
+    await finalResultPromise.catch(() => {});
   });
 
   // ── Test 9 — empty/undefined arrays do not crash the pipeline ──────────
@@ -235,7 +294,7 @@ describe('DispatchPipeline — resolutionRoots → relay tool-call scoping (Path
     const wa = fakeWorkerAgent({
       executeTask: async function* () {
         await new Promise<void>(r => { resolveExecute = r; });
-        yield { type: 'final_result', payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
+        yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'ok', inputTokens: 0, outputTokens: 0 }, timestamp: Date.now() };
       },
     });
     workers.set('relay-1', wa);

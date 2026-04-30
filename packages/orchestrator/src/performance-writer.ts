@@ -51,6 +51,11 @@ const VALID_CONSENSUS_SIGNALS = new Set([
   // Sandbox policy violation — recorded for observability, zero weight in scoring.
   // Consensus round bb03845d-64264402 (7/7 confirmed).
   'boundary_escape',
+  // Transport-layer failure (relay-worker resolutionRoots gap, missing/deleted
+  // worktree, cwd misrouting). Excluded from accuracy/uniqueness arithmetic
+  // per performance-reader.ts:950 + L75. Pre-PR #329: rejected by validateSignal
+  // and silently dropped, masking the fail-closed signal emit added in PR #328.
+  'transport_failure',
 ]);
 
 const VALID_IMPL_SIGNALS = new Set([

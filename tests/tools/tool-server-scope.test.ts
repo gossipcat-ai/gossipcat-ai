@@ -439,4 +439,50 @@ describe('ToolServer scope enforcement', () => {
       expect(fs.existsSync(join(projectRoot, scopeDir, 'file.txt'))).toBe(true);
     });
   });
+
+  describe('assignRoot Option B collision warning', () => {
+    let stderrCalls: string[];
+    let originalWrite: typeof process.stderr.write;
+
+    beforeEach(() => {
+      stderrCalls = [];
+      originalWrite = process.stderr.write.bind(process.stderr);
+      (process.stderr as { write: (chunk: unknown) => boolean }).write = (chunk: unknown) => {
+        stderrCalls.push(String(chunk));
+        return true;
+      };
+    });
+
+    afterEach(() => {
+      (process.stderr as { write: typeof process.stderr.write }).write = originalWrite;
+    });
+
+    it('warns when same agentId is re-assigned to a different root', () => {
+      const wt1 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt1-'));
+      const wt2 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt2-'));
+      try {
+        server.assignRoot('shared-agent', wt1);
+        expect(stderrCalls.find((c: string) => c.includes('assignRoot collision'))).toBeUndefined();
+        server.assignRoot('shared-agent', wt2);
+        const collision = stderrCalls.find((c: string) => c.includes('assignRoot collision'));
+        expect(collision).toBeDefined();
+        expect(collision!).toContain('shared-agent');
+        expect(collision!).toContain('Option B');
+      } finally {
+        fs.rmSync(wt1, { recursive: true, force: true });
+        fs.rmSync(wt2, { recursive: true, force: true });
+      }
+    });
+
+    it('does NOT warn when re-assigning the same root (idempotent assignRoot)', () => {
+      const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-idem-'));
+      try {
+        server.assignRoot('idem-agent', wt);
+        server.assignRoot('idem-agent', wt);
+        expect(stderrCalls.find((c: string) => c.includes('assignRoot collision'))).toBeUndefined();
+      } finally {
+        fs.rmSync(wt, { recursive: true, force: true });
+      }
+    });
+  });
 });

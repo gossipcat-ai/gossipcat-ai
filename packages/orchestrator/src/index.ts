@@ -160,3 +160,5 @@ export {
   FINDING_RESOLVER_INTERNALS,
 } from './finding-resolver';
 export type { ResolveOptions, ResolveResult, ResolveSkipped, SymbolPresence } from './finding-resolver';
+export { TaskStreamEventType } from './task-stream';
+export type { TaskStreamEvent } from './task-stream';

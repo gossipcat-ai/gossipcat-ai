@@ -136,7 +136,19 @@ export class ToolServer {
 
   assignRoot(agentId: string, root: string): void {
     const abs = resolve(root);
-    this.agentRoots.set(agentId, canonicalizeForBoundary(abs));
+    const canonical = canonicalizeForBoundary(abs);
+    const existing = this.agentRoots.get(agentId);
+    if (existing && existing !== canonical) {
+      // Option B (spec §"Concurrent rounds"): two parallel rounds dispatched
+      // the same agentId with different roots. Last-write-wins corrupts the
+      // earlier task's cwd. Warn so operators can correlate; Option A re-key
+      // by (agentId, taskId) is deferred until production observes this.
+      process.stderr.write(
+        `[gossipcat] assignRoot collision: agent=${agentId} replacing root ` +
+        `${existing} → ${canonical} (Option B last-write-wins)\n`,
+      );
+    }
+    this.agentRoots.set(agentId, canonical);
     this.writeAgents.add(agentId);
   }
 
