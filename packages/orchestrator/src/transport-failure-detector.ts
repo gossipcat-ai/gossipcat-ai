@@ -46,6 +46,18 @@ export const TRANSPORT_FAILURE_PATTERN =
   /files? (?:are )?(?:not present|missing)|empty diff|empty workspace|cannot be (?:read|located)|not (?:found|present) (?:on|in)(?: the)? (?:disk|filesystem|worktree)/i;
 
 /**
+ * Cite-anchor pattern. A real grounded hallucination almost always carries a
+ * `<cite tag="file">path:line</cite>` anchor — the model claims to have read
+ * the file. A relay-cwd transport failure CANNOT produce one because the
+ * worker never actually loaded the file. Co-presence of a cite anchor
+ * therefore vetoes the rewrite: prefer false-negative (preserve as
+ * hallucination) over false-positive (silently exonerate a real
+ * hallucination). See PR #327 sonnet review CRITICAL #1.
+ */
+export const CITE_ANCHOR_PATTERN =
+  /<cite\s+tag=["']file["']\s*>[^<]+<\/cite>/i;
+
+/**
  * Caller context required to evaluate the rewrite preconditions. The detector
  * is a pure function over this struct so unit tests can exercise every code
  * path without touching the filesystem or `.gossip/config.json`.
@@ -79,7 +91,12 @@ export function shouldRewriteToTransportFailure(
   if (ctx.isNativeAgent) return false;
   if (!ctx.hadResolutionRoots) return false;
   if (!ctx.findingText) return false;
-  return TRANSPORT_FAILURE_PATTERN.test(ctx.findingText);
+  if (!TRANSPORT_FAILURE_PATTERN.test(ctx.findingText)) return false;
+  // Co-presence veto: if the finding carries a `<cite tag="file">…</cite>`
+  // anchor, the agent at least *claims* to have read code. A relay transport
+  // failure cannot synthesize a cite. Preserve as hallucination_caught.
+  if (CITE_ANCHOR_PATTERN.test(ctx.findingText)) return false;
+  return true;
 }
 
 /**
@@ -185,10 +202,14 @@ export function maybeRewriteHallucinationToTransportFailure(
     extractConsensusId(signal.findingId) ?? signal.consensusId ?? undefined;
   if (!consensusId) return signal;
   const roots = lookupRoundResolutionRoots(projectRoot, consensusId);
+  // Coalesce both fields: callers can place transport text in either `finding`
+  // or `evidence`. Concatenating preserves cite anchors that may live in only
+  // one of the two and matches the pattern across either source.
+  const findingText = `${signal.evidence ?? ''} ${(signal as { finding?: string }).finding ?? ''}`.trim();
   const ctx: TransportFailureContext = {
     isNativeAgent: isNativeAgent(signal.agentId),
     hadResolutionRoots: roots.length > 0,
-    findingText: signal.evidence ?? '',
+    findingText,
   };
   if (!shouldRewriteToTransportFailure(signal.signal, ctx)) return signal;
   appendTransportRewrite(projectRoot, {

@@ -159,6 +159,13 @@ export interface AgentResponse {
     uniqueFindings: number;
     unverifiedsEmitted: number;
     unverifiedsReceived: number;
+    /** Count of `transport_failure` signals attributed to this agent.
+     * Excluded from accuracy / uniqueness / circuit-breaker arithmetic
+     * (Path 2 mitigation, spec
+     * docs/specs/2026-04-29-relay-worker-resolution-roots.md). Surfaced for
+     * dashboard observability so operators can spot agents whose hallucination
+     * counts were inflated by relay-cwd transport failures. */
+    transportFailureCount: number;
     bench: {
       state: 'benched' | 'kept-for-coverage' | 'none';
       reason?: 'chronic-low-accuracy' | 'burst-hallucination';
@@ -327,6 +334,7 @@ export async function agentsHandler(
         uniqueFindings: score.uniqueFindings ?? 0,
         unverifiedsEmitted: score.unverifiedsEmitted ?? 0,
         unverifiedsReceived: score.unverifiedsReceived ?? 0,
+        transportFailureCount: score.transport_failure_count ?? 0,
         consecutiveFailures: score.consecutiveFailures ?? 0,
         circuitOpen: score.circuitOpen ?? false,
         bench,

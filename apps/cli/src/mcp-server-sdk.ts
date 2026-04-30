@@ -2680,8 +2680,28 @@ server.tool(
       // the input unchanged when preconditions don't hold.
       try {
         const { maybeRewriteHallucinationToTransportFailure } = await import('@gossip/orchestrator');
-        const isNativeAgent = (agentId: string): boolean =>
-          ctx.nativeAgentConfigs.has(agentId);
+        const { existsSync: nativeExists } = require('fs');
+        const { join: nativeJoin } = require('path');
+        // Cache `.claude/agents/<id>.md` lookups for the duration of this batch
+        // — fs probes are cheap but agents may repeat across signals and the
+        // cache makes the fallback negligible vs the in-memory map check.
+        const nativeFileCache = new Map<string, boolean>();
+        const isNativeAgent = (agentId: string): boolean => {
+          if (ctx.nativeAgentConfigs.has(agentId)) return true;
+          // Fallback: an agent registered in `.claude/agents/<id>.md` after
+          // gossip_setup but before MCP restart is missing from the in-memory
+          // `nativeAgentConfigs` snapshot. Probe disk so newly added native
+          // subagents aren't misclassified as relay agents (which would
+          // silently exonerate real hallucinations as transport failures).
+          const cached = nativeFileCache.get(agentId);
+          if (cached !== undefined) return cached;
+          let onDisk = false;
+          try {
+            onDisk = nativeExists(nativeJoin(process.cwd(), '.claude', 'agents', `${agentId}.md`));
+          } catch { onDisk = false; }
+          nativeFileCache.set(agentId, onDisk);
+          return onDisk;
+        };
         for (let i = 0; i < formatted.length; i++) {
           const s = formatted[i];
           if (s.type !== 'consensus') continue;

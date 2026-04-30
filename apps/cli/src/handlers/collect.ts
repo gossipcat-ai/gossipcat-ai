@@ -762,9 +762,17 @@ export async function handleCollect(
     try {
       const { writeFileSync: wfr, mkdirSync: mdr } = require('fs');
       const { join: jr } = require('path');
+      const { randomBytes: rb } = require('crypto');
       const reportsDir = jr(process.cwd(), '.gossip', 'consensus-reports');
       mdr(reportsDir, { recursive: true });
-      const reportId = consensusReport.signals?.[0]?.consensusId || Date.now().toString();
+      // Fallback consensus_id MUST match the canonical 8-8 hex regex
+      // (`/^[0-9a-f]{8}-[0-9a-f]{8}$/`) so downstream resolvers — most
+      // importantly `extractConsensusId` in transport-failure-detector.ts —
+      // can derive the round id from a `finding_id` later. Date.now() returned
+      // a 13-char decimal which silently broke the lookup.
+      const reportId =
+        consensusReport.signals?.[0]?.consensusId ||
+        `${rb(4).toString('hex')}-${rb(4).toString('hex')}`;
       const reportPath = jr(reportsDir, `${reportId}.json`);
       const topic = allResults?.find((r: any) => r.task)?.task?.slice(0, 500) || '';
       wfr(reportPath, JSON.stringify({
@@ -793,7 +801,18 @@ export async function handleCollect(
         // round-trip through the JSON payload or the feature is invisible.
         ...(consensusReport.authorDiagnostics ? { authorDiagnostics: consensusReport.authorDiagnostics } : {}),
       }, null, 2));
-    } catch { /* best-effort */ }
+    } catch (e) {
+      // Best-effort still applies (we don't throw to the caller), but the
+      // failure must be visible — a silent swallow here means the
+      // transport-failure detector loses its `resolutionRoots` lookup table
+      // and every subsequent `gossip_signals` call against this round
+      // mis-classifies. Surface to stderr so operators can correlate.
+      const reportIdForLog =
+        consensusReport.signals?.[0]?.consensusId || '<unknown>';
+      process.stderr.write(
+        `[gossipcat] consensus-report write failed for ${reportIdForLog}: ${(e as Error).message ?? e}\n`,
+      );
+    }
   }
 
   // Auto-persist confirmed findings to implementation-findings.jsonl

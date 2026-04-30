@@ -152,6 +152,36 @@ describe('shouldRewriteToTransportFailure', () => {
       }),
     ).toBe(false);
   });
+
+  // PR #327 sonnet review CRITICAL #1 — cite-anchor co-presence veto.
+  it('cite-anchor co-presence vetoes the rewrite (preserve as hallucination)', () => {
+    expect(
+      shouldRewriteToTransportFailure('hallucination_caught', {
+        ...baseCtx,
+        findingText:
+          'feature flag file is missing — see <cite tag="file">config/flags.ts:12</cite>',
+      }),
+    ).toBe(false);
+  });
+
+  it('matching text WITHOUT a cite anchor still rewrites', () => {
+    expect(
+      shouldRewriteToTransportFailure('hallucination_caught', {
+        ...baseCtx,
+        findingText: 'files are not present in the worktree',
+      }),
+    ).toBe(true);
+  });
+
+  it('cite anchor with single quotes is also detected', () => {
+    expect(
+      shouldRewriteToTransportFailure('hallucination_caught', {
+        ...baseCtx,
+        findingText:
+          "files are missing — <cite tag='file'>src/x.ts:1</cite>",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('extractConsensusId', () => {
@@ -283,6 +313,39 @@ describe('maybeRewriteHallucinationToTransportFailure — end-to-end', () => {
     } as Partial<ConsensusSignal>);
     const out = maybeRewriteHallucinationToTransportFailure(TEST_DIR, sig, isNative);
     expect(out).toBe(sig);
+  });
+
+  // PR #327 sonnet review HIGH #3 — coalesce evidence + finding fields.
+  it('coalesces signal.finding into the pattern check when evidence is unrelated', () => {
+    writeReport('328adef4-087942f7', {
+      id: '328adef4-087942f7',
+      resolutionRoots: ['/some/worktree'],
+    });
+    const sig = makeHallucinationSignal({
+      agentId: RELAY_AGENT,
+      evidence: 'unrelated noise',
+      // ConsensusSignal nominally has no `finding`, but recordSignals callers
+      // pass through a divergent `finding` field; the detector must coalesce.
+      finding: 'files are not present in the provided worktree',
+    } as Partial<ConsensusSignal> & { finding?: string });
+    const out = maybeRewriteHallucinationToTransportFailure(TEST_DIR, sig, isNative);
+    expect(out.signal).toBe('transport_failure');
+  });
+
+  // PR #327 sonnet review CRITICAL #1 — cite-anchor veto end-to-end.
+  it('preserves hallucination_caught when finding carries a cite anchor', () => {
+    writeReport('328adef4-087942f7', {
+      id: '328adef4-087942f7',
+      resolutionRoots: ['/some/worktree'],
+    });
+    const sig = makeHallucinationSignal({
+      agentId: RELAY_AGENT,
+      evidence:
+        'feature flag file is missing — see <cite tag="file">config/flags.ts:12</cite>',
+    });
+    const out = maybeRewriteHallucinationToTransportFailure(TEST_DIR, sig, isNative);
+    expect(out.signal).toBe('hallucination_caught');
+    expect(readAuditLog()).toHaveLength(0);
   });
 
   it('returns input unchanged when consensus_id cannot be derived', () => {
