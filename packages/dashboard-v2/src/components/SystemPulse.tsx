@@ -19,11 +19,12 @@ interface BigStatProps {
   label: string;
   valueClass: string;
   pulse?: boolean;
+  tooltip?: string;
 }
 
-function BigStat({ value, unit, label, valueClass, pulse }: BigStatProps) {
+function BigStat({ value, unit, label, valueClass, pulse, tooltip }: BigStatProps) {
   return (
-    <div className="flex flex-col items-center py-4 px-3 text-center">
+    <div className="flex flex-col items-center py-4 px-3 text-center" data-tooltip={tooltip}>
       <div className="flex items-baseline gap-1">
         {pulse && (
           <span className="relative mr-1 inline-flex h-2 w-2">
@@ -98,6 +99,14 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
           label="Confirmed"
           valueClass="text-confirmed"
         />
+        <div className="col-span-2 border-t border-border">
+          <BigStat
+            value={overview.actionableFindings}
+            label="Actionable"
+            valueClass={overview.actionableFindings > 0 ? 'text-orange-400' : 'text-confirmed'}
+            tooltip="Findings still open and need operator review (disagreements + hallucinations + new findings)"
+          />
+        </div>
       </div>
 
       {/* Secondary stats */}
