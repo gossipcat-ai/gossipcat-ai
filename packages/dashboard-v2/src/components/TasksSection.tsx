@@ -148,10 +148,10 @@ export function TasksSection({ tasks, limit = DEFAULT_PAGE_SIZE }: TasksSectionP
                     {kind.label}
                   </span>
                 )}
-                <span className="min-w-0 flex-1 line-clamp-2 font-inter text-[11px] leading-snug text-muted-foreground">
+                <span className="min-w-0 flex-1 line-clamp-2 font-inter text-[11px] leading-snug text-foreground">
                   {task.task}
                 </span>
-                <span className="mt-0.5 shrink-0 font-mono text-xs font-bold text-foreground">{task.agentId}</span>
+                <span className="mt-0.5 shrink-0 font-mono text-[10px] text-muted-foreground/60 font-normal">{task.agentId}</span>
                 <span className="mt-0.5 shrink-0 font-mono text-[10px] text-muted-foreground/50">{timeAgo(task.timestamp)}</span>
               </div>
             );
