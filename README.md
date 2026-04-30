@@ -12,7 +12,6 @@
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/stargazers"><img src="https://img.shields.io/github/stars/gossipcat-ai/gossipcat-ai?style=social" alt="GitHub stars" /></a>
-  <a href="https://bundlephobia.com/package/gossipcat"><img src="https://img.shields.io/bundlephobia/min/gossipcat?color=0ea5e9" alt="minified bundle size" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/commits/master"><img src="https://img.shields.io/github/last-commit/gossipcat-ai/gossipcat-ai?color=0ea5e9" alt="last commit" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gossipcat-ai/gossipcat-ai/ci.yml?branch=master&label=tests" alt="tests" /></a>
   <a href="https://deepwiki.com/gossipcat-ai/gossipcat-ai"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" /></a>
