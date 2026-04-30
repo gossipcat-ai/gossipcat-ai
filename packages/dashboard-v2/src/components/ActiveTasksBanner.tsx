@@ -52,7 +52,16 @@ export function ActiveTasksBanner({ onCountChange }: { onCountChange?: (n: numbe
   const live = tasks.filter(t => now - new Date(t.startedAt).getTime() < STALE_MS);
   const staleCount = tasks.length - live.length;
 
-  if (live.length === 0) return null;
+  if (live.length === 0) {
+    if (staleCount === 0) return null;
+    return (
+      <div className="rounded-lg border border-border bg-card/60 px-4 py-2.5">
+        <span className="font-mono text-xs text-muted-foreground">
+          {staleCount} stale task{staleCount === 1 ? '' : 's'} — likely orphaned (&gt;2h since last update)
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-border bg-card/60 px-4 py-2.5">
