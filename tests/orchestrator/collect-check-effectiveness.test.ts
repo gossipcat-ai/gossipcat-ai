@@ -49,6 +49,7 @@ function makeStubPerfReader(
     categoryAccuracy: {},
     categoryCorrect,
     categoryHallucinated,
+    transport_failure_count: 0,
   };
   jest.spyOn(reader, 'getScores').mockReturnValue(new Map([[agentId, score]]));
   jest.spyOn(reader, 'getCountersSince').mockImplementation((_a, cat) => ({

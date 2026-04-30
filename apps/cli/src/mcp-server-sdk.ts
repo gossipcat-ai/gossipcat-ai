@@ -2671,6 +2671,54 @@ server.tool(
         };
       });
 
+      // Transport-failure rewrite (Path 2, spec
+      // docs/specs/2026-04-29-relay-worker-resolution-roots.md). Runs BEFORE
+      // category enforcement / dedup so the persisted signal class reflects
+      // the rewrite, and BEFORE the auto-skill-gap suggestion path so a relay
+      // cwd outage doesn't trigger spurious skill development. Native agents
+      // and rounds without resolutionRoots are exempt — the detector returns
+      // the input unchanged when preconditions don't hold.
+      try {
+        const { maybeRewriteHallucinationToTransportFailure } = await import('@gossip/orchestrator');
+        const { existsSync: nativeExists } = require('fs');
+        const { join: nativeJoin } = require('path');
+        // Cache `.claude/agents/<id>.md` lookups for the duration of this batch
+        // — fs probes are cheap but agents may repeat across signals and the
+        // cache makes the fallback negligible vs the in-memory map check.
+        const nativeFileCache = new Map<string, boolean>();
+        const isNativeAgent = (agentId: string): boolean => {
+          if (ctx.nativeAgentConfigs.has(agentId)) return true;
+          // Fallback: an agent registered in `.claude/agents/<id>.md` after
+          // gossip_setup but before MCP restart is missing from the in-memory
+          // `nativeAgentConfigs` snapshot. Probe disk so newly added native
+          // subagents aren't misclassified as relay agents (which would
+          // silently exonerate real hallucinations as transport failures).
+          const cached = nativeFileCache.get(agentId);
+          if (cached !== undefined) return cached;
+          let onDisk = false;
+          try {
+            onDisk = nativeExists(nativeJoin(process.cwd(), '.claude', 'agents', `${agentId}.md`));
+          } catch { onDisk = false; }
+          nativeFileCache.set(agentId, onDisk);
+          return onDisk;
+        };
+        for (let i = 0; i < formatted.length; i++) {
+          const s = formatted[i];
+          if (s.type !== 'consensus') continue;
+          if (s.signal !== 'hallucination_caught') continue;
+          const rewritten = maybeRewriteHallucinationToTransportFailure(
+            process.cwd(),
+            s,
+            isNativeAgent,
+          );
+          if (rewritten !== s) {
+            formatted[i] = rewritten;
+          }
+        }
+      } catch (err) {
+        process.stderr.write(`[gossip_signals] transport-failure detector failed: ${(err as Error).message}\n`);
+      }
+
       // Category enforcement for hallucination_caught: if both inferCategory
       // and extractCategories fail, we PERSIST the signal with category:undefined
       // (matching consensus-engine.ts:983-999). Per-category skill-gap routing

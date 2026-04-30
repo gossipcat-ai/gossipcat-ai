@@ -49,6 +49,16 @@ export interface AgentScore {
   categoryCorrect: Record<string, number>;
   categoryHallucinated: Record<string, number>;
   categoryAccuracy: Record<string, number>;
+  /**
+   * Count of `transport_failure` rows (rewritten from `hallucination_caught`
+   * by the relay-worker resolutionRoots-gap detector — see
+   * docs/specs/2026-04-29-relay-worker-resolution-roots.md Path 2). These
+   * rows are EXCLUDED from accuracy / uniqueness / circuit-breaker arithmetic;
+   * the count is surfaced here so dashboards can show "ops issue" counters
+   * without polluting the scoring track. Field is always populated (defaults
+   * to 0) so dashboard renderers never see `undefined`.
+   */
+  transport_failure_count: number;
 }
 
 export interface CategoryCounters {
@@ -84,6 +94,12 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   task_timeout: true,
   task_empty: true,
   consensus_coverage_degraded: true,
+  // Operational rewrite from hallucination_caught when the relay worker ran
+  // without the dispatched resolutionRoots (Path 2, spec
+  // docs/specs/2026-04-29-relay-worker-resolution-roots.md). Listed here so the
+  // scoring switch's exhaustiveness check holds; it's a no-op for accuracy /
+  // uniqueness / circuit breaker — only `transport_failure_count` is bumped.
+  transport_failure: true,
 };
 
 const SEVERITY_MULTIPLIER: Record<string, number> = {
@@ -616,6 +632,7 @@ export class PerformanceReader {
       categoryStrengths: Record<string, number>;
       categoryCorrect: Record<string, number>;
       categoryHallucinated: Record<string, number>;
+      transportFailures: number;
     }>();
 
     const ensure = (id: string) => {
@@ -628,6 +645,7 @@ export class PerformanceReader {
         unverifiedsEmitted: 0, unverifiedsReceived: 0,
         totalSignals: 0, lastSignalMs: 0, categoryStrengths: {},
         categoryCorrect: {}, categoryHallucinated: {},
+        transportFailures: 0,
       });
       return acc.get(id)!;
     };
@@ -900,6 +918,15 @@ export class PerformanceReader {
           // Transport/provider failure — contributes nothing to any scoring accumulator.
           // Does not affect accuracy, uniqueness, reliability, or circuit breaker.
           break;
+        case 'transport_failure':
+          // Rewritten from `hallucination_caught` by the relay-worker
+          // resolutionRoots-gap detector (Path 2, spec
+          // docs/specs/2026-04-29-relay-worker-resolution-roots.md). Counted
+          // separately for ops dashboards; deliberately excluded from accuracy
+          // / uniqueness / circuit-breaker arithmetic so a relay-side cwd bug
+          // can't poison agent rankings.
+          a.transportFailures++;
+          break;
         case 'boundary_escape':
           // Sandbox policy violation — recorded for observability, zero weight.
           // Kept out of NEGATIVE_SIGNALS so scope events don't feed the circuit breaker.
@@ -916,6 +943,11 @@ export class PerformanceReader {
     const signalsByAgent = new Map<string, (ConsensusSignal | ImplSignal)[]>();
     for (const signal of consensusSignals) {
       if (!KNOWN_SIGNALS[signal.signal]) continue;
+      // Exclude transport_failure from the streak entirely — it is neither a
+      // negative signal (would feed circuit-breaker) nor a positive signal
+      // (would reset a real failure streak). Treat it as if absent so a relay
+      // cwd outage neither benches nor rehabilitates the agent.
+      if (signal.signal === 'transport_failure') continue;
       const list = signalsByAgent.get(signal.agentId) || [];
       list.push(signal);
       signalsByAgent.set(signal.agentId, list);
@@ -1035,6 +1067,7 @@ export class PerformanceReader {
         categoryCorrect: { ...a.categoryCorrect },
         categoryHallucinated: { ...a.categoryHallucinated },
         categoryAccuracy,
+        transport_failure_count: a.transportFailures,
       });
     }
 
@@ -1051,6 +1084,7 @@ export class PerformanceReader {
           consecutiveFailures: consec,
           circuitOpen: consec >= CIRCUIT_BREAKER_THRESHOLD,
           categoryStrengths: {}, categoryCorrect: {}, categoryHallucinated: {}, categoryAccuracy: {},
+          transport_failure_count: 0,
         });
       }
     }

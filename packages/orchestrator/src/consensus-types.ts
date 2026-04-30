@@ -157,7 +157,19 @@ export interface ConsensusSignal {
     | 'boundary_escape'
     | 'task_timeout'
     | 'task_empty'
-    | 'consensus_coverage_degraded';
+    | 'consensus_coverage_degraded'
+    /**
+     * Relay-worker `resolutionRoots` plumbing gap (spec
+     * docs/specs/2026-04-29-relay-worker-resolution-roots.md, Path 2). When a
+     * relay-routed agent records `hallucination_caught` whose finding text
+     * matches the "files not present / empty diff / cannot read" pattern AND
+     * the consensus round was dispatched with `resolutionRoots`, the signal is
+     * rewritten from `hallucination_caught` to `transport_failure` BEFORE
+     * persisting to `agent-performance.jsonl`. `transport_failure` is excluded
+     * from accuracy / uniqueness / circuit-breaker arithmetic — it tracks
+     * separately as `AgentScore.transport_failure_count`.
+     */
+    | 'transport_failure';
   agentId: string;
   counterpartId?: string;
   skill?: string;
@@ -307,6 +319,7 @@ const OPERATIONAL_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'finding_dropped_format',
   'consensus_round_retracted',
   'unverified',
+  'transport_failure',
 ]);
 
 export function classifySignal(signalName: string): SignalClass | undefined {

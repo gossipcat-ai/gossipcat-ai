@@ -322,6 +322,11 @@ export async function handleCollect(
   // Step 5: Run consensus on merged results (relay + native together)
   let consensusReport: any = undefined;
   let provisionalSignalCount = 0;
+  // Hoisted out of the consensus block so the dashboard-persistence path
+  // (later in this function) can record `resolutionRoots` on the consensus
+  // report — the transport-failure detector reads it back when classifying
+  // signals. Path 2, spec docs/specs/2026-04-29-relay-worker-resolution-roots.md.
+  let outerEffectiveRoots: readonly string[] = resolutionRoots ?? [];
   const CONSENSUS_TIMEOUT_MS = 1_800_000; // 30 min — native subagents (sonnet/opus) frequently take 2-5 min per cross-review, plus orchestrator dispatch overhead. 15 min was too tight in practice.
   // MIN_AGENTS_FOR_CONSENSUS = 2 (see @gossip/orchestrator/types)
   if (consensus && allResults.filter((r: any) => r.status === 'completed').length >= 2) {
@@ -387,6 +392,7 @@ export async function handleCollect(
       } catch (err) {
         process.stderr.write(`[consensus] auto-discovery failed: ${(err as Error).message}\n`);
       }
+      outerEffectiveRoots = effectiveRoots;
 
       // Hoisted so verifierToolRunner callback can close over it when building the engine config.
       // Constructed AFTER effectiveRoots so fileSearch can prioritize matches under a
@@ -756,9 +762,17 @@ export async function handleCollect(
     try {
       const { writeFileSync: wfr, mkdirSync: mdr } = require('fs');
       const { join: jr } = require('path');
+      const { randomBytes: rb } = require('crypto');
       const reportsDir = jr(process.cwd(), '.gossip', 'consensus-reports');
       mdr(reportsDir, { recursive: true });
-      const reportId = consensusReport.signals?.[0]?.consensusId || Date.now().toString();
+      // Fallback consensus_id MUST match the canonical 8-8 hex regex
+      // (`/^[0-9a-f]{8}-[0-9a-f]{8}$/`) so downstream resolvers — most
+      // importantly `extractConsensusId` in transport-failure-detector.ts —
+      // can derive the round id from a `finding_id` later. Date.now() returned
+      // a 13-char decimal which silently broke the lookup.
+      const reportId =
+        consensusReport.signals?.[0]?.consensusId ||
+        `${rb(4).toString('hex')}-${rb(4).toString('hex')}`;
       const reportPath = jr(reportsDir, `${reportId}.json`);
       const topic = allResults?.find((r: any) => r.task)?.task?.slice(0, 500) || '';
       wfr(reportPath, JSON.stringify({
@@ -767,6 +781,13 @@ export async function handleCollect(
         topic,
         agentCount: consensusReport.agentCount,
         rounds: consensusReport.rounds,
+        // Persist resolutionRoots so the transport-failure detector
+        // (Path 2, spec docs/specs/2026-04-29-relay-worker-resolution-roots.md)
+        // can look up "did this round dispatch with resolutionRoots?" from a
+        // bare `consensus_id` derived from a `finding_id`. Empty array when
+        // none was passed — preserving the explicit "no roots" signal in the
+        // record.
+        resolutionRoots: outerEffectiveRoots.length > 0 ? [...outerEffectiveRoots] : [],
         confirmed: consensusReport.confirmed || [],
         disputed: consensusReport.disputed || [],
         unverified: consensusReport.unverified || [],
@@ -780,7 +801,18 @@ export async function handleCollect(
         // round-trip through the JSON payload or the feature is invisible.
         ...(consensusReport.authorDiagnostics ? { authorDiagnostics: consensusReport.authorDiagnostics } : {}),
       }, null, 2));
-    } catch { /* best-effort */ }
+    } catch (e) {
+      // Best-effort still applies (we don't throw to the caller), but the
+      // failure must be visible — a silent swallow here means the
+      // transport-failure detector loses its `resolutionRoots` lookup table
+      // and every subsequent `gossip_signals` call against this round
+      // mis-classifies. Surface to stderr so operators can correlate.
+      const reportIdForLog =
+        consensusReport.signals?.[0]?.consensusId || '<unknown>';
+      process.stderr.write(
+        `[gossipcat] consensus-report write failed for ${reportIdForLog}: ${(e as Error).message ?? e}\n`,
+      );
+    }
   }
 
   // Auto-persist confirmed findings to implementation-findings.jsonl
