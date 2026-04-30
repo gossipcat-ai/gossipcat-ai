@@ -16,7 +16,3 @@ ground_truth:
 prompt: |
   Review this component for accessibility issues, focusing on ARIA attribute
   coverage on interactive elements.
-notes: |
-  Positive a11y case. low-severity by design — fabricating a "critical a11y"
-  finding would cost 4× a low truth miss, so this case stress-tests severity
-  weighting on the fabrication side too.

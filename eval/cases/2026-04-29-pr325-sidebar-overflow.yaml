@@ -16,7 +16,3 @@ ground_truth:
 prompt: |
   Review this dashboard component for layout bugs at narrow viewports.
   Focus on width constraints, overflow, and grid-cell sizing.
-notes: |
-  Positive design case. The fix landed post-rebase as d9c6f4a (the original
-  pre-rebase SHA was 037f302). Consensus should catch the missing min-width:0 /
-  overflow handling. visual-category findings are the expected anchor.

@@ -23,6 +23,7 @@ import {
 
 const SENTINEL_SUMMARY = 'CANARY_GROUND_TRUTH_SENTINEL_AB12CD34_DO_NOT_LEAK';
 const SENTINEL_CATEGORY = 'CANARY_CATEGORY_SENTINEL_EF56GH78';
+const SENTINEL_NOTES = 'CANARY_NOTES_SENTINEL_IJ90KL12_PARTIAL_ORACLE';
 
 describe('eval harness — anti-contamination', () => {
   let dir: string;
@@ -49,7 +50,7 @@ describe('eval harness — anti-contamination', () => {
       'prompt: |',
       '  Review the file. Report findings only with file:line citations.',
       'notes: |',
-      '  Sentinel notes — never reach the agent.',
+      `  ${SENTINEL_NOTES} — partial-oracle hint that must never reach the agent.`,
       '',
     ].join('\n');
     writeFileSync(casePath, yaml);
@@ -76,6 +77,17 @@ describe('eval harness — anti-contamination', () => {
     expect(prompt).not.toContain(SENTINEL_CATEGORY);
   });
 
+  it('prepareDispatchCase strips notes (partial oracles must not leak)', () => {
+    const c = loadCase(casePath);
+    expect(c.notes).toContain(SENTINEL_NOTES);
+    const sanitized = prepareDispatchCase(c);
+    const serialized = JSON.stringify(sanitized);
+    expect(serialized).not.toContain(SENTINEL_NOTES);
+    expect((sanitized as unknown as Record<string, unknown>).notes).toBeUndefined();
+    const prompt = buildDispatchPrompt(sanitized);
+    expect(prompt).not.toContain(SENTINEL_NOTES);
+  });
+
   it('runCase passes a sanitized case to the dispatcher', async () => {
     const c = loadCase(casePath);
     const seenPrompts: string[] = [];
@@ -96,11 +108,13 @@ describe('eval harness — anti-contamination', () => {
     for (const p of seenPrompts) {
       expect(p).not.toContain(SENTINEL_SUMMARY);
       expect(p).not.toContain(SENTINEL_CATEGORY);
+      expect(p).not.toContain(SENTINEL_NOTES);
     }
     for (const sc of seenCases) {
       const ser = JSON.stringify(sc);
       expect(ser).not.toContain(SENTINEL_SUMMARY);
       expect(ser).not.toContain(SENTINEL_CATEGORY);
+      expect(ser).not.toContain(SENTINEL_NOTES);
     }
   });
 });

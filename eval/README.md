@@ -117,6 +117,19 @@ with df=1, or pipes χ² downstream. With N≈30 cases, `|b - c| ≥ 7` is rough
 p<0.05 — anything below that lacks the statistical power to declare a real
 movement, only suggestive signal.
 
+> **Divergence note — McNemar pairing pass-proxy.** When `--against
+> <baselineDir>` is used, baseline `pass/fail` outcomes are reconstructed from
+> per-case JSON using a coarse proxy: any non-empty `byAgent` finding list
+> counts as a pass. The "current" run uses the strict `F1 ≥ 0.5` threshold
+> documented above. The two halves of the 2×2 are therefore not measured on
+> the same scale; pairing is suggestive, not statistically clean. The CLI
+> emits a stderr warning when this proxy is in effect.
+>
+> For strict same-threshold pairing, rerun `runSuite()` over the archived
+> cases against the baseline run and compare per-case `F1 ≥ 0.5` directly
+> instead of going through `--against`. The `eval/.runs/<runId>/<caseId>.json`
+> files preserve `groundTruth` so this rerun is fully offline.
+
 ## Adding a case
 
 1. Find a real PR in this repo where consensus / cross-review caught a

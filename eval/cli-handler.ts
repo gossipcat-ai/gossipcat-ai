@@ -92,6 +92,11 @@ export async function runEvalCommand(argv: string[]): Promise<void> {
       process.stdout.write(`\n_No baseline outcomes found at ${baselineDir}._\n`);
       return;
     }
+    process.stderr.write(
+      "⚠ Baseline outcomes loaded with coarse 'any findings = pass' proxy. " +
+      'For strict F1>=0.5 pairing, manually rerun runSuite() over the archived ' +
+      'cases. See README §McNemar.\n',
+    );
     const mc = formatMcNemar(before, after);
     process.stdout.write('\n' + mc);
     writeFileSync(join(outDir, scores.runId, 'mcnemar.md'), mc);

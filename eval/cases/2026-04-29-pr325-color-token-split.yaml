@@ -16,7 +16,3 @@ ground_truth:
 prompt: |
   Review this component for semantic / typing issues with color or status
   mapping. Look for one token serving two different conceptual axes.
-notes: |
-  Positive semantic case. The mapped token lacked a discriminator between
-  severity-axis and status-axis renderings; fix split it into two tokens.
-  type_safety category captures "single value smuggled across two domains."

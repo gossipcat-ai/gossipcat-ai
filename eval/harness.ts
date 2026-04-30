@@ -43,14 +43,20 @@ export interface EvalCase {
   sourcePath: string;
 }
 
-/** What we hand to the dispatch layer — `ground_truth` is GONE. */
+/**
+ * What we hand to the dispatch layer — `ground_truth` is GONE.
+ *
+ * `notes` is also intentionally absent: the EvalCase.notes field is for case
+ * authors only and frequently contains partial oracles (e.g. "consensus should
+ * catch the missing min-width:0"). Forwarding it would leak hints to the
+ * agent. The single-chokepoint `prepareDispatchCase` does not copy it.
+ */
 export interface DispatchableCase {
   id: string;
   title: string;
   parent_sha: string;
   scope: { files: string[] };
   prompt: string;
-  notes?: string;
 }
 
 export interface RunOptions {
@@ -104,7 +110,12 @@ export function loadCases(globPath: string, baseDir?: string): EvalCase[] {
   return out;
 }
 
-/** Strip ground_truth from an EvalCase. The single anti-contamination chokepoint. */
+/**
+ * Strip ground_truth AND notes from an EvalCase. The single
+ * anti-contamination chokepoint. Notes routinely contain partial oracles
+ * ("consensus should catch the missing min-width:0") so forwarding them
+ * would leak hints to the agent.
+ */
 export function prepareDispatchCase(c: EvalCase): DispatchableCase {
   return {
     id: c.id,
@@ -112,8 +123,27 @@ export function prepareDispatchCase(c: EvalCase): DispatchableCase {
     parent_sha: c.parent_sha,
     scope: { files: [...c.scope.files] },
     prompt: c.prompt,
-    ...(c.notes ? { notes: c.notes } : {}),
   };
+}
+
+/**
+ * Extract a `<cite tag="file">path:line</cite>` anchor from finding content.
+ * Returns the FIRST cite in the string. Multi-cite findings prefer the first
+ * citation (the agent's primary anchor); line ranges (`11-15`) reduce to the
+ * lower bound. Returns `undefined` for both fields when no cite is present
+ * or the cite is malformed.
+ *
+ * Tolerates single OR double quotes around the tag attribute and an optional
+ * line-range suffix. Match group 1 is the path, group 2 is the start line.
+ */
+export function extractCiteAnchor(content: string): { file?: string; line?: number } {
+  const re = /<cite\s+tag=["']file["']\s*>([^:<]+):(\d+)(?:-\d+)?<\/cite>/;
+  const m = re.exec(content);
+  if (!m) return {};
+  const file = m[1].trim();
+  const line = Number(m[2]);
+  if (!file || !Number.isFinite(line)) return {};
+  return { file, line };
 }
 
 /** Build the natural-language prompt that goes to each reviewer agent. */
@@ -297,11 +327,16 @@ async function defaultDispatcher(
       const text = (r as { result?: string; agentId: string }).result || '';
       const aid = (r as { agentId: string }).agentId;
       const parsed = parseAgentFindingsStrict(text, { idPrefix: aid });
-      out[aid] = parsed.findings.map(f => ({
-        summary: f.content,
-        severity: f.severity,
-        category: f.category,
-      }));
+      out[aid] = parsed.findings.map(f => {
+        const anchor = extractCiteAnchor(f.content);
+        return {
+          summary: f.content,
+          severity: f.severity,
+          category: f.category,
+          ...(anchor.file ? { file: anchor.file } : {}),
+          ...(anchor.line !== undefined ? { line: anchor.line } : {}),
+        };
+      });
     }
     return out;
   } finally {
@@ -529,6 +564,40 @@ function parseSequence(lines: string[], start: number, indent: number): ParseFra
   return { value: arr, next: i };
 }
 
+/**
+ * Quote-aware splitter for inline-flow array contents. Splits `inner` on
+ * top-level commas only — commas inside `"..."` or `'...'` are preserved,
+ * so `["a, b", c]` parses as two items rather than three. Quote characters
+ * are NOT stripped here; downstream parseScalar handles quoted-string
+ * unwrapping.
+ */
+function splitFlowItems(inner: string): string[] {
+  const out: string[] = [];
+  let buf = '';
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (quote) {
+      buf += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      buf += ch;
+      continue;
+    }
+    if (ch === ',') {
+      out.push(buf);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  out.push(buf);
+  return out;
+}
+
 function parseScalar(raw: string): unknown {
   if (raw === '') return '';
   if (raw === 'null' || raw === '~') return null;
@@ -538,7 +607,7 @@ function parseScalar(raw: string): unknown {
   if (raw.startsWith('[') && raw.endsWith(']')) {
     const inner = raw.slice(1, -1).trim();
     if (inner === '') return [];
-    return inner.split(',').map(s => parseScalar(s.trim()));
+    return splitFlowItems(inner).map(s => parseScalar(s.trim()));
   }
   // Quoted strings
   if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {

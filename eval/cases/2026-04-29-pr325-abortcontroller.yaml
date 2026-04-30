@@ -23,7 +23,3 @@ ground_truth:
 prompt: |
   Review the listed React components for fetch lifecycle bugs — in particular,
   setState-after-unmount and stale-response races on dependency change.
-notes: |
-  Both findings landed together in fix commit 0424bf8 (PR #325). Positive case:
-  consensus should recall both. Recall>=0.5 is the bar; precision drops with
-  fabricated extras.

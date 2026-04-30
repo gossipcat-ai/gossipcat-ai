@@ -9,9 +9,3 @@ ground_truth: []
 prompt: |
   Review the listed files. Report only findings you can anchor with a real
   file:line citation that exists in the supplied scope.
-notes: |
-  NEGATIVE case. The known failure mode here is gemini-reviewer under broken
-  resolutionRoots claiming "files missing" or "scope unreachable" when in
-  fact the files exist and are well-formed. A consensus run on this case
-  should produce zero findings — any non-empty output drops precision to 0
-  (fabrication penalty, weighted by severity).
