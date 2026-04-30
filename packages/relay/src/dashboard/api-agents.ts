@@ -173,6 +173,7 @@ const DEFAULT_SCORE: AgentScore = {
   weightedHallucinations: 0,
   consecutiveFailures: 0, circuitOpen: false, categoryStrengths: {},
   categoryCorrect: {}, categoryHallucinated: {}, categoryAccuracy: {},
+  transport_failure_count: 0,
 };
 
 interface TaskGraphEntry {

@@ -2671,6 +2671,34 @@ server.tool(
         };
       });
 
+      // Transport-failure rewrite (Path 2, spec
+      // docs/specs/2026-04-29-relay-worker-resolution-roots.md). Runs BEFORE
+      // category enforcement / dedup so the persisted signal class reflects
+      // the rewrite, and BEFORE the auto-skill-gap suggestion path so a relay
+      // cwd outage doesn't trigger spurious skill development. Native agents
+      // and rounds without resolutionRoots are exempt — the detector returns
+      // the input unchanged when preconditions don't hold.
+      try {
+        const { maybeRewriteHallucinationToTransportFailure } = await import('@gossip/orchestrator');
+        const isNativeAgent = (agentId: string): boolean =>
+          ctx.nativeAgentConfigs.has(agentId);
+        for (let i = 0; i < formatted.length; i++) {
+          const s = formatted[i];
+          if (s.type !== 'consensus') continue;
+          if (s.signal !== 'hallucination_caught') continue;
+          const rewritten = maybeRewriteHallucinationToTransportFailure(
+            process.cwd(),
+            s,
+            isNativeAgent,
+          );
+          if (rewritten !== s) {
+            formatted[i] = rewritten;
+          }
+        }
+      } catch (err) {
+        process.stderr.write(`[gossip_signals] transport-failure detector failed: ${(err as Error).message}\n`);
+      }
+
       // Category enforcement for hallucination_caught: if both inferCategory
       // and extractCategories fail, we PERSIST the signal with category:undefined
       // (matching consensus-engine.ts:983-999). Per-category skill-gap routing

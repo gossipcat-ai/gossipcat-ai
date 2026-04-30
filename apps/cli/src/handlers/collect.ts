@@ -322,6 +322,11 @@ export async function handleCollect(
   // Step 5: Run consensus on merged results (relay + native together)
   let consensusReport: any = undefined;
   let provisionalSignalCount = 0;
+  // Hoisted out of the consensus block so the dashboard-persistence path
+  // (later in this function) can record `resolutionRoots` on the consensus
+  // report — the transport-failure detector reads it back when classifying
+  // signals. Path 2, spec docs/specs/2026-04-29-relay-worker-resolution-roots.md.
+  let outerEffectiveRoots: readonly string[] = resolutionRoots ?? [];
   const CONSENSUS_TIMEOUT_MS = 1_800_000; // 30 min — native subagents (sonnet/opus) frequently take 2-5 min per cross-review, plus orchestrator dispatch overhead. 15 min was too tight in practice.
   // MIN_AGENTS_FOR_CONSENSUS = 2 (see @gossip/orchestrator/types)
   if (consensus && allResults.filter((r: any) => r.status === 'completed').length >= 2) {
@@ -387,6 +392,7 @@ export async function handleCollect(
       } catch (err) {
         process.stderr.write(`[consensus] auto-discovery failed: ${(err as Error).message}\n`);
       }
+      outerEffectiveRoots = effectiveRoots;
 
       // Hoisted so verifierToolRunner callback can close over it when building the engine config.
       // Constructed AFTER effectiveRoots so fileSearch can prioritize matches under a
@@ -767,6 +773,13 @@ export async function handleCollect(
         topic,
         agentCount: consensusReport.agentCount,
         rounds: consensusReport.rounds,
+        // Persist resolutionRoots so the transport-failure detector
+        // (Path 2, spec docs/specs/2026-04-29-relay-worker-resolution-roots.md)
+        // can look up "did this round dispatch with resolutionRoots?" from a
+        // bare `consensus_id` derived from a `finding_id`. Empty array when
+        // none was passed — preserving the explicit "no roots" signal in the
+        // record.
+        resolutionRoots: outerEffectiveRoots.length > 0 ? [...outerEffectiveRoots] : [],
         confirmed: consensusReport.confirmed || [],
         disputed: consensusReport.disputed || [],
         unverified: consensusReport.unverified || [],

@@ -102,6 +102,18 @@ export {
   emitScoringAdjustmentSignals,
   emitPipelineSignals,
 } from './signal-helpers';
+export {
+  shouldRewriteToTransportFailure,
+  appendTransportRewrite,
+  lookupRoundResolutionRoots,
+  extractConsensusId,
+  maybeRewriteHallucinationToTransportFailure,
+  TRANSPORT_FAILURE_PATTERN,
+} from './transport-failure-detector';
+export type {
+  TransportFailureContext,
+  TransportRewriteAudit,
+} from './transport-failure-detector';
 export { COMPLETION_SIGNAL_ALLOWLIST, EMISSION_PATHS } from './completion-signals.allowlist';
 export type { EmissionPath } from './completion-signals.allowlist';
 export { PipelineDriftDetector } from './pipeline-drift-detector';

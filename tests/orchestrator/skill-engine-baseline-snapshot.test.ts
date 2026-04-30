@@ -94,6 +94,7 @@ function makeStubPerfReader(
           categoryAccuracy: {},
           categoryCorrect,
           categoryHallucinated,
+          transport_failure_count: 0,
         },
       ],
     ]),

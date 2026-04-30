@@ -31,6 +31,7 @@ function makeScore(partial: Partial<AgentScore> & { agentId: string }): AgentSco
     categoryCorrect: {},
     categoryHallucinated: {},
     categoryAccuracy: {},
+    transport_failure_count: 0,
     ...partial,
   };
 }
