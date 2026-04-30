@@ -1,0 +1,18 @@
+id: pr325-aria-expanded
+title: Disclosure button missing aria-expanded — a11y regression in ViolationsPage
+parent_sha: a3f36b7
+fix_sha: 0424bf8
+fix_pr: 325
+scope:
+  files:
+    - packages/dashboard-v2/src/components/ViolationsPage.tsx
+ground_truth:
+  - id: gt1
+    severity: low
+    file: packages/dashboard-v2/src/components/ViolationsPage.tsx
+    line_range: [27, 33]
+    summary: Toggle button lacks aria-expanded reflecting open/closed state; screen readers can't announce disclosure status
+    category: accessibility
+prompt: |
+  Review this component for accessibility issues, focusing on ARIA attribute
+  coverage on interactive elements.

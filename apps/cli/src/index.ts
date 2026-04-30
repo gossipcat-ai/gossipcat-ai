@@ -48,6 +48,12 @@ async function main(): Promise<void> {
       return;
     }
 
+    case 'eval': {
+      const { runEvalCommand } = await import('./commands/eval');
+      await runEvalCommand(process.argv.slice(3));
+      return;
+    }
+
     case 'help':
     case '--help':
     case '-h':
@@ -176,6 +182,7 @@ function printHelp(): void {
     gossipcat tasks            Show recent task history
     gossipcat tasks <id>       Show detail for a specific task
     gossipcat tasks --agent <id>  Filter tasks by agent
+    gossipcat eval             Run the curated eval suite (eval/cases/*.yaml)
     gossipcat sync             Sync task history to Supabase
     gossipcat sync --setup     Configure Supabase connection
     gossipcat sync --status    Show sync status

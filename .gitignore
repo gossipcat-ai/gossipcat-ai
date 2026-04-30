@@ -34,3 +34,5 @@ apps/cli/src/**/*.d.ts
 settings.local.json
 gossipcat-*.tgz
 .mcpregistry_*
+eval/.runs/
+eval/cases-private/

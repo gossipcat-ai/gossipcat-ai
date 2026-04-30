@@ -1,0 +1,11 @@
+id: gemini-files-missing
+title: NEGATIVE — agent should not fabricate "files missing" findings
+parent_sha: a3f36b7
+scope:
+  files:
+    - packages/dashboard-v2/src/components/ViolationsCard.tsx
+    - packages/dashboard-v2/src/components/ViolationsPage.tsx
+ground_truth: []
+prompt: |
+  Review the listed files. Report only findings you can anchor with a real
+  file:line citation that exists in the supplied scope.
