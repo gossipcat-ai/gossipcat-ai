@@ -123,7 +123,7 @@ export function SignalFilterRail({ filters, onChange, agents, signalTypes }: Pro
       </div>
 
       <div>
-        <label className={LABEL_CLS}>Source</label>
+        <label className={LABEL_CLS} data-tooltip="manual = operator-recorded · impl = implementer pipeline · meta = orchestrator self-telemetry · auto-provisional = unvalidated">Source</label>
         <select className={INPUT_CLS} value={filters.source ?? ''} onChange={set('source')}>
           <option value="">any</option>
           {SOURCES.map((s) => (

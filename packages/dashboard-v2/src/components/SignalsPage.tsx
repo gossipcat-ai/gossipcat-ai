@@ -228,9 +228,9 @@ export function SignalsPage() {
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Time</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Agent</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Signal</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Counterpart</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Sev</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Finding</th>
+                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="The other agent in this signal — e.g. the peer who agreed or disputed">Counterpart</th>
+                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="Severity of the associated finding (critical / high / medium / low)">Sev</th>
+                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="Finding ID — click row to open finding detail">Finding</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Consensus</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Evidence</th>
                 </tr>

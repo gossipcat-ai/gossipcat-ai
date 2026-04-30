@@ -35,13 +35,13 @@ const TAG_MAP: Record<string, { label: string; filter: FilterType; cls: string }
   new_finding: { label: 'NEW', filter: 'unique', cls: 'text-unique bg-unique/10' },
 };
 
-const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: string }[] = [
+const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: string; tooltip?: string }[] = [
   { key: 'all', label: 'All', cls: 'text-muted-foreground border-border/40 hover:border-border/60', activeCls: 'text-foreground bg-muted border-border' },
   { key: 'confirmed', label: 'Confirmed', cls: 'text-confirmed/50 border-confirmed/20 hover:border-confirmed/40', activeCls: 'text-confirmed bg-confirmed/10 border-confirmed/40' },
   { key: 'unique', label: 'Unique', cls: 'text-unique/50 border-unique/20 hover:border-unique/40', activeCls: 'text-unique bg-unique/10 border-unique/40' },
   { key: 'disputed', label: 'Disputed', cls: 'text-disputed/50 border-disputed/20 hover:border-disputed/40', activeCls: 'text-disputed bg-disputed/10 border-disputed/40' },
   { key: 'unverified', label: 'Unverified', cls: 'text-unverified/50 border-unverified/20 hover:border-unverified/40', activeCls: 'text-unverified bg-unverified/10 border-unverified/40' },
-  { key: 'insight', label: 'Insight', cls: 'text-zinc-500 border-zinc-500/20 hover:border-zinc-500/40', activeCls: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/40' },
+  { key: 'insight', label: 'Insight', cls: 'text-zinc-500 border-zinc-500/20 hover:border-zinc-500/40', activeCls: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/40', tooltip: 'Observations without a specific file:line anchor. Not scored — cannot be confirmed or disputed by peers.' },
 ];
 
 const SEV_FILTER_CHIPS: { key: 'all' | 'critical' | 'high' | 'medium' | 'low'; label: string; cls: string; activeCls: string }[] = [
@@ -574,7 +574,8 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       <span className="font-mono text-[10px] text-muted-foreground/50">Type:</span>
                       {FILTER_CHIPS.map(tab => (
                         <button key={tab.key} onClick={() => setFilter(tab.key)}
-                          className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${filter === tab.key ? tab.activeCls : tab.cls}`}>
+                          className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${filter === tab.key ? tab.activeCls : tab.cls}`}
+                          {...(tab.tooltip ? { 'data-tooltip': tab.tooltip } : {})}>
                           {tab.label}
                         </button>
                       ))}
@@ -802,6 +803,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                           key={chip.key}
                           onClick={() => setFilter(chip.key)}
                           className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold transition ${filter === chip.key ? chip.activeCls : chip.cls} hover:opacity-80`}
+                          {...(chip.tooltip ? { 'data-tooltip': chip.tooltip } : {})}
                         >
                           {chip.label}
                         </button>

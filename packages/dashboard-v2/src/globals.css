@@ -204,6 +204,10 @@ html::after {
 [data-tooltip]:hover::before {
   opacity: 1;
 }
+[data-tooltip]:focus-within::after,
+[data-tooltip]:focus-within::before {
+  opacity: 1;
+}
 [data-tooltip-pos="bottom"]::after {
   bottom: auto;
   top: 100%;
