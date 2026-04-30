@@ -293,9 +293,10 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             legacy CategoryStrengths (severity-weighted sort + sparse rows) is
             retained for reference but we lead with the ratio view here. */}
         <div>
-          <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+          <h2 className="mb-1 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
             Category Competency
           </h2>
+          <p className="mb-3 mt-0.5 font-mono text-[10px] text-muted-foreground/60">Raw per-category ratio — unweighted. Overall accuracy in Metrics applies a hallucination penalty.</p>
           <CategoryCompetency
             categoryAccuracy={s.categoryAccuracy}
             categoryCorrect={s.categoryCorrect}

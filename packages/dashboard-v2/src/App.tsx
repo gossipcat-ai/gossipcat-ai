@@ -96,6 +96,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
         <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
           Team <span className="ml-2 text-primary">{agents.length}</span>
         </h1>
+        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Per-agent accuracy, signal counts, and dispatch weights.</p>
         <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border/40 bg-border/30 sm:grid-cols-4">
           {[
             { label: 'Healthy', value: healthy, color: 'text-confirmed' },
@@ -256,8 +257,8 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                             fillClass={s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed'}
                             tooltip="Adjusted accuracy = raw signal ratio × 1/(1 + weighted hallucinations × 0.3). The penalty is recoverable via skill-gated multiplier in the same category."
                           />
-                          <MiniBar label="U" value={s.uniqueness} fillClass="bg-unique" />
-                          <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--color-impact)]" />
+                          <MiniBar label="U" value={s.uniqueness} fillClass="bg-unique" tooltip="Uniqueness — findings this agent surfaced that no other agent found" />
+                          <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--color-impact)]" tooltip="Impact — severity-weighted finding score; critical and high findings count more" />
                           {rawRatio !== null ? (
                             <MiniBar
                               label="R"
@@ -362,6 +363,7 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
         <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
           Tasks <span className="ml-2 text-primary">{tasks.total}</span>
         </h1>
+        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Live dispatched tasks and their relay status.</p>
         <div className="mt-2 flex gap-4 font-mono text-[11px] text-muted-foreground">
           <span><span className="text-confirmed">{completed}</span> completed</span>
           {failed > 0 && <span><span className="text-destructive">{failed}</span> failed</span>}
@@ -450,6 +452,7 @@ function FindingsPage({
             </span>
           )}
         </h1>
+        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Multi-agent review rounds — findings confirmed when ≥2 agents agree.</p>
         <div className="mt-2 flex gap-4 font-mono text-[11px] text-muted-foreground">
           <span><span className="text-confirmed">{confirmedTotal}</span> confirmed</span>
           <span><span className="text-disputed">{disputedTotal}</span> disputed</span>

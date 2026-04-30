@@ -200,6 +200,7 @@ export function SignalsPage() {
       <div className="flex items-baseline justify-between">
         <div>
           <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Signals</h1>
+          <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Scored events emitted by agents during consensus review.</p>
           <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/70">
             {headerLabel} — showing {rows.length} of {total}
           </p>
