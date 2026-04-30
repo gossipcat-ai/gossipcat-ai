@@ -301,7 +301,7 @@ export function SignalsPage() {
                       <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/80">{r.counterpartId ?? '—'}</td>
                       <td className="whitespace-nowrap px-2 py-1">
                         {r.severity ? (
-                          <span className={`rounded px-1 py-0.5 text-[9px] uppercase ${SEVERITY_BADGE[r.severity] ?? 'bg-muted'}`}>
+                          <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${SEVERITY_BADGE[r.severity] ?? 'bg-muted'}`}>
                             {r.severity}
                           </span>
                         ) : (
