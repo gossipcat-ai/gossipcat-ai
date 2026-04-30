@@ -1274,13 +1274,22 @@ server.tool(
         if (!agent_id || !task) {
           return { content: [{ type: 'text' as const, text: 'Error: mode:"single" requires agent_id and task.' }] };
         }
-        return handleDispatchSingle(agent_id, task, write_mode, scope, timeout_ms, plan_id, step);
+        // Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md — forward
+        // validatedDispatchRoots so a single-mode relay agent (e.g. gemini-tester
+        // dispatched solo against a PR worktree) gets its tool-call cwd pinned.
+        return handleDispatchSingle(
+          agent_id, task, write_mode, scope, timeout_ms, plan_id, step,
+          validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
+        );
       }
       if (mode === 'parallel') {
         if (!tasks || tasks.length === 0) {
           return { content: [{ type: 'text' as const, text: 'Error: mode:"parallel" requires a non-empty tasks array.' }] };
         }
-        return handleDispatchParallel(tasks, false);
+        return handleDispatchParallel(
+          tasks, false,
+          validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
+        );
       }
       if (mode === 'consensus') {
         if (!tasks || tasks.length === 0) {

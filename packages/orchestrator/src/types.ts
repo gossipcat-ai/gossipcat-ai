@@ -176,6 +176,15 @@ export interface DispatchOptions {
    * should pass it through to avoid re-inference.
    */
   taskType?: 'review' | 'implement' | 'research';
+  /**
+   * Worktree paths to scope relay-agent tool calls against. When present and
+   * the dispatched worker is a `WorkerAgent` (relay), `resolutionRoots[0]`
+   * is plumbed via `toolServer.assignRoot` so file_read/file_grep/git_diff
+   * etc. resolve against the worktree instead of `projectRoot`.
+   *
+   * Spec: docs/specs/2026-04-29-relay-worker-resolution-roots.md (Path 1).
+   */
+  resolutionRoots?: readonly string[];
 }
 
 /** Result of analyzing skill overlap between co-dispatched agents */
@@ -251,6 +260,12 @@ export interface TaskEntry {
   lastEventAt?: number;
   /** Whether the agent called memory_query at least once during task execution. */
   memoryQueryCalled?: boolean;
+  /**
+   * Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md — per-task
+   * worktree paths used by relay agents (toolServer.assignRoot) and
+   * persisted on RelayTaskRecord for cross-reconnect audit visibility.
+   */
+  resolutionRoots?: readonly string[];
 }
 
 // ── TaskGraph Event Types ────────────────────────────────────────────────
