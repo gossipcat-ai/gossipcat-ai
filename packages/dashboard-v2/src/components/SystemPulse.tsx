@@ -119,10 +119,6 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
           <span className="text-muted-foreground">signals total</span>
           <span className="font-semibold text-foreground tabular-nums">{overview.totalSignals}</span>
         </div>
-        <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-          <span className="text-muted-foreground">actionable</span>
-          <span className={`font-semibold tabular-nums ${overview.actionableFindings > 0 ? 'text-orange-400' : 'text-foreground'}`}>{overview.actionableFindings}</span>
-        </div>
         {overview.tasksFailed > 0 && (
           <div className="flex items-center justify-between py-1 font-mono text-[11px]">
             <span className="text-muted-foreground">tasks failed</span>
