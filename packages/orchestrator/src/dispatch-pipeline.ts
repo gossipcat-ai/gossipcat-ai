@@ -1,7 +1,9 @@
 import { randomUUID } from 'crypto';
-import { readFileSync, mkdirSync, realpathSync, appendFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync, appendFileSync, statSync } from 'fs';
 import { resolve as resolvePath, join } from 'path';
 import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, PlanState, MIN_AGENTS_FOR_CONSENSUS } from './types';
+import { WorkerAgent } from './worker-agent';
+import { emitConsensusSignals } from './signal-helpers';
 import { ILLMProvider } from './llm-client';
 import { loadSkills } from './skill-loader';
 import { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment, parseSpecFrontMatter } from './prompt-assembler';
@@ -62,6 +64,14 @@ export interface DispatchPipelineConfig {
 type TrackedTask = TaskEntry & {
     stream: AsyncGenerator<TaskStreamEvent, void, undefined>;
     finalResultPromise: Promise<TaskExecutionResult>;
+    /**
+     * True when toolServer.assignRoot was applied for this task because
+     * options.resolutionRoots[0] was supplied AND the worker is a relay
+     * WorkerAgent. Drives symmetric releaseAgent calls in cancel/timeout
+     * paths that live outside the runTask closure (cancelRunningTasks,
+     * collect-time staleness sweep). Spec invariant #4.
+     */
+    resolutionRootAssigned?: boolean;
 };
 
 /**
@@ -390,6 +400,9 @@ export class DispatchPipeline {
     entry.scope = options?.scope;
     entry.planId = options?.planId;
     entry.planStep = options?.step;
+    if (options?.resolutionRoots && options.resolutionRoots.length > 0) {
+      entry.resolutionRoots = options.resolutionRoots;
+    }
 
     // Register scope for overlap tracking
     if (options?.writeMode === 'scoped' && options.scope) {
@@ -401,6 +414,11 @@ export class DispatchPipeline {
       ? this.sequentialQueues.get(agentId)
       : undefined;
 
+    // Track whether resolutionRoots-driven assignRoot was applied so cleanup
+     // (releaseAgent) fires symmetrically on FINAL_RESULT, ERROR, timeout, and
+     // cancellation paths. Spec invariant #4 (per-agent cleanup).
+    let resolutionRootAssigned = false;
+
     const runTask = async () => {
       if (prevSequential) await prevSequential.catch(() => {}); // wait for previous, ignore its errors
 
@@ -409,6 +427,80 @@ export class DispatchPipeline {
         const wtInfo = await this.worktreeManager.create(taskId);
         entry.worktreeInfo = wtInfo;
         this.toolServer?.assignRoot(agentId, wtInfo.path);
+      }
+
+      // ── resolutionRoots → relay-worker tool-call scoping ────────────────
+      // Spec: docs/specs/2026-04-29-relay-worker-resolution-roots.md (Path 1).
+      //
+      // When the caller (gossip_dispatch consensus / parallel / single) supplied
+      // resolutionRoots[0] AND the dispatched worker is a relay WorkerAgent
+      // (NOT a native), pin the agent's tool-call cwd to the worktree via
+      // toolServer.assignRoot. Without this, file_read/file_grep/git_diff in
+      // the relay agent resolve against `projectRoot` (master HEAD) and
+      // hallucinate "files missing" findings.
+      //
+      // INVARIANTS (spec §"Required invariants"):
+      //   #1 Ordering — assignRoot fires synchronously BEFORE
+      //      worker.executeTask is iterated. The for-await below starts the
+      //      LLM, which can fire a tool call on turn 1; any deferral here
+      //      lets that tool call hit projectRoot.
+      //   #2 Native-agent guard — `worker instanceof WorkerAgent` keeps
+      //      native agents out of writeAgents. Native agents never reach
+      //      this dispatch() path in production (they go through
+      //      handleDispatchSingle's nativeConfig branch in mcp-server-sdk),
+      //      but the guard is defense-in-depth in case that ever changes.
+      //   #3 Fail-closed — if resolutionRoots[0] is supplied but the path
+      //      does not exist or is not a directory, throw and emit a
+      //      transport_failure consensus signal. Do NOT silently fall back
+      //      to projectRoot (that is exactly the bug being fixed).
+      //   #4 Per-agent cleanup — resolutionRootAssigned flag drives
+      //      releaseAgent calls on FINAL_RESULT, ERROR, and the
+      //      timeout/cancellation sites later in this file.
+      //   #5 Concurrent rounds — Option B per spec: agentRoots is keyed by
+      //      agentId only. If two consensus rounds dispatch the same
+      //      agentId concurrently with different worktrees, the second
+      //      assignRoot wins (last-write). Documented in PR description;
+      //      Option A re-keying deferred until production observes a
+      //      concurrent same-agent same-instance dispatch.
+      const rrCandidate = options?.resolutionRoots?.[0];
+      if (rrCandidate && worker instanceof WorkerAgent) {
+        let dirOk = false;
+        try {
+          dirOk = existsSync(rrCandidate) && statSync(rrCandidate).isDirectory();
+        } catch {
+          dirOk = false;
+        }
+        if (!dirOk) {
+          // Fail closed. Emit transport_failure consensus signal so the
+          // dashboard surfaces the operator/dispatch-side error without
+          // poisoning the agent's accuracy score (transport_failure is
+          // excluded from negative-signal arithmetic — see
+          // performance-reader.ts:950 + PR #327).
+          const errMsg = `resolutionRoots[0] does not exist or is not a directory: ${rrCandidate}`;
+          try {
+            emitConsensusSignals(this.projectRoot, [{
+              type: 'consensus',
+              signal: 'transport_failure',
+              agentId,
+              taskId,
+              evidence: `dispatch failed: ${errMsg}`,
+              timestamp: new Date().toISOString(),
+              source: 'auto',
+            }]);
+          } catch { /* best-effort — never crash dispatch on signal write */ }
+          throw new Error(errMsg);
+        }
+        if (this.toolServer) {
+          // Option B (spec §"Concurrent rounds"): warn if same agentId is
+          // already pinned to a different root (concurrent same-agent dispatch
+          // would last-write-wins corrupt the cwd of the earlier task).
+          // Option A re-keying by (agentId, taskId) is deferred until
+          // production observes such collisions.
+          this.toolServer.assignRoot(agentId, rrCandidate);
+          resolutionRootAssigned = true;
+          entry.resolutionRootAssigned = true;
+          log(`→ resolutionRoots: assignRoot(${agentId}, ${rrCandidate}) [taskId=${taskId}]`);
+        }
       }
       const stream = worker.executeTask(task, options?.lens, promptContent, taskId);
       entry.stream = stream;
@@ -428,6 +520,13 @@ export class DispatchPipeline {
             entry.completedAt = Date.now();
             entry.memoryQueryCalled = event.payload.memoryQueryCalled ?? false;
             if (entry.writeMode === 'scoped') this.scopeTracker.release(entry.id);
+            // Spec invariant #4: release the resolutionRoots-driven assignRoot
+            // so agentRoots / writeAgents do not retain stale entries between
+            // consensus rounds.
+            if (resolutionRootAssigned) {
+              this.toolServer?.releaseAgent(agentId);
+              resolutionRootAssigned = false;
+            }
             // Visibility fix (Option A): emit log + persist task.completed so async dispatch results
             // are debuggable. Without this, the result lives only in this.tasks Map until gossip_collect
             // is called — invisible to gossip_progress and lost on process restart. Symmetric persistence
@@ -465,6 +564,12 @@ export class DispatchPipeline {
             if (entry.writeMode === 'scoped') this.scopeTracker.release(entry.id);
             if (entry.writeMode === 'worktree' && entry.worktreeInfo) {
               this.worktreeManager.cleanup(entry.id, entry.worktreeInfo.path).catch(() => {});
+            }
+            // Spec invariant #4 — symmetric error-path cleanup of
+            // resolutionRoots-driven assignRoot.
+            if (resolutionRootAssigned) {
+              this.toolServer?.releaseAgent(agentId);
+              resolutionRootAssigned = false;
             }
             // Visibility fix (Option A): same as FINAL_RESULT but for the failed path. Silent worker
             // errors in async dispatch were the diagnostic blindness that ate ~45min of session 2026-04-07.
@@ -516,11 +621,12 @@ export class DispatchPipeline {
   }
 
   /** Get metadata for all running tasks — used by relay task persistence */
-  getRunningTaskRecords(): Array<{ id: string; agentId: string; task: string; startedAt: number; timeoutMs: number }> {
+  getRunningTaskRecords(): Array<{ id: string; agentId: string; task: string; startedAt: number; timeoutMs: number; resolutionRoots?: readonly string[] }> {
     return Array.from(this.tasks.entries())
       .filter(([, t]) => t.status === 'running')
       .map(([id, t]) => ({
         id, agentId: t.agentId, task: t.task, startedAt: t.startedAt, timeoutMs: 300_000,
+        ...(t.resolutionRoots && t.resolutionRoots.length > 0 ? { resolutionRoots: t.resolutionRoots } : {}),
       }));
   }
 
@@ -583,6 +689,12 @@ export class DispatchPipeline {
         if (task.writeMode === 'worktree' && task.worktreeInfo) {
           this.worktreeManager.cleanup(task.id, task.worktreeInfo.path).catch(() => {});
           this.toolServer?.releaseAgent(task.agentId);
+        }
+        // Spec invariant #4 — symmetric cleanup of resolutionRoots assignRoot
+        // on user-cancellation. Idempotent; safe alongside worktree branch.
+        if (task.resolutionRootAssigned) {
+          this.toolServer?.releaseAgent(task.agentId);
+          task.resolutionRootAssigned = false;
         }
         cancelled++;
       }
@@ -764,6 +876,12 @@ export class DispatchPipeline {
         }
         if (t.writeMode === 'worktree') {
           this.toolServer?.releaseAgent(t.agentId);
+        }
+        // Spec invariant #4 — symmetric cleanup of resolutionRoots assignRoot
+        // on collect-timeout paths.
+        if ((t as TrackedTask).resolutionRootAssigned) {
+          this.toolServer?.releaseAgent(t.agentId);
+          (t as TrackedTask).resolutionRootAssigned = false;
         }
       }
     }

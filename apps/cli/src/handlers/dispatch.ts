@@ -363,6 +363,13 @@ export async function handleDispatchSingle(
   write_mode?: 'sequential' | 'scoped' | 'worktree',
   scope?: string, timeout_ms?: number,
   plan_id?: string, step?: number,
+  /**
+   * Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md (Path 1).
+   * Validated worktree paths to scope relay-agent tool calls. Forwarded to
+   * dispatch-pipeline only when the resolved agent is a relay agent —
+   * native agents have a separate flow above (out-of-process Agent tool).
+   */
+  resolutionRoots?: readonly string[],
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -390,6 +397,13 @@ export async function handleDispatchSingle(
     }
     options.planId = plan_id;
     options.step = step;
+  }
+  // Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md — forward
+  // validated resolutionRoots into dispatch-pipeline so relay agents get
+  // toolServer.assignRoot before executeTask iteration. Ignored by native
+  // dispatch path above (native agents don't go through pipeline.dispatch).
+  if (resolutionRoots && resolutionRoots.length > 0) {
+    options.resolutionRoots = resolutionRoots;
   }
   const dispatchOptions = Object.keys(options).length > 0 ? options : undefined;
 
@@ -552,6 +566,11 @@ export async function handleDispatchSingle(
 export async function handleDispatchParallel(
   taskDefs: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }>,
   consensus: boolean,
+  /**
+   * Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md (Path 1).
+   * Forwarded to every dispatched relay task in this batch.
+   */
+  resolutionRoots?: readonly string[],
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -588,11 +607,25 @@ export async function handleDispatchParallel(
   // Dispatch relay tasks normally
   if (relayTasks.length > 0) {
     const { taskIds, errors } = await ctx.mainAgent.dispatchParallel(
-      relayTasks.map((d: any) => ({
-        agentId: d.agent_id,
-        task: d.task,
-        options: d.write_mode ? { writeMode: d.write_mode, scope: d.scope } : undefined,
-      })),
+      relayTasks.map((d: any) => {
+        // Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md — merge
+        // resolutionRoots into per-task options. write_mode-only tasks get a
+        // fresh options object; tasks with neither still get options if roots
+        // are present.
+        const opts: Record<string, unknown> = {};
+        if (d.write_mode) {
+          opts.writeMode = d.write_mode;
+          if (d.scope) opts.scope = d.scope;
+        }
+        if (resolutionRoots && resolutionRoots.length > 0) {
+          opts.resolutionRoots = resolutionRoots;
+        }
+        return {
+          agentId: d.agent_id,
+          task: d.task,
+          options: Object.keys(opts).length > 0 ? opts : undefined,
+        };
+      }),
       consensus ? { consensus: true } : undefined,
     );
     persistRelayTasks(); // Survive MCP reconnects
@@ -824,14 +857,22 @@ export async function handleDispatchConsensus(
 
   // Dispatch relay tasks with consensus (use pre-computed lenses if available)
   if (relayTasks.length > 0) {
+    // Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md — propagate
+    // dispatch-time resolutionRoots onto each relay task so the dispatch
+    // pipeline can pin tool-call cwd via toolServer.assignRoot before
+    // worker.executeTask iterates. Without this, gemini-reviewer / gemini-tester
+    // run with cwd=projectRoot even when resolutionRoots was supplied.
+    const relayOptions = (dispatchResolutionRoots && dispatchResolutionRoots.length > 0)
+      ? { resolutionRoots: dispatchResolutionRoots }
+      : undefined;
     const { taskIds, errors } = precomputedLenses
       ? await ctx.mainAgent.dispatchParallelWithLenses(
-          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task })),
+          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptions })),
           { consensus: true },
           precomputedLenses,
         )
       : await ctx.mainAgent.dispatchParallel(
-          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task })),
+          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptions })),
           { consensus: true },
         );
     persistRelayTasks(); // Survive MCP reconnects

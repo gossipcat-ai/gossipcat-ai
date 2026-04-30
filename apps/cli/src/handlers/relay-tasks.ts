@@ -18,6 +18,16 @@ export interface RelayTaskRecord {
   task: string;
   startedAt: number;
   timeoutMs: number;
+  /**
+   * Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md — persisted
+   * for reconnect symmetry. Note: relay tasks cannot resume after MCP
+   * restart (websocket streams are non-restorable; they are marked
+   * timed_out below). The field exists so an operator running
+   * `gossip_run` to re-dispatch sees the original worktree binding in
+   * audit logs / dashboard, and so post-Path-1 follow-ups that gain
+   * resume capability inherit the field without a schema change.
+   */
+  resolutionRoots?: string[];
 }
 
 const RELAY_TASK_FILE = 'relay-tasks.json';
@@ -46,6 +56,12 @@ export function persistRelayTasks(): void {
         task: task.task.slice(0, 5000),
         startedAt: task.startedAt,
         timeoutMs: task.timeoutMs,
+        // Persist the dispatched resolutionRoots so post-reconnect audit /
+        // dashboard rendering can show the worktree binding even after the
+        // websocket-bound runtime task is marked timed_out.
+        ...(task.resolutionRoots && task.resolutionRoots.length > 0
+          ? { resolutionRoots: [...task.resolutionRoots] }
+          : {}),
       });
     }
 
