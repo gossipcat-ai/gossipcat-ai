@@ -114,6 +114,12 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
           tooltip={`Accuracy ${pct(s.accuracy)}\nRatio of confirmed findings.\nHigher = more trustworthy.`}
         />
         <BarRow
+          label="reliability"
+          value={s.reliability}
+          fillClass="bg-chart"
+          tooltip={`Reliability ${pct(s.reliability)}\nTask completion rate — fraction of dispatched tasks that finished without pipeline error or timeout.`}
+        />
+        <BarRow
           label="unique"
           value={s.uniqueness}
           fillClass="bg-unique"
