@@ -115,9 +115,9 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
         />
         <BarRow
           label="reliability"
-          value={s.reliability}
+          value={s.taskCompletionRate ?? 0}
           fillClass="bg-chart"
-          tooltip={`Reliability ${pct(s.reliability)}\nTask completion rate — fraction of dispatched tasks that finished without pipeline error or timeout.`}
+          tooltip={`Reliability ${pct(s.taskCompletionRate ?? 0)}\nTask completion rate — fraction of dispatched tasks that finished without pipeline error or timeout.`}
         />
         <BarRow
           label="unique"
@@ -146,7 +146,7 @@ interface BarRowProps {
 function BarRow({ label, value, fillClass, tooltip }: BarRowProps) {
   const v = Number.isFinite(value) ? value : 0;
   return (
-    <div className="grid grid-cols-[60px_1fr_38px] items-center gap-2.5">
+    <div className="grid grid-cols-[72px_1fr_38px] items-center gap-2.5">
       <span
         className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
         data-tooltip={tooltip}

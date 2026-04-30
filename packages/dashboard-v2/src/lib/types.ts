@@ -76,6 +76,11 @@ export interface AgentData {
   lastTask: { task: string; timestamp: string } | null;
   scores: {
     accuracy: number; uniqueness: number; reliability: number;
+    /** Real task-completion rate: completed / (completed + failed). Null when
+     * no terminal tasks exist. Use this for the "Reliability" bar on all
+     * dashboard surfaces — score.reliability is a composite formula kept only
+     * for internal dispatch-weight arithmetic. */
+    taskCompletionRate: number | null;
     impactScore: number; dispatchWeight: number; signals: number;
     agreements: number; disagreements: number; hallucinations: number; uniqueFindings: number;
     unverifiedsEmitted?: number; unverifiedsReceived?: number;

@@ -86,7 +86,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
 
   const metricBars = [
     { label: 'accuracy', value: s.accuracy, fill: s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed' },
-    { label: 'reliability', value: s.reliability, fill: 'bg-chart', tooltip: 'Task completion rate — fraction of dispatched tasks that finished without pipeline error or timeout' },
+    { label: 'reliability', value: s.taskCompletionRate ?? 0, fill: 'bg-chart', tooltip: 'Task completion rate — fraction of dispatched tasks that finished without pipeline error or timeout' },
     { label: 'unique', value: s.uniqueness, fill: 'bg-unique' },
     { label: 'impact', value: s.impactScore, fill: 'bg-[var(--color-impact)]' },
   ];
