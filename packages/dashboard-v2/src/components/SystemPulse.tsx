@@ -1,5 +1,6 @@
 import type { OverviewData } from '@/lib/types';
 import { timeAgo } from '@/lib/utils';
+import { href } from '@/lib/router';
 
 interface SystemPulseProps {
   overview: OverviewData;
@@ -99,14 +100,18 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
           label="Confirmed"
           valueClass="text-confirmed"
         />
-        <div className="col-span-2 border-t border-border">
+        <a
+          href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
+          className="col-span-2 block cursor-pointer border-t border-border transition-colors hover:bg-accent/30"
+          aria-label="View actionable findings on Signals page"
+        >
           <BigStat
             value={overview.actionableFindings}
             label="Actionable"
             valueClass={overview.actionableFindings > 0 ? 'text-orange-400' : 'text-confirmed'}
             tooltip="Findings still open and need operator review (disagreements + hallucinations + new findings)"
           />
-        </div>
+        </a>
       </div>
 
       {/* Secondary stats */}

@@ -82,6 +82,44 @@ const SEVERITY_BADGE: Record<string, string> = {
 
 const PAGE_SIZE = 100;
 
+function hydrateFromURL(): SignalFilters {
+  if (typeof window === 'undefined') return EMPTY_FILTERS;
+  const q = new URLSearchParams(window.location.search);
+  const signals = q.getAll('signal').filter(Boolean);
+  const agent = q.get('agent');
+  const counterpart = q.get('counterpart') ?? undefined;
+  const category = q.get('category') ?? undefined;
+  const rawSeverity = q.get('severity');
+  const severity = (rawSeverity === 'critical' || rawSeverity === 'high' || rawSeverity === 'medium' || rawSeverity === 'low')
+    ? rawSeverity
+    : undefined;
+  const since = q.get('since') ?? undefined;
+  const until = q.get('until') ?? undefined;
+  const consensusId = q.get('consensus_id') ?? undefined;
+  const findingId = q.get('finding_id') ?? undefined;
+  const rawSource = q.get('source');
+  const source = (rawSource === 'manual' || rawSource === 'impl' || rawSource === 'meta' || rawSource === 'auto-provisional')
+    ? rawSource
+    : undefined;
+
+  const hasAny = signals.length > 0 || agent || counterpart || category || severity ||
+    since || until || consensusId || findingId || source;
+  if (!hasAny) return EMPTY_FILTERS;
+
+  return {
+    agents: agent ? [agent] : [],
+    signals,
+    counterpart,
+    category,
+    severity,
+    since,
+    until,
+    consensusId,
+    findingId,
+    source,
+  };
+}
+
 function buildQuery(filters: SignalFilters, offset: number, limit = PAGE_SIZE): URLSearchParams {
   const q = new URLSearchParams();
   q.set('limit', String(limit));
@@ -105,7 +143,7 @@ function truncate(s: string | undefined, n: number): string {
 }
 
 export function SignalsPage() {
-  const [filters, setFilters] = useState<SignalFilters>(EMPTY_FILTERS);
+  const [filters, setFilters] = useState<SignalFilters>(() => hydrateFromURL());
   const [rows, setRows] = useState<SignalEntry[]>([]);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState<number>(0);
