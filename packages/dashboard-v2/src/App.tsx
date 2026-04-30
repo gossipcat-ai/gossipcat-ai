@@ -251,7 +251,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                         fillClass={s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed'}
                         tooltip="Adjusted accuracy = raw signal ratio × 1/(1 + weighted hallucinations × 0.3). The penalty is recoverable via skill-gated multiplier in the same category."
                       />
-                      <MiniBar label="Rel" value={s.reliability} fillClass="bg-chart" tooltip="Reliability — fraction of dispatched tasks that finished without pipeline error or timeout" />
+                      <MiniBar label="Rel" value={s.taskCompletionRate ?? 0} fillClass="bg-chart" tooltip="Reliability — fraction of dispatched tasks that finished without pipeline error or timeout" />
                       <MiniBar label="U" value={s.uniqueness} fillClass="bg-unique" tooltip="Uniqueness — findings this agent surfaced that no other agent found" />
                       <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--color-impact)]" tooltip="Impact — severity-weighted finding score; critical and high findings count more" />
                     </div>

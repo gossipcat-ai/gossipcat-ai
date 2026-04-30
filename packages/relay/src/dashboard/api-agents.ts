@@ -166,6 +166,13 @@ export interface AgentResponse {
      * dashboard observability so operators can spot agents whose hallucination
      * counts were inflated by relay-cwd transport failures. */
     transportFailureCount: number;
+    /** Real task-completion rate: completed / (completed + failed).
+     * Null when no completed-or-failed tasks exist (new/never-dispatched agent).
+     * Excludes cancelled and in-flight tasks — only terminal outcomes count.
+     * This is the ground-truth source for the "Reliability" tooltip on all
+     * dashboard surfaces; score.reliability (composite formula) stays for
+     * internal dispatch-weight arithmetic only. */
+    taskCompletionRate: number | null;
     bench: {
       state: 'benched' | 'kept-for-coverage' | 'none';
       reason?: 'chronic-low-accuracy' | 'burst-hallucination';
@@ -196,6 +203,8 @@ interface TaskGraphEntry {
 interface AgentTaskData {
   totalTokens: number;
   lastTask: LastTask | null;
+  tasksCompleted: number;
+  tasksFailed: number;
 }
 
 function readTaskGraphByAgent(projectRoot: string): Map<string, AgentTaskData> {
@@ -213,8 +222,10 @@ function readTaskGraphByAgent(projectRoot: string): Map<string, AgentTaskData> {
 
   // First pass: collect task.created events keyed by taskId for task description + agentId
   const created = new Map<string, { agentId: string; task: string; timestamp: string }>();
-  // Second pass: collect completed events keyed by taskId for tokens
+  // Collect completed events keyed by taskId for tokens
   const completed = new Map<string, { inputTokens: number; outputTokens: number; timestamp: string }>();
+  // Track failed taskIds to attribute per-agent
+  const failed = new Set<string>();
 
   for (const line of lines) {
     let entry: TaskGraphEntry;
@@ -228,6 +239,8 @@ function readTaskGraphByAgent(projectRoot: string): Map<string, AgentTaskData> {
         outputTokens: entry.outputTokens ?? 0,
         timestamp: entry.timestamp ?? '',
       });
+    } else if (entry.type === 'task.failed' && entry.taskId) {
+      failed.add(entry.taskId);
     }
   }
 
@@ -236,13 +249,16 @@ function readTaskGraphByAgent(projectRoot: string): Map<string, AgentTaskData> {
     const { agentId, task, timestamp } = createdData;
     if (isUtilityAgent(agentId)) continue;
     if (!result.has(agentId)) {
-      result.set(agentId, { totalTokens: 0, lastTask: null });
+      result.set(agentId, { totalTokens: 0, lastTask: null, tasksCompleted: 0, tasksFailed: 0 });
     }
     const agentData = result.get(agentId)!;
 
     const comp = completed.get(taskId);
     if (comp) {
       agentData.totalTokens += comp.inputTokens + comp.outputTokens;
+      agentData.tasksCompleted++;
+    } else if (failed.has(taskId)) {
+      agentData.tasksFailed++;
     }
 
     // Track latest task by timestamp
@@ -272,7 +288,7 @@ export async function agentsHandler(
 
   return configs.map(config => {
     const score = scores.get(config.id) ?? { ...DEFAULT_SCORE, agentId: config.id };
-    const agentTask = taskDataByAgent.get(config.id) ?? { totalTokens: 0, lastTask: null };
+    const agentTask = taskDataByAgent.get(config.id) ?? { totalTokens: 0, lastTask: null, tasksCompleted: 0, tasksFailed: 0 };
 
     const categories = Object.keys({ ...score.categoryCorrect, ...score.categoryHallucinated });
     const benchResult = reader.isBenched(config.id, categories, allIds);
@@ -310,6 +326,12 @@ export async function agentsHandler(
       }
     } catch { /* return empty on error */ }
 
+    const { tasksCompleted, tasksFailed } = agentTask;
+    const completionDenominator = tasksCompleted + tasksFailed;
+    const taskCompletionRate = completionDenominator > 0
+      ? tasksCompleted / completionDenominator
+      : null;
+
     return {
       id: config.id,
       provider: config.provider,
@@ -325,6 +347,7 @@ export async function agentsHandler(
         accuracy: score.accuracy,
         uniqueness: score.uniqueness,
         reliability: score.reliability,
+        taskCompletionRate,
         impactScore: score.impactScore ?? 0.5,
         dispatchWeight: reader.getDispatchWeight(config.id),
         signals: score.totalSignals,
