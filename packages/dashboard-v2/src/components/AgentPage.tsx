@@ -329,6 +329,53 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
         </section>
       )}
 
+      {/* Tasks */}
+      <section className="mb-8">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+            Tasks <span className="text-primary">{agentTasks.length}</span>
+          </h2>
+          {taskPages > 1 && (
+            <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+              <button
+                onClick={() => setTaskPage(p => Math.max(0, p - 1))}
+                disabled={clampedTaskPage === 0}
+                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+              >◂ Prev</button>
+              <span>{clampedTaskPage + 1} / {taskPages}</span>
+              <button
+                onClick={() => setTaskPage(p => Math.min(taskPages - 1, p + 1))}
+                disabled={clampedTaskPage >= taskPages - 1}
+                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+              >Next ▸</button>
+            </div>
+          )}
+        </div>
+        {agentTasks.length > 0 ? (
+          <div className="overflow-hidden rounded-md border border-border/40">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-border bg-card">
+                  <th className="py-2 pl-4 pr-2 text-xs font-medium text-muted-foreground" style={{ width: 32 }}></th>
+                  <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">ID</th>
+                  <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">Agent</th>
+                  <th className="py-2 pr-3 text-xs font-medium text-muted-foreground">Description</th>
+                  <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">Duration</th>
+                  <th className="py-2 pr-4 text-right font-mono text-xs font-medium text-muted-foreground">When</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pagedTasks.map(task => (
+                  <TaskRow key={task.taskId} task={task} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="py-6 text-center text-sm text-muted-foreground">No tasks recorded.</div>
+        )}
+      </section>
+
       {/* Consensus Participation — per-finding rows open the shared
           FindingDetailDrawer (PR-F). The legacy inline accordion made users
           scroll several screens to see one finding's citation + signals; the
@@ -445,53 +492,6 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
         consensusId={drawerFinding?.consensusId ?? null}
         findingId={drawerFinding?.findingId ?? null}
       />
-
-      {/* Tasks */}
-      <section className="mb-8">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-            Tasks <span className="text-primary">{agentTasks.length}</span>
-          </h2>
-          {taskPages > 1 && (
-            <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
-              <button
-                onClick={() => setTaskPage(p => Math.max(0, p - 1))}
-                disabled={clampedTaskPage === 0}
-                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
-              >◂ Prev</button>
-              <span>{clampedTaskPage + 1} / {taskPages}</span>
-              <button
-                onClick={() => setTaskPage(p => Math.min(taskPages - 1, p + 1))}
-                disabled={clampedTaskPage >= taskPages - 1}
-                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
-              >Next ▸</button>
-            </div>
-          )}
-        </div>
-        {agentTasks.length > 0 ? (
-          <div className="overflow-hidden rounded-md border border-border/40">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-border bg-card">
-                  <th className="py-2 pl-4 pr-2 text-xs font-medium text-muted-foreground" style={{ width: 32 }}></th>
-                  <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">ID</th>
-                  <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">Agent</th>
-                  <th className="py-2 pr-3 text-xs font-medium text-muted-foreground">Description</th>
-                  <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">Duration</th>
-                  <th className="py-2 pr-4 text-right font-mono text-xs font-medium text-muted-foreground">When</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pagedTasks.map(task => (
-                  <TaskRow key={task.taskId} task={task} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="py-6 text-center text-sm text-muted-foreground">No tasks recorded.</div>
-        )}
-      </section>
 
       {/* Memory Files — paginated by day */}
       <section className="mb-8">
