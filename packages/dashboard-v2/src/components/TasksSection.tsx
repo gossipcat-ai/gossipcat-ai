@@ -72,6 +72,17 @@ function shortTaskId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) : id;
 }
 
+// Derive a visual kind chip from the agentId suffix.
+// Returns null for unrecognized suffixes so the chip is omitted entirely.
+function taskKindFromAgentId(agentId: string): { label: string; cls: string } | null {
+  if (agentId.endsWith('-implementer')) return { label: 'IMPL', cls: 'text-unique' };
+  if (agentId.endsWith('-reviewer'))    return { label: 'REVIEW', cls: 'text-chart' };
+  if (agentId.endsWith('-tester'))      return { label: 'TEST', cls: 'text-unique' };
+  if (agentId.endsWith('-researcher'))  return { label: 'RESEARCH', cls: 'text-muted-foreground' };
+  if (agentId.endsWith('-designer'))    return { label: 'DESIGN', cls: 'text-chart' };
+  return null;
+}
+
 export function TasksSection({ tasks, limit = DEFAULT_PAGE_SIZE }: TasksSectionProps) {
   const visible = tasks.items.slice(0, limit);
   const hasMore = tasks.items.length > limit;
@@ -98,6 +109,7 @@ export function TasksSection({ tasks, limit = DEFAULT_PAGE_SIZE }: TasksSectionP
           visible.map((task, i) => {
             const key = normaliseStatus(task.status);
             const meta = STATUS_META[key];
+            const kind = taskKindFromAgentId(task.agentId);
             return (
               <div
                 key={task.taskId}
@@ -128,6 +140,14 @@ export function TasksSection({ tasks, limit = DEFAULT_PAGE_SIZE }: TasksSectionP
                 >
                   {shortTaskId(task.taskId)}
                 </span>
+                {kind && (
+                  <span
+                    className={`shrink-0 rounded-sm border border-border/40 bg-background/40 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider ${kind.cls}`}
+                    data-tooltip={task.agentId}
+                  >
+                    {kind.label}
+                  </span>
+                )}
                 <span className="min-w-0 flex-1 line-clamp-2 font-inter text-[11px] leading-snug text-muted-foreground">
                   {task.task}
                 </span>
