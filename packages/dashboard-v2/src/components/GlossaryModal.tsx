@@ -137,7 +137,7 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
       onClick={onClose}
       role="presentation"
     >
@@ -160,7 +160,7 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
             ref={closeButtonRef}
             onClick={onClose}
             aria-label="Close glossary"
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-border/40 bg-card font-mono text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-border/40 bg-card font-mono text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
           >
             &times;
           </button>

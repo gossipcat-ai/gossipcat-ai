@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
  * Tracks the width of a DOM element via ResizeObserver.
  * Returns [ref, width]. Width is 0 before first measurement.
  */
-export function useElementWidth<T extends HTMLElement = HTMLDivElement>(): [RefObject<T>, number] {
+export function useElementWidth<T extends HTMLElement = HTMLDivElement>(): [RefObject<T | null>, number] {
   const ref = useRef<T>(null);
   const [width, setWidth] = useState(0);
 

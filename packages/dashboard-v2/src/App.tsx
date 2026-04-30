@@ -286,7 +286,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                   {/* Hallucinations */}
                   <td className="py-3 pr-4 text-right align-top font-mono text-xs tabular-nums">
                     <span
-                      className={s.hallucinations > 0 ? 'font-bold text-destructive' : 'text-muted-foreground/40'}
+                      className={s.hallucinations > 0 ? 'font-bold text-disputed' : 'text-muted-foreground/40'}
                       data-tooltip={`Agreements ${s.agreements} · Disagreements ${s.disagreements} · Hallucinations ${s.hallucinations}`}
                     >
                       {s.hallucinations}
@@ -522,6 +522,11 @@ function Dashboard() {
   } else {
     // Main dashboard — sidebar + main layout
     content = (
+      <div className="space-y-6">
+      <header>
+        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Dashboard</h1>
+        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Multi-agent code review with grounded reward signals. Live activity, agent scores, and consensus rounds.</p>
+      </header>
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr] lg:items-start">
         {/* Left sidebar: System Pulse + Circuit Alerts + Violations */}
         <aside className="space-y-4 lg:sticky lg:top-4">
@@ -552,6 +557,7 @@ function Dashboard() {
             />
           )}
         </main>
+      </div>
       </div>
     );
   }

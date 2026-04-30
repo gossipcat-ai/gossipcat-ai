@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
+import { href } from '@/lib/router';
 import { SignalFilterRail, type SignalFilters } from './SignalFilterRail';
 import { FindingDetailDrawer } from './FindingDetailDrawer';
 import type { SignalEntry } from '@/lib/types';
@@ -248,6 +249,12 @@ export function SignalsPage() {
           </p>
         </div>
       </div>
+
+      {hadAnyURLParams && (
+        <div className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 font-mono text-[10px] text-muted-foreground">
+          Filtered view — {filters.signals.length} signal type{filters.signals.length !== 1 ? 's' : ''}{filters.agents.length > 0 ? ` · ${filters.agents.length} agent${filters.agents.length !== 1 ? 's' : ''}` : ''}{filters.severity ? ` · severity: ${filters.severity}` : ''}{filters.source ? ` · source: ${filters.source}` : ''}. <a href={href('/signals')} className="text-primary hover:text-foreground">Clear filters</a>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_1fr] lg:items-start">
         <div className={hadAnyURLParams ? 'opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100' : undefined}>
