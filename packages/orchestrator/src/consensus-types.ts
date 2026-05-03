@@ -293,7 +293,7 @@ export type PerformanceSignal = ConsensusSignal | ImplSignal | MetaSignal | Pipe
  * `undefined`. This keeps the rollout safe — new callers opt in by updating
  * this map, not by inheriting a guess.
  */
-const PERFORMANCE_SIGNAL_NAMES: ReadonlySet<string> = new Set([
+export const PERFORMANCE_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'agreement',
   'disagreement',
   'unique_confirmed',
@@ -308,7 +308,7 @@ const PERFORMANCE_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'impl_peer_rejected',
 ]);
 
-const OPERATIONAL_SIGNAL_NAMES: ReadonlySet<string> = new Set([
+export const OPERATIONAL_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'task_completed',
   'task_tool_turns',
   'format_compliance',

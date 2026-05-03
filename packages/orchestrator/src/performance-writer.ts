@@ -36,7 +36,7 @@ export function rotateJsonlIfNeeded(filePath: string, maxBytes: number = MAX_TEL
   }
 }
 
-const VALID_CONSENSUS_SIGNALS = new Set([
+export const VALID_CONSENSUS_SIGNALS = new Set([
   'agreement', 'disagreement', 'unverified', 'unique_confirmed',
   'unique_unconfirmed', 'new_finding', 'hallucination_caught',
   'category_confirmed', 'consensus_verified', 'signal_retracted',
@@ -58,15 +58,15 @@ const VALID_CONSENSUS_SIGNALS = new Set([
   'transport_failure',
 ]);
 
-const VALID_IMPL_SIGNALS = new Set([
+export const VALID_IMPL_SIGNALS = new Set([
   'impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected',
 ]);
 
-const VALID_META_SIGNALS = new Set([
+export const VALID_META_SIGNALS = new Set([
   'task_completed', 'task_tool_turns', 'format_compliance',
 ]);
 
-const VALID_PIPELINE_SIGNALS = new Set([
+export const VALID_PIPELINE_SIGNALS = new Set([
   'dispatch_started', 'relay_received', 'finding_dropped_format',
   'synthesis_completed', 'circuit_open_fired', 'skill_injection_skipped',
   'signal_retracted', 'citation_fabricated',
