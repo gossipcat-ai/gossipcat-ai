@@ -1,3 +1,5 @@
+// @gossip:impact-adjacent:signal_pipeline
+
 /**
  * Ref-allowlist enforcement — Phase 1 (detection-only).
  *
@@ -35,14 +37,23 @@ export function capturePreDispatchSha(): string | null {
 }
 
 /**
- * Get commits between two SHAs that look like PR merges
- * (git log --merges --grep="(#[0-9]").
+ * Get commits between two SHAs that look like PR merges.
+ *
+ * Matches both squash-merged PRs (single-parent commit with "(#NNN)" in the
+ * subject, as produced by `gh pr merge --squash`) and traditional merge
+ * commits (two-parent merge with "(#NNN)" in the subject). The
+ * `--grep="(#[0-9]"` predicate is sufficient — both `gh pr merge --squash`
+ * and `gh pr merge --merge` prefix the commit subject with `(#NNN)`, while
+ * direct pushes typically don't include a PR ref.
+ *
+ * NOTE: `--merges` is intentionally omitted — it restricts to commits with
+ * 2+ parents, which silently excludes squash-merged PRs (single-parent).
  */
 function getPrMergeCommits(preSha: string, postSha: string): string[] {
   try {
     const out = execFileSync(
       'git',
-      ['log', `${preSha}..${postSha}`, '--merges', `--grep=(#[0-9]`, '--format=%H %s'],
+      ['log', `${preSha}..${postSha}`, `--grep=(#[0-9]`, '--format=%H %s'],
       { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'ignore'] },
     ).toString().trim();
     return out ? out.split('\n').filter(Boolean) : [];

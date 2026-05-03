@@ -8,6 +8,7 @@
  *   (c) SHA changed + no merge entry → violation: JSONL appended + signal emitted + stderr message
  *   (d) Multiple commits + one PR merge → no signal (batched merges)
  *   (e) preDispatchSha null → no detection, no false positive
+ *   (f) SHA changed + squash-merged PR commit → no signal (squash PR regression)
  */
 
 import * as fs from 'fs';
@@ -87,7 +88,8 @@ describe('checkRefAllowlistViolation', () => {
   it('(b) SHA changed + PR merge entry → no signal (legitimate merge)', () => {
     mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === 'rev-parse') return Buffer.from(POST_SHA + '\n');
-      if (args[0] === 'log' && args.includes('--merges')) {
+      if (args[0] === 'log' && args.includes(`--grep=(#[0-9]`) && !args.includes('--merges')) {
+        // getPrMergeCommits: returns a traditional merge commit (no --merges flag needed)
         return Buffer.from(`${POST_SHA} Merge pull request (#42) from feature/foo\n`);
       }
       return Buffer.from('');
@@ -104,7 +106,7 @@ describe('checkRefAllowlistViolation', () => {
 
     mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === 'rev-parse') return Buffer.from(POST_SHA + '\n');
-      if (args[0] === 'log' && args.includes('--merges')) return Buffer.from('');
+      if (args[0] === 'log' && args.includes(`--grep=(#[0-9]`)) return Buffer.from('');
       if (args[0] === 'log') return Buffer.from(`${POST_SHA} feat: sneak push to master\n`);
       return Buffer.from('');
     });
@@ -144,8 +146,9 @@ describe('checkRefAllowlistViolation', () => {
   it('(d) Multiple commits + one PR merge → no signal (batched merges)', () => {
     mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === 'rev-parse') return Buffer.from(POST_SHA + '\n');
-      if (args[0] === 'log' && args.includes('--merges')) {
-        // One merge commit among several
+      // getPrMergeCommits uses --grep; getCommitRange does not
+      if (args[0] === 'log' && args.includes(`--grep=(#[0-9]`)) {
+        // One PR-ref commit among several
         return Buffer.from(`${POST_SHA} Merge pull request (#99) from feature/bar\n`);
       }
       if (args[0] === 'log') {
@@ -173,6 +176,30 @@ describe('checkRefAllowlistViolation', () => {
     // Should not throw
     expect(() => checkRefAllowlistViolation('task-null', 'sonnet-implementer', PRE_SHA)).not.toThrow();
 
+    expect(mockEmitSignals).not.toHaveBeenCalled();
+    expect(mockAppendFileSync).not.toHaveBeenCalled();
+  });
+
+  it('(f) SHA changed + squash-merged PR commit → no signal (squash PR regression)', () => {
+    // Regression: previously --merges excluded single-parent squash commits,
+    // causing false-positive violations for every `gh pr merge --squash`.
+    // Empirical proof: git log 5318c87..6a3d92e --merges --grep="(#[0-9]" → empty
+    //                  git log 5318c87..6a3d92e          --grep="(#[0-9]" → 6a3d92e (#331)
+    // Fix: drop --merges so squash commits (single-parent) are matched by --grep alone.
+    const SQUASH_SHA = 'squash999aaa888bbb777ccc666ddd555eee444fff';
+
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === 'rev-parse') return Buffer.from(SQUASH_SHA + '\n');
+      // getPrMergeCommits (with --grep, without --merges): returns squash commit
+      if (args[0] === 'log' && args.includes(`--grep=(#[0-9]`)) {
+        return Buffer.from(`${SQUASH_SHA} fix(cli): ref-allowlist detector — drop --merges to support squash PRs (#331)\n`);
+      }
+      return Buffer.from('');
+    });
+
+    checkRefAllowlistViolation('task-squash', 'sonnet-implementer', PRE_SHA);
+
+    // No violation — squash-merged PR is a legitimate master move
     expect(mockEmitSignals).not.toHaveBeenCalled();
     expect(mockAppendFileSync).not.toHaveBeenCalled();
   });
