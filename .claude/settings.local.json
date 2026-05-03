@@ -1,8 +1,4 @@
 {
-  "enabledMcpjsonServers": [
-    "gossipcat"
-  ],
-  "enableAllProjectMcpServers": true,
   "permissions": {
     "allow": [
       "Edit",
@@ -10,9 +6,15 @@
       "Bash(git *)",
       "Bash(npm *)",
       "Bash(npx *)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "mcp__gossipcat__gossip_relay",
+      "mcp__gossipcat__gossip_signals"
     ]
   },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "gossipcat"
+  ],
   "hooks": {
     "UserPromptSubmit": [
       {
