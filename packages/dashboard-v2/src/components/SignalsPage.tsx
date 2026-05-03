@@ -221,6 +221,11 @@ export function SignalsPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const clampedPage = Math.min(page, totalPages - 1);
 
+  // Diagnosis 3: hide the 260px filter rail on first-glance empty states so
+  // operators land on data, not chrome. Keep it visible when there's data,
+  // when filters are active (need to clear them), or while loading (no flash).
+  const showRail = total > 0 || hadAnyURLParams || loading;
+
   const openDrawer = (consensusId?: string, findingId?: string) => {
     if (!consensusId || !findingId) return;
     setDrawerConsensusId(consensusId);
@@ -256,15 +261,17 @@ export function SignalsPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_1fr] lg:items-start">
-        <div className={hadAnyURLParams ? 'opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100' : undefined}>
-          <SignalFilterRail
-            filters={filters}
-            onChange={onFilterChange}
-            agents={agents}
-            signalTypes={SIGNAL_TYPES}
-          />
-        </div>
+      <div className={`grid grid-cols-1 gap-4 ${showRail ? 'lg:grid-cols-[260px_1fr]' : ''} lg:items-start`}>
+        {showRail && (
+          <div className={hadAnyURLParams ? 'opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100' : undefined}>
+            <SignalFilterRail
+              filters={filters}
+              onChange={onFilterChange}
+              agents={agents}
+              signalTypes={SIGNAL_TYPES}
+            />
+          </div>
+        )}
 
         <section className="min-w-0 overflow-hidden rounded-md border border-border/60 bg-card/70">
           {error && (
