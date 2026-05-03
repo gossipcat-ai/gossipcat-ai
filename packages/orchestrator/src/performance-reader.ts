@@ -1,3 +1,4 @@
+// @gossip:impact-adjacent:signal_pipeline
 /**
  * PerformanceReader — reads agent-performance.jsonl and computes
  * per-agent scores from consensus signals.
@@ -32,6 +33,12 @@ export interface AgentScore {
   reliability: number;   // 0-1, combined score for dispatch weighting
   impactScore: number;   // 0-1, weighted toward agents catching CRITICAL/HIGH findings
   totalSignals: number;
+  /** Signals that contributed to scoring accumulators (weightedTotal/weightedCorrect/
+   *  weightedHallucinations/weightedUnique). Excludes transport_failure, task_timeout,
+   *  task_empty, boundary_escape, and uncategorized disagreements. Used by confidence
+   *  formula, Rule A bench gate, and Rule B hallRate denominator so operational noise
+   *  cannot inflate confidence or suppress the hallucination rate threshold. */
+  scoringSignals: number;
   agreements: number;
   disagreements: number;
   uniqueFindings: number;
@@ -259,10 +266,12 @@ export class PerformanceReader {
   /** Get a reliability multiplier for dispatch weighting (0.3 to 2.0) */
   getDispatchWeight(agentId: string): number {
     const score = this.getAgentScore(agentId);
-    if (!score || score.totalSignals < 3) return 1.0; // not enough data, neutral
+    if (!score || score.scoringSignals < 3) return 1.0; // not enough data, neutral
     if (score.circuitOpen) return 0.3;
-    // Confidence increases with signal volume: 3 → ~0.26, 10 → ~0.63, 30 → ~0.95
-    const confidence = 1 - Math.exp(-score.totalSignals / 10);
+    // Confidence increases with scoring-signal volume (excludes transport_failure/
+    // task_timeout/boundary_escape so operational noise cannot inflate confidence):
+    // 3 → ~0.26, 10 → ~0.63, 30 → ~0.95
+    const confidence = 1 - Math.exp(-score.scoringSignals / 10);
     // Blend reliability toward neutral (0.5) based on confidence
     const consensusAdjusted = 0.5 + (score.reliability - 0.5) * confidence;
     return clamp(0.3 + consensusAdjusted * 1.7, 0.3, 2.0);
@@ -356,11 +365,16 @@ export class PerformanceReader {
     const score = this.getAgentScore(agentId);
     if (!score) return { benched: false };
 
-    // Rule A: chronic low accuracy (needs enough evidence to be statistically meaningful)
-    const ruleA = score.accuracy < 0.30 && score.totalSignals >= 200;
-    // Rule B: burst hallucinations (absolute floor + rate gate)
-    const hallRate = score.totalSignals > 0
-      ? score.weightedHallucinations / score.totalSignals
+    // Rule A: chronic low accuracy (needs enough scoring evidence to be statistically meaningful).
+    // Uses scoringSignals so operational noise (transport_failure, task_timeout, boundary_escape)
+    // cannot trip the 200-gate before real evidence justifies benching.
+    const ruleA = score.accuracy < 0.30 && score.scoringSignals >= 200;
+    // Rule B: burst hallucinations (absolute floor + rate gate).
+    // Denominator is scoringSignals so transport_failure rows cannot dilute the
+    // hallucination rate below the 0.40 threshold (e.g. 5 halluc + 8 transport →
+    // hallRate = 5/5 = 1.0, not 5/13 = 0.38).
+    const hallRate = score.scoringSignals > 0
+      ? score.weightedHallucinations / score.scoringSignals
       : 0;
     const ruleB = score.weightedHallucinations >= 5 && hallRate > 0.4;
 
@@ -628,6 +642,7 @@ export class PerformanceReader {
       unverifiedsEmitted: number;
       unverifiedsReceived: number;
       totalSignals: number;
+      scoringSignals: number;
       lastSignalMs: number;
       categoryStrengths: Record<string, number>;
       categoryCorrect: Record<string, number>;
@@ -643,7 +658,7 @@ export class PerformanceReader {
         tasksSeen: new Map(), taskCounter: 0,
         agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
         unverifiedsEmitted: 0, unverifiedsReceived: 0,
-        totalSignals: 0, lastSignalMs: 0, categoryStrengths: {},
+        totalSignals: 0, scoringSignals: 0, lastSignalMs: 0, categoryStrengths: {},
         categoryCorrect: {}, categoryHallucinated: {},
         transportFailures: 0,
       });
@@ -788,6 +803,7 @@ export class PerformanceReader {
         case 'consensus_verified': {
           const diversityMul = (signal.signal === 'agreement')
             ? (peerDiversity.get(signal.agentId) ?? 1) : 1;
+          a.scoringSignals++;
           a.weightedCorrect += sevMul * decay * diversityMul;
           a.weightedTotal += sevMul * decay * diversityMul;
           a.agreements++;
@@ -809,8 +825,9 @@ export class PerformanceReader {
           // weightedTotal/disagreements. Mirrors the task_timeout/task_empty
           // no-op pattern below at :669-673.
           if (!signal.category) {
-            continue;
+            break;
           }
+          a.scoringSignals++;
           a.weightedTotal += sevMul * decay;
           a.disagreements++;
           if (signal.counterpartId && signal.counterpartId.length > 0) {
@@ -830,6 +847,7 @@ export class PerformanceReader {
           // Tracked in both directions for dashboard visibility:
           // - emitted: this agent couldn't verify a peer's finding (reviewer role)
           // - received: a peer couldn't verify THIS agent's finding (author role)
+          a.scoringSignals++;
           a.weightedTotal += decay * 0.02;
           a.unverifiedsEmitted++;
           if (signal.counterpartId && signal.counterpartId.length > 0) {
@@ -839,6 +857,7 @@ export class PerformanceReader {
           break;
         }
         case 'unique_confirmed': {
+          a.scoringSignals++;
           a.weightedCorrect += sevMul * decay;
           a.weightedTotal += sevMul * decay;
           a.weightedUnique += 0.2 * sevMul * decay;
@@ -851,11 +870,13 @@ export class PerformanceReader {
           break;
         }
         case 'unique_unconfirmed': {
+          a.scoringSignals++;
           a.weightedUnique += 0.05 * decay;
           a.uniqueFindings++;
           break;
         }
         case 'new_finding': {
+          a.scoringSignals++;
           a.weightedUnique += 0.15 * decay;
           a.uniqueFindings++;
           break;
@@ -905,6 +926,7 @@ export class PerformanceReader {
               }
             }
           }
+          a.scoringSignals++;
           a.weightedHallucinations += severity * hallucDecay * gatedMultiplier;
           a.weightedTotal += decay;
           a.hallucinations++;
@@ -1054,6 +1076,7 @@ export class PerformanceReader {
       scores.set(id, {
         agentId: id, accuracy, uniqueness, reliability, impactScore,
         totalSignals: a.totalSignals,
+        scoringSignals: a.scoringSignals,
         agreements: a.agreements,
         disagreements: a.disagreements,
         uniqueFindings: a.uniqueFindings,
@@ -1078,7 +1101,8 @@ export class PerformanceReader {
       if (!scores.has(agentId)) {
         scores.set(agentId, {
           agentId, accuracy: 0.5, uniqueness: 0.5, reliability: 0.5, impactScore: 0.5,
-          totalSignals: 0, agreements: 0, disagreements: 0, uniqueFindings: 0, hallucinations: 0,
+          totalSignals: 0, scoringSignals: 0, agreements: 0, disagreements: 0,
+          uniqueFindings: 0, hallucinations: 0,
           unverifiedsEmitted: 0, unverifiedsReceived: 0,
           weightedHallucinations: 0,
           consecutiveFailures: consec,

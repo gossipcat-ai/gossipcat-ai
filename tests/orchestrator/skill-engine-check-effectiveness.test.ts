@@ -30,6 +30,7 @@ function makeStubPerfReader(
     reliability: 0,
     impactScore: 0,
     totalSignals: 0,
+    scoringSignals: 0,
     agreements: 0,
     disagreements: 0,
     uniqueFindings: 0,

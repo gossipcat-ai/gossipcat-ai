@@ -1,8 +1,9 @@
 /**
  * Tests for PerformanceReader.isBenched() — agent auto-benching v1 (GH #93).
  *
- * Rule A: accuracy < 0.30 && totalSignals >= 200 → chronic-low-accuracy
+ * Rule A: accuracy < 0.30 && scoringSignals >= 200 → chronic-low-accuracy
  * Rule B: weightedHallucinations >= 5 && rate > 0.4 → burst-hallucination
+ *         (rate denominator is scoringSignals, not totalSignals)
  * Safeguard: if candidate is sole provider of a requested category → not benched,
  *            safeguardBlocked:true.
  *
@@ -14,12 +15,13 @@
 import { PerformanceReader, AgentScore } from '../../packages/orchestrator/src/performance-reader';
 
 function makeScore(partial: Partial<AgentScore> & { agentId: string }): AgentScore {
-  return {
+  const base: AgentScore = {
     accuracy: 0.8,
     uniqueness: 0.5,
     reliability: 0.7,
     impactScore: 0.5,
     totalSignals: 10,
+    scoringSignals: 10,
     agreements: 0,
     disagreements: 0,
     uniqueFindings: 0,
@@ -34,6 +36,10 @@ function makeScore(partial: Partial<AgentScore> & { agentId: string }): AgentSco
     transport_failure_count: 0,
     ...partial,
   };
+  // Ensure scoringSignals mirrors totalSignals when not set explicitly,
+  // so legacy test assertions that set only totalSignals keep working.
+  if (!('scoringSignals' in partial)) base.scoringSignals = base.totalSignals;
+  return base;
 }
 
 /**
