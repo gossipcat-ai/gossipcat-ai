@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { getWsState } from '@/lib/ws';
-import { href, useRoute } from '@/lib/router';
+import { href, navigate, useRoute } from '@/lib/router';
+import { useExpert } from '@/lib/useExpert';
 import { GlossaryModal } from './GlossaryModal';
 
 const TABS = [
-  { to: '/', label: 'Dashboard', match: (r: string) => r === '/' },
+  { to: '/', label: 'Dashboard', match: (r: string) => r === '/' || r === '/overview' },
   { to: '/team', label: 'Team', match: (r: string) => r === '/team' || r.startsWith('/agent/') },
   { to: '/debates', label: 'Consensus Rounds', match: (r: string) => r === '/debates' },
   { to: '/tasks', label: 'Tasks', match: (r: string) => r === '/tasks' },
@@ -16,6 +17,7 @@ export function TopBar() {
   const [online, setOnline] = useState(false);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const route = useRoute();
+  const expert = useExpert();
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -51,6 +53,17 @@ export function TopBar() {
         </div>
       </div>
       <div className="flex items-center gap-2">
+        <button
+          onClick={() => navigate(expert ? '/' : '/?expert=1')}
+          aria-label={expert ? 'Return to overview' : 'Switch to expert view'}
+          className={`font-mono text-[10px] uppercase tracking-widest border border-border/40 rounded-sm px-2.5 py-1 transition ${
+            expert
+              ? 'text-foreground hover:text-foreground'
+              : 'text-muted-foreground/50 hover:text-muted-foreground'
+          }`}
+        >
+          {expert ? '← Overview' : 'Expert view →'}
+        </button>
         <button
           onClick={() => setGlossaryOpen(true)}
           aria-label="Open glossary"

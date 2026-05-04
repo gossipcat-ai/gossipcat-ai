@@ -1,5 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useRoute } from '@/lib/router';
+import { useExpert } from '@/lib/useExpert';
+import { OverviewPage } from '@/pages/OverviewPage';
 import { AuthGate } from '@/components/AuthGate';
 import { TopBar } from '@/components/TopBar';
 import { SystemPulse } from '@/components/SystemPulse';
@@ -462,6 +464,7 @@ function FindingsPage({
 
 function Dashboard() {
   const route = useRoute();
+  const expert = useExpert();
   const { overview, agents, tasks, consensus, consensusReports, nativeMemories, gossipMemories, loading, refresh } = useDashboardData();
   const [activeTaskCount, setActiveTaskCount] = useState(0);
 
@@ -498,6 +501,16 @@ function Dashboard() {
     content = <SignalsPage />;
   } else if (route === '/violations') {
     content = <ViolationsPage />;
+  } else if ((route === '/' && !expert) || route === '/overview') {
+    content = (
+      <OverviewPage
+        overview={overview}
+        agents={agents}
+        tasks={tasks}
+        activeTaskCount={activeTaskCount}
+        setActiveTaskCount={setActiveTaskCount}
+      />
+    );
   } else {
     // Main dashboard — sidebar + main layout
     content = (
@@ -541,10 +554,17 @@ function Dashboard() {
     );
   }
 
+  // Overview owns its own outer container (max-w-5xl). For everything else,
+  // the historical max-w-7xl + space-y-6 wrapper applies.
+  const isOverview = (route === '/' && !expert) || route === '/overview';
+  const mainClass = isOverview
+    ? 'px-6 py-6'
+    : 'mx-auto max-w-7xl space-y-6 px-6 py-6';
+
   return (
     <div className="min-h-screen bg-background">
       <TopBar />
-      <main className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+      <main className={mainClass}>
         {content}
       </main>
     </div>
