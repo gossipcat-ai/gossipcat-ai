@@ -1,10 +1,24 @@
 import type { OverviewData } from '@/lib/types';
 import { timeAgo } from '@/lib/utils';
 import { href } from '@/lib/router';
+import { EmptyState } from './EmptyState';
 
 interface SystemPulseProps {
   overview: OverviewData;
   activeTasks: number;
+  /**
+   * 'dense' (default) — full operator strip with 3-row agent block,
+   * secondary-stats list, Actionable BigStat, and ActivityBars.
+   * 'calm' — Overview/landing variant: only 3 BigStats
+   * (Agents online / Active tasks / Confirmed %).
+   */
+  mode?: 'dense' | 'calm';
+  /**
+   * Whether to show the ActivityBars row. Defaults to `true` (matching
+   * historical behavior). On `mode='calm'` the OverviewPage passes `false`
+   * to keep the strip hero-proportioned (~80px shorter).
+   */
+  showActivity?: boolean;
 }
 
 function formatDuration(ms: number | null | undefined): string {
@@ -43,7 +57,7 @@ function BigStat({ value, unit, label, valueClass, pulse, tooltip }: BigStatProp
   );
 }
 
-export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
+export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivity }: SystemPulseProps) {
   const totalAgents = overview.relayCount + overview.nativeCount;
   const successRate = overview.tasksCompleted + overview.tasksFailed > 0
     ? Math.round((overview.tasksCompleted / (overview.tasksCompleted + overview.tasksFailed)) * 100)
@@ -51,6 +65,14 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
   const confirmRate = overview.totalFindings > 0
     ? Math.round((overview.confirmedFindings / overview.totalFindings) * 100)
     : 0;
+
+  const isCalm = mode === 'calm';
+  // ActivityBars default: visible in dense, hidden in calm. Prop overrides.
+  const activityVisible = showActivity ?? !isCalm;
+
+  // Day-1 onboarding empty state: only meaningful in calm mode when the fleet
+  // is unregistered. Avoids three "0" stats reading as a broken dashboard.
+  const day1Empty = isCalm && totalAgents === 0;
 
   return (
     <div className="rounded-lg border border-border bg-card">
@@ -65,87 +87,120 @@ export function SystemPulse({ overview, activeTasks }: SystemPulseProps) {
         </div>
       </div>
 
-      {/* Primary 2x2 grid with cross dividers, then full-width actionable row below */}
-      <div className="border-b border-border">
-        <div className="relative grid grid-cols-2">
-          <span className="pointer-events-none absolute left-0 right-0 top-1/2 h-px bg-border" />
-          <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 w-px bg-border" />
-          {/* Three-row agent stat (stacked to fit narrow cell) */}
-          <div className="flex flex-col items-stretch justify-center gap-1.5 px-4 py-3">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Agents currently executing a task">Dispatched</span>
-              <span className={`font-mono text-base font-bold leading-none ${overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}`}>{overview.agentsOnline}</span>
-            </div>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Relay agents with an active WebSocket connection">Connected</span>
-              <span className={`font-mono text-base font-bold leading-none ${overview.relayConnected > 0 ? 'text-confirmed' : 'text-muted-foreground'}`}>{overview.relayConnected}</span>
-            </div>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Total agents in gossipcat config">Registered</span>
-              <span className="font-mono text-base font-bold leading-none text-muted-foreground">{totalAgents}</span>
-            </div>
+      {day1Empty ? (
+        <EmptyState
+          title="No agents registered yet"
+          hint="Run `gossip_setup` or see docs/ to get started."
+        />
+      ) : isCalm ? (
+        // Calm: 3 BigStats — Agents online / Active tasks / Confirmed %.
+        <div className="grid grid-cols-3 border-b border-border">
+          <div className="border-r border-border">
+            <BigStat
+              value={overview.agentsOnline}
+              label="Agents Online"
+              valueClass={overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}
+            />
           </div>
-          <BigStat
-            value={activeTasks}
-            label="Active Tasks"
-            valueClass={activeTasks > 0 ? 'text-unverified' : 'text-muted-foreground'}
-            pulse={activeTasks > 0}
-          />
-          <BigStat
-            value={overview.consensusRuns}
-            label="Consensus"
-            valueClass="text-foreground"
-          />
+          <div className="border-r border-border">
+            <BigStat
+              value={activeTasks}
+              label="Active Tasks"
+              valueClass={activeTasks > 0 ? 'text-unverified' : 'text-muted-foreground'}
+              pulse={activeTasks > 0}
+            />
+          </div>
           <BigStat
             value={`${confirmRate}%`}
             label="Confirmed"
             valueClass="text-confirmed"
           />
         </div>
-        <a
-          href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
-          className="block cursor-pointer border-t border-border transition-colors hover:bg-accent/30"
-          aria-label="View actionable findings on Signals page"
-        >
-          <BigStat
-            value={overview.actionableFindings}
-            label="Actionable"
-            valueClass={overview.actionableFindings > 0 ? 'text-orange-400' : 'text-confirmed'}
-            tooltip="Findings still open and need operator review (disagreements + hallucinations + new findings)"
-          />
-        </a>
-      </div>
-
-      {/* Secondary stats */}
-      <div className="px-3.5 py-3">
-        <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-          <span className="text-muted-foreground">tasks completed</span>
-          <span className="font-semibold text-foreground tabular-nums">{overview.tasksCompleted}</span>
-        </div>
-        <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-          <span className="text-muted-foreground">signals total</span>
-          <span className="font-semibold text-foreground tabular-nums">{overview.totalSignals}</span>
-        </div>
-        {overview.tasksFailed > 0 && (
-          <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-            <span className="text-muted-foreground">tasks failed</span>
-            <span className="font-semibold text-destructive tabular-nums">{overview.tasksFailed}</span>
+      ) : (
+        // Dense: original 2x2 grid with 3-row agent block + Actionable row.
+        <div className="border-b border-border">
+          <div className="relative grid grid-cols-2">
+            <span className="pointer-events-none absolute left-0 right-0 top-1/2 h-px bg-border" />
+            <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 w-px bg-border" />
+            {/* Three-row agent stat (stacked to fit narrow cell) */}
+            <div className="flex flex-col items-stretch justify-center gap-1.5 px-4 py-3">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Agents currently executing a task">Dispatched</span>
+                <span className={`font-mono text-base font-bold leading-none ${overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}`}>{overview.agentsOnline}</span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Relay agents with an active WebSocket connection">Connected</span>
+                <span className={`font-mono text-base font-bold leading-none ${overview.relayConnected > 0 ? 'text-confirmed' : 'text-muted-foreground'}`}>{overview.relayConnected}</span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Total agents in gossipcat config">Registered</span>
+                <span className="font-mono text-base font-bold leading-none text-muted-foreground">{totalAgents}</span>
+              </div>
+            </div>
+            <BigStat
+              value={activeTasks}
+              label="Active Tasks"
+              valueClass={activeTasks > 0 ? 'text-unverified' : 'text-muted-foreground'}
+              pulse={activeTasks > 0}
+            />
+            <BigStat
+              value={overview.consensusRuns}
+              label="Consensus"
+              valueClass="text-foreground"
+            />
+            <BigStat
+              value={`${confirmRate}%`}
+              label="Confirmed"
+              valueClass="text-confirmed"
+            />
           </div>
-        )}
-        <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-          <span className="text-muted-foreground">avg duration</span>
-          <span className="font-semibold text-foreground tabular-nums">{formatDuration(overview.avgDurationMs)}</span>
+          <a
+            href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
+            className="block cursor-pointer border-t border-border transition-colors hover:bg-accent/30"
+            aria-label="View actionable findings on Signals page"
+          >
+            <BigStat
+              value={overview.actionableFindings}
+              label="Actionable"
+              valueClass={overview.actionableFindings > 0 ? 'text-orange-400' : 'text-confirmed'}
+              tooltip="Findings still open and need operator review (disagreements + hallucinations + new findings)"
+            />
+          </a>
         </div>
-        <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-          <span className="text-muted-foreground">success rate</span>
-          <span className={`font-semibold tabular-nums ${successRate === null ? 'text-muted-foreground' : successRate >= 95 ? 'text-confirmed' : successRate >= 80 ? 'text-unverified' : 'text-destructive'}`}>
-            {successRate === null ? '—' : `${successRate}%`}
-          </span>
-        </div>
-      </div>
+      )}
 
-      {/* Activity last 12h */}
-      <ActivityBars hourly={overview.hourlyActivity || []} />
+      {/* Secondary stats — dense only */}
+      {!isCalm && (
+        <div className="px-3.5 py-3">
+          <div className="flex items-center justify-between py-1 font-mono text-[11px]">
+            <span className="text-muted-foreground">tasks completed</span>
+            <span className="font-semibold text-foreground tabular-nums">{overview.tasksCompleted}</span>
+          </div>
+          <div className="flex items-center justify-between py-1 font-mono text-[11px]">
+            <span className="text-muted-foreground">signals total</span>
+            <span className="font-semibold text-foreground tabular-nums">{overview.totalSignals}</span>
+          </div>
+          {overview.tasksFailed > 0 && (
+            <div className="flex items-center justify-between py-1 font-mono text-[11px]">
+              <span className="text-muted-foreground">tasks failed</span>
+              <span className="font-semibold text-destructive tabular-nums">{overview.tasksFailed}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between py-1 font-mono text-[11px]">
+            <span className="text-muted-foreground">avg duration</span>
+            <span className="font-semibold text-foreground tabular-nums">{formatDuration(overview.avgDurationMs)}</span>
+          </div>
+          <div className="flex items-center justify-between py-1 font-mono text-[11px]">
+            <span className="text-muted-foreground">success rate</span>
+            <span className={`font-semibold tabular-nums ${successRate === null ? 'text-muted-foreground' : successRate >= 95 ? 'text-confirmed' : successRate >= 80 ? 'text-unverified' : 'text-destructive'}`}>
+              {successRate === null ? '—' : `${successRate}%`}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Activity last 12h — gated by activityVisible (default: dense=true, calm=false) */}
+      {activityVisible && <ActivityBars hourly={overview.hourlyActivity || []} />}
 
       {/* Last consensus footer */}
       {overview.lastConsensusTimestamp && (
