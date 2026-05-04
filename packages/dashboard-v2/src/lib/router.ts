@@ -48,13 +48,12 @@ export function useRoute(): string {
   const [route, setRoute] = useState(currentRoute());
 
   useEffect(() => {
+    // popstate is re-dispatched as 'dashboard:navigate' by the module-level
+    // handler above, so subscribing to both here would fire setRoute twice
+    // on browser back/forward.
     const sync = () => setRoute(currentRoute());
-    window.addEventListener('popstate', sync);
-
     window.addEventListener('dashboard:navigate', sync as EventListener);
-
     return () => {
-      window.removeEventListener('popstate', sync);
       window.removeEventListener('dashboard:navigate', sync as EventListener);
     };
   }, []);
