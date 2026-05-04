@@ -342,6 +342,13 @@ async function doBoot() {
   // stop fn — avoids a narrow race where SIGTERM between handler registration
   // and timer assignment would have called clearInterval(undefined).
   const eviction = scheduleNativeTaskEviction();
+  // Consensus 4bd62d6c-46fd4e55 root cause B: register lifecycle drain
+  // handlers BEFORE the once-style SIGTERM/SIGINT handlers below. Node fires
+  // signal handlers in registration order, so this gives detached lifecycle
+  // tasks (e.g. the post-collect skill graduation runner) a chance to settle
+  // before `relay.stop()` and `process.exit(0)` truncate them. Idempotent.
+  const { installLifecycleDrainHandlers } = await import('./lifecycle-tasks');
+  installLifecycleDrainHandlers();
   process.once('SIGTERM', async () => {
     if (shuttingDown) return;
     shuttingDown = true;
@@ -1419,6 +1426,35 @@ server.tool(
     }
     if (ctx.httpMcpPort) {
       lines.push(`  HTTP MCP: :${ctx.httpMcpPort}/mcp${ctx.httpMcpPortSource === 'sticky' ? ' (sticky)' : ''}`);
+    }
+
+    // Skill graduation heartbeat — surfaces whether the post-collect runner
+    // has actually executed since session start. Per consensus
+    // 4bd62d6c-46fd4e55, prior code path silently dropped the runner under
+    // SIGTERM; this single line makes "did this ever run?" observable
+    // without log scraping. Quiet on fresh installs (no aggressive warning).
+    try {
+      const { readFileSync: rfHealth } = await import('fs');
+      const healthPath = join(process.cwd(), '.gossip', 'skill-runner-health.json');
+      const raw = rfHealth(healthPath, 'utf8');
+      const h = JSON.parse(raw) as {
+        last_run_at?: string;
+        skills_evaluated?: number;
+        transitions?: Record<string, number>;
+      };
+      const lastMs = h.last_run_at ? new Date(h.last_run_at).getTime() : NaN;
+      if (Number.isFinite(lastMs)) {
+        const ago = Date.now() - lastMs;
+        const sec = Math.round(ago / 1000);
+        const rel = sec < 60 ? `${sec}s` : sec < 3600 ? `${Math.round(sec/60)}m` : `${Math.round(sec/3600)}h`;
+        const t = h.transitions || {};
+        const totalT =
+          (t.passed ?? 0) + (t.failed ?? 0) + (t.flagged_for_manual_review ?? 0) +
+          (t.inconclusive ?? 0) + (t.pending ?? 0);
+        lines.push(`  Skill graduation: last run ${rel} ago (${h.skills_evaluated ?? 0} skills, ${totalT} transitions)`);
+      }
+    } catch {
+      lines.push('  Skill graduation: never run since session start (expected after first gossip_collect)');
     }
 
     // Quota health
