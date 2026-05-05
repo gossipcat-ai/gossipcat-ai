@@ -47,14 +47,20 @@ describe('lifecycle-tasks', () => {
   });
 
   it('installLifecycleDrainHandlers is idempotent', () => {
-    const before = process.listenerCount('SIGTERM');
+    // Consensus 97636615-f9f54441: SIGTERM/SIGINT drain is now invoked
+    // synchronously from mcp-server-sdk.ts's process.once handlers (Option B).
+    // This module only registers a beforeExit fallback for non-signal exits.
+    const before = process.listenerCount('beforeExit');
     installLifecycleDrainHandlers();
-    const afterFirst = process.listenerCount('SIGTERM');
+    const afterFirst = process.listenerCount('beforeExit');
     installLifecycleDrainHandlers();
     installLifecycleDrainHandlers();
-    const afterThird = process.listenerCount('SIGTERM');
+    const afterThird = process.listenerCount('beforeExit');
     expect(afterFirst).toBe(before + 1);
     expect(afterThird).toBe(afterFirst);
+    // Hard guarantee: NO signal listeners are added by this module anymore.
+    expect(process.listenerCount('SIGTERM')).toBe(0);
+    expect(process.listenerCount('SIGINT')).toBe(0);
   });
 
   it('settled promises remove themselves from the in-flight set', async () => {

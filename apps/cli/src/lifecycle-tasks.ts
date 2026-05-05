@@ -45,16 +45,11 @@ export function drainLifecycleTasks(maxMs: number = 8000): Promise<void> {
 }
 
 /**
- * Install SIGTERM/SIGINT/beforeExit drain handlers exactly once. Subsequent
- * calls are no-ops. Handlers CHAIN with whatever else is registered (we use
- * `process.on`, not `process.once`-replace) and run drain BEFORE returning,
- * so the existing handler's `process.exit(0)` only fires after drain
- * resolves.
+ * Install beforeExit drain handler exactly once. Subsequent calls are no-ops.
  *
- * Order matters: this MUST be called BEFORE the existing SIGTERM handler in
- * mcp-server-sdk.ts so node fires us first (handlers run in registration
- * order). The existing handler is `process.once`, so it still runs after
- * us — we just give the runner a chance to finish.
+ * SIGTERM/SIGINT drain is now invoked synchronously from mcp-server-sdk.ts's
+ * process.once handlers — see consensus 97636615-f9f54441. We only register a
+ * beforeExit fallback here for non-signal exit paths.
  */
 export function installLifecycleDrainHandlers(): void {
   if (__installed) return;
@@ -70,13 +65,16 @@ export function installLifecycleDrainHandlers(): void {
     } catch { /* never throw from a signal handler */ }
   };
 
-  process.on('SIGTERM', () => { void drainAndContinue('SIGTERM'); });
-  process.on('SIGINT',  () => { void drainAndContinue('SIGINT'); });
   process.on('beforeExit', () => { void drainAndContinue('beforeExit'); });
 }
 
 // Test-only — reset module state. Not exported via index; tests import directly.
+// Gated behind NODE_ENV === 'test' so production code paths can't accidentally
+// wipe in-flight task tracking mid-shutdown.
 export function __resetLifecycleTasksForTests(): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('__resetLifecycleTasksForTests is test-only — refusing to run outside NODE_ENV=test');
+  }
   inFlight.clear();
   __installed = false;
 }

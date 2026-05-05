@@ -12,7 +12,7 @@
  *     run timestamp + transition counts; surfaced by gossip_status() so
  *     "did this ever run?" is observable without log scraping
  */
-import { existsSync, readdirSync, realpathSync, writeFileSync, renameSync, mkdirSync } from 'fs';
+import { existsSync, readdirSync, realpathSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import type { SkillEngine } from '@gossip/orchestrator';
 
@@ -49,15 +49,17 @@ interface HealthRecord {
 }
 
 function writeHealthAtomic(projectRoot: string, record: HealthRecord): void {
+  const dir = join(projectRoot, '.gossip');
+  const finalPath = join(dir, 'skill-runner-health.json');
+  const tmpPath = finalPath + '.tmp';
   try {
-    const dir = join(projectRoot, '.gossip');
     mkdirSync(dir, { recursive: true });
-    const finalPath = join(dir, 'skill-runner-health.json');
-    const tmpPath = finalPath + '.tmp';
     writeFileSync(tmpPath, JSON.stringify(record, null, 2));
     renameSync(tmpPath, finalPath);
   } catch (e) {
     process.stderr.write(`[gossipcat] checkEffectiveness: health write failed: ${(e as Error).message}\n`);
+    // Clean up the .tmp so a future operator audit doesn't see stale partials.
+    try { if (existsSync(tmpPath)) unlinkSync(tmpPath); } catch { /* best-effort */ }
   }
 }
 

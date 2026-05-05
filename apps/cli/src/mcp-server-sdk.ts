@@ -40,6 +40,7 @@ import { buildDashboardAdvisory } from './setup-response';
 import { refreshNativeAgentFromDisk } from './native-agent-cache';
 import { generateRulesContent } from './rules-content';
 import { formatDropReceipt } from './format-drop-receipt';
+import { shutdownOnSignal, type ShutdownDeps } from './shutdown';
 import { homedir } from 'os';
 
 /**
@@ -347,25 +348,25 @@ async function doBoot() {
   // signal handlers in registration order, so this gives detached lifecycle
   // tasks (e.g. the post-collect skill graduation runner) a chance to settle
   // before `relay.stop()` and `process.exit(0)` truncate them. Idempotent.
-  const { installLifecycleDrainHandlers } = await import('./lifecycle-tasks');
+  const { installLifecycleDrainHandlers, drainLifecycleTasks } = await import('./lifecycle-tasks');
   installLifecycleDrainHandlers();
+  const shutdownDeps: ShutdownDeps = {
+    eviction,
+    relayStop: () => ctx.relay.stop(),
+    cleanupPid,
+    drainLifecycleTasks: () => drainLifecycleTasks(),
+    exit: (code: number) => process.exit(code),
+    pid: process.pid,
+  };
   process.once('SIGTERM', async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    eviction.stop();
-    process.stderr.write(`[relay] shutdown reason=SIGTERM pid=${process.pid}\n`);
-    try { await ctx.relay.stop(); } catch { /* ignore */ }
-    cleanupPid();
-    process.exit(0);
+    await shutdownOnSignal('SIGTERM', shutdownDeps);
   });
   process.once('SIGINT',  async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    eviction.stop();
-    process.stderr.write(`[relay] shutdown reason=SIGINT pid=${process.pid}\n`);
-    try { await ctx.relay.stop(); } catch { /* ignore */ }
-    cleanupPid();
-    process.exit(0);
+    await shutdownOnSignal('SIGINT', shutdownDeps);
   });
 
   if (ctx.relay.dashboardUrl) {
