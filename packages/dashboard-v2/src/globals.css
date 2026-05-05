@@ -27,6 +27,9 @@
   --color-unverified: #fbbf24;
   --color-unique: #c084fc;
 
+  /* Severity palette */
+  --color-severity-high: #f87171;
+
   /* v3 additions */
   --color-impact: #60a5fa;
   --color-insight: #71717a;

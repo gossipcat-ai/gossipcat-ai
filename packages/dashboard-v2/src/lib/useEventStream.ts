@@ -30,29 +30,59 @@ export function writeLastEventId(id: number): void {
   window.localStorage.setItem(LS_KEY, String(id));
 }
 
+const BACKOFF_MIN_MS = 1_000;
+const BACKOFF_MAX_MS = 5_000;
+
 /**
  * Opens an SSE connection to /dashboard/api/events and calls `onEvent` for each
  * message. Replays missed events using `?last_id=N` on connect.
  * Cleans up (closes EventSource) on unmount.
+ *
+ * Uses manual reconnect (close + setTimeout) instead of relying on native
+ * EventSource auto-reconnect so that the persisted last_id is re-read on each
+ * reconnect attempt — native auto-reconnect snapshots the URL at construction
+ * time and would replay from the original last_id forever.
  */
 export function useEventStream(onEvent: (e: DashboardEvent) => void): void {
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') return;
 
-    const lastId = readLastEventId();
-    const es = new window.EventSource(`/dashboard/api/events?last_id=${lastId}`);
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let backoff = BACKOFF_MIN_MS;
+    let destroyed = false;
 
-    es.onmessage = (evt: MessageEvent) => {
-      try {
-        const data: DashboardEvent = JSON.parse(evt.data);
-        onEvent(data);
-        writeLastEventId(data.id);
-      } catch {
-        /* malformed event — skip */
-      }
+    function open(): void {
+      if (destroyed) return;
+      const lastId = readLastEventId();
+      es = new window!.EventSource(`/dashboard/api/events?last_id=${lastId}`);
+
+      es.onmessage = (evt: MessageEvent) => {
+        try {
+          const data: DashboardEvent = JSON.parse(evt.data);
+          onEvent(data);
+          writeLastEventId(data.id);
+          backoff = BACKOFF_MIN_MS; // reset on successful message
+        } catch {
+          /* malformed event — skip */
+        }
+      };
+
+      es.onerror = () => {
+        if (es) { es.close(); es = null; }
+        if (destroyed) return;
+        retryTimer = setTimeout(() => { open(); }, backoff);
+        backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
+      };
+    }
+
+    open();
+
+    return () => {
+      destroyed = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      if (es) { es.close(); es = null; }
     };
-
-    return () => { es.close(); };
   // onEvent is intentionally excluded — callers should memoize it (useCallback)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

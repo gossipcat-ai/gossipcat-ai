@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useEventStream } from '@/lib/useEventStream';
 import { navigate } from '@/lib/router';
 import type { DashboardEvent } from '@/lib/useEventStream';
@@ -21,10 +21,6 @@ function ToastItem({
 }) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const startTimer = useCallback(() => {
-    timerRef.current = setTimeout(() => onDismiss(toast.id), AUTO_DISMISS_MS);
-  }, [toast.id, onDismiss]);
-
   const clearTimer = useCallback(() => {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
@@ -32,13 +28,16 @@ function ToastItem({
     }
   }, []);
 
-  // Start auto-dismiss on mount
-  const mountRef = useRef(false);
-  if (!mountRef.current) {
-    mountRef.current = true;
-    // Schedule after render (can't set timeout in render, but ref is synchronous)
-    setTimeout(() => startTimer(), 0);
-  }
+  const startTimer = useCallback(() => {
+    clearTimer();
+    timerRef.current = setTimeout(() => onDismiss(toast.id), AUTO_DISMISS_MS);
+  }, [toast.id, onDismiss, clearTimer]);
+
+  // Start auto-dismiss on mount; clear on unmount (3a)
+  useEffect(() => {
+    startTimer();
+    return clearTimer;
+  }, [startTimer, clearTimer]);
 
   const { type, payload } = toast.event;
 
@@ -46,8 +45,8 @@ function ToastItem({
     type === 'task.completed'
       ? <span className="text-muted-foreground">✓</span>
       : (payload.confirmed as number) > (payload.disputed as number)
-        ? <span className="text-green-600">◎</span>
-        : <span className="text-orange-500">◎</span>;
+        ? <span className="text-confirmed">◎</span>
+        : <span className="text-disputed">◎</span>;
 
   let body: string;
   if (type === 'task.completed') {
@@ -74,21 +73,21 @@ function ToastItem({
   return (
     <div
       className={[
-        'pointer-events-auto bg-card border rounded shadow-lg px-4 py-3 max-w-sm cursor-pointer',
+        'pointer-events-auto bg-card border rounded shadow-sm px-4 py-3 max-w-sm cursor-pointer',
         'transition-all duration-200',
+        'motion-reduce:transition-none motion-reduce:transform-none',
+        'hover:bg-muted/30 hover:border-border',
         toast.exiting
-          ? 'opacity-0 scale-95 translate-x-full'
+          ? 'opacity-0 scale-95 opacity-0 translate-y-2'
           : 'opacity-100 scale-100 translate-x-0',
       ].join(' ')}
       onClick={handleClick}
       onMouseEnter={clearTimer}
       onMouseLeave={startTimer}
-      role="status"
-      aria-live="polite"
     >
       <div className="flex items-center gap-2">
         <span className="shrink-0 text-sm font-bold">{icon}</span>
-        <span className="font-mono text-[11px] text-foreground min-w-0 truncate">{body}</span>
+        <span title={body} className="font-mono text-[11px] text-foreground min-w-0 truncate">{body}</span>
         <button
           className="ml-auto shrink-0 text-muted-foreground/50 hover:text-muted-foreground text-xs leading-none"
           onClick={(e) => { e.stopPropagation(); clearTimer(); onDismiss(toast.id); }}
@@ -129,12 +128,13 @@ export function NotificationStack() {
 
   useEventStream(onEvent);
 
-  if (toasts.length === 0) return null;
-
   return (
     <div
       className="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-2 pointer-events-none"
+      role="region"
       aria-label="Notifications"
+      aria-live="polite"
+      aria-atomic="false"
     >
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onDismiss={dismiss} />
