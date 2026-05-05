@@ -4,6 +4,58 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.23] — 2026-05-05
+
+Skill-graduation lifecycle fix + signal pipeline integrity + dashboard visual/IA pass + new CI gates. Bundles ~50 merged PRs since v0.4.22. Headline fix is **PR #353** (the v0.4.22 skill runner fix turned out to be structurally bypassed on the production-common code path; this release closes both root causes). No breaking changes; existing `.gossip/` state is fully forward-compatible.
+
+### Fixed
+
+- **Skill graduation runner now actually fires AND survives shutdown** (PR #353). Two distinct root causes diagnosed via 3-agent consensus 4bd62d6c-46fd4e55 and re-verified by 66bf72b1-2e5046fa: (a) `gossip_collect`'s two-phase consensus path returns early at `collect.ts:746` BEFORE reaching the v0.4.22 `setImmediate` registration at line 1179 — every consensus round with native cross-reviewers (the production-common path) silently skipped graduation; (b) even on single-phase rounds where the runner WAS registered, the SIGTERM handler at `mcp-server-sdk.ts:352` called `process.exit(0)` synchronously, tearing down the event loop before the detached `setImmediate` callback could settle. Fix: extract `scheduleSkillRunner` and call it from BOTH the early-return site AND the post-consensus tail; new `apps/cli/src/shutdown.ts` exports `shutdownOnSignal` that runs `drainLifecycleTasks → eviction.stop → relay.stop → cleanupPid → exit` in strict order. New `.gossip/skill-runner-health.json` heartbeat (atomic write) surfaced in `gossip_status` output.
+
+- **`AgentScore.totalSignals` vs `scoringSignals` split** (PR #349). `totalSignals` was incrementing on every recorded signal regardless of category, inflating Rule A/B confidence and Rule C scores when non-scoring signals (e.g. `format_compliance`, `task_completed`) accumulated. Fix: `scoringSignals` counts only the 6-signal scoring subset; `totalSignals` preserved for dashboard display. Required 3 CI iterations to catch all `AgentScore` literal sites in relay + tests (memory: `feedback_agent_score_consumers.md`).
+
+- **`VALID_CONSENSUS_SIGNALS` allowlist drift detector** (PR #350). Bidirectional drift test (8 assertions) asserts every PERFORMANCE/OPERATIONAL signal name member is in some `VALID_*` set; empirically verified catches the PR #329-class regression where a new signal type slipped past the allowlist.
+
+- **`ref-allowlist` detector handles squash-merged PRs** (PR #348). Detector used `git log --merges` which excluded squash commits (single-parent). Dropped the `--merges` filter, added regression test, retracted 3 historical false-positive signals.
+
+- **`transport_failure` signal class for relay-worker resolutionRoots gap** (PRs #327, #328, #329). Path A: detector emits `transport_failure` when relay-worker tool calls drop `resolutionRoots`. Path B: plumbed `resolutionRoots` through `runOneRelayCrossReview`. Plus Option B warning when worker drops the field, registered in the allowlist with regression coverage.
+
+- **Round-counter atomic flush + remainder tracking** (PRs #309, #312). `f2` and follow-on race: when in-memory fallback flushed to disk after FS recovery, the flushed delta could be double-counted or lost on partial-flush interleavings. Fix: atomic flush with explicit remainder accounting.
+
+- **`findFile` symlink-TOCTOU close** (PR #308). `realpathSync` canonicalization before any membership check; closes a narrow attack window where a symlink could be swapped between `lstat` and `read`.
+
+- **Resolver line-anchored staleness behind a config flag** (PR #310). When `resolver.lineAnchored: true`, citations whose anchor line no longer contains the cited symbol are flagged stale; opt-in to avoid changing default behavior.
+
+- **`gossip_update` env scrub** (PR #317). `GOSSIPCAT_*` env vars are now scrubbed from `execSync` calls inside `gossip_update` to prevent leaking session-scoped secrets into the upgrade subprocess. Test hardened from consensus 591af14b (PR #318).
+
+- **Insight-filter for open-findings count + agent prompt context** (commit 1d4677a). `type:insight` findings no longer pollute the actionable-findings count or the next-round prompt context. Test cases extracted to a non-excluded suite (PR #313).
+
+### Added
+
+- **Impact-adjacency CI consensus gate** (PRs #314, #315). New `.github/workflows/impact-adjacency-gate.yml` runs on every PR, requires consensus when the diff touches files with `// @gossip:impact-adjacent:<category>` magic comments. Hardened base-ref + consensus-id regex (PR #315).
+
+- **`ref-allowlist` Phase 1 detector** (PR #316). Detects direct master push by write-mode agents (the 2026-04-28 sonnet-implementer incident class).
+
+- **Curated eval-suite harness + 5 seed cases** (PR #326). Foundation for paired-before/after skill-effectiveness measurement at small N (McNemar's test) — a workaround for the slow-by-design MIN_EVIDENCE=80 graduation timeline.
+
+- **Dashboard `/overview` calm landing route + `?expert=1` toggle** (PR #351). Parallel simple view at `/overview` for first-time visitors and returning operators answering "what is gossipcat / is it healthy / where do I look first" in 5 seconds. Dense `/Dashboard` view preserved byte-identical behind `?expert=1` per iron-law constraint.
+
+- **Dashboard ref-allowlist violations API + UI** (PRs #324, #325). Card on overview, dedicated page, signal-label rendering.
+
+### Changed
+
+- **Dashboard visual/IA polish series** — ~20 small PRs (#320-#347) shipping the post-empathy-pass visual cleanup: actionable BigStat (#334), filter rail conditional render on empty (#347), tri-stat agents widget (#321), real task-completion rate replaces composite-score reliability (#346), Reliability bar on canonical-4 AgentCardBig (#345), 8-item tooltip pass + a11y (#333), in-app glossary modal + "?" icon (#331), naming alignment + stale banner (#332), 5 quick-win copy changes (#330), CSS-craft body font-family swap (#341), tabular-nums + badge polish (#340), cross-lens fix bundle (#342), Team metric schema alignment (#343), AgentPage section reorder (#338), task-row type chip (#337), Signals filter rail de-emphasis on pre-filtered URL (#339), 10 design-QA fixes (#320), 10 route-audit fixes (#322), tri-stat overflow regression fix (#323).
+
+- **README opening rewritten for promotion** (PR #319). Above-the-fold content sharpened.
+
+### Notes for fresh installs
+
+- The skill graduation loop now self-reports liveness via `.gossip/skill-runner-health.json`, surfaced in `gossip_status`. Fresh installs see `Skill graduation: never run since session start (expected after first gossip_collect)` — concrete liveness signal without log spam. After the first `gossip_collect`, the heartbeat updates with `last_run_at`, `last_run_duration_ms`, `skills_evaluated`, `transitions {passed, failed, flagged_for_manual_review, inconclusive, pending}`, and `last_error`.
+
+- `SAFE_NAME` regex change at `check-effectiveness-runner.ts` allows dotted model IDs (`gemini-1.5-pro`) but rejects `..` substrings via negative lookahead — same as v0.4.22, repeated here for completeness.
+
+- The HANDBOOK still cites `MIN_EVIDENCE=120` in invariant #2; source-of-truth is `MIN_EVIDENCE=80` at `packages/orchestrator/src/check-effectiveness.ts:19`. The HANDBOOK doc is stale on this point. Trust the source.
+
 ## [0.4.22] — 2026-04-28
 
 Skill-graduation runtime fix. Bundles three PRs (#305, #306, #307) that together close the end-to-end skill-effectiveness loop: structural blockers in `SkillEngine`, the one-sample Wilson math for sparse baselines, and the runtime detach so the runner actually fires after consensus rounds. No breaking changes.
