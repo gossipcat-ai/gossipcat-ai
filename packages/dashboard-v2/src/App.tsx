@@ -28,6 +28,7 @@ import { useWebSocket } from '@/hooks/useWebSocket';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import { timeAgo } from '@/lib/utils';
 import { getBenchBadgeKind, needsAttention } from '@/lib/bench';
+import { NotificationStack } from '@/components/NotificationStack';
 import type { DashboardEvent, AgentData } from '@/lib/types';
 
 type SortKey = 'weight' | 'accuracy' | 'uniqueness' | 'impact' | 'signals' | 'agreements' | 'hallucinations' | 'lastTask';
@@ -582,5 +583,10 @@ export function App() {
     return <AuthGate onLogin={login} error={error} />;
   }
 
-  return <Dashboard />;
+  return (
+    <>
+      <Dashboard />
+      <NotificationStack />
+    </>
+  );
 }

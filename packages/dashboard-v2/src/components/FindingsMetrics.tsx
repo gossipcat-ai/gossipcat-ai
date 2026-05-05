@@ -47,14 +47,14 @@ const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: st
 const SEV_FILTER_CHIPS: { key: 'all' | 'critical' | 'high' | 'medium' | 'low'; label: string; cls: string; activeCls: string }[] = [
   { key: 'all', label: 'All', cls: 'text-muted-foreground border-border/40 hover:border-border/60', activeCls: 'text-foreground bg-muted border-border' },
   { key: 'critical', label: 'Critical', cls: 'text-red-400/50 border-red-400/20 hover:border-red-400/40', activeCls: 'text-red-400 bg-red-400/10 border-red-400/40' },
-  { key: 'high', label: 'High', cls: 'text-orange-400/50 border-orange-400/20 hover:border-orange-400/40', activeCls: 'text-orange-400 bg-orange-400/10 border-orange-400/40' },
+  { key: 'high', label: 'High', cls: 'text-severity-high/50 border-severity-high/20 hover:border-severity-high/40', activeCls: 'text-severity-high bg-severity-high/10 border-severity-high/40' },
   { key: 'medium', label: 'Medium', cls: 'text-yellow-400/50 border-yellow-400/20 hover:border-yellow-400/40', activeCls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/40' },
   { key: 'low', label: 'Low', cls: 'text-muted-foreground/50 border-border/40 hover:border-border/60', activeCls: 'text-muted-foreground bg-muted/50 border-border' },
 ];
 
 const SEVERITY_CLS: Record<string, string> = {
   critical: 'text-red-400 bg-red-500/10',
-  high: 'text-orange-400 bg-orange-500/10',
+  high: 'text-severity-high bg-severity-high/10',
   medium: 'text-yellow-400 bg-yellow-500/10',
   low: 'text-muted-foreground bg-muted/50',
 };

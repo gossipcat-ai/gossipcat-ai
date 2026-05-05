@@ -1226,6 +1226,24 @@ export async function handleCollect(
   // Runner has its own internal try/catch + rate-limited logging.
   scheduleSkillRunner(ctx, ctx.mainAgent);
 
+  // Emit dashboard SSE notification for consensus completion.
+  // Runs after scheduleSkillRunner so order is: signals recorded → runner scheduled → notification fires.
+  if (consensusReport) {
+    try {
+      const { emitDashboardEvent } = await import('@gossip/relay');
+      const consensusId =
+        consensusReport.signals?.[0]?.consensusId ||
+        `${require('crypto').randomBytes(4).toString('hex')}-${require('crypto').randomBytes(4).toString('hex')}`;
+      emitDashboardEvent('consensus.completed', {
+        consensusId,
+        agentCount: consensusReport.agentCount ?? 0,
+        confirmed: (consensusReport.confirmed || []).length,
+        disputed: (consensusReport.disputed || []).length,
+        unverified: (consensusReport.unverified || []).length,
+      });
+    } catch { /* best-effort — dashboard notification never blocks consensus */ }
+  }
+
   // Session save reminder — only every 10th task completion to avoid nagging
   try {
     const taskCount = ctx.mainAgent.getSessionGossip().length;

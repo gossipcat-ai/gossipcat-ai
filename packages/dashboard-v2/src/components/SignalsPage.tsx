@@ -76,7 +76,7 @@ const SIGNAL_CLS: Record<string, string> = {
 // "high" chip reads the same orange everywhere on the dashboard.
 const SEVERITY_BADGE: Record<string, string> = {
   critical: 'text-red-400 bg-red-500/10',
-  high: 'text-orange-400 bg-orange-500/10',
+  high: 'text-severity-high bg-severity-high/10',
   medium: 'text-yellow-400 bg-yellow-500/10',
   low: 'text-muted-foreground bg-muted/50',
 };

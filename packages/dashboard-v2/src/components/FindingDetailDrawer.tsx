@@ -15,7 +15,7 @@ interface Props {
 // Matches FindingsMetrics SEVERITY_CLS — global severity palette.
 const SEVERITY_COLORS: Record<string, string> = {
   critical: 'text-red-400 bg-red-500/10',
-  high: 'text-orange-400 bg-orange-500/10',
+  high: 'text-severity-high bg-severity-high/10',
   medium: 'text-yellow-400 bg-yellow-500/10',
   low: 'text-muted-foreground bg-muted/50',
 };

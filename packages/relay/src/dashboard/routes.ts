@@ -1,5 +1,6 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { DashboardAuth } from './auth';
+import { handleEventsSSE } from './api-events';
 import { overviewHandler } from './api-overview';
 import { fleetTrendHandler } from './api-fleet-trend';
 import { agentsHandler } from './api-agents';
@@ -376,6 +377,14 @@ export class DashboardRouter {
         } catch (err) {
           this.json(res, 400, { error: err instanceof Error ? err.message : 'Bad request' });
         }
+        return true;
+      }
+
+      // SSE event stream — /dashboard/api/events?last_id=N
+      // Auth already verified above (cookie or Bearer). Long-lived connection:
+      // handleEventsSSE takes over the response and must NOT go through json().
+      if (url === '/dashboard/api/events' && req.method === 'GET') {
+        handleEventsSSE(req, res);
         return true;
       }
 

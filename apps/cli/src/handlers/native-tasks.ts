@@ -602,6 +602,19 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     : result;
   try { ctx.mainAgent.recordNativeTaskCompleted(task_id, completionResult, error || undefined, elapsed ?? undefined, taskInfo.memoryQueryCalled); } catch { /* best-effort */ }
 
+  // 0z. Emit dashboard SSE notification for non-utility task completions.
+  if (!taskInfo.utilityType && agentId !== '_utility' && !agentId.startsWith('_utility')) {
+    try {
+      const { emitDashboardEvent } = await import('@gossip/relay');
+      emitDashboardEvent('task.completed', {
+        taskId: task_id,
+        agentId,
+        durationMs: elapsed ?? null,
+        status: error ? 'failed' : 'completed',
+      });
+    } catch { /* best-effort — dashboard notification never blocks completion */ }
+  }
+
   // 0a. Auto-record impl signal for write-mode tasks (gate on error param only — string heuristics are unreliable)
   if (taskInfo.writeMode && !taskInfo.utilityType && agentId !== '_utility') {
     try {
