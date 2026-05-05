@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getWsState } from '@/lib/ws';
 import { href, navigate, useRoute } from '@/lib/router';
 import { useExpert } from '@/lib/useExpert';
+import { useTheme } from '@/lib/useTheme';
 import { GlossaryModal } from './GlossaryModal';
 
 const TABS = [
@@ -18,6 +19,7 @@ export function TopBar() {
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const route = useRoute();
   const expert = useExpert();
+  const { theme, toggle: toggleTheme } = useTheme();
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -63,6 +65,14 @@ export function TopBar() {
           }`}
         >
           {expert ? '← Overview' : 'Expert view →'}
+        </button>
+        <button
+          onClick={toggleTheme}
+          aria-label={theme === 'editorial' ? 'Switch to default theme' : 'Switch to editorial theme'}
+          title={theme === 'editorial' ? 'Switch to default theme' : 'Switch to editorial theme'}
+          className="font-mono text-[10px] uppercase tracking-widest border border-border/40 rounded-sm px-2.5 py-1 transition text-muted-foreground/50 hover:text-muted-foreground"
+        >
+          {theme === 'editorial' ? 'Default' : 'Editorial'}
         </button>
         <button
           onClick={() => setGlossaryOpen(true)}
