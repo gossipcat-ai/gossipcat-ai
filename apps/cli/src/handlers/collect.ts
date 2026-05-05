@@ -6,8 +6,52 @@ import { ctx, RECENT_CONSENSUS_TASK_TTL_MS } from '../mcp-context';
 import { startConsensusTimeout, persistPendingConsensus } from './relay-cross-review';
 import { persistRelayTasks } from './relay-tasks';
 import { seedRecentConsensusTaskIds } from './native-tasks';
+import { trackLifecycleTask } from '../lifecycle-tasks';
 import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
+
+/**
+ * Schedule the per-skill checkEffectiveness runner as a detached, tracked
+ * lifecycle task. Snapshots all closure inputs from `ctx`+`mainAgent`
+ * eagerly (consensus 480ec3e2, sonnet:f8 + gemini:f2), then registers the
+ * promise via trackLifecycleTask so SIGTERM/SIGINT drain handlers can wait
+ * for it instead of `process.exit(0)` truncating the work.
+ *
+ * MUST be called from BOTH paths in handleCollect:
+ *   1) The two-phase early-return path (`nativePrompts.length > 0`) at the
+ *      end of Phase 2c — without this, native cross-review rounds (the
+ *      production-common path) NEVER trigger the runner. PR #307's setImmediate
+ *      fix was structurally bypassed for this branch.
+ *   2) The end-of-handler post-consensus path (the original site).
+ *
+ * The runner is idempotent — it walks `.gossip/agents/<id>/skills/*.md` and
+ * calls SkillEngine.checkEffectiveness, which is safe to invoke twice in a
+ * single cycle (verdict is computed from current counters either way).
+ */
+export function scheduleSkillRunner(c: typeof ctx, mainAgent: any): void {
+  if (!c.skillEngine) return;
+  // Snapshot all closure inputs in the outer scope so the detached callback
+  // is robust to ctx mutation (consensus 480ec3e2, sonnet:f8 + gemini:f2).
+  const skillEngine = c.skillEngine;
+  const registryGet = (id: string) => mainAgent.getAgentConfig(id);
+  const projectRoot = process.cwd();
+  const runRunner = async () => {
+    try {
+      const { runCheckEffectivenessForAllSkills } = await import('./check-effectiveness-runner');
+      await runCheckEffectivenessForAllSkills({
+        skillEngine,
+        registryGet,
+        projectRoot,
+      });
+    } catch (e) {
+      process.stderr.write(`[gossipcat] checkEffectiveness post-collect run failed: ${(e as Error).message}\n`);
+    }
+  };
+  // Detach via a microtask boundary AND track the promise so shutdown
+  // handlers can drain it. The Promise.resolve().then() yields control
+  // before the runner starts, mirroring the prior setImmediate semantics.
+  trackLifecycleTask(Promise.resolve().then(runRunner));
+}
 
 // ── Phase 2 auto-resolver rate-limited stderr state ─────────────────────────
 // Mirror the PR #296 pattern (loggedCounterErrors Set in performance-writer.ts):
@@ -743,6 +787,16 @@ export async function handleCollect(
           }
         }
 
+        // Consensus 4bd62d6c-46fd4e55 root cause A: this two-phase native
+        // path returns BEFORE the post-consensus skill runner site below. The
+        // production-common path (relay+native cross-review) was bypassing
+        // the runner entirely. Schedule it here so a graduation pass still
+        // runs even when control exits via this return. Counters from
+        // Phase 1 results are already flushed (signals were emitted by
+        // emitConsensusSignals upstream). The runner is idempotent — a
+        // second invocation from the post-consensus path is safe.
+        scheduleSkillRunner(ctx, ctx.mainAgent);
+
         return { content: [{ type: 'text' as const, text: partialOutput }] };
       }
       } // end if (!consensusReport) — legacy Phase 2 path
@@ -1163,32 +1217,14 @@ export async function handleCollect(
     }
   } catch { /* best-effort */ }
 
-  // Run checkEffectiveness on all skill files — fire-and-forget via setImmediate.
-  // Per consensus c0663a37: awaiting here meant the runner rode the MCP response
-  // window and was killed by SIGTERM (12-min relay disconnect cycle) before any
-  // skill could graduate. Counters are already written by emitConsensusSignals
-  // above, so the detached runner sees fresh state. Runner has its own internal
-  // try/catch + rate-limited logging.
-  if (ctx.skillEngine) {
-    // Snapshot all closure inputs in the outer scope so the detached callback
-    // is robust to ctx mutation (consensus 480ec3e2, sonnet:f8 + gemini:f2).
-    const skillEngine = ctx.skillEngine;
-    const mainAgent = ctx.mainAgent;
-    const registryGet = (id: string) => mainAgent.getAgentConfig(id);
-    const projectRoot = process.cwd();
-    setImmediate(async () => {
-      try {
-        const { runCheckEffectivenessForAllSkills } = await import('./check-effectiveness-runner');
-        await runCheckEffectivenessForAllSkills({
-          skillEngine,
-          registryGet,
-          projectRoot,
-        });
-      } catch (e) {
-        process.stderr.write(`[gossipcat] checkEffectiveness post-collect run failed: ${(e as Error).message}\n`);
-      }
-    });
-  }
+  // Run checkEffectiveness on all skill files — detached + tracked so the
+  // SIGTERM drain handler in mcp-server-sdk.ts can wait for it (lifecycle
+  // tasks). Per consensus 4bd62d6c-46fd4e55 root cause B: prior setImmediate
+  // detach was killed by `process.exit(0)` after `relay.stop()`, so the
+  // runner rarely reached `.gossip/agents/`. Counters are already written
+  // by emitConsensusSignals above, so the detached runner sees fresh state.
+  // Runner has its own internal try/catch + rate-limited logging.
+  scheduleSkillRunner(ctx, ctx.mainAgent);
 
   // Session save reminder — only every 10th task completion to avoid nagging
   try {
