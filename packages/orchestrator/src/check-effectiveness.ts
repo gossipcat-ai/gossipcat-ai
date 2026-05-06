@@ -91,6 +91,16 @@ export interface VerdictResult {
   verdict_method?: VerdictMethod;
   shouldUpdate: boolean; // false if terminal state
   newSnapshotFields?: Partial<SkillSnapshot>; // fields to merge into frontmatter
+  /**
+   * Set to `false` ONLY when shouldUpdate=true and the writeback aborted on
+   * version drift (see skill-engine.writeSkillFileFromParts). Callers MUST
+   * treat `persisted === false` as "no transition occurred on disk" and
+   * suppress any operator-visible signal that implies the new status landed
+   * (stderr logs, health-file transition counters, etc.). `undefined` means
+   * either there was no writeback (shouldUpdate=false) or the writeback
+   * succeeded — both are normal cases.
+   */
+  persisted?: boolean;
 }
 
 /**

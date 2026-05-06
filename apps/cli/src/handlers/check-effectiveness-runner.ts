@@ -124,19 +124,27 @@ export async function runCheckEffectivenessForAllSkills(opts: RunnerOptions): Pr
         try {
           const verdict = await opts.skillEngine.checkEffectiveness(agentId, category, { role });
           if (verdict.shouldUpdate) {
-            // Log every transition that changes operator-visible status: passed/failed/flagged
-            const loggedStates = new Set(['passed', 'failed', 'flagged_for_manual_review']);
-            if (loggedStates.has(verdict.status)) {
-              process.stderr.write(
-                `[gossipcat] checkEffectiveness ${agentId}/${category}: ${verdict.status}` +
-                (verdict.effectiveness !== undefined ? ` (Δ=${verdict.effectiveness.toFixed(3)})` : '') +
-                `\n`,
-              );
-            }
-            // Tally only verdict-bearing transitions; pending/inconclusive
-            // states without shouldUpdate aren't operator-relevant.
-            if ((transitions as any)[verdict.status] != null) {
-              (transitions as any)[verdict.status]++;
+            // Suppress phantom transitions: if the verdict writeback aborted
+            // on version drift, skill-engine sets verdict.persisted=false. The
+            // new status never landed on disk (skill-loader.ts will keep
+            // reading stale frontmatter), so we must NOT log a transition or
+            // increment health-file counters — both would lie to operators.
+            // Consensus c491f76c-14e545b1.
+            if (verdict.persisted !== false) {
+              // Log every transition that changes operator-visible status: passed/failed/flagged
+              const loggedStates = new Set(['passed', 'failed', 'flagged_for_manual_review']);
+              if (loggedStates.has(verdict.status)) {
+                process.stderr.write(
+                  `[gossipcat] checkEffectiveness ${agentId}/${category}: ${verdict.status}` +
+                  (verdict.effectiveness !== undefined ? ` (Δ=${verdict.effectiveness.toFixed(3)})` : '') +
+                  `\n`,
+                );
+              }
+              // Tally only verdict-bearing transitions; pending/inconclusive
+              // states without shouldUpdate aren't operator-relevant.
+              if ((transitions as any)[verdict.status] != null) {
+                (transitions as any)[verdict.status]++;
+              }
             }
           }
         } catch (e) {
