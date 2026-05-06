@@ -70,7 +70,11 @@ export function TopBar() {
           onClick={toggleTheme}
           aria-label={theme === 'editorial' ? 'Switch to default theme' : 'Switch to editorial theme'}
           title={theme === 'editorial' ? 'Switch to default theme' : 'Switch to editorial theme'}
-          className="font-mono text-[10px] uppercase tracking-widest border border-border/40 rounded-sm px-2.5 py-1 transition text-muted-foreground/50 hover:text-muted-foreground"
+          className={`font-mono text-[10px] uppercase tracking-widest border border-border/40 rounded-sm px-2.5 py-1 transition ${
+            theme === 'editorial'
+              ? 'text-foreground border-border'
+              : 'text-muted-foreground/50 hover:text-muted-foreground'
+          }`}
         >
           {theme === 'editorial' ? 'Default' : 'Editorial'}
         </button>

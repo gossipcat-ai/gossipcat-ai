@@ -17,13 +17,25 @@
 
   <!-- Theme -->
   <meta name="theme-color" content="#8b5cf6" />
-  <meta name="color-scheme" content="dark" />
+  <script>
+  (function() {
+    try {
+      var t = localStorage.getItem('dashboard:theme');
+      if (t === 'editorial') {
+        document.documentElement.dataset.theme = 'editorial';
+      }
+      var meta = document.createElement('meta');
+      meta.name = 'color-scheme';
+      meta.content = (t === 'editorial') ? 'light' : 'dark';
+      document.head.appendChild(meta);
+    } catch (e) { /* fall through */ }
+  })();
+  </script>
 
   <link rel="icon" type="image/png" href="/dashboard/favicon.png" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Spectral:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700&family=Spectral:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
 </head>
 <body>
   <div id="root"></div>

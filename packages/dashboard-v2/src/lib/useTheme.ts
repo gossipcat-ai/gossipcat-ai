@@ -50,12 +50,14 @@ export function useTheme(): { theme: Theme; setTheme: (t: Theme) => void; toggle
     }
   }, [theme]);
 
-  const setTheme = (t: Theme) => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY, t);
-    }
+  function setTheme(t: Theme): void {
     setThemeState(t);
-  };
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, t);
+      } catch { /* private browsing or quota — UI still updates */ }
+    }
+  }
 
   const toggle = () => {
     setTheme(theme === 'default' ? 'editorial' : 'default');
