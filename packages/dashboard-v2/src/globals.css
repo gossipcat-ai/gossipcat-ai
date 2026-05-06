@@ -51,6 +51,11 @@
   --radius-lg: 0.5rem;
 }
 
+/* ───── Serif utility — no-op in default theme, serif in editorial ───── */
+.font-serif-editorial {
+  font-family: inherit;
+}
+
 body {
   background-color: var(--color-background);
   color: var(--color-foreground);
@@ -59,6 +64,103 @@ body {
   line-height: 1.55;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
+}
+
+/* ───── Editorial theme — cream/ink palette + serif typography ───── */
+[data-theme="editorial"] {
+  /* Background / surface */
+  --color-background: #F4F1EA;
+  --color-foreground: #0E0E0C;
+  --color-card: #EAE5D9;
+  --color-card-foreground: #0E0E0C;
+  --color-muted: #EAE5D9;
+  --color-muted-foreground: #6B6657;
+  --color-border: #D6D0BF;
+  --color-input: #D6D0BF;
+
+  /* Primary / accent */
+  --color-ring: #A4161A;
+  --color-primary: #A4161A;
+  --color-primary-foreground: #F4F1EA;
+  --color-secondary: #EAE5D9;
+  --color-secondary-foreground: #0E0E0C;
+  --color-accent: #D6D0BF;
+  --color-accent-foreground: #0E0E0C;
+
+  /* Destructive unchanged — still red */
+  --color-destructive: #A4161A;
+  --color-destructive-foreground: #F4F1EA;
+
+  /* Semantic finding colors */
+  --color-confirmed: #2D6A4F;
+  --color-disputed: #A4161A;
+  --color-unverified: #B08900;
+  --color-unique: #1D3557;
+
+  /* Severity */
+  --color-severity-high: #C0383D;  /* lighter crimson, distinguishable from --color-disputed #A4161A */
+
+  /* v3 additions */
+  --color-impact: #1D3557;
+  --color-insight: #6B6657;
+  --color-text-dim: #9B9583;
+
+  /* Chart palette — olive/warm tones for editorial */
+  --color-chart: #6B6657;
+  --color-chart-accent: #2D6A4F;
+  --color-chart-deep: #1D3557;
+
+  /* Typography */
+  --font-sans: 'Inter Tight', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+[data-theme="editorial"] body {
+  font-family: var(--font-sans);
+}
+
+[data-theme="editorial"] .font-serif-editorial {
+  font-family: 'Spectral', 'GT Sectra', Georgia, serif;
+}
+
+/* ───── Editorial tooltip overrides ───── */
+[data-theme="editorial"] [data-tooltip]::after {
+  background: rgba(14, 14, 12, 0.95);
+  border-color: var(--color-border);
+  color: var(--color-card);
+}
+[data-theme="editorial"] [data-tooltip]::before {
+  border-top-color: rgba(14, 14, 12, 0.95);
+}
+
+/* ───── Editorial vignette suppression ───── */
+html:has([data-theme="editorial"])::after,
+[data-theme="editorial"]::after {
+  display: none;
+}
+
+/* ───── Editorial scrollbar override ───── */
+[data-theme="editorial"] ::-webkit-scrollbar-thumb {
+  background: rgba(107, 102, 87, 0.3);
+}
+[data-theme="editorial"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 102, 87, 0.5);
+}
+
+/* ───── Editorial inline-code override ───── */
+[data-theme="editorial"] .task-md code.md-inline-code,
+[data-theme="editorial"] .finding-md code.md-inline-code {
+  background: rgba(214, 208, 191, 0.5);
+  border-color: var(--color-border);
+}
+
+/* ───── Editorial CRT logo glow suppression ───── */
+[data-theme="editorial"] .crt-logo:hover::after,
+[data-theme="editorial"] .crt-logo--glitch::after {
+  display: none;
+}
+[data-theme="editorial"] .crt-logo:hover .crt-logo-img {
+  filter: brightness(0.95) contrast(1.05);
 }
 
 /* Subtle vignette — no scanlines (they wash out avatar glows) */
