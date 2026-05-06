@@ -364,8 +364,8 @@ export class SkillEngine {
             status: 'pending',
             version: currentVersion + 1,
           };
-          const ok = this.writeSkillFileFromParts(skillPath, updated, body);
-          if (!ok) {
+          const writeResult = this.writeSkillFileFromParts(skillPath, updated, body);
+          if (!writeResult.ok) {
             process.stderr.write(
               `[gossipcat] skill-engine: status migration aborted on ${skillPath} (drift)\n`,
             );
@@ -766,8 +766,8 @@ ${inputs.join('\n')}
     if (mutated) {
       const currentVersion = this.safeNumber(frontmatter.version ?? 0, 0);
       frontmatter.version = currentVersion + 1;
-      const ok = this.writeSkillFileFromParts(skillPath, frontmatter, body);
-      if (!ok) {
+      const writeResult = this.writeSkillFileFromParts(skillPath, frontmatter, body);
+      if (!writeResult.ok) {
         process.stderr.write(
           `[gossipcat] skill-engine: lazy migration aborted on ${skillPath} (drift for ${agentId}/${category})\n`,
         );
@@ -822,11 +822,17 @@ ${inputs.join('\n')}
         0,
       );
       merged.version = baseVersion + 1;
-      const ok = this.writeSkillFileFromParts(skillPath, merged, body);
-      if (!ok) {
+      const writeResult = this.writeSkillFileFromParts(skillPath, merged, body);
+      if (!writeResult.ok) {
         process.stderr.write(
           `[gossipcat] skill-engine: verdict writeback aborted on ${skillPath} (drift for ${agentId}/${category})\n`,
         );
+        // Propagate the drift abort to the caller so the runner can suppress
+        // phantom transitions in skill-runner-health.json. Without this, the
+        // runner would log "passed" + increment counters even though the
+        // updated frontmatter never reached disk and skill-loader.ts would
+        // continue reading the stale on-disk status.
+        verdict.persisted = false;
       }
     }
 
@@ -1022,7 +1028,7 @@ ${inputs.join('\n')}
     skillPath: string,
     frontmatter: Record<string, unknown>,
     body: string,
-  ): boolean {
+  ): { ok: boolean; drift?: { expectedVersion: number; diskVersion: number } } {
     const newVersion = this.safeNumber(frontmatter.version ?? 1, 1);
     const expectedDiskVersion = newVersion - 1;
 
@@ -1046,7 +1052,7 @@ ${inputs.join('\n')}
         `expected v${expectedDiskVersion}, disk has v${diskVersion}. ` +
         `Aborting stale write (would have been v${newVersion}).\n`,
       );
-      return false;
+      return { ok: false, drift: { expectedVersion: expectedDiskVersion, diskVersion } };
     }
 
     // Test-only deterministic interleaving hook. Fires after the drift check
@@ -1080,7 +1086,7 @@ ${inputs.join('\n')}
             `expected v${expectedDiskVersion}, disk has v${postHookDisk}. ` +
             `Aborting stale write (would have been v${newVersion}).\n`,
           );
-          return false;
+          return { ok: false, drift: { expectedVersion: expectedDiskVersion, diskVersion: postHookDisk } };
         }
       } catch {
         // If we can't re-read, fall through to the write and let rename win.
@@ -1104,6 +1110,6 @@ ${inputs.join('\n')}
       try { unlinkSync(tmpPath); } catch { /* tmp already gone */ }
       throw err;
     }
-    return true;
+    return { ok: true };
   }
 }
