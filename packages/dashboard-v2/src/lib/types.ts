@@ -61,6 +61,12 @@ export interface SkillSlot {
   inconclusiveStrikes?: number;
   inconclusiveAt?: string;
   forcedDevelops?: ForcedDevelopEntry[];
+  /** ISO timestamp from skill frontmatter `bound_at` field (diverges from boundAt on redevelop). */
+  boundAtFrontmatter?: string;
+  /** correct + hallucinated signals since frontmatter bound_at, for MIN_EVIDENCE gate progress. */
+  postBindSignals?: number;
+  /** The MIN_EVIDENCE gate threshold. */
+  minEvidence?: number;
 }
 
 export interface AgentData {

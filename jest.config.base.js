@@ -49,6 +49,7 @@ module.exports = {
     '^@gossip/tools$': '<rootDir>/packages/tools/src',
     '^@gossip/tools/(.*)$': '<rootDir>/packages/tools/src/$1',
     '^@gossip/orchestrator$': '<rootDir>/packages/orchestrator/src',
-    '^@gossip/orchestrator/(.*)$': '<rootDir>/packages/orchestrator/src/$1'
+    '^@gossip/orchestrator/(.*)$': '<rootDir>/packages/orchestrator/src/$1',
+    '^@/(.*)$': '<rootDir>/packages/dashboard-v2/src/$1'
   }
 };
