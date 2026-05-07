@@ -99,6 +99,10 @@ export interface VerdictResult {
    * (stderr logs, health-file transition counters, etc.). `undefined` means
    * either there was no writeback (shouldUpdate=false) or the writeback
    * succeeded — both are normal cases.
+   *
+   * Note: when shouldUpdate=true but newSnapshotFields is absent or empty,
+   * writeSkillFileFromParts is not called and `persisted` stays `undefined`
+   * (treated as success — no disk write was needed).
    */
   persisted?: boolean;
 }

@@ -140,10 +140,11 @@ export async function runCheckEffectivenessForAllSkills(opts: RunnerOptions): Pr
                   `\n`,
                 );
               }
-              // Tally only verdict-bearing transitions; pending/inconclusive
-              // states without shouldUpdate aren't operator-relevant.
-              if ((transitions as any)[verdict.status] != null) {
-                (transitions as any)[verdict.status]++;
+              // Reuse loggedStates so the tally stays in sync with the stderr
+              // log: pending can reach here with shouldUpdate=true on lazy
+              // migrations and would otherwise inflate the health counter.
+              if (loggedStates.has(verdict.status)) {
+                (transitions as TransitionCounts)[verdict.status as keyof TransitionCounts]++;
               }
             }
           }
