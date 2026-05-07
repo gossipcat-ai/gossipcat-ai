@@ -1,5 +1,6 @@
 import { timeAgo } from '@/lib/utils';
 import type { SkillSlot, SkillStatus } from '@/lib/types';
+import { shouldShowProgressBar } from '@/lib/skill-card-logic';
 
 interface Props {
   slot: SkillSlot;
@@ -41,6 +42,8 @@ export function SkillCard({ slot }: Props) {
   const latestForced = forced.length > 0 ? forced[forced.length - 1] : null;
   const effectiveness = typeof slot.effectiveness === 'number' ? formatEffectiveness(slot.effectiveness) : null;
 
+  const showProgressBar = shouldShowProgressBar(status, slot.postBindSignals, slot.minEvidence);
+
   return (
     <div
       className={`rounded-md border bg-card/80 p-3 ${slot.enabled ? 'border-border/50' : 'border-border/30 opacity-60'}`}
@@ -64,6 +67,28 @@ export function SkillCard({ slot }: Props) {
           <div className="mt-1 font-mono text-[10px] text-muted-foreground/60">
             bound {timeAgo(slot.boundAt)}
           </div>
+          {showProgressBar && (() => {
+            const n = slot.postBindSignals!;
+            const total = slot.minEvidence!;
+            const pct = Math.round((n / total) * 100);
+            const fillPct = Math.min(n / total, 1.0) * 100;
+            return (
+              <div
+                className="mt-1.5"
+                title={`MIN_EVIDENCE gate: ${n} of ${total} post-bind signals (${pct}%)`}
+              >
+                <div className="mb-0.5 font-mono text-[9px] text-muted-foreground/50">
+                  post-bind: {n} / {total}
+                </div>
+                <div className="relative h-1 w-full overflow-hidden rounded-full border border-border/40 bg-muted/30">
+                  <div
+                    className="absolute inset-y-0 left-0 rounded-full border-r border-confirmed/40 bg-confirmed/20"
+                    style={{ width: `${fillPct}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
         </div>
         {status && (
           <span className={`shrink-0 rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${statusCls}`} title={STATUS_TOOLTIP[status]}>

@@ -1,5 +1,6 @@
 import { PerformanceReader, AgentScore } from '@gossip/orchestrator/performance-reader';
 import { SkillIndex, SkillSlot } from '@gossip/orchestrator/skill-index';
+import { MIN_EVIDENCE } from '@gossip/orchestrator';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { isUtilityAgent } from './utility-agents';
@@ -43,6 +44,12 @@ export interface SkillSlotResponse {
   inconclusiveStrikes?: number;
   inconclusiveAt?: string;
   forcedDevelops?: ForcedDevelopEntry[];
+  /** ISO timestamp from skill frontmatter `bound_at` field (diverges from slot.boundAt on redevelop). */
+  boundAtFrontmatter?: string;
+  /** correct + hallucinated signals since frontmatter bound_at, for MIN_EVIDENCE gate progress. */
+  postBindSignals?: number;
+  /** The MIN_EVIDENCE gate threshold (re-exported constant, never hardcoded). */
+  minEvidence?: number;
 }
 
 interface SkillFrontmatter {
@@ -50,6 +57,7 @@ interface SkillFrontmatter {
   status?: string;
   inconclusive_strikes?: number;
   inconclusive_at?: string;
+  bound_at?: string;
 }
 
 /** Parse a YAML-like frontmatter block. We avoid pulling a YAML dep and only
@@ -88,6 +96,8 @@ function readSkillFrontmatter(
         if (Number.isFinite(n)) out.inconclusive_strikes = n;
       } else if (key === 'inconclusive_at') {
         out.inconclusive_at = value;
+      } else if (key === 'bound_at') {
+        out.bound_at = value;
       }
     }
     return out;
@@ -319,6 +329,15 @@ export async function agentsHandler(
             if (fm.status !== undefined) response.status = fm.status as SkillStatus;
             if (fm.inconclusive_strikes !== undefined) response.inconclusiveStrikes = fm.inconclusive_strikes;
             if (fm.inconclusive_at !== undefined) response.inconclusiveAt = fm.inconclusive_at;
+            if (fm.bound_at) {
+              response.boundAtFrontmatter = fm.bound_at;
+              const boundAtMs = new Date(fm.bound_at).getTime();
+              if (isFinite(boundAtMs)) {
+                const counters = reader.getCountersSince(config.id, slot.skill, boundAtMs);
+                response.postBindSignals = counters.correct + counters.hallucinated;
+                response.minEvidence = MIN_EVIDENCE;
+              }
+            }
           }
           if (forced.length > 0) response.forcedDevelops = forced;
           return response;
