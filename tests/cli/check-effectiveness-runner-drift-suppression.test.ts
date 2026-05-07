@@ -134,4 +134,54 @@ describe('runCheckEffectivenessForAllSkills — drift suppression', () => {
     const finalRaw = readFileSync(skillPath, 'utf-8');
     expect(finalRaw).toMatch(/version:\s*5/);
   });
+
+  it('does not increment transitions.pending when verdict has status=pending and shouldUpdate=true (f1 regression)', async () => {
+    // Regression for consensus 16e8e74b-f0ba4106 f1:
+    // Before the fix, `(transitions as any)[verdict.status]++` would increment
+    // transitions.pending whenever shouldUpdate=true and status==='pending',
+    // because 'pending' was a key in TransitionCounts. After the fix the tally
+    // is guarded by `loggedStates` (passed/failed/flagged_for_manual_review),
+    // so pending never increments even if shouldUpdate is set.
+
+    const agentId = 'test-agent';
+    const category = 'trust_boundaries';
+
+    // Seed a minimal skill file so the runner can discover the (agentId, category) pair.
+    const skillsDir = join(projectRoot, '.gossip', 'agents', agentId, 'skills');
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(
+      join(skillsDir, `${category}.md`),
+      `---\nstatus: pending\nversion: 1\n---\n# stub\n`,
+    );
+
+    // Stub the skillEngine to return status=pending + shouldUpdate=true.
+    // This combination can be produced by external callers or future code paths
+    // and must not corrupt the transition tally.
+    const stubEngine = {
+      checkEffectiveness: jest.fn().mockResolvedValue({
+        status: 'pending',
+        shouldUpdate: true,
+        // persisted is intentionally absent — the guard should still not tally
+      }),
+    } as any;
+
+    await runCheckEffectivenessForAllSkills({
+      skillEngine: stubEngine,
+      registryGet: (_id: string) => ({ role: 'reviewer' }),
+      projectRoot,
+    });
+
+    const healthPath = join(projectRoot, '.gossip', 'skill-runner-health.json');
+    expect(existsSync(healthPath)).toBe(true);
+    const health = JSON.parse(readFileSync(healthPath, 'utf8'));
+
+    // CRITICAL: pending must remain 0 — it is not an operator-relevant transition.
+    expect(health.transitions.pending).toBe(0);
+
+    // Other counters must also be 0 — the stub emits no terminal verdict.
+    expect(health.transitions.passed).toBe(0);
+    expect(health.transitions.failed).toBe(0);
+    expect(health.transitions.flagged_for_manual_review).toBe(0);
+    expect(health.transitions.inconclusive).toBe(0);
+  });
 });

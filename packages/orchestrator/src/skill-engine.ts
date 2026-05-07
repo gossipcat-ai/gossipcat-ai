@@ -1021,8 +1021,9 @@ ${inputs.join('\n')}
    * contents fully present — never a torn file. The tmp file is cleaned
    * up on the failure path.
    *
-   * Returns `true` if the write landed, `false` if drift was detected and
-   * the write was aborted.
+   * Returns `{ ok: true }` if the write landed, or
+   * `{ ok: false, drift: { expectedVersion, diskVersion } }` if version drift
+   * was detected and the write was aborted.
    */
   private writeSkillFileFromParts(
     skillPath: string,
