@@ -23,9 +23,67 @@ import {
   unlinkSync,
   copyFileSync,
   mkdirSync,
+  linkSync,
 } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
+
+// ---------------------------------------------------------------------------
+// Advisory file locking (linkSync-based, stale TTL 5s)
+// ---------------------------------------------------------------------------
+
+const LOCK_STALE_MS = 5000;
+const LOCK_RETRY_INTERVAL_MS = 50;
+const LOCK_MAX_RETRIES = 40; // 40 × 50ms = 2s total
+
+/**
+ * Acquire an advisory lock by creating a hard-link sidecar `.lock` file.
+ * linkSync is atomic on POSIX filesystems: only one process can win the race.
+ * Stale locks older than LOCK_STALE_MS are removed before retrying.
+ *
+ * Returns the lock path so the caller can release via releaseLock().
+ * Throws if the lock cannot be acquired within the retry window.
+ */
+function acquireLock(idxPath: string): string {
+  const lockPath = `${idxPath}.lock`;
+  // Write a sentinel file; linkSync from it to the lock path is the atomic step.
+  const sentinelPath = `${idxPath}.lock-sentinel`;
+  try {
+    writeFileSync(sentinelPath, String(Date.now()), 'utf-8');
+  } catch {
+    // If we can't write the sentinel, skip locking (best-effort) rather than blocking.
+    return lockPath;
+  }
+
+  for (let attempt = 0; attempt < LOCK_MAX_RETRIES; attempt++) {
+    try {
+      linkSync(sentinelPath, lockPath);
+      // We won — sentinel no longer needed.
+      try { unlinkSync(sentinelPath); } catch { /* ignore */ }
+      return lockPath;
+    } catch {
+      // Lock held by another process — check staleness.
+      try {
+        const lockStat = statSync(lockPath);
+        if (Date.now() - lockStat.mtimeMs > LOCK_STALE_MS) {
+          try { unlinkSync(lockPath); } catch { /* another process may have already cleared it */ }
+        }
+      } catch { /* lock file may have been released between our stat and now */ }
+
+      // Spin-wait (synchronous: this function is called from synchronous loadIndex).
+      const deadline = Date.now() + LOCK_RETRY_INTERVAL_MS;
+      while (Date.now() < deadline) { /* busy-wait */ }
+    }
+  }
+
+  // Could not acquire — proceed unlocked (best-effort advisory).
+  try { unlinkSync(sentinelPath); } catch { /* ignore */ }
+  return lockPath;
+}
+
+function releaseLock(lockPath: string): void {
+  try { unlinkSync(lockPath); } catch { /* already released or never acquired */ }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,13 +144,17 @@ const VALID_TYPES = new Set<string>(['user', 'feedback', 'project', 'reference']
 const VALID_STATUSES = new Set<string>(['open', 'shipped', 'closed']);
 
 /**
- * Parse YAML frontmatter from a memory file. Intentionally separate from the
- * memory-searcher.ts parseFrontmatter to avoid changing a hot call path and
- * to extract the wider field set (type, status, originSessionId) needed here.
+ * Low-level frontmatter parser shared across this module and memory-searcher.ts.
  *
- * Handles optional YAML quotes around values (e.g. status: "open").
+ * Parses the YAML frontmatter block delimited by `---` lines and returns:
+ * - `frontmatter`: raw key→value pairs (quotes stripped from values).
+ * - `bodyAfter`: the document body that follows the closing `---` delimiter.
+ *
+ * Returns null when no valid frontmatter block is found.
  */
-export function parseMemoryFrontmatter(content: string): MemoryFrontmatter | null {
+export function parseFrontmatterRaw(
+  content: string,
+): { frontmatter: Record<string, string>; bodyAfter: string } | null {
   const normalized = content.replace(/\r\n/g, '\n');
   if (!normalized.startsWith('---')) return null;
   const rest = normalized.slice(3);
@@ -110,6 +172,20 @@ export function parseMemoryFrontmatter(content: string): MemoryFrontmatter | nul
     const value = rawVal.replace(/^["']|["']$/g, '');
     obj[key] = value;
   }
+
+  // bodyAfter begins after the closing `---\n` (or `---` at EOF).
+  const bodyAfter = rest.slice(endIdx + 4).replace(/^\n/, '');
+  return { frontmatter: obj, bodyAfter };
+}
+
+/**
+ * Parse YAML frontmatter from a memory file into typed MemoryFrontmatter fields.
+ * Handles optional YAML quotes around values (e.g. status: "open").
+ */
+export function parseMemoryFrontmatter(content: string): MemoryFrontmatter | null {
+  const parsed = parseFrontmatterRaw(content);
+  if (!parsed) return null;
+  const obj = parsed.frontmatter;
 
   const result: MemoryFrontmatter = {};
   if (obj.name) result.name = obj.name;
@@ -383,21 +459,33 @@ export function loadIndex(projectRoot: string): MemoryIndex {
 
   const existing = tryLoadIndex(idxPath);
   if (!existing) {
-    // Full rebuild
-    const index = buildFullIndex(corpus);
+    // Full rebuild — lock the read-rebuild-write critical section.
+    const lockPath = acquireLock(idxPath);
     try {
-      mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
-      atomicWriteJson(idxPath, index);
-    } catch { /* best-effort — callers can still use the in-memory index */ }
-    return index;
+      const index = buildFullIndex(corpus);
+      try {
+        mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+        atomicWriteJson(idxPath, index);
+      } catch { /* best-effort — callers can still use the in-memory index */ }
+      return index;
+    } finally {
+      releaseLock(lockPath);
+    }
   }
 
   const { index, changed } = incrementalRebuild(existing, corpus);
   if (changed) {
+    // Incremental rebuild — lock before persisting.
+    const lockPath = acquireLock(idxPath);
     try {
-      atomicWriteJson(idxPath, index);
-    } catch { /* best-effort */ }
+      try {
+        atomicWriteJson(idxPath, index);
+      } catch { /* best-effort */ }
+    } finally {
+      releaseLock(lockPath);
+    }
   }
+  // No rebuild needed — skip locking (read-only path).
   return index;
 }
 

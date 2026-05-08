@@ -7,8 +7,9 @@
  * the term-frequency counts stored in MemoryIndexDoc.terms at index-build
  * time, so the scoring path here is a single BM25 formula per (term, doc).
  *
- * Status boost: additive only, default magnitude 0. `status: undefined` is
- * treated the same as `status: open` — no penalty for missing status.
+ * Status boost removed: memory-searcher.ts hardcoded openBoost: 0 making
+ * the option dead code. Deleted in PR #364/#365 follow-up cluster — option
+ * can be re-introduced if a caller needs it, but it was never wired through.
  */
 
 import type { MemoryIndex, MemoryIndexDoc } from './memory-index-sidecar';
@@ -16,10 +17,10 @@ import type { MemoryIndex, MemoryIndexDoc } from './memory-index-sidecar';
 const K1 = 1.5;
 const B = 0.75;
 
-export interface BM25Options {
-  /** Additive score boost for status:open (and absent status). Default: 0. */
-  openBoost?: number;
-}
+// BM25Options is kept for forward-compat — the interface is part of the
+// public API surface even if currently empty.
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+export interface BM25Options {}
 
 /**
  * Score a single document against a set of query terms using BM25.
@@ -37,7 +38,7 @@ export function bm25Score(
   N: number,
   avgDl: number,
   postings: MemoryIndex['postings'],
-  options: BM25Options = {},
+  _options: BM25Options = {},
 ): number {
   if (N === 0 || terms.length === 0) return 0;
 
@@ -63,15 +64,6 @@ export function bm25Score(
     const numerator = tf * (K1 + 1);
     const denominator = tf + K1 * (1 - B + B * normDl);
     score += idf * (numerator / denominator);
-  }
-
-  // Additive status boost: open or absent status → boost; shipped/closed → no change.
-  const { openBoost = 0 } = options;
-  if (openBoost > 0) {
-    const status = doc.status;
-    if (status === 'open' || status === undefined) {
-      score += openBoost;
-    }
   }
 
   return score;

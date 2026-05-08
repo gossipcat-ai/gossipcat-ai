@@ -132,6 +132,13 @@ export class ConsensusEngine {
    */
   private anchorPathCache = new Map<string, string | null>();
   /**
+   * Tracks fileRefs for which a null-resolution warning has already been emitted.
+   * Prevents repeated console.warn spam when the same unresolvable citation
+   * appears across multiple findings in the same round. Cleared alongside
+   * anchorPathCache in updateWorktreeRoots.
+   */
+  private anchorWarnedRefs = new Set<string>();
+  /**
    * Per-task worktree paths discovered from TaskEntry.worktreeInfo. Used as
    * additional file-resolution roots so consensus auto-anchor can find files
    * created in a feature-branch worktree (which only exist there, not in the
@@ -250,6 +257,7 @@ export class ConsensusEngine {
       this.pathCache.clear();
       this.fileCache.clear();
       this.anchorPathCache.clear();
+      this.anchorWarnedRefs.clear();
     }
   }
 
@@ -307,9 +315,21 @@ export class ConsensusEngine {
    * updateWorktreeRoots when the worktree set changes.
    */
   private async cachedResolveForAnchor(fileRef: string): Promise<string | null> {
+    // Cache hit: return immediately — no warning on cache-replay (memoized null).
     if (this.anchorPathCache.has(fileRef)) return this.anchorPathCache.get(fileRef)!;
-    const resolved = await this.resolveFilePath(fileRef, { priorityRoots: this.getAnchorPriorityRoots() });
+    const priorityRoots = this.getAnchorPriorityRoots();
+    const resolved = await this.resolveFilePath(fileRef, { priorityRoots });
     this.anchorPathCache.set(fileRef, resolved);
+    // Emit a one-time warning only on the first genuine miss (not cache-replay).
+    // anchorWarnedRefs dedups across repeated calls with the same unresolvable ref.
+    if (resolved === null && !this.anchorWarnedRefs.has(fileRef)) {
+      this.anchorWarnedRefs.add(fileRef);
+      const rootList = priorityRoots.join(', ') || '(none)';
+      console.warn(
+        `[consensus-engine] anchor resolution: "${fileRef}" not found after trying roots [${rootList}].` +
+        ` The cited file may not exist on disk, or the citation path may be incorrect.`,
+      );
+    }
     return resolved;
   }
 

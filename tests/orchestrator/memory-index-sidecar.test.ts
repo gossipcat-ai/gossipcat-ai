@@ -565,7 +565,7 @@ describe('BM25 recall improvement', () => {
     expect(ranked[0].filename).toBe('feedback_readsignals.md');
   });
 
-  it('scores open/absent status equivalently with default openBoost=0', () => {
+  it('scores open/absent status equivalently (openBoost removed — dead code)', () => {
     writeMd(corpus, 'with_open.md', frontmatterMd({
       name: 'Signal Tracking Open',
       type: 'feedback',
@@ -585,10 +585,10 @@ describe('BM25 recall improvement', () => {
 
     const index = buildFullIndex(corpus);
     const terms = Array.from(new Set(tokenize('signal tracking')));
-    const ranked = rankDocuments(terms, index, { openBoost: 0 });
+    const ranked = rankDocuments(terms, index);
 
     expect(ranked.length).toBe(2);
-    // Scores should be equal since content is identical and openBoost=0
+    // Scores should be equal since content is identical (no status boost).
     expect(Math.abs(ranked[0].score - ranked[1].score)).toBeLessThan(0.001);
   });
 
