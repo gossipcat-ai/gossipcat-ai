@@ -1,4 +1,4 @@
-import { MemorySearcher } from '@gossip/orchestrator';
+import { MemorySearcher, buildFullIndex, tokenize as bm25Tokenize, rankDocuments } from '@gossip/orchestrator';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -307,5 +307,109 @@ describe('MemorySearcher', () => {
     expect(results.length).toBe(2);
     expect(results[0].name).toBe('relay high');
     expect(results[0].score).toBeGreaterThan(results[1].score);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BM25 corpus search via _project sentinel
+// ---------------------------------------------------------------------------
+
+describe('MemorySearcher BM25 corpus search (_project)', () => {
+  // The _project sentinel routes through searchCorpus() → BM25.
+  // When the corpus dir doesn't exist, results should be empty (no crash).
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = join(tmpdir(), `gossip-bm25-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(join(tmpRoot, '.gossip'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('returns empty array when corpus does not exist (no crash)', () => {
+    const searcher = new MemorySearcher(tmpRoot);
+    const results = searcher.search('_project', 'signal expiry logic');
+    expect(results).toEqual([]);
+  });
+
+  it('_project route does not require a .gossip/agents/_project/memory dir', () => {
+    // No agents dir created — should still return without throwing
+    const searcher = new MemorySearcher(tmpRoot);
+    expect(() => searcher.search('_project', 'relay connection')).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BM25 scoring via rankDocuments
+// ---------------------------------------------------------------------------
+
+describe('BM25 scoring via rankDocuments', () => {
+  let corpus: string;
+
+  beforeEach(() => {
+    corpus = join(tmpdir(), `gossip-bm25-corpus-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(corpus, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(corpus, { recursive: true, force: true });
+  });
+
+  function writeMdFile(filename: string, content: string): void {
+    writeFileSync(join(corpus, filename), content, 'utf-8');
+  }
+
+  function fmFmt(fields: Record<string, string>, body = 'Body.'): string {
+    const lines = ['---'];
+    for (const [k, v] of Object.entries(fields)) lines.push(`${k}: ${v}`);
+    lines.push('---', '', body);
+    return lines.join('\n') + '\n';
+  }
+
+  it('recall test: "signal expiry logic" hits memories mentioning readSignals', () => {
+    writeMdFile('feedback_readsignals.md', fmFmt({
+      name: 'readSignals expiry',
+      type: 'feedback',
+      status: 'open',
+      description: 'Signal expiry in readSignals function',
+    }, 'The readSignals function expires old signal data from the processing queue based on TTL settings.'));
+
+    writeMdFile('unrelated_dashboard.md', fmFmt({
+      name: 'Dashboard Theme',
+      type: 'project',
+      status: 'open',
+      description: 'Cream ink palette for dashboard',
+    }, 'Editorial cream ink palette with serif typography.'));
+
+    const index = buildFullIndex(corpus);
+    const terms = Array.from(new Set(bm25Tokenize('signal expiry logic')));
+    const ranked = rankDocuments(terms, index);
+
+    expect(ranked.length).toBeGreaterThan(0);
+    expect(ranked[0].filename).toBe('feedback_readsignals.md');
+  });
+
+  it('returns empty results for query terms not in any document', () => {
+    writeMdFile('a.md', fmFmt({ name: 'Alpha' }, 'Relay server internals.'));
+    const index = buildFullIndex(corpus);
+    const terms = Array.from(new Set(bm25Tokenize('zxyvwquartz')));
+    const ranked = rankDocuments(terms, index);
+    expect(ranked).toEqual([]);
+  });
+
+  it('IDF down-weights common terms — rare term uniquely identifies doc', () => {
+    writeMdFile('a.md', fmFmt({ name: 'Signal Alpha', description: 'signal data' }, 'signal processing here'));
+    writeMdFile('b.md', fmFmt({ name: 'Signal Beta', description: 'signal data' }, 'signal pipeline'));
+    writeMdFile('c.md', fmFmt({ name: 'Signal Gamma Expiry', description: 'signal expiry logic' }, 'signal expiry mechanism present'));
+
+    const index = buildFullIndex(corpus);
+    const termsExpiry = Array.from(new Set(bm25Tokenize('expiry')));
+
+    const rankedExpiry = rankDocuments(termsExpiry, index);
+    // Only doc c should match "expiry"
+    expect(rankedExpiry.length).toBe(1);
+    expect(rankedExpiry[0].filename).toBe('c.md');
   });
 });

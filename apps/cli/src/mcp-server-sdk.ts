@@ -4129,13 +4129,16 @@ server.tool(
 
 server.tool(
   'gossip_remember',
-  'Search an agent\'s archived knowledge files.',
+  'Search an agent\'s archived knowledge files, or manage the memory sidecar index.',
   {
     agent_id: z.string().describe('Agent ID to search knowledge for'),
     query: z.string().max(500).describe('Search query (max 500 chars)'),
     max_results: z.number().int().min(1).max(10).optional().default(3).describe('Max results (default 3, max 10)'),
+    action: z.enum(['search', 'rebuild_index', 'rebuild_md']).optional().default('search').describe(
+      'Action: "search" (default) to query knowledge; "rebuild_index" for a full BM25 sidecar rebuild; "rebuild_md" to regenerate MEMORY.md from the index.'
+    ),
   },
-  async ({ agent_id, query, max_results }) => {
+  async ({ agent_id, query, max_results, action = 'search' }) => {
     await boot();
     // Spec: docs/specs/2026-04-19-gossip-remember-hardening.md
     // Part 1: path-prefix split. Part 5: RESERVED_IDS underscore-prefix check.
@@ -4145,6 +4148,29 @@ server.tool(
     if (isReservedAgentId(agent_id)) {
       return { content: [{ type: 'text' as const, text: `Error: agent_id "${agent_id}" is reserved (underscore-prefixed ids other than "_project" are not allowed)` }] };
     }
+
+    const projectRoot = process.cwd();
+
+    if (action === 'rebuild_index') {
+      const { rebuildIndex } = await import('@gossip/orchestrator');
+      try {
+        const index = rebuildIndex(projectRoot);
+        return { content: [{ type: 'text' as const, text: `Memory index rebuilt: ${index.totalDocs} docs indexed at .gossip/memory-index.json` }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error rebuilding index: ${(err as Error).message}` }] };
+      }
+    }
+
+    if (action === 'rebuild_md') {
+      const { rebuildMemoryMd } = await import('@gossip/orchestrator');
+      try {
+        rebuildMemoryMd(projectRoot);
+        return { content: [{ type: 'text' as const, text: 'MEMORY.md regenerated from sidecar index (prior MEMORY.md backed up to MEMORY.md.bak).' }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error regenerating MEMORY.md: ${(err as Error).message}` }] };
+      }
+    }
+
     // Option 1 attribution (project_memory_query_observability.md): native
     // subagents reach gossip_remember through the MCP server, not the relay
     // router, so the router-level hook can't see them. Mirror the same
@@ -4158,7 +4184,6 @@ server.tool(
     } catch { /* best-effort — attribution never blocks the tool */ }
     const { MemorySearcher } = await import('@gossip/orchestrator');
     const { wrapMemoryEnvelope, recordMemoryQuery } = await import('@gossip/tools');
-    const projectRoot = process.cwd();
     const searcher = new MemorySearcher(projectRoot);
     const results = searcher.search(agent_id, query, max_results);
 

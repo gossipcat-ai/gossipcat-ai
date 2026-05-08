@@ -51,6 +51,7 @@ export class MemorySearcher {
           const frontmatter = this.parseFrontmatter(content);
           const body = content.replace(/^---[\s\S]*?---\n*/, '');
 
+          // Regression baseline: files with no frontmatter still appear, name falls back to basename.
           const name = frontmatter?.name || basename(file, '.md');
           const description = frontmatter?.description || '';
           const importance = frontmatter?.importance ?? 0.5;
