@@ -1,8 +1,8 @@
 /**
- * PROTOTYPE — Wilson score interval as a drop-in candidate for oneSidedZTest.
+ * Wilson score interval — the live skill-graduation verdict path.
  *
- * The current one-sided z-test in check-effectiveness.ts has three known
- * statistical flaws:
+ * The legacy one-sided z-test in check-effectiveness.ts has three known
+ * statistical flaws that motivated this replacement:
  *   1. se === 0 lockout when baselineP ∈ {0, 1}. A skill with a 0/6 baseline
  *      can never graduate because the z-test's standard error collapses.
  *   2. baselineP falls back to 0.5 when baselineTotal === 0. This doubles
@@ -18,7 +18,9 @@
  *   - Sparse baselines produce wide CIs that naturally demand more evidence.
  *   - The CI overlap test has calibrated frequentist coverage.
  *
- * This file is prototype only. No integration into resolveVerdict.
+ * Integrated as the live verdict path via wilsonVerdict; the legacy
+ * oneSidedZTest in check-effectiveness.ts is retained for the
+ * diagnostic-only zScore field on snapshots. See HANDBOOK invariant #2.
  */
 
 /**
