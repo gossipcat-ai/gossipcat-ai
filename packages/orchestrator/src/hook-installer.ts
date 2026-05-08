@@ -5,8 +5,13 @@
  * Idempotent — safe to re-run on every `gossip_setup` call (merge/replace).
  * Never throws; returns `{installed: false, reason}` on any failure so setup
  * stays unblocked.
+ *
+ * Also exports `installDisciplineHooks` for the orchestrator-discipline v1
+ * hook bundle (SessionStart bootstrap, PreToolUse signals validator,
+ * PostToolUse collect reminder). These write into `.claude/settings.local.json`
+ * (personal discipline hooks, not project-shared security controls).
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, renameSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 
 export interface HookInstallResult {
@@ -166,5 +171,191 @@ export function installWorktreeSandboxHook(projectRoot: string): HookInstallResu
     return { installed: true };
   } catch (err) {
     return { installed: false, reason: (err as Error).message };
+  }
+}
+
+// ── Discipline hooks (settings.local.json) ───────────────────────────────────
+
+export interface DisciplineHookInstallResult {
+  installed: string[];
+  skipped: string[];
+  reason?: string;
+}
+
+const DISCIPLINE_HOOK_DIR = 'discipline';
+
+const DISCIPLINE_HOOKS = [
+  {
+    name: 'session-start-bootstrap',
+    event: 'SessionStart' as const,
+    matcher: '*',
+    command: '$CLAUDE_PROJECT_DIR/.claude/hooks/discipline/session-start-bootstrap.sh',
+    filename: 'session-start-bootstrap.sh',
+  },
+  {
+    name: 'pretool-signals-validate',
+    event: 'PreToolUse' as const,
+    matcher: 'mcp__gossipcat__gossip_signals',
+    command: '$CLAUDE_PROJECT_DIR/.claude/hooks/discipline/pretool-signals-validate.sh',
+    filename: 'pretool-signals-validate.sh',
+  },
+  {
+    name: 'posttool-collect-reminder',
+    event: 'PostToolUse' as const,
+    matcher: 'mcp__gossipcat__gossip_collect',
+    command: '$CLAUDE_PROJECT_DIR/.claude/hooks/discipline/posttool-collect-reminder.sh',
+    filename: 'posttool-collect-reminder.sh',
+  },
+] as const;
+
+/**
+ * Resolve a bundled discipline hook asset. Mirrors `findBundledHook` candidate
+ * strategy so it works from both the esbuild bundle (dist-mcp/) and dev (ts-node).
+ */
+function findDisciplineHook(filename: string): string | null {
+  const candidates = [
+    resolve(__dirname, 'assets', 'hooks', DISCIPLINE_HOOK_DIR, filename),
+    resolve(__dirname, '..', '..', '..', 'assets', 'hooks', DISCIPLINE_HOOK_DIR, filename),
+    resolve(__dirname, '..', 'assets', 'hooks', DISCIPLINE_HOOK_DIR, filename),
+    resolve(process.cwd(), 'assets', 'hooks', DISCIPLINE_HOOK_DIR, filename),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * Load `.claude/settings.local.json`.
+ *
+ * - File doesn't exist → return `{}`
+ * - File exists, valid JSON object → return parsed object
+ * - File exists but malformed JSON or not a plain object → THROW so caller
+ *   can skip the write rather than silently replacing user content.
+ */
+function loadLocalSettings(settingsPath: string): Record<string, any> {
+  if (!existsSync(settingsPath)) return {};
+  const raw = readFileSync(settingsPath, 'utf-8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `settings.local.json at ${settingsPath} contains malformed JSON: ${(err as Error).message}`,
+    );
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `settings.local.json at ${settingsPath} is not a JSON object (got ${Array.isArray(parsed) ? 'array' : typeof parsed})`,
+    );
+  }
+  return parsed as Record<string, any>;
+}
+
+/**
+ * Idempotently merge a hook entry for `hookEvent` with the given `matcher` and
+ * `command` into `settings`. Returns `true` if the settings object was mutated,
+ * `false` if the exact command was already registered (no-op).
+ */
+function mergeHookEntry(
+  settings: Record<string, any>,
+  hookEvent: string,
+  matcher: string,
+  command: string,
+): boolean {
+  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
+  const hooks = settings.hooks as Record<string, any>;
+  if (!Array.isArray(hooks[hookEvent])) hooks[hookEvent] = [];
+  const eventHooks = hooks[hookEvent] as any[];
+
+  // Idempotency: bail if any entry already contains this exact command.
+  const alreadyInstalled = eventHooks.some(entry => {
+    const innerHooks = entry && Array.isArray(entry.hooks) ? entry.hooks : [];
+    return innerHooks.some(
+      (h: any) => h && typeof h === 'object' && h.command === command,
+    );
+  });
+  if (alreadyInstalled) return false;
+
+  eventHooks.push({
+    matcher,
+    hooks: [{ type: 'command', command }],
+  });
+  return true;
+}
+
+/**
+ * Install the v1 orchestrator-discipline hook bundle into
+ * `<projectRoot>/.claude/settings.local.json` (personal hooks, gitignored).
+ *
+ * Three hooks are registered:
+ *   1. SessionStart → bootstrap reminder
+ *   2. PreToolUse on gossip_signals → finding_id validator
+ *   3. PostToolUse on gossip_collect → signal-recording reminder
+ *
+ * Idempotent — safe to call on every `gossip_setup`. Malformed settings.local.json
+ * is treated as fatal (returns early with reason, never overwrites user content).
+ */
+export function installDisciplineHooks(projectRoot: string): DisciplineHookInstallResult {
+  const installed: string[] = [];
+  const skipped: string[] = [];
+
+  try {
+    // 1. Copy hook scripts into .claude/hooks/discipline/ and mark executable.
+    const targetDir = join(projectRoot, '.claude', 'hooks', DISCIPLINE_HOOK_DIR);
+    mkdirSync(targetDir, { recursive: true });
+
+    for (const hook of DISCIPLINE_HOOKS) {
+      const bundled = findDisciplineHook(hook.filename);
+      if (!bundled) {
+        skipped.push(hook.name);
+        continue;
+      }
+      const target = join(targetDir, hook.filename);
+      copyFileSync(bundled, target);
+      chmodSync(target, 0o755);
+    }
+
+    // 2. Load settings.local.json — throw on malformed JSON so we never
+    //    silently clobber user content.
+    const settingsPath = join(projectRoot, '.claude', 'settings.local.json');
+    mkdirSync(dirname(settingsPath), { recursive: true });
+
+    let settings: Record<string, any>;
+    try {
+      settings = loadLocalSettings(settingsPath);
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] settings.local.json at ${settingsPath} is malformed; skipping discipline hook install. ` +
+        `Fix the file or delete it and re-run gossip_setup.\n`,
+      );
+      return { installed, skipped, reason: (err as Error).message };
+    }
+
+    // 3. Merge all three hook entries idempotently.
+    let anyMutated = false;
+    for (const hook of DISCIPLINE_HOOKS) {
+      const bundled = findDisciplineHook(hook.filename);
+      if (!bundled) continue; // already skipped above
+
+      const mutated = mergeHookEntry(settings, hook.event, hook.matcher, hook.command);
+      if (mutated) {
+        installed.push(hook.name);
+        anyMutated = true;
+      } else {
+        skipped.push(hook.name);
+      }
+    }
+
+    // 4. Atomic write via tmp + rename to avoid partial writes.
+    if (anyMutated) {
+      const tmp = settingsPath + '.tmp.' + process.pid;
+      writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
+      renameSync(tmp, settingsPath);
+    }
+
+    return { installed, skipped };
+  } catch (err) {
+    return { installed, skipped, reason: (err as Error).message };
   }
 }

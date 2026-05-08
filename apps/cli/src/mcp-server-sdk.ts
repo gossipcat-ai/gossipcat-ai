@@ -2055,6 +2055,32 @@ server.tool(
       process.stderr.write(`[gossipcat] gossip_setup: sandbox hook install failed: ${e}\n`);
     }
 
+    // Orchestrator-discipline hook bundle — installs 3 personal hooks into
+    // .claude/settings.local.json (gitignored). Idempotent and non-blocking.
+    let disciplineSummary = '';
+    try {
+      process.stderr.write(
+        '[gossipcat] Installing 3 discipline hooks into .claude/settings.local.json: ' +
+        'SessionStart bootstrap, PreToolUse signals validator, PostToolUse collect reminder. ' +
+        'To skip: delete entries from settings.local.json after install.\n',
+      );
+      const { installDisciplineHooks } = require('@gossip/orchestrator') as typeof import('@gossip/orchestrator');
+      const disciplineResult = installDisciplineHooks(root);
+      if (disciplineResult.reason) {
+        disciplineSummary = `Discipline hooks: skipped (${disciplineResult.reason})`;
+      } else if (disciplineResult.installed.length > 0) {
+        disciplineSummary = `Discipline hooks: installed [${disciplineResult.installed.join(', ')}]`;
+        if (disciplineResult.skipped.length > 0) {
+          disciplineSummary += `, already present [${disciplineResult.skipped.join(', ')}]`;
+        }
+      } else {
+        disciplineSummary = 'Discipline hooks: already present (no changes)';
+      }
+    } catch (e) {
+      disciplineSummary = `Discipline hooks: skipped (${(e as Error).message})`;
+      process.stderr.write(`[gossipcat] gossip_setup: discipline hook install failed: ${e}\n`);
+    }
+
     // Memory hygiene CLAUDE.md seeding — spec 2026-04-17-memory-hygiene-propagation.
     // Idempotent: appends convention block if CLAUDE.md exists but lacks the heading;
     // no-ops if heading present; skips silently if CLAUDE.md missing.
@@ -2132,6 +2158,9 @@ server.tool(
       lines.push('  Orchestrator-role marker: .gossip/orchestrator-role written (issue #176)');
       lines.push('  The hook now auto-exempts the orchestrator when it cd\'s into a worktree.');
       lines.push('  (No manual GOSSIPCAT_ORCHESTRATOR_ROLE env var needed.)');
+    }
+    if (disciplineSummary) {
+      lines.push(disciplineSummary);
     }
     lines.push('Agents will connect to relay on first gossip_dispatch() call.');
     if (nativeCreated.length > 0) {
