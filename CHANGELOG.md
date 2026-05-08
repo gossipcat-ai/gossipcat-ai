@@ -4,6 +4,28 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.24] — 2026-05-08
+
+BM25 memory-search wiring + hono CVE override. Closes the follow-up deferred from v0.4.23 (PR #360 shipped the sidecar; this release wires it into the query path). No breaking changes for non-`_project` agent IDs; `_project` semantics shift from per-project `.gossip/agents/_project/memory/` to the public auto-memory corpus at `~/.claude/projects/<encoded>/memory/` (the documented intent — orchestrator's cross-session memory pool).
+
+### Added
+
+- **`MemorySearcher.searchCorpus()`** (PR #364). Routes `agent_id="_project"` through the BM25 sidecar built in #360: `tokenize` → `loadIndex` (lazy mtime-keyed incremental rebuild) → `rankDocuments` → `SearchResult` projection. Per-agent knowledge-file path unchanged for non-`_project` queries. 3 new tests cover ranking, empty-result, and lazy-rebuild trigger; full test suite 229/229 green.
+
+### Fixed
+
+- **hono CVE override** (PR #364). Bumps transitive `hono` from 4.12.14 → 4.12.18 via `overrides.hono: ">=4.12.16 <5"` to patch [GHSA-69xw-7hcm-h432](https://github.com/advisories/GHSA-69xw-7hcm-h432) (jsx HTML injection) and [GHSA-9vqf-7f2p-gf9v](https://github.com/advisories/GHSA-9vqf-7f2p-gf9v) (`bodyLimit()` bypass for chunked / unknown-length requests). Reaches via `@modelcontextprotocol/sdk@1.27.1` → `@hono/node-server`. Mirrors the ip-address override pattern from #361.
+
+### Changed
+
+- **`_project` is now the public-memory sentinel.** `gossip_remember(agent_id: "_project", query: ...)` now searches the auto-memory corpus at `~/.claude/projects/<encoded-cwd>/memory/` (where `MEMORY.md` and the project_*/feedback_*/user_* memories live), not the per-project `.gossip/agents/_project/memory/` directory. The legacy per-project directory is no longer reachable via this sentinel; if you were relying on it, use a non-reserved agent_id instead.
+
+### Notes
+
+- Consensus round `2ae7bea8-d0f445f2` validated the change via gemini-reviewer + sonnet-reviewer cross-review (4 confirmed, 2 disputed-and-rejected, 5 hallucinations caught and signaled). 4 follow-up findings recorded for future PRs (loadIndex file-lock gap, corpusDir doc accuracy, latent open-boost bug for typeless frontmatter, frontmatter parser duplication).
+- New backlog memory `project_consensus_anchor_resolutionroots_gap.md` documents a discovered gossipcat bug: cross-review prompt `<anchor>` blocks are resolved against `project_root` (master HEAD), not against `resolutionRoots` paths, which caused 3 false-absence findings on this PR before orchestrator manual verification.
+- New trust_boundaries skill bound to `sonnet-reviewer` (`trust-boundaries-anchor-and-branch-verification`) targets the absence-claim hallucination cluster surfaced by this consensus round.
+
 ## [0.4.23] — 2026-05-05
 
 Skill-graduation lifecycle fix + signal pipeline integrity + dashboard visual/IA pass + new CI gates. Bundles ~50 merged PRs since v0.4.22. Headline fix is **PR #353** (the v0.4.22 skill runner fix turned out to be structurally bypassed on the production-common code path; this release closes both root causes). No breaking changes; existing `.gossip/` state is fully forward-compatible.
