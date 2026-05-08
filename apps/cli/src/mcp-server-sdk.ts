@@ -4182,6 +4182,9 @@ server.tool(
       const { recordMemoryQueryAttribution } = await import('@gossip/relay');
       recordMemoryQueryAttribution(agent_id, 'gossip_remember');
     } catch { /* best-effort — attribution never blocks the tool */ }
+    // The `search` action still uses MemorySearcher's String.includes scorer.
+    // The BM25 sidecar (rebuild_index / rebuild_md actions above) is built but
+    // not yet queried here — wiring search through the sidecar is a follow-up.
     const { MemorySearcher } = await import('@gossip/orchestrator');
     const { wrapMemoryEnvelope, recordMemoryQuery } = await import('@gossip/tools');
     const searcher = new MemorySearcher(projectRoot);

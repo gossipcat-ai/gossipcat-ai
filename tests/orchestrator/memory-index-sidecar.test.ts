@@ -5,6 +5,7 @@ import {
   corpusDir,
   tokenize,
   rankDocuments,
+  rebuildIndex,
 } from '@gossip/orchestrator';
 import type { MemoryIndex } from '@gossip/orchestrator';
 import {
@@ -296,18 +297,50 @@ describe('sidecarPath and atomic write behavior', () => {
     expect(result).toBe('/some/project/.gossip/memory-index.json');
   });
 
-  it('no stray .tmp file remains after index is written', () => {
-    const corpus = makeCorpus(projectRoot);
-    writeMd(corpus, 'project_a.md', frontmatterMd({ name: 'A', type: 'project' }));
+  it('rebuildIndex writes via atomic tmp+rename and leaves no stray .tmp', () => {
+    // Redirect HOME so corpusDir() points inside our tmpdir instead of the real home
+    const originalHome = process.env.HOME;
+    const fakeHome = join(tmpdir(), `gossip-fakehome-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    process.env.HOME = fakeHome;
+    try {
+      const corpus = corpusDir(projectRoot);
+      mkdirSync(corpus, { recursive: true });
+      writeMd(corpus, 'project_a.md', frontmatterMd({ name: 'A', type: 'project' }));
 
-    const index = buildFullIndex(corpus);
-    const idxPath = sidecarPath(projectRoot);
-    const tmpPath = `${idxPath}.tmp`;
+      rebuildIndex(projectRoot);
 
-    writeFileSync(idxPath, JSON.stringify(index, null, 2), 'utf-8');
+      const idxPath = sidecarPath(projectRoot);
+      expect(existsSync(idxPath)).toBe(true);
+      expect(existsSync(`${idxPath}.tmp`)).toBe(false);
+    } finally {
+      process.env.HOME = originalHome;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
 
-    expect(existsSync(idxPath)).toBe(true);
-    expect(existsSync(tmpPath)).toBe(false);
+  it('atomic write cleans up .tmp when the rename fails', () => {
+    const originalHome = process.env.HOME;
+    const fakeHome = join(tmpdir(), `gossip-fakehome-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    process.env.HOME = fakeHome;
+    try {
+      const corpus = corpusDir(projectRoot);
+      mkdirSync(corpus, { recursive: true });
+      writeMd(corpus, 'project_a.md', frontmatterMd({ name: 'A', type: 'project' }));
+
+      // Force renameSync to fail by pre-occupying the sidecar path with a non-empty directory.
+      // POSIX rename(file, non-empty-dir) → ENOTEMPTY/EISDIR.
+      const idxPath = sidecarPath(projectRoot);
+      mkdirSync(idxPath, { recursive: true });
+      writeFileSync(join(idxPath, 'sentinel'), 'block');
+
+      expect(() => rebuildIndex(projectRoot)).toThrow();
+
+      // Even though the rename failed, the .tmp file must not remain.
+      expect(existsSync(`${idxPath}.tmp`)).toBe(false);
+    } finally {
+      process.env.HOME = originalHome;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
 });
 
