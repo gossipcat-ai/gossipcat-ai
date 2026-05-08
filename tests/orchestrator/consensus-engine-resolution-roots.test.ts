@@ -170,6 +170,36 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
     expect(snippets).toContain('<anchor');
   });
 
+  it('Test 18 — master-fallback anchor block carries via="⚠ resolved against project root, NOT worktree"', async () => {
+    // File exists at projectRoot but NOT inside the priorityRoot worktree.
+    // The anchor should render (resolves via projectRoot fallback) and must
+    // carry the worktree-warning attribute shipped in PR #365.
+    const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
+    const wt = realpathSync(mkdtempSync(join(tmp, 'wt')));
+
+    // File only lives at projectRoot — not in the worktree.
+    mkdirSync(join(proj, 'src'), { recursive: true });
+    writeFileSync(join(proj, 'src', 'master-only.ts'), 'export function masterFn() { return 42; }');
+    // No corresponding file at wt/src/master-only.ts
+
+    const engine = new ConsensusEngine({
+      llm: makeLlm(),
+      registryGet: () => undefined,
+      projectRoot: proj,
+      resolutionRoots: [wt],
+    } as ConsensusEngineConfig);
+
+    const snippets: string = await (engine as any).snippetsForFinding(
+      'Potential issue at src/master-only.ts:1',
+    );
+
+    // Snippet must render — file found via projectRoot fallback.
+    expect(snippets).toContain('<anchor');
+    expect(snippets).toContain('masterFn');
+    // The warning attribute must be present (PR #365 @ consensus-engine.ts:1498 + 1543).
+    expect(snippets).toContain('via="⚠ resolved against project root, NOT worktree"');
+  });
+
   it('Test 17 — anchorPathCache is cleared when worktree roots change', async () => {
     const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
     mkdirSync(join(proj, 'src'), { recursive: true });

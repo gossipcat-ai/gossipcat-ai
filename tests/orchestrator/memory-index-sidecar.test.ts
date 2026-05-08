@@ -6,6 +6,7 @@ import {
   tokenize,
   rankDocuments,
   rebuildIndex,
+  tryAcquireLockOnce,
 } from '@gossip/orchestrator';
 import type { MemoryIndex } from '@gossip/orchestrator';
 import {
@@ -565,7 +566,7 @@ describe('BM25 recall improvement', () => {
     expect(ranked[0].filename).toBe('feedback_readsignals.md');
   });
 
-  it('scores open/absent status equivalently with default openBoost=0', () => {
+  it('scores open/absent status equivalently (openBoost removed — dead code)', () => {
     writeMd(corpus, 'with_open.md', frontmatterMd({
       name: 'Signal Tracking Open',
       type: 'feedback',
@@ -585,10 +586,10 @@ describe('BM25 recall improvement', () => {
 
     const index = buildFullIndex(corpus);
     const terms = Array.from(new Set(tokenize('signal tracking')));
-    const ranked = rankDocuments(terms, index, { openBoost: 0 });
+    const ranked = rankDocuments(terms, index);
 
     expect(ranked.length).toBe(2);
-    // Scores should be equal since content is identical and openBoost=0
+    // Scores should be equal since content is identical (no status boost).
     expect(Math.abs(ranked[0].score - ranked[1].score)).toBeLessThan(0.001);
   });
 
@@ -634,5 +635,51 @@ describe('BM25 recall improvement', () => {
     const terms = Array.from(new Set(tokenize('zxyvwquartz')));
     const ranked = rankDocuments(terms, index);
     expect(ranked).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tryAcquireLockOnce — non-blocking lock
+// ---------------------------------------------------------------------------
+
+describe('tryAcquireLockOnce', () => {
+  let projectRoot: string;
+
+  beforeEach(() => {
+    projectRoot = makeProjectDir();
+  });
+
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  it('returns {acquired: false} when lock file already exists with a fresh mtime', () => {
+    const idxPath = sidecarPath(projectRoot);
+    const lockPath = `${idxPath}.lock`;
+
+    // Pre-create the lock file with a fresh mtime (well within LOCK_STALE_MS=5000ms).
+    writeFileSync(lockPath, String(Date.now()), 'utf-8');
+
+    const result = tryAcquireLockOnce(idxPath);
+    expect(result.acquired).toBe(false);
+
+    // Ensure we didn't leave a stray sentinel behind.
+    const sentinelPath = `${idxPath}.lock-sentinel`;
+    expect(existsSync(sentinelPath)).toBe(false);
+
+    // Clean up the lock file we pre-created.
+    try { rmSync(lockPath); } catch { /* ignore */ }
+  });
+
+  it('acquires and releases lock when none is held', () => {
+    const idxPath = sidecarPath(projectRoot);
+    const result = tryAcquireLockOnce(idxPath);
+    expect(result.acquired).toBe(true);
+    if (result.acquired) {
+      expect(existsSync(result.lockPath)).toBe(true);
+      // Release the lock.
+      rmSync(result.lockPath, { force: true });
+      expect(existsSync(result.lockPath)).toBe(false);
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { join, basename } from 'path';
-import { loadIndex, tokenize, corpusDir } from './memory-index-sidecar';
+import { loadIndex, tokenize, corpusDir, parseFrontmatterRaw } from './memory-index-sidecar';
 import { rankDocuments } from './memory-index-bm25';
 
 const MAX_QUERY_LENGTH = 500;
@@ -40,7 +40,7 @@ export class MemorySearcher {
     const index = loadIndex(this.projectRoot);
     if (index.totalDocs === 0) return [];
 
-    const ranked = rankDocuments(terms, index, { openBoost: 0 });
+    const ranked = rankDocuments(terms, index);
     const limit = Math.min(maxResults, 10);
 
     return ranked.slice(0, limit).map(({ filename, score }) => {
@@ -251,19 +251,11 @@ export class MemorySearcher {
   }
 
   private parseFrontmatter(content: string): ParsedFrontmatter | null {
-    // Normalize CRLF to LF for cross-platform compatibility
-    const normalized = content.replace(/\r\n/g, '\n');
-    const match = normalized.match(/^---\n([\s\S]*?)\n---/);
-    if (!match) return null;
-    const lines = match[1].split('\n');
-    const obj: Record<string, string> = {};
-    for (const line of lines) {
-      const colonIdx = line.indexOf(':');
-      if (colonIdx === -1) continue;
-      const key = line.slice(0, colonIdx).trim();
-      const value = line.slice(colonIdx + 1).trim();
-      obj[key] = value;
-    }
+    // Delegate to the canonical parser in memory-index-sidecar.ts.
+    // parseFrontmatterRaw handles CRLF normalisation and quote-stripping.
+    const parsed = parseFrontmatterRaw(content);
+    if (!parsed) return null;
+    const obj = parsed.frontmatter;
     const rawImportance = obj.importance !== undefined ? parseFloat(obj.importance) : NaN;
     const importance = Number.isNaN(rawImportance) ? 0.5 : Math.max(0, Math.min(1, rawImportance));
     return {
