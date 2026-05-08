@@ -33,52 +33,50 @@ import { homedir } from 'os';
 // ---------------------------------------------------------------------------
 
 const LOCK_STALE_MS = 5000;
-const LOCK_RETRY_INTERVAL_MS = 50;
-const LOCK_MAX_RETRIES = 40; // 40 × 50ms = 2s total
 
 /**
- * Acquire an advisory lock by creating a hard-link sidecar `.lock` file.
- * linkSync is atomic on POSIX filesystems: only one process can win the race.
- * Stale locks older than LOCK_STALE_MS are removed before retrying.
+ * Try to acquire an advisory lock once (non-blocking). Uses a sentinel +
+ * linkSync pattern: linkSync is atomic on POSIX filesystems so only one
+ * process wins the race.
  *
- * Returns the lock path so the caller can release via releaseLock().
- * Throws if the lock cannot be acquired within the retry window.
+ * Stale-lock recovery: if linkSync fails AND the existing lock is older than
+ * LOCK_STALE_MS, the stale lock is removed and linkSync is retried once.
+ *
+ * Returns `{acquired: true, lockPath}` on success. The caller MUST call
+ * releaseLock(lockPath) in a finally block when acquired is true.
+ * Returns `{acquired: false}` immediately if the lock is held by another
+ * process (non-stale), or if the sentinel file cannot be written.
  */
-function acquireLock(idxPath: string): string {
+export function tryAcquireLockOnce(
+  idxPath: string,
+): { acquired: true; lockPath: string } | { acquired: false } {
   const lockPath = `${idxPath}.lock`;
-  // Write a sentinel file; linkSync from it to the lock path is the atomic step.
   const sentinelPath = `${idxPath}.lock-sentinel`;
-  try {
-    writeFileSync(sentinelPath, String(Date.now()), 'utf-8');
-  } catch {
-    // If we can't write the sentinel, skip locking (best-effort) rather than blocking.
-    return lockPath;
-  }
 
-  for (let attempt = 0; attempt < LOCK_MAX_RETRIES; attempt++) {
+  try { writeFileSync(sentinelPath, String(Date.now()), 'utf-8'); }
+  catch { return { acquired: false }; }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
       linkSync(sentinelPath, lockPath);
-      // We won — sentinel no longer needed.
       try { unlinkSync(sentinelPath); } catch { /* ignore */ }
-      return lockPath;
+      return { acquired: true, lockPath };
     } catch {
-      // Lock held by another process — check staleness.
-      try {
-        const lockStat = statSync(lockPath);
-        if (Date.now() - lockStat.mtimeMs > LOCK_STALE_MS) {
-          try { unlinkSync(lockPath); } catch { /* another process may have already cleared it */ }
-        }
-      } catch { /* lock file may have been released between our stat and now */ }
-
-      // Spin-wait (synchronous: this function is called from synchronous loadIndex).
-      const deadline = Date.now() + LOCK_RETRY_INTERVAL_MS;
-      while (Date.now() < deadline) { /* busy-wait */ }
+      if (attempt === 0) {
+        try {
+          const s = statSync(lockPath);
+          if (Date.now() - s.mtimeMs > LOCK_STALE_MS) {
+            try { unlinkSync(lockPath); } catch { /* another process may have already cleared it */ }
+            continue;
+          }
+        } catch { /* lock file may have disappeared between stat and now */ }
+      }
+      try { unlinkSync(sentinelPath); } catch { /* ignore */ }
+      return { acquired: false };
     }
   }
-
-  // Could not acquire — proceed unlocked (best-effort advisory).
   try { unlinkSync(sentinelPath); } catch { /* ignore */ }
-  return lockPath;
+  return { acquired: false };
 }
 
 function releaseLock(lockPath: string): void {
@@ -148,13 +146,12 @@ const VALID_STATUSES = new Set<string>(['open', 'shipped', 'closed']);
  *
  * Parses the YAML frontmatter block delimited by `---` lines and returns:
  * - `frontmatter`: raw key→value pairs (quotes stripped from values).
- * - `bodyAfter`: the document body that follows the closing `---` delimiter.
  *
  * Returns null when no valid frontmatter block is found.
  */
 export function parseFrontmatterRaw(
   content: string,
-): { frontmatter: Record<string, string>; bodyAfter: string } | null {
+): { frontmatter: Record<string, string> } | null {
   const normalized = content.replace(/\r\n/g, '\n');
   if (!normalized.startsWith('---')) return null;
   const rest = normalized.slice(3);
@@ -173,9 +170,7 @@ export function parseFrontmatterRaw(
     obj[key] = value;
   }
 
-  // bodyAfter begins after the closing `---\n` (or `---` at EOF).
-  const bodyAfter = rest.slice(endIdx + 4).replace(/^\n/, '');
-  return { frontmatter: obj, bodyAfter };
+  return { frontmatter: obj };
 }
 
 /**
@@ -459,31 +454,36 @@ export function loadIndex(projectRoot: string): MemoryIndex {
 
   const existing = tryLoadIndex(idxPath);
   if (!existing) {
-    // Full rebuild — lock the read-rebuild-write critical section.
-    const lockPath = acquireLock(idxPath);
-    try {
-      const index = buildFullIndex(corpus);
+    // Full rebuild outside the lock (rebuild is safe to run concurrently).
+    const index = buildFullIndex(corpus);
+    // Only the write step needs serialization.
+    const lock = tryAcquireLockOnce(idxPath);
+    if (lock.acquired) {
       try {
         mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
         atomicWriteJson(idxPath, index);
       } catch { /* best-effort — callers can still use the in-memory index */ }
-      return index;
-    } finally {
-      releaseLock(lockPath);
+      finally {
+        releaseLock(lock.lockPath);
+      }
     }
+    // best-effort: another writer is active — return in-memory index without persisting
+    return index;
   }
 
   const { index, changed } = incrementalRebuild(existing, corpus);
   if (changed) {
-    // Incremental rebuild — lock before persisting.
-    const lockPath = acquireLock(idxPath);
-    try {
+    // Incremental rebuild — only lock before persisting.
+    const lock = tryAcquireLockOnce(idxPath);
+    if (lock.acquired) {
       try {
         atomicWriteJson(idxPath, index);
       } catch { /* best-effort */ }
-    } finally {
-      releaseLock(lockPath);
+      finally {
+        releaseLock(lock.lockPath);
+      }
     }
+    // best-effort: another writer is active — return in-memory index without persisting
   }
   // No rebuild needed — skip locking (read-only path).
   return index;

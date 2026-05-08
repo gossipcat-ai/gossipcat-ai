@@ -50,6 +50,7 @@ export {
   tokenize,
   sidecarPath,
   corpusDir,
+  tryAcquireLockOnce,
 } from './memory-index-sidecar';
 export type { MemoryIndex, MemoryIndexDoc, MemoryFrontmatter } from './memory-index-sidecar';
 export { bm25Score, rankDocuments } from './memory-index-bm25';

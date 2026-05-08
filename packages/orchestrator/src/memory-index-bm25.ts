@@ -19,7 +19,6 @@ const B = 0.75;
 
 // BM25Options is kept for forward-compat — the interface is part of the
 // public API surface even if currently empty.
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface BM25Options {}
 
 /**
