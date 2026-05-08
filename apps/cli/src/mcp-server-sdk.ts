@@ -4211,9 +4211,10 @@ server.tool(
       const { recordMemoryQueryAttribution } = await import('@gossip/relay');
       recordMemoryQueryAttribution(agent_id, 'gossip_remember');
     } catch { /* best-effort — attribution never blocks the tool */ }
-    // The `search` action still uses MemorySearcher's String.includes scorer.
-    // The BM25 sidecar (rebuild_index / rebuild_md actions above) is built but
-    // not yet queried here — wiring search through the sidecar is a follow-up.
+    // The `search` action routes agent_id="_project" through MemorySearcher.searchCorpus(),
+    // which loads the BM25 sidecar index (with lazy incremental rebuild on mtime drift)
+    // and calls rankDocuments(). All other agent IDs use the per-agent knowledge-file
+    // String.includes scorer in MemorySearcher.search().
     const { MemorySearcher } = await import('@gossip/orchestrator');
     const { wrapMemoryEnvelope, recordMemoryQuery } = await import('@gossip/tools');
     const searcher = new MemorySearcher(projectRoot);

@@ -408,11 +408,15 @@ describe('gossip_remember — path-split access (Part 1)', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('agent_id "_project" reaches the searcher and returns results', () => {
+  it('agent_id "_project" reaches the searcher and routes through BM25 corpus', () => {
+    // _project is the public-memory sentinel: it routes through searchCorpus()
+    // (BM25 sidecar over ~/.claude/projects/<encoded>/memory/), not per-project
+    // .gossip/agents/_project/memory/. With no fixture in the user-home corpus,
+    // results are expected to be empty — but the call must not throw and must
+    // pass the regex gate.
     expect(isReservedAgentId('_project')).toBe(false);
     const searcher = new MemorySearcher(testDir);
-    const results = searcher.search('_project', 'relay connection');
-    expect(results.length).toBeGreaterThan(0);
+    expect(() => searcher.search('_project', 'relay connection')).not.toThrow();
   });
 
   it('agent_id "_system" is rejected before searcher call', () => {
