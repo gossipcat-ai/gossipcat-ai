@@ -136,4 +136,56 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
     (engine as any).updateWorktreeRoots([], [wt2]);
     expect((engine as any).pathCache.size).toBe(0);
   });
+
+  it('Test 16 — anchor snippets resolve from worktree FIRST, not project-root master HEAD', async () => {
+    // Regression for the false-absence finding root cause: when resolutionRoots
+    // supplies a worktree, anchor content for a file that exists in BOTH
+    // project root (master) and the worktree (feature branch) must come from
+    // the worktree version, not the stale master copy.
+    const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
+    const wt = realpathSync(mkdtempSync(join(tmp, 'wt')));
+
+    // Same relative path in both locations but distinct content.
+    mkdirSync(join(proj, 'src'), { recursive: true });
+    mkdirSync(join(wt, 'src'), { recursive: true });
+    writeFileSync(join(proj, 'src', 'target.ts'), 'export function old() { return "master-HEAD"; }');
+    writeFileSync(join(wt, 'src', 'target.ts'), 'export function newImpl() { return "worktree-branch"; }');
+
+    const engine = new ConsensusEngine({
+      llm: makeLlm(),
+      registryGet: () => undefined,
+      projectRoot: proj,
+      resolutionRoots: [wt],
+    } as ConsensusEngineConfig);
+
+    // snippetsForFinding is protected — invoke via cast.
+    const snippets: string = await (engine as any).snippetsForFinding(
+      'Potential issue at src/target.ts:1',
+    );
+
+    // Must show the WORKTREE content, not the master-HEAD content.
+    expect(snippets).toContain('worktree-branch');
+    expect(snippets).not.toContain('master-HEAD');
+    // Anchor block should be emitted (not a "file not found" warning).
+    expect(snippets).toContain('<anchor');
+  });
+
+  it('Test 17 — anchorPathCache is cleared when worktree roots change', async () => {
+    const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
+    mkdirSync(join(proj, 'src'), { recursive: true });
+    writeFileSync(join(proj, 'src', 'a.ts'), 'proj');
+    const wt = realpathSync(mkdtempSync(join(tmp, 'wt')));
+
+    const engine = new ConsensusEngine({
+      llm: makeLlm(), registryGet: () => undefined, projectRoot: proj,
+      resolutionRoots: [wt],
+    } as ConsensusEngineConfig);
+
+    // Seed the anchorPathCache with a stale entry.
+    (engine as any).anchorPathCache.set('src/a.ts', '/stale/path/a.ts');
+    // Changing worktree roots should clear anchorPathCache.
+    const wt2 = realpathSync(mkdtempSync(join(tmp, 'wt2')));
+    (engine as any).updateWorktreeRoots([], [wt2]);
+    expect((engine as any).anchorPathCache.size).toBe(0);
+  });
 });

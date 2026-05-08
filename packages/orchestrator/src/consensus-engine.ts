@@ -125,6 +125,13 @@ export class ConsensusEngine {
   private fileCache = new Map<string, string | null>();
   private pathCache = new Map<string, string | null>();
   /**
+   * Separate path cache for anchor resolution with worktree-priority ordering.
+   * Invalidated in lockstep with pathCache (updateWorktreeRoots clears both).
+   * Keys are plain fileRefs (same as pathCache) — distinct cache because the
+   * resolution order is reversed: worktree roots FIRST, projectRoot fallback.
+   */
+  private anchorPathCache = new Map<string, string | null>();
+  /**
    * Per-task worktree paths discovered from TaskEntry.worktreeInfo. Used as
    * additional file-resolution roots so consensus auto-anchor can find files
    * created in a feature-branch worktree (which only exist there, not in the
@@ -242,6 +249,7 @@ export class ConsensusEngine {
       // Fix #4 — fileCache invalidation parity with pathCache.
       this.pathCache.clear();
       this.fileCache.clear();
+      this.anchorPathCache.clear();
     }
   }
 
@@ -257,10 +265,51 @@ export class ConsensusEngine {
     return roots;
   }
 
+  /**
+   * Resolution roots ordered for anchor snippet resolution during cross-review:
+   * worktree / resolutionRoots FIRST, projectRoot last.
+   *
+   * When a gossip_collect call supplies resolutionRoots (a feature-branch
+   * worktree), the reviewer is examining that branch. Anchor content must
+   * reflect the worktree version of a file, not the stale-from-master copy in
+   * projectRoot. If a file only exists in projectRoot (not modified in the
+   * worktree), the fallback to projectRoot still applies.
+   *
+   * Rule 1 (bare-filename recursion restricted to projectRoot) is preserved:
+   * resolveFilePath checks `isBare && !isProjectRoot` and skips recursion for
+   * non-project roots. The ordering change only affects which version wins when
+   * the same relative path exists in BOTH the worktree AND projectRoot.
+   */
+  private getAnchorPriorityRoots(): string[] {
+    const worktrees: string[] = [];
+    for (const wt of this.currentWorktreeRoots) worktrees.push(wt);
+    if (worktrees.length === 0) {
+      // No active worktree roots — fall back to standard order.
+      return this.getValidRoots();
+    }
+    const roots: string[] = [...worktrees];
+    if (this.config.projectRoot) roots.push(this.config.projectRoot);
+    return roots;
+  }
+
   private async cachedResolve(fileRef: string): Promise<string | null> {
     if (this.pathCache.has(fileRef)) return this.pathCache.get(fileRef)!;
     const resolved = await this.resolveFilePath(fileRef);
     this.pathCache.set(fileRef, resolved);
+    return resolved;
+  }
+
+  /**
+   * Path resolver for anchor snippet building during cross-review.
+   * Uses worktree-priority ordering (getAnchorPriorityRoots) so reviewers see
+   * the worktree version of a modified file, not the stale-from-master copy.
+   * Separate cache keyed by fileRef — invalidated alongside pathCache in
+   * updateWorktreeRoots when the worktree set changes.
+   */
+  private async cachedResolveForAnchor(fileRef: string): Promise<string | null> {
+    if (this.anchorPathCache.has(fileRef)) return this.anchorPathCache.get(fileRef)!;
+    const resolved = await this.resolveFilePath(fileRef, { priorityRoots: this.getAnchorPriorityRoots() });
+    this.anchorPathCache.set(fileRef, resolved);
     return resolved;
   }
 
@@ -1388,7 +1437,9 @@ Return only valid JSON.${skillsBlock}`;
    * Returns formatted anchor blocks as a string, or '' if no citations found.
    */
   protected async snippetsForFinding(findingText: string, maxSnippets = 3): Promise<string> {
-    if (!this.config.projectRoot) return '';
+    // Proceed when we have at least one root to resolve against — either
+    // projectRoot alone or worktree roots seeded from resolutionRoots.
+    if (!this.config.projectRoot && this.currentWorktreeRoots.size === 0) return '';
 
     const citationPattern = /((?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)/g;
     const CONTEXT_LINES = 2;
@@ -1409,11 +1460,20 @@ Return only valid JSON.${skillsBlock}`;
 
       try {
         const safeRef = fullRef.replace(/["<>]/g, '');
-        const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
+        // Use worktree-priority resolver: resolutionRoots (worktrees) are checked
+        // BEFORE projectRoot so reviewers see the branch version of modified files.
+        const filePath = await this.cachedResolveForAnchor(fullRef) ?? await this.cachedResolveForAnchor(bareFile);
         if (!filePath) {
           anchors.push(`⚠ Agent cited \`${safeRef}:${lineNum}\` but file not found`);
           continue;
         }
+        // Defense-in-depth: warn when the resolved path falls back to projectRoot
+        // while worktree roots are active — the anchor may reflect master HEAD,
+        // not the branch under review.
+        const resolvedFromProjectRoot =
+          this.currentWorktreeRoots.size > 0 &&
+          this.config.projectRoot &&
+          filePath.startsWith(resolve(this.config.projectRoot) + '/');
         const fileStat = await stat(filePath);
         if (fileStat.size > MAX_FILE_SIZE) continue;
         const content = await this.cachedRead(filePath);
@@ -1434,7 +1494,10 @@ Return only valid JSON.${skillsBlock}`;
           .map((l, i) => `  ${start + i + 1}: ${l}`)
           .join('\n');
         const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
-        anchors.push(`<anchor src="${safeRef}:${lineNum}">\n${safeSnippet}\n</anchor>`);
+        const projectRootWarning = resolvedFromProjectRoot
+          ? ' via="⚠ resolved against project root, NOT worktree"'
+          : '';
+        anchors.push(`<anchor src="${safeRef}:${lineNum}"${projectRootWarning}>\n${safeSnippet}\n</anchor>`);
       } catch { /* file unreadable, skip */ }
     }
 
@@ -1442,7 +1505,8 @@ Return only valid JSON.${skillsBlock}`;
     // <cite tag="file">auth.ts:38</cite> — resolved by file:line fetch (same as regex above, catches explicit citations)
     // <cite tag="fn">functionName</cite> — resolved by identifier grep
     // Also supports legacy <fn>identifier</fn> for backward compat
-    if (this.config.projectRoot) {
+    // Guard: proceed when we have any resolution root (projectRoot or worktree).
+    if (this.config.projectRoot || this.currentWorktreeRoots.size > 0) {
       const citePattern = /<cite\s+tag="(file|fn)">([^<]+)<\/cite>/g;
       let citeMatch: RegExpExecArray | null;
       while ((citeMatch = citePattern.exec(findingText)) !== null) {
@@ -1452,7 +1516,7 @@ Return only valid JSON.${skillsBlock}`;
         if (!trimmed || trimmed.length > 80) continue;
 
         if (tag === 'file') {
-          // file:line citation — resolve via existing file resolver
+          // file:line citation — resolve via worktree-priority anchor resolver
           const fileMatch = trimmed.match(/^((?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)$/);
           if (fileMatch && !seen.has(trimmed)) {
             seen.add(trimmed);
@@ -1461,8 +1525,12 @@ Return only valid JSON.${skillsBlock}`;
             const lineNum = parseInt(fileMatch[3], 10);
             try {
               const safeRef = fullRef.replace(/["<>]/g, '');
-              const filePath = await this.cachedResolve(fullRef) ?? await this.cachedResolve(bareFile);
+              const filePath = await this.cachedResolveForAnchor(fullRef) ?? await this.cachedResolveForAnchor(bareFile);
               if (filePath) {
+                const resolvedFromProjectRoot =
+                  this.currentWorktreeRoots.size > 0 &&
+                  this.config.projectRoot &&
+                  filePath.startsWith(resolve(this.config.projectRoot) + '/');
                 const content = await this.cachedRead(filePath);
                 if (content) {
                   const fileLines = content.split('\n');
@@ -1471,7 +1539,10 @@ Return only valid JSON.${skillsBlock}`;
                     const end = Math.min(fileLines.length, lineNum + CONTEXT_LINES);
                     const snippet = fileLines.slice(start, end).map((l, i) => `  ${start + i + 1}: ${l}`).join('\n');
                     const safeSnippet = snippet.replace(/<\/?(data|anchor|code)\b[^>]*>/gi, '');
-                    anchors.push(`<anchor src="${safeRef}:${lineNum}" via="cite:file">\n${safeSnippet}\n</anchor>`);
+                    const projectRootWarning = resolvedFromProjectRoot
+                      ? ' via="⚠ resolved against project root, NOT worktree"'
+                      : ' via="cite:file"';
+                    anchors.push(`<anchor src="${safeRef}:${lineNum}"${projectRootWarning}>\n${safeSnippet}\n</anchor>`);
                   }
                 }
               }
@@ -1712,8 +1783,16 @@ Return only valid JSON.${skillsBlock}`;
     });
   }
 
-  private async resolveFilePath(fileRef: string): Promise<string | null> {
-    const roots = this.getValidRoots();
+  private async resolveFilePath(
+    fileRef: string,
+    opts: { priorityRoots?: string[] } = {},
+  ): Promise<string | null> {
+    // When priorityRoots is supplied (e.g. from cachedResolveForAnchor), use it
+    // instead of getValidRoots() so the caller controls resolution order. The
+    // containment check (isInsideAnyRoot) still uses getValidRoots() as the
+    // security boundary — priorityRoots only controls which root is tried first.
+    const allRoots = this.getValidRoots();
+    const roots = opts.priorityRoots ?? allRoots;
     if (roots.length === 0) return null;
     const fileName = fileRef.split('/').pop()!;
     const isBare = !fileRef.includes('/');
@@ -1721,6 +1800,8 @@ Return only valid JSON.${skillsBlock}`;
 
     // Try every root in order: projectRoot first (most files), then any
     // active worktree paths (for files only present on a feature branch).
+    // Security boundary for isInsideAnyRoot uses allRoots (full set) so a
+    // priority-reordered `roots` list cannot escape the containment check.
     for (const root of roots) {
       const rootAbs = resolve(root);
       const isProjectRoot = projectRoot !== null && rootAbs === projectRoot;
@@ -1728,7 +1809,7 @@ Return only valid JSON.${skillsBlock}`;
       // Try the reference as-is (could be a full relative path)
       try {
         const candidate = join(root, fileRef);
-        if (this.isInsideAnyRoot(candidate, roots)) {
+        if (this.isInsideAnyRoot(candidate, allRoots)) {
           await stat(candidate);
           // For non-bare refs, require matchesRelativePath against this root
           // so a monorepo sibling "packages/other/foo.ts" doesn't satisfy a
@@ -1738,7 +1819,7 @@ Return only valid JSON.${skillsBlock}`;
             // introduced by the root itself.
             let real = candidate;
             try { real = realpathSync(candidate); } catch { /* keep */ }
-            if (this.isInsideAnyRoot(real, roots)) return real;
+            if (this.isInsideAnyRoot(real, allRoots)) return real;
           }
         }
       } catch { /* not at this root */ }
@@ -1747,11 +1828,11 @@ Return only valid JSON.${skillsBlock}`;
       if (fileName !== fileRef) {
         try {
           const candidate = join(root, fileName);
-          if (this.isInsideAnyRoot(candidate, roots)) {
+          if (this.isInsideAnyRoot(candidate, allRoots)) {
             await stat(candidate);
             let real = candidate;
             try { real = realpathSync(candidate); } catch { /* keep */ }
-            if (this.isInsideAnyRoot(real, roots)) return real;
+            if (this.isInsideAnyRoot(real, allRoots)) return real;
           }
         } catch { /* not at this root */ }
       }
@@ -1767,7 +1848,7 @@ Return only valid JSON.${skillsBlock}`;
       // findFile honors Rule 3 (skip symlinked entries) internally.
       const searchDirs = ['packages', 'src', 'apps', 'tests', 'test', 'tools', 'scripts', 'lib'];
       for (const dir of searchDirs) {
-        const found = await this.findFile(join(root, dir), fileName, roots, rootAbs, fileRef);
+        const found = await this.findFile(join(root, dir), fileName, allRoots, rootAbs, fileRef);
         if (found) return found;
       }
     }
