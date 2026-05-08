@@ -1,5 +1,7 @@
 import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { join, basename } from 'path';
+import { loadIndex, tokenize, corpusDir } from './memory-index-sidecar';
+import { rankDocuments } from './memory-index-bm25';
 
 const MAX_QUERY_LENGTH = 500;
 const MAX_KEYWORDS = 20;
@@ -22,6 +24,47 @@ interface ParsedFrontmatter {
 export class MemorySearcher {
   constructor(private projectRoot: string) {}
 
+  /**
+   * Search the public auto-memory corpus using BM25 via the sidecar index.
+   *
+   * The sidecar index lives at <projectRoot>/.gossip/memory-index.json.
+   * `loadIndex` performs an incremental rebuild if any corpus *.md file has a
+   * newer mtime than the stored entry — this is the lazy rebuild trigger.
+   */
+  private searchCorpus(query: string, maxResults: number): SearchResult[] {
+    const safeQuery = query.slice(0, MAX_QUERY_LENGTH);
+    const terms = Array.from(new Set(tokenize(safeQuery)));
+    if (terms.length === 0) return [];
+
+    // loadIndex: lazy incremental rebuild if any source mtime > index mtime.
+    const index = loadIndex(this.projectRoot);
+    if (index.totalDocs === 0) return [];
+
+    const ranked = rankDocuments(terms, index, { openBoost: 0 });
+    const limit = Math.min(maxResults, 10);
+
+    return ranked.slice(0, limit).map(({ filename, score }) => {
+      const doc = index.docs[filename]!;
+      // Reconstruct snippets from the corpus file body (best-effort; never blocks search)
+      let snippets: string[] = [];
+      try {
+        const corpus = corpusDir(this.projectRoot);
+        const content = readFileSync(join(corpus, filename), 'utf-8');
+        const body = content.replace(/^---[\s\S]*?\n---\n*/m, '');
+        // Reuse keyword-based snippet extraction with the tokenized terms
+        snippets = this.extractSnippets(body, terms);
+      } catch { /* skip — sidecar result still returned without snippets */ }
+
+      return {
+        source: filename,
+        name: doc.name,
+        description: doc.description ?? '',
+        score,
+        snippets,
+      };
+    });
+  }
+
   search(agentId: string, query: string, maxResults = 3): SearchResult[] {
     if (!query || !query.trim()) return [];
 
@@ -30,6 +73,13 @@ export class MemorySearcher {
 
     // Cap query length to prevent DoS via keyword extraction
     const safeQuery = query.slice(0, MAX_QUERY_LENGTH);
+
+    // The _project sentinel searches the shared auto-memory corpus via BM25 sidecar.
+    // loadIndex inside searchCorpus handles lazy incremental rebuild when any
+    // corpus *.md mtime advances past the stored index entry mtime.
+    if (agentId === '_project') {
+      return this.searchCorpus(query, maxResults);
+    }
 
     const limit = Math.min(maxResults, 10);
     const keywords = this.extractKeywords(safeQuery);
