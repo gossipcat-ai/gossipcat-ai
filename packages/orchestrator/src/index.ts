@@ -40,6 +40,20 @@ export { MemoryWriter } from './memory-writer';
 export type { SessionArtifacts } from './memory-writer';
 export { refreshMemoryIndex, applyStatusTags } from './memory-index';
 export type { RefreshResult, MemoryStatus } from './memory-index';
+export {
+  loadIndex,
+  rebuildIndex,
+  rebuildMemoryMd,
+  regenerateMemoryMd,
+  buildFullIndex,
+  parseMemoryFrontmatter,
+  tokenize,
+  sidecarPath,
+  corpusDir,
+} from './memory-index-sidecar';
+export type { MemoryIndex, MemoryIndexDoc, MemoryFrontmatter } from './memory-index-sidecar';
+export { bm25Score, rankDocuments } from './memory-index-bm25';
+export type { BM25Options } from './memory-index-bm25';
 export { MemoryCompactor } from './memory-compactor';
 export { TaskGraph } from './task-graph';
 export { TaskGraphSync } from './task-graph-sync';
