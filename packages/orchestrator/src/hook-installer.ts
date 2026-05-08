@@ -47,16 +47,32 @@ export function findBundledHook(): string | null {
   return null;
 }
 
-/** Load `.claude/settings.json`, returning `{}` if missing or malformed. */
+/**
+ * Load `.claude/settings.json`.
+ *
+ * - File doesn't exist → return `{}`
+ * - File exists, valid JSON object → return parsed object
+ * - File exists but malformed JSON or not a plain object → THROW with a
+ *   descriptive message so the caller can skip the write rather than
+ *   silently replacing the user's file with `{}`.
+ */
 function loadSettings(settingsPath: string): Record<string, any> {
   if (!existsSync(settingsPath)) return {};
+  const raw = readFileSync(settingsPath, 'utf-8');
+  let parsed: unknown;
   try {
-    const raw = readFileSync(settingsPath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `settings.json at ${settingsPath} contains malformed JSON: ${(err as Error).message}`,
+    );
   }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `settings.json at ${settingsPath} is not a JSON object (got ${Array.isArray(parsed) ? 'array' : typeof parsed})`,
+    );
+  }
+  return parsed as Record<string, any>;
 }
 
 /** Merge the PreToolUse entry idempotently — skip if the exact command is already registered. */
@@ -130,7 +146,18 @@ export function installWorktreeSandboxHook(projectRoot: string): HookInstallResu
     // 2. Merge the PreToolUse registration into settings.json.
     const settingsPath = join(projectRoot, '.claude', 'settings.json');
     mkdirSync(dirname(settingsPath), { recursive: true });
-    const settings = loadSettings(settingsPath);
+
+    let settings: Record<string, any>;
+    try {
+      settings = loadSettings(settingsPath);
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] settings.json at ${settingsPath} is malformed; skipping hook install. ` +
+        `Fix the file or delete it and re-run gossip_setup.\n`,
+      );
+      return { installed: false, reason: (err as Error).message };
+    }
+
     const mutated = mergePreToolUseEntry(settings);
     if (mutated) {
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');

@@ -120,16 +120,20 @@ describe('installWorktreeSandboxHook', () => {
     expect(typeof result.reason).toBe('string');
   });
 
-  it('recovers when settings.json is malformed (treats as empty)', () => {
+  it('skips install (does not overwrite) when settings.json is malformed', () => {
     const root = makeTmpProject();
     created.push(root);
     require('fs').mkdirSync(join(root, '.claude'), { recursive: true });
-    writeFileSync(join(root, '.claude', 'settings.json'), '{not valid json');
+    const malformed = '{not valid json';
+    writeFileSync(join(root, '.claude', 'settings.json'), malformed);
 
     const result = installWorktreeSandboxHook(root);
-    expect(result.installed).toBe(true);
+    // Best-effort: must not throw, must not write.
+    expect(result.installed).toBe(false);
+    expect(typeof result.reason).toBe('string');
 
-    const settings = JSON.parse(readFileSync(join(root, '.claude', 'settings.json'), 'utf-8'));
-    expect(settings.hooks.PreToolUse[0].hooks[0].command).toBe(HOOK_COMMAND);
+    // File must be byte-identical to malformed input — zero data loss.
+    const after = readFileSync(join(root, '.claude', 'settings.json'), 'utf-8');
+    expect(after).toBe(malformed);
   });
 });
