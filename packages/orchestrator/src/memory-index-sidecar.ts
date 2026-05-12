@@ -216,12 +216,13 @@ export function sidecarPath(projectRoot: string): string {
  * Returns the memory corpus directory for a given projectRoot.
  * The corpus lives under ~/.claude/projects/<encoded-cwd>/memory/.
  *
- * Encoding mirrors Claude Code's convention: absolute path with /→- and
- * leading - stripped, all separators replaced with -.
+ * Encoding mirrors Claude Code's convention: every '/' in the absolute
+ * path becomes '-'. The leading '/' becomes a leading '-', which is
+ * preserved (e.g. /Users/goku/foo → -Users-goku-foo).
  */
 export function corpusDir(projectRoot: string): string {
   // Claude Code encodes the project root as the directory name under
-  // ~/.claude/projects/. The encoding replaces path separators with -.
+  // ~/.claude/projects/. Every '/' (including the leading one) becomes '-'.
   const encoded = projectRoot.replace(/\//g, '-');
   return join(homedir(), '.claude', 'projects', encoded, 'memory');
 }
