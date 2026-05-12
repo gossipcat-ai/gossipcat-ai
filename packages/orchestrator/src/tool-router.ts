@@ -7,6 +7,7 @@ import { TOOL_SCHEMAS, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definit
 import type { ToolCall, ToolResult, DispatchPlan, PlannedTask, TaskProgressEvent } from './types';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { readJsonlWithRotated } from './performance-reader';
 
 import { log as _log } from './log';
 const log = (msg: string) => _log('tool-router', msg);
@@ -956,7 +957,7 @@ Keep it SHORT — under 30 lines. This is a working document, not a design doc.`
       return { text: 'No performance data found.' };
     }
 
-    const rawLines = readFileSync(perfPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const rawLines = readJsonlWithRotated(perfPath).trim().split('\n').filter(Boolean);
     const last20 = rawLines.slice(-20).map(line => {
       try { return JSON.parse(line); } catch (_e) { return null; }
     }).filter(Boolean);

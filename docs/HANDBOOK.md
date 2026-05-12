@@ -179,7 +179,7 @@ If `format_compliance` signals a sudden drop for an agent that was fine last rou
 
 ### Skill-develop cooldown gate
 
-`gossip_skills(action: "develop")` is throttled to prevent churn. Redeveloping the same skill while its effectiveness window is still accumulating evidence resets the `MIN_EVIDENCE=120` counter and collapses the statistical signal. Cooldown is verdict-aware:
+`gossip_skills(action: "develop")` is throttled to prevent churn. Redeveloping the same skill while its effectiveness window is still accumulating evidence resets the `MIN_EVIDENCE=80` counter and collapses the statistical signal. Cooldown is verdict-aware:
 
 - `pending` — no gate (skill may need 60-120d to reach MIN_EVIDENCE)
 - `silent_skill` / `insufficient_evidence` — 30d
@@ -275,7 +275,7 @@ npm install -g gossipcat
 
 ### Effectiveness tracking is slow by design
 
-Skills sit in `pending` until ≥120 post-bind signals accumulate in the category, or until the 90-day timeout flips them to `silent_skill` / `insufficient_evidence`. At typical side-project volumes, most skills will time out before graduating. This is intentional statistical rigor, not a bug.
+Skills sit in `pending` until ≥80 post-bind signals accumulate in the category, or until the 90-day timeout flips them to `silent_skill` / `insufficient_evidence`. At typical side-project volumes, most skills will time out before graduating. This is intentional statistical rigor, not a bug.
 
 **Workaround for paper-style validation**: build a curated eval suite with paired before/after runs on a fixed task corpus. Use McNemar's test on paired outcomes (smaller N needed, detects ~15pp shifts at N=30). This is on the roadmap but not shipped.
 
@@ -299,7 +299,7 @@ Two-phase consensus (Phase 1 parallel findings + Phase 2 cross-review) takes rea
 
 ### `flagged_for_manual_review` is effectively unreachable
 
-Per `check-effectiveness.ts:146-157`: reaching 3 `inconclusive` strikes requires ~360 fresh category signals across three independent MIN_EVIDENCE windows, which exceeds the 90-day timeout at realistic volumes. The terminal state exists in the enum but no real skill will reach it. Consider it a design placeholder.
+Per `check-effectiveness.ts:146-157`: reaching 3 `inconclusive` strikes requires ~240 fresh category signals across three independent MIN_EVIDENCE windows, which exceeds the 90-day timeout at realistic volumes. The terminal state exists in the enum but no real skill will reach it. Consider it a design placeholder.
 
 ---
 

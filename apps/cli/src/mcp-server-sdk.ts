@@ -1481,7 +1481,8 @@ server.tool(
     // Mirrors the existing gossip_status reconnect-recovery pattern for
     // pendingConsensusRounds re-surfacing.
     try {
-      const { readFileSync, readdirSync, statSync } = await import('fs');
+      const { readdirSync, statSync } = await import('fs');
+      const { readJsonlWithRotated: readJsonlRotated1506 } = await import('@gossip/orchestrator');
       const reportsDir = join(process.cwd(), '.gossip', 'consensus-reports');
       const perfPath = join(process.cwd(), '.gossip', 'agent-performance.jsonl');
 
@@ -1503,7 +1504,7 @@ server.tool(
         // Build set of consensusIds that have at least one manually-recorded signal.
         const covered = new Set<string>();
         try {
-          const perfRaw = readFileSync(perfPath, 'utf8');
+          const perfRaw = readJsonlRotated1506(perfPath);
           for (const line of perfRaw.split('\n')) {
             if (!line) continue;
             try {
@@ -2567,7 +2568,8 @@ server.tool(
         const existingFindingIds = new Set<string>();
         try {
           const perfPath = join(process.cwd(), '.gossip', 'agent-performance.jsonl');
-          const lines = readFileSync(perfPath, 'utf-8').split('\n').filter(Boolean);
+          const { readJsonlWithRotated: readJsonlRotated2570 } = await import('@gossip/orchestrator');
+          const lines = readJsonlRotated2570(perfPath).split('\n').filter(Boolean);
           for (const line of lines) {
             try { const rec = JSON.parse(line); if (rec.findingId) existingFindingIds.add(rec.findingId); } catch { /* skip */ }
           }
@@ -2847,9 +2849,9 @@ server.tool(
       const existingFindingIds = new Set<string>();
       const existingKeyToFindingId = new Map<string, string>();
       try {
-        const { readFileSync } = await import('fs');
+        const { readJsonlWithRotated: readJsonlRotated2852 } = await import('@gossip/orchestrator');
         const perfPath = require('path').join(process.cwd(), '.gossip', 'agent-performance.jsonl');
-        const lines = readFileSync(perfPath, 'utf-8').split('\n').filter(Boolean);
+        const lines = readJsonlRotated2852(perfPath).split('\n').filter(Boolean);
         for (const line of lines) {
           try {
             const rec = JSON.parse(line);

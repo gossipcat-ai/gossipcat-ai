@@ -5,10 +5,11 @@
  * (consensus 8cc22d50-93ab4d73).
  */
 
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { readJsonlWithRotated, PerformanceReader } from '../../packages/orchestrator/src/performance-reader';
+import * as RoundCounter from '../../packages/orchestrator/src/round-counter';
 
 let tmpDir: string;
 
@@ -111,9 +112,8 @@ describe('PerformanceReader — reads signals from both live and rotated files',
     expect(agentScore!.totalSignals).toBe(5);
   });
 
-  it('getScores returns 0 signals when only .1 existed at time of writing and live is empty', () => {
+  it('getScores returns signals from .1 even when live file is empty', () => {
     const gossipDir = join(tmpDir, '.gossip');
-    const { mkdirSync } = require('fs');
     mkdirSync(gossipDir, { recursive: true });
 
     const perfPath = join(gossipDir, 'agent-performance.jsonl');
@@ -132,5 +132,52 @@ describe('PerformanceReader — reads signals from both live and rotated files',
 
     expect(agentScore).toBeDefined();
     expect(agentScore!.totalSignals).toBe(2);
+  });
+});
+
+// ── Integration: all 7 migrated readers see signals from both live and .1 ────
+
+describe('Phase A completeness — migrated readers see rotated signals', () => {
+  beforeEach(() => RoundCounter.__resetForTests());
+
+  function makeImplSignal(agentId: string, signal: string, daysAgo = 1): string {
+    const ts = new Date(Date.now() - daysAgo * 86400000).toISOString();
+    return JSON.stringify({ type: 'impl', agentId, signal, timestamp: ts });
+  }
+
+  function makeRoundBump(consensusId: string): string {
+    return JSON.stringify({ type: '_meta', signal: 'round_counter_bumped', consensusId, timestamp: new Date().toISOString() });
+  }
+
+  it('getImplScore and scanJsonl (round-counter.get) each recover signals from the .1 slot', () => {
+    const gossipDir = join(tmpDir, '.gossip');
+    mkdirSync(gossipDir, { recursive: true });
+    const perfPath = join(gossipDir, 'agent-performance.jsonl');
+
+    // Rotated slot: 2 impl_test_pass + 2 round_counter_bumped for consensusId 'cid-a'
+    const rotated = [
+      makeImplSignal('agent-z', 'impl_test_pass'),
+      makeImplSignal('agent-z', 'impl_test_pass'),
+      makeRoundBump('cid-a'),
+      makeRoundBump('cid-a'),
+    ].join('\n') + '\n';
+    writeFileSync(perfPath + '.1', rotated);
+
+    // Live slot: 1 more impl_test_pass + 1 more round bump
+    const live = [
+      makeImplSignal('agent-z', 'impl_test_pass'),
+      makeRoundBump('cid-a'),
+    ].join('\n') + '\n';
+    writeFileSync(perfPath, live);
+
+    // getImplScore — should see all 3 passes (2 from .1, 1 from live)
+    const reader = new PerformanceReader(tmpDir);
+    const implScore = reader.getImplScore('agent-z');
+    expect(implScore).not.toBeNull();
+    expect(implScore!.passRate).toBeCloseTo(1.0, 5); // 3/3 pass
+
+    // scanJsonl via round-counter.get — should see 3 bumps (2 from .1, 1 from live)
+    const count = RoundCounter.get(tmpDir, 'cid-a');
+    expect(count).toBe(3);
   });
 });

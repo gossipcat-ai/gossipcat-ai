@@ -1186,7 +1186,7 @@ export class PerformanceReader {
     try {
       const now = Date.now();
       const expiryMs = now - SIGNAL_EXPIRY_DAYS * 86400000;
-      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      const lines = readJsonlWithRotated(this.filePath).trim().split('\n').filter(Boolean);
       let pass = 0, fail = 0, approved = 0, rejected = 0, lastImplSignalMs = 0;
       for (const line of lines) {
         try {

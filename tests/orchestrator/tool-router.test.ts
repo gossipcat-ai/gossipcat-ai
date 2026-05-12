@@ -549,7 +549,9 @@ describe('ToolExecutor', () => {
       JSON.stringify({ agentId: 'writer', signal: 'agreement', outcome: 'confirmed' }),
     ].join('\n');
 
-    mockExistsSync.mockReturnValue(true);
+    // existsSync returns true for the live perf file but false for the .1 rotated slot
+    // so readJsonlWithRotated only reads live content (3 signals).
+    mockExistsSync.mockImplementation((p: unknown) => !String(p).endsWith('.1'));
     mockReadFileSync.mockReturnValue(jsonlData);
 
     const result = await executor.execute({ tool: 'agent_performance', args: {} });

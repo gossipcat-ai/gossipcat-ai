@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpa
 import { randomBytes } from 'crypto';
 import { join, resolve } from 'path';
 import { ILLMProvider } from './llm-client';
-import { PerformanceReader } from './performance-reader';
+import { PerformanceReader, readJsonlWithRotated } from './performance-reader';
 import { LLMMessage } from '@gossip/types';
 import { ConsensusSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
@@ -717,7 +717,7 @@ ${inputs.join('\n')}
     const filePath = join(this.projectRoot, '.gossip', 'agent-performance.jsonl');
     if (!existsSync(filePath)) return [];
     try {
-      return readFileSync(filePath, 'utf-8').trim().split('\n').filter(Boolean)
+      return readJsonlWithRotated(filePath).trim().split('\n').filter(Boolean)
         .map(line => { try { return JSON.parse(line); } catch { return null; } })
         .filter((s): s is ConsensusSignal =>
           s !== null && s.type === 'consensus' && s.signal === 'category_confirmed' && s.category === category
