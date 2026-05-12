@@ -4529,10 +4529,10 @@ server.tool(
     max_events: z.number().int().positive().max(WATCH_MAX_EVENTS).optional().describe(`Cap events returned (default ${WATCH_MAX_EVENTS}).`),
   },
   async ({ cursor, max_events }) => {
-    const { readFileSync, existsSync } = await import('node:fs');
     const { join } = await import('node:path');
+    const { readJsonlWithRotated } = await import('@gossip/orchestrator');
     const perfPath = join(process.cwd(), '.gossip', 'agent-performance.jsonl');
-    const raw = existsSync(perfPath) ? readFileSync(perfPath, 'utf-8') : '';
+    const raw = readJsonlWithRotated(perfPath);
     const result = filterWatchEvents(raw, { cursor, maxEvents: max_events });
     return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
   },

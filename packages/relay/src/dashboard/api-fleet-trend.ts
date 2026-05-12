@@ -1,5 +1,6 @@
-import { readFileSync, existsSync, statSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { join } from 'path';
+import { readJsonlWithRotated } from '@gossip/orchestrator';
 
 export interface FleetTrendPoint {
   day: string; // ISO date YYYY-MM-DD
@@ -54,7 +55,9 @@ export async function fleetTrendHandler(projectRoot: string, query?: URLSearchPa
   const buckets = new Map<string, Map<string, { good: number; total: number }>>();
 
   try {
-    const lines = readFileSync(perfPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const raw = readJsonlWithRotated(perfPath);
+    if (!raw) return { days, points: [] };
+    const lines = raw.trim().split('\n').filter(Boolean);
     for (const line of lines) {
       try {
         const rec = JSON.parse(line);

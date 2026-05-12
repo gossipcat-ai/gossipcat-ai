@@ -1,5 +1,5 @@
-import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { readJsonlWithRotated } from '@gossip/orchestrator';
 
 interface ConsensusSignal {
   type: string;
@@ -63,11 +63,11 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
   }
   const retractedConsensusIds = Array.from(retractedIds);
 
-  if (!existsSync(perfPath)) return { runs: [], totalRuns: 0, totalSignals: 0, page, pageSize, retractedConsensusIds, roundRetractions };
-
   const signals: ConsensusSignal[] = [];
   try {
-    const lines = readFileSync(perfPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const raw = readJsonlWithRotated(perfPath);
+    if (!raw) return { runs: [], totalRuns: 0, totalSignals: 0, page, pageSize, retractedConsensusIds, roundRetractions };
+    const lines = raw.trim().split('\n').filter(Boolean);
     for (const line of lines) {
       try {
         const parsed = JSON.parse(line);
