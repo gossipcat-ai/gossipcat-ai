@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'fs';
+import { readJsonlWithRotated } from './performance-reader';
 import { join } from 'path';
 import { TaskGraph } from './task-graph';
 import type {
@@ -145,8 +145,8 @@ export class TaskGraphSync {
 
   async syncAgentScores(): Promise<number> {
     const perfPath = join(this.gossipDir, 'agent-performance.jsonl');
-    if (!existsSync(perfPath)) return 0;
-    const content = readFileSync(perfPath, 'utf-8');
+    const content = readJsonlWithRotated(perfPath);
+    if (!content) return 0;
     const lines = content.trim().split('\n').filter(Boolean);
     const meta = this.graph.getSyncMeta();
     let synced = 0;

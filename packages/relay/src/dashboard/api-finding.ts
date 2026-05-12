@@ -1,4 +1,5 @@
 import { readFileSync, existsSync, realpathSync } from 'fs';
+import { readJsonlWithRotated } from '@gossip/orchestrator';
 import { join, resolve, relative } from 'path';
 
 // Consensus/finding IDs come from URL segments after decodeURIComponent.
@@ -111,23 +112,26 @@ export async function findingHandler(
 
   const signals: FindingDetailSignal[] = [];
   const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
-  if (existsSync(perfPath)) {
-    const lines = readFileSync(perfPath, 'utf-8').trim().split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        const rec = JSON.parse(line);
-        if (rec.findingId === findingId) {
-          signals.push({
-            signal: rec.signal,
-            agentId: rec.agentId,
-            counterpartId: rec.counterpartId,
-            evidence: rec.evidence,
-            timestamp: rec.timestamp,
-          });
-        }
-      } catch { /* skip */ }
+  try {
+    const raw = readJsonlWithRotated(perfPath);
+    if (raw) {
+      const lines = raw.trim().split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const rec = JSON.parse(line);
+          if (rec.findingId === findingId) {
+            signals.push({
+              signal: rec.signal,
+              agentId: rec.agentId,
+              counterpartId: rec.counterpartId,
+              evidence: rec.evidence,
+              timestamp: rec.timestamp,
+            });
+          }
+        } catch { /* skip */ }
+      }
     }
-  }
+  } catch { /* best-effort */ }
 
   const citations = extractCitations(found.finding || '', projectRoot);
 

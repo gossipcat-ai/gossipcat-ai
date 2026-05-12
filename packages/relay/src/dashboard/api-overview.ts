@@ -1,5 +1,6 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { readJsonlWithRotated } from '@gossip/orchestrator';
 import { isUtilityAgent } from './utility-agents';
 
 interface AgentConfigLike {
@@ -210,9 +211,10 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
   const runBuckets = new Map<string, RunBucket>();
 
   const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
-  if (existsSync(perfPath)) {
+  {
     try {
-      const lines = readFileSync(perfPath, 'utf-8').trim().split('\n').filter(Boolean);
+      const raw = readJsonlWithRotated(perfPath);
+      const lines = raw ? raw.trim().split('\n').filter(Boolean) : [];
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);

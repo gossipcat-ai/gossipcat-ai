@@ -12,6 +12,46 @@ import { ConsensusSignal, ImplSignal, PerformanceSignal } from './consensus-type
 import { normalizeSkillName } from './skill-name';
 
 /**
+ * Read `path.1` (rotated) then `path` (live), concatenating content so signal
+ * readers see the full history across log rotation boundaries. Chronological
+ * order is preserved: rotated content (older) is prepended before live content.
+ *
+ * Mirrors the pattern first used in PipelineDriftDetector.readTail
+ * (pipeline-drift-detector.ts:121-147). Extracted here so all PerformanceReader
+ * methods and dashboard endpoints share a single read path.
+ *
+ * Phase A fix for the signal-log-rotation data-loss bug (consensus
+ * 8cc22d50-93ab4d73). Phase B (write-time aggregate sidecar) is tracked
+ * separately at project_signal_log_rotation_data_loss.md.
+ */
+export function readJsonlWithRotated(filePath: string): string {
+  let rotatedContent = '';
+  let liveContent = '';
+  try {
+    const rotatedPath = filePath + '.1';
+    if (existsSync(rotatedPath)) {
+      rotatedContent = readFileSync(rotatedPath, 'utf-8');
+    }
+  } catch {
+    /* best-effort */
+  }
+  try {
+    if (existsSync(filePath)) {
+      liveContent = readFileSync(filePath, 'utf-8');
+    }
+  } catch {
+    /* best-effort */
+  }
+  if (!rotatedContent && !liveContent) return '';
+  if (!rotatedContent) return liveContent;
+  if (!liveContent) return rotatedContent;
+  // Ensure each file's content ends with a newline before concatenating so
+  // the last line of .1 and the first line of the live file don't merge.
+  const sep = rotatedContent.endsWith('\n') ? '' : '\n';
+  return rotatedContent + sep + liveContent;
+}
+
+/**
  * Skill-gated hallucination recovery — minimum clean-signal count in the
  * matching category required (alongside a bound skill) to apply the recovery
  * multiplier. Volume of unrelated positive signals must not wash away
@@ -290,9 +330,10 @@ export class PerformanceReader {
    * uses this to render banners and strike-through on retracted rounds.
    */
   getRetractedConsensusIds(): Set<string> {
-    if (!existsSync(this.filePath)) return new Set();
     try {
-      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      const raw = readJsonlWithRotated(this.filePath);
+      if (!raw) return new Set();
+      const lines = raw.trim().split('\n').filter(Boolean);
       const ids = new Set<string>();
       for (const line of lines) {
         try {
@@ -313,9 +354,10 @@ export class PerformanceReader {
    * so an admin view can see multiple retraction reasons for the same round.
    */
   getRoundRetractions(): Array<{ consensus_id: string; reason: string; retracted_at: string }> {
-    if (!existsSync(this.filePath)) return [];
     try {
-      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      const raw = readJsonlWithRotated(this.filePath);
+      if (!raw) return [];
+      const lines = raw.trim().split('\n').filter(Boolean);
       const out: Array<{ consensus_id: string; reason: string; retracted_at: string }> = [];
       for (const line of lines) {
         try {
@@ -477,9 +519,10 @@ export class PerformanceReader {
    * Don't unify these — see getCountersSince doc and consensus 9369ebfc-a3654b51 f1.
    */
   private readSignalsRaw(): ConsensusSignal[] {
-    if (!existsSync(this.filePath)) return [];
     try {
-      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      const raw = readJsonlWithRotated(this.filePath);
+      if (!raw) return [];
+      const lines = raw.trim().split('\n').filter(Boolean);
       const all = lines.map(line => {
         try { return JSON.parse(line) as ConsensusSignal; }
         catch { return null; }
@@ -534,11 +577,12 @@ export class PerformanceReader {
   }
 
   private readSignals(): PerformanceSignal[] {
-    if (!existsSync(this.filePath)) return [];
     try {
+      const raw = readJsonlWithRotated(this.filePath);
+      if (!raw) return [];
       const expiryMs = Date.now() - SIGNAL_EXPIRY_DAYS * 86400000;
 
-      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      const lines = raw.trim().split('\n').filter(Boolean);
       const all = lines.map(line => {
         try { return JSON.parse(line) as PerformanceSignal; }
         catch { return null; }
@@ -1142,7 +1186,7 @@ export class PerformanceReader {
     try {
       const now = Date.now();
       const expiryMs = now - SIGNAL_EXPIRY_DAYS * 86400000;
-      const lines = readFileSync(this.filePath, 'utf-8').trim().split('\n').filter(Boolean);
+      const lines = readJsonlWithRotated(this.filePath).trim().split('\n').filter(Boolean);
       let pass = 0, fail = 0, approved = 0, rejected = 0, lastImplSignalMs = 0;
       for (const line of lines) {
         try {

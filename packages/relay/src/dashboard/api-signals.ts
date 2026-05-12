@@ -1,5 +1,5 @@
-import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { readJsonlWithRotated } from '@gossip/orchestrator';
 
 interface SignalEntry {
   type: string;
@@ -80,13 +80,14 @@ export async function signalsHandler(projectRoot: string, query?: URLSearchParam
   const offset = Math.max(parseInt(query?.get('offset') ?? '', 10) || 0, 0);
 
   const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
-  if (!existsSync(perfPath)) return { items: [], total: 0, offset, limit };
 
   const all: SignalEntry[] = [];
   const roundRetractions: RoundRetractionEntry[] = [];
   const signalFilterSet = signalFilters.length ? new Set(signalFilters) : null;
   try {
-    const lines = readFileSync(perfPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const raw = readJsonlWithRotated(perfPath);
+    if (!raw) return { items: [], total: 0, offset, limit };
+    const lines = raw.trim().split('\n').filter(Boolean);
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);

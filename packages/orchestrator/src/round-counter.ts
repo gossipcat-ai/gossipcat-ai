@@ -35,6 +35,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { readJsonlWithRotated } from './performance-reader';
 
 const JSONL_FILENAME = 'agent-performance.jsonl';
 
@@ -105,12 +106,7 @@ function appendMetaRecord(
  * are counted. Malformed lines (truncated tail, partial JSON) are skipped.
  */
 function scanJsonl(filePath: string): Map<string, number> {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, 'utf8');
-  } catch {
-    return new Map();
-  }
+  const raw = readJsonlWithRotated(filePath);
   if (raw.length === 0) return new Map();
 
   // Two-pass scan: first find the most recent reset offset per consensusId,

@@ -31,13 +31,13 @@ Every finding must cite `file:line`. Peers verify the citation exists and says w
 
 **Do not** add an LLM-as-judge layer to the consensus protocol. It will re-introduce the taste problem we removed.
 
-### 2. `MIN_EVIDENCE = 120` is a real statistical gate, not a bug
+### 2. `MIN_EVIDENCE = 80` is a real statistical gate, not a bug
 
-The skill effectiveness z-test at `check-effectiveness.ts:15` requires ≥120 post-bind signals before issuing a `passed`/`failed` verdict. This is calibrated for ≈75.5% power detecting a +10pp shift at p=0.75 baseline under Bonferroni α=0.025 (raising to ~148 signals reaches ≥80% power).
+The skill effectiveness z-test at `check-effectiveness.ts:15` requires ≥80 post-bind signals before issuing a `passed`/`failed` verdict. This is calibrated for statistical detection of a +10pp shift at p=0.75 baseline under Bonferroni α=0.025. Raising MIN_EVIDENCE to ~120 reaches ≈75.5% power; ~148 reaches ≥80% power if stronger guarantees are needed.
 
 Skills will sit in `pending` for a long time. That is **correct behavior**, not a bug. If you see "stuck at pending" and your first instinct is to lower MIN_EVIDENCE, stop — lowering it weakens the statistical power claim that the whole effectiveness loop depends on. For paper evidence, build a curated eval suite with paired before/after testing (smaller N, McNemar's test, ~15 per category) instead.
 
-See `check-effectiveness.ts:91-105` for the in-code comment documenting this, and prior consensus `9369ebfc-a3654b51 f5` for the decision history.
+See `check-effectiveness.ts:7-19` for the in-code comment documenting this, and prior consensus `9369ebfc-a3654b51 f5` for the decision history.
 
 ### 3. Category names are canonicalized via `normalizeSkillName` on BOTH read and write
 
@@ -179,7 +179,7 @@ If `format_compliance` signals a sudden drop for an agent that was fine last rou
 
 ### Skill-develop cooldown gate
 
-`gossip_skills(action: "develop")` is throttled to prevent churn. Redeveloping the same skill while its effectiveness window is still accumulating evidence resets the `MIN_EVIDENCE=120` counter and collapses the statistical signal. Cooldown is verdict-aware:
+`gossip_skills(action: "develop")` is throttled to prevent churn. Redeveloping the same skill while its effectiveness window is still accumulating evidence resets the `MIN_EVIDENCE=80` counter and collapses the statistical signal. Cooldown is verdict-aware:
 
 - `pending` — no gate (skill may need 60-120d to reach MIN_EVIDENCE)
 - `silent_skill` / `insufficient_evidence` — 30d
@@ -275,7 +275,7 @@ npm install -g gossipcat
 
 ### Effectiveness tracking is slow by design
 
-Skills sit in `pending` until ≥120 post-bind signals accumulate in the category, or until the 90-day timeout flips them to `silent_skill` / `insufficient_evidence`. At typical side-project volumes, most skills will time out before graduating. This is intentional statistical rigor, not a bug.
+Skills sit in `pending` until ≥80 post-bind signals accumulate in the category, or until the 90-day timeout flips them to `silent_skill` / `insufficient_evidence`. At typical side-project volumes, most skills will time out before graduating. This is intentional statistical rigor, not a bug.
 
 **Workaround for paper-style validation**: build a curated eval suite with paired before/after runs on a fixed task corpus. Use McNemar's test on paired outcomes (smaller N needed, detects ~15pp shifts at N=30). This is on the roadmap but not shipped.
 
@@ -299,7 +299,7 @@ Two-phase consensus (Phase 1 parallel findings + Phase 2 cross-review) takes rea
 
 ### `flagged_for_manual_review` is effectively unreachable
 
-Per `check-effectiveness.ts:146-157`: reaching 3 `inconclusive` strikes requires ~360 fresh category signals across three independent MIN_EVIDENCE windows, which exceeds the 90-day timeout at realistic volumes. The terminal state exists in the enum but no real skill will reach it. Consider it a design placeholder.
+Per `check-effectiveness.ts:146-157`: reaching 3 `inconclusive` strikes requires ~240 fresh category signals across three independent MIN_EVIDENCE windows, which exceeds the 90-day timeout at realistic volumes. The terminal state exists in the enum but no real skill will reach it. Consider it a design placeholder.
 
 ---
 
