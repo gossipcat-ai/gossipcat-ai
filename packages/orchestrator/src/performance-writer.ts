@@ -1,9 +1,21 @@
 // packages/orchestrator/src/performance-writer.ts
 import { appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
-import { PerformanceSignal, classifySignal } from './consensus-types';
+import { PerformanceSignal, ConsensusSignal, classifySignal } from './consensus-types';
 import type { EmissionPath } from './completion-signals.allowlist';
 import { bump as bumpRoundCounter, reset as resetRoundCounter, deriveConsensusId, makeBumpRecord } from './round-counter';
+import {
+  classifyForAggregate,
+  foldSignal,
+  readAggregateIndex,
+  rebuildAggregateIndex,
+  recordRetraction,
+  sidecarIsStale,
+  writeAggregateIndex,
+  SIDECAR_VERSION,
+  type SignalAggregateIndexData,
+} from './signal-aggregate-index';
+import { readSkillFreshness } from './skill-freshness';
 
 /**
  * Fix 5 (spec 2026-04-27-self-telemetry-remediation §Fix 5): rate-limited
@@ -194,15 +206,169 @@ export function __resetLoggedCounterErrorsForTests(): void {
 
 const INTERNAL = Symbol('performance-writer-internal');
 
+/**
+ * Resolve a (boundAtMs, signalForAggregate) pair for a consensus signal that
+ * should contribute to the sidecar. Returns null when:
+ *   - the signal is not a per-agent accuracy signal (operational / unknown), OR
+ *   - the signal carries no `category` (sidecar partitions by category), OR
+ *   - the signal's agent is the `_system` sentinel (round-level tombstone).
+ */
+function deriveAggregateKey(
+  signal: PerformanceSignal,
+  projectRoot: string,
+  boundAtCache: Map<string, number>,
+): { agentId: string; category: string; boundAtMs: number; signal: string; timestampMs: number } | null {
+  if (signal.type !== 'consensus') return null;
+  const cs = signal as ConsensusSignal;
+  if (cs.agentId === '_system') return null;
+  if (!cs.category) return null;
+  if (classifyForAggregate(cs.signal) === 'none') return null;
+  const ts = cs.timestamp ? new Date(cs.timestamp).getTime() : 0;
+  if (!isFinite(ts) || ts === 0) return null;
+  const boundAtMs = resolveBoundAtMs(cs.agentId, cs.category, projectRoot, boundAtCache, ts);
+  return {
+    agentId: cs.agentId,
+    category: cs.category,
+    boundAtMs,
+    signal: cs.signal,
+    timestampMs: ts,
+  };
+}
+
+/**
+ * Look up the `bound_at` for an agent's category-skill file, with per-process
+ * caching so the sidecar fold-in doesn't disk-walk on every signal. Falls
+ * back to the signal timestamp when no skill file exists — the signal still
+ * lands in a stable bucket, just keyed by its own arrival time. The cache is
+ * pessimistic about freshness: a rebound skill won't be picked up mid-process
+ * but the sidecar carries an explicit `_aggregate_bound_at_ms` stamp on every
+ * jsonl row so a rebuild always sees the same boundary the writer used.
+ */
+const boundAtMissSentinel = -1;
+function resolveBoundAtMs(
+  agentId: string,
+  category: string,
+  projectRoot: string,
+  cache: Map<string, number>,
+  fallbackMs: number,
+): number {
+  const key = agentId + ' ' + category;
+  const cached = cache.get(key);
+  if (cached !== undefined) {
+    return cached === boundAtMissSentinel ? fallbackMs : cached;
+  }
+  try {
+    const { boundAt } = readSkillFreshness(agentId, category, projectRoot);
+    if (typeof boundAt === 'string' && boundAt.length > 0) {
+      const ms = new Date(boundAt).getTime();
+      if (isFinite(ms) && ms > 0) {
+        cache.set(key, ms);
+        return ms;
+      }
+    }
+  } catch {
+    /* fall through to sentinel */
+  }
+  cache.set(key, boundAtMissSentinel);
+  return fallbackMs;
+}
+
 export class PerformanceWriter {
   private readonly filePath: string;
   private readonly projectRoot: string;
+  // Per-instance bound-at cache: agentId\0category → boundAtMs (or -1 sentinel
+  // for "no skill file"). Bounded by the agent×category cardinality of a
+  // single process — small in practice (<50 entries even for big fleets).
+  private readonly boundAtCache: Map<string, number> = new Map();
 
   constructor(projectRoot: string) {
     const dir = join(projectRoot, '.gossip');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     this.filePath = join(dir, 'agent-performance.jsonl');
     this.projectRoot = projectRoot;
+  }
+
+  /**
+   * Fold one or more signals into the aggregate sidecar AFTER the jsonl
+   * append succeeded. Errors are swallowed and logged — the raw jsonl is the
+   * system of record; sidecar staleness is detected and repaired on read.
+   *
+   * Visible for testing.
+   * @internal
+   */
+  __updateAggregateSidecar(signals: PerformanceSignal[]): void {
+    if (signals.length === 0) return;
+    // Read existing sidecar (do NOT rebuild here — we already wrote the
+    // signals to jsonl, so any rebuild would double-count when we apply our
+    // delta below). If the on-disk sidecar is stale relative to the live
+    // jsonl, that means another writer or a prior crash left rows that we
+    // didn't fold in. Rebuild once to catch up to the live jsonl mtime
+    // BEFORE adding our delta — but only if the staleness pre-dates our
+    // current append. Race-safe enough because writes are single-process.
+    let data: SignalAggregateIndexData;
+    try {
+      const existing = readAggregateIndex(this.projectRoot);
+      if (existing && !sidecarIsStale(this.projectRoot, existing)) {
+        data = existing;
+      } else if (existing) {
+        // Stale: rebuild from raw (which includes the rows we just wrote)
+        // then DON'T apply our delta — the rebuild already saw it. Short-
+        // circuit so we don't double count.
+        rebuildAggregateIndex(this.projectRoot);
+        return;
+      } else {
+        // No sidecar yet: start fresh and let our delta be the seed. This
+        // path also runs on first-ever signal — jsonl has 1 row, sidecar is
+        // about to be created from the delta below.
+        data = {
+          version: SIDECAR_VERSION,
+          rebuiltAt: new Date(0).toISOString(),
+          lastRawTimestampMs: 0,
+          agents: {},
+        };
+      }
+    } catch (err) {
+      try {
+        process.stderr.write(`[gossipcat] signal-aggregate-sidecar load failed: ${(err as Error).message}\n`);
+      } catch { /* best-effort */ }
+      return;
+    }
+    let mutated = false;
+    for (const s of signals) {
+      if (s.type === 'consensus' && (s as ConsensusSignal).signal === 'consensus_round_retracted') {
+        const cid = (s as ConsensusSignal & { consensus_id?: string }).consensus_id;
+        if (typeof cid === 'string' && cid.length > 0) {
+          if (recordRetraction(data, cid) > 0) mutated = true;
+        }
+        continue;
+      }
+      const key = deriveAggregateKey(s, this.projectRoot, this.boundAtCache);
+      if (!key) continue;
+      if (foldSignal(data, key.agentId, key.category, key.boundAtMs, key.signal, key.timestampMs)) {
+        mutated = true;
+      }
+    }
+    if (!mutated) return;
+    data.rebuiltAt = new Date().toISOString();
+    // Track the live jsonl mtime so sidecarIsStale() stays in step with the
+    // file we just appended to. Without this, every subsequent appendFileSync
+    // bumps the mtime past lastRawTimestampMs (which is signal-timestamp-
+    // based and ~equal to wall time but not identical), spuriously marking
+    // the sidecar stale and forcing a full rebuild on every other write.
+    try {
+      const st = statSync(this.filePath);
+      if (st.mtimeMs > data.lastRawTimestampMs) data.lastRawTimestampMs = st.mtimeMs;
+    } catch { /* best-effort */ }
+    writeAggregateIndex(this.projectRoot, data);
+  }
+
+  /**
+   * @internal — test-only reset of the bound-at cache. Mutators don't expose
+   * the cache directly; tests that re-bind skills mid-test need this to
+   * observe the new timestamp without spinning up a fresh writer.
+   */
+  __resetBoundAtCacheForTests(): void {
+    this.boundAtCache.clear();
   }
 
   /**
@@ -233,7 +399,13 @@ export class PerformanceWriter {
       validateSignal(signal);
       rotateJsonlIfNeeded(this.filePath);
       const stamped = stampSignalClass(signal);
-      const row = { ...stamped, _emission_path: emissionPath };
+      // Stamp the resolved aggregate boundAt on the row so a rebuild folds
+      // signals into the same bucket the live write path used. No-op when the
+      // signal carries no category — see deriveAggregateKey for the contract.
+      const aggKey = deriveAggregateKey(stamped, this.projectRoot, this.boundAtCache);
+      const row = aggKey
+        ? { ...stamped, _emission_path: emissionPath, _aggregate_bound_at_ms: aggKey.boundAtMs }
+        : { ...stamped, _emission_path: emissionPath };
       // Option C (spec 2026-04-27-self-telemetry-crash-consistency): build the
       // counter-bump meta-record and concatenate it with the signal payload so
       // both land in a single appendFileSync call. This eliminates the
@@ -284,6 +456,8 @@ export class PerformanceWriter {
         throw writeErr;
       }
       bumpSampleCounter(this.projectRoot, 1);
+      // Sidecar fold-in is best-effort: jsonl is the system of record.
+      try { this.__updateAggregateSidecar([stamped]); } catch { /* logged inside */ }
     },
 
     /**
@@ -300,9 +474,14 @@ export class PerformanceWriter {
       // Cosmetic-B invariant that one bad signal does not abort the rest of
       // the batch (PR #5: feedback_signal_serialization_defer style).
       const parts: string[] = [];
+      const stampedSignals: PerformanceSignal[] = [];
       for (const s of signals) {
         const stamped = stampSignalClass(s);
-        const row = { ...stamped, _emission_path: emissionPath };
+        stampedSignals.push(stamped);
+        const aggKey = deriveAggregateKey(stamped, this.projectRoot, this.boundAtCache);
+        const row = aggKey
+          ? { ...stamped, _emission_path: emissionPath, _aggregate_bound_at_ms: aggKey.boundAtMs }
+          : { ...stamped, _emission_path: emissionPath };
         parts.push(JSON.stringify(row));
         try {
           const cls = classifySignal(s.signal);
@@ -343,6 +522,7 @@ export class PerformanceWriter {
         throw writeErr;
       }
       bumpSampleCounter(this.projectRoot, signals.length);
+      try { this.__updateAggregateSidecar(stampedSignals); } catch { /* logged inside */ }
     },
   };
 
@@ -403,6 +583,10 @@ export class PerformanceWriter {
       appendFileSync(this.filePath, JSON.stringify(stamped) + '\n');
     } finally {
       try { resetRoundCounter(this.projectRoot, consensusId); } catch { /* non-fatal */ }
+      // Sidecar retraction: propagate the consensus_id into every bucket so
+      // readers can short-circuit `findingId.startsWith(cid + ':')` checks
+      // when computing accuracy from the fast path. Errors logged inside.
+      try { this.__updateAggregateSidecar([stamped as PerformanceSignal]); } catch { /* logged */ }
     }
   }
 }
