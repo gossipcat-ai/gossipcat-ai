@@ -31,8 +31,10 @@ import {
   readCountersSince,
   recordRetraction,
   sidecarIsStale,
+  foldSignal,
   SIDECAR_FILENAME,
   SIDECAR_VERSION,
+  type SignalAggregateIndexData,
 } from '../../packages/orchestrator/src/signal-aggregate-index';
 import { PerformanceWriter } from '../../packages/orchestrator/src/performance-writer';
 import { PerformanceReader } from '../../packages/orchestrator/src/performance-reader';
@@ -438,5 +440,133 @@ describe('readCountersSince', () => {
   it('returns zero counters for unknown agent/category', () => {
     const data = rebuildAggregateIndex(tmpDir);
     expect(readCountersSince(data, 'ghost', 'security', 0)).toEqual({ correct: 0, hallucinated: 0 });
+  });
+});
+
+// ── Fix 1: mtime-keyed reader cache ─────────────────────────────────────────
+
+describe('reader cache (Fix 1)', () => {
+  it('returns cached result on second call without re-reading disk', () => {
+    const writer = new PerformanceWriter(tmpDir);
+    writer[WRITER_INTERNAL].appendSignal(makeSignal('agent-q', 'agreement', { category: 'security' }));
+
+    const readFileSyncSpy = jest.spyOn(require('fs'), 'readFileSync');
+
+    // First call — populates cache
+    const first = readAggregateIndex(tmpDir);
+    const callsAfterFirst = readFileSyncSpy.mock.calls.filter(
+      (args: unknown[]) => typeof args[0] === 'string' && (args[0] as string).includes(SIDECAR_FILENAME),
+    ).length;
+
+    // Second call with same mtime — should hit cache, no extra readFileSync
+    const second = readAggregateIndex(tmpDir);
+    const callsAfterSecond = readFileSyncSpy.mock.calls.filter(
+      (args: unknown[]) => typeof args[0] === 'string' && (args[0] as string).includes(SIDECAR_FILENAME),
+    ).length;
+
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(callsAfterSecond).toBe(callsAfterFirst); // no extra disk read
+
+    readFileSyncSpy.mockRestore();
+  });
+
+  it('busts cache when mtime changes', () => {
+    const writer = new PerformanceWriter(tmpDir);
+    writer[WRITER_INTERNAL].appendSignal(makeSignal('agent-r', 'agreement', { category: 'security' }));
+
+    const first = readAggregateIndex(tmpDir);
+    expect(first).not.toBeNull();
+    expect(readCountersSince(first!, 'agent-r', 'security', 0).correct).toBe(1);
+
+    // Append another signal — writer rewrites sidecar, bumping mtime
+    writer[WRITER_INTERNAL].appendSignal(makeSignal('agent-r', 'agreement', { category: 'security' }));
+
+    const second = readAggregateIndex(tmpDir);
+    expect(second).not.toBeNull();
+    expect(readCountersSince(second!, 'agent-r', 'security', 0).correct).toBe(2);
+  });
+});
+
+// ── Fix 2: SAFE_NAME tamper validation ──────────────────────────────────────
+
+describe('tamper validation (Fix 2)', () => {
+  it('returns null for hostile agentId key (path traversal)', () => {
+    writeFileSync(sidecarPath, JSON.stringify({
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 0,
+      agents: {
+        '../../etc/passwd': { security: {} },
+      },
+    }));
+    expect(readAggregateIndex(tmpDir)).toBeNull();
+  });
+
+  it('returns null for hostile category key (script injection)', () => {
+    writeFileSync(sidecarPath, JSON.stringify({
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 0,
+      agents: {
+        'valid-agent': { '<script>': {} },
+      },
+    }));
+    expect(readAggregateIndex(tmpDir)).toBeNull();
+  });
+
+  it('accepts valid agentId and category keys', () => {
+    const writer = new PerformanceWriter(tmpDir);
+    writer[WRITER_INTERNAL].appendSignal(makeSignal('valid-agent', 'agreement', { category: 'security' }));
+    const data = readAggregateIndex(tmpDir);
+    expect(data).not.toBeNull();
+  });
+});
+
+// ── Fix 3: Bucket growth cap ─────────────────────────────────────────────────
+
+describe('bucket growth cap (Fix 3)', () => {
+  it('caps byBound at 5 buckets, evicting the oldest', () => {
+    const data: SignalAggregateIndexData = {
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 0,
+      agents: {},
+    };
+
+    // Fold 6 signals with distinct boundAtMs values (ascending: 100, 200, ... 600)
+    for (let i = 1; i <= 6; i++) {
+      foldSignal(data, 'agent-s', 'security', i * 100, 'agreement', Date.now());
+    }
+
+    const byBound = data.agents['agent-s'].security;
+    const keys = Object.keys(byBound);
+    expect(keys.length).toBe(5);
+    // Oldest bucket (boundAtMs=100, key="100") should have been evicted
+    expect(byBound['100']).toBeUndefined();
+    // Newest bucket (boundAtMs=600) should be present
+    expect(byBound['600']).toBeDefined();
+  });
+
+  it('numeric sort is correct — does not evict "9" before "10"', () => {
+    const data: SignalAggregateIndexData = {
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 0,
+      agents: {},
+    };
+
+    // Simulate 5 buckets with values that would sort incorrectly under lexical ordering:
+    // lexical: "10" < "200" < "9" — numeric: 9 < 10 < 200
+    for (const bound of [9, 10, 200, 300, 400]) {
+      foldSignal(data, 'agent-t', 'security', bound, 'agreement', Date.now());
+    }
+    // Now add a 6th — should evict numeric oldest (9), not lexical oldest ("10")
+    foldSignal(data, 'agent-t', 'security', 500, 'agreement', Date.now());
+
+    const byBound = data.agents['agent-t'].security;
+    expect(Object.keys(byBound).length).toBe(5);
+    expect(byBound['9']).toBeUndefined();  // correctly evicted (numeric oldest)
+    expect(byBound['10']).toBeDefined();   // should survive
   });
 });

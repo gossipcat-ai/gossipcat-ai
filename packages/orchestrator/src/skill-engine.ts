@@ -24,7 +24,7 @@ import {
   type VerdictStatus,
 } from './check-effectiveness';
 
-const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+export const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
 /**
  * Test-only deterministic-interleaving hook for writeSkillFileFromParts.

@@ -45,11 +45,16 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { join, dirname } from 'path';
 import { ConsensusSignal } from './consensus-types';
 import { readJsonlWithRotated } from './performance-reader';
+import { SAFE_NAME } from './skill-engine';
 
 export const SIDECAR_VERSION = 1;
 export const SIDECAR_FILENAME = 'signal-aggregate-index.json';
 export const AGENT_PERFORMANCE_FILENAME = 'agent-performance.jsonl';
 const RECENT_RETRACTIONS_CAP = 16;
+
+// Fix 1: mtime-keyed reader cache — mirrors PerformanceReader.cachedScores pattern.
+let cachedAggregateData: SignalAggregateIndexData | null = null;
+let cachedAggregateMtimeMs = 0;
 
 export interface SignalAggregateBucket {
   correct: number;
@@ -105,10 +110,30 @@ export function classifyForAggregate(signal: string): 'correct' | 'hallucinated'
 /**
  * Read the sidecar JSON from disk. Returns `null` if missing, malformed, or
  * carrying a version we don't recognise — callers must rebuild on `null`.
+ *
+ * Fix 1: mtime-keyed reader cache — skips readFileSync+JSON.parse when the
+ *   file has not changed since the last read (mirrors PerformanceReader.getScores).
+ * Fix 2: SAFE_NAME tamper validation — rejects hostile agentId/category keys
+ *   that could cause identity mis-attribution (e.g. "../../etc/passwd").
  */
 export function readAggregateIndex(projectRoot: string): SignalAggregateIndexData | null {
   const path = join(projectRoot, '.gossip', SIDECAR_FILENAME);
-  if (!existsSync(path)) return null;
+  if (!existsSync(path)) {
+    cachedAggregateData = null;
+    cachedAggregateMtimeMs = 0;
+    return null;
+  }
+  let mtimeMs = 0;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch (err) {
+    logSidecarError('stat', err);
+    return null;
+  }
+  // Fix 1: cache hit — return without re-reading disk.
+  if (cachedAggregateData !== null && mtimeMs === cachedAggregateMtimeMs) {
+    return cachedAggregateData;
+  }
   let raw: string;
   try {
     raw = readFileSync(path, 'utf-8');
@@ -127,12 +152,23 @@ export function readAggregateIndex(projectRoot: string): SignalAggregateIndexDat
   const obj = parsed as Partial<SignalAggregateIndexData>;
   if (obj.version !== SIDECAR_VERSION) return null;
   if (!obj.agents || typeof obj.agents !== 'object' || Array.isArray(obj.agents)) return null;
-  return {
+  // Fix 2: SAFE_NAME validation — reject any hostile key before caching.
+  for (const agentId of Object.keys(obj.agents)) {
+    if (!SAFE_NAME.test(agentId)) return null;
+    for (const category of Object.keys((obj.agents as Record<string, Record<string, unknown>>)[agentId] ?? {})) {
+      if (!SAFE_NAME.test(category)) return null;
+    }
+  }
+  const result: SignalAggregateIndexData = {
     version: SIDECAR_VERSION,
     rebuiltAt: typeof obj.rebuiltAt === 'string' ? obj.rebuiltAt : new Date(0).toISOString(),
     lastRawTimestampMs: typeof obj.lastRawTimestampMs === 'number' ? obj.lastRawTimestampMs : 0,
     agents: obj.agents as SignalAggregateIndexData['agents'],
   };
+  // Store in cache only after validation passes.
+  cachedAggregateData = result;
+  cachedAggregateMtimeMs = mtimeMs;
+  return result;
 }
 
 /**
@@ -207,6 +243,8 @@ export function recordRetraction(
   return touched;
 }
 
+const BUCKET_CAP = 5;
+
 function ensureBucket(
   data: SignalAggregateIndexData,
   agentId: string,
@@ -219,6 +257,13 @@ function ensureBucket(
   const byBound = byCat[category];
   const key = String(boundAtMs);
   if (!byBound[key]) {
+    // Fix 3: evict oldest bucket when at capacity to prevent unbounded growth
+    // across frequent skill-rebind epochs. Numeric sort is critical — lexical
+    // sort mangles "9" > "10".
+    const sorted = Object.keys(byBound).map(k => parseInt(k, 10)).sort((a, b) => a - b);
+    if (sorted.length >= BUCKET_CAP) {
+      delete byBound[String(sorted[0])];
+    }
     byBound[key] = {
       correct: 0,
       hallucinated: 0,
