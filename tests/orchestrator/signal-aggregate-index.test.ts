@@ -133,7 +133,7 @@ describe('PerformanceWriter sidecar fold-in', () => {
 
     const data = readAggregateIndex(tmpDir);
     expect(data).not.toBeNull();
-    const counters = readCountersSince(data!, 'agent-a', 'security', 0);
+    const counters = readCountersSince(data!, 'agent-a', 'security', 0)!;
     expect(counters.correct).toBe(1);
     expect(counters.hallucinated).toBe(1);
   });
@@ -247,7 +247,7 @@ describe('concurrent write-while-rebuild', () => {
     }) + '\n');
 
     const rebuilt = rebuildAggregateIndex(tmpDir);
-    const counters = readCountersSince(rebuilt, 'agent-h', 'security', 0);
+    const counters = readCountersSince(rebuilt, 'agent-h', 'security', 0)!;
     expect(counters.correct).toBe(2);
   });
 });
@@ -294,7 +294,7 @@ describe('retraction propagation', () => {
     writeFileSync(jsonlPath, lines.join('\n') + '\n');
 
     const data = rebuildAggregateIndex(tmpDir);
-    const counters = readCountersSince(data, 'agent-j', 'security', 0);
+    const counters = readCountersSince(data, 'agent-j', 'security', 0)!;
     // Only the cid-A signal should count
     expect(counters.correct).toBe(1);
 
@@ -328,7 +328,7 @@ describe('rotation mid-scan', () => {
     }) + '\n');
 
     const data = rebuildAggregateIndex(tmpDir);
-    const counters = readCountersSince(data, 'agent-k', 'security', 0);
+    const counters = readCountersSince(data, 'agent-k', 'security', 0)!;
     expect(counters.correct).toBe(2);
     expect(counters.hallucinated).toBe(1);
   });
@@ -345,7 +345,7 @@ describe('rotation mid-scan', () => {
 
     // Sidecar still has 3 entries (2 from pre-rotation + 1 post)
     const data = readAggregateIndex(tmpDir)!;
-    const counters = readCountersSince(data, 'agent-l', 'security', 0);
+    const counters = readCountersSince(data, 'agent-l', 'security', 0)!;
     expect(counters.correct).toBe(2);
     expect(counters.hallucinated).toBe(1);
   });
@@ -386,7 +386,7 @@ describe('crash simulation — jsonl appended without sidecar update', () => {
     utimesSync(jsonlPath, future, future);
 
     const data = loadOrRebuildAggregateIndex(tmpDir);
-    const counters = readCountersSince(data, 'agent-n', 'security', 0);
+    const counters = readCountersSince(data, 'agent-n', 'security', 0)!;
     expect(counters.correct).toBe(2);
   });
 
@@ -434,13 +434,68 @@ describe('readCountersSince', () => {
     );
     const data = readAggregateIndex(tmpDir)!;
     const cutoff = Date.now() - 5 * 86400000;
-    const counters = readCountersSince(data, 'agent-p', 'security', cutoff);
+    const counters = readCountersSince(data, 'agent-p', 'security', cutoff)!;
     expect(counters.correct).toBe(1);
   });
 
   it('returns zero counters for unknown agent/category', () => {
     const data = rebuildAggregateIndex(tmpDir);
     expect(readCountersSince(data, 'ghost', 'security', 0)).toEqual({ correct: 0, hallucinated: 0 });
+  });
+
+  // Regression — consensus 5058d7b0-7eec4aca:sonnet-reviewer:f3 /
+  // 05bbbf4c-fd4c4c89:gemini-reviewer:f3: bucket-granular filtering
+  // over-counts when sinceMs falls mid-bucket. The straddling bucket has
+  // signals on both sides of sinceMs but the whole bucket's counts were
+  // included. Drift detector (docs/specs/2026-05-13-passed-skill-drift-
+  // detection.md) requires this to return null so the caller falls back
+  // to the per-signal raw scan.
+  it('returns null when a bucket straddles sinceMs (boundAtMs < sinceMs <= lastUpdateMs)', () => {
+    const data: SignalAggregateIndexData = {
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 30,
+      agents: {},
+    };
+    // Bucket keyed at boundAtMs=10 with two signals: a 'correct' at t=10 and
+    // a 'hallucinated' at t=30 (lastUpdateMs becomes 30 via foldSignal's max).
+    foldSignal(data, 'agent-straddle', 'security', /* boundAtMs */ 10, 'agreement', /* ts */ 10);
+    foldSignal(data, 'agent-straddle', 'security', /* boundAtMs */ 10, 'hallucination_caught', /* ts */ 30);
+
+    // sinceMs=20 splits the bucket — boundAtMs(10) < 20 <= lastUpdateMs(30).
+    expect(readCountersSince(data, 'agent-straddle', 'security', 20)).toBeNull();
+  });
+
+  it('end-to-end: getCountersSince falls back to raw scan on bucket straddle', () => {
+    // Drive the public PerformanceReader.getCountersSince so the sidecar +
+    // fall-through plumbing is exercised. Write rows directly with the same
+    // _aggregate_bound_at_ms so the rebuilt sidecar groups them into one
+    // bucket whose lastUpdateMs straddles our query.
+    const tsEarly = Date.now() - 60_000; // before sinceMs
+    const tsLate = Date.now();           // after sinceMs
+    const boundAt = tsEarly;             // shared bucket key
+    const sinceMs = tsEarly + 30_000;    // mid-bucket cutoff
+    const lines = [
+      JSON.stringify({
+        type: 'consensus', agentId: 'agent-straddle-e2e', signal: 'agreement',
+        category: 'security', taskId: 't1', timestamp: new Date(tsEarly).toISOString(),
+        evidence: 'before-sinceMs', _aggregate_bound_at_ms: boundAt,
+      }),
+      JSON.stringify({
+        type: 'consensus', agentId: 'agent-straddle-e2e', signal: 'hallucination_caught',
+        category: 'security', taskId: 't2', timestamp: new Date(tsLate).toISOString(),
+        evidence: 'after-sinceMs', _aggregate_bound_at_ms: boundAt,
+      }),
+    ];
+    writeFileSync(jsonlPath, lines.join('\n') + '\n');
+    rebuildAggregateIndex(tmpDir);
+
+    // Both signals landed in the same bucket (boundAt). lastUpdateMs is the
+    // late ts; bucket-level filter would include both → {correct:1, hall:1}.
+    // The fix forces a fallback to raw per-signal scan → {correct:0, hall:1}.
+    const reader = new PerformanceReader(tmpDir);
+    const counters = reader.getCountersSince('agent-straddle-e2e', 'security', sinceMs);
+    expect(counters).toEqual({ correct: 0, hallucinated: 1 });
   });
 });
 
@@ -484,14 +539,14 @@ describe('reader cache (Fix 1)', () => {
 
     const first = readAggregateIndex(tmpDir);
     expect(first).not.toBeNull();
-    expect(readCountersSince(first!, 'agent-r', 'security', 0).correct).toBe(1);
+    expect(readCountersSince(first!, 'agent-r', 'security', 0)!.correct).toBe(1);
 
     // Append another signal — writer rewrites sidecar, bumping mtime
     writer[WRITER_INTERNAL].appendSignal(makeSignal('agent-r', 'agreement', { category: 'security' }));
 
     const second = readAggregateIndex(tmpDir);
     expect(second).not.toBeNull();
-    expect(readCountersSince(second!, 'agent-r', 'security', 0).correct).toBe(2);
+    expect(readCountersSince(second!, 'agent-r', 'security', 0)!.correct).toBe(2);
   });
 });
 
@@ -587,7 +642,7 @@ describe('write-side cache invalidation (consensus Fix 1)', () => {
 
     const first = readAggregateIndex(tmpDir);
     expect(first).not.toBeNull();
-    expect(readCountersSince(first!, 'agent-u', 'security', 0).correct).toBe(1);
+    expect(readCountersSince(first!, 'agent-u', 'security', 0)!.correct).toBe(1);
 
     // Second write with different data — without write-side invalidation the stale
     // cached object would be returned even though the file changed.
@@ -595,7 +650,7 @@ describe('write-side cache invalidation (consensus Fix 1)', () => {
 
     const second = readAggregateIndex(tmpDir);
     expect(second).not.toBeNull();
-    const counters = readCountersSince(second!, 'agent-u', 'security', 0);
+    const counters = readCountersSince(second!, 'agent-u', 'security', 0)!;
     expect(counters.correct).toBe(1);
     expect(counters.hallucinated).toBe(1);
   });
@@ -662,7 +717,7 @@ describe('bucket key validation — digits only (consensus Fix 3)', () => {
     writeFileSync(sidecarPath, raw + '\n');
     const data = readAggregateIndex(tmpDir);
     expect(data).not.toBeNull();
-    expect(readCountersSince(data!, 'agent-x', 'security', 0).correct).toBe(2);
+    expect(readCountersSince(data!, 'agent-x', 'security', 0)!.correct).toBe(2);
   });
 });
 

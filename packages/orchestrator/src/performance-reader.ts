@@ -498,6 +498,12 @@ export class PerformanceReader {
     //      and fold-in)
     //   3. category lookup misses post-rebuild (defensive — sidecar bucket
     //      keys must match the live category exactly)
+    //   4. a bucket straddles `sinceMs` (boundAtMs < sinceMs <= lastUpdateMs):
+    //      sidecar aggregates at bucket granularity, so it cannot serve an
+    //      exact mid-bucket count — `readSidecarCountersSince` returns null
+    //      and we fall through to the per-signal raw filter at line 534.
+    //      See consensus 5058d7b0-7eec4aca:sonnet-reviewer:f3 /
+    //      05bbbf4c-fd4c4c89:gemini-reviewer:f3.
     const existing = readAggregateIndex(this.projectRoot);
     if (existing && !sidecarIsStale(this.projectRoot, existing)) {
       const agentBuckets = existing.agents[agentId];
@@ -506,15 +512,21 @@ export class PerformanceReader {
         // raw `category` the signal carried, but historically writers have
         // sometimes pre-normalized.
         if (agentBuckets[category]) {
-          return readSidecarCountersSince(existing, agentId, category, sinceMs);
+          const fast = readSidecarCountersSince(existing, agentId, category, sinceMs);
+          if (fast !== null) return fast;
+          // straddle → raw fallback below
+        } else {
+          const norm = normalizeSkillName(category);
+          if (agentBuckets[norm]) {
+            const fast = readSidecarCountersSince(existing, agentId, norm, sinceMs);
+            if (fast !== null) return fast;
+            // straddle → raw fallback below
+          } else {
+            // No bucket for this agent+category in a fresh sidecar means zero
+            // accuracy history — short-circuit to avoid the raw scan.
+            return { correct: 0, hallucinated: 0 };
+          }
         }
-        const norm = normalizeSkillName(category);
-        if (agentBuckets[norm]) {
-          return readSidecarCountersSince(existing, agentId, norm, sinceMs);
-        }
-        // No bucket for this agent+category in a fresh sidecar means zero
-        // accuracy history — short-circuit to avoid the raw scan.
-        return { correct: 0, hallucinated: 0 };
       }
     }
 
