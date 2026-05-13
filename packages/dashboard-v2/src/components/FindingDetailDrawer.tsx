@@ -25,7 +25,7 @@ const TAG_COLORS: Record<string, string> = {
   disputed: 'text-disputed bg-disputed/10 border border-disputed/20',
   unverified: 'text-unverified bg-unverified/10 border border-unverified/20',
   unique: 'text-unique bg-unique/10 border border-unique/20',
-  insight: 'text-muted-foreground bg-muted border border-border/40',
+  insight: 'text-insight bg-insight/10 border border-insight/20',
   newFinding: 'text-unique bg-unique/10 border border-unique/20',
 };
 
