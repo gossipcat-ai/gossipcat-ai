@@ -16,6 +16,10 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 - **PR #364/#365 follow-up cluster** (PR #366, commit 724f583). Loose ends from the BM25 sidecar + resolutionRoots work: `loadIndex` file-lock gap, latent open-boost bug for typeless frontmatter, frontmatter parser deduplication, plus the `corpusDir` leading-dash comment correction.
 
+- **`--color-insight` consumers wired to the token** (PR #369). `FindingDetailDrawer` had mapped insight findings to `text-muted-foreground`, and `FindingsMetrics` hardcoded `text-zinc-500` for the insight filter chip — so `--color-insight` was defined in both themes but never reached the UI. Both consumers now reference `text-insight`/`bg-insight`/`border-insight`. Closes the orphan flagged in PR #368's cross-review.
+
+- **Impact-adjacency gate fires on PR `edited`** (PR #370). The gate workflow used the default `pull_request` activity types (`opened`/`synchronize`/`reopened`), so adding `consensus-id: <hex>-<hex>` to a PR body after open didn't trigger a re-run. `gh run rerun` replayed the original event payload (frozen at open-time), so the gate failed identically. Adding `edited` to the activity types makes body edits re-fire the gate against the current body. PR #367 hit this twice before the bug was diagnosed.
+
 ### Notes
 
 - Consensus round `532d78b3-d5174b9b` validated the editorial v2 palette via `sonnet-designer × sonnet-reviewer × gemini-reviewer` cross-review. Three `hallucination_caught` signals recorded against `gemini-reviewer` for arithmetic errors in contrast-ratio computations (~1.0 off on multiple findings). Five real structural issues in v1 (border/input desync, scrollbar RGB literal, orphaned insight token, chart/unverified amber collision, text-dim/muted step collapse) were caught by `sonnet-reviewer` and folded into v2.
