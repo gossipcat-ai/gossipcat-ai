@@ -54,6 +54,13 @@ export interface SkillFrontmatter {
   sources?: string;
   status: SkillStatus;
   /**
+   * ISO-8601 timestamp set when a `passed` skill is demoted to `inconclusive`
+   * by the drift detector; absent for organically-inconclusive skills. Read by
+   * the skill-loader quarantine filter to suppress regressed skills from
+   * dispatch injection until they re-pass effectiveness checks.
+   */
+  regressed_from_passed_at?: string;
+  /**
    * Dispatch scope. Default 'any' preserves backwards-compatibility with skills
    * authored before this axis was introduced — they activate for all dispatches.
    * Explicit values ('review'|'implement'|'research') hard-reject on mismatch in
@@ -154,6 +161,7 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
     generated_by: fields.generated_by,
     sources: fields.sources,
     status: fields.status as SkillStatus,
+    regressed_from_passed_at: fields.regressed_from_passed_at || undefined,
     task_type,
     scope,
   };

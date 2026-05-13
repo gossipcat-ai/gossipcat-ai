@@ -73,4 +73,16 @@ Check endpoints.`;
     const result = parseSkillFrontmatter(md);
     expect(result?.status).toBe('pending');
   });
+
+  it('round-trips regressed_from_passed_at when set by drift detector', () => {
+    const md = `---\nname: t\ndescription: d\nkeywords: [k]\nstatus: inconclusive\nregressed_from_passed_at: "2026-05-14T10:00:00.000Z"\n---\nBody`;
+    const result = parseSkillFrontmatter(md);
+    expect(result?.regressed_from_passed_at).toBe('2026-05-14T10:00:00.000Z');
+  });
+
+  it('leaves regressed_from_passed_at undefined for organically-inconclusive skills', () => {
+    const md = `---\nname: t\ndescription: d\nkeywords: [k]\nstatus: inconclusive\n---\nBody`;
+    const result = parseSkillFrontmatter(md);
+    expect(result?.regressed_from_passed_at).toBeUndefined();
+  });
 });
