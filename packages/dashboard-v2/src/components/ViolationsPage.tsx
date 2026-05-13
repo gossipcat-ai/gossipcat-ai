@@ -110,7 +110,7 @@ export function ViolationsPage() {
             Process Violations
           </h1>
           {total > 0 && (
-            <span className="rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 font-mono text-xs font-bold text-destructive">
+            <span className="rounded-full border border-disputed/30 bg-disputed/10 px-2 py-0.5 font-mono text-xs font-bold text-disputed">
               {total}
             </span>
           )}
@@ -122,7 +122,7 @@ export function ViolationsPage() {
 
       <div className="overflow-hidden rounded-md border border-border/40 bg-card/80">
         {error && (
-          <div className="border-b border-border/60 bg-destructive/10 px-3 py-2 font-mono text-[10px] text-destructive">
+          <div className="border-b border-border/60 bg-disputed/10 px-3 py-2 font-mono text-[10px] text-disputed">
             {error}
           </div>
         )}

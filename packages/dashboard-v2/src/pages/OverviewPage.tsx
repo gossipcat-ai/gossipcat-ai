@@ -61,6 +61,19 @@ export function OverviewPage({
         mode="calm"
       />
 
+      {/* Actionable stat row — present in calm mode when actionable > 0 so the
+          attention hook isn't only a small header-right link. */}
+      {actionable > 0 && (
+        <a
+          href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
+          className="inline-flex items-center gap-1.5 font-mono text-[12px] text-muted-foreground transition hover:text-foreground"
+        >
+          <span>◆</span>
+          <span className="font-bold text-unverified">{actionable}</span>
+          <span>actionable signals →</span>
+        </a>
+      )}
+
       {/* Live tasks (self-hides when nothing is running) */}
       <ActiveTasksBanner onCountChange={setActiveTaskCount} />
 

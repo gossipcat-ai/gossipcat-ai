@@ -286,11 +286,11 @@ export function SignalsPage() {
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Time</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Agent</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Signal</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="The other agent in this signal — e.g. the peer who agreed or disputed">Counterpart</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="Severity of the associated finding (critical / high / medium / low)">Sev</th>
+                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Evidence</th>
+                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="The other agent in this signal — e.g. the peer who agreed or disputed">Counterpart</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="Finding ID — click row to open finding detail">Finding</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Consensus</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Evidence</th>
                 </tr>
               </thead>
               <tbody>
@@ -312,7 +312,6 @@ export function SignalsPage() {
                       <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/80" title={r.timestamp}>{timeAgo(r.timestamp)}</td>
                       <td className="whitespace-nowrap px-2 py-1 text-foreground">{r.agentId}</td>
                       <td className={`whitespace-nowrap px-2 py-1 ${SIGNAL_CLS[r.signal] ?? 'text-foreground'}`}>{SIGNAL_LABELS[r.signal] ?? r.signal}</td>
-                      <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/80">{r.counterpartId ?? '—'}</td>
                       <td className="whitespace-nowrap px-2 py-1">
                         {r.severity ? (
                           <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${SEVERITY_BADGE[r.severity] ?? 'bg-muted'}`}>
@@ -322,14 +321,15 @@ export function SignalsPage() {
                           <span className="text-muted-foreground/40">—</span>
                         )}
                       </td>
+                      <td className="max-w-[300px] truncate px-2 py-1 text-muted-foreground/80" title={r.evidence}>
+                        {truncate(r.evidence, 80)}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/80">{r.counterpartId ?? '—'}</td>
                       <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/70" title={r.findingId}>
                         {r.findingId ? truncate(r.findingId, 24) : '—'}
                       </td>
                       <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/70" title={r.consensusId}>
                         {r.consensusId ? truncate(r.consensusId, 16) : '—'}
-                      </td>
-                      <td className="max-w-[300px] truncate px-2 py-1 text-muted-foreground/80" title={r.evidence}>
-                        {truncate(r.evidence, 80)}
                       </td>
                     </tr>
                   );
