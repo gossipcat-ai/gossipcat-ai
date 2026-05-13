@@ -130,8 +130,10 @@ export function readAggregateIndex(projectRoot: string): SignalAggregateIndexDat
     logSidecarError('stat', err);
     return null;
   }
-  // Fix 1: cache hit — return without re-reading disk.
-  if (cachedAggregateData !== null && mtimeMs === cachedAggregateMtimeMs) {
+  // Fix 1+2: cache hit — return without re-reading disk. The +1ms guard mirrors
+  // sidecarIsStale's buffer and closes the same-ms external-write race where a
+  // write lands at the same millisecond tick as the stat call.
+  if (cachedAggregateData !== null && mtimeMs === cachedAggregateMtimeMs && Date.now() > cachedAggregateMtimeMs + 1) {
     return cachedAggregateData;
   }
   let raw: string;
@@ -153,10 +155,14 @@ export function readAggregateIndex(projectRoot: string): SignalAggregateIndexDat
   if (obj.version !== SIDECAR_VERSION) return null;
   if (!obj.agents || typeof obj.agents !== 'object' || Array.isArray(obj.agents)) return null;
   // Fix 2: SAFE_NAME validation — reject any hostile key before caching.
+  // Fix 3: also validate third-level boundAtMs keys (must be all-digit timestamps).
   for (const agentId of Object.keys(obj.agents)) {
     if (!SAFE_NAME.test(agentId)) return null;
     for (const category of Object.keys((obj.agents as Record<string, Record<string, unknown>>)[agentId] ?? {})) {
       if (!SAFE_NAME.test(category)) return null;
+      for (const bucketKey of Object.keys((obj.agents as Record<string, Record<string, Record<string, unknown>>>)[agentId][category] ?? {})) {
+        if (!/^\d+$/.test(bucketKey)) return null;
+      }
     }
   }
   const result: SignalAggregateIndexData = {
@@ -183,6 +189,10 @@ export function writeAggregateIndex(projectRoot: string, data: SignalAggregateIn
     const tmp = path + '.tmp';
     writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
     renameSync(tmp, path);
+    // Fix 1: proactively update the reader cache after a successful write so
+    // in-process reads return the fresh data without a disk round-trip.
+    cachedAggregateData = data;
+    cachedAggregateMtimeMs = statSync(path).mtimeMs;
   } catch (err) {
     logSidecarError('write', err);
   }
@@ -243,7 +253,7 @@ export function recordRetraction(
   return touched;
 }
 
-const BUCKET_CAP = 5;
+export const BUCKET_CAP = 5;
 
 function ensureBucket(
   data: SignalAggregateIndexData,
@@ -257,12 +267,13 @@ function ensureBucket(
   const byBound = byCat[category];
   const key = String(boundAtMs);
   if (!byBound[key]) {
-    // Fix 3: evict oldest bucket when at capacity to prevent unbounded growth
-    // across frequent skill-rebind epochs. Numeric sort is critical — lexical
-    // sort mangles "9" > "10".
+    // Fix 3+4: evict oldest bucket(s) until below cap before inserting — while-loop
+    // self-heals a pre-existing overcount (e.g. from a crash mid-eviction). Numeric
+    // sort is critical — lexical sort mangles "9" > "10".
     const sorted = Object.keys(byBound).map(k => parseInt(k, 10)).sort((a, b) => a - b);
-    if (sorted.length >= BUCKET_CAP) {
+    while (sorted.length >= BUCKET_CAP) {
       delete byBound[String(sorted[0])];
+      sorted.shift();
     }
     byBound[key] = {
       correct: 0,

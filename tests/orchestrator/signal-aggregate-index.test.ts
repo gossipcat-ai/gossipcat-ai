@@ -34,6 +34,7 @@ import {
   foldSignal,
   SIDECAR_FILENAME,
   SIDECAR_VERSION,
+  BUCKET_CAP,
   type SignalAggregateIndexData,
 } from '../../packages/orchestrator/src/signal-aggregate-index';
 import { PerformanceWriter } from '../../packages/orchestrator/src/performance-writer';
@@ -458,11 +459,17 @@ describe('reader cache (Fix 1)', () => {
       (args: unknown[]) => typeof args[0] === 'string' && (args[0] as string).includes(SIDECAR_FILENAME),
     ).length;
 
+    // Advance real clock slightly so Date.now() > mtime + 1 (required by the +1ms
+    // mtime buffer introduced in consensus Fix 2 to close the same-ms write race).
+    jest.useFakeTimers({ now: Date.now() + 10 });
+
     // Second call with same mtime — should hit cache, no extra readFileSync
     const second = readAggregateIndex(tmpDir);
     const callsAfterSecond = readFileSyncSpy.mock.calls.filter(
       (args: unknown[]) => typeof args[0] === 'string' && (args[0] as string).includes(SIDECAR_FILENAME),
     ).length;
+
+    jest.useRealTimers();
 
     expect(first).not.toBeNull();
     expect(second).not.toBeNull();
@@ -568,5 +575,133 @@ describe('bucket growth cap (Fix 3)', () => {
     expect(Object.keys(byBound).length).toBe(5);
     expect(byBound['9']).toBeUndefined();  // correctly evicted (numeric oldest)
     expect(byBound['10']).toBeDefined();   // should survive
+  });
+});
+
+// ── Consensus e72d8085-6cfb4ff6 follow-up fixes ──────────────────────────────
+
+describe('write-side cache invalidation (consensus Fix 1)', () => {
+  it('second write is visible to subsequent readAggregateIndex in same process', () => {
+    const writer = new PerformanceWriter(tmpDir);
+    writer[WRITER_INTERNAL].appendSignal(makeSignal('agent-u', 'agreement', { category: 'security' }));
+
+    const first = readAggregateIndex(tmpDir);
+    expect(first).not.toBeNull();
+    expect(readCountersSince(first!, 'agent-u', 'security', 0).correct).toBe(1);
+
+    // Second write with different data — without write-side invalidation the stale
+    // cached object would be returned even though the file changed.
+    writer[WRITER_INTERNAL].appendSignal(makeSignal('agent-u', 'hallucination_caught', { category: 'security' }));
+
+    const second = readAggregateIndex(tmpDir);
+    expect(second).not.toBeNull();
+    const counters = readCountersSince(second!, 'agent-u', 'security', 0);
+    expect(counters.correct).toBe(1);
+    expect(counters.hallucinated).toBe(1);
+  });
+});
+
+describe('bucket key validation — digits only (consensus Fix 3)', () => {
+  it('returns null for sidecar with non-numeric boundAtMs key ("constructor")', () => {
+    // Note: "__proto__" is silently dropped by JSON.stringify. "constructor" serializes.
+    const raw = JSON.stringify({
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 0,
+      agents: {
+        'agent-v': {
+          security: {
+            constructor: {
+              correct: 1, hallucinated: 0, total: 1, lastUpdateMs: Date.now(),
+              recentRetractedConsensusIds: [],
+            },
+          },
+        },
+      },
+    }, null, 2);
+    writeFileSync(sidecarPath, raw + '\n');
+    expect(readAggregateIndex(tmpDir)).toBeNull();
+  });
+
+  it('returns null for alphabetic bucket key ("abc")', () => {
+    const raw = JSON.stringify({
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 0,
+      agents: {
+        'agent-w': {
+          security: {
+            abc: {
+              correct: 1, hallucinated: 0, total: 1, lastUpdateMs: Date.now(),
+              recentRetractedConsensusIds: [],
+            },
+          },
+        },
+      },
+    }, null, 2);
+    writeFileSync(sidecarPath, raw + '\n');
+    expect(readAggregateIndex(tmpDir)).toBeNull();
+  });
+
+  it('accepts valid all-numeric bucket keys', () => {
+    const raw = JSON.stringify({
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 0,
+      agents: {
+        'agent-x': {
+          security: {
+            '1715000000000': {
+              correct: 2, hallucinated: 0, total: 2, lastUpdateMs: Date.now(),
+              recentRetractedConsensusIds: [],
+            },
+          },
+        },
+      },
+    }, null, 2);
+    writeFileSync(sidecarPath, raw + '\n');
+    const data = readAggregateIndex(tmpDir);
+    expect(data).not.toBeNull();
+    expect(readCountersSince(data!, 'agent-x', 'security', 0).correct).toBe(2);
+  });
+});
+
+describe('bucket cap while-loop self-healing (consensus Fix 4)', () => {
+  it(`folding ${BUCKET_CAP + 2} distinct buckets leaves exactly ${BUCKET_CAP}`, () => {
+    const data: SignalAggregateIndexData = {
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 0,
+      agents: {},
+    };
+    const baseMs = 1_700_000_000_000;
+    for (let i = 0; i < BUCKET_CAP + 2; i++) {
+      foldSignal(data, 'agent-y', 'security', baseMs + i * 1000, 'agreement', baseMs + i * 1000);
+    }
+    expect(Object.keys(data.agents['agent-y'].security).length).toBe(BUCKET_CAP);
+  });
+
+  it('while-loop self-heals pre-existing overflow to exactly BUCKET_CAP', () => {
+    // Manually create an overflowed sidecar (BUCKET_CAP+2 buckets) to simulate
+    // a state that arose before the cap was enforced.
+    const data: SignalAggregateIndexData = {
+      version: SIDECAR_VERSION,
+      rebuiltAt: new Date().toISOString(),
+      lastRawTimestampMs: 0,
+      agents: { 'agent-z': { security: Object.create(null) } },
+    };
+    const baseMs = 1_700_000_000_000;
+    // Bypass ensureBucket to inject the overflow directly
+    for (let i = 0; i < BUCKET_CAP + 2; i++) {
+      data.agents['agent-z'].security[String(baseMs + i * 1000)] = {
+        correct: 1, hallucinated: 0, total: 1, lastUpdateMs: baseMs + i * 1000,
+        recentRetractedConsensusIds: [],
+      };
+    }
+    expect(Object.keys(data.agents['agent-z'].security).length).toBe(BUCKET_CAP + 2);
+
+    // Now fold one more — while-loop must drain overcount down to BUCKET_CAP
+    foldSignal(data, 'agent-z', 'security', baseMs + (BUCKET_CAP + 2) * 1000, 'agreement', Date.now());
+    expect(Object.keys(data.agents['agent-z'].security).length).toBe(BUCKET_CAP);
   });
 });
