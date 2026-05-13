@@ -41,7 +41,7 @@ const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: st
   { key: 'unique', label: 'Unique', cls: 'text-unique/50 border-unique/20 hover:border-unique/40', activeCls: 'text-unique bg-unique/10 border-unique/40' },
   { key: 'disputed', label: 'Disputed', cls: 'text-disputed/50 border-disputed/20 hover:border-disputed/40', activeCls: 'text-disputed bg-disputed/10 border-disputed/40' },
   { key: 'unverified', label: 'Unverified', cls: 'text-unverified/50 border-unverified/20 hover:border-unverified/40', activeCls: 'text-unverified bg-unverified/10 border-unverified/40' },
-  { key: 'insight', label: 'Insight', cls: 'text-zinc-500 border-zinc-500/20 hover:border-zinc-500/40', activeCls: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/40', tooltip: 'Observations without a specific file:line anchor. Not scored — cannot be confirmed or disputed by peers.' },
+  { key: 'insight', label: 'Insight', cls: 'text-insight/60 border-insight/20 hover:border-insight/40', activeCls: 'text-insight bg-insight/10 border-insight/40', tooltip: 'Observations without a specific file:line anchor. Not scored — cannot be confirmed or disputed by peers.' },
 ];
 
 const SEV_FILTER_CHIPS: { key: 'all' | 'critical' | 'high' | 'medium' | 'low'; label: string; cls: string; activeCls: string }[] = [
