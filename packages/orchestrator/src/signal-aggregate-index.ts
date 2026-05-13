@@ -45,11 +45,16 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { join, dirname } from 'path';
 import { ConsensusSignal } from './consensus-types';
 import { readJsonlWithRotated } from './performance-reader';
+import { SAFE_NAME } from './skill-engine';
 
 export const SIDECAR_VERSION = 1;
 export const SIDECAR_FILENAME = 'signal-aggregate-index.json';
 export const AGENT_PERFORMANCE_FILENAME = 'agent-performance.jsonl';
 const RECENT_RETRACTIONS_CAP = 16;
+
+// Fix 1: mtime-keyed reader cache — mirrors PerformanceReader.cachedScores pattern.
+let cachedAggregateData: SignalAggregateIndexData | null = null;
+let cachedAggregateMtimeMs = 0;
 
 export interface SignalAggregateBucket {
   correct: number;
@@ -105,10 +110,32 @@ export function classifyForAggregate(signal: string): 'correct' | 'hallucinated'
 /**
  * Read the sidecar JSON from disk. Returns `null` if missing, malformed, or
  * carrying a version we don't recognise — callers must rebuild on `null`.
+ *
+ * Fix 1: mtime-keyed reader cache — skips readFileSync+JSON.parse when the
+ *   file has not changed since the last read (mirrors PerformanceReader.getScores).
+ * Fix 2: SAFE_NAME tamper validation — rejects hostile agentId/category keys
+ *   that could cause identity mis-attribution (e.g. "../../etc/passwd").
  */
 export function readAggregateIndex(projectRoot: string): SignalAggregateIndexData | null {
   const path = join(projectRoot, '.gossip', SIDECAR_FILENAME);
-  if (!existsSync(path)) return null;
+  if (!existsSync(path)) {
+    cachedAggregateData = null;
+    cachedAggregateMtimeMs = 0;
+    return null;
+  }
+  let mtimeMs = 0;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch (err) {
+    logSidecarError('stat', err);
+    return null;
+  }
+  // Fix 1+2: cache hit — return without re-reading disk. The +1ms guard mirrors
+  // sidecarIsStale's buffer and closes the same-ms external-write race where a
+  // write lands at the same millisecond tick as the stat call.
+  if (cachedAggregateData !== null && mtimeMs === cachedAggregateMtimeMs && Date.now() > cachedAggregateMtimeMs + 1) {
+    return cachedAggregateData;
+  }
   let raw: string;
   try {
     raw = readFileSync(path, 'utf-8');
@@ -127,12 +154,27 @@ export function readAggregateIndex(projectRoot: string): SignalAggregateIndexDat
   const obj = parsed as Partial<SignalAggregateIndexData>;
   if (obj.version !== SIDECAR_VERSION) return null;
   if (!obj.agents || typeof obj.agents !== 'object' || Array.isArray(obj.agents)) return null;
-  return {
+  // Fix 2: SAFE_NAME validation — reject any hostile key before caching.
+  // Fix 3: also validate third-level boundAtMs keys (must be all-digit timestamps).
+  for (const agentId of Object.keys(obj.agents)) {
+    if (!SAFE_NAME.test(agentId)) return null;
+    for (const category of Object.keys((obj.agents as Record<string, Record<string, unknown>>)[agentId] ?? {})) {
+      if (!SAFE_NAME.test(category)) return null;
+      for (const bucketKey of Object.keys((obj.agents as Record<string, Record<string, Record<string, unknown>>>)[agentId][category] ?? {})) {
+        if (!/^\d+$/.test(bucketKey)) return null;
+      }
+    }
+  }
+  const result: SignalAggregateIndexData = {
     version: SIDECAR_VERSION,
     rebuiltAt: typeof obj.rebuiltAt === 'string' ? obj.rebuiltAt : new Date(0).toISOString(),
     lastRawTimestampMs: typeof obj.lastRawTimestampMs === 'number' ? obj.lastRawTimestampMs : 0,
     agents: obj.agents as SignalAggregateIndexData['agents'],
   };
+  // Store in cache only after validation passes.
+  cachedAggregateData = result;
+  cachedAggregateMtimeMs = mtimeMs;
+  return result;
 }
 
 /**
@@ -147,6 +189,10 @@ export function writeAggregateIndex(projectRoot: string, data: SignalAggregateIn
     const tmp = path + '.tmp';
     writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
     renameSync(tmp, path);
+    // Fix 1: proactively update the reader cache after a successful write so
+    // in-process reads return the fresh data without a disk round-trip.
+    cachedAggregateData = data;
+    cachedAggregateMtimeMs = statSync(path).mtimeMs;
   } catch (err) {
     logSidecarError('write', err);
   }
@@ -207,6 +253,8 @@ export function recordRetraction(
   return touched;
 }
 
+export const BUCKET_CAP = 5;
+
 function ensureBucket(
   data: SignalAggregateIndexData,
   agentId: string,
@@ -219,6 +267,14 @@ function ensureBucket(
   const byBound = byCat[category];
   const key = String(boundAtMs);
   if (!byBound[key]) {
+    // Fix 3+4: evict oldest bucket(s) until below cap before inserting — while-loop
+    // self-heals a pre-existing overcount (e.g. from a crash mid-eviction). Numeric
+    // sort is critical — lexical sort mangles "9" > "10".
+    const sorted = Object.keys(byBound).map(k => parseInt(k, 10)).sort((a, b) => a - b);
+    while (sorted.length >= BUCKET_CAP) {
+      delete byBound[String(sorted[0])];
+      sorted.shift();
+    }
     byBound[key] = {
       correct: 0,
       hallucinated: 0,
