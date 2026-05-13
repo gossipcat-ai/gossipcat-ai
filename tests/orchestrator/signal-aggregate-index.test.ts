@@ -1,4 +1,4 @@
-// @gossip:impact-adjacent:signal_pipeline
+// @gossip:impact-adjacent:signal-pipeline
 /**
  * Phase B — signal-aggregate sidecar.
  *

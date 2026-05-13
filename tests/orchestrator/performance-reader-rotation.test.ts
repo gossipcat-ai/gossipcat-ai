@@ -1,4 +1,4 @@
-// @gossip:impact-adjacent:signal_pipeline
+// @gossip:impact-adjacent:signal-pipeline
 /**
  * Tests for the readJsonlWithRotated helper and migration of PerformanceReader
  * methods to use it — Phase A fix for the signal-log-rotation data-loss bug
