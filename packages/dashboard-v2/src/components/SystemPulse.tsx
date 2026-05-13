@@ -113,7 +113,7 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
           <BigStat
             value={`${confirmRate}%`}
             label="Confirmed"
-            valueClass="text-confirmed"
+            valueClass={confirmRate >= 50 ? 'text-confirmed' : confirmRate > 0 ? 'text-unverified' : 'text-muted-foreground'}
           />
         </div>
       ) : (

@@ -214,7 +214,11 @@ export function LogsPage() {
           ))}
           {filteredEntries.length === 0 && (
             <div className="py-8 text-center font-mono text-xs text-muted-foreground">
-              {entries.length === 0 ? 'Loading...' : 'No matching log entries.'}
+              {entries.length === 0
+                ? 'Loading...'
+                : filter === 'all'
+                  ? 'No log entries in current tail.'
+                  : `No ${filter} entries in current tail.`}
             </div>
           )}
           <div ref={bottomRef} />

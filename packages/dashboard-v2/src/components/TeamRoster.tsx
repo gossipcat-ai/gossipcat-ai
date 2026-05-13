@@ -94,7 +94,7 @@ export function TeamRoster({ agents }: TeamRosterProps) {
                     ))}
                   </div>
                   {lastTime && (
-                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground/40">{lastTime}</span>
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">{lastTime}</span>
                   )}
                 </div>
               </div>

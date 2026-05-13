@@ -421,9 +421,11 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
             const uniqueCount = report.unique.length;
             const insightCount = (report.insights || []).length;
 
-            // Determine dominant quality: confirmed > disputed > mixed/unverified
+            // Determine dominant quality: confirmed > disputed > mixed/unverified.
+            // Single-finding rounds get the same ratio logic as multi-finding rounds
+            // so a 1/1 confirmed round paints green, not neutral grey.
             const dominantBorderCls = (() => {
-              if (total <= 1) return 'border-l-border/40';
+              if (total === 0) return 'border-l-border/40';
               const confirmedRatio = confirmedCount / total;
               const disputedRatio = disputedCount / total;
               if (confirmedRatio >= 0.5) return 'border-l-confirmed/60';

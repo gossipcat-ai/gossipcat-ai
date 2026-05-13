@@ -268,7 +268,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                   {/* Hallucinations */}
                   <td className="py-3 pr-4 text-right align-top font-mono text-xs tabular-nums">
                     <span
-                      className={s.hallucinations > 0 ? 'font-bold text-disputed' : 'text-muted-foreground/40'}
+                      className={s.hallucinations > 10 ? 'font-bold text-disputed' : s.hallucinations > 0 ? 'text-disputed' : 'text-muted-foreground/40'}
                       data-tooltip={`Agreements ${s.agreements} · Disagreements ${s.disagreements} · Hallucinations ${s.hallucinations}`}
                     >
                       {s.hallucinations}

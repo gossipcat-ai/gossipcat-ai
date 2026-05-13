@@ -214,7 +214,10 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           changed per agent in a way that was decorative, not informational. */}
       <div className="relative mb-6 rounded-xl border border-border bg-card p-5">
         <div className="flex items-center gap-6">
-          <div className="relative shrink-0">
+          <div
+            className="relative shrink-0"
+            data-tooltip={`Accuracy ${Math.round(s.accuracy * 100)}% · Uniqueness ${Math.round(s.uniqueness * 100)}% · Impact ${Math.round(s.impactScore * 100)}%`}
+          >
             <NeuralAvatar
               agentId={agent.id}
               size={120}
@@ -296,7 +299,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           <h2 className="mb-1 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
             Category Competency
           </h2>
-          <p className="mb-3 mt-0.5 font-mono text-[10px] text-muted-foreground/60">Raw per-category ratio — unweighted. Overall accuracy in Metrics applies a hallucination penalty.</p>
+          <p className="mb-3 mt-0.5 font-mono text-[11px] text-muted-foreground/80">◆ Raw per-category ratio — unweighted. Overall accuracy in Metrics applies a hallucination penalty.</p>
           <CategoryCompetency
             categoryAccuracy={s.categoryAccuracy}
             categoryCorrect={s.categoryCorrect}
