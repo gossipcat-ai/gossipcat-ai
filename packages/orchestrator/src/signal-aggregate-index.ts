@@ -1,4 +1,4 @@
-// @gossip:impact-adjacent:signal_pipeline
+// @gossip:impact-adjacent:signal-pipeline
 /**
  * Signal aggregate sidecar — Phase B complement to readJsonlWithRotated.
  *

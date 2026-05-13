@@ -1,4 +1,4 @@
-// @gossip:impact-adjacent:signal_pipeline
+// @gossip:impact-adjacent:signal-pipeline
 /**
  * PerformanceReader — reads agent-performance.jsonl and computes
  * per-agent scores from consensus signals.

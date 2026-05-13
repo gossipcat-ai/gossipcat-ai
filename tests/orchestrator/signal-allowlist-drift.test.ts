@@ -1,4 +1,4 @@
-// @gossip:impact-adjacent:signal_pipeline
+// @gossip:impact-adjacent:signal-pipeline
 //
 // Drift detector: catches the PR #329 class of bug.
 //

@@ -1,4 +1,4 @@
-// @gossip:impact-adjacent:signal_pipeline
+// @gossip:impact-adjacent:signal-pipeline
 
 /**
  * Ref-allowlist enforcement — Phase 1 (detection-only).

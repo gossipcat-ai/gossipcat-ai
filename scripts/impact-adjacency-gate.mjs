@@ -10,8 +10,24 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const ANNOTATION_RE =
-  /\/\/\s*@gossip:impact-adjacent:(map-lifecycle|ttl-semantics|config-writes|signal-pipeline|auth-boundaries|bootstrap-paths|shared-state-with-lifecycle|waived-pattern-mirror)\b/g;
+const ALLOWED_CATEGORIES = [
+  'map-lifecycle',
+  'ttl-semantics',
+  'config-writes',
+  'signal-pipeline',
+  'auth-boundaries',
+  'bootstrap-paths',
+  'shared-state-with-lifecycle',
+  'waived-pattern-mirror',
+];
+const ANNOTATION_RE = new RegExp(
+  `\\/\\/\\s*@gossip:impact-adjacent:(${ALLOWED_CATEGORIES.join('|')})\\b`,
+  'g',
+);
+// Broad regex matches any `@gossip:impact-adjacent:<token>` shape — used to
+// detect malformed category names (e.g. underscore variants) that the narrow
+// regex would silently skip. See issue #373.
+const BROAD_ANNOTATION_RE = /\/\/\s*@gossip:impact-adjacent:([A-Za-z0-9_-]+)\b/g;
 const ROOT = process.cwd();
 const GOSSIP_DIR = path.join(ROOT, '.gossip');
 const WAIVER_LOG = path.join(GOSSIP_DIR, 'waived-impact-adjacency.jsonl');
@@ -92,6 +108,21 @@ function annotationsIn(file) {
   }
   if (!fs.existsSync(abs)) return [];
   const txt = safeRead(abs);
+  // Fail loud on malformed categories: an annotation with the right shape but
+  // a token outside the allowlist would silently pass through ANNOTATION_RE
+  // (see issue #373). Catch those here before the narrow match so the gate
+  // never treats a misannotated file as unannotated.
+  const allowed = new Set(ALLOWED_CATEGORIES);
+  for (const m of txt.matchAll(BROAD_ANNOTATION_RE)) {
+    const tok = m[1];
+    if (!allowed.has(tok)) {
+      process.stderr.write(
+        `${file}: unknown category "${tok}" in @gossip:impact-adjacent annotation.\n` +
+          `Allowed values: ${ALLOWED_CATEGORIES.join(', ')}\n`,
+      );
+      process.exit(1);
+    }
+  }
   const cats = new Set();
   for (const m of txt.matchAll(ANNOTATION_RE)) cats.add(m[1]);
   return [...cats];
