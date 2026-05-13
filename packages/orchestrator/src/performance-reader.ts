@@ -291,7 +291,15 @@ export class PerformanceReader {
     // Check if file changed since last read
     let mtimeMs = 0;
     try { mtimeMs = statSync(this.filePath).mtimeMs; } catch { /* file doesn't exist */ }
-    if (this.cachedScores && mtimeMs === this.cachedMtimeMs) {
+    // The +1ms guard mirrors signal-aggregate-index.ts:136 (PR #372, consensus
+    // e72d8085-6cfb4ff6 gemini f1/f5/f9 + sonnet AGREE). A write landing in the
+    // same integer-ms tick as the stat would produce identical mtimeMs values;
+    // Date.now() > cachedMtimeMs + 1 ensures at least 1ms elapsed since the
+    // cached mtime before trusting the cache, closing the same-ms external-write
+    // race. PerformanceWriter runs in a separate logical path with no shared
+    // PerformanceReader instance, so in-process cache invalidation on write is
+    // not feasible; disk-level +1ms guard is the correct boundary.
+    if (this.cachedScores && mtimeMs === this.cachedMtimeMs && Date.now() > this.cachedMtimeMs + 1) {
       return this.cachedScores;
     }
     // Reset per-pass skill-index cache so disable/enable via `gossip_skills`
