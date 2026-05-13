@@ -74,9 +74,9 @@ body {
   --color-card: #EAE5D9;
   --color-card-foreground: #0E0E0C;
   --color-muted: #EAE5D9;
-  --color-muted-foreground: #6B6657;
-  --color-border: #D6D0BF;
-  --color-input: #D6D0BF;
+  --color-muted-foreground: #524E41;
+  --color-border: #C8C1AB;
+  --color-input: #C8C1AB;
 
   /* Primary / accent */
   --color-ring: #A4161A;
@@ -84,7 +84,7 @@ body {
   --color-primary-foreground: #F4F1EA;
   --color-secondary: #EAE5D9;
   --color-secondary-foreground: #0E0E0C;
-  --color-accent: #D6D0BF;
+  --color-accent: #C4BB9E;
   --color-accent-foreground: #0E0E0C;
 
   /* Destructive unchanged — still red */
@@ -94,19 +94,19 @@ body {
   /* Semantic finding colors */
   --color-confirmed: #2D6A4F;
   --color-disputed: #A4161A;
-  --color-unverified: #B08900;
+  --color-unverified: #7A5F00;
   --color-unique: #1D3557;
 
   /* Severity */
-  --color-severity-high: #C0383D;  /* lighter crimson, distinguishable from --color-disputed #A4161A */
+  --color-severity-high: #B83235;  /* warmer crimson, AA on card, distinguishable from --color-disputed #A4161A */
 
   /* v3 additions */
   --color-impact: #1D3557;
   --color-insight: #6B6657;
-  --color-text-dim: #9B9583;
+  --color-text-dim: #6B6657;
 
   /* Chart palette — olive/warm tones for editorial */
-  --color-chart: #6B6657;
+  --color-chart: #1E4D52;
   --color-chart-accent: #2D6A4F;
   --color-chart-deep: #1D3557;
 
@@ -141,10 +141,10 @@ html:has([data-theme="editorial"])::after,
 
 /* ───── Editorial scrollbar override ───── */
 [data-theme="editorial"] ::-webkit-scrollbar-thumb {
-  background: rgba(107, 102, 87, 0.3);
+  background: rgba(82, 78, 65, 0.3);
 }
 [data-theme="editorial"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(107, 102, 87, 0.5);
+  background: rgba(82, 78, 65, 0.5);
 }
 
 /* ───── Editorial inline-code override ───── */
