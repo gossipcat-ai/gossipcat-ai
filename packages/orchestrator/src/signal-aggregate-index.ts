@@ -290,18 +290,37 @@ function ensureBucket(
  * Sum the `(correct, hallucinated)` counters across every bucket for a given
  * agent + category whose `lastUpdateMs >= sinceMs`. Mirrors the contract of
  * `PerformanceReader.getCountersSince` so it can serve as a drop-in fast path.
+ *
+ * Straddle-bucket self-heal (consensus 5058d7b0-7eec4aca:sonnet-reviewer:f3 /
+ * 05bbbf4c-fd4c4c89:gemini-reviewer:f3): the sidecar aggregates at bucket
+ * granularity keyed by `boundAtMs`. When `sinceMs` falls BETWEEN bucket keys
+ * (e.g. drift queries using `sinceMs = passed_at`), a single bucket can
+ * contain signals from BOTH sides of the boundary — `boundAtMs < sinceMs` but
+ * `lastUpdateMs >= sinceMs`. Including the whole bucket would inflate the
+ * denominator. We can't sub-divide the bucket without scanning the raw jsonl,
+ * so we return `null` to signal the caller to fall through to the raw scan
+ * (per-signal filter at performance-reader.ts:534). Buckets fully after
+ * `sinceMs` (`boundAtMs >= sinceMs`) are still safe; only the straddle case
+ * forces the fallback. Load-bearing for the drift detector spec
+ * docs/specs/2026-05-13-passed-skill-drift-detection.md.
  */
 export function readCountersSince(
   data: SignalAggregateIndexData,
   agentId: string,
   category: string,
   sinceMs: number,
-): { correct: number; hallucinated: number } {
+): { correct: number; hallucinated: number } | null {
   const result = { correct: 0, hallucinated: 0 };
   const cat = data.agents[agentId]?.[category];
   if (!cat) return result;
-  for (const bucket of Object.values(cat)) {
+  for (const bucketKey of Object.keys(cat)) {
+    const bucket = cat[bucketKey];
     if (bucket.lastUpdateMs < sinceMs) continue;
+    // Bucket key is `String(boundAtMs)`. A straddle bucket has earlier
+    // signals before `sinceMs` and later signals after — we cannot serve
+    // an exact count from the aggregate. Force raw-scan fallback.
+    const boundAtMs = parseInt(bucketKey, 10);
+    if (isFinite(boundAtMs) && boundAtMs < sinceMs) return null;
     result.correct += bucket.correct;
     result.hallucinated += bucket.hallucinated;
   }
