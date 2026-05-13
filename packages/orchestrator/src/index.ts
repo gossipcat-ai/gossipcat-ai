@@ -76,6 +76,16 @@ export { OverlapDetector } from './overlap-detector';
 export { LensGenerator } from './lens-generator';
 export { PerformanceWriter, rotateJsonlIfNeeded, MAX_TELEMETRY_BYTES } from './performance-writer';
 export { PerformanceReader, readJsonlWithRotated } from './performance-reader';
+export {
+  loadOrRebuildAggregateIndex,
+  rebuildAggregateIndex,
+  readAggregateIndex,
+  readCountersSince as readAggregateCountersSince,
+  sidecarIsStale,
+  SIDECAR_VERSION,
+  SIDECAR_FILENAME,
+} from './signal-aggregate-index';
+export type { SignalAggregateIndexData, SignalAggregateBucket } from './signal-aggregate-index';
 export type { AgentScore } from './performance-reader';
 export { ConsensusEngine } from './consensus-engine';
 export type { ConsensusEngineConfig } from './consensus-engine';

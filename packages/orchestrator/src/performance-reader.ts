@@ -10,6 +10,11 @@ import { readFileSync, existsSync, statSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { ConsensusSignal, ImplSignal, PerformanceSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
+import {
+  readAggregateIndex,
+  readCountersSince as readSidecarCountersSince,
+  sidecarIsStale,
+} from './signal-aggregate-index';
 
 /**
  * Read `path.1` (rotated) then `path` (live), concatenating content so signal
@@ -481,6 +486,38 @@ export class PerformanceReader {
    * not be unified. See readSignalsRaw doc.
    */
   getCountersSince(agentId: string, category: string, sinceMs: number): CategoryCounters {
+    // Phase B fast path: consult the aggregate sidecar before scanning the
+    // raw jsonl. The sidecar is the write-time aggregate complement to
+    // readJsonlWithRotated (Phase A). When the sidecar is fresh, we avoid the
+    // O(N rows) parse on every effectiveness check.
+    //
+    // Fall back to the raw scan when:
+    //   1. sidecar doesn't exist (first-boot pre-build, or rebuild failed)
+    //   2. sidecar is stale (live jsonl mtime > lastRawTimestampMs — a writer
+    //      appended without updating the sidecar, e.g. a crash between write
+    //      and fold-in)
+    //   3. category lookup misses post-rebuild (defensive — sidecar bucket
+    //      keys must match the live category exactly)
+    const existing = readAggregateIndex(this.projectRoot);
+    if (existing && !sidecarIsStale(this.projectRoot, existing)) {
+      const agentBuckets = existing.agents[agentId];
+      if (agentBuckets) {
+        // Try exact match first, then normalized — buckets are keyed by the
+        // raw `category` the signal carried, but historically writers have
+        // sometimes pre-normalized.
+        if (agentBuckets[category]) {
+          return readSidecarCountersSince(existing, agentId, category, sinceMs);
+        }
+        const norm = normalizeSkillName(category);
+        if (agentBuckets[norm]) {
+          return readSidecarCountersSince(existing, agentId, norm, sinceMs);
+        }
+        // No bucket for this agent+category in a fresh sidecar means zero
+        // accuracy history — short-circuit to avoid the raw scan.
+        return { correct: 0, hallucinated: 0 };
+      }
+    }
+
     const allSignals = this.readSignalsRaw();
     const counters: CategoryCounters = { correct: 0, hallucinated: 0 };
     const normalizedTarget = normalizeSkillName(category);
