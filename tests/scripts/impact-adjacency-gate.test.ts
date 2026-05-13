@@ -175,6 +175,53 @@ describe('impact-adjacency-gate', () => {
     }
   });
 
+  it('(l) annotated source with valid hyphen category + consensus-id → exit 0 (regression: issue #373)', () => {
+    const dir = mkRepo();
+    const base = baseSha(dir);
+    fs.writeFileSync(
+      path.join(dir, 'src.ts'),
+      '// @gossip:impact-adjacent:signal-pipeline\nexport const x = 1;\n',
+    );
+    commitAll(dir, 'valid hyphen category');
+    const res = runGate(dir, {
+      GITHUB_BASE_REF: base,
+      PR_TITLE: 'fix: thing (consensus-id: abcdef12-34567890)',
+    });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/OK \(annotated/);
+  });
+
+  it('(m) annotated source with underscore variant (signal_pipeline) → exit 1 with category-mismatch error (regression: issue #373)', () => {
+    const dir = mkRepo();
+    const base = baseSha(dir);
+    fs.writeFileSync(
+      path.join(dir, 'src.ts'),
+      '// @gossip:impact-adjacent:signal_pipeline\nexport const x = 1;\n',
+    );
+    commitAll(dir, 'underscore variant — bug case from issue #373');
+    const res = runGate(dir, {
+      GITHUB_BASE_REF: base,
+      PR_TITLE: 'fix: thing (consensus-id: abcdef12-34567890)',
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/unknown category "signal_pipeline"/);
+    expect(res.stderr).toMatch(/Allowed values:/);
+  });
+
+  it('(n) annotated source with arbitrary unknown category → exit 1 with category-mismatch error', () => {
+    const dir = mkRepo();
+    const base = baseSha(dir);
+    fs.writeFileSync(
+      path.join(dir, 'src.ts'),
+      '// @gossip:impact-adjacent:bogus_category\nexport const x = 1;\n',
+    );
+    commitAll(dir, 'arbitrary unknown category');
+    const res = runGate(dir, { GITHUB_BASE_REF: base });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/unknown category "bogus_category"/);
+    expect(res.stderr).toMatch(/Allowed values:/);
+  });
+
   it('(k) consensus-id regex: accepts hyphen and underscore separators, rejects loose forms', () => {
     const dir = mkRepo();
     const base = baseSha(dir);
