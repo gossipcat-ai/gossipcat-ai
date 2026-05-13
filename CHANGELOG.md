@@ -4,6 +4,23 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+### Fixed
+
+- **Signal log readers walk rotated `.jsonl.1`** (PR #367). All 14 readers of `.gossip/agent-performance.jsonl` migrated to a new `readJsonlWithRotated` helper so historical signal evidence stops being invisible the moment the live `.jsonl` rotates. Without this, the dashboard showed ~97 sonnet-reviewer signals and 0 for every other agent because everything older than the last rotation was unreachable. Phase A of the rotation-data-loss fix; Phase B (write-time aggregate sidecar to make rotation non-destructive) is spec'd locally and queued for the next release.
+
+- **Editorial theme contrast — v2 palette** (PR #368). The cream/ink editorial theme was failing WCAG AA on `--color-text-dim` (2.75:1 on background), `--color-unverified` (2.81:1), and `--color-severity-high` (~4.31:1 on card). v2 darkens the muted family as a unit, swaps `--color-chart` to deep teal `#1E4D52` to escape the amber collision with `--color-unverified`, and resyncs `--color-border`/`--color-input` with the new `--color-accent`. Body text now lands ~6:1 on card, all semantic tokens pass AA. CSS-only, 10/10 token swaps in `packages/dashboard-v2/src/globals.css`.
+
+- **`wilson-score.ts` header tells the truth** (PR #365). The file header described a legacy z-test as the live skill-graduation path; the verdict path actually walks Wilson-score intervals. Header rewritten; the z-test is correctly framed as diagnostic-only.
+
+- **Cross-review anchor resolver honors `resolutionRoots`** (PR #365). `<anchor>` blocks in cross-reviewer prompts now resolve against the configured `resolutionRoots` paths (e.g. git worktrees) before falling back to project root. When the fallback fires, the anchor is annotated `via="⚠ resolved against project root, NOT worktree"` so reviewers know the citation is suspect. Closes a class of false-absence findings noted in PR #364's consensus round.
+
+- **PR #364/#365 follow-up cluster** (PR #366, commit 724f583). Loose ends from the BM25 sidecar + resolutionRoots work: `loadIndex` file-lock gap, latent open-boost bug for typeless frontmatter, frontmatter parser deduplication, plus the `corpusDir` leading-dash comment correction.
+
+### Notes
+
+- Consensus round `532d78b3-d5174b9b` validated the editorial v2 palette via `sonnet-designer × sonnet-reviewer × gemini-reviewer` cross-review. Three `hallucination_caught` signals recorded against `gemini-reviewer` for arithmetic errors in contrast-ratio computations (~1.0 off on multiple findings). Five real structural issues in v1 (border/input desync, scrollbar RGB literal, orphaned insight token, chart/unverified amber collision, text-dim/muted step collapse) were caught by `sonnet-reviewer` and folded into v2.
+- The Phase A rotation fix is read-side only; the underlying single-slot `.jsonl.1` rotation in `performance-writer.ts` is still destructive across multiple rotations. Phase B will add a derived aggregate sidecar matching the existing `skill-index.json` / `task-graph-index.json` pattern so scoring inputs survive rotation regardless of raw-row retention.
+
 ## [0.4.24] — 2026-05-08
 
 BM25 memory-search wiring + hono CVE override. Closes the follow-up deferred from v0.4.23 (PR #360 shipped the sidecar; this release wires it into the query path). No breaking changes for non-`_project` agent IDs; `_project` semantics shift from per-project `.gossip/agents/_project/memory/` to the public auto-memory corpus at `~/.claude/projects/<encoded>/memory/` (the documented intent — orchestrator's cross-session memory pool).
