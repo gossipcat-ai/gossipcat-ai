@@ -138,6 +138,17 @@ describe('readLedgerIndex — cache validation', () => {
     writeFileSync(p, '{not valid json');
     expect(readLedgerIndex(dir, ledger, 100)).toBeNull();
   });
+
+  it('returns null when entries[*] is missing the verdict field (type guard rejects)', () => {
+    const p = ledgerIndexPath(dir);
+    // Write structurally valid JSON but entries[0] lacks the required `verdict` key.
+    writeFileSync(p, JSON.stringify({
+      ledgerMtime: 100,
+      ledgerContentHash: hashContent(ledger),
+      entries: [{ bulletHash: 'abc', details: 'ok', checkedAt: '2026-05-14T00:00:00Z' }],
+    }));
+    expect(readLedgerIndex(dir, ledger, 100)).toBeNull();
+  });
 });
 
 describe('annotateLedgerText / annotationPrefix — rendering', () => {
@@ -315,8 +326,7 @@ describe('runLedgerVerification — concurrency cap', () => {
       return { bulletHash: b.hash, verdict: 'INCONCLUSIVE', details: '', checkedAt: 'now' };
     };
     await runLedgerVerification(makeBullets(10), verifier, 3);
-    expect(maxObserved).toBeLessThanOrEqual(3);
-    expect(maxObserved).toBeGreaterThan(0);
+    expect(maxObserved).toBe(3);
   });
 
   it('catches verifier exceptions as INCONCLUSIVE — does NOT crash the batch', async () => {
@@ -369,6 +379,15 @@ describe('defaultVerifierFactory', () => {
     const r = await v(mk({ backingFile: 'memory/foo.md' }));
     expect(r.verdict).toBe('INCONCLUSIVE');
     expect(r.details).toContain('gossip_verify_memory');
+  });
+
+  it('sanitizes ../ path traversal in backingFile — details shows only basename', async () => {
+    const v = defaultVerifierFactory();
+    const r = await v(mk({ backingFile: '../../etc/passwd' }));
+    expect(r.verdict).toBe('INCONCLUSIVE');
+    // Must contain only the basename, not the traversal prefix
+    expect(r.details).toContain('gossip_verify_memory(passwd)');
+    expect(r.details).not.toContain('..');
   });
 });
 

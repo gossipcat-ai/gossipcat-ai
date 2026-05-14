@@ -79,7 +79,11 @@ export class BootstrapGenerator {
 
   private readAgentSummaries(config: Record<string, unknown>): AgentSummary[] {
     const agents: AgentSummary[] = [];
-    const agentsConfig = (config.agents ?? {}) as Record<string, Record<string, unknown>>;
+    const rawAgents = config.agents;
+    const agentsConfig: Record<string, Record<string, unknown>> =
+      rawAgents !== null && typeof rawAgents === 'object' && !Array.isArray(rawAgents)
+        ? (rawAgents as Record<string, Record<string, unknown>>)
+        : {};
 
     for (const [id, ac] of Object.entries(agentsConfig)) {
       const summary: AgentSummary = {
@@ -99,7 +103,11 @@ export class BootstrapGenerator {
         let lastTs = '';
         for (const line of lines) {
           try {
-            const e = JSON.parse(line) as { timestamp?: string };
+            const parsed = JSON.parse(line) as unknown;
+            const e: { timestamp?: string } =
+              parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+                ? (parsed as { timestamp?: string })
+                : {};
             count++;
             if (e.timestamp && e.timestamp > lastTs) lastTs = e.timestamp;
           } catch { /* skip malformed */ }
