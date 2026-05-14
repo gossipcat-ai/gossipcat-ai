@@ -27,6 +27,15 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
+      # Fail-fast: zero-deps script that checks every .claude/agents/*.md
+      # `tools:` frontmatter against .claude/settings.json `permissions.allow`.
+      # Catches the "agent declares MCP tool, allowlist is missing it, every
+      # subagent silently falls back to grep-only" failure mode that hid
+      # gossip_remember from native subagents for the entire project history
+      # until PR #384 / 2026-05-14. Runs in ~50ms before npm ci.
+      - name: Check MCP permissions (.claude/agents ↔ settings.json)
+        run: node scripts/check-mcp-permissions.mjs
+
       - name: Install dependencies
         run: npm ci
 
