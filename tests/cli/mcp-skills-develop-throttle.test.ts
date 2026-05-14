@@ -80,7 +80,13 @@ function simulateGate(opts: {
   const { utility_task_id, force } = opts;
   if (!utility_task_id && !force) {
     const freshness = readSkillFreshness(AGENT_ID, CATEGORY, SKILL_ROOT);
-    const decision = computeCooldown(freshness.status);
+    // Mirror handler at apps/cli/src/mcp-server-sdk.ts:3506 — pass the full
+    // freshness object so the drift hard-block branch (status='inconclusive'
+    // AND regressedFromPassedAt non-null) is exercised. Passing freshness.status
+    // alone loses regressedFromPassedAt and silently downgrades the gate.
+    // NOTE: audit-log calls are intentionally out of scope for this helper;
+    // gate-cooldown semantics are what these tests assert.
+    const decision = computeCooldown(freshness);
     if (decision.kind === 'cooldown' && freshness.boundAt) {
       const ageMs = Date.now() - new Date(freshness.boundAt).getTime();
       if (ageMs < decision.cooldownMs) {
@@ -227,4 +233,30 @@ it('rejection message includes agent_id, category, bound_at, status, remaining d
   // Remaining time — 23h into a 30d window → ~29d + 1h left
   expect(result).toMatch(/\d+ day\(s\)/);       // remaining days/hours
   expect(result).toContain('force: true');       // override instruction
+});
+
+// ── Case 9: drift hard-block — inconclusive + regressed_from_passed_at ────
+
+it('hard-blocks develop on drift-demoted inconclusive (regressed_from_passed_at set, well past 60d)', () => {
+  // Mirrors handler invariant: when freshness.regressedFromPassedAt is non-null
+  // AND status === 'inconclusive', computeCooldown returns Infinity. The helper
+  // MUST pass the full freshness object — passing only freshness.status would
+  // drop regressedFromPassedAt and produce a 60-day cooldown that EXPIRES at
+  // 90 days, allowing redevelopment of a drift-demoted skill.
+  const boundAt = daysAgo(90); // far past the 60-day inconclusive cooldown
+  const driftContent =
+    `---\n` +
+    `name: trust-boundaries\n` +
+    `description: test skill\n` +
+    `keywords: [trust]\n` +
+    `bound_at: ${boundAt}\n` +
+    `status: inconclusive\n` +
+    `regressed_from_passed_at: ${daysAgo(20)}\n` +
+    `---\n\n## Iron Law\n`;
+  mockExistsSync.mockReturnValue(true);
+  mockReadFileSync.mockReturnValue(driftContent as any);
+
+  const result = simulateGate({});
+  expect(result).not.toBeNull(); // hard-blocked
+  expect(result).toContain('cooldown');
 });
