@@ -53,6 +53,13 @@ export interface DroppedSkill {
   reason:
     | 'status-failed'
     | 'status-silent'
+    /**
+     * Skill was previously `passed` and was demoted to `inconclusive` by the
+     * drift detector (carries `regressed_from_passed_at` frontmatter). Held out
+     * of injection until it re-passes effectiveness checks; see
+     * docs/specs/2026-05-13-passed-skill-drift-detection.md §Quarantine.
+     */
+    | 'status-drift-demoted'
     | 'below-keyword-threshold'
     | 'no-task-provided'
     | 'budget-exceeded'
@@ -175,12 +182,34 @@ export function loadSkills(
     // Filter by skill effectiveness status written by checkEffectiveness().
     // 'failed' and 'silent_skill' are suppressed — injecting a skill the RL loop
     // has marked as harmful or silent would re-pollute the forward pass.
-    const frontmatterStatus = parseSkillFrontmatter(content)?.status;
-    if (frontmatterStatus === 'failed' || frontmatterStatus === 'silent_skill') {
-      gossipLog(`Skipping ${frontmatterStatus} skill ${agentId}/${skill} from injection`);
+    //
+    // Drift-demoted skills (`status: inconclusive` AND `regressed_from_passed_at` set)
+    // are quarantined here too — see drift-detection spec
+    // docs/specs/2026-05-13-passed-skill-drift-detection.md §"Quarantine
+    // drift-demoted skills". Organic inconclusive (no regressed_from_passed_at)
+    // continues to inject unchanged.
+    const parsedFrontmatter = parseSkillFrontmatter(content);
+    const frontmatterStatus = parsedFrontmatter?.status;
+    const isDriftDemoted =
+      frontmatterStatus === 'inconclusive' &&
+      parsedFrontmatter?.regressed_from_passed_at != null;
+    if (
+      frontmatterStatus === 'failed' ||
+      frontmatterStatus === 'silent_skill' ||
+      isDriftDemoted
+    ) {
+      const dropReason: DroppedSkill['reason'] =
+        frontmatterStatus === 'failed'
+          ? 'status-failed'
+          : isDriftDemoted
+            ? 'status-drift-demoted'
+            : 'status-silent';
+      gossipLog(
+        `Skipping ${isDriftDemoted ? 'drift-demoted inconclusive' : frontmatterStatus} skill ${agentId}/${skill} from injection`,
+      );
       dropped.push({
         skill,
-        reason: frontmatterStatus === 'failed' ? 'status-failed' : 'status-silent',
+        reason: dropReason,
         hits: 0,
       });
       continue;

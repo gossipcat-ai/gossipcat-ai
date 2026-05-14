@@ -190,6 +190,20 @@ describe('computeCooldown', () => {
     expect(computeCooldown('failed')).toEqual({ kind: 'cooldown', status: 'failed', cooldownMs: Infinity });
   });
 
+  it('hard-blocks (cooldownMs: Infinity) drift-demoted inconclusive (regressed_from_passed_at set)', () => {
+    expect(
+      computeCooldown({ status: 'inconclusive', regressedFromPassedAt: '2026-05-01T00:00:00Z' }),
+    ).toEqual({ kind: 'cooldown', status: 'inconclusive', cooldownMs: Infinity });
+  });
+
+  it('falls through to normal 60d cooldown for organic inconclusive (no regressed_from_passed_at)', () => {
+    expect(computeCooldown({ status: 'inconclusive', regressedFromPassedAt: null })).toEqual({
+      kind: 'cooldown',
+      status: 'inconclusive',
+      cooldownMs: 60 * DAY_MS,
+    });
+  });
+
   it('returns {kind: "no_cooldown"} for unknown/future status (forward-compatible)', () => {
     const r1 = computeCooldown('flagged_for_manual_review');
     expect(r1.kind).toBe('no_cooldown');

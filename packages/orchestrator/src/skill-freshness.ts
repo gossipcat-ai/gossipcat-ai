@@ -23,6 +23,15 @@ export interface SkillFreshnessResult {
   status: string | null;
   /** Resolved filesystem path for the skill file */
   path: string;
+  /**
+   * ISO timestamp set by the drift detector when a `passed` skill is demoted
+   * to `inconclusive`. When non-null AND status === 'inconclusive', the skill
+   * is drift-demoted and `computeCooldown` returns Infinity (hard-block) so
+   * gossip_skills(action: "develop") can't redevelop the skill until drift
+   * resolves. Organic-inconclusive (this field null) falls through to the
+   * normal 60-day cooldown.
+   */
+  regressedFromPassedAt?: string | null;
 }
 
 /**
@@ -117,14 +126,14 @@ export function readSkillFreshness(
   const path = resolveSkillFilePath(agentId, category, skillRoot);
 
   if (!existsSync(path)) {
-    return { boundAt: null, status: null, path };
+    return { boundAt: null, status: null, path, regressedFromPassedAt: null };
   }
 
   let content: string;
   try {
     content = readFileSync(path, 'utf-8');
   } catch {
-    return { boundAt: null, status: null, path };
+    return { boundAt: null, status: null, path, regressedFromPassedAt: null };
   }
 
   const boundAt = extractFrontmatterField(content, 'bound_at');
@@ -133,8 +142,9 @@ export function readSkillFreshness(
   // cooldown logic never sees strings outside the VerdictStatus enum.
   // Preserve null (absent field) as-is so computeCooldown returns pre_schema.
   const status = rawStatus === null ? null : coerceStatus(rawStatus);
+  const regressedFromPassedAt = extractFrontmatterField(content, 'regressed_from_passed_at');
 
-  return { boundAt, status, path };
+  return { boundAt, status, path, regressedFromPassedAt };
 }
 
 /**
@@ -147,8 +157,33 @@ export function readSkillFreshness(
  * - `passed` | `failed` → `{kind: 'cooldown', cooldownMs: Infinity}` (terminal hard-block).
  * - unknown status  → `{kind: 'no_cooldown', status}` (forward-compatible: new statuses skip gate).
  */
-export function computeCooldown(status: string | null): CooldownDecision {
+export function computeCooldown(
+  input: string | null | { status: string | null; regressedFromPassedAt?: string | null },
+): CooldownDecision {
+  // Accept either a bare status string (legacy) or a partial freshness result
+  // with status + regressedFromPassedAt. The latter is required for the drift
+  // hard-block branch — drift-demoted skills must hard-block redevelopment
+  // until drift resolves (see drift-detection spec §"Cooldown hard-block").
+  let status: string | null;
+  let regressedFromPassedAt: string | null | undefined;
+  if (input !== null && typeof input === 'object') {
+    status = input.status;
+    regressedFromPassedAt = input.regressedFromPassedAt;
+  } else {
+    status = input;
+    regressedFromPassedAt = undefined;
+  }
+
   if (!status) return { kind: 'pre_schema' };
+
+  // Drift hard-block: an `inconclusive` skill that carries
+  // `regressed_from_passed_at` was demoted by the drift detector. Redevelopment
+  // before the drift window resolves would reset bound_at and bypass the
+  // fast-path silent_skill demotion. Override remains possible via force=true.
+  if (status === 'inconclusive' && regressedFromPassedAt != null) {
+    return { kind: 'cooldown', status, cooldownMs: Infinity };
+  }
+
   const ms = COOLDOWN_MS[status];
   if (ms === undefined) return { kind: 'no_cooldown', status };
   if (ms === 0) return { kind: 'no_cooldown', status };

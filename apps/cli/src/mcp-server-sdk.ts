@@ -3503,7 +3503,7 @@ server.tool(
         const { readSkillFreshness: rsf, computeCooldown: cc, formatCooldownMessage: fcm } = await import('@gossip/orchestrator');
         const freshness = rsf(agent_id, category, process.cwd());
         _freshnessForAudit = freshness;
-        const decision = cc(freshness.status);
+        const decision = cc(freshness);
         if (decision.kind === 'cooldown' && freshness.boundAt) {
           const ageMs = Date.now() - new Date(freshness.boundAt).getTime();
           if (ageMs < decision.cooldownMs) {

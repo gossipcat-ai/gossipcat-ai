@@ -82,7 +82,38 @@ export interface SkillSnapshot {
    * are treated as `version: 0` (rollback-safe).
    */
   version?: number;
+  // ── Drift-detection fields (v3 migration) ────────────────────────────
+  /** ISO. Set on every passed-write. Anchor for drift detection window. */
+  passed_at?: string;
+  /** (correct / (correct+hallucinated)) at the moment of graduation. */
+  passed_baseline_rate?: number;
+  /** True if passed_at was synthesized from bound_at by v3 migration. */
+  passed_backfilled?: boolean;
+  /** ISO. Set on drift-demotion. Distinguishes drift-demoted from organic inconclusive. */
+  regressed_from_passed_at?: string;
+  /** 0 or 1. K=2 requires one prior failing window before demotion. */
+  drift_strikes?: number;
+  /**
+   * ISO. Set when drift_strikes increments 0→1; cleared on re-graduation
+   * (Wilson pass clears strikes) and on demotion. Anchors the strike-2
+   * Wilson window via getCountersSince(drift_strike_at) so the two K=2
+   * windows are independent — without this, the strike-2 window includes
+   * strike-1's signals and the false-demote rate is α (≈0.025) instead
+   * of the spec's α² (≈0.000625).
+   */
+  drift_strike_at?: string;
 }
+
+/**
+ * Drift-window size — number of fresh signals required since passed_at
+ * before a drift Wilson test fires. Mirrors MIN_EVIDENCE; kept as a
+ * separate constant for clarity at the call site.
+ */
+export const DRIFT_WINDOW_SIZE = MIN_EVIDENCE;
+/** K=2 — two consecutive failing drift windows demote a passed skill. */
+export const DRIFT_DEMOTE_STRIKES = 2;
+/** Floor used in the hybrid first-window test for backfilled passed skills. */
+const HYBRID_BACKFILL_FLOOR = 0.75;
 
 export interface VerdictResult {
   status: VerdictStatus;
@@ -177,7 +208,7 @@ export function resolveVerdict(
   snapshot: SkillSnapshot,
   delta: CategoryCounters,
   nowMs: number,
-  opts?: { role?: string; agentAccuracy?: number },
+  opts?: { role?: string; agentAccuracy?: number; driftDelta?: CategoryCounters },
 ): VerdictResult {
   // Terminal states short-circuit
   if (opts?.role === 'implementer') {
@@ -186,8 +217,24 @@ export function resolveVerdict(
   if (snapshot.status === 'flagged_for_manual_review') {
     return { status: 'flagged_for_manual_review', shouldUpdate: false };
   }
-  if (snapshot.status === 'passed' || snapshot.status === 'failed') {
-    return { status: snapshot.status, shouldUpdate: false };
+  if (snapshot.status === 'failed') {
+    return { status: 'failed', shouldUpdate: false };
+  }
+  if (snapshot.status === 'passed') {
+    return resolvePassedDrift(snapshot, opts?.driftDelta, nowMs);
+  }
+  // Fast-path: drift-demoted inconclusive (regressed_from_passed_at set).
+  // If a fresh post-demotion N=80 window fails Wilson vs passed_baseline_rate,
+  // jump directly to silent_skill — skipping the 3-strike machinery.
+  if (
+    snapshot.status === 'inconclusive' &&
+    snapshot.regressed_from_passed_at != null &&
+    snapshot.passed_baseline_rate != null
+  ) {
+    const fast = resolveDriftDemotedFastPath(snapshot, opts?.driftDelta, nowMs);
+    if (fast) return fast;
+    // No verdict from fast-path (insufficient evidence or Wilson passes) →
+    // fall through to the normal inconclusive evaluation below.
   }
 
   // Delta is pre-computed by caller via getCountersSince — use directly
@@ -295,13 +342,25 @@ export function resolveVerdict(
     const oneSampleMethod: VerdictMethod = 'wilson_one_sample';
 
     if (postCI.lower > prior) {
+      const nowIso = new Date(nowMs).toISOString();
+      const currentRate = postTotal > 0 ? delta.correct / postTotal : 0;
       return {
         status: 'passed',
         effectiveness,
         zScore,
         verdict_method: oneSampleMethod,
         shouldUpdate: true,
-        newSnapshotFields: { status: 'passed', verdict_method: oneSampleMethod },
+        newSnapshotFields: {
+          status: 'passed',
+          verdict_method: oneSampleMethod,
+          passed_at: nowIso,
+          passed_baseline_rate: currentRate,
+          regressed_from_passed_at: undefined,
+          drift_strikes: 0,
+          drift_strike_at: undefined,
+          inconclusive_strikes: 0,
+          passed_backfilled: undefined,
+        },
       };
     }
     if (postCI.upper < prior) {
@@ -364,13 +423,25 @@ export function resolveVerdict(
   const zScore = oneSidedZTest({ correct: delta.correct, total: postTotal }, baselineP, zDirection).zScore;
 
   if (wilson === 'passed') {
+    const nowIso = new Date(nowMs).toISOString();
+    const currentRate = postTotal > 0 ? delta.correct / postTotal : 0;
     return {
       status: 'passed',
       effectiveness,
       zScore,
       verdict_method: verdictMethod,
       shouldUpdate: true,
-      newSnapshotFields: { status: 'passed', verdict_method: verdictMethod },
+      newSnapshotFields: {
+        status: 'passed',
+        verdict_method: verdictMethod,
+        passed_at: nowIso,
+        passed_baseline_rate: currentRate,
+        regressed_from_passed_at: undefined,
+        drift_strikes: 0,
+        drift_strike_at: undefined,
+        inconclusive_strikes: 0,
+        passed_backfilled: undefined,
+      },
     };
   }
   if (wilson === 'failed') {
@@ -418,5 +489,153 @@ export function resolveVerdict(
       inconclusive_strikes: strikes,
       verdict_method: verdictMethod,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Drift detection — passed-skill effectiveness re-check.
+//
+// Pipeline gate: a skill that reached `passed` is re-tested every N=80 fresh
+// signals since `passed_at`. Two consecutive Wilson lower-bound failures
+// against `passed_baseline_rate` (K=2) demote the skill to `inconclusive`
+// with `regressed_from_passed_at` stamped. The combined K=2 false-demote
+// rate is α² = 0.000625 — a 40× reduction over a single-window test, with
+// the latency cost bounded by 2 × DRIFT_WINDOW_SIZE.
+//
+// PAUSED state: when `passed_baseline_rate` is undefined (insufficient
+// pre-graduation signal history to reconstruct the baseline on v3
+// migration), drift detection is disabled until a real re-graduation
+// rotates a fresh baseline in. The skill stays `passed`, keeps injecting.
+//
+// Hybrid first-window: for skills with `passed_backfilled: true`, the first
+// drift window tests against BOTH `passed_baseline_rate` AND the 0.75
+// floor (HYBRID_BACKFILL_FLOOR). Demote if EITHER fails. This catches
+// bundled-default skills that graduated on the maintainer's project but
+// don't generalize to the fresh user's codebase. After window 1
+// (passed_backfilled cleared on Wilson pass), only the reconstructed
+// baseline is tested.
+// ---------------------------------------------------------------------------
+
+function wilsonLowerBoundFailsAgainst(
+  delta: CategoryCounters,
+  postTotal: number,
+  baseline: number,
+): boolean {
+  if (postTotal <= 0) return false;
+  // Fast-skip when the post sample rate is at or above the baseline — drift
+  // is by definition "post window is BELOW baseline." This also avoids the
+  // pathological case where baseline=1.0: any finite Wilson upper bound is
+  // strictly < 1, which would otherwise demote every skill whose baseline
+  // was reconstructed from an all-correct history.
+  const postP = delta.correct / postTotal;
+  if (postP >= baseline) return false;
+  // Use sparse-current α (calibrated one-sample target) — same choice the
+  // one-sample baseline-vs-prior path makes. The drift test is conceptually
+  // identical: one observed accuracy CI compared against a fixed prior.
+  const alpha = WILSON_SCHEDULE['sparse-current'];
+  const postCI = wilsonScoreInterval(delta.correct, postTotal, alpha);
+  // Drift = the upper end of the post window's CI lies BELOW the baseline.
+  // Equivalent to "we can confidently say post is BELOW baseline at level α."
+  return postCI.upper < baseline;
+}
+
+function resolvePassedDrift(
+  snapshot: SkillSnapshot,
+  driftDelta: CategoryCounters | undefined,
+  nowMs: number,
+): VerdictResult {
+  // PAUSED: no baseline rate to test against → drift detection disabled.
+  if (snapshot.passed_baseline_rate == null) {
+    return { status: 'passed', shouldUpdate: false };
+  }
+  // No drift delta supplied (caller couldn't compute or status edge case).
+  if (!driftDelta) {
+    return { status: 'passed', shouldUpdate: false };
+  }
+  const postTotal = driftDelta.correct + driftDelta.hallucinated;
+  if (postTotal < DRIFT_WINDOW_SIZE) {
+    // Window not full yet — keep injecting, no transition.
+    return { status: 'passed', shouldUpdate: false };
+  }
+
+  const baseline = snapshot.passed_baseline_rate;
+  const baselineFail = wilsonLowerBoundFailsAgainst(driftDelta, postTotal, baseline);
+  // Hybrid: backfilled passed skills also tested against the 0.75 floor on
+  // the first post-migration window. The reconstructed baseline may itself
+  // be biased toward "already-drifted" if the pre-migration history was
+  // a degraded snapshot. The floor mitigates that for window 1 only.
+  const hybridFail = snapshot.passed_backfilled === true
+    ? wilsonLowerBoundFailsAgainst(driftDelta, postTotal, HYBRID_BACKFILL_FLOOR)
+    : false;
+  const wilsonFails = baselineFail || hybridFail;
+
+  if (wilsonFails) {
+    const nextStrikes = (snapshot.drift_strikes ?? 0) + 1;
+    if (nextStrikes >= DRIFT_DEMOTE_STRIKES) {
+      const nowIso = new Date(nowMs).toISOString();
+      return {
+        status: 'inconclusive',
+        shouldUpdate: true,
+        newSnapshotFields: {
+          status: 'inconclusive',
+          inconclusive_at: nowIso,
+          regressed_from_passed_at: nowIso,
+          drift_strikes: 0,
+          drift_strike_at: undefined,
+        },
+      };
+    }
+    // First failing window — stamp drift_strike_at so the strike-2 Wilson
+    // window anchors here (independent from strike-1's window). Required
+    // for the α² K=2 false-demote guarantee.
+    return {
+      status: 'passed',
+      shouldUpdate: true,
+      newSnapshotFields: {
+        status: 'passed',
+        drift_strikes: nextStrikes,
+        drift_strike_at: new Date(nowMs).toISOString(),
+      },
+    };
+  }
+
+  // Wilson passes → reset strikes; clear passed_backfilled (the reconstructed
+  // baseline is now corroborated by real data and the hybrid floor side of
+  // the test no longer applies on subsequent windows).
+  if ((snapshot.drift_strikes ?? 0) === 0 && snapshot.passed_backfilled !== true) {
+    // Steady-state — nothing to write.
+    return { status: 'passed', shouldUpdate: false };
+  }
+  return {
+    status: 'passed',
+    shouldUpdate: true,
+    newSnapshotFields: {
+      status: 'passed',
+      drift_strikes: 0,
+      drift_strike_at: undefined,
+      passed_backfilled: undefined,
+    },
+  };
+}
+
+function resolveDriftDemotedFastPath(
+  snapshot: SkillSnapshot,
+  driftDelta: CategoryCounters | undefined,
+  _nowMs: number,
+): VerdictResult | null {
+  if (!driftDelta) return null;
+  if (snapshot.passed_baseline_rate == null) return null;
+  const postTotal = driftDelta.correct + driftDelta.hallucinated;
+  if (postTotal < DRIFT_WINDOW_SIZE) return null;
+  const fails = wilsonLowerBoundFailsAgainst(
+    driftDelta,
+    postTotal,
+    snapshot.passed_baseline_rate,
+  );
+  if (!fails) return null;
+  return {
+    status: 'silent_skill',
+    shouldUpdate: true,
+    newSnapshotFields: { status: 'silent_skill' },
   };
 }

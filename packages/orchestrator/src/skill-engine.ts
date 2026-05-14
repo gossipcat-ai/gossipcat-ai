@@ -19,6 +19,7 @@ import { readSkillFreshness } from './skill-freshness';
 import {
   resolveVerdict,
   TIMEOUT_MS,
+  MIN_EVIDENCE,
   type SkillSnapshot,
   type VerdictResult,
   type VerdictStatus,
@@ -793,6 +794,26 @@ ${inputs.join('\n')}
           ? (Number.isFinite(Number(frontmatter.inconclusive_strikes)) ? Number(frontmatter.inconclusive_strikes) : undefined)
           : undefined,
       version: this.safeNumber(frontmatter.version ?? 0, 0),
+      passed_at:
+        typeof frontmatter.passed_at === 'string' ? frontmatter.passed_at : undefined,
+      passed_baseline_rate:
+        frontmatter.passed_baseline_rate != null && Number.isFinite(Number(frontmatter.passed_baseline_rate))
+          ? Number(frontmatter.passed_baseline_rate)
+          : undefined,
+      passed_backfilled:
+        frontmatter.passed_backfilled === true || frontmatter.passed_backfilled === 'true'
+          ? true
+          : undefined,
+      regressed_from_passed_at:
+        typeof frontmatter.regressed_from_passed_at === 'string'
+          ? frontmatter.regressed_from_passed_at
+          : undefined,
+      drift_strikes:
+        frontmatter.drift_strikes != null && Number.isFinite(Number(frontmatter.drift_strikes))
+          ? Number(frontmatter.drift_strikes)
+          : undefined,
+      drift_strike_at:
+        typeof frontmatter.drift_strike_at === 'string' ? frontmatter.drift_strike_at : undefined,
     };
 
     const anchorMs = snapshot.inconclusive_at
@@ -804,9 +825,41 @@ ${inputs.join('\n')}
     // the 0.5 fallback routes to the 'typical' Wilson regime even for high-
     // accuracy agents, inflating the evidence bar unnecessarily.
     const agentScore = this.perfReader.getAgentScore(agentId);
-    const verdictOpts = agentScore != null
-      ? { ...opts, agentAccuracy: agentScore.accuracy }
-      : opts;
+
+    // Drift delta: counters since passed_at (for passed-status drift gate) OR
+    // since regressed_from_passed_at (for the inconclusive-fast-path). Computed
+    // only when the snapshot reaches a state that exercises the drift path —
+    // skipped otherwise to avoid the extra getCountersSince call on the hot
+    // pending/inconclusive paths.
+    let driftDelta: ReturnType<PerformanceReader['getCountersSince']> | undefined;
+    if (snapshot.status === 'passed' && snapshot.passed_at) {
+      // When strike-1 has fired, anchor the next window at drift_strike_at
+      // (not passed_at) so the two K=2 windows are independent. Without
+      // this, the strike-2 window includes strike-1's signals and the
+      // false-demote rate is α (≈0.025) instead of α² (≈0.000625).
+      const anchorIso =
+        (snapshot.drift_strikes ?? 0) >= 1 && snapshot.drift_strike_at
+          ? snapshot.drift_strike_at
+          : snapshot.passed_at;
+      const anchorAtMs = new Date(anchorIso).getTime();
+      if (!isNaN(anchorAtMs)) {
+        driftDelta = this.perfReader.getCountersSince(agentId, category, anchorAtMs);
+      }
+    } else if (
+      snapshot.status === 'inconclusive' &&
+      snapshot.regressed_from_passed_at
+    ) {
+      const regressedMs = new Date(snapshot.regressed_from_passed_at).getTime();
+      if (!isNaN(regressedMs)) {
+        driftDelta = this.perfReader.getCountersSince(agentId, category, regressedMs);
+      }
+    }
+
+    const verdictOpts: Parameters<typeof resolveVerdict>[3] = {
+      ...(opts ?? {}),
+      ...(agentScore != null ? { agentAccuracy: agentScore.accuracy } : {}),
+      ...(driftDelta ? { driftDelta } : {}),
+    };
     const verdict = resolveVerdict(snapshot, delta, nowMs, verdictOpts);
 
     if (verdict.shouldUpdate && verdict.newSnapshotFields) {
@@ -856,12 +909,23 @@ ${inputs.join('\n')}
     nowMs: number,
   ): { frontmatter: Record<string, unknown>; mutated: boolean } {
     const migration_count = Number(frontmatter.migration_count ?? 0);
-    if (migration_count >= 2) return { frontmatter, mutated: false };
+    if (migration_count >= 3) return { frontmatter, mutated: false };
 
     const updates: Record<string, unknown> = {};
 
+    // Steps 1-5 (v1 → v2) only run on un-migrated files. v2-already files
+    // (migration_count === 2) jump straight to step 6 (v3 drift backfill).
+    // Without this guard, the legacy "snapshot lifetime if baseline absent"
+    // step would re-fire when a v2 file had its baseline_accuracy_correct
+    // manually deleted, masking the operator's intent.
+    const needsLegacySteps = migration_count < 2;
+
     // Step 1: rename v1 fields if present
-    if (frontmatter.baseline_correct != null && frontmatter.baseline_accuracy_correct == null) {
+    if (
+      needsLegacySteps &&
+      frontmatter.baseline_correct != null &&
+      frontmatter.baseline_accuracy_correct == null
+    ) {
       updates.baseline_accuracy_correct = frontmatter.baseline_correct;
       updates.baseline_accuracy_hallucinated = frontmatter.baseline_hallucinated ?? 0;
     }
@@ -869,7 +933,7 @@ ${inputs.join('\n')}
     // Step 3: snapshot lifetime if no baseline at all (v0 case)
     const renamedHere = updates.baseline_accuracy_correct != null;
     const alreadyV2 = frontmatter.baseline_accuracy_correct != null;
-    if (!renamedHere && !alreadyV2) {
+    if (needsLegacySteps && !renamedHere && !alreadyV2) {
       const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
       updates.baseline_accuracy_correct = lifetime.correct;
       updates.baseline_accuracy_hallucinated = lifetime.hallucinated;
@@ -887,7 +951,7 @@ ${inputs.join('\n')}
     const boundAt = frontmatter.bound_at as string | undefined;
     const hasActivePendingStatus = frontmatter.status === 'pending';
     const boundAtStale = boundAt != null && (nowMs - new Date(boundAt).getTime()) > TIMEOUT_MS;
-    if (!boundAt || (!hasActivePendingStatus && boundAtStale)) {
+    if (needsLegacySteps && (!boundAt || (!hasActivePendingStatus && boundAtStale))) {
       updates.bound_at = new Date(nowMs).toISOString();
       updates.migration_reason = 'v2_stale_baseline_reset';
     }
@@ -897,11 +961,42 @@ ${inputs.join('\n')}
     // lack one. Invalid existing values (e.g. legacy `status: "active"`) are
     // NOT rewritten here — that's the job of runOneTimeStatusMigration, which
     // also handles files locked by `migration_count >= 2`.
-    if (frontmatter.status === undefined || frontmatter.status === null) {
+    if (needsLegacySteps && (frontmatter.status === undefined || frontmatter.status === null)) {
       updates.status = 'pending';
     }
 
-    updates.migration_count = 2;
+    // ── Step 6 (v3): drift-detection fields for existing passed snapshots ──
+    // For skills already at `status: passed`, backfill passed_at/passed_baseline_rate
+    // so the drift detector has an anchor. The hybrid first-window test (see
+    // resolvePassedDrift in check-effectiveness.ts) uses passed_backfilled to
+    // also test against the 0.75 floor on the FIRST post-migration window —
+    // protecting fresh-install users from inherited maintainer-overfit skills.
+    //
+    // If fewer than MIN_EVIDENCE signals are reachable from `.gossip/agent-performance.jsonl`
+    // (rotated-out, evicted, or fresh install), leave passed_baseline_rate
+    // undefined — drift detection stays PAUSED until N=80 fresh signals
+    // accumulate, at which point the hybrid 0.75 floor side becomes the
+    // load-bearing check.
+    const effectiveStatus = updates.status ?? frontmatter.status;
+    const hasPassedAt = frontmatter.passed_at != null;
+    if (effectiveStatus === 'passed' && !hasPassedAt) {
+      const boundAtVal = updates.bound_at ?? frontmatter.bound_at;
+      if (typeof boundAtVal === 'string') {
+        updates.passed_at = boundAtVal;
+      } else {
+        updates.passed_at = new Date(nowMs).toISOString();
+      }
+      const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
+      const lifetimeTotal = lifetime.correct + lifetime.hallucinated;
+      if (lifetimeTotal >= MIN_EVIDENCE) {
+        updates.passed_baseline_rate = lifetime.correct / lifetimeTotal;
+      }
+      // passed_baseline_rate omitted → PAUSED state. passed_backfilled remains
+      // true so the hybrid 0.75 floor fires once N=80 fresh signals land.
+      updates.passed_backfilled = true;
+    }
+
+    updates.migration_count = 3;
     return { frontmatter: { ...frontmatter, ...updates }, mutated: true };
   }
 

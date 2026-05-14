@@ -123,7 +123,7 @@ describe('SkillEngine.checkEffectiveness()', () => {
       baseline_accuracy_hallucinated: 50,
       status: 'pending',
       bound_at: new Date().toISOString(),
-      migration_count: 2,
+      migration_count: 3,
     });
 
     const contentBefore = readFileSync(skillPath, 'utf-8');
@@ -152,7 +152,7 @@ describe('SkillEngine.checkEffectiveness()', () => {
       baseline_accuracy_hallucinated: 25,
       status: 'pending',
       bound_at: new Date().toISOString(),
-      migration_count: 2,
+      migration_count: 3,
     });
 
     // Delta: 102 correct + 18 hallucinated = 120 signals at 85% (+10pp)
@@ -189,7 +189,7 @@ describe('SkillEngine.checkEffectiveness()', () => {
       baseline_accuracy_hallucinated: 50,
       status: 'pending',
       bound_at: new Date().toISOString(),
-      migration_count: 2,
+      migration_count: 3,
     });
 
     // Delta: 60 correct + 60 hallucinated = 120 signals at 50% (no change)
@@ -228,7 +228,7 @@ describe('SkillEngine.checkEffectiveness()', () => {
       baseline_accuracy_hallucinated: 50,
       status: 'flagged_for_manual_review',
       bound_at: new Date().toISOString(),
-      migration_count: 2,
+      migration_count: 3,
     });
 
     const contentBefore = readFileSync(skillPath, 'utf-8');
@@ -261,7 +261,7 @@ describe('SkillEngine.checkEffectiveness()', () => {
       baseline_accuracy_hallucinated: 50,
       status: 'pending',
       bound_at: new Date().toISOString(),
-      migration_count: 2,
+      migration_count: 3,
     });
 
     const contentBefore = readFileSync(
@@ -372,7 +372,7 @@ describe('checkEffectiveness — lazy migration', () => {
     const fm = readFrontmatter(skillPath);
     expect(Number(fm.baseline_accuracy_correct)).toBe(42);
     expect(Number(fm.baseline_accuracy_hallucinated)).toBe(8);
-    expect(Number(fm.migration_count)).toBe(2);
+    expect(Number(fm.migration_count)).toBe(3);
     // bound_at must be unchanged (still 30 days ago)
     expect(fm.bound_at).toBe(thirtyDaysAgo);
     // migration_reason must be ABSENT (not a stale reset)
@@ -410,7 +410,7 @@ describe('checkEffectiveness — lazy migration', () => {
     expect(fm.bound_at).toBe(hundredDaysAgo);
     // migration_reason must NOT be set — no stale reset occurred
     expect(fm.migration_reason).toBeUndefined();
-    expect(Number(fm.migration_count)).toBe(2);
+    expect(Number(fm.migration_count)).toBe(3);
   });
 
   it('resets bound_at to now() AND sets migration_reason when status is absent and bound_at > 90 days old', async () => {
@@ -446,12 +446,12 @@ describe('checkEffectiveness — lazy migration', () => {
     expect(newBoundAt).toBeGreaterThanOrEqual(beforeMs);
     expect(newBoundAt).toBeLessThanOrEqual(afterMs + 5000);
     expect(fm.migration_reason).toBe('v2_stale_baseline_reset');
-    expect(Number(fm.migration_count)).toBe(2);
+    expect(Number(fm.migration_count)).toBe(3);
     expect(Number(fm.baseline_accuracy_correct)).toBe(30);
     expect(Number(fm.baseline_accuracy_hallucinated)).toBe(10);
   });
 
-  it('refuses to re-migrate when migration_count >= 2', async () => {
+  it('refuses to re-run legacy v1→v2 steps when migration_count >= 2 (still bumps to v3)', async () => {
     const agentId = 'agent-remigrate';
     const category = 'trust_boundaries';
 
@@ -480,7 +480,7 @@ describe('checkEffectiveness — lazy migration', () => {
     // bound_at must NOT be touched
     expect(fm.bound_at).toBe(twohundredDaysAgo);
     // migration_count still 2
-    expect(Number(fm.migration_count)).toBe(2);
+    expect(Number(fm.migration_count)).toBe(3);
     // baseline_accuracy_correct must NOT have been freshly snapshotted (still absent / 0)
     expect(fm.baseline_accuracy_correct == null || Number(fm.baseline_accuracy_correct) === 0).toBe(true);
     // Verdict should reflect the stale/insufficient-evidence state
@@ -522,7 +522,7 @@ describe('checkEffectiveness — lazy migration', () => {
     expect(fm.migration_reason).toBe('v2_stale_baseline_reset');
     expect(Number(fm.baseline_accuracy_correct)).toBe(10);
     expect(Number(fm.baseline_accuracy_hallucinated)).toBe(2);
-    expect(Number(fm.migration_count)).toBe(2);
+    expect(Number(fm.migration_count)).toBe(3);
   });
 });
 
