@@ -95,6 +95,7 @@ export { discoverGitWorktrees } from './discover-git-worktrees';
 export type { DiscoverResult } from './discover-git-worktrees';
 export {
   parseNextSessionBullets,
+  findOpenSectionLine,
   readLedgerIndex,
   writeLedgerIndex,
   runLedgerVerification,

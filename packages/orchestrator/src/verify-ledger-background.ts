@@ -9,12 +9,15 @@
  *   2. readLedgerIndex(...)               — load `.gossip/next-session-index.json` and validate
  *      its `ledgerMtime` AND `ledgerContentHash` against the live ledger. Both must match,
  *      otherwise the cache is stale and the caller should trigger refresh.
- *   3. writeLedgerIndex(...)              — atomic-ish write of the sidecar.
+ *   3. writeLedgerIndex(...)              — best-effort, non-atomic write of the sidecar.
  *   4. runLedgerVerification(...)         — bounded-concurrency (default 3) walk over bullets,
  *      delegating each verification to an injected verifier callback. Tests pass a mock.
  *
- * The background job NEVER awaits inside the bootstrap critical path. Bootstrap calls
- * `triggerBackgroundVerification()` which uses `setImmediate` + a fire-and-forget Promise.
+ * Background verification (haiku dispatch + git subprocess) never blocks the bootstrap
+ * critical path. Bootstrap calls `triggerBackgroundVerification()` which uses `setImmediate`
+ * + a fire-and-forget Promise. Synchronous fs reads required for cache validation
+ * (`statSync`, `existsSync`, `readFileSync`, `JSON.parse`) DO run on the hot path —
+ * bounded by file size, unavoidable for the mtime+hash check.
  *
  * Bootstrap directly reads the sidecar via readLedgerIndex; on a hit it splices verdicts
  * into the ledger text. On a miss/stale, every bullet gets `[UNVERIFIED]` and the background
@@ -66,6 +69,22 @@ export const LEDGER_INDEX_FILENAME = 'next-session-index.json';
 /** Stable BLAKE2-flavored SHA256 truncation. Cheap, deterministic, no deps. */
 export function hashContent(s: string): string {
   return createHash('sha256').update(s).digest('hex').slice(0, 16);
+}
+
+/**
+ * Find the line number (0-based) in `content` where the "## Open ..." section starts.
+ * Returns -1 when no such heading is found (fall-back: scan the whole document).
+ *
+ * Shared by `parseNextSessionBullets` and `annotateLedgerText` so both operate on the
+ * same section boundary, preventing bullet-cursor misalignment when there are bullets
+ * above the Open heading (e.g. in a "## Shipped this session" block).
+ */
+export function findOpenSectionLine(content: string): number {
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s{0,3}#{1,4}\s+Open[^\n]*$/.test(lines[i])) return i;
+  }
+  return -1;
 }
 
 /**
@@ -307,6 +326,10 @@ export function annotationPrefix(verdict: LedgerVerdict, details?: string): stri
  * as parseNextSessionBullets() produces them, so verdict-by-hash lookups stay
  * in sync. Bullets without a matching entry get `[UNVERIFIED]`.
  *
+ * Uses `findOpenSectionLine` to skip any bullets that appear BEFORE the
+ * `## Open ...` heading (e.g. in a "## Shipped this session" block), preventing
+ * bullet-cursor misalignment when the ledger has multi-section structure.
+ *
  * Per user decision #1: STALE bullets are annotated inline, NEVER stripped.
  */
 export function annotateLedgerText(
@@ -316,8 +339,12 @@ export function annotateLedgerText(
 ): string {
   if (bullets.length === 0) return raw;
   const lines = raw.split('\n');
+  // Start the cursor only from the Open-section line so bullets before that
+  // heading (e.g. "## Shipped") do not consume slots and misalign annotations.
+  const openLineStart = findOpenSectionLine(raw);
+  const startLine = openLineStart === -1 ? 0 : openLineStart;
   let bulletCursor = 0;
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = startLine; i < lines.length; i++) {
     if (bulletCursor >= bullets.length) break;
     const m = /^(\s{0,3}[-*]\s+)(.*)$/.exec(lines[i]);
     if (!m) continue;

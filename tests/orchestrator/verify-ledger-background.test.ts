@@ -7,6 +7,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   parseNextSessionBullets,
+  findOpenSectionLine,
   readLedgerIndex,
   writeLedgerIndex,
   runLedgerVerification,
@@ -207,6 +208,84 @@ describe('annotateLedgerText / annotationPrefix — rendering', () => {
     });
     const out = annotateLedgerText(ledger, bullets, byHash);
     expect(out).toContain('[UNVERIFIABLE] Clean up 4 merged-but-locked');
+  });
+
+  it('f5 regression — bullets before ## Open do NOT consume cursor slots', () => {
+    // Multi-section ledger: Shipped section has bullets BEFORE Open section.
+    // Without the fix, foo/bar would advance the cursor and Open bullets would
+    // be annotated on wrong lines (or not at all).
+    const multiSectionLedger = `## Shipped this session
+- foo
+- bar
+
+## Open for next session
+- [target1](memory.md) — backing memory bullet
+- some prose
+`;
+    const openBullets = parseNextSessionBullets(multiSectionLedger);
+    // parseNextSessionBullets should only return Open-section bullets
+    expect(openBullets).toHaveLength(2);
+    expect(openBullets[0].backingFile).toBe('memory.md');
+    expect(openBullets[1].proseOnly).toBe(true);
+
+    // annotateLedgerText should annotate the Open bullets, NOT foo/bar
+    const byHash = new Map<string, LedgerIndexEntry>();
+    byHash.set(openBullets[0].hash, {
+      bulletHash: openBullets[0].hash, verdict: 'STALE',
+      details: 'already shipped', checkedAt: 'now',
+    });
+    byHash.set(openBullets[1].hash, {
+      bulletHash: openBullets[1].hash, verdict: 'PROSE-ONLY', details: '', checkedAt: 'now',
+    });
+    const out = annotateLedgerText(multiSectionLedger, openBullets, byHash);
+
+    // Shipped-section bullets must be untouched
+    expect(out).toContain('- foo');
+    expect(out).not.toContain('[STALE] foo');
+    expect(out).toContain('- bar');
+    expect(out).not.toContain('[STALE] bar');
+
+    // Open-section bullets must carry their annotations
+    expect(out).toContain('[STALE — already shipped] [target1](memory.md)');
+    expect(out).toContain('[PROSE-ONLY] some prose');
+  });
+
+  it('f5 regression — no Open header: fall-through leaves behavior unchanged', () => {
+    // When there is no ## Open heading, findOpenSectionLine returns -1 and
+    // annotateLedgerText falls back to scanning from line 0 (whole document).
+    const plainBullets = `- alpha
+- beta
+`;
+    const bs = parseNextSessionBullets(plainBullets);
+    expect(bs).toHaveLength(2);
+    const byHash = new Map<string, LedgerIndexEntry>();
+    byHash.set(bs[0].hash, { bulletHash: bs[0].hash, verdict: 'FRESH', details: '', checkedAt: 'now' });
+    byHash.set(bs[1].hash, { bulletHash: bs[1].hash, verdict: 'PROSE-ONLY', details: '', checkedAt: 'now' });
+    const out = annotateLedgerText(plainBullets, bs, byHash);
+    expect(out).toContain('- alpha'); // FRESH → untouched
+    expect(out).toContain('[PROSE-ONLY] beta');
+  });
+});
+
+describe('findOpenSectionLine', () => {
+  it('returns -1 when no Open heading exists', () => {
+    expect(findOpenSectionLine('- just bullets\n- more bullets\n')).toBe(-1);
+    expect(findOpenSectionLine('')).toBe(-1);
+  });
+
+  it('returns the correct 0-based line number for ## Open heading', () => {
+    const content = `# Title\n\n## Open for next session\n\n- bullet\n`;
+    expect(findOpenSectionLine(content)).toBe(2);
+  });
+
+  it('handles Open heading on line 0', () => {
+    const content = `## Open for next session\n- bullet\n`;
+    expect(findOpenSectionLine(content)).toBe(0);
+  });
+
+  it('ignores headings that do not start with Open', () => {
+    const content = `## Shipped this session\n- foo\n## Open for next session\n- bar\n`;
+    expect(findOpenSectionLine(content)).toBe(2);
   });
 });
 
