@@ -94,6 +94,65 @@ describe('Drift gate — passed snapshot', () => {
     expect(v.newSnapshotFields?.drift_strikes).toBe(0); // reset after demotion
   });
 
+  it('K=2 window rotation: strike-1 stamps drift_strike_at so strike-2 anchors fresh', () => {
+    // Verifies the α² guarantee: strike-2's Wilson window is computed against
+    // signals since drift_strike_at, NOT since passed_at. Otherwise the two
+    // K=2 windows are not independent and false-demote rate is α not α².
+    //
+    // The snapshot returned after strike-1 carries drift_strike_at = NOW.
+    // skill-engine.ts then routes getCountersSince(drift_strike_at) into
+    // driftDelta for the next evaluation — meaning the strike-2 driftDelta
+    // contains ONLY signals from [drift_strike_at..now2], not the full
+    // [passed_at..now2] window.
+    const snap = passedSnapshot({ drift_strikes: 0 });
+    const v1 = resolveVerdict(
+      snap,
+      { correct: 0, hallucinated: 0 },
+      NOW,
+      { driftDelta: { correct: 40, hallucinated: 40 } }, // 80 fails Wilson
+    );
+    expect(v1.newSnapshotFields?.drift_strikes).toBe(1);
+    expect(v1.newSnapshotFields?.drift_strike_at).toBeDefined();
+    expect(v1.newSnapshotFields?.drift_strike_at).toBe(new Date(NOW).toISOString());
+
+    // Now strike-2: driftDelta passed in is the FRESH-window counters (80
+    // signals since drift_strike_at). If the engine had anchored at passed_at
+    // it would have routed in a 160-signal cumulative window — but the spec
+    // requires postTotal=80 here, and that's what the snapshot fields enable.
+    const snap2 = passedSnapshot({
+      drift_strikes: 1,
+      drift_strike_at: v1.newSnapshotFields!.drift_strike_at as string,
+    });
+    const v2 = resolveVerdict(
+      snap2,
+      { correct: 0, hallucinated: 0 },
+      NOW + 80 * 60_000,
+      { driftDelta: { correct: 40, hallucinated: 40 } }, // 80, NOT 160
+    );
+    expect(v2.status).toBe('inconclusive');
+    expect(v2.newSnapshotFields?.regressed_from_passed_at).toBeDefined();
+    expect(v2.newSnapshotFields?.drift_strike_at).toBeUndefined();
+  });
+
+  it('drift_strike_at clears on Wilson re-pass (fresh window passes)', () => {
+    // Strike-1 has fired; the strike-2 window passes Wilson — the snapshot
+    // must drop drift_strike_at along with drift_strikes=0.
+    const snap = passedSnapshot({
+      drift_strikes: 1,
+      drift_strike_at: new Date(NOW - 60 * 60_000).toISOString(),
+    });
+    const v = resolveVerdict(
+      snap,
+      { correct: 0, hallucinated: 0 },
+      NOW,
+      { driftDelta: { correct: 72, hallucinated: 8 } }, // passes Wilson
+    );
+    expect(v.status).toBe('passed');
+    expect(v.shouldUpdate).toBe(true);
+    expect(v.newSnapshotFields?.drift_strikes).toBe(0);
+    expect(v.newSnapshotFields?.drift_strike_at).toBeUndefined();
+  });
+
   it('Wilson passes → resets drift_strikes when previously non-zero', () => {
     const snap = passedSnapshot({ drift_strikes: 1 });
     // 80 signals at 90% — comfortably above 0.85 baseline

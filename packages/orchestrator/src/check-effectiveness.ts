@@ -93,6 +93,15 @@ export interface SkillSnapshot {
   regressed_from_passed_at?: string;
   /** 0 or 1. K=2 requires one prior failing window before demotion. */
   drift_strikes?: number;
+  /**
+   * ISO. Set when drift_strikes increments 0→1; cleared on re-graduation
+   * (Wilson pass clears strikes) and on demotion. Anchors the strike-2
+   * Wilson window via getCountersSince(drift_strike_at) so the two K=2
+   * windows are independent — without this, the strike-2 window includes
+   * strike-1's signals and the false-demote rate is α (≈0.025) instead
+   * of the spec's α² (≈0.000625).
+   */
+  drift_strike_at?: string;
 }
 
 /**
@@ -348,6 +357,7 @@ export function resolveVerdict(
           passed_baseline_rate: currentRate,
           regressed_from_passed_at: undefined,
           drift_strikes: 0,
+          drift_strike_at: undefined,
           inconclusive_strikes: 0,
           passed_backfilled: undefined,
         },
@@ -428,6 +438,7 @@ export function resolveVerdict(
         passed_baseline_rate: currentRate,
         regressed_from_passed_at: undefined,
         drift_strikes: 0,
+        drift_strike_at: undefined,
         inconclusive_strikes: 0,
         passed_backfilled: undefined,
       },
@@ -570,15 +581,20 @@ function resolvePassedDrift(
           inconclusive_at: nowIso,
           regressed_from_passed_at: nowIso,
           drift_strikes: 0,
+          drift_strike_at: undefined,
         },
       };
     }
+    // First failing window — stamp drift_strike_at so the strike-2 Wilson
+    // window anchors here (independent from strike-1's window). Required
+    // for the α² K=2 false-demote guarantee.
     return {
       status: 'passed',
       shouldUpdate: true,
       newSnapshotFields: {
         status: 'passed',
         drift_strikes: nextStrikes,
+        drift_strike_at: new Date(nowMs).toISOString(),
       },
     };
   }
@@ -596,6 +612,7 @@ function resolvePassedDrift(
     newSnapshotFields: {
       status: 'passed',
       drift_strikes: 0,
+      drift_strike_at: undefined,
       passed_backfilled: undefined,
     },
   };

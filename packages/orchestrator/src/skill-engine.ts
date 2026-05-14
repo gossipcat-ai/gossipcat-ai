@@ -812,6 +812,8 @@ ${inputs.join('\n')}
         frontmatter.drift_strikes != null && Number.isFinite(Number(frontmatter.drift_strikes))
           ? Number(frontmatter.drift_strikes)
           : undefined,
+      drift_strike_at:
+        typeof frontmatter.drift_strike_at === 'string' ? frontmatter.drift_strike_at : undefined,
     };
 
     const anchorMs = snapshot.inconclusive_at
@@ -831,9 +833,17 @@ ${inputs.join('\n')}
     // pending/inconclusive paths.
     let driftDelta: ReturnType<PerformanceReader['getCountersSince']> | undefined;
     if (snapshot.status === 'passed' && snapshot.passed_at) {
-      const passedAtMs = new Date(snapshot.passed_at).getTime();
-      if (!isNaN(passedAtMs)) {
-        driftDelta = this.perfReader.getCountersSince(agentId, category, passedAtMs);
+      // When strike-1 has fired, anchor the next window at drift_strike_at
+      // (not passed_at) so the two K=2 windows are independent. Without
+      // this, the strike-2 window includes strike-1's signals and the
+      // false-demote rate is α (≈0.025) instead of α² (≈0.000625).
+      const anchorIso =
+        (snapshot.drift_strikes ?? 0) >= 1 && snapshot.drift_strike_at
+          ? snapshot.drift_strike_at
+          : snapshot.passed_at;
+      const anchorAtMs = new Date(anchorIso).getTime();
+      if (!isNaN(anchorAtMs)) {
+        driftDelta = this.perfReader.getCountersSince(agentId, category, anchorAtMs);
       }
     } else if (
       snapshot.status === 'inconclusive' &&
