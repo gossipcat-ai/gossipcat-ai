@@ -93,6 +93,27 @@ export { validateResolutionRoot, parseWorktreePorcelain, listWorktreePaths, gitC
 export type { ValidationResult } from './validate-resolution-root';
 export { discoverGitWorktrees } from './discover-git-worktrees';
 export type { DiscoverResult } from './discover-git-worktrees';
+export {
+  parseNextSessionBullets,
+  findOpenSectionLine,
+  readLedgerIndex,
+  writeLedgerIndex,
+  runLedgerVerification,
+  defaultVerifierFactory,
+  triggerBackgroundVerification,
+  annotateLedgerText,
+  annotationPrefix,
+  hashContent,
+  ledgerIndexPath,
+  LEDGER_INDEX_FILENAME,
+} from './verify-ledger-background';
+export type {
+  ParsedBullet,
+  LedgerIndex,
+  LedgerIndexEntry,
+  LedgerVerdict,
+  BulletVerifier,
+} from './verify-ledger-background';
 export { ToolRouter, ToolExecutor } from './tool-router';
 export type { ToolExecutorConfig } from './tool-router';
 export { buildToolSystemPrompt, TOOL_SCHEMAS, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';

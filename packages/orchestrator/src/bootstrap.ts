@@ -1,6 +1,15 @@
-import { existsSync, readFileSync, readdirSync, mkdirSync, copyFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, copyFileSync, statSync } from 'fs';
 import { resolve, join } from 'path';
+import { execFileSync } from 'child_process';
 import { readRulesContent } from './rules-loader';
+import {
+  parseNextSessionBullets,
+  readLedgerIndex,
+  annotateLedgerText,
+  triggerBackgroundVerification,
+  defaultVerifierFactory,
+  type LedgerIndexEntry,
+} from './verify-ledger-background';
 
 export interface BootstrapResult {
   prompt: string;
@@ -431,7 +440,59 @@ Skills are auto-injected from agent config. Project-wide skills in .gossip/skill
       if (content.length === 0) return null;
       // Safety net only — write side already extracts just the priorities section.
       // Generous limit so well-formed content is never cut mid-sentence.
-      return this.verifyToolClaims(content.slice(0, 3000));
+      const trimmed = content.slice(0, 3000);
+      const annotated = this.applyLedgerAnnotations(trimmed, notesPath);
+      return this.verifyToolClaims(annotated);
     } catch { return null; }
   }
+
+  /**
+   * Splice [STALE]/[UNVERIFIED]/[PROSE-ONLY]/[UNVERIFIABLE] annotations into the
+   * ledger text from the `.gossip/next-session-index.json` sidecar.
+   *
+   * Cache hit (mtime AND content-hash match): use cached verdicts.
+   * Cache miss / stale: annotate all bullets with `[UNVERIFIED]` and trigger a
+   * fire-and-forget background verification job (setImmediate; not awaited).
+   *
+   * Bootstrap critical path stays synchronous and fast.
+   */
+  private applyLedgerAnnotations(content: string, ledgerPath: string): string {
+    try {
+      const bullets = parseNextSessionBullets(content);
+      if (bullets.length === 0) return content;
+      let mtime = 0;
+      try { mtime = statSync(ledgerPath).mtimeMs; } catch { /* default 0 */ }
+      const index = readLedgerIndex(this.projectRoot, content, mtime);
+      const byHash = new Map<string, LedgerIndexEntry>();
+      if (index) {
+        for (const e of index.entries) byHash.set(e.bulletHash, e);
+      } else {
+        // Cold/stale cache: trigger background refresh. No await — fire-and-forget.
+        const verifier = defaultVerifierFactory({
+          worktree: () => liveWorktreeCount(this.projectRoot),
+        });
+        triggerBackgroundVerification(this.projectRoot, content, mtime, bullets, verifier);
+      }
+      return annotateLedgerText(content, bullets, byHash);
+    } catch {
+      // Never let annotation failure break bootstrap.
+      return content;
+    }
+  }
+}
+
+/**
+ * Synchronous live worktree count — mirrors `listWorktreePaths` (the async
+ * reader used by discoverGitWorktrees) but stays on the synchronous bootstrap
+ * critical path. Returns null on any failure so the verifier falls back to
+ * UNVERIFIABLE instead of fabricating a count.
+ */
+function liveWorktreeCount(projectRoot: string): number | null {
+  try {
+    const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: projectRoot, encoding: 'utf-8', timeout: 2000,
+    });
+    // Each worktree record starts with `worktree <path>` on its own line.
+    return (out.match(/^worktree\s+/gm) ?? []).length;
+  } catch { return null; }
 }
