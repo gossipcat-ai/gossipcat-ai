@@ -10,6 +10,7 @@ import {
   defaultVerifierFactory,
   type LedgerIndexEntry,
 } from './verify-ledger-background';
+import { checkDistMcpStaleness, renderStalenessBanner } from './dist-mcp-staleness';
 
 export interface BootstrapResult {
   prompt: string;
@@ -140,7 +141,9 @@ export class BootstrapGenerator {
     const isCursor = !!process.env.CURSOR_TRACE_ID || !!process.env.CURSOR_SESSION_ID;
     const host = isClaude ? 'Claude Code' : isCursor ? 'Cursor' : 'your IDE';
 
-    return `# Gossipcat — Multi-Agent Orchestration
+    const banner = renderStalenessBanner(checkDistMcpStaleness());
+
+    return `${banner}# Gossipcat — Multi-Agent Orchestration
 
 Gossipcat is not configured yet. Set up a multi-agent team for this project.
 
@@ -243,7 +246,9 @@ When saving a \`project_*\` memory, include a \`status\` frontmatter field:
 Without it, the dashboard defaults to "backlog" and applies staleness verification conservatively.
 `;
 
-    return `# Gossipcat — Multi-Agent Orchestration
+    const banner = renderStalenessBanner(checkDistMcpStaleness());
+
+    return `${banner}# Gossipcat — Multi-Agent Orchestration
 
 ## Your Role
 

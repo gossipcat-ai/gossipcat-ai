@@ -29,7 +29,17 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 import { ctx } from './mcp-context';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
-import { buildUtilityAgentPrompt, getUncategorizedStatusLine } from '@gossip/orchestrator';
+import { buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog } from '@gossip/orchestrator';
+
+// Prime the dist-mcp staleness cache from the running bundle path. In the bundled
+// CJS output (dist-mcp/mcp-server.js) __filename resolves to the bundle file, so
+// the staleness check can locate the repo root via two dirname() hops. The result
+// is cached at module scope; bootstrap.ts reads it via checkDistMcpStaleness() with
+// no args. Logging is best-effort — never break boot if .gossip/mcp.log is unwritable.
+try {
+  const stalenessResult = checkDistMcpStaleness(__filename);
+  if (stalenessResult.stale) logStalenessToMcpLog(stalenessResult, process.cwd());
+} catch { /* never break boot */ }
 import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
 import { handleCollect } from './handlers/collect';

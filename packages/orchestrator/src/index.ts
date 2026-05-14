@@ -68,6 +68,14 @@ export { createHttpBridgeServer, BridgeConfigError } from './http-bridge-server'
 export type { HttpBridgeServer, HttpBridgeServerOptions } from './http-bridge-server';
 export { WorktreeManager } from './worktree-manager';
 export { BootstrapGenerator } from './bootstrap';
+export {
+  checkDistMcpStaleness,
+  resetStalenessCache,
+  formatStalenessWarning,
+  logStalenessToMcpLog,
+  renderStalenessBanner,
+} from './dist-mcp-staleness';
+export type { StalenessResult } from './dist-mcp-staleness';
 export type { BootstrapResult } from './bootstrap';
 export { findBundledRules, ensureRulesFile, readRulesContent } from './rules-loader';
 export { installWorktreeSandboxHook, findBundledHook, writeOrchestratorRoleMarker, installDisciplineHooks } from './hook-installer';
