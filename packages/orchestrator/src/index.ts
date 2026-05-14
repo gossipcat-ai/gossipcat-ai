@@ -122,7 +122,21 @@ export type {
   LedgerIndexEntry,
   LedgerVerdict,
   BulletVerifier,
+  ParseNextSessionOptions,
 } from './verify-ledger-background';
+export {
+  buildProseResolverIndex,
+  resolveProseBullet,
+  extractTokens,
+  proseResolverPath,
+  discoverAgentIdsForRoot,
+  PROSE_RESOLVER_FILENAME,
+  PROSE_RESOLVER_VERSION,
+  JACCARD_THRESHOLD,
+  MIN_TOKEN_MATCHES,
+  AMBIGUITY_WINDOW,
+} from './prose-bullet-resolver';
+export type { ProseResolverIndex, ProseResolveResult } from './prose-bullet-resolver';
 export { ToolRouter, ToolExecutor } from './tool-router';
 export type { ToolExecutorConfig } from './tool-router';
 export { buildToolSystemPrompt, TOOL_SCHEMAS, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';

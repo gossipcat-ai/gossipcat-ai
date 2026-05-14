@@ -27,6 +27,10 @@
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, writeFileSync, statSync, mkdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
+import {
+  resolveProseBullet,
+  type ProseResolverIndex,
+} from './prose-bullet-resolver';
 
 export type LedgerVerdict =
   | 'FRESH'
@@ -102,7 +106,25 @@ export function findOpenSectionLine(content: string): number {
  * Lines that are not bullets (headings, blank lines) are skipped. Indented
  * continuation lines are folded into the parent bullet.
  */
-export function parseNextSessionBullets(content: string): ParsedBullet[] {
+export interface ParseNextSessionOptions {
+  /**
+   * Optional prose-bullet resolver context. When provided, bullets that have
+   * no explicit `[label](path.md)` link AND no numeric claim are run through
+   * `resolveProseBullet`; a single confident match populates `backingFile`
+   * and clears `proseOnly`. Ambiguous / none results leave `proseOnly` true.
+   *
+   * Callers that want the cheap parse (no fs access) simply omit this arg.
+   */
+  proseResolver?: {
+    index: ProseResolverIndex;
+    agentIds: readonly string[];
+  };
+}
+
+export function parseNextSessionBullets(
+  content: string,
+  opts: ParseNextSessionOptions = {},
+): ParsedBullet[] {
   if (!content) return [];
 
   // Try to locate the "Open for next session" block; fall back to scanning the
@@ -130,7 +152,19 @@ export function parseNextSessionBullets(content: string): ParsedBullet[] {
     const worktreeMatch = text.match(/\b(\d+)\s+(?:merged-but-locked\s+)?worktrees?(?:\s+branch(?:es)?)?\b/i);
     if (worktreeMatch) numericClaim = { n: parseInt(worktreeMatch[1], 10), noun: 'worktree' };
 
-    const proseOnly = !backingFile && !numericClaim;
+    let proseOnly = !backingFile && !numericClaim;
+
+    // POST-PASS: prose-only bullets get a fuzzy memory-slug match attempt.
+    // Single confident match → populate backingFile, clear proseOnly.
+    // Ambiguous / none → leave proseOnly true (orchestrator surfaces candidates).
+    if (proseOnly && opts.proseResolver) {
+      const res = resolveProseBullet(text, opts.proseResolver.index, opts.proseResolver.agentIds);
+      if (res.kind === 'matched') {
+        backingFile = res.backingFile;
+        proseOnly = false;
+      }
+    }
+
     bullets.push({ text, index, hash, backingFile, proseOnly, numericClaim });
     current = null;
   };
