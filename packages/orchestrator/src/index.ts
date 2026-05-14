@@ -105,6 +105,7 @@ export {
   annotationPrefix,
   hashContent,
   ledgerIndexPath,
+  ledgerMtime,
   LEDGER_INDEX_FILENAME,
 } from './verify-ledger-background';
 export type {

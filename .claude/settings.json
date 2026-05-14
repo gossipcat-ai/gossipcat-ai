@@ -14,7 +14,23 @@
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
       "Bash(gh repo view:*)",
-      "mcp__gossipcat__gossip_verify_memory"
+      "mcp__gossipcat__gossip_status",
+      "mcp__gossipcat__gossip_run",
+      "mcp__gossipcat__gossip_relay",
+      "mcp__gossipcat__gossip_relay_cross_review",
+      "mcp__gossipcat__gossip_dispatch",
+      "mcp__gossipcat__gossip_collect",
+      "mcp__gossipcat__gossip_signals",
+      "mcp__gossipcat__gossip_progress",
+      "mcp__gossipcat__gossip_session_save",
+      "mcp__gossipcat__gossip_verify_memory",
+      "mcp__gossipcat__gossip_remember"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "gossipcat"
+  ]
 }
+</content>
+</invoke>

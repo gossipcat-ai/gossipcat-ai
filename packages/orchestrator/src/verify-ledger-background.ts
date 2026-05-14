@@ -26,7 +26,7 @@
  */
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, writeFileSync, statSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 
 export type LedgerVerdict =
   | 'FRESH'
@@ -66,7 +66,11 @@ export interface LedgerIndex {
 
 export const LEDGER_INDEX_FILENAME = 'next-session-index.json';
 
-/** Stable BLAKE2-flavored SHA256 truncation. Cheap, deterministic, no deps. */
+/**
+ * SHA-256 truncated to 64 bits (16 hex chars). Sufficient for cache invalidation and
+ * accidental drift detection; NOT for adversarial integrity (birthday-attack collision
+ * space is ~4B). Cheap, deterministic, no deps.
+ */
 export function hashContent(s: string): string {
   return createHash('sha256').update(s).digest('hex').slice(0, 16);
 }
@@ -157,6 +161,20 @@ export function ledgerIndexPath(projectRoot: string): string {
   return join(projectRoot, '.gossip', LEDGER_INDEX_FILENAME);
 }
 
+function isLedgerIndex(x: unknown): x is LedgerIndex {
+  if (!x || typeof x !== 'object') return false;
+  const o = x as Record<string, unknown>;
+  return typeof o.ledgerMtime === 'number'
+    && typeof o.ledgerContentHash === 'string'
+    && Array.isArray(o.entries)
+    && o.entries.every((e: unknown) =>
+      e !== null && typeof e === 'object'
+      && typeof (e as Record<string, unknown>).bulletHash === 'string'
+      && typeof (e as Record<string, unknown>).verdict === 'string'
+      && typeof (e as Record<string, unknown>).details === 'string'
+      && typeof (e as Record<string, unknown>).checkedAt === 'string');
+}
+
 /**
  * Load the sidecar AND validate it against the live ledger. Returns null on:
  *   - missing sidecar
@@ -172,14 +190,13 @@ export function readLedgerIndex(
 ): LedgerIndex | null {
   const path = ledgerIndexPath(projectRoot);
   if (!existsSync(path)) return null;
-  let parsed: LedgerIndex;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf-8')) as LedgerIndex;
+    parsed = JSON.parse(readFileSync(path, 'utf-8'));
   } catch {
     return null;
   }
-  if (typeof parsed.ledgerMtime !== 'number' || typeof parsed.ledgerContentHash !== 'string') return null;
-  if (!Array.isArray(parsed.entries)) return null;
+  if (!isLedgerIndex(parsed)) return null;
   // BOTH checks required per user decision #2.
   if (parsed.ledgerMtime !== liveLedgerMtime) return null;
   if (parsed.ledgerContentHash !== hashContent(liveLedgerContent)) return null;
@@ -279,7 +296,7 @@ export function defaultVerifierFactory(
     return {
       bulletHash: b.hash,
       verdict: 'INCONCLUSIVE',
-      details: `memory-backed; orchestrator should run gossip_verify_memory(${b.backingFile})`,
+      details: `memory-backed; orchestrator should run gossip_verify_memory(${basename(b.backingFile ?? '')})`,
       checkedAt: now,
     };
   };
