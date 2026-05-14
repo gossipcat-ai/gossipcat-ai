@@ -12,6 +12,7 @@ export type SkillStatus =
   | 'passed'
   | 'failed'
   | 'pending'
+  | 'inconclusive'
   | 'flagged_for_manual_review'
   | 'silent_skill'
   | 'insufficient_evidence';
