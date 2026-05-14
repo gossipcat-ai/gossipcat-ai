@@ -69,7 +69,9 @@ If you see a review agent claiming a "timing order bug" here, it is fabricated. 
 
 ### 7. The reward loop reads `snapshot.status` back in `skill-loader.ts`
 
-Skills with `status: 'failed'` or `status: 'silent_skill'` are filtered out at `loadSkills()` injection time. Skills with `passed`, `pending`, `insufficient_evidence`, or `flagged_for_manual_review` are injected normally. This closes the RL loop — verdict → policy update — in a single place.
+Skills with `status: 'failed'`, `status: 'silent_skill'`, or `status: 'inconclusive' && regressed_from_passed_at != null` (drift-demoted) are filtered out at `loadSkills()` injection time. Skills with `passed`, `pending`, `insufficient_evidence`, `flagged_for_manual_review`, or organically-inconclusive (no `regressed_from_passed_at`) are injected normally. This closes the RL loop — verdict → policy update — in a single place.
+
+The drift-demoted clause was added with the drift detector (invariant #11). The condition is dual: `status === 'inconclusive'` AND `regressed_from_passed_at` present. Organic inconclusive (the standard "ran the evidence window without a confident verdict" state) still injects — only the "was passed, then regressed" state is quarantined.
 
 **Do not** add a second filter site. Filtering is a read-only operation at load-for-injection time; frontmatter is never mutated.
 
@@ -96,6 +98,22 @@ The `verify-the-premise` skill (premise-verification Stage 1) auto-binds to ever
 **How to opt in from the user side:** name the agent `<whatever>-implementer` at `gossip_setup` time. The skill will appear in the agent's prompt on the next dispatch. No manual skill-bind needed.
 
 **Rationale:** suffix-match was chosen over (a) a `role` field in agent config (no such field exists today) and (b) a hardcoded list (breaks user-defined implementers). The suffix is self-documenting, idiomatic in the default agent names, and does not require schema migration.
+
+### 11. `passed` is not terminal — drift detection makes it conditional
+
+A graduated skill (`status: 'passed'`) is NOT a permanent verdict. The drift detector at `packages/orchestrator/src/check-effectiveness.ts:resolvePassedDrift` re-tests every `passed` skill on a fresh `N=DRIFT_WINDOW_SIZE` post-graduation window via Wilson lower-bound vs `passed_baseline_rate`. Two consecutive failing windows (`K=DRIFT_DEMOTE_STRIKES = 2`) demote the skill to `inconclusive` with `regressed_from_passed_at` stamped. A subsequent fresh-window Wilson failure fast-paths to `silent_skill` (skipping the 3-strike machinery).
+
+**Three load-bearing details:**
+
+- **K=2 independence requires `drift_strike_at` rotation.** Strike-1 stamps `drift_strike_at: nowIso`. Strike-2's `getCountersSince` anchors there — NOT at `passed_at` — so the second window is independent of the first. Without this, the two strikes share signals and the α²=0.000625 false-demote rate collapses to ~α=0.025. See PR #381 fixup commit `9d72fe2`.
+
+- **Hybrid first-window for backfilled skills.** Bundled-default skills that ship `status: passed` (or skills migrated to v3 with reconstructed baselines) carry `passed_backfilled: true`. Their FIRST drift window tests against BOTH the reconstructed `passed_baseline_rate` AND the 0.75 floor (`HYBRID_BACKFILL_FLOOR`) — demote if EITHER fails. After the first pass, `passed_backfilled` clears. Prevents re-anchoring at a degraded post-migration rate.
+
+- **Paused-until-evidence for fresh installs.** A fresh user's bundled `passed` skill has zero signal history. v3 migration leaves `passed_baseline_rate: undefined`, which `resolvePassedDrift` treats as PAUSED — the skill keeps injecting normally, no demote on zero evidence. Drift detection activates once N=80 fresh post-install signals accumulate; at that point the hybrid 0.75 floor is the load-bearing check ("does this skill generalize beyond the maintainer's project?").
+
+**Do not** treat `passed` as a write-once anchor. The verdict can rotate: passed → drift-demoted inconclusive → re-graduation passed (with `passed_at` rotated, `regressed_from_passed_at` cleared, `drift_strikes = 0`, `drift_strike_at = undefined`). Code that assumes "passed is sticky" will misbehave on bounce-back.
+
+**Do not** add a Bonferroni correction to drift α. The graduation, drift, and fast-path tests operate on disjoint signal populations (anchored at `bound_at`/`inconclusive_at`, `passed_at`/`drift_strike_at`, and `regressed_from_passed_at` respectively). Sequential gates on different evidence pools each spend their own α=0.025 without leakage. See `docs/specs/2026-05-13-passed-skill-drift-detection.md` for the full statistical argument.
 
 ---
 
