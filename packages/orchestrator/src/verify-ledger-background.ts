@@ -27,6 +27,10 @@
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, writeFileSync, statSync, mkdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
+import {
+  resolveProseBullet,
+  type ProseResolverIndex,
+} from './prose-bullet-resolver';
 
 export type LedgerVerdict =
   | 'FRESH'
@@ -49,6 +53,8 @@ export interface ParsedBullet {
   proseOnly: boolean;
   /** Numeric-claim hint: extracted number + noun the bullet is about (e.g., 4 + "worktree"). */
   numericClaim?: { n: number; noun: string };
+  /** Multi-candidate memory files when the prose-resolver returned `ambiguous`. Surfaced in PROSE-ONLY details so the orchestrator can pick. */
+  ambiguousCandidates?: readonly string[];
 }
 
 export interface LedgerIndexEntry {
@@ -102,7 +108,25 @@ export function findOpenSectionLine(content: string): number {
  * Lines that are not bullets (headings, blank lines) are skipped. Indented
  * continuation lines are folded into the parent bullet.
  */
-export function parseNextSessionBullets(content: string): ParsedBullet[] {
+export interface ParseNextSessionOptions {
+  /**
+   * Optional prose-bullet resolver context. When provided, bullets that have
+   * no explicit `[label](path.md)` link AND no numeric claim are run through
+   * `resolveProseBullet`; a single confident match populates `backingFile`
+   * and clears `proseOnly`. Ambiguous / none results leave `proseOnly` true.
+   *
+   * Callers that want the cheap parse (no fs access) simply omit this arg.
+   */
+  proseResolver?: {
+    index: ProseResolverIndex;
+    agentIds: readonly string[];
+  };
+}
+
+export function parseNextSessionBullets(
+  content: string,
+  opts: ParseNextSessionOptions = {},
+): ParsedBullet[] {
   if (!content) return [];
 
   // Try to locate the "Open for next session" block; fall back to scanning the
@@ -130,8 +154,23 @@ export function parseNextSessionBullets(content: string): ParsedBullet[] {
     const worktreeMatch = text.match(/\b(\d+)\s+(?:merged-but-locked\s+)?worktrees?(?:\s+branch(?:es)?)?\b/i);
     if (worktreeMatch) numericClaim = { n: parseInt(worktreeMatch[1], 10), noun: 'worktree' };
 
-    const proseOnly = !backingFile && !numericClaim;
-    bullets.push({ text, index, hash, backingFile, proseOnly, numericClaim });
+    let proseOnly = !backingFile && !numericClaim;
+
+    // POST-PASS: prose-only bullets get a fuzzy memory-slug match attempt.
+    // Single confident match → populate backingFile, clear proseOnly.
+    // Ambiguous / none → leave proseOnly true (orchestrator surfaces candidates).
+    let ambiguousCandidates: readonly string[] | undefined;
+    if (proseOnly && opts.proseResolver) {
+      const res = resolveProseBullet(text, opts.proseResolver.index, opts.proseResolver.agentIds);
+      if (res.kind === 'matched') {
+        backingFile = res.backingFile;
+        proseOnly = false;
+      } else if (res.kind === 'ambiguous') {
+        ambiguousCandidates = res.candidates.map((c) => c.file);
+      }
+    }
+
+    bullets.push({ text, index, hash, backingFile, proseOnly, numericClaim, ambiguousCandidates });
     current = null;
   };
 
@@ -289,7 +328,10 @@ export function defaultVerifierFactory(
       return { bulletHash: b.hash, verdict: 'UNVERIFIABLE', details: 'no live counter for numeric claim', checkedAt: now };
     }
     if (b.proseOnly) {
-      return { bulletHash: b.hash, verdict: 'PROSE-ONLY', details: 'free-form bullet, no backing memory link', checkedAt: now };
+      const details = b.ambiguousCandidates && b.ambiguousCandidates.length > 0
+        ? `multiple confident matches: ${b.ambiguousCandidates.join(', ')}`
+        : 'free-form bullet, no backing memory link';
+      return { bulletHash: b.hash, verdict: 'PROSE-ONLY', details, checkedAt: now };
     }
     // Memory-linked bullet: in-process we cannot dispatch the haiku verifier;
     // mark INCONCLUSIVE so the orchestrator knows to call gossip_verify_memory.

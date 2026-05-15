@@ -389,6 +389,23 @@ describe('defaultVerifierFactory', () => {
     expect(r.details).toContain('gossip_verify_memory(passwd)');
     expect(r.details).not.toContain('..');
   });
+
+  it('PROSE-ONLY surfaces ambiguousCandidates in details when prose-resolver returns ambiguous', async () => {
+    const v = defaultVerifierFactory();
+    const r = await v(mk({
+      proseOnly: true,
+      ambiguousCandidates: ['project_alpha.md', 'project_beta.md'],
+    }));
+    expect(r.verdict).toBe('PROSE-ONLY');
+    expect(r.details).toBe('multiple confident matches: project_alpha.md, project_beta.md');
+  });
+
+  it('PROSE-ONLY falls back to generic details when ambiguousCandidates is empty/undefined', async () => {
+    const v = defaultVerifierFactory();
+    const r = await v(mk({ proseOnly: true }));
+    expect(r.verdict).toBe('PROSE-ONLY');
+    expect(r.details).toBe('free-form bullet, no backing memory link');
+  });
 });
 
 describe('writeLedgerIndex / sidecar round-trip', () => {
