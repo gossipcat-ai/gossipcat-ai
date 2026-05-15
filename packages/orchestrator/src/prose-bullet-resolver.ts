@@ -37,6 +37,13 @@ export const JACCARD_THRESHOLD = 0.3;
 export const MIN_TOKEN_MATCHES = 2;
 export const AMBIGUITY_WINDOW = 0.05; // within 5% of top score → ambiguous
 
+/** Max bytes for a single memory file's frontmatter read (64 KB). */
+export const FRONTMATTER_READ_LIMIT = 64 * 1024;
+/** Max bytes for the prose-resolver sidecar JSON (16 MB). */
+export const SIDECAR_READ_LIMIT = 16 * 1024 * 1024;
+/** Max agent-directory entries scanned before capping. */
+export const DISCOVER_AGENT_CAP = 1000;
+
 /** Closed set of skill categories (kept in sync with gossip_skills categories). */
 const CATEGORY_KEYWORDS: ReadonlySet<string> = new Set([
   'trust_boundaries',
@@ -66,6 +73,29 @@ export type ProseResolveResult =
   | { kind: 'ambiguous'; candidates: Array<{ file: string; score: number }> }
   | { kind: 'none'; reason: 'zero_tokens' | 'below_threshold' };
 
+/**
+ * Hand-rolled type guard for ProseResolverIndex.
+ * Validates inner record shapes: tokens must be Record<string, string[]>
+ * and memoryTokenCounts must be Record<string, number>.
+ */
+export function isProseResolverIndex(x: unknown): x is ProseResolverIndex {
+  if (!x || typeof x !== 'object') return false;
+  const obj = x as Record<string, unknown>;
+  if (typeof obj['version'] !== 'number') return false;
+  if (typeof obj['memoryDirMtime'] !== 'number') return false;
+  if (typeof obj['filenameHash'] !== 'string') return false;
+  if (!obj['tokens'] || typeof obj['tokens'] !== 'object') return false;
+  if (!obj['memoryTokenCounts'] || typeof obj['memoryTokenCounts'] !== 'object') return false;
+  for (const val of Object.values(obj['tokens'] as object)) {
+    if (!Array.isArray(val)) return false;
+    if (!(val as unknown[]).every((v) => typeof v === 'string')) return false;
+  }
+  for (const val of Object.values(obj['memoryTokenCounts'] as object)) {
+    if (typeof val !== 'number') return false;
+  }
+  return true;
+}
+
 /** Stable hash of the sorted *.md filename list. */
 function hashFilenames(names: string[]): string {
   const sorted = [...names].sort();
@@ -87,12 +117,17 @@ export function proseResolverPath(projectRoot: string): string {
 }
 
 /** Read the known agent-ID list by scanning .gossip/agents subdirs. */
-function discoverAgentIds(projectRoot: string): string[] {
+export function discoverAgentIds(projectRoot: string): string[] {
   const dir = join(projectRoot, '.gossip', 'agents');
   try {
-    return readdirSync(dir, { withFileTypes: true })
+    const dirs = readdirSync(dir, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name);
+    if (dirs.length > DISCOVER_AGENT_CAP) {
+      console.warn(`[prose-resolver] discoverAgentIds: ${dirs.length} entries exceed cap of ${DISCOVER_AGENT_CAP}; truncating`);
+      return dirs.slice(0, DISCOVER_AGENT_CAP);
+    }
+    return dirs;
   } catch {
     return [];
   }
@@ -142,6 +177,7 @@ export function extractTokens(text: string, agentIds: readonly string[]): Set<st
 function readFrontmatterNameDesc(file: string): string {
   let raw: string;
   try {
+    if (statSync(file).size > FRONTMATTER_READ_LIMIT) return '';
     raw = readFileSync(file, 'utf-8');
   } catch {
     return '';
@@ -209,14 +245,14 @@ function readValidSidecar(
   if (!existsSync(path)) return null;
   let parsed: unknown;
   try {
+    if (statSync(path).size > SIDECAR_READ_LIMIT) return null;
     parsed = JSON.parse(readFileSync(path, 'utf-8'));
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const idx = parsed as ProseResolverIndex;
+  if (!isProseResolverIndex(parsed)) return null;
+  const idx = parsed;
   if (idx.version !== PROSE_RESOLVER_VERSION) return null;
-  if (!idx.tokens || !idx.memoryTokenCounts) return null;
 
   // Validate against current memory dir state.
   const files = listMemoryFiles(memoryDir);

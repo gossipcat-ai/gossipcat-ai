@@ -10,8 +10,12 @@ import {
   resolveProseBullet,
   extractTokens,
   proseResolverPath,
+  discoverAgentIdsForRoot,
+  isProseResolverIndex,
   PROSE_RESOLVER_VERSION,
   JACCARD_THRESHOLD,
+  FRONTMATTER_READ_LIMIT,
+  DISCOVER_AGENT_CAP,
   type ProseResolverIndex,
 } from '@gossip/orchestrator';
 
@@ -111,6 +115,36 @@ describe('buildProseResolverIndex', () => {
       expect(idx2.filenameHash).not.toBe(idx1.filenameHash);
       expect(idx2.tokens['pr99']).toContain('project_bar.md');
       expect(idx2.tokens['pr99']).not.toContain('project_foo.md');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('invalidates sidecar on mtime-only change (filename set unchanged)', () => {
+    // Defense-in-depth: the rename test pins mtime to exercise the hash path.
+    // This test exercises the *other* path — same filenames, different dir mtime —
+    // so a regression in the mtime gate would be caught by the suite.
+    const { root, memDir } = mkTmp('mtime-only');
+    try {
+      writeMemory(memDir, 'a.md', 'A', 'PR #1 trust_boundaries');
+      const idx1 = buildProseResolverIndex(root, memDir);
+      const sidecarBefore = JSON.parse(
+        require('fs').readFileSync(proseResolverPath(root), 'utf-8'),
+      );
+      // Bump dir mtime forward without touching the filename set.
+      // (touch a hidden file then remove it — same final filenames, fresh mtime)
+      const sentinel = join(memDir, '.touch');
+      writeFileSync(sentinel, '');
+      rmSync(sentinel);
+      const liveMtime = statSync(memDir).mtimeMs;
+      expect(liveMtime).not.toBe(sidecarBefore.memoryDirMtime);
+      // Sidecar's stored mtime is now stale → readValidSidecar must reject it
+      // and rebuild from disk. Resulting index has the live mtime stamped.
+      const idx2 = buildProseResolverIndex(root, memDir);
+      expect(idx2.memoryDirMtime).toBe(liveMtime);
+      expect(idx2.memoryDirMtime).not.toBe(sidecarBefore.memoryDirMtime);
+      // Filename hash unchanged → confirms this is the mtime-only path.
+      expect(idx2.filenameHash).toBe(idx1.filenameHash);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -259,4 +293,113 @@ describe('resolveProseBullet', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe('isProseResolverIndex (sidecar shape validation)', () => {
+  const valid = (): ProseResolverIndex => ({
+    version: PROSE_RESOLVER_VERSION,
+    memoryDirMtime: 123,
+    filenameHash: 'abc',
+    tokens: { foo: ['a.md', 'b.md'] },
+    memoryTokenCounts: { 'a.md': 2 },
+  });
+
+  it('accepts a well-shaped index', () => {
+    expect(isProseResolverIndex(valid())).toBe(true);
+  });
+
+  it('rejects non-array tokens value', () => {
+    const bad = { ...valid(), tokens: { foo: 'not-an-array' as unknown as string[] } };
+    expect(isProseResolverIndex(bad)).toBe(false);
+  });
+
+  it('rejects non-number memoryTokenCounts value', () => {
+    const bad = { ...valid(), memoryTokenCounts: { 'a.md': '2' as unknown as number } };
+    expect(isProseResolverIndex(bad)).toBe(false);
+  });
+
+  it('rejects non-string element inside tokens array', () => {
+    const bad = { ...valid(), tokens: { foo: ['a.md', 42 as unknown as string] } };
+    expect(isProseResolverIndex(bad)).toBe(false);
+  });
+
+  it('rejects null and primitives', () => {
+    expect(isProseResolverIndex(null)).toBe(false);
+    expect(isProseResolverIndex('string')).toBe(false);
+    expect(isProseResolverIndex(42)).toBe(false);
+  });
+
+  it('rejects missing tokens / memoryTokenCounts', () => {
+    expect(isProseResolverIndex({ version: 1, memoryDirMtime: 0, filenameHash: 'x', memoryTokenCounts: {} })).toBe(false);
+    expect(isProseResolverIndex({ version: 1, memoryDirMtime: 0, filenameHash: 'x', tokens: {} })).toBe(false);
+  });
+});
+
+describe('readFrontmatterNameDesc size limit (defense-in-depth)', () => {
+  it('skips oversized memory files (>64KB frontmatter cap)', () => {
+    const { root, memDir } = mkTmp('oversize-fm');
+    writeAgent(root, 'opus-implementer');
+    writeMemory(memDir, 'normal.md', 'normal memory', 'opus-implementer trust_boundaries');
+    // Oversized file: pad description with > FRONTMATTER_READ_LIMIT bytes.
+    const padding = 'x'.repeat(FRONTMATTER_READ_LIMIT + 1024);
+    const body = `---\nname: oversized\ndescription: opus-implementer ${padding}\ntype: project\nstatus: shipped\n---\n`;
+    writeFileSync(join(memDir, 'oversized.md'), body);
+    expect(statSync(join(memDir, 'oversized.md')).size).toBeGreaterThan(FRONTMATTER_READ_LIMIT);
+    try {
+      const idx = buildProseResolverIndex(root, memDir);
+      // Oversized file is read-skipped → zero tokens indexed for it.
+      expect(idx.memoryTokenCounts['oversized.md']).toBe(0);
+      // The normal file still indexes.
+      expect(idx.memoryTokenCounts['normal.md']).toBeGreaterThan(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('readValidSidecar size limit (defense-in-depth)', () => {
+  it('treats oversized sidecar as invalid and rebuilds', () => {
+    const { root, memDir } = mkTmp('oversize-sidecar');
+    writeAgent(root, 'opus-implementer');
+    writeMemory(memDir, 'a.md', 'a', 'opus-implementer trust_boundaries');
+    const sidecarPath = proseResolverPath(root);
+    mkdirSync(join(root, '.gossip'), { recursive: true });
+    // Write a > SIDECAR_READ_LIMIT (16MB) blob — invalid JSON, but the size check
+    // fires first and short-circuits the read.
+    const huge = 'x'.repeat(16 * 1024 * 1024 + 1024);
+    writeFileSync(sidecarPath, huge);
+    expect(statSync(sidecarPath).size).toBeGreaterThan(16 * 1024 * 1024);
+    try {
+      // Should NOT throw — oversize gate returns null, triggering fresh build.
+      const idx = buildProseResolverIndex(root, memDir);
+      expect(idx.version).toBe(PROSE_RESOLVER_VERSION);
+      expect(idx.memoryTokenCounts['a.md']).toBeGreaterThan(0);
+      // After buildProseResolverIndex, a valid sidecar is written back.
+      expect(statSync(sidecarPath).size).toBeLessThan(16 * 1024 * 1024);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000); // generous timeout for the 16MB write
+});
+
+describe('discoverAgentIds cap (defense-in-depth)', () => {
+  it('caps directory scan at DISCOVER_AGENT_CAP entries', () => {
+    const { root } = mkTmp('agent-cap');
+    const agentsDir = join(root, '.gossip', 'agents');
+    // Create 1001 agent dirs.
+    for (let i = 0; i < DISCOVER_AGENT_CAP + 1; i++) {
+      mkdirSync(join(agentsDir, `agent-${i.toString().padStart(4, '0')}`));
+    }
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const ids = discoverAgentIdsForRoot(root);
+      expect(ids.length).toBe(DISCOVER_AGENT_CAP);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`${DISCOVER_AGENT_CAP + 1} entries exceed cap of ${DISCOVER_AGENT_CAP}`),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000); // creating 1001 dirs may take a moment on slow disks
 });
