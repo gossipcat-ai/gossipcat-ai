@@ -120,6 +120,36 @@ describe('buildProseResolverIndex', () => {
     }
   });
 
+  it('invalidates sidecar on mtime-only change (filename set unchanged)', () => {
+    // Defense-in-depth: the rename test pins mtime to exercise the hash path.
+    // This test exercises the *other* path — same filenames, different dir mtime —
+    // so a regression in the mtime gate would be caught by the suite.
+    const { root, memDir } = mkTmp('mtime-only');
+    try {
+      writeMemory(memDir, 'a.md', 'A', 'PR #1 trust_boundaries');
+      const idx1 = buildProseResolverIndex(root, memDir);
+      const sidecarBefore = JSON.parse(
+        require('fs').readFileSync(proseResolverPath(root), 'utf-8'),
+      );
+      // Bump dir mtime forward without touching the filename set.
+      // (touch a hidden file then remove it — same final filenames, fresh mtime)
+      const sentinel = join(memDir, '.touch');
+      writeFileSync(sentinel, '');
+      rmSync(sentinel);
+      const liveMtime = statSync(memDir).mtimeMs;
+      expect(liveMtime).not.toBe(sidecarBefore.memoryDirMtime);
+      // Sidecar's stored mtime is now stale → readValidSidecar must reject it
+      // and rebuild from disk. Resulting index has the live mtime stamped.
+      const idx2 = buildProseResolverIndex(root, memDir);
+      expect(idx2.memoryDirMtime).toBe(liveMtime);
+      expect(idx2.memoryDirMtime).not.toBe(sidecarBefore.memoryDirMtime);
+      // Filename hash unchanged → confirms this is the mtime-only path.
+      expect(idx2.filenameHash).toBe(idx1.filenameHash);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('invalidates sidecar on file removal', () => {
     const { root, memDir } = mkTmp('remove');
     try {
