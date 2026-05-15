@@ -623,7 +623,7 @@ async function resolveDispatchResolutionRoots(
       }
     }
   } catch (err) {
-    process.stderr.write(`[dispatch] auto-discovery failed: ${(err as Error).message}\n`);
+    process.stderr.write(`[dispatch] auto-discovery failed: ${(err as Error).message ?? String(err)}\n`);
   }
   return { effectiveRoots, warnings };
 }
@@ -680,6 +680,10 @@ export async function handleDispatchParallel(
   }
 
   const lines: string[] = [];
+  // Accumulates all dispatched task IDs (relay + native) for stashing
+  // effectiveResolutionRoots on ctx.pendingDispatchResolutionRoots below,
+  // mirroring the handleDispatchConsensus pattern at lines 1050-1055.
+  const allParallelTaskIds: string[] = [];
 
   // Dispatch relay tasks normally
   if (relayTasks.length > 0) {
@@ -711,6 +715,7 @@ export async function handleDispatchParallel(
       const def = relayTasks[i];
       const t = ctx.mainAgent.getTask(tid);
       lines.push(`  ${tid} → ${t?.agentId || 'unknown'} (relay)`);
+      allParallelTaskIds.push(tid);
       if (def) {
         // Relay worktree path is async (created during pipeline runTask());
         // record undefined here and fill via updateDispatchMetadata later.
@@ -769,6 +774,7 @@ export async function handleDispatchParallel(
     ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
+    allParallelTaskIds.push(taskId);
     persistNativeTaskMap();
     process.stderr.write(`[gossipcat] dispatch → ${def.agent_id} (${nativeConfig.model}) [${taskId}]\n`);
 
@@ -821,6 +827,18 @@ export async function handleDispatchParallel(
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
     );
     nativePrompts.push({ taskId, agentId: def.agent_id, prompt: agentPrompt });
+  }
+
+  // #392 fix (HIGH f2): mirror handleDispatchConsensus stash (lines 1050-1055).
+  // When consensus=true and effective roots were resolved (either caller-supplied
+  // or auto-discovered), stash them keyed by every dispatched task_id so
+  // gossip_collect can pick them up at Phase 2 without requiring a collect-time
+  // resolutionRoots override.
+  if (effectiveResolutionRoots && effectiveResolutionRoots.length > 0) {
+    const frozen = Object.freeze([...effectiveResolutionRoots]);
+    for (const tid of allParallelTaskIds) {
+      ctx.pendingDispatchResolutionRoots.set(tid, frozen);
+    }
   }
 
   let msg = '';

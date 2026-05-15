@@ -255,7 +255,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     });
   });
 
-  // Case 7 — F4: flag ON, no discovered, rejected > 0 → warning in response.
+  // Case 6 — F4: flag ON, no discovered, rejected > 0 → warning in response.
   it('F4 — emits warning when flag is on but all candidates fail validation', async () => {
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
     mockedDiscover.mockResolvedValue({
@@ -278,7 +278,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(dispatchParallelCall[0][0].options).toBeUndefined();
   });
 
-  // Case 6 — failure isolation: discoverGitWorktrees throws → dispatch still
+  // Case 7 — failure isolation: discoverGitWorktrees throws → dispatch still
   // succeeds with empty roots (no warning, no crash).
   it('failure isolation — dispatch succeeds when discoverGitWorktrees throws', async () => {
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });

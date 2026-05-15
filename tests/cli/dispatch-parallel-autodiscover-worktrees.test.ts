@@ -158,6 +158,11 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     expect(relayDefs[0].options).toEqual({
       resolutionRoots: ['/tmp/worktree-a', '/tmp/worktree-b'],
     });
+    // Stash must carry discovered roots for Phase 2 collect-time pickup
+    // (mirrors handleDispatchConsensus stash assertion in dispatch-autodiscover-worktrees.test.ts:168)
+    expect(ctx.pendingDispatchResolutionRoots.size).toBeGreaterThanOrEqual(1);
+    const stashedValue = Array.from(ctx.pendingDispatchResolutionRoots.values())[0];
+    expect(stashedValue).toEqual(['/tmp/worktree-a', '/tmp/worktree-b']);
   });
 
   // Case 2 — explicit caller-passed roots win. Auto-discovery must NOT run.
@@ -239,7 +244,7 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     });
   });
 
-  // Case 7 — F4: flag ON, no discovered, rejected > 0 → warning in response.
+  // Case 6 — F4: flag ON, no discovered, rejected > 0 → warning in response.
   it('F4 — emits warning when flag is on but all candidates fail validation', async () => {
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
     mockedDiscover.mockResolvedValue({
@@ -263,7 +268,7 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     expect(dispatchParallelCall[0][0].options).toBeUndefined();
   });
 
-  // Case 6 — failure isolation: discoverGitWorktrees throws → dispatch still
+  // Case 7 — failure isolation: discoverGitWorktrees throws → dispatch still
   // succeeds with empty roots (no warning, no crash).
   it('failure isolation — dispatch succeeds when discoverGitWorktrees throws', async () => {
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
