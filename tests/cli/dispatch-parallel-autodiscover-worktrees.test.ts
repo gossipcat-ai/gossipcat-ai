@@ -1,20 +1,16 @@
 /**
- * Issue #390 — dispatch-time worktree auto-discovery + soft warning.
+ * Issue #392 — dispatch-time worktree auto-discovery in handleDispatchParallel
+ * (consensus:true mode).
  *
- * Mirrors the collect-time pattern at apps/cli/src/handlers/collect.ts:427.
- * Tests the two-layer behaviour:
+ * Mirrors dispatch-autodiscover-worktrees.test.ts (issue #390 / handleDispatchConsensus),
+ * covering the same 7 cases for the parallel handler when consensus=true.
  *
- *   Layer 1 — mode=consensus + caller didn't pass resolutionRoots + the config
- *             flag `consensus.autoDiscoverWorktrees=true` → run
- *             discoverGitWorktrees and inject results into the dispatch-time
- *             roots so per-task relay options + pendingDispatchResolutionRoots
- *             stash carry the worktree paths.
+ * Auto-discovery only runs when consensus=true; non-consensus parallel dispatch
+ * is not tested here because worktree resolution is irrelevant in that path.
  *
- *   Layer 2 — flag is OFF, resolutionRoots is empty, worktrees exist on disk
- *             → emit a non-fatal warning in the dispatch response.
- *
- * Background: consensus 5178d3e7-41604528 on PR #389 sent gemini-tester to
- * master HEAD instead of the worktree branch because Layer 1 was missing here.
+ * Background: consensus round 5178d3e7-41604528 on PR #389 sent gemini-tester to
+ * master HEAD for worktree-branch PRs. PR #393 / commit 6c1e8be fixed
+ * handleDispatchConsensus; issue #392 tracks the same gap in handleDispatchParallel.
  */
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
@@ -22,7 +18,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { ctx } from '../../apps/cli/src/mcp-context';
-import { handleDispatchConsensus } from '../../apps/cli/src/handlers/dispatch';
+import { handleDispatchParallel } from '../../apps/cli/src/handlers/dispatch';
 
 // Mock the orchestrator package so discoverGitWorktrees is deterministic in
 // test (no real git worktree list traversal). Other named exports pass
@@ -56,9 +52,9 @@ function makeMainAgent(overrides: Record<string, any> = {}): any {
     publishNativeGossip: jest.fn().mockResolvedValue(undefined),
     getChainContext: jest.fn().mockReturnValue(''),
     generateLensesForAgents: jest.fn().mockResolvedValue(new Map()),
-    dispatchParallel: jest.fn().mockResolvedValue({ taskIds: [], errors: [] }),
-    dispatchParallelWithLenses: jest.fn().mockResolvedValue({ taskIds: [], errors: [] }),
-    getTask: jest.fn().mockReturnValue(null),
+    dispatchParallel: jest.fn().mockResolvedValue({ taskIds: ['p-1'], errors: [] }),
+    dispatchParallelWithLenses: jest.fn().mockResolvedValue({ taskIds: ['p-1'], errors: [] }),
+    getTask: jest.fn().mockReturnValue({ agentId: 'gemini-tester' }),
     scopeTracker: {
       hasOverlap: jest.fn().mockReturnValue({ overlaps: false }),
       register: jest.fn(),
@@ -105,9 +101,9 @@ function restoreCtx() {
 
 function writeConfig(dir: string, body: any): void {
   mkdirSync(join(dir, '.gossip'), { recursive: true });
-  // loadConfig requires main_agent.provider + main_agent.model. Auto-discovery
-  // only reads cfg.consensus.autoDiscoverWorktrees, so we merge a minimal
-  // valid main_agent block with whatever the test passed in.
+  // loadConfig requires main_agent.provider + main_agent.model.
+  // Auto-discovery only reads cfg.consensus.autoDiscoverWorktrees, so we
+  // merge a minimal valid main_agent block.
   const merged = {
     main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
     ...body,
@@ -115,23 +111,22 @@ function writeConfig(dir: string, body: any): void {
   writeFileSync(join(dir, '.gossip', 'config.json'), JSON.stringify(merged));
 }
 
-describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (issue #390)', () => {
+describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto-discovery (issue #392)', () => {
   let projectDir: string;
   let prevCwd: string;
 
   beforeEach(() => {
     prevCwd = process.cwd();
-    projectDir = mkdtempSync(join(tmpdir(), 'gossip-dispatch-autodiscover-'));
+    projectDir = mkdtempSync(join(tmpdir(), 'gossip-parallel-autodiscover-'));
     mkdirSync(join(projectDir, '.gossip', 'skills'), { recursive: true });
     process.chdir(projectDir);
     resetCtx();
     mockedDiscover.mockReset();
 
     // Register one relay agent. Relay dispatch is what reads dispatch-time
-    // resolutionRoots into per-task options at dispatch.ts:911-912, so this
-    // gives us the assertion surface.
+    // resolutionRoots into per-task options, giving us the assertion surface.
     ctx.mainAgent.dispatchParallel = jest.fn().mockResolvedValue({
-      taskIds: ['t-1'],
+      taskIds: ['p-1'],
       errors: [],
     });
     ctx.mainAgent.getTask = jest.fn().mockReturnValue({ agentId: 'gemini-tester' });
@@ -144,31 +139,30 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
   });
 
   // Case 1 — Layer 1 happy path: flag ON, no caller-passed roots, worktrees
-  // discovered. Discovered roots must flow into both per-task relay options
-  // AND ctx.pendingDispatchResolutionRoots.
-  it('Layer 1 — auto-discovers worktrees and injects into relay options + stash', async () => {
+  // discovered. Discovered roots must flow into per-task relay options.
+  it('Layer 1 — auto-discovers worktrees and injects into relay options', async () => {
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
     mockedDiscover.mockResolvedValue({
       discovered: ['/tmp/worktree-a', '/tmp/worktree-b'],
       rejected: [],
     });
 
-    await handleDispatchConsensus([
-      { agent_id: 'gemini-tester', task: 'Audit X' },
-    ]);
+    await handleDispatchParallel(
+      [{ agent_id: 'gemini-tester', task: 'Audit X' }],
+      /* consensus */ true,
+    );
 
     expect(mockedDiscover).toHaveBeenCalledWith(expect.any(String), [expect.any(String)]);
-    // Relay options carry the discovered roots
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
     const relayDefs = dispatchParallelCall[0];
     expect(relayDefs[0].options).toEqual({
       resolutionRoots: ['/tmp/worktree-a', '/tmp/worktree-b'],
     });
-    // Stash carries them too (collect-time pickup)
-    expect(ctx.pendingDispatchResolutionRoots.get('t-1')).toEqual([
-      '/tmp/worktree-a',
-      '/tmp/worktree-b',
-    ]);
+    // Stash must carry discovered roots for Phase 2 collect-time pickup
+    // (mirrors handleDispatchConsensus stash assertion in dispatch-autodiscover-worktrees.test.ts:168)
+    expect(ctx.pendingDispatchResolutionRoots.size).toBeGreaterThanOrEqual(1);
+    const stashedValue = Array.from(ctx.pendingDispatchResolutionRoots.values())[0];
+    expect(stashedValue).toEqual(['/tmp/worktree-a', '/tmp/worktree-b']);
   });
 
   // Case 2 — explicit caller-passed roots win. Auto-discovery must NOT run.
@@ -179,10 +173,10 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
       rejected: [],
     });
 
-    await handleDispatchConsensus(
+    await handleDispatchParallel(
       [{ agent_id: 'gemini-tester', task: 'Audit X' }],
-      undefined,
-      ['/tmp/explicit-root'],
+      /* consensus */ true,
+      /* resolutionRoots */ ['/tmp/explicit-root'],
     );
 
     expect(mockedDiscover).not.toHaveBeenCalled();
@@ -190,7 +184,6 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(dispatchParallelCall[0][0].options).toEqual({
       resolutionRoots: ['/tmp/explicit-root'],
     });
-    expect(ctx.pendingDispatchResolutionRoots.get('t-1')).toEqual(['/tmp/explicit-root']);
   });
 
   // Case 3 — flag OFF, no worktrees on disk → no warning, no error.
@@ -198,9 +191,10 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: false } });
     mockedDiscover.mockResolvedValue({ discovered: [], rejected: [] });
 
-    const result: any = await handleDispatchConsensus([
-      { agent_id: 'gemini-tester', task: 'Audit X' },
-    ]);
+    const result: any = await handleDispatchParallel(
+      [{ agent_id: 'gemini-tester', task: 'Audit X' }],
+      /* consensus */ true,
+    );
 
     expect(result.warnings).toBeUndefined();
     expect(result.content[0].text).not.toContain('WARNINGS:');
@@ -214,23 +208,17 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
       rejected: [],
     });
 
-    const result: any = await handleDispatchConsensus([
-      { agent_id: 'gemini-tester', task: 'Audit X' },
-    ]);
+    const result: any = await handleDispatchParallel(
+      [{ agent_id: 'gemini-tester', task: 'Audit X' }],
+      /* consensus */ true,
+    );
 
     expect(result.warnings).toBeDefined();
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toMatch(/autoDiscoverWorktrees/);
     expect(result.warnings[0]).toMatch(/1 worktree/);
     expect(result.content[0].text).toContain('WARNINGS:');
-    // F2 — WARNINGS must appear before the END sentinel so they sit inside the
-    // REQUIRED_NEXT_ACTION envelope (not after the hard cut-off).
-    const msgText: string = result.content[0].text;
-    const warningsIdx = msgText.indexOf('WARNINGS:');
-    const sentinelIdx = msgText.indexOf('=== END REQUIRED_NEXT_ACTION');
-    expect(warningsIdx).toBeGreaterThanOrEqual(0);
-    expect(sentinelIdx).toBeGreaterThan(warningsIdx);
-    // No injection — relay options should stay empty
+    // No injection — relay options should stay empty (no write_mode, no roots)
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
     expect(dispatchParallelCall[0][0].options).toBeUndefined();
   });
@@ -244,9 +232,10 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
       rejected: [],
     });
 
-    const result: any = await handleDispatchConsensus([
-      { agent_id: 'gemini-tester', task: 'Audit X' },
-    ]);
+    const result: any = await handleDispatchParallel(
+      [{ agent_id: 'gemini-tester', task: 'Audit X' }],
+      /* consensus */ true,
+    );
 
     expect(result.warnings).toBeUndefined();
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
@@ -263,9 +252,10 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
       rejected: [{ path: '/bad/path', reason: 'not a git worktree' }],
     });
 
-    const result: any = await handleDispatchConsensus([
-      { agent_id: 'gemini-tester', task: 'Audit X' },
-    ]);
+    const result: any = await handleDispatchParallel(
+      [{ agent_id: 'gemini-tester', task: 'Audit X' }],
+      /* consensus */ true,
+    );
 
     expect(result.warnings).toBeDefined();
     expect(result.warnings).toHaveLength(1);
@@ -273,7 +263,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(result.warnings[0]).toMatch(/1 candidate\(s\) failed validation/);
     expect(result.warnings[0]).toMatch(/cross-review will use projectRoot only/);
     expect(result.content[0].text).toContain('WARNINGS:');
-    // No roots injected — relay options should stay empty
+    // No roots injected
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
     expect(dispatchParallelCall[0][0].options).toBeUndefined();
   });
@@ -284,14 +274,30 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
     mockedDiscover.mockRejectedValue(new Error('git missing'));
 
-    const result: any = await handleDispatchConsensus([
-      { agent_id: 'gemini-tester', task: 'Audit X' },
-    ]);
+    const result: any = await handleDispatchParallel(
+      [{ agent_id: 'gemini-tester', task: 'Audit X' }],
+      /* consensus */ true,
+    );
 
     expect(result.content).toBeDefined();
     expect(result.warnings).toBeUndefined();
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
     expect(dispatchParallelCall[0][0].options).toBeUndefined();
-    expect(ctx.pendingDispatchResolutionRoots.size).toBe(0);
+  });
+
+  // Guard: auto-discovery must NOT run when consensus=false.
+  it('discovery is skipped entirely when consensus=false', async () => {
+    writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
+    mockedDiscover.mockResolvedValue({
+      discovered: ['/tmp/worktree-a'],
+      rejected: [],
+    });
+
+    await handleDispatchParallel(
+      [{ agent_id: 'gemini-tester', task: 'Audit X' }],
+      /* consensus */ false,
+    );
+
+    expect(mockedDiscover).not.toHaveBeenCalled();
   });
 });
