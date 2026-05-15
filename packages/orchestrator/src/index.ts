@@ -130,11 +130,15 @@ export {
   extractTokens,
   proseResolverPath,
   discoverAgentIdsForRoot,
+  isProseResolverIndex,
   PROSE_RESOLVER_FILENAME,
   PROSE_RESOLVER_VERSION,
   JACCARD_THRESHOLD,
   MIN_TOKEN_MATCHES,
   AMBIGUITY_WINDOW,
+  FRONTMATTER_READ_LIMIT,
+  SIDECAR_READ_LIMIT,
+  DISCOVER_AGENT_CAP,
 } from './prose-bullet-resolver';
 export type { ProseResolverIndex, ProseResolveResult } from './prose-bullet-resolver';
 export { ToolRouter, ToolExecutor } from './tool-router';
