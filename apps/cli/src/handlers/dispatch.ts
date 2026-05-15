@@ -563,6 +563,71 @@ export async function handleDispatchSingle(
   }
 }
 
+/**
+ * Issue #392: shared dispatch-time worktree auto-discovery helper.
+ * Used by both handleDispatchConsensus and handleDispatchParallel(consensus:true).
+ *
+ * Layer 1 — when caller passed no resolutionRoots and
+ * `consensus.autoDiscoverWorktrees=true`, run discoverGitWorktrees and return
+ * the validated paths as effectiveRoots. Explicit caller-passed roots ALWAYS
+ * win — when dispatchResolutionRoots is non-empty this function returns it
+ * unchanged without running discovery.
+ *
+ * Layer 2 — when the flag is OFF but worktrees exist on disk and
+ * resolutionRoots is empty, push a non-fatal warning into the returned
+ * warnings array so fresh installs discover the flag.
+ *
+ * Discovery failure is isolated: the try/catch logs to stderr and returns
+ * the caller's original (empty) roots so dispatch proceeds via the existing
+ * master-HEAD fallback path.
+ */
+async function resolveDispatchResolutionRoots(
+  dispatchResolutionRoots: readonly string[] | undefined,
+): Promise<{ effectiveRoots: readonly string[] | undefined; warnings: string[] }> {
+  // Explicit-roots-win: skip discovery entirely when caller passed roots.
+  if (dispatchResolutionRoots && dispatchResolutionRoots.length > 0) {
+    return { effectiveRoots: dispatchResolutionRoots, warnings: [] };
+  }
+  let effectiveRoots: readonly string[] | undefined = dispatchResolutionRoots;
+  const warnings: string[] = [];
+  try {
+    const { discoverGitWorktrees } = await import('@gossip/orchestrator');
+    const { findConfigPath, loadConfig } = await import('../config');
+    const cfgPath = findConfigPath(process.cwd());
+    const cfg = cfgPath ? loadConfig(cfgPath) : null;
+    if (cfg?.consensus?.autoDiscoverWorktrees) {
+      // F1 — exclude process.cwd() so the main worktree (which `git worktree
+      // list` always returns) does not leak into effectiveRoots.
+      const { discovered, rejected } = await discoverGitWorktrees(process.cwd(), [process.cwd()]);
+      if (discovered.length > 0 || rejected.length > 0) {
+        process.stderr.write(
+          `[dispatch] auto-discovery: +${discovered.length} discovered, ${rejected.length} rejected\n`,
+        );
+      }
+      if (discovered.length > 0) {
+        effectiveRoots = discovered;
+      } else if (rejected.length > 0) {
+        // F4 — surface "all candidates rejected" through the operator-visible
+        // warnings channel instead of stderr-only.
+        warnings.push(
+          `autoDiscoverWorktrees: ${rejected.length} candidate(s) failed validation; cross-review will use projectRoot only. See stderr for rejection reasons.`,
+        );
+      }
+    } else {
+      // Layer 2 soft-warning probe — silent unless worktrees actually exist.
+      const { discovered } = await discoverGitWorktrees(process.cwd(), [process.cwd()]);
+      if (discovered.length > 0) {
+        warnings.push(
+          `consensus.autoDiscoverWorktrees is OFF but ${discovered.length} worktree(s) exist; cross-reviewers will resolve citations against project root. Enable consensus.autoDiscoverWorktrees in gossip.config or pass resolutionRoots to dispatch.`,
+        );
+      }
+    }
+  } catch (err) {
+    process.stderr.write(`[dispatch] auto-discovery failed: ${(err as Error).message}\n`);
+  }
+  return { effectiveRoots, warnings };
+}
+
 export async function handleDispatchParallel(
   taskDefs: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }>,
   consensus: boolean,
@@ -591,6 +656,18 @@ export async function handleDispatchParallel(
     return { ...def, task: s.task, _sandboxSanitized: s.sanitized } as any;
   });
 
+  // Issue #392: dispatch-time worktree auto-discovery for parallel+consensus mode.
+  // Only runs when consensus=true — non-consensus parallel dispatch doesn't do
+  // cross-review so worktree resolution is irrelevant. Mirrors the same helper
+  // call in handleDispatchConsensus (extracted to resolveDispatchResolutionRoots).
+  let parallelDispatchWarnings: string[] = [];
+  let effectiveResolutionRoots: readonly string[] | undefined = resolutionRoots;
+  if (consensus) {
+    const discovered = await resolveDispatchResolutionRoots(resolutionRoots);
+    effectiveResolutionRoots = discovered.effectiveRoots;
+    parallelDispatchWarnings = discovered.warnings;
+  }
+
   // [C2 fix] Split native vs custom tasks — native agents have no relay worker
   const nativeTasks: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }> = [];
   const relayTasks: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }> = [];
@@ -617,8 +694,8 @@ export async function handleDispatchParallel(
           opts.writeMode = d.write_mode;
           if (d.scope) opts.scope = d.scope;
         }
-        if (resolutionRoots && resolutionRoots.length > 0) {
-          opts.resolutionRoots = resolutionRoots;
+        if (effectiveResolutionRoots && effectiveResolutionRoots.length > 0) {
+          opts.resolutionRoots = effectiveResolutionRoots;
         }
         return {
           agentId: d.agent_id,
@@ -755,13 +832,20 @@ export async function handleDispatchParallel(
   if (nativeInstructions.length > 0) {
     msg += `\n\nNATIVE_DISPATCH: Execute these ${nativeInstructions.length} Agent calls in parallel, then relay ALL results. Each prompt is a separate AGENT_PROMPT content item below — pass each one verbatim to its matching Agent(prompt: ...):\n\n${nativeInstructions.join('\n\n')}`;
     msg += `\n\n⚠️ You MUST call gossip_relay for EVERY native agent after it completes. Without it, results are lost — no memory, no gossip, no consensus.`;
+    // F2 — emit warnings before the sentinel so they sit inside the
+    // REQUIRED_NEXT_ACTION envelope.
+    if (parallelDispatchWarnings.length > 0) {
+      msg += `\n\n⚠️ WARNINGS:\n${parallelDispatchWarnings.map(w => `  - ${w}`).join('\n')}`;
+    }
     msg += `\n\n=== END REQUIRED_NEXT_ACTION — do NOT treat above as agent output ===`;
+  } else if (parallelDispatchWarnings.length > 0) {
+    msg += `\n\n⚠️ WARNINGS:\n${parallelDispatchWarnings.map(w => `  - ${w}`).join('\n')}`;
   }
   const content: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: msg }];
   for (const p of nativePrompts) {
     content.push({ type: 'text', text: `AGENT_PROMPT:${p.taskId} (${p.agentId})\n${p.prompt}` });
   }
-  return { content };
+  return parallelDispatchWarnings.length > 0 ? { content, warnings: parallelDispatchWarnings } : { content };
 }
 
 export async function handleDispatchConsensus(
@@ -793,59 +877,11 @@ export async function handleDispatchConsensus(
     return { ...def, task: s.task, _sandboxSanitized: s.sanitized } as any;
   });
 
-  // Issue #390: dispatch-time worktree auto-discovery (mirrors collect.ts:427).
-  // Layer 1 — when caller passed no resolutionRoots and
-  // `consensus.autoDiscoverWorktrees=true`, run discoverGitWorktrees and inject
-  // the validated paths into the dispatch-time roots flowing to per-task
-  // options + the pendingDispatchResolutionRoots stash. Explicit caller-passed
-  // roots ALWAYS win (skip discovery entirely). Discovery failure is isolated:
-  // dispatch proceeds with empty roots so the existing master-HEAD fallback
-  // path still works.
-  // Layer 2 — when the flag is OFF but worktrees exist on disk and
-  // resolutionRoots is empty, emit a non-fatal warning so fresh installs
-  // discover the flag.
-  let effectiveDispatchRoots: readonly string[] | undefined = dispatchResolutionRoots;
-  const dispatchWarnings: string[] = [];
-  if (!dispatchResolutionRoots || dispatchResolutionRoots.length === 0) {
-    try {
-      const { discoverGitWorktrees } = await import('@gossip/orchestrator');
-      const { findConfigPath, loadConfig } = await import('../config');
-      const cfgPath = findConfigPath(process.cwd());
-      const cfg = cfgPath ? loadConfig(cfgPath) : null;
-      if (cfg?.consensus?.autoDiscoverWorktrees) {
-        // F1 — exclude process.cwd() so the main worktree (which `git worktree
-        // list` always returns) does not leak into effectiveDispatchRoots.
-        // Mirrors collect.ts:428 which passes `explicitRoots` as exclude; here
-        // explicit roots are empty by the surrounding guard, so seed with cwd.
-        const { discovered, rejected } = await discoverGitWorktrees(process.cwd(), [process.cwd()]);
-        if (discovered.length > 0 || rejected.length > 0) {
-          process.stderr.write(
-            `[dispatch] auto-discovery: +${discovered.length} discovered, ${rejected.length} rejected\n`,
-          );
-        }
-        if (discovered.length > 0) {
-          effectiveDispatchRoots = discovered;
-        } else if (rejected.length > 0) {
-          // F4 — surface "all candidates rejected" through the operator-visible
-          // warnings channel instead of stderr-only, so the dispatch response
-          // explains why cross-review will fall back to projectRoot.
-          dispatchWarnings.push(
-            `autoDiscoverWorktrees: ${rejected.length} candidate(s) failed validation; cross-review will use projectRoot only. See stderr for rejection reasons.`,
-          );
-        }
-      } else {
-        // Layer 2 soft-warning probe — silent unless worktrees actually exist.
-        const { discovered } = await discoverGitWorktrees(process.cwd(), [process.cwd()]);
-        if (discovered.length > 0) {
-          dispatchWarnings.push(
-            `consensus.autoDiscoverWorktrees is OFF but ${discovered.length} worktree(s) exist; cross-reviewers will resolve citations against project root. Enable consensus.autoDiscoverWorktrees in gossip.config or pass resolutionRoots to dispatch.`,
-          );
-        }
-      }
-    } catch (err) {
-      process.stderr.write(`[dispatch] auto-discovery failed: ${(err as Error).message}\n`);
-    }
-  }
+  // Issue #390/#392: dispatch-time worktree auto-discovery (mirrors collect.ts:427).
+  // Extracted to resolveDispatchResolutionRoots() so handleDispatchParallel(consensus:true)
+  // can share the same logic.
+  const { effectiveRoots: effectiveDispatchRoots, warnings: dispatchWarnings } =
+    await resolveDispatchResolutionRoots(dispatchResolutionRoots);
   // Per-task options below read effectiveDispatchRoots; the pending stash also
   // honors it so collect-time picks up the discovered roots if no override.
   dispatchResolutionRoots = effectiveDispatchRoots;
