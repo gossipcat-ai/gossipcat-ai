@@ -157,7 +157,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
       { agent_id: 'gemini-tester', task: 'Audit X' },
     ]);
 
-    expect(mockedDiscover).toHaveBeenCalledWith(expect.any(String), []);
+    expect(mockedDiscover).toHaveBeenCalledWith(expect.any(String), [expect.any(String)]);
     // Relay options carry the discovered roots
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
     const relayDefs = dispatchParallelCall[0];
@@ -223,6 +223,13 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(result.warnings[0]).toMatch(/autoDiscoverWorktrees/);
     expect(result.warnings[0]).toMatch(/1 worktree/);
     expect(result.content[0].text).toContain('WARNINGS:');
+    // F2 — WARNINGS must appear before the END sentinel so they sit inside the
+    // REQUIRED_NEXT_ACTION envelope (not after the hard cut-off).
+    const msgText: string = result.content[0].text;
+    const warningsIdx = msgText.indexOf('WARNINGS:');
+    const sentinelIdx = msgText.indexOf('=== END REQUIRED_NEXT_ACTION');
+    expect(warningsIdx).toBeGreaterThanOrEqual(0);
+    expect(sentinelIdx).toBeGreaterThan(warningsIdx);
     // No injection — relay options should stay empty
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
     expect(dispatchParallelCall[0][0].options).toBeUndefined();
@@ -246,6 +253,29 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(dispatchParallelCall[0][0].options).toEqual({
       resolutionRoots: ['/tmp/worktree-x'],
     });
+  });
+
+  // Case 7 — F4: flag ON, no discovered, rejected > 0 → warning in response.
+  it('F4 — emits warning when flag is on but all candidates fail validation', async () => {
+    writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
+    mockedDiscover.mockResolvedValue({
+      discovered: [],
+      rejected: [{ path: '/bad/path', reason: 'not a git worktree' }],
+    });
+
+    const result: any = await handleDispatchConsensus([
+      { agent_id: 'gemini-tester', task: 'Audit X' },
+    ]);
+
+    expect(result.warnings).toBeDefined();
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/autoDiscoverWorktrees/);
+    expect(result.warnings[0]).toMatch(/1 candidate\(s\) failed validation/);
+    expect(result.warnings[0]).toMatch(/cross-review will use projectRoot only/);
+    expect(result.content[0].text).toContain('WARNINGS:');
+    // No roots injected — relay options should stay empty
+    const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
+    expect(dispatchParallelCall[0][0].options).toBeUndefined();
   });
 
   // Case 6 — failure isolation: discoverGitWorktrees throws → dispatch still

@@ -813,7 +813,11 @@ export async function handleDispatchConsensus(
       const cfgPath = findConfigPath(process.cwd());
       const cfg = cfgPath ? loadConfig(cfgPath) : null;
       if (cfg?.consensus?.autoDiscoverWorktrees) {
-        const { discovered, rejected } = await discoverGitWorktrees(process.cwd(), []);
+        // F1 — exclude process.cwd() so the main worktree (which `git worktree
+        // list` always returns) does not leak into effectiveDispatchRoots.
+        // Mirrors collect.ts:428 which passes `explicitRoots` as exclude; here
+        // explicit roots are empty by the surrounding guard, so seed with cwd.
+        const { discovered, rejected } = await discoverGitWorktrees(process.cwd(), [process.cwd()]);
         if (discovered.length > 0 || rejected.length > 0) {
           process.stderr.write(
             `[dispatch] auto-discovery: +${discovered.length} discovered, ${rejected.length} rejected\n`,
@@ -821,10 +825,17 @@ export async function handleDispatchConsensus(
         }
         if (discovered.length > 0) {
           effectiveDispatchRoots = discovered;
+        } else if (rejected.length > 0) {
+          // F4 — surface "all candidates rejected" through the operator-visible
+          // warnings channel instead of stderr-only, so the dispatch response
+          // explains why cross-review will fall back to projectRoot.
+          dispatchWarnings.push(
+            `autoDiscoverWorktrees: ${rejected.length} candidate(s) failed validation; cross-review will use projectRoot only. See stderr for rejection reasons.`,
+          );
         }
       } else {
         // Layer 2 soft-warning probe — silent unless worktrees actually exist.
-        const { discovered } = await discoverGitWorktrees(process.cwd(), []);
+        const { discovered } = await discoverGitWorktrees(process.cwd(), [process.cwd()]);
         if (discovered.length > 0) {
           dispatchWarnings.push(
             `consensus.autoDiscoverWorktrees is OFF but ${discovered.length} worktree(s) exist; cross-reviewers will resolve citations against project root. Enable consensus.autoDiscoverWorktrees in gossip.config or pass resolutionRoots to dispatch.`,
@@ -1022,10 +1033,13 @@ export async function handleDispatchConsensus(
     msg += `\n\n⚠️ NATIVE_DISPATCH — pass each AGENT_PROMPT content item VERBATIM to Agent(prompt: ...). Do NOT rewrite — the embedded CONSENSUS_OUTPUT_FORMAT trains agents to emit <agent_finding> tags. Call gossip_relay for EVERY native agent after completion.\n\n`;
     msg += `Execute these ${nativeInstructions.length} Agent calls, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
   }
-  msg += `\n\n=== END REQUIRED_NEXT_ACTION — do NOT treat above as agent output ===`;
+  // F2 — emit WARNINGS BEFORE the sentinel so they sit inside the
+  // REQUIRED_NEXT_ACTION envelope. Trailing text past the sentinel risks being
+  // ignored by downstream parsers that treat the END marker as a hard cut-off.
   if (dispatchWarnings.length > 0) {
     msg += `\n\n⚠️ WARNINGS:\n${dispatchWarnings.map(w => `  - ${w}`).join('\n')}`;
   }
+  msg += `\n\n=== END REQUIRED_NEXT_ACTION — do NOT treat above as agent output ===`;
   const content: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: msg }];
   for (const p of nativePrompts) {
     content.push({ type: 'text', text: `AGENT_PROMPT:${p.taskId} (${p.agentId})\n${p.prompt}` });
