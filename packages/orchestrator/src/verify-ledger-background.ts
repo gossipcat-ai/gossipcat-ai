@@ -53,6 +53,8 @@ export interface ParsedBullet {
   proseOnly: boolean;
   /** Numeric-claim hint: extracted number + noun the bullet is about (e.g., 4 + "worktree"). */
   numericClaim?: { n: number; noun: string };
+  /** Multi-candidate memory files when the prose-resolver returned `ambiguous`. Surfaced in PROSE-ONLY details so the orchestrator can pick. */
+  ambiguousCandidates?: readonly string[];
 }
 
 export interface LedgerIndexEntry {
@@ -157,15 +159,18 @@ export function parseNextSessionBullets(
     // POST-PASS: prose-only bullets get a fuzzy memory-slug match attempt.
     // Single confident match → populate backingFile, clear proseOnly.
     // Ambiguous / none → leave proseOnly true (orchestrator surfaces candidates).
+    let ambiguousCandidates: readonly string[] | undefined;
     if (proseOnly && opts.proseResolver) {
       const res = resolveProseBullet(text, opts.proseResolver.index, opts.proseResolver.agentIds);
       if (res.kind === 'matched') {
         backingFile = res.backingFile;
         proseOnly = false;
+      } else if (res.kind === 'ambiguous') {
+        ambiguousCandidates = res.candidates.map((c) => c.file);
       }
     }
 
-    bullets.push({ text, index, hash, backingFile, proseOnly, numericClaim });
+    bullets.push({ text, index, hash, backingFile, proseOnly, numericClaim, ambiguousCandidates });
     current = null;
   };
 
@@ -323,7 +328,10 @@ export function defaultVerifierFactory(
       return { bulletHash: b.hash, verdict: 'UNVERIFIABLE', details: 'no live counter for numeric claim', checkedAt: now };
     }
     if (b.proseOnly) {
-      return { bulletHash: b.hash, verdict: 'PROSE-ONLY', details: 'free-form bullet, no backing memory link', checkedAt: now };
+      const details = b.ambiguousCandidates && b.ambiguousCandidates.length > 0
+        ? `multiple confident matches: ${b.ambiguousCandidates.join(', ')}`
+        : 'free-form bullet, no backing memory link';
+      return { bulletHash: b.hash, verdict: 'PROSE-ONLY', details, checkedAt: now };
     }
     // Memory-linked bullet: in-process we cannot dispatch the haiku verifier;
     // mark INCONCLUSIVE so the orchestrator knows to call gossip_verify_memory.
