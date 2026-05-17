@@ -18,6 +18,7 @@ export {
   GeminiProvider,
   OllamaProvider,
   QuotaExhaustedException,
+  PROVIDER_PLACEHOLDER_RE,
 } from './llm-client';
 export type { ILLMProvider, LLMGenerateOptions } from './llm-client';
 export * from './types';

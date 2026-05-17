@@ -9,7 +9,7 @@ import { randomUUID } from 'crypto';
 import { GossipAgent } from '@gossip/client';
 import { MessageType, MessageEnvelope, Message, ToolDefinition, LLMMessage } from '@gossip/types';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
-import { ILLMProvider } from './llm-client';
+import { ILLMProvider, PROVIDER_PLACEHOLDER_RE } from './llm-client';
 import {
   TaskStreamEvent,
   TaskStreamEventType,
@@ -258,6 +258,7 @@ export class WorkerAgent {
       let lastToolSig = '';   // signature of last tool call for repetition detection
       let repeatCount = 0;    // consecutive identical tool calls
       let consecutiveErrors = 0; // consecutive turns where ALL tool calls return errors
+      let providerRetryAttempted = false; // one retry per dispatch for provider-side placeholders
 
       for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
         // Inject any pending gossip before the next LLM turn
@@ -304,6 +305,29 @@ export class WorkerAgent {
             yield logAndYield(`turn ${turn} — no native FC, but found ${textCalls.length} text-based tool calls: ${textCalls.map(tc => tc.name).join(', ')}`);
             response = { ...response, toolCalls: textCalls };
           }
+        }
+
+        // @gossip:impact-adjacent:signal-pipeline
+        // Detect provider-side transport failures that returned a placeholder.
+        // llm-client.ts emits these for MALFORMED_FUNCTION_CALL, blocked safety, empty candidates, etc.
+        // One retry per dispatch (providerRetryAttempted flag) — repeated MALFORMED at the same
+        // conversation depth indicates a real model issue, not transient API flakiness.
+        // Do NOT push the placeholder onto messages — the model never produced real output.
+        if (
+          !response.toolCalls?.length &&
+          response.text &&
+          PROVIDER_PLACEHOLDER_RE.test(response.text) &&
+          !providerRetryAttempted
+        ) {
+          providerRetryAttempted = true;
+          yield logAndYield(`turn ${turn} — provider placeholder detected, retrying once: "${response.text.slice(0, 100)}"`);
+          response = await this.llm.generate(messages, {
+            tools: this.tools,
+            ...(this.webSearchEnabled ? { webSearch: true } : {}),
+          });
+          yield logAndYield(`turn ${turn} — retry returned: text=${response.text?.length ?? 0}chars, toolCalls=${response.toolCalls?.length ?? 0}`);
+          // If retry still placeholder, fall through to existing "no tool calls" exit
+          // with the explicit error text — caller sees a clear diagnostic, not a fake review.
         }
 
         if (response.text) {
