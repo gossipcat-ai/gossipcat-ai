@@ -11,7 +11,7 @@
  * PostToolUse collect reminder). These write into `.claude/settings.local.json`
  * (personal discipline hooks, not project-shared security controls).
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, renameSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, renameSync, unlinkSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 
 export interface HookInstallResult {
@@ -356,14 +356,31 @@ export function installBootstrapHook(projectRoot: string): BootstrapHookInstallR
     let alreadyCurrent = false;
     let userCustomFound = false;
 
+    // Walk every entry's inner hooks in reverse so we can splice duplicates
+    // without skipping indices. When we find a second `gossipcat hook --run`
+    // entry (or a legacy entry alongside a current one), DROP it instead of
+    // rewriting — otherwise the file would contain two identical commands and
+    // the hook would fire twice per prompt (HIGH n1 from consensus
+    // d88f27db-c0454640).
     for (const entry of ups) {
       if (!entry || !Array.isArray(entry.hooks)) continue;
-      for (const h of entry.hooks) {
+      for (let i = entry.hooks.length - 1; i >= 0; i--) {
+        const h = entry.hooks[i];
         if (!h || typeof h !== 'object' || typeof h.command !== 'string') continue;
         if (h.command === BOOTSTRAP_HOOK_COMMAND) {
-          alreadyCurrent = true;
+          if (alreadyCurrent) {
+            entry.hooks.splice(i, 1);
+            upgraded = true;
+          } else {
+            alreadyCurrent = true;
+          }
         } else if (LEGACY_BOOTSTRAP_CMD_RE.test(h.command)) {
-          h.command = BOOTSTRAP_HOOK_COMMAND;
+          if (alreadyCurrent) {
+            entry.hooks.splice(i, 1);
+          } else {
+            h.command = BOOTSTRAP_HOOK_COMMAND;
+            alreadyCurrent = true;
+          }
           upgraded = true;
         } else {
           userCustomFound = true;
@@ -371,7 +388,23 @@ export function installBootstrapHook(projectRoot: string): BootstrapHookInstallR
       }
     }
 
+    // Prune entries whose hooks[] became empty after splicing — don't leave
+    // dangling matcher stubs behind.
+    for (let i = ups.length - 1; i >= 0; i--) {
+      const entry = ups[i];
+      if (entry && Array.isArray(entry.hooks) && entry.hooks.length === 0) {
+        ups.splice(i, 1);
+      }
+    }
+
     if (alreadyCurrent && !upgraded) {
+      if (userCustomFound) {
+        // Fix MEDIUM f3: emit the warning even when alreadyCurrent is also
+        // true — previously the early return silenced it.
+        process.stderr.write(
+          `[gossipcat] UserPromptSubmit hook in ${settingsPath} also has a custom command alongside the gossipcat hook; leaving as-is.\n`,
+        );
+      }
       return { action: 'already-current' };
     }
 
@@ -390,10 +423,17 @@ export function installBootstrapHook(projectRoot: string): BootstrapHookInstallR
       });
     }
 
-    // Atomic write via tmp + rename.
+    // Atomic write via tmp + rename. Fix MEDIUM f1: if rename throws (e.g.
+    // EXDEV across filesystems, EACCES), unlink the leftover .tmp.<pid> so
+    // we don't litter the .claude/ dir on repeated failures.
     const tmp = settingsPath + '.tmp.' + process.pid;
     writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
-    renameSync(tmp, settingsPath);
+    try {
+      renameSync(tmp, settingsPath);
+    } catch (renameErr) {
+      try { unlinkSync(tmp); } catch { /* best-effort */ }
+      throw renameErr;
+    }
 
     return { action: upgraded ? 'upgraded' : 'installed' };
   } catch (err) {
@@ -464,11 +504,17 @@ export function installDisciplineHooks(projectRoot: string): DisciplineHookInsta
       }
     }
 
-    // 4. Atomic write via tmp + rename to avoid partial writes.
+    // 4. Atomic write via tmp + rename to avoid partial writes. Fix MEDIUM f1:
+    // unlink leftover .tmp.<pid> on rename failure.
     if (anyMutated) {
       const tmp = settingsPath + '.tmp.' + process.pid;
       writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
-      renameSync(tmp, settingsPath);
+      try {
+        renameSync(tmp, settingsPath);
+      } catch (renameErr) {
+        try { unlinkSync(tmp); } catch { /* best-effort */ }
+        throw renameErr;
+      }
     }
 
     return { installed, skipped };

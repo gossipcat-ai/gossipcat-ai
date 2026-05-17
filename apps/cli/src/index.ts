@@ -4,6 +4,7 @@ import { runSetupWizard } from './setup-wizard';
 import { startChat } from './chat';
 import { createAgent, listAgents, removeAgent } from './create-agent';
 import { createTeam } from './create-team';
+import { parseHookSubcommand } from './hook-argv';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -55,11 +56,13 @@ async function main(): Promise<void> {
     }
 
     case 'hook': {
-      // UserPromptSubmit bootstrap hook body. Currently the only flag is
-      // `--run`; accept it (or no flag) and execute. Anything else → help.
-      const sub = args[1];
-      if (sub && sub !== '--run' && sub !== 'run') {
-        console.log('Usage: gossipcat hook --run');
+      // UserPromptSubmit bootstrap hook body. Only valid invocation is
+      // `gossipcat hook --run` (or `gossipcat hook run`). Bare `gossipcat
+      // hook` previously fell through and silently fired the hook — fix
+      // MEDIUM f2 from consensus d88f27db-c0454640.
+      const decision = parseHookSubcommand(args[1]);
+      if (decision === 'usage') {
+        process.stderr.write('Usage: gossipcat hook --run\n');
         process.exit(2);
       }
       const { runHook } = await import('./hook-run');
