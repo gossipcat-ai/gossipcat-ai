@@ -11,7 +11,7 @@
  * PostToolUse collect reminder). These write into `.claude/settings.local.json`
  * (personal discipline hooks, not project-shared security controls).
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, renameSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, renameSync, unlinkSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 
 export interface HookInstallResult {
@@ -284,6 +284,163 @@ function mergeHookEntry(
   return true;
 }
 
+// ── Bootstrap UserPromptSubmit hook (mtime-keyed sentinel) ──────────────────
+
+/**
+ * Result of `installBootstrapHook`.
+ *
+ *   action:
+ *     - "installed"  — wrote a fresh entry (no existing UserPromptSubmit hook)
+ *     - "upgraded"   — replaced an old `cat .gossip/bootstrap.md` command
+ *     - "already-current" — `gossipcat hook --run` already registered
+ *     - "skipped-user-custom" — user has a custom command we won't touch
+ *     - "skipped-malformed" — settings.local.json is unparseable
+ *     - "error"      — unexpected fs error
+ */
+export interface BootstrapHookInstallResult {
+  action:
+    | 'installed'
+    | 'upgraded'
+    | 'already-current'
+    | 'skipped-user-custom'
+    | 'skipped-malformed'
+    | 'error';
+  reason?: string;
+}
+
+/** Command we want every UserPromptSubmit hook to run, post-spec. */
+export const BOOTSTRAP_HOOK_COMMAND = 'gossipcat hook --run';
+
+/** Regex matching legacy `cat .gossip/bootstrap.md ...` hook commands. */
+const LEGACY_BOOTSTRAP_CMD_RE = /cat\s+\.gossip\/bootstrap\.md/;
+
+/**
+ * Install or upgrade the UserPromptSubmit bootstrap hook in
+ * `<projectRoot>/.claude/settings.local.json`.
+ *
+ * Rules:
+ *   - No UserPromptSubmit entry yet → append one with `gossipcat hook --run`.
+ *   - Existing entry matching the legacy `cat .gossip/bootstrap.md` form →
+ *     rewrite the command in place.
+ *   - Existing entry whose command is already `gossipcat hook --run` → no-op.
+ *   - Existing entry with a user-custom command → leave alone, log a one-line
+ *     stderr warning so the user knows the upgrade was deferred.
+ *
+ * Atomic: writes to a `.tmp.<pid>` sibling then renameSyncs. Preserves all
+ * other settings keys (permissions, other hooks).
+ */
+export function installBootstrapHook(projectRoot: string): BootstrapHookInstallResult {
+  try {
+    const settingsPath = join(projectRoot, '.claude', 'settings.local.json');
+    mkdirSync(dirname(settingsPath), { recursive: true });
+
+    let settings: Record<string, any>;
+    try {
+      settings = loadLocalSettings(settingsPath);
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] settings.local.json at ${settingsPath} is malformed; skipping bootstrap hook install. ` +
+        `Fix the file or delete it and re-run gossip_setup.\n`,
+      );
+      return { action: 'skipped-malformed', reason: (err as Error).message };
+    }
+
+    if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
+    const hooks = settings.hooks as Record<string, any>;
+    if (!Array.isArray(hooks.UserPromptSubmit)) hooks.UserPromptSubmit = [];
+    const ups = hooks.UserPromptSubmit as any[];
+
+    // Walk every UserPromptSubmit entry's inner hooks. Track first match
+    // we can act on.
+    let upgraded = false;
+    let alreadyCurrent = false;
+    let userCustomFound = false;
+
+    // Walk every entry's inner hooks in reverse so we can splice duplicates
+    // without skipping indices. When we find a second `gossipcat hook --run`
+    // entry (or a legacy entry alongside a current one), DROP it instead of
+    // rewriting — otherwise the file would contain two identical commands and
+    // the hook would fire twice per prompt (HIGH n1 from consensus
+    // d88f27db-c0454640).
+    for (const entry of ups) {
+      if (!entry || !Array.isArray(entry.hooks)) continue;
+      for (let i = entry.hooks.length - 1; i >= 0; i--) {
+        const h = entry.hooks[i];
+        if (!h || typeof h !== 'object' || typeof h.command !== 'string') continue;
+        if (h.command === BOOTSTRAP_HOOK_COMMAND) {
+          if (alreadyCurrent) {
+            entry.hooks.splice(i, 1);
+            upgraded = true;
+          } else {
+            alreadyCurrent = true;
+          }
+        } else if (LEGACY_BOOTSTRAP_CMD_RE.test(h.command)) {
+          if (alreadyCurrent) {
+            entry.hooks.splice(i, 1);
+          } else {
+            h.command = BOOTSTRAP_HOOK_COMMAND;
+            alreadyCurrent = true;
+          }
+          upgraded = true;
+        } else {
+          userCustomFound = true;
+        }
+      }
+    }
+
+    // Prune entries whose hooks[] became empty after splicing — don't leave
+    // dangling matcher stubs behind.
+    for (let i = ups.length - 1; i >= 0; i--) {
+      const entry = ups[i];
+      if (entry && Array.isArray(entry.hooks) && entry.hooks.length === 0) {
+        ups.splice(i, 1);
+      }
+    }
+
+    if (alreadyCurrent && !upgraded) {
+      if (userCustomFound) {
+        // Fix MEDIUM f3: emit the warning even when alreadyCurrent is also
+        // true — previously the early return silenced it.
+        process.stderr.write(
+          `[gossipcat] UserPromptSubmit hook in ${settingsPath} also has a custom command alongside the gossipcat hook; leaving as-is.\n`,
+        );
+      }
+      return { action: 'already-current' };
+    }
+
+    if (!alreadyCurrent && !upgraded) {
+      if (userCustomFound) {
+        process.stderr.write(
+          `[gossipcat] UserPromptSubmit hook in ${settingsPath} has a custom command; leaving as-is. ` +
+          `To enable bootstrap suppression, set command to "${BOOTSTRAP_HOOK_COMMAND}".\n`,
+        );
+        return { action: 'skipped-user-custom' };
+      }
+      // No matching hook at all — install fresh.
+      ups.push({
+        matcher: '',
+        hooks: [{ type: 'command', command: BOOTSTRAP_HOOK_COMMAND }],
+      });
+    }
+
+    // Atomic write via tmp + rename. Fix MEDIUM f1: if rename throws (e.g.
+    // EXDEV across filesystems, EACCES), unlink the leftover .tmp.<pid> so
+    // we don't litter the .claude/ dir on repeated failures.
+    const tmp = settingsPath + '.tmp.' + process.pid;
+    writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
+    try {
+      renameSync(tmp, settingsPath);
+    } catch (renameErr) {
+      try { unlinkSync(tmp); } catch { /* best-effort */ }
+      throw renameErr;
+    }
+
+    return { action: upgraded ? 'upgraded' : 'installed' };
+  } catch (err) {
+    return { action: 'error', reason: (err as Error).message };
+  }
+}
+
 /**
  * Install the v1 orchestrator-discipline hook bundle into
  * `<projectRoot>/.claude/settings.local.json` (personal hooks, gitignored).
@@ -347,11 +504,17 @@ export function installDisciplineHooks(projectRoot: string): DisciplineHookInsta
       }
     }
 
-    // 4. Atomic write via tmp + rename to avoid partial writes.
+    // 4. Atomic write via tmp + rename to avoid partial writes. Fix MEDIUM f1:
+    // unlink leftover .tmp.<pid> on rename failure.
     if (anyMutated) {
       const tmp = settingsPath + '.tmp.' + process.pid;
       writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
-      renameSync(tmp, settingsPath);
+      try {
+        renameSync(tmp, settingsPath);
+      } catch (renameErr) {
+        try { unlinkSync(tmp); } catch { /* best-effort */ }
+        throw renameErr;
+      }
     }
 
     return { installed, skipped };

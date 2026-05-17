@@ -2092,6 +2092,21 @@ server.tool(
       process.stderr.write(`[gossipcat] gossip_setup: discipline hook install failed: ${e}\n`);
     }
 
+    // Bootstrap UserPromptSubmit hook (mtime-keyed sentinel) — spec
+    // 2026-05-07-bootstrap-hook-trim. Idempotent: upgrades legacy
+    // `cat .gossip/bootstrap.md` hooks, no-ops if already current, leaves
+    // user-custom commands alone.
+    let bootstrapHookSummary = '';
+    try {
+      const { installBootstrapHook } = require('@gossip/orchestrator') as typeof import('@gossip/orchestrator');
+      const r = installBootstrapHook(root);
+      bootstrapHookSummary = `Bootstrap hook: ${r.action}${r.reason ? ` (${r.reason})` : ''}`;
+    } catch (e) {
+      bootstrapHookSummary = `Bootstrap hook: skipped (${(e as Error).message})`;
+      process.stderr.write(`[gossipcat] gossip_setup: bootstrap hook install failed: ${e}\n`);
+    }
+    process.stderr.write(`[gossipcat] gossip_setup: ${bootstrapHookSummary}\n`);
+
     // Memory hygiene CLAUDE.md seeding — spec 2026-04-17-memory-hygiene-propagation.
     // Idempotent: appends convention block if CLAUDE.md exists but lacks the heading;
     // no-ops if heading present; skips silently if CLAUDE.md missing.

@@ -4,6 +4,7 @@ import { runSetupWizard } from './setup-wizard';
 import { startChat } from './chat';
 import { createAgent, listAgents, removeAgent } from './create-agent';
 import { createTeam } from './create-team';
+import { parseHookSubcommand } from './hook-argv';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -51,6 +52,21 @@ async function main(): Promise<void> {
     case 'eval': {
       const { runEvalCommand } = await import('./commands/eval');
       await runEvalCommand(process.argv.slice(3));
+      return;
+    }
+
+    case 'hook': {
+      // UserPromptSubmit bootstrap hook body. Only valid invocation is
+      // `gossipcat hook --run` (or `gossipcat hook run`). Bare `gossipcat
+      // hook` previously fell through and silently fired the hook — fix
+      // MEDIUM f2 from consensus d88f27db-c0454640.
+      const decision = parseHookSubcommand(args[1]);
+      if (decision === 'usage') {
+        process.stderr.write('Usage: gossipcat hook --run\n');
+        process.exit(2);
+      }
+      const { runHook } = await import('./hook-run');
+      runHook();
       return;
     }
 
@@ -187,6 +203,7 @@ function printHelp(): void {
     gossipcat sync --setup     Configure Supabase connection
     gossipcat sync --status    Show sync status
     gossipcat mcp-serve        Start MCP server (for Claude Code / Cursor)
+    gossipcat hook --run       Run UserPromptSubmit bootstrap hook (internal)
     gossipcat help             Show this help
 
   Write modes:
