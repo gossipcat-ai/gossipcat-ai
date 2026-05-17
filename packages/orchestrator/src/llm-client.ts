@@ -65,7 +65,11 @@ async function fetchWithRetry503(
 // worker-agent.ts imports this to detect placeholder responses and retry once.
 // dispatch-pipeline.ts / completion-signals.ts use it to suppress format_compliance:0
 // and emit transport_failure instead (so the mislabelling never reaches scoring).
-export const PROVIDER_PLACEHOLDER_RE = /^\[(?:No response from |Response blocked by )/;
+//
+// Requires a known provider token (Gemini/Anthropic/OpenAI) after "No response from" so
+// the worker's own "[No response from agent]" fallback (worker-agent.ts FINAL_RESULT path)
+// does NOT match — consensus c520ef0b-88114e21:f5 caught the false-positive.
+export const PROVIDER_PLACEHOLDER_RE = /^\[(?:No response from (?:Gemini|Anthropic|OpenAI|OpenClaw)|Response blocked by )/;
 
 // ─── Quota Exception ────────────────────────────────────────────────────────
 

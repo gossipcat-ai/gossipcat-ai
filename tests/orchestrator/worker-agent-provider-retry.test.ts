@@ -244,4 +244,26 @@ describe('transport_failure signal emission on placeholder dispatch', () => {
     // task_completed metadata should flag this as a transport failure
     expect(completedSig.metadata?.transport_failure).toBe(true);
   });
+
+  // Regression test for consensus c520ef0b-88114e21:f5 — worker's own fallback
+  // string MUST NOT be classified as a provider placeholder. Before the regex was
+  // tightened to require a provider token, "[No response from agent]" matched and
+  // silently routed empty-result tasks into transport_failure + suppressed
+  // format_compliance, corrupting the operational/skill signal split.
+  it('(e) worker fallback "[No response from agent]" is NOT a provider placeholder', () => {
+    expect(PROVIDER_PLACEHOLDER_RE.test('[No response from agent]')).toBe(false);
+
+    emitCompletionSignals(testDir, {
+      agentId: 'sonnet-implementer',
+      taskId: 'task-empty',
+      result: '[No response from agent]',
+      elapsedMs: 200,
+      toolCalls: 0,
+    });
+
+    const sigs = readSignals();
+    expect(sigs.find((s: { signal: string }) => s.signal === 'transport_failure')).toBeUndefined();
+    // format_compliance MUST fire (the agent really did produce zero findings)
+    expect(sigs.find((s: { signal: string }) => s.signal === 'format_compliance')).toBeDefined();
+  });
 });

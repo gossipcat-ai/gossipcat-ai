@@ -96,7 +96,11 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
         signal_class: 'operational',
         agentId,
         taskId,
-        evidence: `provider placeholder (kind=${placeholder_kind}, retried=true): ${result.slice(0, 200)}`,
+        // retried-state intentionally omitted — emitCompletionSignals is called from
+        // dispatch-pipeline at completion time and has no view of worker-agent's
+        // providerRetryAttempted flag. Consensus c520ef0b-88114e21:f6 flagged the
+        // prior hardcoded "retried=true" as misleading.
+        evidence: `provider placeholder (kind=${placeholder_kind}): ${result.slice(0, 200)}`,
         timestamp: now,
         source: 'auto',
       };
