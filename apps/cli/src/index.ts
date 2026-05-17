@@ -54,6 +54,19 @@ async function main(): Promise<void> {
       return;
     }
 
+    case 'hook': {
+      // UserPromptSubmit bootstrap hook body. Currently the only flag is
+      // `--run`; accept it (or no flag) and execute. Anything else → help.
+      const sub = args[1];
+      if (sub && sub !== '--run' && sub !== 'run') {
+        console.log('Usage: gossipcat hook --run');
+        process.exit(2);
+      }
+      const { runHook } = await import('./hook-run');
+      runHook();
+      return;
+    }
+
     case 'help':
     case '--help':
     case '-h':
@@ -187,6 +200,7 @@ function printHelp(): void {
     gossipcat sync --setup     Configure Supabase connection
     gossipcat sync --status    Show sync status
     gossipcat mcp-serve        Start MCP server (for Claude Code / Cursor)
+    gossipcat hook --run       Run UserPromptSubmit bootstrap hook (internal)
     gossipcat help             Show this help
 
   Write modes:
