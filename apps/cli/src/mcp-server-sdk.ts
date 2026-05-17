@@ -973,7 +973,7 @@ const server = new McpServer(
   },
   {
     instructions:
-      'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and the full operator playbook (docs/HANDBOOK.md inlined into the response). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.',
+      'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and by default the full operator playbook (docs/HANDBOOK.md inlined; pass slim:true to skip the handbook section on reconnect refreshes). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.',
   }
 );
 
@@ -1397,9 +1397,15 @@ server.tool(
 // ── Info: status + agents (merged) ────────────────────────────────────────
 server.tool(
   'gossip_status',
-  'Check Gossip Mesh system status, host environment, available agents, dashboard URL/key, and agent list with provider/model/skills.',
-  {},
-  async () => {
+  'Check Gossip Mesh system status, host environment, available agents, dashboard URL/key, and agent list with provider/model/skills. Pass slim:true to skip the handbook inline (~21KB savings) on reconnect refreshes.',
+  {
+    slim: z.boolean().optional().describe('When true, omit the ## Project Handbook inline section to save ~21KB on reconnect refreshes where the orchestrator already has the handbook in working memory. Default false.'),
+  },
+  async (args) => {
+    // Type-guard: non-boolean inputs are treated as false (do NOT throw).
+    const slim = typeof (args as { slim?: unknown })?.slim === 'boolean'
+      ? (args as { slim: boolean }).slim
+      : false;
     const { findConfigPath, loadConfig, configToAgentConfigs, loadClaudeSubagents } = await import('./config');
 
     // Refresh MEMORY.md status tags BEFORE building the response, so any
@@ -1658,36 +1664,39 @@ server.tool(
     // inherits the operator wisdom (architectural invariants, caveats, lessons,
     // hallucination patterns to watch for). This is how earned wisdom transfers
     // across sessions and installations without living only in chat history.
+    // Skipped entirely when slim:true (~21KB savings on reconnect refreshes).
     let handbookSection = '';
-    const { existsSync: exHB } = require('fs');
-    const { join: jHB } = require('path');
-    // Fallback chain: (a) dev-repo cwd, (b) npm-installed __dirname=dist-mcp/ → HANDBOOK sibling, (c) defensive __dirname
-    const handbookCandidates: string[] = [
-      jHB(process.cwd(), 'docs', 'HANDBOOK.md'),
-      jHB(__dirname, '..', 'docs', 'HANDBOOK.md'),
-      jHB(__dirname, 'docs', 'HANDBOOK.md'),
-    ];
-    try {
-      const { readFileSync: rfHB, statSync: stHB } = require('fs');
-      const handbookPath = handbookCandidates.find(p => exHB(p)) ?? handbookCandidates[0];
-      const stat = stHB(handbookPath);
-      // Cap at 24KB of handbook content so the status response doesn't balloon
-      // beyond the context window on very large handbooks. If capped, append a
-      // pointer so the orchestrator knows to read the full file manually.
-      const HANDBOOK_CAP_BYTES = 24 * 1024;
-      let body = rfHB(handbookPath, 'utf-8');
-      const truncated = body.length > HANDBOOK_CAP_BYTES;
-      if (truncated) {
-        body = body.slice(0, HANDBOOK_CAP_BYTES);
-      }
-      handbookSection =
-        '\n─────────────────────────────────\n' +
-        '## Project Handbook (auto-loaded from docs/HANDBOOK.md)\n\n' +
-        body.trim() +
-        (truncated
-          ? `\n\n[handbook truncated at ${HANDBOOK_CAP_BYTES / 1024}KB — full file at docs/HANDBOOK.md, ${stat.size} bytes total]`
-          : '');
-    } catch { if (!handbookCandidates.some((p: string) => exHB(p))) { process.stderr.write('[gossipcat] gossip_status: HANDBOOK.md not found in any candidate path — add docs/HANDBOOK.md to capture operator wisdom\n'); } }
+    if (!slim) {
+      const { existsSync: exHB } = require('fs');
+      const { join: jHB } = require('path');
+      // Fallback chain: (a) dev-repo cwd, (b) npm-installed __dirname=dist-mcp/ → HANDBOOK sibling, (c) defensive __dirname
+      const handbookCandidates: string[] = [
+        jHB(process.cwd(), 'docs', 'HANDBOOK.md'),
+        jHB(__dirname, '..', 'docs', 'HANDBOOK.md'),
+        jHB(__dirname, 'docs', 'HANDBOOK.md'),
+      ];
+      try {
+        const { readFileSync: rfHB, statSync: stHB } = require('fs');
+        const handbookPath = handbookCandidates.find(p => exHB(p)) ?? handbookCandidates[0];
+        const stat = stHB(handbookPath);
+        // Cap at 24KB of handbook content so the status response doesn't balloon
+        // beyond the context window on very large handbooks. If capped, append a
+        // pointer so the orchestrator knows to read the full file manually.
+        const HANDBOOK_CAP_BYTES = 24 * 1024;
+        let body = rfHB(handbookPath, 'utf-8');
+        const truncated = body.length > HANDBOOK_CAP_BYTES;
+        if (truncated) {
+          body = body.slice(0, HANDBOOK_CAP_BYTES);
+        }
+        handbookSection =
+          '\n─────────────────────────────────\n' +
+          '## Project Handbook (auto-loaded from docs/HANDBOOK.md)\n\n' +
+          body.trim() +
+          (truncated
+            ? `\n\n[handbook truncated at ${HANDBOOK_CAP_BYTES / 1024}KB — full file at docs/HANDBOOK.md, ${stat.size} bytes total]`
+            : '');
+      } catch { if (!handbookCandidates.some((p: string) => exHB(p))) { process.stderr.write('[gossipcat] gossip_status: HANDBOOK.md not found in any candidate path — add docs/HANDBOOK.md to capture operator wisdom\n'); } }
+    }
 
     // Surface uncategorized-findings count via extracted helper (testable).
     // 7-day window matches skill-gap decay semantics. Skip entirely when count is 0.
