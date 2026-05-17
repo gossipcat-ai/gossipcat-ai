@@ -55,6 +55,22 @@ async function fetchWithRetry503(
   return fetch(url, init);
 }
 
+// ─── Provider Placeholder Detection ─────────────────────────────────────────
+//
+// Matches placeholder strings that llm-client emits when a provider returns
+// an unrecoverable transport-level error (MALFORMED_FUNCTION_CALL, safety
+// block, empty candidates). Shared between llm-client.ts and worker-agent.ts
+// so both files use the same literal — no drift between emission and detection.
+//
+// worker-agent.ts imports this to detect placeholder responses and retry once.
+// dispatch-pipeline.ts / completion-signals.ts use it to suppress format_compliance:0
+// and emit transport_failure instead (so the mislabelling never reaches scoring).
+//
+// Requires a known provider token (Gemini/Anthropic/OpenAI) after "No response from" so
+// the worker's own "[No response from agent]" fallback (worker-agent.ts FINAL_RESULT path)
+// does NOT match — consensus c520ef0b-88114e21:f5 caught the false-positive.
+export const PROVIDER_PLACEHOLDER_RE = /^\[(?:No response from (?:Gemini|Anthropic|OpenAI|OpenClaw)|Response blocked by )/;
+
 // ─── Quota Exception ────────────────────────────────────────────────────────
 
 export class QuotaExhaustedException extends Error {
@@ -535,7 +551,7 @@ export class GeminiProvider implements ILLMProvider {
     if (!parts?.length) {
       // UNEXPECTED_TOOL_CALL: Gemini tried to call a function but the call was malformed.
       // The function call data may be in candidate.content.functionCall or similar.
-      // Log and return empty — the orchestrator's retry mechanism will handle this.
+      // Return placeholder; worker-agent.ts retries once on placeholder match, then surfaces the diagnostic.
       if (finishReason !== 'SAFETY') {
         _log('GeminiProvider', `Empty response parts (finishReason: ${finishReason || 'unknown'}). Returning empty to trigger retry.`);
       }

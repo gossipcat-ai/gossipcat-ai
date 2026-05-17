@@ -19,7 +19,8 @@
 import { PerformanceWriter } from './performance-writer';
 import { WRITER_INTERNAL } from './_writer-internal';
 import { detectFormatCompliance } from './dispatch-pipeline';
-import type { MetaSignal, PipelineSignal } from './consensus-types';
+import { PROVIDER_PLACEHOLDER_RE } from './llm-client';
+import type { ConsensusSignal, MetaSignal, PipelineSignal } from './consensus-types';
 
 export interface CompletionSignalInput {
   agentId: string;
@@ -74,6 +75,56 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
       return;
     }
     const now = new Date().toISOString();
+
+    // Detect provider-side placeholder strings (MALFORMED_FUNCTION_CALL, safety block, etc.).
+    // When the entire result is a placeholder, suppress format_compliance:0 — the agent never
+    // had the chance to comply or fail to comply. Emit transport_failure (operational signal,
+    // excluded from accuracy arithmetic) so the dashboard surfaces a clear diagnostic instead
+    // of mislabelling a transport error as a skill-quality failure.
+    // @gossip:impact-adjacent:signal-pipeline
+    const isProviderPlaceholder = !!result && PROVIDER_PLACEHOLDER_RE.test(result);
+    if (isProviderPlaceholder) {
+      // Classify placeholder_kind from the text prefix for downstream observability.
+      const placeholder_kind = result.startsWith('[Response blocked by ')
+        ? 'blocked_safety'
+        : result.includes('malformed_function_call')
+          ? 'malformed_function_call'
+          : 'no_candidates';
+      const transportSignal: ConsensusSignal = {
+        type: 'consensus',
+        signal: 'transport_failure',
+        signal_class: 'operational',
+        agentId,
+        taskId,
+        // retried-state intentionally omitted — emitCompletionSignals is called from
+        // dispatch-pipeline at completion time and has no view of worker-agent's
+        // providerRetryAttempted flag. Consensus c520ef0b-88114e21:f6 flagged the
+        // prior hardcoded "retried=true" as misleading.
+        evidence: `provider placeholder (kind=${placeholder_kind}): ${result.slice(0, 200)}`,
+        timestamp: now,
+        source: 'auto',
+      };
+      const writer = new PerformanceWriter(projectRoot);
+      writer[WRITER_INTERNAL].appendSignal(transportSignal, 'completion-signals-helper');
+      // Still emit task_completed (duration telemetry is valid) but skip format_compliance
+      // and finding_dropped_format — those metrics are meaningless for placeholder responses.
+      const durationValue = elapsedMs !== null ? elapsedMs : 0;
+      const metadataEntries: Record<string, unknown> = { transport_failure: true };
+      if (elapsedMs === null) metadataEntries.estimated = true;
+      if (error) metadataEntries.error = true;
+      const completedSignal: MetaSignal = {
+        type: 'meta',
+        signal: 'task_completed',
+        agentId,
+        taskId,
+        value: durationValue,
+        metadata: metadataEntries,
+        timestamp: now,
+      };
+      writer[WRITER_INTERNAL].appendSignal(completedSignal, 'completion-signals-helper');
+      return;
+    }
+
     const compliance = detectFormatCompliance(result);
 
     const signals: (MetaSignal | PipelineSignal)[] = [];

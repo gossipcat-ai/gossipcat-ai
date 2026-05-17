@@ -21,6 +21,10 @@ export const COMPLETION_SIGNAL_ALLOWLIST: readonly string[] = [
   'format_compliance',
   'finding_dropped_format',
   'citation_fabricated',
+  // Emitted by emitCompletionSignals when the result is a provider placeholder
+  // (MALFORMED_FUNCTION_CALL, blocked safety, empty candidates). Suppresses
+  // format_compliance:0 emission so transport errors don't mislabel agent skill.
+  'transport_failure',
 ] as const;
 
 /**
@@ -50,6 +54,14 @@ export const COMPLETION_SIGNAL_AUTHORIZED_PATHS: Readonly<Record<string, Readonl
   // is signal-helpers-pipeline; see project_drift_bypass_finding_dropped_format.
   finding_dropped_format: new Set(['completion-signals-helper', 'signal-helpers-pipeline']),
   citation_fabricated: new Set(['completion-signals-helper']),
+  // transport_failure is emitted from the placeholder-detection branch in
+  // emitCompletionSignals (completion-signals.ts) when the result matches
+  // PROVIDER_PLACEHOLDER_RE. Also legitimately emitted from dispatch-pipeline
+  // (resolutionRoots missing/invalid) and signal-helpers-consensus (relay worker
+  // failures) — these are separate emit sites and are NOT covered by this authorized
+  // path list (which is completion-signals-scoped). The L3 drift detector only
+  // fires on signals in this map that land on an unauthorized path.
+  transport_failure: new Set(['completion-signals-helper', 'dispatch-pipeline', 'signal-helpers-consensus']),
 };
 
 /**
