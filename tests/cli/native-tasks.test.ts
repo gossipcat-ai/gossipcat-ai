@@ -85,7 +85,7 @@ describe('dispatch-prompt storage', () => {
       expect(existsSync(stale)).toBe(false);
     });
 
-    it('enforces aggregate cap with eldest-eviction', () => {
+    it('enforces aggregate cap with eldest-eviction (exact count + ordering)', () => {
       const root = mkRoot();
       // Three small files, but pass a tiny capBytes to force eviction.
       const a = writeDispatchPrompt(root, 'a', 'A'.repeat(100));
@@ -97,10 +97,14 @@ describe('dispatch-prompt storage', () => {
       setMtime(c, Date.now() - 10 * 1000);
 
       const { evictedCap } = cleanupExpiredDispatchPrompts(root, 60 * 60 * 1000, 150);
-      // capBytes=150: must drop at least 'a' (100 bytes) to fit two of the
-      // remaining files would still be 200 > 150 so 'b' goes too.
-      expect(evictedCap).toBeGreaterThanOrEqual(1);
+      // capBytes=150 / total=300: drop a (300→200, still >150), drop b
+      // (200→100, ≤150). c (newest) must survive. Exact count enforces the
+      // eldest-first invariant — a >=1 assertion would let a bug that evicts
+      // c instead of a slip through.
+      expect(evictedCap).toBe(2);
       expect(existsSync(a)).toBe(false);
+      expect(existsSync(b)).toBe(false);
+      expect(existsSync(c)).toBe(true);
     });
 
     it('returns zero counts when the directory does not exist (fail-open)', () => {
@@ -161,6 +165,49 @@ describe('dispatch-prompt storage', () => {
       const body = '🚀'.repeat(10); // multi-byte unicode
       const p = writeDispatchPrompt(root, 'tid', body);
       expect(statSync(p).size).toBe(Buffer.byteLength(body, 'utf8'));
+    });
+
+    it('on renameSync failure: throws, cleans up .tmp, leaves no partial target', () => {
+      const root = mkRoot();
+      // Seed the directory so subsequent readdir is non-empty after failure.
+      writeDispatchPrompt(root, 'seed', 'seed');
+      const fs = require('fs');
+      const spy = jest.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+        throw new Error('simulated rename failure');
+      });
+      try {
+        expect(() => writeDispatchPrompt(root, 'failtid', 'body')).toThrow(/simulated rename failure/);
+      } finally {
+        spy.mockRestore();
+      }
+      const dir = join(root, '.gossip', 'dispatch-prompts');
+      const files = readdirSync(dir);
+      // No .tmp leftover (catch block must unlink).
+      expect(files.some(f => f.startsWith('failtid.') && f.endsWith('.tmp'))).toBe(false);
+      // No partial target file at the final path.
+      expect(files.includes('failtid.txt')).toBe(false);
+      // Seed survives — failure is isolated to the failing call.
+      expect(files.includes('seed.txt')).toBe(true);
+    });
+  });
+
+  describe('writeDispatchPrompt concurrency (same taskId)', () => {
+    it('N concurrent calls all resolve, no .tmp leftover, final body is one of the inputs', async () => {
+      const root = mkRoot();
+      const bodies = Array.from({ length: 5 }, (_, i) => `body-${i}`);
+      // Promise.all over sync writeFileSync/renameSync — last-write-wins semantics
+      // since rename is atomic and each call has a unique random .tmp suffix.
+      const paths = await Promise.all(bodies.map(b => Promise.resolve().then(() => writeDispatchPrompt(root, 'tid', b))));
+      // All calls returned the same final path.
+      expect(new Set(paths).size).toBe(1);
+      const dir = join(root, '.gossip', 'dispatch-prompts');
+      const files = readdirSync(dir);
+      // No temp files leaked.
+      expect(files.every(f => !f.endsWith('.tmp'))).toBe(true);
+      // Final file exists with content equal to one of the 5 inputs.
+      expect(files).toContain('tid.txt');
+      const final = readFileSync(join(dir, 'tid.txt'), 'utf8');
+      expect(bodies).toContain(final);
     });
   });
 });
