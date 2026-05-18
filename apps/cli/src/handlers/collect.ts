@@ -9,6 +9,7 @@ import { seedRecentConsensusTaskIds } from './native-tasks';
 import { trackLifecycleTask } from '../lifecycle-tasks';
 import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
+import type { PromptFormat } from './dispatch';
 
 /**
  * Schedule the per-skill checkEffectiveness runner as a detached, tracked
@@ -182,6 +183,15 @@ export async function handleCollect(
    * validateResolutionRoot before invoking handleCollect).
    */
   resolutionRoots?: readonly string[],
+  /**
+   * Spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md.
+   * Applied to the Phase 2 cross-review prompt block emitted in the EXECUTE
+   * NOW payload. When 'elided', each cross-review prompt is written to
+   * .gossip/dispatch-prompts/<consensusId>__<agentId>.txt and the PROMPTS
+   * section is REPLACED with one marker line per agent. Default 'inline'
+   * preserves the existing ---SYSTEM---/---USER--- embedded block.
+   */
+  prompt_format?: PromptFormat,
 ) {
   await ctx.boot();
 
@@ -749,11 +759,38 @@ export async function handleCollect(
         actionLines.push(`consensus_id: ${consensusId}\n`);
         actionLines.push(`For each agent below, dispatch Agent() then call gossip_relay_cross_review:\n`);
 
+        // Spec §1 strict opt-in: per-agent prompt elision for Phase 2
+        // cross-review. When 'elided', write each ---SYSTEM---/---USER---
+        // block to .gossip/dispatch-prompts/<safeId>.txt and replace the
+        // PROMPTS section with marker lines. Agent dispatch instructions
+        // cite the path directly. Item-2-equivalent (PROMPTS block) is
+        // ABSENT entirely when elided.
+        const elideCrossReview = prompt_format === 'elided';
+        const crossReviewPaths = new Map<string, string>();
+        if (elideCrossReview) {
+          const { writeDispatchPrompt } = require('./dispatch-prompt-storage');
+          for (const np of nativePrompts) {
+            const safeId = `${consensusId}__${np.agentId}`
+              .replace(/[^A-Za-z0-9._-]/g, '_')
+              .replace(/\.{2,}/g, '.');
+            const body = `---SYSTEM---\n${np.system}\n---USER---\n${np.user}\n---END---\n`;
+            try {
+              const p = writeDispatchPrompt(process.cwd(), safeId, body);
+              crossReviewPaths.set(np.agentId, p);
+            } catch (err) {
+              process.stderr.write(`[gossipcat] cross-review prompt elision failed for ${np.agentId}: ${(err as Error).message}\n`);
+            }
+          }
+        }
+
         for (const np of nativePrompts) {
           const nativeConfig = ctx.nativeAgentConfigs.get(np.agentId);
           const model = nativeConfig?.model || 'sonnet';
           actionLines.push(`--- AGENT: ${np.agentId} (model: ${model}) ---`);
-          actionLines.push(`Step 1: Agent(model: "${model}", prompt: <see PROMPTS section below>, run_in_background: true)`);
+          const promptRef = elideCrossReview && crossReviewPaths.has(np.agentId)
+            ? `<file ${crossReviewPaths.get(np.agentId)} — READ and forward verbatim; no PROMPTS section below>`
+            : `<see PROMPTS section below>`;
+          actionLines.push(`Step 1: Agent(model: "${model}", prompt: ${promptRef}, run_in_background: true)`);
           actionLines.push(`Step 2: gossip_relay_cross_review(consensus_id: "${consensusId}", agent_id: "${np.agentId}", result: "<output>")\n`);
         }
 
@@ -769,12 +806,14 @@ export async function handleCollect(
           actionLines.push('---');
         }
 
-        // Full prompts at the end
-        for (const np of nativePrompts) {
-          const nativeConfig = ctx.nativeAgentConfigs.get(np.agentId);
-          const model = nativeConfig?.model || 'sonnet';
-          actionLines.push(`\n--- PROMPT FOR ${np.agentId} (model: ${model}) ---`);
-          actionLines.push(`---SYSTEM---\n${np.system}\n---USER---\n${np.user}\n---END---`);
+        // Full prompts at the end — OMITTED entirely under elision (spec §2).
+        if (!elideCrossReview) {
+          for (const np of nativePrompts) {
+            const nativeConfig = ctx.nativeAgentConfigs.get(np.agentId);
+            const model = nativeConfig?.model || 'sonnet';
+            actionLines.push(`\n--- PROMPT FOR ${np.agentId} (model: ${model}) ---`);
+            actionLines.push(`---SYSTEM---\n${np.system}\n---USER---\n${np.user}\n---END---`);
+          }
         }
 
         const partialOutput = actionLines.join('\n');

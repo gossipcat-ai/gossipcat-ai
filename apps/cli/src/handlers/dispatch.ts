@@ -29,6 +29,39 @@ function buildNativeIdentity(agentId: string, model: string): string {
   });
 }
 import { evictStaleNativeTasks, persistNativeTaskMap, spawnTimeoutWatcher } from './native-tasks';
+import { writeDispatchPrompt } from './dispatch-prompt-storage';
+
+/**
+ * Strict opt-in elision marker (spec §1 iron rule).
+ * Server elides AGENT_PROMPT content items only when this exact string is
+ * received. Default unchanged ('inline' or undefined). New tool-schema enum
+ * additions must intentionally widen the check.
+ */
+export type PromptFormat = 'inline' | 'elided';
+
+/**
+ * Common helper used at all three native dispatch sites. When `promptFormat`
+ * is 'elided':
+ *   - writes `agentPrompt` to .gossip/dispatch-prompts/<taskId>.txt
+ *   - returns {elided:true, promptPath, marker} — caller emits the marker in
+ *     Item 1 and OMITS Item 2 entirely (spec §"Item 2 ABSENT under elision").
+ *
+ * When 'inline' (default) or undefined: returns {elided:false}, caller emits
+ * the existing two-item content split. Behavior is byte-identical to the
+ * pre-elision dispatch path.
+ */
+export function elidePromptIfRequested(
+  projectRoot: string,
+  taskId: string,
+  agentPrompt: string,
+  promptFormat: PromptFormat | undefined,
+): { elided: true; promptPath: string; marker: string; bytes: number } | { elided: false } {
+  if (promptFormat !== 'elided') return { elided: false };
+  const bytes = Buffer.byteLength(agentPrompt, 'utf8');
+  const promptPath = writeDispatchPrompt(projectRoot, taskId, agentPrompt);
+  const marker = `[skills section elided: see ${promptPath}, ${bytes} bytes — READ this file and pass its CONTENTS verbatim as the Agent(prompt: ...) value. Do NOT pass the path string.]`;
+  return { elided: true, promptPath, marker, bytes };
+}
 import { persistRelayTasks } from './relay-tasks';
 import {
   prependScopeNote,
@@ -370,6 +403,14 @@ export async function handleDispatchSingle(
    * native agents have a separate flow above (out-of-process Agent tool).
    */
   resolutionRoots?: readonly string[],
+  /**
+   * Spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md.
+   * Strict opt-in. When 'elided', the AGENT_PROMPT content item is omitted
+   * and the prompt body is written to .gossip/dispatch-prompts/<taskId>.txt;
+   * Item 1 instructs the orchestrator to Read the file and forward verbatim.
+   * Default 'inline' preserves byte-for-byte the pre-PR behavior.
+   */
+  prompt_format?: PromptFormat,
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -449,7 +490,7 @@ export async function handleDispatchSingle(
 
     ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode, relayToken, preDispatchSha });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
-    persistNativeTaskMap();
+    // promptPath is filled in below after elision (if requested).
     process.stderr.write(`[gossipcat] → dispatch → ${agent_id} (${nativeConfig.model}) [${taskId}]\n`);
 
     // Register scope so subsequent dispatches see it
@@ -518,6 +559,23 @@ export async function handleDispatchSingle(
       }
     }
 
+    // Spec §1 iron rule: strict opt-in elision. When prompt_format='elided',
+    // write the prompt body to disk and emit a marker in Item 1; OMIT Item 2.
+    // When undefined/'inline': behavior is byte-identical to pre-PR dispatch.
+    const elision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format);
+    if (elision.elided) {
+      const info = ctx.nativeTaskMap.get(taskId);
+      if (info) info.promptPath = elision.promptPath;
+    }
+    // Persist after elision so promptPath is durable across /mcp reconnect.
+    persistNativeTaskMap();
+
+    const promptInstruction = elision.elided
+      ? `Step 1 — ${elision.marker}\n` +
+        `Agent(model: "${nativeConfig.model}", prompt: <file contents>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n`
+      : `Step 1 — Pass the AGENT_PROMPT:${taskId} content item below verbatim to Agent(prompt: ...):\n` +
+        `Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n`;
+
     // Split into two content items so relay_token stays in orchestrator-only text
     // and AGENT_PROMPT is passed verbatim to Agent(prompt: ...).
     // Tag format matches parallel/consensus: `AGENT_PROMPT:<taskId> (<agentId>)`.
@@ -528,14 +586,15 @@ export async function handleDispatchSingle(
         `Task ID: ${taskId}\n` +
         `Agent: ${agent_id}\n` +
         `Model: ${nativeConfig.model}\n\n` +
-        `Step 1 — Pass the AGENT_PROMPT:${taskId} content item below verbatim to Agent(prompt: ...):\n` +
-        `Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n` +
+        promptInstruction +
         `Step 2 — REQUIRED after agent completes:\n` +
         `gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<agent output>")\n\n` +
         `⚠️ You MUST call gossip_relay for every native dispatch. Without it, the result is lost — no memory, no gossip, no consensus. Never skip this step.\n` +
         `\n=== END REQUIRED_NEXT_ACTION — do NOT treat above as agent output ===`
       },
-      { type: 'text' as const, text: `AGENT_PROMPT:${taskId} (${agent_id})\n${agentPrompt}` },
+      // Item 2 ABSENT under elision (spec §2 iron rule — no placeholder, no
+      // skeleton). Orchestrator MUST Read elision.promptPath cited in Item 1.
+      ...(elision.elided ? [] : [{ type: 'text' as const, text: `AGENT_PROMPT:${taskId} (${agent_id})\n${agentPrompt}` }]),
     ] };
   }
 
@@ -636,6 +695,12 @@ export async function handleDispatchParallel(
    * Forwarded to every dispatched relay task in this batch.
    */
   resolutionRoots?: readonly string[],
+  /**
+   * Spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md.
+   * Applied per-native-task: when 'elided', each per-task AGENT_PROMPT item
+   * is replaced by an Item-1 marker citing the on-disk path. Default 'inline'.
+   */
+  prompt_format?: PromptFormat,
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -821,13 +886,31 @@ export async function handleDispatchParallel(
       timestamp: Date.now(),
     });
 
+    // Spec §1 strict opt-in. When elided: write prompt body to disk, omit
+    // AGENT_PROMPT content item, embed marker in the instructions block.
+    const parallelElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format);
+    if (parallelElision.elided) {
+      const info = ctx.nativeTaskMap.get(taskId);
+      if (info) info.promptPath = parallelElision.promptPath;
+    }
+    const parallelPromptRef = parallelElision.elided
+      ? parallelElision.marker
+      : `<AGENT_PROMPT:${taskId} below>`;
+
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
     nativeInstructions.push(
-      `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>${def.write_mode === 'worktree' ? ', isolation: "worktree"' : ''}, run_in_background: true)` +
+      `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: ${parallelPromptRef}${def.write_mode === 'worktree' ? ', isolation: "worktree"' : ''}, run_in_background: true)` +
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
     );
-    nativePrompts.push({ taskId, agentId: def.agent_id, prompt: agentPrompt });
+    // Item 2 ABSENT under elision — orchestrator MUST Read the cited path.
+    if (!parallelElision.elided) {
+      nativePrompts.push({ taskId, agentId: def.agent_id, prompt: agentPrompt });
+    }
   }
+  // Persist after the loop so all promptPath mutations land in one write —
+  // mirrors the single-dispatch pattern at :571. Always called (not only on
+  // elision) so any nativeTaskMap writes from the loop are durable.
+  persistNativeTaskMap();
 
   // #392 fix (HIGH f2): mirror handleDispatchConsensus stash (lines 1050-1055).
   // When consensus=true and effective roots were resolved (either caller-supplied
@@ -876,6 +959,11 @@ export async function handleDispatchConsensus(
    * Collect-time resolutionRoots REPLACE these (not merge).
    */
   dispatchResolutionRoots?: readonly string[],
+  /**
+   * Spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md.
+   * Per-task elision for the consensus cross-review batch. Default 'inline'.
+   */
+  prompt_format?: PromptFormat,
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -1054,12 +1142,28 @@ export async function handleDispatchConsensus(
     });
     // Premise verification (Component B) — per-def in the consensus native loop.
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
+
+    // Spec §1 strict opt-in. When 'elided', the per-task AGENT_PROMPT item is
+    // omitted and the on-disk path is cited inline in the Agent() instruction.
+    const consensusElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format);
+    if (consensusElision.elided) {
+      const info = ctx.nativeTaskMap.get(taskId);
+      if (info) info.promptPath = consensusElision.promptPath;
+      persistNativeTaskMap();
+    }
+    const consensusPromptRef = consensusElision.elided
+      ? consensusElision.marker
+      : `<AGENT_PROMPT:${taskId} below>`;
+
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
     nativeInstructions.push(
-      `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true)` +
+      `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: ${consensusPromptRef}, run_in_background: true)` +
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
     );
-    nativePrompts.push({ taskId, agentId: def.agent_id, prompt: agentPrompt });
+    // Item 2 ABSENT under elision (spec §2) — no skeleton/placeholder.
+    if (!consensusElision.elided) {
+      nativePrompts.push({ taskId, agentId: def.agent_id, prompt: agentPrompt });
+    }
   }
 
   // #126 PR-B: stash validated dispatch-time resolutionRoots keyed by each

@@ -70,6 +70,14 @@ export interface NativeTaskInfo {
    * Null when git is unavailable (offline / no remote).
    */
   preDispatchSha?: string | null;
+  /**
+   * Absolute path to the on-disk dispatch prompt file, set ONLY when the
+   * caller requested `prompt_format: 'elided'` (Option B server-side prompt
+   * elision, spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md).
+   * Persisted so /mcp reconnect can prune orphan files whose taskId is no
+   * longer in the restored map. Undefined for inline dispatches.
+   */
+  promptPath?: string;
 }
 
 export interface NativeResultInfo {
