@@ -9,6 +9,7 @@ import { seedRecentConsensusTaskIds } from './native-tasks';
 import { trackLifecycleTask } from '../lifecycle-tasks';
 import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
+import type { PromptFormat } from './dispatch';
 
 /**
  * Schedule the per-skill checkEffectiveness runner as a detached, tracked
@@ -190,7 +191,7 @@ export async function handleCollect(
    * section is REPLACED with one marker line per agent. Default 'inline'
    * preserves the existing ---SYSTEM---/---USER--- embedded block.
    */
-  prompt_format?: 'inline' | 'elided',
+  prompt_format?: PromptFormat,
 ) {
   await ctx.boot();
 
@@ -769,7 +770,9 @@ export async function handleCollect(
         if (elideCrossReview) {
           const { writeDispatchPrompt } = require('./dispatch-prompt-storage');
           for (const np of nativePrompts) {
-            const safeId = `${consensusId}__${np.agentId}`.replace(/[^A-Za-z0-9._-]/g, '_');
+            const safeId = `${consensusId}__${np.agentId}`
+              .replace(/[^A-Za-z0-9._-]/g, '_')
+              .replace(/\.{2,}/g, '.');
             const body = `---SYSTEM---\n${np.system}\n---USER---\n${np.user}\n---END---\n`;
             try {
               const p = writeDispatchPrompt(process.cwd(), safeId, body);

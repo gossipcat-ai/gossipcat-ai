@@ -892,7 +892,6 @@ export async function handleDispatchParallel(
     if (parallelElision.elided) {
       const info = ctx.nativeTaskMap.get(taskId);
       if (info) info.promptPath = parallelElision.promptPath;
-      persistNativeTaskMap();
     }
     const parallelPromptRef = parallelElision.elided
       ? parallelElision.marker
@@ -908,6 +907,10 @@ export async function handleDispatchParallel(
       nativePrompts.push({ taskId, agentId: def.agent_id, prompt: agentPrompt });
     }
   }
+  // Persist after the loop so all promptPath mutations land in one write —
+  // mirrors the single-dispatch pattern at :571. Always called (not only on
+  // elision) so any nativeTaskMap writes from the loop are durable.
+  persistNativeTaskMap();
 
   // #392 fix (HIGH f2): mirror handleDispatchConsensus stash (lines 1050-1055).
   // When consensus=true and effective roots were resolved (either caller-supplied

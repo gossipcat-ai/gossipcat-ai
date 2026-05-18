@@ -216,6 +216,54 @@ describe('dispatch elision (Option B server-side prompt elision)', () => {
       const files = require('fs').readdirSync(dir).filter((f: string) => f.endsWith('.txt'));
       expect(files).toHaveLength(2);
     });
+
+    it('phase-2 read-path: marker in Item 1 cites a readable file whose content round-trips', async () => {
+      // Arrange — single agent so there is exactly one marker to parse.
+      registerNativeAgent('native-a');
+      const taskDescription = 'Phase-2 lifecycle read-path test task';
+
+      // Act — dispatch with elision.
+      const result = await handleDispatchParallel(
+        [{ agent_id: 'native-a', task: taskDescription }],
+        false,
+        undefined,
+        'elided',
+      );
+
+      // Item 2 must be absent.
+      const promptItems = result.content.filter((c: any) => c.text.startsWith('AGENT_PROMPT:'));
+      expect(promptItems).toHaveLength(0);
+
+      // Item 1 must contain the marker with an absolute path and byte count.
+      const item1 = result.content.find((c: any) =>
+        c.text.includes('[skills section elided: see ')
+      );
+      expect(item1).toBeDefined();
+      const markerMatch = item1!.text.match(
+        /\[skills section elided: see (.+\.txt), (\d+) bytes/
+      );
+      expect(markerMatch).not.toBeNull();
+
+      const promptPath = markerMatch![1];
+      const markerBytes = parseInt(markerMatch![2], 10);
+
+      // Assert — file is readable and round-trips.
+      const body = readFileSync(promptPath, 'utf8');
+
+      // Body must contain the FINDING TAG SCHEMA block injected by assemblePrompt.
+      expect(body).toContain('--- FINDING TAG SCHEMA ---');
+
+      // Body must contain the task description.
+      expect(body).toContain(taskDescription);
+
+      // relay_token and task_id orchestration metadata MUST NOT appear in the body.
+      expect(body).not.toMatch(/relay_token/i);
+      expect(body).not.toMatch(/\btask_id\b/);
+
+      // Byte-length must match the marker's advertised size.
+      const actualBytes = Buffer.byteLength(body, 'utf8');
+      expect(actualBytes).toBe(markerBytes);
+    });
   });
 
   describe('handleDispatchConsensus (Phase 1 cross-review)', () => {

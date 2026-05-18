@@ -179,7 +179,7 @@ export function pruneOrphanDispatchPrompts(
         try {
           unlinkSync(path);
           if (orphaned) orphans++;
-          else aged++;
+          if (tooOld) aged++;
         } catch (err) {
           process.stderr.write(`[gossipcat] dispatch-prompt orphan-prune failed for ${name}: ${(err as Error).message}\n`);
         }
