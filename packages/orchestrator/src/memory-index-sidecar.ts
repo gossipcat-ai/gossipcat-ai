@@ -274,7 +274,10 @@ function buildDocEntry(filename: string, content: string, mtime: number): Memory
     ...bodyTokens,
   ];
 
-  const terms: { [term: string]: number } = {};
+  // Prototype-less — terms keyed by tokens from user content; "constructor",
+  // "toString", etc. would otherwise return inherited prototype values from
+  // doc.terms[term] lookups in bm25Score.
+  const terms: { [term: string]: number } = Object.create(null);
   for (const t of allTokens) {
     terms[t] = (terms[t] || 0) + 1;
   }
@@ -297,7 +300,16 @@ function buildDocEntry(filename: string, content: string, mtime: number): Memory
 }
 
 function buildPostings(docs: MemoryIndex['docs']): MemoryIndex['postings'] {
-  const postings: MemoryIndex['postings'] = {};
+  // Object.create(null) — postings/docs are tokenized term keys. A term that
+  // collides with a built-in prototype name ('constructor', 'toString',
+  // 'valueOf', '__proto__', etc.) would otherwise return the inherited
+  // prototype value on lookup, making `postings[term]` truthy without ever
+  // having been set. The `if (!postings[term])` init branch would skip,
+  // and `postings[term].docs.push(...)` would crash on `undefined.push`.
+  // Reproduced as "Cannot read properties of undefined (reading 'push')"
+  // when a memory file contains the word "constructor" (issue: contributor
+  // bug report 2026-05-19). Prototype-less object closes the class.
+  const postings: MemoryIndex['postings'] = Object.create(null);
   for (const [filename, doc] of Object.entries(docs)) {
     for (const term of Object.keys(doc.terms)) {
       if (!postings[term]) {
@@ -327,17 +339,51 @@ function tryLoadIndex(indexPath: string): MemoryIndex | null {
     const raw = readFileSync(indexPath, 'utf-8');
     const parsed = JSON.parse(raw) as MemoryIndex;
     if (parsed.version !== 1) return null;
-    return parsed;
+    // JSON.parse always returns objects inheriting Object.prototype. Rewrap
+    // the term-keyed maps as prototype-less so reader-side `postings[term]`
+    // lookups for prototype-name collisions (e.g. "constructor") return
+    // undefined instead of the inherited prototype value. Mirrors the
+    // buildPostings(Object.create(null)) write-side fix.
+    return reseatPrototypelessMaps(parsed);
   } catch {
     return null;
   }
 }
 
 /**
+ * Rebind the term-keyed sub-maps (`postings`) and filename-keyed sub-map
+ * (`docs`) on a parsed-from-JSON MemoryIndex onto prototype-less objects.
+ * Without this rewrap, a memory file whose body contains a token equal to
+ * any `Object.prototype` member name causes lookup-side crashes — see
+ * `buildPostings` comment above for the failure mode.
+ */
+function reseatPrototypelessMaps(index: MemoryIndex): MemoryIndex {
+  const safeDocs: MemoryIndex['docs'] = Object.create(null);
+  for (const [filename, doc] of Object.entries(index.docs ?? {})) {
+    // Rewrap each doc's per-term frequency map as well — bm25Score reads
+    // `doc.terms[term]` and a 'constructor' collision would otherwise leak
+    // through to a non-numeric inherited function value.
+    const safeTerms: { [term: string]: number } = Object.create(null);
+    for (const [term, tf] of Object.entries(doc.terms ?? {})) {
+      safeTerms[term] = tf;
+    }
+    safeDocs[filename] = { ...doc, terms: safeTerms };
+  }
+  const safePostings: MemoryIndex['postings'] = Object.create(null);
+  for (const [term, entry] of Object.entries(index.postings ?? {})) {
+    safePostings[term] = { df: entry.df, docs: [...(entry.docs ?? [])] };
+  }
+  return { ...index, docs: safeDocs, postings: safePostings };
+}
+
+/**
  * Build a complete fresh index from the corpus directory.
  */
 export function buildFullIndex(corpusDirectory: string): MemoryIndex {
-  const docs: MemoryIndex['docs'] = {};
+  // Filename keys are user-controlled (markdown files in the auto-memory
+  // dir). A file literally named "constructor.md" would hit the same
+  // prototype-name lookup hazard as the postings map. Prototype-less map.
+  const docs: MemoryIndex['docs'] = Object.create(null);
 
   if (existsSync(corpusDirectory)) {
     let files: string[];
@@ -396,7 +442,10 @@ function incrementalRebuild(
     return { index: existing, changed: false };
   }
 
-  const newDocs: MemoryIndex['docs'] = { ...existing.docs };
+  // Prototype-less to match buildFullIndex/tryLoadIndex contract — see
+  // reseatPrototypelessMaps + buildPostings comments above. Without this,
+  // existing.docs from JSON.parse leaks Object.prototype back in.
+  const newDocs: MemoryIndex['docs'] = Object.assign(Object.create(null), existing.docs);
   let changed = false;
 
   const diskFilenames = new Set(files);
