@@ -1,7 +1,7 @@
 import { loadSkills } from '@gossip/orchestrator';
 import { listAvailableSkills } from '../../packages/orchestrator/src/skill-loader';
 import { SkillIndex } from '../../packages/orchestrator/src/skill-index';
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -276,5 +276,122 @@ LRU probe body.
     expect(patternCache.has('keep-hot')).toBe(true);
     expect(patternCache.has('will-evict')).toBe(false);
     expect(patternCache.has('final-key')).toBe(true);
+  });
+});
+
+describe('LoadSkillsResult.paths (warm-cache fingerprint prerequisite)', () => {
+  let tmpDir: string;
+  let index: SkillIndex;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `gossip-paths-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    mkdirSync(join(tmpDir, '.gossip', 'agents', 'test-agent', 'skills'), { recursive: true });
+    mkdirSync(join(tmpDir, '.gossip', 'skills'), { recursive: true });
+    index = new SkillIndex(tmpDir);
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns paths: [] when no skills loaded', () => {
+    const result = loadSkills('test-agent', [], tmpDir, index);
+    expect(result.loaded).toEqual([]);
+    expect(result.paths).toEqual([]);
+  });
+
+  it('returns paths: [] when requested skill does not resolve', () => {
+    const result = loadSkills('test-agent', ['definitely-not-a-real-skill-xyz'], tmpDir);
+    expect(result.loaded).toEqual([]);
+    expect(result.paths).toEqual([]);
+  });
+
+  it('paths is index-aligned with loaded for permanent skills', () => {
+    const skillPathA = join(tmpDir, '.gossip', 'skills', 'perm-a.md');
+    const skillPathB = join(tmpDir, '.gossip', 'skills', 'perm-b.md');
+    writeFileSync(skillPathA, `---
+name: perm-a
+description: A
+keywords: []
+mode: permanent
+status: active
+---
+
+permanent A
+`);
+    writeFileSync(skillPathB, `---
+name: perm-b
+description: B
+keywords: []
+mode: permanent
+status: active
+---
+
+permanent B
+`);
+    index.bind('test-agent', 'perm-a', { source: 'config', mode: 'permanent' });
+    index.bind('test-agent', 'perm-b', { source: 'config', mode: 'permanent' });
+
+    const result = loadSkills('test-agent', [], tmpDir, index);
+    expect(result.loaded.length).toBe(result.paths.length);
+    expect(result.loaded.length).toBeGreaterThanOrEqual(2);
+
+    const aIdx = result.loaded.indexOf('perm-a');
+    const bIdx = result.loaded.indexOf('perm-b');
+    expect(aIdx).toBeGreaterThanOrEqual(0);
+    expect(bIdx).toBeGreaterThanOrEqual(0);
+    expect(result.paths[aIdx]).toBe(realpathSync(skillPathA));
+    expect(result.paths[bIdx]).toBe(realpathSync(skillPathB));
+  });
+
+  it('paths is index-aligned with loaded for contextual skills activated by keyword match', () => {
+    const ctxPath = join(tmpDir, '.gossip', 'agents', 'test-agent', 'skills', 'ctx-trust.md');
+    writeFileSync(ctxPath, `---
+name: ctx-trust
+description: Trust ctx
+keywords: [auth, session]
+category: trust_boundaries
+mode: contextual
+status: active
+---
+
+ctx trust body
+`);
+    index.bind('test-agent', 'ctx-trust', { source: 'auto', mode: 'contextual' });
+
+    const result = loadSkills('test-agent', [], tmpDir, index, 'review the auth session handler');
+    expect(result.activatedContextual).toContain('ctx-trust');
+    expect(result.loaded.length).toBe(result.paths.length);
+
+    const idx = result.loaded.indexOf('ctx-trust');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(result.paths[idx]).toBe(realpathSync(ctxPath));
+  });
+
+  it('paths contains realpath-resolved values for symlinked skills', () => {
+    const targetDir = join(tmpDir, 'real-skills');
+    mkdirSync(targetDir, { recursive: true });
+    const targetFile = join(targetDir, 'real-skill.md');
+    writeFileSync(targetFile, `---
+name: linked-skill
+description: linked
+keywords: []
+mode: permanent
+status: active
+---
+
+linked body
+`);
+
+    const linkPath = join(tmpDir, '.gossip', 'agents', 'test-agent', 'skills', 'linked-skill.md');
+    symlinkSync(targetFile, linkPath);
+    index.bind('test-agent', 'linked-skill', { source: 'config', mode: 'permanent' });
+
+    const result = loadSkills('test-agent', [], tmpDir, index);
+    expect(result.loaded).toContain('linked-skill');
+    const idx = result.loaded.indexOf('linked-skill');
+    const expected = realpathSync(targetFile);
+    expect(result.paths[idx]).toBe(expected);
+    expect(result.paths[idx]).not.toBe(linkPath);
   });
 });
