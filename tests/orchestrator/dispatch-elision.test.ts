@@ -180,6 +180,42 @@ describe('dispatch elision (Option B server-side prompt elision)', () => {
       expect(entries[0].promptPath).toBeDefined();
       expect(entries[0].promptPath).toMatch(/dispatch-prompts.+\.txt$/);
     });
+
+    it('crash-recovery integration: restoreNativeTaskMap prunes orphan prompt files but preserves tracked tasks', async () => {
+      // Arrange — one elided dispatch creates a tracked prompt file.
+      registerNativeAgent();
+      await handleDispatchSingle(
+        'native-claude', 'Audit x',
+        undefined, undefined, undefined, undefined, undefined,
+        undefined, 'elided',
+      );
+      const trackedIds = [...ctx.nativeTaskMap.keys()];
+      expect(trackedIds).toHaveLength(1);
+      const trackedId = trackedIds[0];
+
+      const dir = join(workDir, '.gossip', 'dispatch-prompts');
+      const trackedPath = join(dir, `${trackedId}.txt`);
+      expect(existsSync(trackedPath)).toBe(true);
+
+      // Simulate a previous-session abandonment: an extra prompt file on disk
+      // whose taskId is not present in the restored nativeTaskMap.
+      const { writeFileSync } = require('fs');
+      const orphanPath = join(dir, 'orphan-from-crash.txt');
+      writeFileSync(orphanPath, 'stranded body from a crashed prior session', 'utf8');
+      expect(existsSync(orphanPath)).toBe(true);
+
+      // Act — simulate /mcp boot. restoreNativeTaskMap reads (absent)
+      // native-tasks.json and then calls pruneOrphanDispatchPrompts with the
+      // known set derived from ctx.nativeTaskMap.keys() (= {trackedId}).
+      const { restoreNativeTaskMap } = require('../../apps/cli/src/handlers/native-tasks');
+      // Wire projectRoot on mainAgent so the dispatch-prompts dir resolves under workDir.
+      ctx.mainAgent.projectRoot = workDir;
+      restoreNativeTaskMap(workDir);
+
+      // Assert — orphan gone, tracked file survives.
+      expect(existsSync(orphanPath)).toBe(false);
+      expect(existsSync(trackedPath)).toBe(true);
+    });
   });
 
   describe('handleDispatchParallel', () => {
