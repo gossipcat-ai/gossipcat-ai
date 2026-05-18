@@ -30,6 +30,16 @@ function buildNativeIdentity(agentId: string, model: string): string {
 }
 import { evictStaleNativeTasks, persistNativeTaskMap, spawnTimeoutWatcher } from './native-tasks';
 import { writeDispatchPrompt } from './dispatch-prompt-storage';
+import {
+  computeSkillFingerprint,
+  getCachedPrompt,
+  setCachedPrompt,
+  splitAssembledPrompt,
+  writeCachedSkillsSection,
+  type PromptCacheKey,
+  type TaskKind,
+} from './dispatch-prompt-cache';
+import { existsSync } from 'fs';
 
 /**
  * Strict opt-in elision marker (spec §1 iron rule).
@@ -55,12 +65,72 @@ export function elidePromptIfRequested(
   taskId: string,
   agentPrompt: string,
   promptFormat: PromptFormat | undefined,
+  warmCached: boolean = false,
 ): { elided: true; promptPath: string; marker: string; bytes: number } | { elided: false } {
   if (promptFormat !== 'elided') return { elided: false };
   const bytes = Buffer.byteLength(agentPrompt, 'utf8');
   const promptPath = writeDispatchPrompt(projectRoot, taskId, agentPrompt);
-  const marker = `[skills section elided: see ${promptPath}, ${bytes} bytes — READ this file and pass its CONTENTS verbatim as the Agent(prompt: ...) value. Do NOT pass the path string.]`;
+  const warmSuffix = warmCached ? ' — warm-cached (skills) + live task' : '';
+  const marker = `[skills section elided: see ${promptPath}, ${bytes} bytes${warmSuffix} — READ this file and pass its CONTENTS verbatim as the Agent(prompt: ...) value. Do NOT pass the path string.]`;
   return { elided: true, promptPath, marker, bytes };
+}
+
+/**
+ * Phase-2 warm-cache lookup. Returns the spliced un-annotated body on hit
+ * (skills-section from cache + live Task: tail), or null on miss. The caller
+ * applies annotations on top (scope/unverified) and then runs the usual
+ * elidePromptIfRequested writer — so the on-disk per-dispatch file matches
+ * the cold-path file byte-for-byte except for the cached skills prefix.
+ *
+ * IRON RULE #6 (CRITICAL): the cache stores the skills-section ONLY. The live
+ * `Task:` block from the current dispatch is spliced in at hit time.
+ * Caching the full body with a stale Task corrupts the RL feedback loop —
+ * see consensus 335e8be5-336648b5:f11.
+ */
+export function tryWarmCacheHit(
+  liveTaskBlock: string,
+  cacheKey: PromptCacheKey,
+  promptFormat: PromptFormat | undefined,
+): string | null {
+  if (promptFormat !== 'elided') return null;
+  if (!liveTaskBlock) return null;
+  const cached = getCachedPrompt(cacheKey);
+  if (!cached) return null;
+  if (cached.skillFingerprint !== cacheKey.skillFingerprint) return null;
+  if (!existsSync(cached.skillsSectionPath)) return null;
+  try {
+    const skillsSection = require('fs').readFileSync(cached.skillsSectionPath, 'utf8');
+    return skillsSection + liveTaskBlock;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Phase-2 cache cold-path store. Call after assemblePrompt on a miss. Splits
+ * the assembled body at the LAST `\n\nTask:` boundary, persists the prefix to
+ * a content-addressed skills-section file, and inserts a cache entry keyed by
+ * the supplied PromptCacheKey. No-op if liveTaskBlock could not be extracted
+ * (assembler invariant violated — skip caching defensively).
+ */
+export function cacheColdPathStore(
+  projectRoot: string,
+  assembledBody: string,
+  cacheKey: PromptCacheKey,
+): void {
+  const { skillsSection, taskBlock } = splitAssembledPrompt(assembledBody);
+  if (!taskBlock) return; // boundary missing — refuse to cache.
+  try {
+    const skillsSectionPath = writeCachedSkillsSection(projectRoot, cacheKey.skillFingerprint, skillsSection);
+    setCachedPrompt(cacheKey, {
+      skillsSectionPath,
+      skillsSectionBytes: Buffer.byteLength(skillsSection, 'utf8'),
+      createdAtMs: Date.now(),
+      skillFingerprint: cacheKey.skillFingerprint,
+    });
+  } catch (err) {
+    process.stderr.write(`[gossipcat] dispatch-prompt-cache cold-store failed: ${(err as Error).message}\n`);
+  }
 }
 import { persistRelayTasks } from './relay-tasks';
 import {
@@ -517,17 +587,45 @@ export async function handleDispatchSingle(
       task,
     );
 
-    // Route through assemblePrompt() so the FINDING TAG SCHEMA (PR #56) and
-    // block ordering stay in lock-step with the relay dispatch path — prior
-    // to this change native dispatch built its prompt via manual concat and
-    // silently missed every schema update made to prompt-assembler.ts.
-    let agentPrompt = assemblePrompt({
-      identity: buildNativeIdentity(agent_id, nativeConfig.model),
-      instructions: nativeConfig.instructions || undefined,
-      skills: skillResult.content || undefined,
-      chainContext: chainContext || undefined,
-      task,
-    });
+    // Phase 2 warm-cache: compute fingerprint from realpath'd skill paths.
+    // Cache key disambiguates by taskKind so consensus / parallel / single
+    // never collide. IRON RULE #6: cache holds SKILLS-SECTION only — the live
+    // Task: tail is built fresh and spliced.
+    const singleCacheKey: PromptCacheKey = {
+      agentId: agent_id,
+      skillFingerprint: computeSkillFingerprint(skillResult.paths || []),
+      taskKind: 'single' as TaskKind,
+    };
+    // splitAssembledPrompt cuts at "\n\nTask:" (the structural anchor), so the
+    // cached skillsSection already ends with the "\n\n---" separator that
+    // precedes Task: in assemblePrompt's output. liveTaskTail must NOT
+    // re-include "\n\n---\n\n" or the warm body grows a duplicate separator
+    // per dispatch (caught by dispatch-prompt-cache.test.ts splice integrity).
+    const singleLiveTaskTail = `\n\nTask: ${task}`;
+
+    let agentPrompt: string;
+    let singleWarm = false;
+    const singleWarmBody = tryWarmCacheHit(singleLiveTaskTail, singleCacheKey, prompt_format);
+    if (singleWarmBody) {
+      agentPrompt = singleWarmBody;
+      singleWarm = true;
+    } else {
+      // Cold path — full assemblePrompt as Phase 1.
+      agentPrompt = assemblePrompt({
+        identity: buildNativeIdentity(agent_id, nativeConfig.model),
+        instructions: nativeConfig.instructions || undefined,
+        skills: skillResult.content || undefined,
+        chainContext: chainContext || undefined,
+        task,
+      });
+      // Store the pre-annotation assembled body in the cache. Annotations
+      // (scope/unverified) are head-prepended and task-dependent, so caching
+      // them risks leaking T1's notes to T2 on warm hit. Cache the assembler
+      // output; re-apply annotations per dispatch.
+      if (prompt_format === 'elided') {
+        cacheColdPathStore(process.cwd(), agentPrompt, singleCacheKey);
+      }
+    }
     if (sanitizeResult.sanitized) agentPrompt = prependScopeNote(agentPrompt);
     // Premise verification (Component B). SCOPE NOTE composes first
     // (enforcement boundary); UNVERIFIED note layered on top (behavioral).
@@ -562,7 +660,7 @@ export async function handleDispatchSingle(
     // Spec §1 iron rule: strict opt-in elision. When prompt_format='elided',
     // write the prompt body to disk and emit a marker in Item 1; OMIT Item 2.
     // When undefined/'inline': behavior is byte-identical to pre-PR dispatch.
-    const elision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format);
+    const elision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format, singleWarm);
     if (elision.elided) {
       const info = ctx.nativeTaskMap.get(taskId);
       if (info) info.promptPath = elision.promptPath;
@@ -858,18 +956,39 @@ export async function handleDispatchParallel(
       def.task,
     );
 
-    // Route through assemblePrompt() so the FINDING TAG SCHEMA (PR #56) and
-    // block ordering stay in lock-step with relay dispatch. When the caller
-    // flags this batch as consensus (via the outer `consensus` param), use
-    // the full CONSENSUS_OUTPUT_FORMAT instead of the slim schema — peer
-    // cross-review expects the same framing relay agents see.
-    let agentPrompt = assemblePrompt({
-      identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
-      instructions: nativeConfig.instructions || undefined,
-      skills: skillResult.content || undefined,
-      consensusSummary: consensus || undefined,
-      task: def.task,
-    });
+    // Phase 2 warm-cache (parallel). taskKind disambiguates consensus vs
+    // information so parallel(consensus=true) and parallel(consensus=false)
+    // never share a cache entry (spec §"Cache key" f2).
+    const parallelCacheKey: PromptCacheKey = {
+      agentId: def.agent_id,
+      skillFingerprint: computeSkillFingerprint(skillResult.paths || []),
+      taskKind: (consensus ? 'parallel-consensus' : 'parallel-information') as TaskKind,
+    };
+    const parallelLiveTaskTail = `\n\nTask: ${def.task}`;  // see singleLiveTaskTail above for splice rationale
+
+    let agentPrompt: string;
+    let parallelWarm = false;
+    const parallelWarmBody = tryWarmCacheHit(parallelLiveTaskTail, parallelCacheKey, prompt_format);
+    if (parallelWarmBody) {
+      agentPrompt = parallelWarmBody;
+      parallelWarm = true;
+    } else {
+      // Route through assemblePrompt() so the FINDING TAG SCHEMA (PR #56) and
+      // block ordering stay in lock-step with relay dispatch. When the caller
+      // flags this batch as consensus (via the outer `consensus` param), use
+      // the full CONSENSUS_OUTPUT_FORMAT instead of the slim schema — peer
+      // cross-review expects the same framing relay agents see.
+      agentPrompt = assemblePrompt({
+        identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
+        instructions: nativeConfig.instructions || undefined,
+        skills: skillResult.content || undefined,
+        consensusSummary: consensus || undefined,
+        task: def.task,
+      });
+      if (prompt_format === 'elided') {
+        cacheColdPathStore(process.cwd(), agentPrompt, parallelCacheKey);
+      }
+    }
     if ((def as any)._sandboxSanitized) agentPrompt = prependScopeNote(agentPrompt);
     // Premise verification (Component B) — per-def in the native loop.
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
@@ -888,7 +1007,7 @@ export async function handleDispatchParallel(
 
     // Spec §1 strict opt-in. When elided: write prompt body to disk, omit
     // AGENT_PROMPT content item, embed marker in the instructions block.
-    const parallelElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format);
+    const parallelElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format, parallelWarm);
     if (parallelElision.elided) {
       const info = ctx.nativeTaskMap.get(taskId);
       if (info) info.promptPath = parallelElision.promptPath;
@@ -1127,25 +1246,45 @@ export async function handleDispatchConsensus(
       def.task,
     );
 
-    // Truncation reserves CONSENSUS OUTPUT FORMAT + lens + task — those must
-    // survive or the agent emits prose instead of <agent_finding> tags (silent
-    // consensus degradation). assemblePrompt() keeps them in the preserved
-    // suffix automatically; the truncatable prefix is [identity + instructions
-    // + skills]. See consensus 12827629-fa9a4660:f8 for the original regression.
-    let agentPrompt = assemblePrompt({
-      identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
-      instructions: nativeConfig.instructions || undefined,
-      skills: skillResultC.content || undefined,
-      consensusSummary: true,
-      lens: lensContent || undefined,
-      task: def.task,
-    });
+    // Phase 2 warm-cache (consensus phase-2 cross-review). taskKind splits
+    // phase-1 (handleDispatchParallel(consensus=true)) from phase-2 cross-review.
+    const consensusCacheKey: PromptCacheKey = {
+      agentId: def.agent_id,
+      skillFingerprint: computeSkillFingerprint(skillResultC.paths || []),
+      taskKind: 'consensus-phase2' as TaskKind,
+    };
+    const consensusLiveTaskTail = `\n\nTask: ${def.task}`;  // see singleLiveTaskTail above for splice rationale
+
+    let agentPrompt: string;
+    let consensusWarm = false;
+    const consensusWarmBody = tryWarmCacheHit(consensusLiveTaskTail, consensusCacheKey, prompt_format);
+    if (consensusWarmBody) {
+      agentPrompt = consensusWarmBody;
+      consensusWarm = true;
+    } else {
+      // Truncation reserves CONSENSUS OUTPUT FORMAT + lens + task — those must
+      // survive or the agent emits prose instead of <agent_finding> tags (silent
+      // consensus degradation). assemblePrompt() keeps them in the preserved
+      // suffix automatically; the truncatable prefix is [identity + instructions
+      // + skills]. See consensus 12827629-fa9a4660:f8 for the original regression.
+      agentPrompt = assemblePrompt({
+        identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
+        instructions: nativeConfig.instructions || undefined,
+        skills: skillResultC.content || undefined,
+        consensusSummary: true,
+        lens: lensContent || undefined,
+        task: def.task,
+      });
+      if (prompt_format === 'elided') {
+        cacheColdPathStore(process.cwd(), agentPrompt, consensusCacheKey);
+      }
+    }
     // Premise verification (Component B) — per-def in the consensus native loop.
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
 
     // Spec §1 strict opt-in. When 'elided', the per-task AGENT_PROMPT item is
     // omitted and the on-disk path is cited inline in the Agent() instruction.
-    const consensusElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format);
+    const consensusElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format, consensusWarm);
     if (consensusElision.elided) {
       const info = ctx.nativeTaskMap.get(taskId);
       if (info) info.promptPath = consensusElision.promptPath;

@@ -105,6 +105,13 @@ export function createAgentDirectory(agentId: string, agentConfig: any): void {
   // instructions.md — agent system prompt / personality / rules
   const instructionsContent = generateInstructions(agentId, agentConfig);
   writeFileSync(resolve(agentDir, 'instructions.md'), instructionsContent);
+  // Phase 2 warm-cache invalidation (defensive). Cache lives in the MCP
+  // server process; this CLI path typically runs in a different process so
+  // the call is a no-op. Kept for contract clarity per spec §"Cache scope".
+  try {
+    const { invalidateAgent } = require('./handlers/dispatch-prompt-cache');
+    invalidateAgent(agentId);
+  } catch { /* best-effort */ }
 
   // memory/memory.md — structured memory (3-section format from crab-language)
   writeFileSync(resolve(agentDir, 'memory', 'memory.md'), `# Core Memories
@@ -448,6 +455,11 @@ export async function createAgent(): Promise<void> {
     const instructionsPath = resolve(process.cwd(), '.gossip', 'agents', agentId as string, 'instructions.md');
     const existing = readFileSync(instructionsPath, 'utf-8');
     writeFileSync(instructionsPath, existing + `\n## Custom Instructions\n\n${customInstructions}\n`);
+    // Phase 2 warm-cache invalidation (defensive; see note at :107).
+    try {
+      const { invalidateAgent } = require('./handlers/dispatch-prompt-cache');
+      invalidateAgent(agentId as string);
+    } catch { /* best-effort */ }
   }
 
   // ── Summary ─────────────────────────────────────────────────────────────
