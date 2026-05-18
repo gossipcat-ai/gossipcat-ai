@@ -19,7 +19,6 @@ jest.mock('../../apps/cli/src/mcp-context', () => ({
 
 import {
   scheduleNativeTaskEviction,
-  evictStaleNativeTasks,
 } from '../../apps/cli/src/handlers/native-tasks';
 
 describe('scheduleNativeTaskEviction', () => {
@@ -47,17 +46,19 @@ describe('scheduleNativeTaskEviction', () => {
     global.clearInterval = originalClearInterval;
   });
 
-  it('(a) calls setInterval with evictStaleNativeTasks and the given interval', () => {
+  it('(a) calls setInterval with a tick function and the given interval', () => {
     scheduleNativeTaskEviction(12345);
 
     expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-    expect(setIntervalSpy).toHaveBeenCalledWith(evictStaleNativeTasks, 12345);
+    // The tick is a wrapper that runs evictStaleNativeTasks AND co-scheduled
+    // cleanupExpiredDispatchPrompts — assert the shape, not the bare ref.
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 12345);
   });
 
   it('defaults to a 1h interval when no interval is provided', () => {
     scheduleNativeTaskEviction();
 
-    expect(setIntervalSpy).toHaveBeenCalledWith(evictStaleNativeTasks, 60 * 60 * 1000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60 * 60 * 1000);
   });
 
   it('(b) calls .unref() on the returned timer so exit is not blocked', () => {
