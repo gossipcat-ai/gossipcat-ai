@@ -668,6 +668,7 @@ Requirements:
    */
   private async detectTechStack(): Promise<string | null> {
     const inputs: string[] = [];
+    let totalDepCount = 0;
 
     // Gather package.json(s) — root + workspace packages
     const pkgPaths = [join(this.projectRoot, 'package.json')];
@@ -685,6 +686,7 @@ Requirements:
       try {
         const pkg = JSON.parse(readFileSync(p, 'utf-8'));
         const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+        totalDepCount += deps.length;
         if (deps.length > 0) {
           inputs.push(`${p.replace(this.projectRoot + '/', '')}: ${deps.join(', ')}`);
         }
@@ -697,7 +699,7 @@ Requirements:
       inputs.push(`Source dirs: ${srcDirs.join(', ') || 'root'}`);
     } catch { /* skip */ }
 
-    if (!this.hasSufficientTechSignals(inputs)) return null;
+    if (totalDepCount < TECH_STACK_MIN_DEPS) return null;
 
     try {
       const messages: LLMMessage[] = [{
@@ -721,20 +723,6 @@ ${inputs.join('\n')}
       // Fallback: return raw dependency list if LLM fails
       return inputs.join('\n').slice(0, 500);
     }
-  }
-
-  private hasSufficientTechSignals(inputs: string[]): boolean {
-    if (inputs.length === 0) return false;
-    let totalDeps = 0;
-    for (const line of inputs) {
-      if (line.startsWith('Source dirs:')) continue;
-      const colonIdx = line.indexOf(': ');
-      if (colonIdx === -1) continue;
-      const depsStr = line.slice(colonIdx + 2).trim();
-      if (!depsStr) continue;
-      totalDeps += depsStr.split(',').map(s => s.trim()).filter(Boolean).length;
-    }
-    return totalDeps >= TECH_STACK_MIN_DEPS;
   }
 
   private loadCategoryFindings(category: string): Array<{ agentId: string; evidence: string }> {

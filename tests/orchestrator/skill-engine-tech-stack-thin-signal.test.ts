@@ -199,6 +199,38 @@ describe('SkillEngine.detectTechStack — thin-signal floor (issue #410)', () =>
   });
 
   /**
+   * Fixture B (memoization) — same 3-dep setup called twice via buildPrompt.
+   *
+   * Tech-stack detection runs during buildPrompt. Calling buildPrompt a second
+   * time on the same engine instance must NOT trigger a second LLM call for
+   * tech-stack — the result must be served from the internal cache.
+   */
+  it('Fixture B: memoizes tech-stack detection across buildPrompt calls', async () => {
+    const projectRoot = setupProjectRoot({
+      dependencies: { express: '^4.18.0', pg: '^8.11.0', zod: '^3.22.0' },
+    });
+
+    try {
+      const cannedResponse = 'TypeScript + Node.js / Express API with PostgreSQL. No HTML rendering. No GraphQL.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedResponse,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+
+      // First call — cache cold, tech-stack LLM should be called once
+      await engine.buildPrompt('agent-a', 'injection_vectors');
+      // Second call — cache warm, tech-stack LLM must NOT be called again
+      await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(1);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
    * Fixture C — 2-dep boundary: threshold not met.
    *
    * A project with gossipcat + typescript (2 deps) must NOT trigger the
