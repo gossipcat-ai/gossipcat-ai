@@ -106,8 +106,12 @@ describe('Skill Development — Integration', () => {
 
   test('prompt includes category findings from JSONL', async () => {
     await generator.generate('test-agent', 'injection_vectors');
-    const callArgs = (mockLlm.generate as jest.Mock).mock.calls[1];
-    const fullPrompt = callArgs[0].map((m: any) => m.content).join('\n');
+    const calls = (mockLlm.generate as jest.Mock).mock.calls;
+    // testDir has no package.json with ≥3 deps, so tech-stack LLM call is skipped.
+    // Find the skill-gen call by looking for 'Agent: test-agent' in the messages.
+    const skillCall = calls.find((c: any) => c[0].some((m: any) => m.content?.includes('Agent: test-agent')));
+    expect(skillCall).toBeDefined();
+    const fullPrompt = skillCall![0].map((m: any) => m.content).join('\n');
     expect(fullPrompt).toContain('Test finding');
   });
 
@@ -124,8 +128,12 @@ describe('Skill Development — Integration', () => {
     const freshGenerator = new SkillEngine(mockLlm as any, freshProfiler, testDir);
     await freshGenerator.generate('test-agent', 'injection_vectors');
 
-    const callArgs = (mockLlm.generate as jest.Mock).mock.calls[1];
-    const fullPrompt = callArgs[0].map((m: any) => m.content).join('\n');
+    const calls = (mockLlm.generate as jest.Mock).mock.calls;
+    // testDir has no package.json with ≥3 deps, so tech-stack LLM call is skipped.
+    // Find the skill-gen call by message content.
+    const skillCall = calls.find((c: any) => c[0].some((m: any) => m.content?.includes('Agent: test-agent')));
+    expect(skillCall).toBeDefined();
+    const fullPrompt = skillCall![0].map((m: any) => m.content).join('\n');
     expect(fullPrompt).toContain('strong-peer');
   });
 });

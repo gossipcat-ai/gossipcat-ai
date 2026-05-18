@@ -85,6 +85,15 @@ export function coerceStatus(raw: unknown): VerdictStatus {
   return 'pending';
 }
 
+/**
+ * Minimum distinct dependency count across all collected package.json entries
+ * required to fire the tech-stack LLM detector. Below this, return null and
+ * skip the <tech_stack> injection entirely. Rationale: 1-2 dep signals are
+ * dominated by the LLM's Node.js training prior and produce hallucinated
+ * tech-stacks for non-Node host projects (issue #410).
+ */
+const TECH_STACK_MIN_DEPS = 3;
+
 const KNOWN_CATEGORIES = new Set([
   'trust_boundaries', 'injection_vectors', 'input_validation', 'concurrency',
   'resource_exhaustion', 'type_safety', 'error_handling', 'data_integrity',
@@ -688,7 +697,7 @@ Requirements:
       inputs.push(`Source dirs: ${srcDirs.join(', ') || 'root'}`);
     } catch { /* skip */ }
 
-    if (inputs.length === 0) return null;
+    if (!this.hasSufficientTechSignals(inputs)) return null;
 
     try {
       const messages: LLMMessage[] = [{
@@ -712,6 +721,20 @@ ${inputs.join('\n')}
       // Fallback: return raw dependency list if LLM fails
       return inputs.join('\n').slice(0, 500);
     }
+  }
+
+  private hasSufficientTechSignals(inputs: string[]): boolean {
+    if (inputs.length === 0) return false;
+    let totalDeps = 0;
+    for (const line of inputs) {
+      if (line.startsWith('Source dirs:')) continue;
+      const colonIdx = line.indexOf(': ');
+      if (colonIdx === -1) continue;
+      const depsStr = line.slice(colonIdx + 2).trim();
+      if (!depsStr) continue;
+      totalDeps += depsStr.split(',').map(s => s.trim()).filter(Boolean).length;
+    }
+    return totalDeps >= TECH_STACK_MIN_DEPS;
   }
 
   private loadCategoryFindings(category: string): Array<{ agentId: string; evidence: string }> {
