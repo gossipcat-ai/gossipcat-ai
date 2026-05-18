@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, realpathSync } from 'fs';
 import { resolve, sep } from 'path';
 import type { SkillIndex } from './skill-index';
 import { parseSkillFrontmatter } from './skill-parser';
@@ -108,6 +108,14 @@ export interface LoadSkillsResult {
    * `dispatchTaskType` is provided and a skill's `scope` array matches it.
    */
   loadedScoped: string[];
+  /**
+   * Resolved absolute paths of every skill file successfully loaded into `content`.
+   * Index-aligned with `loaded` (paths[i] is the resolved path of loaded[i]).
+   * Realpath-normalized so symlinked skills dedupe correctly. Empty array when
+   * no skills loaded. Consumers (e.g. dispatch-prompt warm cache) use these paths
+   * + their mtimeMs to build a skill-set fingerprint without re-walking the FS.
+   */
+  paths: string[];
 }
 
 /**
@@ -167,17 +175,19 @@ export function loadSkills(
   // Load kill-switch config once per invocation (not inside the loop).
   const memConfig = loadMemoryConfig(projectRoot);
 
-  const permanent: Array<{ name: string; content: string }> = [];
-  const scoped: Array<{ name: string; content: string }> = [];
-  const contextualCandidates: Array<{ name: string; content: string; hits: number; rawHits: number; boost: number }> = [];
+  const permanent: Array<{ name: string; content: string; path: string }> = [];
+  const scoped: Array<{ name: string; content: string; path: string }> = [];
+  const contextualCandidates: Array<{ name: string; content: string; path: string; hits: number; rawHits: number; boost: number }> = [];
   const loaded: string[] = [];
+  const paths: string[] = [];
   const dropped: DroppedSkill[] = [];
   const activatedContextual: string[] = [];
   const loadedScoped: string[] = [];
 
   for (const skill of effectiveSkills) {
-    const content = resolveSkill(agentId, skill, projectRoot);
-    if (!content) continue;
+    const resolved = resolveSkill(agentId, skill, projectRoot);
+    if (!resolved) continue;
+    const { content, path: resolvedPath } = resolved;
 
     // Filter by skill effectiveness status written by checkEffectiveness().
     // 'failed' and 'silent_skill' are suppressed — injecting a skill the RL loop
@@ -271,7 +281,7 @@ export function loadSkills(
     if (skillScope && skillScope.length > 0) {
       if (!dispatchTaskType || skillScope.includes(dispatchTaskType)) {
         // Scope matches (or no dispatch type known) — inject unconditionally.
-        scoped.push({ name: skill, content });
+        scoped.push({ name: skill, content, path: resolvedPath });
       } else {
         // Scope declared but dispatch type not in the list.
         dropped.push({ skill, reason: 'scope-type-mismatch', hits: 0 });
@@ -298,7 +308,7 @@ export function loadSkills(
     const mode = index?.getSkillMode(agentId, skill) ?? 'permanent';
 
     if (mode === 'permanent') {
-      permanent.push({ name: skill, content });
+      permanent.push({ name: skill, content, path: resolvedPath });
     } else if (task) {
       const rawHits = countKeywordHits(content, skill, task);
       const frontmatter = parseSkillFrontmatter(content);
@@ -309,7 +319,7 @@ export function loadSkills(
       // but a 1-hit skill with boost passes (1.5 >= 1) and outranks plain
       // 1-hit candidates during the descending sort below.
       if (effectiveHits >= MIN_KEYWORD_HITS) {
-        contextualCandidates.push({ name: skill, content, hits: effectiveHits, rawHits, boost });
+        contextualCandidates.push({ name: skill, content, path: resolvedPath, hits: effectiveHits, rawHits, boost });
       } else {
         // Report raw hits so operators see the real keyword-match count; boost
         // already failed to rescue, so recording effective hits would hide the
@@ -335,13 +345,22 @@ export function loadSkills(
   const accepted = contextualCandidates.slice(0, MAX_CONTEXTUAL_SKILLS);
   const rejected = contextualCandidates.slice(MAX_CONTEXTUAL_SKILLS);
 
-  for (const s of permanent) loaded.push(s.name);
+  // Iteration order here defines the index-alignment of `paths` with `loaded`:
+  // permanent → scoped → accepted (contextual). Both arrays must push in the
+  // same order so consumers can rely on paths[i] being the resolved path of
+  // loaded[i] (see LoadSkillsResult.paths docstring).
+  for (const s of permanent) {
+    loaded.push(s.name);
+    paths.push(s.path);
+  }
   for (const s of scoped) {
     loaded.push(s.name);
+    paths.push(s.path);
     loadedScoped.push(s.name);
   }
   for (const s of accepted) {
     loaded.push(s.name);
+    paths.push(s.path);
     activatedContextual.push(s.name);
   }
   for (const s of rejected) dropped.push({ skill: s.name, reason: 'budget-exceeded', hits: s.hits });
@@ -358,7 +377,7 @@ export function loadSkills(
     ? '\n\n--- SKILLS ---\n\n' + sections.join('\n\n---\n\n') + '\n\n--- END SKILLS ---\n\n'
     : '';
 
-  return { content: contentStr, loaded, dropped, activatedContextual, loadedScoped };
+  return { content: contentStr, loaded, paths, dropped, activatedContextual, loadedScoped };
 }
 
 /** Cache compiled regex patterns to avoid per-dispatch recompilation */
@@ -424,7 +443,20 @@ function getKeywords(content: string, skillName: string): string[] {
   return [skillName.replace(/-/g, ' ')];
 }
 
-function resolveSkill(agentId: string, skill: string, projectRoot: string): string | null {
+/**
+ * Resolve a skill name to its file content and resolved absolute path.
+ * Returns `null` if no resolution path produced a readable file.
+ *
+ * The `path` field is realpath-normalized (so symlinked skills dedupe with
+ * their target) when realpathSync succeeds; on realpathSync failure we fall
+ * back to the non-realpath'd absolute path so a transient FS error never
+ * fails the load.
+ */
+function resolveSkill(
+  agentId: string,
+  skill: string,
+  projectRoot: string,
+): { content: string; path: string } | null {
   // Sanitize agentId to prevent path traversal
   if (!SAFE_AGENT_ID.test(agentId)) return null;
 
@@ -450,7 +482,18 @@ function resolveSkill(agentId: string, skill: string, projectRoot: string): stri
       // entire gossip_dispatch call. Now we log and fall through to the next
       // base (or return null) instead.
       try {
-        return readFileSync(candidate, 'utf-8');
+        const content = readFileSync(candidate, 'utf-8');
+        // Realpath-normalize so symlinked skills collapse to a single fingerprint
+        // entry. If realpathSync throws (broken symlink, permissions), fall back
+        // to the non-realpath'd candidate — a fingerprint glitch is better than
+        // failing the load entirely.
+        let path: string;
+        try {
+          path = realpathSync(candidate);
+        } catch {
+          path = candidate;
+        }
+        return { content, path };
       } catch (err: any) {
         _log('skill-loader', `Failed to read skill file ${candidate}: ${err?.message ?? err}`);
         continue;
