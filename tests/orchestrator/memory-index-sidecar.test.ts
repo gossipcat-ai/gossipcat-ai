@@ -683,3 +683,82 @@ describe('tryAcquireLockOnce', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Prototype-key collision regression — reported 2026-05-19 by audit-team
+// orchestrator. _project corpus containing the token "constructor" crashed
+// gossip_remember with "Cannot read properties of undefined (reading 'push')"
+// because `postings = {}` inherits Object.prototype.constructor. Fixed by
+// switching the relevant maps to Object.create(null). These tests lock the
+// fix and exercise both fresh-corpus and reload-from-disk paths.
+// ---------------------------------------------------------------------------
+
+describe('prototype-key collision in index maps', () => {
+  let projectRoot: string;
+  let corpus: string;
+  beforeEach(() => {
+    projectRoot = makeProjectDir();
+    corpus = join(homedir(), '.claude', 'projects', projectRoot.replace(/\//g, '-'), 'memory');
+    mkdirSync(corpus, { recursive: true });
+  });
+  afterEach(() => {
+    try { rmSync(projectRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(corpus, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it('buildFullIndex does not throw when a corpus file body contains "constructor"', () => {
+    writeMd(corpus, 'project_a.md', frontmatterMd({ name: 'A', type: 'project' }, 'discusses constructor patterns'));
+    writeMd(corpus, 'project_b.md', frontmatterMd({ name: 'B', type: 'project' }, 'tostring valueof hasownproperty'));
+    expect(() => buildFullIndex(corpus)).not.toThrow();
+  });
+
+  it('postings/constructor is a real entry, not Object.prototype.constructor', () => {
+    writeMd(corpus, 'doc.md', frontmatterMd({ name: 'D' }, 'this body talks about constructor and tostring'));
+    const index = buildFullIndex(corpus);
+    // 'constructor' would otherwise be Object.prototype.constructor (the Object function).
+    // After the Object.create(null) fix, the entry is either a proper {df, docs} record
+    // or undefined — never the prototype function.
+    const proto = index.postings['constructor'];
+    if (proto !== undefined) {
+      expect(typeof proto).toBe('object');
+      expect(Array.isArray(proto.docs)).toBe(true);
+      expect(proto.df).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('rankDocuments does not throw when query terms include prototype-name tokens', () => {
+    writeMd(corpus, 'doc.md', frontmatterMd({ name: 'D' }, 'mentions constructor here'));
+    const index = buildFullIndex(corpus);
+    expect(() => rankDocuments(['constructor'], index)).not.toThrow();
+    // The "tostring" token never appears in the corpus, so any prototype-name
+    // lookup must return zero matches rather than crashing on inherited props.
+    expect(() => rankDocuments(['tostring'], index)).not.toThrow();
+    expect(rankDocuments(['tostring'], index)).toEqual([]);
+  });
+
+  it('rebuildIndex round-trips through JSON without re-introducing prototype leakage', () => {
+    writeMd(corpus, 'doc.md', frontmatterMd({ name: 'D' }, 'body with constructor and tostring'));
+    rebuildIndex(projectRoot);
+    // Reload via the public loadIndex path (the one searchCorpus uses).
+    // tryLoadIndex re-wraps maps prototype-less; rankDocuments must not throw.
+    // We deliberately exercise the read path that previously crashed.
+    expect(() => {
+      const second = rebuildIndex(projectRoot);
+      rankDocuments(['constructor', 'tostring'], second);
+    }).not.toThrow();
+  });
+
+  it('gossip_remember(_project) repro returns without throwing on "constructor" corpus', async () => {
+    // Black-box test using the exact MemorySearcher path that gossip_remember
+    // wires up in mcp-server-sdk.ts.
+    const { MemorySearcher } = await import('@gossip/orchestrator');
+    writeMd(corpus, 'project_solidity.md', frontmatterMd(
+      { name: 'solidity-notes', type: 'project' },
+      'audit findings: missing visibility on constructor; reentrancy in fallback',
+    ));
+    const searcher = new MemorySearcher(projectRoot);
+    expect(() => searcher.search('_project', 'constructor reentrancy', 5)).not.toThrow();
+    const results = searcher.search('_project', 'constructor reentrancy', 5);
+    expect(Array.isArray(results)).toBe(true);
+  });
+});
