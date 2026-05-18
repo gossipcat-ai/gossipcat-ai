@@ -15,6 +15,7 @@
 import { existsSync, readdirSync, realpathSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import type { SkillEngine } from '@gossip/orchestrator';
+import { invalidateAgent as invalidateDispatchPromptCacheForAgent } from './dispatch-prompt-cache';
 
 export interface RunnerOptions {
   skillEngine: SkillEngine;
@@ -131,6 +132,12 @@ export async function runCheckEffectivenessForAllSkills(opts: RunnerOptions): Pr
             // increment health-file counters — both would lie to operators.
             // Consensus c491f76c-14e545b1.
             if (verdict.persisted !== false) {
+              // Phase 2 warm-cache invalidation (spec
+              // docs/specs/2026-05-18-dispatch-prompt-warm-cache.md §"Cache scope").
+              // writeSkillFileFromParts rewrote skill frontmatter — bumped mtime
+              // makes the fingerprint stale. Drop entries for this agent so the
+              // next dispatch cold-paths and re-fingerprints.
+              try { invalidateDispatchPromptCacheForAgent(agentId); } catch { /* best-effort */ }
               // Log every transition that changes operator-visible status: passed/failed/flagged
               const loggedStates = new Set(['passed', 'failed', 'flagged_for_manual_review']);
               if (loggedStates.has(verdict.status)) {

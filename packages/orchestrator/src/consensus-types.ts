@@ -255,7 +255,15 @@ export interface PipelineSignal {
      * were written than findings collected. Observability-only — never blocks.
      * Emitted by the collect handler after consensus report is persisted.
      */
-    | 'signal_loss_suspected';
+    | 'signal_loss_suspected'
+    /**
+     * Phase 2 dispatch-prompt warm cache (spec
+     * docs/specs/2026-05-18-dispatch-prompt-warm-cache.md). Emitted by
+     * apps/cli/src/handlers/dispatch-prompt-cache.ts on LRU eviction,
+     * invalidation, or concurrent-dispatch overwrite-race. metadata.reason
+     * ∈ {'lru' | 'invalidation' | 'overwrite_race'}. Observability-only.
+     */
+    | 'dispatch_cache_evicted';
   /** Real agentId for agent-scoped events; '_system' for system-scoped events. */
   agentId: string;
   taskId: string;

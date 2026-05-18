@@ -42,6 +42,10 @@ try {
 } catch { /* never break boot */ }
 import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
+import {
+  invalidateAgent as invalidateDispatchPromptCacheForAgent,
+  invalidateAll as invalidateAllDispatchPromptCache,
+} from './handlers/dispatch-prompt-cache';
 import { handleCollect } from './handlers/collect';
 import { restorePendingConsensus } from './handlers/relay-cross-review';
 import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
@@ -1937,6 +1941,10 @@ server.tool(
         results.push(`${agent_id}: updated (${applyMode})`);
       }
 
+      // Phase 2 warm-cache invalidation: update_instructions rewrites agent
+      // instructions, changing the assembled prompt prefix. Invalidate all
+      // agents since any of them could have been targeted.
+      try { invalidateAllDispatchPromptCache(); } catch { /* best-effort */ }
       return { content: [{ type: 'text' as const, text: results.join('\n') }] };
     }
 
@@ -2156,6 +2164,9 @@ server.tool(
     // Reset the sync-result marker so stale data from a prior setup call
     // can't leak into this response's advisory (issue #96).
     ctx.lastSyncResult = null;
+    // Phase 2 warm-cache invalidation: merge/replace mutate agent config and
+    // instructions; drop every cache entry. Cheap (Map.clear).
+    try { invalidateAllDispatchPromptCache(); } catch { /* best-effort */ }
     try {
       await syncWorkersViaKeychain();
     } catch (e) {
@@ -3486,6 +3497,9 @@ server.tool(
         : 'bound';
 
       process.stderr.write(`[gossipcat] Skill "${slot.skill}" ${bindAction} for ${agent_id} (v${slot.version})\n`);
+      // Phase 2 warm-cache invalidation: bind changes the loaded skill set for
+      // this agent, so existing fingerprints are stale.
+      try { invalidateDispatchPromptCacheForAgent(agent_id); } catch { /* best-effort */ }
       return { content: [{ type: 'text' as const, text: `Skill "${slot.skill}" ${bindAction} for ${agent_id} (v${slot.version}, ${slot.enabled ? 'enabled' : 'disabled'})` }] };
     }
 
@@ -3528,7 +3542,11 @@ server.tool(
       if (!index) return { content: [{ type: 'text' as const, text: 'Skill index not initialized.' }] };
 
       const removed = index.unbind(agent_id, skill);
-      if (removed) process.stderr.write(`[gossipcat] Skill "${skill}" unbound from ${agent_id}\n`);
+      if (removed) {
+        process.stderr.write(`[gossipcat] Skill "${skill}" unbound from ${agent_id}\n`);
+        // Phase 2 warm-cache invalidation: unbind changes the loaded skill set.
+        try { invalidateDispatchPromptCacheForAgent(agent_id); } catch { /* best-effort */ }
+      }
       return { content: [{ type: 'text' as const, text: removed
         ? `Skill "${skill}" unbound from ${agent_id}`
         : `No slot found for "${skill}" on ${agent_id}`
@@ -3661,6 +3679,9 @@ server.tool(
               : result.content;
 
             process.stderr.write(`[gossipcat] Skill developed (native): "${skillName}" for ${agent_id} (category: ${category})\n`);
+            // Phase 2 warm-cache invalidation: develop wrote a new/updated
+            // skill file; mtime bumped, fingerprint stale.
+            try { invalidateDispatchPromptCacheForAgent(agent_id); } catch { /* best-effort */ }
             return {
               content: [{ type: 'text' as const, text: `Skill generated and saved:\n\nPath: ${result.path}\n\nAuto-bound "${skillName}" to ${agent_id} in skill index.\n\n${preview}` }],
             };
@@ -3746,6 +3767,9 @@ server.tool(
           : result.content;
 
         process.stderr.write(`[gossipcat] Skill developed: "${skillName}" for ${agent_id} (category: ${category})\n`);
+        // Phase 2 warm-cache invalidation: direct-path develop also writes a
+        // skill file via SkillEngine.generate → saveFromRaw.
+        try { invalidateDispatchPromptCacheForAgent(agent_id); } catch { /* best-effort */ }
         return {
           content: [{ type: 'text' as const, text: `Skill generated and saved:\n\nPath: ${result.path}\n\nAuto-bound "${skillName}" to ${agent_id} in skill index.\n\n${preview}` }],
         };
