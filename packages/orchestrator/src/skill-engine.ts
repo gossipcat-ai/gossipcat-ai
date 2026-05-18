@@ -85,6 +85,15 @@ export function coerceStatus(raw: unknown): VerdictStatus {
   return 'pending';
 }
 
+/**
+ * Minimum distinct dependency count across all collected package.json entries
+ * required to fire the tech-stack LLM detector. Below this, return null and
+ * skip the <tech_stack> injection entirely. Rationale: 1-2 dep signals are
+ * dominated by the LLM's Node.js training prior and produce hallucinated
+ * tech-stacks for non-Node host projects (issue #410).
+ */
+const TECH_STACK_MIN_DEPS = 3;
+
 const KNOWN_CATEGORIES = new Set([
   'trust_boundaries', 'injection_vectors', 'input_validation', 'concurrency',
   'resource_exhaustion', 'type_safety', 'error_handling', 'data_integrity',
@@ -659,6 +668,7 @@ Requirements:
    */
   private async detectTechStack(): Promise<string | null> {
     const inputs: string[] = [];
+    let totalDepCount = 0;
 
     // Gather package.json(s) — root + workspace packages
     const pkgPaths = [join(this.projectRoot, 'package.json')];
@@ -676,6 +686,7 @@ Requirements:
       try {
         const pkg = JSON.parse(readFileSync(p, 'utf-8'));
         const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+        totalDepCount += deps.length;
         if (deps.length > 0) {
           inputs.push(`${p.replace(this.projectRoot + '/', '')}: ${deps.join(', ')}`);
         }
@@ -688,7 +699,7 @@ Requirements:
       inputs.push(`Source dirs: ${srcDirs.join(', ') || 'root'}`);
     } catch { /* skip */ }
 
-    if (inputs.length === 0) return null;
+    if (totalDepCount < TECH_STACK_MIN_DEPS) return null;
 
     try {
       const messages: LLMMessage[] = [{
