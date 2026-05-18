@@ -1265,8 +1265,15 @@ server.tool(
       (s) => !/[\x00-\x1f]/.test(s),
       { message: 'resolutionRoots entries must not contain NUL or control characters' },
     )).max(32).optional().describe('Optional worktree paths for citation resolution (issue #126).'),
+    // Spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md.
+    // Strict opt-in: default 'inline' preserves the existing two-item content
+    // split. 'elided' instructs the server to write each native AGENT_PROMPT
+    // to .gossip/dispatch-prompts/<taskId>.txt and emit a marker Item 1 only —
+    // Item 2 is OMITTED entirely (no placeholder, no skeleton). The
+    // orchestrator MUST Read the cited file and forward verbatim to Agent().
+    prompt_format: z.enum(['inline', 'elided']).default('inline').describe('Prompt delivery mode for native dispatches: "inline" (default, AGENT_PROMPT content item) or "elided" (write to .gossip/dispatch-prompts/<taskId>.txt; orchestrator Reads + forwards).'),
   },
-  async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step, _utility_task_id, resolutionRoots }) => {
+  async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step, _utility_task_id, resolutionRoots, prompt_format }) => {
     // Track plan execution depth for re-entrant guard
     planExecutionDepth++;
     // #126 PR-B: validate resolutionRoots at the MCP boundary. Fatal (NUL /
@@ -1298,6 +1305,7 @@ server.tool(
         return handleDispatchSingle(
           agent_id, task, write_mode, scope, timeout_ms, plan_id, step,
           validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
+          prompt_format,
         );
       }
       if (mode === 'parallel') {
@@ -1307,13 +1315,14 @@ server.tool(
         return handleDispatchParallel(
           tasks, false,
           validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
+          prompt_format,
         );
       }
       if (mode === 'consensus') {
         if (!tasks || tasks.length === 0) {
           return { content: [{ type: 'text' as const, text: 'Error: mode:"consensus" requires a non-empty tasks array.' }] };
         }
-        return handleDispatchConsensus(tasks, _utility_task_id, validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined);
+        return handleDispatchConsensus(tasks, _utility_task_id, validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined, prompt_format);
       }
       return { content: [{ type: 'text' as const, text: `Unknown mode: ${mode}` }] };
     } finally {
@@ -1337,8 +1346,12 @@ server.tool(
       (s) => !/[\x00-\x1f]/.test(s),
       { message: 'resolutionRoots entries must not contain NUL or control characters' },
     )).max(32).optional().describe('Optional user-worktree paths for citation resolution (issue #126). Collect-time overrides dispatch-time.'),
+    // Spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md.
+    // Governs the Phase 2 cross-review payload only — Phase 1 native dispatch
+    // honors the prompt_format passed to gossip_dispatch/gossip_run.
+    prompt_format: z.enum(['inline', 'elided']).default('inline').describe('Cross-review prompt delivery: "inline" embeds ---SYSTEM---/---USER--- blocks; "elided" writes each to .gossip/dispatch-prompts/ and omits the PROMPTS section.'),
   },
-  async ({ task_ids, timeout_ms, consensus, resolutionRoots }) => {
+  async ({ task_ids, timeout_ms, consensus, resolutionRoots, prompt_format }) => {
     // Validate at MCP boundary. Fatal (NUL / control char) REJECTS the round.
     let validated: string[] | undefined;
     if (resolutionRoots && resolutionRoots.length > 0) {
@@ -1375,7 +1388,7 @@ server.tool(
         for (const tid of task_ids) ctx.pendingDispatchResolutionRoots.delete(tid);
       }
     }
-    return handleCollect(task_ids, timeout_ms, consensus, validated);
+    return handleCollect(task_ids, timeout_ms, consensus, validated, prompt_format);
   }
 );
 
@@ -2240,8 +2253,13 @@ server.tool(
     task: z.string().describe('Task description. Reference file paths — the agent will read them.'),
     write_mode: z.enum(['sequential', 'scoped', 'worktree']).optional().describe('Write mode for implementation tasks'),
     scope: z.string().optional().describe('Directory scope for scoped write mode'),
+    // Spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md.
+    // Forwarded to handleDispatchSingle for native agents; ignored for relay
+    // agents (their prompt is built inside the dispatch pipeline, never
+    // surfaced as an MCP content item to the orchestrator).
+    prompt_format: z.enum(['inline', 'elided']).default('inline').describe('Native-dispatch prompt delivery: "inline" (default) or "elided" (write to .gossip/dispatch-prompts/<taskId>.txt).'),
   },
-  async ({ agent_id, task, write_mode, scope }) => {
+  async ({ agent_id, task, write_mode, scope, prompt_format }) => {
     await boot();
 
     // Auto mode: fast classify → route to single agent or full plan
@@ -2311,7 +2329,7 @@ server.tool(
       // own bare prompt and silently skipped the schema; consensus round
       // b0cc4995-0cd34dc7 surfaced this as the reason fresh-install agents produced
       // prose tables instead of <agent_finding> tags.
-      return handleDispatchSingle(agent_id, task, write_mode, scope);
+      return handleDispatchSingle(agent_id, task, write_mode, scope, undefined, undefined, undefined, undefined, prompt_format);
     }
 
     const options: any = {};

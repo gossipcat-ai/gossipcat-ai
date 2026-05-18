@@ -55,6 +55,27 @@ The agent prompt in item 2 must see **nothing** about the surrounding orchestrat
 
 This is a **security boundary**, not a style preference. See prior session 2026-04-08 and consensus `ff598432`.
 
+**Optional elision protocol (`prompt_format: 'elided'`).** All three dispatch tools — `gossip_dispatch`, `gossip_run`, `gossip_collect` — accept an opt-in `prompt_format` parameter. The default `'inline'` is byte-identical to the description above. When the caller passes `'elided'`:
+
+- The server writes the prompt body to `.gossip/dispatch-prompts/<taskId>.txt` (atomic temp-rename, `SAFE_NAME`-validated taskId).
+- Item 1 contains a marker line of the form `[skills section elided: see <abspath>, <N> bytes — READ this file and pass its CONTENTS verbatim as the Agent(prompt: ...) value. Do NOT pass the path string.]`.
+- **Item 2 is OMITTED entirely** — no skeleton, no placeholder. The orchestrator MUST `Read(<abspath>)` and forward the file contents verbatim to `Agent(prompt: ...)`. A missing file is a hard failure; never substitute the marker text for the prompt.
+
+The on-disk prompt file carries ONLY the agent-facing prompt (identity + instructions + skills + task). It NEVER carries `relay_token`, `task_id`, the `AGENT_PROMPT:` tag prefix, or any other orchestration metadata — those stay in Item 1 only. Persistence: the absolute path is stored alongside the task in `.gossip/native-tasks.json` so `/mcp` reconnect can prune orphan files for tasks that no longer exist. Eviction is mtime-based (default 1h) plus aggregate eldest-eviction at 100 MB.
+
+Example flow inside the consensus protocol when `prompt_format: 'elided'` is passed to `gossip_collect`:
+
+```
+1. gossip_collect(task_ids: [...], consensus: true, prompt_format: 'elided')
+2. → server writes .gossip/dispatch-prompts/<consensusId>__<agentId>.txt per cross-review participant
+3. → returns ⚠️ EXECUTE NOW payload with one marker line per agent; PROMPTS section is ABSENT
+4. → orchestrator Reads each cited file and passes contents verbatim to Agent(prompt: ...)
+5. → gossip_relay_cross_review(consensus_id, agent_id, result) per agent
+6. → gossip_collect(consensus: true) for final synthesized output
+```
+
+Spec: `docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md` (Option B — server-side prompt elision).
+
 ### 5. Scoped agents write files, orchestrator commits
 
 Scoped write mode (`write_mode: "scoped"`) lets agents write files within a directory scope but **not** run `git commit` or `shell_exec` (except read-only git commands). The orchestrator validates the agent's output and commits on their behalf. Worktree agents have full git access within their isolated branch.

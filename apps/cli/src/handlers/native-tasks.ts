@@ -260,7 +260,20 @@ const UTILITY_RESULT_TTL_MS = 24 * 60 * 60 * 1000;
 export function scheduleNativeTaskEviction(
   intervalMs: number = 60 * 60 * 1000,
 ): { stop: () => void } {
-  const timer = setInterval(evictStaleNativeTasks, intervalMs);
+  const timer = setInterval(() => {
+    evictStaleNativeTasks();
+    // Co-scheduled mtime-based eviction of elision prompt files. Same
+    // interval since both share the 1h staleness budget. Fail-open on any
+    // file IO error — the require() also guards a build where the helper
+    // module went missing.
+    try {
+      const root = ctx.mainAgent?.projectRoot ?? process.cwd();
+      const { cleanupExpiredDispatchPrompts } = require('./dispatch-prompt-storage');
+      cleanupExpiredDispatchPrompts(root, 60 * 60 * 1000);
+    } catch (err) {
+      process.stderr.write(`[gossipcat] cleanupExpiredDispatchPrompts failed: ${(err as Error).message}\n`);
+    }
+  }, intervalMs);
   timer.unref();
   return {
     stop: () => clearInterval(timer),
@@ -318,8 +331,28 @@ export function persistNativeTaskMap(): void {
   }
 }
 
-/** Restore nativeTaskMap from disk (called on boot) */
+/** Restore nativeTaskMap from disk (called on boot).
+ *
+ * After in-memory restore, prune orphan dispatch-prompt files whose taskId
+ * is no longer known. This runs once per /mcp boot — files for tasks that
+ * survived the restore are kept; files for tasks that expired or were
+ * dropped during persist are removed. Fail-open: any prune error is logged
+ * but never throws. */
 export function restoreNativeTaskMap(projectRoot: string): void {
+  restoreNativeTaskMapInner(projectRoot);
+  try {
+    const { pruneOrphanDispatchPrompts } = require('./dispatch-prompt-storage');
+    const known = new Set<string>(ctx.nativeTaskMap.keys());
+    const { orphans, aged } = pruneOrphanDispatchPrompts(projectRoot, known);
+    if (orphans > 0 || aged > 0) {
+      process.stderr.write(`[gossipcat] dispatch-prompt prune on boot: orphans=${orphans} aged=${aged}\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`[gossipcat] dispatch-prompt prune on boot failed: ${(err as Error).message}\n`);
+  }
+}
+
+function restoreNativeTaskMapInner(projectRoot: string): void {
   try {
     const { existsSync: ex, readFileSync: rf } = require('fs');
     const { join: j } = require('path');
