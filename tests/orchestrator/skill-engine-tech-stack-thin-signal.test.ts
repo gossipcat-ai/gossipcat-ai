@@ -258,3 +258,259 @@ describe('SkillEngine.detectTechStack — thin-signal floor (issue #410)', () =>
     }
   });
 });
+
+describe('SkillEngine.readTechStackOverride — Option C user override (issue #410)', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  /**
+   * Fixture D — Override wins over auto-detect.
+   *
+   * .gossip/tech-stack.md present + thin-signal package.json (1 dep, would NOT
+   * trigger LLM via auto-detect). Override content should appear in <tech_stack>
+   * block; LLM must NOT be called for tech-stack detection.
+   */
+  it('Fixture D: override wins over auto-detect — LLM not called, override text in prompt', async () => {
+    const overrideContent = 'Solidity + Foundry. No Node.js runtime. No SQL database.';
+    const projectRoot = setupProjectRoot(
+      { dependencies: { gossipcat: '*' } },
+      { '.gossip/tech-stack.md': overrideContent },
+    );
+
+    try {
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: null, // must NOT be called
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      const promptData = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(0);
+      expect(promptData.user).toMatch(/<tech_stack>\n/);
+      expect(promptData.user).toContain(overrideContent);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture E — Override beats rich auto-detect signal.
+   *
+   * Same override file, but package.json with 5+ deps (would normally fire
+   * auto-detect). Override must still win; LLM not called for tech-stack.
+   */
+  it('Fixture E: override beats rich auto-detect signal — LLM not called, override text in prompt', async () => {
+    const overrideContent = 'Solidity + Foundry. No Node.js runtime. No SQL database.';
+    const projectRoot = setupProjectRoot(
+      {
+        dependencies: {
+          express: '^4.18.0',
+          pg: '^8.11.0',
+          zod: '^3.22.0',
+          lodash: '^4.17.21',
+          axios: '^1.6.0',
+        },
+      },
+      { '.gossip/tech-stack.md': overrideContent },
+    );
+
+    try {
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: null, // must NOT be called
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      const promptData = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(0);
+      expect(promptData.user).toMatch(/<tech_stack>\n/);
+      expect(promptData.user).toContain(overrideContent);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture F — Override > 2KB is clamped to first 2000 chars.
+   *
+   * Write a 3KB override file. Assert system prompt contains exactly the first
+   * 2000 chars. Spy on process.stderr.write and assert a clamping warning was
+   * emitted once.
+   */
+  it('Fixture F: override > 2KB is clamped — first 2000 chars in prompt, stderr warning', async () => {
+    // 'A' repeated to build a 3072-byte file (3KB)
+    const longContent = 'A'.repeat(3072);
+    const projectRoot = setupProjectRoot(
+      { dependencies: { gossipcat: '*' } },
+      { '.gossip/tech-stack.md': longContent },
+    );
+
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: null, // must NOT be called for tech-stack
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      const promptData = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      // LLM should not be called for tech-stack — override wins
+      expect(techStackCallCount()).toBe(0);
+
+      // The injected text should be exactly the first 2000 chars (trim doesn't change 'A' * 2000)
+      const expectedClamp = 'A'.repeat(2000);
+      expect(promptData.user).toContain(expectedClamp);
+      // Must not contain chars beyond the clamp boundary
+      expect(promptData.user).not.toContain('A'.repeat(2001));
+
+      // Stderr warning emitted exactly once about clamping
+      const clampWarnings = (stderrSpy.mock.calls as unknown[][])
+        .map(args => String(args[0]))
+        .filter(s => s.includes('clamping to 2000 chars'));
+      expect(clampWarnings).toHaveLength(1);
+    } finally {
+      stderrSpy.mockRestore();
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture G — Override read error falls through to auto-detect.
+   *
+   * Create a *directory* named .gossip/tech-stack.md so existsSync returns true
+   * but readFileSync throws EISDIR. Assert:
+   * - Falls through to auto-detect (LLM is called when dep floor passes)
+   * - process.stderr.write spy invoked with read-failed warning
+   */
+  it('Fixture G: override read error falls through to auto-detect, stderr warning emitted', async () => {
+    // 5-dep project so auto-detect floor (TECH_STACK_MIN_DEPS=3) is met
+    const projectRoot = setupProjectRoot({
+      dependencies: {
+        express: '^4.18.0',
+        pg: '^8.11.0',
+        zod: '^3.22.0',
+        lodash: '^4.17.21',
+        axios: '^1.6.0',
+      },
+    });
+    // Create a DIRECTORY at the override path — existsSync returns true, readFileSync throws EISDIR
+    mkdirSync(join(projectRoot, '.gossip', 'tech-stack.md'), { recursive: true });
+
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      const cannedAutoDetect = 'TypeScript + Node.js / Express API.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedAutoDetect,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      // Falls through: LLM IS called for tech-stack (auto-detect)
+      expect(techStackCallCount()).toBe(1);
+
+      // Stderr warning emitted about read failure
+      const errorWarnings = (stderrSpy.mock.calls as unknown[][])
+        .map(args => String(args[0]))
+        .filter(s => s.includes('tech-stack.md override read failed'));
+      expect(errorWarnings).toHaveLength(1);
+    } finally {
+      stderrSpy.mockRestore();
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture H — Empty override file falls through to auto-detect silently.
+   *
+   * Write an empty (or whitespace-only) .gossip/tech-stack.md. Assert:
+   * - Falls through to auto-detect (LLM called if floor passes)
+   * - No stderr warning emitted (empty file is a silent no-op)
+   */
+  it('Fixture H: empty override file falls through to auto-detect, no stderr warning', async () => {
+    // 5-dep project so auto-detect floor is met
+    const projectRoot = setupProjectRoot(
+      {
+        dependencies: {
+          express: '^4.18.0',
+          pg: '^8.11.0',
+          zod: '^3.22.0',
+          lodash: '^4.17.21',
+          axios: '^1.6.0',
+        },
+      },
+      { '.gossip/tech-stack.md': '   \n  \n  ' }, // whitespace-only
+    );
+
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      const cannedAutoDetect = 'TypeScript + Node.js / Express API.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedAutoDetect,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      // Falls through: LLM IS called for tech-stack
+      expect(techStackCallCount()).toBe(1);
+
+      // No stderr warning for empty file
+      const overrideWarnings = (stderrSpy.mock.calls as unknown[][])
+        .map(args => String(args[0]))
+        .filter(s => s.includes('tech-stack.md'));
+      expect(overrideWarnings).toHaveLength(0);
+    } finally {
+      stderrSpy.mockRestore();
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Memoization — override content is served from cache on second buildPrompt call.
+   *
+   * With the override file present, two buildPrompt calls on the same engine
+   * instance must both contain the override text, and the LLM must never be
+   * called for tech-stack (proving techStackCache is populated from the first
+   * call and reused on the second without re-reading the file).
+   */
+  it('Memoization: override result is cached — LLM not called on second buildPrompt', async () => {
+    const overrideContent = 'Rust + Axum. No Node.js. No SQL.';
+    const projectRoot = setupProjectRoot(
+      { dependencies: { gossipcat: '*' } },
+      { '.gossip/tech-stack.md': overrideContent },
+    );
+
+    try {
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: null, // must NOT be called for tech-stack
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+
+      // First call — cold cache, override read
+      const prompt1 = await engine.buildPrompt('agent-a', 'injection_vectors');
+      // Second call — warm cache, must not re-read or call auto-detect
+      const prompt2 = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      // Both calls produce the override content in the prompt
+      expect(prompt1.user).toContain(overrideContent);
+      expect(prompt2.user).toContain(overrideContent);
+
+      // LLM never called for tech-stack across both calls (cache hit on second)
+      expect(techStackCallCount()).toBe(0);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+});

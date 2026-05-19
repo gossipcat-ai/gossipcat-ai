@@ -228,6 +228,10 @@ If `format_compliance` signals a sudden drop for an agent that was fine last rou
 
 When blocked, the error message shows age + remaining cooldown + override instruction. Pass `force: true` to bypass; every override is appended to `.gossip/forced-skill-develops.jsonl` for auditability. Chronic override patterns on an agent+category pair are a signal that the skill prompt is ineffective or `MIN_EVIDENCE` is miscalibrated for that category — investigate before reflexively forcing.
 
+### Tech-stack override
+
+Drop a `.gossip/tech-stack.md` at the project root to bypass auto-detection on `gossip_skills(action: "develop")`. Content (max 2000 chars after trim) is injected verbatim into the skill-develop prompt's `<tech_stack>` block, replacing the auto-detected description. Useful for non-Node host projects (Solidity, Rust, Move, audit workspaces) where the LLM hallucinates a Node.js stack from thin npm dep signal (issue #410, PR #411 floor + this override). Cache is session-stable — restart the MCP server to pick up edits. Empty file or read errors fall through to auto-detect (with stderr warning on errors). Files over 2 KB are clamped with a stderr warning.
+
 ### Verifying UNVERIFIED findings
 
 When a consensus report has `UNVERIFIED` findings (cross-reviewer couldn't check), **you must verify them yourself before presenting results**. UNVERIFIED means "the peer didn't have the tools or context to check" — you do. Read the cited files, grep for the identifiers, confirm or reject. Do not show raw consensus output with unexamined UNVERIFIED findings.
