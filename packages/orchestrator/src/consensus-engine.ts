@@ -54,7 +54,7 @@ function budgetForAgent(preset: string): number {
 /** Minimum findings per peer to produce a useful cross-review. Below this, skip the peer. */
 const MIN_FINDINGS_PER_PEER = 2;
 const VALID_ACTIONS = new Set(['agree', 'disagree', 'unverified', 'new']);
-const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
+const ANCHOR_PATTERN = /(?:[a-zA-Z]:\/)?[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
 const MAX_VERIFIER_TURNS = 7;
 
 const VERIFIER_TOOLS: ToolDefinition[] = [
@@ -1461,7 +1461,7 @@ Return only valid JSON.${skillsBlock}`;
     // projectRoot alone or worktree roots seeded from resolutionRoots.
     if (!this.config.projectRoot && this.currentWorktreeRoots.size === 0) return '';
 
-    const citationPattern = /((?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)/g;
+    const citationPattern = /((?:[a-zA-Z]:\/)?(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)/g;
     const CONTEXT_LINES = 2;
     const MAX_FILE_SIZE = 10 * 1024 * 1024;
     const anchors: string[] = [];
@@ -1537,7 +1537,7 @@ Return only valid JSON.${skillsBlock}`;
 
         if (tag === 'file') {
           // file:line citation — resolve via worktree-priority anchor resolver
-          const fileMatch = trimmed.match(/^((?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)$/);
+          const fileMatch = trimmed.match(/^((?:[a-zA-Z]:\/)?(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6})):(\d+)$/);
           if (fileMatch && !seen.has(trimmed)) {
             seen.add(trimmed);
             const fullRef = fileMatch[1];
@@ -1658,7 +1658,7 @@ Return only valid JSON.${skillsBlock}`;
       .replace(/'[^'\n]*'/g, '');              // single-quoted strings
 
     // Extract file:line patterns like "task-dispatcher.ts:146" or "consensus-engine.ts:113"
-    const citationPattern = /(?:[\w./-]+\/)?([a-zA-Z][\w.-]+\.[a-z]{1,6}):(\d+)/g;
+    const citationPattern = /(?:(?:[a-zA-Z]:\/)?(?:[\w./-]+\/)?)?([a-zA-Z][\w.-]+\.[a-z]{1,6}):(\d+)/g;
     const rawCitations: Array<{ file: string; line: number }> = [];
     let match;
     while ((match = citationPattern.exec(stripped)) !== null) {

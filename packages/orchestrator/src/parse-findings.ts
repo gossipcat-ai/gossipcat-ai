@@ -28,7 +28,7 @@ const TYPE_ATTR_PATTERN = /type="([a-zA-Z]+)"/;
 const SEVERITY_ATTR_PATTERN = /severity="(critical|high|medium|low)"/;
 const CATEGORY_ATTR_PATTERN = /category="([a-z_]+)"/;
 
-const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
+const ANCHOR_PATTERN = /(?:[a-zA-Z]:\/)?[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
 
 const CANONICAL_TYPES: ReadonlySet<string> = new Set(['finding', 'suggestion', 'insight']);
 
