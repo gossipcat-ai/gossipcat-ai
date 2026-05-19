@@ -1489,11 +1489,10 @@ Return only valid JSON.${skillsBlock}`;
         }
         // Defense-in-depth: warn when the resolved path falls back to projectRoot
         // while worktree roots are active — the anchor may reflect master HEAD,
-        // not the branch under review.
-        const resolvedFromProjectRoot =
-          this.currentWorktreeRoots.size > 0 &&
-          this.config.projectRoot &&
-          filePath.startsWith(resolve(this.config.projectRoot) + '/');
+        // not the branch under review.  Uses isResolvedFromProjectRootOnly to
+        // avoid false-positives when the worktree is nested under projectRoot
+        // (e.g. the standard .claude/worktrees/agent-X layout).
+        const resolvedFromProjectRoot = this.isResolvedFromProjectRootOnly(filePath);
         const fileStat = await stat(filePath);
         if (fileStat.size > MAX_FILE_SIZE) continue;
         const content = await this.cachedRead(filePath);
@@ -1547,10 +1546,7 @@ Return only valid JSON.${skillsBlock}`;
               const safeRef = fullRef.replace(/["<>]/g, '');
               const filePath = await this.cachedResolveForAnchor(fullRef) ?? await this.cachedResolveForAnchor(bareFile);
               if (filePath) {
-                const resolvedFromProjectRoot =
-                  this.currentWorktreeRoots.size > 0 &&
-                  this.config.projectRoot &&
-                  filePath.startsWith(resolve(this.config.projectRoot) + '/');
+                const resolvedFromProjectRoot = this.isResolvedFromProjectRootOnly(filePath);
                 const content = await this.cachedRead(filePath);
                 if (content) {
                   const fileLines = content.split('\n');
@@ -1724,6 +1720,29 @@ Return only valid JSON.${skillsBlock}`;
    * worktree can still be auto-anchored when consensus runs back in the main
    * MCP process).
    */
+  /**
+   * Returns true when filePath falls under projectRoot but NOT inside any
+   * active worktree root.  This is the condition that warrants the
+   * "⚠ resolved against project root, NOT worktree" attribute — the file
+   * was found via the projectRoot fallback, meaning it reflects master HEAD,
+   * not the branch under review.
+   *
+   * The previous inline check used only a startsWith(projectRoot) test, which
+   * produced a false-positive when the worktree itself is nested under
+   * projectRoot (the standard `.claude/worktrees/agent-X` layout): a worktree
+   * file like /x/.claude/worktrees/agent-Y/foo.ts passes startsWith(/x/)
+   * even though it was correctly resolved via the worktree priority root.
+   *
+   * Fix: additionally verify the path is NOT inside any currentWorktreeRoot
+   * via isInsideAnyRoot, which applies realpath-safe containment checks.
+   */
+  private isResolvedFromProjectRootOnly(filePath: string): boolean {
+    if (this.currentWorktreeRoots.size === 0) return false;
+    if (!this.config.projectRoot) return false;
+    if (!filePath.startsWith(resolve(this.config.projectRoot) + '/')) return false;
+    return !this.isInsideAnyRoot(filePath, [...this.currentWorktreeRoots]);
+  }
+
   /**
    * Guard: resolved path must stay inside one of the valid roots, with
    * symlink-safe containment.

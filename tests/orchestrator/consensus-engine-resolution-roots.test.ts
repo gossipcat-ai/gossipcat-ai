@@ -200,6 +200,72 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
     expect(snippets).toContain('via="⚠ resolved against project root, NOT worktree"');
   });
 
+  it('Test 19 — nested worktree-resolved file does NOT get projectRoot warning', async () => {
+    // Regression for issue #401: when the worktree lives under projectRoot
+    // (standard .claude/worktrees/agent-X layout), a file resolved via the
+    // worktree priority root still passes startsWith(projectRoot + '/') —
+    // the old inline check falsely attached the ⚠ warning.
+    const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
+    // Nest the worktree under projectRoot, mimicking .claude/worktrees/agent-X
+    const wtDir = join(proj, '.claude', 'worktrees', 'agent-test');
+    mkdirSync(wtDir, { recursive: true });
+    const wt = realpathSync(wtDir);
+
+    // File exists only in the worktree (e.g. a new file on the branch).
+    mkdirSync(join(wt, 'src'), { recursive: true });
+    writeFileSync(join(wt, 'src', 'new-feature.ts'), 'export function newFeature() { return "branch"; }');
+
+    const engine = new ConsensusEngine({
+      llm: makeLlm(),
+      registryGet: () => undefined,
+      projectRoot: proj,
+      resolutionRoots: [wt],
+    } as ConsensusEngineConfig);
+
+    const snippets: string = await (engine as any).snippetsForFinding(
+      'Potential issue at src/new-feature.ts:1',
+    );
+
+    // Anchor must render.
+    expect(snippets).toContain('<anchor');
+    expect(snippets).toContain('newFeature');
+    // Must NOT carry the false-positive warning — file was resolved from worktree.
+    expect(snippets).not.toContain('⚠ resolved against project root, NOT worktree');
+  });
+
+  it('Test 20 — project-root-only file still gets warning (regression guard)', async () => {
+    // Mirror of Test 18 but using the nested-worktree layout.  A file that
+    // lives ONLY at projectRoot (not in the nested worktree) must still get
+    // the warning attribute so the regression from #401 fix doesn't silently
+    // suppress legitimate warnings.
+    const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
+    const wtDir = join(proj, '.claude', 'worktrees', 'agent-test');
+    mkdirSync(wtDir, { recursive: true });
+    const wt = realpathSync(wtDir);
+
+    // File lives only at projectRoot — not in the worktree.
+    mkdirSync(join(proj, 'src'), { recursive: true });
+    writeFileSync(join(proj, 'src', 'master-only.ts'), 'export function masterFn() { return 42; }');
+    // No corresponding file in wt/src/master-only.ts
+
+    const engine = new ConsensusEngine({
+      llm: makeLlm(),
+      registryGet: () => undefined,
+      projectRoot: proj,
+      resolutionRoots: [wt],
+    } as ConsensusEngineConfig);
+
+    const snippets: string = await (engine as any).snippetsForFinding(
+      'Potential issue at src/master-only.ts:1',
+    );
+
+    // Snippet must render via projectRoot fallback.
+    expect(snippets).toContain('<anchor');
+    expect(snippets).toContain('masterFn');
+    // Warning must still be present — file resolved from projectRoot, not worktree.
+    expect(snippets).toContain('via="⚠ resolved against project root, NOT worktree"');
+  });
+
   it('Test 17 — anchorPathCache is cleared when worktree roots change', async () => {
     const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
     mkdirSync(join(proj, 'src'), { recursive: true });
