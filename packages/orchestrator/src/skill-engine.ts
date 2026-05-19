@@ -7,7 +7,7 @@
  * once the class grew beyond generation into a full lifecycle engine.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, renameSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync, realpathSync, renameSync, unlinkSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { join, resolve } from 'path';
 import { ILLMProvider } from './llm-client';
@@ -437,7 +437,7 @@ export class SkillEngine {
 
     // Analyze project tech stack so skills are tailored, not generic (memoized)
     if (this.techStackCache === undefined) {
-      this.techStackCache = await this.detectTechStack();
+      this.techStackCache = this.readTechStackOverride() ?? await this.detectTechStack();
     }
     const techStack = this.techStackCache;
     if (techStack) {
@@ -722,6 +722,34 @@ ${inputs.join('\n')}
     } catch {
       // Fallback: return raw dependency list if LLM fails
       return inputs.join('\n').slice(0, 500);
+    }
+  }
+
+  /**
+   * Reads `.gossip/tech-stack.md` as a user-authored override for tech-stack
+   * detection. Returns the file content (clamped to 2000 chars) if present and
+   * non-empty, or null to fall through to auto-detect.
+   *
+   * Operator escape hatch for non-Node host projects (Solidity, Rust, Move, etc.)
+   * where the LLM hallucinates a Node.js stack from thin npm dep signal.
+   * Cache is session-stable via techStackCache — restart the MCP server to pick
+   * up edits to this file.
+   */
+  private readTechStackOverride(): string | null {
+    const overridePath = join(this.projectRoot, '.gossip', 'tech-stack.md');
+    if (!existsSync(overridePath)) return null;
+    try {
+      const { size } = statSync(overridePath);
+      if (size > 2048) {
+        process.stderr.write(`[skill-engine] tech-stack.md override is ${size} bytes, clamping to 2000 chars\n`);
+      }
+      const content = readFileSync(overridePath, 'utf-8').slice(0, 2000).trim();
+      if (!content) return null;
+      return content;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[skill-engine] tech-stack.md override read failed: ${msg}\n`);
+      return null;
     }
   }
 
