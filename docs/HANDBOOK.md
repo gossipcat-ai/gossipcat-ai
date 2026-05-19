@@ -252,7 +252,7 @@ gossip_collect({
 
 Without `resolutionRoots`, citations to files that only exist in the worktree resolve against `projectRoot` → `⚠ file not found` → every cross-reviewer marks UNVERIFIED → the round produces zero verified findings. `resolutionRoots` runs each path through a validator (NUL reject, `..` reject, realpath, ownership check, git-common-dir match, `git worktree list` membership) before adding it to the citation-resolver trust zone.
 
-Secondary: `consensus.autoDiscoverWorktrees: true` in `.gossip/config.json` auto-discovers all git worktrees at round start (opt-in, default off) — convenience for users who routinely run consensus on feature branches. Same validator applies.
+Secondary: `consensus.autoDiscoverWorktrees: true` in `.gossip/config.json` is DISCOVERY-ONLY (opt-in, default off). When enabled, it logs a warning listing hashed paths of sibling git worktrees so operators know which branches exist — but it does NOT auto-route cross-reviewers to any of them. You must still pass explicit `resolutionRoots` to `gossip_dispatch` (or `gossip_collect`) to pin cross-reviewers to a specific worktree. Per consensus c6b8580d-595e48d2 + issue #402, prior auto-promotion behaviour was a foot-gun: it silently routed reviews to the wrong branch when multiple worktrees existed. Same validator applies to anything you do pass explicitly.
 
 See spec `docs/specs/2026-04-17-issue-126.md` for the full design.
 
