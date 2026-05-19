@@ -118,7 +118,7 @@ export function detectFormatCompliance(result: string): FormatComplianceResult {
   const tags_dropped_short_content = parseRes.droppedShortContent;
   // Preserve legacy raw-tag count (includes dropped tags) for back-compat.
   const findingCount = (body.match(/<agent_finding[\s>]/g) ?? []).length;
-  const citationCount = (body.match(/\b[\w./-]+\.\w+:\d+\b/g) ?? []).length;
+  const citationCount = (body.match(/\b(?:[a-zA-Z]:\/)?[\w./-]+\.\w+:\d+\b/g) ?? []).length;
   // Compliance now requires ACCEPTED tags (previous behavior accepted
   // dropped-type tags too, which let format-invalid output pass as compliant).
   const formatCompliant = tags_accepted > 0 && citationCount >= tags_accepted;

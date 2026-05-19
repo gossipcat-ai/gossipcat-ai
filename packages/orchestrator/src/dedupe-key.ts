@@ -21,7 +21,7 @@ import { createHash } from 'crypto';
 // Kept in sync with ANCHOR_PATTERN in parse-findings.ts:31. Duplicated here
 // rather than re-exported so this module can be consumed without pulling in
 // the parse-findings surface when it lands on the CLI side.
-const ANCHOR_PATTERN = /[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
+const ANCHOR_PATTERN = /(?:[a-zA-Z]:\/)?[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
 
 const MIN_NORMALIZED_CONTENT_LENGTH = 32;
 
