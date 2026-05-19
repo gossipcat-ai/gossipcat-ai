@@ -138,31 +138,33 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     rmSync(projectDir, { recursive: true, force: true });
   });
 
-  // Case 1 — Layer 1 happy path: flag ON, no caller-passed roots, worktrees
-  // discovered. Discovered roots must flow into per-task relay options.
-  it('Layer 1 — auto-discovers worktrees and injects into relay options', async () => {
+  // Case 1 — Layer 1 (Option D, issue #402, consensus c6b8580d-595e48d2):
+  // discovery-only. Flag ON + no caller-passed roots + worktrees discovered →
+  // emit hashed warning, do NOT promote to relay options or stash.
+  it('Layer 1 — discovery-only: emits hashed warning, does NOT promote roots', async () => {
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
     mockedDiscover.mockResolvedValue({
       discovered: ['/tmp/worktree-a', '/tmp/worktree-b'],
       rejected: [],
     });
 
-    await handleDispatchParallel(
+    const result: any = await handleDispatchParallel(
       [{ agent_id: 'gemini-tester', task: 'Audit X' }],
       /* consensus */ true,
     );
 
     expect(mockedDiscover).toHaveBeenCalledWith(expect.any(String), [expect.any(String)]);
+    expect(result.warnings).toBeDefined();
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/autoDiscoverWorktrees/);
+    expect(result.warnings[0]).toMatch(/2 sibling worktree\(s\) discovered/);
+    expect(result.warnings[0]).toMatch(/auto-promotion is disabled/);
+    expect(result.warnings[0]).toMatch(/sha256:[0-9a-f]{8}/);
+    expect(result.warnings[0]).not.toContain('/tmp/worktree-a');
+    expect(result.warnings[0]).not.toContain('/tmp/worktree-b');
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    const relayDefs = dispatchParallelCall[0];
-    expect(relayDefs[0].options).toEqual({
-      resolutionRoots: ['/tmp/worktree-a', '/tmp/worktree-b'],
-    });
-    // Stash must carry discovered roots for Phase 2 collect-time pickup
-    // (mirrors handleDispatchConsensus stash assertion in dispatch-autodiscover-worktrees.test.ts:168)
-    expect(ctx.pendingDispatchResolutionRoots.size).toBeGreaterThanOrEqual(1);
-    const stashedValue = Array.from(ctx.pendingDispatchResolutionRoots.values())[0];
-    expect(stashedValue).toEqual(['/tmp/worktree-a', '/tmp/worktree-b']);
+    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(ctx.pendingDispatchResolutionRoots.size).toBe(0);
   });
 
   // Case 2 — explicit caller-passed roots win. Auto-discovery must NOT run.
@@ -223,9 +225,9 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     expect(dispatchParallelCall[0][0].options).toBeUndefined();
   });
 
-  // Case 5 — Layer 2 silent when Layer 1 fires. Discovered roots get injected,
-  // and the warning channel stays empty (operator already opted in).
-  it('Layer 2 — silent when Layer 1 fires (flag on + worktrees discovered)', async () => {
+  // Case 5 — Layer 1 warning takes the channel; Layer 2 "flag is OFF" does NOT
+  // fire since the flag is ON.
+  it('Layer 1 warning fires (not Layer 2) when flag on + worktrees discovered', async () => {
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
     mockedDiscover.mockResolvedValue({
       discovered: ['/tmp/worktree-x'],
@@ -237,11 +239,12 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
       /* consensus */ true,
     );
 
-    expect(result.warnings).toBeUndefined();
+    expect(result.warnings).toBeDefined();
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/auto-promotion is disabled/);
+    expect(result.warnings[0]).not.toMatch(/autoDiscoverWorktrees is OFF/);
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toEqual({
-      resolutionRoots: ['/tmp/worktree-x'],
-    });
+    expect(dispatchParallelCall[0][0].options).toBeUndefined();
   });
 
   // Case 6 — F4: flag ON, no discovered, rejected > 0 → warning in response.

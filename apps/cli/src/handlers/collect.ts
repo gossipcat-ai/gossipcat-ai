@@ -417,7 +417,7 @@ export async function handleCollect(
         return { content: [{ type: 'text' as const, text: 'Error: No LLM configured for consensus. Check gossip_setup.' }] };
       }
 
-      const { PerformanceReader, discoverGitWorktrees } = await import('@gossip/orchestrator');
+      const { PerformanceReader, discoverGitWorktrees, hashPath } = await import('@gossip/orchestrator');
       const performanceReader = new PerformanceReader(process.cwd());
 
       // Resolve effective resolution roots (#126 PR-B):
@@ -425,11 +425,18 @@ export async function handleCollect(
       //   2. dispatch-time fallback — NOT loaded here because the pending
       //      round record is created below (resolutionRoots field flows
       //      through it for later phases, not for this first synthesis call)
-      //   3. auto-discovery when consensus.autoDiscoverWorktrees=true,
-      //      validated via the same pipeline as explicit roots.
+      //   3. auto-discovery is DISCOVERY-ONLY (consensus c6b8580d-595e48d2 +
+      //      issue #402): when consensus.autoDiscoverWorktrees=true, log a
+      //      hashed-paths breadcrumb but do NOT merge discovered roots into
+      //      effectiveRoots. Operators must pass explicit resolutionRoots.
       // Collect-time REPLACES dispatch-time (not merges) per spec.
+      //
+      // Asymmetry note: dispatch.ts surfaces the warning through a
+      // warnings[] return path. Collect's auto-discovery branch has no such
+      // channel — it's invoked inline during synthesis — so we emit to
+      // stderr only. Mirrors the discovery-only contract; no auto-promotion.
       const explicitRoots: readonly string[] = resolutionRoots ?? [];
-      let effectiveRoots: readonly string[] = explicitRoots;
+      const effectiveRoots: readonly string[] = explicitRoots;
       try {
         const { findConfigPath, loadConfig } = await import('../config');
         const cfgPath = findConfigPath(process.cwd());
@@ -441,7 +448,14 @@ export async function handleCollect(
               `[consensus] auto-discovery: +${discovered.length} discovered, ${rejected.length} rejected\n`,
             );
           }
-          effectiveRoots = [...explicitRoots, ...discovered];
+          if (discovered.length > 0) {
+            const hashedPaths = discovered.map(d => hashPath(d));
+            process.stderr.write(
+              `[consensus] autoDiscoverWorktrees: ${discovered.length} sibling worktree(s) ` +
+              `discovered but auto-promotion is disabled (issue #402). Pass resolutionRoots to ` +
+              `gossip_collect to pin cross-reviewers. Discovered (hashed): ${hashedPaths.join(', ')}\n`,
+            );
+          }
         }
       } catch (err) {
         process.stderr.write(`[consensus] auto-discovery failed: ${(err as Error).message}\n`);

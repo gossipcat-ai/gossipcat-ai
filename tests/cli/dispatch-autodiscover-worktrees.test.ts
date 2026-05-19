@@ -143,32 +143,38 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     rmSync(projectDir, { recursive: true, force: true });
   });
 
-  // Case 1 — Layer 1 happy path: flag ON, no caller-passed roots, worktrees
-  // discovered. Discovered roots must flow into both per-task relay options
-  // AND ctx.pendingDispatchResolutionRoots.
-  it('Layer 1 — auto-discovers worktrees and injects into relay options + stash', async () => {
+  // Case 1 — Layer 1 (Option D, issue #402, consensus c6b8580d-595e48d2):
+  // flag ON, no caller-passed roots, worktrees discovered. Auto-promotion is
+  // DISABLED — we emit a hashed-paths warning but do NOT inject the discovered
+  // roots into relay options or the stash. Operators must pass explicit roots.
+  it('Layer 1 — discovery-only: emits hashed warning, does NOT promote roots', async () => {
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
     mockedDiscover.mockResolvedValue({
       discovered: ['/tmp/worktree-a', '/tmp/worktree-b'],
       rejected: [],
     });
 
-    await handleDispatchConsensus([
+    const result: any = await handleDispatchConsensus([
       { agent_id: 'gemini-tester', task: 'Audit X' },
     ]);
 
     expect(mockedDiscover).toHaveBeenCalledWith(expect.any(String), [expect.any(String)]);
-    // Relay options carry the discovered roots
+    // Warning emitted with hashed paths (no raw paths to leak)
+    expect(result.warnings).toBeDefined();
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/autoDiscoverWorktrees/);
+    expect(result.warnings[0]).toMatch(/2 sibling worktree\(s\) discovered/);
+    expect(result.warnings[0]).toMatch(/auto-promotion is disabled/);
+    expect(result.warnings[0]).toMatch(/Pass resolutionRoots/);
+    expect(result.warnings[0]).toMatch(/sha256:[0-9a-f]{8}/);
+    // Raw paths must NOT appear in the warning (privacy + only-hashed contract)
+    expect(result.warnings[0]).not.toContain('/tmp/worktree-a');
+    expect(result.warnings[0]).not.toContain('/tmp/worktree-b');
+    // Relay options must NOT carry the discovered roots — auto-promotion off
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    const relayDefs = dispatchParallelCall[0];
-    expect(relayDefs[0].options).toEqual({
-      resolutionRoots: ['/tmp/worktree-a', '/tmp/worktree-b'],
-    });
-    // Stash carries them too (collect-time pickup)
-    expect(ctx.pendingDispatchResolutionRoots.get('t-1')).toEqual([
-      '/tmp/worktree-a',
-      '/tmp/worktree-b',
-    ]);
+    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    // Stash must NOT carry the discovered roots
+    expect(ctx.pendingDispatchResolutionRoots.size).toBe(0);
   });
 
   // Case 2 — explicit caller-passed roots win. Auto-discovery must NOT run.
@@ -235,9 +241,11 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(dispatchParallelCall[0][0].options).toBeUndefined();
   });
 
-  // Case 5 — Layer 2 silent when Layer 1 fires. Discovered roots get injected,
-  // and the warning channel stays empty (operator already opted in).
-  it('Layer 2 — silent when Layer 1 fires (flag on + worktrees discovered)', async () => {
+  // Case 5 — When Layer 1 fires (flag ON + worktrees discovered), the
+  // discovery-only warning takes over the Layer 2 channel — operator already
+  // opted in to the flag, so we emit the hashed-paths warning (single warning
+  // only, not the Layer 2 "flag is off" variant) and do not promote.
+  it('Layer 1 warning fires (not Layer 2) when flag on + worktrees discovered', async () => {
     writeConfig(projectDir, { consensus: { autoDiscoverWorktrees: true } });
     mockedDiscover.mockResolvedValue({
       discovered: ['/tmp/worktree-x'],
@@ -248,11 +256,13 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
       { agent_id: 'gemini-tester', task: 'Audit X' },
     ]);
 
-    expect(result.warnings).toBeUndefined();
+    expect(result.warnings).toBeDefined();
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/auto-promotion is disabled/);
+    // Layer 2 "OFF but worktrees exist" must NOT fire (we're not OFF)
+    expect(result.warnings[0]).not.toMatch(/autoDiscoverWorktrees is OFF/);
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toEqual({
-      resolutionRoots: ['/tmp/worktree-x'],
-    });
+    expect(dispatchParallelCall[0][0].options).toBeUndefined();
   });
 
   // Case 6 — F4: flag ON, no discovered, rejected > 0 → warning in response.

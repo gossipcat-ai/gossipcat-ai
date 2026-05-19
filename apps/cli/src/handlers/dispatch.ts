@@ -12,6 +12,7 @@ import {
   verifyClaims,
   emitConsensusSignals,
   sanitizeForLog,
+  hashPath,
   type ClaimBlock,
   type ClaimVerdict,
   type PerformanceSignal,
@@ -725,10 +726,13 @@ export async function handleDispatchSingle(
  * Used by both handleDispatchConsensus and handleDispatchParallel(consensus:true).
  *
  * Layer 1 — when caller passed no resolutionRoots and
- * `consensus.autoDiscoverWorktrees=true`, run discoverGitWorktrees and return
- * the validated paths as effectiveRoots. Explicit caller-passed roots ALWAYS
- * win — when dispatchResolutionRoots is non-empty this function returns it
- * unchanged without running discovery.
+ * `consensus.autoDiscoverWorktrees=true`, run discoverGitWorktrees and emit a
+ * hashed-paths warning so operators know which worktrees exist. Auto-promotion
+ * to effectiveRoots is DISABLED per consensus c6b8580d-595e48d2 + issue #402:
+ * promoting discovered worktrees blindly routed cross-reviewers to the wrong
+ * branch. Operators must pass explicit resolutionRoots to gossip_dispatch.
+ * Explicit caller-passed roots ALWAYS win — when dispatchResolutionRoots is
+ * non-empty this function returns it unchanged without running discovery.
  *
  * Layer 2 — when the flag is OFF but worktrees exist on disk and
  * resolutionRoots is empty, push a non-fatal warning into the returned
@@ -762,7 +766,15 @@ async function resolveDispatchResolutionRoots(
         );
       }
       if (discovered.length > 0) {
-        effectiveRoots = discovered;
+        // Per consensus c6b8580d-595e48d2 + issue #402: auto-promotion was the
+        // bug. autoDiscoverWorktrees is discovery+warning only. Operators must
+        // pass explicit resolutionRoots to route cross-reviewers.
+        const hashedPaths = discovered.map(d => hashPath(d));
+        warnings.push(
+          `autoDiscoverWorktrees: ${discovered.length} sibling worktree(s) discovered ` +
+          `but auto-promotion is disabled. Pass resolutionRoots to gossip_dispatch ` +
+          `to pin cross-reviewers to a specific worktree. Discovered (hashed): ${hashedPaths.join(', ')}`,
+        );
       } else if (rejected.length > 0) {
         // F4 — surface "all candidates rejected" through the operator-visible
         // warnings channel instead of stderr-only.
