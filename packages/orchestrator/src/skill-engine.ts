@@ -748,7 +748,7 @@ Requirements:
     // README → readmeFound, manifests → manifestCount). Only count source-code extensions
     // to avoid false positives from ubiquitous config files in any project.
     const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.gossip', 'dist', 'build', 'out', 'coverage']);
-    const EXCLUDED_EXTS = new Set(['.json', '.md', '.yaml', '.yml', '.toml', '.lock', '.txt', '.xml', '.ini', '.cfg', '.env', '.gitignore', '.gitattributes', '.editorconfig', '.npmrc', '.nvmrc']);
+    const EXCLUDED_EXTS = new Set(['.json', '.md', '.yaml', '.yml', '.toml', '.lock', '.txt', '.xml', '.ini', '.cfg', '.env', '.gitignore', '.gitattributes', '.editorconfig', '.npmrc', '.nvmrc', '.prettierrc', '.eslintrc', '.babelrc', '.dockerignore', '.flowconfig']);
     let extensionSignal = false;
     try {
       const entries = readdirSync(this.projectRoot, { withFileTypes: true });
