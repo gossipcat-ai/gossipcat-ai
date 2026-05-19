@@ -812,4 +812,45 @@ describe('SkillEngine.detectTechStack — multi-toolchain auto-detection (issue 
       rmSync(projectRoot, { recursive: true, force: true });
     }
   });
+
+  /**
+   * Fixture Q — README.md read error falls through to README fallback.
+   *
+   * README.md exists as a DIRECTORY (existsSync true, readFileSync throws EISDIR).
+   * Fallback `README` (no extension) provides valid Solidity-audit content.
+   * After the F1 fix the loop must continue past the failing README.md and
+   * pick up the fallback. Before the fix, the loop broke after README.md and
+   * never tried the fallback — readmeFound stayed false.
+   */
+  it('Fixture Q: README.md read error falls through to README fallback', async () => {
+    const projectRoot = setupProjectRoot(
+      { dependencies: { gossipcat: '*' } },
+      {},
+    );
+    // README.md as a directory → readFileSync throws EISDIR
+    mkdirSync(join(projectRoot, 'README.md'), { recursive: true });
+    const fallbackContent = '# Solidity Audit Tool\n\nSecurity audit tool for smart contracts.\n';
+    writeFileSync(join(projectRoot, 'README'), fallbackContent);
+
+    try {
+      const cannedResponse = 'Solidity + audit tooling.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedResponse,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      const promptData = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      // LLM IS called — fallback README crossed the threshold.
+      expect(techStackCallCount()).toBe(1);
+      expect(promptData.user).toMatch(/<tech_stack>\n/);
+      // Fallback content (from `README`, not `README.md`) reached the LLM.
+      const llmInput = getTechStackLLMInput(llm);
+      expect(llmInput).toContain('Solidity Audit Tool');
+      expect(llmInput).toContain('Security audit tool for smart contracts');
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
 });

@@ -737,9 +737,9 @@ Requirements:
           if (clamped.trim()) {
             inputs.push(`README (${name}, first ${Math.min(30, content.split('\n').length)} lines):\n${clamped}`);
             readmeFound = true;
+            break; // first successful README wins; empty/error → try next candidate
           }
-        } catch { /* skip */ }
-        break;
+        } catch { /* skip — try next README */ }
       }
     }
 
