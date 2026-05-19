@@ -139,12 +139,14 @@ describe('SkillEngine.detectTechStack — thin-signal floor (issue #410)', () =>
    * the tech-stack LLM call. The system prompt must not contain <tech_stack>.
    */
   test('Fixture A: 1-dep project — LLM not called for tech-stack, <tech_stack> absent', async () => {
+    // .sol files are placed in src/ subdirectory — root-only census skips them,
+    // so the thin dep-count (1) is the only signal and LLM must not be called.
     const projectRoot = setupProjectRoot(
       { dependencies: { gossipcat: '*' } },
       {
-        'Token.sol': 'pragma solidity ^0.8.0;\ncontract Token {}\n',
-        'Vault.sol': 'pragma solidity ^0.8.0;\ncontract Vault {}\n',
-        'Staking.sol': 'pragma solidity ^0.8.0;\ncontract Staking {}\n',
+        'src/Token.sol': 'pragma solidity ^0.8.0;\ncontract Token {}\n',
+        'src/Vault.sol': 'pragma solidity ^0.8.0;\ncontract Vault {}\n',
+        'src/Staking.sol': 'pragma solidity ^0.8.0;\ncontract Staking {}\n',
       },
     );
 
@@ -509,6 +511,344 @@ describe('SkillEngine.readTechStackOverride — Option C user override (issue #4
 
       // LLM never called for tech-stack across both calls (cache hit on second)
       expect(techStackCallCount()).toBe(0);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Helper to capture the user-content string sent to the LLM for tech-stack detection.
+ *
+ * detectTechStack calls llm.generate with a messages array where messages[0].content
+ * is the <project_deps> block. The mock distinguishes tech-stack calls by temperature=0.
+ * This helper extracts that content from the jest mock.calls array.
+ */
+function getTechStackLLMInput(llm: ILLMProvider): string {
+  const mockFn = (llm.generate as jest.Mock);
+  const techStackCall = mockFn.mock.calls.find(
+    (args: unknown[]) => {
+      const opts = args[1] as { temperature?: number } | undefined;
+      return (opts?.temperature ?? 0.3) === 0;
+    },
+  );
+  if (!techStackCall) return '';
+  const messages = techStackCall[0] as Array<{ role: string; content: string }>;
+  return messages[0]?.content ?? '';
+}
+
+describe('SkillEngine.detectTechStack — multi-toolchain auto-detection (issue #410, Option A)', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  /**
+   * Fixture I — Foundry-only project.
+   *
+   * No package.json (below dep threshold), but foundry.toml + 3 .sol files at root.
+   * Manifest scan should fire; extension census should detect .sol(3).
+   * LLM must be called for tech-stack; LLM input contains manifest + extension signals.
+   */
+  it('Fixture I: Foundry-only — LLM called, manifest + extension signals in LLM input', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skill-tech-stack-'));
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    writeFileSync(join(dir, '.gossip', 'bootstrap.md'), '# Test Project\n');
+    writeFileSync(join(dir, '.gossip', 'agent-performance.jsonl'), '');
+    // No package.json — below dep threshold
+    writeFileSync(join(dir, 'foundry.toml'), '[profile.default]\nsrc = "src"\n');
+    writeFileSync(join(dir, 'Token.sol'), 'pragma solidity ^0.8.0;\ncontract Token {}\n');
+    writeFileSync(join(dir, 'Vault.sol'), 'pragma solidity ^0.8.0;\ncontract Vault {}\n');
+    writeFileSync(join(dir, 'Staking.sol'), 'pragma solidity ^0.8.0;\ncontract Staking {}\n');
+
+    try {
+      const cannedResponse = 'Solidity + Foundry. No Node.js. No SQL.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedResponse,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(dir), dir);
+      const promptData = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(1);
+      expect(promptData.user).toMatch(/<tech_stack>\n/);
+      const llmInput = getTechStackLLMInput(llm);
+      expect(llmInput).toContain('Manifest: foundry.toml (Solidity/Foundry)');
+      expect(llmInput).toContain('Root file extensions:');
+      expect(llmInput).toContain('.sol(3)');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture J — Rust-only project.
+   *
+   * No package.json, but Cargo.toml + 2 .rs files at root.
+   * LLM must be called; LLM input contains Rust manifest signal.
+   */
+  it('Fixture J: Rust-only — LLM called, Cargo.toml manifest signal in LLM input', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skill-tech-stack-'));
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    writeFileSync(join(dir, '.gossip', 'bootstrap.md'), '# Test Project\n');
+    writeFileSync(join(dir, '.gossip', 'agent-performance.jsonl'), '');
+    writeFileSync(join(dir, 'Cargo.toml'), '[package]\nname = "myapp"\nversion = "0.1.0"\n');
+    writeFileSync(join(dir, 'main.rs'), 'fn main() {}\n');
+    writeFileSync(join(dir, 'lib.rs'), 'pub fn hello() {}\n');
+
+    try {
+      const cannedResponse = 'Rust. No Node.js. No SQL.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedResponse,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(dir), dir);
+      await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(1);
+      const llmInput = getTechStackLLMInput(llm);
+      expect(llmInput).toContain('Manifest: Cargo.toml (Rust)');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture K — Python project with both pyproject.toml + requirements.txt.
+   *
+   * Both manifest lines must appear in LLM input; LLM must be called.
+   */
+  it('Fixture K: Python (pyproject + requirements) — both manifest lines in LLM input', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skill-tech-stack-'));
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    writeFileSync(join(dir, '.gossip', 'bootstrap.md'), '# Test Project\n');
+    writeFileSync(join(dir, '.gossip', 'agent-performance.jsonl'), '');
+    writeFileSync(join(dir, 'pyproject.toml'), '[build-system]\nrequires = ["setuptools"]\n');
+    writeFileSync(join(dir, 'requirements.txt'), 'requests==2.31.0\nfastapi==0.104.0\n');
+
+    try {
+      const cannedResponse = 'Python + FastAPI. No Node.js.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedResponse,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(dir), dir);
+      await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(1);
+      const llmInput = getTechStackLLMInput(llm);
+      expect(llmInput).toContain('Manifest: pyproject.toml (Python)');
+      expect(llmInput).toContain('Manifest: requirements.txt (Python)');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture L — README crosses threshold for thin-dep project.
+   *
+   * package.json with 1 dep (sub-threshold) + README.md with Solidity content.
+   * README provides the non-Node signal; LLM must be called.
+   * LLM input contains README content; user prompt contains <tech_stack> block.
+   */
+  it('Fixture L: README crosses threshold — LLM called, README content in LLM input', async () => {
+    const readmeContent = '# My Solidity Audit Tool\n\nThis is a security audit tool for Solidity smart contracts.';
+    const projectRoot = setupProjectRoot(
+      { dependencies: { gossipcat: '*' } },
+      { 'README.md': readmeContent },
+    );
+
+    try {
+      const cannedResponse = 'Solidity + audit tooling.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedResponse,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      const promptData = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(1);
+      expect(promptData.user).toMatch(/<tech_stack>\n/);
+      const llmInput = getTechStackLLMInput(llm);
+      expect(llmInput).toContain('My Solidity Audit Tool');
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture M — node_modules excluded from extension census.
+   *
+   * node_modules/foo.js + node_modules/bar.js should NOT be counted.
+   * Contract.sol at root + foundry.toml to cross threshold.
+   * Assert .sol(1) present in LLM input and no .js count from node_modules.
+   */
+  it('Fixture M: node_modules excluded — .sol(1) present, no .js count from node_modules', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skill-tech-stack-'));
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    mkdirSync(join(dir, 'node_modules'), { recursive: true });
+    writeFileSync(join(dir, '.gossip', 'bootstrap.md'), '# Test Project\n');
+    writeFileSync(join(dir, '.gossip', 'agent-performance.jsonl'), '');
+    writeFileSync(join(dir, 'foundry.toml'), '[profile.default]\n');
+    writeFileSync(join(dir, 'Contract.sol'), 'pragma solidity ^0.8.0;\ncontract C {}\n');
+    writeFileSync(join(dir, 'node_modules', 'foo.js'), 'module.exports = {};\n');
+    writeFileSync(join(dir, 'node_modules', 'bar.js'), 'module.exports = {};\n');
+
+    try {
+      const cannedResponse = 'Solidity + Foundry.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedResponse,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(dir), dir);
+      await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(1);
+      const llmInput = getTechStackLLMInput(llm);
+      expect(llmInput).toContain('.sol(1)');
+      // node_modules .js files must NOT appear in the extension census
+      expect(llmInput).not.toMatch(/\.js\(\d+\)/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture N — Mixed Rust+Node additive.
+   *
+   * Cargo.toml + package.json with 5 deps. Both signals should appear in LLM input.
+   */
+  it('Fixture N: Mixed Rust+Node — both Cargo.toml manifest and npm deps in LLM input', async () => {
+    const projectRoot = setupProjectRoot(
+      {
+        dependencies: {
+          express: '^4.18.0',
+          pg: '^8.11.0',
+          zod: '^3.22.0',
+          lodash: '^4.17.21',
+          axios: '^1.6.0',
+        },
+      },
+      { 'Cargo.toml': '[package]\nname = "native-addon"\nversion = "0.1.0"\n' },
+    );
+
+    try {
+      const cannedResponse = 'Rust + Node.js/Express hybrid.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedResponse,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(1);
+      const llmInput = getTechStackLLMInput(llm);
+      expect(llmInput).toContain('Manifest: Cargo.toml (Rust)');
+      // npm deps should also appear (package.json was gathered)
+      expect(llmInput).toContain('express');
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture O — No signals, still suppressed.
+   *
+   * Empty temp dir (no package.json, no manifests, no README, no source files).
+   * LLM must NOT be called; no <tech_stack> in prompt.
+   */
+  it('Fixture O: No signals — LLM not called, no <tech_stack> in prompt', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skill-tech-stack-'));
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    writeFileSync(join(dir, '.gossip', 'bootstrap.md'), '# Test Project\n');
+    writeFileSync(join(dir, '.gossip', 'agent-performance.jsonl'), '');
+    // No package.json, no manifests, no README, no source files at root
+
+    try {
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: null, // must NOT be called
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(dir), dir);
+      const promptData = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(0);
+      expect(promptData.user).not.toMatch(/<tech_stack>\n/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture P — Empty README doesn't count.
+   *
+   * Empty README.md + thin 1-dep package.json. LLM must NOT be called.
+   * Empty README provides no signal; dep count is below threshold.
+   */
+  it('Fixture P: Empty README — LLM not called, empty README not a signal', async () => {
+    const projectRoot = setupProjectRoot(
+      { dependencies: { gossipcat: '*' } },
+      { 'README.md': '   \n   \n  ' }, // whitespace-only
+    );
+
+    try {
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: null, // must NOT be called
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      const promptData = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      expect(techStackCallCount()).toBe(0);
+      expect(promptData.user).not.toMatch(/<tech_stack>\n/);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Fixture Q — README.md read error falls through to README fallback.
+   *
+   * README.md exists as a DIRECTORY (existsSync true, readFileSync throws EISDIR).
+   * Fallback `README` (no extension) provides valid Solidity-audit content.
+   * After the F1 fix the loop must continue past the failing README.md and
+   * pick up the fallback. Before the fix, the loop broke after README.md and
+   * never tried the fallback — readmeFound stayed false.
+   */
+  it('Fixture Q: README.md read error falls through to README fallback', async () => {
+    const projectRoot = setupProjectRoot(
+      { dependencies: { gossipcat: '*' } },
+      {},
+    );
+    // README.md as a directory → readFileSync throws EISDIR
+    mkdirSync(join(projectRoot, 'README.md'), { recursive: true });
+    const fallbackContent = '# Solidity Audit Tool\n\nSecurity audit tool for smart contracts.\n';
+    writeFileSync(join(projectRoot, 'README'), fallbackContent);
+
+    try {
+      const cannedResponse = 'Solidity + audit tooling.';
+      const { llm, techStackCallCount } = makeLLMMock({
+        techStackResponse: cannedResponse,
+        skillGenResponse: VALID_SKILL,
+      });
+
+      const engine = new SkillEngine(llm, makeStubReader(projectRoot), projectRoot);
+      const promptData = await engine.buildPrompt('agent-a', 'injection_vectors');
+
+      // LLM IS called — fallback README crossed the threshold.
+      expect(techStackCallCount()).toBe(1);
+      expect(promptData.user).toMatch(/<tech_stack>\n/);
+      // Fallback content (from `README`, not `README.md`) reached the LLM.
+      const llmInput = getTechStackLLMInput(llm);
+      expect(llmInput).toContain('Solidity Audit Tool');
+      expect(llmInput).toContain('Security audit tool for smart contracts');
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
     }

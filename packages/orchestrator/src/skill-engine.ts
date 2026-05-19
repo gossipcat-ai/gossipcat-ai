@@ -94,6 +94,22 @@ export function coerceStatus(raw: unknown): VerdictStatus {
  */
 const TECH_STACK_MIN_DEPS = 3;
 
+/**
+ * Known non-Node manifest filenames and their associated language/toolchain.
+ * Checked via existsSync (presence only — no content read) in detectTechStack.
+ * Any match is a "non-Node signal" that bypasses the TECH_STACK_MIN_DEPS floor.
+ */
+const MANIFEST_HINTS: ReadonlyArray<readonly [string, string]> = [
+  ['Cargo.toml', 'Rust'],
+  ['pyproject.toml', 'Python'],
+  ['requirements.txt', 'Python'],
+  ['go.mod', 'Go'],
+  ['foundry.toml', 'Solidity/Foundry'],
+  ['Move.toml', 'Move/Aptos/Sui'],
+  ['Gemfile', 'Ruby'],
+  ['composer.json', 'PHP'],
+];
+
 const KNOWN_CATEGORIES = new Set([
   'trust_boundaries', 'injection_vectors', 'input_validation', 'concurrency',
   'resource_exhaustion', 'type_safety', 'error_handling', 'data_integrity',
@@ -699,7 +715,69 @@ Requirements:
       inputs.push(`Source dirs: ${srcDirs.join(', ') || 'root'}`);
     } catch { /* skip */ }
 
-    if (totalDepCount < TECH_STACK_MIN_DEPS) return null;
+    // A1 — Manifest presence scan (existence only, no content read)
+    let manifestCount = 0;
+    for (const [filename, language] of MANIFEST_HINTS) {
+      if (existsSync(join(this.projectRoot, filename))) {
+        inputs.push(`Manifest: ${filename} (${language})`);
+        manifestCount++;
+      }
+    }
+
+    // A2 — README first 30 lines or 2KB
+    const READMES = ['README.md', 'README', 'readme.md'];
+    let readmeFound = false;
+    for (const name of READMES) {
+      const p = join(this.projectRoot, name);
+      if (existsSync(p)) {
+        try {
+          const content = readFileSync(p, 'utf-8');
+          const lines = content.split('\n').slice(0, 30).join('\n');
+          const clamped = lines.slice(0, 2000);
+          if (clamped.trim()) {
+            inputs.push(`README (${name}, first ${Math.min(30, content.split('\n').length)} lines):\n${clamped}`);
+            readmeFound = true;
+            break; // first successful README wins; empty/error → try next candidate
+          }
+        } catch { /* skip — try next README */ }
+      }
+    }
+
+    // A3 — Shallow root extension census (root only, skip excluded dirs + config-only exts)
+    // Config/docs extensions are already covered by other signals (package.json → dep count,
+    // README → readmeFound, manifests → manifestCount). Only count source-code extensions
+    // to avoid false positives from ubiquitous config files in any project.
+    const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.gossip', 'dist', 'build', 'out', 'coverage']);
+    const EXCLUDED_EXTS = new Set(['.json', '.md', '.yaml', '.yml', '.toml', '.lock', '.txt', '.xml', '.ini', '.cfg', '.env', '.gitignore', '.gitattributes', '.editorconfig', '.npmrc', '.nvmrc']);
+    let extensionSignal = false;
+    try {
+      const entries = readdirSync(this.projectRoot, { withFileTypes: true });
+      const extCounts = new Map<string, number>();
+      for (const entry of entries) {
+        if (EXCLUDED_DIRS.has(entry.name)) continue;
+        if (entry.isFile()) {
+          const dotIdx = entry.name.lastIndexOf('.');
+          if (dotIdx > 0) {
+            const ext = entry.name.slice(dotIdx).toLowerCase();
+            if (!EXCLUDED_EXTS.has(ext)) {
+              extCounts.set(ext, (extCounts.get(ext) ?? 0) + 1);
+            }
+          }
+        }
+      }
+      if (extCounts.size > 0) {
+        const sorted = Array.from(extCounts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+          .map(([ext, count]) => `${ext}(${count})`)
+          .join(', ');
+        inputs.push(`Root file extensions: ${sorted}`);
+        extensionSignal = true;
+      }
+    } catch { /* skip */ }
+
+    const hasNonNodeSignal = manifestCount > 0 || readmeFound || extensionSignal;
+    if (totalDepCount < TECH_STACK_MIN_DEPS && !hasNonNodeSignal) return null;
 
     try {
       const messages: LLMMessage[] = [{
