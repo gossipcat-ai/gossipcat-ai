@@ -507,3 +507,97 @@ describe('record-undefined policy — hallucination_caught with projectRoot (cit
     expect(Array.isArray(report.signals)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 2026-05-20-category-resolution-fix PART G — three new cases for the
+// JSON / schema / fallback plumbing introduced by PARTS C, F, and D.
+// ---------------------------------------------------------------------------
+
+describe('parseCrossReviewResponse — category attribute (PARTS C + F)', () => {
+  it('extracts a valid category from cross-review JSON', () => {
+    const engine = new ConsensusEngine({} as any);
+    const raw = JSON.stringify([{
+      action: 'new',
+      findingId: 'self:n1',
+      finding: 'race condition between writers',
+      evidence: 'two callers can write without a lock',
+      confidence: 4,
+      category: 'concurrency',
+    }]);
+    const entries = (engine as any).parseCrossReviewResponse('reviewer-x', raw, 50) as CrossReviewEntry[];
+    expect(entries).toHaveLength(1);
+    expect(entries[0].category).toBe('concurrency');
+  });
+
+  it('rejects invalid category — yields undefined silently', () => {
+    const engine = new ConsensusEngine({} as any);
+    const raw = JSON.stringify([{
+      action: 'new',
+      findingId: 'self:n1',
+      finding: 'something is off',
+      evidence: 'whatever',
+      confidence: 3,
+      category: 'my_made_up_category',
+    }]);
+    const entries = (engine as any).parseCrossReviewResponse('reviewer-x', raw, 50) as CrossReviewEntry[];
+    expect(entries).toHaveLength(1);
+    expect(entries[0].category).toBeUndefined();
+  });
+});
+
+describe('synthesize() — bullet-fallback populates category at insertion (PART D)', () => {
+  it('bullet-fallback finding gets category from extractCategories', async () => {
+    // makeEngine + makeTask are defined at the top of this file.
+    const engine = (() => new ConsensusEngine({
+      llm: { generate: jest.fn() } as any,
+      registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: `preset-${id}`, skills: [] }),
+    } as any))();
+
+    // Agent A emits NO <agent_finding> tags but a bullet containing "race condition"
+    // (matches concurrency per category-extractor.ts).
+    const resultA: TaskEntry = {
+      id: 'task-a',
+      agentId: 'agent-a',
+      task: 'review',
+      status: 'completed',
+      result: '## Findings\n- race condition between writers at db.ts:42 — two callers can write without a lock',
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+      inputTokens: 0,
+      outputTokens: 0,
+    };
+    // Agent B has a real tag so synthesize still has a successful peer.
+    const resultB: TaskEntry = {
+      id: 'task-b',
+      agentId: 'agent-b',
+      task: 'review',
+      status: 'completed',
+      result: '<agent_finding type="finding" severity="low">Unrelated finding at util.ts:10</agent_finding>',
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+      inputTokens: 0,
+      outputTokens: 0,
+    };
+
+    const crossReview: CrossReviewEntry[] = [
+      {
+        action: 'agree',
+        agentId: 'agent-b',
+        peerAgentId: 'agent-a',
+        finding: 'race condition between writers at db.ts:42 — two callers can write without a lock',
+        evidence: 'confirmed by reading the code',
+        confidence: 4,
+      },
+    ];
+
+    const report = await engine.synthesize([resultA, resultB], crossReview);
+
+    // The agreement signal (or any signal targeting the bullet-fallback finding)
+    // must carry category === "concurrency", NOT undefined.
+    const agreement = report.signals.find(
+      s => s.signal === 'agreement' && s.agentId === 'agent-b',
+    );
+    expect(agreement).toBeDefined();
+    expect(agreement!.category).toBe('concurrency');
+  });
+});

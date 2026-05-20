@@ -41,6 +41,10 @@ export interface CrossReviewEntry {
   finding: string;
   evidence: string;
   confidence: number;    // 1-5
+  /** Optional category volunteered by the reviewer in the cross-review JSON.
+   *  Validated against `VALID_CATEGORIES` in `parseCrossReviewResponse`; any value
+   *  outside the 13-key allowlist is silently dropped to undefined. */
+  category?: string;
 }
 
 /** Full consensus report */

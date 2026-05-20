@@ -19,6 +19,8 @@
  * which agent outputs parse.
  */
 
+import { isValidCategory } from './category-extractor';
+
 const MAX_FINDING_CONTENT = 8000;
 const MIN_FINDING_CONTENT = 15;
 const AGENT_FINDING_PATTERN = /<agent_finding\s+([^>]*)>([\s\S]*?)<\/agent_finding>/g;
@@ -307,7 +309,7 @@ export function parseAgentFindingsStrict(
     findings.push({
       type: normalizedType as FindingType,
       severity: severityMatch?.[1] as Severity | undefined,
-      category: categoryMatch?.[1],
+      category: isValidCategory(categoryMatch?.[1]) ? categoryMatch![1] : undefined,
       content,
       hasAnchor: ANCHOR_PATTERN.test(content),
       findingIdx,

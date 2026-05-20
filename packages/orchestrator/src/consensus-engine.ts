@@ -15,7 +15,7 @@ import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry } from './consensus-types';
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
 import { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
-import { extractCategories } from './category-extractor';
+import { extractCategories, isValidCategory } from './category-extractor';
 import { logUncategorizedFinding } from './uncategorized-logger';
 
 export type {
@@ -644,7 +644,9 @@ Return ONLY a JSON array. findingId format:
 - For new: "self:n<N>" — the server rewrites this to a consensus-wide ID. Do NOT reference a peer.
 [
   { "action": "agree"|"disagree"|"unverified"|"new", "findingId": "...", "finding": "brief summary", "evidence": "your reasoning", "confidence": 1-5 }
-]`;
+]
+
+Optional "category" field on action: "new" entries — one of: trust_boundaries | injection_vectors | input_validation | concurrency | resource_exhaustion | type_safety | error_handling | data_integrity | citation_grounding | observability | cli_ergonomics | performance | testing. Any other value is silently dropped to undefined. Set it only when you're confident; the system also infers category from the finding text when omitted. agree/disagree/unverified inherit category from the parent finding.`;
 
     // Inject the reviewer's skills (if any) so their Phase-2 methodology
     // matches Phase 1. Without this, a reviewer trained on citation_grounding
@@ -956,6 +958,7 @@ Return only valid JSON.${skillsBlock}`;
             originalAgentId: r.agentId,
             finding,
             findingType,
+            category: extractCategories(finding)[0],
             confirmedBy: [],
             disputedBy: [],
             unverifiedBy: [],
@@ -1134,7 +1137,7 @@ Return only valid JSON.${skillsBlock}`;
           evidence: capEvidence(entry.evidence),
           timestamp: now,
           findingId: newFindingId,
-          category: resolveSignalCategory(undefined, entry.evidence, entry.finding) ?? undefined,
+          category: resolveSignalCategory(entry.category, entry.finding, entry.evidence) ?? undefined,
         });
         continue;
       }
@@ -2535,6 +2538,8 @@ Return only valid JSON.${skillsBlock}`;
       const findingId = typeof item.findingId === 'string' ? item.findingId : '';
       const peerFromId = findingId.includes(':') ? findingId.split(':')[0] : '';
       const fallbackAgentId = typeof item.agentId === 'string' ? item.agentId : '';
+      const rawCategory = typeof item.category === 'string' ? item.category : undefined;
+      const category = isValidCategory(rawCategory) ? rawCategory : undefined;
       entries.push({
         action: item.action as CrossReviewEntry['action'],
         agentId: reviewerAgentId,
@@ -2543,6 +2548,7 @@ Return only valid JSON.${skillsBlock}`;
         finding: String(item.finding),
         evidence: String(item.evidence),
         confidence,
+        category,
       });
     }
 
