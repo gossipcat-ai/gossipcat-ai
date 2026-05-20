@@ -790,6 +790,16 @@ async function doBoot() {
     process.stderr.write(`[gossipcat] ❌ Bootstrap refresh failed: ${(err as Error).message}\n`);
   }
 
+  // Pre-warm runtime config cache so first dispatch doesn't incur a synchronous
+  // file read mid-call. Unknown keys in the file are logged here (back-compat).
+  try {
+    const { reloadRuntimeFlags } = await import('@gossip/orchestrator');
+    reloadRuntimeFlags();
+    process.stderr.write('[gossipcat] ⚙️  Runtime flags loaded\n');
+  } catch (err) {
+    process.stderr.write(`[gossipcat] ⚠️  Runtime flags load failed (non-fatal): ${(err as Error).message}\n`);
+  }
+
   booted = true;
   ctx.booted = true;
   process.stderr.write(`[gossipcat] 🚀 Booted: relay :${ctx.relay.port}, ${ctx.workers.size} workers\n`);
@@ -3873,6 +3883,81 @@ export function createMcpServer(): McpServer {
     }
   );
 
+  // ── Runtime config store ─────────────────────────────────────────────────
+  server.tool(
+    'gossip_config',
+    'Manage runtime feature-gate flags stored in .gossip/runtime-flags.json. Actions: list (show all flags + source), get (one flag), set (write flag), unset (remove flag), reload (discard cache after hand-edit).',
+    {
+      action: z.enum(['get', 'set', 'unset', 'list', 'reload']).describe('Action to perform'),
+      key: z.string().optional().describe('Flag key (required for get, set, unset). Must start with GOSSIP_.'),
+      value: z.string().optional().describe('Flag value (required for set).'),
+      reason: z.string().min(1).max(1024).optional().describe('Reason for change, appended to audit log (required for set, unset).'),
+    },
+    async ({ action, key, value, reason }) => {
+      await boot();
+      const {
+        getRuntimeFlag,
+        getRuntimeFlagBool: _rfb,
+        setRuntimeFlag,
+        unsetRuntimeFlag,
+        listRuntimeFlags,
+        reloadRuntimeFlags,
+        RUNTIME_FLAG_REGISTRY,
+      } = await import('@gossip/orchestrator');
+
+      if (action === 'list') {
+        const flags = listRuntimeFlags();
+        if (flags.length === 0) return { content: [{ type: 'text' as const, text: 'No runtime flags registered.' }] };
+        const lines = flags.map((f) =>
+          `${f.key}\n  value: ${f.value}\n  source: ${f.from}\n  default: ${f.default}\n  desc: ${f.description}`
+        );
+        return { content: [{ type: 'text' as const, text: `Runtime Flags (${flags.length}):\n\n${lines.join('\n\n')}` }] };
+      }
+
+      if (action === 'get') {
+        if (!key) return { content: [{ type: 'text' as const, text: 'Error: key is required for get.' }] };
+        const flags = listRuntimeFlags();
+        const entry = flags.find((f) => f.key === key);
+        if (!entry) {
+          const val = getRuntimeFlag(key);
+          if (val === undefined) return { content: [{ type: 'text' as const, text: `Key "${key}" is not in the registry or is not a GOSSIP_* key.` }] };
+          return { content: [{ type: 'text' as const, text: `${key} = ${val} (unregistered key)` }] };
+        }
+        return { content: [{ type: 'text' as const, text: `${entry.key} = ${entry.value}\nsource: ${entry.from}\ndefault: ${entry.default}\n${entry.description}` }] };
+      }
+
+      if (action === 'set') {
+        if (!key) return { content: [{ type: 'text' as const, text: 'Error: key is required for set.' }] };
+        if (value === undefined || value === null) return { content: [{ type: 'text' as const, text: 'Error: value is required for set.' }] };
+        if (!reason) return { content: [{ type: 'text' as const, text: 'Error: reason is required for set.' }] };
+        try {
+          await setRuntimeFlag(key, value, 'agent', reason);
+          return { content: [{ type: 'text' as const, text: `Set ${key} = "${value}"\nAudit log updated. Effective immediately — no MCP restart required.` }] };
+        } catch (err) {
+          return { content: [{ type: 'text' as const, text: `Error: ${(err as Error).message}\n\nRegistered flags: ${Object.keys(RUNTIME_FLAG_REGISTRY).join(', ')}` }] };
+        }
+      }
+
+      if (action === 'unset') {
+        if (!key) return { content: [{ type: 'text' as const, text: 'Error: key is required for unset.' }] };
+        if (!reason) return { content: [{ type: 'text' as const, text: 'Error: reason is required for unset.' }] };
+        try {
+          await unsetRuntimeFlag(key, 'agent', reason);
+          return { content: [{ type: 'text' as const, text: `Unset ${key} from file. Env-set values are unaffected.\nEffective immediately (value falls back to env or default).` }] };
+        } catch (err) {
+          return { content: [{ type: 'text' as const, text: `Error: ${(err as Error).message}` }] };
+        }
+      }
+
+      if (action === 'reload') {
+        reloadRuntimeFlags();
+        return { content: [{ type: 'text' as const, text: 'Runtime flags cache reloaded from .gossip/runtime-flags.json.' }] };
+      }
+
+      return { content: [{ type: 'text' as const, text: `Unknown action: ${action}` }] };
+    },
+  );
+
   // ── Tool: list available gossipcat tools ──────────────────────────────────
   // ── Session Memory: save session context for next session ────────────────
   server.tool(
@@ -4483,6 +4568,7 @@ export function createMcpServer(): McpServer {
         { name: 'gossip_plan', desc: 'Plan a task with write-mode suggestions. Returns dispatch-ready JSON for approval.' },
         { name: 'gossip_scores', desc: 'View agent performance scores and dispatch weights.' },
         { name: 'gossip_skills', desc: 'Manage skills. action: list, bind, unbind, build, develop.' },
+        { name: 'gossip_config', desc: 'Manage runtime feature-gate flags in .gossip/runtime-flags.json. action: list, get, set, unset, reload.' },
         { name: 'gossip_remember', desc: 'Search an agent\'s archived knowledge files by keyword query.' },
         { name: 'gossip_verify_memory', desc: 'On-demand staleness check for a memory file claim. Returns FRESH | STALE | CONTRADICTED | INCONCLUSIVE with file:line evidence.' },
         { name: 'gossip_tools', desc: 'List available tools (this command).' },

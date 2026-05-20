@@ -13,6 +13,7 @@ import {
   emitConsensusSignals,
   sanitizeForLog,
   hashPath,
+  getRuntimeFlagBool,
   type ClaimBlock,
   type ClaimVerdict,
   type PerformanceSignal,
@@ -669,7 +670,7 @@ export async function handleDispatchSingle(
     // though rev-parse succeeded), we fall back to the legacy path rather
     // than block dispatch. The Option B HEAD-drift detector still fires.
     let managedWorktreePath: string | null = null;
-    if (useWorktree && process.env.GOSSIP_NATIVE_WORKTREE_MANAGED === '1') {
+    if (useWorktree && getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')) {
       try {
         const wtm = ctx.mainAgent.getWorktreeManager();
         if (wtm) {
@@ -1033,7 +1034,7 @@ export async function handleDispatchParallel(
     // Spec: docs/specs/2026-05-20-native-worktree-isolation-fix.md §3.
     const useWorktreeParallel = def.write_mode === 'worktree' && parallelInGitRepo;
     let managedWorktreePathParallel: string | null = null;
-    if (useWorktreeParallel && process.env.GOSSIP_NATIVE_WORKTREE_MANAGED === '1') {
+    if (useWorktreeParallel && getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')) {
       try {
         const wtm = ctx.mainAgent.getWorktreeManager();
         if (wtm) {
@@ -1333,7 +1334,7 @@ export async function handleDispatchConsensus(
   const nativeInstructions: string[] = [];
   const nativePrompts: Array<{ taskId: string; agentId: string; prompt: string }> = [];
   // Hoisted once-per-consensus — env gate + git status are invariant across the loop.
-  let consensusManagedEnabled = process.env.GOSSIP_NATIVE_WORKTREE_MANAGED === '1';
+  let consensusManagedEnabled = getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED');
   if (consensusManagedEnabled) {
     try {
       const { execSync } = require('child_process');

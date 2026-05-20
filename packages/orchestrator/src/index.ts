@@ -236,3 +236,15 @@ export {
 export type { ResolveOptions, ResolveResult, ResolveSkipped, SymbolPresence } from './finding-resolver';
 export { TaskStreamEventType } from './task-stream';
 export type { TaskStreamEvent } from './task-stream';
+export {
+  getRuntimeFlag,
+  getRuntimeFlagBool,
+  getRuntimeFlagInt,
+  setRuntimeFlag,
+  unsetRuntimeFlag,
+  listRuntimeFlags,
+  reloadRuntimeFlags,
+} from './runtime-config';
+export type { RuntimeFlagEntry } from './runtime-config';
+export { RUNTIME_FLAG_REGISTRY } from './runtime-config-schema';
+export type { RuntimeFlagKey, RuntimeFlagSpec } from './runtime-config-schema';
