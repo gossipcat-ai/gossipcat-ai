@@ -1,0 +1,208 @@
+/**
+ * handleNativeRelay isolation-warning integration test.
+ *
+ * Closes the test-coverage gap surfaced by consensus 68283116-20504c9d:f1
+ * (MEDIUM, PR #426 review). The unit-level detector at
+ * `apps/cli/src/handlers/worktree-isolation-detection.ts` is exercised by
+ * `tests/cli/worktree-isolation-detection.test.ts`, but no test asserted the
+ * integration into `handleNativeRelay` — a refactor of the relay handler
+ * could silently disconnect the warning emission without any test failing.
+ *
+ * What this asserts:
+ *  - When the task carries an `isolationSnapshot` and `writeMode: 'worktree'`,
+ *    handleNativeRelay calls `checkIsolationViolation` and surfaces a
+ *    `⚠ worktree_isolation_failed` line in the relay receipt.
+ *  - When the detector reports `isViolation: false`, no warning is added.
+ *  - When `isolationSnapshot` is absent, the detector is not called at all.
+ */
+import { mkdtempSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+
+import { handleNativeRelay } from '../../apps/cli/src/handlers/native-tasks';
+import { ctx } from '../../apps/cli/src/mcp-context';
+
+// Mock the detector module so we can deterministically return a violation diff
+// without standing up a real git working tree. native-tasks.ts uses an inline
+// `require('./worktree-isolation-detection')` at the call site, so this mock
+// path matches the resolved module identity.
+const mockCheck = jest.fn();
+jest.mock('../../apps/cli/src/handlers/worktree-isolation-detection', () => ({
+  __esModule: true,
+  checkIsolationViolation: (...args: any[]) => mockCheck(...args),
+}));
+
+const AGENT_ID = 'sonnet-implementer';
+const TASK_ID = 'iso-task-1';
+
+function makeMainAgent(projectRoot: string): any {
+  return {
+    dispatch: jest.fn().mockReturnValue({ taskId: 'mock' }),
+    collect: jest.fn().mockResolvedValue({ results: [] }),
+    getAgentConfig: jest.fn().mockReturnValue(null),
+    getLLM: jest.fn().mockReturnValue(null),
+    getAgentList: jest.fn().mockReturnValue([]),
+    getSessionGossip: jest.fn().mockReturnValue([]),
+    getPerfReader: jest.fn().mockReturnValue(undefined),
+    recordNativeTask: jest.fn(),
+    recordNativeTaskCompleted: jest.fn(),
+    recordPlanStepResult: jest.fn(),
+    publishNativeGossip: jest.fn().mockResolvedValue(undefined),
+    scopeTracker: { release: jest.fn() },
+    projectRoot,
+  };
+}
+
+let testDir: string;
+let originalCwd: string;
+let stderrSpy: jest.SpyInstance;
+
+beforeEach(() => {
+  testDir = mkdtempSync(join(tmpdir(), 'gossip-relay-iso-test-'));
+  originalCwd = process.cwd();
+  process.chdir(testDir);
+
+  ctx.nativeTaskMap = new Map();
+  ctx.nativeResultMap = new Map();
+  ctx.pendingConsensusRounds = new Map();
+  ctx.recentConsensusTaskIds = new Map();
+  ctx.recentConsensusAgentIds = new Map();
+  ctx.mainAgent = makeMainAgent(testDir);
+  ctx.nativeUtilityConfig = null;
+  ctx.booted = true;
+  ctx.boot = jest.fn().mockResolvedValue(undefined) as any;
+
+  mockCheck.mockReset();
+  stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+});
+
+afterEach(() => {
+  stderrSpy.mockRestore();
+  process.chdir(originalCwd);
+  rmSync(testDir, { recursive: true, force: true });
+});
+
+function seedWorktreeTask(
+  taskId: string,
+  agentId: string,
+  opts: { withSnapshot?: boolean } = { withSnapshot: true },
+): void {
+  ctx.nativeTaskMap.set(taskId, {
+    agentId,
+    task: 'implement thing in worktree',
+    startedAt: Date.now() - 1000,
+    timeoutMs: 120_000,
+    writeMode: 'worktree',
+    ...(opts.withSnapshot
+      ? {
+          isolationSnapshot: {
+            head: 'a'.repeat(40),
+            dirty: [],
+            takenAt: new Date(Date.now() - 1000).toISOString(),
+          },
+        }
+      : {}),
+  });
+}
+
+describe('handleNativeRelay — worktree isolation warning integration', () => {
+  it('appends ⚠ worktree_isolation_failed to receipt when detector reports a violation', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: true,
+      dirtyPathsAdded: ['packages/orchestrator/src/foo.ts', 'apps/cli/src/bar.ts'],
+      isViolation: true,
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    expect(mockCheck).toHaveBeenCalledTimes(1);
+    const [agentArg, taskArg, snapshotArg] = mockCheck.mock.calls[0];
+    expect(agentArg).toBe(AGENT_ID);
+    expect(taskArg).toBe(TASK_ID);
+    expect(snapshotArg).toMatchObject({ head: 'a'.repeat(40), dirty: [] });
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('⚠ worktree_isolation_failed');
+    expect(text).toContain('HEAD moved');
+    expect(text).toContain('2 new dirty path(s)');
+    expect(text).toContain('packages/orchestrator/src/foo.ts');
+    expect(text).toContain('apps/cli/src/bar.ts');
+  });
+
+  it('shows HEAD unchanged + truncated path list when >5 dirty paths reported', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts', 'g.ts'],
+      isViolation: true,
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+    const text = (res.content[0] as { text: string }).text;
+
+    expect(text).toContain('HEAD unchanged');
+    expect(text).toContain('7 new dirty path(s)');
+    // First five paths listed, then +2 more truncation marker
+    expect(text).toContain('a.ts, b.ts, c.ts, d.ts, e.ts');
+    expect(text).toContain('+2 more');
+    expect(text).not.toContain('g.ts'); // truncated past the 5-path window
+  });
+
+  it('omits warning when detector reports isViolation: false', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: [],
+      isViolation: false,
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    expect(mockCheck).toHaveBeenCalledTimes(1);
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).not.toContain('worktree_isolation_failed');
+  });
+
+  it('does not invoke detector when isolationSnapshot is absent', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID, { withSnapshot: false });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    expect(mockCheck).not.toHaveBeenCalled();
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).not.toContain('worktree_isolation_failed');
+  });
+
+  it('does not invoke detector for non-worktree writeMode', async () => {
+    // scoped writeMode + isolationSnapshot present (defensive — should still not call)
+    ctx.nativeTaskMap.set(TASK_ID, {
+      agentId: AGENT_ID,
+      task: 'scoped task',
+      startedAt: Date.now() - 1000,
+      timeoutMs: 120_000,
+      writeMode: 'scoped',
+      isolationSnapshot: {
+        head: 'b'.repeat(40),
+        dirty: [],
+        takenAt: new Date().toISOString(),
+      },
+    });
+
+    await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    expect(mockCheck).not.toHaveBeenCalled();
+  });
+
+  it('still emits warning when detector throws (caller swallows + isolationDiff stays null → no warning)', async () => {
+    // The handler wraps checkIsolationViolation in try/catch; a throw should
+    // leave isolationDiff null, and the warning block should be skipped.
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockImplementation(() => { throw new Error('detector blew up'); });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).not.toContain('worktree_isolation_failed');
+  });
+});
