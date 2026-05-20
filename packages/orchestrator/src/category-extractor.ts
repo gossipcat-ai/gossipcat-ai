@@ -29,6 +29,19 @@ const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
   testing: [/\btest(s|ing)?\b/i, /coverage/i, /\bmock\b/i, /\bfixture\b/i, /\bunit test/i, /integration test/i, /\be2e\b/i, /test suite/i],
 };
 
+/**
+ * Canonical allowlist of category keys, derived from CATEGORY_PATTERNS so the
+ * two sources can never drift. Used by parse-findings and parseCrossReviewResponse
+ * to reject agent-supplied category strings that aren't real categories — without
+ * this guard, an agent typo would land in `categoryStrengths[<typo>]` and poison
+ * scoring permanently (see spec 2026-05-20-category-resolution-fix.md PART F).
+ */
+export const VALID_CATEGORIES: ReadonlySet<string> = new Set(Object.keys(CATEGORY_PATTERNS));
+
+export function isValidCategory(c: string | undefined): c is string {
+  return typeof c === 'string' && VALID_CATEGORIES.has(c);
+}
+
 export function extractCategories(findingText: string): string[] {
   const matched = new Set<string>();
   for (const [category, patterns] of Object.entries(CATEGORY_PATTERNS)) {

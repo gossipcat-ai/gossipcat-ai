@@ -17,6 +17,7 @@ export const FINDING_TAG_SCHEMA = `FINDING TAG SCHEMA (output parsing requires t
 - Wrap each verifiable claim in <agent_finding type="..." severity="...">...</agent_finding>
 - type MUST be one of: finding | suggestion | insight (any other value is silently DROPPED)
 - severity (findings only): critical | high | medium | low
+- category="..." (optional, findings only) — allowed: trust_boundaries, injection_vectors, input_validation, concurrency, resource_exhaustion, type_safety, error_handling, data_integrity, citation_grounding, observability, cli_ergonomics, performance, testing. Other values DROPPED to undefined; inferred from text when omitted.
 - Do NOT invent new types (e.g., "approval", "concern", "risk", "recommendation", "confirmed", "issue", "bug", "warning") — they will not appear in any dashboard, score, or signal.
 - Cite source files inline: <cite tag="file">path:line</cite>`;
 
