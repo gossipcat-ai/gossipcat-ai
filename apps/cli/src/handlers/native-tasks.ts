@@ -609,14 +609,29 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     } catch { /* best-effort — detector must not block relay completion */ }
   }
 
-  // Bug f13: prune orphaned worktrees on native error — mirrors dispatch-pipeline.ts:473-475.
-  // Native worktrees use Claude Code's Agent(isolation:"worktree") so there's no
-  // worktreePath in NativeTaskInfo. pruneOrphans() iterates all gossip-wt-* worktrees
-  // and removes any whose task IDs no longer have active entries — broader than a
-  // single-task cleanup but actually works (cleanup(taskId, undefined) would run
-  // `git worktree remove undefined --force` and silently fail).
-  if (error && taskInfo.writeMode === 'worktree') {
-    try { ctx.mainAgent.getWorktreeManager()?.pruneOrphans().catch(() => {}); } catch { /* best-effort */ }
+  // Worktree cleanup — two paths depending on managed mode (GOSSIP_NATIVE_WORKTREE_MANAGED=1):
+  //
+  // MANAGED MODE (taskInfo.worktreePath is defined, set by dispatch.ts after WorktreeManager.create()):
+  //   Per-task cleanup via wtm.cleanup(taskId, worktreePath) on BOTH success and error paths.
+  //   Fire-and-forget (.catch(() => {})) to match dispatch-pipeline.ts:566,690 idiom.
+  //   Mirrors PR #431 which added worktreePath to nativeTaskMap parallel entries.
+  //
+  // LEGACY PATH (taskInfo.worktreePath is undefined — env var off or Claude Code harness-managed):
+  //   Fall back to pruneOrphans() on the error path only (original Bug f13 fix).
+  //   pruneOrphans() iterates all gossip-wt-* worktrees and removes any whose task IDs
+  //   no longer have active entries — broader than a single-task cleanup but works
+  //   when there's no worktreePath to pass to cleanup().
+  if (taskInfo.writeMode === 'worktree') {
+    const wtm = ctx.mainAgent.getWorktreeManager();
+    if (taskInfo.worktreePath) {
+      // Managed mode: per-task cleanup regardless of error state
+      // Optional-chain BOTH the call and the .catch — wtm?.op() returns
+      // undefined when wtm is undefined, and undefined.catch() throws TypeError.
+      try { wtm?.cleanup(task_id, taskInfo.worktreePath)?.catch(() => {}); } catch { /* best-effort */ }
+    } else if (error) {
+      // Legacy mode: orphan prune on error only
+      try { wtm?.pruneOrphans()?.catch(() => {}); } catch { /* best-effort */ }
+    }
   }
 
   // Run the same post-collect pipeline as custom agents:

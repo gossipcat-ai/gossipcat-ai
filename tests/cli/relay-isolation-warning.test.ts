@@ -49,6 +49,10 @@ function makeMainAgent(projectRoot: string): any {
     recordPlanStepResult: jest.fn(),
     publishNativeGossip: jest.fn().mockResolvedValue(undefined),
     scopeTracker: { release: jest.fn() },
+    getWorktreeManager: jest.fn().mockReturnValue({
+      cleanup: jest.fn().mockResolvedValue(undefined),
+      pruneOrphans: jest.fn().mockResolvedValue(undefined),
+    }),
     projectRoot,
   };
 }
