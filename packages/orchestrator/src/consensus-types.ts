@@ -225,6 +225,16 @@ export interface ConsensusSignal {
   source?: 'auto' | 'manual';
   evidence: string;
   timestamp: string;
+  /**
+   * `worktree_isolation_failed` payload fields — populated by the native-worktree
+   * isolation detector at apps/cli/src/handlers/worktree-isolation-detection.ts.
+   * Optional on the union so other signals don't need to carry them; typed
+   * readers (dashboards, gossip_signals consumers) can surface them without a
+   * side-channel JSON parse. Closes consensus 68283116-20504c9d:f5.
+   */
+  head_before?: string | null;
+  head_after?: string | null;
+  dirty_paths_added?: string[];
 }
 
 /** Implementation quality signal from verify_write */
