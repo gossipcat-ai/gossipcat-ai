@@ -186,7 +186,17 @@ export interface ConsensusSignal {
      * from accuracy / uniqueness / circuit-breaker arithmetic — it tracks
      * separately as `AgentScore.transport_failure_count`.
      */
-    | 'transport_failure';
+    | 'transport_failure'
+    /**
+     * Native worktree isolation gap (spec
+     * docs/specs/2026-05-20-native-worktree-isolation-fix.md). Emitted by the
+     * relay-side detector in apps/cli/src/handlers/worktree-isolation-detection.ts
+     * when an `Agent(isolation:"worktree")` dispatch leaves the parent checkout
+     * with moved HEAD or new dirty paths — i.e. the native subagent wrote to
+     * the parent checkout instead of its isolated worktree. Detection-only;
+     * no automatic recovery.
+     */
+    | 'worktree_isolation_failed';
   agentId: string;
   counterpartId?: string;
   skill?: string;
@@ -345,6 +355,7 @@ export const OPERATIONAL_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'consensus_round_retracted',
   'unverified',
   'transport_failure',
+  'worktree_isolation_failed',
 ]);
 
 export function classifySignal(signalName: string): SignalClass | undefined {

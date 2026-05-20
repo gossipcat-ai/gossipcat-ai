@@ -71,6 +71,18 @@ export interface NativeTaskInfo {
    */
   preDispatchSha?: string | null;
   /**
+   * Snapshot of parent-checkout state at dispatch time, used by the
+   * Option B isolation-failure detector. Only populated for
+   * `writeMode === 'worktree'` native dispatches. See
+   * `apps/cli/src/handlers/worktree-isolation-detection.ts` and
+   * docs/specs/2026-05-20-native-worktree-isolation-fix.md §"Option B".
+   */
+  isolationSnapshot?: {
+    head: string | null;
+    dirty: string[];
+    takenAt: string;
+  };
+  /**
    * Absolute path to the on-disk dispatch prompt file, set ONLY when the
    * caller requested `prompt_format: 'elided'` (Option B server-side prompt
    * elision, spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md).

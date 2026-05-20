@@ -592,6 +592,23 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     } catch { /* best-effort — violation detection must not block relay completion */ }
   }
 
+  // Option B isolation-failure detector — re-snapshot parent checkout and
+  // emit worktree_isolation_failed if HEAD moved or new dirty paths appeared
+  // that weren't in the dispatch-time snapshot. Spec:
+  // docs/specs/2026-05-20-native-worktree-isolation-fix.md
+  let isolationDiff: { headChanged: boolean; dirtyPathsAdded: string[]; isViolation: boolean } | null = null;
+  if (taskInfo.writeMode === 'worktree' && taskInfo.isolationSnapshot) {
+    try {
+      const { checkIsolationViolation } = require('./worktree-isolation-detection');
+      isolationDiff = checkIsolationViolation(
+        taskInfo.agentId,
+        task_id,
+        taskInfo.isolationSnapshot,
+        process.cwd(),
+      );
+    } catch { /* best-effort — detector must not block relay completion */ }
+  }
+
   // Bug f13: prune orphaned worktrees on native error — mirrors dispatch-pipeline.ts:473-475.
   // Native worktrees use Claude Code's Agent(isolation:"worktree") so there's no
   // worktreePath in NativeTaskInfo. pruneOrphans() iterates all gossip-wt-* worktrees
@@ -929,6 +946,14 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   }
   if (relayLintFired) {
     responseText += `\n⚠ relay_findings_dropped: result has 0 <agent_finding> tags but task was a consensus dispatch — orchestrator may have paraphrased; original tagged findings are lost from the dashboard.`;
+  }
+  if (isolationDiff && isolationDiff.isViolation) {
+    const headPart = isolationDiff.headChanged ? 'HEAD moved' : 'HEAD unchanged';
+    const list = isolationDiff.dirtyPathsAdded.slice(0, 5).join(', ');
+    const more = isolationDiff.dirtyPathsAdded.length > 5
+      ? ` +${isolationDiff.dirtyPathsAdded.length - 5} more`
+      : '';
+    responseText += `\n⚠ worktree_isolation_failed: Agent(isolation:"worktree") write leaked into parent checkout (${headPart}, ${isolationDiff.dirtyPathsAdded.length} new dirty path(s)${list ? `: ${list}${more}` : ''}).`;
   }
   if (utilityBlocks.length > 0) {
     responseText += `\n\n⚠️ EXECUTE NOW — ${utilityBlocks.length} utility task(s) queued:\n\n${utilityBlocks.join('\n\n')}`;
