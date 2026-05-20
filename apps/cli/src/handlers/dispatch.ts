@@ -993,6 +993,14 @@ export async function handleDispatchParallel(
   // Create native dispatch instructions for Claude Code Agent tool
   const nativeInstructions: string[] = [];
   const nativePrompts: Array<{ taskId: string; agentId: string; prompt: string }> = [];
+  // Hoisted once-per-dispatch — git status is invariant across the loop.
+  let parallelInGitRepo = true;
+  try {
+    const { execSync } = require('child_process');
+    execSync('git rev-parse --git-dir', { cwd: process.cwd(), stdio: 'ignore' });
+  } catch {
+    parallelInGitRepo = false;
+  }
   for (const def of nativeTasks) {
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id)!;
     const taskId = randomUUID().slice(0, 8);
@@ -1023,15 +1031,7 @@ export async function handleDispatchParallel(
     // task's Agent() instruction line below. Failure to create falls back to
     // the legacy harness path FOR THIS TASK ONLY — siblings proceed unaffected.
     // Spec: docs/specs/2026-05-20-native-worktree-isolation-fix.md §3.
-    let useWorktreeParallel = def.write_mode === 'worktree';
-    if (useWorktreeParallel) {
-      try {
-        const { execSync } = require('child_process');
-        execSync('git rev-parse --git-dir', { cwd: process.cwd(), stdio: 'ignore' });
-      } catch {
-        useWorktreeParallel = false;
-      }
-    }
+    const useWorktreeParallel = def.write_mode === 'worktree' && parallelInGitRepo;
     let managedWorktreePathParallel: string | null = null;
     if (useWorktreeParallel && process.env.GOSSIP_NATIVE_WORKTREE_MANAGED === '1') {
       try {
@@ -1112,10 +1112,10 @@ export async function handleDispatchParallel(
       agentId: def.agent_id,
       writeMode: def.write_mode as any,
       scope: def.scope,
-      // Native worktree = Claude Code's Agent({isolation:"worktree"}) which
-      // we cannot observe from here; stays undefined. The `.claude/worktrees/`
-      // exclusion in buildAuditExclusions covers native worktrees.
-      worktreePath: undefined,
+      // Option A managed mode: pass the concrete path so audit Layer 3 can
+      // scope per-task exclusions. Legacy harness mode: stays undefined and
+      // the `.claude/worktrees/` exclusion in buildAuditExclusions covers it.
+      worktreePath: managedWorktreePathParallel ?? undefined,
       timestamp: Date.now(),
     });
 
@@ -1332,6 +1332,16 @@ export async function handleDispatchConsensus(
   // was added there (see PR #56 FINDING TAG SCHEMA miss).
   const nativeInstructions: string[] = [];
   const nativePrompts: Array<{ taskId: string; agentId: string; prompt: string }> = [];
+  // Hoisted once-per-consensus — env gate + git status are invariant across the loop.
+  let consensusManagedEnabled = process.env.GOSSIP_NATIVE_WORKTREE_MANAGED === '1';
+  if (consensusManagedEnabled) {
+    try {
+      const { execSync } = require('child_process');
+      execSync('git rev-parse --git-dir', { cwd: process.cwd(), stdio: 'ignore' });
+    } catch {
+      consensusManagedEnabled = false;
+    }
+  }
   for (const def of nativeTasks) {
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id)!;
     const taskId = randomUUID().slice(0, 8);
@@ -1351,17 +1361,8 @@ export async function handleDispatchConsensus(
     // worktree when GOSSIP_NATIVE_WORKTREE_MANAGED=1 and the project is a git
     // repo. Failure for any single task falls back to the legacy harness path
     // FOR THAT TASK ONLY — siblings proceed. Spec §3.
-    let consensusGitRepoOk = process.env.GOSSIP_NATIVE_WORKTREE_MANAGED === '1';
-    if (consensusGitRepoOk) {
-      try {
-        const { execSync } = require('child_process');
-        execSync('git rev-parse --git-dir', { cwd: process.cwd(), stdio: 'ignore' });
-      } catch {
-        consensusGitRepoOk = false;
-      }
-    }
     let managedWorktreePathConsensus: string | null = null;
-    if (consensusGitRepoOk) {
+    if (consensusManagedEnabled) {
       try {
         const wtm = ctx.mainAgent.getWorktreeManager();
         if (wtm) {
