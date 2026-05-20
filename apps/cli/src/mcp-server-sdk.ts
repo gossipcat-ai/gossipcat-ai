@@ -3891,7 +3891,7 @@ export function createMcpServer(): McpServer {
       action: z.enum(['get', 'set', 'unset', 'list', 'reload']).describe('Action to perform'),
       key: z.string().optional().describe('Flag key (required for get, set, unset). Must start with GOSSIP_.'),
       value: z.string().optional().describe('Flag value (required for set).'),
-      reason: z.string().optional().describe('Reason for change, appended to audit log (required for set, unset).'),
+      reason: z.string().min(1).max(1024).optional().describe('Reason for change, appended to audit log (required for set, unset).'),
     },
     async ({ action, key, value, reason }) => {
       await boot();

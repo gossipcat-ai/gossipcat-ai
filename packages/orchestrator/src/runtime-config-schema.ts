@@ -21,10 +21,7 @@ export const RUNTIME_FLAG_REGISTRY = {
 } as const;
 
 export type RuntimeFlagKey = keyof typeof RUNTIME_FLAG_REGISTRY;
-export type RuntimeFlagSpec = {
-  type: 'boolean' | 'integer' | 'string';
-  default: string;
-  description: string;
-  min?: number;
-  max?: number;
-};
+export type RuntimeFlagSpec =
+  | { type: 'boolean'; default: string; description: string }
+  | { type: 'integer'; default: string; description: string; min: number; max: number }
+  | { type: 'string'; default: string; description: string };

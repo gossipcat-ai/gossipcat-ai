@@ -72,10 +72,12 @@ function readFlagsFile(filePath: string): Record<string, string> {
     process.stderr.write(`[gossipcat] runtime-flags.json is not a plain object — treating as empty\n`);
     return {};
   } catch (err: any) {
-    if (err?.code !== 'ENOENT') {
-      process.stderr.write(`[gossipcat] failed to read runtime-flags.json: ${err?.message}\n`);
+    if (err?.code === 'ENOENT') {
+      return {};
     }
-    return {};
+    // Non-ENOENT: permission error, corrupt FS, etc. Fail loud so the caller
+    // (boot-time loader) can surface the problem rather than silently losing state.
+    throw new Error(`[gossipcat] failed to read runtime-flags.json: ${err?.message}`);
   }
 }
 
@@ -108,7 +110,7 @@ function isGossipKey(key: string): boolean {
 
 /** Retrieve the registry spec for a key, or undefined if not registered. */
 function getSpec(key: string): RuntimeFlagSpec | undefined {
-  return (RUNTIME_FLAG_REGISTRY as Record<string, RuntimeFlagSpec>)[key];
+  return RUNTIME_FLAG_REGISTRY[key as keyof typeof RUNTIME_FLAG_REGISTRY];
 }
 
 // ── Public read API ────────────────────────────────────────────────────────
@@ -193,20 +195,22 @@ export function getRuntimeFlagInt(key: string, defaultValue?: number): number {
     return fallback;
   }
 
-  if (spec?.min !== undefined && parsed < spec.min) {
-    if (!_coercionWarned.has(key)) {
-      _coercionWarned.add(key);
-      process.stderr.write(`[gossipcat] getRuntimeFlagInt("${key}"): ${parsed} < min ${spec.min}; using fallback ${fallback}\n`);
+  if (spec?.type === 'integer') {
+    if (parsed < spec.min) {
+      if (!_coercionWarned.has(key)) {
+        _coercionWarned.add(key);
+        process.stderr.write(`[gossipcat] getRuntimeFlagInt("${key}"): ${parsed} < min ${spec.min}; using fallback ${fallback}\n`);
+      }
+      return fallback;
     }
-    return fallback;
-  }
 
-  if (spec?.max !== undefined && parsed > spec.max) {
-    if (!_coercionWarned.has(key)) {
-      _coercionWarned.add(key);
-      process.stderr.write(`[gossipcat] getRuntimeFlagInt("${key}"): ${parsed} > max ${spec.max}; using fallback ${fallback}\n`);
+    if (parsed > spec.max) {
+      if (!_coercionWarned.has(key)) {
+        _coercionWarned.add(key);
+        process.stderr.write(`[gossipcat] getRuntimeFlagInt("${key}"): ${parsed} > max ${spec.max}; using fallback ${fallback}\n`);
+      }
+      return fallback;
     }
-    return fallback;
   }
 
   return parsed;
@@ -252,8 +256,8 @@ function validateValue(key: string, value: string): string | null {
   } else if (spec.type === 'integer') {
     const n = parseInt(value, 10);
     if (isNaN(n)) return `key "${key}" is integer — "${value}" is not parseable`;
-    if (spec.min !== undefined && n < spec.min) return `key "${key}": ${n} < min ${spec.min}`;
-    if (spec.max !== undefined && n > spec.max) return `key "${key}": ${n} > max ${spec.max}`;
+    if (n < spec.min) return `key "${key}": ${n} < min ${spec.min}`;
+    if (n > spec.max) return `key "${key}": ${n} > max ${spec.max}`;
   }
   // 'string' type: any non-empty string is valid.
   if (spec.type === 'string' && value === '') {
@@ -313,8 +317,14 @@ export async function setRuntimeFlag(
       throw parseErr;
     }
 
-    // Rename (atomic on POSIX).
-    fs.renameSync(tmpPath, filePath);
+    // Rename (atomic on POSIX). Guard against partial failures (e.g. cross-device
+    // rename on some edge-case FS) by cleaning up tmp on error.
+    try {
+      fs.renameSync(tmpPath, filePath);
+    } catch (renameErr) {
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      throw renameErr;
+    }
 
     // Invalidate cache.
     _cache = current;
@@ -348,6 +358,9 @@ export async function unsetRuntimeFlag(
 ): Promise<void> {
   if (!isGossipKey(key)) {
     throw new Error(`unsetRuntimeFlag: key "${key}" does not start with GOSSIP_`);
+  }
+  if (!getSpec(key)) {
+    throw new Error(`unsetRuntimeFlag: key "${key}" is not in the runtime flag registry`);
   }
 
   const filePath = flagsFilePath();
@@ -386,7 +399,13 @@ export async function unsetRuntimeFlag(
       throw parseErr;
     }
 
-    fs.renameSync(tmpPath, filePath);
+    // Rename (atomic on POSIX). Clean up tmp on any failure.
+    try {
+      fs.renameSync(tmpPath, filePath);
+    } catch (renameErr) {
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      throw renameErr;
+    }
     _cache = current;
 
     appendAudit({
