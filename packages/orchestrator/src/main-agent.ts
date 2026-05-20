@@ -309,9 +309,13 @@ export class MainAgent {
     } catch { /* best-effort */ }
   }
 
-  /** Get the WorktreeManager from the dispatch pipeline (for native worktree cleanup). */
-  getWorktreeManager(): import('./worktree-manager').WorktreeManager {
-    return (this.pipeline as any).worktreeManager;
+  /**
+   * Get the WorktreeManager from the dispatch pipeline (for native worktree cleanup).
+   * Returns `undefined` when the pipeline hasn't been constructed yet or the
+   * field is absent — callers already defensively `?.`/`if (wtm)` the result.
+   */
+  getWorktreeManager(): import('./worktree-manager').WorktreeManager | undefined {
+    return (this.pipeline as any)?.worktreeManager;
   }
 
   /** Get current orchestrator model info */
