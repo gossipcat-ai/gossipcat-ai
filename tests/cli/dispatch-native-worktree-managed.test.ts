@@ -217,7 +217,7 @@ describe('native dispatch — Option A managed worktree (GOSSIP_NATIVE_WORKTREE_
       const res = await handleDispatchSingle('native-claude', 'audit x', 'worktree');
       const item1 = findItem1(res.content);
       expect(item1).toMatch(/Step 0 — chdir into the gossipcat-managed worktree/);
-      expect(item1).toMatch(/cd \/tmp\/managed-wt-abc12345/);
+      expect(item1).toMatch(/cd '\/tmp\/managed-wt-abc12345'/);
       // Step 0 must precede Step 1
       const step0 = item1.indexOf('Step 0');
       const step1 = item1.indexOf('Step 1');
@@ -229,7 +229,7 @@ describe('native dispatch — Option A managed worktree (GOSSIP_NATIVE_WORKTREE_
       const res = await handleDispatchSingle('native-claude', 'audit x', 'worktree');
       const agentPrompt = findAgentPromptItem(res.content);
       expect(agentPrompt).not.toBeNull();
-      expect(agentPrompt!).not.toMatch(/cd \/tmp\/managed-wt-abc12345/);
+      expect(agentPrompt!).not.toMatch(/cd '\/tmp\/managed-wt-abc12345'/);
       expect(agentPrompt!).not.toMatch(/Step 0 — chdir/);
       // Sanity: AGENT_PROMPT still starts with its tag — no orchestration prefix
       expect(agentPrompt!.startsWith('AGENT_PROMPT:')).toBe(true);
@@ -286,10 +286,10 @@ describe('native dispatch — Option A managed worktree (GOSSIP_NATIVE_WORKTREE_
       expect(existsSync(onDiskPath)).toBe(true);
       const body = readFileSync(onDiskPath, 'utf8');
       // Iron-rule: agent-facing prompt file MUST NOT contain orchestration text.
-      expect(body).not.toMatch(/cd \/tmp\/managed-wt-abc12345/);
+      expect(body).not.toMatch(/cd '\/tmp\/managed-wt-abc12345'/);
       expect(body).not.toMatch(/Step 0 — chdir/);
       // But Item 1 STILL emits the cd line for the orchestrator.
-      expect(item1).toMatch(/cd \/tmp\/managed-wt-abc12345/);
+      expect(item1).toMatch(/cd '\/tmp\/managed-wt-abc12345'/);
     });
 
     it('under elision, Item 2 is ABSENT (spec §2) — no AGENT_PROMPT content item', async () => {

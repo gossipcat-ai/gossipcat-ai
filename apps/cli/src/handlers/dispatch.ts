@@ -677,6 +677,8 @@ export async function handleDispatchSingle(
           managedWorktreePath = created.path;
           const info = ctx.nativeTaskMap.get(taskId);
           if (info) info.worktreePath = managedWorktreePath;
+        } else {
+          process.stderr.write('[gossipcat] managed-worktree gate ON but WorktreeManager unavailable; falling back to harness path\n');
         }
       } catch (err) {
         process.stderr.write(`[gossipcat] managed-worktree create failed (falling back to harness): ${(err as Error).message}\n`);
@@ -716,9 +718,14 @@ export async function handleDispatchSingle(
     // is the actor that runs cd; the spawned sub-agent inherits the chdir-d
     // shell. Leaking orchestration into Item 2 would be read as credential
     // injection by modern Sonnet and the sub-agent will refuse.
+    // POSIX-safe single-quote the worktree path. `mkdtemp(tmpdir())` paths are
+    // generally safe but TMPDIR is user-controlled (e.g. `/Users/Some User/tmp`
+    // on macOS dev machines), so unquoted interpolation would silently chdir
+    // into the wrong directory and defeat the load-bearing isolation step.
+    // Embedded single quotes are escaped via the standard POSIX `'\''` pattern.
     const cdPrefix = managedWorktreePath
       ? `Step 0 — chdir into the gossipcat-managed worktree BEFORE invoking Agent():\n` +
-        `  cd ${managedWorktreePath}\n` +
+        `  cd '${managedWorktreePath.replace(/'/g, "'\\''")}'\n` +
         `(Worktree was created by gossipcat at dispatch time. The Agent(isolation:"worktree") flag below is belt-and-suspenders; the cd above is the load-bearing isolation step.)\n\n`
       : '';
 
