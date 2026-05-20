@@ -1185,7 +1185,9 @@ export async function handleCollect(
   // native-tasks.ts:931 — orchestrator sees in-band that some agents silently
   // emitted no `<agent_finding>` tags this round, not just a stderr log.
   if (consensusReport?.zeroTagAgents && consensusReport.zeroTagAgents.length > 0) {
-    const shown = consensusReport.zeroTagAgents.join(', ');
+    const shown = consensusReport.zeroTagAgents
+      .map((id: string) => id.replace(/[\r\n]/g, ' '))
+      .join(', ');
     const overflow = consensusReport.zeroTagOverflow ?? 0;
     const suffix = overflow > 0 ? ` (+${overflow} more)` : '';
     output += `\n⚠ zeroTagAgents: ${shown}${suffix}`;

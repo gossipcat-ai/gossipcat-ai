@@ -79,4 +79,58 @@ describe('ConsensusEngine — zeroTagAgents accumulator', () => {
     expect(report.zeroTagAgents).toBeUndefined();
     expect(report.zeroTagOverflow).toBeUndefined();
   });
+
+  it('exactly 5 zero-tag agents — cap full, no overflow', async () => {
+    const engine = makeEngine();
+
+    const zeroTagIds = ['z1', 'z2', 'z3', 'z4', 'z5'];
+    const tasks: TaskEntry[] = [
+      ...zeroTagIds.map(id => makeTask(id, zeroTagResult(id))),
+      makeTask('agent-keeper', taggedResult),
+    ];
+
+    const report = await engine.synthesize(tasks, []);
+
+    expect(report.zeroTagAgents?.length).toBe(5);
+    expect(report.zeroTagOverflow).toBeUndefined();
+  });
+
+  it('exactly 6 zero-tag agents — cap full, overflow exactly 1', async () => {
+    const engine = makeEngine();
+
+    const zeroTagIds = ['z1', 'z2', 'z3', 'z4', 'z5', 'z6'];
+    const tasks: TaskEntry[] = [
+      ...zeroTagIds.map(id => makeTask(id, zeroTagResult(id))),
+      makeTask('agent-keeper', taggedResult),
+    ];
+
+    const report = await engine.synthesize(tasks, []);
+
+    expect(report.zeroTagAgents?.length).toBe(5);
+    expect(report.zeroTagOverflow).toBe(1);
+  });
+
+  it('mixed round with zero-tag agent and bad-type-tag agent does not cross-contaminate', async () => {
+    const engine = makeEngine();
+
+    // Agent A: zero <agent_finding> tags → zeroTagAgents accumulator
+    const agentAResult = zeroTagResult('agent-a');
+
+    // Agent B: all findings have wrong type "approval" → droppedFindingsByType accumulator
+    const agentBResult = `<agent_finding type="approval">Approval note at file.ts:5 something descriptive enough for the parser</agent_finding>`;
+
+    const tasks: TaskEntry[] = [
+      makeTask('agent-a', agentAResult),
+      makeTask('agent-b', agentBResult),
+      makeTask('agent-keeper', taggedResult),
+    ];
+
+    const report = await engine.synthesize(tasks, []);
+
+    // Only agent-a (zero tags) appears in zeroTagAgents
+    expect(report.zeroTagAgents).toEqual(['agent-a']);
+    // agent-b's "approval" type should land in droppedFindingsByType, not zeroTagAgents
+    expect(report.droppedFindingsByType?.['approval']).toBeGreaterThanOrEqual(1);
+    expect(report.zeroTagOverflow).toBeUndefined();
+  });
 });
