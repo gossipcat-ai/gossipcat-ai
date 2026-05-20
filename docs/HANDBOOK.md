@@ -136,6 +136,18 @@ A graduated skill (`status: 'passed'`) is NOT a permanent verdict. The drift det
 
 **Do not** add a Bonferroni correction to drift α. The graduation, drift, and fast-path tests operate on disjoint signal populations (anchored at `bound_at`/`inconclusive_at`, `passed_at`/`drift_strike_at`, and `regressed_from_passed_at` respectively). Sequential gates on different evidence pools each spend their own α=0.025 without leakage. See `docs/specs/2026-05-13-passed-skill-drift-detection.md` for the full statistical argument.
 
+### 12. Relay result must be passed verbatim — paraphrase silently drops `<agent_finding>` tags
+
+When the orchestrator calls `gossip_relay(task_id, result)` after a native agent completes, the `result` value **must be the agent's raw output, unchanged.** If the orchestrator summarizes or paraphrases (e.g., `"HIGH — recordCreated lacks redaction"` instead of the full `<agent_finding>` block), the consensus engine's regex at `consensus-engine.ts:802` finds zero tags, the agent's findings are counted as zero, and the dashboard shows an empty native-agent column. Data loss is invisible — no error, no retry.
+
+**Failure mode:** the bullet-parse fallback at `consensus-engine.ts:917-932` may partially recover prose summaries, but it loses citation data, severity grading, and confidence scores. Recovered bullets are unverifiable.
+
+**Parser-side defense (PR #270):** `handleNativeRelay()` in `native-tasks.ts` detects zero tags on a consensus-dispatch relay and appends a `relay_findings_dropped` signal to `.gossip/relay-warnings.jsonl` plus a receipt warning in the `gossip_relay` response. This is detection, not prevention.
+
+**Orchestrator-side rule (this invariant):** every dispatch banner and utility relay instruction now carries an explicit `(VERBATIM — pass the agent's raw output; do NOT paraphrase or summarize, or <agent_finding> tags will be lost)` qualifier on the `gossip_relay` step. Treat this line as a hard contract, not a hint.
+
+**Related:** invariant #8 (`FINDING_TAG_SCHEMA` — parsers are strict). Consensus: `edbf8675-87b24107`.
+
 ---
 
 ## Operator playbook (for orchestrator LLMs)
