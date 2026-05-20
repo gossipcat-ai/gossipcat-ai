@@ -525,6 +525,22 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       >
                         {report.id.slice(0, 8)}
                       </span>
+                      {report.zeroTagAgents && report.zeroTagAgents.length > 0 && (() => {
+                        const shown = report.zeroTagAgents;
+                        const overflow = report.zeroTagOverflow ?? 0;
+                        const total = shown.length + overflow;
+                        const detail = overflow > 0
+                          ? `${shown.join(', ')} (+${overflow} more)`
+                          : shown.join(', ');
+                        return (
+                          <span
+                            className="shrink-0 rounded border border-unverified/20 bg-unverified/5 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-unverified"
+                            title={`Zero-tag agents — emitted no parseable <agent_finding> tags (likely paraphrased relay or HTML-entity encoding). See HANDBOOK invariant #12. Agents: ${detail}`}
+                          >
+                            {total} zero-tag
+                          </span>
+                        );
+                      })()}
                       {report.droppedFindingsByType && Object.keys(report.droppedFindingsByType).length > 0 && (() => {
                         const entries = Object.entries(report.droppedFindingsByType);
                         const total = entries.reduce((n, [, c]) => n + c, 0);
@@ -601,6 +617,23 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                             Dropped: {report.coverageDegraded.droppedAgents.join(', ')}
                           </p>
                         )}
+                      </div>
+                    )}
+                    {report.zeroTagAgents && report.zeroTagAgents.length > 0 && (
+                      <div className="mb-3 rounded-md border border-unverified/20 bg-unverified/8 px-3 py-2">
+                        <p className="font-mono text-[10px] font-semibold text-unverified">
+                          ⚠ Zero-tag agents — {report.zeroTagAgents.length + (report.zeroTagOverflow ?? 0)} agent
+                          {(report.zeroTagAgents.length + (report.zeroTagOverflow ?? 0)) === 1 ? '' : 's'} emitted no parseable &lt;agent_finding&gt; tags
+                        </p>
+                        <p className="mt-0.5 font-mono text-[9px] text-muted-foreground/70">
+                          {report.zeroTagAgents.join(', ')}
+                          {report.zeroTagOverflow && report.zeroTagOverflow > 0
+                            ? ` (+${report.zeroTagOverflow} more)`
+                            : ''}
+                        </p>
+                        <p className="mt-1 font-mono text-[9px] text-muted-foreground/50">
+                          Likely a paraphrased relay or HTML-entity-encoded tags. See HANDBOOK invariant #12.
+                        </p>
                       </div>
                     )}
                     {report.relayCrossReviewSkipped && report.relayCrossReviewSkipped.length > 0 && (
