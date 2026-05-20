@@ -152,6 +152,11 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   // scoring switch's exhaustiveness check holds; it's a no-op for accuracy /
   // uniqueness / circuit breaker — only `transport_failure_count` is bumped.
   transport_failure: true,
+  // Operational signal emitted by the native-worktree isolation detector
+  // (apps/cli/src/handlers/worktree-isolation-detection.ts) when an
+  // Agent(isolation:"worktree") dispatch leaves the parent checkout dirty.
+  // No-op for accuracy / uniqueness — surfaces in dashboards/operational counters only.
+  worktree_isolation_failed: true,
 };
 
 const SEVERITY_MULTIPLIER: Record<string, number> = {

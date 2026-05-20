@@ -559,7 +559,19 @@ export async function handleDispatchSingle(
       preDispatchSha = capturePreDispatchSha();
     }
 
-    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode, relayToken, preDispatchSha });
+    // Option B isolation-failure detector — snapshot parent-checkout state for
+    // worktree-mode native dispatches so handleNativeRelay can detect writes
+    // that leaked outside the Agent(isolation:"worktree") sandbox.
+    // Spec: docs/specs/2026-05-20-native-worktree-isolation-fix.md
+    let isolationSnapshot: { head: string | null; dirty: string[]; takenAt: string } | undefined;
+    if (write_mode === 'worktree') {
+      try {
+        const { captureIsolationSnapshot } = require('./worktree-isolation-detection');
+        isolationSnapshot = captureIsolationSnapshot(process.cwd());
+      } catch { /* best-effort — snapshot failure must not block dispatch */ }
+    }
+
+    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode, relayToken, preDispatchSha, isolationSnapshot });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     // promptPath is filled in below after elision (if requested).
     process.stderr.write(`[gossipcat] → dispatch → ${agent_id} (${nativeConfig.model}) [${taskId}]\n`);
@@ -947,7 +959,16 @@ export async function handleDispatchParallel(
       emitConsensusSignals(process.cwd(), premiseResult.signals);
     }
 
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken });
+    // Option B isolation-failure detector — parallel-dispatch path.
+    let parallelIsolationSnapshot: { head: string | null; dirty: string[]; takenAt: string } | undefined;
+    if (def.write_mode === 'worktree') {
+      try {
+        const { captureIsolationSnapshot } = require('./worktree-isolation-detection');
+        parallelIsolationSnapshot = captureIsolationSnapshot(process.cwd());
+      } catch { /* best-effort */ }
+    }
+
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any, isolationSnapshot: parallelIsolationSnapshot });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     allParallelTaskIds.push(taskId);

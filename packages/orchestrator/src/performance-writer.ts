@@ -68,6 +68,11 @@ export const VALID_CONSENSUS_SIGNALS = new Set([
   // per performance-reader.ts:950 + L75. Pre-PR #329: rejected by validateSignal
   // and silently dropped, masking the fail-closed signal emit added in PR #328.
   'transport_failure',
+  // Native-worktree isolation gap detector (spec
+  // docs/specs/2026-05-20-native-worktree-isolation-fix.md). Emitted when an
+  // Agent(isolation:"worktree") dispatch leaves the parent checkout with moved
+  // HEAD or new dirty paths. Operational signal — zero weight in scoring.
+  'worktree_isolation_failed',
 ]);
 
 export const VALID_IMPL_SIGNALS = new Set([
