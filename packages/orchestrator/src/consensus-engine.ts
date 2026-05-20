@@ -859,6 +859,14 @@ Return only valid JSON.${skillsBlock}`;
     // dashboard can render a banner when agent output was unparseable (e.g.
     // HTML-entity-encoded tags from an upstream-sanitizer layer).
     const authorDiagnostics: Record<string, import('./parse-findings').ParseDiagnostic[]> = {};
+    // Agents whose raw output contained ZERO `<agent_finding>` tags. Capped at
+    // the first 5 `originalAgentId`s for compactness; overflow is counted in
+    // `zeroTagOverflow` and surfaced separately. Mirrors the stderr `_log`
+    // warning at the `rawTagCount === 0` branch below, but in-band so the
+    // `gossip_collect` tool response and dashboard JSON can highlight it.
+    const zeroTagAgents: string[] = [];
+    let zeroTagOverflow = 0;
+    const ZERO_TAG_CAP = 5;
 
     for (const r of successful) {
       // Parse findings from the FULL raw result so tags placed before the
@@ -916,6 +924,11 @@ Return only valid JSON.${skillsBlock}`;
       // different root causes (skill conflict vs type-enum drift) and need different fixes.
       if (agentFindingsFound === 0) {
         if (parseResult.rawTagCount === 0) {
+          if (zeroTagAgents.length < ZERO_TAG_CAP) {
+            zeroTagAgents.push(r.agentId);
+          } else {
+            zeroTagOverflow++;
+          }
           _log('consensus',
             `⚠ agent "${r.agentId}" emitted ZERO tags — falling back to bullet parsing. ` +
             `Check if skill Output Format conflicts with FINDING TAG SCHEMA.`
@@ -1449,6 +1462,9 @@ Return only valid JSON.${skillsBlock}`;
       ...(Object.keys(droppedFindingsByType).length > 0 ? { droppedFindingsByType } : {}),
       // Same pattern for per-author parse diagnostics.
       ...(Object.keys(authorDiagnostics).length > 0 ? { authorDiagnostics } : {}),
+      // Surface zero-tag agents in-band so the gossip_collect tool response
+      // + dashboard JSON can highlight the silent dropout, not just stderr.
+      ...(zeroTagAgents.length > 0 ? { zeroTagAgents, ...(zeroTagOverflow > 0 ? { zeroTagOverflow } : {}) } : {}),
     };
   }
 

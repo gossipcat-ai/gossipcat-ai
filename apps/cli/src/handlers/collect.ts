@@ -907,6 +907,11 @@ export async function handleCollect(
         // renders a banner on the consensus card when present, so this MUST
         // round-trip through the JSON payload or the feature is invisible.
         ...(consensusReport.authorDiagnostics ? { authorDiagnostics: consensusReport.authorDiagnostics } : {}),
+        // Surface zero-tag agents (strict parser saw no `<agent_finding>` tags
+        // at all) in the persisted report so the dashboard can render the
+        // same silent-dropout indicator the gossip_collect tool response shows.
+        ...(consensusReport.zeroTagAgents ? { zeroTagAgents: consensusReport.zeroTagAgents } : {}),
+        ...(consensusReport.zeroTagOverflow ? { zeroTagOverflow: consensusReport.zeroTagOverflow } : {}),
       }, null, 2));
     } catch (e) {
       // Best-effort still applies (we don't throw to the caller), but the
@@ -1173,6 +1178,17 @@ export async function handleCollect(
 
   if (consensusReport?.summary) {
     output += '\n\n' + consensusReport.summary;
+  }
+
+  // Surface zero-tag agents (consensus-engine.ts: rawTagCount === 0 branch).
+  // Mirrors the `relay_findings_dropped` warning pattern from
+  // native-tasks.ts:931 — orchestrator sees in-band that some agents silently
+  // emitted no `<agent_finding>` tags this round, not just a stderr log.
+  if (consensusReport?.zeroTagAgents && consensusReport.zeroTagAgents.length > 0) {
+    const shown = consensusReport.zeroTagAgents.join(', ');
+    const overflow = consensusReport.zeroTagOverflow ?? 0;
+    const suffix = overflow > 0 ? ` (+${overflow} more)` : '';
+    output += `\n⚠ zeroTagAgents: ${shown}${suffix}`;
   }
 
   if (provisionalSignalCount > 0) {

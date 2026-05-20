@@ -103,6 +103,19 @@ export interface ConsensusReport {
    * failures loud. Keyed by `originalAgentId`.
    */
   authorDiagnostics?: Record<string, import('./parse-findings').ParseDiagnostic[]>;
+  /**
+   * Agents whose raw output contained ZERO `<agent_finding>` tags (the strict
+   * parser saw no tags at all). Surfaces the same silent dropout that
+   * `consensus-engine.ts:917` logs to stderr, but in-band so the
+   * `gossip_collect` tool response and the dashboard JSON payload can
+   * highlight it. Capped at the first 5 `originalAgentId`s for compactness —
+   * any agents past that quota are counted via `zeroTagOverflow`. Populated
+   * only when `zeroTagAgents.length > 0`; clean rounds keep both fields
+   * undefined.
+   */
+  zeroTagAgents?: string[];
+  /** Count of zero-tag agents past the 5-entry `zeroTagAgents` cap. */
+  zeroTagOverflow?: number;
 }
 
 /** Return type for collect() */
