@@ -1192,7 +1192,7 @@ export async function handleDispatchParallel(
 }
 
 export async function handleDispatchConsensus(
-  taskDefs: Array<{ agent_id: string; task: string }>,
+  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string }>,
   _utility_task_id?: string,
   /**
    * #126 PR-B: optional dispatch-time resolutionRoots (post-validation,
@@ -1283,8 +1283,8 @@ export async function handleDispatchConsensus(
   // where the orchestrator picks one agent on purpose, not in explicit consensus dispatch.
 
   // Split native vs custom tasks (same pattern as parallel)
-  const nativeTasks: Array<{ agent_id: string; task: string }> = [];
-  const relayTasks: Array<{ agent_id: string; task: string }> = [];
+  const nativeTasks: Array<{ agent_id: string; task: string; write_mode?: string }> = [];
+  const relayTasks: Array<{ agent_id: string; task: string; write_mode?: string }> = [];
   for (const def of taskDefs) {
     if (ctx.nativeAgentConfigs.has(def.agent_id)) {
       nativeTasks.push(def);
@@ -1377,7 +1377,12 @@ export async function handleDispatchConsensus(
       }
     }
 
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, worktreePath: managedWorktreePathConsensus ?? undefined });
+    // When a managed worktree was created for this consensus task, force
+    // writeMode='worktree' so the handleNativeRelay cleanup gate fires.
+    // Without this the gate (taskInfo.writeMode === 'worktree') silently
+    // skips cleanup and managed worktrees leak. (consensus cb4e7421:f5)
+    const effectiveWriteMode = managedWorktreePathConsensus ? 'worktree' : def.write_mode;
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: effectiveWriteMode as any, worktreePath: managedWorktreePathConsensus ?? undefined });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     allTaskIds.push(taskId);

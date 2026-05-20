@@ -177,6 +177,40 @@ describe('handleNativeRelay — managed-worktree per-task cleanup', () => {
     });
   });
 
+  describe('DEFENSIVE EDGES (consensus cb4e7421-6a2e4128)', () => {
+    it('does not throw when getWorktreeManager() returns undefined (managed task)', async () => {
+      seedWorktreeTask(TASK_ID, { managed: true });
+      (ctx.mainAgent.getWorktreeManager as jest.Mock).mockReturnValueOnce(undefined);
+
+      // wtm?.cleanup()?.catch() must short-circuit on undefined wtm,
+      // not throw TypeError on the .catch call.
+      await expect(handleNativeRelay(TASK_ID, VALID_RESULT)).resolves.not.toThrow();
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(cleanupMock).not.toHaveBeenCalled();
+      expect(pruneOrphansMock).not.toHaveBeenCalled();
+    });
+
+    it('treats empty-string worktreePath identically to undefined (falsy guard)', async () => {
+      // Direct seed with worktreePath: '' (bypasses seedWorktreeTask's helper).
+      ctx.nativeTaskMap.set(TASK_ID, {
+        agentId: AGENT_ID,
+        task: 'implement thing',
+        startedAt: Date.now() - 1000,
+        timeoutMs: 120_000,
+        writeMode: 'worktree' as any,
+        worktreePath: '',
+      });
+
+      await handleNativeRelay(TASK_ID, '', 'agent errored');
+      await new Promise(resolve => setImmediate(resolve));
+
+      // Empty string is falsy → takes the legacy branch → pruneOrphans on error
+      expect(cleanupMock).not.toHaveBeenCalled();
+      expect(pruneOrphansMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('NON-WORKTREE writeMode', () => {
     it('does not call cleanup() or pruneOrphans() for scoped write mode', async () => {
       seedWorktreeTask(TASK_ID, { managed: true, writeMode: 'scoped' });

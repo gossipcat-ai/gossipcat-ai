@@ -625,10 +625,12 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     const wtm = ctx.mainAgent.getWorktreeManager();
     if (taskInfo.worktreePath) {
       // Managed mode: per-task cleanup regardless of error state
-      try { wtm?.cleanup(task_id, taskInfo.worktreePath).catch(() => {}); } catch { /* best-effort */ }
+      // Optional-chain BOTH the call and the .catch — wtm?.op() returns
+      // undefined when wtm is undefined, and undefined.catch() throws TypeError.
+      try { wtm?.cleanup(task_id, taskInfo.worktreePath)?.catch(() => {}); } catch { /* best-effort */ }
     } else if (error) {
       // Legacy mode: orphan prune on error only
-      try { wtm?.pruneOrphans().catch(() => {}); } catch { /* best-effort */ }
+      try { wtm?.pruneOrphans()?.catch(() => {}); } catch { /* best-effort */ }
     }
   }
 
