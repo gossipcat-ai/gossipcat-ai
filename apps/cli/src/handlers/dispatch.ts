@@ -644,21 +644,6 @@ export async function handleDispatchSingle(
     // (enforcement boundary); UNVERIFIED note layered on top (behavioral).
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, task, agent_id);
 
-    // Record dispatch metadata for the post-task audit.
-    // For native worktree dispatch the path is created by Claude Code's
-    // Agent({isolation:"worktree"}) out-of-process and not returned to us;
-    // it stays undefined. The Layer 3 audit relies on its blanket
-    // `.claude/worktrees/` exclusion (see buildAuditExclusions) so native
-    // worktree writes are not falsely flagged.
-    recordDispatchMetadata(process.cwd(), {
-      taskId,
-      agentId: agent_id,
-      writeMode: write_mode,
-      scope,
-      worktreePath: undefined,
-      timestamp: Date.now(),
-    });
-
     // Only use worktree if explicitly requested AND project is a git repo
     let useWorktree = write_mode === 'worktree';
     if (useWorktree) {
@@ -669,6 +654,50 @@ export async function handleDispatchSingle(
         useWorktree = false; // not a git repo, skip worktree
       }
     }
+
+    // Option A (structural fix) — gated behind GOSSIP_NATIVE_WORKTREE_MANAGED=1.
+    // Spec: docs/specs/2026-05-20-native-worktree-isolation-fix.md §3.
+    //
+    // When enabled, gossipcat creates the worktree synchronously here via
+    // WorktreeManager.create() and captures the absolute path. The Item 1
+    // orchestrator instructions then prepend an explicit `cd <path>` so the
+    // sub-agent enters the worktree deterministically — no longer trusting
+    // Claude Code's Agent({isolation:"worktree"}) to chdir us out-of-process.
+    // The `isolation:"worktree"` flag is retained as belt-and-suspenders.
+    //
+    // Failure mode: if create() throws (e.g. git unavailable mid-flight even
+    // though rev-parse succeeded), we fall back to the legacy path rather
+    // than block dispatch. The Option B HEAD-drift detector still fires.
+    let managedWorktreePath: string | null = null;
+    if (useWorktree && process.env.GOSSIP_NATIVE_WORKTREE_MANAGED === '1') {
+      try {
+        const wtm = ctx.mainAgent.getWorktreeManager();
+        if (wtm) {
+          const created = await wtm.create(taskId);
+          managedWorktreePath = created.path;
+          const info = ctx.nativeTaskMap.get(taskId);
+          if (info) info.worktreePath = managedWorktreePath;
+        }
+      } catch (err) {
+        process.stderr.write(`[gossipcat] managed-worktree create failed (falling back to harness): ${(err as Error).message}\n`);
+        managedWorktreePath = null;
+      }
+    }
+
+    // Record dispatch metadata for the post-task audit.
+    // Under the legacy harness-managed path the worktree path is created by
+    // Claude Code's Agent({isolation:"worktree"}) out-of-process and not
+    // returned to us; it stays undefined and the Layer 3 audit relies on
+    // its blanket `.claude/worktrees/` exclusion. Under the managed path
+    // (GOSSIP_NATIVE_WORKTREE_MANAGED=1) we now have a concrete path.
+    recordDispatchMetadata(process.cwd(), {
+      taskId,
+      agentId: agent_id,
+      writeMode: write_mode,
+      scope,
+      worktreePath: managedWorktreePath ?? undefined,
+      timestamp: Date.now(),
+    });
 
     // Spec §1 iron rule: strict opt-in elision. When prompt_format='elided',
     // write the prompt body to disk and emit a marker in Item 1; OMIT Item 2.
@@ -681,11 +710,23 @@ export async function handleDispatchSingle(
     // Persist after elision so promptPath is durable across /mcp reconnect.
     persistNativeTaskMap();
 
-    const promptInstruction = elision.elided
+    // HANDBOOK invariant #4 — the cd line lives in Item 1 (orchestrator
+    // instructions), NEVER in Item 2 (verbatim agent prompt) and NEVER in
+    // the elided on-disk prompt file. The orchestrator that invokes Agent()
+    // is the actor that runs cd; the spawned sub-agent inherits the chdir-d
+    // shell. Leaking orchestration into Item 2 would be read as credential
+    // injection by modern Sonnet and the sub-agent will refuse.
+    const cdPrefix = managedWorktreePath
+      ? `Step 0 — chdir into the gossipcat-managed worktree BEFORE invoking Agent():\n` +
+        `  cd ${managedWorktreePath}\n` +
+        `(Worktree was created by gossipcat at dispatch time. The Agent(isolation:"worktree") flag below is belt-and-suspenders; the cd above is the load-bearing isolation step.)\n\n`
+      : '';
+
+    const promptInstruction = cdPrefix + (elision.elided
       ? `Step 1 — ${elision.marker}\n` +
         `Agent(model: "${nativeConfig.model}", prompt: <file contents>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n`
       : `Step 1 — Pass the AGENT_PROMPT:${taskId} content item below verbatim to Agent(prompt: ...):\n` +
-        `Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n`;
+        `Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n`);
 
     // Split into two content items so relay_token stays in orchestrator-only text
     // and AGENT_PROMPT is passed verbatim to Agent(prompt: ...).
