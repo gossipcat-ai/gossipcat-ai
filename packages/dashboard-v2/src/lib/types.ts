@@ -199,6 +199,15 @@ export interface ConsensusReport {
    * banner on affected finding cards so silent parse failures become loud.
    */
   authorDiagnostics?: Record<string, ParseDiagnostic[]>;
+  /**
+   * Agents whose raw output contained zero `<agent_finding>` tags. Mirrors
+   * the orchestrator `ConsensusReport.zeroTagAgents` field so dashboard JSON
+   * parsing preserves the in-band signal. Capped at 5 entries; overflow is
+   * carried separately in `zeroTagOverflow`.
+   */
+  zeroTagAgents?: string[];
+  /** Count of zero-tag agents past the 5-entry `zeroTagAgents` cap. */
+  zeroTagOverflow?: number;
 }
 
 export type ParseDiagnostic =
