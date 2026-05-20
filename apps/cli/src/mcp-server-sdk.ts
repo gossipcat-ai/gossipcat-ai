@@ -33,7 +33,7 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 import { ctx } from './mcp-context';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
-import { buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog } from '@gossip/orchestrator';
+import { buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog, isValidCategory } from '@gossip/orchestrator';
 
 // Prime the dist-mcp staleness cache from the running bundle path. In the bundled
 // CJS output (dist-mcp/mcp-server.js) __filename resolves to the bundle file, so
@@ -2814,7 +2814,7 @@ export function createMcpServer(): McpServer {
             counterpartId: s.counterpart_id,
             findingId: s.finding_id,
             severity: s.severity,
-            category: s.category ?? inferCategory(s),
+            category: (isValidCategory(s.category) ? s.category : undefined) ?? inferCategory(s),
             source: 'manual',
             evidence,
             timestamp: ts,
