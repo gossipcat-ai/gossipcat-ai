@@ -3733,6 +3733,7 @@ export function createMcpServer(): McpServer {
                   `⚠️ EXECUTE NOW — launch this Agent and re-call gossip_skills:\n\n` +
                   `1. Agent(model: "${modelShort}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true) — pass the AGENT_PROMPT:${taskId} content item verbatim\n` +
                   `2. When agent completes → gossip_relay(task_id: "${taskId}", result: "<full agent output>")\n` +
+                  `   (VERBATIM — pass the agent's raw output; do NOT paraphrase or summarize, or <agent_finding> tags will be lost)\n` +
                   `3. Then re-call: gossip_skills(action: "develop", agent_id: "${agent_id}", category: "${category}", _utility_task_id: "${taskId}")\n\n` +
                   `Do ALL steps in order. Do not wait for user input between them.`
                 },
@@ -4186,6 +4187,7 @@ export function createMcpServer(): McpServer {
               `⚠️ EXECUTE NOW — launch this Agent and re-call gossip_session_save:\n\n` +
               `1. Agent(model: "${modelShort}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true) — pass the AGENT_PROMPT:${taskId} content item verbatim\n` +
               `2. When agent completes → gossip_relay(task_id: "${taskId}", result: "<full agent output>")\n` +
+              `   (VERBATIM — pass the agent's raw output; do NOT paraphrase or summarize, or <agent_finding> tags will be lost)\n` +
               `3. Then re-call: gossip_session_save(notes: ${JSON.stringify(notes || '')}, _utility_task_id: "${taskId}")\n\n` +
               `Do ALL steps in order. Do not wait for user input between them.`
             },
@@ -4441,6 +4443,7 @@ export function createMcpServer(): McpServer {
             `⚠️ EXECUTE NOW — launch this Agent and re-call gossip_verify_memory:\n\n` +
             `1. Agent(model: "${modelShort}", prompt: <AGENT_PROMPT:${taskId} below>, run_in_background: true) — pass the AGENT_PROMPT:${taskId} content item verbatim\n` +
             `2. When agent completes → gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<full agent output>")\n` +
+            `   (VERBATIM — pass the agent's raw output; do NOT paraphrase or summarize, or <agent_finding> tags will be lost)\n` +
             `3. Then re-call: gossip_verify_memory(memory_path: ${JSON.stringify(memory_path)}, claim: ${JSON.stringify(claim)}, _utility_task_id: "${taskId}")\n\n` +
             `Do ALL steps in order. Do not wait for user input between them.`
           },

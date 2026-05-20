@@ -848,7 +848,8 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     utilityBlocks.push(
       `Task: cognitive summary [${summaryTaskId}]\n` +
       `1. Agent(model: "${model}", prompt: ${JSON.stringify(summaryPrompt)}, run_in_background: true)\n` +
-      `2. When agent completes → gossip_relay(task_id: "${summaryTaskId}", result: "<full agent output>")`
+      `2. When agent completes → gossip_relay(task_id: "${summaryTaskId}", result: "<full agent output>")\n` +
+      `   (VERBATIM — pass the agent's raw output; do NOT paraphrase or summarize, or <agent_finding> tags will be lost)`
     );
 
     // 2. Gossip utility task — only if there are pending non-utility peers
@@ -874,7 +875,8 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       utilityBlocks.push(
         `Task: gossip publish [${gossipTaskId}]\n` +
         `1. Agent(model: "${model}", prompt: ${JSON.stringify(gossipPrompt)}, run_in_background: true)\n` +
-        `2. When agent completes → gossip_relay(task_id: "${gossipTaskId}", result: "<full agent output>")`
+        `2. When agent completes → gossip_relay(task_id: "${gossipTaskId}", result: "<full agent output>")\n` +
+      `   (VERBATIM — pass the agent's raw output; do NOT paraphrase or summarize, or <agent_finding> tags will be lost)`
       );
     }
   }

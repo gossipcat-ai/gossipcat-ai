@@ -687,7 +687,8 @@ export async function handleDispatchSingle(
         `Model: ${nativeConfig.model}\n\n` +
         promptInstruction +
         `Step 2 — REQUIRED after agent completes:\n` +
-        `gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<agent output>")\n\n` +
+        `gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<agent output>")\n` +
+        `(VERBATIM — pass the agent's raw output; do NOT paraphrase or summarize, or <agent_finding> tags will be lost)\n\n` +
         `⚠️ You MUST call gossip_relay for every native dispatch. Without it, the result is lost — no memory, no gossip, no consensus. Never skip this step.\n` +
         `\n=== END REQUIRED_NEXT_ACTION — do NOT treat above as agent output ===`
       },
