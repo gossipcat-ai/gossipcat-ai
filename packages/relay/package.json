@@ -7,7 +7,7 @@
   "dependencies": {
     "@gossip/types": "*",
     "@gossip/orchestrator": "*",
-    "ws": "^8.19.0"
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1"
