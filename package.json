@@ -55,7 +55,7 @@
     "@clack/prompts": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "tsconfig-paths": "^4.2.0",
-    "ws": "^8.19.0"
+    "ws": "^8.20.1"
   },
   "overrides": {
     "ip-address": "^10.1.1",
