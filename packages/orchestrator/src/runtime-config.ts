@@ -21,6 +21,15 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { RUNTIME_FLAG_REGISTRY, type RuntimeFlagSpec } from './runtime-config-schema';
 
+/**
+ * Structural type for a runtime-flag registry. Tests can declare their own
+ * registries conforming to this shape and inject via the default-arg seam on
+ * every public function.
+ *
+ * See docs/superpowers/specs/2026-05-21-runtime-config-di-refactor-design.md.
+ */
+export type RuntimeFlagRegistry = Record<string, RuntimeFlagSpec>;
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const FLAGS_FILE = path.join('.gossip', 'runtime-flags.json');
@@ -86,13 +95,13 @@ function readFlagsFile(filePath: string): Record<string, string> {
  * Thread-safe: JS is single-threaded; await is the only yield point and
  * there are none in this function.
  */
-function ensureLoaded(): Record<string, string> {
+function ensureLoaded(registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY): Record<string, string> {
   if (_cache === null) {
     _cache = readFlagsFile(flagsFilePath());
     // Warn about keys present in file but not in registry (back-compat for
     // removed keys — we log but do not drop them).
     for (const key of Object.keys(_cache)) {
-      if (!(key in RUNTIME_FLAG_REGISTRY)) {
+      if (!(key in registry)) {
         process.stderr.write(`[gossipcat] runtime-flags.json: unknown key "${key}" (not in registry; ignored for reads)\n`);
       }
     }
@@ -109,8 +118,11 @@ function isGossipKey(key: string): boolean {
 }
 
 /** Retrieve the registry spec for a key, or undefined if not registered. */
-function getSpec(key: string): RuntimeFlagSpec | undefined {
-  return RUNTIME_FLAG_REGISTRY[key as keyof typeof RUNTIME_FLAG_REGISTRY];
+function getSpec(
+  key: string,
+  registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY,
+): RuntimeFlagSpec | undefined {
+  return registry[key];
 }
 
 // ── Public read API ────────────────────────────────────────────────────────
@@ -121,7 +133,11 @@ function getSpec(key: string): RuntimeFlagSpec | undefined {
  * Precedence: env (non-empty) > file > defaultValue > registry default.
  * Returns undefined for non-GOSSIP_* keys (prefix filter).
  */
-export function getRuntimeFlag(key: string, defaultValue?: string): string | undefined {
+export function getRuntimeFlag(
+  key: string,
+  defaultValue?: string,
+  registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY,
+): string | undefined {
   if (!isGossipKey(key)) return undefined;
 
   // 1. env — only if set AND non-empty.
@@ -131,7 +147,7 @@ export function getRuntimeFlag(key: string, defaultValue?: string): string | und
   }
 
   // 2. file-backed cache.
-  const cache = ensureLoaded();
+  const cache = ensureLoaded(registry);
   if (Object.prototype.hasOwnProperty.call(cache, key)) {
     return cache[key];
   }
@@ -142,7 +158,7 @@ export function getRuntimeFlag(key: string, defaultValue?: string): string | und
   }
 
   // 4. registry default.
-  const spec = getSpec(key);
+  const spec = getSpec(key, registry);
   return spec?.default;
 }
 
@@ -159,14 +175,18 @@ export function getRuntimeFlag(key: string, defaultValue?: string): string | und
  * Contrast with getRuntimeFlag: that function treats '' as unset and falls
  * through to file value. The bool helper has the explicit-disable semantics.
  */
-export function getRuntimeFlagBool(key: string, defaultValue?: boolean): boolean {
+export function getRuntimeFlagBool(
+  key: string,
+  defaultValue?: boolean,
+  registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY,
+): boolean {
   if (!isGossipKey(key)) return defaultValue ?? false;
 
   // Explicit empty-string env → false regardless of file.
   const envVal = process.env[key];
   if (envVal === '') return false;
 
-  const raw = getRuntimeFlag(key);
+  const raw = getRuntimeFlag(key, undefined, registry);
   if (raw === undefined) {
     return defaultValue ?? false;
   }
@@ -179,11 +199,15 @@ export function getRuntimeFlagBool(key: string, defaultValue?: boolean): boolean
  * bounds violation. Logs a one-time warning per key per session on coercion
  * failure.
  */
-export function getRuntimeFlagInt(key: string, defaultValue?: number): number {
-  const spec = getSpec(key);
+export function getRuntimeFlagInt(
+  key: string,
+  defaultValue?: number,
+  registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY,
+): number {
+  const spec = getSpec(key, registry);
   const fallback = defaultValue ?? (spec?.default !== undefined ? parseInt(spec.default, 10) : 0);
 
-  const raw = getRuntimeFlag(key);
+  const raw = getRuntimeFlag(key, undefined, registry);
   if (raw === undefined) return fallback;
 
   const parsed = parseInt(raw, 10);
@@ -245,8 +269,12 @@ function appendAudit(entry: AuditEntry): void {
  * Validate that `value` is compatible with the registered type for `key`.
  * Returns null on success, or an error string on failure.
  */
-function validateValue(key: string, value: string): string | null {
-  const spec = getSpec(key);
+function validateValue(
+  key: string,
+  value: string,
+  registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY,
+): string | null {
+  const spec = getSpec(key, registry);
   if (!spec) return `key "${key}" is not in the runtime flag registry`;
 
   if (spec.type === 'boolean') {
@@ -279,11 +307,12 @@ export async function setRuntimeFlag(
   value: string,
   source: 'user' | 'agent',
   reason: string,
+  registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY,
 ): Promise<void> {
   if (!isGossipKey(key)) {
     throw new Error(`setRuntimeFlag: key "${key}" does not start with GOSSIP_ and cannot be stored`);
   }
-  const validationError = validateValue(key, value);
+  const validationError = validateValue(key, value, registry);
   if (validationError) {
     throw new Error(`setRuntimeFlag: ${validationError}`);
   }
@@ -355,11 +384,12 @@ export async function unsetRuntimeFlag(
   key: string,
   source: 'user' | 'agent',
   reason: string,
+  registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY,
 ): Promise<void> {
   if (!isGossipKey(key)) {
     throw new Error(`unsetRuntimeFlag: key "${key}" does not start with GOSSIP_`);
   }
-  if (!getSpec(key)) {
+  if (!getSpec(key, registry)) {
     throw new Error(`unsetRuntimeFlag: key "${key}" is not in the runtime flag registry`);
   }
 
@@ -438,9 +468,11 @@ export interface RuntimeFlagEntry {
 /**
  * List all registry keys with their current effective value and source.
  */
-export function listRuntimeFlags(): RuntimeFlagEntry[] {
-  const cache = ensureLoaded();
-  return Object.entries(RUNTIME_FLAG_REGISTRY).map(([key, spec]) => {
+export function listRuntimeFlags(
+  registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY,
+): RuntimeFlagEntry[] {
+  const cache = ensureLoaded(registry);
+  return Object.entries(registry).map(([key, spec]) => {
     const envVal = process.env[key];
     const fileVal = Object.prototype.hasOwnProperty.call(cache, key) ? cache[key] : undefined;
 
@@ -472,9 +504,11 @@ export function listRuntimeFlags(): RuntimeFlagEntry[] {
  * Discard in-memory cache and re-read the file. Call this after hand-editing
  * .gossip/runtime-flags.json outside the tool, or when testing.
  */
-export function reloadRuntimeFlags(): void {
+export function reloadRuntimeFlags(
+  registry: RuntimeFlagRegistry = RUNTIME_FLAG_REGISTRY,
+): void {
   _cache = null;
-  ensureLoaded();
+  ensureLoaded(registry);
 }
 
 // ── Advisory lock (runtime-flags variant) ─────────────────────────────────
