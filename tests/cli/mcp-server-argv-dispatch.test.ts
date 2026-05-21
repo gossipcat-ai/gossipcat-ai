@@ -125,6 +125,20 @@ describeOrSkip('dist-mcp/mcp-server.js argv dispatch shim', () => {
     expect(res.stderr).toContain("unknown subcommand 'nosuchcommand'");
   });
 
+  it('`mcp` alias → MCP server boots (back-compat for legacy .mcp.json configs)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gossipcat-argv-shim-'));
+    created.push(root);
+    // Legacy `.mcp.json` configs written by older `gossip_setup` versions pass
+    // `"args": ["mcp"]`. The shim must treat this exactly like no-args and boot
+    // the MCP server. See `project_v0_4_29_mcp_arg_regression.md`.
+    const res = await runBundle(['mcp'], { cwd: root, timeoutMs: 8_000, killAfterMs: 2_000 });
+    // Critical: shim did NOT short-circuit with exit code 2 (unknown subcommand).
+    expect(res.code).not.toBe(2);
+    expect(res.stderr).not.toContain("unknown subcommand 'mcp'");
+    // Heavy-import path taken — .gossip/mcp.log exists.
+    expect(existsSync(join(root, '.gossip', 'mcp.log'))).toBe(true);
+  });
+
   it('no args → MCP server boots (stderr redirect activates); SIGTERM after 1.5s ends it', async () => {
     const root = mkdtempSync(join(tmpdir(), 'gossipcat-argv-shim-'));
     created.push(root);
