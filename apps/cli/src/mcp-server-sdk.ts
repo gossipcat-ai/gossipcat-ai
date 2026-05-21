@@ -8,6 +8,61 @@
  */
 import { createWriteStream, mkdirSync } from 'fs';
 import { join } from 'path';
+import { runHook } from './hook-run';
+import { parseHookSubcommand } from './hook-argv';
+
+// ── Argv dispatch shim ──────────────────────────────────────────────────
+//
+// `package.json:bin` ships this file as the `gossipcat` binary, so
+// `gossipcat hook --run` (the UserPromptSubmit hook installed by
+// `gossip_setup` / `installBootstrapHook`) lands HERE — not in
+// `apps/cli/src/index.ts` (which is not bundled into the published
+// artifact). Without this shim the hook would silently boot a duplicate
+// MCP server on every user prompt, racing the real one on `.gossip/`
+// lockfiles and port 51838 → relay crash-loop.
+//
+// Rules (handled BEFORE the stderr redirect / heavy imports below):
+//   - `gossipcat hook --run` or `gossipcat hook run` → execute hook body, exit 0
+//   - `gossipcat hook` or `gossipcat hook <unknown>` → usage to stderr, exit 2
+//   - `gossipcat help|--help|-h`                     → usage to stdout, exit 0
+//   - `gossipcat <unknown>`                          → error to stderr, exit 2
+//   - no args                                        → fall through, boot MCP server
+//
+// See memory `project_bootstrap_hook_command_dispatch_bug.md` for the
+// full diagnosis and the dist-mcp-only build context.
+{
+  const argv = process.argv.slice(2);
+  const sub = argv[0];
+  if (sub === 'hook') {
+    const decision = parseHookSubcommand(argv[1]);
+    if (decision === 'usage') {
+      process.stderr.write('Usage: gossipcat hook --run\n');
+      process.exit(2);
+    }
+    runHook();
+    process.exit(0);
+  }
+  if (sub === 'help' || sub === '--help' || sub === '-h') {
+    process.stdout.write(
+      'gossipcat — Multi-Agent Orchestration\n' +
+      '\n' +
+      'Usage:\n' +
+      '  gossipcat                Start MCP server (for Claude Code / Cursor)\n' +
+      '  gossipcat hook --run     Run UserPromptSubmit bootstrap hook (internal)\n' +
+      '  gossipcat help           Show this help\n' +
+      '\n' +
+      'The published binary is the MCP server bundle. The full CLI\n' +
+      '(setup wizard, create-agent, chat, etc.) lives in apps/cli/src/index.ts\n' +
+      'and is available via `npm start` / `npx ts-node` in the source repo.\n'
+    );
+    process.exit(0);
+  }
+  if (sub !== undefined) {
+    process.stderr.write(`gossipcat: unknown subcommand '${sub}'. Try 'gossipcat help'.\n`);
+    process.exit(2);
+  }
+  // No args → fall through; the MCP server boots below.
+}
 
 // Redirect stderr to log file BEFORE any other imports.
 // Suppressed in test runs (GOSSIPCAT_MCP_NO_MAIN=1) so jest can surface assertion
