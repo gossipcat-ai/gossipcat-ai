@@ -90,6 +90,15 @@ export interface NativeTaskInfo {
    * longer in the restored map. Undefined for inline dispatches.
    */
   promptPath?: string;
+  /**
+   * True if this task's lifetime overlapped with another worktree-mode task.
+   * Set at dispatch time and never cleared. Used by checkIsolationViolation to
+   * skip ambiguous attribution — when Agent A leaks to master and finishes first,
+   * Agent B's later check would falsely attribute A's dirty paths. With this flag,
+   * any concurrent worktree task suppresses the worktree_isolation_failed signal
+   * in favour of a worktree_isolation_skipped breadcrumb.
+   */
+  concurrentWorktreeTaint?: boolean;
 }
 
 export interface NativeResultInfo {

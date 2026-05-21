@@ -605,6 +605,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         task_id,
         taskInfo.isolationSnapshot,
         process.cwd(),
+        taskInfo.concurrentWorktreeTaint,
       );
     } catch { /* best-effort — detector must not block relay completion */ }
   }
@@ -947,12 +948,27 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     responseText += `\n⚠ relay_findings_dropped: result has 0 <agent_finding> tags but task was a consensus dispatch — orchestrator may have paraphrased; original tagged findings are lost from the dashboard.`;
   }
   if (isolationDiff && isolationDiff.isViolation) {
-    const headPart = isolationDiff.headChanged ? 'HEAD moved' : 'HEAD unchanged';
-    const list = isolationDiff.dirtyPathsAdded.slice(0, 5).join(', ');
-    const more = isolationDiff.dirtyPathsAdded.length > 5
-      ? ` +${isolationDiff.dirtyPathsAdded.length - 5} more`
-      : '';
-    responseText += `\n⚠ worktree_isolation_failed: Agent(isolation:"worktree") write leaked into parent checkout (${headPart}, ${isolationDiff.dirtyPathsAdded.length} new dirty path(s)${list ? `: ${list}${more}` : ''}).`;
+    if (taskInfo?.concurrentWorktreeTaint === true) {
+      responseText += `\n⚠ worktree_isolation_skipped: Agent(isolation:"worktree") violation detected but attribution is ambiguous — this task's lifetime overlapped with another worktree task at dispatch time (${isolationDiff.dirtyPathsAdded.length} new dirty path(s)).`;
+      try {
+        const warningRoot = ctx.mainAgent?.projectRoot ?? process.cwd();
+        appendRelayWarning(warningRoot, {
+          taskId: task_id,
+          agentId: taskInfo.agentId,
+          reason: 'worktree_isolation_skipped',
+          resultLength: result?.length ?? 0,
+          suspectedReason: `concurrent_worktree_taint dirtyAdded=${isolationDiff.dirtyPathsAdded.length}`,
+          timestamp: new Date().toISOString(),
+        });
+      } catch { /* best-effort — appendRelayWarning is already fail-open internally */ }
+    } else {
+      const headPart = isolationDiff.headChanged ? 'HEAD moved' : 'HEAD unchanged';
+      const list = isolationDiff.dirtyPathsAdded.slice(0, 5).join(', ');
+      const more = isolationDiff.dirtyPathsAdded.length > 5
+        ? ` +${isolationDiff.dirtyPathsAdded.length - 5} more`
+        : '';
+      responseText += `\n⚠ worktree_isolation_failed: Agent(isolation:"worktree") write leaked into parent checkout (${headPart}, ${isolationDiff.dirtyPathsAdded.length} new dirty path(s)${list ? `: ${list}${more}` : ''}).`;
+    }
   }
   if (utilityBlocks.length > 0) {
     responseText += `\n\n⚠️ EXECUTE NOW — ${utilityBlocks.length} utility task(s) queued:\n\n${utilityBlocks.join('\n\n')}`;
