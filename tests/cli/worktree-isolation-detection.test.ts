@@ -205,6 +205,75 @@ describe('checkIsolationViolation', () => {
   });
 });
 
+describe('checkIsolationViolation — concurrencyTainted 5th param', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('tainted=false: violation still emits consensus signal (regression test)', () => {
+    const before: IsolationSnapshot = { head: SHA_BEFORE, dirty: [], takenAt: 'T0' };
+    mockExec
+      .mockReturnValueOnce(Buffer.from(SHA_BEFORE + '\n'))
+      .mockReturnValueOnce(Buffer.from(' M apps/cli/src/leaked.ts\n'));
+
+    const diff = checkIsolationViolation('opus-implementer', 'task-abc', before, '/tmp', false);
+
+    expect(diff.isViolation).toBe(true);
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    const [, signals] = mockEmit.mock.calls[0];
+    expect(signals[0].signal).toBe('worktree_isolation_failed');
+  });
+
+  it('tainted=true: violation skips emitConsensusSignals and writes stderr breadcrumb with concurrency_tainted=true', () => {
+    const before: IsolationSnapshot = { head: SHA_BEFORE, dirty: [], takenAt: 'T0' };
+    mockExec
+      .mockReturnValueOnce(Buffer.from(SHA_BEFORE + '\n'))
+      .mockReturnValueOnce(Buffer.from(' M apps/cli/src/leaked.ts\n'));
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    const diff = checkIsolationViolation('opus-implementer', 'task-abc', before, '/tmp', true);
+
+    expect(diff.isViolation).toBe(true);
+    expect(mockEmit).not.toHaveBeenCalled();
+
+    const stderrOutput = stderrSpy.mock.calls.map(c => String(c[0])).join('');
+    expect(stderrOutput).toContain('worktree_isolation_skipped');
+    expect(stderrOutput).toContain('concurrency_tainted=true');
+    expect(stderrOutput).toContain('task-abc');
+    expect(stderrOutput).toContain('opus-implementer');
+    stderrSpy.mockRestore();
+  });
+
+  it('tainted=undefined: backward compat — violation emits as normal', () => {
+    const before: IsolationSnapshot = { head: SHA_BEFORE, dirty: [], takenAt: 'T0' };
+    mockExec
+      .mockReturnValueOnce(Buffer.from(SHA_BEFORE + '\n'))
+      .mockReturnValueOnce(Buffer.from(' M apps/cli/src/leaked.ts\n'));
+
+    const diff = checkIsolationViolation('opus-implementer', 'task-abc', before, '/tmp', undefined);
+
+    expect(diff.isViolation).toBe(true);
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('last-finisher suppressed: tainted=true alone suppresses signal even with no other entries in map', () => {
+    // This is the CRITICAL fix (consensus 3e89a9c2-ec574f6b f1): once the taint
+    // is stamped at dispatch time, it is permanent — even if all other worktree
+    // tasks have finished, the last finisher's check is still suppressed.
+    const before: IsolationSnapshot = { head: SHA_BEFORE, dirty: [], takenAt: 'T0' };
+    mockExec
+      .mockReturnValueOnce(Buffer.from(SHA_BEFORE + '\n'))
+      .mockReturnValueOnce(Buffer.from(' M apps/cli/src/leaked.ts\n'));
+
+    // No map involvement — checkIsolationViolation only takes the flag, not the map.
+    // The flag was stamped at dispatch time and stored in NativeTaskInfo.
+    const diff = checkIsolationViolation('opus-implementer', 'task-abc', before, '/tmp', true);
+
+    expect(diff.isViolation).toBe(true);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
 describe('captureIsolationSnapshot', () => {
   beforeEach(() => jest.clearAllMocks());
 

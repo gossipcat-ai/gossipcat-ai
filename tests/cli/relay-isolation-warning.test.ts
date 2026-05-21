@@ -89,7 +89,7 @@ afterEach(() => {
 function seedWorktreeTask(
   taskId: string,
   agentId: string,
-  opts: { withSnapshot?: boolean } = { withSnapshot: true },
+  opts: { withSnapshot?: boolean; concurrentWorktreeTaint?: boolean } = { withSnapshot: true },
 ): void {
   ctx.nativeTaskMap.set(taskId, {
     agentId,
@@ -97,6 +97,7 @@ function seedWorktreeTask(
     startedAt: Date.now() - 1000,
     timeoutMs: 120_000,
     writeMode: 'worktree',
+    ...(opts.concurrentWorktreeTaint !== undefined ? { concurrentWorktreeTaint: opts.concurrentWorktreeTaint } : {}),
     ...(opts.withSnapshot
       ? {
           isolationSnapshot: {
@@ -208,5 +209,40 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
 
     const text = (res.content[0] as { text: string }).text;
     expect(text).not.toContain('worktree_isolation_failed');
+  });
+
+  it('routes to worktree_isolation_skipped when task has concurrentWorktreeTaint=true', async () => {
+    // Seed task with the taint flag manually (stamping path tested separately in
+    // dispatch-concurrency-taint.test.ts). We only need the relay handler path here.
+    seedWorktreeTask(TASK_ID, AGENT_ID, { withSnapshot: true, concurrentWorktreeTaint: true });
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: ['packages/orchestrator/src/foo.ts'],
+      isViolation: true,
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    const text = (res.content[0] as { text: string }).text;
+    // Receipt must say skipped, not failed
+    expect(text).toContain('worktree_isolation_skipped');
+    expect(text).not.toContain('worktree_isolation_failed');
+
+    // relay-warnings.jsonl must have a structured entry with reason: 'worktree_isolation_skipped'
+    const { readFileSync } = require('fs');
+    const { join } = require('path');
+    const warningsPath = join(testDir, '.gossip', 'relay-warnings.jsonl');
+    const raw = readFileSync(warningsPath, 'utf8').trim();
+    const lines = raw.split('\n').filter(Boolean);
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+
+    // Find the skipped entry — there may be other warning lines (relay lint etc.)
+    const skippedEntry = lines
+      .map((l: string) => JSON.parse(l))
+      .find((e: any) => e.reason === 'worktree_isolation_skipped');
+    expect(skippedEntry).toBeDefined();
+    expect(skippedEntry.taskId).toBe(TASK_ID);
+    expect(skippedEntry.agentId).toBe(AGENT_ID);
+    expect(skippedEntry.reason).toBe('worktree_isolation_skipped');
   });
 });

@@ -174,6 +174,11 @@ export function buildIsolationSignal(args: {
  * a violation is detected. Returns the diff so the caller can surface a
  * warning in the relay receipt.
  *
+ * @param concurrencyTainted - When `true`, this task's lifetime overlapped
+ *   with at least one other worktree-mode task at dispatch time. Attribution
+ *   is ambiguous — skip emitConsensusSignals and emit a skipped breadcrumb
+ *   instead. `false` or `undefined` preserves existing emit behaviour.
+ *
  * Fail-open: any throw is swallowed; returns a no-violation diff.
  */
 export function checkIsolationViolation(
@@ -181,25 +186,38 @@ export function checkIsolationViolation(
   taskId: string,
   before: IsolationSnapshot,
   cwd: string = process.cwd(),
+  concurrencyTainted?: boolean,
 ): IsolationDiff {
   try {
     const after = captureIsolationSnapshot(cwd);
     const diff = diffIsolationSnapshots(before, after);
     if (diff.isViolation) {
-      try {
-        const { emitConsensusSignals } = require('@gossip/orchestrator');
-        emitConsensusSignals(cwd, [buildIsolationSignal({ agentId, taskId, before, after, diff })]);
-      } catch {
-        /* best-effort — signal emission must not block relay completion */
+      if (concurrencyTainted === true) {
+        // Lifetime overlapped with another worktree task — attribution is
+        // ambiguous; skip signal emission and emit a breadcrumb only.
+        try {
+          process.stderr.write(
+            `[gossipcat] ⚠️  worktree_isolation_skipped [${taskId}] agent=${agentId} ` +
+            `dirtyAdded=${diff.dirtyPathsAdded.length} concurrency_tainted=true — ` +
+            `lifetime overlapped with another worktree task at dispatch time; attribution ambiguous\n`,
+          );
+        } catch { /* best-effort */ }
+      } else {
+        try {
+          const { emitConsensusSignals } = require('@gossip/orchestrator');
+          emitConsensusSignals(cwd, [buildIsolationSignal({ agentId, taskId, before, after, diff })]);
+        } catch {
+          /* best-effort — signal emission must not block relay completion */
+        }
+        try {
+          const list = diff.dirtyPathsAdded.slice(0, 5).join(', ');
+          const more = diff.dirtyPathsAdded.length > 5 ? ` +${diff.dirtyPathsAdded.length - 5} more` : '';
+          process.stderr.write(
+            `[gossipcat] ⚠️  worktree_isolation_failed [${taskId}] agent=${agentId} ` +
+            `headChanged=${diff.headChanged} dirtyAdded=${diff.dirtyPathsAdded.length}${list ? ` (${list}${more})` : ''}\n`,
+          );
+        } catch { /* best-effort */ }
       }
-      try {
-        const list = diff.dirtyPathsAdded.slice(0, 5).join(', ');
-        const more = diff.dirtyPathsAdded.length > 5 ? ` +${diff.dirtyPathsAdded.length - 5} more` : '';
-        process.stderr.write(
-          `[gossipcat] ⚠️  worktree_isolation_failed [${taskId}] agent=${agentId} ` +
-          `headChanged=${diff.headChanged} dirtyAdded=${diff.dirtyPathsAdded.length}${list ? ` (${list}${more})` : ''}\n`,
-        );
-      } catch { /* best-effort */ }
     }
     return diff;
   } catch {

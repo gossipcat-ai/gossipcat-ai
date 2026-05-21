@@ -51,6 +51,28 @@ import { existsSync } from 'fs';
 export type PromptFormat = 'inline' | 'elided';
 
 /**
+ * Stamp concurrency taint at dispatch time.
+ *
+ * If ANY existing entry in the map has `writeMode === 'worktree'`, mutate all
+ * those entries' `concurrentWorktreeTaint` to `true` AND return `true` so the
+ * new entry also gets tainted. Otherwise return `false` (no sibling, no taint).
+ *
+ * Mutation is in-place — Map values are object refs, fine to mutate.
+ *
+ * Exported for unit tests in tests/cli/dispatch-concurrency-taint.test.ts.
+ */
+export function stampConcurrencyTaint(
+  map: Map<string, { writeMode?: string; concurrentWorktreeTaint?: boolean }>,
+): boolean {
+  const existingWorktreeTasks = [...map.values()].filter(t => t.writeMode === 'worktree');
+  if (existingWorktreeTasks.length === 0) return false;
+  for (const entry of existingWorktreeTasks) {
+    entry.concurrentWorktreeTaint = true;
+  }
+  return true;
+}
+
+/**
  * Common helper used at all three native dispatch sites. When `promptFormat`
  * is 'elided':
  *   - writes `agentPrompt` to .gossip/dispatch-prompts/<taskId>.txt
@@ -571,7 +593,10 @@ export async function handleDispatchSingle(
       } catch { /* best-effort — snapshot failure must not block dispatch */ }
     }
 
-    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode, relayToken, preDispatchSha, isolationSnapshot });
+    const concurrentWorktreeTaint = write_mode === 'worktree'
+      ? stampConcurrencyTaint(ctx.nativeTaskMap) || undefined
+      : undefined;
+    ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode, relayToken, preDispatchSha, isolationSnapshot, concurrentWorktreeTaint });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     // promptPath is filled in below after elision (if requested).
     process.stderr.write(`[gossipcat] → dispatch → ${agent_id} (${nativeConfig.model}) [${taskId}]\n`);
@@ -962,7 +987,10 @@ export async function handleDispatchParallel(
       } catch { /* best-effort */ }
     }
 
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any, isolationSnapshot: parallelIsolationSnapshot });
+    const parallelConcurrentWorktreeTaint = def.write_mode === 'worktree'
+      ? stampConcurrencyTaint(ctx.nativeTaskMap) || undefined
+      : undefined;
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any, isolationSnapshot: parallelIsolationSnapshot, concurrentWorktreeTaint: parallelConcurrentWorktreeTaint });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     allParallelTaskIds.push(taskId);
@@ -1247,7 +1275,10 @@ export async function handleDispatchConsensus(
       emitConsensusSignals(process.cwd(), premiseResult.signals);
     }
 
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any });
+    const consensusConcurrentWorktreeTaint = def.write_mode === 'worktree'
+      ? stampConcurrencyTaint(ctx.nativeTaskMap) || undefined
+      : undefined;
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any, concurrentWorktreeTaint: consensusConcurrentWorktreeTaint });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     allTaskIds.push(taskId);
