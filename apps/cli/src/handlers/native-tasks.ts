@@ -210,7 +210,9 @@ function markTimedOut(taskId: string, info: { agentId: string; task: string; sta
     const meta = lookupDispatchMetadata(process.cwd(), taskId);
     if (meta?.sentinelPath) cleanupTaskSentinel(meta.sentinelPath);
   } catch { /* best-effort */ }
-  // Don't record timeout signals for utility tasks — _utility is not a real agent
+  // Don't record timeout signals for utility tasks — _utility is not a real agent.
+  // info is a narrowed type { agentId, task, startedAt } without utilityType, so we
+  // use agentId here; all utility callsites set agentId:'_utility' (verified ground truth).
   if (info.agentId !== '_utility') {
     recordTimeoutSignal(taskId, info.agentId);
   }
@@ -479,7 +481,9 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       taskInfo = { agentId: timedOutResult.agentId, task: timedOutResult.task, startedAt: timedOutResult.startedAt };
       process.stderr.write(`[gossipcat] ⚠️  relay ← ${timedOutResult.agentId} [${task_id}] LATE (overwriting timed_out)\n`);
       // Retract the timeout signal — agent completed successfully, don't penalize
-      // Skip for _utility tasks — no timeout signal was recorded for them
+      // Skip for _utility tasks — no timeout signal was recorded for them.
+      // taskInfo is reconstructed from timedOutResult without utilityType, so we
+      // fall back to agentId; all utility callsites set agentId:'_utility' (verified ground truth).
       if (taskInfo.agentId !== '_utility') {
         try {
           const { emitConsensusSignals } = require('@gossip/orchestrator');
@@ -640,7 +644,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // between MCP call decode time and the relay record time). Only set
   // memoryQueryCalled when the lookup says true — preserve undefined
   // semantics so absence is distinguishable from "checked, did not call".
-  if (taskInfo.memoryQueryCalled === undefined && !taskInfo.utilityType && agentId !== '_utility') {
+  if (taskInfo.memoryQueryCalled === undefined && !taskInfo.utilityType) {
     try {
       if (hasMemoryQuery(agentId, taskInfo.startedAt, Date.now() + 2000)) {
         taskInfo.memoryQueryCalled = true;
@@ -653,7 +657,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   try { ctx.mainAgent.recordNativeTaskCompleted(task_id, completionResult, error || undefined, elapsed ?? undefined, taskInfo.memoryQueryCalled); } catch { /* best-effort */ }
 
   // 0z. Emit dashboard SSE notification for non-utility task completions.
-  if (!taskInfo.utilityType && agentId !== '_utility' && !agentId.startsWith('_utility')) {
+  if (!taskInfo.utilityType) {
     try {
       const { emitDashboardEvent } = await import('@gossip/relay');
       emitDashboardEvent('task.completed', {
@@ -666,7 +670,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   }
 
   // 0a. Auto-record impl signal for write-mode tasks (gate on error param only — string heuristics are unreliable)
-  if (taskInfo.writeMode && !taskInfo.utilityType && agentId !== '_utility') {
+  if (taskInfo.writeMode && !taskInfo.utilityType) {
     try {
       const { emitImplSignals } = await import('@gossip/orchestrator');
       emitImplSignals(process.cwd(), [{
@@ -690,7 +694,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // native agents (tool-use is inside Claude Code's subagent framework, unobservable).
   // Error path now included (skip only utility tasks) so downstream scorers get
   // task_completed with error:true for failed tasks (consensus bac850a6-eeb048e3, f2).
-  if (!taskInfo.utilityType && agentId !== '_utility') {
+  if (!taskInfo.utilityType) {
     const { emitCompletionSignals } = await import('@gossip/orchestrator');
     emitCompletionSignals(process.cwd(), {
       agentId,
@@ -718,7 +722,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // and does not flag the emission path (cf. project_drift_bypass_finding_dropped_format.md).
   let relayLintFired = false;
   try {
-    if (!error && !taskInfo.utilityType && agentId !== '_utility') {
+    if (!error && !taskInfo.utilityType) {
       const tagCount = result ? (result.match(/<agent_finding[\s>]/g) || []).length : 0;
       const inConsensus = taskWasInConsensusRound(task_id, agentId, ctx.pendingConsensusRounds as any, ctx.recentConsensusTaskIds, ctx.recentConsensusAgentIds);
       if (tagCount === 0 && inConsensus) {
@@ -871,7 +875,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
 
     // 2. Gossip utility task — only if there are pending non-utility peers
     const hasPendingPeers = [...ctx.nativeTaskMap.values()].some(
-      (info) => info.agentId !== '_utility' && !info.utilityType
+      (info) => !info.utilityType
     );
     if (hasPendingPeers) {
       const gossipTaskId = randomUUID().slice(0, 8);
