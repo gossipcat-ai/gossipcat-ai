@@ -27,9 +27,11 @@ import { ctx } from '../../apps/cli/src/mcp-context';
 // `require('./worktree-isolation-detection')` at the call site, so this mock
 // path matches the resolved module identity.
 const mockCheck = jest.fn();
+const mockRevert = jest.fn();
 jest.mock('../../apps/cli/src/handlers/worktree-isolation-detection', () => ({
   __esModule: true,
   checkIsolationViolation: (...args: any[]) => mockCheck(...args),
+  revertLeakedPaths: (...args: any[]) => mockRevert(...args),
 }));
 
 const AGENT_ID = 'sonnet-implementer';
@@ -77,6 +79,10 @@ beforeEach(() => {
   ctx.boot = jest.fn().mockResolvedValue(undefined) as any;
 
   mockCheck.mockReset();
+  mockRevert.mockReset();
+  // Default: auto-revert returns a successful no-op so existing tests that
+  // trigger a violation don't blow up; tests that care assert explicitly.
+  mockRevert.mockReturnValue({ restored: [], skipped: [], rejected: [] });
   stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
 });
 
@@ -209,6 +215,146 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
 
     const text = (res.content[0] as { text: string }).text;
     expect(text).not.toContain('worktree_isolation_failed');
+  });
+
+  // ─── Option A auto-revert (design consensus c15cb1d8-c66840b7) ─────────────
+
+  it('auto-recovers leaked paths via revertLeakedPaths on non-tainted violation', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: ['apps/cli/src/leaked.ts', 'packages/x/y.ts'],
+      isViolation: true,
+    });
+    mockRevert.mockReturnValue({
+      restored: ['apps/cli/src/leaked.ts', 'packages/x/y.ts'],
+      skipped: [],
+      rejected: [],
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    expect(mockRevert).toHaveBeenCalledTimes(1);
+    const [revertCwd, revertPaths] = mockRevert.mock.calls[0];
+    expect(revertCwd).toBe(testDir);
+    expect(revertPaths).toEqual(['apps/cli/src/leaked.ts', 'packages/x/y.ts']);
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('⚠ worktree_isolation_failed');
+    expect(text).toContain("auto-recovered 2 leaked path(s) via 'git restore'");
+  });
+
+  it('reports skipped-path count in receipt when some paths no longer exist', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: ['exists.ts', 'gone.ts'],
+      isViolation: true,
+    });
+    mockRevert.mockReturnValue({
+      restored: ['exists.ts'],
+      skipped: ['gone.ts'],
+      rejected: [],
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("auto-recovered 1 leaked path(s) via 'git restore'");
+    expect(text).toContain('1 path(s) skipped');
+  });
+
+  it('reports rejected-path count in receipt when defense-in-depth filter blocked entries', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: ['ok.ts', '/etc/passwd'],
+      isViolation: true,
+    });
+    mockRevert.mockReturnValue({
+      restored: ['ok.ts'],
+      skipped: [],
+      rejected: ['/etc/passwd'],
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("auto-recovered 1 leaked path(s) via 'git restore'");
+    expect(text).toContain('1 path(s) rejected — security filter');
+  });
+
+  it('reports auto-recovery FAILED in receipt without throwing when revertLeakedPaths reports an error', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: ['weird.ts'],
+      isViolation: true,
+    });
+    mockRevert.mockReturnValue({
+      restored: [],
+      skipped: [],
+      rejected: [],
+      error: 'fatal: pathspec did not match any file',
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('⚠ worktree_isolation_failed');
+    expect(text).toContain('auto-recovery FAILED');
+    expect(text).toContain('pathspec did not match');
+    expect(text).toContain("Run 'git restore <paths>' manually");
+  });
+
+  it('reports auto-recovery FAILED in receipt when revertLeakedPaths itself throws', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: ['x.ts'],
+      isViolation: true,
+    });
+    mockRevert.mockImplementation(() => { throw new Error('require crashed'); });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('⚠ worktree_isolation_failed');
+    expect(text).toContain('auto-recovery FAILED');
+    expect(text).toContain('require crashed');
+  });
+
+  it('does NOT auto-recover when concurrencyTainted=true (attribution ambiguous)', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID, { withSnapshot: true, concurrentWorktreeTaint: true });
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: ['foo.ts', 'bar.ts'],
+      isViolation: true,
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    expect(mockRevert).not.toHaveBeenCalled();
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('worktree_isolation_skipped');
+    expect(text).not.toContain('auto-recovered');
+    expect(text).not.toContain('auto-recovery FAILED');
+  });
+
+  it('does NOT auto-recover when dirtyPathsAdded is empty (HEAD-drift-only violation)', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: true,
+      dirtyPathsAdded: [],
+      isViolation: true,
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    expect(mockRevert).not.toHaveBeenCalled();
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('worktree_isolation_failed');
+    expect(text).not.toContain('auto-recovered');
   });
 
   it('routes to worktree_isolation_skipped when task has concurrentWorktreeTaint=true', async () => {

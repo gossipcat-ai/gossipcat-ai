@@ -28,12 +28,14 @@ jest.mock('child_process', () => ({
 
 // ── imports after mocks ──────────────────────────────────────────────────────
 
+import * as fs from 'fs';
 import {
   parsePorcelain,
   diffIsolationSnapshots,
   buildIsolationSignal,
   checkIsolationViolation,
   captureIsolationSnapshot,
+  revertLeakedPaths,
   IsolationSnapshot,
 } from '../../apps/cli/src/handlers/worktree-isolation-detection';
 import { emitConsensusSignals } from '@gossip/orchestrator';
@@ -271,6 +273,100 @@ describe('checkIsolationViolation — concurrencyTainted 5th param', () => {
 
     expect(diff.isViolation).toBe(true);
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+describe('revertLeakedPaths — Option A auto-revert (consensus c15cb1d8-c66840b7)', () => {
+  let tmpRoot: string;
+
+  function touch(rel: string): void {
+    const abs = require('path').join(tmpRoot, rel);
+    fs.mkdirSync(require('path').dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, '');
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // revertLeakedPaths uses fs.existsSync to skip vanished paths. We can't
+    // jest.spyOn(fs, 'existsSync') (non-configurable in Node 20+), so we
+    // exercise the existence check by passing a real tmpRoot as cwd and
+    // creating the files the test expects to be present.
+    tmpRoot = fs.mkdtempSync(require('path').join(require('os').tmpdir(), 'revert-leaked-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('no-op on empty paths', () => {
+    const r = revertLeakedPaths(tmpRoot, []);
+    expect(r).toEqual({ restored: [], skipped: [], rejected: [] });
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it('happy path: invokes `git restore --source=HEAD -- <paths>` and reports restored', () => {
+    touch('apps/cli/src/leaked.ts');
+    touch('packages/x/y.ts');
+    mockExec.mockReturnValueOnce(Buffer.from(''));
+    const r = revertLeakedPaths(tmpRoot, ['apps/cli/src/leaked.ts', 'packages/x/y.ts']);
+    expect(r.restored).toEqual(['apps/cli/src/leaked.ts', 'packages/x/y.ts']);
+    expect(r.skipped).toEqual([]);
+    expect(r.error).toBeUndefined();
+    expect(mockExec).toHaveBeenCalledTimes(1);
+    const [cmd, args, opts] = mockExec.mock.calls[0];
+    expect(cmd).toBe('git');
+    expect(args).toEqual([
+      'restore',
+      '--source=HEAD',
+      '--',
+      'apps/cli/src/leaked.ts',
+      'packages/x/y.ts',
+    ]);
+    expect((opts as any).cwd).toBe(tmpRoot);
+  });
+
+  it('skips paths that no longer exist on disk', () => {
+    touch('ok.ts');
+    touch('also-ok.ts');
+    // gone.ts intentionally NOT created → revertLeakedPaths' existsSync check skips it
+    mockExec.mockReturnValueOnce(Buffer.from(''));
+    const r = revertLeakedPaths(tmpRoot, ['ok.ts', 'gone.ts', 'also-ok.ts']);
+    expect(r.restored).toEqual(['ok.ts', 'also-ok.ts']);
+    expect(r.skipped).toEqual(['gone.ts']);
+    const [, args] = mockExec.mock.calls[0];
+    expect(args).toEqual(['restore', '--source=HEAD', '--', 'ok.ts', 'also-ok.ts']);
+  });
+
+  it('all paths missing → no git invocation, restored:[]', () => {
+    // No touch() calls — none of the paths exist under tmpRoot
+    const r = revertLeakedPaths(tmpRoot, ['a.ts', 'b.ts']);
+    expect(r.restored).toEqual([]);
+    expect(r.skipped).toEqual(['a.ts', 'b.ts']);
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it('git restore failure → error message surfaced, no throw', () => {
+    touch('weird.ts');
+    mockExec.mockImplementationOnce(() => {
+      throw new Error('fatal: pathspec did not match');
+    });
+    const r = revertLeakedPaths(tmpRoot, ['weird.ts']);
+    expect(r.restored).toEqual([]);
+    expect(r.error).toMatch(/pathspec did not match/);
+  });
+
+  it('filters absolute paths and leading-dash paths defensively, recording rejects', () => {
+    touch('ok.ts');
+    touch('also-ok.ts');
+    mockExec.mockReturnValueOnce(Buffer.from(''));
+    const r = revertLeakedPaths(tmpRoot, ['ok.ts', '/etc/passwd', '--force', 'also-ok.ts']);
+    const [, args] = mockExec.mock.calls[0];
+    // absolute + leading-dash filtered out before git invocation
+    expect(args).toEqual(['restore', '--source=HEAD', '--', 'ok.ts', 'also-ok.ts']);
+    expect(r.restored).toEqual(['ok.ts', 'also-ok.ts']);
+    // rejected paths surface separately from skipped (different reason)
+    expect(r.rejected).toEqual(['/etc/passwd', '--force']);
+    expect(r.skipped).toEqual([]);
   });
 });
 
