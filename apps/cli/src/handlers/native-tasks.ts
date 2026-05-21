@@ -5,6 +5,7 @@
 import { randomUUID } from 'crypto';
 import { hasMemoryQuery } from '@gossip/relay';
 import { ctx, NATIVE_TASK_TTL_MS, defaultImportanceScores } from '../mcp-context';
+import { revertLeakedPaths } from './worktree-isolation-detection';
 
 /**
  * Lazy-prune entries in `ctx.recentConsensusTaskIds` whose TTL has expired.
@@ -977,18 +978,40 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       // leaked paths from HEAD so detect-and-escalate becomes detect-and-recover.
       // Gated on the same non-tainted branch — attribution is only safe here.
       // Fail-open: any error becomes a receipt line, never throws.
+      //
+      // KNOWN LIMITATION (post-#446 consensus dace5336-73384bc9 f9): two
+      // parallel native relays leaking overlapping paths could invoke
+      // `git restore` concurrently on the parent checkout. `git restore` is
+      // idempotent on unmodified files, so the realistic harm is moderate, but
+      // a torn mid-restore state is theoretically possible. Closing this
+      // requires a worktree-level mutex or a serialized recovery queue —
+      // tracked as a follow-up; not addressed in this PR.
       if (isolationDiff.dirtyPathsAdded.length > 0) {
         try {
-          const { revertLeakedPaths } = require('./worktree-isolation-detection');
           const revertRoot = ctx.mainAgent?.projectRoot ?? process.cwd();
           const revertResult = revertLeakedPaths(revertRoot, isolationDiff.dirtyPathsAdded);
+          const auditSuspectedReason =
+            revertResult.error
+              ? `isolation_recovery_failed err=${revertResult.error.slice(0, 80)}`
+              : `isolation_recovery_attempted restored=${revertResult.restored.length} skipped=${revertResult.skipped.length} rejected=${revertResult.rejected.length}`;
+          appendRelayWarning(revertRoot, {
+            taskId: task_id,
+            agentId: taskInfo.agentId,
+            reason: revertResult.error ? 'isolation_recovery_failed' : 'isolation_recovery_attempted',
+            resultLength: isolationDiff.dirtyPathsAdded.length,
+            suspectedReason: auditSuspectedReason,
+            timestamp: new Date().toISOString(),
+          });
           if (revertResult.error) {
             responseText += `\n  → auto-recovery FAILED: ${revertResult.error}. Run 'git restore <paths>' manually.`;
           } else {
             const skippedPart = revertResult.skipped.length > 0
               ? ` (${revertResult.skipped.length} path(s) skipped — no longer present)`
               : '';
-            responseText += `\n  → auto-recovered ${revertResult.restored.length} leaked path(s) via 'git restore'${skippedPart}.`;
+            const rejectedPart = revertResult.rejected.length > 0
+              ? ` (${revertResult.rejected.length} path(s) rejected — security filter)`
+              : '';
+            responseText += `\n  → auto-recovered ${revertResult.restored.length} leaked path(s) via 'git restore'${skippedPart}${rejectedPart}.`;
           }
         } catch (err) {
           responseText += `\n  → auto-recovery FAILED: ${(err as Error).message}. Run 'git restore <paths>' manually.`;

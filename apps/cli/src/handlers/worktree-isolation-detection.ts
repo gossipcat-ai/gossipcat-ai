@@ -78,8 +78,10 @@ export function parsePorcelain(output: string): string[] {
 export interface IsolationRevertResult {
   /** Paths actually restored to HEAD content. */
   restored: string[];
-  /** Paths that were skipped (e.g. no longer present). */
+  /** Paths that were skipped because the file no longer exists on disk. */
   skipped: string[];
+  /** Paths rejected by the defense-in-depth filter (absolute / leading-dash). */
+  rejected: string[];
   /** Set when `git restore` itself failed; receipt should display this message. */
   error?: string;
 }
@@ -105,23 +107,34 @@ export function revertLeakedPaths(
   cwd: string,
   paths: string[],
 ): IsolationRevertResult {
-  const result: IsolationRevertResult = { restored: [], skipped: [] };
+  const result: IsolationRevertResult = { restored: [], skipped: [], rejected: [] };
   if (!paths || paths.length === 0) return result;
 
-  // Defence-in-depth: filter absolute paths and obvious traversal.
-  const safePaths = paths.filter(
-    p => typeof p === 'string' && p.length > 0 && !p.startsWith('/') && !p.startsWith('-'),
-  );
+  // Defence-in-depth: filter absolute paths and leading-dash args. The `--`
+  // separator in execFileSync (line ~135) is the real guard against
+  // git-flag-injection; this filter exists so a rejected path is auditable in
+  // the receipt rather than vanishing silently. Note: `../` traversal is NOT
+  // filtered here — git restore resolves it relative to cwd, and dirtyPathsAdded
+  // from `git status --porcelain` never contains it.
+  const safePaths: string[] = [];
+  for (const p of paths) {
+    if (typeof p === 'string' && p.length > 0 && !p.startsWith('/') && !p.startsWith('-')) {
+      safePaths.push(p);
+    } else if (typeof p === 'string' && p.length > 0) {
+      result.rejected.push(p);
+    }
+  }
 
-  // Skip paths that no longer exist on disk — restore would still attempt them
-  // but we want a clean "skipped" tally for the receipt.
+  // Skip paths that no longer exist on disk (rename / delete races). All entries
+  // in safePaths are repo-relative after the filter above, so path.join(cwd, p)
+  // is the only resolution mode needed.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const fs = require('fs') as typeof import('fs');
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const path = require('path') as typeof import('path');
   const present: string[] = [];
   for (const p of safePaths) {
-    const abs = path.isAbsolute(p) ? p : path.join(cwd, p);
+    const abs = path.join(cwd, p);
     if (fs.existsSync(abs)) {
       present.push(p);
     } else {

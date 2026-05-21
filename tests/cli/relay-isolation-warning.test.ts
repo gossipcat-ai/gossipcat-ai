@@ -82,7 +82,7 @@ beforeEach(() => {
   mockRevert.mockReset();
   // Default: auto-revert returns a successful no-op so existing tests that
   // trigger a violation don't blow up; tests that care assert explicitly.
-  mockRevert.mockReturnValue({ restored: [], skipped: [] });
+  mockRevert.mockReturnValue({ restored: [], skipped: [], rejected: [] });
   stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
 });
 
@@ -229,6 +229,7 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
     mockRevert.mockReturnValue({
       restored: ['apps/cli/src/leaked.ts', 'packages/x/y.ts'],
       skipped: [],
+      rejected: [],
     });
 
     const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
@@ -253,6 +254,7 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
     mockRevert.mockReturnValue({
       restored: ['exists.ts'],
       skipped: ['gone.ts'],
+      rejected: [],
     });
 
     const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
@@ -260,6 +262,26 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
     const text = (res.content[0] as { text: string }).text;
     expect(text).toContain("auto-recovered 1 leaked path(s) via 'git restore'");
     expect(text).toContain('1 path(s) skipped');
+  });
+
+  it('reports rejected-path count in receipt when defense-in-depth filter blocked entries', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID);
+    mockCheck.mockReturnValue({
+      headChanged: false,
+      dirtyPathsAdded: ['ok.ts', '/etc/passwd'],
+      isViolation: true,
+    });
+    mockRevert.mockReturnValue({
+      restored: ['ok.ts'],
+      skipped: [],
+      rejected: ['/etc/passwd'],
+    });
+
+    const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
+
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("auto-recovered 1 leaked path(s) via 'git restore'");
+    expect(text).toContain('1 path(s) rejected — security filter');
   });
 
   it('reports auto-recovery FAILED in receipt without throwing when revertLeakedPaths reports an error', async () => {
@@ -272,6 +294,7 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
     mockRevert.mockReturnValue({
       restored: [],
       skipped: [],
+      rejected: [],
       error: 'fatal: pathspec did not match any file',
     });
 

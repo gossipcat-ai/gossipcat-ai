@@ -300,7 +300,7 @@ describe('revertLeakedPaths — Option A auto-revert (consensus c15cb1d8-c66840b
 
   it('no-op on empty paths', () => {
     const r = revertLeakedPaths(tmpRoot, []);
-    expect(r).toEqual({ restored: [], skipped: [] });
+    expect(r).toEqual({ restored: [], skipped: [], rejected: [] });
     expect(mockExec).not.toHaveBeenCalled();
   });
 
@@ -355,7 +355,7 @@ describe('revertLeakedPaths — Option A auto-revert (consensus c15cb1d8-c66840b
     expect(r.error).toMatch(/pathspec did not match/);
   });
 
-  it('filters absolute paths and leading-dash paths defensively', () => {
+  it('filters absolute paths and leading-dash paths defensively, recording rejects', () => {
     touch('ok.ts');
     touch('also-ok.ts');
     mockExec.mockReturnValueOnce(Buffer.from(''));
@@ -364,6 +364,9 @@ describe('revertLeakedPaths — Option A auto-revert (consensus c15cb1d8-c66840b
     // absolute + leading-dash filtered out before git invocation
     expect(args).toEqual(['restore', '--source=HEAD', '--', 'ok.ts', 'also-ok.ts']);
     expect(r.restored).toEqual(['ok.ts', 'also-ok.ts']);
+    // rejected paths surface separately from skipped (different reason)
+    expect(r.rejected).toEqual(['/etc/passwd', '--force']);
+    expect(r.skipped).toEqual([]);
   });
 });
 
