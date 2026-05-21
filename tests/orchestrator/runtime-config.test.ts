@@ -1,4 +1,11 @@
 /**
+ * Uses GOSSIP_NATIVE_WORKTREE_MANAGED as the registry exemplar in fixtures.
+ * That key is a deprecated tombstone (see runtime-config-schema.ts) retained
+ * specifically as a test-stable exemplar. Do NOT migrate the tests to a "live"
+ * flag — the tombstone's stability is the point.
+ */
+
+/**
  * Tests for runtime-config.ts — file-backed runtime flag store.
  * Spec: docs/specs/2026-05-21-runtime-config-store.md
  */

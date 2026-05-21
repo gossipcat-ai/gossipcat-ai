@@ -90,16 +90,6 @@ export interface NativeTaskInfo {
    * longer in the restored map. Undefined for inline dispatches.
    */
   promptPath?: string;
-  /**
-   * Absolute path to the gossipcat-managed worktree created at dispatch time.
-   * Populated ONLY when `writeMode === 'worktree'` AND
-   * `process.env.GOSSIP_NATIVE_WORKTREE_MANAGED === '1'` (Option A structural
-   * fix, spec docs/specs/2026-05-20-native-worktree-isolation-fix.md §3).
-   * Stays undefined under the legacy harness-managed path; in that mode
-   * Claude Code's Agent({isolation:"worktree"}) owns the path out-of-process
-   * and gossipcat has no handle on it.
-   */
-  worktreePath?: string;
 }
 
 export interface NativeResultInfo {

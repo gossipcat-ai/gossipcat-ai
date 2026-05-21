@@ -130,16 +130,7 @@ export function diffIsolationSnapshots(
   };
 }
 
-/**
- * Build the operational-signal payload for a detected isolation failure.
- *
- * NOTE: The signal name `worktree_isolation_failed` is NOT yet in
- * `OPERATIONAL_SIGNAL_NAMES` in `packages/orchestrator/src/consensus-types.ts`
- * (out of this dispatch's scope). Emitting it through `emitConsensusSignals`
- * will succeed (the allowlist is read-side, used by classifySignal), but
- * `classifySignal` will return undefined until the allowlist is updated in a
- * follow-up PR. See finding emitted by this dispatch.
- */
+/** Build the operational-signal payload for a detected isolation failure. */
 export function buildIsolationSignal(args: {
   agentId: string;
   taskId: string;
