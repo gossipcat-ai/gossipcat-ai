@@ -3938,7 +3938,7 @@ export function createMcpServer(): McpServer {
             : `Set ${key} = "${value}"\nAudit log updated. Effective immediately — no MCP restart required.`;
           return { content: [{ type: 'text' as const, text: ack }] };
         } catch (err) {
-          return { content: [{ type: 'text' as const, text: `Error: ${(err as Error).message}\n\nRegistered flags: ${Object.keys(RUNTIME_FLAG_REGISTRY).join(', ')}` }] };
+          return { content: [{ type: 'text' as const, text: `Error: ${(err as Error).message}\n\nRegistered flags: ${Object.keys(RUNTIME_FLAG_REGISTRY).join(', ') || '(none registered)'}` }] };
         }
       }
 

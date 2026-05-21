@@ -1,19 +1,31 @@
 /**
- * Uses GOSSIP_NATIVE_WORKTREE_MANAGED as the registry exemplar in fixtures.
- * That key is a deprecated tombstone (see runtime-config-schema.ts) retained
- * specifically as a test-stable exemplar. Do NOT migrate the tests to a "live"
- * flag — the tombstone's stability is the point.
- */
-
-/**
  * Tests for runtime-config.ts — file-backed runtime flag store.
  * Spec: docs/specs/2026-05-21-runtime-config-store.md
+ *
+ * DI pattern: every public API in runtime-config.ts now accepts an optional
+ * trailing `registry: RuntimeFlagRegistry` argument that defaults to the
+ * production RUNTIME_FLAG_REGISTRY. Tests inject a synthetic TEST_REGISTRY so
+ * the production registry stays free of test-only tombstones. See
+ * docs/superpowers/specs/2026-05-21-runtime-config-di-refactor-design.md.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+import type { RuntimeFlagRegistry } from '../../packages/orchestrator/src/runtime-config';
+
+// ── Test-local registry ───────────────────────────────────────────────────
+// Synthetic flag for fixture stability. Does not exist in production registry.
+// GOSSIP_ prefix is required by isGossipKey at runtime-config.ts:107.
+
+const TEST_REGISTRY: RuntimeFlagRegistry = {
+  GOSSIP_TEST_FLAG: {
+    type: 'boolean',
+    default: '0',
+    description: 'Synthetic test flag — does not exist in production registry.',
+  },
+};
 
 // ── Test isolation helpers ────────────────────────────────────────────────
 // We need process.cwd() to point at our temp dir for every test, and we need
@@ -46,122 +58,105 @@ function readAuditLines(): any[] {
     .map((l) => JSON.parse(l));
 }
 
+/**
+ * Capture writes to process.stderr for the duration of `fn`. Used to test
+ * the ensureLoaded warning loop under DI.
+ */
+function captureStderr(fn: () => void): string {
+  const original = process.stderr.write.bind(process.stderr);
+  let buffer = '';
+  (process.stderr as any).write = (chunk: any): boolean => {
+    buffer += String(chunk);
+    return true;
+  };
+  try {
+    fn();
+  } finally {
+    (process.stderr as any).write = original;
+  }
+  return buffer;
+}
+
 beforeEach(() => {
   prevCwd = process.cwd();
   workDir = mkdtempSync(path.join(tmpdir(), 'gossip-runtime-cfg-'));
   mkdirSync(path.join(workDir, '.gossip'), { recursive: true });
   process.chdir(workDir);
   // Clean env.
-  delete process.env['GOSSIP_NATIVE_WORKTREE_MANAGED'];
+  delete process.env['GOSSIP_TEST_FLAG'];
 });
 
 afterEach(() => {
   process.chdir(prevCwd);
   rmSync(workDir, { recursive: true, force: true });
-  delete process.env['GOSSIP_NATIVE_WORKTREE_MANAGED'];
+  delete process.env['GOSSIP_TEST_FLAG'];
   jest.resetModules();
 });
 
 // ── Precedence ────────────────────────────────────────────────────────────
 
 it('precedence: env-set returns env value', async () => {
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '0' });
-  process.env['GOSSIP_NATIVE_WORKTREE_MANAGED'] = '1';
+  writeFlags({ GOSSIP_TEST_FLAG: '0' });
+  process.env['GOSSIP_TEST_FLAG'] = '1';
   const { getRuntimeFlag } = await freshImport();
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('1');
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('1');
 });
 
 it('precedence: env-unset + file-set returns file value', async () => {
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '1' });
-  delete process.env['GOSSIP_NATIVE_WORKTREE_MANAGED'];
+  writeFlags({ GOSSIP_TEST_FLAG: '1' });
+  delete process.env['GOSSIP_TEST_FLAG'];
   const { getRuntimeFlag } = await freshImport();
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('1');
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('1');
 });
 
 it('precedence: neither env nor file returns registry default', async () => {
   // No file, no env.
   const { getRuntimeFlag } = await freshImport();
-  // Registry default for GOSSIP_NATIVE_WORKTREE_MANAGED is '0'.
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('0');
+  // Registry default for GOSSIP_TEST_FLAG is '0'.
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('0');
 });
 
 it('precedence: explicit defaultValue used when env and file both absent', async () => {
   const { getRuntimeFlag } = await freshImport();
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', 'fallback')).toBe('fallback');
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', 'fallback', TEST_REGISTRY)).toBe('fallback');
 });
 
 // ── Empty-string env semantics ────────────────────────────────────────────
 
 it('empty-string env: getRuntimeFlag returns file value, not empty string', async () => {
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '1' });
-  process.env['GOSSIP_NATIVE_WORKTREE_MANAGED'] = '';
+  writeFlags({ GOSSIP_TEST_FLAG: '1' });
+  process.env['GOSSIP_TEST_FLAG'] = '';
   const { getRuntimeFlag } = await freshImport();
   // Empty string env → treated as unset → file value '1'.
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('1');
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('1');
 });
 
 it('empty-string env: getRuntimeFlagBool returns false (empty-string is falsy)', async () => {
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '1' });
-  process.env['GOSSIP_NATIVE_WORKTREE_MANAGED'] = '';
+  writeFlags({ GOSSIP_TEST_FLAG: '1' });
+  process.env['GOSSIP_TEST_FLAG'] = '';
   const { getRuntimeFlagBool } = await freshImport();
-  // Empty env → treated as unset → falls to file '1' → bool true.
-  // Wait — the spec says "empty string env treated as unset". So the value
-  // returned by getRuntimeFlag is '1' (from file), and getRuntimeFlagBool('1') = true.
-  // But the spec also says: "getRuntimeFlagBool returns false for empty-string env
-  // regardless of file". Re-reading spec §Empty-string env:
-  //   "getRuntimeFlagBool returns false for empty-string env REGARDLESS of file."
-  // This is the regression test. So the behavior MUST be:
-  //   env='' → getRuntimeFlagBool = false (NOT true from file).
-  //
-  // This means getRuntimeFlagBool has to check env directly for empty-string
-  // BEFORE delegating to getRuntimeFlag. Let's verify the spec wording:
-  // "getRuntimeFlagBool('X') returns false" when env='' even if file has '1'.
-  //
-  // Actually re-reading the spec more carefully:
-  // "Empty-string env is treated as unset. This preserves semantics where
-  //  process.env.X === '1' falses on export X= ... Without this rule, an empty-
-  //  string export would silently fall through to a file "1" and re-enable a flag."
-  //
-  // So the empty-string is treated as UNSET, meaning we fall through to the FILE.
-  // If file has '1', we get true. But then the spec says the test is:
-  // "getRuntimeFlagBool returns false" — the point is when there's NO file either.
-  //
-  // Let me re-read the test plan:
-  // "process.env.X = '' returns file value (or default), NOT empty string.
-  //  getRuntimeFlagBool returns false."
-  //
-  // This reads as: when env='', getRuntimeFlagBool returns false.
-  // But also: when env='', getRuntimeFlag returns file value.
-  // These are contradictory unless getRuntimeFlagBool evaluates the EMPTY STRING
-  // directly (before falling through to file).
-  //
-  // The key insight: getRuntimeFlagBool checks if raw env IS empty string as a
-  // special case. Empty string → false, regardless of file. This is the
-  // "explicit disable" semantics for bool flags: export X= means "force off".
-  //
-  // We implement this below in a dedicated test with the current module behavior.
-  // If the current implementation falls through, this test will catch it.
-  expect(getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe(false);
+  // env='' is an explicit disable for bool flags regardless of file content.
+  expect(getRuntimeFlagBool('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe(false);
 });
 
 it('empty-string env: getRuntimeFlagBool returns false even with no file', async () => {
-  process.env['GOSSIP_NATIVE_WORKTREE_MANAGED'] = '';
+  process.env['GOSSIP_TEST_FLAG'] = '';
   const { getRuntimeFlagBool } = await freshImport();
-  expect(getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe(false);
+  expect(getRuntimeFlagBool('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe(false);
 });
 
 // ── Atomic write ──────────────────────────────────────────────────────────
 
 it('atomic write: setRuntimeFlag survives write-then-parse round-trip', async () => {
   const { setRuntimeFlag, getRuntimeFlag, reloadRuntimeFlags } = await freshImport();
-  await setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', '1', 'user', 'test round-trip');
-  reloadRuntimeFlags();
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('1');
+  await setRuntimeFlag('GOSSIP_TEST_FLAG', '1', 'user', 'test round-trip', TEST_REGISTRY);
+  reloadRuntimeFlags(TEST_REGISTRY);
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('1');
 });
 
 it('atomic write: .tmp file is removed after successful write', async () => {
   const { setRuntimeFlag } = await freshImport();
-  await setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', '1', 'user', 'cleanup test');
+  await setRuntimeFlag('GOSSIP_TEST_FLAG', '1', 'user', 'cleanup test', TEST_REGISTRY);
   const tmpPath = path.join(workDir, '.gossip', 'runtime-flags.json.tmp');
   expect(fs.existsSync(tmpPath)).toBe(false);
 });
@@ -172,8 +167,8 @@ it('concurrent setRuntimeFlag: no torn JSON, 2 ordered audit entries', async () 
   const { setRuntimeFlag } = await freshImport();
 
   await Promise.all([
-    setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', '1', 'agent', 'concurrent A'),
-    setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', '0', 'user', 'concurrent B'),
+    setRuntimeFlag('GOSSIP_TEST_FLAG', '1', 'agent', 'concurrent A', TEST_REGISTRY),
+    setRuntimeFlag('GOSSIP_TEST_FLAG', '0', 'user', 'concurrent B', TEST_REGISTRY),
   ]);
 
   // The flags file must be valid JSON.
@@ -191,20 +186,20 @@ it('concurrent setRuntimeFlag: no torn JSON, 2 ordered audit entries', async () 
 
 it('registry write-gate: unknown key is rejected', async () => {
   const { setRuntimeFlag } = await freshImport();
-  await expect(setRuntimeFlag('GOSSIP_UNKNOWN_FLAG_XYZ' as any, '1', 'user', 'test'))
+  await expect(setRuntimeFlag('GOSSIP_UNKNOWN_FLAG_XYZ' as any, '1', 'user', 'test', TEST_REGISTRY))
     .rejects.toThrow(/not in the runtime flag registry/);
 });
 
 it('registry write-gate: non-boolean value rejected for boolean-typed key', async () => {
   const { setRuntimeFlag } = await freshImport();
-  await expect(setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', 'yes', 'user', 'test'))
+  await expect(setRuntimeFlag('GOSSIP_TEST_FLAG', 'yes', 'user', 'test', TEST_REGISTRY))
     .rejects.toThrow(/boolean/);
 });
 
 it('registry write-gate: unsetRuntimeFlag is a no-op for key not in file', async () => {
   const { unsetRuntimeFlag } = await freshImport();
   // Should not throw.
-  await expect(unsetRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', 'user', 'test')).resolves.toBeUndefined();
+  await expect(unsetRuntimeFlag('GOSSIP_TEST_FLAG', 'user', 'test', TEST_REGISTRY)).resolves.toBeUndefined();
   // No audit entry written (key wasn't in file).
   expect(readAuditLines().length).toBe(0);
 });
@@ -215,19 +210,19 @@ it('prefix filter: getRuntimeFlag returns undefined for non-GOSSIP_ key', async 
   // Even if the env or file has it, the filter must block it.
   process.env['GOSSIPCAT_HTTP_TOKEN'] = 'secret';
   const { getRuntimeFlag } = await freshImport();
-  expect(getRuntimeFlag('GOSSIPCAT_HTTP_TOKEN')).toBeUndefined();
+  expect(getRuntimeFlag('GOSSIPCAT_HTTP_TOKEN', undefined, TEST_REGISTRY)).toBeUndefined();
   delete process.env['GOSSIPCAT_HTTP_TOKEN'];
 });
 
 it('prefix filter: getRuntimeFlag returns undefined for arbitrary non-GOSSIP_ key', async () => {
   const { getRuntimeFlag } = await freshImport();
-  expect(getRuntimeFlag('PATH')).toBeUndefined();
-  expect(getRuntimeFlag('NODE_ENV')).toBeUndefined();
+  expect(getRuntimeFlag('PATH', undefined, TEST_REGISTRY)).toBeUndefined();
+  expect(getRuntimeFlag('NODE_ENV', undefined, TEST_REGISTRY)).toBeUndefined();
 });
 
 it('prefix filter: setRuntimeFlag throws for non-GOSSIP_ key', async () => {
   const { setRuntimeFlag } = await freshImport();
-  await expect(setRuntimeFlag('GOSSIPCAT_HTTP_TOKEN' as any, 'x', 'user', 'test'))
+  await expect(setRuntimeFlag('GOSSIPCAT_HTTP_TOKEN' as any, 'x', 'user', 'test', TEST_REGISTRY))
     .rejects.toThrow(/GOSSIP_/);
 });
 
@@ -235,8 +230,8 @@ it('prefix filter: setRuntimeFlag throws for non-GOSSIP_ key', async () => {
 
 it('audit log: entries append, never overwrite; 2 set calls → 2 entries', async () => {
   const { setRuntimeFlag } = await freshImport();
-  await setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', '1', 'user', 'first');
-  await setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', '0', 'agent', 'second');
+  await setRuntimeFlag('GOSSIP_TEST_FLAG', '1', 'user', 'first', TEST_REGISTRY);
+  await setRuntimeFlag('GOSSIP_TEST_FLAG', '0', 'agent', 'second', TEST_REGISTRY);
 
   const lines = readAuditLines();
   expect(lines.length).toBe(2);
@@ -246,12 +241,12 @@ it('audit log: entries append, never overwrite; 2 set calls → 2 entries', asyn
 
 it('audit log: entry has all required fields', async () => {
   const { setRuntimeFlag } = await freshImport();
-  await setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', '1', 'agent', 'dogfood test');
+  await setRuntimeFlag('GOSSIP_TEST_FLAG', '1', 'agent', 'dogfood test', TEST_REGISTRY);
 
   const [entry] = readAuditLines();
   expect(typeof entry.ts).toBe('string');
   expect(entry.action).toBe('set');
-  expect(entry.key).toBe('GOSSIP_NATIVE_WORKTREE_MANAGED');
+  expect(entry.key).toBe('GOSSIP_TEST_FLAG');
   expect(entry.oldValue).toBeNull(); // first set — was not in file
   expect(entry.newValue).toBe('1');
   expect(entry.source).toBe('agent');
@@ -261,8 +256,8 @@ it('audit log: entry has all required fields', async () => {
 
 it('audit log: unset records oldValue correctly', async () => {
   const { setRuntimeFlag, unsetRuntimeFlag } = await freshImport();
-  await setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', '1', 'user', 'setup');
-  await unsetRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', 'user', 'cleanup');
+  await setRuntimeFlag('GOSSIP_TEST_FLAG', '1', 'user', 'setup', TEST_REGISTRY);
+  await unsetRuntimeFlag('GOSSIP_TEST_FLAG', 'user', 'cleanup', TEST_REGISTRY);
 
   const lines = readAuditLines();
   expect(lines.length).toBe(2);
@@ -274,27 +269,27 @@ it('audit log: unset records oldValue correctly', async () => {
 // ── Source attribution (listRuntimeFlags) ────────────────────────────────
 
 it('listRuntimeFlags: env-set key shows from: "env"', async () => {
-  process.env['GOSSIP_NATIVE_WORKTREE_MANAGED'] = '1';
+  process.env['GOSSIP_TEST_FLAG'] = '1';
   const { listRuntimeFlags } = await freshImport();
-  const flags = listRuntimeFlags();
-  const entry = flags.find((f) => f.key === 'GOSSIP_NATIVE_WORKTREE_MANAGED');
+  const flags = listRuntimeFlags(TEST_REGISTRY);
+  const entry = flags.find((f) => f.key === 'GOSSIP_TEST_FLAG');
   expect(entry?.from).toBe('env');
   expect(entry?.value).toBe('1');
 });
 
 it('listRuntimeFlags: file-only key shows from: "file"', async () => {
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '1' });
+  writeFlags({ GOSSIP_TEST_FLAG: '1' });
   const { listRuntimeFlags } = await freshImport();
-  const flags = listRuntimeFlags();
-  const entry = flags.find((f) => f.key === 'GOSSIP_NATIVE_WORKTREE_MANAGED');
+  const flags = listRuntimeFlags(TEST_REGISTRY);
+  const entry = flags.find((f) => f.key === 'GOSSIP_TEST_FLAG');
   expect(entry?.from).toBe('file');
   expect(entry?.value).toBe('1');
 });
 
 it('listRuntimeFlags: unset key shows from: "default"', async () => {
   const { listRuntimeFlags } = await freshImport();
-  const flags = listRuntimeFlags();
-  const entry = flags.find((f) => f.key === 'GOSSIP_NATIVE_WORKTREE_MANAGED');
+  const flags = listRuntimeFlags(TEST_REGISTRY);
+  const entry = flags.find((f) => f.key === 'GOSSIP_TEST_FLAG');
   expect(entry?.from).toBe('default');
   expect(entry?.value).toBe('0'); // registry default
 });
@@ -305,43 +300,43 @@ it('reloadRuntimeFlags: first getRuntimeFlag returns cached, after reload return
   const { getRuntimeFlag, reloadRuntimeFlags } = await freshImport();
 
   // First read — cache is empty, loads from file (no file → default '0').
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('0');
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('0');
 
   // Hand-edit file out-of-band.
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '1' });
+  writeFlags({ GOSSIP_TEST_FLAG: '1' });
 
   // Without reload, still returns cached value.
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('0');
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('0');
 
   // After reload, returns new file value.
-  reloadRuntimeFlags();
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('1');
+  reloadRuntimeFlags(TEST_REGISTRY);
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('1');
 });
 
 // ── getRuntimeFlagBool ────────────────────────────────────────────────────
 
 it('getRuntimeFlagBool: "1" is truthy', async () => {
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '1' });
+  writeFlags({ GOSSIP_TEST_FLAG: '1' });
   const { getRuntimeFlagBool } = await freshImport();
-  expect(getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe(true);
+  expect(getRuntimeFlagBool('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe(true);
 });
 
 it('getRuntimeFlagBool: "true" is truthy', async () => {
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: 'true' });
+  writeFlags({ GOSSIP_TEST_FLAG: 'true' });
   const { getRuntimeFlagBool } = await freshImport();
-  expect(getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe(true);
+  expect(getRuntimeFlagBool('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe(true);
 });
 
 it('getRuntimeFlagBool: "0" is falsy', async () => {
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '0' });
+  writeFlags({ GOSSIP_TEST_FLAG: '0' });
   const { getRuntimeFlagBool } = await freshImport();
-  expect(getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe(false);
+  expect(getRuntimeFlagBool('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe(false);
 });
 
 it('getRuntimeFlagBool: "false" is falsy', async () => {
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: 'false' });
+  writeFlags({ GOSSIP_TEST_FLAG: 'false' });
   const { getRuntimeFlagBool } = await freshImport();
-  expect(getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe(false);
+  expect(getRuntimeFlagBool('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe(false);
 });
 
 // ── getRuntimeFlagInt (f16) ───────────────────────────────────────────────
@@ -353,21 +348,21 @@ it('getRuntimeFlagInt: NaN coercion returns explicit defaultValue', async () => 
   const { getRuntimeFlagInt } = await freshImport();
   // isGossipKey passes ('GOSSIP_TEST_INT' starts with GOSSIP_).
   // getRuntimeFlag returns 'notanumber' (from env). parseInt('notanumber') = NaN → fallback.
-  expect(getRuntimeFlagInt('GOSSIP_TEST_INT', 42)).toBe(42);
+  expect(getRuntimeFlagInt('GOSSIP_TEST_INT', 42, TEST_REGISTRY)).toBe(42);
   delete process.env['GOSSIP_TEST_INT'];
 });
 
 it('getRuntimeFlagInt: valid integer env value returned as number', async () => {
   process.env['GOSSIP_TEST_INT'] = '7';
   const { getRuntimeFlagInt } = await freshImport();
-  expect(getRuntimeFlagInt('GOSSIP_TEST_INT', 42)).toBe(7);
+  expect(getRuntimeFlagInt('GOSSIP_TEST_INT', 42, TEST_REGISTRY)).toBe(7);
   delete process.env['GOSSIP_TEST_INT'];
 });
 
 it('getRuntimeFlagInt: no env and no file returns defaultValue', async () => {
   const { getRuntimeFlagInt } = await freshImport();
   // GOSSIP_TEST_INT not in registry, not in file, not in env → fallback.
-  expect(getRuntimeFlagInt('GOSSIP_TEST_INT', 99)).toBe(99);
+  expect(getRuntimeFlagInt('GOSSIP_TEST_INT', 99, TEST_REGISTRY)).toBe(99);
 });
 
 // ── Crash recovery (f17) ──────────────────────────────────────────────────
@@ -375,7 +370,7 @@ it('getRuntimeFlagInt: no env and no file returns defaultValue', async () => {
 it('crash recovery: read-back parse failure cleans up tmp and leaves original file unchanged', async () => {
   // This test verifies the cleanup path that already exists in both set/unset:
   // if post-write read-back fails (JSON corrupt), tmp is unlinked and original survives.
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '0' });
+  writeFlags({ GOSSIP_TEST_FLAG: '0' });
   const flagsPath = path.join(workDir, '.gossip', 'runtime-flags.json');
   const originalContent = readFileSync(flagsPath, 'utf8');
 
@@ -393,17 +388,17 @@ it('crash recovery: read-back parse failure cleans up tmp and leaves original fi
 
   // A successful setRuntimeFlag must overwrite the corrupt tmp and clean it up.
   const { setRuntimeFlag } = await freshImport();
-  await setRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED', '1', 'user', 'crash recovery test');
+  await setRuntimeFlag('GOSSIP_TEST_FLAG', '1', 'user', 'crash recovery test', TEST_REGISTRY);
 
   // Tmp must be gone after successful write.
   expect(fs.existsSync(tmpPath)).toBe(false);
 
   // The flags file must now contain the new value (write succeeded).
   const afterContent = JSON.parse(readFileSync(flagsPath, 'utf8'));
-  expect(afterContent['GOSSIP_NATIVE_WORKTREE_MANAGED']).toBe('1');
+  expect(afterContent['GOSSIP_TEST_FLAG']).toBe('1');
 
   // Original content was '0' — the file transitioned correctly.
-  expect(JSON.parse(originalContent)['GOSSIP_NATIVE_WORKTREE_MANAGED']).toBe('0');
+  expect(JSON.parse(originalContent)['GOSSIP_TEST_FLAG']).toBe('0');
 });
 
 // ── Prefix filter file-path test (f18) ───────────────────────────────────
@@ -415,23 +410,23 @@ it('prefix filter: GOSSIPCAT_ key in file is not returned; GOSSIP_ key is return
   mkdirSync(gossipDir, { recursive: true });
   writeFileSync(
     path.join(gossipDir, 'runtime-flags.json'),
-    JSON.stringify({ GOSSIPCAT_HTTP_TOKEN: 'leak-me', GOSSIP_NATIVE_WORKTREE_MANAGED: '1' }, null, 2),
+    JSON.stringify({ GOSSIPCAT_HTTP_TOKEN: 'leak-me', GOSSIP_TEST_FLAG: '1' }, null, 2),
   );
 
   const { getRuntimeFlag } = await freshImport();
 
   // GOSSIPCAT_ prefix → blocked by isGossipKey (does not start with GOSSIP_).
-  expect(getRuntimeFlag('GOSSIPCAT_HTTP_TOKEN')).toBeUndefined();
+  expect(getRuntimeFlag('GOSSIPCAT_HTTP_TOKEN', undefined, TEST_REGISTRY)).toBeUndefined();
 
   // GOSSIP_ prefix → allowed; file value returned.
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('1');
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('1');
 });
 
 // ── unsetRuntimeFlag registry check (f20) ────────────────────────────────
 
 it('unsetRuntimeFlag: unknown registry key is rejected', async () => {
   const { unsetRuntimeFlag } = await freshImport();
-  await expect(unsetRuntimeFlag('GOSSIP_UNKNOWN_XYZ' as any, 'user', 'test'))
+  await expect(unsetRuntimeFlag('GOSSIP_UNKNOWN_XYZ' as any, 'user', 'test', TEST_REGISTRY))
     .rejects.toThrow(/not in the runtime flag registry/);
 });
 
@@ -440,21 +435,65 @@ it('unsetRuntimeFlag: unknown registry key is rejected', async () => {
 it('readFlagsFile: ENOENT returns empty record (no throw)', async () => {
   // No file written → ENOENT → getRuntimeFlag falls through to default.
   const { getRuntimeFlag } = await freshImport();
-  expect(getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toBe('0');
+  expect(getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toBe('0');
 });
 
 it('readFlagsFile: non-ENOENT error is thrown (fail-loud)', async () => {
   // Write a file and then make it unreadable to force a non-ENOENT error.
-  writeFlags({ GOSSIP_NATIVE_WORKTREE_MANAGED: '1' });
+  writeFlags({ GOSSIP_TEST_FLAG: '1' });
   const flagsPath = path.join(workDir, '.gossip', 'runtime-flags.json');
   fs.chmodSync(flagsPath, 0o000);
 
   try {
     const { getRuntimeFlag } = await freshImport();
     // Should throw because the file exists but can't be read (EACCES).
-    expect(() => getRuntimeFlag('GOSSIP_NATIVE_WORKTREE_MANAGED')).toThrow();
+    expect(() => getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toThrow();
   } finally {
     // Restore permissions so afterEach cleanup can delete the file.
     fs.chmodSync(flagsPath, 0o644);
   }
+});
+
+// ── DI-seam falsification tests (spec §Test coverage, R3-MEDIUM-B) ───────
+
+// Test A — exercises the getSpec-default branch via injection.
+// Uses two registries with the SAME key but DIFFERENT defaults so a broken
+// injection (falling back to the production registry) returns the wrong value.
+it('DI seam: registry parameter routes spec-default lookup', async () => {
+  const registryA: RuntimeFlagRegistry = {
+    GOSSIP_DI_PROBE: { type: 'boolean', default: '0', description: 'probe-A' },
+  };
+  const registryB: RuntimeFlagRegistry = {
+    GOSSIP_DI_PROBE: { type: 'boolean', default: '1', description: 'probe-B' },
+  };
+  const { getRuntimeFlag } = await freshImport();
+  // If the third arg is ignored and the function falls back to production
+  // (empty) registry, both calls return undefined — the assertions fail.
+  expect(getRuntimeFlag('GOSSIP_DI_PROBE', undefined, registryA)).toBe('0');
+  // Fresh import so module-level cache doesn't bleed across the second call.
+  const { getRuntimeFlag: getRuntimeFlag2 } = await freshImport();
+  expect(getRuntimeFlag2('GOSSIP_DI_PROBE', undefined, registryB)).toBe('1');
+});
+
+// Test B — exercises the ensureLoaded warning path under injection.
+// The warning fires when a file-cached key is NOT in the registry. If the
+// `!(key in registry)` check at runtime-config.ts:95 reads the production
+// (empty) constant instead of the injected registry, the warning misfires
+// for GOSSIP_TEST_FLAG and stderr captures the contradiction.
+it('DI seam: ensureLoaded warning loop honors injected registry', async () => {
+  writeFlags({ GOSSIP_TEST_FLAG: '1' });            // key IS in TEST_REGISTRY
+  const { listRuntimeFlags } = await freshImport();
+  const stderr = captureStderr(() => {
+    listRuntimeFlags(TEST_REGISTRY);                // triggers ensureLoaded
+  });
+  // With correct injection: zero "unknown key" warnings for GOSSIP_TEST_FLAG.
+  expect(stderr).not.toMatch(/unknown key "GOSSIP_TEST_FLAG"/);
+});
+
+// Test C — exercises listRuntimeFlags' second registry read (R3-MEDIUM-A).
+// listRuntimeFlags must enumerate the INJECTED registry, not the production one.
+it('DI seam: listRuntimeFlags enumerates injected registry', async () => {
+  const { listRuntimeFlags } = await freshImport();
+  const result = listRuntimeFlags(TEST_REGISTRY);
+  expect(result.map((r) => r.key)).toEqual(['GOSSIP_TEST_FLAG']);
 });

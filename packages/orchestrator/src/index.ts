@@ -245,6 +245,6 @@ export {
   listRuntimeFlags,
   reloadRuntimeFlags,
 } from './runtime-config';
-export type { RuntimeFlagEntry } from './runtime-config';
+export type { RuntimeFlagEntry, RuntimeFlagRegistry } from './runtime-config';
 export { RUNTIME_FLAG_REGISTRY } from './runtime-config-schema';
 export type { RuntimeFlagKey, RuntimeFlagSpec } from './runtime-config-schema';
