@@ -972,6 +972,28 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         ? ` +${isolationDiff.dirtyPathsAdded.length - 5} more`
         : '';
       responseText += `\n⚠ worktree_isolation_failed: Agent(isolation:"worktree") write leaked into parent checkout (${headPart}, ${isolationDiff.dirtyPathsAdded.length} new dirty path(s)${list ? `: ${list}${more}` : ''}).`;
+
+      // Option A auto-revert (design consensus c15cb1d8-c66840b7): restore the
+      // leaked paths from HEAD so detect-and-escalate becomes detect-and-recover.
+      // Gated on the same non-tainted branch — attribution is only safe here.
+      // Fail-open: any error becomes a receipt line, never throws.
+      if (isolationDiff.dirtyPathsAdded.length > 0) {
+        try {
+          const { revertLeakedPaths } = require('./worktree-isolation-detection');
+          const revertRoot = ctx.mainAgent?.projectRoot ?? process.cwd();
+          const revertResult = revertLeakedPaths(revertRoot, isolationDiff.dirtyPathsAdded);
+          if (revertResult.error) {
+            responseText += `\n  → auto-recovery FAILED: ${revertResult.error}. Run 'git restore <paths>' manually.`;
+          } else {
+            const skippedPart = revertResult.skipped.length > 0
+              ? ` (${revertResult.skipped.length} path(s) skipped — no longer present)`
+              : '';
+            responseText += `\n  → auto-recovered ${revertResult.restored.length} leaked path(s) via 'git restore'${skippedPart}.`;
+          }
+        } catch (err) {
+          responseText += `\n  → auto-recovery FAILED: ${(err as Error).message}. Run 'git restore <paths>' manually.`;
+        }
+      }
     }
   }
   if (utilityBlocks.length > 0) {
