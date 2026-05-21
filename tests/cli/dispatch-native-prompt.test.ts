@@ -774,3 +774,84 @@ function buildClaimsBlock(
     });
   },
 );
+
+// Consensus path isolation-snapshot capture
+// Closes the detection gap: single + parallel paths captured isolationSnapshot;
+// consensus path omitted it, leaving checkIsolationViolation dead for all
+// consensus dispatches (it bails when snapshot is absent).
+const mockCaptureForConsensus = jest.fn();
+jest.mock(
+  '../../apps/cli/src/handlers/worktree-isolation-detection',
+  () => ({
+    __esModule: true,
+    captureIsolationSnapshot: (...args: any[]) => mockCaptureForConsensus(...args),
+    checkIsolationViolation: jest.fn(),
+  }),
+  { virtual: false },
+);
+
+describe('handleDispatchConsensus — Option B isolation snapshot capture', () => {
+  let skillDir: string;
+  let prevCwd: string;
+
+  beforeEach(() => {
+    prevCwd = process.cwd();
+    skillDir = mkdtempSync(join(tmpdir(), 'gossip-consensus-iso-'));
+    mkdirSync(join(skillDir, '.gossip', 'skills'), { recursive: true });
+    process.chdir(skillDir);
+    resetCtx({
+      generateLensesForAgents: jest.fn().mockResolvedValue(new Map()),
+    });
+    mockCaptureForConsensus.mockReset();
+  });
+
+  afterEach(() => {
+    restoreCtx();
+    process.chdir(prevCwd);
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it('stores isolationSnapshot in nativeTaskMap when write_mode is worktree', async () => {
+    const fakeSnapshot = { head: 'c'.repeat(40), dirty: [], takenAt: new Date().toISOString() };
+    mockCaptureForConsensus.mockReturnValue(fakeSnapshot);
+
+    ctx.nativeAgentConfigs.set('native-claude', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You are a reviewer.',
+      description: 'Native reviewer',
+      skills: [],
+    });
+
+    await handleDispatchConsensus([
+      { agent_id: 'native-claude', task: 'Audit worktree code', write_mode: 'worktree' },
+    ]);
+
+    // There should be exactly one entry in nativeTaskMap (the dispatched agent).
+    expect(ctx.nativeTaskMap.size).toBeGreaterThanOrEqual(1);
+    const entries = [...ctx.nativeTaskMap.values()];
+    const worktreeEntry = entries.find(e => e.writeMode === 'worktree');
+    expect(worktreeEntry).toBeDefined();
+    expect(worktreeEntry!.isolationSnapshot).toMatchObject({
+      head: 'c'.repeat(40),
+      dirty: [],
+    });
+    expect(mockCaptureForConsensus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not set isolationSnapshot when write_mode is not worktree', async () => {
+    ctx.nativeAgentConfigs.set('native-claude', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You are a reviewer.',
+      description: 'Native reviewer',
+      skills: [],
+    });
+
+    await handleDispatchConsensus([
+      { agent_id: 'native-claude', task: 'Audit sequential code' },
+    ]);
+
+    expect(mockCaptureForConsensus).not.toHaveBeenCalled();
+    const entries = [...ctx.nativeTaskMap.values()];
+    expect(entries.every(e => e.isolationSnapshot === undefined)).toBe(true);
+  });
+});

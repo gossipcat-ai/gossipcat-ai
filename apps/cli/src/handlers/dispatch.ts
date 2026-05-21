@@ -1275,10 +1275,19 @@ export async function handleDispatchConsensus(
       emitConsensusSignals(process.cwd(), premiseResult.signals);
     }
 
+    // Option B isolation-failure detector — consensus-dispatch path.
+    let consensusIsolationSnapshot: { head: string | null; dirty: string[]; takenAt: string } | undefined;
+    if (def.write_mode === 'worktree') {
+      try {
+        const { captureIsolationSnapshot } = require('./worktree-isolation-detection');
+        consensusIsolationSnapshot = captureIsolationSnapshot(process.cwd());
+      } catch { /* best-effort */ }
+    }
+
     const consensusConcurrentWorktreeTaint = def.write_mode === 'worktree'
       ? stampConcurrencyTaint(ctx.nativeTaskMap) || undefined
       : undefined;
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any, concurrentWorktreeTaint: consensusConcurrentWorktreeTaint });
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any, isolationSnapshot: consensusIsolationSnapshot, concurrentWorktreeTaint: consensusConcurrentWorktreeTaint });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     allTaskIds.push(taskId);
