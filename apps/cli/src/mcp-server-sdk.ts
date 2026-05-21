@@ -3932,7 +3932,11 @@ export function createMcpServer(): McpServer {
         if (!reason) return { content: [{ type: 'text' as const, text: 'Error: reason is required for set.' }] };
         try {
           await setRuntimeFlag(key, value, 'agent', reason);
-          return { content: [{ type: 'text' as const, text: `Set ${key} = "${value}"\nAudit log updated. Effective immediately — no MCP restart required.` }] };
+          const spec = (RUNTIME_FLAG_REGISTRY as Record<string, { deprecated?: true } | undefined>)[key];
+          const ack = spec?.deprecated
+            ? `Set ${key} = "${value}" — ⚠ this flag is DEPRECATED (no-op tombstone). The write was recorded for audit completeness but has no runtime effect.`
+            : `Set ${key} = "${value}"\nAudit log updated. Effective immediately — no MCP restart required.`;
+          return { content: [{ type: 'text' as const, text: ack }] };
         } catch (err) {
           return { content: [{ type: 'text' as const, text: `Error: ${(err as Error).message}\n\nRegistered flags: ${Object.keys(RUNTIME_FLAG_REGISTRY).join(', ')}` }] };
         }

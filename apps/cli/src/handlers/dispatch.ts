@@ -13,7 +13,6 @@ import {
   emitConsensusSignals,
   sanitizeForLog,
   hashPath,
-  getRuntimeFlagBool,
   type ClaimBlock,
   type ClaimVerdict,
   type PerformanceSignal,
@@ -656,49 +655,12 @@ export async function handleDispatchSingle(
       }
     }
 
-    // Option A (structural fix) — gated behind GOSSIP_NATIVE_WORKTREE_MANAGED=1.
-    // Spec: docs/specs/2026-05-20-native-worktree-isolation-fix.md §3.
-    //
-    // When enabled, gossipcat creates the worktree synchronously here via
-    // WorktreeManager.create() and captures the absolute path. The Item 1
-    // orchestrator instructions then prepend an explicit `cd <path>` so the
-    // sub-agent enters the worktree deterministically — no longer trusting
-    // Claude Code's Agent({isolation:"worktree"}) to chdir us out-of-process.
-    // The `isolation:"worktree"` flag is retained as belt-and-suspenders.
-    //
-    // Failure mode: if create() throws (e.g. git unavailable mid-flight even
-    // though rev-parse succeeded), we fall back to the legacy path rather
-    // than block dispatch. The Option B HEAD-drift detector still fires.
-    let managedWorktreePath: string | null = null;
-    if (useWorktree && getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')) {
-      try {
-        const wtm = ctx.mainAgent.getWorktreeManager();
-        if (wtm) {
-          const created = await wtm.create(taskId);
-          managedWorktreePath = created.path;
-          const info = ctx.nativeTaskMap.get(taskId);
-          if (info) info.worktreePath = managedWorktreePath;
-        } else {
-          process.stderr.write('[gossipcat] managed-worktree gate ON but WorktreeManager unavailable; falling back to harness path\n');
-        }
-      } catch (err) {
-        process.stderr.write(`[gossipcat] managed-worktree create failed (falling back to harness): ${(err as Error).message}\n`);
-        managedWorktreePath = null;
-      }
-    }
-
-    // Record dispatch metadata for the post-task audit.
-    // Under the legacy harness-managed path the worktree path is created by
-    // Claude Code's Agent({isolation:"worktree"}) out-of-process and not
-    // returned to us; it stays undefined and the Layer 3 audit relies on
-    // its blanket `.claude/worktrees/` exclusion. Under the managed path
-    // (GOSSIP_NATIVE_WORKTREE_MANAGED=1) we now have a concrete path.
     recordDispatchMetadata(process.cwd(), {
       taskId,
       agentId: agent_id,
       writeMode: write_mode,
       scope,
-      worktreePath: managedWorktreePath ?? undefined,
+      worktreePath: undefined,
       timestamp: Date.now(),
     });
 
@@ -713,24 +675,7 @@ export async function handleDispatchSingle(
     // Persist after elision so promptPath is durable across /mcp reconnect.
     persistNativeTaskMap();
 
-    // HANDBOOK invariant #4 — the cd line lives in Item 1 (orchestrator
-    // instructions), NEVER in Item 2 (verbatim agent prompt) and NEVER in
-    // the elided on-disk prompt file. The orchestrator that invokes Agent()
-    // is the actor that runs cd; the spawned sub-agent inherits the chdir-d
-    // shell. Leaking orchestration into Item 2 would be read as credential
-    // injection by modern Sonnet and the sub-agent will refuse.
-    // POSIX-safe single-quote the worktree path. `mkdtemp(tmpdir())` paths are
-    // generally safe but TMPDIR is user-controlled (e.g. `/Users/Some User/tmp`
-    // on macOS dev machines), so unquoted interpolation would silently chdir
-    // into the wrong directory and defeat the load-bearing isolation step.
-    // Embedded single quotes are escaped via the standard POSIX `'\''` pattern.
-    const cdPrefix = managedWorktreePath
-      ? `Step 0 — chdir into the gossipcat-managed worktree BEFORE invoking Agent():\n` +
-        `  cd '${managedWorktreePath.replace(/'/g, "'\\''")}'\n` +
-        `(Worktree was created by gossipcat at dispatch time. The Agent(isolation:"worktree") flag below is belt-and-suspenders; the cd above is the load-bearing isolation step.)\n\n`
-      : '';
-
-    const promptInstruction = cdPrefix + (elision.elided
+    const promptInstruction = (elision.elided
       ? `Step 1 — ${elision.marker}\n` +
         `Agent(model: "${nativeConfig.model}", prompt: <file contents>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n`
       : `Step 1 — Pass the AGENT_PROMPT:${taskId} content item below verbatim to Agent(prompt: ...):\n` +
@@ -994,14 +939,6 @@ export async function handleDispatchParallel(
   // Create native dispatch instructions for Claude Code Agent tool
   const nativeInstructions: string[] = [];
   const nativePrompts: Array<{ taskId: string; agentId: string; prompt: string }> = [];
-  // Hoisted once-per-dispatch — git status is invariant across the loop.
-  let parallelInGitRepo = true;
-  try {
-    const { execSync } = require('child_process');
-    execSync('git rev-parse --git-dir', { cwd: process.cwd(), stdio: 'ignore' });
-  } catch {
-    parallelInGitRepo = false;
-  }
   for (const def of nativeTasks) {
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id)!;
     const taskId = randomUUID().slice(0, 8);
@@ -1025,31 +962,7 @@ export async function handleDispatchParallel(
       } catch { /* best-effort */ }
     }
 
-    // Option A managed-worktree gate (parallel-dispatch path). Mirrors
-    // handleDispatchSingle :658-687. Per-task: each native task that requested
-    // worktree isolation gets its own gossipcat-managed worktree synchronously
-    // here; the absolute path is injected as a `cd` Step 0 prefix into THIS
-    // task's Agent() instruction line below. Failure to create falls back to
-    // the legacy harness path FOR THIS TASK ONLY — siblings proceed unaffected.
-    // Spec: docs/specs/2026-05-20-native-worktree-isolation-fix.md §3.
-    const useWorktreeParallel = def.write_mode === 'worktree' && parallelInGitRepo;
-    let managedWorktreePathParallel: string | null = null;
-    if (useWorktreeParallel && getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED')) {
-      try {
-        const wtm = ctx.mainAgent.getWorktreeManager();
-        if (wtm) {
-          const created = await wtm.create(taskId);
-          managedWorktreePathParallel = created.path;
-        } else {
-          process.stderr.write('[gossipcat] managed-worktree gate ON but WorktreeManager unavailable; falling back to harness path\n');
-        }
-      } catch (err) {
-        process.stderr.write(`[gossipcat] managed-worktree create failed (falling back to harness): ${(err as Error).message}\n`);
-        managedWorktreePathParallel = null;
-      }
-    }
-
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any, isolationSnapshot: parallelIsolationSnapshot, worktreePath: managedWorktreePathParallel ?? undefined });
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any, isolationSnapshot: parallelIsolationSnapshot });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     allParallelTaskIds.push(taskId);
@@ -1113,10 +1026,7 @@ export async function handleDispatchParallel(
       agentId: def.agent_id,
       writeMode: def.write_mode as any,
       scope: def.scope,
-      // Option A managed mode: pass the concrete path so audit Layer 3 can
-      // scope per-task exclusions. Legacy harness mode: stays undefined and
-      // the `.claude/worktrees/` exclusion in buildAuditExclusions covers it.
-      worktreePath: managedWorktreePathParallel ?? undefined,
+      worktreePath: undefined,
       timestamp: Date.now(),
     });
 
@@ -1132,17 +1042,8 @@ export async function handleDispatchParallel(
       : `<AGENT_PROMPT:${taskId} below>`;
 
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
-    // HANDBOOK invariant #4 — the cd line lives ONLY in the orchestrator
-    // instruction line (Item 1 territory), NEVER in the per-task AGENT_PROMPT
-    // item or the on-disk elided prompt file. See handleDispatchSingle :715-730.
-    // POSIX-safe single-quoting matches single-dispatch.
-    const cdPrefixParallel = managedWorktreePathParallel
-      ? `Step 0 — chdir into the gossipcat-managed worktree BEFORE invoking Agent():\n` +
-        `  cd '${managedWorktreePathParallel.replace(/'/g, "'\\''")}'\n` +
-        `(Worktree was created by gossipcat at dispatch time. The Agent(isolation:"worktree") flag below is belt-and-suspenders; the cd above is the load-bearing isolation step.)\n`
-      : '';
     nativeInstructions.push(
-      `[${taskId}] ${cdPrefixParallel}Agent(model: "${nativeConfig.model}", prompt: ${parallelPromptRef}${def.write_mode === 'worktree' ? ', isolation: "worktree"' : ''}, run_in_background: true)` +
+      `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: ${parallelPromptRef}${def.write_mode === 'worktree' ? ', isolation: "worktree"' : ''}, run_in_background: true)` +
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
     );
     // Item 2 ABSENT under elision — orchestrator MUST Read the cited path.
@@ -1333,16 +1234,6 @@ export async function handleDispatchConsensus(
   // was added there (see PR #56 FINDING TAG SCHEMA miss).
   const nativeInstructions: string[] = [];
   const nativePrompts: Array<{ taskId: string; agentId: string; prompt: string }> = [];
-  // Hoisted once-per-consensus — env gate + git status are invariant across the loop.
-  let consensusManagedEnabled = getRuntimeFlagBool('GOSSIP_NATIVE_WORKTREE_MANAGED');
-  if (consensusManagedEnabled) {
-    try {
-      const { execSync } = require('child_process');
-      execSync('git rev-parse --git-dir', { cwd: process.cwd(), stdio: 'ignore' });
-    } catch {
-      consensusManagedEnabled = false;
-    }
-  }
   for (const def of nativeTasks) {
     const nativeConfig = ctx.nativeAgentConfigs.get(def.agent_id)!;
     const taskId = randomUUID().slice(0, 8);
@@ -1356,34 +1247,7 @@ export async function handleDispatchConsensus(
       emitConsensusSignals(process.cwd(), premiseResult.signals);
     }
 
-    // Option A managed-worktree gate (consensus-dispatch path). Consensus tasks
-    // do not carry write_mode in their schema (cross-review is uniform), so the
-    // gate is the env var alone: each native consensus reviewer gets its own
-    // worktree when GOSSIP_NATIVE_WORKTREE_MANAGED=1 and the project is a git
-    // repo. Failure for any single task falls back to the legacy harness path
-    // FOR THAT TASK ONLY — siblings proceed. Spec §3.
-    let managedWorktreePathConsensus: string | null = null;
-    if (consensusManagedEnabled) {
-      try {
-        const wtm = ctx.mainAgent.getWorktreeManager();
-        if (wtm) {
-          const created = await wtm.create(taskId);
-          managedWorktreePathConsensus = created.path;
-        } else {
-          process.stderr.write('[gossipcat] managed-worktree gate ON but WorktreeManager unavailable; falling back to harness path\n');
-        }
-      } catch (err) {
-        process.stderr.write(`[gossipcat] managed-worktree create failed (falling back to harness): ${(err as Error).message}\n`);
-        managedWorktreePathConsensus = null;
-      }
-    }
-
-    // When a managed worktree was created for this consensus task, force
-    // writeMode='worktree' so the handleNativeRelay cleanup gate fires.
-    // Without this the gate (taskInfo.writeMode === 'worktree') silently
-    // skips cleanup and managed worktrees leak. (consensus cb4e7421:f5)
-    const effectiveWriteMode = managedWorktreePathConsensus ? 'worktree' : def.write_mode;
-    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: effectiveWriteMode as any, worktreePath: managedWorktreePathConsensus ?? undefined });
+    ctx.nativeTaskMap.set(taskId, { agentId: def.agent_id, task: def.task, startedAt: Date.now(), timeoutMs: NATIVE_TASK_TTL_MS, relayToken, writeMode: def.write_mode as any });
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     try { ctx.mainAgent.recordNativeTask(taskId, def.agent_id, def.task); } catch { /* best-effort */ }
     allTaskIds.push(taskId);
@@ -1456,19 +1320,8 @@ export async function handleDispatchConsensus(
       : `<AGENT_PROMPT:${taskId} below>`;
 
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
-    // HANDBOOK invariant #4 — cd line lives ONLY in this orchestrator line,
-    // NEVER in the per-task AGENT_PROMPT or on-disk elided file. When managed
-    // mode is on we also flip isolation:"worktree" on as belt-and-suspenders;
-    // legacy consensus dispatch emits no isolation flag (cross-review is read-
-    // dominant), so the flag is gated on managedWorktreePathConsensus.
-    const cdPrefixConsensus = managedWorktreePathConsensus
-      ? `Step 0 — chdir into the gossipcat-managed worktree BEFORE invoking Agent():\n` +
-        `  cd '${managedWorktreePathConsensus.replace(/'/g, "'\\''")}'\n` +
-        `(Worktree was created by gossipcat at dispatch time. The Agent(isolation:"worktree") flag below is belt-and-suspenders; the cd above is the load-bearing isolation step.)\n`
-      : '';
-    const consensusIsolationFlag = managedWorktreePathConsensus ? ', isolation: "worktree"' : '';
     nativeInstructions.push(
-      `[${taskId}] ${cdPrefixConsensus}Agent(model: "${nativeConfig.model}", prompt: ${consensusPromptRef}${consensusIsolationFlag}, run_in_background: true)` +
+      `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: ${consensusPromptRef}, run_in_background: true)` +
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
     );
     // Item 2 ABSENT under elision (spec §2) — no skeleton/placeholder.
