@@ -27,6 +27,13 @@ import { parseHookSubcommand } from './hook-argv';
 //   - `gossipcat help|--help|-h`                     → usage to stdout, exit 0
 //   - `gossipcat <unknown>`                          → error to stderr, exit 2
 //   - no args                                        → fall through, boot MCP server
+//   - `gossipcat mcp`                                → back-compat alias for no-args;
+//                                                       legacy `.mcp.json` configs
+//                                                       written by older
+//                                                       `gossip_setup` invocations
+//                                                       pass `"args": ["mcp"]`. Not
+//                                                       advertised in help. See
+//                                                       `project_v0_4_29_mcp_arg_regression.md`.
 //
 // See memory `project_bootstrap_hook_command_dispatch_bug.md` for the
 // full diagnosis and the dist-mcp-only build context.
@@ -57,11 +64,15 @@ import { parseHookSubcommand } from './hook-argv';
     );
     process.exit(0);
   }
-  if (sub !== undefined) {
+  // `mcp` is a back-compat alias for no-args; legacy `.mcp.json` files written
+  // by older `gossip_setup` invocations pass `"args": ["mcp"]`. Without this
+  // exemption v0.4.29 broke every such user with a -32000 MCP handshake error.
+  // Intentionally NOT advertised in help — new configs should use no args.
+  if (sub !== undefined && sub !== 'mcp') {
     process.stderr.write(`gossipcat: unknown subcommand '${sub}'. Try 'gossipcat help'.\n`);
     process.exit(2);
   }
-  // No args → fall through; the MCP server boots below.
+  // No args (or `mcp` alias) → fall through; the MCP server boots below.
 }
 
 // Redirect stderr to log file BEFORE any other imports.
