@@ -10,6 +10,10 @@ import { trackLifecycleTask } from '../lifecycle-tasks';
 import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
 import type { PromptFormat } from './dispatch';
+import { discoverVerifier, type VerifierBinding } from './auto-verify-discovery';
+import type { RelayWarningEntry } from '@gossip/orchestrator';
+import { mkdirSync, appendFileSync } from 'node:fs';
+import { join as joinPath } from 'node:path';
 
 /**
  * Schedule the per-skill checkEffectiveness runner as a detached, tracked
@@ -52,6 +56,57 @@ export function scheduleSkillRunner(c: typeof ctx, mainAgent: any): void {
   // handlers can drain it. The Promise.resolve().then() yields control
   // before the runner starts, mirroring the prior setImmediate semantics.
   trackLifecycleTask(Promise.resolve().then(runRunner));
+}
+
+/**
+ * Build the `verifierDispatch` callback for the consensus-auto-verify feature
+ * from a discovery binding. Spec
+ * docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md.
+ *
+ * **Option A (relay_worker)** dispatches via the existing relay pipeline
+ * (`ctx.mainAgent.dispatch` + `collect`) — single-phase, server-side, fully
+ * invisible. Used when discovery finds a relay agent with the `verification`
+ * skill or when the operator pins one via `GOSSIP_CONSENSUS_AUTO_VERIFY_AGENT`.
+ *
+ * **Option C (native_utility)** — the spec's universal default — requires a
+ * two-phase sentinel return from `gossip_collect`. That wiring is intentionally
+ * deferred to a follow-up PR: the engine's `synthesize` path is currently
+ * synchronous from the cli's perspective, and inverting it to a sentinel +
+ * re-entry pattern is a non-trivial refactor outside this PR's scope. Until
+ * the wiring lands, the native binding returns a dispatcher that REJECTS so
+ * the engine's fail-open path records the warning and continues with the
+ * un-stamped findings (no scoring regression — `tag` stays `'unverified'`).
+ */
+function buildAutoVerifyDispatch(
+  binding: VerifierBinding,
+): (agentId: string, task: string) => Promise<string> {
+  if (binding.kind === 'relay_worker') {
+    return async (_agentId: string, task: string): Promise<string> => {
+      // Use the binding's agentId (the discovered/overridden verifier), not
+      // the engine's `_utility` placeholder.
+      const dispatchResult = await ctx.mainAgent.dispatch(binding.agentId, task);
+      const taskId: string = (dispatchResult as any)?.taskId
+        ?? (dispatchResult as any)?.id
+        ?? '';
+      if (!taskId) {
+        throw new Error('auto_verify_dispatch:no_task_id');
+      }
+      // Poll the relay for the result. 30s upper bound matches AUTO_VERIFY_TIMEOUT_MS
+      // (the engine wraps with its own withTimeout — this is belt-and-braces).
+      const collected = await ctx.mainAgent.collect([taskId], 30000, { consume: true });
+      const r = (collected.results || [])[0];
+      if (!r || r.status !== 'completed' || !r.result) {
+        throw new Error(`auto_verify_dispatch:relay_${r?.status ?? 'unknown'}`);
+      }
+      return String(r.result);
+    };
+  }
+  // Option C native_utility — deferred. The engine's fail-open path catches
+  // the throw and routes to warningSink; synthesis continues. Findings retain
+  // their UNVERIFIED tag with no autoVerify stamp.
+  return async (_agentId: string, _task: string): Promise<string> => {
+    throw new Error('auto_verify_dispatch:native_two_phase_not_yet_wired');
+  };
 }
 
 // ── Phase 2 auto-resolver rate-limited stderr state ─────────────────────────
@@ -497,6 +552,28 @@ export async function handleCollect(
         return filePath; // return original, let fileRead produce a clear error
       };
 
+      // Consensus auto-verify DI wiring (spec
+      // docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md).
+      // `discoverVerifier(team, override)` returns the binding shape; the
+      // engine receives a single `verifierDispatch` callback that hides the
+      // native-vs-relay decision. Inlined `warningSink` writes to
+      // .gossip/relay-warnings.jsonl matching native-tasks.ts:150-163 (mkdir +
+      // appendFile, fail-open via try/catch).
+      const _autoVerifyBinding: VerifierBinding | undefined = discoverVerifier(
+        ctx.mainAgent.getAgentList(),
+        process.env.GOSSIP_CONSENSUS_AUTO_VERIFY_AGENT,
+      );
+      const _autoVerifyDispatch = _autoVerifyBinding
+        ? buildAutoVerifyDispatch(_autoVerifyBinding)
+        : undefined;
+      const _autoVerifyWarningSink = (entry: RelayWarningEntry) => {
+        try {
+          const dir = joinPath(process.cwd(), '.gossip');
+          mkdirSync(dir, { recursive: true });
+          appendFileSync(joinPath(dir, 'relay-warnings.jsonl'), JSON.stringify(entry) + '\n');
+        } catch { /* fail-open: never crash synthesis on observability write */ }
+      };
+
       const engine = new ConsensusEngine({
         llm: mainLlm,
         registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
@@ -504,6 +581,8 @@ export async function handleCollect(
         agentLlm: (id: string) => agentLlmCache.get(id),
         performanceReader,
         resolutionRoots: effectiveRoots,
+        verifierDispatch: _autoVerifyDispatch,
+        warningSink: _autoVerifyWarningSink,
         verifierToolRunner: async (agentId: string, toolName: string, args: Record<string, unknown>): Promise<string> => {
           const toolStart = Date.now();
           try {

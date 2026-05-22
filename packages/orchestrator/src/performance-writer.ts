@@ -73,6 +73,13 @@ export const VALID_CONSENSUS_SIGNALS = new Set([
   // Agent(isolation:"worktree") dispatch leaves the parent checkout with moved
   // HEAD or new dirty paths. Operational signal — zero weight in scoring.
   'worktree_isolation_failed',
+  // Consensus auto-verify (spec docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md,
+  // approved rev-6). Operational signals emitted by maybeAutoVerify — zero weight
+  // in scoring. Without these entries the allowlist-drift test fails and
+  // validateSignal silently drops every emit (same failure mode as PR #329 for
+  // transport_failure).
+  'auto_verify_attempted',
+  'auto_verify_skipped_misconfigured',
 ]);
 
 export const VALID_IMPL_SIGNALS = new Set([
