@@ -2,19 +2,37 @@ import type { OverviewData } from '@/lib/types';
 
 // Deterministic color picker from a palette — no hash randomness to keep
 // the same type the same color across renders.
-const PALETTE = [
-  'bg-primary/70',
+// bg-unique and bg-confirmed are kept as Tailwind classes (non-theme-sensitive semantic tokens).
+// Theme-sensitive tokens (primary, muted-foreground) are expressed as CSS var() strings.
+const PALETTE_BG: string[] = [
+  'color-mix(in oklch, var(--accent) 70%, transparent)',
+  '',  // bg-cyan-500/60 — non-theme, handled via PALETTE_CLASS
+  '',  // bg-unique — handled via PALETTE_CLASS
+  'color-mix(in oklch, var(--text-dim) 60%, transparent)',
+  'color-mix(in oklch, var(--accent) 50%, transparent)',
+  '',  // bg-confirmed/70 — handled via PALETTE_CLASS
+];
+const PALETTE_CLASS: string[] = [
+  '',
   'bg-cyan-500/60',
   'bg-unique',
-  'bg-muted-foreground/60',
-  'bg-primary/50',
+  '',
+  '',
   'bg-confirmed/70',
 ];
 
-function colorFor(type: string): string {
+function colorIndex(type: string): number {
   let h = 0;
   for (let i = 0; i < type.length; i++) h = (h * 31 + type.charCodeAt(i)) >>> 0;
-  return PALETTE[h % PALETTE.length];
+  return h % PALETTE_BG.length;
+}
+
+function colorBgStyle(type: string): string | undefined {
+  return PALETTE_BG[colorIndex(type)] || undefined;
+}
+
+function colorClass(type: string): string {
+  return PALETTE_CLASS[colorIndex(type)] || '';
 }
 
 export function DroppedFindingDrift({ overview }: { overview: OverviewData | null }) {
@@ -23,13 +41,13 @@ export function DroppedFindingDrift({ overview }: { overview: OverviewData | nul
   const total = entries.reduce((acc, [, n]) => acc + n, 0);
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
+    <section className="rounded-lg border border-border p-4" style={{ background: 'var(--surface-elev)' }}>
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Invalid Output Types<span className="text-muted-foreground/50 font-normal normal-case ml-2">agent_finding tags rejected by the parser</span></h3>
-        <span className="text-xs text-muted-foreground">last 20 rounds</span>
+        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Invalid Output Types<span className="font-normal normal-case ml-2" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>agent_finding tags rejected by the parser</span></h3>
+        <span className="text-xs" style={{ color: 'var(--text-dim)' }}>last 20 rounds</span>
       </header>
       {total === 0 ? (
-        <p className="text-xs text-muted-foreground">all clean — no invalid types</p>
+        <p className="text-xs" style={{ color: 'var(--text-dim)' }}>all clean — no invalid types</p>
       ) : (
         <>
           <div className="mb-3 flex h-3 w-full overflow-hidden rounded">
@@ -38,8 +56,8 @@ export function DroppedFindingDrift({ overview }: { overview: OverviewData | nul
               return (
                 <div
                   key={type}
-                  className={colorFor(type)}
-                  style={{ width: `${pct}%` }}
+                  className={colorClass(type)}
+                  style={{ width: `${pct}%`, ...(colorBgStyle(type) ? { background: colorBgStyle(type) } : {}) }}
                   title={`invalid type "${type}" emitted ${n} times in last 20 consensus rounds`}
                 />
               );
@@ -48,9 +66,12 @@ export function DroppedFindingDrift({ overview }: { overview: OverviewData | nul
           <ul className="space-y-1 text-xs">
             {entries.map(([type, n]) => (
               <li key={type} className="flex items-center gap-2">
-                <span className={`h-2 w-2 rounded-sm ${colorFor(type)}`} />
-                <span className="truncate font-mono text-foreground">{type}</span>
-                <span className="ml-auto tabular-nums text-muted-foreground">{n}</span>
+                <span
+                  className={`h-2 w-2 rounded-sm ${colorClass(type)}`}
+                  style={colorBgStyle(type) ? { background: colorBgStyle(type) } : undefined}
+                />
+                <span className="truncate font-mono" style={{ color: 'var(--text)' }}>{type}</span>
+                <span className="ml-auto tabular-nums" style={{ color: 'var(--text-dim)' }}>{n}</span>
               </li>
             ))}
           </ul>

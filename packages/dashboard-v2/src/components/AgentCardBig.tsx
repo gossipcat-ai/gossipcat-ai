@@ -1,3 +1,4 @@
+import type React from 'react';
 import type { AgentData } from '@/lib/types';
 import { NeuralAvatar } from './NeuralAvatar';
 import { timeAgo } from '@/lib/utils';
@@ -30,7 +31,8 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
   const wt = weightTier(s.dispatchWeight);
   const weightColor =
     wt === 'good' ? 'text-confirmed' :
-    wt === 'low' ? 'text-disputed' : 'text-foreground';
+    wt === 'low' ? 'text-disputed' : '';
+  const weightColorStyle = wt === 'good' || wt === 'low' ? undefined : { color: 'var(--text)' } as React.CSSProperties;
 
   const at = accTier(s.accuracy);
   const accBarClass =
@@ -40,7 +42,8 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
   return (
     <a
       href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
-      className="group relative block rounded-lg border border-border bg-card p-3 transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:bg-card/90"
+      className="group relative block rounded-lg border border-border p-3 transition-all hover:-translate-y-0.5 hover:border-primary/30"
+      style={{ background: 'var(--surface-elev)' }}
     >
       {/* Flatten pass: the card used to layer gradient + inset highlight line
           + outer shadow + hover ring + per-agent avatar halo blur, which felt
@@ -62,7 +65,7 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
         {/* Name + meta — full remaining width */}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{agent.id}</span>
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold" style={{ color: 'var(--text)' }}>{agent.id}</span>
             {(() => {
               const kind = getBenchBadgeKind(s);
               if (kind === 'benched') return (
@@ -92,9 +95,10 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
               return null;
             })()}
           </div>
-          <div className="mt-1 flex items-center gap-2 font-inter text-[10px] text-muted-foreground/60">
+          <div className="mt-1 flex items-center gap-2 font-inter text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
             <span
-              className={`rounded-sm border border-border/60 bg-background/60 px-1.5 py-0.5 font-bold tabular-nums ${weightColor}`}
+              className={`rounded-sm border border-border/60 px-1.5 py-0.5 font-bold tabular-nums ${weightColor}`}
+              style={{ background: 'color-mix(in oklch, var(--surface) 60%, transparent)', ...weightColorStyle }}
               data-tooltip={`Dispatch weight ${s.dispatchWeight.toFixed(2)}\nScale 0.3 → 2.0`}
               data-tooltip-pos="bottom"
             >
@@ -106,7 +110,7 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
       </div>
 
       {/* Metric bars — neutral inset panel without the extra shadow layer */}
-      <div className="space-y-1.5 rounded-lg border border-border/30 bg-background/40 px-2.5 py-2">
+      <div className="space-y-1.5 rounded-lg border border-border/30 px-2.5 py-2" style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}>
         <BarRow
           label="accuracy"
           value={s.accuracy}
@@ -148,18 +152,19 @@ function BarRow({ label, value, fillClass, tooltip }: BarRowProps) {
   return (
     <div className="grid grid-cols-[72px_1fr_38px] items-center gap-2.5">
       <span
-        className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+        className="font-mono text-[10px] uppercase tracking-wider"
+        style={{ color: 'var(--text-dim)' }}
         data-tooltip={tooltip}
       >
         {label}
       </span>
-      <div className="h-2 overflow-hidden rounded-full bg-background/80">
+      <div className="h-2 overflow-hidden rounded-full" style={{ background: 'color-mix(in oklch, var(--surface) 80%, transparent)' }}>
         <div
           className={`h-full rounded-full transition-all ${fillClass}`}
           style={{ width: `${Math.max(0, Math.min(100, v * 100))}%` }}
         />
       </div>
-      <span className="text-right font-mono text-[11px] font-bold tabular-nums text-foreground">
+      <span className="text-right font-mono text-[11px] font-bold tabular-nums" style={{ color: 'var(--text)' }}>
         {Math.round(v * 100)}%
       </span>
     </div>
