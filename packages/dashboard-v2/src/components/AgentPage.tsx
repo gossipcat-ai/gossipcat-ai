@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import type React from 'react';
 import { api } from '@/lib/api';
 import { NeuralAvatar } from './NeuralAvatar';
 import { CategoryCompetency } from './CategoryCompetency';
@@ -76,7 +77,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
 
   if (!agent) {
     return (
-      <div className="py-20 text-center text-muted-foreground">Agent not found: {agentId}</div>
+      <div className="py-20 text-center" style={{ color: 'var(--text-dim)' }}>Agent not found: {agentId}</div>
     );
   }
 
@@ -101,17 +102,18 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
   const unvTotal = unvEmitted + unvReceived;
 
   const compactStats = [
-    { label: 'Signals', value: String(s.signals), color: 'text-foreground' },
-    { label: 'Agreements', value: String(s.agreements), color: 'text-confirmed' },
-    { label: 'Disagreements', value: String(s.disagreements), color: 'text-disputed' },
-    { label: 'Hallucinations', value: String(s.hallucinations), color: s.hallucinations > 0 ? 'text-disputed' : 'text-muted-foreground' },
+    { label: 'Signals', value: String(s.signals), color: '' as string, colorStyle: { color: 'var(--text)' } as React.CSSProperties | undefined },
+    { label: 'Agreements', value: String(s.agreements), color: 'text-confirmed', colorStyle: undefined as React.CSSProperties | undefined },
+    { label: 'Disagreements', value: String(s.disagreements), color: 'text-disputed', colorStyle: undefined as React.CSSProperties | undefined },
+    { label: 'Hallucinations', value: String(s.hallucinations), color: s.hallucinations > 0 ? 'text-disputed' : '' as string, colorStyle: s.hallucinations > 0 ? undefined : { color: 'var(--text-dim)' } as React.CSSProperties | undefined },
     {
       label: 'Unverified',
       value: unvTotal > 0 ? `${unvEmitted}↑ ${unvReceived}↓` : '0',
-      color: unvTotal > 0 ? 'text-unverified' : 'text-muted-foreground',
+      color: unvTotal > 0 ? 'text-unverified' : '' as string,
+      colorStyle: unvTotal > 0 ? undefined : { color: 'var(--text-dim)' } as React.CSSProperties | undefined,
       title: unvTotal > 0 ? `${unvEmitted} emitted (as reviewer) · ${unvReceived} received (as author)` : undefined,
     },
-    { label: 'Tokens', value: agent.totalTokens.toLocaleString(), color: 'text-foreground' },
+    { label: 'Tokens', value: agent.totalTokens.toLocaleString(), color: '' as string, colorStyle: { color: 'var(--text)' } as React.CSSProperties | undefined },
   ];
 
   // Paginate tasks by 10
@@ -199,7 +201,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                   · {count} fires in 30d
                 </span>
               </div>
-              <div className="mt-1 text-xs text-muted-foreground/80">
+              <div className="mt-1 text-xs" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>
                 This agent's raw output has repeatedly tripped <span className="font-mono">{code}</span>.
                 Inspect recent consensus rounds on this page for the per-finding banner, or check
                 upstream pipeline layers (sanitizer / renderer / relay encoding).
@@ -212,7 +214,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       {/* Header — flattened: dropped the gradient layer, inset highlight line,
           and per-agent halo glow. The glow was hex-derived so the header tone
           changed per agent in a way that was decorative, not informational. */}
-      <div className="relative mb-6 rounded-xl border border-border bg-card p-5">
+      <div className="relative mb-6 rounded-xl border border-border p-5" style={{ background: 'var(--surface-elev)' }}>
         <div className="flex items-center gap-6">
           <div
             className="relative shrink-0"
@@ -228,29 +230,33 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             />
           </div>
           <div className="min-w-0 flex-1">
-            <h1 className="truncate font-mono text-2xl font-bold text-foreground">{agent.id}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">{agent.provider}/{agent.model}</p>
+            <h1 className="truncate font-mono text-2xl font-bold" style={{ color: 'var(--text)' }}>{agent.id}</h1>
+            <p className="mt-1 text-sm" style={{ color: 'var(--text-dim)' }}>{agent.provider}/{agent.model}</p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <span className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold ${agent.native ? 'text-primary bg-primary/10' : 'text-confirmed bg-confirmed/10'}`}>
+              <span
+                className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold ${agent.native ? '' : 'text-confirmed bg-confirmed/10'}`}
+                style={agent.native ? { color: 'var(--accent)', background: 'color-mix(in oklch, var(--accent) 10%, transparent)' } : undefined}
+              >
                 {agent.native ? 'NATIVE' : 'RELAY'}
               </span>
               {agent.preset && (
-                <span className="rounded-sm bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">{agent.preset}</span>
+                <span className="rounded-sm px-2 py-0.5 font-mono text-[10px]" style={{ background: 'var(--surface-sunk)', color: 'var(--text-dim)' }}>{agent.preset}</span>
               )}
-              <span className="font-mono text-[10px] text-muted-foreground/60">
+              <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
                 {s.signals} signals{agent.lastTask ? ` · ${timeAgo(agent.lastTask.timestamp)}` : ''}
               </span>
             </div>
           </div>
           <div
-            className="flex shrink-0 flex-col items-end rounded-md border border-border bg-background/60 px-3 py-2"
+            className="flex shrink-0 flex-col items-end rounded-md border border-border px-3 py-2"
+            style={{ background: 'color-mix(in oklch, var(--surface) 60%, transparent)' }}
             data-tooltip={`Dispatch weight ${s.dispatchWeight.toFixed(2)}\nScale 0.3 → 2.0`}
             data-tooltip-pos="left"
           >
-            <span className="font-mono text-2xl font-bold tabular-nums leading-none text-foreground">
+            <span className="font-mono text-2xl font-bold tabular-nums leading-none" style={{ color: 'var(--text)' }}>
               {s.dispatchWeight.toFixed(2)}
             </span>
-            <span className="mt-1 font-mono text-[9px] uppercase text-muted-foreground/50">weight</span>
+            <span className="mt-1 font-mono text-[9px] uppercase" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>weight</span>
           </div>
         </div>
       </div>
@@ -264,16 +270,16 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       <section className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Left: Metrics — bars + compact stat strip */}
         <div>
-          <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Metrics</h2>
-          <div className="rounded-lg border border-border/40 bg-card/80 p-4 shadow-[inset_0_1px_3px_rgba(0,0,0,0.35)]">
+          <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Metrics</h2>
+          <div className="rounded-lg border border-border/40 p-4 shadow-[inset_0_1px_3px_rgba(0,0,0,0.35)]" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
             <div className="space-y-2.5">
               {metricBars.map(m => (
                 <div key={m.label} className="grid grid-cols-[72px_1fr_44px] items-center gap-3" {...(m.tooltip ? { 'data-tooltip': m.tooltip } : {})}>
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{m.label}</span>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-background/80">
+                  <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>{m.label}</span>
+                  <div className="h-1.5 overflow-hidden rounded-full" style={{ background: 'color-mix(in oklch, var(--surface) 80%, transparent)' }}>
                     <div className={`h-full rounded-full transition-all ${m.fill}`} style={{ width: `${Math.max(0, Math.min(100, m.value * 100))}%` }} />
                   </div>
-                  <span className="text-right font-mono text-[11px] font-bold tabular-nums text-foreground">{Math.round(m.value * 100)}%</span>
+                  <span className="text-right font-mono text-[11px] font-bold tabular-nums" style={{ color: 'var(--text)' }}>{Math.round(m.value * 100)}%</span>
                 </div>
               ))}
             </div>
@@ -281,11 +287,12 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               {compactStats.map(st => (
                 <div
                   key={st.label}
-                  className="bg-background/60 px-2 py-2 text-center"
+                  className="px-2 py-2 text-center"
+                  style={{ background: 'color-mix(in oklch, var(--surface) 60%, transparent)' }}
                   title={(st as { title?: string }).title}
                 >
-                  <div className={`font-mono text-sm font-bold tabular-nums ${st.color}`}>{st.value}</div>
-                  <div className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground/70">{st.label}</div>
+                  <div className={`font-mono text-sm font-bold tabular-nums ${st.color}`} style={(st as any).colorStyle}>{st.value}</div>
+                  <div className="mt-0.5 font-mono text-[9px] uppercase tracking-wider" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>{st.label}</div>
                 </div>
               ))}
             </div>
@@ -296,10 +303,10 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             legacy CategoryStrengths (severity-weighted sort + sparse rows) is
             retained for reference but we lead with the ratio view here. */}
         <div>
-          <h2 className="mb-1 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+          <h2 className="mb-1 font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
             Category Competency
           </h2>
-          <p className="mb-3 mt-0.5 font-mono text-[11px] text-muted-foreground/80">◆ Raw per-category ratio — unweighted. Overall accuracy in Metrics applies a hallucination penalty.</p>
+          <p className="mb-3 mt-0.5 font-mono text-[11px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>◆ Raw per-category ratio — unweighted. Overall accuracy in Metrics applies a hallucination penalty.</p>
           <CategoryCompetency
             categoryAccuracy={s.categoryAccuracy}
             categoryCorrect={s.categoryCorrect}
@@ -311,8 +318,8 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       {/* Skills — rich card view with effectiveness, status, strikes, forced-develop history. */}
       {(agent.skillSlots.length > 0 || agent.skills.length > 0) && (
         <section className="mb-8">
-          <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-            Skills <span className="text-primary">{agent.skillSlots.length || agent.skills.length}</span>
+          <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+            Skills <span style={{ color: 'var(--accent)' }}>{agent.skillSlots.length || agent.skills.length}</span>
           </h2>
           {agent.skillSlots.length > 0 ? (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -323,7 +330,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           ) : (
             <div className="flex flex-wrap gap-1.5">
               {agent.skills.map(skill => (
-                <span key={skill} className="rounded-sm border border-border bg-card px-2.5 py-1 font-mono text-xs text-muted-foreground">
+                <span key={skill} className="rounded-sm border border-border px-2.5 py-1 font-mono text-xs" style={{ background: 'var(--surface-elev)', color: 'var(--text-dim)' }}>
                   {skill}
                 </span>
               ))}
@@ -335,21 +342,23 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       {/* Tasks */}
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-            Tasks <span className="text-primary">{agentTasks.length}</span>
+          <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+            Tasks <span style={{ color: 'var(--accent)' }}>{agentTasks.length}</span>
           </h2>
           {taskPages > 1 && (
-            <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
               <button
                 onClick={() => setTaskPage(p => Math.max(0, p - 1))}
                 disabled={clampedTaskPage === 0}
-                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                style={{ background: 'var(--surface-elev)' }}
               >◂ Prev</button>
               <span>{clampedTaskPage + 1} / {taskPages}</span>
               <button
                 onClick={() => setTaskPage(p => Math.min(taskPages - 1, p + 1))}
                 disabled={clampedTaskPage >= taskPages - 1}
-                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                style={{ background: 'var(--surface-elev)' }}
               >Next ▸</button>
             </div>
           )}
@@ -358,13 +367,13 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           <div className="overflow-hidden rounded-md border border-border/40">
             <table className="w-full text-left">
               <thead>
-                <tr className="border-b border-border bg-card">
-                  <th className="py-2 pl-4 pr-2 text-xs font-medium text-muted-foreground" style={{ width: 32 }}></th>
-                  <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">ID</th>
-                  <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">Agent</th>
-                  <th className="py-2 pr-3 text-xs font-medium text-muted-foreground">Description</th>
-                  <th className="py-2 pr-3 font-mono text-xs font-medium text-muted-foreground">Duration</th>
-                  <th className="py-2 pr-4 text-right font-mono text-xs font-medium text-muted-foreground">When</th>
+                <tr className="border-b border-border" style={{ background: 'var(--surface-elev)' }}>
+                  <th className="py-2 pl-4 pr-2 text-xs font-medium" style={{ width: 32, color: 'var(--text-dim)' }}></th>
+                  <th className="py-2 pr-3 font-mono text-xs font-medium" style={{ color: 'var(--text-dim)' }}>ID</th>
+                  <th className="py-2 pr-3 font-mono text-xs font-medium" style={{ color: 'var(--text-dim)' }}>Agent</th>
+                  <th className="py-2 pr-3 text-xs font-medium" style={{ color: 'var(--text-dim)' }}>Description</th>
+                  <th className="py-2 pr-3 font-mono text-xs font-medium" style={{ color: 'var(--text-dim)' }}>Duration</th>
+                  <th className="py-2 pr-4 text-right font-mono text-xs font-medium" style={{ color: 'var(--text-dim)' }}>When</th>
                 </tr>
               </thead>
               <tbody>
@@ -375,7 +384,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             </table>
           </div>
         ) : (
-          <div className="py-6 text-center text-sm text-muted-foreground">No tasks recorded.</div>
+          <div className="py-6 text-center text-sm" style={{ color: 'var(--text-dim)' }}>No tasks recorded.</div>
         )}
       </section>
 
@@ -384,8 +393,8 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           scroll several screens to see one finding's citation + signals; the
           drawer surfaces both in one click. */}
       <section className="mb-8">
-        <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Consensus Runs <span className="text-primary">{agentRuns.length}</span>
+        <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          Consensus Runs <span style={{ color: 'var(--accent)' }}>{agentRuns.length}</span>
         </h2>
         {agentRuns.length > 0 ? (
           <div className="space-y-2">
@@ -413,7 +422,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               const runKey = run.taskId + ':' + i;
               const isOpen = expandedRun === runKey;
               return (
-                <div key={runKey} className="rounded-md border border-border/40 bg-card">
+                <div key={runKey} className="rounded-md border border-border/40" style={{ background: 'var(--surface-elev)' }}>
                   <button
                     type="button"
                     onClick={() => setExpandedRun(isOpen ? null : runKey)}
@@ -422,13 +431,13 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                   >
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
-                        <span className="font-mono text-sm font-semibold text-foreground">
+                        <span className="font-mono text-sm font-semibold" style={{ color: 'var(--text)' }}>
                           {runSignals.length > 0 && (
-                            <span className="mr-1.5 inline-block text-muted-foreground">{isOpen ? '▾' : '▸'}</span>
+                            <span className="mr-1.5 inline-block" style={{ color: 'var(--text-dim)' }}>{isOpen ? '▾' : '▸'}</span>
                           )}
                           {total} findings
                         </span>
-                        <span className="font-mono text-xs text-muted-foreground">{timeAgo(run.timestamp)}</span>
+                        <span className="font-mono text-xs" style={{ color: 'var(--text-dim)' }}>{timeAgo(run.timestamp)}</span>
                       </div>
                       <div className="mt-1.5 flex gap-2">
                         {segments.map(seg => seg.count > 0 && (
@@ -453,8 +462,8 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                             <div className="flex items-start gap-2 py-1">
                               <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold ${tag.cls}`}>{tag.label}</span>
                               <div className="min-w-0 flex-1">
-                                <span className="finding-md text-xs text-muted-foreground [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400" dangerouslySetInnerHTML={{ __html: renderFindingMarkdown(sig.evidence || '') }} />
-                                <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">
+                                <span className="finding-md text-xs [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400" style={{ color: 'var(--text-dim)' }} dangerouslySetInnerHTML={{ __html: renderFindingMarkdown(sig.evidence || '') }} />
+                                <span className="ml-2 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                                   {sig.agentId}{sig.counterpartId ? ` + ${sig.counterpartId}` : ''}
                                 </span>
                               </div>
@@ -480,7 +489,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             })}
           </div>
         ) : (
-          <div className="py-6 text-center text-sm text-muted-foreground">No consensus participation recorded.</div>
+          <div className="py-6 text-center text-sm" style={{ color: 'var(--text-dim)' }}>No consensus participation recorded.</div>
         )}
       </section>
 
@@ -499,26 +508,28 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       {/* Memory Files — paginated by day */}
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-            Memory <span className="text-primary">{memories.length} files</span>
+          <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+            Memory <span style={{ color: 'var(--accent)' }}>{memories.length} files</span>
             {currentDay && (
-              <span className="ml-2 font-mono text-[10px] text-muted-foreground">
+              <span className="ml-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
                 · {currentDay.day} ({currentDay.items.length})
               </span>
             )}
           </h2>
           {memoryDays.length > 1 && (
-            <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
               <button
                 onClick={() => setMemDayIdx(i => Math.max(0, i - 1))}
                 disabled={clampedMemDayIdx === 0}
-                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                style={{ background: 'var(--surface-elev)' }}
               >◂ Newer</button>
               <span>{clampedMemDayIdx + 1} / {memoryDays.length}</span>
               <button
                 onClick={() => setMemDayIdx(i => Math.min(memoryDays.length - 1, i + 1))}
                 disabled={clampedMemDayIdx >= memoryDays.length - 1}
-                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                style={{ background: 'var(--surface-elev)' }}
               >Older ▸</button>
             </div>
           )}
@@ -530,23 +541,23 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               const type = mem.frontmatter?.type || 'memory';
               const name = mem.frontmatter?.name || mem.filename.replace(/\.md$/, '');
               return (
-                <div key={mem.filename} className="rounded-md border border-border/40 bg-card/80">
+                <div key={mem.filename} className="rounded-md border border-border/40" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
                   <button
                     onClick={() => setExpandedMem(isOpen ? null : mem.filename)}
                     className="flex w-full items-center gap-2 p-3 text-left transition hover:bg-accent/50"
                   >
-                    <span className={`font-mono text-xs ${isOpen ? 'text-primary' : 'text-muted-foreground'}`}>
+                    <span className="font-mono text-xs" style={{ color: isOpen ? 'var(--accent)' : 'var(--text-dim)' }}>
                       {isOpen ? '\u25BE' : '\u25B8'}
                     </span>
-                    <span className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase text-muted-foreground">
+                    <span className="shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase" style={{ background: 'var(--surface-sunk)', color: 'var(--text-dim)' }}>
                       {type}
                     </span>
-                    <span className="truncate font-mono text-xs font-semibold text-foreground">{name}</span>
-                    <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">{mem.filename}</span>
+                    <span className="truncate font-mono text-xs font-semibold" style={{ color: 'var(--text)' }}>{name}</span>
+                    <span className="ml-auto shrink-0 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>{mem.filename}</span>
                   </button>
                   {isOpen && (
                     <div className="border-t border-border px-4 py-3">
-                      <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-muted-foreground">
+                      <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed" style={{ color: 'var(--text-dim)' }}>
                         {mem.content}
                       </pre>
                     </div>
@@ -556,7 +567,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             })}
           </div>
         ) : (
-          <div className="py-6 text-center text-sm text-muted-foreground">No memory files.</div>
+          <div className="py-6 text-center text-sm" style={{ color: 'var(--text-dim)' }}>No memory files.</div>
         )}
       </section>
     </>

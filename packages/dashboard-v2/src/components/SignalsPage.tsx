@@ -74,12 +74,15 @@ const SIGNAL_CLS: Record<string, string> = {
 
 // Global severity palette — matches FindingsMetrics SEVERITY_CLS so a
 // "high" chip reads the same orange everywhere on the dashboard.
+// Note: 'low' uses inline styles (var(--text-dim) + var(--surface-sunk)) to
+// stay theme-switchable under Tailwind v4 @theme build-time resolution.
 const SEVERITY_BADGE: Record<string, string> = {
   critical: 'text-red-400 bg-red-500/10',
   high: 'text-severity-high bg-severity-high/10',
   medium: 'text-yellow-400 bg-yellow-500/10',
-  low: 'text-muted-foreground bg-muted/50',
+  low: '',
 };
+const SEVERITY_BADGE_LOW_STYLE = { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' };
 
 const PAGE_SIZE = 100;
 
@@ -247,17 +250,17 @@ export function SignalsPage() {
     <div className="space-y-4">
       <div className="flex items-baseline justify-between">
         <div>
-          <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Signals</h1>
-          <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Scored events emitted by agents during consensus review.</p>
-          <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/70">
+          <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Signals</h1>
+          <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Scored events emitted by agents during consensus review.</p>
+          <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
             {headerLabel} — showing {rows.length} of {total}
           </p>
         </div>
       </div>
 
       {hadAnyURLParams && (
-        <div className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 font-mono text-[10px] text-muted-foreground">
-          Filtered view — {filters.signals.length} signal type{filters.signals.length !== 1 ? 's' : ''}{filters.agents.length > 0 ? ` · ${filters.agents.length} agent${filters.agents.length !== 1 ? 's' : ''}` : ''}{filters.severity ? ` · severity: ${filters.severity}` : ''}{filters.source ? ` · source: ${filters.source}` : ''}. <a href={href('/signals')} className="text-primary hover:text-foreground">Clear filters</a>
+        <div className="rounded-md border border-border/40 px-3 py-2 font-mono text-[10px]" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 30%, transparent)', color: 'var(--text-dim)' }}>
+          Filtered view — {filters.signals.length} signal type{filters.signals.length !== 1 ? 's' : ''}{filters.agents.length > 0 ? ` · ${filters.agents.length} agent${filters.agents.length !== 1 ? 's' : ''}` : ''}{filters.severity ? ` · severity: ${filters.severity}` : ''}{filters.source ? ` · source: ${filters.source}` : ''}. <a href={href('/signals')} style={{ color: 'var(--accent)' }}>Clear filters</a>
         </div>
       )}
 
@@ -273,7 +276,7 @@ export function SignalsPage() {
           </div>
         )}
 
-        <section className="min-w-0 overflow-hidden rounded-md border border-border/60 bg-card/70">
+        <section className="min-w-0 overflow-hidden rounded-md border border-border/60" style={{ background: 'color-mix(in oklch, var(--surface-elev) 70%, transparent)' }}>
           {error && (
             <div className="border-b border-border/60 bg-disputed/10 px-3 py-2 font-mono text-[10px] text-disputed">
               {error}
@@ -282,7 +285,7 @@ export function SignalsPage() {
           <div className="overflow-x-auto">
             <table className="w-full border-collapse font-mono text-[10px]">
               <thead>
-                <tr className="border-b border-border/60 text-left text-muted-foreground/70">
+                <tr className="border-b border-border/60 text-left" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Time</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Agent</th>
                   <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Signal</th>
@@ -296,7 +299,7 @@ export function SignalsPage() {
               <tbody>
                 {rows.length === 0 && !loading && (
                   <tr>
-                    <td colSpan={8} className="px-2 py-8 text-center text-muted-foreground/50">
+                    <td colSpan={8} className="px-2 py-8 text-center" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                       no signals match these filters
                     </td>
                   </tr>
@@ -306,29 +309,32 @@ export function SignalsPage() {
                   return (
                     <tr
                       key={`${r.timestamp}-${r.agentId}-${i}`}
-                      className={`border-b border-border/30 ${canOpen ? 'cursor-pointer hover:bg-muted/30' : ''}`}
+                      className={`border-b border-border/30 ${canOpen ? 'cursor-pointer hover:bg-accent/10' : ''}`}
                       onClick={() => canOpen && openDrawer(r.consensusId, r.findingId)}
                     >
-                      <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/80" title={r.timestamp}>{timeAgo(r.timestamp)}</td>
-                      <td className="whitespace-nowrap px-2 py-1 text-foreground">{r.agentId}</td>
-                      <td className={`whitespace-nowrap px-2 py-1 ${SIGNAL_CLS[r.signal] ?? 'text-foreground'}`}>{SIGNAL_LABELS[r.signal] ?? r.signal}</td>
+                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }} title={r.timestamp}>{timeAgo(r.timestamp)}</td>
+                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'var(--text)' }}>{r.agentId}</td>
+                      <td className={`whitespace-nowrap px-2 py-1 ${SIGNAL_CLS[r.signal] ?? ''}`} style={SIGNAL_CLS[r.signal] ? undefined : { color: 'var(--text)' }}>{SIGNAL_LABELS[r.signal] ?? r.signal}</td>
                       <td className="whitespace-nowrap px-2 py-1">
                         {r.severity ? (
-                          <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${SEVERITY_BADGE[r.severity] ?? 'bg-muted'}`}>
+                          <span
+                            className={`rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${SEVERITY_BADGE[r.severity] ?? ''}`}
+                            style={r.severity === 'low' ? SEVERITY_BADGE_LOW_STYLE : (!SEVERITY_BADGE[r.severity] ? { background: 'var(--surface-sunk)' } : undefined)}
+                          >
                             {r.severity}
                           </span>
                         ) : (
-                          <span className="text-muted-foreground/40">—</span>
+                          <span style={{ color: 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}>—</span>
                         )}
                       </td>
-                      <td className="max-w-[300px] truncate px-2 py-1 text-muted-foreground/80" title={r.evidence}>
+                      <td className="max-w-[300px] truncate px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }} title={r.evidence}>
                         {truncate(r.evidence, 80)}
                       </td>
-                      <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/80">{r.counterpartId ?? '—'}</td>
-                      <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/70" title={r.findingId}>
+                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>{r.counterpartId ?? '—'}</td>
+                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }} title={r.findingId}>
                         {r.findingId ? truncate(r.findingId, 24) : '—'}
                       </td>
-                      <td className="whitespace-nowrap px-2 py-1 text-muted-foreground/70" title={r.consensusId}>
+                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }} title={r.consensusId}>
                         {r.consensusId ? truncate(r.consensusId, 16) : '—'}
                       </td>
                     </tr>
@@ -339,17 +345,18 @@ export function SignalsPage() {
           </div>
 
           <div className="flex items-center justify-between border-t border-border/60 px-3 py-2">
-            <span className="font-mono text-[10px] text-muted-foreground/60">
+            <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
               {loading
                 ? 'loading…'
                 : `${clampedPage * PAGE_SIZE + 1}–${clampedPage * PAGE_SIZE + rows.length} of ${total}`}
             </span>
-            <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
               <button
                 type="button"
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={clampedPage === 0 || loading}
-                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                style={{ background: 'var(--surface-elev)' }}
               >◂ Prev</button>
               <span className="tabular-nums">
                 {clampedPage + 1} / {totalPages}
@@ -358,7 +365,8 @@ export function SignalsPage() {
                 type="button"
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={clampedPage >= totalPages - 1 || loading}
-                className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                style={{ background: 'var(--surface-elev)' }}
               >Next ▸</button>
             </div>
           </div>
