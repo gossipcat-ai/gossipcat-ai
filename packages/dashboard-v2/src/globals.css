@@ -8,8 +8,8 @@
   --color-card-foreground: #f0f0f5;
   --color-muted: #1c1c26;
   --color-muted-foreground: #9898a8;
-  --color-border: rgba(139, 92, 246, 0.12);
-  --color-input: rgba(139, 92, 246, 0.12);
+  --color-border: var(--border);
+  --color-input: var(--border);
   --color-ring: #8b5cf6;
   --color-primary: #8b5cf6;
   --color-primary-foreground: #fafafa;
@@ -172,7 +172,7 @@ html::after {
   position: absolute;
   inset: -4px;
   border-radius: 16px;
-  background: radial-gradient(ellipse at center, rgba(139,92,246,0.15) 0%, transparent 70%);
+  background: radial-gradient(ellipse at center, var(--accent-soft) 0%, transparent 70%);
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -193,14 +193,14 @@ html::after {
 .crt-logo:hover .crt-logo-img,
 .crt-logo--glitch .crt-logo-img {
   animation: crt-flicker 0.6s step-end infinite;
-  filter: brightness(1.25) saturate(1.1) drop-shadow(0 0 32px rgba(139,92,246,0.7));
+  filter: brightness(1.25) saturate(1.1) drop-shadow(0 0 32px var(--accent));
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.15); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, 0.25); }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-soft); }
 
 /* ───── Tooltip system (CSS-only, data-tooltip="text") ───── */
 [data-tooltip] {
@@ -214,7 +214,7 @@ html::after {
   transform: translateX(-50%) translateY(-6px);
   padding: 8px 12px;
   background: rgba(14, 14, 20, 0.98);
-  border: 1px solid rgba(139, 92, 246, 0.25);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   font-family: 'Inter', sans-serif;
   font-size: 11px;
@@ -331,8 +331,8 @@ html::after {
 .task-md code.md-inline-code {
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  background: rgba(139, 92, 246, 0.12);
-  border: 1px solid rgba(139, 92, 246, 0.15);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 0.1em 0.35em;
   color: var(--color-foreground);
@@ -342,7 +342,7 @@ html::after {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(139, 92, 246, 0.12);
+  border: 1px solid var(--border);
   border-radius: 5px;
   padding: 0.6rem 0.75rem;
   margin: 0.5rem 0;
@@ -402,8 +402,8 @@ html::after {
 .finding-md code.md-inline-code {
   font-family: var(--font-mono);
   font-size: 0.68rem;
-  background: rgba(139, 92, 246, 0.12);
-  border: 1px solid rgba(139, 92, 246, 0.15);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 0.1em 0.3em;
   color: var(--color-foreground);
@@ -413,7 +413,7 @@ html::after {
   font-family: var(--font-mono);
   font-size: 0.68rem;
   background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(139, 92, 246, 0.12);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.4rem 0.6rem;
   margin: 0.35rem 0;
