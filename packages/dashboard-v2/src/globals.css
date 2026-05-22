@@ -51,6 +51,42 @@
   --radius-lg: 0.5rem;
 }
 
+/* ───── Phase 1a — warm palette tokens (light default) ───── */
+:root {
+  --surface: #f5f4ef;
+  --surface-elev: #ffffff;
+  --surface-sunk: #ede9e0;
+  --text: #1f1f1d;
+  --text-dim: #6b6a64;
+  --text-faint: #9c9a92;
+  --border: #e0ddd2;
+  --border-strong: #c9c5b8;
+  --accent: #cc785c;
+  --accent-bright: #e08a6c;
+  --accent-soft: rgba(204, 120, 92, 0.12);
+  --success: #1a7e5e;
+  --warn: #b8741d;
+  --danger: #c0392b;
+  --beat: 1.6s;
+}
+
+[data-theme="dark"] {
+  --surface: #1c1a17;
+  --surface-elev: #252320;
+  --surface-sunk: #131210;
+  --text: #e8e4d7;
+  --text-dim: #87847b;
+  --text-faint: #5d5a52;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --accent: #d68a6f;
+  --accent-bright: #e08a6c;
+  --accent-soft: rgba(214, 138, 111, 0.16);
+  --success: #57b289;
+  --warn: #c89a55;
+  --danger: #d68a7e;
+}
+
 /* ───── Serif utility — no-op in default theme, serif in editorial ───── */
 .font-serif-editorial {
   font-family: inherit;
