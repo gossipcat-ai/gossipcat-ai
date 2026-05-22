@@ -50,7 +50,7 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
         className="relative flex max-h-[calc(100vh-48px)] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-primary/30 bg-card"
         style={{
           boxShadow:
-            '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 3px rgba(139, 92, 246, 0.06)',
+            '0 24px 64px -16px rgba(31,31,29,0.32), 0 0 0 1px rgba(31,31,29,0.02), 0 0 0 3px var(--accent-soft)',
         }}
         onClick={(e) => e.stopPropagation()}
       >

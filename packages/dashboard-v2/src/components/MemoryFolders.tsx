@@ -43,7 +43,7 @@ const TYPE_ACCENT: Record<DisplayType, string> = {
  * the same hue at low alpha to mimic mockup line 152 (`0 0 8px primary-soft`).
  */
 const TYPE_DOT: Record<DisplayType, { bg: string; glow: string }> = {
-  backlog: { bg: 'bg-primary', glow: 'rgba(139, 92, 246, 0.6)' },
+  backlog: { bg: 'bg-accent', glow: 'var(--accent)' },
   record: { bg: 'bg-text-dim', glow: 'rgba(102, 102, 116, 0.55)' },
   session: { bg: 'bg-confirmed', glow: 'rgba(52, 211, 153, 0.55)' },
   rule: { bg: 'bg-unverified', glow: 'rgba(251, 191, 36, 0.55)' },
@@ -318,7 +318,7 @@ export function NativeMemories({ memories }: { memories: MemoryFile[] }) {
                     {recent && (
                       <span
                         className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
-                        style={{ boxShadow: '0 0 8px rgba(139, 92, 246, 0.6)' }}
+                        style={{ boxShadow: '0 0 8px var(--accent)' }}
                         aria-label="Activity in the last 24h"
                       />
                     )}
