@@ -43,7 +43,7 @@ function ToastItem({
 
   const icon =
     type === 'task.completed'
-      ? <span className="text-muted-foreground">✓</span>
+      ? <span style={{ color: 'var(--text-dim)' }}>✓</span>
       : (payload.confirmed as number) > (payload.disputed as number)
         ? <span className="text-confirmed">◎</span>
         : <span className="text-disputed">◎</span>;
@@ -73,23 +73,25 @@ function ToastItem({
   return (
     <div
       className={[
-        'pointer-events-auto bg-card border rounded shadow-sm px-4 py-3 max-w-sm cursor-pointer',
+        'pointer-events-auto border rounded shadow-sm px-4 py-3 max-w-sm cursor-pointer',
         'transition-all duration-200',
         'motion-reduce:transition-none motion-reduce:transform-none',
-        'hover:bg-muted/30 hover:border-border',
+        'hover:border-border',
         toast.exiting
           ? 'opacity-0 scale-95 opacity-0 translate-y-2'
           : 'opacity-100 scale-100 translate-x-0',
       ].join(' ')}
+      style={{ background: 'var(--surface-elev)' }}
       onClick={handleClick}
       onMouseEnter={clearTimer}
       onMouseLeave={startTimer}
     >
       <div className="flex items-center gap-2">
         <span className="shrink-0 text-sm font-bold">{icon}</span>
-        <span title={body} className="font-mono text-[11px] text-foreground min-w-0 truncate">{body}</span>
+        <span title={body} className="font-mono text-[11px] min-w-0 truncate" style={{ color: 'var(--text)' }}>{body}</span>
         <button
-          className="ml-auto shrink-0 text-muted-foreground/50 hover:text-muted-foreground text-xs leading-none"
+          className="ml-auto shrink-0 hover:[color:var(--text-dim)] text-xs leading-none"
+          style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}
           onClick={(e) => { e.stopPropagation(); clearTimer(); onDismiss(toast.id); }}
           aria-label="Dismiss notification"
         >

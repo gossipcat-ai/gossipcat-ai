@@ -60,15 +60,15 @@ export function FleetHealthTrend() {
   const series = useMemo(() => (data ? groupByAgent(data.points) : []), [data]);
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
+    <section className="rounded-lg border border-border p-4" style={{ background: 'var(--surface-elev)' }}>
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Fleet Health Trend</h3>
-        <span className="text-xs text-muted-foreground">last 30d</span>
+        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Fleet Health Trend</h3>
+        <span className="text-xs" style={{ color: 'var(--text-dim)' }}>last 30d</span>
       </header>
       {!data && !err && <EmptyState title="Loading…" compact />}
-      {err && <p className="text-xs text-muted-foreground">failed to load trend data</p>}
+      {err && <p className="text-xs" style={{ color: 'var(--text-dim)' }}>failed to load trend data</p>}
       {!err && data && series.length === 0 && (
-        <p className="text-xs text-muted-foreground">no recent consensus signals</p>
+        <p className="text-xs" style={{ color: 'var(--text-dim)' }}>no recent consensus signals</p>
       )}
       {!err && series.length > 0 && (
         <ul className="space-y-1.5">
@@ -76,10 +76,10 @@ export function FleetHealthTrend() {
             const isDormant = s.latest === 0;
             return (
             <li key={s.agentId} className={`flex items-center justify-between gap-3 text-xs${isDormant ? ' opacity-40' : ''}`}>
-              <span className="truncate font-mono text-foreground">{s.agentId}</span>
+              <span className="truncate font-mono" style={{ color: 'var(--text)' }}>{s.agentId}</span>
               <div className="flex items-center gap-2">
                 <Sparkline values={s.points.map((p) => p.accuracy)} className={s.latest >= 0.7 ? 'text-confirmed' : s.latest >= 0.4 ? 'text-unverified' : 'text-disputed'} />
-                <span className="w-10 text-right tabular-nums text-muted-foreground">
+                <span className="w-10 text-right tabular-nums" style={{ color: 'var(--text-dim)' }}>
                   {Math.round(s.latest * 100)}%
                 </span>
               </div>

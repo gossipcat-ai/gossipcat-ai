@@ -3,9 +3,9 @@ import type { CitationSnippet as CS } from '@/lib/types';
 export function CitationSnippet({ citation }: { citation: CS }) {
   const lines = citation.snippet.split('\n');
   return (
-    <div className="rounded-md border border-border/40 bg-card/60 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-1 border-b border-border/40 bg-muted/40">
-        <span className="font-mono text-[10px] text-muted-foreground">
+    <div className="rounded-md border border-border/40 overflow-hidden" style={{ background: 'color-mix(in oklch, var(--surface-elev) 60%, transparent)' }}>
+      <div className="flex items-center justify-between px-3 py-1 border-b border-border/40" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 40%, transparent)' }}>
+        <span className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
           {citation.file}:{citation.line}
         </span>
       </div>

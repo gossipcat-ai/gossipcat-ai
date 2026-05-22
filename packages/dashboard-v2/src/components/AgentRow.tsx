@@ -15,7 +15,8 @@ export function AgentRow({ agent }: AgentRowProps) {
   return (
     <button
       onClick={() => { navigate('/agent/' + encodeURIComponent(agent.id)); }}
-      className="group flex min-w-0 flex-1 flex-col items-center rounded-lg border border-border bg-card p-4 text-center transition hover:border-primary/30 hover:bg-accent"
+      className="group flex min-w-0 flex-1 flex-col items-center rounded-lg border border-border p-4 text-center transition hover:border-primary/30 hover:bg-accent"
+      style={{ background: 'var(--surface-elev)' }}
     >
       {/* Avatar with portal glow */}
       <div className="relative mb-3">
@@ -36,15 +37,18 @@ export function AgentRow({ agent }: AgentRowProps) {
       </div>
 
       {/* Agent name */}
-      <span className="font-mono text-xs font-semibold text-foreground">{agent.id}</span>
+      <span className="font-mono text-xs font-semibold" style={{ color: 'var(--text)' }}>{agent.id}</span>
 
       {/* Badge */}
-      <span className={`mt-1 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-semibold ${agent.native ? 'text-primary bg-primary/10' : 'text-confirmed bg-confirmed/10'}`}>
+      <span
+        className={`mt-1 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-semibold ${agent.native ? '' : 'text-confirmed bg-confirmed/10'}`}
+        style={agent.native ? { color: 'var(--accent)', background: 'color-mix(in oklch, var(--accent) 10%, transparent)' } : undefined}
+      >
         {agent.native ? 'NATIVE' : 'RELAY'}
       </span>
 
       {/* Model */}
-      <span className="mt-1 text-[10px] text-muted-foreground">{agent.model.split('/').pop()}</span>
+      <span className="mt-1 text-[10px]" style={{ color: 'var(--text-dim)' }}>{agent.model.split('/').pop()}</span>
 
       {/* Metrics */}
       <div className="mt-2 font-mono text-[10px]">
@@ -52,18 +56,18 @@ export function AgentRow({ agent }: AgentRowProps) {
           <>
             <div className="flex items-center justify-center gap-1.5">
               <span className="text-confirmed">{Math.round(s.accuracy * 100)}% acc</span>
-              <span className="text-muted-foreground">·</span>
+              <span style={{ color: 'var(--text-dim)' }}>·</span>
               <span className="text-unique">{Math.round(s.uniqueness * 100)}% uniq</span>
             </div>
-            <div className="mt-0.5 text-muted-foreground">{s.signals} signals</div>
+            <div className="mt-0.5" style={{ color: 'var(--text-dim)' }}>{s.signals} signals</div>
           </>
         ) : (
-          <span className="text-muted-foreground/50">no signals yet</span>
+          <span style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>no signals yet</span>
         )}
       </div>
 
       {/* Last activity */}
-      <span className="mt-1 font-mono text-[10px] text-muted-foreground">{lastTime}</span>
+      <span className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>{lastTime}</span>
     </button>
   );
 }

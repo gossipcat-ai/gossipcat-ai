@@ -23,11 +23,11 @@ export function TeamHero({ agents }: TeamHeroProps) {
   return (
     <section>
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Team <span className="text-primary">{agents.length}</span>
+        <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          Team <span style={{ color: 'var(--accent)' }}>{agents.length}</span>
         </h2>
         {hasMore && (
-          <a href="/dashboard/team" className="font-mono text-xs text-muted-foreground transition hover:text-primary">
+          <a href="/dashboard/team" className="font-mono text-xs transition hover:[color:var(--accent)]" style={{ color: 'var(--text-dim)' }}>
             view all
           </a>
         )}

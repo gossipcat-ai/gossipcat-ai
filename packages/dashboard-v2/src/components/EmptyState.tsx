@@ -17,9 +17,9 @@ interface EmptyStateProps {
 export function EmptyState({ title, hint, compact = false }: EmptyStateProps) {
   return (
     <div className={`text-center ${compact ? 'py-3' : 'py-6'}`}>
-      <div className="font-mono text-xs text-muted-foreground">{title}</div>
+      <div className="font-mono text-xs" style={{ color: 'var(--text-dim)' }}>{title}</div>
       {hint && (
-        <div className="mt-1 font-mono text-[10px] text-muted-foreground/60">
+        <div className="mt-1 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
           {hint}
         </div>
       )}

@@ -23,18 +23,18 @@ export function SkillVerdictsSnapshot({ overview }: { overview: OverviewData | n
   const total = s ? SEGMENTS.reduce((acc, seg) => acc + (s[seg.key] ?? 0), 0) : 0;
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
+    <section className="rounded-lg border border-border p-4" style={{ background: 'var(--surface-elev)' }}>
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
           Skill Verdicts
         </h3>
-        <span className="font-mono text-[10px] text-muted-foreground/70">{total} total</span>
+        <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>{total} total</span>
       </header>
       {!s || total === 0 ? (
-        <p className="font-mono text-[11px] text-muted-foreground/60">no skill verdicts yet</p>
+        <p className="font-mono text-[11px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>no skill verdicts yet</p>
       ) : (
         <>
-          <div className="mb-3 flex h-2 w-full gap-px overflow-hidden rounded-sm bg-muted/40">
+          <div className="mb-3 flex h-2 w-full gap-px overflow-hidden rounded-sm" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 40%, transparent)' }}>
             {SEGMENTS.map((seg) => {
               const n = s[seg.key] ?? 0;
               if (n === 0) return null;
@@ -56,8 +56,11 @@ export function SkillVerdictsSnapshot({ overview }: { overview: OverviewData | n
               return (
                 <li key={seg.key} className={`flex items-center gap-1.5 ${muted ? 'opacity-40' : ''}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${seg.dot}`} />
-                  <span className="text-muted-foreground">{seg.label}</span>
-                  <span className={`ml-auto tabular-nums ${muted ? 'text-muted-foreground/50' : seg.text}`}>
+                  <span style={{ color: 'var(--text-dim)' }}>{seg.label}</span>
+                  <span
+                    className={`ml-auto tabular-nums ${muted ? '' : seg.text}`}
+                    style={muted ? { color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' } : undefined}
+                  >
                     {n}
                   </span>
                 </li>

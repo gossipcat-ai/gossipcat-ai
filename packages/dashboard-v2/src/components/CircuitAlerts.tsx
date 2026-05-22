@@ -36,7 +36,7 @@ export function CircuitAlerts({ agents }: CircuitAlertsProps) {
   if (attention.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-border bg-card">
+    <div className="rounded-lg border border-border" style={{ background: 'var(--surface-elev)' }}>
       <div className="flex items-center justify-between border-b border-border bg-destructive/[0.04] px-3.5 py-3">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm bg-destructive/15 font-mono text-[11px] font-bold text-destructive">
@@ -65,16 +65,16 @@ export function CircuitAlerts({ agents }: CircuitAlertsProps) {
             >
               <div className="mb-1 flex items-center gap-2.5">
                 <span className={`h-1.5 w-1.5 rounded-full ${isBenched ? 'bg-destructive shadow-[0_0_6px_rgba(248,113,113,0.6)]' : 'bg-unverified'}`} />
-                <span className="text-sm font-semibold text-foreground">{agent.id}</span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--text)' }}>{agent.id}</span>
                 {r.label && (
                   <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${r.cls}`}>
                     {r.label}
                   </span>
                 )}
               </div>
-              <div className="flex items-center justify-between pl-4 font-mono text-[10px] text-muted-foreground">
+              <div className="flex items-center justify-between pl-4 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
                 <span>{agent.scores.consecutiveFailures} consecutive fails</span>
-                {lastTime && <span className="text-muted-foreground/50">{lastTime}</span>}
+                {lastTime && <span style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>{lastTime}</span>}
               </div>
             </a>
           );

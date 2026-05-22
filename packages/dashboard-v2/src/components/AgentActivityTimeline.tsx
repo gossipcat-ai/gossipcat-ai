@@ -53,17 +53,20 @@ export function AgentActivityTimeline({ agentId }: Props) {
       onClick={() => enabled && setFilter(k)}
       disabled={!enabled}
       className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold transition ${
-        filter === k ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'
-      } ${enabled ? '' : 'opacity-40 cursor-not-allowed'}`}
+        enabled ? '' : 'opacity-40 cursor-not-allowed'
+      }`}
+      style={filter === k
+        ? { background: 'var(--surface-sunk)', color: 'var(--text)' }
+        : { color: 'var(--text-dim)' }}
     >
       {label}
     </button>
   );
 
   return (
-    <div className="rounded-md border border-border/40 bg-card/80 px-4 py-3">
+    <div className="rounded-md border border-border/40 px-4 py-3" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
       <div className="mb-3 flex items-center justify-between">
-        <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+        <span className="font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
           Activity
         </span>
         <div className="flex gap-1">
@@ -75,7 +78,7 @@ export function AgentActivityTimeline({ agentId }: Props) {
       </div>
 
       {loading ? (
-        <div className="py-6 text-center text-xs text-muted-foreground">Loading…</div>
+        <div className="py-6 text-center text-xs" style={{ color: 'var(--text-dim)' }}>Loading…</div>
       ) : visible.length === 0 ? (
         <EmptyState
           title="No activity yet"
@@ -85,19 +88,19 @@ export function AgentActivityTimeline({ agentId }: Props) {
       ) : (
         <div className="space-y-1">
           {visible.map((s, i) => {
-            const tagCls = SIGNAL_TAG_CLS[s.signal] || 'text-muted-foreground bg-muted';
+            const tagCls = SIGNAL_TAG_CLS[s.signal] || 'text-text-dim';
             const clickable = !!(s.consensusId && s.findingId);
             const row = (
               <div className="flex items-start gap-2 py-1.5">
-                <span className="shrink-0 font-mono text-[9px] text-muted-foreground/60 tabular-nums w-16">
+                <span className="shrink-0 font-mono text-[9px] tabular-nums w-16" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
                   {timeAgo(s.timestamp)}
                 </span>
                 <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold ${tagCls}`}>
                   {s.signal}
                 </span>
-                <div className="min-w-0 flex-1 text-[11px] text-muted-foreground">
+                <div className="min-w-0 flex-1 text-[11px]" style={{ color: 'var(--text-dim)' }}>
                   {s.counterpartId && (
-                    <span className="font-mono text-[10px] text-muted-foreground/70">→ {s.counterpartId} · </span>
+                    <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>→ {s.counterpartId} · </span>
                   )}
                   {s.evidence && <span>{s.evidence.length > 160 ? s.evidence.slice(0, 160) + '…' : s.evidence}</span>}
                 </div>

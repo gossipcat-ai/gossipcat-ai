@@ -17,13 +17,14 @@ export function TeamSection({ agents }: TeamSectionProps) {
   return (
     <section>
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-          Team <span className="text-primary">{agents.length} agents</span>
+        <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          Team <span style={{ color: 'var(--accent)' }}>{agents.length} agents</span>
         </h2>
         {hasMore && (
           <a
             href="/dashboard/team"
-            className="font-mono text-xs text-muted-foreground transition hover:text-primary"
+            className="font-mono text-xs transition hover:[color:var(--accent)]"
+            style={{ color: 'var(--text-dim)' }}
           >
             view all →
           </a>

@@ -142,7 +142,8 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
       role="presentation"
     >
       <div
-        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
+        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border shadow-2xl"
+        style={{ background: 'var(--surface-elev)' }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="glossary-title"
@@ -152,7 +153,8 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
         <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-5 py-3.5">
           <h2
             id="glossary-title"
-            className="font-mono text-sm font-semibold text-foreground"
+            className="font-mono text-sm font-semibold"
+            style={{ color: 'var(--text)' }}
           >
             Gossipcat Glossary
           </h2>
@@ -160,7 +162,8 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
             ref={closeButtonRef}
             onClick={onClose}
             aria-label="Close glossary"
-            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-border/40 bg-card font-mono text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-border/40 font-mono text-xs transition hover:[color:var(--text)] hover:[background:var(--surface-sunk)]"
+            style={{ background: 'var(--surface-elev)', color: 'var(--text-dim)' }}
           >
             &times;
           </button>
@@ -170,15 +173,15 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
         <div className="flex-1 overflow-y-auto px-5 py-4">
           <dl className="space-y-5">
             {TERMS.map(({ term, definition, seeAlso }) => (
-              <div key={term} className="rounded-md border border-border/40 bg-background/40 px-4 py-3">
+              <div key={term} className="rounded-md border border-border/40 px-4 py-3" style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}>
                 <dt className="font-mono text-[11px] font-bold uppercase tracking-[0.12em] text-amber-400">
                   {term}
                 </dt>
-                <dd className="mt-1.5 font-mono text-xs leading-relaxed text-foreground/80">
+                <dd className="mt-1.5 font-mono text-xs leading-relaxed" style={{ color: 'color-mix(in oklch, var(--text) 80%, transparent)' }}>
                   {definition}
                 </dd>
                 {seeAlso && (
-                  <dd className="mt-1.5 font-mono text-[10px] text-muted-foreground/60">
+                  <dd className="mt-1.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
                     See also: {seeAlso}
                   </dd>
                 )}
