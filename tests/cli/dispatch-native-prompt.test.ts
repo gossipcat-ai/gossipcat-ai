@@ -855,3 +855,99 @@ describe('handleDispatchConsensus — Option B isolation snapshot capture', () =
     expect(entries.every(e => e.isolationSnapshot === undefined)).toBe(true);
   });
 });
+
+/**
+ * Spec 2026-05-22 worktree-isolation-prompt-hardening: harden the dispatch
+ * banner so isolation:"worktree" cannot be silently dropped by the orchestrator
+ * LLM. Tests assert: (a) standalone "Worktree isolation: REQUIRED" banner line
+ * appears iff write_mode === 'worktree', across single/parallel/consensus
+ * paths; (b) when prompt_format === 'elided' AND write_mode === 'worktree',
+ * the on-disk prompt file begins with the // GOSSIP_ISOLATION header.
+ */
+describe('worktree-isolation prompt hardening (spec 2026-05-22)', () => {
+  let skillDir: string;
+  let prevCwd: string;
+
+  beforeEach(() => {
+    prevCwd = process.cwd();
+    skillDir = mkdtempSync(join(tmpdir(), 'gossip-wt-hardening-'));
+    mkdirSync(join(skillDir, '.gossip', 'skills'), { recursive: true });
+    // useWorktree only triggers inside a git repo. Init one so the banner path
+    // actually fires.
+    execSync('git init -q', { cwd: skillDir });
+    process.chdir(skillDir);
+    resetCtx();
+    ctx.nativeAgentConfigs.set('native-claude', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You are a reviewer.',
+      description: 'Native reviewer',
+      skills: [],
+    });
+  });
+
+  afterEach(() => {
+    restoreCtx();
+    process.chdir(prevCwd);
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it('single-dispatch banner contains Worktree isolation: REQUIRED when write_mode=worktree', async () => {
+    const result = await handleDispatchSingle('native-claude', 'Audit x', 'worktree');
+    const orchestratorText = result.content[0].text;
+    expect(orchestratorText).toContain('Worktree isolation: REQUIRED');
+    expect(orchestratorText).toContain('isolation: "worktree",           // REQUIRED — do not omit');
+  });
+
+  it('single-dispatch banner does NOT contain Worktree isolation: REQUIRED when write_mode is absent', async () => {
+    const result = await handleDispatchSingle('native-claude', 'Audit x');
+    const orchestratorText = result.content[0].text;
+    expect(orchestratorText).not.toContain('Worktree isolation: REQUIRED');
+  });
+
+  it('parallel-dispatch banner contains Worktree isolation: REQUIRED per worktree task', async () => {
+    const result = await handleDispatchParallel([
+      { agent_id: 'native-claude', task: 'Audit A', write_mode: 'worktree' },
+      { agent_id: 'native-claude', task: 'Audit B' },
+    ], false);
+    const orchestratorText = result.content[0].text;
+    // Worktree task → banner present.
+    expect(orchestratorText).toContain('Worktree isolation: REQUIRED');
+    // Multi-line Agent() template fired for worktree task.
+    expect(orchestratorText).toContain('isolation: "worktree",           // REQUIRED — do not omit');
+  });
+
+  it('consensus-dispatch banner contains Worktree isolation: REQUIRED when write_mode=worktree (closes latent gap)', async () => {
+    const result = await handleDispatchConsensus([
+      { agent_id: 'native-claude', task: 'Audit consensus', write_mode: 'worktree' },
+    ]);
+    const orchestratorText = result.content[0].text;
+    expect(orchestratorText).toContain('Worktree isolation: REQUIRED');
+    expect(orchestratorText).toContain('isolation: "worktree",           // REQUIRED — do not omit');
+  });
+
+  it('elided prompt file begins with // GOSSIP_ISOLATION header when write_mode=worktree', async () => {
+    const result = await handleDispatchSingle(
+      'native-claude', 'Audit elided', 'worktree',
+      undefined, undefined, undefined, undefined, undefined, 'elided',
+    );
+    // Marker in Item 1 cites the on-disk file. Read that file and assert header.
+    const orchestratorText = result.content[0].text;
+    const pathMatch = orchestratorText.match(/see (\S+\.txt),/);
+    expect(pathMatch).not.toBeNull();
+    const promptFile = readFileSync(pathMatch![1], 'utf8');
+    expect(promptFile.startsWith('// GOSSIP_ISOLATION: worktree\n')).toBe(true);
+    expect(promptFile).toContain('// The orchestrator MUST invoke Agent() with isolation: "worktree".');
+  });
+
+  it('elided prompt file does NOT contain GOSSIP_ISOLATION header when write_mode is sequential', async () => {
+    const result = await handleDispatchSingle(
+      'native-claude', 'Audit elided seq', undefined,
+      undefined, undefined, undefined, undefined, undefined, 'elided',
+    );
+    const orchestratorText = result.content[0].text;
+    const pathMatch = orchestratorText.match(/see (\S+\.txt),/);
+    expect(pathMatch).not.toBeNull();
+    const promptFile = readFileSync(pathMatch![1], 'utf8');
+    expect(promptFile.startsWith('// GOSSIP_ISOLATION')).toBe(false);
+  });
+});
