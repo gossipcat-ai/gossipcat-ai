@@ -89,10 +89,25 @@ export function elidePromptIfRequested(
   agentPrompt: string,
   promptFormat: PromptFormat | undefined,
   warmCached: boolean = false,
+  // string instead of union: parallel/consensus pass through def.write_mode
+  // which is typed as `string` upstream. The actual gate is `=== 'worktree'`
+  // so any other value is treated as "no header" — fail-safe.
+  writeMode?: string,
 ): { elided: true; promptPath: string; marker: string; bytes: number } | { elided: false } {
   if (promptFormat !== 'elided') return { elided: false };
-  const bytes = Buffer.byteLength(agentPrompt, 'utf8');
-  const promptPath = writeDispatchPrompt(projectRoot, taskId, agentPrompt);
+  // Spec 2026-05-22 worktree-isolation-prompt-hardening Change 3: when the
+  // dispatch is in worktree mode, prepend a structural header to the on-disk
+  // prompt body. The header survives even if the orchestrator paraphrases the
+  // Item 1 banner, anchoring the isolation contract in the prompt file itself.
+  const body = writeMode === 'worktree'
+    ? `// GOSSIP_ISOLATION: worktree\n` +
+      `// This task was dispatched with write_mode: "worktree".\n` +
+      `// The orchestrator MUST invoke Agent() with isolation: "worktree".\n` +
+      `// Do not paraphrase this requirement.\n\n` +
+      agentPrompt
+    : agentPrompt;
+  const bytes = Buffer.byteLength(body, 'utf8');
+  const promptPath = writeDispatchPrompt(projectRoot, taskId, body);
   const warmSuffix = warmCached ? ' — warm-cached (skills) + live task' : '';
   const marker = `[skills section elided: see ${promptPath}, ${bytes} bytes${warmSuffix} — READ this file and pass its CONTENTS verbatim as the Agent(prompt: ...) value. Do NOT pass the path string.]`;
   return { elided: true, promptPath, marker, bytes };
@@ -692,7 +707,14 @@ export async function handleDispatchSingle(
     // Spec §1 iron rule: strict opt-in elision. When prompt_format='elided',
     // write the prompt body to disk and emit a marker in Item 1; OMIT Item 2.
     // When undefined/'inline': behavior is byte-identical to pre-PR dispatch.
-    const elision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format, singleWarm);
+    // Pre-merge consensus 2026-05-22: pass EFFECTIVE worktree mode (post
+    // git-repo downgrade at L685-692), not raw write_mode. Otherwise a non-git
+    // dispatch with write_mode='worktree' produces a contradictory packet:
+    // on-disk header demands isolation while the banner+Agent() call omit it.
+    const elision = elidePromptIfRequested(
+      process.cwd(), taskId, agentPrompt, prompt_format, singleWarm,
+      useWorktree ? 'worktree' : undefined,
+    );
     if (elision.elided) {
       const info = ctx.nativeTaskMap.get(taskId);
       if (info) info.promptPath = elision.promptPath;
@@ -700,11 +722,21 @@ export async function handleDispatchSingle(
     // Persist after elision so promptPath is durable across /mcp reconnect.
     persistNativeTaskMap();
 
+    // Spec 2026-05-22: when useWorktree, emit Agent() as a multi-line structurally
+    // separated template so the orchestrator LLM cannot drop isolation:"worktree"
+    // as a mid-tuple paraphrase. Non-worktree dispatches keep the single-line shape.
+    const promptRef = elision.elided ? '<file contents>' : `<AGENT_PROMPT:${taskId} below>`;
+    const agentCall = useWorktree
+      ? `Agent(\n` +
+        `  model: "${nativeConfig.model}",\n` +
+        `  prompt: ${promptRef},\n` +
+        `  isolation: "worktree",           // REQUIRED — do not omit\n` +
+        `  run_in_background: true\n` +
+        `)`
+      : `Agent(model: "${nativeConfig.model}", prompt: ${promptRef}, run_in_background: true)`;
     const promptInstruction = (elision.elided
-      ? `Step 1 — ${elision.marker}\n` +
-        `Agent(model: "${nativeConfig.model}", prompt: <file contents>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n`
-      : `Step 1 — Pass the AGENT_PROMPT:${taskId} content item below verbatim to Agent(prompt: ...):\n` +
-        `Agent(model: "${nativeConfig.model}", prompt: <AGENT_PROMPT:${taskId} below>${useWorktree ? ', isolation: "worktree"' : ''}, run_in_background: true)\n\n`);
+      ? `Step 1 — ${elision.marker}\n${agentCall}\n\n`
+      : `Step 1 — Pass the AGENT_PROMPT:${taskId} content item below verbatim to Agent(prompt: ...):\n${agentCall}\n\n`);
 
     // Split into two content items so relay_token stays in orchestrator-only text
     // and AGENT_PROMPT is passed verbatim to Agent(prompt: ...).
@@ -715,7 +747,8 @@ export async function handleDispatchSingle(
         `NATIVE_DISPATCH: Execute this via Claude Code Agent tool, then relay the result.\n\n` +
         `Task ID: ${taskId}\n` +
         `Agent: ${agent_id}\n` +
-        `Model: ${nativeConfig.model}\n\n` +
+        `Model: ${nativeConfig.model}\n` +
+        (useWorktree ? `Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"\n\n` : `\n`) +
         promptInstruction +
         `Step 2 — REQUIRED after agent completes:\n` +
         `gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<agent output>")\n` +
@@ -1060,7 +1093,7 @@ export async function handleDispatchParallel(
 
     // Spec §1 strict opt-in. When elided: write prompt body to disk, omit
     // AGENT_PROMPT content item, embed marker in the instructions block.
-    const parallelElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format, parallelWarm);
+    const parallelElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format, parallelWarm, def.write_mode);
     if (parallelElision.elided) {
       const info = ctx.nativeTaskMap.get(taskId);
       if (info) info.promptPath = parallelElision.promptPath;
@@ -1069,9 +1102,22 @@ export async function handleDispatchParallel(
       ? parallelElision.marker
       : `<AGENT_PROMPT:${taskId} below>`;
 
+    const parallelUseWorktree = def.write_mode === 'worktree';
+    const parallelWorktreeBanner = parallelUseWorktree
+      ? `\n  Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"`
+      : '';
+    const parallelAgentCall = parallelUseWorktree
+      ? `Agent(\n` +
+        `  model: "${nativeConfig.model}",\n` +
+        `  prompt: ${parallelPromptRef},\n` +
+        `  isolation: "worktree",           // REQUIRED — do not omit\n` +
+        `  run_in_background: true\n` +
+        `)`
+      : `Agent(model: "${nativeConfig.model}", prompt: ${parallelPromptRef}, run_in_background: true)`;
+
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
     nativeInstructions.push(
-      `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: ${parallelPromptRef}${def.write_mode === 'worktree' ? ', isolation: "worktree"' : ''}, run_in_background: true)` +
+      `[${taskId}] ${parallelAgentCall}${parallelWorktreeBanner}` +
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
     );
     // Item 2 ABSENT under elision — orchestrator MUST Read the cited path.
@@ -1349,7 +1395,7 @@ export async function handleDispatchConsensus(
 
     // Spec §1 strict opt-in. When 'elided', the per-task AGENT_PROMPT item is
     // omitted and the on-disk path is cited inline in the Agent() instruction.
-    const consensusElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format, consensusWarm);
+    const consensusElision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format, consensusWarm, def.write_mode);
     if (consensusElision.elided) {
       const info = ctx.nativeTaskMap.get(taskId);
       if (info) info.promptPath = consensusElision.promptPath;
@@ -1359,9 +1405,25 @@ export async function handleDispatchConsensus(
       ? consensusElision.marker
       : `<AGENT_PROMPT:${taskId} below>`;
 
+    // Spec 2026-05-22: this consensus-dispatch site previously did NOT emit
+    // isolation:"worktree" at all (latent gap from before write_mode existed in
+    // the consensus path). Closing the gap and applying multi-line hardening.
+    const consensusUseWorktree = def.write_mode === 'worktree';
+    const consensusWorktreeBanner = consensusUseWorktree
+      ? `\n  Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"`
+      : '';
+    const consensusAgentCall = consensusUseWorktree
+      ? `Agent(\n` +
+        `  model: "${nativeConfig.model}",\n` +
+        `  prompt: ${consensusPromptRef},\n` +
+        `  isolation: "worktree",           // REQUIRED — do not omit\n` +
+        `  run_in_background: true\n` +
+        `)`
+      : `Agent(model: "${nativeConfig.model}", prompt: ${consensusPromptRef}, run_in_background: true)`;
+
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
     nativeInstructions.push(
-      `[${taskId}] Agent(model: "${nativeConfig.model}", prompt: ${consensusPromptRef}, run_in_background: true)` +
+      `[${taskId}] ${consensusAgentCall}${consensusWorktreeBanner}` +
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
     );
     // Item 2 ABSENT under elision (spec §2) — no skeleton/placeholder.
