@@ -4,6 +4,18 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.4.31] — 2026-05-22
+
+Fixes a recurring silent-failure mode where `Agent(isolation:"worktree")` dispatches sometimes didn't engage the worktree sandbox — subagents wrote directly to the parent checkout. Three-agent consensus session diagnosed the root cause: the `isolation: "worktree"` parameter was emitted as a conditional string fragment mid-tuple in the dispatch banner (`apps/cli/src/handlers/dispatch.ts:705,707`), exactly the position where LLMs drop keyword args during paraphrase. Two prior fix designs ("Inverted Gate" PreToolUse-hook denial, "Dispatch-Time Probe" new MCP tool) were proposed and rejected during the session — both solved a different layer than the actual bug.
+
+### Fixed
+
+- **Worktree-isolation prompt emission hardening** (PR #450, commit `ca97a5f`). Three structural changes to `apps/cli/src/handlers/dispatch.ts` make `isolation: "worktree"` undroppable: (1) standalone `Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"` banner field, parallel to Task ID/Agent/Model, emitted only when `useWorktree` is the effective state; (2) multi-line `Agent()` template that places `isolation: "worktree", // REQUIRED — do not omit` on its own line instead of mid-tuple — non-worktree dispatches keep the single-line shape, so no regression; (3) `// GOSSIP_ISOLATION: worktree` four-line header prepended to the elided prompt file (`.gossip/dispatch-prompts/<taskId>.txt`) when `write_mode='worktree'`, anchoring the contract in the prompt body itself for `prompt_format: 'elided'` dispatches. Closes a **latent gap** in `handleDispatchConsensus` that previously did not emit `isolation: "worktree"` at all when `write_mode='worktree'`. Pre-merge consensus (sonnet-reviewer + opus-implementer) caught a contradictory-packet bug fixed in fixup `dccc0c1`: `elidePromptIfRequested` now receives effective `useWorktree` (post git-repo downgrade) rather than raw `write_mode`, preventing the on-disk header from contradicting the banner+Agent() call on non-git-repo dispatches. 7 new tests in `tests/cli/dispatch-native-prompt.test.ts` cover all three dispatch paths (single/parallel/consensus) plus elided-positive, elided-negative, and the non-git-repo silent-downgrade case. Option B post-relay detection (`worktree-isolation-detection.ts`) and PR #436 concurrent-worktree-taint stay unchanged as the safety net — this PR adds emission-side hardening, not a replacement for the detection layer.
+
+### Migration
+
+No code changes required. Internal dispatch banner format change only — no public API surface affected.
+
 ## [0.4.30] — 2026-05-22
 
 Adds consensus auto-verify — an opt-in feature that automatically dispatches a verifier agent to `file_read`-check every UNVERIFIED finding before the consensus report is returned, eliminating the manual CLAUDE.md orchestrator-side rule's "forgetting" and "inconsistency" failure modes. Off by default. Spec went through 6 consensus rounds across rev-1 → rev-6 (21+ HIGH findings caught and resolved) before approval.
