@@ -85,15 +85,14 @@ The core difference: gossipcat verifies findings against actual `file:line` cita
 
 ## Real-world session
 
-What a typical gossipcat session looks like in practice (2026-04-29):
+What a typical gossipcat session looks like in practice (2026-05-22, v0.4.30 ship):
 
-- **2 PRs shipped** — #317 (env-scrub fix, e180d41) and #318 (test hardening, cac57db), both through full consensus before merge
-- **1 consensus round** on PR #317 — round `591af14b-3f674c9c`, 9 confirmed / 0 disputed findings
-- **1 stale backlog item correctly identified** — write-time insight filter was already shipped in a prior session; the `verify-the-premise` skill caught it before sonnet-implementer started redundant implementation work
-- **1 spec correctly deferred** — age-based archive pruning: full scan found 0 candidates meeting the threshold; design locked in docs, not built (right call)
-- **1 hallucination caught** on haiku-researcher — extrapolated from a 50-row sample when the full dataset was needed; `hallucination_caught` signal recorded, accuracy score updated, no fix shipped on bad data
+- **1 feature shipped end-to-end** — consensus auto-verify (PR #448, master commit `4b28a1c`, 1255+ LOC, 50/50 new tests, zero regressions). Full design ↔ ship arc through gossipcat itself: 6 consensus rounds on the spec before any code was written.
+- **6 consensus rounds on the spec** caught **21+ HIGH-severity defects** across rev-1 → rev-6 — including a double-dispatch bug on the `run()` path (rev-3, opus-implementer), a phantom `AgentTeam` type the implementer would have invented if shipped (rev-5, sonnet-reviewer grep-grounded against live `AgentConfig`), and a `metadata` field that didn't exist on `ConsensusSignal` at all (rev-4, sonnet — `metadata` lives only on `MetaSignal` / `PipelineSignal`). Each round produced a measurable rev: rev-1 had 4 HIGHs, rev-6 had 0.
+- **1 post-merge bug caught by a pre-existing drift test** — `signal-allowlist-drift.test.ts:108` (which exists precisely to catch this — same failure mode as PR #329's silent-drop of `transport_failure`) flagged that the implementer added the 2 new signals to `KNOWN_SIGNALS` + the type union + `OPERATIONAL_SIGNAL_NAMES` but missed `VALID_CONSENSUS_SIGNALS` in `performance-writer.ts`. 7-line fix landed in the same PR before merge.
+- **Methodology lesson recorded** — sonnet-reviewer's habit of grepping cited file:line against live code (rather than trusting prose claims) is what ultimately closed the spec. Recorded as a `citation_grounding` agreement signal so the agent's pattern compounds across sessions.
 
-The signal pipeline ran the whole session. Nothing landed without cross-review. One agent's score dropped for the sample-extrapolation error.
+Nothing landed without cross-review. Two agents got `+/-` score adjustments based on what they caught vs. what they missed. The spec is now usable as a worked example of what 6 rounds of multi-agent design review looks like — `docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md`.
 
 <br/>
 
@@ -147,6 +146,12 @@ Real-time view of tasks, consensus reports, agent scores, and activity feed. Ter
 <td align="center">
 <h3>Agent Memory</h3>
 Per-agent cognitive memory persists across sessions. Agents remember past findings, patterns, and project context.
+</td>
+</tr>
+<tr>
+<td align="center" colspan="3">
+<h3>Auto-Verify (v0.4.30)</h3>
+Opt-in. Every UNVERIFIED finding gets <code>file_read</code>-checked by a verifier agent before the report is returned. <code>tag</code> stays <code>'unverified'</code> — auto-verify is metadata, not state transition. Flag: <code>GOSSIP_CONSENSUS_AUTO_VERIFY_UNVERIFIED=1</code>.
 </td>
 </tr>
 </table>
