@@ -244,7 +244,7 @@ export async function runSetupWizard(): Promise<void> {
       mcpServers: {
         gossipcat: {
           command: 'npx',
-          args: ['gossipcat-mcp'],
+          args: ['gossipcat', 'mcp'],
           cwd: process.cwd(),
         },
       },
