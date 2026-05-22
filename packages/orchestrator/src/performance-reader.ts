@@ -157,6 +157,13 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   // Agent(isolation:"worktree") dispatch leaves the parent checkout dirty.
   // No-op for accuracy / uniqueness — surfaces in dashboards/operational counters only.
   worktree_isolation_failed: true,
+  // Consensus auto-verify telemetry. Per-finding `auto_verify_attempted`
+  // carries `findingId` + `evidence` (display-only); round-level
+  // `auto_verify_skipped_misconfigured` is emitted once per round at flag-ON
+  // when no verifier could be wired. Both are operational no-ops for scoring.
+  // Spec: docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md.
+  auto_verify_attempted: true,
+  auto_verify_skipped_misconfigured: true,
 };
 
 const SEVERITY_MULTIPLIER: Record<string, number> = {
@@ -1059,6 +1066,29 @@ export class PerformanceReader {
           // Sandbox policy violation — recorded for observability, zero weight.
           // Kept out of NEGATIVE_SIGNALS so scope events don't feed the circuit breaker.
           break;
+        // ── Operational-no-op signals — backfilled in the consensus-auto-verify
+        //    PR (spec docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md
+        //    §Implementation surface §Audit step). `signal_retracted` and
+        //    `consensus_round_retracted` are runtime-filtered at :871-872 above
+        //    via early `continue`, so TypeScript narrows them out before
+        //    reaching this switch — they intentionally do NOT have arms here.
+        //    The three below were previously falling through to no-op (no
+        //    arm); the implementation PR audit confirmed each `appendSignal`
+        //    call site treats them as round-level observability with no
+        //    scoring contract.
+        case 'severity_miscalibrated':
+        case 'consensus_coverage_degraded':
+        case 'worktree_isolation_failed':
+        case 'auto_verify_attempted':
+        case 'auto_verify_skipped_misconfigured':
+          break;
+        default: {
+          // Exhaustiveness: any new ConsensusSignal['signal'] member added to
+          // the union without a matching arm above is a compile error.
+          const _exhaustive: never = signal.signal;
+          void _exhaustive;
+          break;
+        }
       }
     }
 

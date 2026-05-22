@@ -22,6 +22,20 @@ export interface ConsensusFinding {
     reason: string;
   }>;
   confidence: number; // 1-5, averaged from cross-review responses
+  /**
+   * Auto-verify stamp written by the consensus-auto-verify pipeline when the
+   * `GOSSIP_CONSENSUS_AUTO_VERIFY_UNVERIFIED` flag is enabled. Present ONLY on
+   * findings with `tag === 'unverified'` that the verifier attempted to
+   * resolve. The `tag` itself remains `'unverified'` regardless of verdict —
+   * see spec docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md.
+   */
+  autoVerify?: {
+    attempted: true;
+    verdict: 'confirmed' | 'refuted' | 'inconclusive';
+    evidence: string;
+    dispatchedAt: string;
+    durationMs: number;
+  };
 }
 
 /** A new finding discovered during cross-review */
@@ -196,7 +210,25 @@ export interface ConsensusSignal {
      * the parent checkout instead of its isolated worktree. Detection-only;
      * no automatic recovery.
      */
-    | 'worktree_isolation_failed';
+    | 'worktree_isolation_failed'
+    /**
+     * Operational per-finding signal recorded for each UNVERIFIED finding that
+     * the consensus auto-verify pipeline attempted to resolve. Carries
+     * `findingId` and `evidence` in the
+     * `auto_verify_attempted:<verdict>:<durationMs>ms` shape — DISPLAY ONLY;
+     * downstream consumers MUST back-join to `finding.autoVerify`. See
+     * docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md. No-op
+     * for scoring.
+     */
+    | 'auto_verify_attempted'
+    /**
+     * One-shot round-level signal emitted when the auto-verify feature flag is
+     * ON but the engine could not run — `verifierDispatch` is unwired, the
+     * operator override names a missing/unsuitable agent, or the team has no
+     * suitable verifier. Closed `<reason>` union documented at the spec.
+     * No-op for scoring.
+     */
+    | 'auto_verify_skipped_misconfigured';
   agentId: string;
   counterpartId?: string;
   skill?: string;
@@ -366,7 +398,24 @@ export const OPERATIONAL_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'unverified',
   'transport_failure',
   'worktree_isolation_failed',
+  'auto_verify_attempted',
+  'auto_verify_skipped_misconfigured',
 ]);
+
+/**
+ * Relay-warning ledger entry written to `.gossip/relay-warnings.jsonl` by
+ * `appendRelayWarning` (in `native-tasks.ts`) and by `ConsensusEngine`'s
+ * fail-open auto-verify dispatch path. Exported so cli construction sites can
+ * inline the writer with a typed payload.
+ */
+export interface RelayWarningEntry {
+  taskId: string;
+  agentId: string;
+  reason: string;
+  resultLength: number;
+  suspectedReason: string;
+  timestamp: string;
+}
 
 export function classifySignal(signalName: string): SignalClass | undefined {
   if (PERFORMANCE_SIGNAL_NAMES.has(signalName)) return 'performance';

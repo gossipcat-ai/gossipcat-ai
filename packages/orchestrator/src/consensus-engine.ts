@@ -12,7 +12,9 @@ function shortConsensusId(): string {
 import { LLMMessage, ToolDefinition } from '@gossip/types';
 import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
-import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry } from './consensus-types';
+import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry, RelayWarningEntry } from './consensus-types';
+import { autoVerifyUnverifiedFindings, buildSkipSignal, type AutoVerifiableFinding } from './consensus-auto-verify';
+import { getRuntimeFlagBool } from './runtime-config';
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
 import { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
 import { extractCategories, isValidCategory } from './category-extractor';
@@ -118,6 +120,23 @@ export interface ConsensusEngineConfig {
    * Issue #126 / PR-B.
    */
   resolutionRoots?: readonly string[];
+  /**
+   * Verifier dispatcher resolved by the cli layer via `discoverVerifier(team)`
+   * (spec docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md).
+   * When omitted AND `GOSSIP_CONSENSUS_AUTO_VERIFY_UNVERIFIED='1'`, the engine
+   * silently-skips auto-verify and emits one `auto_verify_skipped_misconfigured`
+   * signal directly to `report.signals` (NOT through `warningSink`).
+   */
+  verifierDispatch?: (agentId: string, task: string) => Promise<string>;
+  /**
+   * Warning sink for fail-open auto-verify dispatch errors (quota-429, network
+   * failure, timeout chain). NOT used for misconfig — those go straight to
+   * `report.signals`. The cli construction site inlines the writer using the
+   * same `{taskId, agentId, reason, resultLength, suspectedReason, timestamp}`
+   * shape that `appendRelayWarning` in `native-tasks.ts` produces, so existing
+   * aggregators of `.gossip/relay-warnings.jsonl` keep working.
+   */
+  warningSink?: (entry: RelayWarningEntry) => void;
 }
 
 export class ConsensusEngine {
@@ -368,6 +387,70 @@ export class ConsensusEngine {
     return truncated;
   }
 
+  /**
+   * Auto-verify UNVERIFIED findings against the actual code. Gated by
+   * `GOSSIP_CONSENSUS_AUTO_VERIFY_UNVERIFIED`. When the gate is OFF, returns
+   * the input unchanged and emits no signals. When the gate is ON but
+   * `verifierDispatch` is unwired, returns the input unchanged and pushes one
+   * `auto_verify_skipped_misconfigured` signal directly to `signals` (NOT
+   * routed through `warningSink`). Fail-open: any dispatch error during the
+   * batch is caught here and routed to `warningSink` (when wired) with the
+   * `auto_verify_failed` reason; synthesis continues with the original input.
+   *
+   * Spec: docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md.
+   */
+  private async maybeAutoVerify(
+    unverified: ConsensusFinding[],
+    signals: ConsensusSignal[],
+    consensusId: string,
+    utilityTaskIdSeed: string,
+  ): Promise<ConsensusFinding[]> {
+    if (!getRuntimeFlagBool('GOSSIP_CONSENSUS_AUTO_VERIFY_UNVERIFIED')) {
+      return unverified;
+    }
+    const dispatch = this.config.verifierDispatch;
+    const warningSink = this.config.warningSink;
+    if (!dispatch) {
+      process.stderr.write(
+        '[gossipcat] auto-verify flag is ON but verifierDispatch is not wired; skipping.\n',
+      );
+      signals.push(buildSkipSignal({
+        consensusId,
+        utilityTaskIdSeed,
+        reason: 'verifierDispatch_unwired',
+      }));
+      return unverified;
+    }
+    try {
+      const result = await autoVerifyUnverifiedFindings(unverified as AutoVerifiableFinding[], {
+        dispatch,
+        concurrency: 5,
+        timeoutMs: 30000,
+        consensusId,
+        utilityTaskIdSeed,
+        projectRoot: this.config.projectRoot,
+      });
+      signals.push(...result.signals);
+      return result.findings as ConsensusFinding[];
+    } catch (err) {
+      if (warningSink) {
+        warningSink({
+          reason: 'auto_verify_failed',
+          suspectedReason: String((err as Error)?.message ?? err).slice(0, 512),
+          resultLength: unverified.length,
+          taskId: `${utilityTaskIdSeed}:auto-verify:error`,
+          agentId: '_utility',
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        process.stderr.write(
+          `[gossipcat] auto-verify dispatch failed (no warningSink wired): ${String((err as Error)?.message ?? err).slice(0, 200)}\n`,
+        );
+      }
+      return unverified;
+    }
+  }
+
   async run(results: TaskEntry[]): Promise<ConsensusReport> {
     const successful = results.filter(r => r.status === 'completed' && r.result);
     if (successful.length < 2) {
@@ -403,6 +486,20 @@ export class ConsensusEngine {
     const totalMs = Date.now() - consensusStart;
     const timing = { totalMs, perAgent, crossReviewMs, synthesizeMs };
     _log('consensus', `Total: ${Math.round(totalMs / 1000)}s (cross-review: ${Math.round(crossReviewMs / 1000)}s, synthesis: ${Math.round(synthesizeMs / 1000)}s)`);
+    // Auto-verify UNVERIFIED findings against actual code (gated by
+    // GOSSIP_CONSENSUS_AUTO_VERIFY_UNVERIFIED). SINGLE call site for the
+    // feature. Mutates `report.unverified` (each finding gains an
+    // `autoVerify` stamp) and pushes per-finding signals onto `report.signals`
+    // before `formatReport` consumes the enriched list.
+    // Spec: docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md.
+    const enriched = await this.maybeAutoVerify(
+      report.unverified,
+      report.signals,
+      consensusId,
+      consensusId,
+    );
+    report.unverified = enriched;
+
     // Always regenerate report with timing data
     report.summary = this.formatReport(report.confirmed, report.disputed, report.unverified, report.unique, report.newFindings, successful.length, report.rounds, timing, report.insights);
 
