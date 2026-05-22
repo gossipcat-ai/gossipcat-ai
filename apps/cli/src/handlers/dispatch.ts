@@ -89,6 +89,9 @@ export function elidePromptIfRequested(
   agentPrompt: string,
   promptFormat: PromptFormat | undefined,
   warmCached: boolean = false,
+  // string instead of union: parallel/consensus pass through def.write_mode
+  // which is typed as `string` upstream. The actual gate is `=== 'worktree'`
+  // so any other value is treated as "no header" — fail-safe.
   writeMode?: string,
 ): { elided: true; promptPath: string; marker: string; bytes: number } | { elided: false } {
   if (promptFormat !== 'elided') return { elided: false };
@@ -704,7 +707,14 @@ export async function handleDispatchSingle(
     // Spec §1 iron rule: strict opt-in elision. When prompt_format='elided',
     // write the prompt body to disk and emit a marker in Item 1; OMIT Item 2.
     // When undefined/'inline': behavior is byte-identical to pre-PR dispatch.
-    const elision = elidePromptIfRequested(process.cwd(), taskId, agentPrompt, prompt_format, singleWarm, write_mode);
+    // Pre-merge consensus 2026-05-22: pass EFFECTIVE worktree mode (post
+    // git-repo downgrade at L685-692), not raw write_mode. Otherwise a non-git
+    // dispatch with write_mode='worktree' produces a contradictory packet:
+    // on-disk header demands isolation while the banner+Agent() call omit it.
+    const elision = elidePromptIfRequested(
+      process.cwd(), taskId, agentPrompt, prompt_format, singleWarm,
+      useWorktree ? 'worktree' : undefined,
+    );
     if (elision.elided) {
       const info = ctx.nativeTaskMap.get(taskId);
       if (info) info.promptPath = elision.promptPath;
@@ -1098,11 +1108,11 @@ export async function handleDispatchParallel(
       : '';
     const parallelAgentCall = parallelUseWorktree
       ? `Agent(\n` +
-        `    model: "${nativeConfig.model}",\n` +
-        `    prompt: ${parallelPromptRef},\n` +
-        `    isolation: "worktree",           // REQUIRED — do not omit\n` +
-        `    run_in_background: true\n` +
-        `  )`
+        `  model: "${nativeConfig.model}",\n` +
+        `  prompt: ${parallelPromptRef},\n` +
+        `  isolation: "worktree",           // REQUIRED — do not omit\n` +
+        `  run_in_background: true\n` +
+        `)`
       : `Agent(model: "${nativeConfig.model}", prompt: ${parallelPromptRef}, run_in_background: true)`;
 
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
@@ -1404,11 +1414,11 @@ export async function handleDispatchConsensus(
       : '';
     const consensusAgentCall = consensusUseWorktree
       ? `Agent(\n` +
-        `    model: "${nativeConfig.model}",\n` +
-        `    prompt: ${consensusPromptRef},\n` +
-        `    isolation: "worktree",           // REQUIRED — do not omit\n` +
-        `    run_in_background: true\n` +
-        `  )`
+        `  model: "${nativeConfig.model}",\n` +
+        `  prompt: ${consensusPromptRef},\n` +
+        `  isolation: "worktree",           // REQUIRED — do not omit\n` +
+        `  run_in_background: true\n` +
+        `)`
       : `Agent(model: "${nativeConfig.model}", prompt: ${consensusPromptRef}, run_in_background: true)`;
 
     lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);

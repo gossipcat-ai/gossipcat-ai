@@ -939,6 +939,34 @@ describe('worktree-isolation prompt hardening (spec 2026-05-22)', () => {
     expect(promptFile).toContain('// The orchestrator MUST invoke Agent() with isolation: "worktree".');
   });
 
+  it('non-git-repo single dispatch with write_mode=worktree silently downgrades (no banner, no header)', async () => {
+    // Pre-merge consensus fix: dispatch.ts:685-692 downgrades useWorktree to
+    // false in non-git-repos. The elided header must also gate on the same
+    // effective state, otherwise the on-disk file contradicts the banner.
+    // Build a fresh dir WITHOUT git init.
+    const nonGitDir = mkdtempSync(join(tmpdir(), 'gossip-nogit-'));
+    mkdirSync(join(nonGitDir, '.gossip', 'skills'), { recursive: true });
+    const restoreCwd = process.cwd();
+    process.chdir(nonGitDir);
+    try {
+      const result = await handleDispatchSingle(
+        'native-claude', 'Audit nogit', 'worktree',
+        undefined, undefined, undefined, undefined, undefined, 'elided',
+      );
+      const orchestratorText = result.content[0].text;
+      // useWorktree downgraded → banner absent, Agent() single-line.
+      expect(orchestratorText).not.toContain('Worktree isolation: REQUIRED');
+      // On-disk header must also be absent (consistency with the banner).
+      const pathMatch = orchestratorText.match(/see (\S+\.txt),/);
+      expect(pathMatch).not.toBeNull();
+      const promptFile = readFileSync(pathMatch![1], 'utf8');
+      expect(promptFile.startsWith('// GOSSIP_ISOLATION')).toBe(false);
+    } finally {
+      process.chdir(restoreCwd);
+      rmSync(nonGitDir, { recursive: true, force: true });
+    }
+  });
+
   it('elided prompt file does NOT contain GOSSIP_ISOLATION header when write_mode is sequential', async () => {
     const result = await handleDispatchSingle(
       'native-claude', 'Audit elided seq', undefined,
