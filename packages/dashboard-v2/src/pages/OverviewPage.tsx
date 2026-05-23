@@ -5,8 +5,12 @@ import { TasksSection } from '@/components/TasksSection';
 import { RecentSignalsPeek } from '@/components/RecentSignalsPeek';
 import { AgentNetworkGraph } from '@/components/AgentNetworkGraph';
 import { GraphRail } from '@/components/GraphRail';
+import { NarrativeStripe } from '@/components/NarrativeStripe';
+import { TemporalScrubber } from '@/components/TemporalScrubber';
 import { usePeerRelationships } from '@/hooks/usePeerRelationships';
 import { useUrlAgentParam } from '@/hooks/useUrlAgentParam';
+import { useUrlRangeParam } from '@/hooks/useUrlRangeParam';
+import { useGlobalAgentKeys } from '@/hooks/useGlobalAgentKeys';
 import { isGraphBeta } from '@/lib/feature-flags';
 import { href } from '@/lib/router';
 import type { OverviewData, AgentData, TasksData, ConsensusData } from '@/lib/types';
@@ -41,28 +45,37 @@ export function OverviewPage({
   const peerRelationships = usePeerRelationships(consensus?.runs);
   // Phase 1b PR4 — selection state moved to ?agent= URL param for deep-linking.
   const [selectedAgentId, setSelectedAgentId] = useUrlAgentParam();
+  // Phase 1b PR5 — ?range= for TemporalScrubber + global ⏎/G shortcuts.
+  const [range, setRange] = useUrlRangeParam();
+  useGlobalAgentKeys(selectedAgentId);
   const selectedAgent = agents && selectedAgentId
     ? agents.find((a) => a.id === selectedAgentId) ?? null
     : null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
-      {/* Phase 1b PR3+PR4 — AgentNetworkGraph + GraphRail side-by-side behind ?graph=1. */}
+      {/* Phase 1b PR3+PR4+PR5 — Graph + Rail + NarrativeStripe + TemporalScrubber, all behind ?graph=1. */}
       {showGraph && agents && (
-        <div className="flex gap-3">
-          <div className="min-w-0 flex-1">
-            <AgentNetworkGraph
+        <div className="space-y-3">
+          <NarrativeStripe />
+          <div className="flex gap-3">
+            <div className="min-w-0 flex-1">
+              <AgentNetworkGraph
+                agents={agents}
+                peerRelationships={peerRelationships}
+                selectedAgentId={selectedAgentId}
+                onSelectAgent={setSelectedAgentId}
+              />
+            </div>
+            <GraphRail
+              selectedAgent={selectedAgent}
               agents={agents}
               peerRelationships={peerRelationships}
-              selectedAgentId={selectedAgentId}
-              onSelectAgent={setSelectedAgentId}
             />
           </div>
-          <GraphRail
-            selectedAgent={selectedAgent}
-            agents={agents}
-            peerRelationships={peerRelationships}
-          />
+          {consensus && (
+            <TemporalScrubber runs={consensus.runs} range={range} onRangeChange={setRange} />
+          )}
         </div>
       )}
       {/* Page header */}
