@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { VortexEngine } from '@/lib/vortex-engine';
 import { agentColor } from '@/lib/utils';
+import { subscribe } from '@/lib/animation-scheduler';
 
 interface NeuralAvatarProps {
   agentId: string;
@@ -27,7 +28,6 @@ export function NeuralAvatar({
 }: NeuralAvatarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<VortexEngine | null>(null);
-  const rafRef = useRef<number>(0);
   const visibleRef = useRef(true);
 
   useEffect(() => {
@@ -45,17 +45,15 @@ export function NeuralAvatar({
     engineRef.current = engine;
     engine.draw();
 
-    const loop = () => {
+    const unsubscribe = subscribe((deltaMs) => {
       if (visibleRef.current) {
-        engine.update(16);
+        engine.update(deltaMs);
         engine.draw();
       }
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
+    });
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
+      unsubscribe();
       engineRef.current = null;
     };
   }, [agentId, size, signals, accuracy, uniqueness, impact]);
