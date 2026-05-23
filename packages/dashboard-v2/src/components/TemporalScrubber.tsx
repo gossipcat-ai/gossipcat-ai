@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { bucketize, BUCKET_COUNT } from '@/lib/histogram';
+import { useEffect, useMemo, useState } from 'react';
+import { bucketize, BUCKET_COUNT, rangeWindowMs } from '@/lib/histogram';
 import type { Range } from '@/lib/range-param';
 import type { ConsensusRun } from '@/lib/types';
 
@@ -12,7 +12,25 @@ interface TemporalScrubberProps {
 
 const RANGES: Range[] = ['1h', '24h', '7d', '30d'];
 
+/** Human label for the left flank — "1 hour ago" / "24 hours ago" / "7 days ago" / "30 days ago". */
+const RANGE_AGO_LABEL: Record<Range, string> = {
+  '1h': '1h ago',
+  '24h': '24h ago',
+  '7d': '7d ago',
+  '30d': '30d ago',
+};
+
 export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: TemporalScrubberProps) {
+  // `nowMs` ticks at the bucket interval so the histogram doesn't freeze
+  // while real time advances without new data. One bucket-width per tick
+  // is sufficient — finer resolution would re-render needlessly.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const bucketMs = rangeWindowMs(range) / BUCKET_COUNT;
+    const id = window.setInterval(() => setNowMs(Date.now()), bucketMs);
+    return () => window.clearInterval(id);
+  }, [range]);
+
   const buckets = useMemo(() => {
     // Each round contributes signals.length timestamps (using the round's ts).
     const timestamps: string[] = [];
@@ -20,8 +38,8 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
       const n = r.signals?.length ?? 0;
       for (let i = 0; i < n; i++) timestamps.push(r.timestamp);
     }
-    return bucketize(timestamps, range, Date.now());
-  }, [runs, range]);
+    return bucketize(timestamps, range, nowMs);
+  }, [runs, range, nowMs]);
 
   const max = Math.max(1, ...buckets);
 
@@ -33,6 +51,7 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
       <div className="font-mono text-[9px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-faint)' }}>
         Signal volume
       </div>
+      <span className="font-mono text-[9px] tabular-nums" style={{ color: 'var(--text-faint)' }}>{RANGE_AGO_LABEL[range]}</span>
       <svg
         viewBox={`0 0 ${BUCKET_COUNT} 1`}
         preserveAspectRatio="none"
@@ -49,11 +68,12 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
               width={0.8}
               height={Math.max(h, c > 0 ? 0.04 : 0)}
               fill="currentColor"
-              opacity={c === 0 ? 0.08 : 0.85}
+              opacity={c === 0 ? 0.15 : 0.85}
             />
           );
         })}
       </svg>
+      <span className="font-mono text-[9px] tabular-nums" style={{ color: 'var(--text-faint)' }}>now</span>
       <div className="flex gap-1">
         {RANGES.map((r) => {
           const active = r === range;
@@ -62,6 +82,7 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
               key={r}
               type="button"
               onClick={() => onRangeChange(r)}
+              aria-pressed={active}
               className="rounded px-2 py-0.5 font-mono text-[10px] transition"
               style={{
                 background: active ? 'color-mix(in oklch, var(--accent) 10%, transparent)' : 'transparent',

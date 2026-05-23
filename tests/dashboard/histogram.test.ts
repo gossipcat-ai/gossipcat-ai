@@ -61,4 +61,34 @@ describe('bucketize', () => {
     const total = buckets.reduce((a, b) => a + b, 0);
     expect(total).toBeLessThanOrEqual(1);
   });
+
+  // --- Boundary cases added per PR #458 sonnet-reviewer consensus ---
+
+  it('includes a timestamp exactly at nowMs (right boundary, clamped to last bucket)', () => {
+    const now = new Date('2026-05-23T12:00:00Z').getTime();
+    const buckets = bucketize([new Date(now).toISOString()], '24h', now);
+    expect(buckets[23]).toBe(1);
+    expect(buckets.slice(0, 23).every((b) => b === 0)).toBe(true);
+  });
+
+  it('includes a timestamp exactly at start (oldest boundary, lands in bucket 0)', () => {
+    const now = new Date('2026-05-23T12:00:00Z').getTime();
+    const start = now - 24 * 3600_000;
+    const buckets = bucketize([new Date(start).toISOString()], '24h', now);
+    expect(buckets[0]).toBe(1);
+    expect(buckets.slice(1).every((b) => b === 0)).toBe(true);
+  });
+
+  it('excludes a timestamp one ms after nowMs', () => {
+    const now = new Date('2026-05-23T12:00:00Z').getTime();
+    const buckets = bucketize([new Date(now + 1).toISOString()], '24h', now);
+    expect(buckets.every((b) => b === 0)).toBe(true);
+  });
+
+  it('excludes a timestamp one ms before start', () => {
+    const now = new Date('2026-05-23T12:00:00Z').getTime();
+    const start = now - 24 * 3600_000;
+    const buckets = bucketize([new Date(start - 1).toISOString()], '24h', now);
+    expect(buckets.every((b) => b === 0)).toBe(true);
+  });
 });

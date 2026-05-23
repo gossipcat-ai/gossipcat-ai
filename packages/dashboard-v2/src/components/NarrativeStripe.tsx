@@ -36,8 +36,10 @@ export function NarrativeStripe() {
       timeoutRef.current = window.setTimeout(clear, STRIPE_TIMEOUT_MS) as unknown as number;
       return;
     }
+    // Narrow via discriminated union — all three terminal variants in
+    // DashboardEvent expose `taskId`, so no cast is needed.
     if (event.type === 'consensus_complete' || event.type === 'task_completed' || event.type === 'task_failed') {
-      if (event.type !== 'consensus_complete' && (event as { taskId?: string }).taskId !== activeTaskId) return;
+      if (event.taskId !== activeTaskId) return;
       clear();
     }
   });
@@ -70,14 +72,19 @@ export function NarrativeStripe() {
           → <span style={{ color: 'var(--text)' }}>{activeAgentId}</span>
         </span>
       )}
-      <span className="ml-auto" style={{ color: 'var(--text-faint)' }}>live</span>
-
-      <style>{`
-        @keyframes beat-pulse-narrative {
-          0%, 100% { opacity: 1; }
-          50%      { opacity: 0.72; }
-        }
-      `}</style>
+      <button
+        type="button"
+        onClick={() => {
+          // Scroll the consensus rounds section into view if it exists.
+          // The actual per-round drill-in is deferred to a future PR.
+          const el = document.getElementById('consensus-rounds-section');
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }}
+        className="ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] transition hover:[background:color-mix(in_oklch,var(--accent)_12%,transparent)]"
+        style={{ color: 'var(--text-faint)', cursor: 'pointer' }}
+      >
+        watch ↓
+      </button>
     </div>
   );
 }

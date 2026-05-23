@@ -9,11 +9,18 @@ import { navigate } from '@/lib/router';
  *
  * Skips when focus is in an editable element so typing isn't hijacked.
  */
+/** ARIA roles that imply text input on otherwise-non-editable elements. */
+const EDITABLE_ROLES = new Set(['textbox', 'combobox', 'listbox', 'spinbutton', 'searchbox']);
+
 function isEditable(t: EventTarget | null): boolean {
   if (!(t instanceof Element)) return false;
   const tag = t.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
-  return (t as HTMLElement).isContentEditable === true;
+  if ((t as HTMLElement).isContentEditable === true) return true;
+  // Rich-text editors and custom widgets often render as <div role="textbox">
+  // with their own contenteditable management; respect their input contract.
+  const role = t.getAttribute('role');
+  return role !== null && EDITABLE_ROLES.has(role);
 }
 
 export function useGlobalAgentKeys(selectedAgentId: string | null): void {

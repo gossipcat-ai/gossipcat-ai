@@ -12,12 +12,20 @@ export function useUrlRangeParam(): readonly [Range, (r: Range | null) => void] 
   });
 
   useEffect(() => {
+    // Canonicalize on mount — write the default ?range=7d if absent so the
+    // URL is shareable from the first render (otherwise a freshly-loaded
+    // visitor's URL won't reflect their current range until they manually
+    // pick a different one).
+    if (typeof window !== 'undefined' && getRangeParam(window.location.search) === null) {
+      setRangeParam(r);
+    }
     const sync = () => {
       const next = typeof window === 'undefined' ? '7d' : (getRangeParam(window.location.search) ?? '7d');
       setR((prev) => (prev === next ? prev : next));
     };
     window.addEventListener('dashboard:navigate', sync as EventListener);
     return () => window.removeEventListener('dashboard:navigate', sync as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps — `r` is captured intentionally on mount only
   }, []);
 
   return [r, setRangeParam] as const;
