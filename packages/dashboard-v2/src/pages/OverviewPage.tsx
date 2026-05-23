@@ -1,11 +1,12 @@
-import { useState } from 'react';
 import { SystemPulse } from '@/components/SystemPulse';
 import { ActiveTasksBanner } from '@/components/ActiveTasksBanner';
 import { TeamHero } from '@/components/TeamHero';
 import { TasksSection } from '@/components/TasksSection';
 import { RecentSignalsPeek } from '@/components/RecentSignalsPeek';
 import { AgentNetworkGraph } from '@/components/AgentNetworkGraph';
+import { GraphRail } from '@/components/GraphRail';
 import { usePeerRelationships } from '@/hooks/usePeerRelationships';
+import { useUrlAgentParam } from '@/hooks/useUrlAgentParam';
 import { isGraphBeta } from '@/lib/feature-flags';
 import { href } from '@/lib/router';
 import type { OverviewData, AgentData, TasksData, ConsensusData } from '@/lib/types';
@@ -38,18 +39,31 @@ export function OverviewPage({
   const actionable = overview.actionableFindings;
   const showGraph = isGraphBeta();
   const peerRelationships = usePeerRelationships(consensus?.runs);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  // Phase 1b PR4 — selection state moved to ?agent= URL param for deep-linking.
+  const [selectedAgentId, setSelectedAgentId] = useUrlAgentParam();
+  const selectedAgent = agents && selectedAgentId
+    ? agents.find((a) => a.id === selectedAgentId) ?? null
+    : null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
-      {/* Phase 1b PR3 — AgentNetworkGraph behind ?graph=1 flag, ABOVE existing widgets. */}
+      {/* Phase 1b PR3+PR4 — AgentNetworkGraph + GraphRail side-by-side behind ?graph=1. */}
       {showGraph && agents && (
-        <AgentNetworkGraph
-          agents={agents}
-          peerRelationships={peerRelationships}
-          selectedAgentId={selectedAgentId}
-          onSelectAgent={setSelectedAgentId}
-        />
+        <div className="flex gap-3">
+          <div className="min-w-0 flex-1">
+            <AgentNetworkGraph
+              agents={agents}
+              peerRelationships={peerRelationships}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={setSelectedAgentId}
+            />
+          </div>
+          <GraphRail
+            selectedAgent={selectedAgent}
+            agents={agents}
+            peerRelationships={peerRelationships}
+          />
+        </div>
       )}
       {/* Page header */}
       <header>
