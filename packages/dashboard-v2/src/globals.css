@@ -140,6 +140,21 @@
   --s-8: 64px;
 }
 
+/* DESIGN.md section header signature (small-caps Geist).
+   Replaces the legacy `font-mono text-[11px] font-bold uppercase tracking-widest` pattern.
+   Step 2 of the application checklist rolls this out across every existing header.
+   This PR only applies it to TeamHero as a smoke test. */
+.h-section {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  font-variant: small-caps;
+  color: var(--ink-2);
+}
+
 :root {
   --shadow-overlay: 0 24px 64px -16px rgba(31, 31, 29, 0.32), 0 0 0 1px rgba(31, 31, 29, 0.04);
   --shadow-overlay-hairline: 0 0 0 1px rgba(31, 31, 29, 0.02);
