@@ -178,4 +178,58 @@ describe('aggregatePeerRelationships', () => {
     expect(rel.lastInteraction).toBe('2026-05-23T10:00:00Z');
     expect(rel.rounds).toBe(1);
   });
+
+  // --- Regressions from PR #454 sonnet-reviewer consensus (4ad05e8) ---
+
+  it('counts impl_peer_approved as confirmed (write-mode peer code-review verdict)', () => {
+    const map = aggregatePeerRelationships([
+      run('t1', '2026-05-23T10:00:00Z', ['reviewer', 'implementer'], [
+        { signal: 'impl_peer_approved', agentId: 'reviewer', counterpartId: 'implementer' },
+      ]),
+    ]);
+    expect(map.get(peerKey('reviewer', 'implementer'))!.confirmed).toBe(1);
+  });
+
+  it('counts impl_peer_rejected as disputed (write-mode peer code-review verdict)', () => {
+    const map = aggregatePeerRelationships([
+      run('t1', '2026-05-23T10:00:00Z', ['reviewer', 'implementer'], [
+        { signal: 'impl_peer_rejected', agentId: 'reviewer', counterpartId: 'implementer' },
+      ]),
+    ]);
+    expect(map.get(peerKey('reviewer', 'implementer'))!.disputed).toBe(1);
+  });
+
+  it('skips retracted rounds entirely (matches App.tsx visibleRuns filter)', () => {
+    const map = aggregatePeerRelationships([
+      { ...run('t1', '2026-05-23T10:00:00Z', ['a', 'b'], [
+        { signal: 'agreement', agentId: 'a', counterpartId: 'b' },
+      ]), retracted: true, retractedAt: '2026-05-23T10:30:00Z', retractionReason: 'test' },
+      run('t2', '2026-05-23T11:00:00Z', ['a', 'b'], [
+        { signal: 'agreement', agentId: 'a', counterpartId: 'b' },
+      ]),
+    ]);
+    // Retracted t1 must not contribute; only t2 counts.
+    const rel = map.get(peerKey('a', 'b'))!;
+    expect(rel.confirmed).toBe(1);
+    expect(rel.rounds).toBe(1);
+    expect(rel.lastInteraction).toBe('2026-05-23T11:00:00Z');
+  });
+
+  it('skips signals with empty-string counterpartId (would create phantom map keys)', () => {
+    const map = aggregatePeerRelationships([
+      run('t1', '2026-05-23T10:00:00Z', ['a'], [
+        { signal: 'agreement', agentId: 'a', counterpartId: '' },
+      ]),
+    ]);
+    expect(map.size).toBe(0);
+  });
+
+  it('skips signals with empty-string agentId (would create phantom map keys)', () => {
+    const map = aggregatePeerRelationships([
+      run('t1', '2026-05-23T10:00:00Z', ['', 'b'], [
+        { signal: 'agreement', agentId: '', counterpartId: 'b' },
+      ]),
+    ]);
+    expect(map.size).toBe(0);
+  });
 });

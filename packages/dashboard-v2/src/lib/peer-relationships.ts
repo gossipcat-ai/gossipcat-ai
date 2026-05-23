@@ -8,10 +8,23 @@ export function peerKey(a: string, b: string): string {
   return a <= b ? `${a}::${b}` : `${b}::${a}`;
 }
 
-/** Signal types that count as confirming the pair (trust). */
-const CONFIRMED_SIGNALS = new Set<string>(['agreement', 'unique_confirmed']);
-/** Signal types that count as disputed (mixed). */
-const DISPUTED_SIGNALS = new Set<string>(['disagreement']);
+/**
+ * Signal types that count as confirming the pair (trust).
+ * `agreement` + `unique_confirmed` are cross-review verdicts; `impl_peer_approved`
+ * is the write-mode peer code-review approval (counterpartId enforced server-side
+ * at apps/cli/src/mcp-server-sdk.ts:2826 — always carries a peer relationship).
+ */
+const CONFIRMED_SIGNALS = new Set<string>([
+  'agreement',
+  'unique_confirmed',
+  'impl_peer_approved',
+]);
+/**
+ * Signal types that count as disputed (mixed).
+ * `disagreement` is the cross-review counterpart; `impl_peer_rejected` is the
+ * write-mode peer code-review rejection (counterpartId-bearing).
+ */
+const DISPUTED_SIGNALS = new Set<string>(['disagreement', 'impl_peer_rejected']);
 /** Signal types that count as a hallucination catch (adversarial). */
 const CATCH_SIGNALS = new Set<string>(['hallucination_caught']);
 
@@ -20,8 +33,9 @@ const CATCH_SIGNALS = new Set<string>(['hallucination_caught']);
  * function — same input always produces the same Map. Memoized at the hook
  * layer; do not memoize here.
  *
- * Skips signals that don't describe a peer relationship:
- *   - signals missing counterpartId (e.g. impl_test_pass, unique_unconfirmed without peer)
+ * Skips:
+ *   - retracted rounds (matches App.tsx:visibleRuns filter pattern)
+ *   - signals missing counterpartId OR agentId (or empty strings)
  *   - signal types not in CONFIRMED/DISPUTED/CATCH (e.g. new_finding, insights)
  */
 export function aggregatePeerRelationships(runs: ConsensusRun[]): PeerRelationshipMap {
@@ -30,8 +44,10 @@ export function aggregatePeerRelationships(runs: ConsensusRun[]): PeerRelationsh
   const seenRoundsByPair = new Map<string, Set<string>>();
 
   for (const round of runs) {
+    if (round.retracted) continue;
     for (const sig of round.signals) {
-      if (!sig.counterpartId) continue;
+      // Both ids required and non-empty — empty-string would produce phantom map keys.
+      if (!sig.counterpartId || !sig.agentId) continue;
       const isConfirmed = CONFIRMED_SIGNALS.has(sig.signal);
       const isDisputed = DISPUTED_SIGNALS.has(sig.signal);
       const isCatch = CATCH_SIGNALS.has(sig.signal);
