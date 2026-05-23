@@ -15,7 +15,7 @@ export function TeamRoster({ agents }: TeamRosterProps) {
   return (
     <section>
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h2 className="h-section">
           Team <span style={{ color: 'var(--accent)' }}>{agents.length}</span>
         </h2>
         <a href="/dashboard/team" className="font-mono text-xs transition" style={{ color: 'var(--text-dim)' }}>
@@ -35,7 +35,7 @@ export function TeamRoster({ agents }: TeamRosterProps) {
             { label: 'Acc', value: s.accuracy, fill: s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed' },
             { label: 'Rel', value: s.taskCompletionRate ?? 0, fill: 'bg-chart', tooltip: 'Reliability — fraction of dispatched tasks that finished without pipeline error or timeout' },
             { label: 'Unq', value: s.uniqueness, fill: 'bg-unique' },
-            { label: 'Imp', value: s.impactScore, fill: 'bg-[var(--accent)]' },
+            { label: 'Imp', value: s.impactScore, fill: 'bg-[var(--c3)]' },
           ];
 
           return (

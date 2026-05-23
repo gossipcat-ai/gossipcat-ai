@@ -25,7 +25,7 @@ export function SkillVerdictsSnapshot({ overview }: { overview: OverviewData | n
   return (
     <section className="rounded-lg border border-border p-4" style={{ background: 'var(--surface-elev)' }}>
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h3 className="h-section">
           Skill Verdicts
         </h3>
         <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>{total} total</span>

@@ -162,7 +162,7 @@ export function LogsPage() {
   return (
     <>
       <div className="mb-4 flex items-center gap-3">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h2 className="h-section">
           MCP Log <span style={{ color: 'var(--accent)' }}>{totalLines} lines</span>
         </h2>
         <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>

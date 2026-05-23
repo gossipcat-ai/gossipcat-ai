@@ -41,7 +41,7 @@ export function SignalFilterRail({ filters, onChange, agents, signalTypes }: Pro
   return (
     <aside className="space-y-3 rounded-md border border-border/60 p-3" style={{ background: 'color-mix(in oklch, var(--surface-elev) 70%, transparent)' }}>
       <div className="flex items-center justify-between">
-        <h2 className="font-mono text-[11px] font-semibold uppercase tracking-widest" style={{ color: 'var(--accent)' }}>Filters</h2>
+        <h2 className="h-section">Filters</h2>
         <button
           type="button"
           className="font-mono text-[9px]"

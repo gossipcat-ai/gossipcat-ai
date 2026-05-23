@@ -117,7 +117,7 @@ export function AgentNetworkGraph({
         style={{ height, background: 'var(--stage-bg)', borderColor: 'var(--border)', color: 'var(--stage-text-dim)' }}
       >
         <div className="text-center">
-          <div className="mb-2 font-mono text-sm font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          <div className="mb-2 h-section">
             No agents configured
           </div>
           <div className="font-mono text-xs">Run <code>gossip_setup</code> to spin up the fleet.</div>
@@ -222,8 +222,8 @@ function HubSpokeGraph({
     >
       {/* Header label — adapts to mode. */}
       <div
-        className="absolute z-10 flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-widest"
-        style={{ top: 10, left: 12, color: 'var(--stage-text-dim)', pointerEvents: 'none' }}
+        className="absolute z-10 flex items-center gap-2 h-section"
+        style={{ top: 10, left: 12, pointerEvents: 'none' }}
       >
         {selectedAgentId ? (
           <>

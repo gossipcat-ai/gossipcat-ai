@@ -250,7 +250,7 @@ export function SignalsPage() {
     <div className="space-y-4">
       <div className="flex items-baseline justify-between">
         <div>
-          <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Signals</h1>
+          <h1 className="h-section">Signals</h1>
           <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Scored events emitted by agents during consensus review.</p>
           <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
             {headerLabel} — showing {rows.length} of {total}

@@ -85,7 +85,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
         <div className="max-h-[calc(100vh-220px)] space-y-5 overflow-y-auto px-5 py-4">
           {/* Task prompt — rendered as markdown */}
           <section>
-            <h3 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+            <h3 className="mb-2 h-section">
               Task
             </h3>
             <div
@@ -98,7 +98,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
           {/* Result */}
           {task.result ? (
             <section>
-              <h3 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+              <h3 className="mb-2 h-section">
                 Result
               </h3>
               <div
@@ -109,7 +109,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
             </section>
           ) : (
             <section>
-              <h3 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+              <h3 className="mb-2 h-section">
                 Result
               </h3>
               <div className="rounded-md border border-border/40 p-3 text-center font-mono text-xs" style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)', color: 'var(--text-dim)' }}>

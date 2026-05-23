@@ -38,7 +38,7 @@ export function RecentSignalsPeek() {
   return (
     <section className="rounded-lg border border-border p-4" style={{ background: 'var(--surface-elev)' }}>
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Recent Signals</h3>
+        <h3 className="h-section">Recent Signals</h3>
         <button
           type="button"
           onClick={() => navigate('/signals')}

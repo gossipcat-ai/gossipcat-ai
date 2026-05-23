@@ -125,7 +125,7 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
     <div ref={containerRef} className="rounded-md border border-border/40 px-4 py-3" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+          <span className="h-section">
             Signal Timeline
           </span>
           <span className="font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>

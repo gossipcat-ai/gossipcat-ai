@@ -341,7 +341,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
     <section>
       {!hideHeader && (
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          <h2 className="h-section">
             Consensus Rounds <span style={{ color: 'var(--accent)' }}>{consensus.totalRuns ?? consensus.runs.length}</span>
           </h2>
           {!showAll && (
@@ -461,7 +461,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               <div key={report.id}>
                 {showBucketHeader && (
                   <div className={`mb-2 flex items-center gap-3 ${_i > 0 ? 'mt-4' : ''}`}>
-                    <span className="font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+                    <span className="h-section">
                       {currentBucket}
                     </span>
                     <div className="h-px flex-1 bg-border/30" />
@@ -671,7 +671,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       const underReviewed = coverage.filter(c => c.assigned < c.targetK);
                       return (
                         <details className="mb-3 rounded-md border border-border/30" style={{ background: 'color-mix(in oklch, var(--surface-elev) 30%, transparent)' }}>
-                          <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-widest select-none" style={{ color: 'var(--text-dim)' }}>
+                          <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 h-section select-none">
                             Cross-Review Assignments
                             {report.partialReview && (
                               <span className="rounded border border-unverified/15 bg-unverified/5 px-1.5 py-0.5 font-mono text-[9px] font-bold normal-case tracking-normal text-unverified">

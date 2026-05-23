@@ -17,7 +17,7 @@ export function TeamSection({ agents }: TeamSectionProps) {
   return (
     <section>
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h2 className="h-section">
           Team <span style={{ color: 'var(--accent)' }}>{agents.length} agents</span>
         </h2>
         {hasMore && (
