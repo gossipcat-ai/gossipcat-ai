@@ -21,7 +21,7 @@ export function AuthGate({ onLogin, error }: AuthGateProps) {
 
   return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--surface)' }}>
-      <div className="w-full max-w-sm rounded-xl border border-border p-8 text-center shadow-2xl" style={{ background: 'var(--surface-elev)' }}>
+      <div className="w-full max-w-sm rounded-xl border [border-color:var(--border)] p-8 text-center shadow-2xl" style={{ background: 'var(--surface-elev)' }}>
         {/* Logo with CRT hover effect */}
         <div className="crt-logo mx-auto mb-4" style={{ width: 'fit-content' }}>
           <img
@@ -56,7 +56,7 @@ export function AuthGate({ onLogin, error }: AuthGateProps) {
             onChange={(e) => setKey(e.target.value)}
             placeholder="Dashboard key"
             autoFocus
-            className="w-full rounded-lg border border-border px-4 py-3 font-mono text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+            className="w-full rounded-lg border [border-color:var(--border)] px-4 py-3 font-mono text-sm outline-none focus:[border-color:var(--accent)] focus:ring-2 focus:[--tw-ring-color:color-mix(in_oklch,var(--accent)_20%,transparent)]"
             style={{ background: 'var(--surface)', color: 'var(--text)' }}
           />
           <button
@@ -69,7 +69,7 @@ export function AuthGate({ onLogin, error }: AuthGateProps) {
         </form>
 
         {error && (
-          <p className="mt-3 text-sm text-destructive">
+          <p className="mt-3 text-sm" style={{ color: 'var(--danger)' }}>
             Invalid key. Check your terminal for the correct key.
           </p>
         )}

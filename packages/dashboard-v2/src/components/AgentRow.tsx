@@ -15,7 +15,7 @@ export function AgentRow({ agent }: AgentRowProps) {
   return (
     <button
       onClick={() => { navigate('/agent/' + encodeURIComponent(agent.id)); }}
-      className="group flex min-w-0 flex-1 flex-col items-center rounded-lg border border-border p-4 text-center transition hover:border-primary/30 hover:bg-accent/10"
+      className="group flex min-w-0 flex-1 flex-col items-center rounded-lg border [border-color:var(--border)] p-4 text-center transition hover:[border-color:color-mix(in_oklch,var(--accent)_30%,transparent)] hover:bg-accent/10"
       style={{ background: 'var(--surface-elev)' }}
     >
       {/* Avatar with portal glow */}
@@ -41,8 +41,8 @@ export function AgentRow({ agent }: AgentRowProps) {
 
       {/* Badge */}
       <span
-        className={`mt-1 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-semibold ${agent.native ? '' : 'text-confirmed bg-confirmed/10'}`}
-        style={agent.native ? { color: 'var(--accent)', background: 'color-mix(in oklch, var(--accent) 10%, transparent)' } : undefined}
+        className="mt-1 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-semibold"
+        style={agent.native ? { color: 'var(--accent)', background: 'color-mix(in oklch, var(--accent) 10%, transparent)' } : { color: 'var(--success)', background: 'color-mix(in oklch, var(--success) 10%, transparent)' }}
       >
         {agent.native ? 'NATIVE' : 'RELAY'}
       </span>
@@ -55,7 +55,7 @@ export function AgentRow({ agent }: AgentRowProps) {
         {s.signals > 0 ? (
           <>
             <div className="flex items-center justify-center gap-1.5">
-              <span className="text-confirmed">{Math.round(s.accuracy * 100)}% acc</span>
+              <span style={{ color: 'var(--success)' }}>{Math.round(s.accuracy * 100)}% acc</span>
               <span style={{ color: 'var(--text-dim)' }}>·</span>
               <span className="text-unique">{Math.round(s.uniqueness * 100)}% uniq</span>
             </div>

@@ -96,20 +96,20 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
     <>
       {/* Header with summary stats */}
       <div className="mb-6">
-        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Team <span className="ml-2 text-primary">{agents.length}</span>
+        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          Team <span className="ml-2" style={{ color: 'var(--accent)' }}>{agents.length}</span>
         </h1>
-        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Per-agent accuracy, signal counts, and dispatch weights.</p>
-        <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border/40 bg-border/30 sm:grid-cols-4">
+        <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Per-agent accuracy, signal counts, and dispatch weights.</p>
+        <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border [background:color-mix(in_oklch,var(--border)_30%,transparent)] sm:grid-cols-4">
           {[
-            { label: 'Healthy', value: healthy, color: 'text-confirmed' },
-            { label: 'Benched', value: circuitOpen, color: circuitOpen > 0 ? 'text-destructive' : 'text-muted-foreground' },
-            { label: 'Total Signals', value: totalSignals.toLocaleString(), color: 'text-foreground' },
-            { label: 'Tokens Used', value: totalTokens.toLocaleString(), color: 'text-foreground' },
+            { label: 'Healthy', value: healthy, varColor: 'var(--success)' },
+            { label: 'Benched', value: circuitOpen, varColor: circuitOpen > 0 ? 'var(--danger)' : 'var(--text-dim)' },
+            { label: 'Total Signals', value: totalSignals.toLocaleString(), varColor: 'var(--text)' },
+            { label: 'Tokens Used', value: totalTokens.toLocaleString(), varColor: 'var(--text)' },
           ].map((stat) => (
-            <div key={stat.label} className="bg-card/80 px-4 py-3">
-              <div className={`font-mono text-lg font-bold tabular-nums ${stat.color}`}>{stat.value}</div>
-              <div className="mt-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">{stat.label}</div>
+            <div key={stat.label} style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }} className="px-4 py-3">
+              <div className="font-mono text-lg font-bold tabular-nums" style={{ color: stat.varColor }}>{stat.value}</div>
+              <div className="mt-0.5 font-mono text-[10px] uppercase tracking-wider" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>{stat.label}</div>
             </div>
           ))}
         </div>
@@ -122,12 +122,13 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search agents by id, provider, or model..."
-          className="w-full max-w-md rounded-md border border-border/40 bg-card/80 px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-primary/40 focus:outline-none"
+          className="w-full max-w-md rounded-md [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border px-3 py-1.5 font-mono text-xs focus:[border-color:color-mix(in_oklch,var(--accent)_40%,transparent)] focus:outline-none"
+          style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)', color: 'var(--text)' }}
         />
       </div>
 
       {/* Leaderboard table */}
-      <div className="overflow-hidden rounded-md border border-border/40 bg-card/80">
+      <div className="overflow-hidden rounded-md [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
         <table className="w-full text-left">
           <colgroup>
             <col style={{ width: 44 }} />
@@ -139,38 +140,38 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
             <col />
           </colgroup>
           <thead>
-            <tr className="border-b border-border/40 bg-muted/20 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80">
+            <tr className="border-b [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] font-mono text-[10px] uppercase tracking-wider" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 20%, transparent)', color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>
               <th className="py-2.5 pl-5 pr-2 text-center">#</th>
               <th className="py-2.5 pr-3 text-left">Agent</th>
-              <th className="py-2.5 pr-4 text-right cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort('weight')}>
+              <th className="py-2.5 pr-4 text-right cursor-pointer select-none hover:[color:var(--text)]" onClick={() => toggleSort('weight')}>
                 Weight {arrow('weight')}
               </th>
               <th className="py-2.5 pr-4 text-left align-top">
                 <div className="flex items-center gap-2 text-[10px]">
-                  <button onClick={() => toggleSort('accuracy')} className="flex items-center gap-1 hover:text-foreground" data-tooltip="Accuracy — fraction of findings confirmed by cross-review (with hallucination penalty)">
+                  <button onClick={() => toggleSort('accuracy')} className="flex items-center gap-1 hover:[color:var(--text)]" data-tooltip="Accuracy — fraction of findings confirmed by cross-review (with hallucination penalty)">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-confirmed" />Acc{arrow('accuracy')}
                   </button>
-                  <span className="text-muted-foreground/30">·</span>
-                  <button onClick={() => toggleSort('uniqueness')} className="flex items-center gap-1 hover:text-foreground" data-tooltip="Uniqueness — findings this agent surfaced that no peer found">
+                  <span style={{ color: 'color-mix(in oklch, var(--text-dim) 30%, transparent)' }}>·</span>
+                  <button onClick={() => toggleSort('uniqueness')} className="flex items-center gap-1 hover:[color:var(--text)]" data-tooltip="Uniqueness — findings this agent surfaced that no peer found">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-unique" />Unq{arrow('uniqueness')}
                   </button>
-                  <span className="text-muted-foreground/30">·</span>
-                  <button onClick={() => toggleSort('impact')} className="flex items-center gap-1 hover:text-foreground" data-tooltip="Impact — severity-weighted finding score">
+                  <span style={{ color: 'color-mix(in oklch, var(--text-dim) 30%, transparent)' }}>·</span>
+                  <button onClick={() => toggleSort('impact')} className="flex items-center gap-1 hover:[color:var(--text)]" data-tooltip="Impact — severity-weighted finding score">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />Imp{arrow('impact')}
                   </button>
                 </div>
               </th>
-              <th className="py-2.5 pr-4 text-right cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort('signals')}>
+              <th className="py-2.5 pr-4 text-right cursor-pointer select-none hover:[color:var(--text)]" onClick={() => toggleSort('signals')}>
                 Signals {arrow('signals')}
               </th>
               <th
-                className="py-2.5 pr-4 text-right cursor-pointer select-none hover:text-foreground"
+                className="py-2.5 pr-4 text-right cursor-pointer select-none hover:[color:var(--text)]"
                 onClick={() => toggleSort('hallucinations')}
                 data-tooltip="Hallucinations — fabricated findings caught by cross-review"
               >
                 Halluc {arrow('hallucinations')}
               </th>
-              <th className="py-2.5 pr-5 text-left cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort('lastTask')}>
+              <th className="py-2.5 pr-5 text-left cursor-pointer select-none hover:[color:var(--text)]" onClick={() => toggleSort('lastTask')}>
                 Last Task {arrow('lastTask')}
               </th>
             </tr>
@@ -179,21 +180,25 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
             {sorted.map((agent, i) => {
               const s = agent.scores;
               const lt = lastTaskByAgent.get(agent.id);
-              const weightColor = s.dispatchWeight >= 1.2 ? 'text-confirmed' : s.dispatchWeight >= 0.8 ? 'text-foreground' : 'text-disputed';
+              const weightColor = s.dispatchWeight >= 1.2 ? 'var(--success)' : s.dispatchWeight >= 0.8 ? 'var(--text)' : 'var(--danger)';
               const rankDisplay = i + 1;
 
               return (
                 <tr
                   key={agent.id}
-                  className="group border-t border-border/20 align-top transition-colors hover:bg-accent/20"
+                  className="group border-t [border-color:color-mix(in_oklch,var(--border)_20%,transparent)] align-top transition-colors hover:bg-accent/20"
                 >
                   {/* Rank */}
                   <td className="py-3 pl-5 pr-2 text-center align-top">
-                    <span className={`font-mono text-[11px] tabular-nums ${
-                      rankDisplay === 1 ? 'font-bold text-primary' :
-                      rankDisplay === 2 || rankDisplay === 3 ? 'font-semibold text-foreground/80' :
-                      'text-muted-foreground/40'
-                    }`}>{rankDisplay}</span>
+                    <span
+                      className="font-mono text-[11px] tabular-nums"
+                      style={{
+                        color: rankDisplay === 1 ? 'var(--accent)' :
+                               rankDisplay === 2 || rankDisplay === 3 ? 'color-mix(in oklch, var(--text) 80%, transparent)' :
+                               'color-mix(in oklch, var(--text-dim) 40%, transparent)',
+                        fontWeight: rankDisplay === 1 ? 'bold' : rankDisplay <= 3 ? 600 : undefined,
+                      }}
+                    >{rankDisplay}</span>
                   </td>
 
                   {/* Agent */}
@@ -209,12 +214,13 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                       />
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className="truncate font-mono text-xs font-semibold text-foreground group-hover:text-primary">{agent.id}</span>
+                          <span className="truncate font-mono text-xs font-semibold group-hover:[color:var(--accent)]" style={{ color: 'var(--text)' }}>{agent.id}</span>
                           {(() => {
                             const kind = getBenchBadgeKind(s);
                             if (kind === 'benched') return (
                               <span
-                                className="shrink-0 rounded bg-destructive/15 px-1 font-mono text-[8px] font-bold uppercase tracking-wider text-destructive"
+                                className="shrink-0 rounded px-1 font-mono text-[8px] font-bold uppercase tracking-wider"
+                                style={{ background: 'color-mix(in oklch, var(--danger) 15%, transparent)', color: 'var(--danger)' }}
                                 data-tooltip={`Benched (${s.bench.reason ?? 'auto'}). Excluded from dispatch until recovery.`}
                               >benched</span>
                             );
@@ -233,7 +239,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                             return null;
                           })()}
                         </div>
-                        <div className="truncate font-mono text-[10px] text-muted-foreground/50">
+                        <div className="truncate font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                           {agent.provider}/{agent.model}
                         </div>
                       </div>
@@ -242,7 +248,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
 
                   {/* Weight */}
                   <td className="py-3 pr-4 text-right align-top">
-                    <span className={`font-mono text-sm font-bold tabular-nums ${weightColor}`}>{s.dispatchWeight.toFixed(2)}</span>
+                    <span className="font-mono text-sm font-bold tabular-nums" style={{ color: weightColor }}>{s.dispatchWeight.toFixed(2)}</span>
                   </td>
 
                   {/* Metrics: four mini bars stacked — Acc / Rel / Unq / Imp */}
@@ -261,14 +267,14 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                   </td>
 
                   {/* Signals */}
-                  <td className="py-3 pr-4 text-right align-top font-mono text-xs tabular-nums text-foreground">
+                  <td className="py-3 pr-4 text-right align-top font-mono text-xs tabular-nums" style={{ color: 'var(--text)' }}>
                     {s.signals.toLocaleString()}
                   </td>
 
                   {/* Hallucinations */}
                   <td className="py-3 pr-4 text-right align-top font-mono text-xs tabular-nums">
                     <span
-                      className={s.hallucinations > 10 ? 'font-bold text-disputed' : s.hallucinations > 0 ? 'text-disputed' : 'text-muted-foreground/40'}
+                      style={{ color: s.hallucinations > 0 ? 'var(--danger)' : 'color-mix(in oklch, var(--text-dim) 40%, transparent)', fontWeight: s.hallucinations > 10 ? 'bold' : undefined }}
                       data-tooltip={`Agreements ${s.agreements} · Disagreements ${s.disagreements} · Hallucinations ${s.hallucinations}`}
                     >
                       {s.hallucinations}
@@ -282,13 +288,13 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                         <span className="warn-badge shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold">
                           {lt.taskId.slice(0, 8)}
                         </span>
-                        <span className="truncate font-inter text-[11px] text-muted-foreground/80" style={{ maxWidth: 260 }}>
+                        <span className="truncate font-inter text-[11px]" style={{ maxWidth: 260, color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>
                           {lt.task}
                         </span>
-                        <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/50">{timeAgo(lt.timestamp)}</span>
+                        <span className="ml-auto shrink-0 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>{timeAgo(lt.timestamp)}</span>
                       </div>
                     ) : (
-                      <span className="font-mono text-[10px] text-muted-foreground/30">no tasks</span>
+                      <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 30%, transparent)' }}>no tasks</span>
                     )}
                   </td>
                 </tr>
@@ -304,11 +310,11 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
 function MiniBar({ label, value, fillClass, tooltip }: { label: string; value: number; fillClass: string; tooltip?: string }) {
   return (
     <div className="flex items-center gap-2" data-tooltip={tooltip} data-tooltip-pos="top">
-      <span className="w-6 font-mono text-[8px] uppercase text-muted-foreground/50">{label}</span>
-      <div className="h-1 flex-1 overflow-hidden rounded-full bg-background/60">
+      <span className="w-6 font-mono text-[8px] uppercase" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>{label}</span>
+      <div className="h-1 flex-1 overflow-hidden rounded-full" style={{ background: 'color-mix(in oklch, var(--surface) 60%, transparent)' }}>
         <div className={`h-full rounded-full ${fillClass}`} style={{ width: `${Math.max(0, Math.min(100, value * 100))}%` }} />
       </div>
-      <span className="w-8 text-right font-mono text-[10px] tabular-nums text-foreground/80">
+      <span className="w-8 text-right font-mono text-[10px] tabular-nums" style={{ color: 'color-mix(in oklch, var(--text) 80%, transparent)' }}>
         {Math.round(value * 100)}%
       </span>
     </div>
@@ -342,13 +348,13 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
   return (
     <>
       <div className="mb-6">
-        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Tasks <span className="ml-2 text-primary">{tasks.total}</span>
+        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          Tasks <span className="ml-2" style={{ color: 'var(--accent)' }}>{tasks.total}</span>
         </h1>
-        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Live dispatched tasks and their relay status.</p>
-        <div className="mt-2 flex gap-4 font-mono text-[11px] text-muted-foreground">
-          <span><span className="text-confirmed">{completed}</span> completed</span>
-          {failed > 0 && <span><span className="text-destructive">{failed}</span> failed</span>}
+        <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Live dispatched tasks and their relay status.</p>
+        <div className="mt-2 flex gap-4 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
+          <span><span style={{ color: 'var(--success)' }}>{completed}</span> completed</span>
+          {failed > 0 && <span><span style={{ color: 'var(--danger)' }}>{failed}</span> failed</span>}
           {running > 0 && <span><span className="text-unverified">{running}</span> running</span>}
           <span>showing {paged.length} of {filtered.length}{q && ` (filtered from ${tasks.items.length})`}</span>
         </div>
@@ -360,38 +366,41 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
           value={query}
           onChange={(e) => { setQuery(e.target.value); setPage(0); }}
           placeholder="Search tasks by description, agent, id, status..."
-          className="w-full max-w-md rounded-md border border-border/40 bg-card/80 px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-primary/40 focus:outline-none"
+          className="w-full max-w-md rounded-md [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border px-3 py-1.5 font-mono text-xs focus:[border-color:color-mix(in_oklch,var(--accent)_40%,transparent)] focus:outline-none"
+          style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)', color: 'var(--text)' }}
         />
-        <div className={`flex shrink-0 items-center gap-2 font-mono text-[11px] text-muted-foreground ${totalPages <= 1 ? 'invisible' : ''}`}>
+        <div className={`flex shrink-0 items-center gap-2 font-mono text-[11px] ${totalPages <= 1 ? 'invisible' : ''}`} style={{ color: 'var(--text-dim)' }}>
             <button
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={clampedPage === 0}
-              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
+              className="rounded-sm [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
+              style={{ background: 'var(--surface-elev)' }}
             >◂ Prev</button>
             <span>{clampedPage + 1} / {totalPages}</span>
             <button
               onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
               disabled={clampedPage >= totalPages - 1}
-              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
+              className="rounded-sm [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
+              style={{ background: 'var(--surface-elev)' }}
             >Next ▸</button>
           </div>
       </div>
 
-      <div className="overflow-hidden rounded-md border border-border/40 bg-card/80">
+      <div className="overflow-hidden rounded-md [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
         {paged.length === 0 ? (
-          <div className="py-12 text-center text-sm text-muted-foreground">
+          <div className="py-12 text-center text-sm" style={{ color: 'var(--text-dim)' }}>
             {q ? 'No tasks match your search.' : 'No tasks yet.'}
           </div>
         ) : (
           <table className="w-full text-left">
             <thead>
-              <tr className="border-b border-border/40 bg-muted/30">
-                <th className="py-2.5 pl-4 pr-2 text-xs font-medium text-muted-foreground" style={{ width: 32 }}></th>
-                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">ID</th>
-                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Agent</th>
-                <th className="py-2.5 pr-3 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Description</th>
-                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Duration</th>
-                <th className="py-2.5 pr-4 text-right font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground">When</th>
+              <tr className="border-b [border-color:color-mix(in_oklch,var(--border)_40%,transparent)]" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 30%, transparent)' }}>
+                <th className="py-2.5 pl-4 pr-2 text-xs font-medium" style={{ width: 32, color: 'var(--text-dim)' }}></th>
+                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>ID</th>
+                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>Agent</th>
+                <th className="py-2.5 pr-3 text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>Description</th>
+                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>Duration</th>
+                <th className="py-2.5 pr-4 text-right font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>When</th>
               </tr>
             </thead>
             <tbody>
@@ -426,23 +435,23 @@ function FindingsPage({
   return (
     <>
       <div className="mb-6">
-        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
-          Consensus Rounds <span className="ml-2 text-primary">{visibleRuns.length}</span>
+        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          Consensus Rounds <span className="ml-2" style={{ color: 'var(--accent)' }}>{visibleRuns.length}</span>
           {!showRetracted && retractedCount > 0 && (
-            <span className="ml-2 font-normal normal-case tracking-normal text-muted-foreground/60">
+            <span className="ml-2 font-normal normal-case tracking-normal" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
               / {consensus.totalRuns ?? consensus.runs.length} total
             </span>
           )}
         </h1>
-        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Multi-agent review rounds — findings confirmed when ≥2 agents agree.</p>
-        <div className="mt-2 flex gap-4 font-mono text-[11px] text-muted-foreground">
-          <span><span className="text-confirmed">{confirmedTotal}</span> confirmed</span>
-          <span><span className="text-disputed">{disputedTotal}</span> disputed</span>
+        <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Multi-agent review rounds — findings confirmed when ≥2 agents agree.</p>
+        <div className="mt-2 flex gap-4 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
+          <span><span style={{ color: 'var(--success)' }}>{confirmedTotal}</span> confirmed</span>
+          <span><span style={{ color: 'var(--danger)' }}>{disputedTotal}</span> disputed</span>
           {unverifiedTotal > 0 && <span><span className="text-unverified">{unverifiedTotal}</span> unverified</span>}
           <span>{consensus.totalSignals} total signals</span>
         </div>
         {retractedCount > 0 && (
-          <div className="mt-2 flex items-center gap-2 font-mono text-[11px] text-muted-foreground/70">
+          <div className="mt-2 flex items-center gap-2 font-mono text-[11px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
             <span>
               {showRetracted
                 ? `${retractedCount} retracted run${retractedCount === 1 ? '' : 's'} shown`
@@ -451,7 +460,8 @@ function FindingsPage({
             <button
               type="button"
               onClick={() => setShowRetracted(v => !v)}
-              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 text-[10px] transition hover:bg-accent/10 hover:text-foreground"
+              className="rounded-sm [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border px-2 py-0.5 text-[10px] transition hover:bg-accent/10 hover:[color:var(--text)]"
+              style={{ background: 'var(--surface-elev)' }}
             >
               {showRetracted ? 'hide' : 'show'}
             </button>
@@ -478,9 +488,9 @@ function Dashboard() {
 
   if (loading || !overview || !consensus) {
     return (
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen" style={{ background: 'var(--surface)' }}>
         <TopBar />
-        <div className="flex items-center justify-center py-20 text-muted-foreground">Loading dashboard...</div>
+        <div className="flex items-center justify-center py-20" style={{ color: 'var(--text-dim)' }}>Loading dashboard...</div>
       </div>
     );
   }
@@ -517,8 +527,8 @@ function Dashboard() {
     content = (
       <div className="space-y-6">
       <header>
-        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">Dashboard</h1>
-        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">Multi-agent code review with grounded reward signals. Live activity, agent scores, and consensus rounds.</p>
+        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Dashboard</h1>
+        <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Multi-agent code review with grounded reward signals. Live activity, agent scores, and consensus rounds.</p>
       </header>
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr] lg:items-start">
         {/* Left sidebar: System Pulse + Circuit Alerts + Violations */}
@@ -563,7 +573,7 @@ function Dashboard() {
     : 'mx-auto max-w-7xl space-y-6 px-6 py-6';
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen" style={{ background: 'var(--surface)' }}>
       <TopBar />
       <main className={mainClass}>
         {content}
@@ -576,7 +586,7 @@ export function App() {
   const { authed, login, error } = useAuth();
 
   if (authed === null) {
-    return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading...</div>;
+    return <div className="flex min-h-screen items-center justify-center" style={{ color: 'var(--text-dim)' }}>Loading...</div>;
   }
 
   if (!authed) {

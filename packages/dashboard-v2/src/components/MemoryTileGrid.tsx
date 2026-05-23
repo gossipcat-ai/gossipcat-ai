@@ -78,7 +78,7 @@ export function MemoryTileGrid({ folder, memories, onBack, onOpen }: MemoryTileG
               <button
                 key={`${mem.agentId || ''}/${mem.filename}`}
                 onClick={() => onOpen(mem)}
-                className="group flex flex-col gap-1.5 rounded-md border border-border/40 p-3 text-left transition hover:border-primary/30 hover:bg-accent/40"
+                className="group flex flex-col gap-1.5 rounded-md border [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] p-3 text-left transition hover:[border-color:color-mix(in_oklch,var(--accent)_30%,transparent)] hover:bg-accent/40"
                 style={{ background: 'var(--surface-sunk)' }}
               >
                 <span
