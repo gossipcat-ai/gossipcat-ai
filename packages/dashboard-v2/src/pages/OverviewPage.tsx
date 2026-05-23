@@ -1,15 +1,21 @@
+import { useState } from 'react';
 import { SystemPulse } from '@/components/SystemPulse';
 import { ActiveTasksBanner } from '@/components/ActiveTasksBanner';
 import { TeamHero } from '@/components/TeamHero';
 import { TasksSection } from '@/components/TasksSection';
 import { RecentSignalsPeek } from '@/components/RecentSignalsPeek';
+import { AgentNetworkGraph } from '@/components/AgentNetworkGraph';
+import { usePeerRelationships } from '@/hooks/usePeerRelationships';
+import { isGraphBeta } from '@/lib/feature-flags';
 import { href } from '@/lib/router';
-import type { OverviewData, AgentData, TasksData } from '@/lib/types';
+import type { OverviewData, AgentData, TasksData, ConsensusData } from '@/lib/types';
 
 interface OverviewPageProps {
   overview: OverviewData;
   agents: AgentData[] | null;
   tasks: TasksData | null;
+  /** Optional — only consumed by the ?graph=1 beta to derive peer relationships. */
+  consensus?: ConsensusData | null;
   activeTaskCount: number;
   setActiveTaskCount: (n: number) => void;
 }
@@ -25,13 +31,26 @@ export function OverviewPage({
   overview,
   agents,
   tasks,
+  consensus,
   activeTaskCount,
   setActiveTaskCount,
 }: OverviewPageProps) {
   const actionable = overview.actionableFindings;
+  const showGraph = isGraphBeta();
+  const peerRelationships = usePeerRelationships(consensus?.runs);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
+      {/* Phase 1b PR3 — AgentNetworkGraph behind ?graph=1 flag, ABOVE existing widgets. */}
+      {showGraph && agents && (
+        <AgentNetworkGraph
+          agents={agents}
+          peerRelationships={peerRelationships}
+          selectedAgentId={selectedAgentId}
+          onSelectAgent={setSelectedAgentId}
+        />
+      )}
       {/* Page header */}
       <header>
         <div className="flex items-baseline justify-between gap-4">
