@@ -3,9 +3,12 @@ import { AgentCardBig } from './AgentCardBig';
 
 interface TeamHeroProps {
   agents: AgentData[];
+  /** Optional — when set, the matching card gets an accent ring so it
+   *  echoes the AgentNetworkGraph selection. Phase 1b PR3 wires this. */
+  highlightedAgentId?: string | null;
 }
 
-export function TeamHero({ agents }: TeamHeroProps) {
+export function TeamHero({ agents, highlightedAgentId }: TeamHeroProps) {
   // Sort by most recent dispatch first (lastTask.timestamp desc), with signal count as tie-break
   // so agents with no tasks sink to the bottom deterministically.
   const sorted = [...agents].sort((a, b) => {
@@ -33,9 +36,21 @@ export function TeamHero({ agents }: TeamHeroProps) {
         )}
       </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {visible.map((agent) => (
-          <AgentCardBig key={agent.id} agent={agent} />
-        ))}
+        {visible.map((agent) => {
+          const isHighlighted = agent.id === highlightedAgentId;
+          return (
+            <div
+              key={agent.id}
+              style={{
+                borderRadius: '0.5rem',
+                boxShadow: isHighlighted ? '0 0 0 2px var(--accent)' : undefined,
+                transition: 'box-shadow 200ms cubic-bezier(0.4,0,0.2,1)',
+              }}
+            >
+              <AgentCardBig agent={agent} />
+            </div>
+          );
+        })}
       </div>
     </section>
   );

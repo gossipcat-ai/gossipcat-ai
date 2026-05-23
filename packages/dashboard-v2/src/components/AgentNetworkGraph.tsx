@@ -22,8 +22,11 @@ interface GraphNode extends SimulationNodeDatum {
 }
 
 interface GraphLink extends SimulationLinkDatum<GraphNode> {
-  source: GraphNode | string;
-  target: GraphNode | string;
+  // We always construct links with resolved GraphNode references, never string
+  // ids, so d3-force's mutation path (string→object) is never taken. Tightening
+  // the union here lets the SVG render path drop its `as GraphNode` cast.
+  source: GraphNode;
+  target: GraphNode;
   cls: 'trust' | 'mixed' | 'catch';
   width: number;
   rounds: number;
@@ -38,7 +41,7 @@ function sizeFor(signals: number): number {
 }
 
 export function AgentNetworkGraph({
-  agents, peerRelationships, selectedAgentId, onSelectAgent, height = 580,
+  agents, peerRelationships, selectedAgentId, onSelectAgent, height = 420,
 }: AgentNetworkGraphProps) {
   // Empty states — return early to avoid running force on zero/one nodes.
   if (agents.length === 0) {
@@ -80,7 +83,7 @@ export function AgentNetworkGraph({
 }
 
 function ForceGraphInner({
-  agents, peerRelationships, selectedAgentId, onSelectAgent, height = 580, sizeFor,
+  agents, peerRelationships, selectedAgentId, onSelectAgent, height = 420, sizeFor,
 }: AgentNetworkGraphProps & { sizeFor: (signals: number) => number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const simRef = useRef<Simulation<GraphNode, GraphLink> | null>(null);
@@ -146,28 +149,51 @@ function ForceGraphInner({
       style={{ height, background: 'var(--stage-bg)', borderColor: 'var(--border)' }}
       onClick={() => onSelectAgent(null)}
     >
+      {/* Header label — gives the stage context for a first-time viewer. */}
+      <div
+        className="absolute z-10 flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-widest"
+        style={{ top: 10, left: 12, color: 'var(--stage-text-dim)', pointerEvents: 'none' }}
+      >
+        <span>Agent Network</span>
+        <span style={{ opacity: 0.5 }}>·</span>
+        <span style={{ color: 'var(--text)' }}>{agents.length}</span>
+        <span style={{ opacity: 0.7 }}>agents</span>
+        <span style={{ opacity: 0.5 }}>·</span>
+        <span style={{ color: 'var(--text)' }}>{links.length}</span>
+        <span style={{ opacity: 0.7 }}>edges</span>
+      </div>
       <svg width="100%" height={height} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        {links.map((l, i) => {
-          const s = l.source as GraphNode;
-          const t = l.target as GraphNode;
+        {links.map((l) => {
+          const s = l.source;
+          const t = l.target;
           if (s.x == null || s.y == null || t.x == null || t.y == null) return null;
-          // Mid-perpendicular Bezier control point — 40px fixed offset, clockwise normal.
-          const mx = (s.x + t.x) / 2;
-          const my = (s.y + t.y) / 2;
+          // Offset endpoints by node radius so edges meet the avatar circumference,
+          // not the center — avoids the "arrow stabbing through the icon" look.
           const dx = t.x - s.x;
           const dy = t.y - s.y;
           const len = Math.max(1, Math.hypot(dx, dy));
-          // Clockwise normal: rotate (dx, dy) by -90°.
-          const nx = dy / len;
-          const ny = -dx / len;
+          const ux = dx / len;
+          const uy = dy / len;
+          const sr = sizeFor(s.agent.scores.signals) / 2;
+          const tr = sizeFor(t.agent.scores.signals) / 2;
+          const sx = s.x + ux * sr;
+          const sy = s.y + uy * sr;
+          const tx = t.x - ux * tr;
+          const ty = t.y - uy * tr;
+          // Mid-perpendicular Bezier control point — 40px fixed offset, clockwise normal.
+          const mx = (sx + tx) / 2;
+          const my = (sy + ty) / 2;
+          // Clockwise normal: rotate unit vector by -90°.
+          const nx = uy;
+          const ny = -ux;
           const cx = mx + nx * 40;
           const cy = my + ny * 40;
-          const d = `M ${s.x},${s.y} Q ${cx},${cy} ${t.x},${t.y}`;
+          const d = `M ${sx},${sy} Q ${cx},${cy} ${tx},${ty}`;
           const stroke = l.cls === 'trust' ? 'var(--success)' : l.cls === 'mixed' ? 'var(--warn)' : 'var(--danger)';
           const dash = l.cls === 'catch' ? '5,3' : l.cls === 'mixed' ? '8,2' : undefined;
           return (
             <path
-              key={i}
+              key={`${s.id}::${t.id}`}
               d={d}
               stroke={stroke}
               strokeWidth={l.width}
@@ -179,6 +205,15 @@ function ForceGraphInner({
           );
         })}
       </svg>
+      {/* Edge legend — three rows in the bottom-left, anchored over the stage. */}
+      <div
+        className="absolute z-10 flex flex-col gap-1 rounded font-mono text-[10px]"
+        style={{ bottom: 10, left: 12, color: 'var(--stage-text-dim)', pointerEvents: 'none' }}
+      >
+        <LegendRow stroke="var(--success)" label="Trust" />
+        <LegendRow stroke="var(--warn)" label="Mixed" dash="8,2" />
+        <LegendRow stroke="var(--danger)" label="Caught" dash="5,3" />
+      </div>
       {nodes.map((n) => {
         if (n.x == null || n.y == null) return null;
         const size = sizeFor(n.agent.scores.signals);
@@ -210,6 +245,18 @@ function ForceGraphInner({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** Bottom-left legend swatch — short stroke sample + label. */
+function LegendRow({ stroke, label, dash }: { stroke: string; label: string; dash?: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <svg width="22" height="6" style={{ display: 'block' }}>
+        <line x1="0" y1="3" x2="22" y2="3" stroke={stroke} strokeWidth="1.5" strokeDasharray={dash} />
+      </svg>
+      <span>{label}</span>
     </div>
   );
 }

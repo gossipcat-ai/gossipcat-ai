@@ -96,8 +96,8 @@ export function OverviewPage({
       {/* Live tasks (self-hides when nothing is running) */}
       <ActiveTasksBanner onCountChange={setActiveTaskCount} />
 
-      {/* Top-4 agents */}
-      {agents && <TeamHero agents={agents} />}
+      {/* Top-4 agents — echoes the AgentNetworkGraph selection when the graph is on */}
+      {agents && <TeamHero agents={agents} highlightedAgentId={showGraph ? selectedAgentId : null} />}
 
       {/* Recent dispatches — limit 3 (vs dense view's 5) */}
       {tasks && <TasksSection tasks={tasks} limit={3} />}
