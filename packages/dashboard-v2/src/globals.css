@@ -141,6 +141,18 @@ html::after {
   100% { text-shadow: 2px 0 0 rgba(255,0,80,0.5), -2px 0 0 rgba(0,200,255,0.5); }
 }
 
+/* ───── Beat-rhythm pulse — live-status indicators ───── */
+@keyframes beat-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.9); }
+}
+
+/* Override Tailwind's animate-pulse on live-indicator elements to use the
+   project-wide --beat cadence instead of the default 2s timing. */
+.animate-pulse {
+  animation: beat-pulse var(--beat) ease-in-out infinite;
+}
+
 .crt-logo {
   position: relative;
   display: inline-block;
