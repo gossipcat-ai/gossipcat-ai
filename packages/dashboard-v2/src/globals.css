@@ -72,6 +72,10 @@
   --warn: #b8741d;
   --danger: #c0392b;
   --beat: 1.6s;
+  /* Phase 1b graph-stage tokens — cream stage in light mode. */
+  --stage-bg: #ede9e0;
+  --stage-grid: rgba(31, 31, 29, 0.025);
+  --stage-text-dim: #6b6a64;
 }
 
 :root {
@@ -99,6 +103,9 @@
   --shadow-overlay-hairline: 0 0 0 1px rgba(255, 255, 255, 0.04);
   --shadow-card: none;
   --color-unique: #9d7fd5;
+  --stage-bg: #131210;
+  --stage-grid: rgba(255, 255, 255, 0.03);
+  --stage-text-dim: #87847b;
 }
 
 /* Tailwind utility classes (text-foreground, bg-card, etc.) resolve against
