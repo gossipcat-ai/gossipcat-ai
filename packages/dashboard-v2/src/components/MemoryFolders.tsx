@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
+import type React from 'react';
 import type { MemoryFile } from '@/lib/types';
 import { DISPLAY_TYPES, toDisplayType, type DisplayType } from '@/lib/memory-taxonomy';
 import { dedupeMemories } from '@/lib/memory-dedupe';
@@ -30,12 +31,21 @@ type StatusFilter = 'all' | 'open' | 'shipped';
 /**
  * Per-folder accent — text color class applied to count + icon stroke.
  * Mirrors mockup lines 118-122 where each category owns a semantic color.
+ * Theme-linked colours (accent → var(--accent)) use inline styles; semantic
+ * colours (confirmed, unverified) stay as Tailwind classes.
  */
-const TYPE_ACCENT: Record<DisplayType, string> = {
-  backlog: 'text-primary',
+const TYPE_ACCENT_CLASS: Record<DisplayType, string> = {
+  backlog: '',
   record: 'text-text-dim',
   session: 'text-confirmed',
   rule: 'text-unverified',
+};
+
+const TYPE_ACCENT_STYLE: Record<DisplayType, React.CSSProperties | undefined> = {
+  backlog: { color: 'var(--accent)' },
+  record: undefined,
+  session: undefined,
+  rule: undefined,
 };
 
 /**
@@ -43,7 +53,7 @@ const TYPE_ACCENT: Record<DisplayType, string> = {
  * the same hue at low alpha to mimic mockup line 152 (`0 0 8px primary-soft`).
  */
 const TYPE_DOT: Record<DisplayType, { bg: string; glow: string }> = {
-  backlog: { bg: 'bg-primary', glow: 'rgba(139, 92, 246, 0.6)' },
+  backlog: { bg: 'bg-accent', glow: 'var(--accent)' },
   record: { bg: 'bg-text-dim', glow: 'rgba(102, 102, 116, 0.55)' },
   session: { bg: 'bg-confirmed', glow: 'rgba(52, 211, 153, 0.55)' },
   rule: { bg: 'bg-unverified', glow: 'rgba(251, 191, 36, 0.55)' },
@@ -52,12 +62,20 @@ const TYPE_DOT: Record<DisplayType, { bg: string; glow: string }> = {
 /**
  * Icon box tint — faint category background + soft ring. Keyed per folder so
  * each tile reads as its own "chapter" at a glance (mockup lines 117-122).
+ * Icon box tint uses inline var(--accent) at 6% alpha for the backlog type.
  */
-const TYPE_ICON_BOX: Record<DisplayType, string> = {
-  backlog: 'bg-primary/[0.06] border-primary/30',
+const TYPE_ICON_BOX_CLASS: Record<DisplayType, string> = {
+  backlog: 'border-primary/30',
   record: 'bg-text-dim/[0.08] border-text-dim/20',
   session: 'bg-confirmed/[0.06] border-confirmed/25',
   rule: 'bg-unverified/[0.06] border-unverified/25',
+};
+
+const TYPE_ICON_BOX_STYLE: Record<DisplayType, React.CSSProperties | undefined> = {
+  backlog: { background: 'color-mix(in oklch, var(--accent) 6%, transparent)' },
+  record: undefined,
+  session: undefined,
+  rule: undefined,
 };
 
 /**
@@ -88,6 +106,8 @@ const TYPE_ICON: Record<DisplayType, JSX.Element> = {
     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
   ),
 };
+
+
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -167,8 +187,8 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
   return (
     <section className="flex h-full flex-col">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-          {heading} <span className="text-primary">{filtered.length}</span>
+        <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          {heading} <span style={{ color: 'var(--accent)' }}>{filtered.length}</span>
         </h2>
         {statusFilter && (
           <div className="flex gap-1 font-mono text-[10px]" role="tablist" aria-label="Status filter">
@@ -180,9 +200,12 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
                 onClick={() => setStatusView(s)}
                 className={`rounded-sm border px-2 py-0.5 uppercase tracking-widest transition ${
                   statusView === s
-                    ? 'border-primary/50 bg-primary/10 text-primary'
-                    : 'border-border/30 text-muted-foreground hover:border-primary/30 hover:text-foreground'
+                    ? 'border-primary/50'
+                    : 'border-border/30 hover:border-primary/30'
                 }`}
+                style={statusView === s
+                  ? { color: 'var(--accent)', background: 'color-mix(in oklch, var(--accent) 10%, transparent)' }
+                  : { color: 'var(--text-dim)' }}
               >
                 {s}
               </button>
@@ -194,23 +217,27 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
         {DISPLAY_TYPES.map(({ type, label, blurb }) => {
           const count = byFolder.buckets[type].length;
           const active = byFolder.recent[type];
-          const accent = TYPE_ACCENT[type];
+          const accentCls = TYPE_ACCENT_CLASS[type];
+          const accentStyle = TYPE_ACCENT_STYLE[type];
+          const iconBoxCls = TYPE_ICON_BOX_CLASS[type];
+          const iconBoxStyle = TYPE_ICON_BOX_STYLE[type];
           const dot = TYPE_DOT[type];
-          const iconBox = TYPE_ICON_BOX[type];
           const empty = count === 0;
           return (
             <button
               key={type}
               onClick={() => setFolder(type)}
               disabled={empty}
-              className={`group relative grid grid-cols-[auto_1fr_auto] grid-rows-[auto_auto] items-center gap-x-3 gap-y-1 rounded-md border bg-muted p-3.5 text-left transition ${
+              className={`group relative grid grid-cols-[auto_1fr_auto] grid-rows-[auto_auto] items-center gap-x-3 gap-y-1 rounded-md border p-3.5 text-left transition ${
                 empty
                   ? 'cursor-default border-border/20 opacity-55'
                   : 'border-border/40 hover:border-primary/30 hover:bg-accent/40'
               }`}
+              style={{ background: 'var(--surface-sunk)' }}
             >
               <span
-                className={`relative row-span-2 flex h-9 w-9 items-center justify-center rounded-sm border ${iconBox} ${accent}`}
+                className={`relative row-span-2 flex h-9 w-9 items-center justify-center rounded-sm border ${iconBoxCls} ${accentCls}`}
+                style={{ ...iconBoxStyle, ...accentStyle }}
                 aria-hidden
               >
                 {active && (
@@ -234,17 +261,16 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
                   {TYPE_ICON[type]}
                 </svg>
               </span>
-              <span className="self-end font-mono text-[11px] font-bold uppercase tracking-widest text-foreground">
+              <span className="self-end font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
                 {label}
               </span>
               <span
-                className={`row-span-2 self-center font-mono text-sm font-bold tabular-nums ${
-                  empty ? 'text-muted-foreground/40' : accent
-                }`}
+                className={`row-span-2 self-center font-mono text-sm font-bold tabular-nums ${accentCls}`}
+                style={empty ? { color: 'color-mix(in oklch, var(--text-dim) 40%, transparent)' } : accentStyle}
               >
                 {count}
               </span>
-              <span className="self-start font-mono text-[10px] leading-snug text-muted-foreground/70">
+              <span className="self-start font-mono text-[10px] leading-snug" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
                 {blurb}
               </span>
             </button>
@@ -298,11 +324,11 @@ export function NativeMemories({ memories }: { memories: MemoryFile[] }) {
 
   return (
     <section className="flex h-full flex-col">
-      <h2 className="mb-3 font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-        Native Memory <span className="text-primary">{unique.length}</span>
+      <h2 className="mb-3 font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        Native Memory <span style={{ color: 'var(--accent)' }}>{unique.length}</span>
       </h2>
       {unique.length === 0 ? (
-        <p className="font-mono text-[11px] text-muted-foreground">No native memories yet.</p>
+        <p className="font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>No native memories yet.</p>
       ) : (
         <ul className="space-y-1 font-mono text-[11px]">
           {unique.slice(0, 20).map((m) => {
@@ -312,25 +338,26 @@ export function NativeMemories({ memories }: { memories: MemoryFile[] }) {
               <li key={m.filename}>
                 <button
                   onClick={() => setOpen(m)}
-                  className="flex w-full items-center justify-between gap-3 rounded-sm border border-border/20 bg-muted/40 px-3 py-2 text-left transition hover:border-primary/30 hover:bg-accent/40"
+                  className="flex w-full items-center justify-between gap-3 rounded-sm border border-border/20 px-3 py-2 text-left transition hover:border-primary/30 hover:bg-accent/40"
+                  style={{ background: 'color-mix(in oklch, var(--surface-sunk) 40%, transparent)' }}
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     {recent && (
                       <span
-                        className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
-                        style={{ boxShadow: '0 0 8px rgba(139, 92, 246, 0.6)' }}
+                        className="h-1.5 w-1.5 shrink-0 rounded-full"
+                        style={{ background: 'var(--accent)', boxShadow: '0 0 8px var(--accent)' }}
                         aria-label="Activity in the last 24h"
                       />
                     )}
-                    <span className="truncate text-foreground">{m.filename}</span>
+                    <span className="truncate" style={{ color: 'var(--text)' }}>{m.filename}</span>
                   </span>
-                  {desc && <span className="shrink-0 truncate text-muted-foreground/80">{desc.slice(0, 60)}</span>}
+                  {desc && <span className="shrink-0 truncate" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>{desc.slice(0, 60)}</span>}
                 </button>
               </li>
             );
           })}
           {unique.length > 20 && (
-            <li className="pl-3 text-[10px] text-muted-foreground">… and {unique.length - 20} more</li>
+            <li className="pl-3 text-[10px]" style={{ color: 'var(--text-dim)' }}>… and {unique.length - 20} more</li>
           )}
         </ul>
       )}

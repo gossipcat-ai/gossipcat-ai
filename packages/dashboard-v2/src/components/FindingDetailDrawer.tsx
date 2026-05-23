@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
@@ -17,8 +17,9 @@ const SEVERITY_COLORS: Record<string, string> = {
   critical: 'text-red-400 bg-red-500/10',
   high: 'text-severity-high bg-severity-high/10',
   medium: 'text-yellow-400 bg-yellow-500/10',
-  low: 'text-muted-foreground bg-muted/50',
+  low: '',
 };
+const SEVERITY_LOW_STYLE = { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' };
 
 const TAG_COLORS: Record<string, string> = {
   confirmed: 'text-confirmed bg-confirmed/10 border border-confirmed/20',
@@ -27,6 +28,15 @@ const TAG_COLORS: Record<string, string> = {
   unique: 'text-unique bg-unique/10 border border-unique/20',
   insight: 'text-insight bg-insight/10 border border-insight/20',
   newFinding: 'text-unique bg-unique/10 border border-unique/20',
+};
+
+const drawerStyle: CSSProperties = {
+  background: 'var(--surface-elev)',
+  borderRadius: '16px 0 0 16px',
+  boxShadow: 'var(--shadow-overlay)',
+  border: '1px solid var(--border)',
+  color: 'var(--text)',
+  fontFamily: 'var(--font-sans)',
 };
 
 export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId }: Props) {
@@ -44,26 +54,36 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-[480px] sm:w-[480px] sm:max-w-[480px] overflow-y-auto">
+      <SheetContent side="right" className="w-[480px] sm:w-[480px] sm:max-w-[480px] overflow-y-auto" style={drawerStyle}>
         <SheetHeader>
-          <SheetTitle className="font-mono text-sm">Finding detail</SheetTitle>
+          <SheetTitle className="font-mono text-sm" style={{ color: 'var(--text)' }}>Finding detail</SheetTitle>
         </SheetHeader>
 
         {error && <div className="mt-4 text-[11px] text-disputed">{error}</div>}
-        {!error && !detail && <div className="mt-4 text-[11px] text-muted-foreground">Loading…</div>}
+        {!error && !detail && <div className="mt-4 text-[11px]" style={{ color: 'var(--text-dim)' }}>Loading…</div>}
 
         {detail && (
           <div className="mt-4 space-y-4">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className={`font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded ${TAG_COLORS[detail.finding.tag] || 'bg-muted'}`}>
+              <span
+                className={`font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded ${TAG_COLORS[detail.finding.tag] || ''}`}
+                style={TAG_COLORS[detail.finding.tag] ? undefined : { background: 'var(--surface-sunk)' }}
+              >
                 {detail.finding.tag}
               </span>
               {detail.finding.severity && (
-                <span className={`font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded ${SEVERITY_COLORS[detail.finding.severity] || 'bg-muted'}`}>
+                <span
+                  className={`font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded ${SEVERITY_COLORS[detail.finding.severity] || ''}`}
+                  style={
+                    detail.finding.severity === 'low' ? SEVERITY_LOW_STYLE
+                    : !SEVERITY_COLORS[detail.finding.severity] ? { background: 'var(--surface-sunk)' }
+                    : undefined
+                  }
+                >
                   {detail.finding.severity}
                 </span>
               )}
-              <span className="font-mono text-[9px] text-muted-foreground">
+              <span className="font-mono text-[9px]" style={{ color: 'var(--text-dim)' }}>
                 by {detail.finding.originalAgentId}
               </span>
               {detail.retracted && (
@@ -73,13 +93,13 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
               )}
             </div>
 
-            <div className="text-[12px] leading-relaxed whitespace-pre-wrap">
+            <div className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap">
               {detail.finding.finding.replace(/<cite tag="file">[^<]+<\/cite>/g, '').trim()}
             </div>
 
             {detail.citations.length > 0 && (
               <div className="space-y-2">
-                <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                <div className="font-mono text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
                   Citations
                 </div>
                 {detail.citations.map((c, i) => <CitationSnippet key={i} citation={c} />)}
@@ -87,7 +107,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
             )}
 
             <div className="space-y-1">
-              <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+              <div className="font-mono text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
                 Coverage
               </div>
               {detail.finding.confirmedBy.length > 0 && (
@@ -97,17 +117,17 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
               )}
               {detail.finding.disputedBy.map((d, i) => (
                 <div key={i} className="text-[11px]">
-                  <span className="text-disputed">✗</span> disputed by {d.agentId}: <span className="text-muted-foreground">{d.reason}</span>
+                  <span className="text-disputed">✗</span> disputed by {d.agentId}: <span style={{ color: 'var(--text-dim)' }}>{d.reason}</span>
                 </div>
               ))}
               {detail.finding.confirmedBy.length === 0 && detail.finding.disputedBy.length === 0 && (
-                <div className="text-[11px] text-muted-foreground">No peer review</div>
+                <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>No peer review</div>
               )}
             </div>
 
             {detail.signals.length > 0 && (
               <div className="space-y-2">
-                <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                <div className="font-mono text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
                   Signals ({detail.signals.length})
                 </div>
                 <div className="space-y-1">
@@ -115,15 +135,15 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
                     <div key={i} className="text-[11px] border-l-2 border-border/40 pl-2">
                       <div className="flex items-center gap-2">
                         <span className="font-mono font-semibold">{s.signal}</span>
-                        <span className="text-muted-foreground">·</span>
+                        <span style={{ color: 'var(--text-dim)' }}>·</span>
                         <span>{s.agentId}</span>
                         {s.counterpartId && <>
-                          <span className="text-muted-foreground">→</span>
+                          <span style={{ color: 'var(--text-dim)' }}>→</span>
                           <span>{s.counterpartId}</span>
                         </>}
-                        <span className="text-muted-foreground ml-auto">{timeAgo(s.timestamp)}</span>
+                        <span className="ml-auto" style={{ color: 'var(--text-dim)' }}>{timeAgo(s.timestamp)}</span>
                       </div>
-                      {s.evidence && <div className="text-muted-foreground mt-0.5">{s.evidence.slice(0, 200)}</div>}
+                      {s.evidence && <div className="mt-0.5" style={{ color: 'var(--text-dim)' }}>{s.evidence.slice(0, 200)}</div>}
                     </div>
                   ))}
                 </div>
@@ -131,7 +151,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
             )}
 
             <div className="pt-2 border-t border-border/40">
-              <a href={`#/consensus/${detail.consensusId}`} className="font-mono text-[10px] text-primary hover:underline">
+              <a href={`#/consensus/${detail.consensusId}`} className="font-mono text-[10px] hover:underline" style={{ color: 'var(--accent)' }}>
                 → consensus round {detail.consensusId}
               </a>
             </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 
 interface GlossaryModalProps {
   open: boolean;
@@ -109,6 +109,15 @@ const TERMS: GlossaryTerm[] = [
   },
 ];
 
+const dialogStyle: CSSProperties = {
+  background: 'var(--surface-elev)',
+  borderRadius: '16px',
+  boxShadow: 'var(--shadow-overlay)',
+  border: '1px solid var(--border)',
+  color: 'var(--text)',
+  fontFamily: 'var(--font-sans)',
+};
+
 export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -137,12 +146,14 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-6 backdrop-blur-sm"
+      style={{ background: 'color-mix(in oklch, var(--surface) 80%, transparent)' }}
       onClick={onClose}
       role="presentation"
     >
       <div
-        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
+        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-2xl flex-col overflow-hidden"
+        style={dialogStyle}
         role="dialog"
         aria-modal="true"
         aria-labelledby="glossary-title"
@@ -152,7 +163,8 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
         <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-5 py-3.5">
           <h2
             id="glossary-title"
-            className="font-mono text-sm font-semibold text-foreground"
+            className="font-mono text-sm font-semibold"
+            style={{ color: 'var(--text)' }}
           >
             Gossipcat Glossary
           </h2>
@@ -160,7 +172,8 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
             ref={closeButtonRef}
             onClick={onClose}
             aria-label="Close glossary"
-            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-border/40 bg-card font-mono text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-border/40 font-mono text-xs transition hover:[color:var(--text)] hover:[background:var(--surface-sunk)]"
+            style={{ background: 'var(--surface-elev)', color: 'var(--text-dim)' }}
           >
             &times;
           </button>
@@ -170,15 +183,15 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
         <div className="flex-1 overflow-y-auto px-5 py-4">
           <dl className="space-y-5">
             {TERMS.map(({ term, definition, seeAlso }) => (
-              <div key={term} className="rounded-md border border-border/40 bg-background/40 px-4 py-3">
-                <dt className="font-mono text-[11px] font-bold uppercase tracking-[0.12em] text-amber-400">
+              <div key={term} className="rounded-md border border-border/40 px-4 py-3" style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}>
+                <dt className="font-mono text-[11px] font-bold uppercase tracking-[0.12em]" style={{ color: 'var(--accent)' }}>
                   {term}
                 </dt>
-                <dd className="mt-1.5 font-mono text-xs leading-relaxed text-foreground/80">
+                <dd className="mt-1.5 font-mono text-xs leading-relaxed" style={{ color: 'color-mix(in oklch, var(--text) 80%, transparent)' }}>
                   {definition}
                 </dd>
                 {seeAlso && (
-                  <dd className="mt-1.5 font-mono text-[10px] text-muted-foreground/60">
+                  <dd className="mt-1.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
                     See also: {seeAlso}
                   </dd>
                 )}
@@ -193,7 +206,8 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
             href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/docs/HANDBOOK.md"
             target="_blank"
             rel="noopener noreferrer"
-            className="font-mono text-xs text-amber-400 transition hover:text-amber-300 hover:underline"
+            className="font-mono text-xs transition hover:underline"
+            style={{ color: 'var(--accent)' }}
           >
             Read the full HANDBOOK &rarr;
           </a>

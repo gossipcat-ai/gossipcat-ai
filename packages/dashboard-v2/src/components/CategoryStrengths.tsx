@@ -84,22 +84,22 @@ export function CategoryStrengths({ strengths, accuracy, correctCounts, hallucin
           className={`flex items-center gap-3 ${row.sparse ? 'opacity-40' : ''}`}
           title={row.sparse ? `Only ${row.n} signal${row.n === 1 ? '' : 's'} in this category — needs ≥${MIN_CATEGORY_N} for a trustworthy accuracy.` : `${row.c} correct / ${row.n} total`}
         >
-          <span className="w-32 shrink-0 truncate font-mono text-[11px] text-muted-foreground">
+          <span className="w-32 shrink-0 truncate font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
             {row.category.replace(/_/g, ' ')}
           </span>
-          <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted/30">
+          <div className="h-2 flex-1 overflow-hidden rounded-full" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 30%, transparent)' }}>
             <div
               className="h-full rounded-full bg-chart/70 transition-all"
               style={{ width: `${row.score * 100}%` }}
             />
           </div>
-          <span className="shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground/70 w-16">
+          <span className="shrink-0 text-right font-mono text-[10px] tabular-nums w-16" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
             {row.sparse && row.n === 0
               ? '—'
               : `${row.c}/${row.n}`}
           </span>
-          <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-foreground">
-            {row.sparse ? <span className="text-muted-foreground/50">sparse</span> : `${Math.round(row.score * 100)}%`}
+          <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums" style={{ color: 'var(--text)' }}>
+            {row.sparse ? <span style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>sparse</span> : `${Math.round(row.score * 100)}%`}
           </span>
         </div>
       ))}

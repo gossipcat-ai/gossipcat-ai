@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import type React from 'react';
 import type { TasksData } from '@/lib/types';
 import { timeAgo } from '@/lib/utils';
 import { EmptyState } from './EmptyState';
@@ -35,13 +36,14 @@ const STATUS_META: Record<StatusKey, {
   label: string;
   iconBox: string;
   text: string;
+  textStyle?: React.CSSProperties;
   pulse: boolean;
 }> = {
   completed: { label: 'Done', iconBox: 'bg-confirmed/10 border-confirmed/30', text: 'text-confirmed', pulse: false },
   running: { label: 'Running', iconBox: 'bg-unverified/10 border-unverified/30', text: 'text-unverified', pulse: true },
   failed: { label: 'Failed', iconBox: 'bg-destructive/10 border-destructive/30', text: 'text-destructive', pulse: false },
-  cancelled: { label: 'Cancelled', iconBox: 'bg-muted-foreground/10 border-muted-foreground/25', text: 'text-muted-foreground', pulse: false },
-  unknown: { label: 'Unknown', iconBox: 'bg-muted-foreground/10 border-muted-foreground/25', text: 'text-muted-foreground', pulse: false },
+  cancelled: { label: 'Cancelled', iconBox: 'border-muted-foreground/25', text: '', textStyle: { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--text-dim) 10%, transparent)' }, pulse: false },
+  unknown: { label: 'Unknown', iconBox: 'border-muted-foreground/25', text: '', textStyle: { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--text-dim) 10%, transparent)' }, pulse: false },
 };
 
 const STATUS_ICON: Record<StatusKey, JSX.Element> = {
@@ -74,11 +76,11 @@ function shortTaskId(id: string): string {
 
 // Derive a visual kind chip from the agentId suffix.
 // Returns null for unrecognized suffixes so the chip is omitted entirely.
-function taskKindFromAgentId(agentId: string): { label: string; cls: string } | null {
+function taskKindFromAgentId(agentId: string): { label: string; cls: string; clsStyle?: React.CSSProperties } | null {
   if (agentId.endsWith('-implementer')) return { label: 'IMPL', cls: 'text-unique' };
   if (agentId.endsWith('-reviewer'))    return { label: 'REVIEW', cls: 'text-chart' };
   if (agentId.endsWith('-tester'))      return { label: 'TEST', cls: 'text-unique' };
-  if (agentId.endsWith('-researcher'))  return { label: 'RESEARCH', cls: 'text-muted-foreground' };
+  if (agentId.endsWith('-researcher'))  return { label: 'RESEARCH', cls: '', clsStyle: { color: 'var(--text-dim)' } };
   if (agentId.endsWith('-designer'))    return { label: 'DESIGN', cls: 'text-chart' };
   return null;
 }
@@ -90,16 +92,16 @@ export function TasksSection({ tasks, limit = DEFAULT_PAGE_SIZE }: TasksSectionP
   return (
     <section className="flex h-full flex-col">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-          Tasks <span className="text-primary">{tasks.total}</span>
+        <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          Tasks <span style={{ color: 'var(--accent)' }}>{tasks.total}</span>
         </h2>
         {hasMore && (
-          <a href="/dashboard/tasks" className="font-mono text-xs text-muted-foreground transition hover:text-foreground">
+          <a href="/dashboard/tasks" className="font-mono text-xs transition" style={{ color: 'var(--text-dim)' }}>
             view all
           </a>
         )}
       </div>
-      <div className="flex-1 rounded-md border border-border/40 bg-card/80">
+      <div className="flex-1 rounded-md border border-border/40" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
         {visible.length === 0 ? (
           <EmptyState
             title="No tasks yet"
@@ -117,6 +119,7 @@ export function TasksSection({ tasks, limit = DEFAULT_PAGE_SIZE }: TasksSectionP
               >
                 <span
                   className={`mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border ${meta.iconBox} ${meta.text} ${meta.pulse ? 'animate-pulse' : ''}`}
+                  style={meta.textStyle}
                   aria-label={`Status: ${meta.label}`}
                   data-tooltip={meta.label}
                 >
@@ -135,24 +138,26 @@ export function TasksSection({ tasks, limit = DEFAULT_PAGE_SIZE }: TasksSectionP
                   </svg>
                 </span>
                 <span
-                  className="mt-0.5 shrink-0 rounded border border-border/40 bg-background/60 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground"
+                  className="mt-0.5 shrink-0 rounded border border-border/40 px-1.5 py-0.5 font-mono text-[10px] font-semibold"
+                  style={{ background: 'color-mix(in oklch, var(--surface) 60%, transparent)', color: 'var(--text-dim)' }}
                   data-tooltip={task.taskId}
                 >
                   {shortTaskId(task.taskId)}
                 </span>
                 {kind && (
                   <span
-                    className={`shrink-0 rounded-sm border border-border/40 bg-background/40 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider ${kind.cls}`}
+                    className={`shrink-0 rounded-sm border border-border/40 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider ${kind.cls}`}
+                    style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)', ...kind.clsStyle }}
                     data-tooltip={task.agentId}
                   >
                     {kind.label}
                   </span>
                 )}
-                <span className="min-w-0 flex-1 line-clamp-2 font-inter text-[11px] leading-snug text-foreground">
+                <span className="min-w-0 flex-1 line-clamp-2 font-inter text-[11px] leading-snug" style={{ color: 'var(--text)' }}>
                   {task.task}
                 </span>
-                <span className="mt-0.5 shrink-0 font-mono text-[10px] text-muted-foreground/60 font-normal">{task.agentId}</span>
-                <span className="mt-0.5 shrink-0 font-mono text-[10px] text-muted-foreground/50">{timeAgo(task.timestamp)}</span>
+                <span className="mt-0.5 shrink-0 font-mono text-[10px] font-normal" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>{task.agentId}</span>
+                <span className="mt-0.5 shrink-0 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>{timeAgo(task.timestamp)}</span>
               </div>
             );
           })

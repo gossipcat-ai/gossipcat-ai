@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type React from 'react';
 import { api } from '@/lib/api';
 import { onEvent } from '@/lib/ws';
 
@@ -20,22 +21,31 @@ interface LogsResponse {
 // you actually want to notice (errors, timeouts). Now only error/timeout pop;
 // everything else is muted so errors stand out by contrast. User feedback:
 // "too colorful" landed hardest on this page.
-const CATEGORY_COLORS: Record<string, string> = {
-  dispatch: 'text-muted-foreground/80',
-  consensus: 'text-primary/70',
+//
+// text-dim colours are expressed as inline var() so they survive Tailwind v4
+// @theme build-time resolution and remain theme-switchable at runtime.
+const CATEGORY_STYLES: Record<string, React.CSSProperties> = {
+  dispatch: { color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' },
+  consensus: { color: 'color-mix(in oklch, var(--accent) 70%, transparent)' },
+  error: {},   // uses text-disputed class, no override
+  timeout: {}, // uses text-unverified class, no override
+  worker: { color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' },
+  gemini: { color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' },
+  skill: { color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' },
+  boot: { color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' },
+  relay: { color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' },
+  gossip: { color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' },
+  utility: { color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' },
+  memory: { color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' },
+  persist: { color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' },
+  toolserver: { color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' },
+  other: { color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' },
+};
+
+/** Non-theme Tailwind class for categories that use semantic signal colours. */
+const CATEGORY_CLASS: Record<string, string> = {
   error: 'text-disputed',
   timeout: 'text-unverified',
-  worker: 'text-muted-foreground/70',
-  gemini: 'text-muted-foreground/70',
-  skill: 'text-muted-foreground/80',
-  boot: 'text-muted-foreground/50',
-  relay: 'text-muted-foreground/80',
-  gossip: 'text-muted-foreground/80',
-  utility: 'text-muted-foreground/60',
-  memory: 'text-muted-foreground/80',
-  persist: 'text-muted-foreground/50',
-  toolserver: 'text-muted-foreground/50',
-  other: 'text-muted-foreground/70',
 };
 
 const CATEGORY_PATTERNS: [RegExp, string][] = [
@@ -80,6 +90,8 @@ const FILTERS: { key: string; label: string }[] = [
 ];
 
 const MAX_LINES = 1000;
+
+
 
 export function LogsPage() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
@@ -150,10 +162,10 @@ export function LogsPage() {
   return (
     <>
       <div className="mb-4 flex items-center gap-3">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-          MCP Log <span className="text-primary">{totalLines} lines</span>
+        <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          MCP Log <span style={{ color: 'var(--accent)' }}>{totalLines} lines</span>
         </h2>
-        <span className="font-mono text-[10px] text-muted-foreground/50">
+        <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
           {formatSize(fileSize)}
         </span>
         {live && (
@@ -170,11 +182,10 @@ export function LogsPage() {
           <button
             key={f.key}
             onClick={() => setFilter(f.key)}
-            className={`rounded-sm px-2.5 py-1 font-mono text-[10px] font-semibold transition ${
-              filter === f.key
-                ? 'bg-muted text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
+            className="rounded-sm px-2.5 py-1 font-mono text-[10px] font-semibold transition"
+            style={filter === f.key
+              ? { background: 'var(--surface-sunk)', color: 'var(--text)' }
+              : { color: 'var(--text-dim)' }}
           >
             {f.label}
           </button>
@@ -183,16 +194,18 @@ export function LogsPage() {
           <button
             onClick={() => setLive(!live)}
             className={`rounded-sm px-2.5 py-1 font-mono text-[10px] font-semibold transition ${
-              live ? 'bg-confirmed/10 text-confirmed' : 'text-muted-foreground'
+              live ? 'bg-confirmed/10 text-confirmed' : ''
             }`}
+            style={live ? undefined : { color: 'var(--text-dim)' }}
           >
             {live ? '● Live' : '○ Paused'}
           </button>
           <button
             onClick={() => setAutoScroll(!autoScroll)}
-            className={`rounded-sm px-2.5 py-1 font-mono text-[10px] font-semibold transition ${
-              autoScroll ? 'bg-primary/10 text-primary' : 'text-muted-foreground'
-            }`}
+            className="rounded-sm px-2.5 py-1 font-mono text-[10px] font-semibold transition"
+            style={autoScroll
+              ? { color: 'var(--accent)', background: 'color-mix(in oklch, var(--accent) 10%, transparent)' }
+              : { color: 'var(--text-dim)' }}
           >
             {autoScroll ? '⤓ Auto' : '⤓ Scroll'}
           </button>
@@ -200,20 +213,23 @@ export function LogsPage() {
       </div>
 
       {/* Log output */}
-      <div className="overflow-hidden rounded-md border border-border bg-card">
+      <div className="overflow-hidden rounded-md border border-border" style={{ background: 'var(--surface-elev)' }}>
         <div className="max-h-[70vh] overflow-y-auto p-3 font-mono text-xs leading-relaxed">
           {filteredEntries.map((entry) => (
-            <div key={entry.line} className="flex gap-2 hover:bg-muted/30">
-              <span className="w-10 shrink-0 select-none text-right text-muted-foreground/30">
+            <div key={entry.line} className="flex gap-2 hover:bg-accent/10">
+              <span className="w-10 shrink-0 select-none text-right" style={{ color: 'color-mix(in oklch, var(--text-dim) 30%, transparent)' }}>
                 {entry.line}
               </span>
-              <span className={CATEGORY_COLORS[entry.category] || CATEGORY_COLORS.other}>
+              <span
+                className={CATEGORY_CLASS[entry.category] ?? ''}
+                style={CATEGORY_STYLES[entry.category] ?? CATEGORY_STYLES.other}
+              >
                 {entry.text}
               </span>
             </div>
           ))}
           {filteredEntries.length === 0 && (
-            <div className="py-8 text-center font-mono text-xs text-muted-foreground">
+            <div className="py-8 text-center font-mono text-xs" style={{ color: 'var(--text-dim)' }}>
               {entries.length === 0
                 ? 'Loading...'
                 : filter === 'all'

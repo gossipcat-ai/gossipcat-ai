@@ -32,12 +32,17 @@ interface BigStatProps {
   value: string | number;
   unit?: string;
   label: string;
-  valueClass: string;
+  /** Non-theme Tailwind class for the value (e.g. text-confirmed, text-unverified, text-orange-400).
+   *  Pass empty string to fall back to var(--text). Theme-sensitive colours
+   *  are handled via valueColor instead. */
+  valueClass?: string;
+  /** Inline CSS color override — takes precedence over valueClass when set. */
+  valueColor?: string;
   pulse?: boolean;
   tooltip?: string;
 }
 
-function BigStat({ value, unit, label, valueClass, pulse, tooltip }: BigStatProps) {
+function BigStat({ value, unit, label, valueClass = '', valueColor, pulse, tooltip }: BigStatProps) {
   return (
     <div className="flex flex-col items-center py-4 px-3 text-center" data-tooltip={tooltip}>
       <div className="flex items-baseline gap-1">
@@ -47,10 +52,15 @@ function BigStat({ value, unit, label, valueClass, pulse, tooltip }: BigStatProp
             <span className="relative inline-flex h-2 w-2 rounded-full bg-unverified" />
           </span>
         )}
-        <span className={`font-mono text-2xl font-bold leading-none ${valueClass}`}>{value}</span>
-        {unit && <span className="font-mono text-xs text-muted-foreground">{unit}</span>}
+        <span
+          className={`font-mono text-2xl font-medium leading-none tracking-[-0.025em] ${valueClass}`}
+          style={valueColor ? { color: valueColor } : undefined}
+        >
+          {value}
+        </span>
+        {unit && <span className="font-mono text-xs" style={{ color: 'var(--text-dim)' }}>{unit}</span>}
       </div>
-      <div className="mt-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+      <div className="mt-1.5 text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
         {label}
       </div>
     </div>
@@ -75,14 +85,14 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
   const day1Empty = isCalm && totalAgents === 0;
 
   return (
-    <div className="rounded-lg border border-border bg-card">
+    <div className="rounded-lg border border-border" style={{ background: 'var(--surface-elev)' }}>
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border bg-primary/[0.03] px-3.5 py-3">
-        <div className="font-mono text-[11px] font-bold uppercase tracking-widest text-primary">
+      <div className="flex items-center justify-between border-b border-border px-3.5 py-3" style={{ background: 'color-mix(in oklch, var(--accent) 3%, transparent)' }}>
+        <div className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--accent)' }}>
           System Pulse
         </div>
         <div className="flex items-center gap-1.5 font-mono text-[10px] text-confirmed">
-          <span className="h-1.5 w-1.5 rounded-full bg-confirmed shadow-[0_0_6px_rgba(52,211,153,0.5)]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-confirmed" />
           LIVE
         </div>
       </div>
@@ -99,21 +109,23 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
             <BigStat
               value={overview.agentsOnline}
               label="Agents Online"
-              valueClass={overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}
+              valueColor={overview.agentsOnline > 0 ? 'var(--accent)' : 'var(--text)'}
             />
           </div>
           <div className="border-r border-border">
             <BigStat
               value={activeTasks}
               label="Active Tasks"
-              valueClass={activeTasks > 0 ? 'text-unverified' : 'text-muted-foreground'}
+              valueClass={activeTasks > 0 ? 'text-unverified' : ''}
+              valueColor={activeTasks > 0 ? undefined : 'var(--text-dim)'}
               pulse={activeTasks > 0}
             />
           </div>
           <BigStat
             value={`${confirmRate}%`}
             label="Confirmed"
-            valueClass={confirmRate >= 50 ? 'text-confirmed' : confirmRate > 0 ? 'text-unverified' : 'text-muted-foreground'}
+            valueClass={confirmRate >= 50 ? 'text-confirmed' : confirmRate > 0 ? 'text-unverified' : ''}
+            valueColor={confirmRate === 0 ? 'var(--text-dim)' : undefined}
           />
         </div>
       ) : (
@@ -125,28 +137,32 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
             {/* Three-row agent stat (stacked to fit narrow cell) */}
             <div className="flex flex-col items-stretch justify-center gap-1.5 px-4 py-3">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Agents currently executing a task">Dispatched</span>
-                <span className={`font-mono text-base font-bold leading-none ${overview.agentsOnline > 0 ? 'text-primary' : 'text-foreground'}`}>{overview.agentsOnline}</span>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }} data-tooltip="Agents currently executing a task">Dispatched</span>
+                <span
+                  className="font-mono text-base font-bold leading-none"
+                  style={{ color: overview.agentsOnline > 0 ? 'var(--accent)' : 'var(--text)' }}
+                >{overview.agentsOnline}</span>
               </div>
               <div className="flex items-baseline justify-between gap-2">
-                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Relay agents with an active WebSocket connection">Connected</span>
-                <span className={`font-mono text-base font-bold leading-none ${overview.relayConnected > 0 ? 'text-confirmed' : 'text-muted-foreground'}`}>{overview.relayConnected}</span>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }} data-tooltip="Relay agents with an active WebSocket connection">Connected</span>
+                <span className={`font-mono text-base font-bold leading-none ${overview.relayConnected > 0 ? 'text-confirmed' : ''}`} style={overview.relayConnected > 0 ? undefined : { color: 'var(--text-dim)' }}>{overview.relayConnected}</span>
               </div>
               <div className="flex items-baseline justify-between gap-2">
-                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground" data-tooltip="Total agents in gossipcat config">Registered</span>
-                <span className="font-mono text-base font-bold leading-none text-muted-foreground">{totalAgents}</span>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }} data-tooltip="Total agents in gossipcat config">Registered</span>
+                <span className="font-mono text-base font-bold leading-none" style={{ color: 'var(--text-dim)' }}>{totalAgents}</span>
               </div>
             </div>
             <BigStat
               value={activeTasks}
               label="Active Tasks"
-              valueClass={activeTasks > 0 ? 'text-unverified' : 'text-muted-foreground'}
+              valueClass={activeTasks > 0 ? 'text-unverified' : ''}
+              valueColor={activeTasks > 0 ? undefined : 'var(--text-dim)'}
               pulse={activeTasks > 0}
             />
             <BigStat
               value={overview.consensusRuns}
               label="Consensus"
-              valueClass="text-foreground"
+              valueColor="var(--text)"
             />
             <BigStat
               value={`${confirmRate}%`}
@@ -173,26 +189,29 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
       {!isCalm && (
         <div className="px-3.5 py-3">
           <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-            <span className="text-muted-foreground">tasks completed</span>
-            <span className="font-semibold text-foreground tabular-nums">{overview.tasksCompleted}</span>
+            <span style={{ color: 'var(--text-dim)' }}>tasks completed</span>
+            <span className="font-semibold tabular-nums" style={{ color: 'var(--text)' }}>{overview.tasksCompleted}</span>
           </div>
           <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-            <span className="text-muted-foreground">signals total</span>
-            <span className="font-semibold text-foreground tabular-nums">{overview.totalSignals}</span>
+            <span style={{ color: 'var(--text-dim)' }}>signals total</span>
+            <span className="font-semibold tabular-nums" style={{ color: 'var(--text)' }}>{overview.totalSignals}</span>
           </div>
           {overview.tasksFailed > 0 && (
             <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-              <span className="text-muted-foreground">tasks failed</span>
+              <span style={{ color: 'var(--text-dim)' }}>tasks failed</span>
               <span className="font-semibold text-destructive tabular-nums">{overview.tasksFailed}</span>
             </div>
           )}
           <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-            <span className="text-muted-foreground">avg duration</span>
-            <span className="font-semibold text-foreground tabular-nums">{formatDuration(overview.avgDurationMs)}</span>
+            <span style={{ color: 'var(--text-dim)' }}>avg duration</span>
+            <span className="font-semibold tabular-nums" style={{ color: 'var(--text)' }}>{formatDuration(overview.avgDurationMs)}</span>
           </div>
           <div className="flex items-center justify-between py-1 font-mono text-[11px]">
-            <span className="text-muted-foreground">success rate</span>
-            <span className={`font-semibold tabular-nums ${successRate === null ? 'text-muted-foreground' : successRate >= 95 ? 'text-confirmed' : successRate >= 80 ? 'text-unverified' : 'text-destructive'}`}>
+            <span style={{ color: 'var(--text-dim)' }}>success rate</span>
+            <span
+              className={`font-semibold tabular-nums ${successRate !== null && successRate >= 95 ? 'text-confirmed' : successRate !== null && successRate >= 80 ? 'text-unverified' : successRate !== null ? 'text-destructive' : ''}`}
+              style={successRate === null ? { color: 'var(--text-dim)' } : undefined}
+            >
               {successRate === null ? '—' : `${successRate}%`}
             </span>
           </div>
@@ -204,7 +223,7 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
 
       {/* Last consensus footer */}
       {overview.lastConsensusTimestamp && (
-        <div className="border-t border-border px-3.5 py-2 font-mono text-[10px] text-muted-foreground/60">
+        <div className="border-t border-border px-3.5 py-2 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
           last consensus {timeAgo(overview.lastConsensusTimestamp)}
         </div>
       )}
@@ -221,8 +240,8 @@ function ActivityBars({ hourly }: ActivityBarsProps) {
   const bars = hourly.length === 12 ? hourly : new Array(12).fill(0);
   const max = Math.max(1, ...bars);
   return (
-    <div className="border-t border-border bg-primary/[0.02] px-3.5 py-3">
-      <div className="mb-2 font-mono text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60">
+    <div className="border-t border-border px-3.5 py-3" style={{ background: 'color-mix(in oklch, var(--accent) 2%, transparent)' }}>
+      <div className="mb-2 font-mono text-[9px] font-bold uppercase tracking-widest" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
         Activity Last 12h
       </div>
       <div className="flex h-6 items-end gap-0.5">
@@ -244,7 +263,7 @@ function ActivityBars({ hourly }: ActivityBarsProps) {
           );
         })}
       </div>
-      <div className="mt-1 flex justify-between font-mono text-[9px] text-muted-foreground/40">
+      <div className="mt-1 flex justify-between font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}>
         <span>12h ago</span>
         <span>now</span>
       </div>

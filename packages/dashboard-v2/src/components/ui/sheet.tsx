@@ -42,7 +42,8 @@ export function Sheet({ open, onOpenChange, children }: SheetProps) {
   return (
     <div className="fixed inset-0 z-50">
       <div
-        className="absolute inset-0 bg-background/70 backdrop-blur-sm"
+        className="absolute inset-0 backdrop-blur-sm"
+        style={{ background: 'color-mix(in oklch, var(--surface) 70%, transparent)' }}
         onClick={() => onOpenChange(false)}
       />
       <div className="absolute inset-y-0 right-0 flex">
@@ -60,10 +61,11 @@ interface SheetContentProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
 }
 
-export function SheetContent({ side: _side = 'right', className = '', children, ...rest }: SheetContentProps) {
+export function SheetContent({ side: _side = 'right', className = '', children, style, ...rest }: SheetContentProps) {
   return (
     <div
-      className={`h-full border-l border-border/60 bg-card shadow-xl p-6 ${className}`}
+      className={`h-full p-6 ${className}`}
+      style={{ background: 'var(--surface-elev)', ...style }}
       {...rest}
     >
       {children}

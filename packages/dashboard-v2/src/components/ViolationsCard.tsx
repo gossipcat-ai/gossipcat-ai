@@ -22,11 +22,8 @@ export function ViolationsCard() {
 
   return (
     <div
-      className={`rounded-lg border ${
-        hasViolations
-          ? 'border-destructive/30 bg-destructive/10'
-          : 'border-border bg-muted/20'
-      }`}
+      className={`rounded-lg border ${hasViolations ? 'border-destructive/30 bg-destructive/10' : 'border-border'}`}
+      style={hasViolations ? undefined : { background: 'color-mix(in oklch, var(--surface-sunk) 20%, transparent)' }}
     >
       <div
         className={`flex items-center justify-between border-b px-3.5 py-3 ${
@@ -37,18 +34,14 @@ export function ViolationsCard() {
       >
         <div className="flex items-center gap-2">
           <span
-            className={`inline-flex h-4 w-4 items-center justify-center rounded-sm font-mono text-[11px] font-bold ${
-              hasViolations
-                ? 'bg-destructive/15 text-destructive'
-                : 'bg-muted text-muted-foreground'
-            }`}
+            className={`inline-flex h-4 w-4 items-center justify-center rounded-sm font-mono text-[11px] font-bold ${hasViolations ? 'bg-destructive/15 text-destructive' : ''}`}
+            style={hasViolations ? undefined : { background: 'var(--surface-sunk)', color: 'var(--text-dim)' }}
           >
             !
           </span>
           <span
-            className={`min-w-0 truncate font-mono text-[11px] font-bold uppercase tracking-widest ${
-              hasViolations ? 'text-destructive' : 'text-muted-foreground'
-            }`}
+            className={`min-w-0 truncate font-mono text-[11px] font-bold uppercase tracking-widest ${hasViolations ? 'text-destructive' : ''}`}
+            style={hasViolations ? undefined : { color: 'var(--text-dim)' }}
           >
             Process Violations
           </span>
@@ -62,31 +55,31 @@ export function ViolationsCard() {
 
       <div className="min-h-[52px] px-3.5 py-3">
         {err && (
-          <p className="font-mono text-[10px] text-muted-foreground">
+          <p className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
             failed to load violation data
           </p>
         )}
 
         {!err && !data && (
-          <p className="font-mono text-[10px] text-muted-foreground/60">Loading…</p>
+          <p className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Loading…</p>
         )}
 
         {!err && data && !hasViolations && (
-          <p className="font-mono text-[10px] text-muted-foreground/70">
+          <p className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
             No violations detected
           </p>
         )}
 
         {!err && data && hasViolations && (
           <>
-            <p className="font-mono text-[11px] text-foreground">
+            <p className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>
               {total} direct master push{total === 1 ? '' : 'es'} detected
             </p>
             {latest && (
-              <div className="mt-1 flex min-w-0 items-center gap-2 font-mono text-[10px] text-muted-foreground">
+              <div className="mt-1 flex min-w-0 items-center gap-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
                 <span className="shrink-0">Most recent:</span>
-                <span className="truncate text-foreground">{latest.agentId}</span>
-                <span className="shrink-0 text-muted-foreground/50">{timeAgo(latest.detectedAt)}</span>
+                <span className="truncate" style={{ color: 'var(--text)' }}>{latest.agentId}</span>
+                <span className="shrink-0" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>{timeAgo(latest.detectedAt)}</span>
               </div>
             )}
           </>
@@ -96,9 +89,8 @@ export function ViolationsCard() {
           <div className="mt-2 text-right">
             <a
               href={href('/violations')}
-              className={`font-mono text-[10px] transition hover:underline ${
-                hasViolations ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'
-              }`}
+              className={`font-mono text-[10px] transition hover:underline ${hasViolations ? 'text-destructive' : ''}`}
+              style={hasViolations ? undefined : { color: 'var(--text-dim)' }}
             >
               View all →
             </a>

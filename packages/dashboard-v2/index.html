@@ -16,17 +16,25 @@
   <meta property="og:image" content="/dashboard/assets/gossip-mini.png" />
 
   <!-- Theme -->
-  <meta name="theme-color" content="#8b5cf6" />
+  <meta name="theme-color" content="#cc785c" />
   <script>
   (function() {
     try {
-      var t = localStorage.getItem('dashboard:theme');
-      if (t === 'editorial') {
-        document.documentElement.dataset.theme = 'editorial';
+      var raw = localStorage.getItem('dashboard:theme');
+      var t;
+      if (raw === 'light' || raw === 'dark') {
+        t = raw;
+      } else if (raw === 'editorial') {
+        t = 'light';
+      } else if (raw === 'default') {
+        t = 'dark';
+      } else {
+        t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
       }
+      if (t === 'dark') document.documentElement.dataset.theme = 'dark';
       var meta = document.createElement('meta');
       meta.name = 'color-scheme';
-      meta.content = (t === 'editorial') ? 'light' : 'dark';
+      meta.content = t;
       document.head.appendChild(meta);
     } catch (e) { /* fall through */ }
   })();
@@ -35,7 +43,7 @@
   <link rel="icon" type="image/png" href="/dashboard/favicon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700&family=Spectral:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 </head>
 <body>
   <div id="root"></div>

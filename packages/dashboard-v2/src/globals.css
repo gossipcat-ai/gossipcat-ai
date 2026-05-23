@@ -1,47 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --color-background: #0a0a0f;
-  --color-foreground: #f0f0f5;
-  --color-card: #13131a;
-  --color-card-foreground: #f0f0f5;
-  --color-muted: #1c1c26;
-  --color-muted-foreground: #9898a8;
-  --color-border: rgba(139, 92, 246, 0.12);
-  --color-input: rgba(139, 92, 246, 0.12);
-  --color-ring: #8b5cf6;
-  --color-primary: #8b5cf6;
-  --color-primary-foreground: #fafafa;
-  --color-secondary: #1c1c26;
-  --color-secondary-foreground: #f0f0f5;
-  --color-accent: #1e1e30;
-  --color-accent-foreground: #f0f0f5;
-  --color-destructive: #f87171;
-  --color-destructive-foreground: #fafafa;
-
-  /* Semantic finding colors */
-  --color-confirmed: #34d399;
-  --color-disputed: #f87171;
-  --color-unverified: #fbbf24;
-  --color-unique: #c084fc;
-
-  /* Severity palette */
-  --color-severity-high: #f87171;
-
-  /* v3 additions */
-  --color-impact: #60a5fa;
-  --color-insight: #71717a;
-  --color-text-dim: #666674;
-
-  /* Chart / dynamic-data palette — turquoise tones for bars, sparklines,
-     and activity graphs that don't carry finding semantics. Kept separate
-     from --color-primary (purple) which remains the UI chrome accent. */
-  --color-chart: #75dddd;
-  --color-chart-accent: #09bc8a;
-  --color-chart-deep: #508991;
-
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
   --font-inter: 'Inter', system-ui, sans-serif;
@@ -49,128 +9,141 @@
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
+
+  /* Compat aliases — keep Tailwind utility classes (bg-card, border-border,
+     ring-primary, text-destructive, etc.) working after the Phase 1a token
+     rename. Each alias resolves to a new --surface/--text/--accent token so
+     theme switching still works. Tailwind v4 resolves @theme colors at
+     build time, so these MUST live here (not in :root).
+     IMPORTANT: Because @theme resolves at build time, the alias values are
+     STATIC snapshots of light-theme. Dark theme is handled by the [data-theme="dark"]
+     block re-declaring the underlying --surface/--text tokens, which the inline
+     `style={{ ... var(--surface-elev) ... }}` from Task 7 picks up; utility classes
+     bound here get the LIGHT value baked in at compile time. Anywhere theme
+     switching matters, use the inline style instead of the utility class. */
+  --color-background: #f5f4ef;
+  --color-foreground: #1f1f1d;
+  --color-card: #ffffff;
+  --color-card-foreground: #1f1f1d;
+  --color-muted: #ede9e0;
+  --color-muted-foreground: #6b6a64;
+  --color-border: #e0ddd2;
+  --color-input: #e0ddd2;
+  --color-ring: #cc785c;
+  --color-primary: #cc785c;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #ede9e0;
+  --color-secondary-foreground: #1f1f1d;
+  --color-accent: #cc785c;
+  --color-accent-foreground: #ffffff;
+  --color-destructive: #c0392b;
+  --color-destructive-foreground: #ffffff;
+
+  --color-confirmed: #1a7e5e;
+  --color-disputed: #c0392b;
+  --color-unverified: #b8741d;
+  --color-unique: #7c5cbf;
+  --color-severity-high: #c0392b;
+  --color-impact: #cc785c;
+  --color-insight: #6b6a64;
+  --color-text-dim: #6b6a64;
+
+  /* Chart fills (Reliability bars, sparklines, activity dots). Distinct
+     blue-grey so it reads as DATA, not status, alongside the warm accent. */
+  --color-chart: #5d7e9c;
+  --color-chart-accent: #1a7e5e;
+  --color-chart-deep: #6b6a64;
 }
 
-/* ───── Serif utility — no-op in default theme, serif in editorial ───── */
-.font-serif-editorial {
-  font-family: inherit;
+/* ───── Phase 1a — warm palette tokens (light default) ───── */
+:root {
+  --surface: #f5f4ef;
+  --surface-elev: #ffffff;
+  --surface-sunk: #ede9e0;
+  --text: #1f1f1d;
+  --text-dim: #6b6a64;
+  --text-faint: #9c9a92;
+  --border: #e0ddd2;
+  --border-strong: #c9c5b8;
+  --accent: #cc785c;
+  --accent-bright: #e08a6c;
+  --accent-soft: rgba(204, 120, 92, 0.12);
+  --success: #1a7e5e;
+  --warn: #b8741d;
+  --danger: #c0392b;
+  --beat: 1.6s;
+}
+
+:root {
+  --shadow-overlay: 0 24px 64px -16px rgba(31, 31, 29, 0.32), 0 0 0 1px rgba(31, 31, 29, 0.04);
+  --shadow-overlay-hairline: 0 0 0 1px rgba(31, 31, 29, 0.02);
+  --shadow-card: 0 1px 2px rgba(31, 31, 29, 0.04), 0 2px 6px -2px rgba(31, 31, 29, 0.05);
+}
+
+[data-theme="dark"] {
+  --surface: #1c1a17;
+  --surface-elev: #252320;
+  --surface-sunk: #131210;
+  --text: #e8e4d7;
+  --text-dim: #87847b;
+  --text-faint: #5d5a52;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --accent: #d68a6f;
+  --accent-bright: #e08a6c;
+  --accent-soft: rgba(214, 138, 111, 0.16);
+  --success: #57b289;
+  --warn: #c89a55;
+  --danger: #d68a7e;
+  --shadow-overlay: 0 24px 64px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-overlay-hairline: 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-card: none;
+  --color-unique: #9d7fd5;
+}
+
+/* Tailwind utility classes (text-foreground, bg-card, etc.) resolve against
+   @theme at build time and CANNOT theme-switch at runtime. The aliases above
+   bake light-theme defaults into utility classes; this block overrides the
+   underlying tokens in dark mode so any element using `color: var(--text)` /
+   `background: var(--surface-elev)` (the spec-recommended pattern from Task 7)
+   DOES theme-switch correctly. The few remaining utility-class consumers
+   (App.tsx legacy view, AgentRow etc.) are a known gap tracked in PR notes. */
+
+/* Theme-aware warning badge — replaces the cold amber Tailwind classes
+   used across TaskRow, TaskDetailModal, SkillCard, App.tsx for "skipped /
+   scheduled / pending" states. Reads as warning, adapts to both themes. */
+.warn-badge {
+  color: var(--warn);
+  background: color-mix(in oklch, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in oklch, var(--warn) 30%, transparent);
 }
 
 body {
-  background-color: var(--color-background);
-  color: var(--color-foreground);
-  font-family: var(--font-mono);
-  font-size: 15px;
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
   line-height: 1.55;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
 }
 
-/* ───── Editorial theme — cream/ink palette + serif typography ───── */
-[data-theme="editorial"] {
-  /* Background / surface */
-  --color-background: #F4F1EA;
-  --color-foreground: #0E0E0C;
-  --color-card: #EAE5D9;
-  --color-card-foreground: #0E0E0C;
-  --color-muted: #EAE5D9;
-  --color-muted-foreground: #524E41;
-  --color-border: #C8C1AB;
-  --color-input: #C8C1AB;
+/* ───── Phase 1a — luminance themes
+   Light is the implicit default (no [data-theme] attribute).
+   Dark activates via [data-theme="dark"] from useTheme.ts.
+   Tokens live in the :root + [data-theme="dark"] blocks above. ───── */
 
-  /* Primary / accent */
-  --color-ring: #A4161A;
-  --color-primary: #A4161A;
-  --color-primary-foreground: #F4F1EA;
-  --color-secondary: #EAE5D9;
-  --color-secondary-foreground: #0E0E0C;
-  --color-accent: #C4BB9E;
-  --color-accent-foreground: #0E0E0C;
-
-  /* Destructive unchanged — still red */
-  --color-destructive: #A4161A;
-  --color-destructive-foreground: #F4F1EA;
-
-  /* Semantic finding colors */
-  --color-confirmed: #2D6A4F;
-  --color-disputed: #A4161A;
-  --color-unverified: #7A5F00;
-  --color-unique: #1D3557;
-
-  /* Severity */
-  --color-severity-high: #B83235;  /* warmer crimson, AA on card, distinguishable from --color-disputed #A4161A */
-
-  /* v3 additions */
-  --color-impact: #1D3557;
-  --color-insight: #6B6657;
-  --color-text-dim: #6B6657;
-
-  /* Chart palette — olive/warm tones for editorial */
-  --color-chart: #1E4D52;
-  --color-chart-accent: #2D6A4F;
-  --color-chart-deep: #1D3557;
-
-  /* Typography */
-  --font-sans: 'Inter Tight', 'Inter', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, monospace;
-}
-
-[data-theme="editorial"] body {
-  font-family: var(--font-sans);
-}
-
-[data-theme="editorial"] .font-serif-editorial {
-  font-family: 'Spectral', 'GT Sectra', Georgia, serif;
-}
-
-/* ───── Editorial tooltip overrides ───── */
-[data-theme="editorial"] [data-tooltip]::after {
-  background: rgba(14, 14, 12, 0.95);
-  border-color: var(--color-border);
-  color: var(--color-card);
-}
-[data-theme="editorial"] [data-tooltip]::before {
-  border-top-color: rgba(14, 14, 12, 0.95);
-}
-
-/* ───── Editorial vignette suppression ───── */
-html:has([data-theme="editorial"])::after,
-[data-theme="editorial"]::after {
-  display: none;
-}
-
-/* ───── Editorial scrollbar override ───── */
-[data-theme="editorial"] ::-webkit-scrollbar-thumb {
-  background: rgba(82, 78, 65, 0.3);
-}
-[data-theme="editorial"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(82, 78, 65, 0.5);
-}
-
-/* ───── Editorial inline-code override ───── */
-[data-theme="editorial"] .task-md code.md-inline-code,
-[data-theme="editorial"] .finding-md code.md-inline-code {
-  background: rgba(214, 208, 191, 0.5);
-  border-color: var(--color-border);
-}
-
-/* ───── Editorial CRT logo glow suppression ───── */
-[data-theme="editorial"] .crt-logo:hover::after,
-[data-theme="editorial"] .crt-logo--glitch::after {
-  display: none;
-}
-[data-theme="editorial"] .crt-logo:hover .crt-logo-img {
-  filter: brightness(0.95) contrast(1.05);
-}
-
-/* Subtle vignette — no scanlines (they wash out avatar glows) */
-html::after {
+/* Subtle vignette — dark theme only (washes out the warm light palette).
+   z-index 1 keeps it above body content but below dialogs/drawers (z-50) and
+   notification stacks. The earlier z-index 9998 obscured modals once the
+   selector was corrected. */
+html[data-theme="dark"]::after {
   content: '';
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 9998;
-  background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 65%, rgba(0, 0, 0, 0.2) 100%);
+  z-index: 1;
+  background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 65%, rgba(0, 0, 0, 0.35) 100%);
 }
 
 /* ───── CRT / TV hover effect ───── */
@@ -201,6 +174,18 @@ html::after {
   50%  { text-shadow: 1px 0 0 rgba(255,0,80,0.3), -1px 0 0 rgba(0,200,255,0.3); }
   75%  { text-shadow: -1px 0 0 rgba(255,0,80,0.5), 1px 0 0 rgba(0,200,255,0.5); }
   100% { text-shadow: 2px 0 0 rgba(255,0,80,0.5), -2px 0 0 rgba(0,200,255,0.5); }
+}
+
+/* ───── Beat-rhythm pulse — live-status indicators ───── */
+@keyframes beat-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.9); }
+}
+
+/* Override Tailwind's animate-pulse on live-indicator elements to use the
+   project-wide --beat cadence instead of the default 2s timing. */
+.animate-pulse {
+  animation: beat-pulse var(--beat) ease-in-out infinite;
 }
 
 .crt-logo {
@@ -234,7 +219,7 @@ html::after {
   position: absolute;
   inset: -4px;
   border-radius: 16px;
-  background: radial-gradient(ellipse at center, rgba(139,92,246,0.15) 0%, transparent 70%);
+  background: radial-gradient(ellipse at center, var(--accent-soft) 0%, transparent 70%);
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -255,14 +240,14 @@ html::after {
 .crt-logo:hover .crt-logo-img,
 .crt-logo--glitch .crt-logo-img {
   animation: crt-flicker 0.6s step-end infinite;
-  filter: brightness(1.25) saturate(1.1) drop-shadow(0 0 32px rgba(139,92,246,0.7));
+  filter: brightness(1.25) saturate(1.1) drop-shadow(0 0 32px var(--accent));
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.15); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, 0.25); }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-soft); }
 
 /* ───── Tooltip system (CSS-only, data-tooltip="text") ───── */
 [data-tooltip] {
@@ -275,14 +260,14 @@ html::after {
   left: 50%;
   transform: translateX(-50%) translateY(-6px);
   padding: 8px 12px;
-  background: rgba(14, 14, 20, 0.98);
-  border: 1px solid rgba(139, 92, 246, 0.25);
+  background: var(--surface-sunk);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   font-family: 'Inter', sans-serif;
   font-size: 11px;
   font-weight: 500;
   line-height: 1.45;
-  color: var(--color-foreground);
+  color: var(--text);
   white-space: pre-line;
   width: max-content;
   max-width: 220px;
@@ -291,7 +276,7 @@ html::after {
   opacity: 0;
   transition: opacity 150ms ease 50ms;
   z-index: 1000;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7);
+  box-shadow: var(--shadow-overlay);
 }
 [data-tooltip]::before {
   content: '';
@@ -300,7 +285,7 @@ html::after {
   left: 50%;
   transform: translateX(-50%);
   border: 4px solid transparent;
-  border-top-color: rgba(14, 14, 20, 0.98);
+  border-top-color: var(--surface-sunk);
   pointer-events: none;
   opacity: 0;
   transition: opacity 150ms ease 50ms;
@@ -323,7 +308,7 @@ html::after {
   bottom: auto;
   top: 100%;
   border-top-color: transparent;
-  border-bottom-color: rgba(14, 14, 20, 0.98);
+  border-bottom-color: var(--surface-sunk);
 }
 [data-tooltip-pos="left"]::after {
   left: auto;
@@ -355,7 +340,7 @@ html::after {
 .task-md h1.md-h1 {
   font-size: 1rem;
   font-weight: 700;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.75rem;
   margin-bottom: 0.375rem;
   line-height: 1.4;
@@ -364,7 +349,7 @@ html::after {
 .task-md h2.md-h2 {
   font-size: 0.875rem;
   font-weight: 700;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.625rem;
   margin-bottom: 0.3rem;
   line-height: 1.4;
@@ -373,7 +358,7 @@ html::after {
 .task-md h3.md-h3 {
   font-size: 0.8rem;
   font-weight: 600;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.5rem;
   margin-bottom: 0.25rem;
   line-height: 1.4;
@@ -393,24 +378,25 @@ html::after {
 .task-md code.md-inline-code {
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  background: rgba(139, 92, 246, 0.12);
-  border: 1px solid rgba(139, 92, 246, 0.15);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 0.1em 0.35em;
-  color: var(--color-foreground);
+  color: var(--text);
 }
 
 .task-md pre.md-code-block {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(139, 92, 246, 0.12);
-  border-radius: 5px;
-  padding: 0.6rem 0.75rem;
+  font-size: 12px;
+  background: var(--surface-sunk);
+  border: none;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 12px 16px;
   margin: 0.5rem 0;
   overflow-x: auto;
   white-space: pre;
-  color: var(--color-foreground);
+  color: var(--text);
   line-height: 1.5;
 }
 
@@ -426,7 +412,7 @@ html::after {
 .finding-md h1.md-h1 {
   font-size: 0.8rem;
   font-weight: 700;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.5rem;
   margin-bottom: 0.25rem;
   line-height: 1.4;
@@ -435,7 +421,7 @@ html::after {
 .finding-md h2.md-h2 {
   font-size: 0.75rem;
   font-weight: 700;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.4rem;
   margin-bottom: 0.2rem;
   line-height: 1.4;
@@ -444,7 +430,7 @@ html::after {
 .finding-md h3.md-h3 {
   font-size: 0.7rem;
   font-weight: 600;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.3rem;
   margin-bottom: 0.15rem;
   line-height: 1.4;
@@ -464,24 +450,24 @@ html::after {
 .finding-md code.md-inline-code {
   font-family: var(--font-mono);
   font-size: 0.68rem;
-  background: rgba(139, 92, 246, 0.12);
-  border: 1px solid rgba(139, 92, 246, 0.15);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 0.1em 0.3em;
-  color: var(--color-foreground);
+  color: var(--text);
 }
 
 .finding-md pre.md-code-block {
   font-family: var(--font-mono);
   font-size: 0.68rem;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(139, 92, 246, 0.12);
+  background: var(--surface-sunk);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.4rem 0.6rem;
   margin: 0.35rem 0;
   overflow-x: auto;
   white-space: pre;
-  color: var(--color-foreground);
+  color: var(--text);
   line-height: 1.5;
 }
 

@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type React from 'react';
 import type { MemoryFile } from '@/lib/types';
 import { DISPLAY_TYPES, type DisplayType } from '@/lib/memory-taxonomy';
 import { timeAgo } from '@/lib/utils';
@@ -11,15 +12,15 @@ interface MemoryTileGridProps {
   onOpen: (memory: MemoryFile) => void;
 }
 
-const TYPE_ACCENT: Record<DisplayType, string> = {
-  backlog: 'text-primary',
-  record: 'text-text-dim',
-  session: 'text-confirmed',
-  rule: 'text-unverified',
+const TYPE_ACCENT_STYLE: Record<DisplayType, React.CSSProperties> = {
+  backlog: { color: 'var(--accent)' },
+  record: { color: 'var(--text-dim)' },
+  session: { color: 'var(--success)' },
+  rule: { color: 'var(--warn)' },
 };
 
 const TYPE_TAG_RING: Record<DisplayType, string> = {
-  backlog: 'border-primary/30 bg-primary/[0.06]',
+  backlog: 'border-[color-mix(in_oklch,var(--accent)_30%,transparent)] bg-[color-mix(in_oklch,var(--accent)_6%,transparent)]',
   record: 'border-text-dim/30 bg-text-dim/[0.08]',
   session: 'border-confirmed/30 bg-confirmed/[0.06]',
   rule: 'border-unverified/30 bg-unverified/[0.06]',
@@ -36,7 +37,7 @@ const TYPE_TAG_RING: Record<DisplayType, string> = {
  */
 export function MemoryTileGrid({ folder, memories, onBack, onOpen }: MemoryTileGridProps) {
   const meta = DISPLAY_TYPES.find((d) => d.type === folder)!;
-  const accent = TYPE_ACCENT[folder];
+  const accentStyle = TYPE_ACCENT_STYLE[folder];
   const tagRing = TYPE_TAG_RING[folder];
 
   const sorted = useMemo(
@@ -50,13 +51,14 @@ export function MemoryTileGrid({ folder, memories, onBack, onOpen }: MemoryTileG
       <div className="mb-3 flex items-center gap-2 font-mono text-xs">
         <button
           onClick={onBack}
-          className="font-bold uppercase tracking-widest text-muted-foreground transition hover:text-primary"
+          className="font-bold uppercase tracking-widest transition hover:[color:var(--accent)]"
+          style={{ color: 'var(--text-dim)' }}
         >
           Memory
         </button>
-        <span className="text-muted-foreground/40">›</span>
-        <span className={`font-bold uppercase tracking-widest ${accent}`}>{meta.label}</span>
-        <span className="ml-1 text-muted-foreground/60">{sorted.length}</span>
+        <span style={{ color: 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}>›</span>
+        <span className="font-bold uppercase tracking-widest" style={accentStyle}>{meta.label}</span>
+        <span className="ml-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>{sorted.length}</span>
       </div>
 
       {sorted.length === 0 ? (
@@ -76,19 +78,22 @@ export function MemoryTileGrid({ folder, memories, onBack, onOpen }: MemoryTileG
               <button
                 key={`${mem.agentId || ''}/${mem.filename}`}
                 onClick={() => onOpen(mem)}
-                className="group flex flex-col gap-1.5 rounded-md border border-border/40 bg-muted p-3 text-left transition hover:border-primary/30 hover:bg-accent/40"
+                className="group flex flex-col gap-1.5 rounded-md border [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] p-3 text-left transition hover:[border-color:color-mix(in_oklch,var(--accent)_30%,transparent)] hover:bg-accent/40"
+                style={{ background: 'var(--surface-sunk)' }}
               >
                 <span
-                  className={`inline-block w-fit rounded-sm border px-1.5 py-[1px] font-mono text-[9px] font-bold uppercase tracking-[0.14em] ${tagRing} ${accent}`}
+                  className={`inline-block w-fit rounded-sm border px-1.5 py-[1px] font-mono text-[9px] font-bold uppercase tracking-[0.14em] ${tagRing}`}
+                  style={accentStyle}
                 >
                   {meta.label}
                 </span>
                 <span
-                  className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground group-hover:text-primary"
+                  className="line-clamp-2 text-[13px] font-medium leading-snug group-hover:[color:var(--accent)]"
+                  style={{ color: 'var(--text)' }}
                 >
                   {title}
                 </span>
-                <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-muted-foreground/70">
+                <div className="flex items-center justify-between gap-2 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
                   <span className="min-w-0 truncate">{context}</span>
                   {ts && <span className="shrink-0">{timeAgo(ts)}</span>}
                 </div>

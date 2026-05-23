@@ -55,16 +55,16 @@ export function CategoryCompetency({ categoryAccuracy, categoryCorrect, category
             className={`grid grid-cols-[128px_1fr_auto_44px] items-center gap-3 ${row.n > 0 && row.n < 10 ? 'opacity-50' : ''}`}
             title={row.n > 0 && row.n < 10 ? `${title} — low sample (n<10)` : title}
           >
-            <span className="truncate font-mono text-[11px] text-muted-foreground">
+            <span className="truncate font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
               {row.key.replace(/_/g, ' ')}
             </span>
-            <div className="h-2 overflow-hidden rounded-sm bg-muted/30">
+            <div className="h-2 overflow-hidden rounded-sm" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 30%, transparent)' }}>
               <div
                 className={`h-full rounded-sm transition-all ${fill}`}
                 style={{ width: `${row.acc * 100}%` }}
               />
             </div>
-            <span className="shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground/60 w-16">
+            <span className="shrink-0 text-right font-mono text-[10px] tabular-nums w-16" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
               {row.n > 0 ? (
                 <>
                   {row.c}/{row.n}
@@ -74,7 +74,7 @@ export function CategoryCompetency({ categoryAccuracy, categoryCorrect, category
                 '—'
               )}
             </span>
-            <span className="text-right font-mono text-[11px] font-bold tabular-nums text-foreground">
+            <span className="text-right font-mono text-[11px] font-bold tabular-nums" style={{ color: 'var(--text)' }}>
               {Math.round(row.acc * 100)}%
             </span>
           </div>

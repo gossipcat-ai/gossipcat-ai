@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import type React from 'react';
 import type { ConsensusData, ConsensusReportsData, ConsensusReportFinding, ConsensusReport, ParseDiagnostic } from '@/lib/types';
 import { api } from '@/lib/api';
 import { timeAgo, renderFindingMarkdown, agentInitials, agentColor } from '@/lib/utils';
@@ -35,8 +36,8 @@ const TAG_MAP: Record<string, { label: string; filter: FilterType; cls: string }
   new_finding: { label: 'NEW', filter: 'unique', cls: 'text-unique bg-unique/10' },
 };
 
-const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: string; tooltip?: string }[] = [
-  { key: 'all', label: 'All', cls: 'text-muted-foreground border-border/40 hover:border-border/60', activeCls: 'text-foreground bg-muted border-border' },
+const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: string; activeStyle?: React.CSSProperties; inactiveStyle?: React.CSSProperties; tooltip?: string }[] = [
+  { key: 'all', label: 'All', cls: 'border-border/40 hover:border-border/60', activeCls: 'border-border', activeStyle: { color: 'var(--text)', background: 'var(--surface-sunk)' }, inactiveStyle: { color: 'var(--text-dim)' } },
   { key: 'confirmed', label: 'Confirmed', cls: 'text-confirmed/50 border-confirmed/20 hover:border-confirmed/40', activeCls: 'text-confirmed bg-confirmed/10 border-confirmed/40' },
   { key: 'unique', label: 'Unique', cls: 'text-unique/50 border-unique/20 hover:border-unique/40', activeCls: 'text-unique bg-unique/10 border-unique/40' },
   { key: 'disputed', label: 'Disputed', cls: 'text-disputed/50 border-disputed/20 hover:border-disputed/40', activeCls: 'text-disputed bg-disputed/10 border-disputed/40' },
@@ -44,22 +45,27 @@ const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: st
   { key: 'insight', label: 'Insight', cls: 'text-insight/60 border-insight/20 hover:border-insight/40', activeCls: 'text-insight bg-insight/10 border-insight/40', tooltip: 'Observations without a specific file:line anchor. Not scored — cannot be confirmed or disputed by peers.' },
 ];
 
-const SEV_FILTER_CHIPS: { key: 'all' | 'critical' | 'high' | 'medium' | 'low'; label: string; cls: string; activeCls: string }[] = [
-  { key: 'all', label: 'All', cls: 'text-muted-foreground border-border/40 hover:border-border/60', activeCls: 'text-foreground bg-muted border-border' },
+const SEV_FILTER_CHIPS: { key: 'all' | 'critical' | 'high' | 'medium' | 'low'; label: string; cls: string; activeCls: string; activeStyle?: React.CSSProperties; inactiveStyle?: React.CSSProperties }[] = [
+  { key: 'all', label: 'All', cls: 'border-border/40 hover:border-border/60', activeCls: 'border-border', activeStyle: { color: 'var(--text)', background: 'var(--surface-sunk)' }, inactiveStyle: { color: 'var(--text-dim)' } },
   { key: 'critical', label: 'Critical', cls: 'text-red-400/50 border-red-400/20 hover:border-red-400/40', activeCls: 'text-red-400 bg-red-400/10 border-red-400/40' },
   { key: 'high', label: 'High', cls: 'text-severity-high/50 border-severity-high/20 hover:border-severity-high/40', activeCls: 'text-severity-high bg-severity-high/10 border-severity-high/40' },
   { key: 'medium', label: 'Medium', cls: 'text-yellow-400/50 border-yellow-400/20 hover:border-yellow-400/40', activeCls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/40' },
-  { key: 'low', label: 'Low', cls: 'text-muted-foreground/50 border-border/40 hover:border-border/60', activeCls: 'text-muted-foreground bg-muted/50 border-border' },
+  { key: 'low', label: 'Low', cls: 'border-border/40 hover:border-border/60', activeCls: 'border-border', activeStyle: { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' }, inactiveStyle: { color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' } },
 ];
 
 const SEVERITY_CLS: Record<string, string> = {
   critical: 'text-red-400 bg-red-500/10',
   high: 'text-severity-high bg-severity-high/10',
   medium: 'text-yellow-400 bg-yellow-500/10',
-  low: 'text-muted-foreground bg-muted/50',
+  low: '',
 };
+const SEVERITY_STYLE_LOW: React.CSSProperties = { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' };
 
-const CITE_STYLES = '[&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400 [&_.inline-code]:rounded [&_.inline-code]:bg-muted [&_.inline-code]:px-1 [&_.inline-code]:py-0.5 [&_.inline-code]:font-mono [&_.inline-code]:text-[11px] [&_.inline-code]:text-foreground/80 [&_.inline-code-block]:my-1.5 [&_.inline-code-block]:block [&_.inline-code-block]:rounded [&_.inline-code-block]:bg-muted/70 [&_.inline-code-block]:p-2 [&_.inline-code-block]:font-mono [&_.inline-code-block]:text-[11px] [&_.inline-code-block]:text-foreground/70 [&_.inline-code-block]:overflow-x-auto';
+// Note: [&_.inline-code]:bg-surface-sunk and text-text are CSS custom property
+// references inside Tailwind arbitrary selectors — these target child elements
+// rendered by renderFindingMarkdown so they can't use inline style on the parent.
+// Using Tailwind's [&_...] arbitrary variant with CSS custom-property values.
+const CITE_STYLES = '[&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400 [&_.inline-code]:rounded [&_.inline-code]:[background:var(--surface-sunk)] [&_.inline-code]:px-1 [&_.inline-code]:py-0.5 [&_.inline-code]:font-mono [&_.inline-code]:text-[11px] [&_.inline-code]:[color:color-mix(in_oklch,var(--text)_80%,transparent)] [&_.inline-code-block]:my-1.5 [&_.inline-code-block]:block [&_.inline-code-block]:rounded [&_.inline-code-block]:[background:color-mix(in_oklch,var(--surface-sunk)_70%,transparent)] [&_.inline-code-block]:p-2 [&_.inline-code-block]:font-mono [&_.inline-code-block]:text-[11px] [&_.inline-code-block]:[color:color-mix(in_oklch,var(--text)_70%,transparent)] [&_.inline-code-block]:overflow-x-auto';
 
 interface FindingReviewInfo {
   reviewers: string[];
@@ -95,6 +101,7 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
     : f.tag === 'unverified' ? 'text-unverified bg-unverified/10 border-unverified/20'
     : 'text-unique bg-unique/10 border-unique/20';
   const sevCls = f.severity ? SEVERITY_CLS[f.severity] || '' : '';
+  const sevStyle: React.CSSProperties | undefined = f.severity === 'low' ? SEVERITY_STYLE_LOW : undefined;
   const typeLabel = f.findingType === 'suggestion' ? 'SUGGESTION'
     : f.findingType === 'insight' ? 'INSIGHT'
     : null;
@@ -107,14 +114,14 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
   const identifier = citeMatch ? citeMatch[1] : null;
 
   return (
-    <div className="rounded-md border border-border/40 hover:border-border/60 transition-colors bg-card/30 px-4 py-3.5">
+    <div className="rounded-md border border-border/40 hover:border-border/60 transition-colors px-4 py-3.5" style={{ background: 'color-mix(in oklch, var(--surface-elev) 30%, transparent)' }}>
       {/* Row 1: Tags + Identifier + Agent */}
       <div className="flex items-center gap-2 mb-1.5">
         <span className={`shrink-0 rounded border px-2 py-1 font-mono text-[10px] font-bold ${tagCls}`}>
           {f.tag.toUpperCase()}
         </span>
         {f.severity && (
-          <span className={`shrink-0 rounded border px-2 py-1 font-mono text-[10px] font-bold ${sevCls}`}>
+          <span className={`shrink-0 rounded border px-2 py-1 font-mono text-[10px] font-bold ${sevCls}`} style={sevStyle}>
             {f.severity.toUpperCase()}
           </span>
         )}
@@ -128,7 +135,7 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
             {identifier}
           </span>
         )}
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground/40">{f.originalAgentId}</span>
+        <span className="ml-auto font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}>{f.originalAgentId}</span>
         {f.confirmedBy && f.confirmedBy.length > 0 && (() => {
           const unique = [...new Set(f.confirmedBy)];
           return (
@@ -178,7 +185,8 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
                 ⚠ {d.code}
               </div>
               <div
-                className="mt-0.5 text-[11px] text-muted-foreground/80"
+                className="mt-0.5 text-[11px]"
+                style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}
                 dangerouslySetInnerHTML={{ __html: escapeHtml(DIAGNOSTIC_LABELS[d.code]) + ' — ' + escapeHtml(d.message) }}
               />
             </div>
@@ -191,13 +199,13 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
           {f.disputedBy.map((d, di) => (
             <div key={di} className="text-[11px]">
               <span className="font-mono font-bold text-disputed/70">{d.agentId}</span>
-              <span className="text-muted-foreground/60"> — {d.reason || d.evidence || 'No reason given'}</span>
+              <span style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}> — {d.reason || d.evidence || 'No reason given'}</span>
             </div>
           ))}
         </div>
       )}
       {/* Finding text */}
-      <div className={`finding-md font-inter text-xs leading-relaxed text-muted-foreground ${CITE_STYLES}`}
+      <div className={`finding-md font-inter text-xs leading-relaxed ${CITE_STYLES}`} style={{ color: 'var(--text-dim)' }}
         dangerouslySetInnerHTML={{ __html: renderFindingMarkdown(f.finding) }} />
       {/* Cross-review coverage badge row */}
       {reviewInfo && (
@@ -333,11 +341,11 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
     <section>
       {!hideHeader && (
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-            Consensus Rounds <span className="text-primary">{consensus.totalRuns ?? consensus.runs.length}</span>
+          <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+            Consensus Rounds <span style={{ color: 'var(--accent)' }}>{consensus.totalRuns ?? consensus.runs.length}</span>
           </h2>
           {!showAll && (
-            <a href="/dashboard/debates" className="font-mono text-xs text-muted-foreground transition hover:text-primary">
+            <a href="/dashboard/debates" className="font-mono text-xs transition" style={{ color: 'var(--text-dim)' }}>
               view all
             </a>
           )}
@@ -453,7 +461,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               <div key={report.id}>
                 {showBucketHeader && (
                   <div className={`mb-2 flex items-center gap-3 ${_i > 0 ? 'mt-4' : ''}`}>
-                    <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                    <span className="font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
                       {currentBucket}
                     </span>
                     <div className="h-px flex-1 bg-border/30" />
@@ -464,9 +472,10 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                   ${dominantBorderCls}
                   ${isRetracted ? 'opacity-60 line-through decoration-disputed/40' : ''}
                   ${isExpanded
-                    ? 'bg-card border-r-border/60 border-t-border/60 border-b-border/60'
-                    : 'bg-card/50 hover:bg-card/70 hover:border-r-border/60 hover:border-t-border/60 hover:border-b-border/60 hover:shadow-sm hover:shadow-black/20 hover:-translate-y-px'
+                    ? 'border-r-border/60 border-t-border/60 border-b-border/60'
+                    : 'hover:border-r-border/60 hover:border-t-border/60 hover:border-b-border/60 hover:shadow-sm hover:shadow-black/20 hover:-translate-y-px'
                   }`}
+                style={{ background: isExpanded ? 'var(--surface-elev)' : 'color-mix(in oklch, var(--surface-elev) 50%, transparent)' }}
                 data-retracted={isRetracted ? 'true' : undefined}
               >
                 {/* Retraction banner — inline per-card (not shared AlertBanner
@@ -483,7 +492,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       </span>
                     )}
                     {retraction!.reason && (
-                      <span className="ml-2 text-muted-foreground/80">— {retraction!.reason}</span>
+                      <span className="ml-2" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>— {retraction!.reason}</span>
                     )}
                   </div>
                 )}
@@ -495,10 +504,10 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                   <div className="flex-1 min-w-0">
                     {/* Row 1: count + agents + time */}
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-sm font-bold text-foreground">{allFindings.length}</span>
-                      <span className="text-[11px] text-muted-foreground/70">findings</span>
-                      <span className="text-muted-foreground/30 text-[10px]">·</span>
-                      <span className="text-[11px] text-muted-foreground/60">{report.rounds}r</span>
+                      <span className="font-mono text-sm font-bold" style={{ color: 'var(--text)' }}>{allFindings.length}</span>
+                      <span className="text-[11px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>findings</span>
+                      <span className="text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 30%, transparent)' }}>·</span>
+                      <span className="text-[11px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>{report.rounds}r</span>
                       {/* Agent initials as colored dots */}
                       {agentIds.length > 0 && (
                         <div className="flex items-center gap-1 ml-1">
@@ -506,21 +515,22 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                             <span
                               key={id}
                               title={id}
-                              className="inline-flex h-4 w-4 items-center justify-center rounded-full font-mono text-[8px] font-bold text-background"
-                              style={{ backgroundColor: agentColor(id) }}
+                              className="inline-flex h-4 w-4 items-center justify-center rounded-full font-mono text-[8px] font-bold"
+                              style={{ color: 'var(--surface)', backgroundColor: agentColor(id) }}
                             >
                               {agentInitials(id)}
                             </span>
                           ))}
                           {allAgentIds.length > 5 && (
-                            <span className="font-mono text-[9px] text-muted-foreground/40">
+                            <span className="font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}>
                               +{allAgentIds.length - 5}
                             </span>
                           )}
                         </div>
                       )}
                       <span
-                        className="shrink-0 rounded border border-border/30 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground"
+                        className="shrink-0 rounded border border-border/30 px-1.5 py-0.5 font-mono text-[10px] font-semibold"
+                        style={{ background: 'color-mix(in oklch, var(--surface-sunk) 40%, transparent)', color: 'var(--text-dim)' }}
                         title={report.id}
                       >
                         {report.id.slice(0, 8)}
@@ -554,7 +564,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                           </span>
                         );
                       })()}
-                      <span className="ml-auto font-mono text-[10px] text-muted-foreground/50 shrink-0">
+                      <span className="ml-auto font-mono text-[10px] shrink-0" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                         {timeAgo(report.timestamp)}
                       </span>
                     </div>
@@ -573,15 +583,18 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                     </div>
                     {report.topic && (
                       <div className="mt-1.5 flex items-start gap-2">
-                        <span className="shrink-0 rounded border border-border/30 bg-muted/30 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-muted-foreground/50">Topic</span>
-                        <span className="font-inter text-[11px] leading-relaxed text-muted-foreground/70">
+                        <span className="shrink-0 rounded border border-border/30 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 30%, transparent)', color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>Topic</span>
+                        <span className="font-inter text-[11px] leading-relaxed" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
                           {report.topic}
                         </span>
                       </div>
                     )}
                   </div>
                   {/* Chevron */}
-                  <span className={`mt-1 shrink-0 font-mono text-[10px] text-muted-foreground/40 transition-transform duration-150 ${isExpanded ? 'rotate-90 text-primary/60' : 'group-hover:text-muted-foreground/60'}`}>
+                  <span
+                    className={`mt-1 shrink-0 font-mono text-[10px] transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
+                    style={{ color: isExpanded ? 'color-mix(in oklch, var(--accent) 60%, transparent)' : 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}
+                  >
                     ▸
                   </span>
                 </button>
@@ -589,20 +602,22 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                 {isExpanded && (
                   <div className="border-t border-border/20 px-4 pb-4 pt-3">
                     <div className="mb-2 flex items-center gap-2">
-                      <span className="font-mono text-[10px] text-muted-foreground/50">Type:</span>
+                      <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>Type:</span>
                       {FILTER_CHIPS.map(tab => (
                         <button key={tab.key} onClick={() => setFilter(tab.key)}
                           className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${filter === tab.key ? tab.activeCls : tab.cls}`}
+                          style={filter === tab.key ? tab.activeStyle : tab.inactiveStyle}
                           {...(tab.tooltip ? { 'data-tooltip': tab.tooltip } : {})}>
                           {tab.label}
                         </button>
                       ))}
                     </div>
                     <div className="mb-2 flex items-center gap-2">
-                      <span className="font-mono text-[10px] text-muted-foreground/50">Severity:</span>
+                      <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>Severity:</span>
                       {SEV_FILTER_CHIPS.map(chip => (
                         <button key={chip.key} onClick={() => setSevFilter(chip.key)}
-                          className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${sevFilter === chip.key ? chip.activeCls : chip.cls}`}>
+                          className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${sevFilter === chip.key ? chip.activeCls : chip.cls}`}
+                          style={sevFilter === chip.key ? chip.activeStyle : chip.inactiveStyle}>
                           {chip.label}
                         </button>
                       ))}
@@ -613,7 +628,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                           ⚠ Coverage degraded — {report.coverageDegraded.received} of {report.coverageDegraded.expected} agents responded
                         </p>
                         {report.coverageDegraded.droppedAgents.length > 0 && (
-                          <p className="mt-0.5 font-mono text-[9px] text-muted-foreground/70">
+                          <p className="mt-0.5 font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
                             Dropped: {report.coverageDegraded.droppedAgents.join(', ')}
                           </p>
                         )}
@@ -625,13 +640,13 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                           ⚠ Zero-tag agents — {report.zeroTagAgents.length + (report.zeroTagOverflow ?? 0)} agent
                           {(report.zeroTagAgents.length + (report.zeroTagOverflow ?? 0)) === 1 ? '' : 's'} emitted no parseable &lt;agent_finding&gt; tags
                         </p>
-                        <p className="mt-0.5 font-mono text-[9px] text-muted-foreground/70">
+                        <p className="mt-0.5 font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
                           {report.zeroTagAgents.join(', ')}
                           {report.zeroTagOverflow && report.zeroTagOverflow > 0
                             ? ` (+${report.zeroTagOverflow} more)`
                             : ''}
                         </p>
-                        <p className="mt-1 font-mono text-[9px] text-muted-foreground/50">
+                        <p className="mt-1 font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                           Likely a paraphrased relay or HTML-entity-encoded tags. See HANDBOOK invariant #12.
                         </p>
                       </div>
@@ -641,7 +656,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                         <p className="font-mono text-[10px] font-semibold text-unverified">
                           ⚠ Cross-review skipped: {report.relayCrossReviewSkipped.length} relay agent{report.relayCrossReviewSkipped.length === 1 ? '' : 's'} failed Phase 2
                         </p>
-                        <p className="mt-0.5 font-mono text-[9px] text-muted-foreground/70">
+                        <p className="mt-0.5 font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
                           {report.relayCrossReviewSkipped.map(s => s.agentId).join(', ')}
                         </p>
                       </div>
@@ -655,15 +670,15 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       const totalCovered = coverage.length;
                       const underReviewed = coverage.filter(c => c.assigned < c.targetK);
                       return (
-                        <details className="mb-3 rounded-md border border-border/30 bg-card/30">
-                          <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground select-none">
+                        <details className="mb-3 rounded-md border border-border/30" style={{ background: 'color-mix(in oklch, var(--surface-elev) 30%, transparent)' }}>
+                          <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-widest select-none" style={{ color: 'var(--text-dim)' }}>
                             Cross-Review Assignments
                             {report.partialReview && (
                               <span className="rounded border border-unverified/15 bg-unverified/5 px-1.5 py-0.5 font-mono text-[9px] font-bold normal-case tracking-normal text-unverified">
                                 partial
                               </span>
                             )}
-                            <span className="ml-auto font-mono text-[9px] font-normal normal-case tracking-normal text-muted-foreground/50">
+                            <span className="ml-auto font-mono text-[9px] font-normal normal-case tracking-normal" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                               {reviewerEntries.length} reviewers · {totalCovered} findings
                             </span>
                           </summary>
@@ -672,16 +687,16 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                               <div key={reviewerId} className="flex items-center gap-2">
                                 <span
                                   title={reviewerId}
-                                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[8px] font-bold text-background"
-                                  style={{ backgroundColor: agentColor(reviewerId) }}
+                                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[8px] font-bold"
+                                  style={{ color: 'var(--surface)', backgroundColor: agentColor(reviewerId) }}
                                 >
                                   {agentInitials(reviewerId)}
                                 </span>
-                                <span className="font-mono text-[10px] text-muted-foreground">{reviewerId}</span>
-                                <span className="font-mono text-[10px] text-muted-foreground/40">({findingIds.length})</span>
+                                <span className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>{reviewerId}</span>
+                                <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}>({findingIds.length})</span>
                                 <div className="flex flex-wrap gap-1 ml-1">
                                   {findingIds.map(fid => (
-                                    <span key={fid} className="rounded bg-muted/50 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
+                                    <span key={fid} className="rounded px-1.5 py-0.5 font-mono text-[9px]" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)', color: 'var(--text-dim)' }}>
                                       {fid.length > 12 ? fid.slice(0, 12) + '…' : fid}
                                     </span>
                                   ))}
@@ -708,7 +723,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                     })()}
                     <div className="space-y-3">
                       {filteredFindings.length === 0 ? (
-                        <div className="py-4 text-center text-xs text-muted-foreground">No findings match this filter.</div>
+                        <div className="py-4 text-center text-xs" style={{ color: 'var(--text-dim)' }}>No findings match this filter.</div>
                       ) : (
                         filteredFindings.map((f, j) => <ReportFinding key={j} f={f} reviewInfo={f.id ? reviewLookup[f.id] : undefined} diagnostics={diagnosticsForFinding(f)} />)
                       )}
@@ -720,17 +735,19 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
             );
           })}
           {showAll && totalDebatePages > 1 && (
-            <div className="flex items-center justify-center gap-3 pt-4 font-mono text-[11px] text-muted-foreground">
+            <div className="flex items-center justify-center gap-3 pt-4 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
               <button
                 onClick={() => setDebatePage(p => Math.max(0, p - 1))}
                 disabled={clampedDebatePage === 0}
-                className="rounded-sm border border-border/40 bg-card px-3 py-1 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-3 py-1 transition hover:bg-accent/10 disabled:opacity-30"
+                style={{ background: 'var(--surface-elev)' }}
               >◂ Prev</button>
               <span>Page {clampedDebatePage + 1} of {totalDebatePages}</span>
               <button
                 onClick={() => setDebatePage(p => Math.min(totalDebatePages - 1, p + 1))}
                 disabled={clampedDebatePage >= totalDebatePages - 1}
-                className="rounded-sm border border-border/40 bg-card px-3 py-1 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-3 py-1 transition hover:bg-accent/10 disabled:opacity-30"
+                style={{ background: 'var(--surface-elev)' }}
               >Next ▸</button>
             </div>
           )}
@@ -767,7 +784,8 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
             return (
               <div
                 key={run.taskId + i}
-                className={`rounded-md border bg-card transition ${isOpen ? 'border-primary/25' : 'border-border'} ${isRunRetracted ? 'opacity-60' : ''}`}
+                className={`rounded-md border transition ${isOpen ? 'border-primary/25' : 'border-border'} ${isRunRetracted ? 'opacity-60' : ''}`}
+                style={{ background: 'var(--surface-elev)' }}
                 data-retracted={isRunRetracted ? 'true' : undefined}
                 title={isRunRetracted && run.retractionReason ? `Retracted: ${run.retractionReason}` : undefined}
               >
@@ -780,7 +798,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       </span>
                     )}
                     {run.retractionReason && (
-                      <span className="ml-2 text-muted-foreground/80">— {run.retractionReason}</span>
+                      <span className="ml-2" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>— {run.retractionReason}</span>
                     )}
                   </div>
                 )}
@@ -788,28 +806,31 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                 <button
                   aria-expanded={isOpen}
                   onClick={() => { const opening = !isOpen; setExpandedId(opening ? run.taskId : null); if (opening) { setFilter('all'); setSevFilter('all'); } }}
-                  className="flex w-full items-center p-3 text-left transition hover:bg-accent/50"
+                  className="flex w-full items-center p-3 text-left transition hover:bg-accent/10"
                 >
-                  <span className={`mr-3 font-mono text-xs text-muted-foreground transition ${isOpen ? 'text-primary' : ''}`}>
+                  <span
+                    className="mr-3 font-mono text-xs transition"
+                    style={{ color: isOpen ? 'var(--accent)' : 'var(--text-dim)' }}
+                  >
                     {isOpen ? '▾' : '▸'}
                   </span>
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <span className="font-mono text-[10px] text-primary/50">{run.taskId}</span>
-                        <span className={`font-mono text-sm font-semibold text-foreground ${isRunRetracted ? 'line-through decoration-disputed/40' : ''}`}>{runTotal} findings</span>
+                        <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--accent) 50%, transparent)' }}>{run.taskId}</span>
+                        <span className={`font-mono text-sm font-semibold ${isRunRetracted ? 'line-through decoration-disputed/40' : ''}`} style={{ color: 'var(--text)' }}>{runTotal} findings</span>
                         <div className="flex gap-1.5">
                           {run.agents.slice(0, 4).map((a) => (
-                            <span key={a} className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                            <span key={a} className="rounded-sm px-1.5 py-0.5 font-mono text-[10px]" style={{ background: 'var(--surface-sunk)', color: 'var(--text-dim)' }}>
                               {a.split('-').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
                             </span>
                           ))}
                           {run.agents.length > 4 && (
-                            <span className="font-mono text-[10px] text-muted-foreground">+{run.agents.length - 4}</span>
+                            <span className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>+{run.agents.length - 4}</span>
                           )}
                         </div>
                       </div>
-                      <span className="font-mono text-xs text-muted-foreground">{timeAgo(run.timestamp)}</span>
+                      <span className="font-mono text-xs" style={{ color: 'var(--text-dim)' }}>{timeAgo(run.timestamp)}</span>
                     </div>
 
                     <div className="mt-2 flex gap-2">
@@ -838,6 +859,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                           key={chip.key}
                           onClick={() => setFilter(chip.key)}
                           className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold transition ${filter === chip.key ? chip.activeCls : chip.cls} hover:opacity-80`}
+                          style={filter === chip.key ? chip.activeStyle : chip.inactiveStyle}
                           {...(chip.tooltip ? { 'data-tooltip': chip.tooltip } : {})}
                         >
                           {chip.label}
@@ -847,7 +869,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
 
                     {/* Findings list */}
                     {filteredSignals.length === 0 ? (
-                      <div className="py-4 text-center text-xs text-muted-foreground">No findings match this filter.</div>
+                      <div className="py-4 text-center text-xs" style={{ color: 'var(--text-dim)' }}>No findings match this filter.</div>
                     ) : (
                       <div className="space-y-2">
                         {filteredSignals.map((sig, j) => {
@@ -859,10 +881,10 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                                 {tag.label}
                               </span>
                               <div className="min-w-0 flex-1">
-                                <span className="text-xs text-muted-foreground [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400">
+                                <span className="text-xs [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400" style={{ color: 'var(--text-dim)' }}>
                                   <span className="finding-md" dangerouslySetInnerHTML={{ __html: renderFindingMarkdown(sig.evidence || '') }} />
                                 </span>
-                                <span className="ml-2 font-mono text-[10px] text-muted-foreground/50">
+                                <span className="ml-2 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                                   {sig.agentId}{sig.counterpartId ? ` + ${sig.counterpartId}` : ''}
                                 </span>
                               </div>

@@ -111,7 +111,7 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
 
   if (signals.length === 0) {
     return (
-      <div ref={containerRef} className="rounded-md border border-border/40 bg-card/80 px-4 py-3">
+      <div ref={containerRef} className="rounded-md border border-border/40 px-4 py-3" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
         <EmptyState
           title="No signal history yet"
           hint="Signals are recorded during consensus rounds."
@@ -122,13 +122,13 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
   }
 
   return (
-    <div ref={containerRef} className="rounded-md border border-border/40 bg-card/80 px-4 py-3">
+    <div ref={containerRef} className="rounded-md border border-border/40 px-4 py-3" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
             Signal Timeline
           </span>
-          <span className="font-mono text-[9px] text-muted-foreground/50">
+          <span className="font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
             {isWindowed ? `last ${windowSize} of ${total}` : `${total} total`}
           </span>
         </div>
@@ -159,8 +159,9 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
               // signals.length < the visual width budget. See agent-page UX
               // memo (project_agent_page_timeline_ux.md).
               className={`h-4 min-w-[4px] flex-1 rounded-sm transition-opacity hover:opacity-80 ${
-                SIGNAL_COLORS[s.signal] || 'bg-muted'
+                SIGNAL_COLORS[s.signal] || ''
               } ${clickable ? 'cursor-pointer' : 'cursor-default'}`}
+              style={SIGNAL_COLORS[s.signal] ? undefined : { background: 'var(--surface-sunk)' }}
               title={`${SIGNAL_LABELS[s.signal] || s.signal} — ${timeAgo(s.timestamp)}${clickable ? ' (click for detail)' : ''}`}
             />
           );
@@ -180,7 +181,7 @@ export function SignalTimeline({ agentId }: { agentId: string }) {
         ].map((l) => (
           <div key={l.label} className="flex items-center gap-1">
             <div className={`h-2 w-2 rounded-sm ${l.color}`} />
-            <span className="font-mono text-[9px] text-muted-foreground/60">{l.label}</span>
+            <span className="font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>{l.label}</span>
           </div>
         ))}
       </div>

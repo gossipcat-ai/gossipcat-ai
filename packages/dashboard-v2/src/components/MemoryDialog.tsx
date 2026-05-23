@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, type CSSProperties } from 'react';
 import type { MemoryFile } from '@/lib/types';
 import { renderMarkdown, timeAgo } from '@/lib/utils';
 import { toDisplayType } from '@/lib/memory-taxonomy';
@@ -19,6 +19,15 @@ interface MemoryDialogProps {
  *   - Close glyph inline with tag + title in a single header row
  *   - Section headers colored primary, not muted
  */
+const dialogStyle: CSSProperties = {
+  background: 'var(--surface-elev)',
+  borderRadius: '16px',
+  boxShadow: 'var(--shadow-overlay), 0 0 0 3px var(--accent-soft)',
+  border: '1px solid var(--border)',
+  color: 'var(--text)',
+  fontFamily: 'var(--font-sans)',
+};
+
 export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
   useEffect(() => {
     if (!memory) return;
@@ -43,61 +52,72 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-background/80 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-6 backdrop-blur-sm"
+      style={{ background: 'color-mix(in oklch, var(--surface) 80%, transparent)' }}
       onClick={onClose}
     >
       <div
-        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-primary/30 bg-card"
-        style={{
-          boxShadow:
-            '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 3px rgba(139, 92, 246, 0.06)',
-        }}
+        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-xl flex-col overflow-hidden"
+        style={dialogStyle}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header — tag + title + close, all on one row (mockup line 245-267) */}
-        <div className="flex items-center gap-2.5 border-b border-border/60 px-4 py-3.5">
-          <span className="shrink-0 rounded-sm border border-primary/30 bg-primary/[0.06] px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-primary">
+        {/* Header — eyebrow + tag + title + close */}
+        <div className="flex flex-col border-b border-border/60 px-4 pt-3 pb-3.5 gap-1">
+          {/* Eyebrow row — mono ID label */}
+          <div
+            className="font-mono text-[9px] uppercase tracking-[0.16em]"
+            style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}
+          >
+            {owner} · {display}
+          </div>
+          <div className="flex items-center gap-2.5">
+          <span
+            className="shrink-0 rounded-sm border border-primary/30 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.14em]"
+            style={{ background: 'color-mix(in oklch, var(--accent) 6%, transparent)', color: 'var(--accent)' }}
+          >
             {display}
           </span>
-          <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium text-foreground">
+          <span className="min-w-0 flex-1 truncate font-mono font-semibold" style={{ color: 'var(--text)', fontSize: '16px', fontWeight: 600 }}>
             {memory.filename}
           </span>
           <button
             onClick={onClose}
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded transition hover:bg-accent/20"
+            style={{ color: 'var(--text-dim)' }}
             aria-label="Close"
           >
             <span className="text-base leading-none">✕</span>
           </button>
+          </div>
         </div>
 
         {/* Body — section headers now primary-colored per mockup line 275 */}
-        <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-[13px] leading-relaxed text-foreground">
+        <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-[13px] leading-relaxed" style={{ color: 'var(--text)' }}>
           <section>
-            <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">
+            <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
               Owner
             </h3>
-            <div className="flex flex-wrap gap-3 font-mono text-[11px] text-muted-foreground">
+            <div className="flex flex-wrap gap-3 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
               <span>{owner}</span>
               {ts && <span>· updated {timeAgo(ts)}</span>}
             </div>
-            <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground/60">
+            <div className="mt-1 truncate font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
               {path}
             </div>
           </section>
 
           {fmEntries.length > 0 && (
             <section>
-              <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">
+              <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
                 Frontmatter
               </h3>
-              <div className="overflow-hidden rounded-md border border-border/40 bg-background/40">
+              <div className="overflow-hidden rounded-md border border-border/40" style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}>
                 <table className="w-full text-left font-mono text-[11px]">
                   <tbody>
                     {fmEntries.map(([k, v]) => (
                       <tr key={k} className="border-b border-border/20 last:border-b-0">
-                        <td className="w-32 px-3 py-1.5 text-muted-foreground/70">{k}</td>
-                        <td className="px-3 py-1.5 break-all text-foreground/90">{v}</td>
+                        <td className="w-32 px-3 py-1.5" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>{k}</td>
+                        <td className="px-3 py-1.5 break-all" style={{ color: 'color-mix(in oklch, var(--text) 90%, transparent)' }}>{v}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -107,11 +127,12 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
           )}
 
           <section>
-            <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">
+            <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
               Content
             </h3>
             <div
-              className="task-md overflow-x-auto rounded-md border border-border/40 bg-background/40 p-3 text-xs leading-relaxed text-foreground/90"
+              className="task-md overflow-x-auto rounded-md border border-border/40 p-3 text-xs leading-relaxed"
+              style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)', color: 'color-mix(in oklch, var(--text) 90%, transparent)' }}
               dangerouslySetInnerHTML={{ __html: renderMarkdown(memory.content) }}
             />
           </section>

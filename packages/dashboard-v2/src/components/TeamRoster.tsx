@@ -1,3 +1,4 @@
+import type React from 'react';
 import type { AgentData } from '@/lib/types';
 import { agentColor, timeAgo } from '@/lib/utils';
 import { getBenchBadgeKind } from '@/lib/bench';
@@ -14,33 +15,34 @@ export function TeamRoster({ agents }: TeamRosterProps) {
   return (
     <section>
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-foreground">
-          Team <span className="text-primary">{agents.length}</span>
+        <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          Team <span style={{ color: 'var(--accent)' }}>{agents.length}</span>
         </h2>
-        <a href="/dashboard/team" className="font-mono text-xs text-muted-foreground transition hover:text-primary">
+        <a href="/dashboard/team" className="font-mono text-xs transition" style={{ color: 'var(--text-dim)' }}>
           view all
         </a>
       </div>
-      <div className="rounded-md border border-border/40 bg-card/80">
+      <div className="rounded-md border border-border/40" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
         {sorted.map((agent, i) => {
           const s = agent.scores;
           const color = agentColor(agent.id);
           const lastTime = agent.lastTask?.timestamp ? timeAgo(agent.lastTask.timestamp) : '';
-          const weightColor =
-            s.dispatchWeight >= 1.2 ? 'text-confirmed' :
-            s.dispatchWeight >= 0.8 ? 'text-foreground' : 'text-muted-foreground';
+          const weightColor = s.dispatchWeight >= 1.2 ? 'text-confirmed' : '';
+          const weightColorStyle = s.dispatchWeight >= 1.2 ? undefined
+            : s.dispatchWeight >= 0.8 ? { color: 'var(--text)' } as React.CSSProperties
+            : { color: 'var(--text-dim)' } as React.CSSProperties;
           const metricBars = [
             { label: 'Acc', value: s.accuracy, fill: s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed' },
             { label: 'Rel', value: s.taskCompletionRate ?? 0, fill: 'bg-chart', tooltip: 'Reliability — fraction of dispatched tasks that finished without pipeline error or timeout' },
             { label: 'Unq', value: s.uniqueness, fill: 'bg-unique' },
-            { label: 'Imp', value: s.impactScore, fill: 'bg-[var(--color-impact)]' },
+            { label: 'Imp', value: s.impactScore, fill: 'bg-[var(--accent)]' },
           ];
 
           return (
             <a
               key={agent.id}
               href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
-              className={`flex items-stretch border-l-[3px] transition hover:bg-accent/50 ${
+              className={`flex items-stretch border-l-[3px] transition hover:bg-accent/10 ${
                 i > 0 ? 'border-t border-border/20' : ''
               }`}
               style={{ borderLeftColor: color }}
@@ -49,7 +51,7 @@ export function TeamRoster({ agents }: TeamRosterProps) {
                 {/* Line 1: name + circuit badge + weight + accuracy % */}
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate font-mono text-xs font-semibold text-foreground">{agent.id}</span>
+                    <span className="truncate font-mono text-xs font-semibold" style={{ color: 'var(--text)' }}>{agent.id}</span>
                     {(() => {
                       const kind = getBenchBadgeKind(s);
                       if (kind === 'benched') return (
@@ -71,10 +73,10 @@ export function TeamRoster({ agents }: TeamRosterProps) {
                     })()}
                   </div>
                   <div className="flex shrink-0 items-baseline gap-1.5">
-                    <span className={`font-mono text-sm font-bold tabular-nums leading-none ${weightColor}`}>
+                    <span className={`font-mono text-sm font-bold tabular-nums leading-none ${weightColor}`} style={weightColorStyle}>
                       {s.dispatchWeight.toFixed(1)}
                     </span>
-                    <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                    <span className="font-mono text-[10px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
                       {Math.round(s.accuracy * 100)}%
                     </span>
                   </div>
@@ -85,16 +87,16 @@ export function TeamRoster({ agents }: TeamRosterProps) {
                   <div className="flex-1 space-y-1">
                     {metricBars.map(m => (
                       <div key={m.label} className="flex items-center gap-2 text-[9px]">
-                        <span className="w-6 uppercase text-muted-foreground" data-tooltip={m.tooltip}>{m.label}</span>
-                        <div className="h-1 flex-1 overflow-hidden rounded-full bg-background/60">
+                        <span className="w-6 uppercase" style={{ color: 'var(--text-dim)' }} data-tooltip={m.tooltip}>{m.label}</span>
+                        <div className="h-1 flex-1 overflow-hidden rounded-full" style={{ background: 'color-mix(in oklch, var(--surface) 60%, transparent)' }}>
                           <div className={`h-full ${m.fill}`} style={{ width: `${m.value * 100}%` }} />
                         </div>
-                        <span className="w-8 text-right tabular-nums text-foreground">{Math.round(m.value * 100)}%</span>
+                        <span className="w-8 text-right tabular-nums" style={{ color: 'var(--text)' }}>{Math.round(m.value * 100)}%</span>
                       </div>
                     ))}
                   </div>
                   {lastTime && (
-                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">{lastTime}</span>
+                    <span className="shrink-0 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>{lastTime}</span>
                   )}
                 </div>
               </div>

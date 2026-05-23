@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import type React from 'react';
 import type { TaskItem } from '@/lib/types';
 import { timeAgo, agentColor } from '@/lib/utils';
 
@@ -39,6 +40,7 @@ const STATUS_META: Record<StatusKey, {
   label: string;
   iconBox: string;   // bg tint + border ring on the 22px square
   text: string;      // icon stroke + label color
+  textStyle?: React.CSSProperties;
   pulse: boolean;    // subtle breathing outline for in-flight tasks
 }> = {
   completed: {
@@ -61,14 +63,16 @@ const STATUS_META: Record<StatusKey, {
   },
   cancelled: {
     label: 'Cancelled',
-    iconBox: 'bg-muted-foreground/10 border-muted-foreground/25',
-    text: 'text-muted-foreground',
+    iconBox: 'border-muted-foreground/25',
+    text: '',
+    textStyle: { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--text-dim) 10%, transparent)' },
     pulse: false,
   },
   unknown: {
     label: 'Unknown',
-    iconBox: 'bg-muted-foreground/10 border-muted-foreground/25',
-    text: 'text-muted-foreground',
+    iconBox: 'border-muted-foreground/25',
+    text: '',
+    textStyle: { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--text-dim) 10%, transparent)' },
     pulse: false,
   },
 };
@@ -136,6 +140,7 @@ export function TaskRow({ task, onClick }: TaskRowProps) {
         <span className="inline-flex items-center gap-2" aria-label={`Status: ${meta.label}`}>
           <span
             className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border ${meta.iconBox} ${meta.text} ${meta.pulse ? 'animate-pulse' : ''}`}
+            style={meta.textStyle}
             aria-hidden
           >
             <svg
@@ -151,32 +156,32 @@ export function TaskRow({ task, onClick }: TaskRowProps) {
               {STATUS_ICON[key]}
             </svg>
           </span>
-          <span className={`font-mono text-[10px] font-semibold uppercase tracking-wider ${meta.text}`}>
+          <span className={`font-mono text-[10px] font-semibold uppercase tracking-wider ${meta.text}`} style={meta.textStyle}>
             {meta.label}
           </span>
         </span>
       </td>
       <td className="py-2.5 pr-3">
         <span
-          className="rounded border border-amber-500/25 bg-amber-500/8 px-2 py-1 font-mono text-[10px] font-semibold text-amber-400"
+          className="warn-badge rounded px-2 py-1 font-mono text-[10px] font-semibold"
           title={task.taskId}
         >
           {task.taskId.slice(0, 8)}
         </span>
       </td>
-      <td className="py-2.5 pr-3 font-mono text-xs text-muted-foreground">
-        <a href={`/dashboard/agent/${encodeURIComponent(task.agentId)}`} className="inline-flex items-center gap-1.5 transition hover:text-primary">
+      <td className="py-2.5 pr-3 font-mono text-xs" style={{ color: 'var(--text-dim)' }}>
+        <a href={`/dashboard/agent/${encodeURIComponent(task.agentId)}`} className="inline-flex items-center gap-1.5 transition">
           <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: agentColor(task.agentId) }} />
           {task.agentId}
         </a>
       </td>
-      <td className="py-2.5 pr-3 font-inter text-sm text-foreground/80">
+      <td className="py-2.5 pr-3 font-inter text-sm" style={{ color: 'color-mix(in oklch, var(--text) 80%, transparent)' }}>
         {(() => { const line = task.task.replace(/\n.*/s, ''); return line.length > 100 ? line.slice(0, 100) + '…' : line; })()}
       </td>
-      <td className="py-2.5 pr-3 font-mono text-xs text-muted-foreground">
+      <td className="py-2.5 pr-3 font-mono text-xs" style={{ color: 'var(--text-dim)' }}>
         {key === 'running' ? 'running' : formatDurationNice(task.duration)}
       </td>
-      <td className="py-2.5 pr-4 text-right font-mono text-xs text-muted-foreground/50">
+      <td className="py-2.5 pr-4 text-right font-mono text-xs" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
         {timeAgo(task.timestamp)}
       </td>
     </tr>
