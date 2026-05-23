@@ -1,8 +1,20 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
+/* Geist Variable — DESIGN.md primary body/UI/data font.
+   Self-hosted from the geist npm package's woff2 asset. Vite resolves the
+   relative path through node_modules at build time and hashes the output.
+   See main.tsx for why the npm package's JS entry can't be used directly. */
+@font-face {
+  font-family: 'Geist';
+  src: url('../../../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
-  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-sans: var(--font-geist-sans, 'Geist'), 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
   --font-inter: 'Inter', system-ui, sans-serif;
 
@@ -86,6 +98,89 @@
   --edge-opacity-base: 0.70;
   --edge-opacity-selected: 0.90;
   --edge-opacity-dim: 0.18;
+
+  /* DESIGN.md token aliases (added 2026-05-24).
+     Both name families resolve to identical values during migration.
+     Old color/surface/text names remain canonical until per-component
+     PRs migrate consumers. See DESIGN.md Token migration section. */
+  /* Foundation — literal hex per DESIGN.md (NOT aliased through legacy --color-*
+     tokens, which carry pre-WCAG-revision values; aliasing would defeat the
+     point of the spec's color-discipline pass). */
+  --bg: #FAF7F2;
+  /* --surface: NAMING CONFLICT — live --surface (line 60) means "page canvas"
+     (#f5f4ef); DESIGN.md --surface means "cards" (#FFFEFB). Aliasing here
+     would shift body bg cream → white (regression caught in PR #464 review).
+     Resolution candidates for a future PR: (a) rename live --surface → --bg-page
+     and let DESIGN.md --surface stand, (b) introduce --surface-card as a third
+     name and document --surface as deprecated. Until then, new code MUST NOT
+     reference --surface expecting card semantics — use --color-card or the
+     hex literal #FFFEFB. */
+  --surface-2: #F4EFE5;
+  --ink: #1A1916;
+  --ink-2: #4A4640;
+  --ink-3: #6B6862;
+  --ink-4: #807A71;
+  /* --accent-soft: SKIPPED — live --accent-soft (line 70) is identical value. */
+  --ok: #2A6E4F;
+  --ok-soft: #DCEBE2;
+  --warn: #B47A2A;
+  --warn-soft: #F2E4CC;
+  --bad: #A53A4A;
+  --bad-soft: #EFD4D8;
+  --info: #3F8B86;
+  --info-soft: #D5E6E4;
+  --idle: #6B6862;
+  --idle-soft: #E5E0D7;
+  /* Chart palette (multi-series ONLY — never for status) */
+  --c1: #3F8B86;
+  --c2: #8C5E97;
+  --c3: #B47A2A;
+  --c4: #2F7D5B;
+  --c5: #A53A4A;
+  --c6: #6B6862;
+  --c7: #C8A45A;
+  /* Per-agent identity (avatar bloom only — NEVER card chrome) */
+  --a-sonnet-reviewer: #8C5E97;
+  --a-sonnet-designer: #C8A45A;
+  --a-sonnet-implementer: #A53A4A;
+  --a-opus-implementer: #C97056;
+  --a-gemini-reviewer: #3F8B86;
+  --a-gemini-tester: #2F7D5B;
+  --a-haiku-researcher: #6B7A85;
+  /* Radius scale */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 9999px;
+  /* Spacing scale (4px base) */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+}
+
+/* DESIGN.md section header signature (small-caps Geist).
+   Replaces the legacy `font-mono text-[11px] font-bold uppercase tracking-widest` pattern.
+   Step 2 of the application checklist rolls this out across every existing header.
+   This PR only applies it to TeamHero as a smoke test. */
+.h-section {
+  /* Geist literal first (per DESIGN.md), then fall through the --font-sans
+     chain so the class still renders if Geist asset load fails. */
+  font-family: 'Geist', var(--font-sans);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  /* font-variant-caps (longhand) preserves font-variant-numeric: tabular-nums
+     on numeric children like the count span in TeamHero (<h2>Team <span>7</span></h2>).
+     The font-variant shorthand would reset numeric sub-properties. */
+  font-variant-caps: small-caps;
+  color: var(--ink-2);
 }
 
 :root {
@@ -121,6 +216,29 @@
   --edge-opacity-base: 0.55;
   --edge-opacity-selected: 0.85;
   --edge-opacity-dim: 0.15;
+
+  /* DESIGN.md token aliases — dark mode counterparts.
+     Per DESIGN.md "Dark mode" subsection: warm-charcoal foundation, cream text,
+     semantic colors at +10% lightness, accent slightly warmer.
+     These mirror the light-mode aliases inside the :root block above. */
+  --bg: #14120F;
+  --surface-2: #1F1D19;
+  --ink: #F2EDE3;
+  --ink-2: #B8B0A1;
+  --ink-3: #807A71;
+  --ink-4: #524E47;
+  --ok: #5BB58A;
+  --ok-soft: #1F3328;
+  --warn: #D8A35A;
+  --warn-soft: #3A2D17;
+  --bad: #D26478;
+  --bad-soft: #3A1C22;
+  --info: #7CC1C7;
+  --info-soft: #1A2729;
+  --idle: #807A71;
+  --idle-soft: #2A2722;
+  /* Chart palette stays identical across themes (semantically same hues). */
+  /* Per-agent identity hues stay identical too. */
 }
 
 /* Tailwind utility classes (text-foreground, bg-card, etc.) resolve against

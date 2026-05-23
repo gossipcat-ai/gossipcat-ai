@@ -26,7 +26,7 @@ export function TeamHero({ agents, highlightedAgentId }: TeamHeroProps) {
   return (
     <section>
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h2 className="h-section">
           Team <span style={{ color: 'var(--accent)' }}>{agents.length}</span>
         </h2>
         {hasMore && (
