@@ -15,8 +15,8 @@ interface MemoryTileGridProps {
 const TYPE_ACCENT_STYLE: Record<DisplayType, React.CSSProperties> = {
   backlog: { color: 'var(--accent)' },
   record: { color: 'var(--text-dim)' },
-  session: { color: 'var(--color-confirmed)' },
-  rule: { color: 'var(--color-unverified)' },
+  session: { color: 'var(--success)' },
+  rule: { color: 'var(--warn)' },
 };
 
 const TYPE_TAG_RING: Record<DisplayType, string> = {

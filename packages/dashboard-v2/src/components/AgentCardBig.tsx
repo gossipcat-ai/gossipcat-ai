@@ -132,7 +132,7 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
         <BarRow
           label="impact"
           value={s.impactScore}
-          fillClass="bg-[var(--color-impact)]"
+          fillClass="bg-[var(--accent)]"
           tooltip={`Impact ${pct(s.impactScore)}\nSeverity-weighted findings.\nCritical and high findings count more.`}
         />
       </div>

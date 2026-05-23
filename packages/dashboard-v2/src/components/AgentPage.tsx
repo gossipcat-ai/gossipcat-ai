@@ -89,7 +89,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
     { label: 'accuracy', value: s.accuracy, fill: s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed' },
     { label: 'reliability', value: s.taskCompletionRate ?? 0, fill: 'bg-chart', tooltip: 'Task completion rate — fraction of dispatched tasks that finished without pipeline error or timeout' },
     { label: 'unique', value: s.uniqueness, fill: 'bg-unique' },
-    { label: 'impact', value: s.impactScore, fill: 'bg-[var(--color-impact)]' },
+    { label: 'impact', value: s.impactScore, fill: 'bg-[var(--accent)]' },
   ];
 
   // Unverified signals carry two meanings depending on whose column they land in:

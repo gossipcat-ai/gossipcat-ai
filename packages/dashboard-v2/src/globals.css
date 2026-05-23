@@ -2,45 +2,6 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #0a0a0f;
-  --color-foreground: #f0f0f5;
-  --color-card: #13131a;
-  --color-card-foreground: #f0f0f5;
-  --color-muted: #1c1c26;
-  --color-muted-foreground: #9898a8;
-  --color-border: var(--border);
-  --color-input: var(--border);
-  --color-ring: #8b5cf6;
-  --color-primary: #8b5cf6;
-  --color-primary-foreground: #fafafa;
-  --color-secondary: #1c1c26;
-  --color-secondary-foreground: #f0f0f5;
-  --color-accent: #1e1e30;
-  --color-accent-foreground: #f0f0f5;
-  --color-destructive: #f87171;
-  --color-destructive-foreground: #fafafa;
-
-  /* Semantic finding colors */
-  --color-confirmed: #34d399;
-  --color-disputed: #f87171;
-  --color-unverified: #fbbf24;
-  --color-unique: #c084fc;
-
-  /* Severity palette */
-  --color-severity-high: #f87171;
-
-  /* v3 additions */
-  --color-impact: #60a5fa;
-  --color-insight: #71717a;
-  --color-text-dim: #666674;
-
-  /* Chart / dynamic-data palette — turquoise tones for bars, sparklines,
-     and activity graphs that don't carry finding semantics. Kept separate
-     from --color-primary (purple) which remains the UI chrome accent. */
-  --color-chart: #75dddd;
-  --color-chart-accent: #09bc8a;
-  --color-chart-deep: #508991;
-
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
   --font-inter: 'Inter', system-ui, sans-serif;
@@ -87,8 +48,8 @@
 }
 
 body {
-  background-color: var(--color-background);
-  color: var(--color-foreground);
+  background-color: var(--surface);
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: 15px;
   line-height: 1.55;
@@ -232,7 +193,7 @@ html::after {
   font-size: 11px;
   font-weight: 500;
   line-height: 1.45;
-  color: var(--color-foreground);
+  color: var(--text);
   white-space: pre-line;
   width: max-content;
   max-width: 220px;
@@ -305,7 +266,7 @@ html::after {
 .task-md h1.md-h1 {
   font-size: 1rem;
   font-weight: 700;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.75rem;
   margin-bottom: 0.375rem;
   line-height: 1.4;
@@ -314,7 +275,7 @@ html::after {
 .task-md h2.md-h2 {
   font-size: 0.875rem;
   font-weight: 700;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.625rem;
   margin-bottom: 0.3rem;
   line-height: 1.4;
@@ -323,7 +284,7 @@ html::after {
 .task-md h3.md-h3 {
   font-size: 0.8rem;
   font-weight: 600;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.5rem;
   margin-bottom: 0.25rem;
   line-height: 1.4;
@@ -347,7 +308,7 @@ html::after {
   border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 0.1em 0.35em;
-  color: var(--color-foreground);
+  color: var(--text);
 }
 
 .task-md pre.md-code-block {
@@ -377,7 +338,7 @@ html::after {
 .finding-md h1.md-h1 {
   font-size: 0.8rem;
   font-weight: 700;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.5rem;
   margin-bottom: 0.25rem;
   line-height: 1.4;
@@ -386,7 +347,7 @@ html::after {
 .finding-md h2.md-h2 {
   font-size: 0.75rem;
   font-weight: 700;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.4rem;
   margin-bottom: 0.2rem;
   line-height: 1.4;
@@ -395,7 +356,7 @@ html::after {
 .finding-md h3.md-h3 {
   font-size: 0.7rem;
   font-weight: 600;
-  color: var(--color-foreground);
+  color: var(--text);
   margin-top: 0.3rem;
   margin-bottom: 0.15rem;
   line-height: 1.4;
@@ -419,7 +380,7 @@ html::after {
   border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 0.1em 0.3em;
-  color: var(--color-foreground);
+  color: var(--text);
 }
 
 .finding-md pre.md-code-block {
@@ -432,7 +393,7 @@ html::after {
   margin: 0.35rem 0;
   overflow-x: auto;
   white-space: pre;
-  color: var(--color-foreground);
+  color: var(--text);
   line-height: 1.5;
 }
 

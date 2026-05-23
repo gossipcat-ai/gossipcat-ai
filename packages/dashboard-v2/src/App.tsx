@@ -156,7 +156,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                   </button>
                   <span className="text-muted-foreground/30">·</span>
                   <button onClick={() => toggleSort('impact')} className="flex items-center gap-1 hover:text-foreground" data-tooltip="Impact — severity-weighted finding score">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-impact)]" />Imp{arrow('impact')}
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />Imp{arrow('impact')}
                   </button>
                 </div>
               </th>
@@ -256,7 +256,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                       />
                       <MiniBar label="Rel" value={s.taskCompletionRate ?? 0} fillClass="bg-chart" tooltip="Reliability — fraction of dispatched tasks that finished without pipeline error or timeout" />
                       <MiniBar label="U" value={s.uniqueness} fillClass="bg-unique" tooltip="Uniqueness — findings this agent surfaced that no other agent found" />
-                      <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--color-impact)]" tooltip="Impact — severity-weighted finding score; critical and high findings count more" />
+                      <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--accent)]" tooltip="Impact — severity-weighted finding score; critical and high findings count more" />
                     </div>
                   </td>
 
