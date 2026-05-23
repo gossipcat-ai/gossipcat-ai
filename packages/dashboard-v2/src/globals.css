@@ -139,6 +139,12 @@
   --c5: #A53A4A;
   --c6: #6B6862;
   --c7: #C8A45A;
+  /* --c8 added 2026-05-24 post-Step-2 review: --c3 (#B47A2A ochre) collides
+     hex-identically with --warn in light mode, breaking the impact-bar's
+     semantic neutrality. --c8 magenta is distinct from every semantic color
+     (--ok green / --warn amber / --bad rose / --info teal / --idle slate)
+     and from every other chart palette hue. Used for impact-bar fills. */
+  --c8: #B85FA0;
   /* Per-agent identity (avatar bloom only — NEVER card chrome) */
   --a-sonnet-reviewer: #8C5E97;
   --a-sonnet-designer: #C8A45A;
@@ -239,6 +245,8 @@
   --idle-soft: #2A2722;
   /* Chart palette stays identical across themes (semantically same hues). */
   /* Per-agent identity hues stay identical too. */
+  /* --c8 magenta needs a slightly brighter shade in dark mode for legibility. */
+  --c8: #D478B8;
 }
 
 /* Tailwind utility classes (text-foreground, bg-card, etc.) resolve against

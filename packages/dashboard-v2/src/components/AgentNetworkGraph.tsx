@@ -223,7 +223,15 @@ function HubSpokeGraph({
       {/* Header label — adapts to mode. */}
       <div
         className="absolute z-10 flex items-center gap-2 h-section"
-        style={{ top: 10, left: 12, pointerEvents: 'none' }}
+        style={{
+          top: 10,
+          left: 12,
+          pointerEvents: 'none',
+          color: 'var(--stage-text-dim)',
+          background: 'color-mix(in oklch, var(--stage-bg) 70%, transparent)',
+          padding: '2px 6px',
+          borderRadius: '3px',
+        }}
       >
         {selectedAgentId ? (
           <>

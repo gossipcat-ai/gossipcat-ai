@@ -184,7 +184,7 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
           <dl className="space-y-5">
             {TERMS.map(({ term, definition, seeAlso }) => (
               <div key={term} className="rounded-md border border-border/40 px-4 py-3" style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}>
-                <dt className="font-mono text-[11px] font-bold uppercase tracking-[0.12em]" style={{ color: 'var(--accent)' }}>
+                <dt className="h-section">
                   {term}
                 </dt>
                 <dd className="mt-1.5 font-mono text-xs leading-relaxed" style={{ color: 'color-mix(in oklch, var(--text) 80%, transparent)' }}>

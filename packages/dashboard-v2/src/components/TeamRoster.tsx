@@ -35,7 +35,7 @@ export function TeamRoster({ agents }: TeamRosterProps) {
             { label: 'Acc', value: s.accuracy, fill: s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed' },
             { label: 'Rel', value: s.taskCompletionRate ?? 0, fill: 'bg-chart', tooltip: 'Reliability — fraction of dispatched tasks that finished without pipeline error or timeout' },
             { label: 'Unq', value: s.uniqueness, fill: 'bg-unique' },
-            { label: 'Imp', value: s.impactScore, fill: 'bg-[var(--c3)]' },
+            { label: 'Imp', value: s.impactScore, fill: 'bg-[var(--c8)]' },
           ];
 
           return (

@@ -51,13 +51,12 @@ export function MemoryTileGrid({ folder, memories, onBack, onOpen }: MemoryTileG
       <div className="mb-3 flex items-center gap-2 font-mono text-xs">
         <button
           onClick={onBack}
-          className="font-bold uppercase tracking-widest transition hover:[color:var(--accent)]"
-          style={{ color: 'var(--text-dim)' }}
+          className="h-section transition hover:[color:var(--accent)]"
         >
           Memory
         </button>
         <span style={{ color: 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}>›</span>
-        <span className="font-bold uppercase tracking-widest" style={accentStyle}>{meta.label}</span>
+        <span className="h-section" style={accentStyle}>{meta.label}</span>
         <span className="ml-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>{sorted.length}</span>
       </div>
 
