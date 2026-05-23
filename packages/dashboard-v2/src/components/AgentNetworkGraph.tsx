@@ -116,14 +116,22 @@ function ForceGraphInner({
       if (!cls) continue;
       links.push({ source: sourceNode, target: targetNode, cls, width: edgeWidthFor(rel.rounds), rounds: rel.rounds });
     }
+    // Render order: mixed (background) → trust → catch (foreground). SVG paints in
+    // array order, so later entries sit on top. Meaningful signals (catch + trust)
+    // are now drawn over the visually-dominant "mixed" edges instead of being
+    // buried under them.
+    const ORDER: Record<GraphLink['cls'], number> = { mixed: 0, trust: 1, catch: 2 };
+    links.sort((a, b) => ORDER[a.cls] - ORDER[b.cls]);
     return { nodes, links };
   }, [agents, peerRelationships]);
 
   // (Re-)build force simulation on width/nodes/links change.
   useEffect(() => {
+    // Wider link distance + stronger charge = more spread, less clumping
+    // for dense graphs (Phase 1b.1 polish — was 120/-400, felt cramped at 7+ agents).
     const sim = forceSimulation<GraphNode, GraphLink>(nodes)
-      .force('link', forceLink<GraphNode, GraphLink>(links).id((d) => d.id).distance(120).strength(0.4))
-      .force('charge', forceManyBody<GraphNode>().strength(-400))
+      .force('link', forceLink<GraphNode, GraphLink>(links).id((d) => d.id).distance(200).strength(0.35))
+      .force('charge', forceManyBody<GraphNode>().strength(-700))
       .force('center', forceCenter(width / 2, height / 2))
       .alpha(1).alphaMin(0.01).alphaDecay(0.05);
     simRef.current = sim;
@@ -180,17 +188,22 @@ function ForceGraphInner({
           const sy = s.y + uy * sr;
           const tx = t.x - ux * tr;
           const ty = t.y - uy * tr;
-          // Mid-perpendicular Bezier control point — 40px fixed offset, clockwise normal.
+          // Mid-perpendicular Bezier control point — 20px offset (Phase 1b.1 polish,
+          // was 40px; tightened to reduce the parallel-arc fishbowl effect on dense graphs).
           const mx = (sx + tx) / 2;
           const my = (sy + ty) / 2;
           // Clockwise normal: rotate unit vector by -90°.
           const nx = uy;
           const ny = -ux;
-          const cx = mx + nx * 40;
-          const cy = my + ny * 40;
+          const cx = mx + nx * 20;
+          const cy = my + ny * 20;
           const d = `M ${sx},${sy} Q ${cx},${cy} ${tx},${ty}`;
           const stroke = l.cls === 'trust' ? 'var(--success)' : l.cls === 'mixed' ? 'var(--warn)' : 'var(--danger)';
           const dash = l.cls === 'catch' ? '5,3' : l.cls === 'mixed' ? '8,2' : undefined;
+          // Baseline opacity reduced from 0.85 → 0.55 so edges feel calm; selection
+          // still pops at 0.85. Dimmed (non-selected) edges drop to 0.15 so the
+          // selected node's edges stand out cleanly.
+          const isAdjacent = selectedAgentId == null || s.id === selectedAgentId || t.id === selectedAgentId;
           return (
             <path
               key={`${s.id}::${t.id}`}
@@ -199,7 +212,7 @@ function ForceGraphInner({
               strokeWidth={l.width}
               strokeDasharray={dash}
               fill="none"
-              opacity={selectedAgentId == null || s.id === selectedAgentId || t.id === selectedAgentId ? 0.85 : 0.25}
+              opacity={selectedAgentId == null ? 0.55 : isAdjacent ? 0.85 : 0.15}
               style={{ transition: 'opacity 200ms cubic-bezier(0.4,0,0.2,1)' }}
             />
           );
