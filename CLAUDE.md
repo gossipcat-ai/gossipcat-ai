@@ -181,3 +181,35 @@ Future sessions should find this block at session start and produce clean
 memories on first write. If you see an existing memory with missing fields,
 leave it alone — back-filling is a human-curated pass (spec §1
 strip-and-generalize, not automated).
+
+---
+
+## Design System
+
+Read `DESIGN.md` at the repo root before making any visual or UI decisions in
+`packages/dashboard-v2` (or any future dashboard surface).
+
+All font choices, color tokens, spacing, layout, component contracts, and
+motion are defined there. Do not introduce new fonts, accent colors, or
+component patterns without explicit user approval and an update to
+`DESIGN.md`'s Decisions Log.
+
+Load-bearing rules from DESIGN.md (do not violate without approval):
+
+- Terracotta `--accent` (#C97056) is for brand mark + primary CTA + active nav
+  only. Never on chart bars, status indicators, or generic chrome.
+- Status is always semantic: `--ok` green = confirmed/healthy, `--warn` amber =
+  needs skills/drift, `--bad` rose = disputed/critical, `--info` teal =
+  unverified, `--idle` slate = offline/silent.
+- Per-agent identity color lives in the avatar bloom only. Card chrome stays
+  neutral.
+- Fraunces serif is for route titles (H1, H2) only. Geist body + UI + data
+  (with `tabular-nums`). JetBrains Mono for task IDs / hashes / code inlines only.
+- Section labels use small-caps Geist (lowercase + `font-variant: small-caps` +
+  `letter-spacing: 0.04em`), NOT all-caps mono.
+- No drop shadows by default. Cards are hairline `--border` only.
+- Equal-height hero row (`align-items: stretch`) for the graph + sidebar.
+
+When QA-ing dashboard PRs, flag any code that violates DESIGN.md tokens or
+contracts. When implementing dashboard work, dispatch design review via
+`gossip_run(agent_id: "sonnet-designer", ...)` after build to catch regressions.
