@@ -76,6 +76,13 @@
   --stage-bg: #ede9e0;
   --stage-grid: rgba(31, 31, 29, 0.025);
   --stage-text-dim: #6b6a64;
+  /* AgentNetworkGraph edge opacity — calmer baseline that still meets WCAG
+     1.4.11 (3:1 for non-text graphical elements). Light mode uses the deeper
+     #1a7e5e / #b8741d / #c0392b token values on cream stage, so the floor is
+     higher than dark mode. Overridden in [data-theme="dark"] below. */
+  --edge-opacity-base: 0.70;
+  --edge-opacity-selected: 0.90;
+  --edge-opacity-dim: 0.18;
 }
 
 :root {
@@ -106,6 +113,11 @@
   --stage-bg: #131210;
   --stage-grid: rgba(255, 255, 255, 0.03);
   --stage-text-dim: #87847b;
+  /* Dark mode tokens are lighter (#57b289 / #c89a55 / #d68a7e) so a lower
+     baseline still reads clearly on #131210 stage. */
+  --edge-opacity-base: 0.55;
+  --edge-opacity-selected: 0.85;
+  --edge-opacity-dim: 0.15;
 }
 
 /* Tailwind utility classes (text-foreground, bg-card, etc.) resolve against

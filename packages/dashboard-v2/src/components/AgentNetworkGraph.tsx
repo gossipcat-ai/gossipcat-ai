@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  forceCenter, forceLink, forceManyBody, forceSimulation,
+  forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation,
   type Simulation, type SimulationLinkDatum, type SimulationNodeDatum,
 } from 'd3-force';
 import { NeuralAvatar } from './NeuralAvatar';
@@ -129,18 +129,32 @@ function ForceGraphInner({
   useEffect(() => {
     // Wider link distance + stronger charge = more spread, less clumping
     // for dense graphs (Phase 1b.1 polish — was 120/-400, felt cramped at 7+ agents).
+    // forceCollide uses each node's visual radius (from sizeFor) + 6px gutter so
+    // large-signal avatars (84px) never visually overlap. alphaDecay calmed from
+    // 0.05 to 0.028 (just above d3 default 0.0228) so the wider layout has time
+    // to actually settle — at 0.05 the simulation cooled in ~56 ticks, often
+    // stranding nodes in a local minimum.
     const sim = forceSimulation<GraphNode, GraphLink>(nodes)
       .force('link', forceLink<GraphNode, GraphLink>(links).id((d) => d.id).distance(200).strength(0.35))
       .force('charge', forceManyBody<GraphNode>().strength(-700))
+      .force('collide', forceCollide<GraphNode>((d) => sizeFor(d.agent.scores.signals) / 2 + 6))
       .force('center', forceCenter(width / 2, height / 2))
-      .alpha(1).alphaMin(0.01).alphaDecay(0.05);
+      .alpha(1).alphaMin(0.01).alphaDecay(0.028);
     simRef.current = sim;
     sim.stop();
     // Manual ticking via the shared scheduler — keeps frame budget unified.
+    // Clamping x/y after each tick keeps nodes inside the overflow-hidden
+    // container — without this, narrow viewports + the 800px width fallback
+    // can strand nodes off-screen with their click target unreachable.
+    const pad = 50;
     const unsubscribe = subscribe(() => {
       if (sim.alpha() < sim.alphaMin()) return;
       sim.tick();
-      forceRender((n) => n + 1);
+      for (const n of nodes) {
+        if (n.x != null) n.x = Math.max(pad, Math.min(width - pad, n.x));
+        if (n.y != null) n.y = Math.max(pad, Math.min(height - pad, n.y));
+      }
+      forceRender((v) => v + 1);
     });
     return () => {
       unsubscribe();
@@ -200,10 +214,16 @@ function ForceGraphInner({
           const d = `M ${sx},${sy} Q ${cx},${cy} ${tx},${ty}`;
           const stroke = l.cls === 'trust' ? 'var(--success)' : l.cls === 'mixed' ? 'var(--warn)' : 'var(--danger)';
           const dash = l.cls === 'catch' ? '5,3' : l.cls === 'mixed' ? '8,2' : undefined;
-          // Baseline opacity reduced from 0.85 → 0.55 so edges feel calm; selection
-          // still pops at 0.85. Dimmed (non-selected) edges drop to 0.15 so the
-          // selected node's edges stand out cleanly.
+          // Edge opacity is theme-aware via --edge-opacity-* tokens — light
+          // mode needs a higher floor (0.70) than dark (0.55) to clear WCAG
+          // 1.4.11 for the deeper cream-mode stroke colors. Tokens override
+          // in [data-theme="dark"] in globals.css.
           const isAdjacent = selectedAgentId == null || s.id === selectedAgentId || t.id === selectedAgentId;
+          const opacityVar = selectedAgentId == null
+            ? 'var(--edge-opacity-base)'
+            : isAdjacent
+              ? 'var(--edge-opacity-selected)'
+              : 'var(--edge-opacity-dim)';
           return (
             <path
               key={`${s.id}::${t.id}`}
@@ -212,8 +232,7 @@ function ForceGraphInner({
               strokeWidth={l.width}
               strokeDasharray={dash}
               fill="none"
-              opacity={selectedAgentId == null ? 0.55 : isAdjacent ? 0.85 : 0.15}
-              style={{ transition: 'opacity 200ms cubic-bezier(0.4,0,0.2,1)' }}
+              style={{ opacity: opacityVar, transition: 'opacity 200ms cubic-bezier(0.4,0,0.2,1)' }}
             />
           );
         })}
