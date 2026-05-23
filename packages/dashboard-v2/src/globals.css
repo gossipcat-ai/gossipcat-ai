@@ -9,6 +9,44 @@
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
+
+  /* Compat aliases — keep Tailwind utility classes (bg-card, border-border,
+     ring-primary, text-destructive, etc.) working after the Phase 1a token
+     rename. Each alias resolves to a new --surface/--text/--accent token so
+     theme switching still works. Tailwind v4 resolves @theme colors at
+     build time, so these MUST live here (not in :root).
+     IMPORTANT: Because @theme resolves at build time, the alias values are
+     STATIC snapshots of light-theme. Dark theme is handled by the [data-theme="dark"]
+     block re-declaring the underlying --surface/--text tokens, which the inline
+     `style={{ ... var(--surface-elev) ... }}` from Task 7 picks up; utility classes
+     bound here get the LIGHT value baked in at compile time. Anywhere theme
+     switching matters, use the inline style instead of the utility class. */
+  --color-background: #f5f4ef;
+  --color-foreground: #1f1f1d;
+  --color-card: #ffffff;
+  --color-card-foreground: #1f1f1d;
+  --color-muted: #ede9e0;
+  --color-muted-foreground: #6b6a64;
+  --color-border: #e0ddd2;
+  --color-input: #e0ddd2;
+  --color-ring: #cc785c;
+  --color-primary: #cc785c;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #ede9e0;
+  --color-secondary-foreground: #1f1f1d;
+  --color-accent: #cc785c;
+  --color-accent-foreground: #ffffff;
+  --color-destructive: #c0392b;
+  --color-destructive-foreground: #ffffff;
+
+  --color-confirmed: #1a7e5e;
+  --color-disputed: #c0392b;
+  --color-unverified: #b8741d;
+  --color-unique: #cc785c;
+  --color-severity-high: #c0392b;
+  --color-impact: #cc785c;
+  --color-insight: #6b6a64;
+  --color-text-dim: #6b6a64;
 }
 
 /* ───── Phase 1a — warm palette tokens (light default) ───── */
@@ -30,6 +68,11 @@
   --beat: 1.6s;
 }
 
+:root {
+  --shadow-overlay: 0 24px 64px -16px rgba(31, 31, 29, 0.32), 0 0 0 1px rgba(31, 31, 29, 0.04);
+  --shadow-overlay-hairline: 0 0 0 1px rgba(31, 31, 29, 0.02);
+}
+
 [data-theme="dark"] {
   --surface: #1c1a17;
   --surface-elev: #252320;
@@ -45,13 +88,15 @@
   --success: #57b289;
   --warn: #c89a55;
   --danger: #d68a7e;
+  --shadow-overlay: 0 24px 64px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-overlay-hairline: 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
 body {
   background-color: var(--surface);
   color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 15px;
+  font-family: var(--font-sans);
+  font-size: 14px;
   line-height: 1.55;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
@@ -62,14 +107,15 @@ body {
    Dark activates via [data-theme="dark"] from useTheme.ts.
    Tokens live in the :root + [data-theme="dark"] blocks above. ───── */
 
-/* Subtle vignette — no scanlines (they wash out avatar glows) */
-html::after {
+/* Subtle vignette — dark theme only (washes out the warm light palette) */
+[data-theme="dark"] html::after,
+html:has([data-theme="dark"])::after {
   content: '';
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 9998;
-  background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 65%, rgba(0, 0, 0, 0.2) 100%);
+  background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 65%, rgba(0, 0, 0, 0.35) 100%);
 }
 
 /* ───── CRT / TV hover effect ───── */

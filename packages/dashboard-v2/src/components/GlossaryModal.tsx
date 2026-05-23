@@ -112,7 +112,7 @@ const TERMS: GlossaryTerm[] = [
 const dialogStyle: CSSProperties = {
   background: 'var(--surface-elev)',
   borderRadius: '16px',
-  boxShadow: '0 24px 64px -16px rgba(31,31,29,0.32), 0 0 0 1px rgba(31,31,29,0.02)',
+  boxShadow: 'var(--shadow-overlay)',
   border: '1px solid var(--border)',
   color: 'var(--text)',
   fontFamily: 'var(--font-sans)',
