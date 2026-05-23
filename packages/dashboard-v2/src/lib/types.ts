@@ -147,6 +147,32 @@ export interface ConsensusData {
   roundRetractions?: Array<{ consensus_id: string; reason: string; retracted_at: string }>;
 }
 
+/**
+ * Aggregated peer relationship between two agents, derived client-side from
+ * the consensus signal stream. Each pair is keyed by the alphabetically-sorted
+ * `agentId` pair joined with `::` (see `peerKey()` in lib/peer-relationships.ts).
+ *
+ * Powers Phase 1b's AgentNetworkGraph edge encoding:
+ *   confirmed-dominant pair  → `peer-trust` edge (green, solid)
+ *   disputed-present pair    → `peer-mixed` edge (amber, solid-with-dashes)
+ *   any hallucinations       → `peer-catch` edge (red, dashed)
+ */
+export interface PeerRelationship {
+  /** Distinct consensus rounds (by taskId) where this pair both appeared. */
+  rounds: number;
+  /** Count of `agreement` + `unique_confirmed` signals between the pair. */
+  confirmed: number;
+  /** Count of `disagreement` signals between the pair. */
+  disputed: number;
+  /** Count of `hallucination_caught` signals between the pair (symmetric: either direction). */
+  hallucinationsCaught: number;
+  /** ISO timestamp of the most recent consensus round containing any signal for this pair. */
+  lastInteraction: string;
+}
+
+/** Map from `peerKey(a, b)` → aggregated relationship. Order-independent. */
+export type PeerRelationshipMap = Map<string, PeerRelationship>;
+
 export interface ConsensusReportFinding {
   id: string;
   originalAgentId: string;
