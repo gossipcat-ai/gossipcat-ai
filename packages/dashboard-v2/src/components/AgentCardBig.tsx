@@ -43,7 +43,7 @@ export function AgentCardBig({ agent }: AgentCardBigProps) {
     <a
       href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
       className="group relative block rounded-lg border border-border p-3 transition-all hover:-translate-y-0.5 hover:border-primary/30"
-      style={{ background: 'var(--surface-elev)' }}
+      style={{ background: 'var(--surface-elev)', boxShadow: 'var(--shadow-card)' }}
     >
       {/* Flatten pass: the card used to layer gradient + inset highlight line
           + outer shadow + hover ring + per-agent avatar halo blur, which felt

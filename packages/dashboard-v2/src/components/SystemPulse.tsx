@@ -53,7 +53,7 @@ function BigStat({ value, unit, label, valueClass = '', valueColor, pulse, toolt
           </span>
         )}
         <span
-          className={`font-mono text-2xl font-bold leading-none ${valueClass}`}
+          className={`font-mono text-2xl font-medium leading-none tracking-[-0.025em] ${valueClass}`}
           style={valueColor ? { color: valueColor } : undefined}
         >
           {value}
