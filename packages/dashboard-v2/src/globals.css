@@ -92,13 +92,17 @@
      Old color/surface/text names remain canonical until per-component
      PRs migrate consumers. See DESIGN.md Token migration section. */
   --bg: var(--color-background);
-  --surface: var(--color-card);
+  /* --surface: SKIPPED — already declared at line 60 as #f5f4ef (cream page bg).
+     DESIGN.md spec uses --surface to mean "cards" (#ffffff), but live --surface means
+     "page canvas". Rather than override (would change page bg cream→white), we keep
+     the live meaning and let later PRs decide whether to rename or split into
+     --surface-page vs --surface-card. */
   --surface-2: var(--color-muted);
   --ink: var(--color-foreground);
   --ink-2: #4A4640;
   --ink-3: #6B6862;
   --ink-4: #807A71;
-  --accent-soft: rgba(204, 120, 92, 0.12);
+  /* --accent-soft: SKIPPED — already declared at line 70 with identical value. */
   --ok: var(--color-confirmed);
   --ok-soft: #DCEBE2;
   --warn-soft: #F2E4CC;
