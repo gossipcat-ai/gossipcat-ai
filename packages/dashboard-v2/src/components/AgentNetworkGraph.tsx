@@ -213,7 +213,12 @@ function ForceGraphInner({
           const cy = my + ny * 20;
           const d = `M ${sx},${sy} Q ${cx},${cy} ${tx},${ty}`;
           const stroke = l.cls === 'trust' ? 'var(--success)' : l.cls === 'mixed' ? 'var(--warn)' : 'var(--danger)';
-          const dash = l.cls === 'catch' ? '5,3' : l.cls === 'mixed' ? '8,2' : undefined;
+          // Catch (red) is now solid — the strong --danger color carries the
+          // signal on its own, and dropping the dash makes it visually distinct
+          // from mixed (amber dashed). Previous "5,3 vs 8,2" dash pattern read
+          // as the same broken line at the eye-level distances users actually
+          // scan from.
+          const dash = l.cls === 'mixed' ? '8,2' : undefined;
           // Edge opacity is theme-aware via --edge-opacity-* tokens — light
           // mode needs a higher floor (0.70) than dark (0.55) to clear WCAG
           // 1.4.11 for the deeper cream-mode stroke colors. Tokens override
@@ -244,36 +249,54 @@ function ForceGraphInner({
       >
         <LegendRow stroke="var(--success)" label="Trust" />
         <LegendRow stroke="var(--warn)" label="Mixed" dash="8,2" />
-        <LegendRow stroke="var(--danger)" label="Caught" dash="5,3" />
+        <LegendRow stroke="var(--danger)" label="Caught" />
       </div>
       {nodes.map((n) => {
         if (n.x == null || n.y == null) return null;
         const size = sizeFor(n.agent.scores.signals);
         const isSelected = n.id === selectedAgentId;
         const isDimmed = selectedAgentId != null && !isSelected;
+        const label = n.agent.id;
         return (
           <button
             key={n.id}
             type="button"
             onClick={(ev) => { ev.stopPropagation(); onSelectAgent(n.id); }}
-            className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full transition"
+            className="absolute -translate-x-1/2 -translate-y-1/2 transition"
             style={{
-              left: n.x, top: n.y, width: size, height: size,
+              left: n.x, top: n.y,
               opacity: isDimmed ? 0.4 : 1,
-              boxShadow: isSelected ? `0 0 0 3px var(--accent)` : undefined,
               border: 'none', background: 'transparent', padding: 0, cursor: 'pointer',
             }}
             aria-label={`Select agent ${n.agent.id}`}
             title={n.agent.id}
           >
-            <NeuralAvatar
-              agentId={n.agent.id}
-              signals={n.agent.scores.signals}
-              accuracy={n.agent.scores.accuracy}
-              uniqueness={n.agent.scores.uniqueness}
-              impact={n.agent.scores.impactScore}
-              size={size}
-            />
+            <div
+              className="rounded-full"
+              style={{
+                width: size, height: size,
+                boxShadow: isSelected ? `0 0 0 3px var(--accent)` : undefined,
+              }}
+            >
+              <NeuralAvatar
+                agentId={n.agent.id}
+                signals={n.agent.scores.signals}
+                accuracy={n.agent.scores.accuracy}
+                uniqueness={n.agent.scores.uniqueness}
+                impact={n.agent.scores.impactScore}
+                size={size}
+              />
+            </div>
+            <div
+              className="mt-1 font-mono text-[10px] font-bold uppercase tracking-wider"
+              style={{
+                color: isSelected ? 'var(--text)' : 'var(--stage-text-dim)',
+                textAlign: 'center',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {label}
+            </div>
           </button>
         );
       })}
