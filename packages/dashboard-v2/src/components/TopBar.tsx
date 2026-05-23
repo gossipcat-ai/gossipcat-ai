@@ -19,9 +19,7 @@ export function TopBar() {
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const route = useRoute();
   const expert = useExpert();
-  const { theme, toggle: toggleTheme } = useTheme();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const themeStr = theme as any as string;
+  const { theme, toggle } = useTheme();
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -69,16 +67,63 @@ export function TopBar() {
         >
           {expert ? '← Overview' : 'Expert view →'}
         </button>
-        <button
-          onClick={toggleTheme}
-          aria-label={theme === 'editorial' ? 'Switch to default theme' : 'Switch to editorial theme'}
-          title={theme === 'editorial' ? 'Switch to default theme' : 'Switch to editorial theme'}
-          className={`font-mono text-[10px] uppercase tracking-widest border rounded-sm px-2.5 py-1 transition ${
-            theme === 'editorial' ? 'border-border' : 'border-border/40'
-          }`}
-          style={{ color: themeStr === 'editorial' ? 'var(--text)' : 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}
+        <div
+          role="button"
+          tabIndex={-1}
+          title="Search — coming soon"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            height: '32px',
+            padding: '0 12px',
+            minWidth: '220px',
+            background: 'var(--surface-elev)',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            color: 'var(--text-faint)',
+            fontFamily: 'var(--font-sans)',
+            fontSize: '13px',
+            cursor: 'not-allowed',
+          }}
         >
-          {themeStr === 'editorial' ? 'Default' : 'Editorial'}
+          <span style={{ opacity: 0.7 }}>Search…</span>
+          <kbd
+            style={{
+              marginLeft: 'auto',
+              padding: '1px 6px',
+              borderRadius: '4px',
+              background: 'var(--surface-sunk)',
+              border: '1px solid var(--border)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '11px',
+              color: 'var(--text-dim)',
+            }}
+          >
+            ⌘K
+          </kbd>
+        </div>
+        <button
+          type="button"
+          onClick={toggle}
+          title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+          aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+          style={{
+            width: '32px',
+            height: '32px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'var(--surface-elev)',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            color: 'var(--text)',
+            cursor: 'pointer',
+            fontSize: '16px',
+            lineHeight: 1,
+          }}
+        >
+          {theme === 'light' ? '◐' : '◑'}
         </button>
         <button
           onClick={() => setGlossaryOpen(true)}
