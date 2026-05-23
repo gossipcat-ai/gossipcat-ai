@@ -86,6 +86,58 @@
   --edge-opacity-base: 0.70;
   --edge-opacity-selected: 0.90;
   --edge-opacity-dim: 0.18;
+
+  /* DESIGN.md token aliases (added 2026-05-24).
+     Both name families resolve to identical values during migration.
+     Old color/surface/text names remain canonical until per-component
+     PRs migrate consumers. See DESIGN.md Token migration section. */
+  --bg: var(--color-background);
+  --surface: var(--color-card);
+  --surface-2: var(--color-muted);
+  --ink: var(--color-foreground);
+  --ink-2: #4A4640;
+  --ink-3: #6B6862;
+  --ink-4: #807A71;
+  --accent-soft: rgba(204, 120, 92, 0.12);
+  --ok: var(--color-confirmed);
+  --ok-soft: #DCEBE2;
+  --warn-soft: #F2E4CC;
+  --bad: var(--color-disputed);
+  --bad-soft: #EFD4D8;
+  --info: #3F8B86;
+  --info-soft: #D5E6E4;
+  --idle: var(--color-insight);
+  --idle-soft: #E5E0D7;
+  /* Chart palette (multi-series ONLY — never for status) */
+  --c1: #3F8B86;
+  --c2: #8C5E97;
+  --c3: #B47A2A;
+  --c4: #2F7D5B;
+  --c5: #A53A4A;
+  --c6: #6B6862;
+  --c7: #C8A45A;
+  /* Per-agent identity (avatar bloom only — NEVER card chrome) */
+  --a-sonnet-reviewer: #8C5E97;
+  --a-sonnet-designer: #C8A45A;
+  --a-sonnet-implementer: #A53A4A;
+  --a-opus-implementer: #C97056;
+  --a-gemini-reviewer: #3F8B86;
+  --a-gemini-tester: #2F7D5B;
+  --a-haiku-researcher: #6B7A85;
+  /* Radius scale */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 9999px;
+  /* Spacing scale (4px base) */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
 }
 
 :root {
