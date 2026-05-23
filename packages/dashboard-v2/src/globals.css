@@ -189,6 +189,12 @@ html[data-theme="dark"]::after {
   50%      { opacity: 0.55; transform: scale(0.9); }
 }
 
+/* Subtler pulse for NarrativeStripe — slower (2×beat), opacity-only, no scale. */
+@keyframes beat-pulse-narrative {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.72; }
+}
+
 /* Override Tailwind's animate-pulse on live-indicator elements to use the
    project-wide --beat cadence instead of the default 2s timing. */
 .animate-pulse {
