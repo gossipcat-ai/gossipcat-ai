@@ -256,11 +256,7 @@ function ForceGraphInner({
         const size = sizeFor(n.agent.scores.signals);
         const isSelected = n.id === selectedAgentId;
         const isDimmed = selectedAgentId != null && !isSelected;
-        // Strip the redundant agent_type suffix from common ids (e.g.
-        // "sonnet-reviewer" → "reviewer") since the avatar color already
-        // encodes the provider. Falls through to the full id otherwise.
-        const labelParts = n.agent.id.split('-');
-        const label = labelParts.length > 1 ? labelParts.slice(1).join('-') : n.agent.id;
+        const label = n.agent.id;
         return (
           <button
             key={n.id}
