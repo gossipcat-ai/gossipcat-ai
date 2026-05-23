@@ -26,5 +26,8 @@ export function useUrlAgentParam(): [string | null, (id: string | null) => void]
     };
   }, []);
 
-  return [id, setAgentParam];
+  // `as const` preserves the tuple shape; without it, TypeScript widens the
+  // return type to (string | null | setter)[], which makes destructured
+  // call-site inference unsafe.
+  return [id, setAgentParam] as const;
 }

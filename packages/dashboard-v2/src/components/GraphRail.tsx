@@ -41,7 +41,9 @@ function FleetSummary({ agents, peerRelationships }: { agents: AgentData[]; peer
       recentCatches.push({ pair: [a, b], catches: rel.hallucinationsCaught, ts: rel.lastInteraction });
     }
   }
-  recentCatches.sort((a, b) => b.ts.localeCompare(a.ts));
+  // Sort by parsed timestamp, not lexicographic. Defense-in-depth in case
+  // `lastInteraction` ever ships a non-ISO format.
+  recentCatches.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
   const top5Catches = recentCatches.slice(0, 5);
 
   return (
@@ -62,28 +64,30 @@ function FleetSummary({ agents, peerRelationships }: { agents: AgentData[]; peer
               key={a.id}
               type="button"
               onClick={() => setAgentParam(a.id)}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:[background:color-mix(in_oklch,var(--accent)_8%,transparent)]"
+              className="group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:[background:color-mix(in_oklch,var(--accent)_8%,transparent)]"
+              style={{ cursor: 'pointer' }}
             >
               <NeuralAvatar agentId={a.id} signals={a.scores.signals} accuracy={a.scores.accuracy} uniqueness={a.scores.uniqueness} impact={a.scores.impactScore} size={28} />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-mono text-[11px] font-semibold" style={{ color: 'var(--text)' }}>{a.id}</div>
                 <div className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>{Math.round(a.scores.accuracy * 100)}% accuracy · {a.scores.signals} signals</div>
               </div>
+              <span className="opacity-0 transition group-hover:opacity-100 font-mono text-[10px]" style={{ color: 'var(--accent)' }}>→</span>
             </button>
           ))
         )}
       </Section>
 
-      <Section label="Weekly trends" tone="muted">
-        <EmptyRow text="Historical delta data lands in Phase 1b PR5." />
-      </Section>
+      {/* Weekly trends section deferred — historical-delta data lands in Phase 1b PR5.
+          Hidden rather than rendered-as-placeholder so the fleet summary doesn't
+          carry a visible "unfinished" hole in production UI. */}
 
       <Section label="Recent hallucination catches" tone="danger">
         {top5Catches.length === 0 ? (
           <EmptyRow text="No catches in the active window." />
         ) : (
-          top5Catches.map((c, i) => (
-            <div key={i} className="rounded px-2 py-1.5">
+          top5Catches.map((c) => (
+            <div key={`${c.pair[0]}::${c.pair[1]}`} className="rounded px-2 py-1.5">
               <div className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>
                 <span style={{ color: 'var(--danger)' }}>◆</span> {c.pair[0]} ↔ {c.pair[1]}
               </div>
@@ -215,7 +219,7 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
       {/* Action footer — sticky bottom. Keyboard hints visual-only this PR. */}
       <div className="mt-auto flex flex-col gap-1.5 border-t p-3" style={{ borderColor: 'var(--border)' }}>
         <ActionButton label="Open dispatch log" kbd="⏎" href={`/agent/${encodeURIComponent(agent.id)}`} />
-        <ActionButton label="View skill graph" kbd="G" href={`/agent/${encodeURIComponent(agent.id)}#skills`} />
+        <ActionButton label="View skill graph" kbd="G" href={`/agent/${encodeURIComponent(agent.id)}#skills`} disabled={agent.skills.length === 0} />
         <ActionButton label="Dispatch consensus" kbd="⌘D" href="#" disabled />
       </div>
     </div>
@@ -236,6 +240,7 @@ function ActionButton({ label, kbd, href, disabled }: { label: string; kbd: stri
     <a
       href={disabled ? undefined : `/dashboard${href}`}
       aria-disabled={disabled}
+      tabIndex={disabled ? -1 : undefined}
       className="flex items-center justify-between rounded px-2 py-1.5 font-mono text-[11px] transition"
       style={{ background: disabled ? 'transparent' : 'color-mix(in oklch, var(--surface) 50%, transparent)', color: disabled ? 'var(--text-faint)' : 'var(--text)', pointerEvents: disabled ? 'none' : 'auto', opacity: disabled ? 0.5 : 1 }}
     >
