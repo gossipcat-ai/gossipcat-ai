@@ -11,7 +11,7 @@ import { usePeerRelationships } from '@/hooks/usePeerRelationships';
 import { useUrlAgentParam } from '@/hooks/useUrlAgentParam';
 import { useUrlRangeParam } from '@/hooks/useUrlRangeParam';
 import { useGlobalAgentKeys } from '@/hooks/useGlobalAgentKeys';
-import { isGraphBeta } from '@/lib/feature-flags';
+import { isGraphHidden } from '@/lib/feature-flags';
 import { href } from '@/lib/router';
 import type { OverviewData, AgentData, TasksData, ConsensusData } from '@/lib/types';
 
@@ -19,7 +19,7 @@ interface OverviewPageProps {
   overview: OverviewData;
   agents: AgentData[] | null;
   tasks: TasksData | null;
-  /** Optional — only consumed by the ?graph=1 beta to derive peer relationships. */
+  /** Optional — consumed by the graph layer to derive peer relationships. */
   consensus?: ConsensusData | null;
   activeTaskCount: number;
   setActiveTaskCount: (n: number) => void;
@@ -41,7 +41,7 @@ export function OverviewPage({
   setActiveTaskCount,
 }: OverviewPageProps) {
   const actionable = overview.actionableFindings;
-  const showGraph = isGraphBeta();
+  const hideGraph = isGraphHidden();
   const peerRelationships = usePeerRelationships(consensus?.runs);
   // Phase 1b PR4 — selection state moved to ?agent= URL param for deep-linking.
   const [selectedAgentId, setSelectedAgentId] = useUrlAgentParam();
@@ -54,8 +54,10 @@ export function OverviewPage({
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
-      {/* Phase 1b PR3+PR4+PR5 — Graph + Rail + NarrativeStripe + TemporalScrubber, all behind ?graph=1. */}
-      {showGraph && agents && (
+      {/* Phase 1b PRs 3-6 — Graph + Rail + NarrativeStripe + TemporalScrubber.
+          Shown by default; ?graph=0 opts out (escape hatch to the legacy
+          calm-widgets-only layout below). */}
+      {!hideGraph && agents && (
         <div className="space-y-3">
           <NarrativeStripe />
           <div className="flex gap-3">
@@ -124,7 +126,7 @@ export function OverviewPage({
       <ActiveTasksBanner onCountChange={setActiveTaskCount} />
 
       {/* Top-4 agents — echoes the AgentNetworkGraph selection when the graph is on */}
-      {agents && <TeamHero agents={agents} highlightedAgentId={showGraph ? selectedAgentId : null} />}
+      {agents && <TeamHero agents={agents} highlightedAgentId={!hideGraph ? selectedAgentId : null} />}
 
       {/* Recent dispatches — limit 3 (vs dense view's 5) */}
       {tasks && <TasksSection tasks={tasks} limit={3} />}
