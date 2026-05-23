@@ -279,7 +279,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
                   <td className="py-3 pr-5 align-top">
                     {lt ? (
                       <div className="flex min-w-0 items-center gap-2">
-                        <span className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-400">
+                        <span className="warn-badge shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold">
                           {lt.taskId.slice(0, 8)}
                         </span>
                         <span className="truncate font-inter text-[11px] text-muted-foreground/80" style={{ maxWidth: 260 }}>
@@ -366,13 +366,13 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
             <button
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={clampedPage === 0}
-              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
             >◂ Prev</button>
             <span>{clampedPage + 1} / {totalPages}</span>
             <button
               onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
               disabled={clampedPage >= totalPages - 1}
-              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
             >Next ▸</button>
           </div>
       </div>
@@ -451,7 +451,7 @@ function FindingsPage({
             <button
               type="button"
               onClick={() => setShowRetracted(v => !v)}
-              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 text-[10px] transition hover:bg-accent/50 hover:text-foreground"
+              className="rounded-sm border border-border/40 bg-card px-2 py-0.5 text-[10px] transition hover:bg-accent/10 hover:text-foreground"
             >
               {showRetracted ? 'hide' : 'show'}
             </button>

@@ -350,14 +350,14 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               <button
                 onClick={() => setTaskPage(p => Math.max(0, p - 1))}
                 disabled={clampedTaskPage === 0}
-                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >◂ Prev</button>
               <span>{clampedTaskPage + 1} / {taskPages}</span>
               <button
                 onClick={() => setTaskPage(p => Math.min(taskPages - 1, p + 1))}
                 disabled={clampedTaskPage >= taskPages - 1}
-                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >Next ▸</button>
             </div>
@@ -521,14 +521,14 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               <button
                 onClick={() => setMemDayIdx(i => Math.max(0, i - 1))}
                 disabled={clampedMemDayIdx === 0}
-                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >◂ Newer</button>
               <span>{clampedMemDayIdx + 1} / {memoryDays.length}</span>
               <button
                 onClick={() => setMemDayIdx(i => Math.min(memoryDays.length - 1, i + 1))}
                 disabled={clampedMemDayIdx >= memoryDays.length - 1}
-                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >Older ▸</button>
             </div>
@@ -544,7 +544,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                 <div key={mem.filename} className="rounded-md border border-border/40" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
                   <button
                     onClick={() => setExpandedMem(isOpen ? null : mem.filename)}
-                    className="flex w-full items-center gap-2 p-3 text-left transition hover:bg-accent/50"
+                    className="flex w-full items-center gap-2 p-3 text-left transition hover:bg-accent/10"
                   >
                     <span className="font-mono text-xs" style={{ color: isOpen ? 'var(--accent)' : 'var(--text-dim)' }}>
                       {isOpen ? '\u25BE' : '\u25B8'}

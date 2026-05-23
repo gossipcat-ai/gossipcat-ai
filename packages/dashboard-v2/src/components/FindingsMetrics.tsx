@@ -739,14 +739,14 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               <button
                 onClick={() => setDebatePage(p => Math.max(0, p - 1))}
                 disabled={clampedDebatePage === 0}
-                className="rounded-sm border border-border/40 px-3 py-1 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-3 py-1 transition hover:bg-accent/10 disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >◂ Prev</button>
               <span>Page {clampedDebatePage + 1} of {totalDebatePages}</span>
               <button
                 onClick={() => setDebatePage(p => Math.min(totalDebatePages - 1, p + 1))}
                 disabled={clampedDebatePage >= totalDebatePages - 1}
-                className="rounded-sm border border-border/40 px-3 py-1 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-3 py-1 transition hover:bg-accent/10 disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >Next ▸</button>
             </div>
@@ -806,7 +806,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                 <button
                   aria-expanded={isOpen}
                   onClick={() => { const opening = !isOpen; setExpandedId(opening ? run.taskId : null); if (opening) { setFilter('all'); setSevFilter('all'); } }}
-                  className="flex w-full items-center p-3 text-left transition hover:bg-accent/50"
+                  className="flex w-full items-center p-3 text-left transition hover:bg-accent/10"
                 >
                   <span
                     className="mr-3 font-mono text-xs transition"

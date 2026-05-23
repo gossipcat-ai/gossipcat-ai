@@ -355,7 +355,7 @@ export function SignalsPage() {
                 type="button"
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={clampedPage === 0 || loading}
-                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >◂ Prev</button>
               <span className="tabular-nums">
@@ -365,7 +365,7 @@ export function SignalsPage() {
                 type="button"
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={clampedPage >= totalPages - 1 || loading}
-                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >Next ▸</button>
             </div>

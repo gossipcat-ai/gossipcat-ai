@@ -56,7 +56,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-[480px] sm:w-[480px] sm:max-w-[480px] overflow-y-auto" style={drawerStyle}>
         <SheetHeader>
-          <SheetTitle className="font-mono text-sm">Finding detail</SheetTitle>
+          <SheetTitle className="font-mono text-sm" style={{ color: 'var(--text)' }}>Finding detail</SheetTitle>
         </SheetHeader>
 
         {error && <div className="mt-4 text-[11px] text-disputed">{error}</div>}

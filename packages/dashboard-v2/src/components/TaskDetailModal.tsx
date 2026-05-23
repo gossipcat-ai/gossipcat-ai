@@ -52,7 +52,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
               <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold ${meta.cls}`} style={meta.clsStyle}>
                 {meta.label}
               </span>
-              <span className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-400">
+              <span className="warn-badge shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold">
                 {task.taskId.slice(0, 8)}
               </span>
               <a
@@ -73,7 +73,7 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
           </div>
           <button
             onClick={onClose}
-            className="shrink-0 rounded-md border border-border/40 px-2 py-1 font-mono text-xs transition hover:bg-accent/50"
+            className="shrink-0 rounded-md border border-border/40 px-2 py-1 font-mono text-xs transition hover:bg-accent/10"
             style={{ background: 'var(--surface-elev)', color: 'var(--text-dim)' }}
             aria-label="Close"
           >

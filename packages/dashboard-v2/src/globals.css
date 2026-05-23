@@ -47,6 +47,12 @@
   --color-impact: #cc785c;
   --color-insight: #6b6a64;
   --color-text-dim: #6b6a64;
+
+  /* Chart fills (Reliability bars, sparklines, activity dots). Distinct
+     blue-grey so it reads as DATA, not status, alongside the warm accent. */
+  --color-chart: #5d7e9c;
+  --color-chart-accent: #1a7e5e;
+  --color-chart-deep: #6b6a64;
 }
 
 /* ───── Phase 1a — warm palette tokens (light default) ───── */
@@ -90,6 +96,23 @@
   --danger: #d68a7e;
   --shadow-overlay: 0 24px 64px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --shadow-overlay-hairline: 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+/* Tailwind utility classes (text-foreground, bg-card, etc.) resolve against
+   @theme at build time and CANNOT theme-switch at runtime. The aliases above
+   bake light-theme defaults into utility classes; this block overrides the
+   underlying tokens in dark mode so any element using `color: var(--text)` /
+   `background: var(--surface-elev)` (the spec-recommended pattern from Task 7)
+   DOES theme-switch correctly. The few remaining utility-class consumers
+   (App.tsx legacy view, AgentRow etc.) are a known gap tracked in PR notes. */
+
+/* Theme-aware warning badge — replaces the cold amber Tailwind classes
+   used across TaskRow, TaskDetailModal, SkillCard, App.tsx for "skipped /
+   scheduled / pending" states. Reads as warning, adapts to both themes. */
+.warn-badge {
+  color: var(--warn);
+  background: color-mix(in oklch, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in oklch, var(--warn) 30%, transparent);
 }
 
 body {
@@ -232,7 +255,7 @@ html:has([data-theme="dark"])::after {
   left: 50%;
   transform: translateX(-50%) translateY(-6px);
   padding: 8px 12px;
-  background: rgba(14, 14, 20, 0.98);
+  background: var(--surface-sunk);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   font-family: 'Inter', sans-serif;
@@ -248,7 +271,7 @@ html:has([data-theme="dark"])::after {
   opacity: 0;
   transition: opacity 150ms ease 50ms;
   z-index: 1000;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7);
+  box-shadow: var(--shadow-overlay);
 }
 [data-tooltip]::before {
   content: '';
@@ -257,7 +280,7 @@ html:has([data-theme="dark"])::after {
   left: 50%;
   transform: translateX(-50%);
   border: 4px solid transparent;
-  border-top-color: rgba(14, 14, 20, 0.98);
+  border-top-color: var(--surface-sunk);
   pointer-events: none;
   opacity: 0;
   transition: opacity 150ms ease 50ms;
@@ -280,7 +303,7 @@ html:has([data-theme="dark"])::after {
   bottom: auto;
   top: 100%;
   border-top-color: transparent;
-  border-bottom-color: rgba(14, 14, 20, 0.98);
+  border-bottom-color: var(--surface-sunk);
 }
 [data-tooltip-pos="left"]::after {
   left: auto;

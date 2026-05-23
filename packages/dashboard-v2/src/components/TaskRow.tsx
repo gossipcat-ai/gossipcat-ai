@@ -163,7 +163,7 @@ export function TaskRow({ task, onClick }: TaskRowProps) {
       </td>
       <td className="py-2.5 pr-3">
         <span
-          className="rounded border border-amber-500/25 bg-amber-500/8 px-2 py-1 font-mono text-[10px] font-semibold text-amber-400"
+          className="warn-badge rounded px-2 py-1 font-mono text-[10px] font-semibold"
           title={task.taskId}
         >
           {task.taskId.slice(0, 8)}

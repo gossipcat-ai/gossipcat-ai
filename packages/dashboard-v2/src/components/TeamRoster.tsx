@@ -42,7 +42,7 @@ export function TeamRoster({ agents }: TeamRosterProps) {
             <a
               key={agent.id}
               href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
-              className={`flex items-stretch border-l-[3px] transition hover:bg-accent/50 ${
+              className={`flex items-stretch border-l-[3px] transition hover:bg-accent/10 ${
                 i > 0 ? 'border-t border-border/20' : ''
               }`}
               style={{ borderLeftColor: color }}

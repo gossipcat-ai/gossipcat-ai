@@ -77,7 +77,7 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
           >
             {display}
           </span>
-          <span className="min-w-0 flex-1 truncate font-mono text-xs font-semibold" style={{ color: 'var(--text)', fontSize: '18px', fontWeight: 600 }}>
+          <span className="min-w-0 flex-1 truncate font-mono font-semibold" style={{ color: 'var(--text)', fontSize: '16px', fontWeight: 600 }}>
             {memory.filename}
           </span>
           <button

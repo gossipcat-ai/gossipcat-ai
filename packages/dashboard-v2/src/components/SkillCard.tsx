@@ -68,7 +68,7 @@ export function SkillCard({ slot }: Props) {
               {slot.source}
             </span>
             {slot.mode === 'contextual' && (
-              <span className="rounded-sm border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] text-amber-400">
+              <span className="warn-badge rounded-sm px-1.5 py-0.5 font-mono text-[9px]">
                 contextual
               </span>
             )}

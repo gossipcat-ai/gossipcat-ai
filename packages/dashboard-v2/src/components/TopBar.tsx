@@ -84,7 +84,7 @@ export function TopBar() {
             color: 'var(--text-faint)',
             fontFamily: 'var(--font-sans)',
             fontSize: '13px',
-            cursor: 'not-allowed',
+            cursor: 'default',
           }}
         >
           <span style={{ opacity: 0.7 }}>Search…</span>

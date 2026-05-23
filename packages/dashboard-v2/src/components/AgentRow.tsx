@@ -15,7 +15,7 @@ export function AgentRow({ agent }: AgentRowProps) {
   return (
     <button
       onClick={() => { navigate('/agent/' + encodeURIComponent(agent.id)); }}
-      className="group flex min-w-0 flex-1 flex-col items-center rounded-lg border border-border p-4 text-center transition hover:border-primary/30 hover:bg-accent"
+      className="group flex min-w-0 flex-1 flex-col items-center rounded-lg border border-border p-4 text-center transition hover:border-primary/30 hover:bg-accent/10"
       style={{ background: 'var(--surface-elev)' }}
     >
       {/* Avatar with portal glow */}

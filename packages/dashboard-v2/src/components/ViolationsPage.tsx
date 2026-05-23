@@ -176,7 +176,7 @@ export function ViolationsPage() {
               type="button"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1 || loading}
-              className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+              className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
               style={{ background: 'var(--surface-elev)' }}
             >
               ◂ Prev
@@ -186,7 +186,7 @@ export function ViolationsPage() {
               type="button"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages || loading}
-              className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/50 disabled:opacity-30"
+              className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
               style={{ background: 'var(--surface-elev)' }}
             >
               Next ▸

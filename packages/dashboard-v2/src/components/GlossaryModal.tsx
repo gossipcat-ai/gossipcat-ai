@@ -146,7 +146,8 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-6 backdrop-blur-sm"
+      style={{ background: 'color-mix(in oklch, var(--surface) 80%, transparent)' }}
       onClick={onClose}
       role="presentation"
     >
@@ -183,7 +184,7 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
           <dl className="space-y-5">
             {TERMS.map(({ term, definition, seeAlso }) => (
               <div key={term} className="rounded-md border border-border/40 px-4 py-3" style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}>
-                <dt className="font-mono text-[11px] font-bold uppercase tracking-[0.12em] text-amber-400">
+                <dt className="font-mono text-[11px] font-bold uppercase tracking-[0.12em]" style={{ color: 'var(--accent)' }}>
                   {term}
                 </dt>
                 <dd className="mt-1.5 font-mono text-xs leading-relaxed" style={{ color: 'color-mix(in oklch, var(--text) 80%, transparent)' }}>
@@ -205,7 +206,8 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
             href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/docs/HANDBOOK.md"
             target="_blank"
             rel="noopener noreferrer"
-            className="font-mono text-xs text-amber-400 transition hover:text-amber-300 hover:underline"
+            className="font-mono text-xs transition hover:underline"
+            style={{ color: 'var(--accent)' }}
           >
             Read the full HANDBOOK &rarr;
           </a>
