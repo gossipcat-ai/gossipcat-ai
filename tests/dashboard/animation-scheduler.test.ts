@@ -168,3 +168,41 @@ describe('AnimationScheduler — SSR safety', () => {
     }
   });
 });
+
+describe('AnimationScheduler — delta cap (tab-resume safety)', () => {
+  it('caps deltaMs at 100ms even when wall-clock advances seconds (tab background → resume)', () => {
+    const cb = jest.fn();
+    subscribe(cb);
+    // First tick establishes lastTickMs and uses the 16ms fallback.
+    tick(16);
+    expect(cb.mock.calls[0][0]).toBeLessThanOrEqual(16);
+    cb.mockClear();
+    // Simulate a 5-second tab-background gap.
+    tick(5000);
+    const observedDelta = cb.mock.calls[0][0] as number;
+    expect(observedDelta).toBeLessThanOrEqual(100);
+    expect(observedDelta).toBeGreaterThan(0);
+  });
+
+  it('does NOT cap normal frame deltas under 100ms', () => {
+    const cb = jest.fn();
+    subscribe(cb);
+    tick(16);
+    cb.mockClear();
+    tick(33); // 30fps frame
+    expect(cb.mock.calls[0][0]).toBeGreaterThanOrEqual(33);
+    expect(cb.mock.calls[0][0]).toBeLessThanOrEqual(40);
+  });
+});
+
+describe('AnimationScheduler — late-cleanup safety', () => {
+  it('unsubscribe is safe to call after __resetForTests forcibly clears state', () => {
+    const off = subscribe(() => {});
+    __resetForTests();
+    expect(getSubscriberCount()).toBe(0);
+    // unsubscribe captured the closure before reset; should not throw or
+    // re-cancel an already-stopped loop.
+    expect(() => off()).not.toThrow();
+    expect(getSubscriberCount()).toBe(0);
+  });
+});

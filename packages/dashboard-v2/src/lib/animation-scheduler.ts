@@ -30,8 +30,20 @@ const subscribers = new Set<AnimationTick>();
 let rafId = 0;
 let lastTickMs = 0;
 
+/**
+ * Cap deltaMs at 100ms. When a browser tab backgrounds and resumes, rAF
+ * fires with `nowMs` potentially seconds ahead of `lastTickMs`. Subscribers
+ * that accumulate this delta into their own state (e.g. VortexEngine's
+ * `time += dt`) would otherwise snap animations forward by the full gap
+ * in one frame, causing visible particle teleportation. 100ms = ~6 frames
+ * at 60Hz, generous enough that a normal frame hiccup doesn't trip it.
+ */
+const MAX_DELTA_MS = 100;
+
 function loop(nowMs: number): void {
-  const deltaMs = lastTickMs === 0 ? 16 : Math.max(0, nowMs - lastTickMs);
+  const deltaMs = lastTickMs === 0
+    ? 16
+    : Math.min(MAX_DELTA_MS, Math.max(0, nowMs - lastTickMs));
   lastTickMs = nowMs;
 
   for (const cb of subscribers) {

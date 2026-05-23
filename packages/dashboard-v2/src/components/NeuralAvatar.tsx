@@ -6,7 +6,8 @@ import { subscribe } from '@/lib/animation-scheduler';
 interface NeuralAvatarProps {
   agentId: string;
   size?: number;
-  /** Accepted but ignored — avatars always animate now. Kept for backwards-compat with callers. */
+  /** When false, the vortex is rendered once and then frozen — used by offline agents.
+   *  Defaults to true. Toggling at runtime resumes/pauses the per-frame draw. */
   animate?: boolean;
   /** Raw signal count (0-5000+). Controls size + complexity + shape emergence. */
   signals?: number;
@@ -21,6 +22,7 @@ interface NeuralAvatarProps {
 export function NeuralAvatar({
   agentId,
   size = 64,
+  animate = true,
   signals = 0,
   accuracy = 0.5,
   uniqueness = 0.5,
@@ -29,6 +31,10 @@ export function NeuralAvatar({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<VortexEngine | null>(null);
   const visibleRef = useRef(true);
+  const animateRef = useRef(animate);
+  // Mirror the prop into the ref so the subscriber closure (captured below)
+  // sees fresh values without re-subscribing on every prop toggle.
+  animateRef.current = animate;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -46,7 +52,7 @@ export function NeuralAvatar({
     engine.draw();
 
     const unsubscribe = subscribe((deltaMs) => {
-      if (visibleRef.current) {
+      if (visibleRef.current && animateRef.current) {
         engine.update(deltaMs);
         engine.draw();
       }
