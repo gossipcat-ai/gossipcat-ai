@@ -124,7 +124,7 @@ export function TopBar() {
           Glossary
         </button>
         <div className="flex items-center gap-2 rounded-md border border-border px-3.5 py-1.5 font-mono text-xs" style={{ background: 'var(--surface-elev)', color: 'var(--text-dim)' }}>
-          <span className={`inline-block h-1.5 w-1.5 rounded-full ${online ? 'bg-confirmed shadow-[0_0_6px_rgba(52,211,153,0.5)]' : 'bg-destructive'}`} />
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${online ? 'bg-confirmed' : 'bg-destructive'}`} />
           {online ? 'Connected' : 'Disconnected'}
         </div>
       </div>

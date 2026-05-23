@@ -42,7 +42,7 @@
   --color-confirmed: #1a7e5e;
   --color-disputed: #c0392b;
   --color-unverified: #b8741d;
-  --color-unique: #cc785c;
+  --color-unique: #7c5cbf;
   --color-severity-high: #c0392b;
   --color-impact: #cc785c;
   --color-insight: #6b6a64;
@@ -98,6 +98,7 @@
   --shadow-overlay: 0 24px 64px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --shadow-overlay-hairline: 0 0 0 1px rgba(255, 255, 255, 0.04);
   --shadow-card: none;
+  --color-unique: #9d7fd5;
 }
 
 /* Tailwind utility classes (text-foreground, bg-card, etc.) resolve against
@@ -132,14 +133,16 @@ body {
    Dark activates via [data-theme="dark"] from useTheme.ts.
    Tokens live in the :root + [data-theme="dark"] blocks above. ───── */
 
-/* Subtle vignette — dark theme only (washes out the warm light palette) */
-[data-theme="dark"] html::after,
-html:has([data-theme="dark"])::after {
+/* Subtle vignette — dark theme only (washes out the warm light palette).
+   z-index 1 keeps it above body content but below dialogs/drawers (z-50) and
+   notification stacks. The earlier z-index 9998 obscured modals once the
+   selector was corrected. */
+html[data-theme="dark"]::after {
   content: '';
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 9998;
+  z-index: 1;
   background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 65%, rgba(0, 0, 0, 0.35) 100%);
 }
 
@@ -457,7 +460,7 @@ html:has([data-theme="dark"])::after {
 .finding-md pre.md-code-block {
   font-family: var(--font-mono);
   font-size: 0.68rem;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--surface-sunk);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.4rem 0.6rem;

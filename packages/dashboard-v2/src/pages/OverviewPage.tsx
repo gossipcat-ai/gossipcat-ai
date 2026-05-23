@@ -35,7 +35,7 @@ export function OverviewPage({
       {/* Page header */}
       <header>
         <div className="flex items-baseline justify-between gap-4">
-          <h1 className="text-4xl font-bold tracking-tight" style={{ color: 'var(--text)' }}>
+          <h1 className="font-mono text-4xl font-bold tracking-tight" style={{ color: 'var(--text)' }}>
             Overview
           </h1>
           {actionable > 0 && (

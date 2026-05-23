@@ -43,19 +43,20 @@ export function parseTheme(raw: string | null, prefersDark: boolean): Theme {
 }
 
 function readPrefersDark(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return true; // SSR / no-MQ env defaults to dark per spec
+  // SSR / no-matchMedia env: default to LIGHT (matches the FOUC-prevention
+  // script in index.html so there's no light→dark flash on jsdom and
+  // engines without prefers-color-scheme support).
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
 function readTheme(): Theme {
-  if (typeof window === 'undefined') return 'dark';
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  const theme = parseTheme(raw, readPrefersDark());
-  // One-time migration: rewrite stored value to the new union so subsequent reads are stable.
-  if (raw !== theme) {
-    try { window.localStorage.setItem(STORAGE_KEY, theme); } catch { /* private browsing */ }
-  }
-  return theme;
+  if (typeof window === 'undefined') return 'light';
+  // Guard against Firefox SecurityError when dom.storage.enabled=false and
+  // restricted private-browsing contexts; mirror the FOUC script's try/catch.
+  let raw: string | null = null;
+  try { raw = window.localStorage.getItem(STORAGE_KEY); } catch { /* storage blocked */ }
+  return parseTheme(raw, readPrefersDark());
 }
 
 /**

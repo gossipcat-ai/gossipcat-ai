@@ -70,7 +70,7 @@ export function ActiveTasksBanner({ onCountChange }: { onCountChange?: (n: numbe
           actual "unverified finding" counts on the same page, causing users
           to conflate running-task status with review-state. */}
       <div className="mb-2 flex items-center gap-2">
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-confirmed shadow-[0_0_6px_rgba(52,211,153,0.5)]" />
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-confirmed" />
         <span className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
           Live
         </span>

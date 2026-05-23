@@ -93,7 +93,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
               )}
             </div>
 
-            <div className="text-[12px] leading-relaxed whitespace-pre-wrap">
+            <div className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap">
               {detail.finding.finding.replace(/<cite tag="file">[^<]+<\/cite>/g, '').trim()}
             </div>
 

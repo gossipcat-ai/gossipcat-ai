@@ -82,7 +82,7 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
           </span>
           <button
             onClick={onClose}
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded transition hover:bg-accent/20"
+            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded transition hover:bg-accent/20"
             style={{ color: 'var(--text-dim)' }}
             aria-label="Close"
           >
