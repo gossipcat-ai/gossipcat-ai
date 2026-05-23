@@ -1,24 +1,12 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useRoute } from '@/lib/router';
-import { useExpert } from '@/lib/useExpert';
 import { OverviewPage } from '@/pages/OverviewPage';
 import { AuthGate } from '@/components/AuthGate';
 import { TopBar } from '@/components/TopBar';
-import { SystemPulse } from '@/components/SystemPulse';
-import { CircuitAlerts } from '@/components/CircuitAlerts';
-import { ActiveTasksBanner } from '@/components/ActiveTasksBanner';
-import { FindingsMetrics } from '@/components/FindingsMetrics';
-import { TeamHero } from '@/components/TeamHero';
 import { NeuralAvatar } from '@/components/NeuralAvatar';
 import { TaskDetailModal } from '@/components/TaskDetailModal';
-import { TasksSection } from '@/components/TasksSection';
-import { MemoryFolders } from '@/components/MemoryFolders';
-import { FleetHealthTrend } from '@/components/FleetHealthTrend';
-import { ViolationsCard } from '@/components/ViolationsCard';
+import { FindingsMetrics } from '@/components/FindingsMetrics';
 import { ViolationsPage } from '@/components/ViolationsPage';
-import { SkillVerdictsSnapshot } from '@/components/SkillVerdictsSnapshot';
-import { RecentSignalsPeek } from '@/components/RecentSignalsPeek';
-import { DroppedFindingDrift } from '@/components/DroppedFindingDrift';
 import { AgentPage } from '@/components/AgentPage';
 import { LogsPage } from '@/components/LogsPage';
 import { SignalsPage } from '@/components/SignalsPage';
@@ -475,8 +463,7 @@ function FindingsPage({
 
 function Dashboard() {
   const route = useRoute();
-  const expert = useExpert();
-  const { overview, agents, tasks, consensus, consensusReports, nativeMemories, gossipMemories, loading, refresh } = useDashboardData();
+  const { overview, agents, tasks, consensus, consensusReports, loading, refresh } = useDashboardData();
   const [activeTaskCount, setActiveTaskCount] = useState(0);
 
   const handleWsEvent = useCallback((event: DashboardEvent) => {
@@ -512,7 +499,8 @@ function Dashboard() {
     content = <SignalsPage />;
   } else if (route === '/violations') {
     content = <ViolationsPage />;
-  } else if ((route === '/' && !expert) || route === '/overview') {
+  } else {
+    // Default: OverviewPage handles `/`, `/overview`, and any unknown route.
     content = (
       <OverviewPage
         overview={overview}
@@ -522,52 +510,12 @@ function Dashboard() {
         setActiveTaskCount={setActiveTaskCount}
       />
     );
-  } else {
-    // Main dashboard — sidebar + main layout
-    content = (
-      <div className="space-y-6">
-      <header>
-        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Dashboard</h1>
-        <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Multi-agent code review with grounded reward signals. Live activity, agent scores, and consensus rounds.</p>
-      </header>
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr] lg:items-start">
-        {/* Left sidebar: System Pulse + Circuit Alerts + Violations */}
-        <aside className="space-y-4 lg:sticky lg:top-4">
-          <SystemPulse overview={overview} activeTasks={activeTaskCount} />
-          {agents && <CircuitAlerts agents={agents} />}
-          <ViolationsCard />
-        </aside>
-
-        {/* Main: Active tasks + Recent tasks + Team hero + Consensus + Memories */}
-        <main className="min-w-0 space-y-6">
-          <ActiveTasksBanner onCountChange={setActiveTaskCount} />
-          <FindingsMetrics consensus={consensus} reports={consensusReports} />
-          {tasks && <TasksSection tasks={tasks} limit={5} />}
-          {agents && <TeamHero agents={agents} />}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <FleetHealthTrend />
-            <SkillVerdictsSnapshot overview={overview} />
-          </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <RecentSignalsPeek />
-            <DroppedFindingDrift overview={overview} />
-          </div>
-          {(gossipMemories || nativeMemories) && (
-            <MemoryFolders
-              memories={[...(gossipMemories ?? []), ...(nativeMemories ?? [])]}
-              heading="Memory"
-              statusFilter
-            />
-          )}
-        </main>
-      </div>
-      </div>
-    );
   }
 
   // Overview owns its own outer container (max-w-5xl). For everything else,
   // the historical max-w-7xl + space-y-6 wrapper applies.
-  const isOverview = (route === '/' && !expert) || route === '/overview';
+  const isOverview = route === '/' || route === '/overview' ||
+    !(/^\/(agent\/|team|tasks|debates|logs|signals|violations)/.test(route));
   const mainClass = isOverview
     ? 'px-6 py-6'
     : 'mx-auto max-w-7xl space-y-6 px-6 py-6';

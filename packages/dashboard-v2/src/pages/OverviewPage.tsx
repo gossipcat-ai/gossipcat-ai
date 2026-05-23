@@ -15,10 +15,9 @@ interface OverviewPageProps {
 }
 
 /**
- * Calm landing page (Variant A from consensus df14d789-6b714276) at /overview
- * and at / when ?expert=1 is not set. Composes 6 widgets in a narrow readable
- * column. The dense /Dashboard view is reachable via ?expert=1 and is
- * byte-identical to the historical layout — that's the iron law.
+ * Calm landing page (Variant A from consensus df14d789-6b714276) at `/` and
+ * `/overview`. Composes 6 widgets in a narrow readable column. The previous
+ * `?expert=1` dense view was removed in Phase 1a — this is the single Overview.
  *
  * Spec: docs/specs/2026-05-04-overview-route-design.md (gitignored — refer by path).
  */

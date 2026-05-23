@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getWsState } from '@/lib/ws';
-import { href, navigate, useRoute } from '@/lib/router';
-import { useExpert } from '@/lib/useExpert';
+import { href, useRoute } from '@/lib/router';
 import { useTheme } from '@/lib/useTheme';
 import { GlossaryModal } from './GlossaryModal';
 
@@ -18,7 +17,6 @@ export function TopBar() {
   const [online, setOnline] = useState(false);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const route = useRoute();
-  const expert = useExpert();
   const { theme, toggle } = useTheme();
 
   useEffect(() => {
@@ -59,14 +57,6 @@ export function TopBar() {
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <button
-          onClick={() => navigate(expert ? '/' : '/?expert=1')}
-          aria-label={expert ? 'Return to overview' : 'Switch to expert view'}
-          className="font-mono text-[10px] uppercase tracking-widest border border-border/40 rounded-sm px-2.5 py-1 transition"
-          style={{ color: expert ? 'var(--text)' : 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}
-        >
-          {expert ? '← Overview' : 'Expert view →'}
-        </button>
         <div
           role="button"
           tabIndex={-1}
