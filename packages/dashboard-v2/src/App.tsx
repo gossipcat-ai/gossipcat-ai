@@ -506,6 +506,7 @@ function Dashboard() {
         overview={overview}
         agents={agents}
         tasks={tasks}
+        consensus={consensus}
         activeTaskCount={activeTaskCount}
         setActiveTaskCount={setActiveTaskCount}
       />
