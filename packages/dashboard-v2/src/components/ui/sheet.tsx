@@ -61,11 +61,11 @@ interface SheetContentProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
 }
 
-export function SheetContent({ side: _side = 'right', className = '', children, ...rest }: SheetContentProps) {
+export function SheetContent({ side: _side = 'right', className = '', children, style, ...rest }: SheetContentProps) {
   return (
     <div
-      className={`h-full border-l border-border/60 shadow-xl p-6 ${className}`}
-      style={{ background: 'var(--surface-elev)' }}
+      className={`h-full p-6 ${className}`}
+      style={{ background: 'var(--surface-elev)', ...style }}
       {...rest}
     >
       {children}

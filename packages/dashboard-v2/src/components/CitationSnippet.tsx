@@ -9,7 +9,18 @@ export function CitationSnippet({ citation }: { citation: CS }) {
           {citation.file}:{citation.line}
         </span>
       </div>
-      <pre className="px-3 py-2 font-mono text-[11px] leading-relaxed overflow-x-auto">
+      <pre
+        className="overflow-x-auto"
+        style={{
+          background: 'var(--surface-sunk)',
+          borderLeft: '3px solid var(--accent)',
+          padding: '12px 16px',
+          borderRadius: '6px',
+          fontFamily: 'var(--font-mono)',
+          fontSize: '12px',
+          color: 'var(--text)',
+        }}
+      >
         {lines.map((l, i) => (
           <div key={i} className="whitespace-pre">{l || '\u00A0'}</div>
         ))}

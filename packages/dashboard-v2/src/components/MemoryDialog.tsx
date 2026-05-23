@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, type CSSProperties } from 'react';
 import type { MemoryFile } from '@/lib/types';
 import { renderMarkdown, timeAgo } from '@/lib/utils';
 import { toDisplayType } from '@/lib/memory-taxonomy';
@@ -19,6 +19,15 @@ interface MemoryDialogProps {
  *   - Close glyph inline with tag + title in a single header row
  *   - Section headers colored primary, not muted
  */
+const dialogStyle: CSSProperties = {
+  background: 'var(--surface-elev)',
+  borderRadius: '16px',
+  boxShadow: '0 24px 64px -16px rgba(31,31,29,0.32), 0 0 0 1px rgba(31,31,29,0.02), 0 0 0 3px var(--accent-soft)',
+  border: '1px solid var(--border)',
+  color: 'var(--text)',
+  fontFamily: 'var(--font-sans)',
+};
+
 export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
   useEffect(() => {
     if (!memory) return;
@@ -48,23 +57,27 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
       onClick={onClose}
     >
       <div
-        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-primary/30"
-        style={{
-          background: 'var(--surface-elev)',
-          boxShadow:
-            '0 24px 64px -16px rgba(31,31,29,0.32), 0 0 0 1px rgba(31,31,29,0.02), 0 0 0 3px var(--accent-soft)',
-        }}
+        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-xl flex-col overflow-hidden"
+        style={dialogStyle}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header — tag + title + close, all on one row (mockup line 245-267) */}
-        <div className="flex items-center gap-2.5 border-b border-border/60 px-4 py-3.5">
+        {/* Header — eyebrow + tag + title + close */}
+        <div className="flex flex-col border-b border-border/60 px-4 pt-3 pb-3.5 gap-1">
+          {/* Eyebrow row — mono ID label */}
+          <div
+            className="font-mono text-[9px] uppercase tracking-[0.16em]"
+            style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}
+          >
+            {owner} · {display}
+          </div>
+          <div className="flex items-center gap-2.5">
           <span
             className="shrink-0 rounded-sm border border-primary/30 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.14em]"
             style={{ background: 'color-mix(in oklch, var(--accent) 6%, transparent)', color: 'var(--accent)' }}
           >
             {display}
           </span>
-          <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium" style={{ color: 'var(--text)' }}>
+          <span className="min-w-0 flex-1 truncate font-mono text-xs font-semibold" style={{ color: 'var(--text)', fontSize: '18px', fontWeight: 600 }}>
             {memory.filename}
           </span>
           <button
@@ -75,6 +88,7 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
           >
             <span className="text-base leading-none">✕</span>
           </button>
+          </div>
         </div>
 
         {/* Body — section headers now primary-colored per mockup line 275 */}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
@@ -30,6 +30,15 @@ const TAG_COLORS: Record<string, string> = {
   newFinding: 'text-unique bg-unique/10 border border-unique/20',
 };
 
+const drawerStyle: CSSProperties = {
+  background: 'var(--surface-elev)',
+  borderRadius: '16px 0 0 16px',
+  boxShadow: '0 24px 64px -16px rgba(31,31,29,0.32), 0 0 0 1px rgba(31,31,29,0.02)',
+  border: '1px solid var(--border)',
+  color: 'var(--text)',
+  fontFamily: 'var(--font-sans)',
+};
+
 export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId }: Props) {
   const [detail, setDetail] = useState<FindingDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +54,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-[480px] sm:w-[480px] sm:max-w-[480px] overflow-y-auto">
+      <SheetContent side="right" className="w-[480px] sm:w-[480px] sm:max-w-[480px] overflow-y-auto" style={drawerStyle}>
         <SheetHeader>
           <SheetTitle className="font-mono text-sm">Finding detail</SheetTitle>
         </SheetHeader>

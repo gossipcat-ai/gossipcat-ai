@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 
 interface GlossaryModalProps {
   open: boolean;
@@ -109,6 +109,15 @@ const TERMS: GlossaryTerm[] = [
   },
 ];
 
+const dialogStyle: CSSProperties = {
+  background: 'var(--surface-elev)',
+  borderRadius: '16px',
+  boxShadow: '0 24px 64px -16px rgba(31,31,29,0.32), 0 0 0 1px rgba(31,31,29,0.02)',
+  border: '1px solid var(--border)',
+  color: 'var(--text)',
+  fontFamily: 'var(--font-sans)',
+};
+
 export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -142,8 +151,8 @@ export function GlossaryModal({ open, onClose }: GlossaryModalProps) {
       role="presentation"
     >
       <div
-        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border shadow-2xl"
-        style={{ background: 'var(--surface-elev)' }}
+        className="relative flex max-h-[calc(100vh-48px)] w-full max-w-2xl flex-col overflow-hidden"
+        style={dialogStyle}
         role="dialog"
         aria-modal="true"
         aria-labelledby="glossary-title"
