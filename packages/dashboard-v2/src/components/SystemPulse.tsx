@@ -178,7 +178,7 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
             <BigStat
               value={overview.actionableFindings}
               label="Actionable"
-              valueClass={overview.actionableFindings > 0 ? 'text-orange-400' : 'text-confirmed'}
+              valueClass={overview.actionableFindings > 0 ? 'text-orange-400' : ''}
               tooltip="Findings still open and need operator review (disagreements + hallucinations + new findings)"
             />
           </a>

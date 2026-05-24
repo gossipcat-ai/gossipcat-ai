@@ -55,18 +55,18 @@ export function NarrativeStripe() {
       aria-live="polite"
       className="flex items-center gap-3 rounded-md border px-3 py-2 font-mono text-[11px]"
       style={{
-        background: 'color-mix(in oklch, var(--accent) 8%, transparent)',
-        borderColor: 'color-mix(in oklch, var(--accent) 30%, transparent)',
+        background: 'color-mix(in oklch, var(--info) 8%, transparent)',
+        borderColor: 'color-mix(in oklch, var(--info) 30%, transparent)',
         color: 'var(--text)',
         animation: 'beat-pulse-narrative calc(var(--beat) * 2) ease-in-out infinite',
       }}
     >
       <span
         className="inline-block h-2 w-2 rounded-full"
-        style={{ background: 'var(--accent)', boxShadow: '0 0 6px var(--accent)' }}
+        style={{ background: 'var(--info)', boxShadow: '0 0 6px var(--info)' }}
       />
       <span style={{ color: 'var(--text-dim)' }}>Round in flight</span>
-      <span className="font-bold" style={{ color: 'var(--accent)' }}>{shortId}</span>
+      <span className="font-bold" style={{ color: 'var(--info)' }}>{shortId}</span>
       {activeAgentId && (
         <span style={{ color: 'var(--text-dim)' }}>
           → <span style={{ color: 'var(--text)' }}>{activeAgentId}</span>
@@ -80,7 +80,7 @@ export function NarrativeStripe() {
           const el = document.getElementById('consensus-rounds-section');
           if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }}
-        className="ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] transition hover:[background:color-mix(in_oklch,var(--accent)_12%,transparent)]"
+        className="ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] transition hover:[background:color-mix(in_oklch,var(--info)_12%,transparent)]"
         style={{ color: 'var(--text-faint)', cursor: 'pointer' }}
       >
         watch ↓
