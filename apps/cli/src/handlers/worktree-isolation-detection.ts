@@ -199,6 +199,14 @@ export interface IsolationPreserveResult {
   rejected: string[];
   /** Set on any git/IO failure — caller must NOT proceed to destructive revert. */
   error?: string;
+  /**
+   * Set `true` when `git diff` produced no output (the present paths already
+   * match HEAD). Distinguishes "nothing to preserve, nothing to revert" from a
+   * genuine preserve failure: both leave `patchPath` unset and `error` unset,
+   * but only the latter warrants the operator-facing recovery alarm.
+   * See consensus 9abe6f5a-6db14a27 f2.
+   */
+  emptyDiff?: boolean;
 }
 
 /**
@@ -298,11 +306,14 @@ export function preserveLeakedPaths(
 
     // f1 (PR #495): an empty diff means the present paths produced no content
     // delta (e.g. a leaked path already matching HEAD). Writing a zero-byte
-    // patch and setting patchPath would falsely report "work preserved" in the
-    // receipt. Skip the write and leave patchPath unset so the caller treats it
-    // as "no patch written" — harmless here, since an empty diff means there is
-    // nothing for the subsequent revert to restore.
+    // patch would falsely report "work preserved". Set the `emptyDiff` sentinel
+    // and return WITHOUT a patchPath: there is nothing to preserve AND nothing
+    // for the subsequent revert to restore. The caller uses `emptyDiff` to tell
+    // this "nothing to do" state apart from a genuine preserve failure — without
+    // it, an empty diff is mis-reported to the operator as "could NOT preserve
+    // leaked work" (consensus 9abe6f5a-6db14a27 f2).
     if (diff.length === 0) {
+      result.emptyDiff = true;
       return result;
     }
 
