@@ -74,6 +74,40 @@ export function parsePorcelain(output: string): string[] {
   return paths.sort();
 }
 
+/**
+ * SAFE_NAME for taskId-as-filename — alphanumerics plus `._-`, no `..`
+ * substring, 1-64 chars. Mirrors the `SAFE_TASK_ID` regex in
+ * `dispatch-prompt-storage.ts` (which writes `.gossip/dispatch-prompts/<taskId>.txt`)
+ * so the recovery-patch path uses the identical validation contract. Re-declared
+ * locally to avoid a cross-module import and keep this detector self-contained.
+ */
+const SAFE_TASK_ID = /^(?!.*\.\.)[A-Za-z0-9._-]{1,64}$/;
+
+/**
+ * Shared defence-in-depth path filter used by BOTH `revertLeakedPaths` and
+ * `preserveLeakedPaths` so the two helpers cannot drift. Rejects absolute paths
+ * and leading-dash args (the latter would be parsed as git flags despite the
+ * `--` separator in some shells). The `--` separator passed to execFileSync is
+ * the real guard against git-flag-injection; this filter exists so a rejected
+ * path is auditable in the receipt rather than vanishing silently.
+ *
+ * Note: `../` traversal is NOT filtered here — git resolves it relative to cwd,
+ * and dirtyPathsAdded from `git status --porcelain` never contains it.
+ */
+export function filterSafePaths(paths: string[]): { safe: string[]; rejected: string[] } {
+  const safe: string[] = [];
+  const rejected: string[] = [];
+  if (!paths) return { safe, rejected };
+  for (const p of paths) {
+    if (typeof p === 'string' && p.length > 0 && !p.startsWith('/') && !p.startsWith('-')) {
+      safe.push(p);
+    } else if (typeof p === 'string' && p.length > 0) {
+      rejected.push(p);
+    }
+  }
+  return { safe, rejected };
+}
+
 /** Result of an auto-revert attempt — surfaced in the relay receipt. */
 export interface IsolationRevertResult {
   /** Paths actually restored to HEAD content. */
@@ -110,20 +144,13 @@ export function revertLeakedPaths(
   const result: IsolationRevertResult = { restored: [], skipped: [], rejected: [] };
   if (!paths || paths.length === 0) return result;
 
-  // Defence-in-depth: filter absolute paths and leading-dash args. The `--`
-  // separator in execFileSync (line ~135) is the real guard against
+  // Defence-in-depth: filter absolute paths and leading-dash args via the shared
+  // `filterSafePaths` (also used by preserveLeakedPaths so they cannot drift).
+  // The `--` separator in execFileSync (below) is the real guard against
   // git-flag-injection; this filter exists so a rejected path is auditable in
-  // the receipt rather than vanishing silently. Note: `../` traversal is NOT
-  // filtered here — git restore resolves it relative to cwd, and dirtyPathsAdded
-  // from `git status --porcelain` never contains it.
-  const safePaths: string[] = [];
-  for (const p of paths) {
-    if (typeof p === 'string' && p.length > 0 && !p.startsWith('/') && !p.startsWith('-')) {
-      safePaths.push(p);
-    } else if (typeof p === 'string' && p.length > 0) {
-      result.rejected.push(p);
-    }
-  }
+  // the receipt rather than vanishing silently.
+  const { safe: safePaths, rejected } = filterSafePaths(paths);
+  result.rejected = rejected;
 
   // Skip paths that no longer exist on disk (rename / delete races). All entries
   // in safePaths are repo-relative after the filter above, so path.join(cwd, p)
@@ -150,6 +177,128 @@ export function revertLeakedPaths(
       stdio: ['ignore', 'ignore', 'ignore'],
     });
     result.restored = present;
+  } catch (err) {
+    result.error = (err as Error).message || String(err);
+  }
+  return result;
+}
+
+/** Result of a non-destructive preserve attempt — surfaced in the relay receipt. */
+export interface IsolationPreserveResult {
+  /** Absolute path to the written patch, set only when a patch was captured. */
+  patchPath?: string;
+  /** Paths actually included in the captured patch. */
+  preserved: string[];
+  /** Paths skipped because the file no longer exists on disk. */
+  skipped: string[];
+  /** Paths rejected by the shared safety filter (absolute / leading-dash). */
+  rejected: string[];
+  /** Set on any git/IO failure — caller must NOT proceed to destructive revert. */
+  error?: string;
+}
+
+/**
+ * Non-destructive companion to `revertLeakedPaths`: capture the leaked work to a
+ * recoverable patch BEFORE master is cleaned, so an isolation escape no longer
+ * destroys the agent's changes.
+ *
+ * Spec: docs/specs/2026-05-24-worktree-isolation-nondestructive-recovery.md §3.1.
+ *
+ * Sequence (the patch must cover BOTH tracked-modified AND untracked-new files;
+ * plain `git diff` omits untracked files):
+ *   1. `git add -N -- <present safe paths>` — intent-to-add so new files appear
+ *      in the diff as additions without staging their content.
+ *   2. `git diff -- <present safe paths>` → atomic temp+rename into
+ *      `.gossip/recovery/<SAFE taskId>.patch`.
+ *   3. `git reset -- <present safe paths>` — undo the intent-to-add so the
+ *      working tree is byte-identical to before this call. CRITICAL: the
+ *      subsequent `revertLeakedPaths` must behave exactly as it does today.
+ *
+ * Fail-open: any git/IO error returns `{ error }` and never throws. Per spec
+ * §3.1(b) the caller skips the destructive revert when this returns an error
+ * (or writes no patch), so work is never destroyed when the safety net failed.
+ */
+export function preserveLeakedPaths(
+  cwd: string,
+  paths: string[],
+  taskId: string,
+): IsolationPreserveResult {
+  const result: IsolationPreserveResult = { preserved: [], skipped: [], rejected: [] };
+  if (!paths || paths.length === 0) return result;
+
+  // Validate taskId before it touches the filesystem as a filename. Same guard
+  // contract as .gossip/dispatch-prompts/<taskId>.txt (dispatch-prompt-storage.ts).
+  if (typeof taskId !== 'string' || !SAFE_TASK_ID.test(taskId)) {
+    result.error = `taskId failed SAFE_NAME validation (rejected: ${JSON.stringify(taskId).slice(0, 64)})`;
+    return result;
+  }
+
+  // Shared safety filter — identical to revertLeakedPaths so they cannot drift.
+  const { safe: safePaths, rejected } = filterSafePaths(paths);
+  result.rejected = rejected;
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('fs') as typeof import('fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require('path') as typeof import('path');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const crypto = require('crypto') as typeof import('crypto');
+
+  // Skip paths that no longer exist on disk (rename / delete races). Mirrors
+  // revertLeakedPaths so the two helpers operate on the same `present` set.
+  const present: string[] = [];
+  for (const p of safePaths) {
+    if (fs.existsSync(path.join(cwd, p))) {
+      present.push(p);
+    } else {
+      result.skipped.push(p);
+    }
+  }
+
+  if (present.length === 0) return result;
+
+  try {
+    // 1. intent-to-add so untracked-new files surface in the diff as additions
+    //    without their content entering the index.
+    execFileSync('git', ['add', '-N', '--', ...present], {
+      cwd,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    let diff: Buffer;
+    try {
+      // 2. capture the unified patch (tracked-modified + intent-to-add new files).
+      diff = execFileSync('git', ['diff', '--', ...present], {
+        cwd,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        maxBuffer: 64 * 1024 * 1024,
+      });
+    } finally {
+      // 3. ALWAYS undo the intent-to-add, even if `git diff` threw — the working
+      //    tree (and index) must be byte-identical to before this call so the
+      //    subsequent revertLeakedPaths behaves exactly as today.
+      try {
+        execFileSync('git', ['reset', '--', ...present], {
+          cwd,
+          stdio: ['ignore', 'ignore', 'ignore'],
+        });
+      } catch { /* best-effort — reset failure is surfaced via the diff path below */ }
+    }
+
+    const recoveryDir = path.join(cwd, '.gossip', 'recovery');
+    fs.mkdirSync(recoveryDir, { recursive: true });
+    const finalPath = path.join(recoveryDir, `${taskId}.patch`);
+    const tmpPath = path.join(recoveryDir, `${taskId}.patch.${crypto.randomUUID().slice(0, 8)}.tmp`);
+    try {
+      fs.writeFileSync(tmpPath, diff);
+      fs.renameSync(tmpPath, finalPath);
+    } catch (err) {
+      try { fs.unlinkSync(tmpPath); } catch { /* best-effort */ }
+      throw err;
+    }
+
+    result.patchPath = finalPath;
+    result.preserved = present;
   } catch (err) {
     result.error = (err as Error).message || String(err);
   }
