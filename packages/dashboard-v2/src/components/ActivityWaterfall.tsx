@@ -159,7 +159,7 @@ export function ActivityWaterfall({ agents, runs, loading = false, error = null 
             <div className="flex items-center gap-2 font-mono text-[12px]" style={{ color: 'var(--ink)' }}>
               <span
                 className="inline-block h-2 w-2 flex-shrink-0 rounded-full"
-                style={{ background: color, boxShadow: `0 0 4px ${color}80` }}
+                style={{ background: color }}
               />
               <span className="truncate">{agent.id}</span>
             </div>

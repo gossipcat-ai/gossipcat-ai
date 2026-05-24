@@ -205,7 +205,7 @@ function SankeyHorizontal({ data }: { data: ConsensusFlowResponse }) {
         <g>
           {ribbons.map((r, i) => (
             <path
-              key={i}
+              key={`${r.fromFamily}-${r.toVerdict}`}
               d={r.path}
               fill={r.color}
               fillOpacity={0.55}
@@ -327,6 +327,8 @@ interface RibbonRender {
   path: string;
   color: string;
   tooltip: string;
+  fromFamily: ConsensusFlowFamily;
+  toVerdict: ConsensusFlowVerdict;
 }
 
 interface SankeyLayout {
@@ -430,6 +432,8 @@ function computeSankeyLayout(data: ConsensusFlowResponse): SankeyLayout {
       path,
       color: VERDICT_COLOR[e.to.verdict],
       tooltip: `${famCount} ${FAMILY_LABEL[e.from.family]} agent${famCount === 1 ? '' : 's'} → ${e.to.count} ${VERDICT_LABEL[e.to.verdict]} finding${e.to.count === 1 ? '' : 's'} (${Math.round(e.weight * 100)}%)`,
+      fromFamily: e.from.family,
+      toVerdict: e.to.verdict,
     });
   }
 

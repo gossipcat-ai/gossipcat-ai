@@ -47,7 +47,7 @@ export function SkillEffectivenessSparkline({
   // rather than "early signal." Fall back to the threshold-only placeholder.
   const definedCount = segments.reduce((n, s) => n + s.length, 0);
   if (curve.length === 0 || definedCount < MIN_VISIBLE_POINTS) {
-    return <EmptySparkline width={width} height={height} />;
+    return <EmptySparkline width={width} height={height} threshold={threshold} />;
   }
 
   const innerW = width - PADDING_X * 2;
@@ -113,10 +113,16 @@ export function SkillEffectivenessSparkline({
   );
 }
 
-function EmptySparkline({ width, height }: { width: number; height: number }) {
+function EmptySparkline({ width, height, threshold }: { width: number; height: number; threshold?: number }) {
   // Render the threshold dashed line only — keeps the row height stable while
   // signaling "no post-bind signals yet."
-  const thresholdY = height / 2;
+  // When threshold is defined, position the line at the correct ratio so it
+  // matches where the live sparkline would draw its dashed reference.
+  const innerH = height - PADDING_Y * 2;
+  const thresholdY =
+    threshold !== undefined
+      ? PADDING_Y + (1 - clamp01(threshold)) * innerH
+      : height / 2;
   return (
     <svg
       width={width}
@@ -130,10 +136,10 @@ function EmptySparkline({ width, height }: { width: number; height: number }) {
         x2={width - PADDING_X}
         y1={thresholdY}
         y2={thresholdY}
-        stroke="var(--ink-4)"
+        stroke="var(--ok)"
         strokeWidth={1}
-        strokeDasharray="2 3"
-        opacity={0.5}
+        strokeDasharray="2 2"
+        opacity={0.4}
       />
     </svg>
   );
