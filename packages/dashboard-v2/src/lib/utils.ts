@@ -225,9 +225,15 @@ export function agentInitials(id: string): string {
   return (parts[0] || id).slice(0, 2).toUpperCase();
 }
 
+/** Fallback for agents not in AGENT_IDENTITY_TABLE — uses DESIGN.md chart palette --c1..--c7 hex values. */
 const AGENT_COLORS = [
-  '#8b5cf6', '#06b6d4', '#f97316', '#34d399',
-  '#f43f5e', '#fbbf24', '#60a5fa', '#e879f9',
+  '#3F8B86', // --c1 teal
+  '#8C5E97', // --c2 plum
+  '#B47A2A', // --c3 ochre
+  '#2F7D5B', // --c4 sage
+  '#A53A4A', // --c5 rose
+  '#6B6862', // --c6 slate
+  '#C8A45A', // --c7 sand
 ];
 
 /** Per-agent identity color table — sourced from DESIGN.md §Per-agent identity */

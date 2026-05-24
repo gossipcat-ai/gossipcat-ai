@@ -35,7 +35,7 @@ export function TeamHero({ agents, highlightedAgentId, severityMap, trendByAgent
           Team <span style={{ color: 'var(--accent)' }}>{agents.length}</span>
         </h2>
         {hasMore && (
-          <a href="/dashboard/team" className="font-mono text-xs transition hover:[color:var(--accent)]" style={{ color: 'var(--text-dim)' }}>
+          <a href="/dashboard/team" className="text-xs transition hover:[color:var(--accent)]" style={{ color: 'var(--text-dim)' }}>
             view all
           </a>
         )}
