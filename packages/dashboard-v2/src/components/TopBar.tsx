@@ -47,7 +47,7 @@ export function TopBar() {
                 }`}
                 style={isActive
                   ? { background: 'color-mix(in oklch, var(--accent) 10%, transparent)', color: 'var(--accent)' }
-                  : { color: 'var(--text-dim)' }
+                  : { color: 'var(--ink-3)' }
                 }
               >
                 {tab.label}
@@ -71,7 +71,7 @@ export function TopBar() {
             background: 'var(--surface-elev)',
             border: '1px solid var(--border)',
             borderRadius: '8px',
-            color: 'var(--text-faint)',
+            color: 'var(--ink-3)',
             fontFamily: 'var(--font-sans)',
             fontSize: '13px',
             cursor: 'default',
@@ -87,7 +87,7 @@ export function TopBar() {
               border: '1px solid var(--border)',
               fontFamily: 'var(--font-mono)',
               fontSize: '11px',
-              color: 'var(--text-dim)',
+              color: 'var(--ink-3)',
             }}
           >
             ⌘K
@@ -107,7 +107,7 @@ export function TopBar() {
             background: 'var(--surface-elev)',
             border: '1px solid var(--border)',
             borderRadius: '8px',
-            color: 'var(--text)',
+            color: 'var(--ink)',
             cursor: 'pointer',
             fontSize: '16px',
             lineHeight: 1,
@@ -119,11 +119,11 @@ export function TopBar() {
           onClick={() => setGlossaryOpen(true)}
           aria-label="Open glossary"
           className="flex items-center justify-center rounded-md border border-border/60 px-2.5 py-1 font-mono text-xs font-semibold transition hover:border-border"
-          style={{ background: 'var(--surface-elev)', color: 'var(--text)' }}
+          style={{ background: 'var(--surface-elev)', color: 'var(--ink)' }}
         >
           Glossary
         </button>
-        <div className="flex items-center gap-2 rounded-md border border-border px-3.5 py-1.5 font-mono text-xs" style={{ background: 'var(--surface-elev)', color: 'var(--text-dim)' }}>
+        <div className="flex items-center gap-2 rounded-md border border-border px-3.5 py-1.5 font-mono text-xs" style={{ background: 'var(--surface-elev)', color: 'var(--ink-3)' }}>
           <span className={`inline-block h-1.5 w-1.5 rounded-full ${online ? 'bg-confirmed' : 'bg-destructive'}`} />
           {online ? 'Connected' : 'Disconnected'}
         </div>
