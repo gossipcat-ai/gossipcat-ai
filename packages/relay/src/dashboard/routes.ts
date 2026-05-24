@@ -145,6 +145,15 @@ export class DashboardRouter {
       return this.serveDashboard(res);
     }
 
+    // Root + bare host: redirect to /dashboard. The SPA at /dashboard
+    // handles its own auth gate (login form when no session cookie,
+    // overview when authed).
+    if (url === '/' || url === '') {
+      res.writeHead(302, { Location: '/dashboard' });
+      res.end();
+      return true;
+    }
+
     this.json(res, 404, { error: 'Not found' });
     return true;
   }
