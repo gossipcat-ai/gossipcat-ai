@@ -250,10 +250,12 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
             />
           </div>
 
-          {/* Sparkline + footer */}
+          {/* Sparkline + footer — width matches the metric bars above (full row width). */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {trendPoints && trendPoints.length > 0 && (
-              <AreaSparkline points={trendPoints} width={80} height={20} color={ac} />
+              <div style={{ width: '100%' }}>
+                <AreaSparkline points={trendPoints} width={240} height={28} color={ac} />
+              </div>
             )}
             <div
               style={{

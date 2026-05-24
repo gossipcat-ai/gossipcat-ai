@@ -77,13 +77,14 @@ export function AreaSparkline({
   const isEmpty = values.length === 0 || values.every((v) => v === 0);
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
       <svg
-        width={width}
+        width="100%"
         height={height}
         viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
         aria-hidden="true"
-        style={{ overflow: 'visible', flexShrink: 0 }}
+        style={{ overflow: 'visible', flex: 1, minWidth: 0 }}
       >
         {/* Area fill — suppressed when reducedMotion */}
         {!reducedMotion && !isEmpty && area && (

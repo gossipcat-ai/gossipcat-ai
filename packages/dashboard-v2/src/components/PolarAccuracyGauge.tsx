@@ -80,7 +80,8 @@ export function PolarAccuracyGauge({ accuracy, size = 90, color = 'var(--ink)' }
           x={cx}
           y={cy}
           textAnchor="middle"
-          dominantBaseline="central"
+          dominantBaseline="middle"
+          dy="0.08em"
           fill="var(--ink)"
           style={{
             fontSize,

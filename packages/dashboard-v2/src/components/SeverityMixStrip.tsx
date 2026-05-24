@@ -31,16 +31,30 @@ export function SeverityMixStrip({ counts, height = 7 }: SeverityMixStripProps) 
   const title = `critical: ${c.critical}, high: ${c.high}, medium: ${c.medium}, low: ${c.low}`;
 
   if (total === 0) {
+    // Empty state — 4 placeholder segments at low opacity so the user sees
+    // the future shape, not a near-invisible flat bar.
     return (
       <div
-        title={title}
+        title={`${title} (no findings yet)`}
         style={{
+          display: 'flex',
           height,
           borderRadius: height / 2,
-          background: 'var(--idle)',
-          opacity: 0.25,
+          overflow: 'hidden',
+          gap: 1,
         }}
-      />
+      >
+        {SEVERITY_ORDER.map((sev) => (
+          <div
+            key={sev}
+            style={{
+              flex: 1,
+              background: SEGMENT_COLORS[sev],
+              opacity: 0.18,
+            }}
+          />
+        ))}
+      </div>
     );
   }
 
