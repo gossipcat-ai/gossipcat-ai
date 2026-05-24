@@ -18,7 +18,7 @@ import { useUrlRangeParam } from '@/hooks/useUrlRangeParam';
 import { useGlobalAgentKeys } from '@/hooks/useGlobalAgentKeys';
 import { isGraphHidden } from '@/lib/feature-flags';
 import { href } from '@/lib/router';
-import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint } from '@/lib/types';
+import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint, SkillsApiResponse } from '@/lib/types';
 
 interface OverviewPageProps {
   overview: OverviewData;
@@ -30,6 +30,8 @@ interface OverviewPageProps {
   consensusReports?: ConsensusReportsData | null;
   /** Optional — Step 6: supplies 7d sparkline data for AgentCardBig. */
   fleetTrend?: FleetTrendResponse | null;
+  /** Optional — Step 9.5: per-skill post-bind effectiveness curves. */
+  skills?: SkillsApiResponse | null;
   activeTaskCount: number;
   setActiveTaskCount: (n: number) => void;
 }
@@ -48,6 +50,7 @@ export function OverviewPage({
   consensus,
   consensusReports,
   fleetTrend,
+  skills,
   activeTaskCount,
   setActiveTaskCount,
 }: OverviewPageProps) {
@@ -185,7 +188,7 @@ export function OverviewPage({
           summary; grid is the per-skill breakdown across all live bindings.
           Both render from already-fetched overview + agents data. */}
       <SkillVerdictsSnapshot overview={overview} />
-      <SkillGraduationGrid agents={agents} />
+      <SkillGraduationGrid skills={skills ?? null} />
     </div>
   );
 }

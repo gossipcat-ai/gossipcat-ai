@@ -36,6 +36,38 @@ export interface FleetTrendResponse {
   points: FleetTrendPoint[];
 }
 
+/* ── Step 9.5 — skills + post-bind effectiveness curves ───────────────── */
+
+export interface SkillCurvePoint {
+  /** Window-end timestamp (ms epoch). */
+  t: number;
+  /** Accuracy = correct/(correct+halluc) in window. null when window empty. */
+  value: number | null;
+}
+
+export interface SkillEffectivenessEntry {
+  agentId: string;
+  skill: string;
+  status: SkillStatus | null;
+  /** 10 equal-time windows from boundAt → now. */
+  curve: SkillCurvePoint[];
+  /** Graduation threshold — passed_baseline_rate from frontmatter, fallback 0.7. */
+  threshold: number;
+  /** Total post-bind signals across the full curve window. */
+  n: number;
+  /** ISO. Anchor for the curve. */
+  boundAt: string;
+}
+
+export interface SkillsApiResponse {
+  /** Raw skill-index passthrough (agent → skill → slot). Unused by the
+   *  dashboard today but kept for compatibility with the bind UI. */
+  index: Record<string, Record<string, unknown>>;
+  suggestions: string[];
+  /** Per-agent+skill effectiveness curves. Drives SkillGraduationGrid. */
+  effectiveness: SkillEffectivenessEntry[];
+}
+
 export interface ForcedDevelopEntry {
   timestamp: string;
   reason?: string;

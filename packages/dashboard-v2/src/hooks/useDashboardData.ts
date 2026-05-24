@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
-import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile, FleetTrendResponse } from '@/lib/types';
+import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile, FleetTrendResponse, SkillsApiResponse } from '@/lib/types';
 
 /**
  * Polling interval for /api/agents and friends. Backs the "Team page updates
@@ -21,6 +21,12 @@ export interface DashboardState {
   consensus: ConsensusData | null;
   consensusReports: ConsensusReportsData | null;
   fleetTrend: FleetTrendResponse | null;
+  /**
+   * Step 9.5 — per-skill post-bind effectiveness curves. Drives the
+   * SkillGraduationGrid sparklines + skill-count subtitle. Null while
+   * the first poll is in flight.
+   */
+  skills: SkillsApiResponse | null;
   /**
    * Claude Code auto-memory (`~/.claude/projects/-<cwd>/memory/`). Flat list,
    * no 4-folder taxonomy. Separate from gossipMemories — callers MUST NOT merge
@@ -46,6 +52,7 @@ export function useDashboardData() {
   const [state, setState] = useState<DashboardState>({
     overview: null, agents: null, tasks: null, consensus: null, consensusReports: null,
     fleetTrend: null,
+    skills: null,
     nativeMemories: null, gossipMemories: null, memories: null,
     loading: true, error: null,
   });
@@ -59,7 +66,7 @@ export function useDashboardData() {
     if (inFlight.current) return;
     inFlight.current = true;
     try {
-      const [overview, agents, tasks, consensus, consensusReports, fleetTrend, nativeResp, gossipResp] = await Promise.all([
+      const [overview, agents, tasks, consensus, consensusReports, fleetTrend, skills, nativeResp, gossipResp] = await Promise.all([
         api<OverviewData>('overview'),
         api<AgentData[]>('agents'),
         api<TasksData>('tasks?limit=2000'),
@@ -72,6 +79,10 @@ export function useDashboardData() {
         api<ConsensusReportsData>('consensus-reports?page=1&pageSize=200').catch(() => ({ reports: [] })),
         // Fleet trend — 7-day window for AreaSparkline in AgentCardBig.
         api<FleetTrendResponse>('fleet-trend?days=7').catch(() => ({ days: 7, points: [] })),
+        // Step 9.5 — per-skill effectiveness curves for SkillGraduationGrid.
+        // Server-side 60s cache keyed on agent-performance.jsonl mtime — the
+        // 5s poll just refreshes the cache stamp, not the curve derivation.
+        api<SkillsApiResponse>('skills').catch(() => ({ index: {}, suggestions: [], effectiveness: [] })),
         // Native + gossip stores are fetched in parallel and kept SEPARATE. The
         // taxonomy/status split only applies to gossip memories. Native memories
         // render flat. Spec: docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md
@@ -92,6 +103,7 @@ export function useDashboardData() {
       setState({
         overview, agents, tasks, consensus, consensusReports,
         fleetTrend,
+        skills,
         nativeMemories,
         gossipMemories,
         memories: nativeMemories, // deprecated legacy alias
