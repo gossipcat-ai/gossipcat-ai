@@ -45,56 +45,69 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
 
   return (
     <div
-      className="flex items-center gap-3 rounded-md border px-3 py-2"
+      className="rounded-md border px-3 py-2"
       style={{ background: 'var(--surface-elev)', borderColor: 'var(--border)' }}
     >
-      <div className="h-section">
-        Signal volume
+      {/* Top row: section label + range selector */}
+      <div className="mb-2 flex items-center justify-between">
+        <div className="h-section">Signal volume</div>
+        <div className="flex gap-1">
+          {RANGES.map((r) => {
+            const active = r === range;
+            return (
+              <button
+                key={r}
+                type="button"
+                onClick={() => onRangeChange(r)}
+                aria-pressed={active}
+                className="rounded px-2 py-0.5 font-mono text-[10px] transition"
+                style={{
+                  background: active ? 'color-mix(in oklch, var(--accent) 10%, transparent)' : 'transparent',
+                  color: active ? 'var(--accent)' : 'var(--text-dim)',
+                  border: '1px solid',
+                  borderColor: active ? 'color-mix(in oklch, var(--accent) 30%, transparent)' : 'transparent',
+                }}
+              >
+                {r}
+              </button>
+            );
+          })}
+        </div>
       </div>
-      <span className="font-mono text-[10px] tabular-nums" style={{ color: 'var(--ink-3)' }}>{RANGE_AGO_LABEL[range]}</span>
+
+      {/* Full-width bar chart — uses chart-palette --c1 (teal) instead of
+          --accent per DESIGN.md (chart bars never use accent). Bars get a
+          subtle baseline row, rounded caps, and a hover-friendly gap. */}
       <svg
         viewBox={`0 0 ${BUCKET_COUNT} 1`}
         preserveAspectRatio="none"
-        style={{ flex: 1, height, color: 'var(--accent)' }}
+        style={{ width: '100%', height, color: 'var(--c1)', display: 'block' }}
       >
+        {/* Baseline track — faint axis at the bottom so empty buckets read as zero */}
+        <rect x={0} y={0.985} width={BUCKET_COUNT} height={0.015} fill="var(--ink)" opacity={0.08} />
         {buckets.map((c, i) => {
           const h = c === 0 ? 0 : (c / max);
           const y = 1 - h;
           return (
             <rect
               key={i}
-              x={i + 0.1}
+              x={i + 0.15}
               y={y}
-              width={0.8}
+              width={0.7}
               height={Math.max(h, c > 0 ? 0.04 : 0)}
+              rx={0.06}
+              ry={0.06}
               fill="currentColor"
-              opacity={c === 0 ? 0.15 : 0.85}
+              opacity={c === 0 ? 0 : 0.9}
             />
           );
         })}
       </svg>
-      <span className="font-mono text-[10px] tabular-nums" style={{ color: 'var(--ink-3)' }}>now</span>
-      <div className="flex gap-1">
-        {RANGES.map((r) => {
-          const active = r === range;
-          return (
-            <button
-              key={r}
-              type="button"
-              onClick={() => onRangeChange(r)}
-              aria-pressed={active}
-              className="rounded px-2 py-0.5 font-mono text-[10px] transition"
-              style={{
-                background: active ? 'color-mix(in oklch, var(--accent) 10%, transparent)' : 'transparent',
-                color: active ? 'var(--accent)' : 'var(--text-dim)',
-                border: '1px solid',
-                borderColor: active ? 'color-mix(in oklch, var(--accent) 30%, transparent)' : 'transparent',
-              }}
-            >
-              {r}
-            </button>
-          );
-        })}
+
+      {/* X-axis labels: oldest (left) → now (right) */}
+      <div className="mt-1 flex items-center justify-between font-mono text-[10px] tabular-nums" style={{ color: 'var(--ink-3)' }}>
+        <span>{RANGE_AGO_LABEL[range]}</span>
+        <span>now</span>
       </div>
     </div>
   );

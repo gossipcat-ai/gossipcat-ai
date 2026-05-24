@@ -108,7 +108,7 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
           <div className="border-r border-border">
             <BigStat
               value={overview.agentsOnline}
-              label="Agents Online"
+              label="Agents Working"
               valueColor={overview.agentsOnline > 0 ? 'var(--ok)' : 'var(--text)'}
             />
           </div>
