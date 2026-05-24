@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type React from 'react';
 import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
 import { navigate } from '@/lib/router';
@@ -40,9 +41,42 @@ const SEVERITY_TICK_COLOR: Record<string, string> = {
   low: 'var(--ink-3)',
 };
 
+// Map severity → confidence /5 for the CONF column.
+const SEVERITY_CONF: Record<string, number> = {
+  critical: 5,
+  high: 4,
+  medium: 3,
+  low: 2,
+};
+
 function truncate(s: string, n: number): string {
   if (!s) return '';
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+/** Wrap backtick spans in code-inline styling, matching the mockup. */
+function renderFinding(text: string): React.ReactNode {
+  const parts = text.split(/(`[^`]+`)/g);
+  return parts.map((p, i) => {
+    if (p.startsWith('`') && p.endsWith('`') && p.length > 2) {
+      return (
+        <code
+          key={i}
+          style={{
+            background: 'color-mix(in oklch, var(--ink) 6%, transparent)',
+            padding: '0 4px',
+            borderRadius: 3,
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12,
+            color: 'var(--ink)',
+          }}
+        >
+          {p.slice(1, -1)}
+        </code>
+      );
+    }
+    return <span key={i}>{p}</span>;
+  });
 }
 
 export function RecentSignalsPeek() {
@@ -50,64 +84,94 @@ export function RecentSignalsPeek() {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    api<SignalsResponse>('signals?limit=5')
+    // Pull 7 items so the table shows roughly the mockup's row count.
+    api<SignalsResponse>('signals?limit=7')
       .then((r) => setItems(r.items ?? []))
       .catch((e) => setErr(String(e?.message ?? e)));
   }, []);
 
+  // "+N in last hour" delta — recency callout per mockup.
+  const lastHour = items
+    ? items.filter((s) => Date.now() - Date.parse(s.timestamp) < 3600_000).length
+    : 0;
+
   return (
-    <section className="rounded-lg border border-border p-4" style={{ background: 'var(--surface-elev)' }}>
+    <section>
+      {/* Section header — small-caps title + recency callout + 'all signals →' */}
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="h-section">Recent Signals</h3>
+        <div className="flex items-baseline gap-3">
+          <h3 className="h-section">Signal stream</h3>
+          {lastHour > 0 && (
+            <span className="font-mono text-[11px]" style={{ color: 'var(--accent)' }}>
+              +{lastHour} in last hour
+            </span>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => navigate('/signals')}
-          className="font-mono text-[10px] hover:underline"
+          className="font-mono text-[11px] hover:underline"
           style={{ color: 'var(--text-dim)' }}
         >
           all signals →
         </button>
       </header>
-      {err && <p className="text-xs" style={{ color: 'var(--text-dim)' }}>unavailable</p>}
-      {!err && items && items.length === 0 && (
-        <p className="text-xs" style={{ color: 'var(--text-dim)' }}>no signals recorded</p>
-      )}
-      {!err && items && items.length > 0 && (
-        <ul className="space-y-1.5">
-          {items.map((s, i) => {
-            const tickColor = s.severity ? SEVERITY_TICK_COLOR[s.severity] : 'transparent';
-            const verdictColor = VERDICT_COLOR[s.signal] ?? 'var(--ink-2)';
-            const verdictLabel = LABELS[s.signal] ?? s.signal;
-            return (
-              <li key={`${s.timestamp}-${i}`} className="flex items-center gap-2 text-xs">
-                {/* severity tick — semantic color, no severity = transparent gap */}
-                <span
-                  aria-hidden="true"
-                  style={{
-                    display: 'inline-block',
-                    width: 3,
-                    alignSelf: 'stretch',
-                    background: tickColor,
-                    borderRadius: 1,
-                  }}
-                  title={s.severity ?? ''}
-                />
-                <span className="w-14 shrink-0 tabular-nums" style={{ color: 'var(--text-dim)' }}>{timeAgo(s.timestamp)}</span>
-                <span className="h-section w-36 shrink-0 truncate" style={{ color: verdictColor, fontSize: 11 }} title={verdictLabel}>
-                  {verdictLabel}
-                </span>
-                <span className="w-28 shrink-0 truncate font-mono" style={{ color: 'var(--text-dim)' }}>{s.agentId}</span>
-                <span
-                  className="flex-1 truncate"
-                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.45, color: 'var(--text)' }}
-                >
-                  {truncate(s.evidence ?? '', 80)}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+
+      <div className="rounded-lg border border-border" style={{ background: 'var(--surface-elev)' }}>
+        {err && <p className="px-4 py-3 text-xs" style={{ color: 'var(--text-dim)' }}>unavailable</p>}
+        {!err && items && items.length === 0 && (
+          <p className="px-4 py-3 text-xs" style={{ color: 'var(--text-dim)' }}>no signals recorded</p>
+        )}
+        {!err && items && items.length > 0 && (
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="h-section py-2 pl-4 pr-3 text-left" style={{ fontSize: 10, width: 80 }}>time</th>
+                <th className="h-section py-2 pr-3 text-left" style={{ fontSize: 10, width: 160 }}>verdict</th>
+                <th className="h-section py-2 pr-3 text-left" style={{ fontSize: 10, width: 180 }}>agent</th>
+                <th className="h-section py-2 pr-3 text-left" style={{ fontSize: 10 }}>finding</th>
+                <th className="h-section py-2 pl-3 pr-4 text-right" style={{ fontSize: 10, width: 60 }}>conf</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((s, i) => {
+                const tickColor = s.severity ? SEVERITY_TICK_COLOR[s.severity] : 'transparent';
+                const verdictColor = VERDICT_COLOR[s.signal] ?? 'var(--ink-2)';
+                const verdictLabel = LABELS[s.signal] ?? s.signal;
+                const conf = s.severity ? SEVERITY_CONF[s.severity] : 1;
+                return (
+                  <tr key={`${s.timestamp}-${i}`} className="border-b border-border/40 last:border-b-0">
+                    <td className="py-2.5 pl-4 pr-3 align-middle font-mono text-[12px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
+                      {timeAgo(s.timestamp)}
+                    </td>
+                    <td className="py-2.5 pr-3 align-middle">
+                      <div className="flex items-center gap-2">
+                        <span
+                          aria-hidden="true"
+                          style={{ display: 'inline-block', width: 3, height: 14, background: tickColor, borderRadius: 1, flexShrink: 0 }}
+                          title={s.severity ?? ''}
+                        />
+                        <span className="h-section truncate" style={{ color: verdictColor, fontSize: 11 }} title={verdictLabel}>
+                          {verdictLabel}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 pr-3 align-middle font-mono text-[12px]" style={{ color: 'var(--text-dim)' }}>
+                      <span className="truncate">{s.agentId}</span>
+                    </td>
+                    <td className="py-2.5 pr-3 align-middle text-[12px]" style={{ color: 'var(--text)', lineHeight: 1.45 }}>
+                      {renderFinding(truncate(s.evidence ?? '', 120))}
+                    </td>
+                    <td className="py-2.5 pl-3 pr-4 align-middle text-right font-mono text-[12px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
+                      {conf}/5
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
     </section>
   );
 }
