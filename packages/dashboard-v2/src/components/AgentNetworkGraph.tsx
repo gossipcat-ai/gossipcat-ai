@@ -27,6 +27,10 @@ interface Position {
   y: number;
   /** 'center' = focused agent, 'peer' = peer of focused, 'fleet' = resting orbit, 'hidden' = non-peer when focused. */
   role: 'center' | 'peer' | 'fleet' | 'hidden';
+  /** Angle from center in radians (-π/2 = top, 0 = right, π/2 = bottom, π = left).
+   *  Used by the renderer to position the agent's name label radially OUTWARD
+   *  from the avatar so labels never collide with avatars at smaller radii. */
+  angle?: number;
 }
 
 /**
@@ -36,33 +40,52 @@ interface Position {
  */
 function restingLayout(agents: AgentData[], width: number, height: number): Map<string, Position> {
   const center = { x: width / 2, y: height / 2 };
-  // maxRadius = 100% accuracy band (outermost ring). innerCushion keeps the 100% ring
-  // off the canvas edge.
-  const innerCushion = 40;
+  // Tighter cushion (was 40) lets the chart fill more of the available canvas.
+  const innerCushion = 24;
   const maxRadius = Math.max(80, Math.min(width, height) / 2 - innerCushion);
 
   const out = new Map<string, Position>();
   if (agents.length === 0) return out;
 
-  // Group agents by accuracy band so that agents with similar accuracy don't pile on top
-  // of each other. Use alphabetical order within a band as a stable angular offset.
-  const sorted = [...agents].sort((a, b) => a.id.localeCompare(b.id));
+  // Sort by accuracy DESCENDING so the alphabetical-around-perimeter degenerate
+  // case is replaced by a smarter walk: agents at similar radii get distributed
+  // around the chart, not clumped at the same angle. Stable secondary sort by id
+  // keeps the layout deterministic.
+  const sorted = [...agents].sort((a, b) => {
+    const da = b.scores?.accuracy ?? 0;
+    const dc = a.scores?.accuracy ?? 0;
+    if (da !== dc) return dc - da;
+    return a.id.localeCompare(b.id);
+  });
   const N = sorted.length;
 
+  // Golden-angle stride (phyllotaxis). 137.50776° ≈ 2.39996 rad.
+  // Equal-spaced angles (2π/N per step) put adjacent ranks at adjacent
+  // angles — when two agents share a similar accuracy they also land at
+  // similar radii, and the combination CLUSTERS them visually. The golden
+  // angle guarantees that for any N, consecutive items in the walk land
+  // far apart on the circle. So two agents with neighboring accuracies
+  // (e.g. sonnet-reviewer 63% + haiku-researcher 64% — same radius band)
+  // are placed on opposite sides of the chart instead of next to each
+  // other. The result spreads the fleet evenly regardless of how the
+  // accuracy distribution clumps.
+  const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < N; i++) {
     const agent = sorted[i];
     // 0 = at center (perfect accuracy), 1 = at maxRadius (zero accuracy).
-    // Floor at 0.1 of maxRadius so 100%-accuracy agents don't stack on the center bloom.
+    // Inner floor at 0.22*maxRadius so the highest-accuracy agent doesn't
+    // visually merge with the orchestrator blackhole at the center.
     const acc = clamp(agent.scores?.accuracy ?? 0, 0, 1);
-    const radius = Math.max(maxRadius * 0.1, (1 - acc) * maxRadius);
+    const radius = Math.max(maxRadius * 0.22, (1 - acc) * maxRadius);
 
-    // Angle: alphabetical around the perimeter, top start, clockwise.
-    const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
+    // Anchor at -π/2 (top) for the first agent, then step by golden angle.
+    const angle = -Math.PI / 2 + i * GOLDEN_ANGLE;
 
     out.set(agent.id, {
       x: center.x + radius * Math.cos(angle),
       y: center.y + radius * Math.sin(angle),
       role: 'fleet',
+      angle,
     });
   }
   return out;
@@ -97,9 +120,11 @@ type Star = {
   x: number; y: number;
   baseR: number;   // born radius
   r: number;       // current radius (shrinks when consumed)
-  baseO: number;   // born opacity
-  o: number;       // current opacity
+  baseO: number;   // born opacity (target when idle, before twinkle modulation)
+  o: number;       // current opacity (after twinkle + consume effects)
   consumed: number | null; // index of agent consuming this star, or null
+  phase: number;    // 0..2π — initial twinkle phase so each star blinks independently
+  twinkleHz: number; // 0.2..1.2 cycles per second
 };
 
 /** Observatory-style starfield rendered behind the rings.
@@ -128,6 +153,8 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
         baseO,
         o: baseO,
         consumed: null,
+        phase: rand() * Math.PI * 2,
+        twinkleHz: 0.2 + rand() * 1.0,
       };
     });
   }, [width, height]);
@@ -141,8 +168,12 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
     const fadeRate = 1.5;     // opacity units per second when consumed
     const shrinkRate = 1.8;   // radius units per second when consumed
 
+    // Wall-clock-ish elapsed time for twinkle phase. Accumulates deltas so
+    // we don't depend on performance.now() (kept self-contained inside loop).
+    let elapsedS = 0;
     const tick = (deltaMs: number) => {
       const dt = deltaMs / 1000;
+      elapsedS += dt;
       const stars = starsRef.current;
       const circles = circlesRef.current;
       for (let i = 0; i < stars.length; i++) {
@@ -160,6 +191,13 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
               break;
             }
           }
+        }
+
+        // Twinkle: idle stars softly modulate between 50% and 100% of baseO.
+        // Consumed stars skip twinkle so the fade-to-zero reads cleanly.
+        if (star.consumed === null) {
+          const mod = 0.75 + 0.25 * Math.sin(elapsedS * star.twinkleHz * Math.PI * 2 + star.phase);
+          star.o = star.baseO * mod;
         }
 
         if (star.consumed !== null) {
@@ -235,6 +273,85 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
           opacity={s.o}
         />
       ))}
+    </svg>
+  );
+}
+
+/** Smile face overlay shown on the orchestrator blackhole when clicked.
+ *  Pops in with a brief scale-bounce + fade, then fades out at ~900ms.
+ *  Four variants cycle through clicks so repeated clicks vary the reaction:
+ *    0 — normal smile
+ *    1 — winky face
+ *    2 — big grin (open mouth)
+ *    3 — cat smile ( :3 ) */
+function OrchestratorSmile({ variant }: { variant: number }) {
+  const face = (() => {
+    switch (variant) {
+      case 1: // wink
+        return (
+          <>
+            <path d="M 19 24 L 25 24" stroke="#F2EDE3" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="34" cy="24" r="1.5" fill="#F2EDE3" />
+            <path d="M 20 31 Q 28 36 36 31" stroke="#F2EDE3" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+          </>
+        );
+      case 2: // big grin
+        return (
+          <>
+            <circle cx="22" cy="23" r="1.6" fill="#F2EDE3" />
+            <circle cx="34" cy="23" r="1.6" fill="#F2EDE3" />
+            <path d="M 19 30 Q 28 38 37 30 Q 28 33 19 30 Z" fill="#F2EDE3" opacity="0.92" />
+          </>
+        );
+      case 3: // cat :3
+        return (
+          <>
+            <circle cx="22" cy="24" r="1.4" fill="#F2EDE3" />
+            <circle cx="34" cy="24" r="1.4" fill="#F2EDE3" />
+            <path d="M 22 30 Q 26 33 28 30 Q 30 33 34 30" stroke="#F2EDE3" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+          </>
+        );
+      default: // normal smile
+        return (
+          <>
+            <circle cx="22" cy="24" r="1.5" fill="#F2EDE3" />
+            <circle cx="34" cy="24" r="1.5" fill="#F2EDE3" />
+            <path d="M 20 31 Q 28 36 36 31" stroke="#F2EDE3" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+          </>
+        );
+    }
+  })();
+  return (
+    <svg
+      width="56" height="56" viewBox="0 0 56 56"
+      style={{
+        position: 'absolute',
+        top: 0, left: 0,
+        animation: 'orch-smile-pop 900ms ease-out forwards',
+        pointerEvents: 'none',
+      }}
+      aria-hidden
+    >
+      {face}
+    </svg>
+  );
+}
+
+/** Expanding ripple wave emitted from the orchestrator on click. Visual
+ *  confirmation the click landed even before the smile finishes pop-in. */
+function OrchestratorRipple() {
+  return (
+    <svg
+      width="56" height="56" viewBox="0 0 56 56"
+      style={{
+        position: 'absolute',
+        top: 0, left: 0,
+        animation: 'orch-ripple 700ms ease-out forwards',
+        pointerEvents: 'none',
+      }}
+      aria-hidden
+    >
+      <circle cx="28" cy="28" r="9" fill="none" stroke="var(--accent)" strokeWidth="1.2" />
     </svg>
   );
 }
@@ -420,14 +537,25 @@ function HubSpokeGraph({
 }: AgentNetworkGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
+  // measuredHeight tracks the ACTUAL rendered card height (which stretches via
+  // the equal-height flex row), separately from the `height` prop (which is
+  // just the minimum floor). Centering the rings + stars + agents in the real
+  // canvas requires this — otherwise the system lives in the top `height` px
+  // and the bottom of the stretched card is empty.
+  const [measuredHeight, setMeasuredHeight] = useState(height);
+  // Easter egg: click the orchestrator blackhole. Count drives a smile face
+  // pop + ripple, and unlocks playful label reactions past certain thresholds.
+  const [orchestratorClicks, setOrchestratorClicks] = useState(0);
 
-  // Resize observer keeps layout responsive.
+  // Resize observer keeps layout responsive in both dimensions.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
       const w = entry.contentRect.width;
+      const h = entry.contentRect.height;
       if (w > 0) setWidth(w);
+      if (h > 0) setMeasuredHeight(h);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -439,10 +567,10 @@ function HubSpokeGraph({
   const positions = useMemo(() => {
     const ids = agents.map((a) => a.id);
     if (selectedAgentId && ids.includes(selectedAgentId)) {
-      return focusLayout(selectedAgentId, ids, peerRelationships, width, height);
+      return focusLayout(selectedAgentId, ids, peerRelationships, width, measuredHeight);
     }
-    return restingLayout(agents, width, height);
-  }, [agents, peerRelationships, selectedAgentId, width, height]);
+    return restingLayout(agents, width, measuredHeight);
+  }, [agents, peerRelationships, selectedAgentId, width, measuredHeight]);
 
   // Spokes (only drawn in focus mode) — straight lines from center to each peer.
   const spokes = useMemo(() => {
@@ -508,11 +636,11 @@ function HubSpokeGraph({
     >
       {/* Starfield: observatory backdrop with eat-the-stars animation.
           Stars within ~60px of an agent drift in, shrink, fade, then respawn. */}
-      <Starfield width={width} height={height} agentPositions={agentPositionsForStars} />
+      <Starfield width={width} height={measuredHeight} agentPositions={agentPositionsForStars} />
       {/* Accuracy rings — rendered second (behind spokes/avatars, above stars).
           Hide labels in focus mode: positions are then driven by peer-
           distance, not accuracy, so the accuracy ticks would mislead. */}
-      <RingBands width={width} height={height} hideLabels={!!selectedAgentId} />
+      <RingBands width={width} height={measuredHeight} hideLabels={!!selectedAgentId} />
 
       {/* Header label — adapts to mode. */}
       <div
@@ -548,16 +676,16 @@ function HubSpokeGraph({
         )}
       </div>
 
-      {/* Accuracy-scope legend — explains the radial encoding. Sits just below
-          the fleet-name overlay at the top-left. Per Step 4 review feedback,
-          the legend must be in the attention path (top-left, not bottom-left).
+      {/* Accuracy-scope legend — explains the radial encoding.
+          Per user feedback, positioned at the bottom-right to keep the
+          top-left clean (FLEET label + click-to-focus hint live there).
           Only shown in resting mode — focus mode has its own edge legend. */}
       {!selectedAgentId && (
         <div
           className="absolute z-10 h-section"
           style={{
-            top: 36,
-            left: 12,
+            bottom: 12,
+            right: 12,
             fontSize: '10px',
             color: 'var(--stage-text-dim)',
             background: 'color-mix(in oklch, var(--stage-bg) 70%, transparent)',
@@ -566,12 +694,12 @@ function HubSpokeGraph({
             pointerEvents: 'none',
           }}
         >
-          closer to center = higher accuracy · spoke color = agent identity
+          closer to center = higher accuracy
         </div>
       )}
 
       {/* Spokes in focus mode only. SVG layer sits above the background. */}
-      <svg width="100%" height={height} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+      <svg width="100%" height={measuredHeight} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
         {spokes.map((s) => {
           // Trim line endpoints to avatar radius so spokes meet the circumference.
           const selectedAgent = agents.find((a) => a.id === selectedAgentId);
@@ -599,7 +727,10 @@ function HubSpokeGraph({
               strokeDasharray={dash}
               strokeLinecap="round"
               style={{
-                opacity: 'var(--edge-opacity-selected)',
+                // Dimmer spokes on the cosmic dark canvas — bright stroke
+                // saturates against the starfield. 0.55 reads as energy flow,
+                // 0.9 read as neon.
+                opacity: 0.55,
                 transition: 'opacity 200ms cubic-bezier(0.4,0,0.2,1)',
               }}
             />
@@ -619,6 +750,71 @@ function HubSpokeGraph({
         </div>
       )}
 
+      {/* Center black hole — the gravitational locus of the fleet.
+          Represents the orchestrator: every agent is in orbit around it,
+          stars get pulled toward it (via the agent-eat animation), the
+          consensus locus collapses here. Visual: dark disc + accretion-
+          disk glow + outer halo, all on the center of the measured canvas.
+          Resting mode only; in focus mode the selected agent becomes the
+          gravitational center via the existing center glow ring. */}
+      {!selectedAgentId && measuredHeight > 0 && (
+        <div
+          className="absolute z-[1] -translate-x-1/2 -translate-y-1/2"
+          style={{
+            left: width / 2,
+            top: measuredHeight / 2,
+            cursor: 'pointer',
+          }}
+          onClick={(ev) => {
+            ev.stopPropagation();
+            setOrchestratorClicks((c) => c + 1);
+          }}
+          title={orchestratorClicks >= 10 ? '♥' : orchestratorClicks >= 5 ? 'ok ok' : 'orchestrator'}
+        >
+          <svg width="56" height="56" viewBox="0 0 56 56" style={{ display: 'block', pointerEvents: 'none' }} aria-hidden>
+            {/* Outer accretion halo — terracotta glow */}
+            <circle cx="28" cy="28" r="26" fill="none" stroke="var(--accent)" strokeWidth="0.6" opacity="0.35" />
+            <circle cx="28" cy="28" r="22" fill="none" stroke="var(--accent)" strokeWidth="0.4" opacity="0.25" />
+            {/* Event horizon — cream ring on the edge of the disc */}
+            <circle cx="28" cy="28" r="12" fill="none" stroke="#F2EDE3" strokeWidth="1.1" opacity="0.75" />
+            {/* The disc itself — actual blackhole, swallows whatever the rest is */}
+            <circle cx="28" cy="28" r="9" fill="#000" />
+            {/* Inner accretion glow rim */}
+            <circle cx="28" cy="28" r="9" fill="none" stroke="var(--accent)" strokeWidth="0.5" opacity="0.6" />
+          </svg>
+          {/* Easter egg: smile face pops in on every click. The `key` prop
+              changes per click so React remounts the SVG and the CSS
+              animation restarts. Variant cycles 4 faces. */}
+          {orchestratorClicks > 0 && (
+            <OrchestratorSmile key={orchestratorClicks} variant={(orchestratorClicks - 1) % 4} />
+          )}
+          {/* Ripple wave — concentric expanding circle that fades out, hinting
+              the click registered even before the smile finishes pop-in. */}
+          {orchestratorClicks > 0 && (
+            <OrchestratorRipple key={`ripple-${orchestratorClicks}`} />
+          )}
+          <div
+            className="font-mono"
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 4px)',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              fontSize: '9px',
+              letterSpacing: '0.18em',
+              textTransform: 'uppercase',
+              color: orchestratorClicks >= 10 ? 'var(--accent)' : 'var(--stage-text-dim)',
+              whiteSpace: 'nowrap',
+              opacity: 0.7,
+              pointerEvents: 'none',
+              transition: 'color 400ms ease-out',
+            }}
+          >
+            {orchestratorClicks >= 10 ? '♥ orchestrator ♥' : 'orchestrator'}
+          </div>
+        </div>
+      )}
+
       {/* Agent nodes — absolutely positioned, transition-animated. */}
       {agents.map((a) => {
         const pos = positions.get(a.id);
@@ -629,7 +825,23 @@ function HubSpokeGraph({
         const isPeer = pos.role === 'peer';
         // Resting: full opacity. Center: full + glow ring. Peer: full. Hidden: 0.
         const opacity = isHidden ? 0 : 1;
-        const labelColor = isCenter ? 'var(--text)' : 'var(--stage-text-dim)';
+        const labelColor = isCenter ? '#F2EDE3' : 'var(--stage-text-dim)';
+        // Position label RADIALLY OUTWARD from the avatar based on the layout
+        // angle. This prevents the universal "label below avatar" collision
+        // where two stacked agents have the upper agent's label landing on
+        // top of the lower agent. Top-half agents (angle in [-π, 0]) get the
+        // label above; bottom-half get it below; left/right shift inline.
+        const angle = pos.angle ?? Math.PI / 2; // default: below (no angle = center)
+        const labelDist = size / 2 + 14; // gap between avatar edge and label baseline
+        const labelDx = Math.cos(angle) * labelDist;
+        const labelDy = Math.sin(angle) * labelDist;
+        // Anchor the label so its inner edge (toward the center) lines up with
+        // the avatar — horizontal labels read left-or-right of avatar; vertical
+        // labels (top/bottom) stay center-anchored.
+        const labelAnchor: 'left' | 'right' | 'center' =
+          Math.abs(Math.cos(angle)) > 0.7
+            ? Math.cos(angle) > 0 ? 'left' : 'right'
+            : 'center';
         return (
           <button
             key={a.id}
@@ -650,7 +862,12 @@ function HubSpokeGraph({
               className="rounded-full"
               style={{
                 width: size, height: size,
-                boxShadow: isCenter ? `0 0 0 3px var(--accent), 0 8px 32px -8px var(--accent-soft)` : undefined,
+                // Focus-mode center: blackhole-style accretion halo (cream
+                // event horizon + soft accent glow), not a bright terracotta
+                // ring. Coherent with the resting-mode orchestrator blackhole.
+                boxShadow: isCenter
+                  ? `0 0 0 1.5px rgba(242, 237, 227, 0.45), 0 0 0 6px rgba(201, 112, 86, 0.18), 0 0 28px -4px rgba(201, 112, 86, 0.35)`
+                  : undefined,
                 transition: 'box-shadow 200ms cubic-bezier(0.4,0,0.2,1)',
               }}
             >
@@ -664,12 +881,20 @@ function HubSpokeGraph({
               />
             </div>
             <div
-              className="mt-1 font-mono text-[10px] font-bold uppercase tracking-wider"
+              className="absolute font-mono text-[10px] font-bold uppercase tracking-wider"
               style={{
+                left: '50%',
+                top: '50%',
+                transform: `translate(calc(-50% + ${labelDx}px), calc(-50% + ${labelDy}px))${
+                  labelAnchor === 'left' ? ' translateX(calc(50% + 4px))'
+                  : labelAnchor === 'right' ? ' translateX(calc(-50% - 4px))'
+                  : ''
+                }`,
                 color: labelColor,
-                textAlign: 'center',
+                textAlign: labelAnchor === 'right' ? 'right' : labelAnchor === 'left' ? 'left' : 'center',
                 whiteSpace: 'nowrap',
-                transition: 'color 200ms cubic-bezier(0.4,0,0.2,1)',
+                pointerEvents: 'none',
+                transition: 'color 200ms cubic-bezier(0.4,0,0.2,1), transform 320ms cubic-bezier(0.4,0,0.2,1)',
               }}
             >
               {a.id}

@@ -131,12 +131,18 @@ function timeAgo(iso: string): string {
 }
 
 function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; peerRelationships: PeerRelationshipMap; agents: AgentData[] }) {
-  // Status pill: benched > offline > online (highest-severity status wins).
+  // Status pill: benched > native (always ready) > offline > online.
+  // Native (Claude Code subagent) agents don't have a relay WebSocket and
+  // therefore no meaningful online/offline state — they're dispatched on
+  // demand by the orchestrator and are always available. Showing "OFFLINE"
+  // for them was misleading (a false signal that the agent was unhealthy).
   const status: { label: string; color: string } = agent.scores.bench.state === 'benched'
     ? { label: 'BENCHED', color: 'var(--danger)' }
-    : !agent.online
-      ? { label: 'OFFLINE', color: 'var(--text-dim)' }
-      : { label: 'ONLINE', color: 'var(--success)' };
+    : agent.native
+      ? { label: 'READY', color: 'var(--success)' }
+      : !agent.online
+        ? { label: 'OFFLINE', color: 'var(--ink-3)' }
+        : { label: 'ONLINE', color: 'var(--success)' };
 
   // Top 3 peers by total interaction count.
   const peers: Array<{ other: string; rel: PeerRelationship; total: number }> = [];
@@ -154,7 +160,7 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
     <div className="flex h-full flex-col">
       {/* Status pill — top gradient strip */}
       <div
-        className="flex items-center gap-1.5 px-4 py-2 font-mono text-[9px] font-bold uppercase tracking-widest"
+        className="flex items-center gap-1.5 px-4 py-2 h-section"
         style={{ color: status.color, borderBottom: '1px solid var(--border)', background: `color-mix(in oklch, ${status.color} 6%, transparent)` }}
       >
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: status.color, display: 'inline-block' }} />
@@ -165,8 +171,8 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
       <div className="flex items-center gap-3 px-4 pt-4">
         <NeuralAvatar agentId={agent.id} signals={agent.scores.signals} accuracy={agent.scores.accuracy} uniqueness={agent.scores.uniqueness} impact={agent.scores.impactScore} size={48} />
         <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-[13px] font-semibold" style={{ color: 'var(--text)' }}>{agent.id}</div>
-          <div className="truncate font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>{agent.model}</div>
+          <div className="truncate font-mono text-[13px] font-semibold" style={{ color: 'var(--ink)' }}>{agent.id}</div>
+          <div className="truncate font-mono text-[10px]" style={{ color: 'var(--ink-3)' }}>{agent.model}</div>
         </div>
       </div>
 
@@ -180,7 +186,7 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
 
       {/* Top peer relationships */}
       <div className="mt-4 px-4">
-        <div className="mb-1.5 font-mono text-[9px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-faint)' }}>
+        <div className="mb-1.5 h-section">
           Top peers
         </div>
         {topPeers.length === 0 ? (
@@ -189,8 +195,8 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
           <div className="space-y-1">
             {topPeers.map(({ other, rel }) => (
               <div key={other} className="rounded px-2 py-1.5" style={{ background: 'color-mix(in oklch, var(--surface) 50%, transparent)' }}>
-                <div className="truncate font-mono text-[11px]" style={{ color: 'var(--text)' }}>{other}</div>
-                <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                <div className="truncate font-mono text-[11px]" style={{ color: 'var(--ink)' }}>{other}</div>
+                <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px]" style={{ color: 'var(--ink-3)' }}>
                   {rel.confirmed > 0 && <span><span style={{ color: 'var(--success)' }}>✓</span> {rel.confirmed}</span>}
                   {rel.disputed > 0 && <span><span style={{ color: 'var(--warn)' }}>≠</span> {rel.disputed}</span>}
                   {rel.hallucinationsCaught > 0 && <span><span style={{ color: 'var(--danger)' }}>◆</span> {rel.hallucinationsCaught}</span>}
@@ -205,12 +211,12 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
       {/* Skills */}
       {agent.skills.length > 0 && (
         <div className="mt-4 px-4">
-          <div className="mb-1.5 font-mono text-[9px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-faint)' }}>
+          <div className="mb-1.5 h-section">
             Skills <span style={{ color: 'var(--accent)' }}>{agent.skills.length}</span>
           </div>
           <div className="flex flex-wrap gap-1">
             {agent.skills.slice(0, 6).map((s) => (
-              <span key={s} className="rounded-sm border px-1.5 py-0.5 font-mono text-[10px]" style={{ borderColor: 'var(--border)', color: 'var(--text-dim)' }}>{s}</span>
+              <span key={s} className="rounded-sm border px-1.5 py-0.5 font-mono text-[10px]" style={{ borderColor: 'var(--border)', color: 'var(--ink-3)' }}>{s}</span>
             ))}
           </div>
         </div>
