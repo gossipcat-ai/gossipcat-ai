@@ -25,6 +25,9 @@ interface Props {
 
 const PADDING_X = 1;
 const PADDING_Y = 2;
+/** Minimum non-null buckets before the curve renders. Below this the
+ *  threshold-only placeholder shows — N + verdict label carry the info. */
+const MIN_VISIBLE_POINTS = 3;
 
 export function SkillEffectivenessSparkline({
   curve,
@@ -37,7 +40,11 @@ export function SkillEffectivenessSparkline({
   // segments don't visually bridge gaps. Each run becomes one <path>.
   const segments = useMemo(() => splitSegments(curve), [curve]);
 
-  if (curve.length === 0) {
+  // Total non-null buckets across all segments. Below MIN_VISIBLE_POINTS the
+  // curve renders as floating dots/short stubs, which reads as broken noise
+  // rather than "early signal." Fall back to the threshold-only placeholder.
+  const definedCount = segments.reduce((n, s) => n + s.length, 0);
+  if (curve.length === 0 || definedCount < MIN_VISIBLE_POINTS) {
     return <EmptySparkline width={width} height={height} />;
   }
 
