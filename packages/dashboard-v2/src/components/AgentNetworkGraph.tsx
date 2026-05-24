@@ -435,14 +435,22 @@ function HubSpokeGraph({
 }: AgentNetworkGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
+  // measuredHeight tracks the ACTUAL rendered card height (which stretches via
+  // the equal-height flex row), separately from the `height` prop (which is
+  // just the minimum floor). Centering the rings + stars + agents in the real
+  // canvas requires this — otherwise the system lives in the top `height` px
+  // and the bottom of the stretched card is empty.
+  const [measuredHeight, setMeasuredHeight] = useState(height);
 
-  // Resize observer keeps layout responsive.
+  // Resize observer keeps layout responsive in both dimensions.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
       const w = entry.contentRect.width;
+      const h = entry.contentRect.height;
       if (w > 0) setWidth(w);
+      if (h > 0) setMeasuredHeight(h);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -454,10 +462,10 @@ function HubSpokeGraph({
   const positions = useMemo(() => {
     const ids = agents.map((a) => a.id);
     if (selectedAgentId && ids.includes(selectedAgentId)) {
-      return focusLayout(selectedAgentId, ids, peerRelationships, width, height);
+      return focusLayout(selectedAgentId, ids, peerRelationships, width, measuredHeight);
     }
-    return restingLayout(agents, width, height);
-  }, [agents, peerRelationships, selectedAgentId, width, height]);
+    return restingLayout(agents, width, measuredHeight);
+  }, [agents, peerRelationships, selectedAgentId, width, measuredHeight]);
 
   // Spokes (only drawn in focus mode) — straight lines from center to each peer.
   const spokes = useMemo(() => {
@@ -523,11 +531,11 @@ function HubSpokeGraph({
     >
       {/* Starfield: observatory backdrop with eat-the-stars animation.
           Stars within ~60px of an agent drift in, shrink, fade, then respawn. */}
-      <Starfield width={width} height={height} agentPositions={agentPositionsForStars} />
+      <Starfield width={width} height={measuredHeight} agentPositions={agentPositionsForStars} />
       {/* Accuracy rings — rendered second (behind spokes/avatars, above stars).
           Hide labels in focus mode: positions are then driven by peer-
           distance, not accuracy, so the accuracy ticks would mislead. */}
-      <RingBands width={width} height={height} hideLabels={!!selectedAgentId} />
+      <RingBands width={width} height={measuredHeight} hideLabels={!!selectedAgentId} />
 
       {/* Header label — adapts to mode. */}
       <div
@@ -586,7 +594,7 @@ function HubSpokeGraph({
       )}
 
       {/* Spokes in focus mode only. SVG layer sits above the background. */}
-      <svg width="100%" height={height} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+      <svg width="100%" height={measuredHeight} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
         {spokes.map((s) => {
           // Trim line endpoints to avatar radius so spokes meet the circumference.
           const selectedAgent = agents.find((a) => a.id === selectedAgentId);
