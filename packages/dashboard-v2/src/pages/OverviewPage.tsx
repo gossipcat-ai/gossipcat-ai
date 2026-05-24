@@ -1,4 +1,5 @@
 import { SystemPulse } from '@/components/SystemPulse';
+import { ActivityWaterfall } from '@/components/ActivityWaterfall';
 import { ActiveTasksBanner } from '@/components/ActiveTasksBanner';
 import { TeamHero } from '@/components/TeamHero';
 import { TasksSection } from '@/components/TasksSection';
@@ -107,6 +108,16 @@ export function OverviewPage({
         activeTasks={activeTaskCount}
         mode="calm"
       />
+
+      {/* DESIGN.md Step 5 — 24h per-agent activity waterfall. Replaces the
+          single-row fleet-wide hourly bars with a heatmap matrix that shows
+          WHO was active WHEN. */}
+      {agents && (
+        <ActivityWaterfall
+          agents={agents}
+          runs={consensus?.runs}
+        />
+      )}
 
       {/* Actionable stat row — present in calm mode when actionable > 0 so the
           attention hook isn't only a small header-right link. */}
