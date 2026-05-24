@@ -48,10 +48,10 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
       className="flex items-center gap-3 rounded-md border px-3 py-2"
       style={{ background: 'var(--surface-elev)', borderColor: 'var(--border)' }}
     >
-      <div className="font-mono text-[9px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-faint)' }}>
+      <div className="h-section">
         Signal volume
       </div>
-      <span className="font-mono text-[9px] tabular-nums" style={{ color: 'var(--text-faint)' }}>{RANGE_AGO_LABEL[range]}</span>
+      <span className="font-mono text-[10px] tabular-nums" style={{ color: 'var(--ink-3)' }}>{RANGE_AGO_LABEL[range]}</span>
       <svg
         viewBox={`0 0 ${BUCKET_COUNT} 1`}
         preserveAspectRatio="none"
@@ -73,7 +73,7 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
           );
         })}
       </svg>
-      <span className="font-mono text-[9px] tabular-nums" style={{ color: 'var(--text-faint)' }}>now</span>
+      <span className="font-mono text-[10px] tabular-nums" style={{ color: 'var(--ink-3)' }}>now</span>
       <div className="flex gap-1">
         {RANGES.map((r) => {
           const active = r === range;
