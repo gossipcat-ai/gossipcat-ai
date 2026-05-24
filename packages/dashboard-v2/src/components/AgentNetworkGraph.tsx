@@ -141,10 +141,27 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
   useEffect(() => {
     if (width <= 0 || height <= 0) return;
     const rand = seededRandom(7311);
-    const count = 120;
+    const count = 170;
     starsRef.current = Array.from({ length: count }, () => {
-      const baseR = rand() < 0.82 ? 0.7 : 1.4;
-      const baseO = 0.20 + rand() * 0.40; // brighter in dark mode (canvas is always dark now)
+      // Three-tier size + brightness so the field reads like real sky:
+      // most are tiny dim background stars, some mid, and a few bright
+      // "named" stars pop. Brightness scales with size so big = bright.
+      const roll = rand();
+      let baseR: number;
+      let baseO: number;
+      if (roll < 0.07) {
+        // ~7% bright stars
+        baseR = 2.0 + rand() * 0.6;
+        baseO = 0.75 + rand() * 0.25;
+      } else if (roll < 0.32) {
+        // ~25% mid stars
+        baseR = 1.2 + rand() * 0.4;
+        baseO = 0.45 + rand() * 0.35;
+      } else {
+        // ~68% faint background stars
+        baseR = 0.5 + rand() * 0.4;
+        baseO = 0.25 + rand() * 0.30;
+      }
       return {
         x: rand() * width,
         y: rand() * height,
@@ -154,7 +171,9 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
         o: baseO,
         consumed: null,
         phase: rand() * Math.PI * 2,
-        twinkleHz: 0.2 + rand() * 1.0,
+        // Slightly wider Hz range — brighter stars twinkle a touch faster
+        // so they read as more "alive" than the dim background.
+        twinkleHz: 0.25 + rand() * 1.4,
       };
     });
   }, [width, height]);
@@ -196,8 +215,10 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
         // Twinkle: idle stars softly modulate between 50% and 100% of baseO.
         // Consumed stars skip twinkle so the fade-to-zero reads cleanly.
         if (star.consumed === null) {
-          const mod = 0.75 + 0.25 * Math.sin(elapsedS * star.twinkleHz * Math.PI * 2 + star.phase);
-          star.o = star.baseO * mod;
+          // Deeper twinkle swing (45% .. 115% of baseO) makes bright stars
+          // visibly pulse and dim background ones shimmer in/out.
+          const mod = 0.80 + 0.35 * Math.sin(elapsedS * star.twinkleHz * Math.PI * 2 + star.phase);
+          star.o = Math.min(1, star.baseO * mod);
         }
 
         if (star.consumed !== null) {

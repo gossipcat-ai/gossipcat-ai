@@ -102,7 +102,7 @@ export function RecentSignalsPeek() {
         <div className="flex items-baseline gap-3">
           <h3 className="h-section">Signal stream</h3>
           {lastHour > 0 && (
-            <span className="font-mono text-[11px]" style={{ color: 'var(--accent)' }}>
+            <span className="font-mono text-[11px]" style={{ color: 'var(--info)' }}>
               +{lastHour} in last hour
             </span>
           )}
@@ -147,7 +147,8 @@ export function RecentSignalsPeek() {
                     <td className="py-2.5 pr-3 align-middle">
                       <div className="flex items-center gap-2">
                         <span
-                          aria-hidden="true"
+                          role="img"
+                          aria-label={s.severity ? `severity: ${s.severity}` : 'severity: unspecified'}
                           style={{ display: 'inline-block', width: 3, height: 14, background: tickColor, borderRadius: 1, flexShrink: 0 }}
                           title={s.severity ?? ''}
                         />

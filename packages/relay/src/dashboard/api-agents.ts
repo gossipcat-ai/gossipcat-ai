@@ -219,13 +219,22 @@ interface AgentTaskData {
 
 function readTaskGraphByAgent(projectRoot: string): Map<string, AgentTaskData> {
   const taskGraphPath = join(projectRoot, '.gossip', 'task-graph.jsonl');
+  const archivePath = taskGraphPath + '.1';
   const result = new Map<string, AgentTaskData>();
 
-  if (!existsSync(taskGraphPath)) return result;
+  if (!existsSync(taskGraphPath) && !existsSync(archivePath)) return result;
 
-  let lines: string[];
+  // Read archive first (older events), then primary — same order as event log.
+  // Rotation puts old task.created in .jsonl.1 while task.completed lives in
+  // the primary; reading only the primary makes them orphans.
+  let lines: string[] = [];
   try {
-    lines = readFileSync(taskGraphPath, 'utf-8').trim().split('\n').filter(Boolean);
+    if (existsSync(archivePath)) {
+      lines.push(...readFileSync(archivePath, 'utf-8').split('\n').filter(Boolean));
+    }
+    if (existsSync(taskGraphPath)) {
+      lines.push(...readFileSync(taskGraphPath, 'utf-8').split('\n').filter(Boolean));
+    }
   } catch {
     return result;
   }

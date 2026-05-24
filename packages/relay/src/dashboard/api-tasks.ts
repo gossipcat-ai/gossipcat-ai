@@ -2,6 +2,23 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { isUtilityAgent } from './utility-agents';
 
+/** Read task-graph.jsonl + its single rotated archive (.jsonl.1).
+ *  After single-slot rotation (5MB cap), task.created events from before the
+ *  rotation live in .1 while their task.completed lands in the new primary —
+ *  reading only the primary makes long-lived tasks appear as orphan completions
+ *  and disappear from the Tasks page entirely. */
+function readTaskGraphLines(graphPath: string): string[] {
+  const out: string[] = [];
+  const archive = graphPath + '.1';
+  if (existsSync(archive)) {
+    out.push(...readFileSync(archive, 'utf-8').split('\n').filter(Boolean));
+  }
+  if (existsSync(graphPath)) {
+    out.push(...readFileSync(graphPath, 'utf-8').split('\n').filter(Boolean));
+  }
+  return out;
+}
+
 interface TaskEntry {
   taskId: string;
   agentId: string;
@@ -28,13 +45,15 @@ export async function tasksHandler(projectRoot: string, query?: URLSearchParams)
   const offset = isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
 
   const graphPath = join(projectRoot, '.gossip', 'task-graph.jsonl');
-  if (!existsSync(graphPath)) return { items: [], total: 0, offset, limit };
+  if (!existsSync(graphPath) && !existsSync(graphPath + '.1')) {
+    return { items: [], total: 0, offset, limit };
+  }
 
   const created = new Map<string, { agentId: string; task: string; timestamp: string }>();
   const completed = new Map<string, { duration?: number; timestamp: string; failed: boolean; cancelled?: boolean; inputTokens?: number; outputTokens?: number; result?: string }>();
 
   try {
-    const lines = readFileSync(graphPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const lines = readTaskGraphLines(graphPath);
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);

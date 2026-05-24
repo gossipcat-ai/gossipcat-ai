@@ -16,15 +16,12 @@ interface SeverityMixStripProps {
   height?: number;
 }
 
-/** Monochrome opacity ramp — single rose hue ramping from dark
- *  (critical) to light (low) reads as "severity intensity" without
- *  collisions with the verdict/status semantic palette elsewhere. */
-const SEGMENT_COLOR = 'var(--bad)';
-const SEGMENT_OPACITY: Record<keyof SeverityCount, number> = {
-  critical: 1.0,
-  high: 0.7,
-  medium: 0.45,
-  low: 0.22,
+/** Per-severity semantic colors per DESIGN.md Step 6. */
+const SEGMENT_COLORS: Record<keyof SeverityCount, string> = {
+  critical: 'var(--bad)',
+  high: 'var(--warn)',
+  medium: 'var(--info)',
+  low: 'var(--idle)',
 };
 
 const SEVERITY_ORDER: Array<keyof SeverityCount> = ['critical', 'high', 'medium', 'low'];
@@ -55,8 +52,8 @@ export function SeverityMixStrip({ counts, height = 10 }: SeverityMixStripProps)
             key={sev}
             style={{
               flex: 1,
-              background: SEGMENT_COLOR,
-              opacity: SEGMENT_OPACITY[sev] * 0.5,
+              background: SEGMENT_COLORS[sev],
+              opacity: 0.4,
             }}
           />
         ))}
@@ -84,8 +81,7 @@ export function SeverityMixStrip({ counts, height = 10 }: SeverityMixStripProps)
             key={sev}
             style={{
               width: `${pct.toFixed(2)}%`,
-              background: SEGMENT_COLOR,
-              opacity: SEGMENT_OPACITY[sev],
+              background: SEGMENT_COLORS[sev],
               flexShrink: 0,
             }}
           />

@@ -210,12 +210,6 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
             style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}
           >
             <SubBar
-              label="reliability"
-              value={s.taskCompletionRate ?? 0}
-              color={ac}
-              tooltip={`Reliability ${pct(s.taskCompletionRate ?? 0)}\nTask completion rate.`}
-            />
-            <SubBar
               label="unique"
               value={s.uniqueness}
               color={ac}
