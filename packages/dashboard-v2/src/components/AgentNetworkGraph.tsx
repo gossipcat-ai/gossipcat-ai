@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { NeuralAvatar } from './NeuralAvatar';
 import { classifyPeerRelationship, edgeWidthFor } from '@/lib/edge-classification';
 import { peerKey } from '@/lib/peer-relationships';
+import { subscribe as subscribeAnimation } from '@/lib/animation-scheduler';
 import type { AgentData, PeerRelationship, PeerRelationshipMap } from '@/lib/types';
 
 interface AgentNetworkGraphProps {
@@ -87,21 +88,137 @@ function seededRandom(seed: number): () => number {
 interface StarfieldProps {
   width: number;
   height: number;
+  /** Agent positions on the stage. Stars within consumeRadius of any agent
+   *  drift toward that agent, shrink + fade, then respawn elsewhere. */
+  agentPositions: { x: number; y: number }[];
 }
 
-/** Subtle observatory-style starfield rendered behind the rings.
- *  ~40 stars at low opacity, mix of 1px and 2px for depth. Stable seed
- *  so positions don't shift between renders. Pure decoration. */
-function Starfield({ width, height }: StarfieldProps) {
-  const rand = seededRandom(7311);
-  const stars = Array.from({ length: 42 }, () => ({
-    x: rand() * width,
-    y: rand() * height,
-    r: rand() < 0.85 ? 0.7 : 1.4,
-    o: 0.12 + rand() * 0.18,
-  }));
+type Star = {
+  x: number; y: number;
+  baseR: number;   // born radius
+  r: number;       // current radius (shrinks when consumed)
+  baseO: number;   // born opacity
+  o: number;       // current opacity
+  consumed: number | null; // index of agent consuming this star, or null
+};
+
+/** Observatory-style starfield rendered behind the rings.
+ *  ~120 stars; mix of 0.7px / 1.4px for depth. Agents passively
+ *  "eat" nearby stars — within consumeRadius, a star drifts toward the
+ *  agent, shrinks, fades, and respawns elsewhere. Subscribes to the
+ *  shared AnimationScheduler so the loop respects prefers-reduced-motion. */
+function Starfield({ width, height, agentPositions }: StarfieldProps) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const starsRef = useRef<Star[]>([]);
+  const circlesRef = useRef<(SVGCircleElement | null)[]>([]);
+
+  // Seed star positions once per width/height. Respawn handled in the tick.
+  useEffect(() => {
+    if (width <= 0 || height <= 0) return;
+    const rand = seededRandom(7311);
+    const count = 120;
+    starsRef.current = Array.from({ length: count }, () => {
+      const baseR = rand() < 0.82 ? 0.7 : 1.4;
+      const baseO = 0.20 + rand() * 0.40; // brighter in dark mode (canvas is always dark now)
+      return {
+        x: rand() * width,
+        y: rand() * height,
+        baseR,
+        r: baseR,
+        baseO,
+        o: baseO,
+        consumed: null,
+      };
+    });
+  }, [width, height]);
+
+  // Animation loop — agents eat nearby stars.
+  useEffect(() => {
+    if (width <= 0 || height <= 0) return;
+    const rand = seededRandom(919); // separate seed for respawn jitter
+    const consumeRadius = 60; // px — slightly bigger than avatar visual radius
+    const driftPerSec = 90;   // px per second toward agent when consumed
+    const fadeRate = 1.5;     // opacity units per second when consumed
+    const shrinkRate = 1.8;   // radius units per second when consumed
+
+    const tick = (deltaMs: number) => {
+      const dt = deltaMs / 1000;
+      const stars = starsRef.current;
+      const circles = circlesRef.current;
+      for (let i = 0; i < stars.length; i++) {
+        const star = stars[i];
+
+        // Detect first agent within consumeRadius. Sticky consumption (once
+        // claimed, the star is being eaten by that agent until it disappears).
+        if (star.consumed === null) {
+          for (let a = 0; a < agentPositions.length; a++) {
+            const dx = agentPositions[a].x - star.x;
+            const dy = agentPositions[a].y - star.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < consumeRadius * consumeRadius) {
+              star.consumed = a;
+              break;
+            }
+          }
+        }
+
+        if (star.consumed !== null) {
+          const target = agentPositions[star.consumed];
+          if (target) {
+            const dx = target.x - star.x;
+            const dy = target.y - star.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const move = Math.min(dist, driftPerSec * dt);
+            star.x += (dx / dist) * move;
+            star.y += (dy / dist) * move;
+            star.o = Math.max(0, star.o - fadeRate * dt);
+            star.r = Math.max(0, star.r - shrinkRate * dt);
+          }
+          // Respawn when fully consumed or arrived at agent.
+          if (star.o <= 0.01 || star.r <= 0.1) {
+            // Random respawn far from any agent.
+            let nx = 0, ny = 0, safe = false;
+            for (let tries = 0; tries < 8; tries++) {
+              nx = rand() * width;
+              ny = rand() * height;
+              safe = true;
+              for (const ap of agentPositions) {
+                const ddx = ap.x - nx;
+                const ddy = ap.y - ny;
+                if (ddx * ddx + ddy * ddy < consumeRadius * consumeRadius * 1.5) {
+                  safe = false;
+                  break;
+                }
+              }
+              if (safe) break;
+            }
+            star.x = nx;
+            star.y = ny;
+            star.r = star.baseR;
+            star.o = star.baseO;
+            star.consumed = null;
+          }
+        }
+
+        // Direct DOM mutation — avoid React re-render storm for 120 stars * 60fps.
+        const c = circles[i];
+        if (c) {
+          c.setAttribute('cx', String(star.x));
+          c.setAttribute('cy', String(star.y));
+          c.setAttribute('r', String(star.r));
+          c.setAttribute('opacity', String(star.o));
+        }
+      }
+    };
+
+    const unsubscribe = subscribeAnimation(tick);
+    return () => unsubscribe();
+  }, [width, height, agentPositions]);
+
+  const stars = starsRef.current;
   return (
     <svg
+      ref={svgRef}
       width="100%"
       height={height}
       style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
@@ -110,10 +227,11 @@ function Starfield({ width, height }: StarfieldProps) {
       {stars.map((s, i) => (
         <circle
           key={i}
+          ref={(el) => { circlesRef.current[i] = el; }}
           cx={s.x}
           cy={s.y}
           r={s.r}
-          fill="var(--ink-3)"
+          fill="#F2EDE3"
           opacity={s.o}
         />
       ))}
@@ -355,15 +473,42 @@ function HubSpokeGraph({
   // Count summary for the header.
   const peerCount = selectedAgentId ? spokes.length : 0;
 
+  // Agent positions for the starfield's eat-stars animation. Coordinates are
+  // in the stage's coordinate space, same as restingLayout/focusLayout output.
+  const agentPositionsForStars = useMemo(() => {
+    const out: { x: number; y: number }[] = [];
+    for (const agent of agents) {
+      const p = positions.get(agent.id);
+      if (p) out.push({ x: p.x, y: p.y });
+    }
+    return out;
+  }, [agents, positions]);
+
   return (
     <div
       ref={containerRef}
       className="relative overflow-hidden rounded-lg border"
-      style={{ height, background: 'var(--stage-bg)', borderColor: 'var(--border)' }}
+      style={{
+        // minHeight gives the stage a floor; height: 100% lets it grow to fill
+        // the parent flex row when the sidebar is taller (fixes "space below"
+        // when items-stretch makes the row equal-height).
+        minHeight: height,
+        height: '100%',
+        // Always-dark stage regardless of overall theme — the observatory /
+        // cosmic metaphor (agents as stars in an accuracy constellation) only
+        // reads in the dark. Override stage-* tokens with literal dark values
+        // so light-mode users still see the cosmic canvas.
+        background: '#14120F',
+        borderColor: '#2B2823',
+        ['--stage-bg' as any]: '#14120F',
+        ['--stage-text-dim' as any]: '#B8B0A1',
+        ['--stage-grid' as any]: 'rgba(255,255,255,0.03)',
+      }}
       onClick={() => onSelectAgent(null)}
     >
-      {/* Starfield: subtle observatory backdrop, behind everything. */}
-      <Starfield width={width} height={height} />
+      {/* Starfield: observatory backdrop with eat-the-stars animation.
+          Stars within ~60px of an agent drift in, shrink, fade, then respawn. */}
+      <Starfield width={width} height={height} agentPositions={agentPositionsForStars} />
       {/* Accuracy rings — rendered second (behind spokes/avatars, above stars).
           Hide labels in focus mode: positions are then driven by peer-
           distance, not accuracy, so the accuracy ticks would mislead. */}
@@ -386,16 +531,16 @@ function HubSpokeGraph({
           <>
             <span>Focus</span>
             <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ color: 'var(--text)' }}>{selectedAgentId}</span>
+            <span style={{ color: '#F2EDE3' }}>{selectedAgentId}</span>
             <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ color: 'var(--text)' }}>{peerCount}</span>
+            <span style={{ color: '#F2EDE3' }}>{peerCount}</span>
             <span style={{ opacity: 0.7 }}>peer{peerCount === 1 ? '' : 's'}</span>
           </>
         ) : (
           <>
             <span>Fleet</span>
             <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ color: 'var(--text)' }}>{agents.length}</span>
+            <span style={{ color: '#F2EDE3' }}>{agents.length}</span>
             <span style={{ opacity: 0.7 }}>agents</span>
             <span style={{ opacity: 0.5 }}>·</span>
             <span style={{ opacity: 0.7 }}>click an avatar to focus</span>
