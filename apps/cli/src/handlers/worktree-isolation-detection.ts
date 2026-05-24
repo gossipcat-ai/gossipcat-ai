@@ -282,7 +282,14 @@ export function preserveLeakedPaths(
           cwd,
           stdio: ['ignore', 'ignore', 'ignore'],
         });
-      } catch { /* best-effort — reset failure is surfaced via the diff path below */ }
+      } catch {
+        // best-effort. `git reset` of intent-to-add entries is near-infallible,
+        // but if it DID fail the captured patch is still valid (diff ran before
+        // this reset), so work is preserved — the only residue is intent-to-add
+        // entries left in the index (surfacing as empty new files in
+        // `git status`), recoverable with `git reset HEAD -- <paths>`. We do not
+        // fail the preserve for this: the patch (the thing that matters) is intact.
+      }
     }
 
     const recoveryDir = path.join(cwd, '.gossip', 'recovery');
