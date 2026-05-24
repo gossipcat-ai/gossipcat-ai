@@ -109,12 +109,10 @@ export function ViolationsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <div className="flex items-center gap-2">
-          <h1 className="h-section">
-            Process Violations
-          </h1>
+        <div className="flex items-baseline gap-3">
+          <h1 className="h-route">Process Violations</h1>
           {total > 0 && (
-            <span className="rounded-full border border-disputed/30 bg-disputed/10 px-2 py-0.5 font-mono text-xs font-bold text-disputed">
+            <span className="font-mono text-sm tabular-nums" style={{ color: 'var(--ink-3)' }}>
               {total}
             </span>
           )}

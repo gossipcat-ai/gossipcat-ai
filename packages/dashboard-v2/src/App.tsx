@@ -117,9 +117,10 @@ function TeamPage({
     <>
       {/* Header with summary stats */}
       <div className="mb-6">
-        <h1 className="h-section">
-          Team <span className="ml-2" style={{ color: 'var(--ink)', fontWeight: 700 }}>{agents.length}</span>
-        </h1>
+        <div className="flex items-baseline gap-3">
+          <h1 className="h-route">Team</h1>
+          <span className="font-mono text-sm tabular-nums" style={{ color: 'var(--ink-3)' }}>{agents.length}</span>
+        </div>
         <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Per-agent accuracy, signal counts, and dispatch weights.</p>
         <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border [background:color-mix(in_oklch,var(--border)_30%,transparent)] sm:grid-cols-4">
           {[
@@ -369,9 +370,10 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
   return (
     <>
       <div className="mb-6">
-        <h1 className="h-section">
-          Tasks <span className="ml-2" style={{ color: 'var(--ink)', fontWeight: 700 }}>{tasks.total}</span>
-        </h1>
+        <div className="flex items-baseline gap-3">
+          <h1 className="h-route">Tasks</h1>
+          <span className="font-mono text-sm tabular-nums" style={{ color: 'var(--ink-3)' }}>{tasks.total}</span>
+        </div>
         <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Live dispatched tasks and their relay status.</p>
         <div className="mt-2 flex gap-4 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
           <span><span style={{ color: 'var(--success)' }}>{completed}</span> completed</span>
@@ -456,14 +458,15 @@ function FindingsPage({
   return (
     <>
       <div className="mb-6">
-        <h1 className="h-section">
-          Consensus Rounds <span className="ml-2" style={{ color: 'var(--ink)', fontWeight: 700 }}>{visibleRuns.length}</span>
+        <div className="flex items-baseline gap-3">
+          <h1 className="h-route">Consensus Rounds</h1>
+          <span className="font-mono text-sm tabular-nums" style={{ color: 'var(--ink-3)' }}>{visibleRuns.length}</span>
           {!showRetracted && retractedCount > 0 && (
-            <span className="ml-2 font-normal normal-case tracking-normal" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
+            <span className="font-mono text-sm tabular-nums" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
               / {consensus.totalRuns ?? consensus.runs.length} total
             </span>
           )}
-        </h1>
+        </div>
         <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Multi-agent review rounds — findings confirmed when ≥2 agents agree.</p>
         <div className="mt-2 flex gap-4 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
           <span><span style={{ color: 'var(--success)' }}>{confirmedTotal}</span> confirmed</span>
