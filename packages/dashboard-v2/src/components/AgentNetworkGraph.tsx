@@ -112,9 +112,11 @@ type Star = {
   x: number; y: number;
   baseR: number;   // born radius
   r: number;       // current radius (shrinks when consumed)
-  baseO: number;   // born opacity
-  o: number;       // current opacity
+  baseO: number;   // born opacity (target when idle, before twinkle modulation)
+  o: number;       // current opacity (after twinkle + consume effects)
   consumed: number | null; // index of agent consuming this star, or null
+  phase: number;    // 0..2π — initial twinkle phase so each star blinks independently
+  twinkleHz: number; // 0.2..1.2 cycles per second
 };
 
 /** Observatory-style starfield rendered behind the rings.
@@ -143,6 +145,8 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
         baseO,
         o: baseO,
         consumed: null,
+        phase: rand() * Math.PI * 2,
+        twinkleHz: 0.2 + rand() * 1.0,
       };
     });
   }, [width, height]);
@@ -156,8 +160,12 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
     const fadeRate = 1.5;     // opacity units per second when consumed
     const shrinkRate = 1.8;   // radius units per second when consumed
 
+    // Wall-clock-ish elapsed time for twinkle phase. Accumulates deltas so
+    // we don't depend on performance.now() (kept self-contained inside loop).
+    let elapsedS = 0;
     const tick = (deltaMs: number) => {
       const dt = deltaMs / 1000;
+      elapsedS += dt;
       const stars = starsRef.current;
       const circles = circlesRef.current;
       for (let i = 0; i < stars.length; i++) {
@@ -175,6 +183,13 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
               break;
             }
           }
+        }
+
+        // Twinkle: idle stars softly modulate between 50% and 100% of baseO.
+        // Consumed stars skip twinkle so the fade-to-zero reads cleanly.
+        if (star.consumed === null) {
+          const mod = 0.75 + 0.25 * Math.sin(elapsedS * star.twinkleHz * Math.PI * 2 + star.phase);
+          star.o = star.baseO * mod;
         }
 
         if (star.consumed !== null) {
