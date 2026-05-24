@@ -43,7 +43,7 @@ export function DroppedFindingDrift({ overview }: { overview: OverviewData | nul
   return (
     <section className="rounded-lg border border-border p-4" style={{ background: 'var(--surface-elev)' }}>
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Invalid Output Types<span className="font-normal normal-case ml-2" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>agent_finding tags rejected by the parser</span></h3>
+        <h3 className="h-section">Invalid Output Types<span className="font-normal normal-case ml-2" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>agent_finding tags rejected by the parser</span></h3>
         <span className="text-xs" style={{ color: 'var(--text-dim)' }}>last 20 rounds</span>
       </header>
       {total === 0 ? (

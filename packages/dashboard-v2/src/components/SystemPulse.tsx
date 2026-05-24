@@ -87,8 +87,8 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
   return (
     <div className="rounded-lg border border-border" style={{ background: 'var(--surface-elev)' }}>
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-3.5 py-3" style={{ background: 'color-mix(in oklch, var(--accent) 3%, transparent)' }}>
-        <div className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--accent)' }}>
+      <div className="flex items-center justify-between border-b border-border px-3.5 py-3">
+        <div className="h-section">
           System Pulse
         </div>
         <div className="flex items-center gap-1.5 font-mono text-[10px] text-confirmed">

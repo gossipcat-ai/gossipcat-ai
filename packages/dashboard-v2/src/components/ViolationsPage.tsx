@@ -110,7 +110,7 @@ export function ViolationsPage() {
     <div className="space-y-4">
       <div>
         <div className="flex items-center gap-2">
-          <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          <h1 className="h-section">
             Process Violations
           </h1>
           {total > 0 && (

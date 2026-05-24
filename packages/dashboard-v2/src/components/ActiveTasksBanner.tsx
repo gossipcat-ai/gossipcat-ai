@@ -71,7 +71,7 @@ export function ActiveTasksBanner({ onCountChange }: { onCountChange?: (n: numbe
           to conflate running-task status with review-state. */}
       <div className="mb-2 flex items-center gap-2">
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-confirmed" />
-        <span className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <span className="h-section">
           Live
         </span>
         <span className="font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>

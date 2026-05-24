@@ -89,7 +89,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
     { label: 'accuracy', value: s.accuracy, fill: s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed' },
     { label: 'reliability', value: s.taskCompletionRate ?? 0, fill: 'bg-chart', tooltip: 'Task completion rate — fraction of dispatched tasks that finished without pipeline error or timeout' },
     { label: 'unique', value: s.uniqueness, fill: 'bg-unique' },
-    { label: 'impact', value: s.impactScore, fill: 'bg-[var(--accent)]' },
+    { label: 'impact', value: s.impactScore, fill: 'bg-[var(--c8)]' },
   ];
 
   // Unverified signals carry two meanings depending on whose column they land in:
@@ -270,7 +270,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       <section className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Left: Metrics — bars + compact stat strip */}
         <div>
-          <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Metrics</h2>
+          <h2 className="mb-3 h-section">Metrics</h2>
           <div className="rounded-lg border border-border/40 p-4 shadow-[inset_0_1px_3px_rgba(0,0,0,0.35)]" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
             <div className="space-y-2.5">
               {metricBars.map(m => (
@@ -303,7 +303,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             legacy CategoryStrengths (severity-weighted sort + sparse rows) is
             retained for reference but we lead with the ratio view here. */}
         <div>
-          <h2 className="mb-1 font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          <h2 className="mb-1 h-section">
             Category Competency
           </h2>
           <p className="mb-3 mt-0.5 font-mono text-[11px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>◆ Raw per-category ratio — unweighted. Overall accuracy in Metrics applies a hallucination penalty.</p>
@@ -318,7 +318,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       {/* Skills — rich card view with effectiveness, status, strikes, forced-develop history. */}
       {(agent.skillSlots.length > 0 || agent.skills.length > 0) && (
         <section className="mb-8">
-          <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          <h2 className="mb-3 h-section">
             Skills <span style={{ color: 'var(--accent)' }}>{agent.skillSlots.length || agent.skills.length}</span>
           </h2>
           {agent.skillSlots.length > 0 ? (
@@ -342,7 +342,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       {/* Tasks */}
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          <h2 className="h-section">
             Tasks <span style={{ color: 'var(--accent)' }}>{agentTasks.length}</span>
           </h2>
           {taskPages > 1 && (
@@ -393,7 +393,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           scroll several screens to see one finding's citation + signals; the
           drawer surfaces both in one click. */}
       <section className="mb-8">
-        <h2 className="mb-3 font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h2 className="mb-3 h-section">
           Consensus Runs <span style={{ color: 'var(--accent)' }}>{agentRuns.length}</span>
         </h2>
         {agentRuns.length > 0 ? (
@@ -508,7 +508,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       {/* Memory Files — paginated by day */}
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+          <h2 className="h-section">
             Memory <span style={{ color: 'var(--accent)' }}>{memories.length} files</span>
             {currentDay && (
               <span className="ml-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>

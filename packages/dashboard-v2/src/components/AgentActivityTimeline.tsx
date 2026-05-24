@@ -66,7 +66,7 @@ export function AgentActivityTimeline({ agentId }: Props) {
   return (
     <div className="rounded-md border border-border/40 px-4 py-3" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
       <div className="mb-3 flex items-center justify-between">
-        <span className="font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+        <span className="h-section">
           Activity
         </span>
         <div className="flex gap-1">

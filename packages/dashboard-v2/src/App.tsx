@@ -84,7 +84,7 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
     <>
       {/* Header with summary stats */}
       <div className="mb-6">
-        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h1 className="h-section">
           Team <span className="ml-2" style={{ color: 'var(--accent)' }}>{agents.length}</span>
         </h1>
         <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Per-agent accuracy, signal counts, and dispatch weights.</p>
@@ -336,7 +336,7 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
   return (
     <>
       <div className="mb-6">
-        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h1 className="h-section">
           Tasks <span className="ml-2" style={{ color: 'var(--accent)' }}>{tasks.total}</span>
         </h1>
         <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Live dispatched tasks and their relay status.</p>
@@ -423,7 +423,7 @@ function FindingsPage({
   return (
     <>
       <div className="mb-6">
-        <h1 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h1 className="h-section">
           Consensus Rounds <span className="ml-2" style={{ color: 'var(--accent)' }}>{visibleRuns.length}</span>
           {!showRetracted && retractedCount > 0 && (
             <span className="ml-2 font-normal normal-case tracking-normal" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>

@@ -48,7 +48,7 @@ function FleetSummary({ agents, peerRelationships }: { agents: AgentData[]; peer
 
   return (
     <div className="flex h-full flex-col p-4">
-      <div className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+      <div className="mb-2 h-section">
         Fleet at a glance
       </div>
       <p className="mb-4 font-mono text-[11px]" style={{ color: 'var(--text-faint)' }}>

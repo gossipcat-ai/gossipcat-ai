@@ -187,7 +187,7 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
   return (
     <section className="flex h-full flex-col">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+        <h2 className="h-section">
           {heading} <span style={{ color: 'var(--accent)' }}>{filtered.length}</span>
         </h2>
         {statusFilter && (
@@ -261,7 +261,7 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
                   {TYPE_ICON[type]}
                 </svg>
               </span>
-              <span className="self-end font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+              <span className="self-end h-section">
                 {label}
               </span>
               <span
@@ -324,7 +324,7 @@ export function NativeMemories({ memories }: { memories: MemoryFile[] }) {
 
   return (
     <section className="flex h-full flex-col">
-      <h2 className="mb-3 font-mono text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>
+      <h2 className="mb-3 h-section">
         Native Memory <span style={{ color: 'var(--accent)' }}>{unique.length}</span>
       </h2>
       {unique.length === 0 ? (

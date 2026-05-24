@@ -62,7 +62,7 @@ export function FleetHealthTrend() {
   return (
     <section className="rounded-lg border border-border p-4" style={{ background: 'var(--surface-elev)' }}>
       <header className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text)' }}>Fleet Health Trend</h3>
+        <h3 className="h-section">Fleet Health Trend</h3>
         <span className="text-xs" style={{ color: 'var(--text-dim)' }}>last 30d</span>
       </header>
       {!data && !err && <EmptyState title="Loading…" compact />}
