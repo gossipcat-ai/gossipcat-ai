@@ -676,16 +676,16 @@ function HubSpokeGraph({
         )}
       </div>
 
-      {/* Accuracy-scope legend — explains the radial encoding. Sits just below
-          the fleet-name overlay at the top-left. Per Step 4 review feedback,
-          the legend must be in the attention path (top-left, not bottom-left).
+      {/* Accuracy-scope legend — explains the radial encoding.
+          Per user feedback, positioned at the bottom-right to keep the
+          top-left clean (FLEET label + click-to-focus hint live there).
           Only shown in resting mode — focus mode has its own edge legend. */}
       {!selectedAgentId && (
         <div
           className="absolute z-10 h-section"
           style={{
-            top: 36,
-            left: 12,
+            bottom: 12,
+            right: 12,
             fontSize: '10px',
             color: 'var(--stage-text-dim)',
             background: 'color-mix(in oklch, var(--stage-bg) 70%, transparent)',
