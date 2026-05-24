@@ -148,6 +148,19 @@ When the orchestrator calls `gossip_relay(task_id, result)` after a native agent
 
 **Related:** invariant #8 (`FINDING_TAG_SCHEMA` — parsers are strict). Consensus: `edbf8675-87b24107`.
 
+### 13. Parallel native write-intent dispatch must use `worktree` — the dispatcher rejects it otherwise
+
+Two or more native **write-intent** tasks dispatched in `mode: "parallel"` run concurrently (`run_in_background: true`) in the **same** `process.cwd()`. Each implementer typically runs `git checkout -b <branch>`; `.git/HEAD` is a single file, so the last checkout wins (POSIX write semantics) and a later `git commit` from another agent lands on the wrong branch. The relay cannot see this — the race is inside the agent's Bash, not a `gossip_*` call (issue #434).
+
+A **warning is useless** here: it ships in the *same* MCP response packet as the `NATIVE_DISPATCH: Execute these N Agent calls` directive, so the orchestrator cannot interpose before the Agent() calls fire. Therefore `handleDispatchParallel` (`apps/cli/src/handlers/dispatch.ts`) **hard-rejects** the dispatch before any task is spawned when **≥2 native tasks** satisfy the exported `isParallelHeadRaceWriteIntent` predicate (`dispatch.ts`, unit-tested in `tests/cli/dispatch-parallel-head-race-guard.test.ts`) — i.e. `write_mode === 'sequential'` OR (`write_mode === undefined` AND `agent_id` ends in `-implementer`).
+
+**Safe modes (excluded, never trigger the error):**
+- `write_mode: "worktree"` — each task gets an isolated working tree with its own `.git` (`git branch X HEAD` only *reads* HEAD; `git worktree add` writes the worktree's own HEAD, not the shared one).
+- `write_mode: "scoped"` — scoped agents do no git; the orchestrator commits (invariant #5).
+- Read-only **reviewers** (no `-implementer` suffix, `write_mode` omitted) — parallel review/consensus dispatch is unaffected.
+
+**Do NOT** "fix" this by auto-promoting `sequential` → `worktree`: worktree always forks a fresh branch from the base, which silently discards prior work when the task is a *revision to an existing branch* (see `feedback_worktree_dispatch_branch_divergence`). The caller must choose `worktree` (fresh isolation) or `scoped` (orchestrator-committed) explicitly. The predicate gates on the `-implementer` suffix for the same reason as invariant #10. Consensus: `974a1bb2-de854fb4`.
+
 ---
 
 ## Operator playbook (for orchestrator LLMs)

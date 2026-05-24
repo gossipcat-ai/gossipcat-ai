@@ -73,6 +73,25 @@ export function stampConcurrencyTaint(
 }
 
 /**
+ * [issue #434] A native parallel task carries branch-race write-intent if it
+ * will `git checkout -b` + commit in the SHARED process.cwd(): either an
+ * explicit `write_mode: 'sequential'`, or an implementer (by the load-bearing
+ * `-implementer` suffix, invariant #10) with no explicit write_mode. Two+ such
+ * tasks dispatched concurrently clobber the shared `.git/HEAD`.
+ * `worktree` (own .git) and `scoped` (no agent git) are safe and excluded.
+ * Read-only reviewers omit write_mode and don't end in `-implementer`, so they
+ * return false — parallel review/consensus dispatch is unaffected.
+ */
+export function isParallelHeadRaceWriteIntent(
+  t: { agent_id: string; write_mode?: string },
+): boolean {
+  return (
+    t.write_mode === 'sequential' ||
+    (t.write_mode === undefined && t.agent_id.endsWith('-implementer'))
+  );
+}
+
+/**
  * Common helper used at all three native dispatch sites. When `promptFormat`
  * is 'elided':
  *   - writes `agentPrompt` to .gossip/dispatch-prompts/<taskId>.txt
@@ -917,6 +936,22 @@ export async function handleDispatchParallel(
     } else {
       relayTasks.push(def);
     }
+  }
+
+  // [issue #434 / consensus 974a1bb2-de854fb4] HARD pre-dispatch guard.
+  // Two+ native write-intent tasks in mode:'parallel' run concurrently in the
+  // SAME process.cwd(), so their `git checkout -b` calls clobber the shared
+  // .git/HEAD and commits land on the wrong branch. A warning is useless here
+  // because it ships in the same response packet as the execute-now directive,
+  // so we block before any native task is emitted/spawned. worktree isolates
+  // (own .git), scoped does no agent git — both safe and excluded.
+  const writeIntentNative = nativeTasks.filter(isParallelHeadRaceWriteIntent);
+  if (writeIntentNative.length >= 2) {
+    return { content: [{ type: 'text' as const, text:
+      `Error: ${writeIntentNative.length} native implementer tasks dispatched in mode:'parallel' without write_mode:'worktree'. ` +
+      `They run concurrently in the same process.cwd() and share .git/HEAD, so their branch checkouts will clobber each other and commits will land on the wrong branch. ` +
+      `Pass write_mode:'worktree' per task (or 'scoped' with a scope path) so each task gets an isolated working tree. ` +
+      `See issue #434 and HANDBOOK invariant #13.` }] };
   }
 
   const lines: string[] = [];
