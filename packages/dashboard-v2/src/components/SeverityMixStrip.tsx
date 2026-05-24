@@ -25,14 +25,14 @@ const SEGMENT_COLORS: Record<keyof SeverityCount, string> = {
 
 const SEVERITY_ORDER: Array<keyof SeverityCount> = ['critical', 'high', 'medium', 'low'];
 
-export function SeverityMixStrip({ counts, height = 7 }: SeverityMixStripProps) {
+export function SeverityMixStrip({ counts, height = 10 }: SeverityMixStripProps) {
   const c = counts ?? { critical: 0, high: 0, medium: 0, low: 0 };
   const total = c.critical + c.high + c.medium + c.low;
   const title = `critical: ${c.critical}, high: ${c.high}, medium: ${c.medium}, low: ${c.low}`;
 
   if (total === 0) {
-    // Empty state — 4 placeholder segments at low opacity so the user sees
-    // the future shape, not a near-invisible flat bar.
+    // Empty state — 4 placeholder segments visible enough to convey the
+    // future shape. Higher opacity + border so it reads in both themes.
     return (
       <div
         title={`${title} (no findings yet)`}
@@ -41,7 +41,9 @@ export function SeverityMixStrip({ counts, height = 7 }: SeverityMixStripProps) 
           height,
           borderRadius: height / 2,
           overflow: 'hidden',
-          gap: 1,
+          gap: 2,
+          border: '1px solid color-mix(in oklch, var(--border) 60%, transparent)',
+          width: '100%',
         }}
       >
         {SEVERITY_ORDER.map((sev) => (
@@ -50,7 +52,7 @@ export function SeverityMixStrip({ counts, height = 7 }: SeverityMixStripProps) 
             style={{
               flex: 1,
               background: SEGMENT_COLORS[sev],
-              opacity: 0.18,
+              opacity: 0.4,
             }}
           />
         ))}
@@ -66,6 +68,7 @@ export function SeverityMixStrip({ counts, height = 7 }: SeverityMixStripProps) 
         height,
         borderRadius: height / 2,
         overflow: 'hidden',
+        width: '100%',
       }}
     >
       {SEVERITY_ORDER.map((sev) => {

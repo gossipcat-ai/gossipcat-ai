@@ -69,14 +69,14 @@ function SubBar({ label, value, color, tooltip }: {
       style={{ gridTemplateColumns: '56px 1fr 32px' }}
     >
       <span
-        className="text-[9px]"
+        className="text-[11px]"
         style={{ color: 'var(--ink-3)', fontFamily: 'Geist, Inter, sans-serif', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
         data-tooltip={tooltip}
       >
         {label}
       </span>
       <div
-        className="h-1.5 overflow-hidden rounded-full"
+        className="h-2 overflow-hidden rounded-full"
         style={{ background: 'color-mix(in oklch, var(--ink) 8%, transparent)' }}
       >
         <div
@@ -86,7 +86,7 @@ function SubBar({ label, value, color, tooltip }: {
       </div>
       <span
         className="text-right tabular-nums"
-        style={{ fontFamily: 'Geist, Inter, sans-serif', fontSize: 10, color: 'var(--ink-3)' }}
+        style={{ fontFamily: 'Geist, Inter, sans-serif', fontSize: 11, color: 'var(--ink-2)' }}
       >
         {pct(v)}
       </span>
@@ -106,6 +106,26 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
       className="group relative block rounded-lg border border-border p-3 transition-all hover:-translate-y-0.5 hover:border-[color-mix(in_oklch,var(--ink)_30%,transparent)]"
       style={{ background: 'var(--surface-elev)' }}
     >
+      {/* Status chip pinned top-right of the entire card */}
+      <div style={{ position: 'absolute', top: 10, right: 12, zIndex: 1 }}>
+        <span
+          className="inline-flex items-center gap-1.5 rounded-sm border border-border/60 px-2 py-0.5"
+          style={{
+            background: 'color-mix(in oklch, var(--surface) 60%, transparent)',
+            color: 'var(--ink-2)',
+            fontFamily: 'Geist, Inter, sans-serif',
+            fontSize: 11,
+            fontVariant: 'small-caps',
+            letterSpacing: '0.04em',
+          }}
+          data-tooltip={status.tooltip}
+          data-tooltip-pos="bottom"
+        >
+          <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: status.dotColor, flexShrink: 0 }} />
+          {status.label}
+        </span>
+      </div>
+
       {/* Two-column grid: 100px gauge column + flexible meta column */}
       <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: 12, alignItems: 'start' }}>
 
@@ -115,7 +135,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
           <SeverityMixStrip counts={severityCounts} />
           <span
             style={{
-              fontSize: 9,
+              fontSize: 10,
               color: 'var(--ink-3)',
               fontFamily: 'Geist, Inter, sans-serif',
               fontVariant: 'small-caps',
@@ -148,7 +168,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
                   className="truncate"
                   style={{
                     fontFamily: 'Geist, Inter, sans-serif',
-                    fontSize: 12,
+                    fontSize: 14,
                     fontWeight: 600,
                     color: 'var(--ink)',
                     minWidth: 0,
@@ -185,42 +205,6 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
                   );
                   return null;
                 })()}
-              </div>
-              {/* Status chip — healthy / needs skills */}
-              <div
-                style={{
-                  marginTop: 2,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  fontFamily: 'Geist, Inter, sans-serif',
-                  fontSize: 10,
-                  color: 'var(--ink-3)',
-                }}
-              >
-                <span
-                  className="inline-flex items-center gap-1 rounded-sm border border-border/60 px-1.5 py-0.5"
-                  style={{
-                    background: 'color-mix(in oklch, var(--surface) 60%, transparent)',
-                    color: 'var(--ink-3)',
-                    fontVariant: 'small-caps',
-                    letterSpacing: '0.04em',
-                  }}
-                  data-tooltip={status.tooltip}
-                  data-tooltip-pos="bottom"
-                >
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: '50%',
-                      background: status.dotColor,
-                      flexShrink: 0,
-                    }}
-                  />
-                  {status.label}
-                </span>
               </div>
             </div>
           </div>
@@ -260,7 +244,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
             <div
               style={{
                 fontFamily: 'Geist, Inter, sans-serif',
-                fontSize: 10,
+                fontSize: 11,
                 color: 'var(--ink-3)',
                 display: 'flex',
                 alignItems: 'center',

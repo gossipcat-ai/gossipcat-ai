@@ -95,7 +95,7 @@ export function PolarAccuracyGauge({ accuracy, size = 90, color = 'var(--ink)' }
       </svg>
       <span
         style={{
-          fontSize: 9,
+          fontSize: 10,
           color: 'var(--ink-3)',
           fontFamily: 'Geist, Inter, sans-serif',
           fontVariant: 'small-caps',
