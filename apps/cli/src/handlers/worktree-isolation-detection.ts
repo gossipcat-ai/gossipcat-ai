@@ -200,11 +200,15 @@ export interface IsolationPreserveResult {
   /** Set on any git/IO failure — caller must NOT proceed to destructive revert. */
   error?: string;
   /**
-   * Set `true` when `git diff` produced no output (the present paths already
-   * match HEAD). Distinguishes "nothing to preserve, nothing to revert" from a
-   * genuine preserve failure: both leave `patchPath` unset and `error` unset,
-   * but only the latter warrants the operator-facing recovery alarm.
-   * See consensus 9abe6f5a-6db14a27 f2.
+   * Set `true` when there is benignly nothing to preserve — the patch we would
+   * have written is empty. Three cases set it: no input paths; no present paths
+   * to diff (all rejected by the safety filter, or vanished from disk before the
+   * diff ran); or `git diff` produced zero bytes (present paths already match
+   * HEAD). Distinguishes "nothing to preserve, nothing to revert" from a genuine
+   * preserve failure (`error`): both leave `patchPath` unset, but only `error`
+   * warrants the operator-facing recovery alarm. The taskId-validation failure
+   * is an `error`, NOT an emptyDiff. See consensus 9abe6f5a-6db14a27 f2 and
+   * 72981222-c54b4c11 f5.
    */
   emptyDiff?: boolean;
 }
@@ -236,7 +240,12 @@ export function preserveLeakedPaths(
   taskId: string,
 ): IsolationPreserveResult {
   const result: IsolationPreserveResult = { preserved: [], skipped: [], rejected: [] };
-  if (!paths || paths.length === 0) return result;
+  // No input paths → benignly nothing to preserve. Mark emptyDiff so the caller
+  // treats it as a no-op (not a preserve failure). 72981222-c54b4c11 f5.
+  if (!paths || paths.length === 0) {
+    result.emptyDiff = true;
+    return result;
+  }
 
   // Validate taskId before it touches the filesystem as a filename. Same guard
   // contract as .gossip/dispatch-prompts/<taskId>.txt (dispatch-prompt-storage.ts).
@@ -267,7 +276,15 @@ export function preserveLeakedPaths(
     }
   }
 
-  if (present.length === 0) return result;
+  // No present paths to diff (all rejected by the safety filter, or all vanished
+  // from disk before this ran). Benignly nothing to preserve AND nothing for the
+  // subsequent revert to restore — mark emptyDiff so the caller skips the revert
+  // calmly instead of raising the false "could NOT preserve" alarm. The skipped/
+  // rejected paths remain on `result` for audit. 72981222-c54b4c11 f5.
+  if (present.length === 0) {
+    result.emptyDiff = true;
+    return result;
+  }
 
   try {
     // 1. intent-to-add so untracked-new files surface in the diff as additions
