@@ -10,6 +10,7 @@ import { createWriteStream, mkdirSync } from 'fs';
 import { join } from 'path';
 import { runHook } from './hook-run';
 import { parseHookSubcommand } from './hook-argv';
+import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgrade-check';
 
 // ── Argv dispatch shim ──────────────────────────────────────────────────
 //
@@ -1546,6 +1547,22 @@ export function createMcpServer(): McpServer {
       }
       if (ctx.httpMcpPort) {
         lines.push(`  HTTP MCP: :${ctx.httpMcpPort}/mcp${ctx.httpMcpPortSource === 'sticky' ? ' (sticky)' : ''}`);
+      }
+
+      // Upgrade-available notice. The synchronous status path makes NO network
+      // call — it only reads the cached latest version. The actual registry
+      // refresh is fire-and-forget (void checkForUpgrade()). The env opt-out
+      // gates BOTH the network refresh and the banner emit, and every step is
+      // wrapped so an upgrade check can never break gossip_status.
+      if (process.env.GOSSIP_DISABLE_UPGRADE_CHECK !== '1') {
+        try {
+          const latest = getLastKnownLatest();
+          const current = getGossipcatVersion();
+          if (isUpgradeAvailable(current, latest)) {
+            lines.push(`⬆ Upgrade available: gossipcat v${latest} (you have v${current}). Run: npm update -g gossipcat`);
+          }
+          void checkForUpgrade();
+        } catch { /* fail-silent — status must always return valid output */ }
       }
 
       // Skill graduation heartbeat — surfaces whether the post-collect runner
