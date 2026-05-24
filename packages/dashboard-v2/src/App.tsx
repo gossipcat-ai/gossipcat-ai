@@ -310,7 +310,7 @@ function TeamPage({
                         <span className="warn-badge shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold">
                           {lt.taskId.slice(0, 8)}
                         </span>
-                        <span className="truncate font-inter text-[11px]" style={{ maxWidth: 260, color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>
+                        <span className="truncate text-[11px]" style={{ maxWidth: 260, color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>
                           {lt.task}
                         </span>
                         <span className="ml-auto shrink-0 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>{timeAgo(lt.timestamp)}</span>
@@ -421,7 +421,7 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
                 <th className="py-2.5 pl-4 pr-2 text-xs font-medium" style={{ width: 32, color: 'var(--text-dim)' }}></th>
                 <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>ID</th>
                 <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>Agent</th>
-                <th className="py-2.5 pr-3 text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>Description</th>
+                <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>Description</th>
                 <th className="py-2.5 pr-3 font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>Duration</th>
                 <th className="py-2.5 pr-4 text-right font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>When</th>
               </tr>

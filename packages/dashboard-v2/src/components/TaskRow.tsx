@@ -175,7 +175,7 @@ export function TaskRow({ task, onClick }: TaskRowProps) {
           {task.agentId}
         </a>
       </td>
-      <td className="py-2.5 pr-3 font-inter text-sm" style={{ color: 'color-mix(in oklch, var(--text) 80%, transparent)' }}>
+      <td className="py-2.5 pr-3 text-xs leading-snug" style={{ color: 'color-mix(in oklch, var(--text) 80%, transparent)' }}>
         {(() => { const line = task.task.replace(/\n.*/s, ''); return line.length > 100 ? line.slice(0, 100) + '…' : line; })()}
       </td>
       <td className="py-2.5 pr-3 font-mono text-xs" style={{ color: 'var(--text-dim)' }}>

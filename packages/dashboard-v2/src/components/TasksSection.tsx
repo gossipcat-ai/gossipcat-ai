@@ -93,7 +93,7 @@ export function TasksSection({ tasks, limit = DEFAULT_PAGE_SIZE }: TasksSectionP
     <section className="flex h-full flex-col">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="h-section">
-          Tasks <span style={{ color: 'var(--accent)' }}>{tasks.total}</span>
+          Tasks <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{tasks.total}</span>
         </h2>
         {hasMore && (
           <a href="/dashboard/tasks" className="font-mono text-xs transition" style={{ color: 'var(--text-dim)' }}>
