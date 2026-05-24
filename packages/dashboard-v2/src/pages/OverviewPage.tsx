@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { SystemPulse } from '@/components/SystemPulse';
 import { ActivityWaterfall } from '@/components/ActivityWaterfall';
 import { ActiveTasksBanner } from '@/components/ActiveTasksBanner';
@@ -9,12 +10,13 @@ import { GraphRail } from '@/components/GraphRail';
 import { NarrativeStripe } from '@/components/NarrativeStripe';
 import { TemporalScrubber } from '@/components/TemporalScrubber';
 import { usePeerRelationships } from '@/hooks/usePeerRelationships';
+import { useSeverityCounts } from '@/hooks/useSeverityCounts';
 import { useUrlAgentParam } from '@/hooks/useUrlAgentParam';
 import { useUrlRangeParam } from '@/hooks/useUrlRangeParam';
 import { useGlobalAgentKeys } from '@/hooks/useGlobalAgentKeys';
 import { isGraphHidden } from '@/lib/feature-flags';
 import { href } from '@/lib/router';
-import type { OverviewData, AgentData, TasksData, ConsensusData } from '@/lib/types';
+import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint } from '@/lib/types';
 
 interface OverviewPageProps {
   overview: OverviewData;
@@ -22,6 +24,10 @@ interface OverviewPageProps {
   tasks: TasksData | null;
   /** Optional — consumed by the graph layer to derive peer relationships. */
   consensus?: ConsensusData | null;
+  /** Optional — Step 6: supplies severity counts for AgentCardBig. */
+  consensusReports?: ConsensusReportsData | null;
+  /** Optional — Step 6: supplies 7d sparkline data for AgentCardBig. */
+  fleetTrend?: FleetTrendResponse | null;
   activeTaskCount: number;
   setActiveTaskCount: (n: number) => void;
 }
@@ -38,12 +44,33 @@ export function OverviewPage({
   agents,
   tasks,
   consensus,
+  consensusReports,
+  fleetTrend,
   activeTaskCount,
   setActiveTaskCount,
 }: OverviewPageProps) {
   const actionable = overview.actionableFindings;
   const hideGraph = isGraphHidden();
   const peerRelationships = usePeerRelationships(consensus?.runs);
+
+  // Step 6 — client-side severity counts for AgentCardBig gauge/strip
+  const severityMap = useSeverityCounts(consensusReports?.reports);
+
+  // Step 6 — per-agent trend points for AreaSparkline
+  const trendByAgent = useMemo((): Map<string, FleetTrendPoint[]> => {
+    const m = new Map<string, FleetTrendPoint[]>();
+    if (fleetTrend) {
+      for (const p of fleetTrend.points) {
+        const arr = m.get(p.agentId) ?? [];
+        arr.push(p);
+        m.set(p.agentId, arr);
+      }
+      for (const arr of m.values()) {
+        arr.sort((a, b) => a.day.localeCompare(b.day));
+      }
+    }
+    return m;
+  }, [fleetTrend]);
   // Phase 1b PR4 — selection state moved to ?agent= URL param for deep-linking.
   const [selectedAgentId, setSelectedAgentId] = useUrlAgentParam();
   // Phase 1b PR5 — ?range= for TemporalScrubber + global ⏎/G shortcuts.
@@ -137,7 +164,14 @@ export function OverviewPage({
       <ActiveTasksBanner onCountChange={setActiveTaskCount} />
 
       {/* Top-4 agents — echoes the AgentNetworkGraph selection when the graph is on */}
-      {agents && <TeamHero agents={agents} highlightedAgentId={!hideGraph ? selectedAgentId : null} />}
+      {agents && (
+        <TeamHero
+          agents={agents}
+          highlightedAgentId={!hideGraph ? selectedAgentId : null}
+          severityMap={severityMap}
+          trendByAgent={trendByAgent}
+        />
+      )}
 
       {/* Recent dispatches — limit 3 (vs dense view's 5) */}
       {tasks && <TasksSection tasks={tasks} limit={3} />}

@@ -17,11 +17,23 @@ import { useDashboardData } from '@/hooks/useDashboardData';
 import { timeAgo } from '@/lib/utils';
 import { getBenchBadgeKind, needsAttention } from '@/lib/bench';
 import { NotificationStack } from '@/components/NotificationStack';
-import type { DashboardEvent, AgentData } from '@/lib/types';
+import { useSeverityCounts } from '@/hooks/useSeverityCounts';
+import { AgentCardBig } from '@/components/AgentCardBig';
+import type { DashboardEvent, AgentData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint } from '@/lib/types';
 
 type SortKey = 'weight' | 'accuracy' | 'uniqueness' | 'impact' | 'signals' | 'agreements' | 'hallucinations' | 'lastTask';
 
-function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib/types').TasksData | null }) {
+function TeamPage({
+  agents,
+  tasks,
+  consensusReports,
+  fleetTrend,
+}: {
+  agents: AgentData[];
+  tasks: import('@/lib/types').TasksData | null;
+  consensusReports?: ConsensusReportsData | null;
+  fleetTrend?: FleetTrendResponse | null;
+}) {
   const [sortKey, setSortKey] = useState<SortKey>('weight');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [query, setQuery] = useState('');
@@ -37,6 +49,26 @@ function TeamPage({ agents, tasks }: { agents: AgentData[]; tasks: import('@/lib
     }
     return m;
   }, [tasks]);
+
+  // Step 6 — severity counts derived client-side from consensus reports
+  const severityMap = useSeverityCounts(consensusReports?.reports);
+
+  // Step 6 — per-agent trend points for AreaSparkline
+  const trendByAgent = useMemo((): Map<string, FleetTrendPoint[]> => {
+    const m = new Map<string, FleetTrendPoint[]>();
+    if (fleetTrend) {
+      for (const p of fleetTrend.points) {
+        const arr = m.get(p.agentId) ?? [];
+        arr.push(p);
+        m.set(p.agentId, arr);
+      }
+      // Sort each series ascending by day
+      for (const arr of m.values()) {
+        arr.sort((a, b) => a.day.localeCompare(b.day));
+      }
+    }
+    return m;
+  }, [fleetTrend]);
 
   const circuitOpen = agents.filter(needsAttention).length;
   const healthy = agents.filter((a) => a.scores.accuracy >= 0.5).length;
@@ -463,7 +495,7 @@ function FindingsPage({
 
 function Dashboard() {
   const route = useRoute();
-  const { overview, agents, tasks, consensus, consensusReports, loading, refresh } = useDashboardData();
+  const { overview, agents, tasks, consensus, consensusReports, fleetTrend, loading, refresh } = useDashboardData();
   const [activeTaskCount, setActiveTaskCount] = useState(0);
 
   const handleWsEvent = useCallback((event: DashboardEvent) => {
@@ -488,7 +520,7 @@ function Dashboard() {
     const agentId = decodeURIComponent(agentMatch[1]);
     content = <AgentPage agentId={agentId} agents={agents} tasks={tasks} consensus={consensus} />;
   } else if (route === '/team' && agents) {
-    content = <TeamPage agents={agents} tasks={tasks} />;
+    content = <TeamPage agents={agents} tasks={tasks} consensusReports={consensusReports} fleetTrend={fleetTrend} />;
   } else if (route === '/tasks' && tasks) {
     content = <TasksPage tasks={tasks} />;
   } else if (route === '/debates' && consensus) {
@@ -507,6 +539,8 @@ function Dashboard() {
         agents={agents}
         tasks={tasks}
         consensus={consensus}
+        consensusReports={consensusReports}
+        fleetTrend={fleetTrend}
         activeTaskCount={activeTaskCount}
         setActiveTaskCount={setActiveTaskCount}
       />

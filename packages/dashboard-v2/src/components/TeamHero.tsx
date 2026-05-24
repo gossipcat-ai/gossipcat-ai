@@ -1,4 +1,5 @@
-import type { AgentData } from '@/lib/types';
+import type { AgentData, FleetTrendPoint } from '@/lib/types';
+import type { SeverityCountMap } from '@/hooks/useSeverityCounts';
 import { AgentCardBig } from './AgentCardBig';
 
 interface TeamHeroProps {
@@ -6,9 +7,13 @@ interface TeamHeroProps {
   /** Optional — when set, the matching card gets an accent ring so it
    *  echoes the AgentNetworkGraph selection. Phase 1b PR3 wires this. */
   highlightedAgentId?: string | null;
+  /** Step 6 — per-agent severity distribution from useSeverityCounts. */
+  severityMap?: SeverityCountMap;
+  /** Step 6 — per-agent 7d trend points for AreaSparkline. */
+  trendByAgent?: Map<string, FleetTrendPoint[]>;
 }
 
-export function TeamHero({ agents, highlightedAgentId }: TeamHeroProps) {
+export function TeamHero({ agents, highlightedAgentId, severityMap, trendByAgent }: TeamHeroProps) {
   // Sort by most recent dispatch first (lastTask.timestamp desc), with signal count as tie-break
   // so agents with no tasks sink to the bottom deterministically.
   const sorted = [...agents].sort((a, b) => {
@@ -47,7 +52,11 @@ export function TeamHero({ agents, highlightedAgentId }: TeamHeroProps) {
                 transition: 'box-shadow 200ms cubic-bezier(0.4,0,0.2,1)',
               }}
             >
-              <AgentCardBig agent={agent} />
+              <AgentCardBig
+                agent={agent}
+                severityCounts={severityMap?.get(agent.id)}
+                trendPoints={trendByAgent?.get(agent.id)}
+              />
             </div>
           );
         })}
