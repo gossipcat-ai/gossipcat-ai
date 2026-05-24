@@ -335,6 +335,43 @@ export interface FindingDetail {
   retracted?: { reason: string; at: string };
 }
 
+/* ── Step 7 — Consensus Flow ─────────────────────────────────────────── */
+
+export type ConsensusFlowFamily = 'sonnet' | 'gemini' | 'opus' | 'haiku' | 'other';
+
+export type ConsensusFlowVerdict = 'confirmed' | 'disputed' | 'unverified' | 'unique';
+
+export interface ConsensusFlowEdge {
+  from: { family: ConsensusFlowFamily; agentCount: number };
+  to: { verdict: ConsensusFlowVerdict; count: number };
+  /** count / totalFindings, in [0, 1]. */
+  weight: number;
+}
+
+export interface ConsensusFlowResponse {
+  consensusId: string;
+  timestamp: string;
+  agentCount: number;
+  modelFamilyToFindings: Array<{
+    family: ConsensusFlowFamily;
+    agentIds: string[];
+    agentCount: number;
+  }>;
+  familyToOutcome: ConsensusFlowEdge[];
+  summary: {
+    totalFindings: number;
+    confirmed: number;
+    disputed: number;
+    unverified: number;
+    unique: number;
+    newFindings: number;
+  };
+  crossReviewAssignments?: Record<string, string[]>;
+  crossReviewCoverage?: Array<{ findingId: string; assigned: number; targetK: number }>;
+  partialReview?: boolean;
+  coverageDegraded?: { expected: number; received: number; droppedAgents: string[] };
+}
+
 export interface ViolationEntry {
   taskId: string;
   agentId: string;
