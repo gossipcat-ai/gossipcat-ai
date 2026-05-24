@@ -93,10 +93,10 @@ export function RecentSignalsPeek() {
                   title={s.severity ?? ''}
                 />
                 <span className="w-14 shrink-0 tabular-nums" style={{ color: 'var(--text-dim)' }}>{timeAgo(s.timestamp)}</span>
-                <span className="h-section w-20 shrink-0" style={{ color: verdictColor, fontSize: 11 }}>
+                <span className="h-section w-36 shrink-0 truncate" style={{ color: verdictColor, fontSize: 11 }} title={verdictLabel}>
                   {verdictLabel}
                 </span>
-                <span className="w-24 shrink-0 truncate font-mono" style={{ color: 'var(--text-dim)' }}>{s.agentId}</span>
+                <span className="w-28 shrink-0 truncate font-mono" style={{ color: 'var(--text-dim)' }}>{s.agentId}</span>
                 <span
                   className="flex-1 truncate"
                   style={{ fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.45, color: 'var(--text)' }}
