@@ -996,7 +996,22 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
           const preserveResult = preserveLeakedPaths(revertRoot, isolationDiff.dirtyPathsAdded, task_id);
           const preserveOk = !preserveResult.error && !!preserveResult.patchPath;
 
-          if (!preserveOk) {
+          if (preserveResult.emptyDiff) {
+            // Empty diff: the leaked paths already match HEAD (e.g. a zero-byte
+            // untracked file or a content-identical write). Nothing to preserve
+            // and nothing for the destructive revert to restore — skip both,
+            // calmly. This is NOT a preserve failure, so it must not emit the
+            // recovery alarm (consensus 9abe6f5a-6db14a27 f2).
+            appendRelayWarning(revertRoot, {
+              taskId: task_id,
+              agentId: taskInfo.agentId,
+              reason: 'isolation_recovery_preserved',
+              resultLength: isolationDiff.dirtyPathsAdded.length,
+              suspectedReason: 'isolation_recovery_noop_empty_diff',
+              timestamp: new Date().toISOString(),
+            });
+            responseText += `\n  → isolation diff empty (leaked paths already match HEAD); nothing to preserve or revert.`;
+          } else if (!preserveOk) {
             // Spec §3.1 option (b): the safety net failed — do NOT run the
             // destructive revert. Leave master dirty and surface a hard receipt
             // so the operator can recover manually before any work is lost.

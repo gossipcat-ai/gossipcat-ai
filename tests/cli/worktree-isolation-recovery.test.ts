@@ -39,10 +39,12 @@ function porcelain(cwd: string): string {
 }
 
 describe('filterSafePaths', () => {
-  it('passes repo-relative paths, rejects absolute and leading-dash', () => {
+  it('passes repo-relative paths, rejects absolute, leading-dash, and empty', () => {
     const r = filterSafePaths(['ok.ts', 'a/b/c.ts', '/etc/passwd', '--force', '']);
     expect(r.safe).toEqual(['ok.ts', 'a/b/c.ts']);
-    expect(r.rejected).toEqual(['/etc/passwd', '--force']);
+    // f4 (PR #495): empty-string paths now surface in rejected[] (in input
+    // order) instead of vanishing silently.
+    expect(r.rejected).toEqual(['/etc/passwd', '--force', '']);
   });
 
   it('empty input → both empty', () => {
@@ -91,6 +93,33 @@ describe('preserveLeakedPaths — real git repo', () => {
     const r = preserveLeakedPaths(repo, [], 'task-abc');
     expect(r).toEqual({ preserved: [], skipped: [], rejected: [] });
     expect(fs.existsSync(path.join(repo, '.gossip', 'recovery'))).toBe(false);
+  });
+
+  it('empty diff (present path, no content delta) → no patch, emptyDiff sentinel set, no error', () => {
+    // README.md is tracked and unmodified since the baseline commit: it exists
+    // on disk (passes the present-file check) so git runs, but `git diff`
+    // yields nothing. f1: no zero-byte patch is written and patchPath stays
+    // unset. The `emptyDiff` sentinel lets the call site distinguish this
+    // "nothing to do" state from a genuine preserve failure
+    // (consensus 9abe6f5a-6db14a27 f2) so it does not emit the recovery alarm.
+    const before = porcelain(repo);
+    const r = preserveLeakedPaths(repo, ['README.md'], 'task-emptydiff');
+    const after = porcelain(repo);
+
+    expect(after).toBe(before);
+    expect(r.error).toBeUndefined();
+    expect(r.patchPath).toBeUndefined();
+    expect(r.preserved).toEqual([]);
+    expect(r.emptyDiff).toBe(true);
+    expect(fs.existsSync(path.join(repo, '.gossip', 'recovery', 'task-emptydiff.patch'))).toBe(false);
+  });
+
+  it('emptyDiff sentinel is NOT set when there is no work at all (empty / all-rejected input)', () => {
+    // The early returns that precede the git-diff step (empty input, all paths
+    // missing/rejected) must leave emptyDiff undefined — it specifically means
+    // "git diff ran and produced nothing", not "we never reached the diff".
+    expect(preserveLeakedPaths(repo, [], 'task-none').emptyDiff).toBeUndefined();
+    expect(preserveLeakedPaths(repo, ['/etc/passwd', '--force'], 'task-rej').emptyDiff).toBeUndefined();
   });
 
   it('leaked NEW untracked file → patch captures it; tree byte-identical; git apply reproduces', () => {
