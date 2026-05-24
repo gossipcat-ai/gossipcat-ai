@@ -1,11 +1,11 @@
 /**
  * 90×90 polar accuracy gauge (SVG).
  *
- * Design rules (DESIGN.md Step 6):
+ * Design rules (DESIGN.md Step 6 v1.1):
  * - Single arc 0→360° × accuracy. Track at 8% opacity --ink.
- * - Stroke is status-semantic: --ok ≥0.7, --warn 0.4–0.7, --bad <0.4.
+ * - Stroke uses per-agent identity color (passed via `color` prop).
  * - Percentage label in Fraunces tabular-nums at center.
- * - No drop shadows, no per-agent color.
+ * - "ACCURACY" label rendered below the gauge.
  */
 
 import React from 'react';
@@ -13,12 +13,8 @@ import React from 'react';
 interface PolarAccuracyGaugeProps {
   accuracy: number;
   size?: number;
-}
-
-function gaugeColor(accuracy: number): string {
-  if (accuracy >= 0.7) return 'var(--ok)';
-  if (accuracy >= 0.4) return 'var(--warn)';
-  return 'var(--bad)';
+  /** Per-agent identity color. Defaults to neutral ink. */
+  color?: string;
 }
 
 /**
@@ -45,61 +41,63 @@ function circlePath(cx: number, cy: number, r: number): string {
   return `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx} ${cy + r} A ${r} ${r} 0 1 1 ${cx} ${cy - r}`;
 }
 
-export function PolarAccuracyGauge({ accuracy, size = 90 }: PolarAccuracyGaugeProps) {
+export function PolarAccuracyGauge({ accuracy, size = 90, color = 'var(--ink)' }: PolarAccuracyGaugeProps) {
   const v = Number.isFinite(accuracy) ? Math.max(0, Math.min(1, accuracy)) : 0;
   const cx = size / 2;
   const cy = size / 2;
-  const strokeWidth = size * 0.089; // ~8px at 90
+  const strokeWidth = size * 0.089;
   const r = (size - strokeWidth) / 2 - 2;
-  const color = gaugeColor(v);
   const pct = Math.round(v * 100);
-
-  // Fraunces font-size proportional to gauge size
   const fontSize = Math.round(size * 0.22);
 
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      role="img"
-      aria-label={`Accuracy ${pct}%`}
-    >
-      {/* Track — full circle at 8% opacity ink */}
-      <path
-        d={circlePath(cx, cy, r)}
-        fill="none"
-        stroke="var(--ink)"
-        strokeOpacity={0.08}
-        strokeWidth={strokeWidth}
-        strokeLinecap="round"
-      />
-      {/* Arc — accuracy fraction, status semantic */}
-      {v > 0 && (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        role="img"
+        aria-label={`Accuracy ${pct}%`}
+      >
         <path
-          d={arcPath(cx, cy, r, v)}
+          d={circlePath(cx, cy, r)}
           fill="none"
-          stroke={color}
+          stroke="var(--ink)"
+          strokeOpacity={0.08}
           strokeWidth={strokeWidth}
           strokeLinecap="round"
         />
-      )}
-      {/* Percentage label — Fraunces at center */}
-      <text
-        x={cx}
-        y={cy}
-        textAnchor="middle"
-        dominantBaseline="central"
-        fill={color}
-        style={{
-          fontSize,
-          fontFamily: "'Fraunces', serif",
-          fontVariantNumeric: 'tabular-nums',
-          fontWeight: 700,
-        }}
+        {v > 0 && (
+          <path
+            d={arcPath(cx, cy, r, v)}
+            fill="none"
+            stroke={color}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+          />
+        )}
+        <text
+          x={cx}
+          y={cy}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill="var(--ink)"
+          style={{
+            fontSize,
+            fontFamily: "'Fraunces', serif",
+            fontVariantNumeric: 'tabular-nums',
+            fontWeight: 700,
+          }}
+        >
+          {pct}%
+        </text>
+      </svg>
+      <span
+        className="font-mono text-[9px] uppercase tracking-wider"
+        style={{ color: 'var(--text-dim, var(--ink-3))' }}
       >
-        {pct}%
-      </text>
-    </svg>
+        ACCURACY
+      </span>
+    </div>
   );
 }

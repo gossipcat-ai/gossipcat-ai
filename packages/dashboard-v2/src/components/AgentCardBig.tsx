@@ -1,13 +1,14 @@
 /**
- * AgentCardBig — Step 6 rewrite (DESIGN.md).
+ * AgentCardBig — Step 6 v1.1 (DESIGN.md).
  *
  * Two-column layout:
- * - Left (100px): PolarAccuracyGauge + SeverityMixStrip + "severity mix" label
- * - Right (flex): name+chip row, 3 sub-bars (reliability/unique/impact),
+ * - Left (100px): PolarAccuracyGauge + ACCURACY label + SeverityMixStrip + "severity mix"
+ * - Right (flex): name+status-chip row, 3 sub-bars (reliability/unique/impact),
  *                 AreaSparkline+delta, signals+timeAgo footer
  *
- * Gate: no var(--accent) in chart bars. Gauge stroke is status-semantic.
- * Card chrome is neutral — no per-agent color except NeuralAvatar bloom.
+ * Per-agent identity color (agentColor(id)) drives gauge stroke, all 3 sub-bars,
+ * and the sparkline. Card chrome (border, bg, hover) stays neutral.
+ * Status chip semantic: healthy / needs skills with --ok / --warn dots.
  */
 
 import type React from 'react';
@@ -18,7 +19,7 @@ import { NeuralAvatar } from './NeuralAvatar';
 import { PolarAccuracyGauge } from './PolarAccuracyGauge';
 import { SeverityMixStrip } from './SeverityMixStrip';
 import { AreaSparkline } from './AreaSparkline';
-import { timeAgo } from '@/lib/utils';
+import { agentColor, timeAgo } from '@/lib/utils';
 import { getBenchBadgeKind } from '@/lib/bench';
 
 export interface AgentCardBigProps {
@@ -31,10 +32,27 @@ function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
 
-function weightTier(w: number): 'good' | 'mid' | 'low' {
-  if (w >= 1.2) return 'good';
-  if (w >= 0.8) return 'mid';
-  return 'low';
+interface StatusChipKind {
+  label: 'healthy' | 'needs skills';
+  dotColor: string;
+  tooltip: string;
+}
+
+function statusChipKind(s: AgentData['scores']): StatusChipKind {
+  if (s.accuracy >= 0.7 && s.bench.state === 'none') {
+    return {
+      label: 'healthy',
+      dotColor: 'var(--ok)',
+      tooltip: `Accuracy ${Math.round(s.accuracy * 100)}% — above 70% baseline.`,
+    };
+  }
+  return {
+    label: 'needs skills',
+    dotColor: 'var(--warn)',
+    tooltip: s.bench.state !== 'none'
+      ? `Benched (${s.bench.reason ?? 'auto'})`
+      : `Accuracy ${Math.round(s.accuracy * 100)}% — below 70% baseline.`,
+  };
 }
 
 /** Horizontal metric bar — reliability / unique / impact */
@@ -79,11 +97,8 @@ function SubBar({ label, value, color, tooltip }: {
 export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBigProps) {
   const s = agent.scores;
   const lastTime = agent.lastTask?.timestamp ? timeAgo(agent.lastTask.timestamp) : '';
-
-  const wt = weightTier(s.dispatchWeight);
-  const weightColor =
-    wt === 'good' ? 'var(--ok)' :
-    wt === 'low' ? 'var(--bad)' : 'var(--ink-3)';
+  const ac = agentColor(agent.id);
+  const status = statusChipKind(s);
 
   return (
     <a
@@ -96,7 +111,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
 
         {/* ── Left column ── */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-          <PolarAccuracyGauge accuracy={s.accuracy} size={90} />
+          <PolarAccuracyGauge accuracy={s.accuracy} size={90} color={ac} />
           <SeverityMixStrip counts={severityCounts} />
           <span
             style={{
@@ -171,7 +186,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
                   return null;
                 })()}
               </div>
-              {/* Weight + provider chip */}
+              {/* Status chip — healthy / needs skills */}
               <div
                 style={{
                   marginTop: 2,
@@ -184,16 +199,27 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
                 }}
               >
                 <span
-                  className="rounded-sm border border-border/60 px-1.5 py-0.5 tabular-nums"
+                  className="inline-flex items-center gap-1 rounded-sm border border-border/60 px-1.5 py-0.5"
                   style={{
                     background: 'color-mix(in oklch, var(--surface) 60%, transparent)',
-                    color: weightColor,
-                    fontWeight: 600,
+                    color: 'var(--ink-3)',
+                    fontVariant: 'small-caps',
+                    letterSpacing: '0.04em',
                   }}
-                  data-tooltip={`Dispatch weight ${s.dispatchWeight.toFixed(2)}\nScale 0.3 → 2.0`}
+                  data-tooltip={status.tooltip}
                   data-tooltip-pos="bottom"
                 >
-                  {s.dispatchWeight.toFixed(2)} wt
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: '50%',
+                      background: status.dotColor,
+                      flexShrink: 0,
+                    }}
+                  />
+                  {status.label}
                 </span>
               </div>
             </div>
@@ -207,19 +233,19 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
             <SubBar
               label="reliability"
               value={s.taskCompletionRate ?? 0}
-              color="var(--c1)"
+              color={ac}
               tooltip={`Reliability ${pct(s.taskCompletionRate ?? 0)}\nTask completion rate.`}
             />
             <SubBar
               label="unique"
               value={s.uniqueness}
-              color="var(--c2)"
+              color={ac}
               tooltip={`Uniqueness ${pct(s.uniqueness)}\nFindings others missed.`}
             />
             <SubBar
               label="impact"
               value={s.impactScore}
-              color="var(--c3)"
+              color={ac}
               tooltip={`Impact ${pct(s.impactScore)}\nSeverity-weighted findings.`}
             />
           </div>
@@ -227,7 +253,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
           {/* Sparkline + footer */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {trendPoints && trendPoints.length > 0 && (
-              <AreaSparkline points={trendPoints} width={80} height={20} />
+              <AreaSparkline points={trendPoints} width={80} height={20} color={ac} />
             )}
             <div
               style={{

@@ -18,6 +18,8 @@ interface AreaSparklineProps {
   height?: number;
   /** When true (CSS prefers-reduced-motion), area fill is suppressed. */
   reducedMotion?: boolean;
+  /** Stroke + fill color. Defaults to chart token --c1 for back-compat. */
+  color?: string;
 }
 
 function toSignals(points: FleetTrendPoint[]): number[] {
@@ -66,6 +68,7 @@ export function AreaSparkline({
   width = 80,
   height = 20,
   reducedMotion = false,
+  color = 'var(--c1)',
 }: AreaSparklineProps) {
   const values = useMemo(() => toSignals(points), [points]);
   const { line, area } = useMemo(() => buildPath(values, width, height), [values, width, height]);
@@ -86,7 +89,7 @@ export function AreaSparkline({
         {!reducedMotion && !isEmpty && area && (
           <path
             d={area}
-            fill="var(--c1)"
+            fill={color}
             fillOpacity={0.3}
           />
         )}
@@ -94,7 +97,7 @@ export function AreaSparkline({
         <path
           d={line}
           fill="none"
-          stroke={isEmpty ? 'var(--idle)' : 'var(--c1)'}
+          stroke={isEmpty ? 'var(--idle)' : color}
           strokeOpacity={isEmpty ? 0.3 : 1}
           strokeWidth={1.5}
           strokeLinecap="round"
