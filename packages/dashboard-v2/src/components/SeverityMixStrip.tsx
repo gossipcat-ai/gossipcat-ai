@@ -16,31 +16,51 @@ interface SeverityMixStripProps {
   height?: number;
 }
 
-const SEGMENT_COLORS: Record<keyof SeverityCount, string> = {
-  critical: 'var(--bad)',
-  high: 'var(--warn)',
-  medium: 'var(--info)',
-  low: 'var(--idle)',
+/** Monochrome opacity ramp — single rose hue ramping from dark
+ *  (critical) to light (low) reads as "severity intensity" without
+ *  collisions with the verdict/status semantic palette elsewhere. */
+const SEGMENT_COLOR = 'var(--bad)';
+const SEGMENT_OPACITY: Record<keyof SeverityCount, number> = {
+  critical: 1.0,
+  high: 0.7,
+  medium: 0.45,
+  low: 0.22,
 };
 
 const SEVERITY_ORDER: Array<keyof SeverityCount> = ['critical', 'high', 'medium', 'low'];
 
-export function SeverityMixStrip({ counts, height = 7 }: SeverityMixStripProps) {
+export function SeverityMixStrip({ counts, height = 10 }: SeverityMixStripProps) {
   const c = counts ?? { critical: 0, high: 0, medium: 0, low: 0 };
   const total = c.critical + c.high + c.medium + c.low;
   const title = `critical: ${c.critical}, high: ${c.high}, medium: ${c.medium}, low: ${c.low}`;
 
   if (total === 0) {
+    // Empty state — 4 placeholder segments visible enough to convey the
+    // future shape. Higher opacity + border so it reads in both themes.
     return (
       <div
-        title={title}
+        title={`${title} (no findings yet)`}
         style={{
+          display: 'flex',
           height,
           borderRadius: height / 2,
-          background: 'var(--idle)',
-          opacity: 0.25,
+          overflow: 'hidden',
+          gap: 2,
+          border: '1px solid color-mix(in oklch, var(--border) 60%, transparent)',
+          width: '100%',
         }}
-      />
+      >
+        {SEVERITY_ORDER.map((sev) => (
+          <div
+            key={sev}
+            style={{
+              flex: 1,
+              background: SEGMENT_COLOR,
+              opacity: SEGMENT_OPACITY[sev] * 0.5,
+            }}
+          />
+        ))}
+      </div>
     );
   }
 
@@ -52,6 +72,7 @@ export function SeverityMixStrip({ counts, height = 7 }: SeverityMixStripProps) 
         height,
         borderRadius: height / 2,
         overflow: 'hidden',
+        width: '100%',
       }}
     >
       {SEVERITY_ORDER.map((sev) => {
@@ -63,7 +84,8 @@ export function SeverityMixStrip({ counts, height = 7 }: SeverityMixStripProps) 
             key={sev}
             style={{
               width: `${pct.toFixed(2)}%`,
-              background: SEGMENT_COLORS[sev],
+              background: SEGMENT_COLOR,
+              opacity: SEGMENT_OPACITY[sev],
               flexShrink: 0,
             }}
           />

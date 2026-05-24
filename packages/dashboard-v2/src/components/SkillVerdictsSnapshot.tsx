@@ -6,16 +6,14 @@ import type { OverviewData } from '@/lib/types';
 const SEGMENTS: {
   key: keyof NonNullable<OverviewData['skillVerdictSummary']>;
   label: string;
-  bar: string;
-  dot: string;
-  text: string;
+  color: string;
 }[] = [
-  { key: 'passed',                label: 'passed',        bar: 'bg-emerald-400',  dot: 'bg-emerald-400',  text: 'text-emerald-400' },
-  { key: 'pending',               label: 'pending',       bar: 'bg-sky-400',      dot: 'bg-sky-400',      text: 'text-sky-400' },
-  { key: 'insufficient_evidence', label: 'insufficient',  bar: 'bg-yellow-400',   dot: 'bg-yellow-400',   text: 'text-yellow-400' },
-  { key: 'inconclusive',          label: 'inconclusive',  bar: 'bg-orange-400',   dot: 'bg-orange-400',   text: 'text-orange-400' },
-  { key: 'silent_skill',          label: 'silent',        bar: 'bg-zinc-500',     dot: 'bg-zinc-500',     text: 'text-zinc-400' },
-  { key: 'failed',                label: 'failed',        bar: 'bg-red-400',      dot: 'bg-red-400',      text: 'text-red-400' },
+  { key: 'passed',                label: 'passed',        color: 'var(--ok)' },
+  { key: 'pending',               label: 'pending',       color: 'var(--info)' },
+  { key: 'insufficient_evidence', label: 'insufficient',  color: 'var(--idle)' },
+  { key: 'inconclusive',          label: 'inconclusive',  color: 'var(--warn)' },
+  { key: 'silent_skill',          label: 'silent',        color: 'var(--ink-3)' },
+  { key: 'failed',                label: 'failed',        color: 'var(--bad)' },
 ];
 
 export function SkillVerdictsSnapshot({ overview }: { overview: OverviewData | null }) {
@@ -42,8 +40,7 @@ export function SkillVerdictsSnapshot({ overview }: { overview: OverviewData | n
               return (
                 <div
                   key={seg.key}
-                  className={seg.bar}
-                  style={{ width: `${pct}%` }}
+                  style={{ width: `${pct}%`, background: seg.color }}
                   title={`${seg.label}: ${n}`}
                 />
               );
@@ -55,11 +52,11 @@ export function SkillVerdictsSnapshot({ overview }: { overview: OverviewData | n
               const muted = n === 0;
               return (
                 <li key={seg.key} className={`flex items-center gap-1.5 ${muted ? 'opacity-40' : ''}`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${seg.dot}`} />
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: seg.color }} />
                   <span style={{ color: 'var(--text-dim)' }}>{seg.label}</span>
                   <span
-                    className={`ml-auto tabular-nums ${muted ? '' : seg.text}`}
-                    style={muted ? { color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' } : undefined}
+                    className="ml-auto tabular-nums"
+                    style={muted ? { color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' } : { color: seg.color }}
                   >
                     {n}
                   </span>

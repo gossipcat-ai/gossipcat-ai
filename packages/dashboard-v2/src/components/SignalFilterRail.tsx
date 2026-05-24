@@ -27,8 +27,8 @@ function toggleIn(list: string[], value: string): string[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 }
 
-const LABEL_CLS = 'mb-1 block font-mono text-[9px] font-semibold uppercase tracking-widest';
-const LABEL_STYLE = { color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' } as const;
+const LABEL_CLS = 'mb-1 block h-section';
+const LABEL_STYLE = {} as const;
 const INPUT_CLS = 'w-full rounded border border-border px-2 py-1 font-mono text-[10px] focus:border-primary focus:outline-none';
 const INPUT_STYLE = { background: 'var(--surface)', color: 'var(--text)' } as const;
 

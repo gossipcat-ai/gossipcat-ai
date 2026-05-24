@@ -342,7 +342,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
       {!hideHeader && (
         <div className="mb-4 flex items-center justify-between">
           <h2 className="h-section">
-            Consensus Rounds <span style={{ color: 'var(--accent)' }}>{consensus.totalRuns ?? consensus.runs.length}</span>
+            Consensus Rounds <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{consensus.totalRuns ?? consensus.runs.length}</span>
           </h2>
           {!showAll && (
             <a href="/dashboard/debates" className="font-mono text-xs transition" style={{ color: 'var(--text-dim)' }}>

@@ -80,7 +80,8 @@ export function PolarAccuracyGauge({ accuracy, size = 90, color = 'var(--ink)' }
           x={cx}
           y={cy}
           textAnchor="middle"
-          dominantBaseline="central"
+          dominantBaseline="middle"
+          dy="0.08em"
           fill="var(--ink)"
           style={{
             fontSize,
@@ -94,7 +95,7 @@ export function PolarAccuracyGauge({ accuracy, size = 90, color = 'var(--ink)' }
       </svg>
       <span
         style={{
-          fontSize: 9,
+          fontSize: 10,
           color: 'var(--ink-3)',
           fontFamily: 'Geist, Inter, sans-serif',
           fontVariant: 'small-caps',

@@ -222,6 +222,25 @@
   --text-faint: #5d5a52;
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.14);
+
+  /* Tailwind @theme tokens — these were missing from the dark override block,
+     so any Tailwind utility class that uses `border-border` / `bg-card` /
+     `bg-background` / `text-foreground` / etc. rendered light-mode values
+     (cream, dark ink) regardless of theme. That's why card borders in dark
+     mode read as bright cream lines on the dark canvas. Override the
+     @theme variables to dark-mode equivalents so the utility classes
+     theme-switch correctly. */
+  --color-background: #131210;
+  --color-foreground: #e8e4d7;
+  --color-card: #252320;
+  --color-card-foreground: #e8e4d7;
+  --color-muted: #1c1a17;
+  --color-muted-foreground: #87847b;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-input: rgba(255, 255, 255, 0.08);
+  --color-secondary: #1c1a17;
+  --color-secondary-foreground: #e8e4d7;
+  --color-text-dim: #87847b;
   --accent: #d68a6f;
   --accent-bright: #e08a6c;
   --accent-soft: rgba(214, 138, 111, 0.16);

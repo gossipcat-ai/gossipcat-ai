@@ -773,14 +773,14 @@ function HubSpokeGraph({
         >
           <svg width="56" height="56" viewBox="0 0 56 56" style={{ display: 'block', pointerEvents: 'none' }} aria-hidden>
             {/* Outer accretion halo — terracotta glow */}
-            <circle cx="28" cy="28" r="26" fill="none" stroke="var(--accent)" strokeWidth="0.6" opacity="0.35" />
-            <circle cx="28" cy="28" r="22" fill="none" stroke="var(--accent)" strokeWidth="0.4" opacity="0.25" />
+            <circle cx="28" cy="28" r="26" fill="none" stroke="var(--border-strong)" strokeWidth="0.6" opacity="0.35" />
+            <circle cx="28" cy="28" r="22" fill="none" stroke="var(--border-strong)" strokeWidth="0.4" opacity="0.25" />
             {/* Event horizon — cream ring on the edge of the disc */}
             <circle cx="28" cy="28" r="12" fill="none" stroke="#F2EDE3" strokeWidth="1.1" opacity="0.75" />
             {/* The disc itself — actual blackhole, swallows whatever the rest is */}
             <circle cx="28" cy="28" r="9" fill="#000" />
             {/* Inner accretion glow rim */}
-            <circle cx="28" cy="28" r="9" fill="none" stroke="var(--accent)" strokeWidth="0.5" opacity="0.6" />
+            <circle cx="28" cy="28" r="9" fill="none" stroke="var(--border-strong)" strokeWidth="0.5" opacity="0.6" />
           </svg>
           {/* Easter egg: smile face pops in on every click. The `key` prop
               changes per click so React remounts the SVG and the CSS
@@ -866,7 +866,7 @@ function HubSpokeGraph({
                 // event horizon + soft accent glow), not a bright terracotta
                 // ring. Coherent with the resting-mode orchestrator blackhole.
                 boxShadow: isCenter
-                  ? `0 0 0 1.5px rgba(242, 237, 227, 0.45), 0 0 0 6px rgba(201, 112, 86, 0.18), 0 0 28px -4px rgba(201, 112, 86, 0.35)`
+                  ? `0 0 0 1.5px rgba(242, 237, 227, 0.45), 0 0 0 6px color-mix(in oklch, var(--border-strong) 18%, transparent), 0 0 28px -4px color-mix(in oklch, var(--border-strong) 35%, transparent)`
                   : undefined,
                 transition: 'box-shadow 200ms cubic-bezier(0.4,0,0.2,1)',
               }}
@@ -881,7 +881,7 @@ function HubSpokeGraph({
               />
             </div>
             <div
-              className="absolute font-mono text-[10px] font-bold uppercase tracking-wider"
+              className="absolute font-mono text-[10px] font-bold tracking-wider"
               style={{
                 left: '50%',
                 top: '50%',

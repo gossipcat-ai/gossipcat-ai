@@ -94,7 +94,7 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
         {/* Body — section headers now primary-colored per mockup line 275 */}
         <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-[13px] leading-relaxed" style={{ color: 'var(--text)' }}>
           <section>
-            <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
+            <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--ink-2)' }}>
               Owner
             </h3>
             <div className="flex flex-wrap gap-3 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
@@ -108,7 +108,7 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
 
           {fmEntries.length > 0 && (
             <section>
-              <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
+              <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--ink-2)' }}>
                 Frontmatter
               </h3>
               <div className="overflow-hidden rounded-md border border-border/40" style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}>
@@ -127,7 +127,7 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
           )}
 
           <section>
-            <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
+            <h3 className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--ink-2)' }}>
               Content
             </h3>
             <div
