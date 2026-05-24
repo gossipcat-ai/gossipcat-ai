@@ -50,17 +50,25 @@ function buildPath(values: number[], W: number, H: number): { line: string; area
   return { line, area };
 }
 
+/** Minimum first-half signal total before a delta is meaningful. Below this,
+ *  the ratio amplifies noise (1→6 signals = +500%) and misleads the operator. */
+const DELTA_BASELINE_FLOOR = 5;
+const DELTA_DISPLAY_CAP = 999;
+
 function deltaPercent(points: FleetTrendPoint[]): number | null {
   if (points.length < 2) return null;
   const half = Math.floor(points.length / 2);
   const first = points.slice(0, half);
   const last = points.slice(points.length - half);
-  const avg = (arr: FleetTrendPoint[]) =>
-    arr.reduce((sum, p) => sum + p.signals, 0) / arr.length;
-  const a = avg(first);
-  const b = avg(last);
-  if (a === 0) return b === 0 ? 0 : 100;
-  return Math.round(((b - a) / a) * 100);
+  const sum = (arr: FleetTrendPoint[]) => arr.reduce((s, p) => s + p.signals, 0);
+  const firstSum = sum(first);
+  const lastSum = sum(last);
+  // Suppress when baseline volume is too small — percentage would be noise.
+  if (firstSum < DELTA_BASELINE_FLOOR) return null;
+  const a = firstSum / first.length;
+  const b = lastSum / last.length;
+  const pct = Math.round(((b - a) / a) * 100);
+  return Math.max(-DELTA_DISPLAY_CAP, Math.min(DELTA_DISPLAY_CAP, pct));
 }
 
 export function AreaSparkline({
@@ -107,16 +115,17 @@ export function AreaSparkline({
       </svg>
       {delta !== null && !isEmpty && (
         <span
+          title="7d dispatch volume change — neutral indicator, not a quality metric"
           style={{
             fontSize: 10,
             fontFamily: 'Geist, Inter, sans-serif',
             fontVariantNumeric: 'tabular-nums',
             fontWeight: 600,
-            color: delta >= 0 ? 'var(--ok)' : 'var(--bad)',
+            color: 'var(--ink-3)',
             flexShrink: 0,
           }}
         >
-          {delta >= 0 ? '+' : ''}{delta}%
+          {delta >= 0 ? '+' : ''}{delta}%{Math.abs(delta) >= DELTA_DISPLAY_CAP ? '+' : ''}
         </span>
       )}
     </div>
