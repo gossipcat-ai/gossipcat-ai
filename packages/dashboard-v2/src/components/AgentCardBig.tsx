@@ -126,42 +126,37 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
         </span>
       </div>
 
-      {/* Two-column grid: 100px gauge column + flexible meta column */}
-      <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: 12, alignItems: 'start' }}>
+      {/* Two-column grid: 100px gauge column + flexible meta column.
+          alignItems:stretch lets the left column distribute its content
+          vertically so gauge pins top, severity-mix pins bottom — mirrors
+          the right column's name-row / bars / sparkline rhythm. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: 12, alignItems: 'stretch' }}>
 
         {/* ── Left column ── */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingBottom: 2 }}>
           <PolarAccuracyGauge accuracy={s.accuracy} size={90} color={ac} />
-          <SeverityMixStrip counts={severityCounts} />
-          <span
-            style={{
-              fontSize: 10,
-              color: 'var(--ink-3)',
-              fontFamily: 'Geist, Inter, sans-serif',
-              fontVariant: 'small-caps',
-              letterSpacing: '0.04em',
-            }}
-          >
-            severity mix
-          </span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, width: '100%' }}>
+            <SeverityMixStrip counts={severityCounts} />
+            <span
+              style={{
+                fontSize: 10,
+                color: 'var(--ink-3)',
+                fontFamily: 'Geist, Inter, sans-serif',
+                fontVariant: 'small-caps',
+                letterSpacing: '0.04em',
+              }}
+            >
+              severity mix
+            </span>
+          </div>
         </div>
 
         {/* ── Right column ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
 
-          {/* Name row + avatar + bench chip */}
+          {/* Name row + bench chip — avatar omitted; Fleet/graph already
+              carries the per-agent identity visual. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ flexShrink: 0 }}>
-              <NeuralAvatar
-                agentId={agent.id}
-                size={36}
-                animate={agent.online}
-                signals={s.signals}
-                accuracy={s.accuracy}
-                uniqueness={s.uniqueness}
-                impact={s.impactScore}
-              />
-            </div>
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                 <span
