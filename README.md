@@ -302,12 +302,12 @@ Gossipcat is on **[npm](https://www.npmjs.com/package/gossipcat)** and **[GitHub
 
 **Pin to a specific npm version:**
 ```bash
-npm install -g gossipcat@0.4.14
+npm install -g gossipcat@0.5.2
 ```
 
 **Pin to a specific GitHub release tarball** (version-locked, bypasses npm registry):
 ```bash
-npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.4.14/gossipcat-0.4.14.tgz
+npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.5.2/gossipcat-0.5.2.tgz
 ```
 
 **Project-local install** (each project gets its own gossipcat):

@@ -4,6 +4,73 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-05-24
+
+Dashboard polish + a load-bearing reader bug fix. The visible win is a cleaner Team page and login screen; the invisible win is that the Tasks page stops showing "0 of 0" forever once the task graph crosses 5MB.
+
+### Fixed
+
+- **Task-graph rotation reader bug** (PR #487). `performance-writer.rotateJsonlIfNeeded` does single-slot 5MB rotation (`.jsonl` → `.jsonl.1`) but the three relay endpoints reading task history (`api-tasks.ts`, `api-agents.ts`, `api-overview.ts`) only loaded the primary file. After rotation, every `task.created` event in the archive became orphaned from its later `task.completed` in the new primary, so long-running and historical tasks vanished from the Tasks page, the per-agent task lists, and the Overview hourly bucket counts. `taskCompletionRate` (which drove the "Reliability" bar) became permanently null. Readers now load `.jsonl.1` then `.jsonl` and concatenate in chronological order. On a fleet with 1,483 historical `task.created` entries in the archive, the Tasks page went from showing 3 entries to 1,486.
+- **Consensus eee614bd-31ba4209 high-severity findings** (PR #487). Seven dashboard fixes from a 3-agent consensus round: (1) `SeverityMixStrip` switched from a monochrome `--bad` opacity ramp to per-segment semantic colors (`--bad`/`--warn`/`--info`/`--idle`) so critical/high/medium/low render distinctly. (2) `RecentSignalsPeek` "+N in last hour" badge moved from `--accent` (terracotta, CTA-only per DESIGN.md) to `--info`. (3) `SkillGraduationGrid` skill-count badge: `--accent` → bold `--ink`. (4) `computeDeltaPp` gates the ±pp display behind ≥4 non-null buckets — prevents misleading ±100pp swings from 2-bucket single-signal data on PASSED cards. (5) `RecentSignalsPeek` severity tick now has `role="img"` + descriptive `aria-label` so screen readers get severity context (was `aria-hidden` with title-only). (6) `TopBar` Search placeholder: `role="button" tabIndex={-1}` (contradictory AT) → `aria-hidden="true"`. (7) `±pp` delta added explicit `aria-label` for trend direction.
+- **AuthGate UX hardening** (PR #487). Loading state on Unlock button (disabled + "Unlocking…" label during pending). `LoginResult` discriminated union threaded through `lib/api.ts` → `useAuth.ts` → `AuthGate.tsx` so the error message distinguishes 401/403 ("Invalid key") from network/5xx ("Connection error — relay may be offline"). `shadow-2xl` removed per DESIGN.md no-drop-shadow rule.
+
+### Added
+
+- **SkillGraduationGrid per-agent identity** (PR #487). Each card now shows a colored agent dot + agent ID below the skill name — disambiguates the 4 `trust-boundaries`, 3 `data-integrity`, 2 `type-safety` duplicates that previously rendered identically. Card chrome now also displays a `7d` window chip, the current accuracy vs threshold (`0.42 / 0.70`), and a ±pp drift indicator (PASSED skills only).
+- **`/api/skills` 7d effectiveness window** (PR #487). `deriveEffectiveness` switched from `[boundAt, now]` equal-time bucketing to a `[max(boundAt, now-7d), now]` window. Skills bound long ago with one cluster of historical activity used to collapse into 2-3 populated buckets out of 10; now sparse-data cards render the clean dashed threshold line and dense recent activity fills the curve evenly.
+- **AgentNetworkGraph starfield polish** (PR #487). 170 stars (was 120) with three-tier brightness — ~7% bright (r ≈ 2.0-2.6, opacity 0.75-1.0), ~25% mid (r ≈ 1.2-1.6), ~68% faint background — and a deeper 0.80 ± 0.35 twinkle swing.
+
+### Changed
+
+- **TeamPage + AuthGate DESIGN.md compliance** (PR #487). Full token migration across both surfaces: `--text` → `--ink`, `--text-dim` → `--ink-2/--ink-3`, `--danger` → `--bad`, `--success` → `--ok`. Headers use `.h-route` (Fraunces 32px); stat labels, column headers, badges, and mini-bar labels use `.h-section` small-caps Geist (was `font-mono uppercase tracking-wider`, the "killed Risk #4" pattern per DESIGN.md). TeamPage rank #1 color: `--accent` → bold `--ink`. `TasksPage` + `FindingsPage` token migration also landed (whole-file scope of the gate-check).
+- **Reliability bar removed from Team/Fleet/Agent surfaces** (PR #487). `AgentCardBig`, `AgentPage`, and the App TeamPage table no longer render the Reliability row. The backing `taskCompletionRate` was null because of the task-graph rotation bug above; the row will return once backend wiring of per-agent completion ratios from the merged `.jsonl + .jsonl.1` stream lands.
+- **README hero refresh** (commit `5362f681`). Three dashboard screenshots embedded near the top of `README.md` so GitHub visitors see the post-DESIGN.md visual story before the install section.
+
+### Migration
+
+No API changes. Operators using the Tasks page or relying on `taskCompletionRate` will immediately see historical entries after upgrading.
+
+## [0.5.1] — 2026-05-24
+
+Hotfix for SkillGraduationGrid sparkline rendering — fragmented dots on low-signal cards were noise, not information.
+
+### Fixed
+
+- **SkillEffectivenessSparkline minimum-points gate** (PR #486, supersedes PR #484). `MIN_VISIBLE_POINTS` raised from 3 to 5 (half of the 10-bucket window). Below the threshold the card shows only the dashed graduation threshold line — sparse data with big gaps collapses to the clean placeholder instead of fragmented stubs that read as broken noise.
+
+## [0.5.0] — 2026-05-24
+
+Marathon dashboard session — full `DESIGN.md v1` application checklist (Steps 0-10) landed across 14 PRs (#464-#482). The visual system is now an editorial canvas: Fraunces serif for route titles, small-caps Geist for section labels, JetBrains Mono restricted to data/IDs, semantic color tokens (`--ok`/`--warn`/`--bad`/`--info`/`--idle`) replacing pre-migration aliases.
+
+### Added
+
+- **DESIGN.md v1** (PR #463). Source of truth for the dashboard visual system — editorial canvas + infographic vocabulary direction, color token palette, typography rules (Fraunces / Geist / JetBrains Mono), 10-step implementation checklist with gate criteria.
+- **Steps 0+1 — fonts + token aliases + TeamHero smoke** (PR #464). Fraunces + Geist + JetBrains Mono loaded; DESIGN.md alias-block tokens introduced.
+- **Step 2 — section header sweep + accent cleanup** (PR #465). `.h-section` small-caps Geist applied across section labels; first pass of terracotta `--accent` leaks removed from non-CTA chrome.
+- **Step 3 — topbar text migration** (PR #466). TopBar nav + brand mark migrated to DESIGN.md typography contracts.
+- **Step 4 — accuracy-scope encoding + equal-height hero** (PR #467). Hero row uses `align-items: stretch` per DESIGN.md.
+- **Step 5 — ActivityWaterfall 24h per-agent heatmap** (PR #469). New visualization replacing the prior bar grid.
+- **Step 6 — team cards + topbar polish** (PR #471). AgentCardBig refactored with polar gauge + severity strip + sparkline + status chip; per-agent identity color via `agentColor(id)`.
+- **Step 7 — Consensus flow page + `/api/consensus-flow` backend** (PR #472). 4-state Sankey visualization of consensus rounds with `lg/sm` responsive breakpoints; trust-boundary regex validation on `consensusId`.
+- **Step 8 — signal stream table** (PR #473). RecentSignalsPeek refactored to TIME / VERDICT / AGENT / FINDING / CONF columns; `renderFinding()` helper wraps backtick spans in inline code styling.
+- **Step 9 + 9.5 — SkillGraduationGrid** (PR #474, #475). Verdict-grouped foundation rewritten as a flat card grid; UNKNOWN bucket in a native `<details>` collapsible; per-skill post-bind effectiveness curves derived from 10-bucket bucketing of `agent-performance.jsonl` with 60s mtime cache; backend `/api/skills` extended with `effectiveness: SkillEffectivenessEntry[]`.
+- **PR-A page heading parity — `.h-route` Fraunces H1** (PR #476). All routes use the same 32px Fraunces route title; `.h-section` demoted to section labels only.
+- **PR-B Overview restructure** (PR #478). `<header>` moved above graph; duplicate actionable CTA deduped; graph toggle via URL state.
+
+### Changed
+
+- **Step 10 — final cleanup** (PR #482). Inter font removed from `index.html` + `globals.css`; legacy tokens (`--text-faint`, `--color-chart-deep`) removed; final all-caps `font-mono` header sweep (`uppercase tracking-widest` returns empty in `packages/dashboard-v2/src`).
+- **PR-C Tasks + regressions** (PR #479). Tasks section polish + regression fixes accumulated during the marathon.
+
+### Fixed
+
+- **TopBar glossary button polish** (PR #477). Normalized to 32×32 / 8px-rounded matching the theme toggle.
+- **`/` → `/dashboard` redirect** (PR #481). 302 redirect at the relay so the bare host serves the dashboard.
+
+### Migration
+
+Dashboard-only release — no API surface changes. The visual system is now contract-driven by `DESIGN.md`; any new component must respect the alias-block tokens and the small-caps-not-all-caps-mono convention.
+
 ## [0.4.31] — 2026-05-22
 
 Fixes a recurring silent-failure mode where `Agent(isolation:"worktree")` dispatches sometimes didn't engage the worktree sandbox — subagents wrote directly to the parent checkout. Three-agent consensus session diagnosed the root cause: the `isolation: "worktree"` parameter was emitted as a conditional string fragment mid-tuple in the dispatch banner (`apps/cli/src/handlers/dispatch.ts:705,707`), exactly the position where LLMs drop keyword args during paraphrase. Two prior fix designs ("Inverted Gate" PreToolUse-hook denial, "Dispatch-Time Probe" new MCP tool) were proposed and rejected during the session — both solved a different layer than the actual bug.

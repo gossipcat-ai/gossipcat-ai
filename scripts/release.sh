@@ -154,14 +154,25 @@ gh release create "$tag" \
   --title "gossipcat $tag" \
   --generate-notes
 
+# npm publish — uses the same packed tarball so GH release + npm registry
+# are byte-identical. Skip with SKIP_NPM_PUBLISH=1 for dry runs.
+if [ "${SKIP_NPM_PUBLISH:-0}" = "1" ]; then
+  echo "→ Skipping npm publish (SKIP_NPM_PUBLISH=1)"
+else
+  echo "→ Publishing to npm registry"
+  npm publish "$tarball" --access public
+fi
+
 # Cleanup local tarballs
 rm -f "$tarball" "gossipcat.tgz"
 
 echo ""
 echo "✅ Released $tag"
 echo ""
-echo "Install command (latest):"
-echo "  npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/latest/download/gossipcat.tgz"
+echo "Install commands:"
+echo "  npm install -g gossipcat              # latest from npm"
+echo "  npm install -g gossipcat@${version}    # pinned"
 echo ""
-echo "Pinned version:"
-echo "  npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/${tag}/gossipcat-${version}.tgz"
+echo "GitHub release tarballs:"
+echo "  https://github.com/gossipcat-ai/gossipcat-ai/releases/latest/download/gossipcat.tgz"
+echo "  https://github.com/gossipcat-ai/gossipcat-ai/releases/download/${tag}/gossipcat-${version}.tgz"
