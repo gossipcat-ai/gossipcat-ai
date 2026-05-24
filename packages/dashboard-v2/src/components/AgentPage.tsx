@@ -235,7 +235,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <span
                 className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold ${agent.native ? '' : 'text-confirmed bg-confirmed/10'}`}
-                style={agent.native ? { color: 'var(--accent)', background: 'color-mix(in oklch, var(--accent) 10%, transparent)' } : undefined}
+                style={agent.native ? { color: 'var(--idle)', background: 'color-mix(in oklch, var(--idle) 10%, transparent)' } : undefined}
               >
                 {agent.native ? 'NATIVE' : 'RELAY'}
               </span>
@@ -319,7 +319,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       {(agent.skillSlots.length > 0 || agent.skills.length > 0) && (
         <section className="mb-8">
           <h2 className="mb-3 h-section">
-            Skills <span style={{ color: 'var(--accent)' }}>{agent.skillSlots.length || agent.skills.length}</span>
+            Skills <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{agent.skillSlots.length || agent.skills.length}</span>
           </h2>
           {agent.skillSlots.length > 0 ? (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -343,7 +343,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="h-section">
-            Tasks <span style={{ color: 'var(--accent)' }}>{agentTasks.length}</span>
+            Tasks <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{agentTasks.length}</span>
           </h2>
           {taskPages > 1 && (
             <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
@@ -394,7 +394,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           drawer surfaces both in one click. */}
       <section className="mb-8">
         <h2 className="mb-3 h-section">
-          Consensus Runs <span style={{ color: 'var(--accent)' }}>{agentRuns.length}</span>
+          Consensus Runs <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{agentRuns.length}</span>
         </h2>
         {agentRuns.length > 0 ? (
           <div className="space-y-2">
@@ -509,7 +509,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="h-section">
-            Memory <span style={{ color: 'var(--accent)' }}>{memories.length} files</span>
+            Memory <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{memories.length} files</span>
             {currentDay && (
               <span className="ml-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
                 · {currentDay.day} ({currentDay.items.length})

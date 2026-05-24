@@ -109,7 +109,7 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
             <BigStat
               value={overview.agentsOnline}
               label="Agents Online"
-              valueColor={overview.agentsOnline > 0 ? 'var(--accent)' : 'var(--text)'}
+              valueColor={overview.agentsOnline > 0 ? 'var(--ok)' : 'var(--text)'}
             />
           </div>
           <div className="border-r border-border">
@@ -140,7 +140,7 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
                 <span className="font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }} data-tooltip="Agents currently executing a task">Dispatched</span>
                 <span
                   className="font-mono text-base font-bold leading-none"
-                  style={{ color: overview.agentsOnline > 0 ? 'var(--accent)' : 'var(--text)' }}
+                  style={{ color: overview.agentsOnline > 0 ? 'var(--ok)' : 'var(--text)' }}
                 >{overview.agentsOnline}</span>
               </div>
               <div className="flex items-baseline justify-between gap-2">
@@ -240,7 +240,7 @@ function ActivityBars({ hourly }: ActivityBarsProps) {
   const bars = hourly.length === 12 ? hourly : new Array(12).fill(0);
   const max = Math.max(1, ...bars);
   return (
-    <div className="border-t border-border px-3.5 py-3" style={{ background: 'color-mix(in oklch, var(--accent) 2%, transparent)' }}>
+    <div className="border-t border-border px-3.5 py-3" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 30%, transparent)' }}>
       <div className="mb-2 font-mono text-[9px] font-bold uppercase tracking-widest" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
         Activity Last 12h
       </div>

@@ -117,7 +117,7 @@ function TeamPage({
       {/* Header with summary stats */}
       <div className="mb-6">
         <h1 className="h-section">
-          Team <span className="ml-2" style={{ color: 'var(--accent)' }}>{agents.length}</span>
+          Team <span className="ml-2" style={{ color: 'var(--ink)', fontWeight: 700 }}>{agents.length}</span>
         </h1>
         <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Per-agent accuracy, signal counts, and dispatch weights.</p>
         <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border [background:color-mix(in_oklch,var(--border)_30%,transparent)] sm:grid-cols-4">
@@ -177,7 +177,7 @@ function TeamPage({
                   </button>
                   <span style={{ color: 'color-mix(in oklch, var(--text-dim) 30%, transparent)' }}>·</span>
                   <button onClick={() => toggleSort('impact')} className="flex items-center gap-1 hover:[color:var(--text)]" data-tooltip="Impact — severity-weighted finding score">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />Imp{arrow('impact')}
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--c8)]" />Imp{arrow('impact')}
                   </button>
                 </div>
               </th>
@@ -282,7 +282,7 @@ function TeamPage({
                       />
                       <MiniBar label="Rel" value={s.taskCompletionRate ?? 0} fillClass="bg-chart" tooltip="Reliability — fraction of dispatched tasks that finished without pipeline error or timeout" />
                       <MiniBar label="U" value={s.uniqueness} fillClass="bg-unique" tooltip="Uniqueness — findings this agent surfaced that no other agent found" />
-                      <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--accent)]" tooltip="Impact — severity-weighted finding score; critical and high findings count more" />
+                      <MiniBar label="I" value={s.impactScore} fillClass="bg-[var(--c8)]" tooltip="Impact — severity-weighted finding score; critical and high findings count more" />
                     </div>
                   </td>
 
@@ -369,7 +369,7 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
     <>
       <div className="mb-6">
         <h1 className="h-section">
-          Tasks <span className="ml-2" style={{ color: 'var(--accent)' }}>{tasks.total}</span>
+          Tasks <span className="ml-2" style={{ color: 'var(--ink)', fontWeight: 700 }}>{tasks.total}</span>
         </h1>
         <p className="mt-0.5 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>Live dispatched tasks and their relay status.</p>
         <div className="mt-2 flex gap-4 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
@@ -456,7 +456,7 @@ function FindingsPage({
     <>
       <div className="mb-6">
         <h1 className="h-section">
-          Consensus Rounds <span className="ml-2" style={{ color: 'var(--accent)' }}>{visibleRuns.length}</span>
+          Consensus Rounds <span className="ml-2" style={{ color: 'var(--ink)', fontWeight: 700 }}>{visibleRuns.length}</span>
           {!showRetracted && retractedCount > 0 && (
             <span className="ml-2 font-normal normal-case tracking-normal" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
               / {consensus.totalRuns ?? consensus.runs.length} total

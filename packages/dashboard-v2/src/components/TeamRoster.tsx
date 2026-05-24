@@ -16,7 +16,7 @@ export function TeamRoster({ agents }: TeamRosterProps) {
     <section>
       <div className="mb-3 flex items-center justify-between">
         <h2 className="h-section">
-          Team <span style={{ color: 'var(--accent)' }}>{agents.length}</span>
+          Team <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{agents.length}</span>
         </h2>
         <a href="/dashboard/team" className="font-mono text-xs transition" style={{ color: 'var(--text-dim)' }}>
           view all

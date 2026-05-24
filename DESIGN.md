@@ -70,6 +70,7 @@ Restrained, semantic-strict. **One accent.** Every other color carries meaning.
 | `--c5` | `#A53A4A` | rose |
 | `--c6` | `#6B6862` | slate |
 | `--c7` | `#C8A45A` | sand |
+| `--c8` | `#B85FA0` | magenta |
 
 ### Per-agent identity (avatar bloom only — NEVER card chrome)
 

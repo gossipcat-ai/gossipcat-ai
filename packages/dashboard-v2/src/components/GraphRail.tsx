@@ -212,7 +212,7 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
       {agent.skills.length > 0 && (
         <div className="mt-4 px-4">
           <div className="mb-1.5 h-section">
-            Skills <span style={{ color: 'var(--accent)' }}>{agent.skills.length}</span>
+            Skills <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{agent.skills.length}</span>
           </div>
           <div className="flex flex-wrap gap-1">
             {agent.skills.slice(0, 6).map((s) => (

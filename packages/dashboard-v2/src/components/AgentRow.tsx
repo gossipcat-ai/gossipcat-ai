@@ -42,7 +42,7 @@ export function AgentRow({ agent }: AgentRowProps) {
       {/* Badge */}
       <span
         className="mt-1 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-semibold"
-        style={agent.native ? { color: 'var(--accent)', background: 'color-mix(in oklch, var(--accent) 10%, transparent)' } : { color: 'var(--success)', background: 'color-mix(in oklch, var(--success) 10%, transparent)' }}
+        style={agent.native ? { color: 'var(--idle)', background: 'color-mix(in oklch, var(--idle) 10%, transparent)' } : { color: 'var(--success)', background: 'color-mix(in oklch, var(--success) 10%, transparent)' }}
       >
         {agent.native ? 'NATIVE' : 'RELAY'}
       </span>

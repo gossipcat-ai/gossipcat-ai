@@ -32,7 +32,7 @@ export function TeamHero({ agents, highlightedAgentId, severityMap, trendByAgent
     <section>
       <div className="mb-3 flex items-center justify-between">
         <h2 className="h-section">
-          Team <span style={{ color: 'var(--accent)' }}>{agents.length}</span>
+          Team <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{agents.length}</span>
         </h2>
         {hasMore && (
           <a href="/dashboard/team" className="text-xs transition hover:[color:var(--accent)]" style={{ color: 'var(--text-dim)' }}>
@@ -48,7 +48,7 @@ export function TeamHero({ agents, highlightedAgentId, severityMap, trendByAgent
               key={agent.id}
               style={{
                 borderRadius: '0.5rem',
-                boxShadow: isHighlighted ? '0 0 0 2px var(--accent)' : undefined,
+                boxShadow: isHighlighted ? '0 0 0 2px var(--border-strong)' : undefined,
                 transition: 'box-shadow 200ms cubic-bezier(0.4,0,0.2,1)',
               }}
             >
