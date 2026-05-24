@@ -637,7 +637,10 @@ function HubSpokeGraph({
               strokeDasharray={dash}
               strokeLinecap="round"
               style={{
-                opacity: 'var(--edge-opacity-selected)',
+                // Dimmer spokes on the cosmic dark canvas — bright stroke
+                // saturates against the starfield. 0.55 reads as energy flow,
+                // 0.9 read as neon.
+                opacity: 0.55,
                 transition: 'opacity 200ms cubic-bezier(0.4,0,0.2,1)',
               }}
             />
@@ -654,6 +657,53 @@ function HubSpokeGraph({
           <LegendRow stroke="var(--success)" label="Trust" />
           <LegendRow stroke="var(--warn)" label="Mixed" dash="8,2" />
           <LegendRow stroke="var(--danger)" label="Caught" />
+        </div>
+      )}
+
+      {/* Center black hole — the gravitational locus of the fleet.
+          Represents the orchestrator: every agent is in orbit around it,
+          stars get pulled toward it (via the agent-eat animation), the
+          consensus locus collapses here. Visual: dark disc + accretion-
+          disk glow + outer halo, all on the center of the measured canvas.
+          Resting mode only; in focus mode the selected agent becomes the
+          gravitational center via the existing center glow ring. */}
+      {!selectedAgentId && measuredHeight > 0 && (
+        <div
+          className="absolute z-[1] -translate-x-1/2 -translate-y-1/2"
+          style={{
+            left: width / 2,
+            top: measuredHeight / 2,
+            pointerEvents: 'none',
+          }}
+        >
+          <svg width="56" height="56" viewBox="0 0 56 56" style={{ display: 'block' }} aria-hidden>
+            {/* Outer accretion halo — terracotta glow */}
+            <circle cx="28" cy="28" r="26" fill="none" stroke="var(--accent)" strokeWidth="0.6" opacity="0.35" />
+            <circle cx="28" cy="28" r="22" fill="none" stroke="var(--accent)" strokeWidth="0.4" opacity="0.25" />
+            {/* Event horizon — cream ring on the edge of the disc */}
+            <circle cx="28" cy="28" r="12" fill="none" stroke="#F2EDE3" strokeWidth="1.1" opacity="0.75" />
+            {/* The disc itself — actual blackhole, swallows whatever the rest is */}
+            <circle cx="28" cy="28" r="9" fill="#000" />
+            {/* Inner accretion glow rim */}
+            <circle cx="28" cy="28" r="9" fill="none" stroke="var(--accent)" strokeWidth="0.5" opacity="0.6" />
+          </svg>
+          <div
+            className="font-mono"
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 4px)',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              fontSize: '9px',
+              letterSpacing: '0.18em',
+              textTransform: 'uppercase',
+              color: 'var(--stage-text-dim)',
+              whiteSpace: 'nowrap',
+              opacity: 0.7,
+            }}
+          >
+            orchestrator
+          </div>
         </div>
       )}
 
@@ -704,7 +754,12 @@ function HubSpokeGraph({
               className="rounded-full"
               style={{
                 width: size, height: size,
-                boxShadow: isCenter ? `0 0 0 3px var(--accent), 0 8px 32px -8px var(--accent-soft)` : undefined,
+                // Focus-mode center: blackhole-style accretion halo (cream
+                // event horizon + soft accent glow), not a bright terracotta
+                // ring. Coherent with the resting-mode orchestrator blackhole.
+                boxShadow: isCenter
+                  ? `0 0 0 1.5px rgba(242, 237, 227, 0.45), 0 0 0 6px rgba(201, 112, 86, 0.18), 0 0 28px -4px rgba(201, 112, 86, 0.35)`
+                  : undefined,
                 transition: 'box-shadow 200ms cubic-bezier(0.4,0,0.2,1)',
               }}
             >
