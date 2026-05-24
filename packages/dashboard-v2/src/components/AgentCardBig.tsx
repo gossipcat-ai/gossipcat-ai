@@ -39,7 +39,7 @@ interface StatusChipKind {
 }
 
 function statusChipKind(s: AgentData['scores']): StatusChipKind {
-  if (s.accuracy >= 0.7 && s.bench.state === 'none') {
+  if (s.accuracy >= 0.7 && s.bench?.state === 'none') {
     return {
       label: 'healthy',
       dotColor: 'var(--ok)',
@@ -49,8 +49,8 @@ function statusChipKind(s: AgentData['scores']): StatusChipKind {
   return {
     label: 'needs skills',
     dotColor: 'var(--warn)',
-    tooltip: s.bench.state !== 'none'
-      ? `Benched (${s.bench.reason ?? 'auto'})`
+    tooltip: s.bench?.state !== 'none'
+      ? `Benched (${s.bench?.reason ?? 'auto'})`
       : `Accuracy ${Math.round(s.accuracy * 100)}% — below 70% baseline.`,
   };
 }
@@ -69,8 +69,8 @@ function SubBar({ label, value, color, tooltip }: {
       style={{ gridTemplateColumns: '56px 1fr 32px' }}
     >
       <span
-        className="font-mono text-[9px]"
-        style={{ color: 'var(--ink-3)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+        className="text-[9px]"
+        style={{ color: 'var(--ink-3)', fontFamily: 'Geist, Inter, sans-serif', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
         data-tooltip={tooltip}
       >
         {label}

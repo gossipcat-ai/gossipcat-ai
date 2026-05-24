@@ -230,7 +230,19 @@ const AGENT_COLORS = [
   '#f43f5e', '#fbbf24', '#60a5fa', '#e879f9',
 ];
 
+/** Per-agent identity color table — sourced from DESIGN.md §Per-agent identity */
+const AGENT_IDENTITY_TABLE: Record<string, string> = {
+  'sonnet-reviewer':    '#8C5E97', // plum
+  'sonnet-designer':    '#C8A45A', // sand
+  'sonnet-implementer': '#A53A4A', // rose
+  'opus-implementer':   '#C97056', // terracotta
+  'gemini-reviewer':    '#3F8B86', // teal
+  'gemini-tester':      '#2F7D5B', // sage
+  'haiku-researcher':   '#6B7A85', // slate
+};
+
 export function agentColor(id: string): string {
+  if (AGENT_IDENTITY_TABLE[id]) return AGENT_IDENTITY_TABLE[id];
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
   return AGENT_COLORS[h % AGENT_COLORS.length];
