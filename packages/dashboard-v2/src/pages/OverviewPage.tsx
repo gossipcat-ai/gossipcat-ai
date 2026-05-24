@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { SystemPulse } from '@/components/SystemPulse';
 import { ActivityWaterfall } from '@/components/ActivityWaterfall';
 import { ActiveTasksBanner } from '@/components/ActiveTasksBanner';
@@ -85,12 +85,58 @@ export function OverviewPage({
     ? agents.find((a) => a.id === selectedAgentId) ?? null
     : null;
 
+  // Fix 3 — local toggle state; synced with ?graph= URL param via replaceState
+  const [graphVisible, setGraphVisible] = useState(!hideGraph);
+  function toggleGraph() {
+    const next = !graphVisible;
+    setGraphVisible(next);
+    const url = new URL(window.location.href);
+    if (next) {
+      url.searchParams.delete('graph');
+    } else {
+      url.searchParams.set('graph', '0');
+    }
+    window.history.replaceState(null, '', url.toString());
+  }
+
   return (
-    <div className="mx-auto max-w-5xl space-y-8">
+    <div className="mx-auto max-w-6xl space-y-6">
+      {/* Page header — Fix 2: moved above the graph block */}
+      <header>
+        <div className="flex items-baseline justify-between gap-4">
+          <h1 className="h-route h-route--lg">Overview</h1>
+          <div className="flex items-baseline gap-4">
+            {actionable > 0 && (
+              <a
+                href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
+                className="font-mono text-[11px] text-orange-400 transition hover:underline"
+                data-tooltip="Findings open for operator review"
+              >
+                {actionable} actionable →
+              </a>
+            )}
+            {/* Fix 3 — graph visibility toggle */}
+            {agents && (
+              <button
+                type="button"
+                onClick={toggleGraph}
+                className="font-mono text-[10px] transition hover:underline"
+                style={{ color: 'var(--text-dim)' }}
+              >
+                {graphVisible ? '[hide graph]' : '[show graph]'}
+              </button>
+            )}
+          </div>
+        </div>
+        <p className="mt-1 font-mono text-[13px]" style={{ color: 'var(--text-dim)' }}>
+          What your agents are doing right now.
+        </p>
+      </header>
+
       {/* Phase 1b PRs 3-6 — Graph + Rail + NarrativeStripe + TemporalScrubber.
           Shown by default; ?graph=0 opts out (escape hatch to the legacy
-          calm-widgets-only layout below). */}
-      {!hideGraph && agents && (
+          calm-widgets-only layout below). Fix 3: now also togglable via header button. */}
+      {graphVisible && agents && (
         <div className="space-y-3">
           <NarrativeStripe />
           <div className="flex items-stretch gap-3">
@@ -113,24 +159,6 @@ export function OverviewPage({
           )}
         </div>
       )}
-      {/* Page header */}
-      <header>
-        <div className="flex items-baseline justify-between gap-4">
-          <h1 className="h-route h-route--lg">Overview</h1>
-          {actionable > 0 && (
-            <a
-              href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
-              className="font-mono text-[11px] text-orange-400 transition hover:underline"
-              data-tooltip="Findings open for operator review"
-            >
-              {actionable} actionable →
-            </a>
-          )}
-        </div>
-        <p className="mt-1 font-mono text-[13px]" style={{ color: 'var(--text-dim)' }}>
-          What your agents are doing right now.
-        </p>
-      </header>
 
       {/* Hero strip — calm SystemPulse */}
       <SystemPulse
@@ -138,6 +166,9 @@ export function OverviewPage({
         activeTasks={activeTaskCount}
         mode="calm"
       />
+
+      {/* Live tasks (self-hides when nothing is running) — Fix 4: moved before waterfall */}
+      <ActiveTasksBanner onCountChange={setActiveTaskCount} />
 
       {/* DESIGN.md Step 5 — 24h per-agent activity waterfall. Replaces the
           single-row fleet-wide hourly bars with a heatmap matrix that shows
@@ -149,38 +180,21 @@ export function OverviewPage({
         />
       )}
 
-      {/* Actionable stat row — present in calm mode when actionable > 0 so the
-          attention hook isn't only a small header-right link. */}
-      {actionable > 0 && (
-        <a
-          href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
-          className="inline-flex items-center gap-1.5 font-mono text-[12px] transition hover:[color:var(--text)]"
-          style={{ color: 'var(--text-dim)' }}
-        >
-          <span>◆</span>
-          <span className="font-bold text-unverified">{actionable}</span>
-          <span>actionable signals →</span>
-        </a>
-      )}
-
-      {/* Live tasks (self-hides when nothing is running) */}
-      <ActiveTasksBanner onCountChange={setActiveTaskCount} />
-
-      {/* Top-4 agents — echoes the AgentNetworkGraph selection when the graph is on */}
-      {agents && (
-        <TeamHero
-          agents={agents}
-          highlightedAgentId={!hideGraph ? selectedAgentId : null}
-          severityMap={severityMap}
-          trendByAgent={trendByAgent}
-        />
-      )}
+      {/* Last 5 signals — Fix 4: moved before tasks */}
+      <RecentSignalsPeek />
 
       {/* Recent dispatches — limit 3 (vs dense view's 5) */}
       {tasks && <TasksSection tasks={tasks} limit={3} />}
 
-      {/* Last 5 signals */}
-      <RecentSignalsPeek />
+      {/* Top-4 agents — Fix 4: moved below live feeds + tasks */}
+      {agents && (
+        <TeamHero
+          agents={agents}
+          highlightedAgentId={graphVisible ? selectedAgentId : null}
+          severityMap={severityMap}
+          trendByAgent={trendByAgent}
+        />
+      )}
 
       {/* DESIGN.md Step 9 — Skill graduation. Snapshot is the bar-chart
           summary; grid is the per-skill breakdown across all live bindings.
