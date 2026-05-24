@@ -26,8 +26,10 @@ interface Props {
 const PADDING_X = 1;
 const PADDING_Y = 2;
 /** Minimum non-null buckets before the curve renders. Below this the
- *  threshold-only placeholder shows — N + verdict label carry the info. */
-const MIN_VISIBLE_POINTS = 3;
+ *  threshold-only placeholder shows — N + verdict label carry the info.
+ *  Set to 5 (half of the 10-bucket window) so sparse data with big gaps
+ *  collapses to the clean dashed line instead of fragmented stubs. */
+const MIN_VISIBLE_POINTS = 5;
 
 export function SkillEffectivenessSparkline({
   curve,
