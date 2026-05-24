@@ -994,6 +994,9 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
           // to .gossip/recovery/<taskId>.patch BEFORE cleaning master, so an
           // isolation escape no longer destroys the agent's changes.
           const preserveResult = preserveLeakedPaths(revertRoot, isolationDiff.dirtyPathsAdded, task_id);
+          // NB: preserveOk is also false on the benign `emptyDiff` path (no patchPath) — that
+          // is fine: the `if (preserveResult.emptyDiff)` branch below is checked FIRST, so
+          // preserveOk only ever gates the genuine-failure vs. success decision. (47dbe3f5-504247c9 f5)
           const preserveOk = !preserveResult.error && !!preserveResult.patchPath;
 
           if (preserveResult.emptyDiff) {
@@ -1010,7 +1013,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
               suspectedReason: 'isolation_recovery_noop_empty_diff',
               timestamp: new Date().toISOString(),
             });
-            responseText += `\n  → isolation diff empty (leaked paths already match HEAD); nothing to preserve or revert.`;
+            responseText += `\n  → nothing to preserve or revert (leaked paths already match HEAD, or are no longer present).`;
           } else if (!preserveOk) {
             // Spec §3.1 option (b): the safety net failed — do NOT run the
             // destructive revert. Leave master dirty and surface a hard receipt

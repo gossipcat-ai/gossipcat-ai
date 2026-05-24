@@ -89,9 +89,9 @@ describe('preserveLeakedPaths — real git repo', () => {
     fs.rmSync(repo, { recursive: true, force: true });
   });
 
-  it('empty paths → no-op, no patch, no error', () => {
+  it('empty paths → no-op, no patch, no error, emptyDiff sentinel set', () => {
     const r = preserveLeakedPaths(repo, [], 'task-abc');
-    expect(r).toEqual({ preserved: [], skipped: [], rejected: [] });
+    expect(r).toEqual({ preserved: [], skipped: [], rejected: [], emptyDiff: true });
     expect(fs.existsSync(path.join(repo, '.gossip', 'recovery'))).toBe(false);
   });
 
@@ -114,12 +114,32 @@ describe('preserveLeakedPaths — real git repo', () => {
     expect(fs.existsSync(path.join(repo, '.gossip', 'recovery', 'task-emptydiff.patch'))).toBe(false);
   });
 
-  it('emptyDiff sentinel is NOT set when there is no work at all (empty / all-rejected input)', () => {
-    // The early returns that precede the git-diff step (empty input, all paths
-    // missing/rejected) must leave emptyDiff undefined — it specifically means
-    // "git diff ran and produced nothing", not "we never reached the diff".
-    expect(preserveLeakedPaths(repo, [], 'task-none').emptyDiff).toBeUndefined();
-    expect(preserveLeakedPaths(repo, ['/etc/passwd', '--force'], 'task-rej').emptyDiff).toBeUndefined();
+  it('benign no-patch early returns all set emptyDiff (empty input, all-rejected, all-vanished)', () => {
+    // 72981222-c54b4c11 f5: every benign "nothing to preserve" early return must
+    // set emptyDiff so the caller skips the destructive revert calmly instead of
+    // raising the false "could NOT preserve leaked work" alarm.
+    // (a) empty input
+    expect(preserveLeakedPaths(repo, [], 'task-none').emptyDiff).toBe(true);
+    // (b) all paths rejected by the safety filter → present.length === 0
+    const rej = preserveLeakedPaths(repo, ['/etc/passwd', '--force'], 'task-rej');
+    expect(rej.emptyDiff).toBe(true);
+    expect(rej.rejected).toEqual(['/etc/passwd', '--force']);
+    expect(rej.patchPath).toBeUndefined();
+    // (c) safe paths that no longer exist on disk → all skipped, present.length === 0
+    const gone = preserveLeakedPaths(repo, ['apps/cli/vanished.ts', 'also-gone.ts'], 'task-gone');
+    expect(gone.emptyDiff).toBe(true);
+    expect(gone.skipped.sort()).toEqual(['also-gone.ts', 'apps/cli/vanished.ts']);
+    expect(gone.preserved).toEqual([]);
+    expect(gone.patchPath).toBeUndefined();
+    expect(fs.existsSync(path.join(repo, '.gossip', 'recovery'))).toBe(false);
+  });
+
+  it('taskId validation failure sets error, NOT emptyDiff (genuine failure keeps the alarm)', () => {
+    // The taskId-validation early return is a real error and must remain
+    // distinguishable from the benign emptyDiff no-ops.
+    const r = preserveLeakedPaths(repo, ['apps/cli/src/leaked.ts'], '../escape');
+    expect(r.error).toMatch(/SAFE_NAME/);
+    expect(r.emptyDiff).toBeUndefined();
   });
 
   it('leaked NEW untracked file → patch captures it; tree byte-identical; git apply reproduces', () => {
