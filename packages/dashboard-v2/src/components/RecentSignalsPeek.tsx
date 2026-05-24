@@ -28,7 +28,7 @@ const VERDICT_COLOR: Record<string, string> = {
   disagreement: 'var(--bad)',
   hallucination_caught: 'var(--bad)',
   unique_confirmed: 'var(--info)',
-  unique_unconfirmed: 'var(--info)',
+  unique_unconfirmed: 'var(--warn)',
   new_finding: 'var(--info)',
   unverified: 'var(--info)',
 };
@@ -41,13 +41,6 @@ const SEVERITY_TICK_COLOR: Record<string, string> = {
   low: 'var(--ink-3)',
 };
 
-// Map severity → confidence /5 for the CONF column.
-const SEVERITY_CONF: Record<string, number> = {
-  critical: 5,
-  high: 4,
-  medium: 3,
-  low: 2,
-};
 
 function truncate(s: string, n: number): string {
   if (!s) return '';
@@ -101,11 +94,12 @@ export function RecentSignalsPeek() {
       <header className="mb-3 flex items-baseline justify-between">
         <div className="flex items-baseline gap-3">
           <h3 className="h-section">Signal stream</h3>
-          {lastHour > 0 && (
-            <span className="font-mono text-[11px]" style={{ color: 'var(--info)' }}>
-              +{lastHour} in last hour
-            </span>
-          )}
+          <span
+            className="font-mono text-[11px]"
+            style={{ color: 'var(--info)', visibility: lastHour === 0 ? 'hidden' : 'visible' }}
+          >
+            +{lastHour} in last hour
+          </span>
         </div>
         <button
           type="button"
@@ -118,6 +112,50 @@ export function RecentSignalsPeek() {
       </header>
 
       <div className="rounded-lg border border-border" style={{ background: 'var(--surface-elev)' }}>
+        {/* Loading skeleton — 5 fake rows, no animate-pulse per ActivityWaterfall precedent */}
+        {!err && items === null && (
+          <div aria-busy="true">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="py-2 pl-4 pr-3" style={{ width: 80 }}>
+                    <div className="h-2 w-8 rounded" style={{ background: 'var(--border)', opacity: 0.4 }} />
+                  </th>
+                  <th className="py-2 pr-3" style={{ width: 160 }}>
+                    <div className="h-2 w-12 rounded" style={{ background: 'var(--border)', opacity: 0.4 }} />
+                  </th>
+                  <th className="py-2 pr-3" style={{ width: 180 }}>
+                    <div className="h-2 w-10 rounded" style={{ background: 'var(--border)', opacity: 0.4 }} />
+                  </th>
+                  <th className="py-2 pr-4">
+                    <div className="h-2 w-14 rounded" style={{ background: 'var(--border)', opacity: 0.4 }} />
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <tr key={i} className="border-b border-border/40 last:border-b-0">
+                    <td className="py-2.5 pl-4 pr-3">
+                      <div className="h-2.5 w-10 rounded" style={{ background: 'var(--border)', opacity: 0.4 }} />
+                    </td>
+                    <td className="py-2.5 pr-3">
+                      <div className="flex items-center gap-2">
+                        <div style={{ width: 3, height: 14, background: 'var(--border)', opacity: 0.4, borderRadius: 1, flexShrink: 0 }} />
+                        <div className="h-2.5 w-14 rounded" style={{ background: 'var(--border)', opacity: 0.4 }} />
+                      </div>
+                    </td>
+                    <td className="py-2.5 pr-3">
+                      <div className="h-2.5 w-24 rounded" style={{ background: 'var(--border)', opacity: 0.4 }} />
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      <div className="h-2.5 rounded" style={{ background: 'var(--border)', opacity: 0.4, width: '75%' }} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         {err && <p className="px-4 py-3 text-xs" style={{ color: 'var(--text-dim)' }}>unavailable</p>}
         {!err && items && items.length === 0 && (
           <p className="px-4 py-3 text-xs" style={{ color: 'var(--text-dim)' }}>no signals recorded</p>
@@ -129,8 +167,7 @@ export function RecentSignalsPeek() {
                 <th className="h-section py-2 pl-4 pr-3 text-left" style={{ fontSize: 10, width: 80 }}>time</th>
                 <th className="h-section py-2 pr-3 text-left" style={{ fontSize: 10, width: 160 }}>verdict</th>
                 <th className="h-section py-2 pr-3 text-left" style={{ fontSize: 10, width: 180 }}>agent</th>
-                <th className="h-section py-2 pr-3 text-left" style={{ fontSize: 10 }}>finding</th>
-                <th className="h-section py-2 pl-3 pr-4 text-right" style={{ fontSize: 10, width: 60 }}>conf</th>
+                <th className="h-section py-2 pr-4 text-left" style={{ fontSize: 10 }}>finding</th>
               </tr>
             </thead>
             <tbody>
@@ -138,7 +175,6 @@ export function RecentSignalsPeek() {
                 const tickColor = s.severity ? SEVERITY_TICK_COLOR[s.severity] : 'transparent';
                 const verdictColor = VERDICT_COLOR[s.signal] ?? 'var(--ink-2)';
                 const verdictLabel = LABELS[s.signal] ?? s.signal;
-                const conf = s.severity ? SEVERITY_CONF[s.severity] : 1;
                 return (
                   <tr key={`${s.timestamp}-${i}`} className="border-b border-border/40 last:border-b-0">
                     <td className="py-2.5 pl-4 pr-3 align-middle font-mono text-[12px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
@@ -160,11 +196,8 @@ export function RecentSignalsPeek() {
                     <td className="py-2.5 pr-3 align-middle font-mono text-[12px]" style={{ color: 'var(--text-dim)' }}>
                       <span className="truncate">{s.agentId}</span>
                     </td>
-                    <td className="py-2.5 pr-3 align-middle text-[12px]" style={{ color: 'var(--text)', lineHeight: 1.45 }}>
+                    <td className="py-2.5 pr-4 align-middle text-[12px]" style={{ color: 'var(--text)', lineHeight: 1.45 }}>
                       {renderFinding(truncate(s.evidence ?? '', 120))}
-                    </td>
-                    <td className="py-2.5 pl-3 pr-4 align-middle text-right font-mono text-[12px] tabular-nums" style={{ color: 'var(--text-dim)' }}>
-                      {conf}/5
                     </td>
                   </tr>
                 );
