@@ -216,7 +216,16 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       {/* Header — flattened: dropped the gradient layer, inset highlight line,
           and per-agent halo glow. The glow was hex-derived so the header tone
           changed per agent in a way that was decorative, not informational. */}
-      <div className="relative mb-6 rounded-xl border border-border p-5" style={{ background: 'var(--surface-elev)' }}>
+      {/* Force dark-mode scope for the identity header card. The NeuralAvatar
+          vortex is designed against a dark cosmos backdrop — on light themes
+          its pinks/violets read as washed-out smudge. data-theme="dark"
+          cascades the dark token overrides only inside this card; the rest
+          of the page honors the global theme. */}
+      <div
+        data-theme="dark"
+        className="relative mb-6 rounded-xl border border-border p-5"
+        style={{ background: 'var(--surface-elev)', color: 'var(--text)' }}
+      >
         <div className="flex items-center gap-6">
           <div
             className="relative shrink-0"

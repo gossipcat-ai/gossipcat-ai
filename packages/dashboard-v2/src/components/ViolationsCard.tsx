@@ -40,7 +40,7 @@ export function ViolationsCard() {
             !
           </span>
           <span
-            className={`min-w-0 truncate font-mono text-[11px] font-bold uppercase tracking-widest ${hasViolations ? 'text-destructive' : ''}`}
+            className={`min-w-0 truncate font-mono text-[11px] font-bold uppercase tracking-wider ${hasViolations ? 'text-destructive' : ''}`}
             style={hasViolations ? undefined : { color: 'var(--text-dim)' }}
           >
             Process Violations

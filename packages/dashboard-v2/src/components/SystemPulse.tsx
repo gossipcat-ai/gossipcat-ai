@@ -241,7 +241,7 @@ function ActivityBars({ hourly }: ActivityBarsProps) {
   const max = Math.max(1, ...bars);
   return (
     <div className="border-t border-border px-3.5 py-3" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 30%, transparent)' }}>
-      <div className="mb-2 font-mono text-[9px] font-bold uppercase tracking-widest" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
+      <div className="mb-2 font-mono text-[9px] font-bold uppercase tracking-wider" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
         Activity Last 12h
       </div>
       <div className="flex h-6 items-end gap-0.5">

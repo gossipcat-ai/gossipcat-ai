@@ -51,7 +51,7 @@ function FleetSummary({ agents, peerRelationships }: { agents: AgentData[]; peer
       <div className="mb-2 h-section">
         Fleet at a glance
       </div>
-      <p className="mb-4 font-mono text-[11px]" style={{ color: 'var(--text-faint)' }}>
+      <p className="mb-4 font-mono text-[12px]" style={{ color: 'var(--text-faint)' }}>
         Click a node to see detail.
       </p>
 
@@ -64,15 +64,14 @@ function FleetSummary({ agents, peerRelationships }: { agents: AgentData[]; peer
               key={a.id}
               type="button"
               onClick={() => setAgentParam(a.id)}
-              className="group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:[background:color-mix(in_oklch,var(--accent)_8%,transparent)]"
+              className="group flex w-full items-center gap-2 rounded px-2 py-2 text-left transition hover:[background:color-mix(in_oklch,var(--accent)_8%,transparent)]"
               style={{ cursor: 'pointer' }}
             >
-              <NeuralAvatar agentId={a.id} signals={a.scores.signals} accuracy={a.scores.accuracy} uniqueness={a.scores.uniqueness} impact={a.scores.impactScore} size={28} />
               <div className="min-w-0 flex-1">
-                <div className="truncate font-mono text-[11px] font-semibold" style={{ color: 'var(--text)' }}>{a.id}</div>
-                <div className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>{Math.round(a.scores.accuracy * 100)}% accuracy · {a.scores.signals} signals</div>
+                <div className="truncate font-mono text-[12px] font-semibold" style={{ color: 'var(--text)' }}>{a.id}</div>
+                <div className="mt-0.5 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>{Math.round(a.scores.accuracy * 100)}% accuracy · {a.scores.signals} signals</div>
               </div>
-              <span className="opacity-0 transition group-hover:opacity-100 font-mono text-[10px]" style={{ color: 'var(--accent)' }}>→</span>
+              <span className="opacity-0 transition group-hover:opacity-100 font-mono text-[11px]" style={{ color: 'var(--accent)' }}>→</span>
             </button>
           ))
         )}
@@ -87,11 +86,11 @@ function FleetSummary({ agents, peerRelationships }: { agents: AgentData[]; peer
           <EmptyRow text="No catches in the active window." />
         ) : (
           top5Catches.map((c) => (
-            <div key={`${c.pair[0]}::${c.pair[1]}`} className="rounded px-2 py-1.5">
-              <div className="font-mono text-[11px]" style={{ color: 'var(--text)' }}>
+            <div key={`${c.pair[0]}::${c.pair[1]}`} className="rounded px-2 py-2">
+              <div className="font-mono text-[12px]" style={{ color: 'var(--text)' }}>
                 <span style={{ color: 'var(--danger)' }}>◆</span> {c.pair[0]} ↔ {c.pair[1]}
               </div>
-              <div className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              <div className="mt-0.5 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
                 {c.catches} caught · {timeAgo(c.ts)}
               </div>
             </div>
@@ -106,7 +105,7 @@ function Section({ label, tone, children }: { label: string; tone: 'success' | '
   const toneColor = tone === 'success' ? 'var(--success)' : tone === 'danger' ? 'var(--danger)' : 'var(--text-faint)';
   return (
     <section className="mb-4">
-      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-widest" style={{ color: toneColor }}>
+      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] font-bold uppercase tracking-wider" style={{ color: toneColor }}>
         <span style={{ width: 4, height: 4, borderRadius: '50%', background: toneColor, display: 'inline-block' }} />
         {label}
       </div>
@@ -116,7 +115,7 @@ function Section({ label, tone, children }: { label: string; tone: 'success' | '
 }
 
 function EmptyRow({ text }: { text: string }) {
-  return <div className="px-2 py-1.5 font-mono text-[10px]" style={{ color: 'var(--text-faint)' }}>{text}</div>;
+  return <div className="px-2 py-1.5 font-mono text-[11px]" style={{ color: 'var(--text-faint)' }}>{text}</div>;
 }
 
 /** Naive time-ago for the rail. ISO timestamp → "3h ago" / "2d ago". */
@@ -171,8 +170,8 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
       <div className="flex items-center gap-3 px-4 pt-4">
         <NeuralAvatar agentId={agent.id} signals={agent.scores.signals} accuracy={agent.scores.accuracy} uniqueness={agent.scores.uniqueness} impact={agent.scores.impactScore} size={48} />
         <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-[13px] font-semibold" style={{ color: 'var(--ink)' }}>{agent.id}</div>
-          <div className="truncate font-mono text-[10px]" style={{ color: 'var(--ink-3)' }}>{agent.model}</div>
+          <div className="truncate font-mono text-[14px] font-semibold" style={{ color: 'var(--ink)' }}>{agent.id}</div>
+          <div className="truncate font-mono text-[11px]" style={{ color: 'var(--ink-3)' }}>{agent.model}</div>
         </div>
       </div>
 
@@ -195,8 +194,8 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
           <div className="space-y-1">
             {topPeers.map(({ other, rel }) => (
               <div key={other} className="rounded px-2 py-1.5" style={{ background: 'color-mix(in oklch, var(--surface) 50%, transparent)' }}>
-                <div className="truncate font-mono text-[11px]" style={{ color: 'var(--ink)' }}>{other}</div>
-                <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px]" style={{ color: 'var(--ink-3)' }}>
+                <div className="truncate font-mono text-[12px]" style={{ color: 'var(--ink)' }}>{other}</div>
+                <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px]" style={{ color: 'var(--ink-3)' }}>
                   {rel.confirmed > 0 && <span><span style={{ color: 'var(--success)' }}>✓</span> {rel.confirmed}</span>}
                   {rel.disputed > 0 && <span><span style={{ color: 'var(--warn)' }}>≠</span> {rel.disputed}</span>}
                   {rel.hallucinationsCaught > 0 && <span><span style={{ color: 'var(--danger)' }}>◆</span> {rel.hallucinationsCaught}</span>}
@@ -216,7 +215,7 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
           </div>
           <div className="flex flex-wrap gap-1">
             {agent.skills.slice(0, 6).map((s) => (
-              <span key={s} className="rounded-sm border px-1.5 py-0.5 font-mono text-[10px]" style={{ borderColor: 'var(--border)', color: 'var(--ink-3)' }}>{s}</span>
+              <span key={s} className="rounded-sm border px-1.5 py-0.5 font-mono text-[11px]" style={{ borderColor: 'var(--border)', color: 'var(--ink-3)' }}>{s}</span>
             ))}
           </div>
         </div>
@@ -235,8 +234,8 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded px-2 py-1.5" style={{ background: 'color-mix(in oklch, var(--surface) 50%, transparent)' }}>
-      <div className="font-mono text-[9px] uppercase tracking-widest" style={{ color: 'var(--text-faint)' }}>{label}</div>
-      <div className="mt-0.5 font-mono text-[15px] font-medium tabular-nums" style={{ color: 'var(--text)' }}>{value}</div>
+      <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-faint)' }}>{label}</div>
+      <div className="mt-0.5 font-mono text-[16px] font-medium tabular-nums" style={{ color: 'var(--text)' }}>{value}</div>
     </div>
   );
 }
@@ -247,11 +246,11 @@ function ActionButton({ label, kbd, href, disabled }: { label: string; kbd: stri
       href={disabled ? undefined : `/dashboard${href}`}
       aria-disabled={disabled}
       tabIndex={disabled ? -1 : undefined}
-      className="flex items-center justify-between rounded px-2 py-1.5 font-mono text-[11px] transition"
+      className="flex items-center justify-between rounded px-2 py-2 font-mono text-[12px] transition"
       style={{ background: disabled ? 'transparent' : 'color-mix(in oklch, var(--surface) 50%, transparent)', color: disabled ? 'var(--text-faint)' : 'var(--text)', pointerEvents: disabled ? 'none' : 'auto', opacity: disabled ? 0.5 : 1 }}
     >
       <span>{label}</span>
-      <kbd className="rounded border px-1 py-0.5 font-mono text-[9px]" style={{ borderColor: 'var(--border)', background: 'var(--surface-sunk)', color: 'var(--text-dim)' }}>{kbd}</kbd>
+      <kbd className="rounded border px-1 py-0.5 font-mono text-[10px]" style={{ borderColor: 'var(--border)', background: 'var(--surface-sunk)', color: 'var(--text-dim)' }}>{kbd}</kbd>
     </a>
   );
 }
