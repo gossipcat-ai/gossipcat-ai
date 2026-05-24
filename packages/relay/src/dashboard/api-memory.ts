@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 
-const AGENT_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const AGENT_ID_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
 const DANGEROUS_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 
 interface KnowledgeFile { filename: string; frontmatter: Record<string, string>; content: string; }

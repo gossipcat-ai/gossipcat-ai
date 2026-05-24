@@ -27,7 +27,7 @@ export interface SkillsGetResponse {
 export interface SkillsBindRequest { agent_id: string; skill: string; enabled: boolean; }
 export interface SkillsBindResponse { success: boolean; error?: string; }
 
-const AGENT_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const AGENT_ID_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
 
 /** Curve resolution. Spec-default 10 windows; held in a constant for clarity. */
 const NUM_BUCKETS = 10;
