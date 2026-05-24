@@ -5,6 +5,8 @@ import { ActiveTasksBanner } from '@/components/ActiveTasksBanner';
 import { TeamHero } from '@/components/TeamHero';
 import { TasksSection } from '@/components/TasksSection';
 import { RecentSignalsPeek } from '@/components/RecentSignalsPeek';
+import { SkillVerdictsSnapshot } from '@/components/SkillVerdictsSnapshot';
+import { SkillGraduationGrid } from '@/components/SkillGraduationGrid';
 import { AgentNetworkGraph } from '@/components/AgentNetworkGraph';
 import { GraphRail } from '@/components/GraphRail';
 import { NarrativeStripe } from '@/components/NarrativeStripe';
@@ -178,6 +180,12 @@ export function OverviewPage({
 
       {/* Last 5 signals */}
       <RecentSignalsPeek />
+
+      {/* DESIGN.md Step 9 — Skill graduation. Snapshot is the bar-chart
+          summary; grid is the per-skill breakdown across all live bindings.
+          Both render from already-fetched overview + agents data. */}
+      <SkillVerdictsSnapshot overview={overview} />
+      <SkillGraduationGrid agents={agents} />
     </div>
   );
 }
