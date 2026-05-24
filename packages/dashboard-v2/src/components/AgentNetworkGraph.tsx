@@ -74,20 +74,34 @@ function clamp(n: number, lo: number, hi: number): number {
 interface RingBandsProps {
   width: number;
   height: number;
+  /** When true, suppress accuracy tick labels — used in focus mode where
+   *  agent positions are driven by peer-distance, not accuracy. The rings
+   *  themselves stay as decoration but the accuracy labels would mislead. */
+  hideLabels?: boolean;
 }
 
-/** Concentric accuracy bands at 25/50/75/100%. Pure decoration — pointer-events: none. */
-function RingBands({ width, height }: RingBandsProps) {
+/** Concentric accuracy bands.
+ *
+ *  IMPORTANT: rings are at radii r = maxR * {1, 0.75, 0.5, 0.25}, but the
+ *  accuracy VALUE at each ring is inverted because restingLayout maps
+ *  radius = (1 - accuracy) * maxRadius — agents at maxR have accuracy 0%,
+ *  agents at center have accuracy 100%. Each ring's label MUST express the
+ *  accuracy value at that ring, not the radius fraction.
+ */
+function RingBands({ width, height, hideLabels = false }: RingBandsProps) {
   const cx = width / 2;
   const cy = height / 2;
   const innerCushion = 40;
   const maxR = Math.max(80, Math.min(width, height) / 2 - innerCushion);
-  // 4 rings at 25/50/75/100% of maxR. Inner-to-outer.
+  // Inner-to-outer rings. accLabel = accuracy value AT that ring.
+  // Outer ring (r = maxR, full distance from center) = 0% accuracy.
+  // Inner ring (r = maxR * 0.25, closest to center) = 75% accuracy.
+  // Center bloom itself = 100% accuracy (no ring needed).
   const rings = [
-    { pct: 100, r: maxR },
-    { pct: 75, r: maxR * 0.75 },
-    { pct: 50, r: maxR * 0.5 },
-    { pct: 25, r: maxR * 0.25 },
+    { r: maxR,        accLabel: '0%' },
+    { r: maxR * 0.75, accLabel: '25%' },
+    { r: maxR * 0.5,  accLabel: '50%' },
+    { r: maxR * 0.25, accLabel: '75%' },
   ];
   return (
     <svg
@@ -96,8 +110,8 @@ function RingBands({ width, height }: RingBandsProps) {
       style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
       aria-hidden
     >
-      {rings.map(({ pct, r }) => (
-        <g key={pct}>
+      {rings.map(({ r, accLabel }) => (
+        <g key={accLabel}>
           <circle
             cx={cx}
             cy={cy}
@@ -107,17 +121,21 @@ function RingBands({ width, height }: RingBandsProps) {
             strokeDasharray="2 4"
             opacity={0.5}
           />
-          {/* Tick label just above the top of each ring. */}
-          <text
-            x={cx + 6}
-            y={cy - r + 4}
-            fontFamily="var(--font-mono)"
-            fontSize="9"
-            fill="var(--ink-3)"
-            letterSpacing="0.06em"
-          >
-            {pct}%
-          </text>
+          {/* Tick label just ABOVE the top of each ring (outside the arc)
+              so it doesn't collide with avatar/name labels rendered at
+              roughly the same y-coordinate inside the ring. */}
+          {!hideLabels && (
+            <text
+              x={cx + 6}
+              y={cy - r - 4}
+              fontFamily="var(--font-mono)"
+              fontSize="9"
+              fill="var(--ink-3)"
+              letterSpacing="0.06em"
+            >
+              {accLabel}
+            </text>
+          )}
         </g>
       ))}
     </svg>
@@ -294,8 +312,10 @@ function HubSpokeGraph({
       style={{ height, background: 'var(--stage-bg)', borderColor: 'var(--border)' }}
       onClick={() => onSelectAgent(null)}
     >
-      {/* Accuracy rings — rendered first (behind everything else). */}
-      <RingBands width={width} height={height} />
+      {/* Accuracy rings — rendered first (behind everything else).
+          Hide labels in focus mode: positions are then driven by peer-
+          distance, not accuracy, so the accuracy ticks would mislead. */}
+      <RingBands width={width} height={height} hideLabels={!!selectedAgentId} />
 
       {/* Header label — adapts to mode. */}
       <div
@@ -349,7 +369,7 @@ function HubSpokeGraph({
             pointerEvents: 'none',
           }}
         >
-          distance from center = accuracy · spoke color = agent identity
+          closer to center = higher accuracy · spoke color = agent identity
         </div>
       )}
 

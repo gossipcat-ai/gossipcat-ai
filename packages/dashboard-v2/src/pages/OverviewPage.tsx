@@ -83,7 +83,7 @@ export function OverviewPage({
       {/* Page header */}
       <header>
         <div className="flex items-baseline justify-between gap-4">
-          <h1 style={{ fontFamily: 'var(--font-serif, Fraunces, ui-serif, Georgia, serif)', fontWeight: 500, fontSize: '44px', lineHeight: 1.1, letterSpacing: '-0.015em', color: 'var(--ink)' }}>
+          <h1 style={{ fontFamily: '"Fraunces", ui-serif, Georgia, serif', fontWeight: 500, fontSize: '44px', lineHeight: 1.1, letterSpacing: '-0.015em', color: 'var(--ink)' }}>
             Overview
           </h1>
           {actionable > 0 && (
