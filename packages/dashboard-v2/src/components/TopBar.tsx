@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { getWsState } from '@/lib/ws';
+import { useState } from 'react';
 import { href, useRoute } from '@/lib/router';
 import { useTheme } from '@/lib/useTheme';
 import { GlossaryModal } from './GlossaryModal';
@@ -14,17 +13,9 @@ const TABS = [
 ];
 
 export function TopBar() {
-  const [online, setOnline] = useState(false);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const route = useRoute();
   const { theme, toggle } = useTheme();
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setOnline(getWsState() === WebSocket.OPEN);
-    }, 2000);
-    return () => clearInterval(interval);
-  }, []);
 
   return (
     <nav className="relative flex items-center justify-between border-b border-border px-6 py-3.5">
@@ -118,15 +109,15 @@ export function TopBar() {
         <button
           onClick={() => setGlossaryOpen(true)}
           aria-label="Open glossary"
-          className="flex items-center justify-center rounded-md border border-border/60 px-2.5 py-1 font-mono text-xs font-semibold transition hover:border-border"
+          title="Glossary"
+          className="flex items-center justify-center rounded-md border border-border/60 px-2 py-1 transition hover:border-border"
           style={{ background: 'var(--surface-elev)', color: 'var(--ink)' }}
         >
-          Glossary
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+          </svg>
         </button>
-        <div className="flex items-center gap-2 rounded-md border border-border px-3.5 py-1.5 font-mono text-xs" style={{ background: 'var(--surface-elev)', color: 'var(--ink-3)' }}>
-          <span className={`inline-block h-1.5 w-1.5 rounded-full ${online ? 'bg-confirmed' : 'bg-destructive'}`} />
-          {online ? 'Connected' : 'Disconnected'}
-        </div>
       </div>
       <GlossaryModal open={glossaryOpen} onClose={() => setGlossaryOpen(false)} />
     </nav>

@@ -1,172 +1,282 @@
+/**
+ * AgentCardBig — Step 6 v1.1 (DESIGN.md).
+ *
+ * Two-column layout:
+ * - Left (100px): PolarAccuracyGauge + ACCURACY label + SeverityMixStrip + "severity mix"
+ * - Right (flex): name+status-chip row, 3 sub-bars (reliability/unique/impact),
+ *                 AreaSparkline+delta, signals+timeAgo footer
+ *
+ * Per-agent identity color (agentColor(id)) drives gauge stroke, all 3 sub-bars,
+ * and the sparkline. Card chrome (border, bg, hover) stays neutral.
+ * Status chip semantic: healthy / needs skills with --ok / --warn dots.
+ */
+
 import type React from 'react';
 import type { AgentData } from '@/lib/types';
+import type { FleetTrendPoint } from '@/lib/types';
+import type { SeverityCount } from '@/hooks/useSeverityCounts';
 import { NeuralAvatar } from './NeuralAvatar';
-import { timeAgo } from '@/lib/utils';
+import { PolarAccuracyGauge } from './PolarAccuracyGauge';
+import { SeverityMixStrip } from './SeverityMixStrip';
+import { AreaSparkline } from './AreaSparkline';
+import { agentColor, timeAgo } from '@/lib/utils';
 import { getBenchBadgeKind } from '@/lib/bench';
 
-interface AgentCardBigProps {
+export interface AgentCardBigProps {
   agent: AgentData;
+  severityCounts?: SeverityCount;
+  trendPoints?: FleetTrendPoint[];
 }
 
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
 
-function weightTier(w: number): 'good' | 'mid' | 'low' {
-  if (w >= 1.2) return 'good';
-  if (w >= 0.8) return 'mid';
-  return 'low';
-}
-
-function accTier(a: number): 'good' | 'mid' | 'low' {
-  if (a >= 0.7) return 'good';
-  if (a >= 0.4) return 'mid';
-  return 'low';
-}
-
-export function AgentCardBig({ agent }: AgentCardBigProps) {
-  const s = agent.scores;
-  const lastTime = agent.lastTask?.timestamp ? timeAgo(agent.lastTask.timestamp) : '';
-
-  const wt = weightTier(s.dispatchWeight);
-  const weightColor =
-    wt === 'good' ? 'text-confirmed' :
-    wt === 'low' ? 'text-disputed' : '';
-  const weightColorStyle = wt === 'good' || wt === 'low' ? undefined : { color: 'var(--text)' } as React.CSSProperties;
-
-  const at = accTier(s.accuracy);
-  const accBarClass =
-    at === 'good' ? 'bg-confirmed' :
-    at === 'mid' ? 'bg-unverified' : 'bg-disputed';
-
-  return (
-    <a
-      href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
-      className="group relative block rounded-lg border border-border p-3 transition-all hover:-translate-y-0.5 hover:border-primary/30"
-      style={{ background: 'var(--surface-elev)', boxShadow: 'var(--shadow-card)' }}
-    >
-      {/* Flatten pass: the card used to layer gradient + inset highlight line
-          + outer shadow + hover ring + per-agent avatar halo blur, which felt
-          skeuomorphic and fought the metric bars for attention. Single card
-          background + subtle hover lift reads cleaner in the 2x2 hero grid. */}
-      <div className="mb-2.5 flex items-center gap-2.5">
-        <div className="relative shrink-0">
-          <NeuralAvatar
-            agentId={agent.id}
-            size={48}
-            animate={agent.online}
-            signals={s.signals}
-            accuracy={s.accuracy}
-            uniqueness={s.uniqueness}
-            impact={s.impactScore}
-          />
-        </div>
-
-        {/* Name + meta — full remaining width */}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold" style={{ color: 'var(--text)' }}>{agent.id}</span>
-            {(() => {
-              const kind = getBenchBadgeKind(s);
-              if (kind === 'benched') return (
-                <span
-                  className="shrink-0 rounded-sm bg-destructive/10 px-1 py-0.5 font-mono text-[8px] font-bold text-destructive"
-                  data-tooltip={`Benched (${s.bench.reason ?? 'auto'}). Excluded from dispatch until recovery.`}
-                >
-                  BENCHED
-                </span>
-              );
-              if (kind === 'struggling') return (
-                <span
-                  className="shrink-0 rounded-sm bg-unverified/10 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
-                  data-tooltip="Struggling: consecutive failures tripped the circuit breaker."
-                >
-                  STRUGGLING
-                </span>
-              );
-              if (kind === 'kept-for-coverage') return (
-                <span
-                  className="shrink-0 rounded-sm border border-unverified/40 bg-unverified/10 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
-                  data-tooltip={`Would bench (${s.bench.reason ?? 'rule'}), but kept as sole provider of a category.`}
-                >
-                  KEPT FOR COVERAGE
-                </span>
-              );
-              return null;
-            })()}
-          </div>
-          <div className="mt-1 flex items-center gap-2 font-inter text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}>
-            <span
-              className={`rounded-sm border border-border/60 px-1.5 py-0.5 font-bold tabular-nums ${weightColor}`}
-              style={{ background: 'color-mix(in oklch, var(--surface) 60%, transparent)', ...weightColorStyle }}
-              data-tooltip={`Dispatch weight ${s.dispatchWeight.toFixed(2)}\nScale 0.3 → 2.0`}
-              data-tooltip-pos="bottom"
-            >
-              {s.dispatchWeight.toFixed(2)} wt
-            </span>
-            <span className="truncate">{s.signals} signals{lastTime ? ` · ${lastTime}` : ''}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Metric bars — neutral inset panel without the extra shadow layer */}
-      <div className="space-y-1.5 rounded-lg border border-border/30 px-2.5 py-2" style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}>
-        <BarRow
-          label="accuracy"
-          value={s.accuracy}
-          fillClass={accBarClass}
-          tooltip={`Accuracy ${pct(s.accuracy)}\nRatio of confirmed findings.\nHigher = more trustworthy.`}
-        />
-        <BarRow
-          label="reliability"
-          value={s.taskCompletionRate ?? 0}
-          fillClass="bg-chart"
-          tooltip={`Reliability ${pct(s.taskCompletionRate ?? 0)}\nTask completion rate — fraction of dispatched tasks that finished without pipeline error or timeout.`}
-        />
-        <BarRow
-          label="unique"
-          value={s.uniqueness}
-          fillClass="bg-unique"
-          tooltip={`Uniqueness ${pct(s.uniqueness)}\nFindings others missed.\nHigher = this agent sees what peers don't.`}
-        />
-        <BarRow
-          label="impact"
-          value={s.impactScore}
-          fillClass="bg-[var(--c8)]"
-          tooltip={`Impact ${pct(s.impactScore)}\nSeverity-weighted findings.\nCritical and high findings count more.`}
-        />
-      </div>
-    </a>
-  );
-}
-
-interface BarRowProps {
-  label: string;
-  value: number;
-  fillClass: string;
+interface StatusChipKind {
+  label: 'healthy' | 'needs skills';
+  dotColor: string;
   tooltip: string;
 }
 
-function BarRow({ label, value, fillClass, tooltip }: BarRowProps) {
-  const v = Number.isFinite(value) ? value : 0;
+function statusChipKind(s: AgentData['scores']): StatusChipKind {
+  if (s.accuracy >= 0.7 && s.bench?.state === 'none') {
+    return {
+      label: 'healthy',
+      dotColor: 'var(--ok)',
+      tooltip: `Accuracy ${Math.round(s.accuracy * 100)}% — above 70% baseline.`,
+    };
+  }
+  return {
+    label: 'needs skills',
+    dotColor: 'var(--warn)',
+    tooltip: s.bench?.state !== 'none'
+      ? `Benched (${s.bench?.reason ?? 'auto'})`
+      : `Accuracy ${Math.round(s.accuracy * 100)}% — below 70% baseline.`,
+  };
+}
+
+/** Horizontal metric bar — reliability / unique / impact */
+function SubBar({ label, value, color, tooltip }: {
+  label: string;
+  value: number;
+  color: string;
+  tooltip: string;
+}) {
+  const v = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
   return (
-    <div className="grid grid-cols-[72px_1fr_38px] items-center gap-2.5">
+    <div
+      className="grid items-center gap-2"
+      style={{ gridTemplateColumns: '56px 1fr 32px' }}
+    >
       <span
-        className="font-mono text-[10px] uppercase tracking-wider"
-        style={{ color: 'var(--text-dim)' }}
+        className="text-[9px]"
+        style={{ color: 'var(--ink-3)', fontFamily: 'Geist, Inter, sans-serif', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
         data-tooltip={tooltip}
       >
         {label}
       </span>
-      <div className="h-2 overflow-hidden rounded-full" style={{ background: 'color-mix(in oklch, var(--surface) 80%, transparent)' }}>
+      <div
+        className="h-1.5 overflow-hidden rounded-full"
+        style={{ background: 'color-mix(in oklch, var(--ink) 8%, transparent)' }}
+      >
         <div
-          className={`h-full rounded-full transition-all ${fillClass}`}
-          style={{ width: `${Math.max(0, Math.min(100, v * 100))}%` }}
+          className="h-full rounded-full transition-all"
+          style={{ width: `${Math.round(v * 100)}%`, background: color }}
         />
       </div>
-      <span className="text-right font-mono text-[11px] font-bold tabular-nums" style={{ color: 'var(--text)' }}>
-        {Math.round(v * 100)}%
+      <span
+        className="text-right tabular-nums"
+        style={{ fontFamily: 'Geist, Inter, sans-serif', fontSize: 10, color: 'var(--ink-3)' }}
+      >
+        {pct(v)}
       </span>
     </div>
+  );
+}
+
+export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBigProps) {
+  const s = agent.scores;
+  const lastTime = agent.lastTask?.timestamp ? timeAgo(agent.lastTask.timestamp) : '';
+  const ac = agentColor(agent.id);
+  const status = statusChipKind(s);
+
+  return (
+    <a
+      href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
+      className="group relative block rounded-lg border border-border p-3 transition-all hover:-translate-y-0.5 hover:border-[color-mix(in_oklch,var(--ink)_30%,transparent)]"
+      style={{ background: 'var(--surface-elev)' }}
+    >
+      {/* Two-column grid: 100px gauge column + flexible meta column */}
+      <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: 12, alignItems: 'start' }}>
+
+        {/* ── Left column ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+          <PolarAccuracyGauge accuracy={s.accuracy} size={90} color={ac} />
+          <SeverityMixStrip counts={severityCounts} />
+          <span
+            style={{
+              fontSize: 9,
+              color: 'var(--ink-3)',
+              fontFamily: 'Geist, Inter, sans-serif',
+              fontVariant: 'small-caps',
+              letterSpacing: '0.04em',
+            }}
+          >
+            severity mix
+          </span>
+        </div>
+
+        {/* ── Right column ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+
+          {/* Name row + avatar + bench chip */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ flexShrink: 0 }}>
+              <NeuralAvatar
+                agentId={agent.id}
+                size={36}
+                animate={agent.online}
+                signals={s.signals}
+                accuracy={s.accuracy}
+                uniqueness={s.uniqueness}
+                impact={s.impactScore}
+              />
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                <span
+                  className="truncate"
+                  style={{
+                    fontFamily: 'Geist, Inter, sans-serif',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: 'var(--ink)',
+                    minWidth: 0,
+                    flex: 1,
+                  }}
+                >
+                  {agent.id}
+                </span>
+                {(() => {
+                  const kind = getBenchBadgeKind(s);
+                  if (kind === 'benched') return (
+                    <span
+                      className="shrink-0 rounded-sm bg-destructive/10 px-1 py-0.5 font-mono text-[8px] font-bold text-destructive"
+                      data-tooltip={`Benched (${s.bench.reason ?? 'auto'}). Excluded from dispatch until recovery.`}
+                    >
+                      BENCHED
+                    </span>
+                  );
+                  if (kind === 'struggling') return (
+                    <span
+                      className="shrink-0 rounded-sm bg-unverified/10 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
+                      data-tooltip="Struggling: consecutive failures tripped the circuit breaker."
+                    >
+                      STRUGGLING
+                    </span>
+                  );
+                  if (kind === 'kept-for-coverage') return (
+                    <span
+                      className="shrink-0 rounded-sm border border-unverified/40 bg-unverified/10 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
+                      data-tooltip={`Would bench (${s.bench.reason ?? 'rule'}), but kept as sole provider of a category.`}
+                    >
+                      KEPT
+                    </span>
+                  );
+                  return null;
+                })()}
+              </div>
+              {/* Status chip — healthy / needs skills */}
+              <div
+                style={{
+                  marginTop: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontFamily: 'Geist, Inter, sans-serif',
+                  fontSize: 10,
+                  color: 'var(--ink-3)',
+                }}
+              >
+                <span
+                  className="inline-flex items-center gap-1 rounded-sm border border-border/60 px-1.5 py-0.5"
+                  style={{
+                    background: 'color-mix(in oklch, var(--surface) 60%, transparent)',
+                    color: 'var(--ink-3)',
+                    fontVariant: 'small-caps',
+                    letterSpacing: '0.04em',
+                  }}
+                  data-tooltip={status.tooltip}
+                  data-tooltip-pos="bottom"
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: '50%',
+                      background: status.dotColor,
+                      flexShrink: 0,
+                    }}
+                  />
+                  {status.label}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Metric bars */}
+          <div
+            className="rounded-md border border-border/30 px-2 py-2 space-y-1.5"
+            style={{ background: 'color-mix(in oklch, var(--surface) 40%, transparent)' }}
+          >
+            <SubBar
+              label="reliability"
+              value={s.taskCompletionRate ?? 0}
+              color={ac}
+              tooltip={`Reliability ${pct(s.taskCompletionRate ?? 0)}\nTask completion rate.`}
+            />
+            <SubBar
+              label="unique"
+              value={s.uniqueness}
+              color={ac}
+              tooltip={`Uniqueness ${pct(s.uniqueness)}\nFindings others missed.`}
+            />
+            <SubBar
+              label="impact"
+              value={s.impactScore}
+              color={ac}
+              tooltip={`Impact ${pct(s.impactScore)}\nSeverity-weighted findings.`}
+            />
+          </div>
+
+          {/* Sparkline + footer */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {trendPoints && trendPoints.length > 0 && (
+              <AreaSparkline points={trendPoints} width={80} height={20} color={ac} />
+            )}
+            <div
+              style={{
+                fontFamily: 'Geist, Inter, sans-serif',
+                fontSize: 10,
+                color: 'var(--ink-3)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+            >
+              <span className="tabular-nums">{s.signals} signals</span>
+              {lastTime && (
+                <>
+                  <span style={{ opacity: 0.5 }}>·</span>
+                  <span>{lastTime}</span>
+                </>
+              )}
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </a>
   );
 }

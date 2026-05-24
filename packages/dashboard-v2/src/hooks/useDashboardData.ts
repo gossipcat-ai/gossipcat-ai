@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
-import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile } from '@/lib/types';
+import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile, FleetTrendResponse } from '@/lib/types';
 
 /**
  * Polling interval for /api/agents and friends. Backs the "Team page updates
@@ -20,6 +20,7 @@ export interface DashboardState {
   tasks: TasksData | null;
   consensus: ConsensusData | null;
   consensusReports: ConsensusReportsData | null;
+  fleetTrend: FleetTrendResponse | null;
   /**
    * Claude Code auto-memory (`~/.claude/projects/-<cwd>/memory/`). Flat list,
    * no 4-folder taxonomy. Separate from gossipMemories — callers MUST NOT merge
@@ -44,6 +45,7 @@ export interface DashboardState {
 export function useDashboardData() {
   const [state, setState] = useState<DashboardState>({
     overview: null, agents: null, tasks: null, consensus: null, consensusReports: null,
+    fleetTrend: null,
     nativeMemories: null, gossipMemories: null, memories: null,
     loading: true, error: null,
   });
@@ -57,7 +59,7 @@ export function useDashboardData() {
     if (inFlight.current) return;
     inFlight.current = true;
     try {
-      const [overview, agents, tasks, consensus, consensusReports, nativeResp, gossipResp] = await Promise.all([
+      const [overview, agents, tasks, consensus, consensusReports, fleetTrend, nativeResp, gossipResp] = await Promise.all([
         api<OverviewData>('overview'),
         api<AgentData[]>('agents'),
         api<TasksData>('tasks?limit=2000'),
@@ -65,7 +67,11 @@ export function useDashboardData() {
         // (confirmedTotal/disputedTotal/unverifiedTotal in App.tsx:383-385) cover
         // the full round history instead of the first 10 runs.
         api<ConsensusData>('consensus?pageSize=500'),
-        api<ConsensusReportsData>('consensus-reports?page=1&pageSize=5').catch(() => ({ reports: [] })),
+        // pageSize=200 (was 5) — Step 6 useSeverityCounts needs recent reports
+        // to derive per-agent severity distributions for the card gauge/strip.
+        api<ConsensusReportsData>('consensus-reports?page=1&pageSize=200').catch(() => ({ reports: [] })),
+        // Fleet trend — 7-day window for AreaSparkline in AgentCardBig.
+        api<FleetTrendResponse>('fleet-trend?days=7').catch(() => ({ days: 7, points: [] })),
         // Native + gossip stores are fetched in parallel and kept SEPARATE. The
         // taxonomy/status split only applies to gossip memories. Native memories
         // render flat. Spec: docs/specs/2026-04-15-session-save-native-vs-gossip-memory.md
@@ -85,6 +91,7 @@ export function useDashboardData() {
 
       setState({
         overview, agents, tasks, consensus, consensusReports,
+        fleetTrend,
         nativeMemories,
         gossipMemories,
         memories: nativeMemories, // deprecated legacy alias
