@@ -24,7 +24,7 @@ export function ConsensusFlowPage({ consensusId }: ConsensusFlowPageProps) {
           <span aria-hidden="true">›</span>
           <span style={{ color: 'var(--ink)' }}>{consensusId}</span>
         </nav>
-        <h1 className="h-section">Consensus flow</h1>
+        <h1 className="h-route">Consensus flow</h1>
         <p
           className="mt-0.5 font-mono text-[10px]"
           style={{ color: 'var(--ink-3)' }}

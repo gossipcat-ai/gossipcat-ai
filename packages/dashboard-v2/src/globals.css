@@ -191,6 +191,20 @@
    Replaces the legacy `font-mono text-[11px] font-bold uppercase tracking-widest` pattern.
    Step 2 of the application checklist rolls this out across every existing header.
    This PR only applies it to TeamHero as a smoke test. */
+/* DESIGN.md route title — Fraunces serif for every page H1 (and H2 used as route title).
+   Use .h-route--lg modifier for the Overview editorial 44px variant. */
+.h-route {
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
+  font-weight: 500;
+  font-size: 32px;
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+.h-route--lg {
+  font-size: 44px;
+}
+
 .h-section {
   /* Geist literal first (per DESIGN.md), then fall through the --font-sans
      chain so the class still renders if Geist asset load fails. */
