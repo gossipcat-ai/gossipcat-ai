@@ -27,6 +27,10 @@ interface Position {
   y: number;
   /** 'center' = focused agent, 'peer' = peer of focused, 'fleet' = resting orbit, 'hidden' = non-peer when focused. */
   role: 'center' | 'peer' | 'fleet' | 'hidden';
+  /** Angle from center in radians (-π/2 = top, 0 = right, π/2 = bottom, π = left).
+   *  Used by the renderer to position the agent's name label radially OUTWARD
+   *  from the avatar so labels never collide with avatars at smaller radii. */
+  angle?: number;
 }
 
 /**
@@ -36,33 +40,44 @@ interface Position {
  */
 function restingLayout(agents: AgentData[], width: number, height: number): Map<string, Position> {
   const center = { x: width / 2, y: height / 2 };
-  // maxRadius = 100% accuracy band (outermost ring). innerCushion keeps the 100% ring
-  // off the canvas edge.
-  const innerCushion = 40;
+  // Tighter cushion (was 40) lets the chart fill more of the available canvas.
+  const innerCushion = 24;
   const maxRadius = Math.max(80, Math.min(width, height) / 2 - innerCushion);
 
   const out = new Map<string, Position>();
   if (agents.length === 0) return out;
 
-  // Group agents by accuracy band so that agents with similar accuracy don't pile on top
-  // of each other. Use alphabetical order within a band as a stable angular offset.
-  const sorted = [...agents].sort((a, b) => a.id.localeCompare(b.id));
+  // Sort by accuracy DESCENDING so the alphabetical-around-perimeter degenerate
+  // case is replaced by a smarter walk: agents at similar radii get distributed
+  // around the chart, not clumped at the same angle. Stable secondary sort by id
+  // keeps the layout deterministic.
+  const sorted = [...agents].sort((a, b) => {
+    const da = b.scores?.accuracy ?? 0;
+    const dc = a.scores?.accuracy ?? 0;
+    if (da !== dc) return dc - da;
+    return a.id.localeCompare(b.id);
+  });
   const N = sorted.length;
 
   for (let i = 0; i < N; i++) {
     const agent = sorted[i];
     // 0 = at center (perfect accuracy), 1 = at maxRadius (zero accuracy).
-    // Floor at 0.1 of maxRadius so 100%-accuracy agents don't stack on the center bloom.
+    // Inner floor raised from 0.1 → 0.22 of maxRadius so the highest-accuracy
+    // agent (e.g. opus at 76%) doesn't visually merge with the center bloom.
     const acc = clamp(agent.scores?.accuracy ?? 0, 0, 1);
-    const radius = Math.max(maxRadius * 0.1, (1 - acc) * maxRadius);
+    const radius = Math.max(maxRadius * 0.22, (1 - acc) * maxRadius);
 
-    // Angle: alphabetical around the perimeter, top start, clockwise.
+    // Angle: evenly distribute around the perimeter, top start, clockwise.
+    // Walking the sorted-by-accuracy array gives a natural visual spread —
+    // adjacent ranks land at adjacent angles, not adjacent radii, so labels
+    // and avatars never share a column.
     const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
 
     out.set(agent.id, {
       x: center.x + radius * Math.cos(angle),
       y: center.y + radius * Math.sin(angle),
       role: 'fleet',
+      angle,
     });
   }
   return out;
@@ -629,7 +644,23 @@ function HubSpokeGraph({
         const isPeer = pos.role === 'peer';
         // Resting: full opacity. Center: full + glow ring. Peer: full. Hidden: 0.
         const opacity = isHidden ? 0 : 1;
-        const labelColor = isCenter ? 'var(--text)' : 'var(--stage-text-dim)';
+        const labelColor = isCenter ? '#F2EDE3' : 'var(--stage-text-dim)';
+        // Position label RADIALLY OUTWARD from the avatar based on the layout
+        // angle. This prevents the universal "label below avatar" collision
+        // where two stacked agents have the upper agent's label landing on
+        // top of the lower agent. Top-half agents (angle in [-π, 0]) get the
+        // label above; bottom-half get it below; left/right shift inline.
+        const angle = pos.angle ?? Math.PI / 2; // default: below (no angle = center)
+        const labelDist = size / 2 + 14; // gap between avatar edge and label baseline
+        const labelDx = Math.cos(angle) * labelDist;
+        const labelDy = Math.sin(angle) * labelDist;
+        // Anchor the label so its inner edge (toward the center) lines up with
+        // the avatar — horizontal labels read left-or-right of avatar; vertical
+        // labels (top/bottom) stay center-anchored.
+        const labelAnchor: 'left' | 'right' | 'center' =
+          Math.abs(Math.cos(angle)) > 0.7
+            ? Math.cos(angle) > 0 ? 'left' : 'right'
+            : 'center';
         return (
           <button
             key={a.id}
@@ -664,12 +695,20 @@ function HubSpokeGraph({
               />
             </div>
             <div
-              className="mt-1 font-mono text-[10px] font-bold uppercase tracking-wider"
+              className="absolute font-mono text-[10px] font-bold uppercase tracking-wider"
               style={{
+                left: '50%',
+                top: '50%',
+                transform: `translate(calc(-50% + ${labelDx}px), calc(-50% + ${labelDy}px))${
+                  labelAnchor === 'left' ? ' translateX(calc(50% + 4px))'
+                  : labelAnchor === 'right' ? ' translateX(calc(-50% - 4px))'
+                  : ''
+                }`,
                 color: labelColor,
-                textAlign: 'center',
+                textAlign: labelAnchor === 'right' ? 'right' : labelAnchor === 'left' ? 'left' : 'center',
                 whiteSpace: 'nowrap',
-                transition: 'color 200ms cubic-bezier(0.4,0,0.2,1)',
+                pointerEvents: 'none',
+                transition: 'color 200ms cubic-bezier(0.4,0,0.2,1), transform 320ms cubic-bezier(0.4,0,0.2,1)',
               }}
             >
               {a.id}
