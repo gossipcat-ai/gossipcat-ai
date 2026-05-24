@@ -694,7 +694,7 @@ function HubSpokeGraph({
             pointerEvents: 'none',
           }}
         >
-          closer to center = higher accuracy · spoke color = agent identity
+          closer to center = higher accuracy
         </div>
       )}
 
