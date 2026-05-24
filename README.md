@@ -29,6 +29,26 @@
 
 <br/>
 
+<p align="center">
+  <a href="#reading-the-dashboard">
+    <img src="https://raw.githubusercontent.com/gossipcat-ai/gossipcat-ai/master/packages/dashboard-v2/public/assets/dashboard-overview.png" alt="Gossipcat dashboard — live fleet view with per-agent vortexes, accuracy rings, signal volume, and recent hallucination catches" width="900" />
+  </p>
+  <p align="center">
+    <em>Live dashboard at <code>http://localhost:63007/dashboard</code> — fleet vortex, signal stream, skill graduation grid, and consensus flow, all in real time.</em>
+  </p>
+</p>
+
+<p align="center">
+  <a href="#reading-the-dashboard">
+    <img src="https://raw.githubusercontent.com/gossipcat-ai/gossipcat-ai/master/packages/dashboard-v2/public/assets/dashboard-team.png" alt="Gossipcat Team page — per-agent accuracy, weight, signals, hallucinations, and last task" width="900" />
+  </p>
+  <p align="center">
+    <em>Per-agent leaderboard — accuracy, uniqueness, impact, hallucinations caught, and dispatch weight. Updated after every consensus round.</em>
+  </p>
+</p>
+
+<br/>
+
 > **The single-reviewer failure mode:** a solo AI reviewer ships hallucinated bugs as critical findings **5–10% of the time** in our internal usage. Gossipcat's cross-review drops that to **under 1%**. That delta is what the whole system exists to produce.
 <!-- TODO: link public benchmark -->
 
@@ -607,6 +627,14 @@ Concrete recipes for the most common workflows. Each one shows what to type, wha
 ## Reading the dashboard
 
 The dashboard at `http://localhost:<port>/dashboard` is the visual layer over everything gossipcat knows. Open it once with the auth key from `gossip_status`, leave the tab open while you work. Updates push live via WebSocket.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/gossipcat-ai/gossipcat-ai/master/packages/dashboard-v2/public/assets/dashboard-skills.png" alt="Skill graduation grid — per-skill effectiveness curve, 7d window, current/threshold value, and ±pp delta for graduated skills" width="900" />
+</p>
+<p align="center">
+  <em>Skill graduation grid — each card is one (skill × agent) pair: post-bind effectiveness curve over a 7-day window with current value vs threshold and ±pp drift on graduated skills.</em>
+</p>
+
 
 | Panel | What it shows | When to look at it |
 |---|---|---|
