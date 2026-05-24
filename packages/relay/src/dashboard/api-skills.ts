@@ -65,6 +65,7 @@ const AGENT_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 /** Curve resolution. Spec-default 10 windows; held in a constant for clarity. */
 const NUM_BUCKETS = 10;
+const WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7d effectiveness window
 /** Fallback threshold when frontmatter has no `passed_baseline_rate`. */
 const DEFAULT_THRESHOLD = 0.7;
 /** Cache TTL — short enough to stay live during a session, long enough to
@@ -230,10 +231,11 @@ function deriveEffectiveness(
       const boundAtIso = fm?.bound_at ?? slot.boundAt;
       const boundAtMs = new Date(boundAtIso).getTime();
       if (!Number.isFinite(boundAtMs) || boundAtMs <= 0) continue;
-      // Bucket span: divide [boundAt, now] into NUM_BUCKETS windows. When the
-      // skill was just bound (span < NUM_BUCKETS ms), clamp to a 1ms-per-bucket
-      // floor so the math doesn't degenerate. The curve will just be empty.
-      const totalSpan = Math.max(nowMs - boundAtMs, NUM_BUCKETS);
+      // Bucket span: cap to a recent 7d window so dense recent activity fills
+      // all buckets instead of clustering into 2-3 of N. Skills bound long ago
+      // with no recent signals collapse to empty buckets (threshold-only render).
+      const windowStartMs = Math.max(boundAtMs, nowMs - WINDOW_MS);
+      const totalSpan = Math.max(nowMs - windowStartMs, NUM_BUCKETS);
       const bucketMs = totalSpan / NUM_BUCKETS;
       const events = signalIdx.byAgentSkill.get(agentId)?.get(normalizeSkillName(slot.skill)) ?? [];
       const buckets: Array<{ c: number; h: number }> = Array.from(
@@ -242,8 +244,8 @@ function deriveEffectiveness(
       );
       let n = 0;
       for (const ev of events) {
-        if (ev.ts < boundAtMs) continue;
-        const rel = ev.ts - boundAtMs;
+        if (ev.ts < windowStartMs) continue;
+        const rel = ev.ts - windowStartMs;
         let i = Math.floor(rel / bucketMs);
         if (i < 0) i = 0;
         if (i >= NUM_BUCKETS) i = NUM_BUCKETS - 1;
@@ -253,7 +255,7 @@ function deriveEffectiveness(
       }
       const curve: SkillCurvePoint[] = buckets.map((b, i) => {
         const total = b.c + b.h;
-        const t = boundAtMs + (i + 1) * bucketMs;
+        const t = windowStartMs + (i + 1) * bucketMs;
         return { t, value: total > 0 ? b.c / total : null };
       });
       const threshold = fm?.passed_baseline_rate ?? DEFAULT_THRESHOLD;

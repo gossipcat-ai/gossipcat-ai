@@ -49,8 +49,7 @@ export function TopBar() {
       </div>
       <div className="flex items-center gap-2">
         <div
-          role="button"
-          tabIndex={-1}
+          aria-hidden="true"
           title="Search — coming soon"
           style={{
             display: 'inline-flex',

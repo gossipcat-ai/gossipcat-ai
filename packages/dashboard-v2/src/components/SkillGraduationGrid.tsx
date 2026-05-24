@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import type { SkillsApiResponse, SkillEffectivenessEntry, SkillStatus } from '@/lib/types';
 import { SkillEffectivenessSparkline } from './SkillEffectivenessSparkline';
 import { href } from '@/lib/router';
+import { agentColor } from '@/lib/utils';
 
 /**
  * DESIGN.md Step 9.5 — SkillGraduationGrid as a flat card grid.
@@ -74,8 +75,8 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
         <div className="flex items-baseline gap-2">
           <h3 className="h-section">Skill Graduation</h3>
           <span
-            className="font-mono text-[11px] tabular-nums"
-            style={{ color: 'var(--accent)' }}
+            className="font-mono text-[11px] tabular-nums font-bold"
+            style={{ color: 'var(--ink)' }}
           >
             {skillCount}
           </span>
@@ -214,6 +215,12 @@ function SkillCard({ entry }: { entry: SkillEffectivenessEntry }) {
   const verdict = isGraduationVerdict(entry.status) ? entry.status : null;
   const color = verdict ? VERDICT_COLOR[verdict] : UNKNOWN_COLOR;
   const label = verdict ? VERDICT_LABEL[verdict] : (entry.status ?? 'unknown');
+  // Delta only meaningful for skills that have actually graduated — for
+  // pending/failed/etc. the trend is noise, not progress.
+  const deltaPp = verdict === 'passed' ? computeDeltaPp(entry.curve) : null;
+  const currentValue = latestValue(entry.curve);
+  const currentStr = currentValue == null ? '—' : currentValue.toFixed(2);
+  const thresholdStr = entry.threshold.toFixed(2);
 
   return (
     <li
@@ -221,9 +228,33 @@ function SkillCard({ entry }: { entry: SkillEffectivenessEntry }) {
       style={{ background: 'var(--surface)' }}
       title={`${entry.agentId} · ${entry.skill} · ${label} · N=${entry.n}`}
     >
-      {/* Top: skill name */}
-      <div className="truncate text-[13px]" style={{ color: 'var(--ink)' }}>
-        {entry.skill}
+      {/* Top: skill name + 7d chip; agent identity below */}
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="truncate text-[13px]" style={{ color: 'var(--ink)' }}>
+            {entry.skill}
+          </div>
+          <span
+            className="shrink-0 rounded-sm border border-border px-1 font-mono text-[9px] tabular-nums"
+            style={{ color: 'var(--ink-3)' }}
+            title="7-day effectiveness window"
+          >
+            7d
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+            style={{ backgroundColor: agentColor(entry.agentId) }}
+          />
+          <span
+            className="truncate font-mono text-[10px]"
+            style={{ color: 'var(--ink-3)' }}
+          >
+            {entry.agentId}
+          </span>
+        </div>
       </div>
       {/* Middle: sparkline */}
       <SkillEffectivenessSparkline
@@ -231,7 +262,7 @@ function SkillCard({ entry }: { entry: SkillEffectivenessEntry }) {
         threshold={entry.threshold}
         stroke={color}
       />
-      {/* Bottom: verdict label + N */}
+      {/* Bottom: verdict label + delta-pp + N */}
       <div className="flex items-baseline justify-between gap-2">
         <span
           className="truncate text-[10px]"
@@ -243,15 +274,59 @@ function SkillCard({ entry }: { entry: SkillEffectivenessEntry }) {
         >
           {label}
         </span>
-        <span
-          className="font-mono text-[10px] tabular-nums"
-          style={{ color: 'var(--ink-3)' }}
-        >
-          N={entry.n}
-        </span>
+        <div className="flex items-baseline gap-2">
+          {deltaPp !== null && (
+            <span
+              className="font-mono text-[10px] tabular-nums"
+              style={{
+                color:
+                  deltaPp > 0 ? 'var(--ok)' : deltaPp < 0 ? 'var(--bad)' : 'var(--ink-3)',
+              }}
+              title={`Trend ${deltaPp > 0 ? 'up' : deltaPp < 0 ? 'down' : 'flat'} ${Math.abs(deltaPp)} percentage points across the 7d window`}
+              aria-label={`Trend ${deltaPp > 0 ? 'up' : deltaPp < 0 ? 'down' : 'flat'} ${Math.abs(deltaPp)} percentage points`}
+            >
+              {deltaPp > 0 ? '+' : ''}
+              {deltaPp}pp
+            </span>
+          )}
+          <span
+            className="font-mono text-[10px] tabular-nums"
+            style={{ color: 'var(--ink)' }}
+            title={`current ${currentStr} · threshold ${thresholdStr}`}
+          >
+            {currentStr}
+            <span style={{ color: 'var(--ink-3)' }}> / {thresholdStr}</span>
+          </span>
+          <span
+            className="font-mono text-[10px] tabular-nums"
+            style={{ color: 'var(--ink-3)' }}
+          >
+            N={entry.n}
+          </span>
+        </div>
       </div>
     </li>
   );
+}
+
+/** First→last non-null bucket delta, in percentage points (integer).
+ *  Returns null if fewer than 4 non-null buckets — with 2-3 sparse buckets
+ *  the delta swings to ±100pp from single signals, which is misleading
+ *  (consensus eee614bd-31ba4209 finding f17). */
+const DELTA_MIN_BUCKETS = 4;
+function computeDeltaPp(curve: SkillEffectivenessEntry['curve']): number | null {
+  const defined = curve.filter((p) => p.value != null && Number.isFinite(p.value)) as Array<{ value: number }>;
+  if (defined.length < DELTA_MIN_BUCKETS) return null;
+  return Math.round((defined[defined.length - 1].value - defined[0].value) * 100);
+}
+
+/** Most recent non-null bucket value, or null if all buckets are empty. */
+function latestValue(curve: SkillEffectivenessEntry['curve']): number | null {
+  for (let i = curve.length - 1; i >= 0; i--) {
+    const v = curve[i].value;
+    if (v != null && Number.isFinite(v)) return v;
+  }
+  return null;
 }
 
 /* ── states ────────────────────────────────────────────────────────────── */

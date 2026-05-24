@@ -89,7 +89,6 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
 
   const metricBars = [
     { label: 'accuracy', value: s.accuracy, fill: s.accuracy >= 0.7 ? 'bg-confirmed' : s.accuracy >= 0.4 ? 'bg-unverified' : 'bg-disputed' },
-    { label: 'reliability', value: s.taskCompletionRate ?? 0, fill: 'bg-chart', tooltip: 'Task completion rate — fraction of dispatched tasks that finished without pipeline error or timeout' },
     { label: 'unique', value: s.uniqueness, fill: 'bg-unique' },
     { label: 'impact', value: s.impactScore, fill: 'bg-[var(--c8)]' },
   ];
@@ -285,7 +284,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           <div className="rounded-lg border border-border/40 p-4 shadow-[inset_0_1px_3px_rgba(0,0,0,0.35)]" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
             <div className="space-y-2.5">
               {metricBars.map(m => (
-                <div key={m.label} className="grid grid-cols-[72px_1fr_44px] items-center gap-3" {...(m.tooltip ? { 'data-tooltip': m.tooltip } : {})}>
+                <div key={m.label} className="grid grid-cols-[72px_1fr_44px] items-center gap-3">
                   <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>{m.label}</span>
                   <div className="h-1.5 overflow-hidden rounded-full" style={{ background: 'color-mix(in oklch, var(--surface) 80%, transparent)' }}>
                     <div className={`h-full rounded-full transition-all ${m.fill}`} style={{ width: `${Math.max(0, Math.min(100, m.value * 100))}%` }} />

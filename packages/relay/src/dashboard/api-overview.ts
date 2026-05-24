@@ -140,13 +140,23 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
   const now = Date.now();
   const hourMs = 60 * 60 * 1000;
 
-  // Single pass over task-graph.jsonl for active agents, task stats, and hourly buckets.
+  // Single pass over task-graph.jsonl (+ rotated .1) for active agents,
+  // task stats, and hourly buckets. Rotation puts pre-rotation task.created in
+  // .jsonl.1; reading only the primary makes long-lived tasks orphan-completion
+  // and underreports taskCompletionRate / reliability bars.
   const graphPath = join(projectRoot, '.gossip', 'task-graph.jsonl');
-  if (existsSync(graphPath)) {
+  const archivePath = graphPath + '.1';
+  if (existsSync(graphPath) || existsSync(archivePath)) {
     try {
       const created = new Map<string, { agentId: string; timestamp: string }>();
       const finished = new Set<string>();
-      const lines = readFileSync(graphPath, 'utf-8').trim().split('\n').filter(Boolean);
+      const lines: string[] = [];
+      if (existsSync(archivePath)) {
+        lines.push(...readFileSync(archivePath, 'utf-8').split('\n').filter(Boolean));
+      }
+      if (existsSync(graphPath)) {
+        lines.push(...readFileSync(graphPath, 'utf-8').split('\n').filter(Boolean));
+      }
       for (const line of lines) {
         try {
           const ev = JSON.parse(line);
