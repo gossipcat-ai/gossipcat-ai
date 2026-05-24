@@ -71,6 +71,56 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.min(Math.max(n, lo), hi);
 }
 
+/** Tiny seeded PRNG so the starfield is stable across renders.
+ *  Mulberry32 — small, deterministic, no deps. */
+function seededRandom(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+interface StarfieldProps {
+  width: number;
+  height: number;
+}
+
+/** Subtle observatory-style starfield rendered behind the rings.
+ *  ~40 stars at low opacity, mix of 1px and 2px for depth. Stable seed
+ *  so positions don't shift between renders. Pure decoration. */
+function Starfield({ width, height }: StarfieldProps) {
+  const rand = seededRandom(7311);
+  const stars = Array.from({ length: 42 }, () => ({
+    x: rand() * width,
+    y: rand() * height,
+    r: rand() < 0.85 ? 0.7 : 1.4,
+    o: 0.12 + rand() * 0.18,
+  }));
+  return (
+    <svg
+      width="100%"
+      height={height}
+      style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+      aria-hidden
+    >
+      {stars.map((s, i) => (
+        <circle
+          key={i}
+          cx={s.x}
+          cy={s.y}
+          r={s.r}
+          fill="var(--ink-3)"
+          opacity={s.o}
+        />
+      ))}
+    </svg>
+  );
+}
+
 interface RingBandsProps {
   width: number;
   height: number;
@@ -312,7 +362,9 @@ function HubSpokeGraph({
       style={{ height, background: 'var(--stage-bg)', borderColor: 'var(--border)' }}
       onClick={() => onSelectAgent(null)}
     >
-      {/* Accuracy rings — rendered first (behind everything else).
+      {/* Starfield: subtle observatory backdrop, behind everything. */}
+      <Starfield width={width} height={height} />
+      {/* Accuracy rings — rendered second (behind spokes/avatars, above stars).
           Hide labels in focus mode: positions are then driven by peer-
           distance, not accuracy, so the accuracy ticks would mislead. */}
       <RingBands width={width} height={height} hideLabels={!!selectedAgentId} />
