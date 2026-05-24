@@ -54,35 +54,40 @@ const SIGNAL_LABELS: Record<string, string> = {
   boundary_escape: 'Boundary escape',
 };
 
-const SIGNAL_CLS: Record<string, string> = {
-  agreement: 'text-confirmed',
-  consensus_verified: 'text-confirmed',
-  impl_test_pass: 'text-confirmed',
-  impl_typecheck_pass: 'text-confirmed',
-  impl_peer_approved: 'text-confirmed',
-  disagreement: 'text-disputed',
-  hallucination_caught: 'text-disputed',
-  impl_test_fail: 'text-disputed',
-  impl_typecheck_fail: 'text-disputed',
-  impl_peer_rejected: 'text-disputed',
-  boundary_escape: 'text-disputed',
-  unique_confirmed: 'text-unique',
-  new_finding: 'text-unique',
-  unique_unconfirmed: 'text-unique/70',
-  unverified: 'text-unverified',
+// DESIGN.md Step 8 — semantic verdict color per signal type. Applied as inline
+// color on a .h-section span (small-caps Geist) so verdict text reads as a
+// section-label, not all-caps mono. Confirmed = --ok green, disputed/
+// hallucination = --bad rose, unique/new_finding/unverified = --info teal.
+// Operational pass/fail signals (impl_test_*, impl_typecheck_*) map onto the
+// same ok/bad axis. boundary_escape = --bad (security violation).
+const VERDICT_COLOR: Record<string, string> = {
+  agreement: 'var(--ok)',
+  consensus_verified: 'var(--ok)',
+  impl_test_pass: 'var(--ok)',
+  impl_typecheck_pass: 'var(--ok)',
+  impl_peer_approved: 'var(--ok)',
+  disagreement: 'var(--bad)',
+  hallucination_caught: 'var(--bad)',
+  impl_test_fail: 'var(--bad)',
+  impl_typecheck_fail: 'var(--bad)',
+  impl_peer_rejected: 'var(--bad)',
+  boundary_escape: 'var(--bad)',
+  unique_confirmed: 'var(--info)',
+  unique_unconfirmed: 'var(--info)',
+  new_finding: 'var(--info)',
+  unverified: 'var(--info)',
 };
 
-// Global severity palette — matches FindingsMetrics SEVERITY_CLS so a
-// "high" chip reads the same orange everywhere on the dashboard.
-// Note: 'low' uses inline styles (var(--text-dim) + var(--surface-sunk)) to
-// stay theme-switchable under Tailwind v4 @theme build-time resolution.
-const SEVERITY_BADGE: Record<string, string> = {
-  critical: 'text-red-400 bg-red-500/10',
-  high: 'text-severity-high bg-severity-high/10',
-  medium: 'text-yellow-400 bg-yellow-500/10',
-  low: '',
+// DESIGN.md Step 8 — severity-tick semantic palette. Single color per severity
+// (no opacity ramp) so the leftmost 6px bar reads severity at a glance:
+//   critical → --bad rose · high → --warn amber · medium → --info teal ·
+//   low → --ink-3 neutral. No --accent leaks; no Tailwind raw colors.
+const SEVERITY_TICK_COLOR: Record<string, string> = {
+  critical: 'var(--bad)',
+  high: 'var(--warn)',
+  medium: 'var(--info)',
+  low: 'var(--ink-3)',
 };
-const SEVERITY_BADGE_LOW_STYLE = { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' };
 
 const PAGE_SIZE = 100;
 
@@ -278,63 +283,78 @@ export function SignalsPage() {
 
         <section className="min-w-0 overflow-hidden rounded-md border border-border/60" style={{ background: 'color-mix(in oklch, var(--surface-elev) 70%, transparent)' }}>
           {error && (
-            <div className="border-b border-border/60 bg-disputed/10 px-3 py-2 font-mono text-[10px] text-disputed">
+            <div
+              className="border-b border-border/60 px-3 py-2 font-mono text-[10px]"
+              style={{
+                color: 'var(--bad)',
+                background: 'color-mix(in oklch, var(--bad) 10%, transparent)',
+              }}
+            >
               {error}
             </div>
           )}
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse font-mono text-[10px]">
+            <table className="w-full border-collapse text-[10px]">
               <thead>
-                <tr className="border-b border-border/60 text-left" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Time</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Agent</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Signal</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="Severity of the associated finding (critical / high / medium / low)">Sev</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Evidence</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="The other agent in this signal — e.g. the peer who agreed or disputed">Counterpart</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest" data-tooltip="Finding ID — click row to open finding detail">Finding</th>
-                  <th className="px-2 py-1.5 font-semibold uppercase tracking-widest">Consensus</th>
+                <tr className="h-section border-b border-border/60 text-left" style={{ color: 'color-mix(in oklch, var(--ink-2) 80%, transparent)' }}>
+                  {/* Leftmost severity-tick column — 6px bar, no header label */}
+                  <th className="w-[6px] p-0" aria-label="severity" />
+                  <th className="px-2 py-1.5">time</th>
+                  <th className="px-2 py-1.5">agent</th>
+                  <th className="px-2 py-1.5">verdict</th>
+                  <th className="px-2 py-1.5">finding</th>
+                  <th className="px-2 py-1.5" data-tooltip="The other agent in this signal — e.g. the peer who agreed or disputed">counterpart</th>
+                  <th className="px-2 py-1.5" data-tooltip="Finding ID — click row to open finding detail">id</th>
+                  <th className="px-2 py-1.5">consensus</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && !loading && (
                   <tr>
-                    <td colSpan={8} className="px-2 py-8 text-center" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
+                    <td colSpan={8} className="px-2 py-8 text-center font-mono" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                       no signals match these filters
                     </td>
                   </tr>
                 )}
                 {rows.map((r, i) => {
                   const canOpen = !!(r.consensusId && r.findingId);
+                  const tickColor = r.severity ? SEVERITY_TICK_COLOR[r.severity] : 'transparent';
+                  const verdictColor = VERDICT_COLOR[r.signal] ?? 'var(--ink-2)';
+                  const verdictLabel = SIGNAL_LABELS[r.signal] ?? r.signal;
                   return (
                     <tr
                       key={`${r.timestamp}-${r.agentId}-${i}`}
-                      className={`border-b border-border/30 ${canOpen ? 'cursor-pointer hover:bg-accent/10' : ''}`}
+                      className={`border-b border-border/30 ${canOpen ? 'cursor-pointer transition-colors' : ''}`}
+                      style={canOpen ? { ['--row-hover-bg' as string]: 'color-mix(in oklch, var(--surface-sunk) 40%, transparent)' } : undefined}
+                      onMouseEnter={(e) => {
+                        if (canOpen) e.currentTarget.style.background = 'color-mix(in oklch, var(--surface-sunk) 40%, transparent)';
+                      }}
+                      onMouseLeave={(e) => {
+                        if (canOpen) e.currentTarget.style.background = '';
+                      }}
                       onClick={() => canOpen && openDrawer(r.consensusId, r.findingId)}
                     >
-                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }} title={r.timestamp}>{timeAgo(r.timestamp)}</td>
-                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'var(--text)' }}>{r.agentId}</td>
-                      <td className={`whitespace-nowrap px-2 py-1 ${SIGNAL_CLS[r.signal] ?? ''}`} style={SIGNAL_CLS[r.signal] ? undefined : { color: 'var(--text)' }}>{SIGNAL_LABELS[r.signal] ?? r.signal}</td>
+                      {/* Severity tick — full-bleed left bar, semantic color */}
+                      <td
+                        className="p-0"
+                        style={{ background: tickColor, width: 6 }}
+                        title={r.severity ?? 'no severity'}
+                      />
+                      <td className="whitespace-nowrap px-2 py-1 font-mono tabular-nums" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }} title={r.timestamp}>{timeAgo(r.timestamp)}</td>
+                      <td className="whitespace-nowrap px-2 py-1 font-mono" style={{ color: 'var(--text)' }}>{r.agentId}</td>
+                      {/* Verdict — small-caps Geist via .h-section, color is semantic */}
                       <td className="whitespace-nowrap px-2 py-1">
-                        {r.severity ? (
-                          <span
-                            className={`rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${SEVERITY_BADGE[r.severity] ?? ''}`}
-                            style={r.severity === 'low' ? SEVERITY_BADGE_LOW_STYLE : (!SEVERITY_BADGE[r.severity] ? { background: 'var(--surface-sunk)' } : undefined)}
-                          >
-                            {r.severity}
-                          </span>
-                        ) : (
-                          <span style={{ color: 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}>—</span>
-                        )}
+                        <span className="h-section" style={{ color: verdictColor, fontSize: 11 }}>{verdictLabel}</span>
                       </td>
-                      <td className="max-w-[300px] truncate px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }} title={r.evidence}>
+                      {/* Finding/evidence — JetBrains Mono code-inline treatment */}
+                      <td className="max-w-[320px] truncate px-2 py-1" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.45, color: 'var(--text)' }} title={r.evidence}>
                         {truncate(r.evidence, 80)}
                       </td>
-                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>{r.counterpartId ?? '—'}</td>
-                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }} title={r.findingId}>
+                      <td className="whitespace-nowrap px-2 py-1 font-mono" style={{ color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' }}>{r.counterpartId ?? '—'}</td>
+                      <td className="whitespace-nowrap px-2 py-1 font-mono" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }} title={r.findingId}>
                         {r.findingId ? truncate(r.findingId, 24) : '—'}
                       </td>
-                      <td className="whitespace-nowrap px-2 py-1" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }} title={r.consensusId}>
+                      <td className="whitespace-nowrap px-2 py-1 font-mono" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }} title={r.consensusId}>
                         {r.consensusId ? truncate(r.consensusId, 16) : '—'}
                       </td>
                     </tr>
@@ -355,7 +375,7 @@ export function SignalsPage() {
                 type="button"
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={clampedPage === 0 || loading}
-                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-[color-mix(in_oklch,var(--surface-sunk)_50%,transparent)] disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >◂ Prev</button>
               <span className="tabular-nums">
@@ -365,7 +385,7 @@ export function SignalsPage() {
                 type="button"
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={clampedPage >= totalPages - 1 || loading}
-                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-accent/10 disabled:opacity-30"
+                className="rounded-sm border border-border/40 px-2 py-0.5 transition hover:bg-[color-mix(in_oklch,var(--surface-sunk)_50%,transparent)] disabled:opacity-30"
                 style={{ background: 'var(--surface-elev)' }}
               >Next ▸</button>
             </div>
