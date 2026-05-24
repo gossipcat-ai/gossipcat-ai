@@ -5,7 +5,7 @@
 import { randomUUID } from 'crypto';
 import { hasMemoryQuery } from '@gossip/relay';
 import { ctx, NATIVE_TASK_TTL_MS, defaultImportanceScores } from '../mcp-context';
-import { revertLeakedPaths } from './worktree-isolation-detection';
+import { revertLeakedPaths, preserveLeakedPaths } from './worktree-isolation-detection';
 
 /**
  * Lazy-prune entries in `ctx.recentConsensusTaskIds` whose TTL has expired.
@@ -989,29 +989,56 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       if (isolationDiff.dirtyPathsAdded.length > 0) {
         try {
           const revertRoot = ctx.mainAgent?.projectRoot ?? process.cwd();
-          const revertResult = revertLeakedPaths(revertRoot, isolationDiff.dirtyPathsAdded);
-          const auditSuspectedReason =
-            revertResult.error
-              ? `isolation_recovery_failed err=${revertResult.error.slice(0, 80)}`
-              : `isolation_recovery_attempted restored=${revertResult.restored.length} skipped=${revertResult.skipped.length} rejected=${revertResult.rejected.length}`;
-          appendRelayWarning(revertRoot, {
-            taskId: task_id,
-            agentId: taskInfo.agentId,
-            reason: revertResult.error ? 'isolation_recovery_failed' : 'isolation_recovery_attempted',
-            resultLength: isolationDiff.dirtyPathsAdded.length,
-            suspectedReason: auditSuspectedReason,
-            timestamp: new Date().toISOString(),
-          });
-          if (revertResult.error) {
-            responseText += `\n  → auto-recovery FAILED: ${revertResult.error}. Run 'git restore <paths>' manually.`;
+
+          // Non-destructive recovery (spec 2026-05-24): preserve the leaked work
+          // to .gossip/recovery/<taskId>.patch BEFORE cleaning master, so an
+          // isolation escape no longer destroys the agent's changes.
+          const preserveResult = preserveLeakedPaths(revertRoot, isolationDiff.dirtyPathsAdded, task_id);
+          const preserveOk = !preserveResult.error && !!preserveResult.patchPath;
+
+          if (!preserveOk) {
+            // Spec §3.1 option (b): the safety net failed — do NOT run the
+            // destructive revert. Leave master dirty and surface a hard receipt
+            // so the operator can recover manually before any work is lost.
+            const errMsg = preserveResult.error
+              ? preserveResult.error.slice(0, 120)
+              : 'no patch written';
+            const pathList = isolationDiff.dirtyPathsAdded.slice(0, 5).join(' ');
+            appendRelayWarning(revertRoot, {
+              taskId: task_id,
+              agentId: taskInfo.agentId,
+              reason: 'isolation_recovery_failed',
+              resultLength: isolationDiff.dirtyPathsAdded.length,
+              suspectedReason: `isolation_recovery_preserve_failed err=${errMsg.slice(0, 80)}`,
+              timestamp: new Date().toISOString(),
+            });
+            responseText += `\n  → ⚠ could NOT preserve leaked work (${errMsg}); master left dirty to avoid data loss. Recover manually: git stash push -- ${pathList}.`;
           } else {
-            const skippedPart = revertResult.skipped.length > 0
-              ? ` (${revertResult.skipped.length} path(s) skipped — no longer present)`
-              : '';
-            const rejectedPart = revertResult.rejected.length > 0
-              ? ` (${revertResult.rejected.length} path(s) rejected — security filter)`
-              : '';
-            responseText += `\n  → auto-recovered ${revertResult.restored.length} leaked path(s) via 'git restore'${skippedPart}${rejectedPart}.`;
+            // Preserve succeeded — safe to clean master via the destructive revert.
+            const revertResult = revertLeakedPaths(revertRoot, isolationDiff.dirtyPathsAdded);
+            const auditSuspectedReason =
+              revertResult.error
+                ? `isolation_recovery_failed err=${revertResult.error.slice(0, 80)}`
+                : `isolation_recovery_preserved patch=${preserveResult.patchPath} preserved=${preserveResult.preserved.length} restored=${revertResult.restored.length} skipped=${revertResult.skipped.length} rejected=${revertResult.rejected.length}`;
+            appendRelayWarning(revertRoot, {
+              taskId: task_id,
+              agentId: taskInfo.agentId,
+              reason: revertResult.error ? 'isolation_recovery_failed' : 'isolation_recovery_preserved',
+              resultLength: isolationDiff.dirtyPathsAdded.length,
+              suspectedReason: auditSuspectedReason,
+              timestamp: new Date().toISOString(),
+            });
+            if (revertResult.error) {
+              responseText += `\n  → leaked work preserved at .gossip/recovery/${task_id}.patch, but master restore FAILED: ${revertResult.error}. Run 'git restore <paths>' manually; recover work with: git apply .gossip/recovery/${task_id}.patch.`;
+            } else {
+              const skippedPart = revertResult.skipped.length > 0
+                ? ` (${revertResult.skipped.length} path(s) skipped — no longer present)`
+                : '';
+              const rejectedPart = revertResult.rejected.length > 0
+                ? ` (${revertResult.rejected.length} path(s) rejected — security filter)`
+                : '';
+              responseText += `\n  → leaked work preserved at .gossip/recovery/${task_id}.patch; master restored (${revertResult.restored.length} path(s))${skippedPart}${rejectedPart}. Recover with: git apply .gossip/recovery/${task_id}.patch (onto a fresh branch).`;
+            }
           }
         } catch (err) {
           responseText += `\n  → auto-recovery FAILED: ${(err as Error).message}. Run 'git restore <paths>' manually.`;

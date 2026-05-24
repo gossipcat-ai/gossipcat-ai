@@ -28,10 +28,12 @@ import { ctx } from '../../apps/cli/src/mcp-context';
 // path matches the resolved module identity.
 const mockCheck = jest.fn();
 const mockRevert = jest.fn();
+const mockPreserve = jest.fn();
 jest.mock('../../apps/cli/src/handlers/worktree-isolation-detection', () => ({
   __esModule: true,
   checkIsolationViolation: (...args: any[]) => mockCheck(...args),
   revertLeakedPaths: (...args: any[]) => mockRevert(...args),
+  preserveLeakedPaths: (...args: any[]) => mockPreserve(...args),
 }));
 
 const AGENT_ID = 'sonnet-implementer';
@@ -80,9 +82,18 @@ beforeEach(() => {
 
   mockCheck.mockReset();
   mockRevert.mockReset();
+  mockPreserve.mockReset();
   // Default: auto-revert returns a successful no-op so existing tests that
   // trigger a violation don't blow up; tests that care assert explicitly.
   mockRevert.mockReturnValue({ restored: [], skipped: [], rejected: [] });
+  // Default: preserve succeeds (patch written) so the call site proceeds to the
+  // destructive revert. Tests that exercise preserve-failure override this.
+  mockPreserve.mockReturnValue({
+    preserved: [],
+    skipped: [],
+    rejected: [],
+    patchPath: join(testDir, '.gossip', 'recovery', `${TASK_ID}.patch`),
+  });
   stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
 });
 
@@ -241,7 +252,8 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
 
     const text = (res.content[0] as { text: string }).text;
     expect(text).toContain('⚠ worktree_isolation_failed');
-    expect(text).toContain("auto-recovered 2 leaked path(s) via 'git restore'");
+    expect(text).toContain('leaked work preserved at .gossip/recovery/iso-task-1.patch');
+    expect(text).toContain('master restored (2 path(s))');
   });
 
   it('reports skipped-path count in receipt when some paths no longer exist', async () => {
@@ -260,7 +272,7 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
     const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
 
     const text = (res.content[0] as { text: string }).text;
-    expect(text).toContain("auto-recovered 1 leaked path(s) via 'git restore'");
+    expect(text).toContain('master restored (1 path(s))');
     expect(text).toContain('1 path(s) skipped');
   });
 
@@ -280,11 +292,11 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
     const res = await handleNativeRelay(TASK_ID, '<agent_finding type="finding" severity="LOW">x</agent_finding>');
 
     const text = (res.content[0] as { text: string }).text;
-    expect(text).toContain("auto-recovered 1 leaked path(s) via 'git restore'");
+    expect(text).toContain('master restored (1 path(s))');
     expect(text).toContain('1 path(s) rejected — security filter');
   });
 
-  it('reports auto-recovery FAILED in receipt without throwing when revertLeakedPaths reports an error', async () => {
+  it('reports master restore FAILED in receipt (work still preserved) without throwing when revertLeakedPaths reports an error', async () => {
     seedWorktreeTask(TASK_ID, AGENT_ID);
     mockCheck.mockReturnValue({
       headChanged: false,
@@ -302,7 +314,8 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
 
     const text = (res.content[0] as { text: string }).text;
     expect(text).toContain('⚠ worktree_isolation_failed');
-    expect(text).toContain('auto-recovery FAILED');
+    expect(text).toContain('leaked work preserved at .gossip/recovery/iso-task-1.patch');
+    expect(text).toContain('master restore FAILED');
     expect(text).toContain('pathspec did not match');
     expect(text).toContain("Run 'git restore <paths>' manually");
   });
