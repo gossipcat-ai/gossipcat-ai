@@ -37,50 +37,19 @@ export interface FleetTrendResponse {
 }
 
 /* ── Step 9.5 — skills + post-bind effectiveness curves ───────────────── */
-
-export interface SkillCurvePoint {
-  /** Window-end timestamp (ms epoch). */
-  t: number;
-  /** Accuracy = correct/(correct+halluc) in window. null when window empty. */
-  value: number | null;
-}
-
-export interface SkillEffectivenessEntry {
-  agentId: string;
-  skill: string;
-  status: SkillStatus | null;
-  /** 10 equal-time windows from boundAt → now. */
-  curve: SkillCurvePoint[];
-  /** Graduation threshold — passed_baseline_rate from frontmatter, fallback 0.7. */
-  threshold: number;
-  /** Total post-bind signals across the full curve window. */
-  n: number;
-  /** ISO. Anchor for the curve. */
-  boundAt: string;
-}
-
-export interface SkillsApiResponse {
-  /** Raw skill-index passthrough (agent → skill → slot). Unused by the
-   *  dashboard today but kept for compatibility with the bind UI. */
-  index: Record<string, Record<string, unknown>>;
-  suggestions: string[];
-  /** Per-agent+skill effectiveness curves. Drives SkillGraduationGrid. */
-  effectiveness: SkillEffectivenessEntry[];
-}
+// SkillCurvePoint, SkillEffectivenessEntry, SkillsApiResponse, SkillVerdict,
+// and SkillStatus are canonical in @gossip/types/skills. Re-exported here for
+// backward compat so all existing `import type { ... } from '@/lib/types'`
+// call sites continue to compile without changes.
+import type { SkillStatus as _SkillStatus } from '@gossip/types';
+export type { SkillCurvePoint, SkillEffectivenessEntry, SkillsApiResponse, SkillVerdict, SkillStatus } from '@gossip/types';
+// Alias in local scope so SkillSlot.status below resolves correctly.
+type SkillStatus = _SkillStatus;
 
 export interface ForcedDevelopEntry {
   timestamp: string;
   reason?: string;
 }
-
-export type SkillStatus =
-  | 'pending'
-  | 'passed'
-  | 'failed'
-  | 'silent_skill'
-  | 'insufficient_evidence'
-  | 'inconclusive'
-  | 'flagged_for_manual_review';
 
 export interface SkillSlot {
   name: string;

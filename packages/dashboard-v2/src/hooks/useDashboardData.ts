@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
-import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile, FleetTrendResponse, SkillsApiResponse } from '@/lib/types';
+import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile, FleetTrendResponse } from '@/lib/types';
+import type { SkillsApiResponse } from '@gossip/types';
 
 /**
  * Polling interval for /api/agents and friends. Backs the "Team page updates

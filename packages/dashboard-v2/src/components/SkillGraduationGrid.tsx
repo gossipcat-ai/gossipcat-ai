@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { SkillsApiResponse, SkillEffectivenessEntry, SkillStatus } from '@/lib/types';
+import type { SkillsApiResponse, SkillEffectivenessEntry, SkillStatus } from '@gossip/types';
 import { SkillEffectivenessSparkline } from './SkillEffectivenessSparkline';
 import { href } from '@/lib/router';
 import { agentColor } from '@/lib/utils';
