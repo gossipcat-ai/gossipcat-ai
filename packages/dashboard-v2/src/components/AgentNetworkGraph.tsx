@@ -29,25 +29,99 @@ interface Position {
 }
 
 /**
- * Resting layout: agents arranged on a single ring, sorted by id for stable
- * angles. No edges drawn in this state — the ring itself is the visual.
+ * Resting layout: agents placed at a radius encoding accuracy.
+ * Higher accuracy = closer to center (radius = (1 - accuracy) * maxRadius).
+ * Agents are sorted alphabetically for stable angle assignment.
  */
-function restingLayout(agentIds: string[], width: number, height: number): Map<string, Position> {
+function restingLayout(agents: AgentData[], width: number, height: number): Map<string, Position> {
   const center = { x: width / 2, y: height / 2 };
-  const radius = Math.max(80, Math.min(width, height) / 2 - 100);
+  // maxRadius = 100% accuracy band (outermost ring). innerCushion keeps the 100% ring
+  // off the canvas edge.
+  const innerCushion = 40;
+  const maxRadius = Math.max(80, Math.min(width, height) / 2 - innerCushion);
+
   const out = new Map<string, Position>();
-  const sorted = [...agentIds].sort();
+  if (agents.length === 0) return out;
+
+  // Group agents by accuracy band so that agents with similar accuracy don't pile on top
+  // of each other. Use alphabetical order within a band as a stable angular offset.
+  const sorted = [...agents].sort((a, b) => a.id.localeCompare(b.id));
   const N = sorted.length;
+
   for (let i = 0; i < N; i++) {
-    // Start the first agent at the top (-π/2) and go clockwise.
+    const agent = sorted[i];
+    // 0 = at center (perfect accuracy), 1 = at maxRadius (zero accuracy).
+    // Floor at 0.1 of maxRadius so 100%-accuracy agents don't stack on the center bloom.
+    const acc = clamp(agent.scores?.accuracy ?? 0, 0, 1);
+    const radius = Math.max(maxRadius * 0.1, (1 - acc) * maxRadius);
+
+    // Angle: alphabetical around the perimeter, top start, clockwise.
     const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
-    out.set(sorted[i], {
+
+    out.set(agent.id, {
       x: center.x + radius * Math.cos(angle),
       y: center.y + radius * Math.sin(angle),
       role: 'fleet',
     });
   }
   return out;
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(Math.max(n, lo), hi);
+}
+
+interface RingBandsProps {
+  width: number;
+  height: number;
+}
+
+/** Concentric accuracy bands at 25/50/75/100%. Pure decoration — pointer-events: none. */
+function RingBands({ width, height }: RingBandsProps) {
+  const cx = width / 2;
+  const cy = height / 2;
+  const innerCushion = 40;
+  const maxR = Math.max(80, Math.min(width, height) / 2 - innerCushion);
+  // 4 rings at 25/50/75/100% of maxR. Inner-to-outer.
+  const rings = [
+    { pct: 100, r: maxR },
+    { pct: 75, r: maxR * 0.75 },
+    { pct: 50, r: maxR * 0.5 },
+    { pct: 25, r: maxR * 0.25 },
+  ];
+  return (
+    <svg
+      width="100%"
+      height={height}
+      style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+      aria-hidden
+    >
+      {rings.map(({ pct, r }) => (
+        <g key={pct}>
+          <circle
+            cx={cx}
+            cy={cy}
+            r={r}
+            fill="none"
+            stroke="var(--border-strong)"
+            strokeDasharray="2 4"
+            opacity={0.5}
+          />
+          {/* Tick label just above the top of each ring. */}
+          <text
+            x={cx + 6}
+            y={cy - r + 4}
+            fontFamily="var(--font-mono)"
+            fontSize="9"
+            fill="var(--ink-3)"
+            letterSpacing="0.06em"
+          >
+            {pct}%
+          </text>
+        </g>
+      ))}
+    </svg>
+  );
 }
 
 /**
@@ -181,7 +255,7 @@ function HubSpokeGraph({
     if (selectedAgentId && ids.includes(selectedAgentId)) {
       return focusLayout(selectedAgentId, ids, peerRelationships, width, height);
     }
-    return restingLayout(ids, width, height);
+    return restingLayout(agents, width, height);
   }, [agents, peerRelationships, selectedAgentId, width, height]);
 
   // Spokes (only drawn in focus mode) — straight lines from center to each peer.
@@ -220,6 +294,9 @@ function HubSpokeGraph({
       style={{ height, background: 'var(--stage-bg)', borderColor: 'var(--border)' }}
       onClick={() => onSelectAgent(null)}
     >
+      {/* Accuracy rings — rendered first (behind everything else). */}
+      <RingBands width={width} height={height} />
+
       {/* Header label — adapts to mode. */}
       <div
         className="absolute z-10 flex items-center gap-2 h-section"
@@ -253,6 +330,28 @@ function HubSpokeGraph({
           </>
         )}
       </div>
+
+      {/* Accuracy-scope legend — explains the radial encoding. Sits just below
+          the fleet-name overlay at the top-left. Per Step 4 review feedback,
+          the legend must be in the attention path (top-left, not bottom-left).
+          Only shown in resting mode — focus mode has its own edge legend. */}
+      {!selectedAgentId && (
+        <div
+          className="absolute z-10 h-section"
+          style={{
+            top: 36,
+            left: 12,
+            fontSize: '10px',
+            color: 'var(--stage-text-dim)',
+            background: 'color-mix(in oklch, var(--stage-bg) 70%, transparent)',
+            padding: '2px 6px',
+            borderRadius: '3px',
+            pointerEvents: 'none',
+          }}
+        >
+          distance from center = accuracy · spoke color = agent identity
+        </div>
+      )}
 
       {/* Spokes in focus mode only. SVG layer sits above the background. */}
       <svg width="100%" height={height} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
