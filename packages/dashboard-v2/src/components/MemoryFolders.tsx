@@ -198,7 +198,7 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
                 role="tab"
                 aria-selected={statusView === s}
                 onClick={() => setStatusView(s)}
-                className={`rounded-sm border px-2 py-0.5 uppercase tracking-widest transition ${
+                className={`rounded-sm border px-2 py-0.5 uppercase tracking-wider transition ${
                   statusView === s
                     ? 'border-primary/50'
                     : 'border-border/30 hover:border-primary/30'

@@ -593,7 +593,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                   {/* Chevron */}
                   <span
                     className={`mt-1 shrink-0 font-mono text-[10px] transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
-                    style={{ color: isExpanded ? 'color-mix(in oklch, var(--accent) 60%, transparent)' : 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}
+                    style={{ color: isExpanded ? 'color-mix(in oklch, var(--ink) 60%, transparent)' : 'color-mix(in oklch, var(--text-dim) 40%, transparent)' }}
                   >
                     ▸
                   </span>
@@ -810,14 +810,14 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                 >
                   <span
                     className="mr-3 font-mono text-xs transition"
-                    style={{ color: isOpen ? 'var(--accent)' : 'var(--text-dim)' }}
+                    style={{ color: isOpen ? 'var(--ink)' : 'var(--text-dim)', fontWeight: isOpen ? 600 : 400 }}
                   >
                     {isOpen ? '▾' : '▸'}
                   </span>
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--accent) 50%, transparent)' }}>{run.taskId}</span>
+                        <span className="font-mono text-[10px]" style={{ color: 'var(--ink-3)' }}>{run.taskId}</span>
                         <span className={`font-mono text-sm font-semibold ${isRunRetracted ? 'line-through decoration-disputed/40' : ''}`} style={{ color: 'var(--text)' }}>{runTotal} findings</span>
                         <div className="flex gap-1.5">
                           {run.agents.slice(0, 4).map((a) => (

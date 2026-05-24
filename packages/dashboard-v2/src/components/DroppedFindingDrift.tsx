@@ -5,11 +5,11 @@ import type { OverviewData } from '@/lib/types';
 // bg-unique and bg-confirmed are kept as Tailwind classes (non-theme-sensitive semantic tokens).
 // Theme-sensitive tokens (primary, muted-foreground) are expressed as CSS var() strings.
 const PALETTE_BG: string[] = [
-  'color-mix(in oklch, var(--accent) 70%, transparent)',
+  'color-mix(in oklch, var(--c1) 70%, transparent)',
   '',  // bg-cyan-500/60 — non-theme, handled via PALETTE_CLASS
   '',  // bg-unique — handled via PALETTE_CLASS
   'color-mix(in oklch, var(--text-dim) 60%, transparent)',
-  'color-mix(in oklch, var(--accent) 50%, transparent)',
+  'color-mix(in oklch, var(--c2) 50%, transparent)',
   '',  // bg-confirmed/70 — handled via PALETTE_CLASS
 ];
 const PALETTE_CLASS: string[] = [

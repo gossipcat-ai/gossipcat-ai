@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
 /* Geist Variable — DESIGN.md primary body/UI/data font.
@@ -64,7 +64,6 @@
      blue-grey so it reads as DATA, not status, alongside the warm accent. */
   --color-chart: #5d7e9c;
   --color-chart-accent: #1a7e5e;
-  --color-chart-deep: #6b6a64;
 }
 
 /* ───── Phase 1a — warm palette tokens (light default) ───── */

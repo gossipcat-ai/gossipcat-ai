@@ -42,7 +42,7 @@ export function CircuitAlerts({ agents }: CircuitAlertsProps) {
           <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm bg-destructive/15 font-mono text-[11px] font-bold text-destructive">
             !
           </span>
-          <span className="font-mono text-[11px] font-bold uppercase tracking-widest text-destructive">
+          <span className="font-mono text-[11px] font-bold uppercase tracking-wider text-destructive">
             Agents Needing Attention
           </span>
         </div>

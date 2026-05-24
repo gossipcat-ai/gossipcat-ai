@@ -106,7 +106,7 @@ function Section({ label, tone, children }: { label: string; tone: 'success' | '
   const toneColor = tone === 'success' ? 'var(--success)' : tone === 'danger' ? 'var(--danger)' : 'var(--text-faint)';
   return (
     <section className="mb-4">
-      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-widest" style={{ color: toneColor }}>
+      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-wider" style={{ color: toneColor }}>
         <span style={{ width: 4, height: 4, borderRadius: '50%', background: toneColor, display: 'inline-block' }} />
         {label}
       </div>
@@ -235,7 +235,7 @@ function AgentDetail({ agent, peerRelationships, agents }: { agent: AgentData; p
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded px-2 py-1.5" style={{ background: 'color-mix(in oklch, var(--surface) 50%, transparent)' }}>
-      <div className="font-mono text-[9px] uppercase tracking-widest" style={{ color: 'var(--text-faint)' }}>{label}</div>
+      <div className="font-mono text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-faint)' }}>{label}</div>
       <div className="mt-0.5 font-mono text-[15px] font-medium tabular-nums" style={{ color: 'var(--text)' }}>{value}</div>
     </div>
   );

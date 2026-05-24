@@ -67,14 +67,14 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
           <div className="mt-4 space-y-4">
             <div className="flex items-center gap-2 flex-wrap">
               <span
-                className={`font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded ${TAG_COLORS[detail.finding.tag] || ''}`}
+                className={`font-mono text-[9px] uppercase tracking-wider px-2 py-0.5 rounded ${TAG_COLORS[detail.finding.tag] || ''}`}
                 style={TAG_COLORS[detail.finding.tag] ? undefined : { background: 'var(--surface-sunk)' }}
               >
                 {detail.finding.tag}
               </span>
               {detail.finding.severity && (
                 <span
-                  className={`font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded ${SEVERITY_COLORS[detail.finding.severity] || ''}`}
+                  className={`font-mono text-[9px] uppercase tracking-wider px-2 py-0.5 rounded ${SEVERITY_COLORS[detail.finding.severity] || ''}`}
                   style={
                     detail.finding.severity === 'low' ? SEVERITY_LOW_STYLE
                     : !SEVERITY_COLORS[detail.finding.severity] ? { background: 'var(--surface-sunk)' }
@@ -88,7 +88,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
                 by {detail.finding.originalAgentId}
               </span>
               {detail.retracted && (
-                <span className="font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded bg-disputed/50">
+                <span className="font-mono text-[9px] uppercase tracking-wider px-2 py-0.5 rounded bg-disputed/50">
                   retracted
                 </span>
               )}
@@ -100,7 +100,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
 
             {detail.citations.length > 0 && (
               <div className="space-y-2">
-                <div className="font-mono text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+                <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
                   Citations
                 </div>
                 {detail.citations.map((c, i) => <CitationSnippet key={i} citation={c} />)}
@@ -108,7 +108,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
             )}
 
             <div className="space-y-1">
-              <div className="font-mono text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+              <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
                 Coverage
               </div>
               {detail.finding.confirmedBy.length > 0 && (
@@ -128,7 +128,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
 
             {detail.signals.length > 0 && (
               <div className="space-y-2">
-                <div className="font-mono text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+                <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
                   Signals ({detail.signals.length})
                 </div>
                 <div className="space-y-1">
