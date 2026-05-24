@@ -15,7 +15,7 @@ interface ConsensusFlowProps {
 
 type FetchState =
   | { kind: 'loading' }
-  | { kind: 'empty'; data: ConsensusFlowResponse }
+  | { kind: 'empty' }
   | { kind: 'full'; data: ConsensusFlowResponse }
   | { kind: 'error'; error: string; stale?: ConsensusFlowResponse };
 
@@ -47,10 +47,15 @@ const VERDICT_ORDER: ConsensusFlowVerdict[] = ['confirmed', 'disputed', 'unverif
 const MIN_VISIBLE_WEIGHT = 0.01;
 
 export function ConsensusFlow({ consensusId, data: preloaded, onError }: ConsensusFlowProps) {
+  // A valid consensusId with a fetched report — even if totalFindings === 0 —
+  // renders the structural sankey (computeSankeyLayout gives every slot minH).
+  // The 'empty' state is reserved for when no consensusId was provided.
   const [state, setState] = useState<FetchState>(
     preloaded
-      ? { kind: preloaded.summary.totalFindings === 0 ? 'empty' : 'full', data: preloaded }
-      : { kind: 'loading' }
+      ? { kind: 'full', data: preloaded }
+      : consensusId
+        ? { kind: 'loading' }
+        : { kind: 'empty' }
   );
 
   useEffect(() => {
@@ -69,17 +74,14 @@ export function ConsensusFlow({ consensusId, data: preloaded, onError }: Consens
       })
       .then((d) => {
         if (cancelled) return;
-        setState({
-          kind: d.summary.totalFindings === 0 ? 'empty' : 'full',
-          data: d,
-        });
+        setState({ kind: 'full', data: d });
       })
       .catch((err: Error) => {
         if (cancelled) return;
         setState((prev) => ({
           kind: 'error',
           error: err.message,
-          stale: prev.kind === 'full' || prev.kind === 'empty' ? prev.data : undefined,
+          stale: prev.kind === 'full' ? prev.data : undefined,
         }));
         onError?.(err);
       });
@@ -194,9 +196,11 @@ function SankeyHorizontal({ data }: { data: ConsensusFlowResponse }) {
         width="100%"
         height={SVG_H}
         role="img"
-        aria-label="Consensus flow sankey"
+        aria-label={`Consensus flow: ${data.summary.confirmed} confirmed, ${data.summary.disputed} disputed, ${data.summary.unverified} unverified, ${data.summary.unique} unique of ${data.summary.totalFindings} findings across ${data.agentCount} agents`}
         style={{ display: 'block' }}
       >
+        {/* TODO: ribbon-level keyboard focus (tabIndex + role="graphics-symbol")
+            for full WCAG 2.1 SC 2.1.1 — out of scope for Step 7 fixup. */}
         {/* Ribbons */}
         <g>
           {ribbons.map((r, i) => (
@@ -335,11 +339,24 @@ function computeSankeyLayout(data: ConsensusFlowResponse): SankeyLayout {
   const total = data.summary.totalFindings;
   const usableH = SVG_H - COL_PAD * 2;
 
-  // LEFT bands sized by agentCount.
-  const leftTotal = data.modelFamilyToFindings.reduce((s, b) => s + b.agentCount, 0) || 1;
+  // Per-family finding totals — drives left band sizing AND ribbon stacking
+  // (matches the right column's finding-count denominator so ribbons fit).
+  const familyTotalsByVerdict = new Map<ConsensusFlowFamily, number>();
+  for (const e of data.familyToOutcome) {
+    familyTotalsByVerdict.set(
+      e.from.family,
+      (familyTotalsByVerdict.get(e.from.family) ?? 0) + e.to.count,
+    );
+  }
+
+  // LEFT bands sized by finding flow originating from each family.
+  const leftTotal = data.modelFamilyToFindings.reduce(
+    (s, b) => s + (familyTotalsByVerdict.get(b.family) ?? 0), 0,
+  ) || 1;
   let cursorL = COL_PAD;
   const left: BandSlot[] = data.modelFamilyToFindings.map((b) => {
-    const h = Math.max(20, (b.agentCount / leftTotal) * usableH);
+    const findings = familyTotalsByVerdict.get(b.family) ?? 0;
+    const h = Math.max(20, (findings / leftTotal) * usableH);
     const slot: BandSlot = { family: b.family, y: cursorL, h, agentCount: b.agentCount };
     cursorL += h;
     return slot;
@@ -363,16 +380,6 @@ function computeSankeyLayout(data: ConsensusFlowResponse): SankeyLayout {
   // proportionally within the band.
   const leftOffset = new Map<ConsensusFlowFamily, number>();
   const rightOffset = new Map<ConsensusFlowVerdict, number>();
-  const familyAgentCounts = new Map<ConsensusFlowFamily, number>(
-    data.modelFamilyToFindings.map((b) => [b.family, b.agentCount])
-  );
-  const familyTotalsByVerdict = new Map<ConsensusFlowFamily, number>();
-  for (const e of data.familyToOutcome) {
-    familyTotalsByVerdict.set(
-      e.from.family,
-      (familyTotalsByVerdict.get(e.from.family) ?? 0) + e.to.count,
-    );
-  }
 
   const edges: RibbonRender[] = [];
   // Pre-sort edges to be drawn in stable family→verdict order.
@@ -382,7 +389,6 @@ function computeSankeyLayout(data: ConsensusFlowResponse): SankeyLayout {
   });
 
   for (const e of sortedEdges) {
-    if (e.weight < MIN_VISIBLE_WEIGHT) continue;
     const lBand = left.find((b) => b.family === e.from.family);
     const rSlot = right.find((s) => s.verdict === e.to.verdict);
     if (!lBand || !rSlot) continue;
@@ -392,16 +398,19 @@ function computeSankeyLayout(data: ConsensusFlowResponse): SankeyLayout {
     const rTotal = rSlot.count || 1;
     const rRibbonH = (e.to.count / rTotal) * rSlot.h;
 
+    // Advance cursors for EVERY edge — even sub-MIN_VISIBLE_WEIGHT skipped
+    // ones — so the band's bottom doesn't show a gap when ribbons are hidden.
     const lOff = leftOffset.get(e.from.family) ?? 0;
     const rOff = rightOffset.get(e.to.verdict) ?? 0;
+    leftOffset.set(e.from.family, lOff + lRibbonH);
+    rightOffset.set(e.to.verdict, rOff + rRibbonH);
+
+    if (e.weight < MIN_VISIBLE_WEIGHT) continue;
 
     const y0a = lBand.y + lOff;
     const y0b = y0a + lRibbonH;
     const y1a = rSlot.y + rOff;
     const y1b = y1a + rRibbonH;
-
-    leftOffset.set(e.from.family, lOff + lRibbonH);
-    rightOffset.set(e.to.verdict, rOff + rRibbonH);
 
     const xa = LEFT_X + COL_W;
     const xb = MID_X;
@@ -415,7 +424,8 @@ function computeSankeyLayout(data: ConsensusFlowResponse): SankeyLayout {
       `C ${cxb} ${y1b}, ${cxa} ${y0b}, ${xa} ${y0b} ` +
       `Z`;
 
-    const famCount = familyAgentCounts.get(e.from.family) ?? 0;
+    const famBand = data.modelFamilyToFindings.find((b) => b.family === e.from.family);
+    const famCount = famBand?.agentCount ?? 0;
     edges.push({
       path,
       color: VERDICT_COLOR[e.to.verdict],

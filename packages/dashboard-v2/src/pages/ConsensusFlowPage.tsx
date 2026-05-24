@@ -15,11 +15,11 @@ export function ConsensusFlowPage({ consensusId }: ConsensusFlowPageProps) {
           aria-label="Breadcrumb"
         >
           <a
-            href={href('/debates')}
+            href={href('/')}
             className="hover:underline"
             style={{ color: 'var(--ink-3)' }}
           >
-            Consensus
+            Overview
           </a>
           <span aria-hidden="true">›</span>
           <span style={{ color: 'var(--ink)' }}>{consensusId}</span>
@@ -27,7 +27,7 @@ export function ConsensusFlowPage({ consensusId }: ConsensusFlowPageProps) {
         <h1 className="h-section">Consensus flow</h1>
         <p
           className="mt-0.5 font-mono text-[10px]"
-          style={{ color: 'color-mix(in oklch, var(--text-dim) 60%, transparent)' }}
+          style={{ color: 'var(--ink-3)' }}
         >
           Model families on the left, findings reviewed in the middle, verdicts on the right.
         </p>

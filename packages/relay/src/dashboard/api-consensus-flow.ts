@@ -8,7 +8,7 @@ import { join } from 'path';
  * prevents `..`, NUL bytes, or alternative separators from escaping the
  * `.gossip/consensus-reports/` directory.
  */
-const SAFE_CONSENSUS_ID = /^[0-9a-f]{8}-[0-9a-f]{8}$/i;
+const SAFE_CONSENSUS_ID = /^[0-9a-f]{8}-[0-9a-f]{8}$/;
 
 export type ModelFamily = 'sonnet' | 'gemini' | 'opus' | 'haiku' | 'other';
 
@@ -110,7 +110,8 @@ export function consensusFlowHandler(
     buckets.confirmed.length +
     buckets.disputed.length +
     buckets.unverified.length +
-    buckets.unique.length;
+    buckets.unique.length +
+    newFindings.length;
 
   // Build family -> agentIds map across all findings.
   const familyAgents = new Map<ModelFamily, Set<string>>();
