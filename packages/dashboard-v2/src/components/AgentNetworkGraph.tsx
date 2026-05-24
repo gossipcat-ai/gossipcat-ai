@@ -59,19 +59,27 @@ function restingLayout(agents: AgentData[], width: number, height: number): Map<
   });
   const N = sorted.length;
 
+  // Golden-angle stride (phyllotaxis). 137.50776° ≈ 2.39996 rad.
+  // Equal-spaced angles (2π/N per step) put adjacent ranks at adjacent
+  // angles — when two agents share a similar accuracy they also land at
+  // similar radii, and the combination CLUSTERS them visually. The golden
+  // angle guarantees that for any N, consecutive items in the walk land
+  // far apart on the circle. So two agents with neighboring accuracies
+  // (e.g. sonnet-reviewer 63% + haiku-researcher 64% — same radius band)
+  // are placed on opposite sides of the chart instead of next to each
+  // other. The result spreads the fleet evenly regardless of how the
+  // accuracy distribution clumps.
+  const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < N; i++) {
     const agent = sorted[i];
     // 0 = at center (perfect accuracy), 1 = at maxRadius (zero accuracy).
-    // Inner floor raised from 0.1 → 0.22 of maxRadius so the highest-accuracy
-    // agent (e.g. opus at 76%) doesn't visually merge with the center bloom.
+    // Inner floor at 0.22*maxRadius so the highest-accuracy agent doesn't
+    // visually merge with the orchestrator blackhole at the center.
     const acc = clamp(agent.scores?.accuracy ?? 0, 0, 1);
     const radius = Math.max(maxRadius * 0.22, (1 - acc) * maxRadius);
 
-    // Angle: evenly distribute around the perimeter, top start, clockwise.
-    // Walking the sorted-by-accuracy array gives a natural visual spread —
-    // adjacent ranks land at adjacent angles, not adjacent radii, so labels
-    // and avatars never share a column.
-    const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
+    // Anchor at -π/2 (top) for the first agent, then step by golden angle.
+    const angle = -Math.PI / 2 + i * GOLDEN_ANGLE;
 
     out.set(agent.id, {
       x: center.x + radius * Math.cos(angle),
