@@ -60,7 +60,7 @@ export function OverviewPage({
       {!hideGraph && agents && (
         <div className="space-y-3">
           <NarrativeStripe />
-          <div className="flex gap-3">
+          <div className="flex items-stretch gap-3">
             <div className="min-w-0 flex-1">
               <AgentNetworkGraph
                 agents={agents}
@@ -83,7 +83,7 @@ export function OverviewPage({
       {/* Page header */}
       <header>
         <div className="flex items-baseline justify-between gap-4">
-          <h1 className="font-mono text-4xl font-bold tracking-tight" style={{ color: 'var(--text)' }}>
+          <h1 style={{ fontFamily: '"Fraunces", ui-serif, Georgia, serif', fontWeight: 500, fontSize: '44px', lineHeight: 1.1, letterSpacing: '-0.015em', color: 'var(--ink)' }}>
             Overview
           </h1>
           {actionable > 0 && (

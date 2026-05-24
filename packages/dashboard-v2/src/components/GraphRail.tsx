@@ -14,7 +14,7 @@ export function GraphRail({ selectedAgent, agents, peerRelationships, height = 4
   return (
     <aside
       className="flex-shrink-0 overflow-y-auto rounded-lg border"
-      style={{ width: 320, height, background: 'var(--surface-elev)', borderColor: 'var(--border)' }}
+      style={{ width: 320, minHeight: height, background: 'var(--surface-elev)', borderColor: 'var(--border)' }}
       aria-label={selectedAgent ? `Agent detail: ${selectedAgent.id}` : 'Fleet summary'}
     >
       {selectedAgent ? (

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { NeuralAvatar } from './NeuralAvatar';
 import { classifyPeerRelationship, edgeWidthFor } from '@/lib/edge-classification';
 import { peerKey } from '@/lib/peer-relationships';
+import { subscribe as subscribeAnimation } from '@/lib/animation-scheduler';
 import type { AgentData, PeerRelationship, PeerRelationshipMap } from '@/lib/types';
 
 interface AgentNetworkGraphProps {
@@ -29,25 +30,284 @@ interface Position {
 }
 
 /**
- * Resting layout: agents arranged on a single ring, sorted by id for stable
- * angles. No edges drawn in this state — the ring itself is the visual.
+ * Resting layout: agents placed at a radius encoding accuracy.
+ * Higher accuracy = closer to center (radius = (1 - accuracy) * maxRadius).
+ * Agents are sorted alphabetically for stable angle assignment.
  */
-function restingLayout(agentIds: string[], width: number, height: number): Map<string, Position> {
+function restingLayout(agents: AgentData[], width: number, height: number): Map<string, Position> {
   const center = { x: width / 2, y: height / 2 };
-  const radius = Math.max(80, Math.min(width, height) / 2 - 100);
+  // maxRadius = 100% accuracy band (outermost ring). innerCushion keeps the 100% ring
+  // off the canvas edge.
+  const innerCushion = 40;
+  const maxRadius = Math.max(80, Math.min(width, height) / 2 - innerCushion);
+
   const out = new Map<string, Position>();
-  const sorted = [...agentIds].sort();
+  if (agents.length === 0) return out;
+
+  // Group agents by accuracy band so that agents with similar accuracy don't pile on top
+  // of each other. Use alphabetical order within a band as a stable angular offset.
+  const sorted = [...agents].sort((a, b) => a.id.localeCompare(b.id));
   const N = sorted.length;
+
   for (let i = 0; i < N; i++) {
-    // Start the first agent at the top (-π/2) and go clockwise.
+    const agent = sorted[i];
+    // 0 = at center (perfect accuracy), 1 = at maxRadius (zero accuracy).
+    // Floor at 0.1 of maxRadius so 100%-accuracy agents don't stack on the center bloom.
+    const acc = clamp(agent.scores?.accuracy ?? 0, 0, 1);
+    const radius = Math.max(maxRadius * 0.1, (1 - acc) * maxRadius);
+
+    // Angle: alphabetical around the perimeter, top start, clockwise.
     const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
-    out.set(sorted[i], {
+
+    out.set(agent.id, {
       x: center.x + radius * Math.cos(angle),
       y: center.y + radius * Math.sin(angle),
       role: 'fleet',
     });
   }
   return out;
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(Math.max(n, lo), hi);
+}
+
+/** Tiny seeded PRNG so the starfield is stable across renders.
+ *  Mulberry32 — small, deterministic, no deps. */
+function seededRandom(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+interface StarfieldProps {
+  width: number;
+  height: number;
+  /** Agent positions on the stage. Stars within consumeRadius of any agent
+   *  drift toward that agent, shrink + fade, then respawn elsewhere. */
+  agentPositions: { x: number; y: number }[];
+}
+
+type Star = {
+  x: number; y: number;
+  baseR: number;   // born radius
+  r: number;       // current radius (shrinks when consumed)
+  baseO: number;   // born opacity
+  o: number;       // current opacity
+  consumed: number | null; // index of agent consuming this star, or null
+};
+
+/** Observatory-style starfield rendered behind the rings.
+ *  ~120 stars; mix of 0.7px / 1.4px for depth. Agents passively
+ *  "eat" nearby stars — within consumeRadius, a star drifts toward the
+ *  agent, shrinks, fades, and respawns elsewhere. Subscribes to the
+ *  shared AnimationScheduler so the loop respects prefers-reduced-motion. */
+function Starfield({ width, height, agentPositions }: StarfieldProps) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const starsRef = useRef<Star[]>([]);
+  const circlesRef = useRef<(SVGCircleElement | null)[]>([]);
+
+  // Seed star positions once per width/height. Respawn handled in the tick.
+  useEffect(() => {
+    if (width <= 0 || height <= 0) return;
+    const rand = seededRandom(7311);
+    const count = 120;
+    starsRef.current = Array.from({ length: count }, () => {
+      const baseR = rand() < 0.82 ? 0.7 : 1.4;
+      const baseO = 0.20 + rand() * 0.40; // brighter in dark mode (canvas is always dark now)
+      return {
+        x: rand() * width,
+        y: rand() * height,
+        baseR,
+        r: baseR,
+        baseO,
+        o: baseO,
+        consumed: null,
+      };
+    });
+  }, [width, height]);
+
+  // Animation loop — agents eat nearby stars.
+  useEffect(() => {
+    if (width <= 0 || height <= 0) return;
+    const rand = seededRandom(919); // separate seed for respawn jitter
+    const consumeRadius = 60; // px — slightly bigger than avatar visual radius
+    const driftPerSec = 90;   // px per second toward agent when consumed
+    const fadeRate = 1.5;     // opacity units per second when consumed
+    const shrinkRate = 1.8;   // radius units per second when consumed
+
+    const tick = (deltaMs: number) => {
+      const dt = deltaMs / 1000;
+      const stars = starsRef.current;
+      const circles = circlesRef.current;
+      for (let i = 0; i < stars.length; i++) {
+        const star = stars[i];
+
+        // Detect first agent within consumeRadius. Sticky consumption (once
+        // claimed, the star is being eaten by that agent until it disappears).
+        if (star.consumed === null) {
+          for (let a = 0; a < agentPositions.length; a++) {
+            const dx = agentPositions[a].x - star.x;
+            const dy = agentPositions[a].y - star.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < consumeRadius * consumeRadius) {
+              star.consumed = a;
+              break;
+            }
+          }
+        }
+
+        if (star.consumed !== null) {
+          const target = agentPositions[star.consumed];
+          if (target) {
+            const dx = target.x - star.x;
+            const dy = target.y - star.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const move = Math.min(dist, driftPerSec * dt);
+            star.x += (dx / dist) * move;
+            star.y += (dy / dist) * move;
+            star.o = Math.max(0, star.o - fadeRate * dt);
+            star.r = Math.max(0, star.r - shrinkRate * dt);
+          }
+          // Respawn when fully consumed or arrived at agent.
+          if (star.o <= 0.01 || star.r <= 0.1) {
+            // Random respawn far from any agent.
+            let nx = 0, ny = 0, safe = false;
+            for (let tries = 0; tries < 8; tries++) {
+              nx = rand() * width;
+              ny = rand() * height;
+              safe = true;
+              for (const ap of agentPositions) {
+                const ddx = ap.x - nx;
+                const ddy = ap.y - ny;
+                if (ddx * ddx + ddy * ddy < consumeRadius * consumeRadius * 1.5) {
+                  safe = false;
+                  break;
+                }
+              }
+              if (safe) break;
+            }
+            star.x = nx;
+            star.y = ny;
+            star.r = star.baseR;
+            star.o = star.baseO;
+            star.consumed = null;
+          }
+        }
+
+        // Direct DOM mutation — avoid React re-render storm for 120 stars * 60fps.
+        const c = circles[i];
+        if (c) {
+          c.setAttribute('cx', String(star.x));
+          c.setAttribute('cy', String(star.y));
+          c.setAttribute('r', String(star.r));
+          c.setAttribute('opacity', String(star.o));
+        }
+      }
+    };
+
+    const unsubscribe = subscribeAnimation(tick);
+    return () => unsubscribe();
+  }, [width, height, agentPositions]);
+
+  const stars = starsRef.current;
+  return (
+    <svg
+      ref={svgRef}
+      width="100%"
+      height={height}
+      style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+      aria-hidden
+    >
+      {stars.map((s, i) => (
+        <circle
+          key={i}
+          ref={(el) => { circlesRef.current[i] = el; }}
+          cx={s.x}
+          cy={s.y}
+          r={s.r}
+          fill="#F2EDE3"
+          opacity={s.o}
+        />
+      ))}
+    </svg>
+  );
+}
+
+interface RingBandsProps {
+  width: number;
+  height: number;
+  /** When true, suppress accuracy tick labels — used in focus mode where
+   *  agent positions are driven by peer-distance, not accuracy. The rings
+   *  themselves stay as decoration but the accuracy labels would mislead. */
+  hideLabels?: boolean;
+}
+
+/** Concentric accuracy bands.
+ *
+ *  IMPORTANT: rings are at radii r = maxR * {1, 0.75, 0.5, 0.25}, but the
+ *  accuracy VALUE at each ring is inverted because restingLayout maps
+ *  radius = (1 - accuracy) * maxRadius — agents at maxR have accuracy 0%,
+ *  agents at center have accuracy 100%. Each ring's label MUST express the
+ *  accuracy value at that ring, not the radius fraction.
+ */
+function RingBands({ width, height, hideLabels = false }: RingBandsProps) {
+  const cx = width / 2;
+  const cy = height / 2;
+  const innerCushion = 40;
+  const maxR = Math.max(80, Math.min(width, height) / 2 - innerCushion);
+  // Inner-to-outer rings. accLabel = accuracy value AT that ring.
+  // Outer ring (r = maxR, full distance from center) = 0% accuracy.
+  // Inner ring (r = maxR * 0.25, closest to center) = 75% accuracy.
+  // Center bloom itself = 100% accuracy (no ring needed).
+  const rings = [
+    { r: maxR,        accLabel: '0%' },
+    { r: maxR * 0.75, accLabel: '25%' },
+    { r: maxR * 0.5,  accLabel: '50%' },
+    { r: maxR * 0.25, accLabel: '75%' },
+  ];
+  return (
+    <svg
+      width="100%"
+      height={height}
+      style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+      aria-hidden
+    >
+      {rings.map(({ r, accLabel }) => (
+        <g key={accLabel}>
+          <circle
+            cx={cx}
+            cy={cy}
+            r={r}
+            fill="none"
+            stroke="var(--border-strong)"
+            strokeDasharray="2 4"
+            opacity={0.5}
+          />
+          {/* Tick label just ABOVE the top of each ring (outside the arc)
+              so it doesn't collide with avatar/name labels rendered at
+              roughly the same y-coordinate inside the ring. */}
+          {!hideLabels && (
+            <text
+              x={cx + 6}
+              y={cy - r - 4}
+              fontFamily="var(--font-mono)"
+              fontSize="9"
+              fill="var(--ink-3)"
+              letterSpacing="0.06em"
+            >
+              {accLabel}
+            </text>
+          )}
+        </g>
+      ))}
+    </svg>
+  );
 }
 
 /**
@@ -181,7 +441,7 @@ function HubSpokeGraph({
     if (selectedAgentId && ids.includes(selectedAgentId)) {
       return focusLayout(selectedAgentId, ids, peerRelationships, width, height);
     }
-    return restingLayout(ids, width, height);
+    return restingLayout(agents, width, height);
   }, [agents, peerRelationships, selectedAgentId, width, height]);
 
   // Spokes (only drawn in focus mode) — straight lines from center to each peer.
@@ -213,13 +473,47 @@ function HubSpokeGraph({
   // Count summary for the header.
   const peerCount = selectedAgentId ? spokes.length : 0;
 
+  // Agent positions for the starfield's eat-stars animation. Coordinates are
+  // in the stage's coordinate space, same as restingLayout/focusLayout output.
+  const agentPositionsForStars = useMemo(() => {
+    const out: { x: number; y: number }[] = [];
+    for (const agent of agents) {
+      const p = positions.get(agent.id);
+      if (p) out.push({ x: p.x, y: p.y });
+    }
+    return out;
+  }, [agents, positions]);
+
   return (
     <div
       ref={containerRef}
       className="relative overflow-hidden rounded-lg border"
-      style={{ height, background: 'var(--stage-bg)', borderColor: 'var(--border)' }}
+      style={{
+        // minHeight gives the stage a floor; height: 100% lets it grow to fill
+        // the parent flex row when the sidebar is taller (fixes "space below"
+        // when items-stretch makes the row equal-height).
+        minHeight: height,
+        height: '100%',
+        // Always-dark stage regardless of overall theme — the observatory /
+        // cosmic metaphor (agents as stars in an accuracy constellation) only
+        // reads in the dark. Override stage-* tokens with literal dark values
+        // so light-mode users still see the cosmic canvas.
+        background: '#14120F',
+        borderColor: '#2B2823',
+        ['--stage-bg' as any]: '#14120F',
+        ['--stage-text-dim' as any]: '#B8B0A1',
+        ['--stage-grid' as any]: 'rgba(255,255,255,0.03)',
+      }}
       onClick={() => onSelectAgent(null)}
     >
+      {/* Starfield: observatory backdrop with eat-the-stars animation.
+          Stars within ~60px of an agent drift in, shrink, fade, then respawn. */}
+      <Starfield width={width} height={height} agentPositions={agentPositionsForStars} />
+      {/* Accuracy rings — rendered second (behind spokes/avatars, above stars).
+          Hide labels in focus mode: positions are then driven by peer-
+          distance, not accuracy, so the accuracy ticks would mislead. */}
+      <RingBands width={width} height={height} hideLabels={!!selectedAgentId} />
+
       {/* Header label — adapts to mode. */}
       <div
         className="absolute z-10 flex items-center gap-2 h-section"
@@ -237,22 +531,44 @@ function HubSpokeGraph({
           <>
             <span>Focus</span>
             <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ color: 'var(--text)' }}>{selectedAgentId}</span>
+            <span style={{ color: '#F2EDE3' }}>{selectedAgentId}</span>
             <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ color: 'var(--text)' }}>{peerCount}</span>
+            <span style={{ color: '#F2EDE3' }}>{peerCount}</span>
             <span style={{ opacity: 0.7 }}>peer{peerCount === 1 ? '' : 's'}</span>
           </>
         ) : (
           <>
             <span>Fleet</span>
             <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ color: 'var(--text)' }}>{agents.length}</span>
+            <span style={{ color: '#F2EDE3' }}>{agents.length}</span>
             <span style={{ opacity: 0.7 }}>agents</span>
             <span style={{ opacity: 0.5 }}>·</span>
             <span style={{ opacity: 0.7 }}>click an avatar to focus</span>
           </>
         )}
       </div>
+
+      {/* Accuracy-scope legend — explains the radial encoding. Sits just below
+          the fleet-name overlay at the top-left. Per Step 4 review feedback,
+          the legend must be in the attention path (top-left, not bottom-left).
+          Only shown in resting mode — focus mode has its own edge legend. */}
+      {!selectedAgentId && (
+        <div
+          className="absolute z-10 h-section"
+          style={{
+            top: 36,
+            left: 12,
+            fontSize: '10px',
+            color: 'var(--stage-text-dim)',
+            background: 'color-mix(in oklch, var(--stage-bg) 70%, transparent)',
+            padding: '2px 6px',
+            borderRadius: '3px',
+            pointerEvents: 'none',
+          }}
+        >
+          closer to center = higher accuracy · spoke color = agent identity
+        </div>
+      )}
 
       {/* Spokes in focus mode only. SVG layer sits above the background. */}
       <svg width="100%" height={height} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
