@@ -8,10 +8,11 @@ import { AgentActivityTimeline } from './AgentActivityTimeline';
 import { FindingDetailDrawer } from './FindingDetailDrawer';
 import { SignalTimeline } from './SignalTimeline';
 import { TaskRow } from './TaskRow';
+import { TaskDetailModal } from './TaskDetailModal';
 import { timeAgo, renderFindingMarkdown } from '@/lib/utils';
 import { getBenchBadgeKind } from '@/lib/bench';
 import { escapeHtml } from '@/lib/sanitize';
-import type { AgentData, TasksData, ConsensusData, ConsensusReport, ConsensusReportsData, MemoryData, MemoryFile, ParseDiagnostic } from '@/lib/types';
+import type { AgentData, TasksData, TaskItem, ConsensusData, ConsensusReport, ConsensusReportsData, MemoryData, MemoryFile, ParseDiagnostic } from '@/lib/types';
 
 interface AgentPageProps {
   agentId: string;
@@ -35,6 +36,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
   const [drawerFinding, setDrawerFinding] = useState<{ consensusId: string; findingId: string } | null>(null);
   const [taskPage, setTaskPage] = useState(0);
   const [memDayIdx, setMemDayIdx] = useState(0);
+  const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
 
   useEffect(() => {
     api<MemoryData>(`memory/${agentId}`).then(data => {
@@ -378,7 +380,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
               </thead>
               <tbody>
                 {pagedTasks.map(task => (
-                  <TaskRow key={task.taskId} task={task} />
+                  <TaskRow key={task.taskId} task={task} onClick={setSelectedTask} />
                 ))}
               </tbody>
             </table>
@@ -504,6 +506,8 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
         consensusId={drawerFinding?.consensusId ?? null}
         findingId={drawerFinding?.findingId ?? null}
       />
+
+      <TaskDetailModal task={selectedTask} onClose={() => setSelectedTask(null)} />
 
       {/* Memory Files — paginated by day */}
       <section className="mb-8">
