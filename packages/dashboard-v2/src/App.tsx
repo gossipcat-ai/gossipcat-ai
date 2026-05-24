@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useRoute } from '@/lib/router';
 import { OverviewPage } from '@/pages/OverviewPage';
+import { ConsensusFlowPage } from '@/pages/ConsensusFlowPage';
 import { AuthGate } from '@/components/AuthGate';
 import { TopBar } from '@/components/TopBar';
 import { NeuralAvatar } from '@/components/NeuralAvatar';
@@ -516,9 +517,13 @@ function Dashboard() {
 
   let content;
   const agentMatch = route.match(/^\/agent\/(.+)$/);
+  const consensusFlowMatch = route.match(/^\/consensus\/(.+)$/);
   if (agentMatch && agents) {
     const agentId = decodeURIComponent(agentMatch[1]);
     content = <AgentPage agentId={agentId} agents={agents} tasks={tasks} consensus={consensus} />;
+  } else if (consensusFlowMatch) {
+    const consensusId = decodeURIComponent(consensusFlowMatch[1]);
+    content = <ConsensusFlowPage consensusId={consensusId} />;
   } else if (route === '/team' && agents) {
     content = <TeamPage agents={agents} tasks={tasks} consensusReports={consensusReports} fleetTrend={fleetTrend} />;
   } else if (route === '/tasks' && tasks) {
@@ -550,7 +555,7 @@ function Dashboard() {
   // Overview owns its own outer container (max-w-5xl). For everything else,
   // the historical max-w-7xl + space-y-6 wrapper applies.
   const isOverview = route === '/' || route === '/overview' ||
-    !(/^\/(agent\/|team|tasks|debates|logs|signals|violations)/.test(route));
+    !(/^\/(agent\/|consensus\/|team|tasks|debates|logs|signals|violations)/.test(route));
   const mainClass = isOverview
     ? 'px-6 py-6'
     : 'mx-auto max-w-7xl space-y-6 px-6 py-6';

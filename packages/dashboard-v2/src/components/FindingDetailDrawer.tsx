@@ -4,6 +4,7 @@ import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
 import { CitationSnippet } from './CitationSnippet';
 import type { FindingDetail } from '@/lib/types';
+import { href } from '@/lib/router';
 
 interface Props {
   open: boolean;
@@ -151,7 +152,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
             )}
 
             <div className="pt-2 border-t border-border/40">
-              <a href={`#/consensus/${detail.consensusId}`} className="font-mono text-[10px] hover:underline" style={{ color: 'var(--accent)' }}>
+              <a href={href(`/consensus/${detail.consensusId}`)} className="font-mono text-[10px] hover:underline" style={{ color: 'var(--accent)' }}>
                 → consensus round {detail.consensusId}
               </a>
             </div>

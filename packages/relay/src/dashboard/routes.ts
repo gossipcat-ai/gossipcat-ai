@@ -9,6 +9,7 @@ import { memoryHandler } from './api-memory';
 import { autoMemoryHandler } from './api-native-memory';
 import { gossipMemoryHandler } from './api-gossip-memory';
 import { consensusHandler } from './api-consensus';
+import { consensusFlowHandler, isValidConsensusId } from './api-consensus-flow';
 import { signalsHandler } from './api-signals';
 import { findingHandler } from './api-finding';
 import { openFindingsHandler } from './api-open-findings';
@@ -270,6 +271,28 @@ export class DashboardRouter {
 
       if (url === '/dashboard/api/consensus' && req.method === 'GET') {
         const data = await consensusHandler(this.projectRoot, query ?? undefined);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      if (url === '/dashboard/api/consensus-flow' && req.method === 'GET') {
+        // Trust boundary: consensusId arrives via URL query and is allowlisted
+        // (`xxxxxxxx-xxxxxxxx` hex) before the handler touches the filesystem.
+        // Reject malformed input with 400 here so the handler never sees it.
+        const consensusId = query?.get('consensusId')?.trim() ?? '';
+        if (!consensusId) {
+          this.json(res, 400, { error: 'consensusId query parameter is required' });
+          return true;
+        }
+        if (!isValidConsensusId(consensusId)) {
+          this.json(res, 400, { error: 'invalid consensusId shape (expected xxxxxxxx-xxxxxxxx hex)' });
+          return true;
+        }
+        const data = consensusFlowHandler(this.projectRoot, query ?? undefined);
+        if ('error' in data) {
+          this.json(res, 404, data);
+          return true;
+        }
         this.json(res, 200, data);
         return true;
       }
