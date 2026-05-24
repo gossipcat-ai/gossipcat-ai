@@ -99,9 +99,13 @@ export function filterSafePaths(paths: string[]): { safe: string[]; rejected: st
   const rejected: string[] = [];
   if (!paths) return { safe, rejected };
   for (const p of paths) {
-    if (typeof p === 'string' && p.length > 0 && !p.startsWith('/') && !p.startsWith('-')) {
+    if (typeof p !== 'string') continue; // non-string entries aren't auditable as paths
+    if (p.length > 0 && !p.startsWith('/') && !p.startsWith('-')) {
       safe.push(p);
-    } else if (typeof p === 'string' && p.length > 0) {
+    } else {
+      // f4 (PR #495): empty-string AND unsafe (absolute / leading-dash) paths
+      // both land in rejected[] so they surface in the receipt rather than
+      // vanishing silently — consistent with this filter's audit purpose.
       rejected.push(p);
     }
   }
@@ -290,6 +294,16 @@ export function preserveLeakedPaths(
         // `git status`), recoverable with `git reset HEAD -- <paths>`. We do not
         // fail the preserve for this: the patch (the thing that matters) is intact.
       }
+    }
+
+    // f1 (PR #495): an empty diff means the present paths produced no content
+    // delta (e.g. a leaked path already matching HEAD). Writing a zero-byte
+    // patch and setting patchPath would falsely report "work preserved" in the
+    // receipt. Skip the write and leave patchPath unset so the caller treats it
+    // as "no patch written" — harmless here, since an empty diff means there is
+    // nothing for the subsequent revert to restore.
+    if (diff.length === 0) {
+      return result;
     }
 
     const recoveryDir = path.join(cwd, '.gossip', 'recovery');
