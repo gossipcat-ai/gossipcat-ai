@@ -277,6 +277,85 @@ function Starfield({ width, height, agentPositions }: StarfieldProps) {
   );
 }
 
+/** Smile face overlay shown on the orchestrator blackhole when clicked.
+ *  Pops in with a brief scale-bounce + fade, then fades out at ~900ms.
+ *  Four variants cycle through clicks so repeated clicks vary the reaction:
+ *    0 — normal smile
+ *    1 — winky face
+ *    2 — big grin (open mouth)
+ *    3 — cat smile ( :3 ) */
+function OrchestratorSmile({ variant }: { variant: number }) {
+  const face = (() => {
+    switch (variant) {
+      case 1: // wink
+        return (
+          <>
+            <path d="M 19 24 L 25 24" stroke="#F2EDE3" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="34" cy="24" r="1.5" fill="#F2EDE3" />
+            <path d="M 20 31 Q 28 36 36 31" stroke="#F2EDE3" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+          </>
+        );
+      case 2: // big grin
+        return (
+          <>
+            <circle cx="22" cy="23" r="1.6" fill="#F2EDE3" />
+            <circle cx="34" cy="23" r="1.6" fill="#F2EDE3" />
+            <path d="M 19 30 Q 28 38 37 30 Q 28 33 19 30 Z" fill="#F2EDE3" opacity="0.92" />
+          </>
+        );
+      case 3: // cat :3
+        return (
+          <>
+            <circle cx="22" cy="24" r="1.4" fill="#F2EDE3" />
+            <circle cx="34" cy="24" r="1.4" fill="#F2EDE3" />
+            <path d="M 22 30 Q 26 33 28 30 Q 30 33 34 30" stroke="#F2EDE3" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+          </>
+        );
+      default: // normal smile
+        return (
+          <>
+            <circle cx="22" cy="24" r="1.5" fill="#F2EDE3" />
+            <circle cx="34" cy="24" r="1.5" fill="#F2EDE3" />
+            <path d="M 20 31 Q 28 36 36 31" stroke="#F2EDE3" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+          </>
+        );
+    }
+  })();
+  return (
+    <svg
+      width="56" height="56" viewBox="0 0 56 56"
+      style={{
+        position: 'absolute',
+        top: 0, left: 0,
+        animation: 'orch-smile-pop 900ms ease-out forwards',
+        pointerEvents: 'none',
+      }}
+      aria-hidden
+    >
+      {face}
+    </svg>
+  );
+}
+
+/** Expanding ripple wave emitted from the orchestrator on click. Visual
+ *  confirmation the click landed even before the smile finishes pop-in. */
+function OrchestratorRipple() {
+  return (
+    <svg
+      width="56" height="56" viewBox="0 0 56 56"
+      style={{
+        position: 'absolute',
+        top: 0, left: 0,
+        animation: 'orch-ripple 700ms ease-out forwards',
+        pointerEvents: 'none',
+      }}
+      aria-hidden
+    >
+      <circle cx="28" cy="28" r="9" fill="none" stroke="var(--accent)" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
 interface RingBandsProps {
   width: number;
   height: number;
@@ -464,6 +543,9 @@ function HubSpokeGraph({
   // canvas requires this — otherwise the system lives in the top `height` px
   // and the bottom of the stretched card is empty.
   const [measuredHeight, setMeasuredHeight] = useState(height);
+  // Easter egg: click the orchestrator blackhole. Count drives a smile face
+  // pop + ripple, and unlocks playful label reactions past certain thresholds.
+  const [orchestratorClicks, setOrchestratorClicks] = useState(0);
 
   // Resize observer keeps layout responsive in both dimensions.
   useEffect(() => {
@@ -681,10 +763,15 @@ function HubSpokeGraph({
           style={{
             left: width / 2,
             top: measuredHeight / 2,
-            pointerEvents: 'none',
+            cursor: 'pointer',
           }}
+          onClick={(ev) => {
+            ev.stopPropagation();
+            setOrchestratorClicks((c) => c + 1);
+          }}
+          title={orchestratorClicks >= 10 ? '♥' : orchestratorClicks >= 5 ? 'ok ok' : 'orchestrator'}
         >
-          <svg width="56" height="56" viewBox="0 0 56 56" style={{ display: 'block' }} aria-hidden>
+          <svg width="56" height="56" viewBox="0 0 56 56" style={{ display: 'block', pointerEvents: 'none' }} aria-hidden>
             {/* Outer accretion halo — terracotta glow */}
             <circle cx="28" cy="28" r="26" fill="none" stroke="var(--accent)" strokeWidth="0.6" opacity="0.35" />
             <circle cx="28" cy="28" r="22" fill="none" stroke="var(--accent)" strokeWidth="0.4" opacity="0.25" />
@@ -695,6 +782,17 @@ function HubSpokeGraph({
             {/* Inner accretion glow rim */}
             <circle cx="28" cy="28" r="9" fill="none" stroke="var(--accent)" strokeWidth="0.5" opacity="0.6" />
           </svg>
+          {/* Easter egg: smile face pops in on every click. The `key` prop
+              changes per click so React remounts the SVG and the CSS
+              animation restarts. Variant cycles 4 faces. */}
+          {orchestratorClicks > 0 && (
+            <OrchestratorSmile key={orchestratorClicks} variant={(orchestratorClicks - 1) % 4} />
+          )}
+          {/* Ripple wave — concentric expanding circle that fades out, hinting
+              the click registered even before the smile finishes pop-in. */}
+          {orchestratorClicks > 0 && (
+            <OrchestratorRipple key={`ripple-${orchestratorClicks}`} />
+          )}
           <div
             className="font-mono"
             style={{
@@ -705,12 +803,14 @@ function HubSpokeGraph({
               fontSize: '9px',
               letterSpacing: '0.18em',
               textTransform: 'uppercase',
-              color: 'var(--stage-text-dim)',
+              color: orchestratorClicks >= 10 ? 'var(--accent)' : 'var(--stage-text-dim)',
               whiteSpace: 'nowrap',
               opacity: 0.7,
+              pointerEvents: 'none',
+              transition: 'color 400ms ease-out',
             }}
           >
-            orchestrator
+            {orchestratorClicks >= 10 ? '♥ orchestrator ♥' : 'orchestrator'}
           </div>
         </div>
       )}

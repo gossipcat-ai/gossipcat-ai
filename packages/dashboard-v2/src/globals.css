@@ -169,6 +169,24 @@
   --s-8: 64px;
 }
 
+/* Orchestrator easter egg — click the center blackhole.
+   Smile pops in with a quick bounce + fade out; ripple expands + fades. */
+@keyframes orch-smile-pop {
+  0%   { opacity: 0; transform: scale(0.4); }
+  20%  { opacity: 1; transform: scale(1.25); }
+  45%  { opacity: 1; transform: scale(0.95); }
+  60%  { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
+}
+@keyframes orch-ripple {
+  0%   { opacity: 0.7; transform: scale(0.9); }
+  100% { opacity: 0; transform: scale(3.4); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Respect motion sensitivity: easter egg still fires but instantly. */
+  [style*="orch-smile-pop"], [style*="orch-ripple"] { animation: none !important; opacity: 0; }
+}
+
 /* DESIGN.md section header signature (small-caps Geist).
    Replaces the legacy `font-mono text-[11px] font-bold uppercase tracking-widest` pattern.
    Step 2 of the application checklist rolls this out across every existing header.
