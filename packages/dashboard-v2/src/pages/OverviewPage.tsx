@@ -18,7 +18,8 @@ import { useUrlRangeParam } from '@/hooks/useUrlRangeParam';
 import { useGlobalAgentKeys } from '@/hooks/useGlobalAgentKeys';
 import { isGraphHidden } from '@/lib/feature-flags';
 import { href } from '@/lib/router';
-import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint, SkillsApiResponse } from '@/lib/types';
+import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint } from '@/lib/types';
+import type { SkillsApiResponse } from '@gossip/types';
 
 interface OverviewPageProps {
   overview: OverviewData;

@@ -2,44 +2,10 @@ import { SkillIndex, SkillIndexData } from '@gossip/orchestrator/skill-index';
 import { readJsonlWithRotated, normalizeSkillName } from '@gossip/orchestrator';
 import { existsSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
+import type { SkillVerdict, SkillCurvePoint, SkillEffectivenessEntry } from '@gossip/types';
 
-/**
- * Verdict tags inlined from `check-effectiveness.ts` SkillStatus union. We keep
- * this as a string-literal union (not a re-import) so the relay package
- * doesn't widen its public surface with internal orchestrator types — the
- * verdict is just a tag for the dashboard, not a state machine input.
- */
-export type SkillVerdict =
-  | 'pending'
-  | 'passed'
-  | 'failed'
-  | 'silent_skill'
-  | 'insufficient_evidence'
-  | 'inconclusive'
-  | 'flagged_for_manual_review';
-
-/** One point on the post-bind effectiveness curve for a single skill. */
-export interface SkillCurvePoint {
-  /** Window-end timestamp (ms epoch). */
-  t: number;
-  /** Accuracy in window = correct / (correct + hallucinated). null when window empty. */
-  value: number | null;
-}
-
-/** Per-agent+skill effectiveness curve plus metadata. */
-export interface SkillEffectivenessEntry {
-  agentId: string;
-  skill: string;
-  status: SkillVerdict | null;
-  /** 10 equal-time windows from boundAt → now. */
-  curve: SkillCurvePoint[];
-  /** Graduation threshold — passed_baseline_rate from frontmatter, fallback 0.7. */
-  threshold: number;
-  /** Total post-bind signals across the full curve window. */
-  n: number;
-  /** ISO. Anchor for the curve. From frontmatter bound_at if present, else slot.boundAt. */
-  boundAt: string;
-}
+// Re-export from @gossip/types so relay consumers get the canonical types.
+export type { SkillVerdict, SkillCurvePoint, SkillEffectivenessEntry };
 
 export interface SkillsGetResponse {
   index: SkillIndexData;
