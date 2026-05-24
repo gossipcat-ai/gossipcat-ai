@@ -45,17 +45,41 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
 
   return (
     <div
-      className="flex items-center gap-3 rounded-md border px-3 py-2"
+      className="rounded-md border px-3 py-2"
       style={{ background: 'var(--surface-elev)', borderColor: 'var(--border)' }}
     >
-      <div className="h-section">
-        Signal volume
+      {/* Top row: section label + range selector */}
+      <div className="mb-2 flex items-center justify-between">
+        <div className="h-section">Signal volume</div>
+        <div className="flex gap-1">
+          {RANGES.map((r) => {
+            const active = r === range;
+            return (
+              <button
+                key={r}
+                type="button"
+                onClick={() => onRangeChange(r)}
+                aria-pressed={active}
+                className="rounded px-2 py-0.5 font-mono text-[10px] transition"
+                style={{
+                  background: active ? 'color-mix(in oklch, var(--accent) 10%, transparent)' : 'transparent',
+                  color: active ? 'var(--accent)' : 'var(--text-dim)',
+                  border: '1px solid',
+                  borderColor: active ? 'color-mix(in oklch, var(--accent) 30%, transparent)' : 'transparent',
+                }}
+              >
+                {r}
+              </button>
+            );
+          })}
+        </div>
       </div>
-      <span className="font-mono text-[10px] tabular-nums" style={{ color: 'var(--ink-3)' }}>{RANGE_AGO_LABEL[range]}</span>
+
+      {/* Full-width bar chart */}
       <svg
         viewBox={`0 0 ${BUCKET_COUNT} 1`}
         preserveAspectRatio="none"
-        style={{ flex: 1, height, color: 'var(--accent)' }}
+        style={{ width: '100%', height, color: 'var(--accent)', display: 'block' }}
       >
         {buckets.map((c, i) => {
           const h = c === 0 ? 0 : (c / max);
@@ -73,28 +97,11 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
           );
         })}
       </svg>
-      <span className="font-mono text-[10px] tabular-nums" style={{ color: 'var(--ink-3)' }}>now</span>
-      <div className="flex gap-1">
-        {RANGES.map((r) => {
-          const active = r === range;
-          return (
-            <button
-              key={r}
-              type="button"
-              onClick={() => onRangeChange(r)}
-              aria-pressed={active}
-              className="rounded px-2 py-0.5 font-mono text-[10px] transition"
-              style={{
-                background: active ? 'color-mix(in oklch, var(--accent) 10%, transparent)' : 'transparent',
-                color: active ? 'var(--accent)' : 'var(--text-dim)',
-                border: '1px solid',
-                borderColor: active ? 'color-mix(in oklch, var(--accent) 30%, transparent)' : 'transparent',
-              }}
-            >
-              {r}
-            </button>
-          );
-        })}
+
+      {/* X-axis labels: oldest (left) → now (right) */}
+      <div className="mt-1 flex items-center justify-between font-mono text-[10px] tabular-nums" style={{ color: 'var(--ink-3)' }}>
+        <span>{RANGE_AGO_LABEL[range]}</span>
+        <span>now</span>
       </div>
     </div>
   );
