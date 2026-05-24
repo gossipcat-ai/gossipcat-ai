@@ -1,6 +1,6 @@
 import { SkillIndex, SkillIndexData } from '@gossip/orchestrator/skill-index';
-import { readJsonlWithRotated, normalizeSkillName } from '@gossip/orchestrator';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { readJsonlWithRotated, normalizeSkillName, resolveSkill } from '@gossip/orchestrator';
+import { existsSync, statSync } from 'fs';
 import { join } from 'path';
 import type { SkillVerdict, SkillCurvePoint, SkillEffectivenessEntry } from '@gossip/types';
 
@@ -56,19 +56,21 @@ function readSkillFrontmatter(
   skillName: string,
 ): SkillFrontmatter | null {
   try {
-    const path = join(projectRoot, '.gossip', 'agents', agentId, 'skills', `${skillName}.md`);
-    if (!existsSync(path)) return null;
-    const raw = readFileSync(path, 'utf-8');
+    const resolved = resolveSkill(agentId, skillName, projectRoot);
+    if (!resolved) return null;
+    const raw = resolved.content;
     if (!raw.startsWith('---')) return null;
     const end = raw.indexOf('\n---', 3);
     if (end === -1) return null;
     const block = raw.slice(3, end);
     const out: SkillFrontmatter = {};
     for (const line of block.split('\n')) {
-      const m = line.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.+?)\s*$/);
+      // Strip inline comments before matching to handle `key: value  # note`
+      const trimmed = line.replace(/#.*$/, '').trim();
+      const m = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.+)$/);
       if (!m) continue;
       const key = m[1];
-      let value: string = m[2];
+      let value: string = m[2].trim();
       if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
         value = value.slice(1, -1);
       }
@@ -79,6 +81,8 @@ function readSkillFrontmatter(
         if (Number.isFinite(n)) out.passed_baseline_rate = n;
       }
     }
+    // Return null instead of empty object when no recognized fields were parsed
+    if (!out.status && !out.bound_at && out.passed_baseline_rate === undefined) return null;
     return out;
   } catch {
     return null;

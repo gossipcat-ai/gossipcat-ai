@@ -452,7 +452,7 @@ function getKeywords(content: string, skillName: string): string[] {
  * back to the non-realpath'd absolute path so a transient FS error never
  * fails the load.
  */
-function resolveSkill(
+export function resolveSkill(
   agentId: string,
   skill: string,
   projectRoot: string,
