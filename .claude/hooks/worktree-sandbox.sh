@@ -180,6 +180,26 @@ if [ -z "$cwd" ]; then
   exit 0
 fi
 
+# Env-based orchestrator exemption (issue #162 problem 1).
+#
+# When the orchestrator shell cd's into a worktree to inspect/commit a
+# subagent's work (which is a legitimate operation), the cwd-glob logic
+# below pins it as if it were the subagent. Set
+# GOSSIPCAT_ORCHESTRATOR_ROLE=1 on the top-level orchestrator session to
+# short-circuit the gate.
+#
+# NOTE: gossip_setup (issue #176) now auto-creates a marker file at
+# $CLAUDE_PROJECT_DIR/.gossip/orchestrator-role so this env var no longer
+# needs to be set manually. The marker-file check below fires after
+# IS_SUBAGENT=1 is determined and is safe because each session's
+# CLAUDE_PROJECT_DIR points to its own project root (worktree sessions
+# point to the worktree, not the parent project), so subagents cannot
+# accidentally resolve the orchestrator's marker file.
+# The env var check is kept for backward compatibility (manual opt-in).
+case "$GOSSIPCAT_ORCHESTRATOR_ROLE" in
+  1|true|TRUE|yes|YES) exit 0 ;;
+esac
+
 # Distinguish orchestrator from subagent using $CLAUDE_PROJECT_DIR as anchor.
 # The orchestrator runs with its project dir as cwd; subagents run inside a
 # gossipcat worktree. We only gate subagents.
@@ -225,6 +245,25 @@ fi
 
 # Orchestrator (or non-gossipcat cwd) → pass through without gating.
 [ "$IS_SUBAGENT" -eq 0 ] && exit 0
+
+# Marker-file orchestrator exemption (issue #176).
+#
+# gossip_setup writes $CLAUDE_PROJECT_DIR/.gossip/orchestrator-role at the
+# PROJECT ROOT. When the orchestrator cd's into a worktree, IS_SUBAGENT was
+# set to 1 above, but we can still detect the orchestrator because:
+#   - Orchestrator session: CLAUDE_PROJECT_DIR = <project root>
+#     → marker = <project root>/.gossip/orchestrator-role  ← exists
+#   - Subagent session:     CLAUDE_PROJECT_DIR = <worktree root>
+#     → marker = <worktree>/.gossip/orchestrator-role      ← does NOT exist
+# This is naturally self-policing: subagents cannot see the orchestrator's
+# marker file without explicitly reading outside their worktree.
+# Only check when CLAUDE_PROJECT_DIR is set; skip silently when absent.
+if [ -n "$CLAUDE_PROJECT_DIR" ]; then
+  if [ -f "${CLAUDE_PROJECT_DIR}/.gossip/orchestrator-role" ]; then
+    exit 0
+  fi
+fi
+
 # Subagent falls through to existing path-gating logic below (unchanged).
 
 # Case-insensitive tool-name match (portable: no bash 4+ ${var,,}).
@@ -268,7 +307,41 @@ ${edit_paths}"
     # absolute-path token `/etc/passwd` would be missed.
     cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     if [ -n "$cmd" ]; then
-      candidates="$(printf '%s\n' "$cmd" \
+      # Quoted-string false-positive mitigation (issue #162 problem 2).
+      #
+      # The raw grep matches any /path token preceded by a shell metachar,
+      # including tokens inside single-quoted arg bodies like `git commit -m
+      # 'fixes /etc/config'` or `gh pr create --body '... see /etc/passwd
+      # ...'`. These never write to those paths, but they falsely trip the
+      # boundary check.
+      #
+      # Mitigation: if argv[0] (the first whitespace-separated token with
+      # any leading path stripped) is NOT a shell wrapper, strip single-
+      # quoted content before extraction. Shell wrappers (`bash -c`,
+      # `sh -c`, `eval`, `zsh -c`, `ksh -c`) may carry the REAL command
+      # inside single quotes, so we leave their bodies untouched.
+      #
+      # Known bypass: `env bash -c 'cp /wt /etc/x'` — argv[0] is `env`, so
+      # we strip the single-quoted body. The subagent prompt (Layer 1) and
+      # the git porcelain audit (Layer 3) still apply. Documented in
+      # docs/specs/2026-04-18-sandbox-hook-quoted-args.md (if/when we ship it).
+      argv0_raw="$(printf '%s' "$cmd" | awk '{print $1}')"
+      argv0_basename="${argv0_raw##*/}"
+      cmd_for_extraction="$cmd"
+      case "$argv0_basename" in
+        bash|sh|zsh|ksh|dash|eval|exec)
+          # Shell wrapper — keep quoted content for extraction.
+          ;;
+        *)
+          # Non-shell — strip balanced single-quoted spans. POSIX sed, no
+          # state. Caveats: ANSI-C `$'...'` quoting and `'\''` escaped
+          # apostrophe edges leak partial content; these are narrow cases
+          # and the downstream grep still catches any absolute-path token
+          # that survives the strip.
+          cmd_for_extraction="$(printf '%s' "$cmd" | sed "s/'[^']*'//g")"
+          ;;
+      esac
+      candidates="$(printf '%s\n' "$cmd_for_extraction" \
         | grep -oE '(^|[[:space:]=><;\|(){},&`])/[^[:space:]"'"'"'`;\|><(){},&]+' 2>/dev/null \
         | sed -E -e 's/^[[:space:]=><;\|(){},&`]//')"
     fi
@@ -324,7 +397,7 @@ while IFS= read -r path_arg; do
   fi
 
   if ! path_is_inside "$cwd_norm" "$path_norm"; then
-    emit_deny "BOUNDARY ESCAPE: ${tool_name} targets '${path_arg}' (normalized: '${path_norm}') outside worktree cwd '${cwd_norm}'. Use a relative path (./...) inside the worktree."
+    emit_deny "BOUNDARY ESCAPE: ${tool_name} targets '${path_arg}' (normalized: '${path_norm}') outside worktree cwd '${cwd_norm}'. Use a relative path (./...) inside the worktree. If you are the orchestrator, re-run gossip_setup to auto-write the orchestrator-role marker (issue #176). Fallback: export GOSSIPCAT_ORCHESTRATOR_ROLE=1 and relaunch Claude Code."
   fi
 done <<EOF
 $candidates
