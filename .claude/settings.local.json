@@ -17,7 +17,40 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cat .gossip/bootstrap.md 2>/dev/null || echo '[gossipcat] No bootstrap yet. Load tools first: ToolSearch(query: \"select:mcp__gossipcat__gossip_status\") then call gossip_status()'"
+            "command": "gossipcat hook --run"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/discipline/session-start-bootstrap.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__gossipcat__gossip_signals",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/discipline/pretool-signals-validate.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__gossipcat__gossip_collect",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/discipline/posttool-collect-reminder.sh"
           }
         ]
       }
