@@ -100,7 +100,7 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 import { ctx } from './mcp-context';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
-import { buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog, isValidCategory } from '@gossip/orchestrator';
+import { buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog, isValidCategory, seedPermanentDefaults, GLOBAL_PERMANENT_DEFAULTS, IMPLEMENTER_PERMANENT_DEFAULTS, RESEARCHER_REVIEWER_PERMANENT_DEFAULTS } from '@gossip/orchestrator';
 
 // Prime the dist-mcp staleness cache from the running bundle path. In the bundled
 // CJS output (dist-mcp/mcp-server.js) __filename resolves to the bundle file, so
@@ -750,35 +750,11 @@ async function doBoot() {
     // slots added. The "no overlap between permanent and contextual"
     // invariant the user raised is enforced by construction: once a slot is
     // bound, its mode is authoritative for that agent and won't be clobbered.
-    const GLOBAL_PERMANENT_DEFAULTS = ['memory-retrieval'];
-    // Implementer-only permanent defaults — bound to any agent whose id ends
-    // in `-implementer`. Convention documented in .claude/rules/gossipcat.md.
-    // Spec: docs/specs/2026-04-22-premise-verification.md (Component C).
-    const IMPLEMENTER_PERMANENT_DEFAULTS = ['verify-the-premise', 'implementation-discipline'];
-    // Researcher/Reviewer permanent defaults — bound to any agent whose id
-    // ends in `-researcher` or `-reviewer`. Disjoint from the implementer
-    // filter: hybrid ids like `foo-researcher-implementer` match BOTH filters
-    // independently and inherit each suffix's defaults once.
-    // Spec: docs/specs/2026-04-22-premise-verification-stage-2.md (PR B).
-    const RESEARCHER_REVIEWER_PERMANENT_DEFAULTS = ['emit-structured-claims'];
     try {
-      const allAgentIds = agentConfigs.map((ac: any) => ac.id).filter((id: any) => typeof id === 'string' && id.length > 0);
-      if (allAgentIds.length > 0) {
-        skillIndex.ensureBoundWithMode(GLOBAL_PERMANENT_DEFAULTS, allAgentIds, 'permanent');
-        process.stderr.write(`[gossipcat] 📚 Global permanent defaults seeded: ${GLOBAL_PERMANENT_DEFAULTS.join(', ')} → ${allAgentIds.length} agents\n`);
-      }
-      const implementerIds = allAgentIds.filter((id: string) => id.endsWith('-implementer'));
-      if (implementerIds.length > 0) {
-        skillIndex.ensureBoundWithMode(IMPLEMENTER_PERMANENT_DEFAULTS, implementerIds, 'permanent');
-        process.stderr.write(`[gossipcat] 📚 Implementer permanent defaults seeded: ${IMPLEMENTER_PERMANENT_DEFAULTS.join(', ')} → ${implementerIds.length} agents\n`);
-      }
-      const researcherReviewerIds = allAgentIds.filter(
-        (id: string) => id.endsWith('-researcher') || id.endsWith('-reviewer'),
-      );
-      if (researcherReviewerIds.length > 0) {
-        skillIndex.ensureBoundWithMode(RESEARCHER_REVIEWER_PERMANENT_DEFAULTS, researcherReviewerIds, 'permanent');
-        process.stderr.write(`[gossipcat] 📚 Researcher/Reviewer permanent defaults seeded: ${RESEARCHER_REVIEWER_PERMANENT_DEFAULTS.join(', ')} → ${researcherReviewerIds.length} agents\n`);
-      }
+      const seeded = seedPermanentDefaults(skillIndex, agentConfigs.map((ac: any) => ac.id));
+      if (seeded.global.length > 0) process.stderr.write(`[gossipcat] 📚 Global permanent defaults seeded: ${GLOBAL_PERMANENT_DEFAULTS.join(', ')} → ${seeded.global.length} agents\n`);
+      if (seeded.implementer.length > 0) process.stderr.write(`[gossipcat] 📚 Implementer permanent defaults seeded: ${IMPLEMENTER_PERMANENT_DEFAULTS.join(', ')} → ${seeded.implementer.length} agents\n`);
+      if (seeded.researcherReviewer.length > 0) process.stderr.write(`[gossipcat] 📚 Researcher/Reviewer permanent defaults seeded: ${RESEARCHER_REVIEWER_PERMANENT_DEFAULTS.join(', ')} → ${seeded.researcherReviewer.length} agents\n`);
     } catch (seedErr) {
       process.stderr.write(`[gossipcat] ⚠️  Global permanent skill auto-seed failed: ${(seedErr as Error).message}\n`);
     }
