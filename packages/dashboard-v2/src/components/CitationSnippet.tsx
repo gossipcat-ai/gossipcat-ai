@@ -13,7 +13,7 @@ export function CitationSnippet({ citation }: { citation: CS }) {
         className="overflow-x-auto"
         style={{
           background: 'var(--surface-sunk)',
-          borderLeft: '3px solid var(--accent)',
+          borderLeft: '3px solid var(--border-strong)',
           padding: '12px 16px',
           borderRadius: '6px',
           fontFamily: 'var(--font-mono)',
