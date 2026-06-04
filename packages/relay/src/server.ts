@@ -15,6 +15,7 @@ import { AgentConnection, livenessMap } from './agent-connection';
 import { DashboardAuth } from './dashboard/auth';
 import { DashboardRouter } from './dashboard/routes';
 import { DashboardWs } from './dashboard/ws';
+import type { ChatbotAgent } from '@gossip/orchestrator';
 
 export interface DashboardConfig {
   projectRoot: string;
@@ -454,5 +455,15 @@ export class RelayServer {
    */
   setAgentConfigs(configs: Array<{ id: string; provider: string; model: string; preset?: string; skills: string[]; native?: boolean }>): void {
     this.dashboardRouter?.updateContext({ agentConfigs: configs });
+  }
+
+  /**
+   * Inject the read-only dashboard chatbot agent (or null to disable). Called
+   * by the app layer (mcp-server-sdk.ts) after boot once the chat provider/key
+   * are resolved. dashboardRouter is private, so this public forwarder is the
+   * only seam (spec §3.6, CORRECTION #1). No-op if the dashboard is disabled.
+   */
+  setChatbot(agent: ChatbotAgent | null): void {
+    this.dashboardRouter?.setChatbot(agent);
   }
 }

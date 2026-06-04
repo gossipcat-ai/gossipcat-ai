@@ -19,6 +19,9 @@ import { tasksHandler } from './api-tasks';
 import { activeTasksHandler } from './api-active-tasks';
 import { logsHandler } from './api-logs';
 import { violationsHandler } from './api-violations';
+import { handleChat } from './api-chat';
+import { ChatConversationStore } from './chat-session-store';
+import type { ChatbotAgent } from '@gossip/orchestrator';
 import { readFileSync, existsSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { createHash, timingSafeEqual } from 'crypto';
@@ -40,6 +43,17 @@ interface DashboardContext {
 
 const AUTH_MAX_ATTEMPTS = 10;
 const AUTH_LOCKOUT_MS = 60_000; // 1 minute lockout after max attempts
+
+// Per-route body cap for POST /dashboard/api/chat. Larger than the shared
+// MAX_BODY_SIZE (8 KB) because a chat message can be a reasonable paragraph,
+// but still tightly bounded as a DoS guard (CORRECTION #6 — parametrize
+// readBody, don't bump the shared cap).
+const CHAT_MAX_BODY = 64 * 1024; // 64 KB
+
+// Minimum interval between chat turns from one IP — a simple per-IP throttle so
+// a single client can't fan out concurrent/rapid turns (each turn can run up to
+// maxToolCallsPerTurn tool executions). Mirrors the isIpLockedOut style.
+const CHAT_MIN_INTERVAL_MS = 1_000;
 
 /**
  * Resolve the bundled dashboard asset root. Same multi-candidate pattern as
@@ -63,6 +77,13 @@ function resolveDashboardRoot(projectRoot: string): string | null {
 export class DashboardRouter {
   private authAttempts = new Map<string, { count: number; lockedUntil: number }>();
   private dashboardRoot: string | null;
+  // Chatbot seam (P2). Null until the app layer injects an agent via
+  // setChatbot; a null agent is the graceful-degrade path (handleChat emits an
+  // error event rather than 5xx).
+  private chatbot: ChatbotAgent | null = null;
+  private chatStore = new ChatConversationStore();
+  // Per-IP last-chat-turn timestamp for the min-interval throttle.
+  private chatLastTurn = new Map<string, number>();
 
   constructor(
     private auth: DashboardAuth,
@@ -70,6 +91,15 @@ export class DashboardRouter {
     private ctx: DashboardContext,
   ) {
     this.dashboardRoot = resolveDashboardRoot(projectRoot);
+  }
+
+  /**
+   * Inject (or clear) the read-only chatbot agent. Called by the app layer
+   * after boot via RelayServer.setChatbot. Passing null disables chat with a
+   * graceful-degrade SSE error rather than a hard failure.
+   */
+  setChatbot(agent: ChatbotAgent | null): void {
+    this.chatbot = agent;
   }
 
   /** Update live context (call when agents connect/disconnect) */
@@ -202,6 +232,32 @@ export class DashboardRouter {
     }
     const attempt = this.authAttempts.get(ip);
     return !!(attempt && attempt.lockedUntil > now);
+  }
+
+  /**
+   * Per-IP min-interval throttle for chat turns. Returns true (and records the
+   * new turn timestamp) when the caller is allowed to proceed; false when the
+   * previous turn was too recent. Opportunistic pruning caps the map under
+   * abusive scans, same posture as isIpLockedOut.
+   */
+  private allowChatTurn(ip: string): boolean {
+    const now = Date.now();
+    if (this.chatLastTurn.size > 100) {
+      // Prune entries idle for longer than the throttle window can possibly
+      // matter (10x the interval). Pruning at exactly CHAT_MIN_INTERVAL_MS was
+      // too aggressive to reap under a fast scan — by the time the map crosses
+      // 100, the freshest 100 entries are all within one interval and nothing
+      // gets dropped, so the guard never actually reaps. A 10x window keeps the
+      // throttle decision intact while letting stale IPs fall out.
+      const staleBefore = CHAT_MIN_INTERVAL_MS * 10;
+      for (const [k, v] of this.chatLastTurn) {
+        if (now - v > staleBefore) this.chatLastTurn.delete(k);
+      }
+    }
+    const last = this.chatLastTurn.get(ip);
+    if (last !== undefined && now - last < CHAT_MIN_INTERVAL_MS) return false;
+    this.chatLastTurn.set(ip, now);
+    return true;
   }
 
   /**
@@ -427,6 +483,27 @@ export class DashboardRouter {
         return true;
       }
 
+      // Chatbot turn — /dashboard/api/chat. Auth already verified above.
+      // Streams SSE (handleChat takes over the response — do NOT go through
+      // json()). Read the body with a per-route cap (NOT the shared
+      // MAX_BODY_SIZE), then a per-IP min-interval throttle, then hand off.
+      if (url === '/dashboard/api/chat' && req.method === 'POST') {
+        const ip = req.socket?.remoteAddress || 'unknown';
+        if (!this.allowChatTurn(ip)) {
+          this.json(res, 429, { error: 'Too many chat requests. Slow down.' });
+          return true;
+        }
+        let body: unknown;
+        try {
+          body = JSON.parse(await readBody(req, CHAT_MAX_BODY));
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON body' });
+          return true;
+        }
+        await handleChat(req, res, body, { chatbot: this.chatbot, store: this.chatStore });
+        return true;
+      }
+
       this.json(res, 404, { error: 'Unknown API endpoint' });
     } catch (err) {
       this.json(res, 500, { error: 'Internal server error' });
@@ -603,14 +680,14 @@ export class DashboardRouter {
 
 const MAX_BODY_SIZE = 8 * 1024; // 8 KB — ample for auth key and skill bind payloads
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_SIZE): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     let tooLarge = false;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_SIZE) {
+      if (size > maxBytes) {
         tooLarge = true;
         req.destroy();
         reject(new Error('Request body too large'));
