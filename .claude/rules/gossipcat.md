@@ -70,11 +70,13 @@ in `-researcher` or `-reviewer`. Name custom research / review agents with
 one of those suffixes (e.g. `foo-researcher`, `foo-reviewer`) so they inherit
 the skill automatically.
 
-Auto-bind bindings are disjoint by suffix — an agent id may match multiple
-suffixes and will inherit each suffix's defaults once. A hybrid id like
-`foo-researcher-implementer` receives BOTH the `-researcher` defaults
-(`emit-structured-claims`) AND the `-implementer` defaults
-(`verify-the-premise`).
+Auto-bind routing is by `id.endsWith(<suffix>)`, so an id matches exactly one
+trailing suffix and the suffix groups are mutually exclusive. A hybrid-looking
+id like `foo-researcher-implementer` ends in `-implementer`, so it inherits
+ONLY the `-implementer` defaults (`verify-the-premise`, `implementation-discipline`)
+— it does NOT also get the `-researcher`/`-reviewer` defaults. There is no
+mechanism today for one agent to auto-inherit two suffix groups; if you need
+that, bind the extra skill explicitly.
 
 ## When to Use Multi-Agent vs Single Agent
 

@@ -30,6 +30,12 @@ export { SkillGapTracker, SKILL_FRESHNESS_MS } from './skill-gap-tracker';
 export type { GapSuggestion, GapResolution, GapEntry, GapData } from './skill-gap-tracker';
 export { SkillIndex } from './skill-index';
 export type { SkillSlot, SkillIndexData } from './skill-index';
+export {
+  seedPermanentDefaults,
+  GLOBAL_PERMANENT_DEFAULTS,
+  IMPLEMENTER_PERMANENT_DEFAULTS,
+  RESEARCHER_REVIEWER_PERMANENT_DEFAULTS,
+} from './permanent-defaults';
 export { assemblePrompt, assembleUtilityPrompt, MAX_ASSEMBLED_PROMPT_CHARS, extractSpecReferences, buildSpecReviewEnrichment, parseSpecFrontMatter, CONSENSUS_OUTPUT_FORMAT, FINDING_TAG_SCHEMA, UTILITY_DATA_ONLY_PREAMBLE, buildUtilityAgentPrompt } from './prompt-assembler';
 export type { SpecStatus } from './prompt-assembler';
 export { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
