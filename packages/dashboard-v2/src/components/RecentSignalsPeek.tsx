@@ -38,7 +38,7 @@ const VERDICT_COLOR: Record<string, string> = {
 const SEVERITY_TICK_COLOR: Record<string, string> = {
   critical: 'var(--bad)',
   high: 'var(--warn)',
-  medium: 'var(--info)',
+  medium: 'var(--severity-medium)',
   low: 'var(--ink-3)',
 };
 

@@ -20,7 +20,7 @@ interface SeverityMixStripProps {
 const SEGMENT_COLORS: Record<keyof SeverityCount, string> = {
   critical: 'var(--bad)',
   high: 'var(--warn)',
-  medium: 'var(--info)',
+  medium: 'var(--severity-medium)',
   low: 'var(--idle)',
 };
 

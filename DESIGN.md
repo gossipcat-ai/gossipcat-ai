@@ -56,8 +56,11 @@ Restrained, semantic-strict. **One accent.** Every other color carries meaning.
 | `--ok` | `#2A6E4F` | `#DCEBE2` | confirmed, healthy, passed, positive delta (darkened from #2F7D5B to clear 4.5:1 for 11px chip text) |
 | `--warn` | `#B47A2A` | `#F2E4CC` | needs skills, drift, low confidence |
 | `--bad` | `#A53A4A` | `#EFD4D8` | disputed, hallucination, failed, critical |
-| `--info` | `#3F8B86` | `#D5E6E4` | unverified, neutral data viz default |
+| `--info` | `#3F8B86` | `#D5E6E4` | unverified status, neutral data viz default |
 | `--idle` | `#6B6862` | `#E5E0D7` | offline, dormant, silent skill |
+| `--severity-medium` | `#3E6DA8` | — | **medium** severity only (cool blue, NOT --info teal — see Decisions Log 2026-06-04) |
+
+Severity ramp (finding/signal lists, severity-mix strip): `--bad` critical → `--warn` high → `--severity-medium` low-blue → `--idle` low. `--info` teal is **status only** (unverified) and must never double as a severity color.
 
 ### Chart palette (multi-series ONLY)
 
@@ -442,3 +445,5 @@ Each PR ships a Lighthouse + axe-core report demonstrating WCAG AA compliance ma
 | 2026-05-24 | Revised v0 → v1 after design review (consensus 144335b4, sonnet-designer) | 10 findings + 1 suggestion + 1 insight. Critical: F1 token namespace collision (fixed via alias migration), F2 Geist not on Google Fonts (fixed by Step 0 + npm install). High: F3 added State Coverage subsection, F4 darkened `--ink-3` to #6B6862 / `--ok` to #2A6E4F / restricted `--ink-4` to non-text use, F5 added Responsive breakpoints. F9 expanded skill graduation to 6 states. F6/F7/F8/F10 folded into the revised application checklist (Steps 0/2/4/5/6/7 gates). S1 added prefers-reduced-motion rule. I1 acknowledged via new Step 2 (.h-section retroactive sweep) |
 | 2026-05-24 | v1.1 — Step 6 sub-bar / gauge / sparkline colors reverted from chart palette (`--c1/--c2/--c3`) to per-agent identity color (`agentColor(id)`) | The chart-palette mapping was a misreading of the original infographic-vocabulary intent. Per-agent identity flooding the data viz is what was shown in the approved Option C preview; only card chrome stays neutral. Status chip stays semantic. Caught during PR #471 visual review |
 | 2026-05-24 | v1.1 clarification — Fraunces is allowed for the gauge center % inside AgentCardBig | Strict reading of §Typography reserves Fraunces for routes/heroes; gauge center % is an explicit editorial-accent carve-out inside an otherwise Geist card. Caught and documented during PR #471 pre-merge consensus |
+| 2026-06-04 | Unified `unverified` status to `--info` teal everywhere (was rendering ochre `#b8741d` via `bg-unverified` utilities, teal via `var(--info)`) | Same status showed two colors across views; DESIGN.md row 59 defines unverified = `--info`. `--color-unverified` re-pointed to the `--info` hex in both themes (PR #509) |
+| 2026-06-04 | Introduced `--severity-medium` blue (`#3E6DA8` / `#6E9BD4`); moved `medium` severity off `--info` teal | The unverified-status unification made `medium` severity (also `--info` teal) collide with unverified status — one teal, two meanings, violating "status is always semantic." The warm ramp (rose/amber/gold) is fully consumed by critical/high + identity hues, and `--warn`'s dark value is already gold; a cool blue is the only non-colliding slot that preserves the original "medium = calm severity" intent. Updated `SeverityMixStrip`, `RecentSignalsPeek`, `SignalsPage`. `--info` is now status-only. Deferred follow-up: pre-existing `hover:bg-accent/30-40` washes (convention is `/10`) in `AgentActivityTimeline`/`AgentPage`/`TaskRow`/`SystemPulse` |

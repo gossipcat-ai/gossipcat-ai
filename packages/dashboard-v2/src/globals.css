@@ -142,6 +142,12 @@
   --bad-soft: #EFD4D8;
   --info: #3F8B86;
   --info-soft: #D5E6E4;
+  /* Medium severity. Was mapped to --info teal, which collided with the
+     unverified STATUS token (both teal) once --color-unverified was unified to
+     --info. A distinct cool blue keeps "medium = the calm severity" while
+     freeing --info to mean only unverified/info. Severity ramp: --bad rose
+     (critical) → --warn amber (high) → --severity-medium blue → --idle slate (low). */
+  --severity-medium: #3E6DA8;
   --idle: #6B6862;
   --idle-soft: #E5E0D7;
   /* Chart palette (multi-series ONLY — never for status) */
@@ -312,6 +318,7 @@
   --bad-soft: #3A1C22;
   --info: #7CC1C7;
   --info-soft: #1A2729;
+  --severity-medium: #6E9BD4;
   --idle: #807A71;
   --idle-soft: #2A2722;
   /* Chart palette stays identical across themes (semantically same hues). */
