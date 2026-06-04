@@ -8,6 +8,9 @@ import { createProvider } from '../../packages/orchestrator/src/llm-client';
 import { existsSync, readFileSync, unlinkSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
+// Static import preserves the `unique symbol` type so it can index PerformanceWriter
+// (a dynamic `await import` widens it to plain `symbol`, breaking the index access).
+import { WRITER_INTERNAL } from '../../packages/orchestrator/src/_writer-internal';
 
 const PROJECT_ROOT = process.cwd();
 // Use a temp directory for performance signals to avoid destroying production data
@@ -55,7 +58,6 @@ describe('Consensus Protocol E2E', () => {
     // the consensus engine directly with synthetic Phase 1 results
     const { ConsensusEngine } = await import('../../packages/orchestrator/src/consensus-engine');
     const { PerformanceWriter } = await import('../../packages/orchestrator/src/performance-writer');
-    const { WRITER_INTERNAL } = await import('../../packages/orchestrator/src/_writer-internal');
 
     // Use google provider for cross-review (same as agents)
     const apiKey = getKeyFromKeychain('google');
