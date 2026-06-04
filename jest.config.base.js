@@ -22,7 +22,6 @@ const GEMINI_E2E_SUITES = [
 const KNOWN_BROKEN_SUITES = [
   'tests/cli/mcp-handlers\\.test\\.ts$',           // dispatch budget assertions
   'tests/cli/mcp-signals-validation\\.test\\.ts$', // signal schema edge cases
-  'tests/orchestrator/skill-catalog\\.test\\.ts$', // catalog shape drift
   'tests/orchestrator/consensus-e2e\\.test\\.ts$', // requires local .gossip/config.json fixture
   'tests/relay/dashboard-edge-cases\\.test\\.ts$', // dashboard API edges
 ];
