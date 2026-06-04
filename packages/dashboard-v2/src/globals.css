@@ -53,7 +53,11 @@
 
   --color-confirmed: #1a7e5e;
   --color-disputed: #c0392b;
-  --color-unverified: #b8741d;
+  /* unverified = --info teal per DESIGN.md:59 (status palette). Hex-literal
+     (not var(--color-info)) so Tailwind v4 opacity modifiers compose at build.
+     Was #b8741d ochre, which collided with --warn and rendered unverified two
+     different colors across the dashboard. Dark override below mirrors --color-info. */
+  --color-unverified: #3F8B86;
   --color-unique: #7c5cbf;
   /* DESIGN.md semantic palette exposed as Tailwind utilities so components
      can use bg-warn / text-bad / border-info / bg-warn/10 etc. instead of
@@ -269,6 +273,7 @@
   --color-warn: #D8A35A;
   --color-bad: #D26478;
   --color-info: #7CC1C7;
+  --color-unverified: #7CC1C7;
   --accent: #d68a6f;
   --accent-bright: #e08a6c;
   --accent-soft: rgba(214, 138, 111, 0.16);

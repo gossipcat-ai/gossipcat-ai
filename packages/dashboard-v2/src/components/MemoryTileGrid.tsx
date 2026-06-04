@@ -13,14 +13,16 @@ interface MemoryTileGridProps {
 }
 
 const TYPE_ACCENT_STYLE: Record<DisplayType, React.CSSProperties> = {
-  backlog: { color: 'var(--accent)' },
+  // backlog = "open, needs action" → --warn amber (matches MemoryFolders);
+  // brand accent is reserved for brand/CTA/active-nav, not data classification.
+  backlog: { color: 'var(--warn)' },
   record: { color: 'var(--text-dim)' },
   session: { color: 'var(--success)' },
   rule: { color: 'var(--warn)' },
 };
 
 const TYPE_TAG_RING: Record<DisplayType, string> = {
-  backlog: 'border-[color-mix(in_oklch,var(--accent)_30%,transparent)] bg-[color-mix(in_oklch,var(--accent)_6%,transparent)]',
+  backlog: 'border-[color-mix(in_oklch,var(--warn)_30%,transparent)] bg-[color-mix(in_oklch,var(--warn)_6%,transparent)]',
   record: 'border-text-dim/30 bg-text-dim/[0.08]',
   session: 'border-confirmed/30 bg-confirmed/[0.06]',
   rule: 'border-unverified/30 bg-unverified/[0.06]',
@@ -77,7 +79,7 @@ export function MemoryTileGrid({ folder, memories, onBack, onOpen }: MemoryTileG
               <button
                 key={`${mem.agentId || ''}/${mem.filename}`}
                 onClick={() => onOpen(mem)}
-                className="group flex flex-col gap-1.5 rounded-md border [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] p-3 text-left transition hover:[border-color:color-mix(in_oklch,var(--accent)_30%,transparent)] hover:bg-accent/40"
+                className="group flex flex-col gap-1.5 rounded-md border [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] p-3 text-left transition hover:[border-color:color-mix(in_oklch,var(--accent)_30%,transparent)] hover:bg-accent/10"
                 style={{ background: 'var(--surface-sunk)' }}
               >
                 <span

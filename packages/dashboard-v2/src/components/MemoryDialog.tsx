@@ -15,14 +15,25 @@ interface MemoryDialogProps {
  *
  * Visual shell mirrors docs/designs/memory-brain-v3.html lines 235-292:
  *   - Narrow (~576px), vertically centered
- *   - Primary-faint ring shadow for the "floating card" feel
+ *   - Hairline overlay elevation (--shadow-overlay) for the "floating card" feel
  *   - Close glyph inline with tag + title in a single header row
  *   - Section headers colored primary, not muted
  */
+// Per-type chip token — source of truth is MemoryFolders TYPE_ACCENT_STYLE
+// (backlog = "open, needs action" → --warn amber, NOT the brand accent; there
+// is no DESIGN.md carve-out granting --accent to backlog). Every type uses a
+// neutral/semantic token so the chip never dilutes the brand accent.
+const CHIP_COLOR: Record<string, string> = {
+  backlog: 'var(--warn)',
+  record: 'var(--text-dim)',
+  session: 'var(--success)',
+  rule: 'var(--warn)',
+};
+
 const dialogStyle: CSSProperties = {
   background: 'var(--surface-elev)',
   borderRadius: '16px',
-  boxShadow: 'var(--shadow-overlay), 0 0 0 3px var(--accent-soft)',
+  boxShadow: 'var(--shadow-overlay)',
   border: '1px solid var(--border)',
   color: 'var(--text)',
   fontFamily: 'var(--font-sans)',
@@ -45,6 +56,7 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
   if (!memory) return null;
 
   const display = toDisplayType(memory);
+  const chipColor = CHIP_COLOR[display] ?? 'var(--text-dim)';
   const owner = memory.agentId === '_project' ? 'project' : memory.agentId || 'unknown';
   const path = `.gossip/agents/${memory.agentId || '_project'}/memory/knowledge/${memory.filename}`;
   const ts = pickTimestamp(memory.frontmatter);
@@ -72,8 +84,12 @@ export function MemoryDialog({ memory, onClose }: MemoryDialogProps) {
           </div>
           <div className="flex items-center gap-2.5">
           <span
-            className="shrink-0 rounded-sm border border-primary/30 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.14em]"
-            style={{ background: 'color-mix(in oklch, var(--accent) 6%, transparent)', color: 'var(--accent)' }}
+            className="shrink-0 rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.14em]"
+            style={{
+              background: `color-mix(in oklch, ${chipColor} 6%, transparent)`,
+              borderColor: `color-mix(in oklch, ${chipColor} 30%, transparent)`,
+              color: chipColor,
+            }}
           >
             {display}
           </span>
