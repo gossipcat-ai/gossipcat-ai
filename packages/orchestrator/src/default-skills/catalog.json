@@ -96,6 +96,30 @@
       "description": "IaC, containers, networking, monitoring, alerting, scaling, disaster recovery",
       "keywords": ["infra", "terraform", "kubernetes", "docker", "monitoring", "cloud", "networking"],
       "categories": ["infrastructure"]
+    },
+    {
+      "name": "memory-retrieval",
+      "description": "Call gossip_remember BEFORE reviewing — recall prior findings on the same code so you don't re-discover or contradict yourself",
+      "keywords": [],
+      "categories": ["review"]
+    },
+    {
+      "name": "verify-the-premise",
+      "description": "Grep-verify quantitative claims in the dispatch task BEFORE writing code.",
+      "keywords": [],
+      "categories": ["verification"]
+    },
+    {
+      "name": "implementation-discipline",
+      "description": "Coding-time discipline for implementer agents — think first, simplest change, surgical edits, stated success criteria.",
+      "keywords": [],
+      "categories": ["implementation"]
+    },
+    {
+      "name": "emit-structured-claims",
+      "description": "Emit a structured premise-claims JSON block alongside prose findings so the orchestrator can grep-verify code-shape claims and close the four Stage-1 bypass classes.",
+      "keywords": [],
+      "categories": ["review", "research"]
     }
   ]
 }

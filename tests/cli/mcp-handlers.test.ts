@@ -1376,20 +1376,22 @@ describe('handleDispatchSingle — native skill injection', () => {
     expect(prompt).not.toContain('emit-structured-claims');
   });
 
-  it('hybrid *-researcher-implementer agent inherits BOTH emit-structured-claims AND verify-the-premise', async () => {
-    // Load-bearing invariant: disjoint suffix sets mean a hybrid id matches
-    // both filters and gets each suffix's defaults once. Simulates the post-
-    // seed SkillIndex state by declaring both skills enabled.
+  it('hybrid *-researcher-implementer agent inherits implementer defaults ONLY, not emit-structured-claims', async () => {
+    // Disjoint-suffix routing (permanent-defaults.ts seedPermanentDefaults):
+    // an id ending in `-implementer` routes ONLY to IMPLEMENTER_PERMANENT_DEFAULTS
+    // (verify-the-premise + implementation-discipline). `foo-researcher-implementer`
+    // does NOT end in `-researcher`/`-reviewer`, so emit-structured-claims is never
+    // seeded. Simulates the post-seed SkillIndex state with implementer defaults only.
     ctx.mainAgent = makeMainAgent({
       getSkillIndex: jest
         .fn()
-        .mockReturnValue(makeSkillIndex(['emit-structured-claims', 'verify-the-premise'])),
+        .mockReturnValue(makeSkillIndex(['verify-the-premise', 'implementation-discipline'])),
     });
     ctx.nativeAgentConfigs.set('foo-researcher-implementer', {
       model: 'claude-sonnet-4-6',
       instructions: 'Hybrid researcher-implementer.',
       description: 'Hybrid native agent',
-      skills: ['emit-structured-claims', 'verify-the-premise'],
+      skills: ['verify-the-premise', 'implementation-discipline'],
     });
     const result = await handleDispatchSingle(
       'foo-researcher-implementer',
@@ -1397,9 +1399,10 @@ describe('handleDispatchSingle — native skill injection', () => {
     );
     const prompt = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
     expect(prompt).toContain('--- SKILLS ---');
-    expect(prompt).toContain('emit-structured-claims');
     expect(prompt).toContain('verify-the-premise');
-    expect(prompt).toContain('premise-claims');
+    expect(prompt).toContain('implementation-discipline');
+    expect(prompt).not.toContain('emit-structured-claims');
+    expect(prompt).not.toContain('premise-claims');
     expect(prompt.toLowerCase()).toContain('iron law');
   });
 });
