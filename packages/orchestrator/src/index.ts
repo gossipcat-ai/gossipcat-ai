@@ -254,3 +254,5 @@ export {
 export type { RuntimeFlagEntry, RuntimeFlagRegistry } from './runtime-config';
 export { RUNTIME_FLAG_REGISTRY } from './runtime-config-schema';
 export type { RuntimeFlagKey, RuntimeFlagSpec } from './runtime-config-schema';
+export { ChatbotAgent } from './chatbot-agent';
+export type { ChatbotTool, ChatbotAgentConfig, ChatStreamEvent } from './chatbot-agent';
