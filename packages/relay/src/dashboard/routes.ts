@@ -11,6 +11,7 @@ import { gossipMemoryHandler } from './api-gossip-memory';
 import { consensusHandler } from './api-consensus';
 import { consensusFlowHandler, isValidConsensusId } from './api-consensus-flow';
 import { signalsHandler } from './api-signals';
+import { signalActivityHandler } from './api-signal-activity';
 import { findingHandler } from './api-finding';
 import { openFindingsHandler } from './api-open-findings';
 import { learningsHandler } from './api-learnings';
@@ -341,6 +342,12 @@ export class DashboardRouter {
 
       if (url === '/dashboard/api/signals' && req.method === 'GET') {
         const data = await signalsHandler(this.projectRoot, query ?? undefined);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      if (url === '/dashboard/api/signal-activity' && req.method === 'GET') {
+        const data = await signalActivityHandler(this.projectRoot);
         this.json(res, 200, data);
         return true;
       }

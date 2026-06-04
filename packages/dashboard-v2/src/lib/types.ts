@@ -36,6 +36,13 @@ export interface FleetTrendResponse {
   points: FleetTrendPoint[];
 }
 
+/* ── 24h signal-activity histogram (flat signal log, not consensus runs) ── */
+export interface SignalActivityResponse {
+  agents: { id: string; buckets: number[] }[];
+  total: number;
+  generatedAt: string;
+}
+
 /* ── Step 9.5 — skills + post-bind effectiveness curves ───────────────── */
 // SkillCurvePoint, SkillEffectivenessEntry, SkillsApiResponse, SkillVerdict,
 // and SkillStatus are canonical in @gossip/types/skills. Re-exported here for

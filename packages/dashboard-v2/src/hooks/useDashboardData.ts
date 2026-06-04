@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
-import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile, FleetTrendResponse } from '@/lib/types';
+import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile, FleetTrendResponse, SignalActivityResponse } from '@/lib/types';
 import type { SkillsApiResponse } from '@gossip/types';
 
 /**
@@ -22,6 +22,13 @@ export interface DashboardState {
   consensus: ConsensusData | null;
   consensusReports: ConsensusReportsData | null;
   fleetTrend: FleetTrendResponse | null;
+  /**
+   * 24h per-agent signal-activity histogram from the flat signal log. Backs
+   * the Overview ActivityWaterfall heatmap + "Signals · 24h" counter, which
+   * previously under-reported because they were sourced from gated consensus
+   * runs. Null while the first poll is in flight.
+   */
+  signalActivity: SignalActivityResponse | null;
   /**
    * Step 9.5 — per-skill post-bind effectiveness curves. Drives the
    * SkillGraduationGrid sparklines + skill-count subtitle. Null while
@@ -53,6 +60,7 @@ export function useDashboardData() {
   const [state, setState] = useState<DashboardState>({
     overview: null, agents: null, tasks: null, consensus: null, consensusReports: null,
     fleetTrend: null,
+    signalActivity: null,
     skills: null,
     nativeMemories: null, gossipMemories: null, memories: null,
     loading: true, error: null,
@@ -67,7 +75,7 @@ export function useDashboardData() {
     if (inFlight.current) return;
     inFlight.current = true;
     try {
-      const [overview, agents, tasks, consensus, consensusReports, fleetTrend, skills, nativeResp, gossipResp] = await Promise.all([
+      const [overview, agents, tasks, consensus, consensusReports, fleetTrend, signalActivity, skills, nativeResp, gossipResp] = await Promise.all([
         api<OverviewData>('overview'),
         api<AgentData[]>('agents'),
         api<TasksData>('tasks?limit=2000'),
@@ -80,6 +88,10 @@ export function useDashboardData() {
         api<ConsensusReportsData>('consensus-reports?page=1&pageSize=200').catch(() => ({ reports: [] })),
         // Fleet trend — 7-day window for AreaSparkline in AgentCardBig.
         api<FleetTrendResponse>('fleet-trend?days=7').catch(() => ({ days: 7, points: [] })),
+        // 24h per-agent signal-activity histogram from the flat signal log —
+        // backs the ActivityWaterfall heatmap so manual/single-dispatch signals
+        // appear (consensus-runs feed is gated to ≥2 agents & ≥3 signals).
+        api<SignalActivityResponse>('signal-activity').catch(() => ({ agents: [], total: 0, generatedAt: '' })),
         // Step 9.5 — per-skill effectiveness curves for SkillGraduationGrid.
         // Server-side 60s cache keyed on agent-performance.jsonl mtime — the
         // 5s poll just refreshes the cache stamp, not the curve derivation.
@@ -104,6 +116,7 @@ export function useDashboardData() {
       setState({
         overview, agents, tasks, consensus, consensusReports,
         fleetTrend,
+        signalActivity,
         skills,
         nativeMemories,
         gossipMemories,

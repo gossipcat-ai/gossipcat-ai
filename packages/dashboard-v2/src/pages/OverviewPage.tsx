@@ -18,7 +18,7 @@ import { useUrlRangeParam } from '@/hooks/useUrlRangeParam';
 import { useGlobalAgentKeys } from '@/hooks/useGlobalAgentKeys';
 import { isGraphHidden } from '@/lib/feature-flags';
 import { href } from '@/lib/router';
-import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint } from '@/lib/types';
+import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint, SignalActivityResponse } from '@/lib/types';
 import type { SkillsApiResponse } from '@gossip/types';
 
 interface OverviewPageProps {
@@ -31,6 +31,8 @@ interface OverviewPageProps {
   consensusReports?: ConsensusReportsData | null;
   /** Optional — Step 6: supplies 7d sparkline data for AgentCardBig. */
   fleetTrend?: FleetTrendResponse | null;
+  /** Optional — 24h per-agent signal histogram for the ActivityWaterfall heatmap. */
+  signalActivity?: SignalActivityResponse | null;
   /** Optional — Step 9.5: per-skill post-bind effectiveness curves. */
   skills?: SkillsApiResponse | null;
   activeTaskCount: number;
@@ -51,6 +53,7 @@ export function OverviewPage({
   consensus,
   consensusReports,
   fleetTrend,
+  signalActivity,
   skills,
   activeTaskCount,
   setActiveTaskCount,
@@ -178,7 +181,7 @@ export function OverviewPage({
       {agents && (
         <ActivityWaterfall
           agents={agents}
-          runs={consensus?.runs}
+          activity={signalActivity}
         />
       )}
 
