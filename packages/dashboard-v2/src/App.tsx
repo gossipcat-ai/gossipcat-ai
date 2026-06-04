@@ -502,7 +502,7 @@ function FindingsPage({
 
 function Dashboard() {
   const route = useRoute();
-  const { overview, agents, tasks, consensus, consensusReports, fleetTrend, skills, loading, refresh } = useDashboardData();
+  const { overview, agents, tasks, consensus, consensusReports, fleetTrend, signalActivity, skills, loading, refresh } = useDashboardData();
   const [activeTaskCount, setActiveTaskCount] = useState(0);
 
   const handleWsEvent = useCallback((event: DashboardEvent) => {
@@ -552,6 +552,7 @@ function Dashboard() {
         consensus={consensus}
         consensusReports={consensusReports}
         fleetTrend={fleetTrend}
+        signalActivity={signalActivity}
         skills={skills}
         activeTaskCount={activeTaskCount}
         setActiveTaskCount={setActiveTaskCount}

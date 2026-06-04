@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { AgentData, ConsensusRun } from '@/lib/types';
+import type { AgentData, SignalActivityResponse } from '@/lib/types';
 import { agentColor } from '@/lib/utils';
 
 /** 24h activity waterfall — per-agent heatmap of signal volume by hour.
@@ -8,6 +8,13 @@ import { agentColor } from '@/lib/utils';
  *  empty state. Each agent gets a row of 24 cells (one per hour of the
  *  rolling 24h window ending now). Cell intensity = signal volume in that
  *  hour relative to the row's max.
+ *
+ *  Data source: the flat per-agent signal histogram from
+ *  /api/signal-activity (server-bucketed from agent-performance.jsonl over a
+ *  rolling 24h window). This reflects ALL signal activity — manual
+ *  gossip_signals(record) and single-dispatch signals included — NOT just
+ *  gated consensus runs (the consensus-runs feed requires ≥2 agents & ≥3
+ *  signals, so it dropped manual/solo activity to zero here previously).
  *
  *  State coverage per DESIGN.md "State coverage" subsection:
  *    - Full:    matrix rendered with shaded cells
@@ -19,30 +26,28 @@ import { agentColor } from '@/lib/utils';
  */
 interface ActivityWaterfallProps {
   agents: AgentData[];
-  runs: ConsensusRun[] | null | undefined;
+  activity: SignalActivityResponse | null | undefined;
   loading?: boolean;
   error?: string | null;
 }
 
 const HOURS = 24;
-const NOW_OFFSET_MS = 60 * 60 * 1000;
-const WINDOW_MS = HOURS * NOW_OFFSET_MS;
 
-/** Compute a per-agent 24-hour signal-count matrix from consensus runs.
- *  Bucket index 0 = oldest (24h ago), HOURS-1 = current hour. */
-function bucketActivity(runs: ConsensusRun[], agents: AgentData[], nowMs: number): Map<string, number[]> {
+/** Build a per-agent 24-hour signal-count matrix from the server-bucketed
+ *  signal-activity histogram. Bucket index 0 = oldest hour, HOURS-1 = current.
+ *  Every agent in `agents` is zero-filled; server buckets are copied in,
+ *  clamped/padded to exactly HOURS so a malformed row can't break the grid. */
+function bucketActivity(
+  activity: SignalActivityResponse | null | undefined,
+  agents: AgentData[],
+): Map<string, number[]> {
   const out = new Map<string, number[]>();
   for (const a of agents) out.set(a.id, new Array(HOURS).fill(0));
-  const cutoffMs = nowMs - WINDOW_MS;
-  for (const run of runs) {
-    if (run.retracted) continue;
-    const ts = Date.parse(run.timestamp);
-    if (isNaN(ts) || ts < cutoffMs || ts > nowMs) continue;
-    const bucket = Math.min(HOURS - 1, Math.floor((ts - cutoffMs) / NOW_OFFSET_MS));
-    for (const sig of run.signals ?? []) {
-      const row = out.get(sig.agentId);
-      if (row) row[bucket] += 1;
-    }
+  for (const entry of activity?.agents ?? []) {
+    const row = out.get(entry.id);
+    if (!row) continue;
+    const src = entry.buckets ?? [];
+    for (let i = 0; i < HOURS; i++) row[i] = src[i] ?? 0;
   }
   return out;
 }
@@ -71,16 +76,13 @@ const LEVEL_OPACITY: Record<0 | 1 | 2 | 3 | 4, number> = {
 // previous local switch duplicated the 7-agent table and hardcoded a fallback
 // hex, risking silent drift if globals.css identity tokens changed.
 
-export function ActivityWaterfall({ agents, runs, loading = false, error = null }: ActivityWaterfallProps) {
-  const nowMs = Date.now();
+export function ActivityWaterfall({ agents, activity, loading = false, error = null }: ActivityWaterfallProps) {
   // Memoize the bucket computation — re-runs only when the underlying data
-  // changes, not on every parent re-render.
+  // changes, not on every parent re-render. The 24h window is computed
+  // server-side, so this is a pure copy/zero-fill (no Date math here).
   const buckets = useMemo(
-    () => bucketActivity(runs ?? [], agents, nowMs),
-    // nowMs intentionally excluded — bucketing is recomputed on data changes,
-    // not wall-clock ticks (each hour boundary would re-render but that's fine).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [runs, agents],
+    () => bucketActivity(activity, agents),
+    [activity, agents],
   );
 
   // Per-row totals for the right-side count column.
@@ -119,13 +121,13 @@ export function ActivityWaterfall({ agents, runs, loading = false, error = null 
     );
   }
 
-  // Fleet has agents but no activity in the last 24h, OR run data is missing
-  // (runs == null). Distinguish the two so a disconnected relay doesn't
-  // misreport as "fleet idle" — the latter is factually wrong when we never
-  // received run data at all.
+  // Fleet has agents but no activity in the last 24h, OR activity data is
+  // missing (activity == null). Distinguish the two so a disconnected relay
+  // doesn't misreport as "fleet idle" — the latter is factually wrong when we
+  // never received activity data at all.
   if (fleetTotal === 0) {
-    const message = runs == null
-      ? 'Run data unavailable — relay may be disconnected. Showing idle rows from the agent registry.'
+    const message = activity == null
+      ? 'Activity data unavailable — relay may be disconnected. Showing idle rows from the agent registry.'
       : 'No active dispatches — fleet idle.';
     return (
       <WaterfallShell error={error} fleetTotal={0}>
