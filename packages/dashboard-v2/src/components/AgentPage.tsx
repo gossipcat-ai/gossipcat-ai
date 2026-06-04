@@ -285,7 +285,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             <div className="space-y-2.5">
               {metricBars.map(m => (
                 <div key={m.label} className="grid grid-cols-[72px_1fr_44px] items-center gap-3">
-                  <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>{m.label}</span>
+                  <span className="h-section" style={{ color: 'var(--text-dim)', fontSize: '10px' }}>{m.label}</span>
                   <div className="h-1.5 overflow-hidden rounded-full" style={{ background: 'color-mix(in oklch, var(--surface) 80%, transparent)' }}>
                     <div className={`h-full rounded-full transition-all ${m.fill}`} style={{ width: `${Math.max(0, Math.min(100, m.value * 100))}%` }} />
                   </div>

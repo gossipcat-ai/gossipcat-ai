@@ -112,10 +112,7 @@ function ConsensusFlowChart({ data }: { data: ConsensusFlowResponse }) {
     >
       <header className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h2
-            className="font-mono text-[13px] font-semibold"
-            style={{ color: 'var(--ink)' }}
-          >
+          <h2 className="h-section" style={{ color: 'var(--ink)' }}>
             Consensus flow
           </h2>
           <p
