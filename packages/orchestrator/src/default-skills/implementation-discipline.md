@@ -41,7 +41,10 @@ review — wins over the clever one.
 
 ## 3. Surgical changes
 - Edit only what the task requires. Do NOT "improve" adjacent code, comments, or
-  formatting, and do NOT refactor things that aren't broken.
+  formatting, and do NOT refactor things that aren't broken. (Exception: a minimal
+  refactor strictly necessary to land your change cleanly — e.g. extracting a
+  function you must call — is in scope, as long as it preserves existing behavior
+  and stays the minimum needed.)
 - Match the surrounding style even if you'd personally write it differently.
 - Remove imports / variables / functions that YOUR change orphaned. Do NOT
   delete pre-existing dead code unless the task asked for it.
@@ -68,5 +71,7 @@ review — wins over the clever one.
   review and inflate blast radius.
 - "I added config/an interface in case we need it later." You don't; delete it.
 - Dropping input validation at a boundary because the state "is impossible."
-- Self-certifying ("tests pass, done") in place of stating checkable criteria and
-  letting cross-review verify.
+- Self-certifying ("tests pass, done") as a substitute for stating checkable
+  criteria and letting cross-review verify. (This does NOT mean ignore a red test
+  — a failing test still blocks; cross-review is an added gate, not a replacement
+  for green tests.)
