@@ -119,15 +119,21 @@ export function ActivityWaterfall({ agents, runs, loading = false, error = null 
     );
   }
 
-  // Fleet has agents but no activity in the last 24h.
+  // Fleet has agents but no activity in the last 24h, OR run data is missing
+  // (runs == null). Distinguish the two so a disconnected relay doesn't
+  // misreport as "fleet idle" — the latter is factually wrong when we never
+  // received run data at all.
   if (fleetTotal === 0) {
+    const message = runs == null
+      ? 'Run data unavailable — relay may be disconnected. Showing idle rows from the agent registry.'
+      : 'No active dispatches — fleet idle.';
     return (
       <WaterfallShell error={error} fleetTotal={0}>
         {agents.map((agent) => (
           <IdleRow key={agent.id} agent={agent} />
         ))}
         <div className="px-5 py-3 font-mono text-[11px]" style={{ color: 'var(--ink-3)' }}>
-          No active dispatches — fleet idle.
+          {message}
         </div>
       </WaterfallShell>
     );

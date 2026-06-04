@@ -238,8 +238,8 @@ function SankeyHorizontal({ data }: { data: ConsensusFlowResponse }) {
                 textAnchor="end"
                 dominantBaseline="middle"
                 fontSize={11}
-                fontFamily="var(--font-mono)"
                 fill="var(--ink)"
+                style={{ fontFamily: 'var(--font-mono)' }}
               >
                 {FAMILY_LABEL[band.family]} · {band.agentCount}
               </text>
@@ -265,9 +265,8 @@ function SankeyHorizontal({ data }: { data: ConsensusFlowResponse }) {
                 textAnchor="middle"
                 dominantBaseline="middle"
                 fontSize={11}
-                fontFamily="var(--font-mono)"
                 fill="var(--ink)"
-                style={{ fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+                style={{ fontFamily: 'var(--font-mono)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
               >
                 {VERDICT_LABEL[slot.verdict]} · {slot.count}
               </text>
@@ -297,8 +296,8 @@ function SankeyHorizontal({ data }: { data: ConsensusFlowResponse }) {
                   textAnchor="end"
                   dominantBaseline="middle"
                   fontSize={11}
-                  fontFamily="var(--font-mono)"
                   fill="var(--ink)"
+                  style={{ fontFamily: 'var(--font-mono)' }}
                 >
                   {slot.count} · {pct}%
                 </text>

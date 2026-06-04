@@ -47,16 +47,16 @@ const FILTER_CHIPS: { key: FilterType; label: string; cls: string; activeCls: st
 
 const SEV_FILTER_CHIPS: { key: 'all' | 'critical' | 'high' | 'medium' | 'low'; label: string; cls: string; activeCls: string; activeStyle?: React.CSSProperties; inactiveStyle?: React.CSSProperties }[] = [
   { key: 'all', label: 'All', cls: 'border-border/40 hover:border-border/60', activeCls: 'border-border', activeStyle: { color: 'var(--text)', background: 'var(--surface-sunk)' }, inactiveStyle: { color: 'var(--text-dim)' } },
-  { key: 'critical', label: 'Critical', cls: 'text-red-400/50 border-red-400/20 hover:border-red-400/40', activeCls: 'text-red-400 bg-red-400/10 border-red-400/40' },
+  { key: 'critical', label: 'Critical', cls: 'text-bad/50 border-bad/20 hover:border-bad/40', activeCls: 'text-bad bg-bad/10 border-bad/40' },
   { key: 'high', label: 'High', cls: 'text-severity-high/50 border-severity-high/20 hover:border-severity-high/40', activeCls: 'text-severity-high bg-severity-high/10 border-severity-high/40' },
-  { key: 'medium', label: 'Medium', cls: 'text-yellow-400/50 border-yellow-400/20 hover:border-yellow-400/40', activeCls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/40' },
+  { key: 'medium', label: 'Medium', cls: 'text-warn/50 border-warn/20 hover:border-warn/40', activeCls: 'text-warn bg-warn/10 border-warn/40' },
   { key: 'low', label: 'Low', cls: 'border-border/40 hover:border-border/60', activeCls: 'border-border', activeStyle: { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' }, inactiveStyle: { color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' } },
 ];
 
 const SEVERITY_CLS: Record<string, string> = {
-  critical: 'text-red-400 bg-red-500/10',
+  critical: 'text-bad bg-bad/10',
   high: 'text-severity-high bg-severity-high/10',
-  medium: 'text-yellow-400 bg-yellow-500/10',
+  medium: 'text-warn bg-warn/10',
   low: '',
 };
 const SEVERITY_STYLE_LOW: React.CSSProperties = { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' };
@@ -105,8 +105,10 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
   const typeLabel = f.findingType === 'suggestion' ? 'SUGGESTION'
     : f.findingType === 'insight' ? 'INSIGHT'
     : null;
-  const typeCls = f.findingType === 'suggestion' ? 'text-blue-400 bg-blue-500/10'
-    : f.findingType === 'insight' ? 'text-zinc-400 bg-zinc-500/10'
+  // suggestion = informational action → --info teal; insight = neutral
+  // observation → text-dim grey. Maps the typeCls tokens to DESIGN.md.
+  const typeCls = f.findingType === 'suggestion' ? 'text-info bg-info/10'
+    : f.findingType === 'insight' ? 'text-text-dim bg-text-dim/10'
     : '';
 
   // Extract first cite as identifier
@@ -131,7 +133,7 @@ function ReportFinding({ f, reviewInfo, diagnostics }: {
           </span>
         )}
         {identifier && (
-          <span className="bg-blue-500/10 px-2 py-1 font-mono text-[10px] text-blue-400 border border-blue-500/15 rounded">
+          <span className="bg-info/10 px-2 py-1 font-mono text-[10px] text-info border border-info/15 rounded">
             {identifier}
           </span>
         )}
