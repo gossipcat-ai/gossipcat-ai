@@ -485,7 +485,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                                 key={j}
                                 type="button"
                                 onClick={() => setDrawerFinding({ consensusId: run.taskId, findingId: sig.findingId! })}
-                                className="block w-full rounded-sm text-left transition hover:bg-accent/40"
+                                className="block w-full rounded-sm text-left transition hover:bg-accent/10"
                               >{row}</button>
                             );
                           }

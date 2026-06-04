@@ -112,7 +112,7 @@ export function AgentActivityTimeline({ agentId }: Props) {
                   key={i}
                   type="button"
                   onClick={() => setDrawer({ consensusId: s.consensusId!, findingId: s.findingId! })}
-                  className="w-full rounded-sm text-left transition hover:bg-accent/40"
+                  className="w-full rounded-sm text-left transition hover:bg-accent/10"
                 >
                   {row}
                 </button>

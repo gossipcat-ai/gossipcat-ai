@@ -130,7 +130,7 @@ export function TaskRow({ task, onClick }: TaskRowProps) {
 
   return (
     <tr
-      className={`border-b border-border hover:bg-accent/30 transition-colors ${onClick ? 'cursor-pointer' : ''}`}
+      className={`border-b border-border hover:bg-accent/10 transition-colors ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick ? (e) => {
         if ((e.target as HTMLElement).closest('a')) return;
         onClick(task);
