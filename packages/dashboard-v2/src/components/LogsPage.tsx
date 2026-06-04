@@ -26,7 +26,7 @@ interface LogsResponse {
 // @theme build-time resolution and remain theme-switchable at runtime.
 const CATEGORY_STYLES: Record<string, React.CSSProperties> = {
   dispatch: { color: 'color-mix(in oklch, var(--text-dim) 80%, transparent)' },
-  consensus: { color: 'color-mix(in oklch, var(--accent) 70%, transparent)' },
+  consensus: { color: 'color-mix(in oklch, var(--info) 80%, transparent)' },
   error: {},   // uses text-disputed class, no override
   timeout: {}, // uses text-unverified class, no override
   worker: { color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' },
@@ -203,7 +203,7 @@ export function LogsPage() {
             onClick={() => setAutoScroll(!autoScroll)}
             className="rounded-sm px-2.5 py-1 font-mono text-[10px] font-semibold transition"
             style={autoScroll
-              ? { color: 'var(--accent)', background: 'color-mix(in oklch, var(--accent) 10%, transparent)' }
+              ? { color: 'var(--ok)', background: 'color-mix(in oklch, var(--ok) 10%, transparent)' }
               : { color: 'var(--text-dim)' }}
           >
             {autoScroll ? '⤓ Auto' : '⤓ Scroll'}

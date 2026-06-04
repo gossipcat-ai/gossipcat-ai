@@ -172,7 +172,7 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
           </div>
           <a
             href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
-            className="block cursor-pointer border-t border-border transition-colors hover:bg-accent/30"
+            className="block cursor-pointer border-t border-border transition-colors hover:bg-accent/10"
             aria-label="View actionable findings on Signals page"
           >
             <BigStat

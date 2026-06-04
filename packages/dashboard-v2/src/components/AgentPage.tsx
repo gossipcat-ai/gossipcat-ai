@@ -281,7 +281,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
         {/* Left: Metrics — bars + compact stat strip */}
         <div>
           <h2 className="mb-3 h-section">Metrics</h2>
-          <div className="rounded-lg border border-border/40 p-4 shadow-[inset_0_1px_3px_rgba(0,0,0,0.35)]" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
+          <div className="rounded-lg border border-border/40 p-4" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
             <div className="space-y-2.5">
               {metricBars.map(m => (
                 <div key={m.label} className="grid grid-cols-[72px_1fr_44px] items-center gap-3">
@@ -485,7 +485,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                                 key={j}
                                 type="button"
                                 onClick={() => setDrawerFinding({ consensusId: run.taskId, findingId: sig.findingId! })}
-                                className="block w-full rounded-sm text-left transition hover:bg-accent/40"
+                                className="block w-full rounded-sm text-left transition hover:bg-accent/10"
                               >{row}</button>
                             );
                           }
@@ -558,7 +558,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                     onClick={() => setExpandedMem(isOpen ? null : mem.filename)}
                     className="flex w-full items-center gap-2 p-3 text-left transition hover:bg-accent/10"
                   >
-                    <span className="font-mono text-xs" style={{ color: isOpen ? 'var(--accent)' : 'var(--text-dim)' }}>
+                    <span className="font-mono text-xs" style={{ color: isOpen ? 'var(--text)' : 'var(--text-dim)' }}>
                       {isOpen ? '\u25BE' : '\u25B8'}
                     </span>
                     <span className="shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase" style={{ background: 'var(--surface-sunk)', color: 'var(--text-dim)' }}>

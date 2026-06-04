@@ -475,7 +475,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                   ${isRetracted ? 'opacity-60 line-through decoration-disputed/40' : ''}
                   ${isExpanded
                     ? 'border-r-border/60 border-t-border/60 border-b-border/60'
-                    : 'hover:border-r-border/60 hover:border-t-border/60 hover:border-b-border/60 hover:shadow-sm hover:shadow-black/20 hover:-translate-y-px'
+                    : 'hover:border-r-border/60 hover:border-t-border/60 hover:border-b-border/60 hover:-translate-y-px'
                   }`}
                 style={{ background: isExpanded ? 'var(--surface-elev)' : 'color-mix(in oklch, var(--surface-elev) 50%, transparent)' }}
                 data-retracted={isRetracted ? 'true' : undefined}

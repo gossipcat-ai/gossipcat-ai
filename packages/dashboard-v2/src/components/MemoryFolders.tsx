@@ -233,7 +233,7 @@ export function MemoryFolders({ memories, heading = 'Memory', statusFilter = fal
               className={`group relative grid grid-cols-[auto_1fr_auto] grid-rows-[auto_auto] items-center gap-x-3 gap-y-1 rounded-md border p-3.5 text-left transition ${
                 empty
                   ? 'cursor-default border-border/20 opacity-55'
-                  : 'border-border/40 hover:border-primary/30 hover:bg-accent/40'
+                  : 'border-border/40 hover:border-primary/30 hover:bg-accent/10'
               }`}
               style={{ background: 'var(--surface-sunk)' }}
             >
@@ -340,14 +340,14 @@ export function NativeMemories({ memories }: { memories: MemoryFile[] }) {
               <li key={m.filename}>
                 <button
                   onClick={() => setOpen(m)}
-                  className="flex w-full items-center justify-between gap-3 rounded-sm border border-border/20 px-3 py-2 text-left transition hover:border-primary/30 hover:bg-accent/40"
+                  className="flex w-full items-center justify-between gap-3 rounded-sm border border-border/20 px-3 py-2 text-left transition hover:border-primary/30 hover:bg-accent/10"
                   style={{ background: 'color-mix(in oklch, var(--surface-sunk) 40%, transparent)' }}
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     {recent && (
                       <span
                         className="h-1.5 w-1.5 shrink-0 rounded-full"
-                        style={{ background: 'var(--accent)', boxShadow: '0 0 8px var(--accent)' }}
+                        style={{ background: 'var(--ok)', boxShadow: '0 0 6px color-mix(in oklch, var(--ok) 60%, transparent)' }}
                         aria-label="Activity in the last 24h"
                       />
                     )}

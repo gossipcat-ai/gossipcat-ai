@@ -41,8 +41,8 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
       onClick={onClose}
     >
       <div
-        className="relative mt-12 w-full max-w-3xl rounded-lg border border-border shadow-2xl"
-        style={{ background: 'var(--surface-elev)' }}
+        className="relative mt-12 w-full max-w-3xl rounded-lg border border-border"
+        style={{ background: 'var(--surface-elev)', boxShadow: 'var(--shadow-overlay)' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

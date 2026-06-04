@@ -64,7 +64,10 @@ export function CircuitAlerts({ agents }: CircuitAlertsProps) {
               }`}
             >
               <div className="mb-1 flex items-center gap-2.5">
-                <span className={`h-1.5 w-1.5 rounded-full ${isBenched ? 'bg-destructive shadow-[0_0_6px_rgba(248,113,113,0.6)]' : 'bg-unverified'}`} />
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${isBenched ? 'bg-destructive' : 'bg-unverified'}`}
+                  style={isBenched ? { boxShadow: '0 0 6px color-mix(in oklch, var(--bad) 60%, transparent)' } : undefined}
+                />
                 <span className="text-sm font-semibold" style={{ color: 'var(--text)' }}>{agent.id}</span>
                 {r.label && (
                   <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${r.cls}`}>

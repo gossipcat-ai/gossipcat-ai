@@ -73,7 +73,7 @@ function ToastItem({
   return (
     <div
       className={[
-        'pointer-events-auto border rounded shadow-sm px-4 py-3 max-w-sm cursor-pointer',
+        'pointer-events-auto border rounded px-4 py-3 max-w-sm cursor-pointer',
         'transition-all duration-200',
         'motion-reduce:transition-none motion-reduce:transform-none',
         'hover:border-border',
@@ -81,7 +81,7 @@ function ToastItem({
           ? 'opacity-0 scale-95 opacity-0 translate-y-2'
           : 'opacity-100 scale-100 translate-x-0',
       ].join(' ')}
-      style={{ background: 'var(--surface-elev)' }}
+      style={{ background: 'var(--surface-elev)', boxShadow: 'var(--shadow-card)' }}
       onClick={handleClick}
       onMouseEnter={clearTimer}
       onMouseLeave={startTimer}
