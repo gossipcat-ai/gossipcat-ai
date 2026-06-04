@@ -55,6 +55,14 @@
   --color-disputed: #c0392b;
   --color-unverified: #b8741d;
   --color-unique: #7c5cbf;
+  /* DESIGN.md semantic palette exposed as Tailwind utilities so components
+     can use bg-warn / text-bad / border-info / bg-warn/10 etc. instead of
+     reaching for raw text-red-400 / text-yellow-400 Tailwind palette values.
+     Hex literals match DESIGN.md so Tailwind v4 opacity modifiers (/10, /20)
+     compose correctly at build time. Dark-mode overrides below. */
+  --color-warn: #B47A2A;
+  --color-bad: #A53A4A;
+  --color-info: #3F8B86;
   --color-severity-high: #c0392b;
   --color-impact: #cc785c;
   --color-insight: #6b6a64;
@@ -256,6 +264,11 @@
   --color-secondary: #1c1a17;
   --color-secondary-foreground: #e8e4d7;
   --color-text-dim: #87847b;
+  /* DESIGN.md semantic palette — dark-mode overrides (mirror the light block
+     above; values from DESIGN.md "Dark mode" subsection). */
+  --color-warn: #D8A35A;
+  --color-bad: #D26478;
+  --color-info: #7CC1C7;
   --accent: #d68a6f;
   --accent-bright: #e08a6c;
   --accent-soft: rgba(214, 138, 111, 0.16);

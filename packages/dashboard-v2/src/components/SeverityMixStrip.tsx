@@ -36,6 +36,8 @@ export function SeverityMixStrip({ counts, height = 10 }: SeverityMixStripProps)
     // future shape. Higher opacity + border so it reads in both themes.
     return (
       <div
+        role="img"
+        aria-label={`Severity distribution: no findings yet (${title})`}
         title={`${title} (no findings yet)`}
         style={{
           display: 'flex',
@@ -63,6 +65,8 @@ export function SeverityMixStrip({ counts, height = 10 }: SeverityMixStripProps)
 
   return (
     <div
+      role="img"
+      aria-label={`Severity distribution — ${title}`}
       title={title}
       style={{
         display: 'flex',

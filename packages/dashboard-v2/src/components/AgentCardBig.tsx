@@ -177,6 +177,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
                   if (kind === 'benched') return (
                     <span
                       className="shrink-0 rounded-sm bg-destructive/10 px-1 py-0.5 font-mono text-[8px] font-bold text-destructive"
+                      aria-label={`Benched (${s.bench.reason ?? 'auto'}). Excluded from dispatch until recovery.`}
                       data-tooltip={`Benched (${s.bench.reason ?? 'auto'}). Excluded from dispatch until recovery.`}
                     >
                       BENCHED
@@ -185,6 +186,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
                   if (kind === 'struggling') return (
                     <span
                       className="shrink-0 rounded-sm bg-unverified/10 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
+                      aria-label="Struggling: consecutive failures tripped the circuit breaker."
                       data-tooltip="Struggling: consecutive failures tripped the circuit breaker."
                     >
                       STRUGGLING
@@ -193,6 +195,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
                   if (kind === 'kept-for-coverage') return (
                     <span
                       className="shrink-0 rounded-sm border border-unverified/40 bg-unverified/10 px-1 py-0.5 font-mono text-[8px] font-bold text-unverified"
+                      aria-label={`Would bench (${s.bench.reason ?? 'rule'}), but kept as sole provider of a category.`}
                       data-tooltip={`Would bench (${s.bench.reason ?? 'rule'}), but kept as sole provider of a category.`}
                     >
                       KEPT
