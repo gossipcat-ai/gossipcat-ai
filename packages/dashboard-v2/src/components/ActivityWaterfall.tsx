@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { AgentData, ConsensusRun } from '@/lib/types';
+import { agentColor } from '@/lib/utils';
 
 /** 24h activity waterfall — per-agent heatmap of signal volume by hour.
  *
@@ -65,19 +66,10 @@ const LEVEL_OPACITY: Record<0 | 1 | 2 | 3 | 4, number> = {
   4: 1.0,
 };
 
-/** Per-agent identity color — same mapping as the cosmic graph stage. */
-function agentColor(id: string): string {
-  switch (id) {
-    case 'sonnet-reviewer': return '#8C5E97';
-    case 'sonnet-designer': return '#C8A45A';
-    case 'sonnet-implementer': return '#A53A4A';
-    case 'opus-implementer': return '#C97056';
-    case 'gemini-reviewer': return '#3F8B86';
-    case 'gemini-tester': return '#2F7D5B';
-    case 'haiku-researcher': return '#6B7A85';
-    default: return '#6B6862';
-  }
-}
+// Per-agent identity color imported from @/lib/utils — canonical source
+// (AGENT_IDENTITY_TABLE, sourced from DESIGN.md §Per-agent identity). The
+// previous local switch duplicated the 7-agent table and hardcoded a fallback
+// hex, risking silent drift if globals.css identity tokens changed.
 
 export function ActivityWaterfall({ agents, runs, loading = false, error = null }: ActivityWaterfallProps) {
   const nowMs = Date.now();

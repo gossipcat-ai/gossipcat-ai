@@ -110,7 +110,8 @@ export function OverviewPage({
             {actionable > 0 && (
               <a
                 href={href('/signals?signal=disagreement&signal=hallucination_caught&signal=new_finding')}
-                className="font-mono text-[11px] text-orange-400 transition hover:underline"
+                className="font-mono text-[11px] transition hover:underline"
+                style={{ color: 'var(--warn)' }}
                 data-tooltip="Findings open for operator review"
               >
                 {actionable} actionable →
