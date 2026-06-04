@@ -60,7 +60,7 @@ function BigStat({ value, unit, label, valueClass = '', valueColor, pulse, toolt
         </span>
         {unit && <span className="font-mono text-xs" style={{ color: 'var(--ink-3)' }}>{unit}</span>}
       </div>
-      <div className="mt-1.5 text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--ink-3)' }}>
+      <div className="h-section mt-1.5" style={{ color: 'var(--ink-3)', fontSize: '10px' }}>
         {label}
       </div>
     </div>
@@ -137,18 +137,18 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
             {/* Three-row agent stat (stacked to fit narrow cell) */}
             <div className="flex flex-col items-stretch justify-center gap-1.5 px-4 py-3">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--ink-3)' }} data-tooltip="Agents currently executing a task">Dispatched</span>
+                <span className="h-section" style={{ color: 'var(--ink-3)', fontSize: '10px' }} data-tooltip="Agents currently executing a task">Dispatched</span>
                 <span
                   className="font-mono text-base font-bold leading-none"
                   style={{ color: overview.agentsOnline > 0 ? 'var(--ok)' : 'var(--text)' }}
                 >{overview.agentsOnline}</span>
               </div>
               <div className="flex items-baseline justify-between gap-2">
-                <span className="font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--ink-3)' }} data-tooltip="Relay agents with an active WebSocket connection">Connected</span>
+                <span className="h-section" style={{ color: 'var(--ink-3)', fontSize: '10px' }} data-tooltip="Relay agents with an active WebSocket connection">Connected</span>
                 <span className={`font-mono text-base font-bold leading-none ${overview.relayConnected > 0 ? 'text-confirmed' : ''}`} style={overview.relayConnected > 0 ? undefined : { color: 'var(--ink-3)' }}>{overview.relayConnected}</span>
               </div>
               <div className="flex items-baseline justify-between gap-2">
-                <span className="font-mono text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--ink-3)' }} data-tooltip="Total agents in gossipcat config">Registered</span>
+                <span className="h-section" style={{ color: 'var(--ink-3)', fontSize: '10px' }} data-tooltip="Total agents in gossipcat config">Registered</span>
                 <span className="font-mono text-base font-bold leading-none" style={{ color: 'var(--ink-3)' }}>{totalAgents}</span>
               </div>
             </div>
@@ -241,7 +241,7 @@ function ActivityBars({ hourly }: ActivityBarsProps) {
   const max = Math.max(1, ...bars);
   return (
     <div className="border-t border-border px-3.5 py-3" style={{ background: 'color-mix(in oklch, var(--surface-sunk) 30%, transparent)' }}>
-      <div className="mb-2 font-mono text-[9px] font-bold uppercase tracking-wider" style={{ color: 'color-mix(in oklch, var(--ink-3) 60%, transparent)' }}>
+      <div className="h-section mb-2" style={{ color: 'color-mix(in oklch, var(--ink-3) 60%, transparent)', fontSize: '11px' }}>
         Activity Last 12h
       </div>
       <div className="flex h-6 items-end gap-0.5">
