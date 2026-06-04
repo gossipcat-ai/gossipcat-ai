@@ -3,6 +3,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
 import { CitationSnippet } from './CitationSnippet';
+import { ErrorChip } from './ErrorChip';
 import type { FindingDetail } from '@/lib/types';
 import { href } from '@/lib/router';
 
@@ -60,7 +61,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
           <SheetTitle className="font-mono text-sm" style={{ color: 'var(--text)' }}>Finding detail</SheetTitle>
         </SheetHeader>
 
-        {error && <div className="mt-4 text-[11px] text-disputed">{error}</div>}
+        {error && <div className="mt-4"><ErrorChip message={error} /></div>}
         {!error && !detail && <div className="mt-4 text-[11px]" style={{ color: 'var(--text-dim)' }}>Loading…</div>}
 
         {detail && (

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { SkillsApiResponse, SkillEffectivenessEntry, SkillStatus } from '@gossip/types';
 import { SkillEffectivenessSparkline } from './SkillEffectivenessSparkline';
+import { ErrorChip } from './ErrorChip';
 import { href } from '@/lib/router';
 import { agentColor } from '@/lib/utils';
 
@@ -94,6 +95,7 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
         >
           skill detail →
         </a>
+        {error && <ErrorChip message={error} className="ml-2" />}
       </header>
 
       <div
@@ -105,7 +107,12 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
           Verdict is from the latest evidence window.
         </p>
 
-        {error && <ErrorBanner message={error} />}
+        {/* DESIGN.md error contract — full error reason lives in the header
+            ErrorChip; here we render the cached grid dimmed at 50% so the
+            operator keeps their context instead of seeing a destructive
+            full-width banner that replaces the data. The legacy ErrorBanner
+            is no longer used; kept in the file for compatibility but
+            unreferenced. */}
         {loading && !skills && <GridSkeleton />}
         {!loading && total === 0 && !error && (
           <p className="text-[12px]" style={{ color: 'var(--ink-3)' }}>
@@ -113,7 +120,10 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
           </p>
         )}
         {total > 0 && (
-          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+          <ul
+            className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6"
+            style={error ? { opacity: 0.5 } : undefined}
+          >
             {known.map((entry) => (
               <SkillCard key={cellKey(entry)} entry={entry} />
             ))}
@@ -331,20 +341,10 @@ function latestValue(curve: SkillEffectivenessEntry['curve']): number | null {
 
 /* ── states ────────────────────────────────────────────────────────────── */
 
-function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div
-      className="mb-3 rounded-sm px-2 py-1 font-mono text-[10px]"
-      style={{
-        color: 'var(--bad)',
-        background: 'color-mix(in oklch, var(--bad) 12%, transparent)',
-        border: '1px solid color-mix(in oklch, var(--bad) 30%, transparent)',
-      }}
-    >
-      error · {message}
-    </div>
-  );
-}
+// Legacy ErrorBanner removed in favor of the shared ErrorChip in the header
+// per DESIGN.md error contract — the error reason lives top-right of the
+// card and the cached grid below dims to 50% so the operator keeps context
+// instead of seeing a full-width destructive banner replace the data.
 
 function GridSkeleton() {
   return (
