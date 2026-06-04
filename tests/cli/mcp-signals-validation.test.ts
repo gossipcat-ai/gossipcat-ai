@@ -326,11 +326,12 @@ describe('hallucination → gap pipeline — no keyword match skips suggestion',
     const gapTracker = new SkillGapTracker(testDir);
     const category = runGapPipeline(gapTracker, {
       agentId: 'sonnet-reviewer',
-      evidence: 'The finding was completely fabricated with no recognizable pattern.',
+      evidence: 'The reviewer felt the change looked acceptable overall.',
       taskId: 'task-none-001',
     });
 
-    // 'pattern' and 'fabricated' are not in DEFAULT_KEYWORDS
+    // Evidence deliberately matches no CATEGORY_PATTERNS keyword (category-extractor.ts).
+    // (Avoids "fabricated"/"verify"/etc. which now map to citation_grounding.)
     expect(category).toBe('');
     const entries = readGapLog(testDir);
     expect(entries).toHaveLength(0);
@@ -568,7 +569,7 @@ describe('bulk_from_consensus — category assignment via bulkInferCategory', ()
     try {
       const writer = new PerformanceWriter(testDir);
       // Simulate what addSignal does when category is undefined
-      writer.appendSignals([{
+      writer[WRITER_INTERNAL].appendSignals([{
         type: 'consensus' as const,
         signal: 'agreement',
         agentId: 'agent-a',
@@ -683,7 +684,7 @@ describe('gossip_signals retraction validation', () => {
       const agent_id = 'haiku-researcher';
       const reason = 'Verified the finding was fabricated.';
 
-      writer.appendSignals([{
+      writer[WRITER_INTERNAL].appendSignals([{
         type: 'consensus' as const,
         taskId: task_id,
         signal: 'signal_retracted',

@@ -9,6 +9,9 @@ const GEMINI_E2E_SUITES = [
   'tests/orchestrator/project-init-e2e\\.test\\.ts$',
   'tests/orchestrator/cognitive-e2e\\.test\\.ts$',
   'tests/orchestrator/interactive-session-e2e\\.test\\.ts$',
+  // Real-LLM consensus e2e: needs a local .gossip/config.json + a google key in
+  // keychain/env. Not broken — env-gated like the other e2e suites above.
+  'tests/orchestrator/consensus-e2e\\.test\\.ts$',
 ];
 
 // Known-broken test suites, excluded from the default run so CI can ship a
@@ -19,11 +22,7 @@ const GEMINI_E2E_SUITES = [
 // burndown.
 //
 // Set RUN_KNOWN_BROKEN=1 locally when actively fixing one of them.
-const KNOWN_BROKEN_SUITES = [
-  'tests/cli/mcp-signals-validation\\.test\\.ts$', // signal schema edge cases
-  'tests/orchestrator/consensus-e2e\\.test\\.ts$', // requires local .gossip/config.json fixture
-  'tests/relay/dashboard-edge-cases\\.test\\.ts$', // dashboard API edges
-];
+const KNOWN_BROKEN_SUITES = [];
 
 module.exports = {
   testEnvironment: 'node',

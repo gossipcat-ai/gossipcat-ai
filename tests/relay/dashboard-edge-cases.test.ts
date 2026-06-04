@@ -21,29 +21,43 @@ describe('Dashboard API: Edge Cases', () => {
 
   describe('api-overview', () => {
     it('should count consensus runs from agent-performance signals', async () => {
+      // consensusRuns uses the "real consensus run" definition (api-overview.ts:278,
+      // mirrors api-consensus.ts:98): a run needs >=2 distinct agents AND >=3 signals.
+      // Two runs, each 3 signals across 3 agents, both qualify.
+      const ts = new Date().toISOString();
+      const sig = (taskId: string, signal: string, agentId: string) =>
+        JSON.stringify({ type: 'consensus', taskId, signal, agentId, timestamp: ts });
       const signals = [
-        JSON.stringify({ type: 'consensus', taskId: 'task-1', signal: 'agreement', agentId: 'a', timestamp: new Date().toISOString() }),
-        JSON.stringify({ type: 'consensus', taskId: 'task-1', signal: 'unique_confirmed', agentId: 'b', timestamp: new Date().toISOString() }),
-        JSON.stringify({ type: 'consensus', taskId: 'task-2', signal: 'disagreement', agentId: 'a', timestamp: new Date().toISOString() }),
+        sig('task-1', 'agreement', 'a'),
+        sig('task-1', 'unique_confirmed', 'b'),
+        sig('task-1', 'agreement', 'c'),
+        sig('task-2', 'agreement', 'a'),
+        sig('task-2', 'unique_confirmed', 'b'),
+        sig('task-2', 'disagreement', 'c'),
       ].join('\n');
       writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), signals);
       const data = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
-      expect(data.consensusRuns).toBe(2); // 2 unique taskIds
-      expect(data.totalSignals).toBe(3);
-      expect(data.confirmedFindings).toBe(2); // agreement + unique_confirmed
-      expect(data.totalFindings).toBe(3);
+      expect(data.consensusRuns).toBe(2); // 2 runs, each >=2 agents and >=3 signals
+      expect(data.totalSignals).toBe(6);
+      expect(data.confirmedFindings).toBe(5); // agreement + unique_confirmed signals (3 in run-1, 2 in run-2)
+      expect(data.totalFindings).toBe(6); // every signal here is a finding-bearing type
     });
 
     it('should not throw on malformed agent-performance.jsonl', async () => {
-      writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), '{"foo":\nnot json\n{"bar": 1}');
+      // totalSignals counts only well-formed `type:"consensus"` signal rows. Two
+      // malformed lines plus one valid consensus signal -> resilient skip, count 1.
+      const valid = JSON.stringify({ type: 'consensus', taskId: 't', signal: 'agreement', agentId: 'a', timestamp: new Date().toISOString() });
+      writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), `{"foo":\nnot json\n${valid}`);
       const data = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
-      // Resilient: skips invalid lines, counts valid ones ({"bar": 1} parses OK)
       expect(data.totalSignals).toBe(1);
     });
 
     it('should handle very large agent-performance file without crashing', async () => {
       // NOTE: This is synchronous and will block. A better implementation would stream.
-      const largeFileContent = Array.from({ length: 10000 }, (_, i) => JSON.stringify({ i })).join('\n');
+      const ts = new Date().toISOString();
+      const largeFileContent = Array.from({ length: 10000 }, (_, i) =>
+        JSON.stringify({ type: 'consensus', taskId: `t${i}`, signal: 'agreement', agentId: 'a', timestamp: ts }),
+      ).join('\n');
       writeFileSync(join(projectRoot, '.gossip', 'agent-performance.jsonl'), largeFileContent);
       const data = await overviewHandler(projectRoot, { agentConfigs: [], relayConnections: 0, connectedAgentIds: [] });
       expect(data.totalSignals).toBe(10000);
