@@ -472,7 +472,7 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
                             <div className="flex items-start gap-2 py-1">
                               <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold ${tag.cls}`}>{tag.label}</span>
                               <div className="min-w-0 flex-1">
-                                <span className="finding-md text-xs [&_.cite-file]:rounded [&_.cite-file]:bg-blue-500/10 [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-blue-400 [&_.cite-fn]:rounded [&_.cite-fn]:bg-purple-500/10 [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-purple-400" style={{ color: 'var(--text-dim)' }} dangerouslySetInnerHTML={{ __html: renderFindingMarkdown(sig.evidence || '') }} />
+                                <span className="finding-md text-xs [&_.cite-file]:rounded [&_.cite-file]:bg-[color-mix(in_oklch,var(--cite-file)_10%,transparent)] [&_.cite-file]:px-1 [&_.cite-file]:font-mono [&_.cite-file]:text-[var(--cite-file)] [&_.cite-fn]:rounded [&_.cite-fn]:bg-[color-mix(in_oklch,var(--cite-fn)_10%,transparent)] [&_.cite-fn]:px-1 [&_.cite-fn]:font-mono [&_.cite-fn]:text-[var(--cite-fn)]" style={{ color: 'var(--text-dim)' }} dangerouslySetInnerHTML={{ __html: renderFindingMarkdown(sig.evidence || '') }} />
                                 <span className="ml-2 font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                                   {sig.agentId}{sig.counterpartId ? ` + ${sig.counterpartId}` : ''}
                                 </span>

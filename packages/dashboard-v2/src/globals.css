@@ -148,6 +148,12 @@
      freeing --info to mean only unverified/info. Severity ramp: --bad rose
      (critical) → --warn amber (high) → --severity-medium blue → --idle slate (low). */
   --severity-medium: #3E6DA8;
+  /* Citations — file path vs function name in finding evidence. NOT severity,
+     NOT agent identity. Muted indigo/violet chosen to clear --severity-medium
+     blue (cite-file ~15deg + lower saturation) and --c2 plum (cite-fn ~33deg).
+     See DESIGN.md Decisions Log 2026-06-04. */
+  --cite-file: #4D5B96;
+  --cite-fn: #675990;
   --idle: #6B6862;
   --idle-soft: #E5E0D7;
   /* Chart palette (multi-series ONLY — never for status) */
@@ -319,6 +325,8 @@
   --info: #7CC1C7;
   --info-soft: #1A2729;
   --severity-medium: #6E9BD4;
+  --cite-file: #6674C2;
+  --cite-fn: #7A6FBA;
   --idle: #807A71;
   --idle-soft: #2A2722;
   /* Chart palette stays identical across themes (semantically same hues). */
