@@ -42,7 +42,9 @@ const TYPE_ACCENT_CLASS: Record<DisplayType, string> = {
 };
 
 const TYPE_ACCENT_STYLE: Record<DisplayType, React.CSSProperties | undefined> = {
-  backlog: { color: 'var(--accent)' },
+  // backlog = "open, needs action" → semantic --warn amber, not the brand
+  // terracotta (DESIGN.md: --accent is brand mark / primary CTA / active nav only).
+  backlog: { color: 'var(--warn)' },
   record: undefined,
   session: undefined,
   rule: undefined,
@@ -53,7 +55,7 @@ const TYPE_ACCENT_STYLE: Record<DisplayType, React.CSSProperties | undefined> = 
  * the same hue at low alpha to mimic mockup line 152 (`0 0 8px primary-soft`).
  */
 const TYPE_DOT: Record<DisplayType, { bg: string; glow: string }> = {
-  backlog: { bg: 'bg-accent', glow: 'var(--accent)' },
+  backlog: { bg: 'bg-[color:var(--warn)]', glow: 'var(--warn)' },
   record: { bg: 'bg-text-dim', glow: 'rgba(102, 102, 116, 0.55)' },
   session: { bg: 'bg-confirmed', glow: 'rgba(52, 211, 153, 0.55)' },
   rule: { bg: 'bg-unverified', glow: 'rgba(251, 191, 36, 0.55)' },
@@ -72,7 +74,7 @@ const TYPE_ICON_BOX_CLASS: Record<DisplayType, string> = {
 };
 
 const TYPE_ICON_BOX_STYLE: Record<DisplayType, React.CSSProperties | undefined> = {
-  backlog: { background: 'color-mix(in oklch, var(--accent) 6%, transparent)' },
+  backlog: { background: 'color-mix(in oklch, var(--warn) 6%, transparent)' },
   record: undefined,
   session: undefined,
   rule: undefined,
