@@ -754,7 +754,7 @@ async function doBoot() {
     // Implementer-only permanent defaults — bound to any agent whose id ends
     // in `-implementer`. Convention documented in .claude/rules/gossipcat.md.
     // Spec: docs/specs/2026-04-22-premise-verification.md (Component C).
-    const IMPLEMENTER_PERMANENT_DEFAULTS = ['verify-the-premise'];
+    const IMPLEMENTER_PERMANENT_DEFAULTS = ['verify-the-premise', 'implementation-discipline'];
     // Researcher/Reviewer permanent defaults — bound to any agent whose id
     // ends in `-researcher` or `-reviewer`. Disjoint from the implementer
     // filter: hybrid ids like `foo-researcher-implementer` match BOTH filters
