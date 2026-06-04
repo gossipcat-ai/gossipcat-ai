@@ -133,8 +133,11 @@ describe('PerformanceWriter — gossip_signals backing store', () => {
       },
     ]);
 
-    const raw = readFileSync(join(testDir, '.gossip', 'agent-performance.jsonl'), 'utf-8').trim();
-    const parsed = JSON.parse(raw);
+    // appendSignals with a consensusId also appends a `_meta`/`round_counter_bumped`
+    // line (round-counter.ts Option C), so the file is 2 lines — parse the signal row.
+    const lines = readFileSync(join(testDir, '.gossip', 'agent-performance.jsonl'), 'utf-8')
+      .trim().split('\n').filter(Boolean).map((l: string) => JSON.parse(l));
+    const parsed = lines.find((r: { type?: string }) => r.type !== '_meta');
     expect(parsed.findingId).toBe('4c88bcd3-00cf4810:gemini-reviewer:f1');
     expect(parsed.consensusId).toBe('4c88bcd3-00cf4810');
     expect(parsed.severity).toBe('high');
@@ -412,14 +415,20 @@ describe('handleCollect', () => {
 
 describe('handleNativeRelay', () => {
   let testDir: string;
+  let previousCwd: string;
 
   beforeEach(() => {
+    previousCwd = process.cwd();
     testDir = makeTmpDir('relay');
     resetCtx({}, testDir);
+    // emitCompletionSignals writes to process.cwd()/.gossip (native-tasks.ts:700);
+    // align cwd with testDir so signals land in the test sandbox, not the real repo.
+    process.chdir(testDir);
   });
 
   afterEach(() => {
     restoreCtx();
+    process.chdir(previousCwd);
     rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -911,7 +920,7 @@ describe('persistNativeTaskMap + restore', () => {
     expect(data.tasks['t1'].agentId).toBe('claude-reviewer');
   });
 
-  it('persists result metadata but strips full result text (slim format)', () => {
+  it('persists result metadata, truncating full result text to 50k on disk (slim format)', () => {
     const now = Date.now();
     const longResult = 'x'.repeat(100_000);
     ctx.nativeResultMap.set('r1', {
@@ -925,8 +934,9 @@ describe('persistNativeTaskMap + restore', () => {
     const filePath = join(testDir, '.gossip', 'native-tasks.json');
     const data = JSON.parse(readFileSync(filePath, 'utf-8'));
     expect(data.results['r1']).toBeDefined();
-    // Full result text is not stored — only status metadata
-    expect(data.results['r1'].result).toBeUndefined();
+    // Disk copy is truncated to 50k chars (native-tasks.ts:320), not stripped entirely;
+    // the full result stays in memory.
+    expect(data.results['r1'].result).toBe('x'.repeat(50_000));
     expect(data.results['r1'].status).toBe('completed');
   });
 
@@ -1210,7 +1220,9 @@ describe('handleDispatchSingle — native skill injection', () => {
     });
 
     const result = await handleDispatchSingle('native-claude', 'Audit the memory system');
-    const text = result.content[0].text;
+    // Skills live in the AGENT_PROMPT content item, not the orchestrator-instructions
+    // item (content[0]) — two-item native dispatch split.
+    const text = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
     expect(text).toContain('--- SKILLS ---');
     expect(text).toContain('memory-retrieval');
     expect(text).toContain('Recall past findings');
@@ -1250,7 +1262,7 @@ describe('handleDispatchSingle — native skill injection', () => {
     const result = await handleDispatchConsensus([
       { agent_id: 'native-claude', task: 'Audit memory' },
     ]);
-    const text = result.content[0].text;
+    const text = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
     const skillsIdx = text.indexOf('--- SKILLS ---');
     const consensusIdx = text.indexOf('--- CONSENSUS OUTPUT FORMAT ---');
     expect(skillsIdx).toBeGreaterThan(-1);
@@ -1274,7 +1286,8 @@ describe('handleDispatchSingle — native skill injection', () => {
     });
 
     const result = await handleDispatchSingle('native-claude', 'Audit memory');
-    expect(result.content[0].text).toContain('[Context truncated to fit budget]');
+    const agentPrompt = result.content.find(c => c.text.startsWith('AGENT_PROMPT:'))?.text ?? '';
+    expect(agentPrompt).toContain('[Context truncated to fit budget]');
   });
 
   it('verify-the-premise skill appears in *-implementer agent prompt when bound', async () => {
