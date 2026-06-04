@@ -4,6 +4,29 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-06-04
+
+Dashboard correctness plus a broad DESIGN.md token-discipline pass, with worktree-isolation reliability fixes underneath in the CLI.
+
+### Fixed
+
+- **Overview "24h activity" heatmap read as idle while signals were landing** (PR #508). The "Agent · 24h activity" heatmap and "Signals · 24h" counter were sourced from `consensus?.runs`, which the `/consensus` endpoint gates to runs with ≥2 agents AND ≥3 signals. Manually-recorded signals (`gossip_signals(record)`) and single `gossip_run` dispatches never form such a run, so a workflow built on those showed the heatmap permanently empty — directly contradicting the Signal-stream widget, which reads the ungated flat log. A new `GET /api/signal-activity` endpoint serves a per-agent × hour 24h histogram from `agent-performance.jsonl` using the **same inclusion rules** as the stream (`type==='consensus'`, skip `consensus_round_retracted` + the `_system` sentinel), so the heatmap total now agrees with the stream. Verified via 3-agent consensus.
+- **"Unverified" status rendered two different colors** (PR #509). The `bg-unverified`/`text-unverified` utilities resolved to ochre `#b8741d` while every `var(--info)` usage rendered teal, so the same status showed orange in `FindingsMetrics`/`AgentPage`/`SignalTimeline` and teal elsewhere. `--color-unverified` is now unified to the `--info` teal hex in both themes (the dark-mode override was previously missing).
+- **`medium` severity collided with the unverified status color** (PR #509). Unifying unverified→`--info` teal made `medium` severity (also `--info`) share teal with a status token. Introduced a dedicated `--severity-medium` blue (`#3E6DA8` / `#6E9BD4`); `--info` is now status-only. The designer's `--c2` plum candidate was rejected (it is `sonnet-reviewer`'s identity hue).
+- **DESIGN.md token discipline across the dashboard** (PRs #489, #490, #491, #503–#507, #509). Removed default drop shadows in favor of `--shadow-overlay` / `--shadow-card` / hairline borders; pulled the terracotta brand accent off generic chrome, status, and data viz (memory type chips → per-type semantic tokens, log `consensus` category → `--info`, activity dots → `--ok`, row-hover washes normalized from `/30`–`/40` to the `/10` convention); migrated raw Tailwind palette colors to semantic tokens; swept section labels to small-caps Geist; added an `ErrorChip` error contract with 50%-dimmed stale-data rendering.
+- **Worktree isolation recovery is now non-destructive** (PRs #495, #496, #497, issue #437). Isolation-recovery early-returns set an `emptyDiff` sentinel on all benign no-preserve paths, preventing spurious recovery churn.
+- **Skill resolution across all three tiers** (PR #494). `readSkillFrontmatter` resolves agent-local → project-wide → bundled-default skills correctly.
+
+### Added
+
+- **Parallel native write-intent dispatch is hard-blocked** (PR #498, issue #434). Two or more native write-intent tasks dispatched in `mode:"parallel"` race on the shared `.git/HEAD` (the last `git checkout -b` wins, so a later commit can land on the wrong branch). The dispatcher now rejects this configuration before spawning any task and directs the caller to `worktree` (isolated) or `scoped` (orchestrator-committed) write mode.
+- **Upgrade-available notice in `gossip_status`** (PR #499, issue #452). A cached check surfaces when a newer gossipcat version is published, so operators know to update.
+- **Layer-2 worktree sandbox hooks** (PR #501). Activated and refreshed the gossipcat discipline hooks.
+
+### Security
+
+- **Dependency bumps** (PR #492). `qs` and `postcss` raised via npm `overrides`.
+
 ## [0.5.2] — 2026-05-24
 
 Dashboard polish + a load-bearing reader bug fix. The visible win is a cleaner Team page and login screen; the invisible win is that the Tasks page stops showing "0 of 0" forever once the task graph crosses 5MB.
