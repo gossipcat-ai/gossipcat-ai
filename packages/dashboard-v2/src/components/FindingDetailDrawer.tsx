@@ -41,6 +41,45 @@ const drawerStyle: CSSProperties = {
   fontFamily: 'var(--font-sans)',
 };
 
+function FindingDetailSkeleton() {
+  const cell = (h: string, w: string) => (
+    <div className={`${h} ${w} rounded`} style={{ background: 'var(--border)', opacity: 0.4 }} />
+  );
+  return (
+    <div className="mt-4 space-y-4" aria-busy="true">
+      {/* Chip row: tag + severity + "by agent" */}
+      <div className="flex items-center gap-2">
+        {cell('h-3.5', 'w-12')}
+        {cell('h-3.5', 'w-14')}
+        {cell('h-3.5', 'w-16')}
+      </div>
+      {/* Finding text: 3 stacked bars */}
+      <div className="space-y-2">
+        {cell('h-2', 'w-full')}
+        {cell('h-2', 'w-[92%]')}
+        {cell('h-2', 'w-[70%]')}
+      </div>
+      {/* Citations: label + block */}
+      <div className="space-y-2">
+        {cell('h-2', 'w-16')}
+        {cell('h-12', 'w-full')}
+      </div>
+      {/* Coverage: label + 2 rows */}
+      <div className="space-y-2">
+        {cell('h-2', 'w-16')}
+        {cell('h-2', 'w-[60%]')}
+        {cell('h-2', 'w-[45%]')}
+      </div>
+      {/* Signals: label + 2 rows */}
+      <div className="space-y-2">
+        {cell('h-2', 'w-20')}
+        {cell('h-2', 'w-full')}
+        {cell('h-2', 'w-[80%]')}
+      </div>
+    </div>
+  );
+}
+
 export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId }: Props) {
   const [detail, setDetail] = useState<FindingDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +101,7 @@ export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId
         </SheetHeader>
 
         {error && <div className="mt-4"><ErrorChip message={error} /></div>}
-        {!error && !detail && <div className="mt-4 text-[11px]" style={{ color: 'var(--text-dim)' }}>Loading…</div>}
+        {!error && !detail && <FindingDetailSkeleton />}
 
         {detail && (
           <div className="mt-4 space-y-4">
