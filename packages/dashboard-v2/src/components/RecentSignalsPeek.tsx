@@ -3,6 +3,7 @@ import type React from 'react';
 import { api } from '@/lib/api';
 import { timeAgo } from '@/lib/utils';
 import { navigate } from '@/lib/router';
+import { ErrorChip } from './ErrorChip';
 import type { SignalEntry } from '@/lib/types';
 
 interface SignalsResponse {
@@ -109,6 +110,7 @@ export function RecentSignalsPeek() {
         >
           all signals →
         </button>
+        {err && <ErrorChip message={err} className="ml-2" />}
       </header>
 
       <div className="rounded-lg border border-border" style={{ background: 'var(--surface-elev)' }}>
@@ -156,12 +158,18 @@ export function RecentSignalsPeek() {
             </table>
           </div>
         )}
-        {err && <p className="px-4 py-3 text-xs" style={{ color: 'var(--text-dim)' }}>unavailable</p>}
+        {/* DESIGN.md error contract — when err is set we render the cached
+            items (already preserved in state, since setItems is only called
+            on a successful fetch) dimmed at 50% so the operator still sees
+            their context. The full error reason lives in the header ErrorChip. */}
         {!err && items && items.length === 0 && (
           <p className="px-4 py-3 text-xs" style={{ color: 'var(--text-dim)' }}>no signals recorded</p>
         )}
-        {!err && items && items.length > 0 && (
-          <table className="w-full">
+        {err && (!items || items.length === 0) && (
+          <p className="px-4 py-3 text-xs" style={{ color: 'var(--text-dim)' }}>no cached signals to display</p>
+        )}
+        {items && items.length > 0 && (
+          <table className="w-full" style={err ? { opacity: 0.5 } : undefined}>
             <thead>
               <tr className="border-b border-border">
                 <th className="h-section py-2 pl-4 pr-3 text-left" style={{ fontSize: 10, width: 80 }}>time</th>
