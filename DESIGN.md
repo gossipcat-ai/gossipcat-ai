@@ -62,6 +62,15 @@ Restrained, semantic-strict. **One accent.** Every other color carries meaning.
 
 Severity ramp (finding/signal lists, severity-mix strip): `--bad` critical → `--warn` high → `--severity-medium` low-blue → `--idle` low. `--info` teal is **status only** (unverified) and must never double as a severity color.
 
+### Citation tokens (code references in finding evidence)
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--cite-file` | `#4D5B96` | `#6674C2` | file-path citations (`<code class="cite-file">`) — muted indigo |
+| `--cite-fn` | `#675990` | `#7A6FBA` | function-name citations (`<code class="cite-fn">`) — muted violet |
+
+Citations are JetBrains Mono inline code with a `/10` hue-tinted background (`color-mix(in oklch, var(--cite-file) 10%, transparent)`). They carry **no** status or identity meaning: `--cite-file` is held ~15° + lower saturation off `--severity-medium` blue, and `--cite-fn` ~33° off `--c2` / `--a-sonnet-reviewer` plum. Never reuse these for status, severity, or agent identity.
+
 ### Chart palette (multi-series ONLY)
 
 | Token | Hex | |
@@ -447,3 +456,4 @@ Each PR ships a Lighthouse + axe-core report demonstrating WCAG AA compliance ma
 | 2026-05-24 | v1.1 clarification — Fraunces is allowed for the gauge center % inside AgentCardBig | Strict reading of §Typography reserves Fraunces for routes/heroes; gauge center % is an explicit editorial-accent carve-out inside an otherwise Geist card. Caught and documented during PR #471 pre-merge consensus |
 | 2026-06-04 | Unified `unverified` status to `--info` teal everywhere (was rendering ochre `#b8741d` via `bg-unverified` utilities, teal via `var(--info)`) | Same status showed two colors across views; DESIGN.md row 59 defines unverified = `--info`. `--color-unverified` re-pointed to the `--info` hex in both themes (PR #509) |
 | 2026-06-04 | Introduced `--severity-medium` blue (`#3E6DA8` / `#6E9BD4`); moved `medium` severity off `--info` teal | The unverified-status unification made `medium` severity (also `--info` teal) collide with unverified status — one teal, two meanings, violating "status is always semantic." The warm ramp (rose/amber/gold) is fully consumed by critical/high + identity hues, and `--warn`'s dark value is already gold; a cool blue is the only non-colliding slot that preserves the original "medium = calm severity" intent. Updated `SeverityMixStrip`, `RecentSignalsPeek`, `SignalsPage`. `--info` is now status-only. Deferred follow-up: pre-existing `hover:bg-accent/30-40` washes (convention is `/10`) in `AgentActivityTimeline`/`AgentPage`/`TaskRow`/`SystemPulse` |
+| 2026-06-04 | Introduced `--cite-file` (`#4D5B96` / `#6674C2`) + `--cite-fn` (`#675990` / `#7A6FBA`); replaced raw Tailwind `blue-400`/`purple-400` cite styling at 4 sites | Citation spans used raw `text-blue-400`/`text-purple-400`, colliding with the just-introduced `--severity-medium` blue (a file citation read as a medium-severity marker) and `--c2`/`--a-sonnet-reviewer` plum (a fn citation read as agent identity) — the same "one hue, two meanings" problem the row above fixed. Muted indigo/violet tokens chosen to clear both zones (cite-file ~15° + lower saturation off severity-medium; cite-fn ~33° off plum). `/10` bg tint preserved via `color-mix`. Updated `FindingsMetrics` (×2), `TaskDetailModal`, `AgentPage`; `utils.ts` emits the classes unchanged. Dark tokens land ~4.3:1 contrast — acceptable for tinted inline mono code. sonnet-designer picked the hues; orchestrator verified hue gaps + WCAG contrast numerically |
