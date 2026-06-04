@@ -326,6 +326,12 @@ export function SignalsPage() {
                       key={`${r.timestamp}-${r.agentId}-${i}`}
                       className={`border-b border-border/30 ${canOpen ? 'cursor-pointer transition-colors' : ''}`}
                       style={canOpen ? { ['--row-hover-bg' as string]: 'color-mix(in oklch, var(--surface-sunk) 40%, transparent)' } : undefined}
+                      // Keyboard-accessible activation: when canOpen, treat the row as
+                      // an interactive button (Enter/Space → openDrawer). Without this,
+                      // keyboard/SR users couldn't reach the drawer.
+                      role={canOpen ? 'button' : undefined}
+                      tabIndex={canOpen ? 0 : undefined}
+                      aria-label={canOpen ? `View finding ${r.findingId ?? ''}` : undefined}
                       onMouseEnter={(e) => {
                         if (canOpen) e.currentTarget.style.background = 'color-mix(in oklch, var(--surface-sunk) 40%, transparent)';
                       }}
@@ -333,6 +339,12 @@ export function SignalsPage() {
                         if (canOpen) e.currentTarget.style.background = '';
                       }}
                       onClick={() => canOpen && openDrawer(r.consensusId, r.findingId)}
+                      onKeyDown={(e) => {
+                        if (canOpen && (e.key === 'Enter' || e.key === ' ')) {
+                          e.preventDefault();
+                          openDrawer(r.consensusId, r.findingId);
+                        }
+                      }}
                     >
                       {/* Severity tick — full-bleed left bar, semantic color */}
                       <td

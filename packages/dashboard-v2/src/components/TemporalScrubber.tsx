@@ -62,10 +62,13 @@ export function TemporalScrubber({ runs, range, onRangeChange, height = 52 }: Te
                 aria-pressed={active}
                 className="rounded px-2 py-0.5 font-mono text-[10px] transition"
                 style={{
-                  background: active ? 'color-mix(in oklch, var(--accent) 10%, transparent)' : 'transparent',
-                  color: active ? 'var(--accent)' : 'var(--text-dim)',
+                  // Filter chips are interactive chrome, not CTAs — DESIGN.md
+                  // reserves --accent for brand mark / primary CTA / active nav.
+                  // Selected state uses weight + surface, not the brand hue.
+                  background: active ? 'var(--surface-sunk)' : 'transparent',
+                  color: active ? 'var(--text)' : 'var(--text-dim)',
                   border: '1px solid',
-                  borderColor: active ? 'color-mix(in oklch, var(--accent) 30%, transparent)' : 'transparent',
+                  borderColor: active ? 'var(--border-strong)' : 'transparent',
                 }}
               >
                 {r}

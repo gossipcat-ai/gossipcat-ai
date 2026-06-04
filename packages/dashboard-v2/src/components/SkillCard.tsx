@@ -23,7 +23,10 @@ const STATUS_CLS: Record<SkillStatus, string> = {
   failed: 'border-disputed/40 bg-disputed/10 text-disputed',
   silent_skill: 'border-unverified/40 bg-unverified/10 text-unverified',
   insufficient_evidence: 'border-unverified/40 bg-unverified/10 text-unverified',
-  inconclusive: 'border-orange-400/40 bg-orange-500/10 text-orange-400',
+  // Match SkillGraduationGrid: inconclusive → --warn (DESIGN.md amber).
+  // Raw orange-400 was a different hue, theme-baked, inconsistent with the
+  // overview grid showing the same skill data.
+  inconclusive: 'border-[color:var(--warn)]/40 bg-[color:var(--warn)]/10 text-[color:var(--warn)]',
   flagged_for_manual_review: 'border-disputed/40 bg-disputed/10 text-disputed',
 };
 

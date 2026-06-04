@@ -80,7 +80,9 @@
   --accent-bright: #e08a6c;
   --accent-soft: rgba(204, 120, 92, 0.12);
   --success: #1a7e5e;
-  --warn: #b8741d;
+  /* --warn declared below in the DESIGN.md alias block (#B47A2A).
+     Legacy #b8741d removed to prevent a future merge from regressing the
+     spec'd value via cascade ordering. */
   --danger: #c0392b;
   --beat: 1.6s;
   /* Phase 1b graph-stage tokens — cream stage in light mode. */
@@ -258,7 +260,8 @@
   --accent-bright: #e08a6c;
   --accent-soft: rgba(214, 138, 111, 0.16);
   --success: #57b289;
-  --warn: #c89a55;
+  /* --warn declared below in the DESIGN.md dark-mode alias block (#D8A35A).
+     Legacy #c89a55 removed to prevent cascade-order regressions. */
   --danger: #d68a7e;
   --shadow-overlay: 0 24px 64px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --shadow-overlay-hairline: 0 0 0 1px rgba(255, 255, 255, 0.04);
@@ -467,7 +470,7 @@ html[data-theme="dark"]::after {
   background: var(--surface-sunk);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
-  font-family: 'Inter', sans-serif;
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 500;
   line-height: 1.45;
