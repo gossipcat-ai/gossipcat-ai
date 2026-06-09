@@ -4,6 +4,14 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+### Changed
+
+- **Worktree-isolation auto-restore is now OFF by default** (issue #437). Previously, when the isolation detector flagged a leak into the parent checkout, it would `git restore` the affected paths automatically after preserving them to `.gossip/recovery/<taskId>.patch`. Because the detector attributes *any* path dirtied during a dispatch window to the agent, in an orchestrated session it could misfire on the orchestrator's own concurrent writes (e.g. journaling to `.claude/`) and destroy them. The destructive revert is now gated behind `GOSSIP_WORKTREE_AUTO_REVERT` (or `consensus.worktreeAutoRevert: true`); the new default preserves the patch and reports, leaving the working tree untouched. **To restore the previous auto-clean behavior, set `GOSSIP_WORKTREE_AUTO_REVERT=1`.**
+
+### Added
+
+- **Orchestrator-owned path exclusion for isolation detection** (issue #437). Built-in `.gossip/`/`.claude/` prefixes — plus an opt-in `consensus.orchestratorOwnedGlobs` allowlist — are excluded from leak attribution, so routine orchestrator/infra writes during a dispatch are no longer flagged or reverted. `git status --porcelain` head-drift remains a hard violation regardless.
+
 ## [0.5.3] — 2026-06-04
 
 Dashboard correctness plus a broad DESIGN.md token-discipline pass, with worktree-isolation reliability fixes underneath in the CLI.

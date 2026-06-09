@@ -199,8 +199,11 @@ export function worktreeAutoRevertEnabled(projectRoot: string): boolean {
     const raw = getRuntimeFlag('GOSSIP_WORKTREE_AUTO_REVERT', configSeed);
     return raw === '1' || raw?.toLowerCase() === 'true';
   } catch {
-    // Orchestrator import failed — honor config seed, else registry default OFF.
-    return configSeed === '1';
+    // Orchestrator import failed — a broken subsystem must NOT become the
+    // enabling condition for a destructive op. Fail OFF regardless of the config
+    // seed (pre-merge consensus 1bdcafc4 — "heuristic detector must not default
+    // to a destructive op"). The operator can still force it via env.
+    return false;
   }
 }
 
@@ -655,7 +658,12 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
       let orchestratorOwnedGlobs: string[] = [];
       try {
         const { findConfigPath, loadConfig } = require('../config');
-        const cfgP = findConfigPath(process.cwd());
+        // Resolve config from the project root (same basis as revertRoot below),
+        // not bare process.cwd() — the MCP server's cwd can differ from the
+        // project root, which would silently skip the operator globs (pre-merge
+        // consensus 1bdcafc4).
+        const cfgRoot = ctx.mainAgent?.projectRoot ?? process.cwd();
+        const cfgP = findConfigPath(cfgRoot);
         const cfg = cfgP ? loadConfig(cfgP) : null;
         const g = cfg?.consensus?.orchestratorOwnedGlobs;
         if (Array.isArray(g)) orchestratorOwnedGlobs = g;
