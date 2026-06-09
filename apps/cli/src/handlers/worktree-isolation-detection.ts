@@ -78,12 +78,18 @@ function globToRegExp(glob: string): RegExp {
     const c = glob[i];
     if (c === '*') {
       if (glob[i + 1] === '*') {
-        // `**` → any characters including path separators.
-        re += '.*';
-        i++;
-        // Consume a trailing slash after `**` so `docs/**` matches `docs/x`
-        // (the `**/` form) as well as `docs/a/b`.
-        if (glob[i + 1] === '/') i++;
+        i++; // consume the second '*'
+        if (glob[i + 1] === '/') {
+          // `**/` → zero or more COMPLETE path segments (each ending in `/`).
+          // Emitting `(?:.*/)?` (not `.*`) keeps a separator boundary, so
+          // `docs/**/foo` matches `docs/foo` and `docs/a/b/foo` but NOT
+          // `docs/xfoo` (issue #437 pre-merge consensus 9fe6d8db).
+          i++; // consume the '/'
+          re += '(?:.*/)?';
+        } else {
+          // Trailing `**` → any remaining characters including separators.
+          re += '.*';
+        }
       } else {
         // `*` → any characters except a path separator.
         re += '[^/]*';

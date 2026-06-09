@@ -164,34 +164,43 @@ function appendRelayWarning(
 
 /**
  * Resolve the effective GOSSIP_WORKTREE_AUTO_REVERT flag (spec 2026-06-09
- * Layer B, §8.2 item 4). Precedence: env → file → `consensus.worktreeAutoRevert`
+ * Layer B, §8.2 item 4). Precedence: env → flags-file → `consensus.worktreeAutoRevert`
  * config → registry default '0'.
  *
- * There is no standalone config→runtime-store seed seam today (the runtime store
- * has no boot-time config hydration; `consensus.autoResolveOnRoundClose` is read
- * the same direct way in collect.ts). So the config value is supplied as the
- * `defaultValue` to `getRuntimeFlagBool`, which already implements env→file→
- * defaultValue precedence — making the env/registry path authoritative while
- * letting the config file seed the default. TODO(§8.2-4): if a real config→store
- * hydration seam lands, move this seeding there.
+ * The config value is supplied as the STRING `defaultValue` to `getRuntimeFlag`,
+ * NOT to `getRuntimeFlagBool`. This matters: `getRuntimeFlagBool` forwards
+ * `undefined` (not its `defaultValue`) to `getRuntimeFlag`, which then returns
+ * the registry default `'0'` before any caller default applies — so a config
+ * seed passed to `getRuntimeFlagBool` is dead code (pre-merge consensus
+ * 9fe6d8db). `getRuntimeFlag`'s own precedence is env(non-empty) > flags-file >
+ * explicit defaultValue > registry default, so seeding it directly makes the
+ * config opt-in actually work while keeping env/flags-file authoritative.
+ *
+ * Empty-string env (`export GOSSIP_WORKTREE_AUTO_REVERT=`) is an explicit OFF,
+ * matching the bool-helper's force-off semantics for a destructive opt-in.
  *
  * Fail-open: any config read error falls back to the registry default ('0' → OFF).
+ * Exported for direct precedence testing (config seed honored without env).
  */
-function worktreeAutoRevertEnabled(projectRoot: string): boolean {
-  let configDefault: boolean | undefined;
+export function worktreeAutoRevertEnabled(projectRoot: string): boolean {
+  // Explicit empty-string env → force OFF regardless of file/config.
+  if (process.env.GOSSIP_WORKTREE_AUTO_REVERT === '') return false;
+
+  let configSeed: string | undefined;
   try {
     const { findConfigPath, loadConfig } = require('../config');
     const cfgP = findConfigPath(projectRoot);
     const cfg = cfgP ? loadConfig(cfgP) : null;
     const v = cfg?.consensus?.worktreeAutoRevert;
-    if (typeof v === 'boolean') configDefault = v;
+    if (typeof v === 'boolean') configSeed = v ? '1' : '0';
   } catch { /* fail-open — env/registry path stays authoritative */ }
   try {
-    const { getRuntimeFlagBool } = require('@gossip/orchestrator');
-    return getRuntimeFlagBool('GOSSIP_WORKTREE_AUTO_REVERT', configDefault);
+    const { getRuntimeFlag } = require('@gossip/orchestrator');
+    const raw = getRuntimeFlag('GOSSIP_WORKTREE_AUTO_REVERT', configSeed);
+    return raw === '1' || raw?.toLowerCase() === 'true';
   } catch {
     // Orchestrator import failed — honor config seed, else registry default OFF.
-    return configDefault ?? false;
+    return configSeed === '1';
   }
 }
 

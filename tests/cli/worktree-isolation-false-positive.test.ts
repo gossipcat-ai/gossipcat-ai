@@ -100,6 +100,17 @@ describe('filterOrchestratorOwned', () => {
     expect(r.excluded).toEqual(['logs/a.log']);
     expect(r.agentAttributable).toEqual(['logs/sub/b.log']);
   });
+
+  it('** before a literal segment enforces a path-separator boundary (consensus 9fe6d8db)', () => {
+    // Regression for the globToRegExp `**/foo` boundary bug: `docs/**/foo` must
+    // match `docs/foo` and `docs/a/b/foo` but NOT `docs/xfoo` (suffix match).
+    const r = filterOrchestratorOwned(
+      ['docs/xfoo', 'docs/foo', 'docs/a/b/foo'],
+      ['docs/**/foo'],
+    );
+    expect(r.excluded.sort()).toEqual(['docs/a/b/foo', 'docs/foo'].sort());
+    expect(r.agentAttributable).toEqual(['docs/xfoo']); // NOT silenced
+  });
 });
 
 // ─── Layer A — diffIsolationSnapshots integration ────────────────────────────
@@ -241,8 +252,9 @@ jest.mock('../../apps/cli/src/handlers/worktree-isolation-detection', () => {
   };
 });
 
-import { handleNativeRelay } from '../../apps/cli/src/handlers/native-tasks';
+import { handleNativeRelay, worktreeAutoRevertEnabled } from '../../apps/cli/src/handlers/native-tasks';
 import { ctx } from '../../apps/cli/src/mcp-context';
+import { writeFileSync, mkdirSync } from 'fs';
 
 const AGENT_ID = 'sonnet-implementer';
 const TASK_ID = 'iso-fp-task-1';
@@ -414,5 +426,65 @@ describe('handleNativeRelay — Layer B auto-restore opt-in', () => {
     expect(excludedEntry.taskId).toBe(TASK_ID);
     expect(excludedEntry.resultLength).toBe(2);
     expect(excludedEntry.suspectedReason).toContain('.claude/knowledge-nominations.md');
+  });
+});
+
+// ─── Layer B — worktreeAutoRevertEnabled config→flag precedence ──────────────
+// Regression for the consensus 9fe6d8db HIGH finding: consensus.worktreeAutoRevert
+// in .gossip/config.json must actually seed the flag when no env override is set.
+// (The original impl passed the seed to getRuntimeFlagBool's defaultValue, which
+// is dead code because the registry default '0' pre-empts it.)
+describe('worktreeAutoRevertEnabled — config→flag seeding precedence', () => {
+  let root: string;
+  let prevEnv: string | undefined;
+
+  function writeConfig(worktreeAutoRevert?: boolean): void {
+    mkdirSync(join(root, '.gossip'), { recursive: true });
+    const cfg: any = { main_agent: { provider: 'anthropic', model: 'claude-opus-4-6' } };
+    if (worktreeAutoRevert !== undefined) cfg.consensus = { worktreeAutoRevert };
+    writeFileSync(join(root, '.gossip', 'config.json'), JSON.stringify(cfg));
+  }
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'iso-fp-cfg-'));
+    prevEnv = process.env.GOSSIP_WORKTREE_AUTO_REVERT;
+    delete process.env.GOSSIP_WORKTREE_AUTO_REVERT;
+  });
+
+  afterEach(() => {
+    if (prevEnv === undefined) delete process.env.GOSSIP_WORKTREE_AUTO_REVERT;
+    else process.env.GOSSIP_WORKTREE_AUTO_REVERT = prevEnv;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('config worktreeAutoRevert:true with NO env → enabled (the dead-config bug)', () => {
+    writeConfig(true);
+    expect(worktreeAutoRevertEnabled(root)).toBe(true);
+  });
+
+  it('config worktreeAutoRevert:false → disabled', () => {
+    writeConfig(false);
+    expect(worktreeAutoRevertEnabled(root)).toBe(false);
+  });
+
+  it('config absent / no consensus block → registry default OFF', () => {
+    writeConfig(undefined);
+    expect(worktreeAutoRevertEnabled(root)).toBe(false);
+  });
+
+  it('no config file at all → registry default OFF (fail-open)', () => {
+    expect(worktreeAutoRevertEnabled(root)).toBe(false);
+  });
+
+  it('env=1 overrides config false', () => {
+    writeConfig(false);
+    process.env.GOSSIP_WORKTREE_AUTO_REVERT = '1';
+    expect(worktreeAutoRevertEnabled(root)).toBe(true);
+  });
+
+  it('explicit empty-string env forces OFF even with config true', () => {
+    writeConfig(true);
+    process.env.GOSSIP_WORKTREE_AUTO_REVERT = '';
+    expect(worktreeAutoRevertEnabled(root)).toBe(false);
   });
 });
