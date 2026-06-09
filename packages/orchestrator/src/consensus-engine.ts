@@ -43,6 +43,7 @@ const MODEL_BUDGETS: Record<string, number> = {
   'sonnet':  400_000,   // 200K token context
   'haiku':   400_000,   // 200K token context
   'opus':    400_000,   // 200K token context
+  'fable':   400_000,   // 200K token context
   'gemini':  2_400_000, // ~1M token context
   'gpt':     320_000,   // 128K token context
 };

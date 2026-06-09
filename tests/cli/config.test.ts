@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { validateConfig, findConfigPath, configToAgentConfigs, VALID_MAIN_PROVIDERS } from '../../apps/cli/src/config';
+import { validateConfig, findConfigPath, configToAgentConfigs, loadClaudeSubagents, VALID_MAIN_PROVIDERS } from '../../apps/cli/src/config';
 import { CREATE_PROVIDER_CASES } from '../../packages/orchestrator/src/llm-client';
 
 describe('Config Validation', () => {
@@ -46,6 +46,15 @@ describe('Config Validation', () => {
     });
     expect(config.utility_model?.provider).toBe('native');
     expect(config.utility_model?.model).toBe('haiku');
+  });
+
+  it('accepts utility_model with native provider and fable tier', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'google', model: 'gemini-2.5-pro' },
+      utility_model: { provider: 'native', model: 'fable' },
+    });
+    expect(config.utility_model?.provider).toBe('native');
+    expect(config.utility_model?.model).toBe('fable');
   });
 
   it('rejects native utility_model with invalid model tier', () => {
@@ -302,5 +311,39 @@ describe('findConfigPath', () => {
     const filePath = join(tmpDir, 'gossip.agents.json');
     writeFileSync(filePath, '{}');
     expect(findConfigPath(tmpDir)).toBe(filePath);
+  });
+});
+
+describe('loadClaudeSubagents — fable tier allowlist', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `gossip-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(join(tmpDir, '.claude', 'agents'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('does NOT skip a .claude/agents/*.md with model: fable — loads as anthropic/claude-fable-5', () => {
+    writeFileSync(
+      join(tmpDir, '.claude', 'agents', 'fable-agent.md'),
+      `---\nname: Fable Agent\nmodel: fable\ndescription: A fable-tier agent\n---\nYou are a fable agent.\n`,
+    );
+    const agents = loadClaudeSubagents(tmpDir);
+    const fable = agents.find(a => a.name === 'Fable Agent');
+    expect(fable).toBeDefined();
+    expect(fable?.provider).toBe('anthropic');
+    expect(fable?.model).toBe('claude-fable-5');
+  });
+
+  it('still skips an .md with a genuinely unknown model tier', () => {
+    writeFileSync(
+      join(tmpDir, '.claude', 'agents', 'bogus-agent.md'),
+      `---\nname: Bogus Agent\nmodel: gpt-9\ndescription: unknown tier\n---\nbody\n`,
+    );
+    const agents = loadClaudeSubagents(tmpDir);
+    expect(agents.find(a => a.name === 'Bogus Agent')).toBeUndefined();
   });
 });

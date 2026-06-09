@@ -295,6 +295,10 @@ describe('modelTierFromId', () => {
     expect(modelTierFromId('claude-haiku-4-5')).toBe('haiku');
   });
 
+  it('maps fable models to "fable"', () => {
+    expect(modelTierFromId('claude-fable-5')).toBe('fable');
+  });
+
   it('defaults everything else to "sonnet"', () => {
     expect(modelTierFromId('claude-sonnet-4-6')).toBe('sonnet');
     expect(modelTierFromId('gemini-2.5-pro')).toBe('sonnet');

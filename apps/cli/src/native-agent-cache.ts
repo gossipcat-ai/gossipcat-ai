@@ -63,9 +63,10 @@ const realFs: FsLike = {
  * Map a model id to a Claude tier label. Mirrors the inline logic that was
  * previously duplicated across the bootstrap and config-sync paths.
  */
-export function modelTierFromId(modelId: string): 'opus' | 'sonnet' | 'haiku' {
+export function modelTierFromId(modelId: string): 'opus' | 'sonnet' | 'haiku' | 'fable' {
   if (modelId.includes('opus')) return 'opus';
   if (modelId.includes('haiku')) return 'haiku';
+  if (modelId.includes('fable')) return 'fable';
   return 'sonnet';
 }
 
