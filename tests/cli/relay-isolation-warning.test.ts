@@ -64,11 +64,19 @@ function makeMainAgent(projectRoot: string): any {
 let testDir: string;
 let originalCwd: string;
 let stderrSpy: jest.SpyInstance;
+let prevAutoRevert: string | undefined;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), 'gossip-relay-iso-test-'));
   originalCwd = process.cwd();
   process.chdir(testDir);
+
+  // These tests assert the destructive preserve-then-revert behaviour, which
+  // post-#437 (spec 2026-06-09 Layer B) is OPT-IN — default OFF. Enable it via
+  // env so the carry-forward revert assertions stay green. The no-revert default
+  // is covered separately in worktree-isolation-false-positive.test.ts.
+  prevAutoRevert = process.env.GOSSIP_WORKTREE_AUTO_REVERT;
+  process.env.GOSSIP_WORKTREE_AUTO_REVERT = '1';
 
   ctx.nativeTaskMap = new Map();
   ctx.nativeResultMap = new Map();
@@ -101,6 +109,8 @@ afterEach(() => {
   stderrSpy.mockRestore();
   process.chdir(originalCwd);
   rmSync(testDir, { recursive: true, force: true });
+  if (prevAutoRevert === undefined) delete process.env.GOSSIP_WORKTREE_AUTO_REVERT;
+  else process.env.GOSSIP_WORKTREE_AUTO_REVERT = prevAutoRevert;
 });
 
 function seedWorktreeTask(

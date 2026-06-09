@@ -36,8 +36,110 @@ export interface IsolationSnapshot {
 /** Parsed diff between two snapshots. */
 export interface IsolationDiff {
   headChanged: boolean;
+  /**
+   * Agent-attributable added dirty paths, AFTER orchestrator-owned exclusion.
+   * Downstream preserve/revert only ever act on these — never on the infra
+   * paths the orchestrator owns. Spec 2026-06-09 §8.2 item 5.
+   */
   dirtyPathsAdded: string[];
   isViolation: boolean;
+  /**
+   * Added dirty paths filtered OUT as orchestrator/infra-owned (built-in
+   * `.gossip/`/`.claude/` prefixes or operator `excludeGlobs`). Carried for the
+   * audit (`isolation_excluded_orchestrator_paths`) and base-rate measurement.
+   * Omitted/empty when nothing was excluded.
+   */
+  excludedPaths?: string[];
+}
+
+/**
+ * Paths the orchestrator / main session and gossipcat infra routinely write
+ * during a dispatch window. A native code-writing agent's legitimate output
+ * lands in source dirs (packages/, apps/, src/, tests/) — never in these.
+ * Attributing these to an agent is a false positive by construction. These
+ * prefixes are ALWAYS excluded and are not operator-removable (infra invariants).
+ * Spec 2026-06-09 §3.1 / §8.
+ */
+const ORCHESTRATOR_OWNED_PREFIXES = [
+  '.gossip/', // operational state: signals, recovery, dispatch-prompts, session
+  '.claude/', // Claude Code session state: knowledge-nominations.md, worktrees, agents
+];
+
+/**
+ * Translate a single glob pattern into a RegExp matched against repo-relative
+ * porcelain path STRINGS (never a filesystem glob engine — spec §8.2 item 1).
+ * Supports the subset we need: `**` (any chars incl. `/`), `*` (any chars
+ * except `/`), `?` (single non-`/` char). All other regex metacharacters are
+ * escaped literally. Anchored at both ends so a pattern matches the whole path.
+ */
+function globToRegExp(glob: string): RegExp {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        i++; // consume the second '*'
+        if (glob[i + 1] === '/') {
+          // `**/` → zero or more COMPLETE path segments (each ending in `/`).
+          // Emitting `(?:.*/)?` (not `.*`) keeps a separator boundary, so
+          // `docs/**/foo` matches `docs/foo` and `docs/a/b/foo` but NOT
+          // `docs/xfoo` (issue #437 pre-merge consensus 9fe6d8db).
+          i++; // consume the '/'
+          re += '(?:.*/)?';
+        } else {
+          // Trailing `**` → any remaining characters including separators.
+          re += '.*';
+        }
+      } else {
+        // `*` → any characters except a path separator.
+        re += '[^/]*';
+      }
+    } else if (c === '?') {
+      re += '[^/]';
+    } else {
+      // Escape every regex metacharacter so the pattern is matched literally.
+      re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+/**
+ * Partition repo-relative dirty paths into agent-attributable vs.
+ * orchestrator/infra-owned. A path is EXCLUDED if it starts with any built-in
+ * `ORCHESTRATOR_OWNED_PREFIXES` entry OR matches any operator `extraGlobs`.
+ *
+ * Pure (no FS access). `extraGlobs` are matched as STRING globs against the
+ * path text — NEVER via a filesystem glob engine (`glob.sync`/`fast-glob`),
+ * which would resolve against cwd and let `**` suppress all detection
+ * (spec §8.2 item 1). The built-in prefixes are unioned with `extraGlobs`,
+ * never replaced (spec §8.3 "union, not replace").
+ */
+export function filterOrchestratorOwned(
+  paths: string[],
+  extraGlobs: string[] = [],
+): { agentAttributable: string[]; excluded: string[] } {
+  const agentAttributable: string[] = [];
+  const excluded: string[] = [];
+  if (!paths || paths.length === 0) return { agentAttributable, excluded };
+
+  // Compile operator globs once. Skip non-string / empty entries defensively —
+  // validateConfig already rejects them, but this keeps the matcher fail-safe.
+  const globMatchers = (extraGlobs || [])
+    .filter((g): g is string => typeof g === 'string' && g.length > 0)
+    .map(globToRegExp);
+
+  for (const p of paths) {
+    if (typeof p !== 'string' || p.length === 0) continue;
+    const isBuiltIn = ORCHESTRATOR_OWNED_PREFIXES.some(prefix => p.startsWith(prefix));
+    const isGlobbed = !isBuiltIn && globMatchers.some(re => re.test(p));
+    if (isBuiltIn || isGlobbed) {
+      excluded.push(p);
+    } else {
+      agentAttributable.push(p);
+    }
+  }
+  return { agentAttributable, excluded };
 }
 
 /** Read `git rev-parse HEAD` from `cwd`. Returns null on any failure. */
@@ -385,29 +487,43 @@ export function captureIsolationSnapshot(cwd: string = process.cwd()): Isolation
 }
 
 /**
- * Diff two snapshots. Violation if HEAD moved OR new dirty paths appeared
- * that weren't in the `before` set.
+ * Diff two snapshots. Violation if HEAD moved OR new AGENT-ATTRIBUTABLE dirty
+ * paths appeared that weren't in the `before` set.
  *
  * `before.head === null` short-circuits the HEAD comparison — we can't claim
  * drift if we never read the baseline. The dirty-path diff still runs and is
  * sufficient to catch the PR #422 pattern (HEAD untouched, files written
  * directly to parent checkout).
+ *
+ * Orchestrator/infra-owned paths (built-in `.gossip/`/`.claude/` prefixes plus
+ * operator `excludeGlobs`) are subtracted from the added-path set BEFORE the
+ * violation decision (spec 2026-06-09 §3.1, placement §8.1 option b — all three
+ * dispatch paths route through here on relay, so the consensus path inherits the
+ * filter with no special-case code). `dirtyPathsAdded` therefore means
+ * "agent-attributable added paths"; the filtered-out infra paths ride along on
+ * `excludedPaths`. `headChanged` is NEVER excludable — HEAD drift stays a hard
+ * violation regardless of exclusions (§8.1).
  */
 export function diffIsolationSnapshots(
   before: IsolationSnapshot,
   after: IsolationSnapshot,
+  excludeGlobs: string[] = [],
 ): IsolationDiff {
   const headChanged =
     before.head !== null && after.head !== null && before.head !== after.head;
 
   const beforeSet = new Set(before.dirty);
-  const dirtyPathsAdded = after.dirty.filter(p => !beforeSet.has(p));
+  const addedPaths = after.dirty.filter(p => !beforeSet.has(p));
 
-  return {
+  const { agentAttributable, excluded } = filterOrchestratorOwned(addedPaths, excludeGlobs);
+
+  const diff: IsolationDiff = {
     headChanged,
-    dirtyPathsAdded,
-    isViolation: headChanged || dirtyPathsAdded.length > 0,
+    dirtyPathsAdded: agentAttributable,
+    isViolation: headChanged || agentAttributable.length > 0,
   };
+  if (excluded.length > 0) diff.excludedPaths = excluded;
+  return diff;
 }
 
 /** Build the operational-signal payload for a detected isolation failure. */
@@ -427,6 +543,7 @@ export function buildIsolationSignal(args: {
   head_before: string | null;
   head_after: string | null;
   dirty_paths_added: string[];
+  excluded_paths: string[];
 } {
   const { agentId, taskId, before, after, diff } = args;
   const headSummary = diff.headChanged
@@ -445,6 +562,7 @@ export function buildIsolationSignal(args: {
     head_before: before.head,
     head_after: after.head,
     dirty_paths_added: diff.dirtyPathsAdded,
+    excluded_paths: diff.excludedPaths ?? [],
   };
 }
 
@@ -458,6 +576,9 @@ export function buildIsolationSignal(args: {
  *   with at least one other worktree-mode task at dispatch time. Attribution
  *   is ambiguous — skip emitConsensusSignals and emit a skipped breadcrumb
  *   instead. `false` or `undefined` preserves existing emit behaviour.
+ * @param excludeGlobs - Operator-configured extra orchestrator-owned globs
+ *   (`consensus.orchestratorOwnedGlobs`), unioned with the built-in
+ *   `.gossip/`/`.claude/` prefixes and subtracted from the attributable set.
  *
  * Fail-open: any throw is swallowed; returns a no-violation diff.
  */
@@ -467,10 +588,11 @@ export function checkIsolationViolation(
   before: IsolationSnapshot,
   cwd: string = process.cwd(),
   concurrencyTainted?: boolean,
+  excludeGlobs: string[] = [],
 ): IsolationDiff {
   try {
     const after = captureIsolationSnapshot(cwd);
-    const diff = diffIsolationSnapshots(before, after);
+    const diff = diffIsolationSnapshots(before, after, excludeGlobs);
     if (diff.isViolation) {
       if (concurrencyTainted === true) {
         // Lifetime overlapped with another worktree task — attribution is
