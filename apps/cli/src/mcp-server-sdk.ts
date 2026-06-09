@@ -319,6 +319,7 @@ async function getModules() {
     WorkerAgent: (await import('@gossip/orchestrator')).WorkerAgent,
     createProvider: (await import('@gossip/orchestrator')).createProvider,
     createProviderForAgent: (await import('@gossip/orchestrator')).createProviderForAgent,
+    resolveAgentProvider: (await import('@gossip/orchestrator')).resolveAgentProvider,
     PerformanceWriter: (await import('@gossip/orchestrator')).PerformanceWriter,
     SkillEngine: (await import('@gossip/orchestrator')).SkillEngine,
     MemorySearcher: (await import('@gossip/orchestrator')).MemorySearcher,
@@ -555,13 +556,12 @@ async function doBoot() {
       continue;
     }
     // #522: resolve from the per-agent keychain SERVICE (key_ref ?? provider)
-    // and build via createProviderForAgent so this MCP-boot worker honors the
-    // DegradedProvider pre-flight + base_url, mirroring main-agent.ts. Without
-    // key_ref here, an MCP-booted key_ref agent would read the provider key.
-    const keyService = (ac as any).key_ref ?? ac.provider;
-    const key = await ctx.keychain.getKey(keyService);
-    const llm = m.createProviderForAgent(
-      ac.id, ac.provider, ac.model, key ?? undefined, (ac as any).base_url, undefined, (ac as any).key_ref,
+    // and build via resolveAgentProvider — the pure extracted helper that
+    // mirrors the same logic as main-agent.ts syncWorkers/start() without
+    // needing the full ctx. Behavior is byte-identical to the prior inline block.
+    const llm = await m.resolveAgentProvider(
+      { id: ac.id, provider: ac.provider, model: ac.model, base_url: (ac as any).base_url, key_ref: (ac as any).key_ref },
+      (s: string) => ctx.keychain.getKey(s),
     );
     const { existsSync, readFileSync } = require('fs');
     const { join } = require('path');

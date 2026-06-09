@@ -1,4 +1,4 @@
-import { createProvider, createProviderForAgent, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
+import { createProvider, createProviderForAgent, resolveAgentProvider, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
 
 describe('LLM Client', () => {
   describe('createProvider', () => {
@@ -426,6 +426,72 @@ describe('LLM Client', () => {
       expect(caught!.message).toContain('keychain service "deepseek"');
       expect(fetchSpy).not.toHaveBeenCalled();
       fetchSpy.mockRestore();
+    });
+  });
+
+  describe('resolveAgentProvider — extracted pure helper (issue #522)', () => {
+    it('key_ref set: getKey called with key_ref service (not provider)', async () => {
+      const getKey = jest.fn().mockResolvedValue('sk-custom');
+      const provider = await resolveAgentProvider(
+        { id: 'a1', provider: 'openai', model: 'gpt-4', key_ref: 'my-custom-key' },
+        getKey,
+      );
+      expect(getKey).toHaveBeenCalledWith('my-custom-key');
+      expect(getKey).not.toHaveBeenCalledWith('openai');
+      expect(provider).toBeInstanceOf(OpenAIProvider);
+    });
+
+    it('key_ref absent: getKey called with provider name (byte-identical fallback)', async () => {
+      const getKey = jest.fn().mockResolvedValue('sk-provider');
+      const provider = await resolveAgentProvider(
+        { id: 'a2', provider: 'openai', model: 'gpt-4' },
+        getKey,
+      );
+      expect(getKey).toHaveBeenCalledWith('openai');
+      expect(provider).toBeInstanceOf(OpenAIProvider);
+    });
+
+    it('key missing for key-requiring provider → DegradedProvider whose generate() rejects naming the key_ref service', async () => {
+      const getKey = jest.fn().mockResolvedValue(null);
+      const provider = await resolveAgentProvider(
+        { id: 'ds-agent', provider: 'deepseek', model: 'deepseek-chat', key_ref: 'my-deepseek-key' },
+        getKey,
+      );
+      const fetchSpy = jest.spyOn(global, 'fetch');
+      await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+        .rejects.toThrow(/my-deepseek-key/);
+      // DegradedProvider must not make a network call.
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+    });
+
+    it('key missing, no key_ref → DegradedProvider names the provider as the keychain service', async () => {
+      const getKey = jest.fn().mockResolvedValue(null);
+      const provider = await resolveAgentProvider(
+        { id: 'a3', provider: 'anthropic', model: 'claude-3' },
+        getKey,
+      );
+      await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+        .rejects.toThrow(/keychain service "anthropic"/);
+    });
+
+    it('base_url threaded: deepseek with custom base_url builds provider without throwing', async () => {
+      const getKey = jest.fn().mockResolvedValue('sk-ds');
+      const provider = await resolveAgentProvider(
+        { id: 'ds2', provider: 'deepseek', model: 'deepseek-chat', base_url: 'https://my-proxy.example.com/v1' },
+        getKey,
+      );
+      expect(provider).toBeInstanceOf(OpenAIProvider);
+      // Verify base_url is threaded: a 401 error should reference the custom base_url.
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false, status: 401, text: async () => 'bad key',
+      }) as unknown as typeof fetch;
+      let caught: Error | undefined;
+      try { await provider.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
+      expect(caught).toBeDefined();
+      expect(caught!.message).toContain('https://my-proxy.example.com/v1');
+      global.fetch = originalFetch;
     });
   });
 

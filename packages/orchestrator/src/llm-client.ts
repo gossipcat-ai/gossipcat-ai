@@ -738,6 +738,26 @@ export function createProviderForAgent(
   return createProvider(provider, model, apiKey, projectRoot, baseUrl);
 }
 
+/**
+ * Pure async helper: resolves the per-agent keychain service (key_ref ?? provider),
+ * fetches the key via the injected `getKey` callback, then delegates to
+ * {@link createProviderForAgent}. Extracted from the doBoot inline block so the
+ * key-resolution + provider-construction path can be unit-tested without a
+ * full MCP-boot harness. #522
+ *
+ * @param ac  Minimal agent config shape — same fields used at every construction site.
+ * @param getKey  Injected key lookup (e.g. `(s) => ctx.keychain.getKey(s)`); returns
+ *                `null` when the service has no stored key.
+ */
+export async function resolveAgentProvider(
+  ac: { id: string; provider: string; model: string; base_url?: string; key_ref?: string },
+  getKey: (service: string) => Promise<string | null>,
+): Promise<ILLMProvider> {
+  const keyService = ac.key_ref ?? ac.provider;
+  const key = await getKey(keyService);
+  return createProviderForAgent(ac.id, ac.provider, ac.model, key ?? undefined, ac.base_url, undefined, ac.key_ref);
+}
+
 // ─── Factory ────────────────────────────────────────────────────────────────
 
 // Runtime-side mirror of the providers the switch below knows how to build.
