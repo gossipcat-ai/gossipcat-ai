@@ -4,19 +4,23 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-06-09
+
+Reliability fixes from real-world operator reports (issue reporter: GravyaDev): the worktree-isolation detector no longer destroys the orchestrator's own concurrent writes, and OpenAI-compatible custom agents (DeepSeek) no longer crash-loop the MCP server. Adds per-agent keychain credentials and a first-class DeepSeek provider.
+
 ### Changed
 
-- **Worktree-isolation auto-restore is now OFF by default** (issue #437). Previously, when the isolation detector flagged a leak into the parent checkout, it would `git restore` the affected paths automatically after preserving them to `.gossip/recovery/<taskId>.patch`. Because the detector attributes *any* path dirtied during a dispatch window to the agent, in an orchestrated session it could misfire on the orchestrator's own concurrent writes (e.g. journaling to `.claude/`) and destroy them. The destructive revert is now gated behind `GOSSIP_WORKTREE_AUTO_REVERT` (or `consensus.worktreeAutoRevert: true`); the new default preserves the patch and reports, leaving the working tree untouched. **To restore the previous auto-clean behavior, set `GOSSIP_WORKTREE_AUTO_REVERT=1`.**
+- **Worktree-isolation auto-restore is now OFF by default** (issue #437, PR #521). Previously, when the isolation detector flagged a leak into the parent checkout, it would `git restore` the affected paths automatically after preserving them to `.gossip/recovery/<taskId>.patch`. Because the detector attributes *any* path dirtied during a dispatch window to the agent, in an orchestrated session it could misfire on the orchestrator's own concurrent writes (e.g. journaling to `.claude/`) and destroy them. The destructive revert is now gated behind `GOSSIP_WORKTREE_AUTO_REVERT` (or `consensus.worktreeAutoRevert: true`); the new default preserves the patch and reports, leaving the working tree untouched. **To restore the previous auto-clean behavior, set `GOSSIP_WORKTREE_AUTO_REVERT=1`.**
 
 ### Added
 
-- **Orchestrator-owned path exclusion for isolation detection** (issue #437). Built-in `.gossip/`/`.claude/` prefixes — plus an opt-in `consensus.orchestratorOwnedGlobs` allowlist — are excluded from leak attribution, so routine orchestrator/infra writes during a dispatch are no longer flagged or reverted. `git status --porcelain` head-drift remains a hard violation regardless.
-- **Per-agent credentials via `key_ref`** (issue #522). An agent config may set `key_ref` — the name of the keychain **service** to read its API key from — defaulting to `provider`. Two OpenAI-compatible agents (e.g. OpenAI + DeepSeek) can now use different keys. `key_ref` is a service name in `.gossip/config.json`, never the key itself; the key stays in the OS keychain.
-- **First-class `provider: "deepseek"`** (issue #522). DeepSeek (OpenAI-wire-compatible) is now a built-in provider: `base_url` defaults to `https://api.deepseek.com/v1`, auth errors name DeepSeek, and `deepseek-reasoner` responses (which return their answer in `reasoning_content`) are read correctly.
+- **Orchestrator-owned path exclusion for isolation detection** (issue #437, PR #521). Built-in `.gossip/`/`.claude/` prefixes — plus an opt-in `consensus.orchestratorOwnedGlobs` allowlist — are excluded from leak attribution, so routine orchestrator/infra writes during a dispatch are no longer flagged or reverted. `git status --porcelain` head-drift remains a hard violation regardless.
+- **Per-agent credentials via `key_ref`** (issue #522, PR #524). An agent config may set `key_ref` — the name of the keychain **service** to read its API key from — defaulting to `provider`. Two OpenAI-compatible agents (e.g. OpenAI + DeepSeek) can now use different keys. `key_ref` is a service name in `.gossip/config.json`, never the key itself; the key stays in the OS keychain.
+- **First-class `provider: "deepseek"`** (issue #522, PRs #523, #524). DeepSeek (OpenAI-wire-compatible) is now a built-in provider: `base_url` defaults to `https://api.deepseek.com/v1`, auth errors name DeepSeek, and `deepseek-reasoner` responses (which return their answer in `reasoning_content`) are read correctly.
 
 ### Fixed
 
-- **OpenAI-compatible custom agents no longer crash the MCP server** (issue #522). A provider error (e.g. a 401 from a misconfigured DeepSeek agent) on a single dispatch previously became an unhandled rejection that crash-looped the server. The task now fails cleanly. The agent's `base_url` is also no longer dropped on config load (it previously defaulted to `api.openai.com`), and auth failures give a clear, provider-named message instead of misdirecting to `platform.openai.com`.
+- **OpenAI-compatible custom agents no longer crash the MCP server** (issue #522, PR #523). A provider error (e.g. a 401 from a misconfigured DeepSeek agent) on a single dispatch previously became an unhandled rejection that crash-looped the server. The task now fails cleanly. The agent's `base_url` is also no longer dropped on config load (it previously defaulted to `api.openai.com`), and auth failures give a clear, provider-named message instead of misdirecting to `platform.openai.com`.
 
 ## [0.5.3] — 2026-06-04
 
