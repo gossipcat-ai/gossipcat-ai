@@ -62,6 +62,11 @@ export interface GossipConfig {
     /** Custom API base URL for OpenAI-compatible endpoints (e.g. DeepSeek).
      *  Validated in validateConfig; carried through configToAgentConfigs. #522 */
     base_url?: string;
+    /** Keychain SERVICE NAME this agent resolves its API key from. Defaults to
+     *  `provider` when omitted. A service NAME, never the key itself — the key
+     *  stays in the OS keychain. Validated against /^[a-zA-Z0-9_-]{1,32}$/ in
+     *  validateConfig; carried through configToAgentConfigs. #522 */
+    key_ref?: string;
   }>;
 }
 
@@ -100,7 +105,20 @@ export function loadConfig(configPath: string): GossipConfig {
 // enabled". Drift between these two lists means some values pass schema but
 // fail validateConfig (or vice versa) — that is a hard-to-diagnose user-facing
 // bug. If you change one, change the other.
-export const VALID_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'native', 'none'];
+export const VALID_PROVIDERS = ['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local', 'native', 'none'];
+
+// Keychain SERVICE-NAME allowlist for `agent.key_ref`. Mirrors the
+// VALID_PROVIDERS regex in apps/cli/src/keychain.ts:8 — a key_ref is read by
+// Keychain.getKey(service) and MUST pass the same validateProvider gate, so a
+// config that validates here can always be resolved by the keychain. A positive
+// allowlist (NOT a blocklist of bad chars). #522.
+const KEY_REF_PATTERN = /^[a-zA-Z0-9_-]{1,32}$/;
+
+// Well-known provider service names. A key_ref naming one of these that differs
+// from the agent's own provider is very likely an operator typo (the agent would
+// authenticate with the wrong key), so validateConfig WARNS — not a hard error,
+// because a shared custom service name across providers is a legitimate use. #522
+const WELL_KNOWN_KEY_SERVICES = ['anthropic', 'openai', 'deepseek', 'openclaw', 'google'];
 
 // Subset for `main_agent.provider`: 'native' is excluded because the main
 // agent must be able to invoke a real LLM (the orchestrator that dispatches
@@ -228,6 +246,49 @@ export function validateConfig(raw: any): GossipConfig {
           throw new Error(`Agent "${id}" has invalid base_url: ${agent.base_url}`);
         }
       }
+      // #522: key_ref is a keychain SERVICE NAME, never a key. It must pass the
+      // same allowlist the keychain enforces on reads, so a validated config is
+      // always resolvable. Two non-fatal warnings catch common operator mistakes.
+      if (agent.key_ref !== undefined) {
+        if (typeof agent.key_ref !== 'string' || !KEY_REF_PATTERN.test(agent.key_ref)) {
+          // Do NOT echo the raw value: if an operator pasted an actual API key
+          // (which fails the pattern), printing it verbatim would leak the
+          // secret into logs / crash reporters. Show only a short masked prefix.
+          const masked =
+            typeof agent.key_ref === 'string' ? `${agent.key_ref.slice(0, 4)}…(${agent.key_ref.length} chars)` : typeof agent.key_ref;
+          throw new Error(
+            `Agent "${id}" has invalid key_ref [${masked}]. A key_ref is a keychain ` +
+            `service NAME and must match /^[a-zA-Z0-9_-]{1,32}$/ (never the key itself).`
+          );
+        }
+        // Cross-provider WARNING: a key_ref that names a different well-known
+        // provider than the agent's own is probably a typo — the agent would
+        // read the wrong key. Legitimate for a shared custom service, hence warn.
+        if (
+          WELL_KNOWN_KEY_SERVICES.includes(agent.key_ref) &&
+          agent.key_ref !== agent.provider
+        ) {
+          process.stderr.write(
+            `[gossipcat] warning: agent "${id}" key_ref "${agent.key_ref}" names a known ` +
+            `provider different from its provider "${agent.provider}" — it will authenticate ` +
+            `with the "${agent.key_ref}" keychain key. Set key_ref to "${agent.provider}" if unintended.\n`
+          );
+        }
+        // Secret-looking WARNING: catches an operator pasting the raw key into
+        // the service-name field. (The regex above already blocks spaces and
+        // 'sk-...' lengths >32, but warn on the borderline cases that pass it.)
+        if (
+          agent.key_ref.length > 40 ||
+          /\s/.test(agent.key_ref) ||
+          agent.key_ref.startsWith('sk-')
+        ) {
+          process.stderr.write(
+            `[gossipcat] warning: agent "${id}" key_ref looks like a secret, not a service ` +
+            `name. key_ref must be a keychain SERVICE NAME; store the key via the keychain ` +
+            `and reference its service name here.\n`
+          );
+        }
+      }
     }
   }
 
@@ -245,6 +306,9 @@ export function configToAgentConfigs(config: GossipConfig): AgentConfig[] {
     // #522: carry base_url through so DeepSeek / OpenAI-compatible agents reach
     // their configured endpoint instead of defaulting to api.openai.com.
     base_url: agent.base_url,
+    // #522: carry the keychain service name through so the resolver reads the
+    // per-agent key (key_ref ?? provider) at both resolution sites.
+    key_ref: agent.key_ref,
   }));
 }
 

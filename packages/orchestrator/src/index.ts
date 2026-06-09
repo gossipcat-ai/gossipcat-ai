@@ -14,6 +14,7 @@ export { TaskDispatcher } from './task-dispatcher';
 export {
   createProvider,
   createProviderForAgent,
+  resolveAgentProvider,
   KEY_REQUIRING_PROVIDERS,
   AnthropicProvider,
   OpenAIProvider,

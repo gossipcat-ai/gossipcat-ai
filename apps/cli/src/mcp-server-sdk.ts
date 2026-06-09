@@ -318,6 +318,8 @@ async function getModules() {
     MainAgent: (await import('@gossip/orchestrator')).MainAgent,
     WorkerAgent: (await import('@gossip/orchestrator')).WorkerAgent,
     createProvider: (await import('@gossip/orchestrator')).createProvider,
+    createProviderForAgent: (await import('@gossip/orchestrator')).createProviderForAgent,
+    resolveAgentProvider: (await import('@gossip/orchestrator')).resolveAgentProvider,
     PerformanceWriter: (await import('@gossip/orchestrator')).PerformanceWriter,
     SkillEngine: (await import('@gossip/orchestrator')).SkillEngine,
     MemorySearcher: (await import('@gossip/orchestrator')).MemorySearcher,
@@ -553,8 +555,14 @@ async function doBoot() {
       process.stderr.write(`[gossipcat] 🤖 ${ac.id}: native agent (${modelTier})\n`);
       continue;
     }
-    const key = await ctx.keychain.getKey(ac.provider);
-    const llm = m.createProvider(ac.provider, ac.model, key ?? undefined, undefined, (ac as any).base_url);
+    // #522: resolve from the per-agent keychain SERVICE (key_ref ?? provider)
+    // and build via resolveAgentProvider — the pure extracted helper that
+    // mirrors the same logic as main-agent.ts syncWorkers/start() without
+    // needing the full ctx. Behavior is byte-identical to the prior inline block.
+    const llm = await m.resolveAgentProvider(
+      { id: ac.id, provider: ac.provider, model: ac.model, base_url: (ac as any).base_url, key_ref: (ac as any).key_ref },
+      (s: string) => ctx.keychain.getKey(s),
+    );
     const { existsSync, readFileSync } = require('fs');
     const { join } = require('path');
     const instructionsPath = join(process.cwd(), '.gossip', 'agents', ac.id, 'instructions.md');
@@ -612,12 +620,16 @@ async function doBoot() {
     mainKey = await ctx.keychain.getKey(config.main_agent.provider);
     if (!mainKey) {
       for (const ac of agentConfigs) {
-        const key = await ctx.keychain.getKey(ac.provider);
+        // #522: resolve from the per-agent keychain SERVICE (key_ref ?? provider)
+        // so an agent whose key is stored under a custom key_ref is visible to
+        // the orchestrator-LLM fallback, not just provider-named ones.
+        const keyService = (ac as any).key_ref ?? ac.provider;
+        const key = await ctx.keychain.getKey(keyService);
         if (key) {
           mainProvider = ac.provider;
           mainModel = ac.model;
           mainKey = key;
-          process.stderr.write(`[gossipcat] ⚠️  Main agent key unavailable, using ${ac.provider}/${ac.model} for orchestration\n`);
+          process.stderr.write(`[gossipcat] ⚠️  Main agent key unavailable, using ${ac.provider}/${ac.model} (keychain "${keyService}") for orchestration\n`);
           break;
         }
       }
@@ -1233,7 +1245,8 @@ export function createMcpServer(): McpServer {
         } else {
           // Fallback: use the first agent that has a working key
           for (const ac of agentConfigs) {
-            const key = await ctx.keychain.getKey(ac.provider);
+            // #522: honor the per-agent keychain service (key_ref ?? provider).
+            const key = await ctx.keychain.getKey((ac as any).key_ref ?? ac.provider);
             if (key) {
               llm = createProvider(ac.provider, ac.model, key, undefined, (ac as any).base_url);
               process.stderr.write(`[gossipcat] gossip_plan: main agent key unavailable, using ${ac.provider}/${ac.model} for planning\n`);
@@ -1943,7 +1956,7 @@ export function createMcpServer(): McpServer {
       // lens generator, gossip publisher all call createProvider on this value),
       // and createProvider has no 'native' branch. 'native' remains valid for
       // utility_model and per-agent overrides.
-      main_provider: z.enum(['anthropic', 'openai', 'openclaw', 'google', 'local', 'none']).default('google')
+      main_provider: z.enum(['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local', 'none']).default('google')
         .describe('Provider for the orchestrator LLM. Use "none" when no API key is available — features degrade gracefully to profile-based. Note: "native" is not valid here (use it only for utility_model or per-agent overrides).'),
       main_model: z.string().default('gemini-2.5-pro')
         .describe('Model ID for orchestrator (e.g. gemini-2.5-pro, claude-sonnet-4-6, gpt-4o)'),
@@ -1966,7 +1979,7 @@ export function createMcpServer(): McpServer {
         instructions: z.string().optional()
           .describe('For native agents: full instructions (markdown body of .claude/agents/*.md)'),
         // Custom agent fields
-        provider: z.enum(['anthropic', 'openai', 'openclaw', 'google', 'local']).optional()
+        provider: z.enum(['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local']).optional()
           .describe('For custom agents: LLM provider'),
         custom_model: z.string().optional()
           .describe('For custom agents: model ID (e.g. gemini-2.5-pro, gpt-4o, claude-sonnet-4-6)'),

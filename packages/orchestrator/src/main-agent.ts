@@ -80,7 +80,7 @@ export interface MainAgentConfig {
   relayUrl: string;
   relayApiKey?: string;  // shared secret for relay auth — passed to all workers
   agents: AgentConfig[];
-  apiKeys?: Record<string, string>;  // provider → key
+  apiKeys?: Record<string, string>;  // keychain service name (key_ref ?? provider) → key
   projectRoot?: string;  // defaults to process.cwd()
   llm?: ILLMProvider;  // override for testing
   bootstrapPrompt?: string;  // NEW — injected by BootstrapGenerator
@@ -189,12 +189,20 @@ export class MainAgent {
     for (const config of this.registry.getAll()) {
       if (config.native) continue; // native agents use host's Agent tool, not relay
       if (this.workers.has(config.id)) continue; // skip if already set externally
-      // Try apiKeys map first, then keyProvider callback
-      let apiKey: string | undefined = this.apiKeys[config.provider];
+      // Try apiKeys map first, then keyProvider callback.
+      // #522: resolve from the per-agent keychain SERVICE (key_ref ?? provider),
+      // and build via createProviderForAgent so this MCP-boot path honors
+      // base_url and the DegradedProvider pre-flight — mirroring syncWorkers.
+      // Previously it used raw createProvider(config.provider, ...), which
+      // dropped base_url and bypassed the pre-flight (a latent #523 gap here).
+      const keyService = config.key_ref ?? config.provider;
+      let apiKey: string | undefined = this.apiKeys[keyService];
       if (!apiKey && this.keyProviderFn) {
-        apiKey = (await this.keyProviderFn(config.provider)) ?? undefined;
+        apiKey = (await this.keyProviderFn(keyService)) ?? undefined;
       }
-      const llm = createProvider(config.provider, config.model, apiKey);
+      const llm = createProviderForAgent(
+        config.id, config.provider, config.model, apiKey, config.base_url, undefined, config.key_ref,
+      );
 
       // Load per-agent instructions if available
       const instructionsPath = join(this.projectRoot, '.gossip', 'agents', config.id, 'instructions.md');
@@ -354,7 +362,9 @@ export class MainAgent {
       // worker (and its live relay connection) alone — this kills the disconnect
       // burst observed on every dispatch (see relay logs showing 4 workers
       // RELAY DISCONNECTED + reconnected within 30ms per dispatch).
-      const key = await keyProvider(ac.provider);
+      // #522: resolve the key from the per-agent keychain SERVICE (key_ref),
+      // defaulting to the provider name — byte-identical to pre-#522 when absent.
+      const key = await keyProvider(ac.key_ref ?? ac.provider);
       const existing = this.workers.get(ac.id);
       const hadKeySnapshot = this.lastKeyByAgent.has(ac.id);
       const prevKey = this.lastKeyByAgent.get(ac.id) ?? null;
@@ -381,7 +391,7 @@ export class MainAgent {
       // configured key gets a DegradedProvider that fails the TASK with a clear
       // diagnostic, instead of issuing an empty-Bearer request that returns a
       // misleading 401. base_url is now a typed field on AgentConfig.
-      const llm = createProviderForAgent(ac.id, ac.provider, ac.model, key ?? undefined, ac.base_url);
+      const llm = createProviderForAgent(ac.id, ac.provider, ac.model, key ?? undefined, ac.base_url, undefined, ac.key_ref);
 
       const instructionsPath = join(this.projectRoot, '.gossip', 'agents', ac.id, 'instructions.md');
       const instructions = existsSync(instructionsPath)

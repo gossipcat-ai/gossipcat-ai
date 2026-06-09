@@ -1,4 +1,4 @@
-import { createProvider, createProviderForAgent, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
+import { createProvider, createProviderForAgent, resolveAgentProvider, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
 
 describe('LLM Client', () => {
   describe('createProvider', () => {
@@ -356,6 +356,171 @@ describe('LLM Client', () => {
       // 'none' resolves to NullProvider which has no exported class; assert it does not throw + resolves empty.
       const nullp = createProviderForAgent('a5', 'none', 'x', undefined);
       return expect(nullp.generate([{ role: 'user', content: 'hi' }])).resolves.toEqual({ text: '' });
+    });
+
+    it('DegradedProvider names the keychain SERVICE from key_ref, not the provider (issue #522)', async () => {
+      // key_ref:"my-custom-key" on an openai agent → message names that service.
+      const provider = createProviderForAgent('cust', 'openai', 'gpt-4', undefined, 'https://api.example.com/v1', undefined, 'my-custom-key');
+      let caught: Error | undefined;
+      try { await provider.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
+      expect(caught).toBeDefined();
+      expect(caught!.message).toContain('no API key configured for agent "cust"');
+      expect(caught!.message).toContain('keychain service "my-custom-key"');
+    });
+
+    it('DegradedProvider falls back to provider name when key_ref absent', async () => {
+      const provider = createProviderForAgent('a6', 'openai', 'gpt-4', undefined);
+      let caught: Error | undefined;
+      try { await provider.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
+      expect(caught!.message).toContain('keychain service "openai"');
+    });
+  });
+
+  describe('provider:"deepseek" — first-class OpenAI-compatible provider (issue #522)', () => {
+    it('createProvider("deepseek") → OpenAIProvider', () => {
+      const provider = createProvider('deepseek', 'deepseek-chat', 'sk-ds-key');
+      expect(provider).toBeInstanceOf(OpenAIProvider);
+    });
+
+    it('defaults base_url to https://api.deepseek.com/v1 (named in the auth error)', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false, status: 401, text: async () => 'bad key',
+      }) as unknown as typeof fetch;
+
+      const provider = createProvider('deepseek', 'deepseek-chat', 'bad-key');
+      let caught: Error | undefined;
+      try { await provider.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
+      expect(caught!.message).toContain('https://api.deepseek.com/v1');
+      // Provider label names DeepSeek, not the generic "OpenAI-compatible".
+      expect(caught!.message).toMatch(/^DeepSeek authentication failed/);
+      expect(caught!.message).not.toContain('platform.openai.com');
+
+      global.fetch = originalFetch;
+    });
+
+    it('explicit base_url overrides the deepseek default', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false, status: 401, text: async () => 'bad key',
+      }) as unknown as typeof fetch;
+
+      const provider = createProvider('deepseek', 'deepseek-chat', 'bad-key', undefined, 'https://my-proxy.example.com/v1');
+      let caught: Error | undefined;
+      try { await provider.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
+      expect(caught!.message).toContain('https://my-proxy.example.com/v1');
+      expect(caught!.message).not.toContain('api.deepseek.com');
+
+      global.fetch = originalFetch;
+    });
+
+    it('deepseek is key-requiring: no key → DegradedProvider naming the deepseek service', async () => {
+      const fetchSpy = jest.spyOn(global, 'fetch');
+      // key_ref defaults to the provider "deepseek" when absent.
+      const provider = createProviderForAgent('ds-agent', 'deepseek', 'deepseek-reasoner', undefined, undefined, undefined, undefined);
+      let caught: Error | undefined;
+      try { await provider.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
+      expect(caught).toBeDefined();
+      expect(caught!.message).toContain('no API key configured for agent "ds-agent"');
+      expect(caught!.message).toContain('provider deepseek');
+      expect(caught!.message).toContain('keychain service "deepseek"');
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+    });
+  });
+
+  describe('resolveAgentProvider — extracted pure helper (issue #522)', () => {
+    it('key_ref set: getKey called with key_ref service (not provider)', async () => {
+      const getKey = jest.fn().mockResolvedValue('sk-custom');
+      const provider = await resolveAgentProvider(
+        { id: 'a1', provider: 'openai', model: 'gpt-4', key_ref: 'my-custom-key' },
+        getKey,
+      );
+      expect(getKey).toHaveBeenCalledWith('my-custom-key');
+      expect(getKey).not.toHaveBeenCalledWith('openai');
+      expect(provider).toBeInstanceOf(OpenAIProvider);
+    });
+
+    it('key_ref absent: getKey called with provider name (byte-identical fallback)', async () => {
+      const getKey = jest.fn().mockResolvedValue('sk-provider');
+      const provider = await resolveAgentProvider(
+        { id: 'a2', provider: 'openai', model: 'gpt-4' },
+        getKey,
+      );
+      expect(getKey).toHaveBeenCalledWith('openai');
+      expect(provider).toBeInstanceOf(OpenAIProvider);
+    });
+
+    it('key missing for key-requiring provider → DegradedProvider whose generate() rejects naming the key_ref service', async () => {
+      const getKey = jest.fn().mockResolvedValue(null);
+      const provider = await resolveAgentProvider(
+        { id: 'ds-agent', provider: 'deepseek', model: 'deepseek-chat', key_ref: 'my-deepseek-key' },
+        getKey,
+      );
+      const fetchSpy = jest.spyOn(global, 'fetch');
+      await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+        .rejects.toThrow(/my-deepseek-key/);
+      // DegradedProvider must not make a network call.
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+    });
+
+    it('key missing, no key_ref → DegradedProvider names the provider as the keychain service', async () => {
+      const getKey = jest.fn().mockResolvedValue(null);
+      const provider = await resolveAgentProvider(
+        { id: 'a3', provider: 'anthropic', model: 'claude-3' },
+        getKey,
+      );
+      await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+        .rejects.toThrow(/keychain service "anthropic"/);
+    });
+
+    it('base_url threaded: deepseek with custom base_url builds provider without throwing', async () => {
+      const getKey = jest.fn().mockResolvedValue('sk-ds');
+      const provider = await resolveAgentProvider(
+        { id: 'ds2', provider: 'deepseek', model: 'deepseek-chat', base_url: 'https://my-proxy.example.com/v1' },
+        getKey,
+      );
+      expect(provider).toBeInstanceOf(OpenAIProvider);
+      // Verify base_url is threaded: a 401 error should reference the custom base_url.
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false, status: 401, text: async () => 'bad key',
+      }) as unknown as typeof fetch;
+      let caught: Error | undefined;
+      try { await provider.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
+      expect(caught).toBeDefined();
+      expect(caught!.message).toContain('https://my-proxy.example.com/v1');
+      global.fetch = originalFetch;
+    });
+  });
+
+  describe('reasoning_content fallback (deepseek-reasoner, issue #522)', () => {
+    async function generateWith(message: Record<string, unknown>): Promise<string> {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+      }) as unknown as typeof fetch;
+      try {
+        const provider = createProvider('deepseek', 'deepseek-reasoner', 'sk-ds');
+        const res = await provider.generate([{ role: 'user', content: 'q' }]);
+        return res.text;
+      } finally {
+        global.fetch = originalFetch;
+      }
+    }
+
+    it('empty-string content falls through to reasoning_content (|| not ??)', async () => {
+      expect(await generateWith({ content: '', reasoning_content: 'answer', tool_calls: null })).toBe('answer');
+    });
+
+    it('non-empty content is preferred over reasoning_content', async () => {
+      expect(await generateWith({ content: 'x', reasoning_content: 'should-not-win', tool_calls: null })).toBe('x');
+    });
+
+    it('null content with no reasoning_content yields empty string', async () => {
+      expect(await generateWith({ content: null, tool_calls: null })).toBe('');
     });
   });
 });
