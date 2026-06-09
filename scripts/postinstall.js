@@ -122,9 +122,9 @@ try {
 } catch (e) {
   // Soft-fail on write errors: global npm installs often target root-owned dirs
   // where EACCES is expected. Hard-exiting here would abort `npm install -g`
-  // for every user without sudo — users can re-run `gossipcat setup` after.
+  // for every user without sudo — users can run `gossipcat key set` after.
   // Regression guard: tests/cli/install-packaging.test.ts:133-140.
-  console.warn(`gossipcat: postinstall could not write .mcp.json (${e.code || e.message}). Run 'gossipcat setup' after install to configure.`);
+  console.warn(`gossipcat: postinstall could not write .mcp.json (${e.code || e.message}). Run 'gossipcat key set <provider>' after install to store your API keys.`);
 }
 
 // Staleness check: warn if dist-mcp/ is older than package.json
