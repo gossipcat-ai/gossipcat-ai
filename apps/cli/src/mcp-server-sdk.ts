@@ -185,6 +185,36 @@ import { isReservedAgentId } from './reserved-ids';
 let booted = false;
 let bootPromise: Promise<void> | null = null;
 
+// #522 SEV-1: install ONCE per process. main() runs on every connect (boot AND
+// reconnect), so guard the handler registration to avoid stacking duplicate
+// listeners across reconnects.
+let runtimeGuardsInstalled = false;
+
+/**
+ * Install process-level last-resort handlers for background task rejections.
+ *
+ * A worker provider error (e.g. an OpenAI 401 from a misconfigured DeepSeek
+ * agent) rejects a detached task promise. Before #522 there was no handler, so
+ * Node's default unhandledRejection behavior tore down the MCP server, which
+ * the host then respawned — a crash-loop. These handlers LOG to stderr (the
+ * .gossip/mcp.log sink) and CONTINUE; they must NOT process.exit, because a
+ * single background task failing is not a reason to kill the long-lived server.
+ *
+ * The boot-failure path keeps its own `main().catch(... process.exit(1))` — that
+ * is a genuine fatal and is intentionally left untouched.
+ */
+function installRuntimeRejectionGuards(): void {
+  if (runtimeGuardsInstalled) return;
+  runtimeGuardsInstalled = true;
+  process.on('unhandledRejection', (reason: unknown) => {
+    const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+    process.stderr.write(`[gossipcat] ⚠️ unhandledRejection (background task; server continues): ${msg}\n`);
+  });
+  process.on('uncaughtException', (err: Error) => {
+    process.stderr.write(`[gossipcat] ⚠️ uncaughtException (server continues): ${err.stack ?? err.message}\n`);
+  });
+}
+
 // Re-entrant guard: prevents gossip_plan from being called inside a plan step
 let planExecutionDepth = 0;
 // Stash gathered session data between utility dispatch and re-entry (keyed by task ID)
@@ -5066,6 +5096,9 @@ async function main() {
   // so one McpServer instance is sufficient here. The HTTP path constructs a
   // fresh McpServer per inbound session (see issue #405 and the new-session
   // branch in startHttpMcpTransport).
+  // #522: arm last-resort guards before anything can dispatch a background task,
+  // so a rejecting task promise logs-and-continues instead of crash-looping.
+  installRuntimeRejectionGuards();
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);

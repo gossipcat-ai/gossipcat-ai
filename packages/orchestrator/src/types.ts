@@ -7,6 +7,10 @@ export interface AgentConfig {
   id: string;
   provider: 'anthropic' | 'openai' | 'google' | 'local';
   model: string;
+  /** Custom API base URL for OpenAI-compatible endpoints (e.g. DeepSeek).
+   *  When omitted, OpenAIProvider defaults to https://api.openai.com/v1.
+   *  Carried from config through configToAgentConfigs (issue #522). */
+  base_url?: string;
   /** Freeform role description — replaces preset. e.g. "ui-architect", "security-auditor" */
   role?: string;
   /** @deprecated Use role instead */

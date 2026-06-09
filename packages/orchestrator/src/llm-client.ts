@@ -209,6 +209,23 @@ class QuotaTracker {
   }
 }
 
+/**
+ * Build a clear, non-misleading error message for a 401/403 from an LLM
+ * endpoint. Provider auth failures (bad/expired/missing key, wrong base_url)
+ * previously fell through to a generic `<Provider> API error (401): ...` which
+ * sent users to platform.openai.com even when the request targeted a
+ * DeepSeek / OpenAI-compatible base_url. This names the provider + endpoint and
+ * points at gossipcat's key source (the OS keychain, not env vars). Issue #522.
+ */
+function authErrorMessage(provider: string, status: number, endpoint: string, body: string): string {
+  return (
+    `${provider} authentication failed (HTTP ${status}) for ${endpoint}: ` +
+    `the API key was rejected. Verify the key for this provider/base_url — ` +
+    `gossipcat resolves provider keys from the OS keychain (not environment ` +
+    `variables). Response: ${body}`
+  );
+}
+
 export interface LLMGenerateOptions {
   tools?: ToolDefinition[];
   temperature?: number;
@@ -266,6 +283,9 @@ export class AnthropicProvider implements ILLMProvider {
       const body = (await res.text()).slice(0, 200);
       if (res.status === 429) this.quota.handle429(res, body);
       if (res.status === 503) this.quota.handle503(res, body);
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(authErrorMessage('Anthropic', res.status, 'https://api.anthropic.com/v1', body));
+      }
       throw new Error(`Anthropic API error (${res.status}): ${body}`);
     }
     this.quota.onSuccess();
@@ -380,6 +400,15 @@ export class OpenAIProvider implements ILLMProvider {
       const body = (await res.text()).slice(0, 200);
       if (res.status === 429) this.quota.handle429(res, body);
       if (res.status === 503) this.quota.handle503(res, body);
+      // 401/403: auth/key failure for THIS endpoint. Surface a clear message
+      // that names the configured base_url rather than the generic OpenAI host,
+      // so DeepSeek / OpenAI-compatible users aren't sent to platform.openai.com.
+      // Cooldown is deferred — handle429's quota state machine is keyed to
+      // rate-limit semantics; a wrong key won't fix itself by waiting, so a
+      // clear, fail-fast message is the correct behavior here (issue #522).
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(authErrorMessage('OpenAI-compatible', res.status, this.baseUrl, body));
+      }
       throw new Error(`OpenAI API error (${res.status}): ${body}`);
     }
     this.quota.onSuccess();
@@ -488,6 +517,9 @@ export class GeminiProvider implements ILLMProvider {
       const errBody = (await res.text()).slice(0, 200);
       if (res.status === 429) this.quota.handle429(res, errBody);
       if (res.status === 503) this.quota.handle503(res, errBody);
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(authErrorMessage('Google Gemini', res.status, 'https://generativelanguage.googleapis.com/v1beta', errBody));
+      }
       throw new Error(`Gemini API error (${res.status}): ${errBody}`);
     }
     this.quota.onSuccess();
@@ -642,6 +674,51 @@ class NullProvider implements ILLMProvider {
   async generate(): Promise<LLMResponse> {
     return { text: '' };
   }
+}
+
+/**
+ * A provider that rejects every generate() call with a fixed diagnostic. Used
+ * for the pre-flight missing-key case (issue #522): a key-requiring agent built
+ * with no configured key gets one of these instead of crashing construction or
+ * issuing an empty-Bearer request that returns a misleading 401. The rejection
+ * surfaces as a normal task failure via gossip_collect / gossip_progress.
+ */
+class DegradedProvider implements ILLMProvider {
+  constructor(private readonly reason: string) {}
+  async generate(): Promise<LLMResponse> {
+    throw new Error(this.reason);
+  }
+}
+
+/**
+ * Providers that require an API key to function. `local` (Ollama) and `none`
+ * (NullProvider) do not. Exported for the pre-flight key check at the worker
+ * construction site (main-agent.ts).
+ */
+export const KEY_REQUIRING_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google'] as const;
+
+/**
+ * Build a provider for an agent, downgrading to a {@link DegradedProvider} when
+ * a key-requiring provider has no key configured. Prefer this over
+ * `createProvider` at agent-construction sites so a missing key fails the TASK
+ * with a clear message rather than crashing construction or sending an
+ * empty-Bearer request. Issue #522.
+ */
+export function createProviderForAgent(
+  agentId: string,
+  provider: string,
+  model: string,
+  apiKey: string | undefined,
+  baseUrl?: string,
+  projectRoot?: string,
+): ILLMProvider {
+  if ((KEY_REQUIRING_PROVIDERS as readonly string[]).includes(provider) && !apiKey) {
+    return new DegradedProvider(
+      `no API key configured for agent "${agentId}" (provider ${provider}, ` +
+      `base_url ${baseUrl ?? 'default'}); set its key via the keychain`,
+    );
+  }
+  return createProvider(provider, model, apiKey, projectRoot, baseUrl);
 }
 
 // ─── Factory ────────────────────────────────────────────────────────────────

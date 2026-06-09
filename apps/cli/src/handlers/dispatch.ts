@@ -782,7 +782,13 @@ export async function handleDispatchSingle(
   }
 
   try {
-    const { taskId } = ctx.mainAgent.dispatch(agent_id, task, dispatchOptions as any);
+    const { taskId, finalResultPromise } = ctx.mainAgent.dispatch(agent_id, task, dispatchOptions as any);
+    // #522 SEV-1: a worker provider error (e.g. OpenAI 401) rejects this
+    // background promise. Without a catch it becomes an unhandledRejection and
+    // crash-loops the MCP server. Swallow it here — task errors still surface to
+    // the caller via gossip_collect / gossip_progress (the parallel/consensus
+    // path already does the same at dispatch-pipeline.ts ~747).
+    finalResultPromise?.catch(() => {});
     // For relay worktree dispatch the path is filled in by the async
     // runTask() inside dispatch-pipeline after WorktreeManager.create().
     // Record undefined here; the callback side (gossip_run completion or

@@ -13,6 +13,8 @@ export type { FindBestMatchOptions } from './agent-registry';
 export { TaskDispatcher } from './task-dispatcher';
 export {
   createProvider,
+  createProviderForAgent,
+  KEY_REQUIRING_PROVIDERS,
   AnthropicProvider,
   OpenAIProvider,
   GeminiProvider,
