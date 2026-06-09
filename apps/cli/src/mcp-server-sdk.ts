@@ -550,7 +550,7 @@ async function doBoot() {
       } else if (ex(instrPath)) {
         instructions = rf(instrPath, 'utf-8');
       }
-      const modelTier = ac.model.includes('opus') ? 'opus' : ac.model.includes('haiku') ? 'haiku' : 'sonnet';
+      const modelTier = ac.model.includes('opus') ? 'opus' : ac.model.includes('haiku') ? 'haiku' : ac.model.includes('fable') ? 'fable' : 'sonnet';
       ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions, description: ac.role || ac.preset || '', skills: ac.skills || [] });
       process.stderr.write(`[gossipcat] 🤖 ${ac.id}: native agent (${modelTier})\n`);
       continue;
@@ -597,7 +597,7 @@ async function doBoot() {
       const ac = claudeConfigs[i];
       agentConfigs.push(ac);
       // Map model tier for Agent tool dispatch
-      const modelTier = sa.model.includes('opus') ? 'opus' : sa.model.includes('haiku') ? 'haiku' : 'sonnet';
+      const modelTier = sa.model.includes('opus') ? 'opus' : sa.model.includes('haiku') ? 'haiku' : sa.model.includes('fable') ? 'fable' : 'sonnet';
       ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions: sa.instructions, description: sa.description, skills: ac.skills || [] });
       // Register in identityRegistry so self_identity returns runtime/provider/model
       ctx.identityRegistry.set(ac.id, { agent_id: ac.id, runtime: 'native', provider: ac.provider, model: ac.model });
@@ -1001,7 +1001,7 @@ async function doSyncWorkers() {
         const ac = claudeConfigs[i];
         ctx.mainAgent.registerAgent(ac);
         // [H2 fix] Populate nativeAgentConfigs for hot-reloaded subagents
-        const modelTier = sa.model.includes('opus') ? 'opus' : sa.model.includes('haiku') ? 'haiku' : 'sonnet';
+        const modelTier = sa.model.includes('opus') ? 'opus' : sa.model.includes('haiku') ? 'haiku' : sa.model.includes('fable') ? 'fable' : 'sonnet';
         ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions: sa.instructions, description: sa.description, skills: ac.skills || [] });
         ctx.identityRegistry.set(ac.id, { agent_id: ac.id, runtime: 'native', provider: ac.provider, model: ac.model });
       }
@@ -1972,7 +1972,7 @@ export function createMcpServer(): McpServer {
           '"custom" = any provider (anthropic/openai/google/local)'
         ),
         // Native agent fields
-        model: z.enum(['opus', 'sonnet', 'haiku']).optional()
+        model: z.enum(['opus', 'sonnet', 'haiku', 'fable']).optional()
           .describe('For native agents: Claude model tier'),
         description: z.string().optional()
           .describe('For native agents: one-line description for the .claude/agents/*.md frontmatter'),

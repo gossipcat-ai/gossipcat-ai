@@ -136,6 +136,7 @@ const CLAUDE_MODEL_MAP: Record<string, { provider: string; model: string }> = {
   opus:   { provider: 'anthropic', model: 'claude-opus-4-6' },
   sonnet: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
   haiku:  { provider: 'anthropic', model: 'claude-haiku-4-5' },
+  fable:  { provider: 'anthropic', model: 'claude-fable-5' },
 };
 
 export function validateConfig(raw: any): GossipConfig {
@@ -359,7 +360,7 @@ export function loadClaudeSubagents(projectRoot?: string, existingIds?: Set<stri
 
       const mapped = CLAUDE_MODEL_MAP[modelKey];
       if (!mapped) {
-        process.stderr.write(`[gossipcat] Skipping .claude/agents/${file}: unknown model "${modelKey}" (expected: opus, sonnet, haiku)\n`);
+        process.stderr.write(`[gossipcat] Skipping .claude/agents/${file}: unknown model "${modelKey}" (expected: opus, sonnet, haiku, fable)\n`);
         continue;
       }
 
