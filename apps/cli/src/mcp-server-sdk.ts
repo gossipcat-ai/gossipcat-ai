@@ -1749,6 +1749,17 @@ export function createMcpServer(): McpServer {
         }
       } catch { /* keychain doctor failure must never break status — skip */ }
 
+      // Auth-failure visibility — surface any provider whose API key was rejected
+      // (HTTP 401/403) within the TTL window so the operator sees WHICH key to fix.
+      // Separate from quota health: a 401/403 is a manual-fix condition, not a
+      // wait-it-out cooldown. Self-heals on a later success + read-time TTL filter.
+      try {
+        const { readRecentAuthFailures } = await import('@gossip/orchestrator');
+        for (const f of readRecentAuthFailures(process.cwd())) {
+          lines.push(`  ⚠️ Auth: "${f.provider}" key rejected (HTTP ${f.status}) — run 'gossipcat key set ${f.provider}'`);
+        }
+      } catch { /* auth-state.json not present — skip */ }
+
       // Signals pending — recent consensus rounds with no manually-recorded signals.
       // Surfaces the back-search gap (per consensus 4c88bcd3, haiku:f17) so the
       // orchestrator can SEE which rounds it skipped without having to remember.

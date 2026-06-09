@@ -1,4 +1,7 @@
 import { createProvider, createProviderForAgent, resolveAgentProvider, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 describe('LLM Client', () => {
   describe('createProvider', () => {
@@ -294,6 +297,29 @@ describe('LLM Client', () => {
       expect(caught!.message).not.toContain('platform.openai.com');
 
       global.fetch = originalFetch;
+    });
+
+    it('records the auth failure under the key_ref service, not the provider slot (issue #522)', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: async () => 'Incorrect API key provided',
+      }) as unknown as typeof fetch;
+      const root = mkdtempSync(join(tmpdir(), 'auth-keyref-'));
+      try {
+        // An openai-provider agent whose key lives at keychain service "my-corp-key".
+        const provider = createProvider('openai', 'gpt-4', 'bad-key', root, undefined, 'my-corp-key');
+        await provider.generate([{ role: 'user', content: 'hi' }]).catch(() => { /* 401 expected */ });
+        const state = JSON.parse(readFileSync(join(root, '.gossip', 'auth-state.json'), 'utf-8'));
+        // The recorded slot (and thus the `gossipcat key set <X>` hint) must be the
+        // key_ref service, NOT the generic provider name.
+        expect(Object.keys(state)).toEqual(['my-corp-key']);
+        expect(state['my-corp-key'].status).toBe(401);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+        global.fetch = originalFetch;
+      }
     });
 
     it('non-auth 500 still uses the generic OpenAI error path', async () => {
