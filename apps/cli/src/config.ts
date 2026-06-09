@@ -251,8 +251,13 @@ export function validateConfig(raw: any): GossipConfig {
       // always resolvable. Two non-fatal warnings catch common operator mistakes.
       if (agent.key_ref !== undefined) {
         if (typeof agent.key_ref !== 'string' || !KEY_REF_PATTERN.test(agent.key_ref)) {
+          // Do NOT echo the raw value: if an operator pasted an actual API key
+          // (which fails the pattern), printing it verbatim would leak the
+          // secret into logs / crash reporters. Show only a short masked prefix.
+          const masked =
+            typeof agent.key_ref === 'string' ? `${agent.key_ref.slice(0, 4)}…(${agent.key_ref.length} chars)` : typeof agent.key_ref;
           throw new Error(
-            `Agent "${id}" has invalid key_ref "${agent.key_ref}". A key_ref is a keychain ` +
+            `Agent "${id}" has invalid key_ref [${masked}]. A key_ref is a keychain ` +
             `service NAME and must match /^[a-zA-Z0-9_-]{1,32}$/ (never the key itself).`
           );
         }

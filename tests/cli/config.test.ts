@@ -208,6 +208,24 @@ describe('key_ref — per-agent keychain service (issue #522)', () => {
     })).toThrow('invalid key_ref');
   });
 
+  it('does NOT echo the raw key_ref value in the throw (no secret leak)', () => {
+    // If an operator pastes an actual API key (which fails the regex), the
+    // error must mask it — never print the secret verbatim. #522 consensus a5953983.
+    const secret = 'sk-proj-' + 'A1b2C3d4'.repeat(6); // realistic, fails the regex
+    let msg = '';
+    try {
+      validateConfig({
+        main_agent: { provider: 'anthropic', model: 'claude' },
+        agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'], key_ref: secret } },
+      });
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain('invalid key_ref');
+    expect(msg).not.toContain(secret);
+    expect(msg).toContain(`(${secret.length} chars)`); // masked form names the length only
+  });
+
   it('WARNS (does not throw) when key_ref names a different well-known provider', () => {
     expect(() => validateConfig({
       main_agent: { provider: 'anthropic', model: 'claude' },

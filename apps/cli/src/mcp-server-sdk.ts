@@ -620,12 +620,16 @@ async function doBoot() {
     mainKey = await ctx.keychain.getKey(config.main_agent.provider);
     if (!mainKey) {
       for (const ac of agentConfigs) {
-        const key = await ctx.keychain.getKey(ac.provider);
+        // #522: resolve from the per-agent keychain SERVICE (key_ref ?? provider)
+        // so an agent whose key is stored under a custom key_ref is visible to
+        // the orchestrator-LLM fallback, not just provider-named ones.
+        const keyService = (ac as any).key_ref ?? ac.provider;
+        const key = await ctx.keychain.getKey(keyService);
         if (key) {
           mainProvider = ac.provider;
           mainModel = ac.model;
           mainKey = key;
-          process.stderr.write(`[gossipcat] ⚠️  Main agent key unavailable, using ${ac.provider}/${ac.model} for orchestration\n`);
+          process.stderr.write(`[gossipcat] ⚠️  Main agent key unavailable, using ${ac.provider}/${ac.model} (keychain "${keyService}") for orchestration\n`);
           break;
         }
       }
