@@ -4,6 +4,14 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-06-10
+
+Completes the Claude Fable 5 native-agent support started in 0.5.5.
+
+### Fixed
+
+- **`gossip_setup` now actually creates `model: fable` native agents** (follow-up to #529, PR #531). The native-agent **creation** path in `gossip_setup` kept its own private `CLAUDE_MODEL_MAP` (only `opus`/`sonnet`/`haiku`), so #529 — which patched the input `z.enum`, the canonical `config.ts` map, and the dispatch-time tier maps — left this one untouched. The result: the tool schema accepted `model: "fable"` and then the handler rejected it downstream with `unknown model tier "fable"`, so no fable native agent could be created. The creation map now includes `fable → claude-fable-5`, matching the canonical map. The duplicated map remains known debt (every new model still re-breaks native registration across the remaining touchpoints).
+
 ## [0.5.5] — 2026-06-09
 
 Operator-facing credential UX + a new native model. Published-binary users can now store API keys without the source repo, see at a glance which keys are stale or rejected, and register a Claude Fable 5 native agent. Follows up the #522 DeepSeek/key_ref work in 0.5.4.
@@ -14,10 +22,6 @@ Operator-facing credential UX + a new native model. Published-binary users can n
 - **Keychain doctor in `gossip_status`** (PR #526). Surfaces stale/placeholder API-key entries (e.g. test placeholders left in a real keychain, or implausibly short values) so a misconfigured key is visible at a glance. Backend-agnostic (macOS Keychain / Linux secret-tool / encrypted-file fallback); the secret value is never printed.
 - **Auth-failure visibility in `gossip_status`** (PR #528, closes #2). When a provider rejects a key (HTTP 401/403), the status now shows `⚠️ Auth: "<service>" key rejected (HTTP N) — run 'gossipcat key set <service>'`, naming the exact keychain service to fix (honors per-agent `key_ref`). Self-healing: cleared on the next successful request and filtered by a 6h TTL. Recorded separately from quota state — a wrong key is a manual-fix condition, not a wait-it-out cooldown (which is why 401/403 deliberately has no backoff). Visibility only; a 401/403 still fails fast.
 - **`fable` (Claude Fable 5) as a native agent model** (PR #529). `model: fable` → `claude-fable-5` is now accepted by `gossip_setup` and the `.claude/agents/*.md` loader (previously skipped as "unknown model"), and dispatches as fable rather than silently falling back to sonnet.
-
-### Fixed
-
-- **`gossip_setup` now actually creates `model: fable` native agents** (follow-up to #529, in the re-cut 0.5.5 tarball). The native-agent **creation** path in `gossip_setup` kept its own private `CLAUDE_MODEL_MAP` (only `opus`/`sonnet`/`haiku`), so #529 — which patched the input `z.enum`, the canonical `config.ts` map, and the dispatch-time tier maps — left this one untouched. The result: the tool schema accepted `model: "fable"` and then the handler rejected it with `unknown model tier "fable"`. The creation map now includes `fable → claude-fable-5`, matching the canonical map. The duplicated map remains a known debt (every new model still re-breaks native registration across the remaining touchpoints).
 
 ## [0.5.4] — 2026-06-09
 
