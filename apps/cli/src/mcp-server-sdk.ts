@@ -2208,6 +2208,7 @@ export function createMcpServer(): McpServer {
         opus:   { provider: 'anthropic', model: 'claude-opus-4-6' },
         sonnet: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
         haiku:  { provider: 'anthropic', model: 'claude-haiku-4-5' },
+        fable:  { provider: 'anthropic', model: 'claude-fable-5' },
       };
 
       const configAgents: Record<string, any> = {};
