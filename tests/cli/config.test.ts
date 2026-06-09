@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { validateConfig, findConfigPath, VALID_MAIN_PROVIDERS } from '../../apps/cli/src/config';
+import { validateConfig, findConfigPath, configToAgentConfigs, VALID_MAIN_PROVIDERS } from '../../apps/cli/src/config';
 import { CREATE_PROVIDER_CASES } from '../../packages/orchestrator/src/llm-client';
 
 describe('Config Validation', () => {
@@ -112,6 +112,49 @@ describe('Config Validation', () => {
       const config = validateConfig({ main_agent: { provider: p, model: 'x' } });
       expect(config.main_agent.provider).toBe(p);
     }
+  });
+});
+
+describe('configToAgentConfigs (issue #522 — base_url carry-through)', () => {
+  it('carries base_url from config through to AgentConfig', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: {
+        deepseek: {
+          provider: 'openai',
+          model: 'deepseek-chat',
+          skills: ['typescript'],
+          base_url: 'https://api.deepseek.com/v1',
+        },
+      },
+    });
+    const [ac] = configToAgentConfigs(config);
+    expect(ac.id).toBe('deepseek');
+    expect(ac.provider).toBe('openai');
+    expect(ac.base_url).toBe('https://api.deepseek.com/v1');
+  });
+
+  it('leaves base_url undefined when not configured (defaults preserved)', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'] } },
+    });
+    const [ac] = configToAgentConfigs(config);
+    expect(ac.base_url).toBeUndefined();
+  });
+
+  it('validateConfig accepts a valid https base_url', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'], base_url: 'https://api.deepseek.com/v1' } },
+    })).not.toThrow();
+  });
+
+  it('validateConfig rejects a non-http(s) base_url scheme', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'], base_url: 'ftp://nope' } },
+    })).toThrow('base_url must use http or https');
   });
 });
 

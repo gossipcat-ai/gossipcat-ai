@@ -1,4 +1,4 @@
-import { createProvider, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
+import { createProvider, createProviderForAgent, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
 
 describe('LLM Client', () => {
   describe('createProvider', () => {
@@ -65,8 +65,9 @@ describe('LLM Client', () => {
   });
 
   describe('AnthropicProvider', () => {
-    it('throws on API error', async () => {
-      // Mock fetch to return error
+    it('throws a clear AUTH error on 401 (issue #522)', async () => {
+      // 401/403 now produce a dedicated auth message that points at the
+      // keychain, NOT the generic `Anthropic API error (401)` fall-through.
       const originalFetch = global.fetch;
       global.fetch = jest.fn().mockResolvedValue({
         ok: false,
@@ -76,7 +77,22 @@ describe('LLM Client', () => {
 
       const provider = new AnthropicProvider('bad-key', 'claude-3');
       await expect(provider.generate([{ role: 'user', content: 'hello' }]))
-        .rejects.toThrow('Anthropic API error (401): Unauthorized');
+        .rejects.toThrow(/Anthropic authentication failed \(HTTP 401\).*keychain/s);
+
+      global.fetch = originalFetch;
+    });
+
+    it('throws on non-auth API error (e.g. 500) via the generic path', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'Internal',
+      }) as unknown as typeof fetch;
+
+      const provider = new AnthropicProvider('test-key', 'claude-3');
+      await expect(provider.generate([{ role: 'user', content: 'hello' }]))
+        .rejects.toThrow('Anthropic API error (500): Internal');
 
       global.fetch = originalFetch;
     });
@@ -231,6 +247,115 @@ describe('LLM Client', () => {
       });
 
       global.fetch = originalFetch;
+    });
+
+    it('401 → clear AUTH error that names the keychain and NOT platform.openai.com (issue #522)', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: async () => 'Incorrect API key provided',
+      }) as unknown as typeof fetch;
+
+      // DeepSeek / OpenAI-compatible endpoint.
+      const provider = new OpenAIProvider('bad-key', 'deepseek-chat', undefined, 'https://api.deepseek.com/v1');
+      let caught: Error | undefined;
+      try {
+        await provider.generate([{ role: 'user', content: 'hi' }]);
+      } catch (e) {
+        caught = e as Error;
+      }
+      expect(caught).toBeDefined();
+      expect(caught!.message).toMatch(/authentication failed \(HTTP 401\)/);
+      expect(caught!.message).toMatch(/keychain/);
+      // Must reference the configured base_url, never the generic OpenAI host.
+      expect(caught!.message).toContain('https://api.deepseek.com/v1');
+      expect(caught!.message).not.toContain('platform.openai.com');
+
+      global.fetch = originalFetch;
+    });
+
+    it('403 → AUTH error, also avoids platform.openai.com (issue #522)', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        text: async () => 'Forbidden',
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('bad-key', 'gpt-4');
+      let caught: Error | undefined;
+      try {
+        await provider.generate([{ role: 'user', content: 'hi' }]);
+      } catch (e) {
+        caught = e as Error;
+      }
+      expect(caught!.message).toMatch(/authentication failed \(HTTP 403\)/);
+      expect(caught!.message).not.toContain('platform.openai.com');
+
+      global.fetch = originalFetch;
+    });
+
+    it('non-auth 500 still uses the generic OpenAI error path', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'boom',
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('test-key', 'gpt-4');
+      await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+        .rejects.toThrow('OpenAI API error (500): boom');
+
+      global.fetch = originalFetch;
+    });
+  });
+
+  describe('createProviderForAgent — pre-flight key check (issue #522)', () => {
+    it('key-requiring provider with no key → DegradedProvider that fails the task with a clear message', async () => {
+      const fetchSpy = jest.spyOn(global, 'fetch');
+      const provider = createProviderForAgent('deepseek-agent', 'openai', 'deepseek-chat', undefined, 'https://api.deepseek.com/v1');
+
+      let caught: Error | undefined;
+      try {
+        await provider.generate([{ role: 'user', content: 'hi' }]);
+      } catch (e) {
+        caught = e as Error;
+      }
+      // Fails the TASK (rejects generate) without making an empty-Bearer request.
+      expect(caught).toBeDefined();
+      expect(caught!.message).toContain('no API key configured for agent "deepseek-agent"');
+      expect(caught!.message).toContain('provider openai');
+      expect(caught!.message).toContain('https://api.deepseek.com/v1');
+      expect(caught!.message).toMatch(/keychain/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      fetchSpy.mockRestore();
+    });
+
+    it('empty-string key is treated as missing', async () => {
+      const provider = createProviderForAgent('a1', 'anthropic', 'claude-3', '');
+      await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+        .rejects.toThrow('no API key configured for agent "a1"');
+    });
+
+    it('default base_url is reported as \'default\' when none configured', async () => {
+      const provider = createProviderForAgent('a2', 'openai', 'gpt-4', undefined);
+      await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+        .rejects.toThrow(/base_url default/);
+    });
+
+    it('key-requiring provider WITH a key builds a real provider (no DegradedProvider)', () => {
+      const provider = createProviderForAgent('a3', 'openai', 'gpt-4', 'sk-real', 'https://api.deepseek.com/v1');
+      expect(provider).toBeInstanceOf(OpenAIProvider);
+    });
+
+    it('non-key provider (local/none) builds normally even without a key', () => {
+      expect(createProviderForAgent('a4', 'local', 'llama3', undefined)).toBeInstanceOf(OllamaProvider);
+      // 'none' resolves to NullProvider which has no exported class; assert it does not throw + resolves empty.
+      const nullp = createProviderForAgent('a5', 'none', 'x', undefined);
+      return expect(nullp.generate([{ role: 'user', content: 'hi' }])).resolves.toEqual({ text: '' });
     });
   });
 });

@@ -5,7 +5,7 @@
  * fans out to WorkerAgents, and synthesizes results.
  */
 
-import { ILLMProvider, createProvider } from './llm-client';
+import { ILLMProvider, createProvider, createProviderForAgent } from './llm-client';
 import { AgentRegistry } from './agent-registry';
 import { TaskDispatcher } from './task-dispatcher';
 import { WorkerAgent } from './worker-agent';
@@ -377,7 +377,11 @@ export class MainAgent {
         this.workers.delete(ac.id);
       }
 
-      const llm = createProvider(ac.provider, ac.model, key ?? undefined, undefined, (ac as any).base_url);
+      // Pre-flight key check (issue #522): a key-requiring provider with no
+      // configured key gets a DegradedProvider that fails the TASK with a clear
+      // diagnostic, instead of issuing an empty-Bearer request that returns a
+      // misleading 401. base_url is now a typed field on AgentConfig.
+      const llm = createProviderForAgent(ac.id, ac.provider, ac.model, key ?? undefined, ac.base_url);
 
       const instructionsPath = join(this.projectRoot, '.gossip', 'agents', ac.id, 'instructions.md');
       const instructions = existsSync(instructionsPath)

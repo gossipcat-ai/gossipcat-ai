@@ -38,6 +38,9 @@ export interface GossipConfig {
     preset?: string;
     skills: string[];
     native?: boolean;
+    /** Custom API base URL for OpenAI-compatible endpoints (e.g. DeepSeek).
+     *  Validated in validateConfig; carried through configToAgentConfigs. #522 */
+    base_url?: string;
   }>;
 }
 
@@ -187,6 +190,9 @@ export function configToAgentConfigs(config: GossipConfig): AgentConfig[] {
     preset: agent.preset,
     skills: agent.skills,
     native: agent.native,
+    // #522: carry base_url through so DeepSeek / OpenAI-compatible agents reach
+    // their configured endpoint instead of defaulting to api.openai.com.
+    base_url: agent.base_url,
   }));
 }
 
