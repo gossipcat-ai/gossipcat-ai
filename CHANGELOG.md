@@ -4,6 +4,17 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-06-09
+
+Operator-facing credential UX + a new native model. Published-binary users can now store API keys without the source repo, see at a glance which keys are stale or rejected, and register a Claude Fable 5 native agent. Follows up the #522 DeepSeek/key_ref work in 0.5.4.
+
+### Added
+
+- **`gossipcat key set <provider>` / `gossipcat key list`** (PR #527). The published binary is the MCP-server bundle and previously had no way to store an API key — the setup wizard lives only in the source repo, and no MCP tool stores keys, so a `gossip_setup`-created OpenAI/DeepSeek/OpenClaw agent was dead-on-arrival. `key set` reads the secret from stdin (hidden TTY prompt or a pipe) and stores it in the OS keychain (service `gossip-mesh`, account = the agent's `key_ref ?? provider`); `key list` shows which providers have a key (never the value). Terminal-only by design — secrets never traverse the LLM tool layer. The post-install hint now points here instead of the non-existent `gossipcat setup`.
+- **Keychain doctor in `gossip_status`** (PR #526). Surfaces stale/placeholder API-key entries (e.g. test placeholders left in a real keychain, or implausibly short values) so a misconfigured key is visible at a glance. Backend-agnostic (macOS Keychain / Linux secret-tool / encrypted-file fallback); the secret value is never printed.
+- **Auth-failure visibility in `gossip_status`** (PR #528, closes #2). When a provider rejects a key (HTTP 401/403), the status now shows `⚠️ Auth: "<service>" key rejected (HTTP N) — run 'gossipcat key set <service>'`, naming the exact keychain service to fix (honors per-agent `key_ref`). Self-healing: cleared on the next successful request and filtered by a 6h TTL. Recorded separately from quota state — a wrong key is a manual-fix condition, not a wait-it-out cooldown (which is why 401/403 deliberately has no backoff). Visibility only; a 401/403 still fails fast.
+- **`fable` (Claude Fable 5) as a native agent model** (PR #529). `model: fable` → `claude-fable-5` is now accepted by `gossip_setup` and the `.claude/agents/*.md` loader (previously skipped as "unknown model"), and dispatches as fable rather than silently falling back to sonnet.
+
 ## [0.5.4] — 2026-06-09
 
 Reliability fixes from real-world operator reports (issue reporter: GravyaDev): the worktree-isolation detector no longer destroys the orchestrator's own concurrent writes, and OpenAI-compatible custom agents (DeepSeek) no longer crash-loop the MCP server. Adds per-agent keychain credentials and a first-class DeepSeek provider.
