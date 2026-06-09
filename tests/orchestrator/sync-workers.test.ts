@@ -144,3 +144,32 @@ describe('MainAgent.syncWorkers — keychain short-circuit', () => {
     expect(alphaAfter.stopCalls).toBe(0);
   });
 });
+
+describe('MainAgent.syncWorkers — key_ref keychain-service resolution (issue #522)', () => {
+  function makeKeyRefAgent() {
+    return new MainAgent({
+      provider: 'local',
+      model: 'mock',
+      relayUrl: 'ws://localhost:0',
+      agents: [
+        // key_ref present → resolver reads service 'shared-key', NOT 'openai'.
+        { id: 'a-ref', provider: 'openai', model: 'gpt', skills: [], key_ref: 'shared-key' },
+        // key_ref absent → resolver reads the provider name 'anthropic'.
+        { id: 'b-noref', provider: 'anthropic', model: 'claude', skills: [] },
+      ],
+      llm: mockLLM,
+    });
+  }
+
+  it('resolves the key from key_ref when present, and from provider when absent', async () => {
+    const agent = makeKeyRefAgent();
+    const keyProvider = jest.fn(async (service: string) => `key-for-${service}`);
+
+    await agent.syncWorkers(keyProvider);
+
+    const services = keyProvider.mock.calls.map(c => c[0]);
+    expect(services).toContain('shared-key');   // a-ref → key_ref
+    expect(services).toContain('anthropic');     // b-noref → provider
+    expect(services).not.toContain('openai');    // never the provider when key_ref is set
+  });
+});

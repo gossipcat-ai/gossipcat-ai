@@ -158,6 +158,97 @@ describe('configToAgentConfigs (issue #522 — base_url carry-through)', () => {
   });
 });
 
+describe('key_ref — per-agent keychain service (issue #522)', () => {
+  let stderrSpy: jest.SpyInstance;
+  beforeEach(() => {
+    stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => {
+    stderrSpy.mockRestore();
+  });
+
+  it('configToAgentConfigs carries key_ref through to AgentConfig', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: {
+        ds: { provider: 'deepseek', model: 'deepseek-chat', skills: ['typescript'], key_ref: 'deepseek' },
+      },
+    });
+    const [ac] = configToAgentConfigs(config);
+    expect(ac.key_ref).toBe('deepseek');
+  });
+
+  it('leaves key_ref undefined when not configured (byte-identical default)', () => {
+    const config = validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'] } },
+    });
+    const [ac] = configToAgentConfigs(config);
+    expect(ac.key_ref).toBeUndefined();
+  });
+
+  it('accepts a valid custom key_ref service name', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'], key_ref: 'my-custom-key_1' } },
+    })).not.toThrow();
+  });
+
+  it('rejects a key_ref that fails the service-name allowlist regex', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'], key_ref: 'has spaces!' } },
+    })).toThrow('invalid key_ref');
+  });
+
+  it('rejects a key_ref longer than 32 chars (regex cap)', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'], key_ref: 'a'.repeat(33) } },
+    })).toThrow('invalid key_ref');
+  });
+
+  it('WARNS (does not throw) when key_ref names a different well-known provider', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'], key_ref: 'anthropic' } },
+    })).not.toThrow();
+    const out = stderrSpy.mock.calls.map(c => String(c[0])).join('');
+    expect(out).toMatch(/key_ref "anthropic" names a known provider/);
+  });
+
+  it('does NOT warn when key_ref equals the agent provider', () => {
+    validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'], key_ref: 'openai' } },
+    });
+    const out = stderrSpy.mock.calls.map(c => String(c[0])).join('');
+    expect(out).not.toMatch(/names a known provider/);
+  });
+
+  it('WARNS (does not throw) when key_ref looks like a secret (sk- prefix)', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: { a: { provider: 'openai', model: 'gpt-4', skills: ['x'], key_ref: 'sk-abc123' } },
+    })).not.toThrow();
+    const out = stderrSpy.mock.calls.map(c => String(c[0])).join('');
+    expect(out).toMatch(/looks like a secret/);
+  });
+
+  it('accepts provider:"deepseek" as a first-class provider', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude' },
+      agents: { a: { provider: 'deepseek', model: 'deepseek-chat', skills: ['x'] } },
+    })).not.toThrow();
+  });
+
+  it('accepts main_agent.provider:"deepseek"', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'deepseek', model: 'deepseek-chat' },
+    })).not.toThrow();
+  });
+});
+
 describe('findConfigPath', () => {
   let tmpDir: string;
 

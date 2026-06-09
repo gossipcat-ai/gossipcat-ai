@@ -5,12 +5,18 @@
 /** Configuration for a worker agent */
 export interface AgentConfig {
   id: string;
-  provider: 'anthropic' | 'openai' | 'google' | 'local';
+  provider: 'anthropic' | 'openai' | 'deepseek' | 'google' | 'local';
   model: string;
   /** Custom API base URL for OpenAI-compatible endpoints (e.g. DeepSeek).
    *  When omitted, OpenAIProvider defaults to https://api.openai.com/v1.
    *  Carried from config through configToAgentConfigs (issue #522). */
   base_url?: string;
+  /** Keychain SERVICE NAME to resolve this agent's API key from. Defaults to
+   *  `provider` when omitted — byte-identical to pre-#522 behavior. Lets two
+   *  OpenAI-compatible agents read different keychain entries. This is a service
+   *  NAME, never the key itself (the key stays in the OS keychain). Validated
+   *  against /^[a-zA-Z0-9_-]{1,32}$/ in validateConfig (issue #522). */
+  key_ref?: string;
   /** Freeform role description — replaces preset. e.g. "ui-architect", "security-auditor" */
   role?: string;
   /** @deprecated Use role instead */

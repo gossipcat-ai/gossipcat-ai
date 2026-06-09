@@ -353,6 +353,7 @@ export class OpenAIProvider implements ILLMProvider {
   private quota: QuotaTracker;
   private baseUrl: string;
   private timeoutMs: number;
+  private providerLabel: string;
   constructor(
     private apiKey: string,
     private model: string,
@@ -366,10 +367,17 @@ export class OpenAIProvider implements ILLMProvider {
      * — pass 600_000 or higher when instantiating for those providers.
      */
     timeoutMs?: number,
+    /**
+     * Human-readable provider name used in the 401/403 auth-error message so a
+     * first-class OpenAI-compatible provider (e.g. DeepSeek) names itself rather
+     * than the generic "OpenAI-compatible". Defaults to "OpenAI-compatible". #522
+     */
+    providerLabel?: string,
   ) {
     this.baseUrl = (baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, '');
     this.quota = new QuotaTracker(quotaSlot ?? 'openai', projectRoot);
     this.timeoutMs = timeoutMs ?? 120_000;
+    this.providerLabel = providerLabel ?? 'OpenAI-compatible';
   }
 
   async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
@@ -407,7 +415,7 @@ export class OpenAIProvider implements ILLMProvider {
       // rate-limit semantics; a wrong key won't fix itself by waiting, so a
       // clear, fail-fast message is the correct behavior here (issue #522).
       if (res.status === 401 || res.status === 403) {
-        throw new Error(authErrorMessage('OpenAI-compatible', res.status, this.baseUrl, body));
+        throw new Error(authErrorMessage(this.providerLabel, res.status, this.baseUrl, body));
       }
       throw new Error(`OpenAI API error (${res.status}): ${body}`);
     }
@@ -456,7 +464,11 @@ export class OpenAIProvider implements ILLMProvider {
     }
     const usage = data.usage as Record<string, number> | undefined;
     return {
-      text: (msg.content as string) || '',
+      // #522: deepseek-reasoner returns its answer in `reasoning_content`,
+      // sometimes alongside an empty-string `content`. Use `||` (NOT `??`) so an
+      // empty-string content falls through to reasoning_content — `"" ?? x` keeps
+      // the empty string and drops the answer.
+      text: (msg.content || msg.reasoning_content || '') as string,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: usage ? { inputTokens: usage.prompt_tokens, outputTokens: usage.completion_tokens } : undefined,
     };
@@ -695,7 +707,7 @@ class DegradedProvider implements ILLMProvider {
  * (NullProvider) do not. Exported for the pre-flight key check at the worker
  * construction site (main-agent.ts).
  */
-export const KEY_REQUIRING_PROVIDERS = ['anthropic', 'openai', 'openclaw', 'google'] as const;
+export const KEY_REQUIRING_PROVIDERS = ['anthropic', 'openai', 'deepseek', 'openclaw', 'google'] as const;
 
 /**
  * Build a provider for an agent, downgrading to a {@link DegradedProvider} when
@@ -711,11 +723,16 @@ export function createProviderForAgent(
   apiKey: string | undefined,
   baseUrl?: string,
   projectRoot?: string,
+  keyRef?: string,
 ): ILLMProvider {
   if ((KEY_REQUIRING_PROVIDERS as readonly string[]).includes(provider) && !apiKey) {
+    // Name the keychain SERVICE the resolver tried (key_ref ?? provider) so a
+    // missing per-agent key is actionable — the operator knows exactly which
+    // service to store. Service names are safe to log; never the key value. #522
+    const service = keyRef ?? provider;
     return new DegradedProvider(
       `no API key configured for agent "${agentId}" (provider ${provider}, ` +
-      `base_url ${baseUrl ?? 'default'}); set its key via the keychain`,
+      `base_url ${baseUrl ?? 'default'}); set the key for keychain service "${service}"`,
     );
   }
   return createProvider(provider, model, apiKey, projectRoot, baseUrl);
@@ -728,12 +745,21 @@ export function createProviderForAgent(
 // tests/cli/config.test.ts asserts this matches VALID_MAIN_PROVIDERS in
 // apps/cli/src/config.ts so a provider can never pass schema validation but
 // fail at runtime (or vice versa).
-export const CREATE_PROVIDER_CASES = ['anthropic', 'openai', 'openclaw', 'google', 'local', 'none'] as const;
+export const CREATE_PROVIDER_CASES = ['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local', 'none'] as const;
 
 export function createProvider(provider: string, model: string, apiKey?: string, projectRoot?: string, baseUrl?: string): ILLMProvider {
   switch (provider) {
     case 'anthropic': return new AnthropicProvider(apiKey!, model, projectRoot);
     case 'openai': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl, baseUrl ? `openai:${baseUrl}` : undefined);
+    // DeepSeek is OpenAI-wire-compatible — reuse OpenAIProvider. Default the
+    // base_url to api.deepseek.com/v1 (an explicit base_url still overrides),
+    // give it a 'deepseek' quota slot, and a 'DeepSeek' label so 401/403 auth
+    // errors name DeepSeek instead of the generic "OpenAI-compatible". #522
+    case 'deepseek': return new OpenAIProvider(
+      apiKey ?? '', model, projectRoot,
+      baseUrl ?? 'https://api.deepseek.com/v1',
+      'deepseek', undefined, 'DeepSeek',
+    );
     // OpenClaw is a remote agentic LLM with its own server-side tool chain
     // (web_fetch, exec, browser, etc.). Its wallclock regularly exceeds the
     // 120s default because it's doing Claude-like agentic work per request
