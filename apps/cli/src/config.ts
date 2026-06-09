@@ -31,6 +31,27 @@ export interface GossipConfig {
      * false (no behavior change for default installs).
      */
     autoDiscoverWorktrees?: boolean;
+    /**
+     * When false, the round-close open-findings auto-resolver is skipped.
+     * Read directly in collect.ts; absent ⇒ enabled (default-on).
+     */
+    autoResolveOnRoundClose?: boolean;
+    /**
+     * Layer B opt-in (issue #437, spec 2026-06-09). Seeds the
+     * GOSSIP_WORKTREE_AUTO_REVERT runtime-flag default on load; the env var
+     * overrides (env → config → registry default '0'). When the effective flag
+     * is OFF (the default), a detected isolation leak is preserved + reported
+     * but NOT destructively reverted from the parent checkout.
+     */
+    worktreeAutoRevert?: boolean;
+    /**
+     * Layer A extra exclusions (issue #437, spec 2026-06-09). Operator-supplied
+     * STRING globs matched against repo-relative dirty paths, UNIONED with the
+     * built-in `.gossip/`/`.claude/` prefixes (which are never removable).
+     * Wildcard-only (`**`/`*`) and traversal (`../`) entries are rejected by
+     * validateConfig.
+     */
+    orchestratorOwnedGlobs?: string[];
   };
   agents?: Record<string, {
     provider: string;
@@ -123,6 +144,37 @@ export function validateConfig(raw: any): GossipConfig {
       typeof raw.consensus.autoResolveOnRoundClose !== 'boolean'
     ) {
       throw new Error('Config "consensus.autoResolveOnRoundClose" must be a boolean');
+    }
+    if (
+      raw.consensus.worktreeAutoRevert !== undefined &&
+      typeof raw.consensus.worktreeAutoRevert !== 'boolean'
+    ) {
+      throw new Error('Config "consensus.worktreeAutoRevert" must be a boolean');
+    }
+    if (raw.consensus.orchestratorOwnedGlobs !== undefined) {
+      const globs = raw.consensus.orchestratorOwnedGlobs;
+      if (!Array.isArray(globs)) {
+        throw new Error('Config "consensus.orchestratorOwnedGlobs" must be an array of strings');
+      }
+      for (const g of globs) {
+        if (typeof g !== 'string' || g.length === 0) {
+          throw new Error('Config "consensus.orchestratorOwnedGlobs" entries must be non-empty strings');
+        }
+        // Defense-in-depth on the pattern itself (spec §8.2 item 3): a
+        // wildcard-only entry would suppress ALL detection; a `../` entry is a
+        // traversal smell even though the match target is bounded to
+        // repo-relative strings.
+        if (g === '**' || g === '*') {
+          throw new Error(
+            `Config "consensus.orchestratorOwnedGlobs" entry "${g}" is wildcard-only and would suppress all isolation detection`,
+          );
+        }
+        if (g.includes('../')) {
+          throw new Error(
+            `Config "consensus.orchestratorOwnedGlobs" entry "${g}" contains a traversal segment ("../") and is rejected`,
+          );
+        }
+      }
     }
   }
 

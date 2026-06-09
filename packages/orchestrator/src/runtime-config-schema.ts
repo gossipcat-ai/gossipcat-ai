@@ -38,6 +38,14 @@ export const RUNTIME_FLAG_REGISTRY = {
     default: '',
     description: 'Operator override agent_id for consensus auto-verify discovery.',
   },
+  /**
+   * When '1', a detected worktree-isolation leak whose work was successfully
+   * preserved to .gossip/recovery/<taskId>.patch is ALSO destructively
+   * reverted from the parent checkout (git restore --source=HEAD). Default '0'
+   * (preserve + report only) — a heuristic detector must not default to a
+   * destructive op (issue #437, round 251e5ef6-d4d44ba2).
+   */
+  GOSSIP_WORKTREE_AUTO_REVERT: { type: 'boolean', default: '0', description: 'Destructively revert preserved isolation-leak paths from the parent checkout' },
 } as const;
 
 export type RuntimeFlagKey = keyof typeof RUNTIME_FLAG_REGISTRY;

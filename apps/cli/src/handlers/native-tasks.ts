@@ -163,6 +163,39 @@ function appendRelayWarning(
 }
 
 /**
+ * Resolve the effective GOSSIP_WORKTREE_AUTO_REVERT flag (spec 2026-06-09
+ * Layer B, §8.2 item 4). Precedence: env → file → `consensus.worktreeAutoRevert`
+ * config → registry default '0'.
+ *
+ * There is no standalone config→runtime-store seed seam today (the runtime store
+ * has no boot-time config hydration; `consensus.autoResolveOnRoundClose` is read
+ * the same direct way in collect.ts). So the config value is supplied as the
+ * `defaultValue` to `getRuntimeFlagBool`, which already implements env→file→
+ * defaultValue precedence — making the env/registry path authoritative while
+ * letting the config file seed the default. TODO(§8.2-4): if a real config→store
+ * hydration seam lands, move this seeding there.
+ *
+ * Fail-open: any config read error falls back to the registry default ('0' → OFF).
+ */
+function worktreeAutoRevertEnabled(projectRoot: string): boolean {
+  let configDefault: boolean | undefined;
+  try {
+    const { findConfigPath, loadConfig } = require('../config');
+    const cfgP = findConfigPath(projectRoot);
+    const cfg = cfgP ? loadConfig(cfgP) : null;
+    const v = cfg?.consensus?.worktreeAutoRevert;
+    if (typeof v === 'boolean') configDefault = v;
+  } catch { /* fail-open — env/registry path stays authoritative */ }
+  try {
+    const { getRuntimeFlagBool } = require('@gossip/orchestrator');
+    return getRuntimeFlagBool('GOSSIP_WORKTREE_AUTO_REVERT', configDefault);
+  } catch {
+    // Orchestrator import failed — honor config seed, else registry default OFF.
+    return configDefault ?? false;
+  }
+}
+
+/**
  * Spawn a timeout watcher for a native task.
  * INVARIANT: On timeout, writes timed_out to nativeResultMap. Does NOT delete from nativeTaskMap.
  * The collect polling loop depends on nativeTaskMap entries persisting until real relay or TTL eviction.
@@ -601,9 +634,24 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // emit worktree_isolation_failed if HEAD moved or new dirty paths appeared
   // that weren't in the dispatch-time snapshot. Spec:
   // docs/specs/2026-05-20-native-worktree-isolation-fix.md
-  let isolationDiff: { headChanged: boolean; dirtyPathsAdded: string[]; isViolation: boolean } | null = null;
+  let isolationDiff:
+    | { headChanged: boolean; dirtyPathsAdded: string[]; isViolation: boolean; excludedPaths?: string[] }
+    | null = null;
   if (taskInfo.writeMode === 'worktree' && taskInfo.isolationSnapshot) {
     try {
+      // Operator-configured extra orchestrator-owned globs (spec 2026-06-09
+      // Layer A, §3.4). Unioned with the built-in .gossip//.claude/ prefixes
+      // inside diffIsolationSnapshots. Read fail-open — a missing/corrupt config
+      // must never block relay completion.
+      let orchestratorOwnedGlobs: string[] = [];
+      try {
+        const { findConfigPath, loadConfig } = require('../config');
+        const cfgP = findConfigPath(process.cwd());
+        const cfg = cfgP ? loadConfig(cfgP) : null;
+        const g = cfg?.consensus?.orchestratorOwnedGlobs;
+        if (Array.isArray(g)) orchestratorOwnedGlobs = g;
+      } catch { /* fail-open — built-in prefixes still apply */ }
+
       const { checkIsolationViolation } = require('./worktree-isolation-detection');
       isolationDiff = checkIsolationViolation(
         taskInfo.agentId,
@@ -611,6 +659,7 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         taskInfo.isolationSnapshot,
         process.cwd(),
         taskInfo.concurrentWorktreeTaint,
+        orchestratorOwnedGlobs,
       );
     } catch { /* best-effort — detector must not block relay completion */ }
   }
@@ -952,6 +1001,24 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   if (relayLintFired) {
     responseText += `\n⚠ relay_findings_dropped: result has 0 <agent_finding> tags but task was a consensus dispatch — orchestrator may have paraphrased; original tagged findings are lost from the dashboard.`;
   }
+  // Base-rate audit (spec 2026-06-09 §3.1 / §8.2 item 5): record orchestrator-
+  // owned paths excluded from attribution BEFORE the violation/revert decision,
+  // even when no violation results — this is the measurement that tells us how
+  // often Layer A fires so the prefix list can be tuned. Fail-open.
+  if (isolationDiff && isolationDiff.excludedPaths && isolationDiff.excludedPaths.length > 0) {
+    try {
+      const excludedRoot = ctx.mainAgent?.projectRoot ?? process.cwd();
+      const exList = isolationDiff.excludedPaths.slice(0, 5).join(' ');
+      appendRelayWarning(excludedRoot, {
+        taskId: task_id,
+        agentId: taskInfo.agentId,
+        reason: 'isolation_excluded_orchestrator_paths',
+        resultLength: isolationDiff.excludedPaths.length,
+        suspectedReason: `excluded_orchestrator_owned count=${isolationDiff.excludedPaths.length} paths=${exList}`,
+        timestamp: new Date().toISOString(),
+      });
+    } catch { /* best-effort — appendRelayWarning is already fail-open internally */ }
+  }
   if (isolationDiff && isolationDiff.isViolation) {
     if (taskInfo?.concurrentWorktreeTaint === true) {
       responseText += `\n⚠ worktree_isolation_skipped: Agent(isolation:"worktree") violation detected but attribution is ambiguous — this task's lifetime overlapped with another worktree task at dispatch time (${isolationDiff.dirtyPathsAdded.length} new dirty path(s)).`;
@@ -1031,8 +1098,10 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
               timestamp: new Date().toISOString(),
             });
             responseText += `\n  → ⚠ could NOT preserve leaked work (${errMsg}); master left dirty to avoid data loss. Recover manually: git stash push -- ${pathList}.`;
-          } else {
-            // Preserve succeeded — safe to clean master via the destructive revert.
+          } else if (worktreeAutoRevertEnabled(revertRoot)) {
+            // Preserve succeeded AND auto-revert opted in (GOSSIP_WORKTREE_AUTO_REVERT
+            // / consensus.worktreeAutoRevert) — clean master via the destructive
+            // revert. Byte-for-byte the pre-#437 behaviour. Spec 2026-06-09 Layer B.
             const revertResult = revertLeakedPaths(revertRoot, isolationDiff.dirtyPathsAdded);
             const auditSuspectedReason =
               revertResult.error
@@ -1057,6 +1126,24 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
                 : '';
               responseText += `\n  → leaked work preserved at .gossip/recovery/${task_id}.patch; master restored (${revertResult.restored.length} path(s))${skippedPart}${rejectedPart}. Recover with: git apply .gossip/recovery/${task_id}.patch (onto a fresh branch).`;
             }
+          } else {
+            // DEFAULT (auto-revert OFF, spec 2026-06-09 Layer B): preserve + report,
+            // do NOT touch the working tree. A heuristic detector must not default
+            // to a destructive op (issue #437). Master is left exactly as-is.
+            appendRelayWarning(revertRoot, {
+              taskId: task_id,
+              agentId: taskInfo.agentId,
+              reason: 'isolation_recovery_preserved_no_revert',
+              resultLength: isolationDiff.dirtyPathsAdded.length,
+              suspectedReason: `auto_revert_disabled patch=${preserveResult.patchPath} preserved=${preserveResult.preserved.length}`,
+              timestamp: new Date().toISOString(),
+            });
+            responseText +=
+              `\n  → leaked work preserved at .gossip/recovery/${task_id}.patch; ` +
+              `master left as-is (auto-revert disabled). ` +
+              `If this was a real isolation leak, clean with: git restore <paths>. ` +
+              `Recover the work with: git apply .gossip/recovery/${task_id}.patch (onto a fresh branch). ` +
+              `Enable auto-revert with GOSSIP_WORKTREE_AUTO_REVERT=1.`;
           }
         } catch (err) {
           responseText += `\n  → auto-recovery FAILED: ${(err as Error).message}. Run 'git restore <paths>' manually.`;
