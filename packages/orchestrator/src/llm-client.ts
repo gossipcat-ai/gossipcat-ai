@@ -14,6 +14,7 @@ import { join } from 'path';
 import { ToolDefinition, LLMMessage } from '@gossip/types';
 import { LLMResponse } from './types';
 import { log as _log } from './log';
+import { recordAuthFailure, clearAuthFailure } from './auth-state';
 
 // ─── 503 Retry Helper ───────────────────────────────────────────────────────
 
@@ -241,8 +242,12 @@ export interface ILLMProvider {
 
 export class AnthropicProvider implements ILLMProvider {
   private quota: QuotaTracker;
-  constructor(private apiKey: string, private model: string, projectRoot?: string) {
+  private projectRoot?: string;
+  private authSlot: string;
+  constructor(private apiKey: string, private model: string, projectRoot?: string, authSlot?: string) {
     this.quota = new QuotaTracker('anthropic', projectRoot);
+    this.projectRoot = projectRoot;
+    this.authSlot = authSlot ?? 'anthropic';
   }
 
   async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
@@ -284,11 +289,13 @@ export class AnthropicProvider implements ILLMProvider {
       if (res.status === 429) this.quota.handle429(res, body);
       if (res.status === 503) this.quota.handle503(res, body);
       if (res.status === 401 || res.status === 403) {
+        recordAuthFailure(this.projectRoot, this.authSlot, res.status);
         throw new Error(authErrorMessage('Anthropic', res.status, 'https://api.anthropic.com/v1', body));
       }
       throw new Error(`Anthropic API error (${res.status}): ${body}`);
     }
     this.quota.onSuccess();
+    clearAuthFailure(this.projectRoot, this.authSlot);
     const data = await res.json() as Record<string, unknown>;
     return this.parseAnthropicResponse(data);
   }
@@ -354,6 +361,9 @@ export class OpenAIProvider implements ILLMProvider {
   private baseUrl: string;
   private timeoutMs: number;
   private providerLabel: string;
+  private projectRoot?: string;
+  /** Keychain provider slot (deepseek / openclaw / openai) — the key the operator must fix. */
+  private authProvider: string;
   constructor(
     private apiKey: string,
     private model: string,
@@ -373,11 +383,22 @@ export class OpenAIProvider implements ILLMProvider {
      * than the generic "OpenAI-compatible". Defaults to "OpenAI-compatible". #522
      */
     providerLabel?: string,
+    /**
+     * Keychain SERVICE name (key_ref ?? provider) to name in the auth-failure
+     * record, so gossip_status tells the operator the exact `gossipcat key set
+     * <service>` to run. Distinct from the quota slot: rate-limit quota is keyed
+     * per provider/endpoint (shared across agents on the same endpoint), while a
+     * rejected key is per-agent credential. Defaults to the quota slot. #522
+     */
+    authSlot?: string,
   ) {
     this.baseUrl = (baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, '');
-    this.quota = new QuotaTracker(quotaSlot ?? 'openai', projectRoot);
+    const quotaSlotResolved = quotaSlot ?? 'openai';
+    this.quota = new QuotaTracker(quotaSlotResolved, projectRoot);
+    this.authProvider = authSlot ?? quotaSlotResolved;
     this.timeoutMs = timeoutMs ?? 120_000;
     this.providerLabel = providerLabel ?? 'OpenAI-compatible';
+    this.projectRoot = projectRoot;
   }
 
   async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
@@ -415,11 +436,13 @@ export class OpenAIProvider implements ILLMProvider {
       // rate-limit semantics; a wrong key won't fix itself by waiting, so a
       // clear, fail-fast message is the correct behavior here (issue #522).
       if (res.status === 401 || res.status === 403) {
+        recordAuthFailure(this.projectRoot, this.authProvider, res.status);
         throw new Error(authErrorMessage(this.providerLabel, res.status, this.baseUrl, body));
       }
       throw new Error(`OpenAI API error (${res.status}): ${body}`);
     }
     this.quota.onSuccess();
+    clearAuthFailure(this.projectRoot, this.authProvider);
     const data = await res.json() as Record<string, unknown>;
     return this.parseOpenAIResponse(data);
   }
@@ -479,9 +502,13 @@ export class OpenAIProvider implements ILLMProvider {
 
 export class GeminiProvider implements ILLMProvider {
   private quota: QuotaTracker;
+  private projectRoot?: string;
+  private authSlot: string;
 
-  constructor(private apiKey: string, private model: string, projectRoot?: string) {
+  constructor(private apiKey: string, private model: string, projectRoot?: string, authSlot?: string) {
     this.quota = new QuotaTracker('google', projectRoot);
+    this.projectRoot = projectRoot;
+    this.authSlot = authSlot ?? 'google';
   }
 
   async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
@@ -530,11 +557,13 @@ export class GeminiProvider implements ILLMProvider {
       if (res.status === 429) this.quota.handle429(res, errBody);
       if (res.status === 503) this.quota.handle503(res, errBody);
       if (res.status === 401 || res.status === 403) {
+        recordAuthFailure(this.projectRoot, this.authSlot, res.status);
         throw new Error(authErrorMessage('Google Gemini', res.status, 'https://generativelanguage.googleapis.com/v1beta', errBody));
       }
       throw new Error(`Gemini API error (${res.status}): ${errBody}`);
     }
     this.quota.onSuccess();
+    clearAuthFailure(this.projectRoot, this.authSlot);
     const data = await res.json() as Record<string, unknown>;
     const result = this.parseGeminiResponse(data);
     if (process.env.GOSSIP_DEBUG) _log('Gemini', `→ text=${result.text?.length ?? 0}chars, toolCalls=${result.toolCalls?.length ?? 0}${result.toolCalls?.length ? ` [${result.toolCalls.map(tc => tc.name).join(', ')}]` : ''}, tokens=${result.usage?.inputTokens ?? '?'}/${result.usage?.outputTokens ?? '?'}`);
@@ -735,7 +764,10 @@ export function createProviderForAgent(
       `base_url ${baseUrl ?? 'default'}); set the key for keychain service "${service}"`,
     );
   }
-  return createProvider(provider, model, apiKey, projectRoot, baseUrl);
+  // Auth-failure slot = the keychain SERVICE the operator must fix (key_ref ??
+  // provider), so gossip_status names the right `gossipcat key set <service>`.
+  // Distinct from the quota slot (per-endpoint rate-limit state). #522
+  return createProvider(provider, model, apiKey, projectRoot, baseUrl, keyRef ?? provider);
 }
 
 /**
@@ -767,10 +799,10 @@ export async function resolveAgentProvider(
 // fail at runtime (or vice versa).
 export const CREATE_PROVIDER_CASES = ['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local', 'none'] as const;
 
-export function createProvider(provider: string, model: string, apiKey?: string, projectRoot?: string, baseUrl?: string): ILLMProvider {
+export function createProvider(provider: string, model: string, apiKey?: string, projectRoot?: string, baseUrl?: string, authSlot?: string): ILLMProvider {
   switch (provider) {
-    case 'anthropic': return new AnthropicProvider(apiKey!, model, projectRoot);
-    case 'openai': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl, baseUrl ? `openai:${baseUrl}` : undefined);
+    case 'anthropic': return new AnthropicProvider(apiKey!, model, projectRoot, authSlot);
+    case 'openai': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl, baseUrl ? `openai:${baseUrl}` : undefined, undefined, undefined, authSlot);
     // DeepSeek is OpenAI-wire-compatible — reuse OpenAIProvider. Default the
     // base_url to api.deepseek.com/v1 (an explicit base_url still overrides),
     // give it a 'deepseek' quota slot, and a 'DeepSeek' label so 401/403 auth
@@ -778,15 +810,15 @@ export function createProvider(provider: string, model: string, apiKey?: string,
     case 'deepseek': return new OpenAIProvider(
       apiKey ?? '', model, projectRoot,
       baseUrl ?? 'https://api.deepseek.com/v1',
-      'deepseek', undefined, 'DeepSeek',
+      'deepseek', undefined, 'DeepSeek', authSlot,
     );
     // OpenClaw is a remote agentic LLM with its own server-side tool chain
     // (web_fetch, exec, browser, etc.). Its wallclock regularly exceeds the
     // 120s default because it's doing Claude-like agentic work per request
     // — two timeouts this session (task 2b426ef6 at 100.9s, task 53005181
     // hit the 120s cap on a URL-fetching review). Give it 10 minutes.
-    case 'openclaw': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl ?? 'http://127.0.0.1:18789/v1', 'openclaw', 600_000);
-    case 'google': return new GeminiProvider(apiKey!, model, projectRoot);
+    case 'openclaw': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl ?? 'http://127.0.0.1:18789/v1', 'openclaw', 600_000, undefined, authSlot);
+    case 'google': return new GeminiProvider(apiKey!, model, projectRoot, authSlot);
     case 'local': return new OllamaProvider(model);
     case 'none': return new NullProvider();
     default: throw new Error(`Unknown provider: ${provider}`);

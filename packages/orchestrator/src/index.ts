@@ -24,6 +24,8 @@ export {
   PROVIDER_PLACEHOLDER_RE,
 } from './llm-client';
 export type { ILLMProvider, LLMGenerateOptions } from './llm-client';
+export { recordAuthFailure, clearAuthFailure, readRecentAuthFailures } from './auth-state';
+export type { AuthFailure } from './auth-state';
 export * from './types';
 export * from './consensus-types';
 export type { ImplSignal, MetaSignal, PerformanceSignal } from './consensus-types';
