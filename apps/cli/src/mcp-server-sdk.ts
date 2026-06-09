@@ -1721,6 +1721,34 @@ export function createMcpServer(): McpServer {
         }
       } catch { /* quota-state.json not present — skip */ }
 
+      // Keychain doctor — surface stale/placeholder API-key entries that may
+      // linger in the user's real keychain (e.g. from an OLD test that wrote
+      // test placeholders to the real service). Backend-agnostic: goes only
+      // through ctx.keychain.getKey. Wrapped so a failure never breaks status.
+      try {
+        const { detectStaleKeychainEntries } = await import('./keychain-doctor');
+        const configPath = findConfigPath();
+        if (configPath) {
+          const doctorConfig = loadConfig(configPath);
+          const doctorAgents = configToAgentConfigs(doctorConfig);
+          const services = Array.from(
+            new Set([
+              ...doctorAgents.map((ac) => ac.key_ref ?? ac.provider),
+              doctorConfig.main_agent.provider,
+            ]),
+          );
+          const warnings = await detectStaleKeychainEntries(
+            (s: string) => ctx.keychain.getKey(s),
+            services,
+          );
+          for (const w of warnings) {
+            lines.push(
+              `  ⚠️ Keychain: "${w.service}" looks stale — ${w.reason} (${w.redactedValue}); re-run key setup`,
+            );
+          }
+        }
+      } catch { /* keychain doctor failure must never break status — skip */ }
+
       // Signals pending — recent consensus rounds with no manually-recorded signals.
       // Surfaces the back-search gap (per consensus 4c88bcd3, haiku:f17) so the
       // orchestrator can SEE which rounds it skipped without having to remember.
