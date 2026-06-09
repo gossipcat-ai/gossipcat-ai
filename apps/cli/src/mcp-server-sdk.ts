@@ -38,7 +38,12 @@ import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgra
 //
 // See memory `project_bootstrap_hook_command_dispatch_bug.md` for the
 // full diagnosis and the dist-mcp-only build context.
-{
+//
+// Wrapped in an IIFE (not a bare block) so the `key` branch can `return` after
+// spawning its async handler — the async work keeps the event loop alive and
+// calls process.exit(code) when done, while the synchronous `return` prevents
+// fall-through to the MCP server boot below.
+const __argvShimHandled = (() => {
   const argv = process.argv.slice(2);
   const sub = argv[0];
   if (sub === 'hook') {
@@ -57,6 +62,8 @@ import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgra
       'Usage:\n' +
       '  gossipcat                Start MCP server (for Claude Code / Cursor)\n' +
       '  gossipcat hook --run     Run UserPromptSubmit bootstrap hook (internal)\n' +
+      '  gossipcat key set <provider>   Store an API key in the OS keychain (service: gossip-mesh)\n' +
+      '  gossipcat key list             Show which providers have a stored key\n' +
       '  gossipcat help           Show this help\n' +
       '\n' +
       'The published binary is the MCP server bundle. The full CLI\n' +
@@ -64,6 +71,32 @@ import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgra
       'and is available via `npm start` / `npx ts-node` in the source repo.\n'
     );
     process.exit(0);
+  }
+  if (sub === 'key') {
+    // Terminal-only credential bootstrap for the published binary. Deliberately
+    // NOT an MCP tool: a secret must never traverse the LLM tool layer.
+    void (async () => {
+      const { runKeyCommand } = await import('./key-command');
+      const { Keychain } = await import('./keychain');
+      const kc = new Keychain();
+      const io = {
+        setKey: (p: string, k: string) => kc.setKey(p, k),
+        getKey: (p: string) => kc.getKey(p),
+        readSecret: () => readSecretFromStdin(),
+        out: (l: string) => process.stdout.write(l + '\n'),
+        err: (l: string) => process.stderr.write(l + '\n'),
+      };
+      const code = await runKeyCommand(argv.slice(1), io);
+      process.exit(code);
+    })().catch((err: unknown) => {
+      // main() (which installs the unhandledRejection guard) never runs on the
+      // key path, so a keychain/import/stdin failure would otherwise crash with a
+      // raw stack trace. Surface a clean message and a non-zero exit instead.
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`gossipcat key: ${msg}\n`);
+      process.exit(1);
+    });
+    return true; // async handler owns the process; do NOT boot the MCP server
   }
   // `mcp` is a back-compat alias for no-args; legacy `.mcp.json` files written
   // by older `gossip_setup` invocations pass `"args": ["mcp"]`. Without this
@@ -74,12 +107,70 @@ import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgra
     process.exit(2);
   }
   // No args (or `mcp` alias) → fall through; the MCP server boots below.
-}
+  return false;
+})();
 
+/**
+ * Read an API key secret from the terminal WITHOUT echoing it. Used only by the
+ * `gossipcat key set` shim branch above.
+ *   - TTY: prompt on STDERR (never stdout — stdout is the MCP channel), read one
+ *     line with echo disabled so the key is not displayed or left in scrollback.
+ *   - Piped (non-TTY): read all of stdin and return it verbatim (caller trims).
+ * The raw string is returned; the secret is never logged or printed here.
+ */
+function readSecretFromStdin(): Promise<string> {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
+    return new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      stdin.on('data', (c: Buffer) => chunks.push(c));
+      stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      // Without this, a broken pipe emits an unhandled 'error' → uncaughtException
+      // crash (no guard runs on the key path). Reject so the .catch surfaces it.
+      stdin.on('error', (e: Error) => reject(e));
+      stdin.resume();
+    });
+  }
+  return new Promise<string>((resolve) => {
+    process.stderr.write('Paste the API key, then Enter: ');
+    let buf = '';
+    const wasRaw = stdin.isRaw === true;
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    const onData = (ch: string) => {
+      for (const c of ch) {
+        const code = c.charCodeAt(0);
+        if (c === '\n' || c === '\r') {
+          stdin.setRawMode(wasRaw);
+          stdin.pause();
+          stdin.removeListener('data', onData);
+          process.stderr.write('\n');
+          resolve(buf);
+          return;
+        } else if (code === 3) { // Ctrl-C (ETX)
+          stdin.setRawMode(wasRaw);
+          stdin.pause();
+          stdin.removeListener('data', onData);
+          process.stderr.write('\n');
+          process.exit(130);
+        } else if (code === 127 || code === 8) { // DEL / backspace
+          buf = buf.slice(0, -1);
+        } else {
+          buf += c; // never echoed
+        }
+      }
+    };
+    stdin.on('data', onData);
+  });
+}
 // Redirect stderr to log file BEFORE any other imports.
 // Suppressed in test runs (GOSSIPCAT_MCP_NO_MAIN=1) so jest can surface assertion
 // failures on the real stderr stream — see tests/cli/http-mcp-second-connect.test.ts.
-if (process.env.GOSSIPCAT_MCP_NO_MAIN !== '1') {
+// Also suppressed when the argv shim handled a subcommand (`key`): that path owns
+// stdout/stderr for its prompt + result, and the MCP server must NOT boot or it
+// would steal stdin and redirect the key prompt into mcp.log.
+if (process.env.GOSSIPCAT_MCP_NO_MAIN !== '1' && !__argvShimHandled) {
   const gossipDir = join(process.cwd(), '.gossip');
   try { mkdirSync(gossipDir, { recursive: true }); } catch {}
   const logStream = createWriteStream(join(gossipDir, 'mcp.log'), { flags: 'a' });
@@ -5127,6 +5218,9 @@ async function main() {
 // Suppress automatic main() invocation when imported from tests. Tests set
 // GOSSIPCAT_MCP_NO_MAIN=1 so they can call createMcpServer() in isolation
 // without binding stdio. Issue #405 regression test relies on this.
-if (process.env.GOSSIPCAT_MCP_NO_MAIN !== '1') {
+// Also suppressed when the argv shim handled a subcommand (`key`): the async
+// key handler owns the process and calls process.exit(); booting the MCP server
+// here would race it for stdin.
+if (process.env.GOSSIPCAT_MCP_NO_MAIN !== '1' && !__argvShimHandled) {
   main().catch(err => { process.stderr.write(`[gossipcat] Fatal: ${err.message}\n`); process.exit(1); });
 }
