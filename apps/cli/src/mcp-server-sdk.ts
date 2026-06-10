@@ -276,6 +276,11 @@ import { isReservedAgentId } from './reserved-ids';
 let booted = false;
 let bootPromise: Promise<void> | null = null;
 
+// #520: sibling roots resolved once at MCP boot. Empty array → byte-identical
+// behavior to before this feature. Tool handlers (in createMcpServer) close
+// over this module-level variable so they always see the post-boot value.
+let configuredSiblingRoots: string[] = [];
+
 // #522 SEV-1: install ONCE per process. main() runs on every connect (boot AND
 // reconnect), so guard the handler registration to avoid stacking duplicate
 // listeners across reconnects.
@@ -479,6 +484,15 @@ async function doBoot() {
       agents: {},
     };
   }
+  // #520: resolve declared sibling roots once at boot (fail-fast on a bad entry).
+  // Empty when no config / no siblingRoots → byte-identical to prior behavior.
+  try {
+    if (config && !ctx.bootedInDegradedMode) configuredSiblingRoots = m.resolveSiblingRoots(config, process.cwd());
+  } catch (e) {
+    process.stderr.write(`[gossipcat] FATAL: invalid consensus.siblingRoots — ${(e as Error).message}\n`);
+    throw e; // fail fast: a misconfigured sibling root must not boot silently
+  }
+
   const agentConfigs = m.configToAgentConfigs(config);
   ctx.keychain = new m.Keychain();
 
@@ -1483,7 +1497,7 @@ export function createMcpServer(): McpServer {
       if (resolutionRoots && resolutionRoots.length > 0) {
         const { validateResolutionRoot } = await import('@gossip/orchestrator');
         for (const raw of resolutionRoots) {
-          const r = await validateResolutionRoot(raw, process.cwd());
+          const r = await validateResolutionRoot(raw, process.cwd(), { siblingRoots: configuredSiblingRoots });
           if (r.valid) {
             validatedDispatchRoots.push(r.canonical);
             process.stderr.write(`[consensus] resolutionRoots accepted: ${r.canonical}\n`);
@@ -1559,7 +1573,7 @@ export function createMcpServer(): McpServer {
         const { validateResolutionRoot } = await import('@gossip/orchestrator');
         const out: string[] = [];
         for (const raw of resolutionRoots) {
-          const r = await validateResolutionRoot(raw, process.cwd());
+          const r = await validateResolutionRoot(raw, process.cwd(), { siblingRoots: configuredSiblingRoots });
           if (r.valid) {
             out.push(r.canonical);
             process.stderr.write(`[consensus] resolutionRoots accepted: ${r.canonical}\n`);
