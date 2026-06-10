@@ -1221,8 +1221,6 @@ Return only valid JSON.${skillsBlock}`;
         // only — it fires for legacy callers that invoke synthesize() directly
         // without threading a consensusId through cross-review (e.g., tests
         // that construct CrossReviewEntry objects by hand).
-        const newFindingId = entry.findingId ??
-          `${consensusId}:new:${entry.agentId}:${++newFindingIdx}`;
         // Close the verification bypass: NEW entries get the same strict citation
         // check that confirmed findings get at the tagging stage. Always-on,
         // independent of GOSSIP_VERIFIED_CHAINING. A fabricated-citation extension
@@ -1232,6 +1230,10 @@ Return only valid JSON.${skillsBlock}`;
           _log('consensus', `Dropped NEW entry from ${entry.agentId} — fabricated citation: ${entry.finding.slice(0, 80)}`);
           continue;
         }
+        // newFindingId computed AFTER the fabrication gate so that dropped entries
+        // do not consume a counter value, keeping the sequence contiguous.
+        const newFindingId = entry.findingId ??
+          `${consensusId}:new:${entry.agentId}:${++newFindingIdx}`;
         newFindings.push({
           agentId: entry.agentId,
           finding: sanitize(entry.finding),

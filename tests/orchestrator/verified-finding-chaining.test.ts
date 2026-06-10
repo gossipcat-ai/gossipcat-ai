@@ -77,6 +77,7 @@ describe('synthesize — NEW entry verification + field carry', () => {
     }];
     const report = await (eng as any).synthesize(results, entries, 'cid12345-67890abc');
     expect(report.newFindings).toHaveLength(0);
+    expect(report.signals.filter((s: any) => s.signal === 'new_finding')).toHaveLength(0);
   });
 });
 
@@ -125,6 +126,35 @@ describe('formatReport — chain rendering', () => {
     }];
     const report = await (eng as any).synthesize(results, entries, 'cid12345-67890abc');
     expect(report.summary).toContain('extends a:f1');
+  });
+});
+
+describe('synthesize — chained extension does not mutate parent', () => {
+  it('leaves the parent finding severity and confirmedBy unchanged', async () => {
+    const eng = new ConsensusEngine({
+      llm: { generate: jest.fn() } as any,
+      registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+    } as any);
+    // agent 'a' emits a real low-severity finding so it lands in the report
+    const results = [
+      makeTask('a', '<agent_finding type="finding" severity="low">missing guard at db.ts:10</agent_finding>'),
+      makeTask('b', 'y'),
+    ];
+    // agent 'b' submits a NEW chained entry that escalates to critical and references a:f1
+    const entries = [{
+      action: 'new' as const, agentId: 'b', peerAgentId: '', findingId: 'cid:new:b:1',
+      finding: 'escalated: unauth reachable at db.ts:10', evidence: 'db.ts:10', confidence: 5,
+      parentFindingId: 'a:f1', severity: 'critical' as const,
+    }];
+    const report = await (eng as any).synthesize(results, entries, 'cid12345-67890abc');
+    // parent finding lands in unique (only agent 'a' found it; no cross-review agree/disagree)
+    const all = [...(report.confirmed ?? []), ...(report.disputed ?? []), ...(report.unverified ?? []), ...(report.unique ?? [])];
+    const parent = all.find((f: any) => f.finding && f.finding.includes('missing guard'));
+    expect(parent).toBeDefined();
+    // parent severity must NOT have been escalated to critical by the chain
+    expect(parent.severity === undefined || parent.severity === 'low').toBe(true);
+    // chain must not have appended itself to the parent's confirmedBy
+    expect((parent.confirmedBy ?? []).some((c: any) => (typeof c === 'string' ? c : c.agentId) === 'b')).toBe(false);
   });
 });
 
