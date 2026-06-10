@@ -2638,6 +2638,13 @@ Return only valid JSON.${skillsBlock}`;
       const fallbackAgentId = typeof item.agentId === 'string' ? item.agentId : '';
       const rawCategory = typeof item.category === 'string' ? item.category : undefined;
       const category = isValidCategory(rawCategory) ? rawCategory : undefined;
+      const SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
+      const rawParent = typeof item.parentFindingId === 'string' ? item.parentFindingId : undefined;
+      const parentFindingId = rawParent && rawParent.includes(':') ? rawParent : undefined;
+      const rawSeverity = typeof item.severity === 'string' ? item.severity : undefined;
+      const severity = rawSeverity && SEVERITIES.has(rawSeverity)
+        ? (rawSeverity as 'critical' | 'high' | 'medium' | 'low')
+        : undefined;
       entries.push({
         action: item.action as CrossReviewEntry['action'],
         agentId: reviewerAgentId,
@@ -2647,6 +2654,8 @@ Return only valid JSON.${skillsBlock}`;
         evidence: String(item.evidence),
         confidence,
         category,
+        parentFindingId,
+        severity,
       });
     }
 
