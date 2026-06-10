@@ -1220,11 +1220,22 @@ Return only valid JSON.${skillsBlock}`;
         // that construct CrossReviewEntry objects by hand).
         const newFindingId = entry.findingId ??
           `${consensusId}:new:${entry.agentId}:${++newFindingIdx}`;
+        // Close the verification bypass: NEW entries get the same strict citation
+        // check that confirmed findings get at the tagging stage. Always-on,
+        // independent of GOSSIP_VERIFIED_CHAINING. A fabricated-citation extension
+        // is dropped rather than appended blind.
+        const newHasFabricatedCitation = await this.verifyCitations(entry.finding, { strict: true });
+        if (newHasFabricatedCitation) {
+          _log('consensus', `Dropped NEW entry from ${entry.agentId} — fabricated citation: ${entry.finding.slice(0, 80)}`);
+          continue;
+        }
         newFindings.push({
           agentId: entry.agentId,
           finding: sanitize(entry.finding),
           evidence: sanitize(entry.evidence),
           confidence: entry.confidence,
+          parentFindingId: entry.parentFindingId,
+          severity: entry.severity,
         });
         signals.push({
           type: 'consensus',
