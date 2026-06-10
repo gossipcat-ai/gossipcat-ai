@@ -127,3 +127,26 @@ describe('formatReport — chain rendering', () => {
     expect(report.summary).toContain('extends a:f1');
   });
 });
+
+describe('synthesize — chaining metric', () => {
+  it('logs a chained-finding count when chains are present', async () => {
+    const logs: string[] = [];
+    const spy = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: any) => { logs.push(String(chunk)); return true; }) as any);
+    try {
+      const eng = new ConsensusEngine({
+        llm: { generate: jest.fn() } as any,
+        registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+      } as any);
+      const results = [makeTask('a', 'x'), makeTask('b', 'y')];
+      const entries = [{
+        action: 'new' as const, agentId: 'b', peerAgentId: '', findingId: 'cid:new:b:1',
+        finding: 'auth bypass at routes.ts:88', evidence: 'routes.ts:88', confidence: 4,
+        parentFindingId: 'a:f1', severity: 'critical' as const,
+      }];
+      await (eng as any).synthesize(results, entries, 'cid12345-67890abc');
+      expect(logs.some(l => l.includes('chained_findings=1'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

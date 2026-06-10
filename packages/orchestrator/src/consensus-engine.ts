@@ -1559,6 +1559,10 @@ Return only valid JSON.${skillsBlock}`;
     }
 
     // (d) Generate formatted report
+    const chainedCount = newFindings.filter(nf => nf.parentFindingId).length;
+    if (chainedCount > 0) {
+      _log('consensus', `verified-chaining: chained_findings=${chainedCount} total_new=${newFindings.length} consensusId=${consensusId}`);
+    }
     const summary = this.formatReport(confirmed, disputed, unverified, unique, newFindings, successful.length, 2, undefined, insights);
 
     return {
