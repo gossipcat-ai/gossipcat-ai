@@ -44,6 +44,10 @@ export interface ConsensusNewFinding {
   finding: string;
   evidence: string;
   confidence: number;
+  /** Peer finding this extends, e.g. "gemini-reviewer:f1". Set only on chained extensions. */
+  parentFindingId?: string;
+  /** The extension's own severity — may differ from (escalate) the parent's. */
+  severity?: 'critical' | 'high' | 'medium' | 'low';
 }
 
 /** A single cross-review entry from one agent about one peer finding */
@@ -59,6 +63,10 @@ export interface CrossReviewEntry {
    *  Validated against `VALID_CATEGORIES` in `parseCrossReviewResponse`; any value
    *  outside the 13-key allowlist is silently dropped to undefined. */
   category?: string;
+  /** For action:"new" chained extensions — the peer finding being extended. */
+  parentFindingId?: string;
+  /** For action:"new" chained extensions — the extension's own severity. */
+  severity?: 'critical' | 'high' | 'medium' | 'low';
 }
 
 /** Full consensus report */
