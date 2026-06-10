@@ -28,7 +28,7 @@ export class ScopeTracker {
       try { realSibling = realpathSync(s); } catch { /* declared roots are realpath'd at config load; keep */ }
       const relS = relative(realSibling, real);
       if (relS === '') throw new Error(`Scope "${scope}" resolves to a sibling root — too broad`);
-      if (!relS.startsWith('..') && !relS.startsWith('/') && relS !== '') {
+      if (!relS.startsWith('..') && !relS.startsWith('/') /* '/' guard: Windows cross-drive (path.relative never returns absolute on POSIX) */) {
         return real.endsWith('/') ? real : real + '/';
       }
     }

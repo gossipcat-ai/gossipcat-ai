@@ -773,6 +773,7 @@ async function doBoot() {
       } catch { return ''; }
     })(),
     keyProvider: async (provider: string) => ctx.keychain.getKey(provider),
+    siblingRoots: configuredSiblingRoots,
     toolServer: ctx.toolServer ? {
       assignScope: (agentId: string, scope: string) => ctx.toolServer.assignScope(agentId, scope),
       assignRoot: (agentId: string, root: string) => ctx.toolServer.assignRoot(agentId, root),

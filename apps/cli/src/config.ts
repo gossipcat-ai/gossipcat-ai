@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'fs';
-import { resolve, join } from 'path';
+import { resolve, join, relative } from 'path';
 import { AgentConfig } from '@gossip/orchestrator';
 
 export interface GossipConfig {
@@ -349,6 +349,12 @@ export function resolveSiblingRoots(config: GossipConfig, projectRoot: string): 
       throw new Error(`Config "consensus.siblingRoots": realpath failed for "${abs}": ${(e as Error).message}`);
     }
   };
+  let rootReal = projectRoot;
+  try { rootReal = realpathSync(projectRoot); } catch { /* keep */ }
+  const isInsideProject = (abs: string): boolean => {
+    const rel = relative(rootReal, abs);
+    return rel === '' || (!rel.startsWith('..') && !rel.startsWith('/'));
+  };
   for (const entry of declared) {
     if (entry.endsWith('/*')) {
       const parentAbs = resolve(projectRoot, entry.slice(0, -2));
@@ -360,10 +366,20 @@ export function resolveSiblingRoots(config: GossipConfig, projectRoot: string): 
         const childAbs = join(parentAbs, name);
         let childStat;
         try { childStat = statSync(childAbs); } catch { continue; } // broken symlink / vanished entry — skip, don't crash boot
-        if (childStat.isDirectory()) out.push(validateDir(childAbs));
+        if (childStat.isDirectory()) {
+          const canonical = validateDir(childAbs);
+          if (isInsideProject(canonical)) {
+            throw new Error(`Config "consensus.siblingRoots": "${canonical}" is inside the project root — siblingRoots are for EXTERNAL repos; use a normal scope instead`);
+          }
+          out.push(canonical);
+        }
       }
     } else {
-      out.push(validateDir(resolve(projectRoot, entry)));
+      const canonical = validateDir(resolve(projectRoot, entry));
+      if (isInsideProject(canonical)) {
+        throw new Error(`Config "consensus.siblingRoots": "${canonical}" is inside the project root — siblingRoots are for EXTERNAL repos; use a normal scope instead`);
+      }
+      out.push(canonical);
     }
   }
   return out;

@@ -6,6 +6,7 @@ import { validateResolutionRoot } from '../../packages/orchestrator/src/validate
 import { validateConfig, resolveSiblingRoots } from '../../apps/cli/src/config';
 import { ScopeTracker } from '../../packages/orchestrator/src/scope-tracker';
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
+import { DispatchPipeline } from '../../packages/orchestrator/src/dispatch-pipeline';
 
 const gitInit = (dir: string) => {
   execFileSync('git', ['init', '-q'], { cwd: dir });
@@ -147,5 +148,28 @@ describe('#520 integration — path-carrying cite into a sibling repo', () => {
     } as any);
     const unresolved = await (engNoRoot as any).resolveFilePath('services/core/handler.ts');
     expect(unresolved).toBeNull();
+  });
+});
+
+describe('#520 wiring — DispatchPipeline threads siblingRoots into ScopeTracker', () => {
+  it('a scoped write into a declared sibling root is accepted (not "outside project root")', () => {
+    const pipeline = new DispatchPipeline({ projectRoot: root, siblingRoots: [sibling] } as any);
+    expect(() => (pipeline as any).scopeTracker.register(join(sibling, 'services'), 'task-wire-1')).not.toThrow();
+  });
+  it('without siblingRoots, the same sibling scope is rejected (proves the wiring is load-bearing)', () => {
+    const pipeline = new DispatchPipeline({ projectRoot: root } as any);
+    expect(() => (pipeline as any).scopeTracker.register(join(sibling, 'services'), 'task-wire-2')).toThrow(/outside project root/);
+  });
+});
+
+describe('resolveSiblingRoots — rejects a sibling root inside projectRoot (consensus 01909cc9)', () => {
+  it('throws when a declared sibling root is inside the project root', () => {
+    const inside = join(root, 'packages-x'); mkdirSync(inside, { recursive: true });
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [inside] } });
+    expect(() => resolveSiblingRoots(cfg, root)).toThrow(/inside the project root/);
+  });
+  it('still accepts a genuinely external sibling root', () => {
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [sibling] } });
+    expect(resolveSiblingRoots(cfg, root)).toContain(realpathSync(sibling));
   });
 });
