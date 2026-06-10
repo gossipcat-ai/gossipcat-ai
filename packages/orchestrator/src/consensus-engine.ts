@@ -744,7 +744,10 @@ Return ONLY a JSON array. findingId format:
   { "action": "agree"|"disagree"|"unverified"|"new", "findingId": "...", "finding": "brief summary", "evidence": "your reasoning", "confidence": 1-5 }
 ]
 
-Optional "category" field on action: "new" entries — one of: trust_boundaries | injection_vectors | input_validation | concurrency | resource_exhaustion | type_safety | error_handling | data_integrity | citation_grounding | observability | cli_ergonomics | performance | testing. Any other value is silently dropped to undefined. Set it only when you're confident; the system also infers category from the finding text when omitted. agree/disagree/unverified inherit category from the parent finding.`;
+Optional "category" field on action: "new" entries — one of: trust_boundaries | injection_vectors | input_validation | concurrency | resource_exhaustion | type_safety | error_handling | data_integrity | citation_grounding | observability | cli_ergonomics | performance | testing. Any other value is silently dropped to undefined. Set it only when you're confident; the system also infers category from the finding text when omitted. agree/disagree/unverified inherit category from the parent finding.${getRuntimeFlagBool('GOSSIP_VERIFIED_CHAINING') ? `
+
+CHAINING (action:"new" only): if your NEW finding EXTENDS a specific peer finding — e.g. you verified their bug is reachable on a path that escalates its impact — set "parentFindingId" to that peer finding's id (e.g. "gemini-reviewer:f1") and set "severity" (critical|high|medium|low) to YOUR extension's severity. The extension MUST cite a NEW file:line that the parent did not; an extension whose only citation duplicates the parent is not a valid chain. Do not restate the parent — add new evidence.` : ''}
+`;
 
     // Inject the reviewer's skills (if any) so their Phase-2 methodology
     // matches Phase 1. Without this, a reviewer trained on citation_grounding

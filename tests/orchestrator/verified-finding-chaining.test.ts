@@ -79,3 +79,34 @@ describe('synthesize — NEW entry verification + field carry', () => {
     expect(report.newFindings).toHaveLength(0);
   });
 });
+
+describe('cross-review prompt — chaining solicitation', () => {
+  afterEach(() => { delete process.env.GOSSIP_VERIFIED_CHAINING; });
+
+  const buildPrompt = async (flagOn: boolean) => {
+    if (flagOn) process.env.GOSSIP_VERIFIED_CHAINING = '1';
+    else delete process.env.GOSSIP_VERIFIED_CHAINING;
+    const eng = new ConsensusEngine({
+      registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+    } as any);
+    const results = [
+      makeTask('a', '<agent_finding type="finding" severity="high">SQL inj at db.ts:42</agent_finding>'),
+      makeTask('b', '<agent_finding type="finding" severity="low">style at x.ts:1</agent_finding>'),
+    ];
+    return (eng as any).buildCrossReviewPrompt(
+      { agentId: 'a' },
+      new Map([['a', 'SQL inj at db.ts:42'], ['b', 'style at x.ts:1']]),
+      new Map([['a', results[0].result], ['b', results[1].result]]),
+    );
+  };
+
+  it('mentions parentFindingId when the flag is on', async () => {
+    const p = await buildPrompt(true);
+    expect(JSON.stringify(p)).toContain('parentFindingId');
+  });
+
+  it('does NOT mention parentFindingId when the flag is off', async () => {
+    const p = await buildPrompt(false);
+    expect(JSON.stringify(p)).not.toContain('parentFindingId');
+  });
+});
