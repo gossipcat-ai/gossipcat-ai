@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'fs';
 import { resolve, join } from 'path';
 import { AgentConfig } from '@gossip/orchestrator';
 
@@ -52,6 +52,15 @@ export interface GossipConfig {
      * validateConfig.
      */
     orchestratorOwnedGlobs?: string[];
+    /**
+     * Issue #520. Operator-declared external repo roots (and worktree `/*` globs)
+     * that citations + scoped writes may resolve into. Each entry is absolute or
+     * relative to the project root; a trailing `/*` expands to present subdirs.
+     * Realpath'd + validated at load (resolveSiblingRoots). Default absent ⇒
+     * single-repo installs unchanged. Declaring a root bypasses ONLY the
+     * git-common-dir + worktree-list gates, never the other security gates.
+     */
+    siblingRoots?: string[];
   };
   agents?: Record<string, {
     provider: string;
@@ -198,6 +207,26 @@ export function validateConfig(raw: any): GossipConfig {
         }
       }
     }
+    if (raw.consensus.siblingRoots !== undefined) {
+      const roots = raw.consensus.siblingRoots;
+      if (!Array.isArray(roots)) {
+        throw new Error('Config "consensus.siblingRoots" must be an array of strings');
+      }
+      for (const p of roots) {
+        if (typeof p !== 'string' || p.length === 0) {
+          throw new Error('Config "consensus.siblingRoots" entries must be non-empty strings');
+        }
+        // eslint-disable-next-line no-control-regex
+        if (/[\x00-\x1f]/.test(p)) {
+          throw new Error('Config "consensus.siblingRoots" entry contains a control character');
+        }
+        // A bare wildcard would declare "trust everything" — reject. A trailing
+        // `/*` glob on a concrete parent is allowed and expanded at load.
+        if (p === '*' || p === '**' || p === '/*') {
+          throw new Error(`Config "consensus.siblingRoots" entry "${p}" is wildcard-only and would over-trust`);
+        }
+      }
+    }
   }
 
   if (raw.sandboxEnforcement !== undefined) {
@@ -294,6 +323,48 @@ export function validateConfig(raw: any): GossipConfig {
   }
 
   return raw as GossipConfig;
+}
+
+/**
+ * #520. Resolve `consensus.siblingRoots` into canonical absolute directory paths:
+ * expand trailing `/*` globs against the on-disk parent, then validate each entry
+ * (exists, is a directory, realpath, ownership) FAIL-FAST — a bad entry throws at
+ * boot, never a silent drop. Returns [] when no siblingRoots are configured.
+ */
+export function resolveSiblingRoots(config: GossipConfig, projectRoot: string): string[] {
+  const declared = config.consensus?.siblingRoots ?? [];
+  if (declared.length === 0) return [];
+  const out: string[] = [];
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const validateDir = (abs: string): string => {
+    let st;
+    try { st = statSync(abs); } catch (e) {
+      throw new Error(`Config "consensus.siblingRoots": "${abs}" does not resolve to directory: ${(e as Error).message}`);
+    }
+    if (!st.isDirectory()) throw new Error(`Config "consensus.siblingRoots": "${abs}" is not a directory`);
+    if (uid != null && st.uid !== uid) {
+      throw new Error(`Config "consensus.siblingRoots": "${abs}" owner uid mismatch (file=${st.uid}, current=${uid})`);
+    }
+    try { return realpathSync(abs); } catch (e) {
+      throw new Error(`Config "consensus.siblingRoots": realpath failed for "${abs}": ${(e as Error).message}`);
+    }
+  };
+  for (const entry of declared) {
+    if (entry.endsWith('/*')) {
+      const parentAbs = resolve(projectRoot, entry.slice(0, -2));
+      let names: string[];
+      try { names = readdirSync(parentAbs); } catch (e) {
+        throw new Error(`Config "consensus.siblingRoots": glob parent "${parentAbs}" not readable: ${(e as Error).message}`);
+      }
+      for (const name of names) {
+        const childAbs = join(parentAbs, name);
+        if (statSync(childAbs).isDirectory()) out.push(validateDir(childAbs));
+      }
+    } else {
+      out.push(validateDir(resolve(projectRoot, entry)));
+    }
+  }
+  return out;
 }
 
 export function configToAgentConfigs(config: GossipConfig): AgentConfig[] {

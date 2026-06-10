@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { validateResolutionRoot } from '../../packages/orchestrator/src/validate-resolution-root';
+import { validateConfig, resolveSiblingRoots } from '../../apps/cli/src/config';
 import { ScopeTracker } from '../../packages/orchestrator/src/scope-tracker';
 
 const gitInit = (dir: string) => {
@@ -76,5 +77,31 @@ describe('ScopeTracker — sibling roots', () => {
   it('does not change behavior when no sibling roots are configured', () => {
     const st = new ScopeTracker(root);
     expect(() => st.register(join(sibling, 'x'), 'task-4')).toThrow(/outside project root/);
+  });
+});
+
+const minimalSkeleton = { main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' } };
+
+describe('config siblingRoots', () => {
+  it('validateConfig accepts a string array and rejects bare wildcards', () => {
+    expect(() => validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: ['../product'] } })).not.toThrow();
+    expect(() => validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: ['*'] } })).toThrow(/wildcard-only/);
+    expect(() => validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [123] } })).toThrow(/non-empty strings/);
+  });
+
+  it('resolveSiblingRoots realpaths declared roots', () => {
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [sibling] } });
+    const resolved = resolveSiblingRoots(cfg, root);
+    expect(resolved).toContain(realpathSync(sibling));
+  });
+
+  it('resolveSiblingRoots throws (fail-fast) on a non-existent entry', () => {
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [join(sibling, 'does-not-exist')] } });
+    expect(() => resolveSiblingRoots(cfg, root)).toThrow();
+  });
+
+  it('resolveSiblingRoots throws on a file-not-directory entry', () => {
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [join(siblingSub, 'handler.ts')] } });
+    expect(() => resolveSiblingRoots(cfg, root)).toThrow(/not a directory/);
   });
 });
