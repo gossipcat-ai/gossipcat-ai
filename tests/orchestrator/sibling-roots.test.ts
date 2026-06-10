@@ -174,6 +174,35 @@ describe('resolveSiblingRoots — rejects a sibling root inside projectRoot (con
   });
 });
 
+describe('resolveSiblingRoots — v2 git worktree enumeration (#520)', () => {
+  it("enumerates a declared repo's git worktrees (v2 — path-carrying cites resolve)", () => {
+    execFileSync('git', ['-C', sibling, 'commit', '--allow-empty', '-q', '-m', 'init']);
+    const wt = join(dirname(sibling), 'product-wt-feature');
+    execFileSync('git', ['-C', sibling, 'worktree', 'add', '-q', wt]);
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: ['../product'] } });
+    const resolved = resolveSiblingRoots(cfg, root);
+    expect(resolved).toContain(realpathSync(sibling));
+    expect(resolved).toContain(realpathSync(wt));
+    // cleanup
+    execFileSync('git', ['-C', sibling, 'worktree', 'prune']);
+  });
+
+  it('dedups the root + its worktrees (no duplicate canonical paths)', () => {
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: ['../product'] } });
+    const resolved = resolveSiblingRoots(cfg, root);
+    expect(resolved.length).toBe(new Set(resolved).size);
+    expect(resolved.filter(p => p === realpathSync(sibling)).length).toBe(1);
+  });
+
+  it('fail-soft: a non-git declared sibling root still resolves (enumeration returns [])', () => {
+    const plainDir = join(dirname(sibling), 'plain-ext'); mkdirSync(plainDir, { recursive: true });
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [join('..', 'plain-ext')] } });
+    let resolved: string[] = [];
+    expect(() => { resolved = resolveSiblingRoots(cfg, root); }).not.toThrow();
+    expect(resolved).toContain(realpathSync(plainDir));
+  });
+});
+
 describe('consensus 318a16c1 hardening', () => {
   it('rejects a prefix-adjacent sibling (/base/product-evil vs declared /base/product) — no startsWith escape', async () => {
     const base = dirname(sibling);
