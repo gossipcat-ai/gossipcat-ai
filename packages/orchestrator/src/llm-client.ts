@@ -806,11 +806,13 @@ export function createProvider(provider: string, model: string, apiKey?: string,
     // DeepSeek is OpenAI-wire-compatible — reuse OpenAIProvider. Default the
     // base_url to api.deepseek.com/v1 (an explicit base_url still overrides),
     // give it a 'deepseek' quota slot, and a 'DeepSeek' label so 401/403 auth
-    // errors name DeepSeek instead of the generic "OpenAI-compatible". #522
+    // errors name DeepSeek instead of the generic "OpenAI-compatible". #522.
+    // 600s timeout (like openclaw): deepseek-reasoner streams long reasoning_content
+    // and per-turn latency was observed at 60-74s — the 120s default terminates it.
     case 'deepseek': return new OpenAIProvider(
       apiKey ?? '', model, projectRoot,
       baseUrl ?? 'https://api.deepseek.com/v1',
-      'deepseek', undefined, 'DeepSeek', authSlot,
+      'deepseek', 600_000, 'DeepSeek', authSlot,
     );
     // OpenClaw is a remote agentic LLM with its own server-side tool chain
     // (web_fetch, exec, browser, etc.). Its wallclock regularly exceeds the
