@@ -109,7 +109,7 @@ export type { SignalAggregateIndexData, SignalAggregateBucket } from './signal-a
 export type { AgentScore } from './performance-reader';
 export { ConsensusEngine } from './consensus-engine';
 export type { ConsensusEngineConfig } from './consensus-engine';
-export { validateResolutionRoot, parseWorktreePorcelain, listWorktreePaths, gitCommonDir, hashPath } from './validate-resolution-root';
+export { validateResolutionRoot, parseWorktreePorcelain, listWorktreePaths, gitCommonDir, hashPath, GIT_ENV } from './validate-resolution-root';
 export type { ValidationResult } from './validate-resolution-root';
 export { discoverGitWorktrees } from './discover-git-worktrees';
 export type { DiscoverResult } from './discover-git-worktrees';

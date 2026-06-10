@@ -28,7 +28,7 @@ import { promisify } from 'util';
 
 const execFileP = promisify(execFile);
 
-const GIT_ENV = {
+export const GIT_ENV = {
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_CONFIG_SYSTEM: '/dev/null',
   GIT_CONFIG_NOSYSTEM: '1',

@@ -187,11 +187,42 @@ describe('resolveSiblingRoots — v2 git worktree enumeration (#520)', () => {
     execFileSync('git', ['-C', sibling, 'worktree', 'prune']);
   });
 
-  it('dedups the root + its worktrees (no duplicate canonical paths)', () => {
+  it('dedups the root + its worktrees (root appears once despite enumeration returning it)', () => {
+    execFileSync('git', ['-C', sibling, 'commit', '--allow-empty', '-q', '-m', 'init']);
+    const wt = join(dirname(sibling), 'product-wt-dedup');
+    execFileSync('git', ['-C', sibling, 'worktree', 'add', '-q', wt]);
     const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: ['../product'] } });
     const resolved = resolveSiblingRoots(cfg, root);
-    expect(resolved.length).toBe(new Set(resolved).size);
     expect(resolved.filter(p => p === realpathSync(sibling)).length).toBe(1);
+    expect(new Set(resolved).size).toBe(resolved.length);
+    expect(resolved).toContain(realpathSync(wt));
+    execFileSync('git', ['-C', sibling, 'worktree', 'remove', '-f', wt]);
+  });
+
+  it('enumerates N simultaneous worktrees of one declared repo', () => {
+    execFileSync('git', ['-C', sibling, 'commit', '--allow-empty', '-q', '-m', 'init']);
+    const wtA = join(dirname(sibling), 'product-wt-a');
+    const wtB = join(dirname(sibling), 'product-wt-b');
+    execFileSync('git', ['-C', sibling, 'worktree', 'add', '-q', wtA]);
+    execFileSync('git', ['-C', sibling, 'worktree', 'add', '-q', wtB]);
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: ['../product'] } });
+    const resolved = resolveSiblingRoots(cfg, root);
+    expect(resolved).toContain(realpathSync(wtA));
+    expect(resolved).toContain(realpathSync(wtB));
+    execFileSync('git', ['-C', sibling, 'worktree', 'remove', '-f', wtA]);
+    execFileSync('git', ['-C', sibling, 'worktree', 'remove', '-f', wtB]);
+  });
+
+  it('skips (does not throw on) an enumerated worktree checked out inside projectRoot', () => {
+    execFileSync('git', ['-C', sibling, 'commit', '--allow-empty', '-q', '-m', 'init']);
+    const insideWt = join(root, 'nested-product-wt');
+    execFileSync('git', ['-C', sibling, 'worktree', 'add', '-q', insideWt]);
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: ['../product'] } });
+    let resolved: string[] = [];
+    expect(() => { resolved = resolveSiblingRoots(cfg, root); }).not.toThrow();
+    expect(resolved).toContain(realpathSync(sibling));
+    expect(resolved).not.toContain(realpathSync(insideWt));
+    execFileSync('git', ['-C', sibling, 'worktree', 'remove', '-f', insideWt]);
   });
 
   it('fail-soft: a non-git declared sibling root still resolves (enumeration returns [])', () => {

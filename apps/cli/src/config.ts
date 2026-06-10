@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'fs';
 import { resolve, join, relative } from 'path';
 import { execFileSync } from 'child_process';
-import { AgentConfig, parseWorktreePorcelain } from '@gossip/orchestrator';
+import { AgentConfig, parseWorktreePorcelain, GIT_ENV } from '@gossip/orchestrator';
 
 export interface GossipConfig {
   main_agent: {
@@ -373,8 +373,15 @@ export function resolveSiblingRoots(config: GossipConfig, projectRoot: string): 
   // by parseWorktreePorcelain; each is independently validateDir-gated by the caller.
   const enumerateWorktrees = (repoRoot: string): string[] => {
     try {
+      // Harden git: neutralize global/system config (GIT_ENV, shared with
+      // validateResolutionRoot) AND clear any inherited GIT_DIR/GIT_WORK_TREE so
+      // `git -C <repoRoot>` enumerates the declared sibling, not an outer repo
+      // (consensus f65b8bc3 deepseek:f1 + sonnet:f13).
+      const env: Record<string, string | undefined> = { ...process.env, ...GIT_ENV };
+      delete env.GIT_DIR;
+      delete env.GIT_WORK_TREE;
       const stdout = execFileSync('git', ['-C', repoRoot, 'worktree', 'list', '-z', '--porcelain'], {
-        encoding: 'utf8', timeout: 5000, maxBuffer: 10 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+        encoding: 'utf8', timeout: 5000, maxBuffer: 1 << 20, stdio: ['ignore', 'pipe', 'ignore'], env,
       });
       return parseWorktreePorcelain(stdout, { includeLocked: true });
     } catch {
