@@ -252,7 +252,14 @@ export async function validateResolutionRoot(
   // AND the worktree-list gate (step 7) — and ONLY those two. All earlier gates
   // (control-char, `..`, existence, directory, realpath, ownership) have run above.
   // Default empty ⇒ no behavior change for single-repo installs.
-  const isDeclaredSibling = (opts.siblingRoots ?? []).some((s) => isInsideRoot(canonical, s));
+  // siblingRoots are realpath'd at config load (resolveSiblingRoots), but realpath
+  // here too so isInsideRoot's "both args canonical" contract holds even if a caller
+  // passes a raw/symlinked root (consensus 318a16c1, deepseek:f5 + sonnet:f12).
+  const isDeclaredSibling = (opts.siblingRoots ?? []).some((s) => {
+    let realS = s;
+    try { realS = realpathSync(s); } catch { /* unresolvable → fall back to raw; fails closed via isInsideRoot */ }
+    return isInsideRoot(canonical, realS);
+  });
 
   // 6. git-common-dir must match projectRoot's.
   if (!isDeclaredSibling) {

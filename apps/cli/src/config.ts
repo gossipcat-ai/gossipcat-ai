@@ -357,13 +357,17 @@ export function resolveSiblingRoots(config: GossipConfig, projectRoot: string): 
   };
   for (const entry of declared) {
     if (entry.endsWith('/*')) {
-      const parentAbs = resolve(projectRoot, entry.slice(0, -2));
+      // Validate the glob parent (stat + isDirectory + uid + realpath) before
+      // listing it — the children are individually validateDir'd below, but the
+      // parent itself must pass the same ownership/realpath gate so a swapped
+      // symlink parent can't redirect the listing (consensus 318a16c1, sonnet:f16).
+      const parentReal = validateDir(resolve(projectRoot, entry.slice(0, -2)));
       let names: string[];
-      try { names = readdirSync(parentAbs); } catch (e) {
-        throw new Error(`Config "consensus.siblingRoots": glob parent "${parentAbs}" not readable: ${(e as Error).message}`);
+      try { names = readdirSync(parentReal); } catch (e) {
+        throw new Error(`Config "consensus.siblingRoots": glob parent "${parentReal}" not readable: ${(e as Error).message}`);
       }
       for (const name of names) {
-        const childAbs = join(parentAbs, name);
+        const childAbs = join(parentReal, name);
         let childStat;
         try { childStat = statSync(childAbs); } catch { continue; } // broken symlink / vanished entry — skip, don't crash boot
         if (childStat.isDirectory()) {

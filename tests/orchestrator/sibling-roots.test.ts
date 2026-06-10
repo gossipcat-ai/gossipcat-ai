@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { execFileSync } from 'child_process';
 import { validateResolutionRoot } from '../../packages/orchestrator/src/validate-resolution-root';
 import { validateConfig, resolveSiblingRoots } from '../../apps/cli/src/config';
@@ -171,5 +171,29 @@ describe('resolveSiblingRoots — rejects a sibling root inside projectRoot (con
   it('still accepts a genuinely external sibling root', () => {
     const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [sibling] } });
     expect(resolveSiblingRoots(cfg, root)).toContain(realpathSync(sibling));
+  });
+});
+
+describe('consensus 318a16c1 hardening', () => {
+  it('rejects a prefix-adjacent sibling (/base/product-evil vs declared /base/product) — no startsWith escape', async () => {
+    const base = dirname(sibling);
+    const evil = join(base, 'product-evil'); mkdirSync(evil, { recursive: true }); gitInit(evil);
+    const r = await validateResolutionRoot(evil, root, { siblingRoots: [sibling] });
+    expect(r.valid).toBe(false);
+  });
+
+  it('admits a path under a sibling root declared via a symlink (realpath-at-boundary, FIX 1)', async () => {
+    const base = dirname(sibling);
+    const linkToSibling = join(base, 'product-link');
+    try { symlinkSync(sibling, linkToSibling); } catch { return; }
+    const r = await validateResolutionRoot(siblingSub, root, { siblingRoots: [linkToSibling] });
+    expect(r.valid).toBe(true);
+  });
+
+  it('rejects a glob siblingRoots entry whose parent is not a directory (FIX 2 — glob parent validated)', () => {
+    const base = dirname(sibling);
+    const fileParent = join(base, 'notadir'); writeFileSync(fileParent, 'x');
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [join('..', 'notadir', '*')] } });
+    expect(() => resolveSiblingRoots(cfg, root)).toThrow(/not a directory|does not resolve to directory/);
   });
 });
