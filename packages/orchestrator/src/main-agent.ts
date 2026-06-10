@@ -211,7 +211,7 @@ export class MainAgent {
 
       // Enable web search for researcher agents (they need to look things up)
       const enableWebSearch = config.preset === 'researcher' || config.skills.includes('research');
-      const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey);
+      const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey, config.maxToolTurns);
       await worker.start();
       // Record the key snapshot so the first syncWorkers call can short-circuit
       // when the keychain hasn't changed — otherwise every dispatch tears down
@@ -398,7 +398,7 @@ export class MainAgent {
         ? readFileSync(instructionsPath, 'utf-8') : undefined;
 
       const enableWebSearch = ac.preset === 'researcher' || ac.skills.includes('research');
-      const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey);
+      const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey, ac.maxToolTurns);
       await worker.start();
       this.workers.set(ac.id, worker);
       this.lastKeyByAgent.set(ac.id, key);
