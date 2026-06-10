@@ -23,7 +23,7 @@
 import { execFile } from 'child_process';
 import { createHash } from 'crypto';
 import { statSync, realpathSync } from 'fs';
-import { normalize, resolve } from 'path';
+import { normalize, resolve, relative, isAbsolute } from 'path';
 import { promisify } from 'util';
 
 const execFileP = promisify(execFile);
@@ -168,6 +168,13 @@ export function parseWorktreePorcelain(
   return out;
 }
 
+/** Realpath-safe containment: is `canonical` equal to or under `root`?
+ *  Both args MUST be realpath'd absolute paths. */
+function isInsideRoot(canonical: string, root: string): boolean {
+  const rel = relative(root, canonical);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
 /**
  * Validate a single user-supplied resolution root against projectRoot.
  * Returns canonical (realpath'd) form on success. Only fatal outcome:
@@ -176,6 +183,7 @@ export function parseWorktreePorcelain(
 export async function validateResolutionRoot(
   rawPath: string,
   projectRoot: string,
+  opts: { siblingRoots?: readonly string[] } = {},
 ): Promise<ValidationResult> {
   const hashed = hashPath(rawPath);
 
@@ -239,55 +247,66 @@ export async function validateResolutionRoot(
     // Non-POSIX host (Windows); skip ownership check gracefully.
   }
 
+  // #520: an explicitly-declared sibling root is a deliberate operator trust
+  // decision. For paths contained in one, bypass the git-common-dir gate (step 6)
+  // AND the worktree-list gate (step 7) — and ONLY those two. All earlier gates
+  // (control-char, `..`, existence, directory, realpath, ownership) have run above.
+  // Default empty ⇒ no behavior change for single-repo installs.
+  const isDeclaredSibling = (opts.siblingRoots ?? []).some((s) => isInsideRoot(canonical, s));
+
   // 6. git-common-dir must match projectRoot's.
-  const [candGcd, rootGcd] = await Promise.all([
-    gitCommonDir(canonical),
-    gitCommonDir(projectRoot),
-  ]);
-  if (!rootGcd) {
-    // Can't verify against an un-git'd projectRoot — drop to be safe.
-    return {
-      valid: false,
-      reason: 'projectRoot git-common-dir lookup failed',
-      hashedInput: hashed,
-    };
-  }
-  if (!candGcd) {
-    return {
-      valid: false,
-      reason: 'candidate git-common-dir lookup failed (not a git repo?)',
-      hashedInput: hashed,
-    };
-  }
-  if (candGcd !== rootGcd) {
-    return {
-      valid: false,
-      reason: 'outside git-common-dir (cross-repo or non-worktree)',
-      hashedInput: hashed,
-    };
+  if (!isDeclaredSibling) {
+    const [candGcd, rootGcd] = await Promise.all([
+      gitCommonDir(canonical),
+      gitCommonDir(projectRoot),
+    ]);
+    if (!rootGcd) {
+      // Can't verify against an un-git'd projectRoot — drop to be safe.
+      return {
+        valid: false,
+        reason: 'projectRoot git-common-dir lookup failed',
+        hashedInput: hashed,
+      };
+    }
+    if (!candGcd) {
+      return {
+        valid: false,
+        reason: 'candidate git-common-dir lookup failed (not a git repo?)',
+        hashedInput: hashed,
+      };
+    }
+    if (candGcd !== rootGcd) {
+      return {
+        valid: false,
+        reason: 'outside git-common-dir (cross-repo or non-worktree)',
+        hashedInput: hashed,
+      };
+    }
   }
 
   // 7. Must appear in `git worktree list`.
   // includeLocked: true — active agent worktrees are always locked by git;
   // rejecting them here would silently break all explicit resolutionRoots
   // that point at in-use worktrees (root cause of consensus 3aa4a6ef regression).
-  const worktrees = await listWorktreePaths(projectRoot, { includeLocked: true });
-  // Project root itself is always a valid worktree by convention — include it.
-  let projectRootReal = projectRoot;
-  try {
-    projectRootReal = realpathSync(projectRoot);
-  } catch {
-    /* keep as-is */
-  }
-  if (
-    canonical !== projectRootReal &&
-    !worktrees.some((w) => w === canonical)
-  ) {
-    return {
-      valid: false,
-      reason: 'not found in `git worktree list`',
-      hashedInput: hashed,
-    };
+  if (!isDeclaredSibling) {
+    const worktrees = await listWorktreePaths(projectRoot, { includeLocked: true });
+    // Project root itself is always a valid worktree by convention — include it.
+    let projectRootReal = projectRoot;
+    try {
+      projectRootReal = realpathSync(projectRoot);
+    } catch {
+      /* keep as-is */
+    }
+    if (
+      canonical !== projectRootReal &&
+      !worktrees.some((w) => w === canonical)
+    ) {
+      return {
+        valid: false,
+        reason: 'not found in `git worktree list`',
+        hashedInput: hashed,
+      };
+    }
   }
 
   return { valid: true, canonical };
