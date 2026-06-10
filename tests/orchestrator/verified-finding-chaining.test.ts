@@ -110,3 +110,20 @@ describe('cross-review prompt — chaining solicitation', () => {
     expect(JSON.stringify(p)).not.toContain('parentFindingId');
   });
 });
+
+describe('formatReport — chain rendering', () => {
+  it('annotates a NEW finding that has a parentFindingId', async () => {
+    const eng = new ConsensusEngine({
+      llm: { generate: jest.fn() } as any,
+      registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+    } as any);
+    const results = [makeTask('a', 'x'), makeTask('b', 'y')];
+    const entries = [{
+      action: 'new' as const, agentId: 'b', peerAgentId: '', findingId: 'cid:new:b:1',
+      finding: 'reachable unauth at routes.ts:88', evidence: 'routes.ts:88', confidence: 4,
+      parentFindingId: 'a:f1', severity: 'critical' as const,
+    }];
+    const report = await (eng as any).synthesize(results, entries, 'cid12345-67890abc');
+    expect(report.summary).toContain('extends a:f1');
+  });
+});

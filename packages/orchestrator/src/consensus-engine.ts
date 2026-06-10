@@ -2500,7 +2500,10 @@ Return only valid JSON.${skillsBlock}`;
       lines.push('NEW (discovered during cross-review):');
       for (const f of newFindings) {
         const preset = this.config.registryGet(f.agentId)?.preset || f.agentId;
-        lines.push(`  ★ [${preset}] "${f.finding}"`);
+        const chainSuffix = f.parentFindingId
+          ? ` _(↳ extends ${f.parentFindingId}${f.severity ? `, severity ${f.severity}` : ''})_`
+          : '';
+        lines.push(`  ★ [${preset}] "${f.finding}"${chainSuffix}`);
       }
       lines.push('');
     }
