@@ -17,6 +17,12 @@ export interface AgentConfig {
    *  NAME, never the key itself (the key stays in the OS keychain). Validated
    *  against /^[a-zA-Z0-9_-]{1,32}$/ in validateConfig (issue #522). */
   key_ref?: string;
+  /** Per-agent override for the WorkerAgent tool-turn budget. When omitted,
+   *  WorkerAgent falls back to the MAX_TOOL_TURNS default (15). Lets a
+   *  slow-reasoning agent (e.g. deepseek-challenger) get more turns without
+   *  raising the global cap. Validated in validateConfig; carried through
+   *  configToAgentConfigs. */
+  maxToolTurns?: number;
   /** Freeform role description — replaces preset. e.g. "ui-architect", "security-auditor" */
   role?: string;
   /** @deprecated Use role instead */

@@ -135,6 +135,7 @@ export class WorkerAgent {
   }> = new Map();
 
   private webSearchEnabled: boolean;
+  private maxToolTurns: number;
   private validToolNames: Set<string>;
   private onTaskComplete?: TaskCompleteCallback;
 
@@ -146,8 +147,10 @@ export class WorkerAgent {
     instructions?: string,
     webSearch?: boolean,
     apiKey?: string,
+    maxToolTurns?: number,
   ) {
     this.webSearchEnabled = webSearch ?? false;
+    this.maxToolTurns = maxToolTurns ?? MAX_TOOL_TURNS;
     this.validToolNames = new Set(tools.map(t => t.name));
     this.instructions = instructions || 'You are a skilled developer agent. Complete the assigned task using the available tools. Be concise and focused.\n\nIf you encounter a domain your skills don\'t cover, call suggest_skill(name, reason) — it helps the system learn. Don\'t stop working to suggest; note the gap and keep going.';
     this.agent = new GossipAgent({ agentId, relayUrl, apiKey, reconnect: true });
@@ -233,7 +236,7 @@ export class WorkerAgent {
    - Turn 3: Verify with file_tree or file_read, fix any issues
    That's a complete task in 3 turns. Aim for efficiency.
 
-3. **Budget: ${MAX_TOOL_TURNS} tool turns.** Each LLM response that includes tool calls costs 1 turn, regardless of how many tools you call in that response. Use multiple tool calls per turn.
+3. **Budget: ${this.maxToolTurns} tool turns.** Each LLM response that includes tool calls costs 1 turn, regardless of how many tools you call in that response. Use multiple tool calls per turn.
 
 4. **Signal completion.** When you're done, respond with a concise summary (no tool calls) listing: files created/modified, technology choices made, and what the next step should be.
 
@@ -253,14 +256,14 @@ export class WorkerAgent {
     ];
 
     try {
-      const WRAP_UP_AT = MAX_TOOL_TURNS - 4;  // warn with 4 turns left
-      const FINAL_AT = MAX_TOOL_TURNS - 2;    // second-to-last turn: save all work (turn after this is for summary only)
+      const WRAP_UP_AT = this.maxToolTurns - 4;  // warn with 4 turns left
+      const FINAL_AT = this.maxToolTurns - 2;    // second-to-last turn: save all work (turn after this is for summary only)
       let lastToolSig = '';   // signature of last tool call for repetition detection
       let repeatCount = 0;    // consecutive identical tool calls
       let consecutiveErrors = 0; // consecutive turns where ALL tool calls return errors
       let providerRetryAttempted = false; // one retry per dispatch for provider-side placeholders
 
-      for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+      for (let turn = 0; turn < this.maxToolTurns; turn++) {
         // Inject any pending gossip before the next LLM turn
         while (this.gossipQueue.length > 0) {
           const gossip = this.gossipQueue.shift()!;
@@ -274,7 +277,7 @@ export class WorkerAgent {
         if (turn === WRAP_UP_AT) {
           messages.push({
             role: 'user',
-            content: `[System] ${MAX_TOOL_TURNS - turn} turns left. Finish writing any open files now. On your next response, you can make multiple tool calls to save everything at once.`,
+            content: `[System] ${this.maxToolTurns - turn} turns left. Finish writing any open files now. On your next response, you can make multiple tool calls to save everything at once.`,
           });
         } else if (turn === FINAL_AT) {
           messages.push({
@@ -283,7 +286,7 @@ export class WorkerAgent {
           });
         }
 
-        yield logAndYield(`turn ${turn}/${MAX_TOOL_TURNS} — calling LLM (${messages.length} messages)`);
+        yield logAndYield(`turn ${turn}/${this.maxToolTurns} — calling LLM (${messages.length} messages)`);
         const llmStart = Date.now();
         let response = await this.llm.generate(messages, {
           tools: this.tools,
@@ -407,7 +410,7 @@ export class WorkerAgent {
         }
       }
 
-      yield logAndYield(`hit max turns (${MAX_TOOL_TURNS}), requesting summary. Total tool calls: ${toolCallCount}`);
+      yield logAndYield(`hit max turns (${this.maxToolTurns}), requesting summary. Total tool calls: ${toolCallCount}`);
       try {
         messages.push({ role: 'user', content: 'Your turn budget is exhausted. Summarize what you accomplished and what remains unfinished. List files created/modified.' });
         const summary = await this.llm.generate(messages);

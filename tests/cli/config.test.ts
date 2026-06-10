@@ -347,3 +347,33 @@ describe('loadClaudeSubagents — fable tier allowlist', () => {
     expect(agents.find(a => a.name === 'Bogus Agent')).toBeUndefined();
   });
 });
+
+describe('maxToolTurns config plumbing (fix/per-agent-turn-cap)', () => {
+  it('carries maxToolTurns through configToAgentConfigs', () => {
+    const cfg = validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: 25 } },
+    });
+    const ac = configToAgentConfigs(cfg).find(a => a.id === 'x');
+    expect(ac?.maxToolTurns).toBe(25);
+  });
+
+  it('rejects a non-integer / out-of-range maxToolTurns', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: 0 } },
+    })).toThrow(/maxToolTurns/);
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: 99 } },
+    })).toThrow(/maxToolTurns/);
+  });
+
+  it('accepts a config with no maxToolTurns (default path)', () => {
+    const cfg = validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'] } },
+    });
+    expect(configToAgentConfigs(cfg).find(a => a.id === 'x')?.maxToolTurns).toBeUndefined();
+  });
+});

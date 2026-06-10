@@ -371,3 +371,19 @@ describe('instructions and gossip', () => {
     expect(worker.getInstructions()).toBe('New instructions');
   });
 });
+
+describe('WorkerAgent per-agent maxToolTurns (fix/per-agent-turn-cap)', () => {
+  it('uses the provided maxToolTurns when set', () => {
+    const stubLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const w = new WorkerAgent('a1', stubLlm as any, 'ws://x', [], undefined, false, undefined, 25);
+    expect((w as any).maxToolTurns).toBe(25);
+  });
+
+  it('falls back to the default (15) when omitted', () => {
+    const stubLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const w = new WorkerAgent('a1', stubLlm as any, 'ws://x', [], undefined, false, undefined);
+    expect((w as any).maxToolTurns).toBe(15);
+  });
+});

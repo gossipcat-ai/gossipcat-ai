@@ -665,7 +665,7 @@ async function doBoot() {
     const identityBlock = identity ? m.formatIdentityBlock(identity) + '\n' : '';
     const instructions = (identityBlock + baseInstructions).trim() || undefined;
     const enableWebSearch = ac.preset === 'researcher' || (ac.skills ?? []).includes('research');
-    const worker = new m.WorkerAgent(ac.id, llm, ctx.relay.url, m.ALL_TOOLS, instructions, enableWebSearch, relayApiKey);
+    const worker = new m.WorkerAgent(ac.id, llm, ctx.relay.url, m.ALL_TOOLS, instructions, enableWebSearch, relayApiKey, ac.maxToolTurns);
     // ATI profiling signals (task_completed + task_tool_turns + format_compliance +
     // finding_dropped_format) are emitted from the dispatch-pipeline via the shared
     // `emitCompletionSignals` helper on FINAL_RESULT / ERROR. Emitting them here too

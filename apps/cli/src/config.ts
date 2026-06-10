@@ -67,6 +67,8 @@ export interface GossipConfig {
      *  stays in the OS keychain. Validated against /^[a-zA-Z0-9_-]{1,32}$/ in
      *  validateConfig; carried through configToAgentConfigs. #522 */
     key_ref?: string;
+    /** Per-agent override for the WorkerAgent tool-turn budget (default 15). */
+    maxToolTurns?: number;
   }>;
 }
 
@@ -290,6 +292,14 @@ export function validateConfig(raw: any): GossipConfig {
           );
         }
       }
+      // Per-agent tool-turn budget override. Optional; when present must be a
+      // positive integer within a sane bound (a runaway cap wastes quota).
+      if (agent.maxToolTurns !== undefined) {
+        const n = agent.maxToolTurns;
+        if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 50) {
+          throw new Error(`Agent "${id}" has invalid maxToolTurns (${JSON.stringify(n)}); must be an integer in [1, 50]`);
+        }
+      }
     }
   }
 
@@ -310,6 +320,7 @@ export function configToAgentConfigs(config: GossipConfig): AgentConfig[] {
     // #522: carry the keychain service name through so the resolver reads the
     // per-agent key (key_ref ?? provider) at both resolution sites.
     key_ref: agent.key_ref,
+    maxToolTurns: agent.maxToolTurns,
   }));
 }
 
