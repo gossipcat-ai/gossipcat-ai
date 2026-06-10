@@ -59,6 +59,9 @@ export interface DispatchPipelineConfig {
   syncFactory?: () => TaskGraphSync | null;
   toolServer?: ToolServerCallbacks | null;
   keyProvider?: (provider: string) => Promise<string | null>;
+  /** #520: declared external sibling repo roots, forwarded to ScopeTracker so scoped
+   *  writes into a declared sibling are accepted. Default []. */
+  siblingRoots?: readonly string[];
 }
 
 type TrackedTask = TaskEntry & {
@@ -212,7 +215,7 @@ export class DispatchPipeline {
     this.memReader = new AgentMemoryReader(config.projectRoot);
     this.memCompactor = new MemoryCompactor(config.projectRoot);
     this.gapTracker = new SkillGapTracker(config.projectRoot);
-    this.scopeTracker = new ScopeTracker(config.projectRoot);
+    this.scopeTracker = new ScopeTracker(config.projectRoot, config.siblingRoots ?? []);
     this.worktreeManager = new WorktreeManager(config.projectRoot);
     this.perfReader = new PerformanceReader(config.projectRoot);
     this.consensusCoordinator = new ConsensusCoordinator({

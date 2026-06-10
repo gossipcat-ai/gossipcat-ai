@@ -87,6 +87,7 @@ export interface MainAgentConfig {
   syncFactory?: () => TaskGraphSync | null;
   toolServer?: ToolServerCallbacks | null;
   keyProvider?: (provider: string) => Promise<string | null>;
+  siblingRoots?: readonly string[];
 }
 
 export class MainAgent {
@@ -151,6 +152,7 @@ export class MainAgent {
       syncFactory: config.syncFactory,
       toolServer: config.toolServer,
       keyProvider: config.keyProvider,
+      siblingRoots: config.siblingRoots ?? [],
     });
 
     // Wire dispatch differentiator (after pipeline creation)
