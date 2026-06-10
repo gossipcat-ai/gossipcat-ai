@@ -46,6 +46,18 @@ export const RUNTIME_FLAG_REGISTRY = {
    * destructive op (issue #437, round 251e5ef6-d4d44ba2).
    */
   GOSSIP_WORKTREE_AUTO_REVERT: { type: 'boolean', default: '0', description: 'Destructively revert preserved isolation-leak paths from the parent checkout' },
+  /**
+   * Master gate for verified finding-chaining. When '1', the cross-review prompt
+   * solicits `parentFindingId` + `severity` on action:"new" entries and the report
+   * surfaces parent→extension chains. The verifyCitations gate on NEW entries is
+   * ALWAYS on (independent of this flag). Default '0' — operators opt in after the
+   * A/B guardrail clears. Spec: docs/specs/2026-06-10-verified-finding-chaining-design.md.
+   */
+  GOSSIP_VERIFIED_CHAINING: {
+    type: 'boolean',
+    default: '0',
+    description: 'Enable verified finding-chaining (parentFindingId + severity on NEW cross-review entries).',
+  },
 } as const;
 
 export type RuntimeFlagKey = keyof typeof RUNTIME_FLAG_REGISTRY;
