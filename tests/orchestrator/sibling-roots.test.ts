@@ -107,6 +107,21 @@ describe('config siblingRoots', () => {
   });
 });
 
+describe('resolveSiblingRoots — broken symlink in glob parent (consensus a5ca8f69 F10)', () => {
+  it('skips a broken symlink child instead of crashing boot', () => {
+    // Build a glob parent: <base>/wt-parent/{real-wt (dir), dead (broken symlink)}
+    const wtParent = join(sibling, 'wt-parent');
+    mkdirSync(join(wtParent, 'real-wt'), { recursive: true });
+    try { symlinkSync(join(wtParent, 'does-not-exist'), join(wtParent, 'dead')); } catch { return; } // skip if symlink unsupported
+    const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [join(wtParent, '*')] } });
+    let resolved: string[] = [];
+    expect(() => { resolved = resolveSiblingRoots(cfg, root); }).not.toThrow();
+    expect(resolved).toContain(realpathSync(join(wtParent, 'real-wt')));
+    // the broken symlink must not appear
+    expect(resolved.some((p) => p.endsWith('/dead'))).toBe(false);
+  });
+});
+
 describe('#520 integration — path-carrying cite into a sibling repo', () => {
   it('resolves WITH siblingRoots config, fails WITHOUT', async () => {
     // (a) The MCP boundary admits the declared root only with the config.

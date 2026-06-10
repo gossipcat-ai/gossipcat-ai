@@ -358,7 +358,9 @@ export function resolveSiblingRoots(config: GossipConfig, projectRoot: string): 
       }
       for (const name of names) {
         const childAbs = join(parentAbs, name);
-        if (statSync(childAbs).isDirectory()) out.push(validateDir(childAbs));
+        let childStat;
+        try { childStat = statSync(childAbs); } catch { continue; } // broken symlink / vanished entry — skip, don't crash boot
+        if (childStat.isDirectory()) out.push(validateDir(childAbs));
       }
     } else {
       out.push(validateDir(resolve(projectRoot, entry)));
