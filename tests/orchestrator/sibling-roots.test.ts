@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { validateResolutionRoot } from '../../packages/orchestrator/src/validate-resolution-root';
+import { ScopeTracker } from '../../packages/orchestrator/src/scope-tracker';
 
 const gitInit = (dir: string) => {
   execFileSync('git', ['init', '-q'], { cwd: dir });
@@ -53,5 +54,27 @@ describe('validateResolutionRoot — siblingRoots bypass', () => {
     try { symlinkSync(outside, link); } catch { return; }
     const r = await validateResolutionRoot(link, root, { siblingRoots: [sibling] });
     expect(r.valid).toBe(false);
+  });
+});
+
+describe('ScopeTracker — sibling roots', () => {
+  it('accepts a scope under a declared sibling root', () => {
+    const st = new ScopeTracker(root, [sibling]);
+    expect(() => st.register(join(sibling, 'services'), 'task-1')).not.toThrow();
+  });
+
+  it('rejects a scope equal to the entire sibling root (per-root too-broad guard)', () => {
+    const st = new ScopeTracker(root, [sibling]);
+    expect(() => st.register(sibling, 'task-2')).toThrow(/too broad/);
+  });
+
+  it('still rejects a scope outside all roots', () => {
+    const st = new ScopeTracker(root, [sibling]);
+    expect(() => st.register(outside, 'task-3')).toThrow(/outside project root/);
+  });
+
+  it('does not change behavior when no sibling roots are configured', () => {
+    const st = new ScopeTracker(root);
+    expect(() => st.register(join(sibling, 'x'), 'task-4')).toThrow(/outside project root/);
   });
 });

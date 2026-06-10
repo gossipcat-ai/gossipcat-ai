@@ -5,7 +5,7 @@ export class ScopeTracker {
   private activeScopes: Map<string, string> = new Map(); // normalized scope → taskId
   private taskToScope: Map<string, string> = new Map();  // taskId → scope (for release)
 
-  constructor(private projectRoot: string) {}
+  constructor(private projectRoot: string, private siblingRoots: readonly string[] = []) {}
 
   private normalize(scope: string): string {
     if (!scope || !scope.trim()) throw new Error('Scope must not be empty');
@@ -17,6 +17,20 @@ export class ScopeTracker {
     } catch {
       // Path doesn't exist yet (e.g. new directory) — fall back to resolve-only check
       real = abs;
+    }
+    // #520: a scope under an explicitly-declared sibling root is accepted. The
+    // returned key is the canonical absolute path (unique per root, so the overlap
+    // map in hasOverlap/register stays collision-free across roots). The too-broad
+    // guard is recomputed PER-ROOT against the matched sibling, not against
+    // projectRoot (consensus 56d65741 LOW finding).
+    for (const s of this.siblingRoots) {
+      let realSibling = s;
+      try { realSibling = realpathSync(s); } catch { /* declared roots are realpath'd at config load; keep */ }
+      const relS = relative(realSibling, real);
+      if (relS === '') throw new Error(`Scope "${scope}" resolves to a sibling root — too broad`);
+      if (!relS.startsWith('..') && !relS.startsWith('/') && relS !== '') {
+        return real.endsWith('/') ? real : real + '/';
+      }
     }
     const rel = relative(realRoot, real);
     if (rel.startsWith('..')) throw new Error(`Scope "${scope}" resolves outside project root`);
