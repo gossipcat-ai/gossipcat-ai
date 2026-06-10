@@ -5,6 +5,7 @@ import { execFileSync } from 'child_process';
 import { validateResolutionRoot } from '../../packages/orchestrator/src/validate-resolution-root';
 import { validateConfig, resolveSiblingRoots } from '../../apps/cli/src/config';
 import { ScopeTracker } from '../../packages/orchestrator/src/scope-tracker';
+import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
 
 const gitInit = (dir: string) => {
   execFileSync('git', ['init', '-q'], { cwd: dir });
@@ -103,5 +104,33 @@ describe('config siblingRoots', () => {
   it('resolveSiblingRoots throws on a file-not-directory entry', () => {
     const cfg = validateConfig({ ...minimalSkeleton, consensus: { siblingRoots: [join(siblingSub, 'handler.ts')] } });
     expect(() => resolveSiblingRoots(cfg, root)).toThrow(/not a directory/);
+  });
+});
+
+describe('#520 integration — path-carrying cite into a sibling repo', () => {
+  it('resolves WITH siblingRoots config, fails WITHOUT', async () => {
+    // (a) The MCP boundary admits the declared root only with the config.
+    const accepted = await validateResolutionRoot(sibling, root, { siblingRoots: [realpathSync(sibling)] });
+    expect(accepted.valid).toBe(true);
+    const rejected = await validateResolutionRoot(sibling, root); // no config
+    expect(rejected.valid).toBe(false);
+
+    // (b) Once admitted, the resolver anchors a path-carrying cite into the sibling.
+    if (!accepted.valid) throw new Error('precondition');
+    const eng = new ConsensusEngine({
+      projectRoot: root,
+      resolutionRoots: [accepted.canonical],
+      registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+    } as any);
+    const resolved = await (eng as any).resolveFilePath('services/core/handler.ts');
+    expect(resolved).toBe(realpathSync(join(siblingSub, 'handler.ts')));
+
+    // (c) Same cite, engine WITHOUT the sibling root → unresolved (the #520 bug).
+    const engNoRoot = new ConsensusEngine({
+      projectRoot: root,
+      registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+    } as any);
+    const unresolved = await (engNoRoot as any).resolveFilePath('services/core/handler.ts');
+    expect(unresolved).toBeNull();
   });
 });
