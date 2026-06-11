@@ -502,7 +502,7 @@ function FindingsPage({
 
 function Dashboard() {
   const route = useRoute();
-  const { overview, agents, tasks, consensus, consensusReports, fleetTrend, signalActivity, skills, loading, refresh } = useDashboardData();
+  const { overview, agents, tasks, consensus, consensusReports, fleetTrend, signalActivity, skills, loading, error, refresh } = useDashboardData();
   const [activeTaskCount, setActiveTaskCount] = useState(0);
 
   const handleWsEvent = useCallback((event: DashboardEvent) => {
@@ -511,6 +511,34 @@ function Dashboard() {
   }, [refresh]);
 
   useWebSocket(handleWsEvent);
+
+  // Error state: a core fetch failed (e.g. "overview: HTTP 500"). We still
+  // lack gate data, so we can't render the dashboard — but we must NOT keep
+  // showing the indefinite spinner. Show the error with a retry hint so the
+  // user knows why they're blocked and that recovery is automatic.
+  if (!loading && error && (!overview || !consensus)) {
+    return (
+      <div className="min-h-screen" style={{ background: 'var(--surface)' }}>
+        <TopBar />
+        <div className="flex items-center justify-center py-20">
+          <div
+            className="w-full max-w-sm rounded-xl border p-8 text-center"
+            style={{ borderColor: 'var(--border)', background: 'var(--surface-elev)' }}
+          >
+            <p className="mb-2 text-sm font-semibold" style={{ color: 'var(--bad)' }}>
+              Dashboard fetch failed
+            </p>
+            <p className="mb-4 font-mono text-xs" style={{ color: 'var(--bad)' }}>
+              {error}
+            </p>
+            <p className="text-xs" style={{ color: 'var(--ink-3)' }}>
+              Relay may be restarting — retrying every 5s. Check the relay terminal if this persists.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading || !overview || !consensus) {
     return (
