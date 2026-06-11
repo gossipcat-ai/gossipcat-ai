@@ -467,4 +467,65 @@ describe('WorkerAgent per-agent maxToolTurns (fix/per-agent-turn-cap)', () => {
     // Restore mocks so subsequent tests in the file are not affected
     jest.resetModules();
   }, 15_000);
+
+  it('executeTask loop runs exactly once for the minimal maxToolTurns of 1', async () => {
+    const { MessageType } = require('@gossip/types');
+
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler(
+              { result: 'tool-ok' },
+              { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req }
+            );
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    jest.resetModules();
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    const dummyTool: ToolDefinition = {
+      name: 'noop',
+      description: 'no-op',
+      parameters: { type: 'object', properties: {} },
+    };
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async () => {
+        const callN = (stubLlm.generate as jest.Mock).mock.calls.length;
+        if (callN > 1) {
+          return { text: 'summary after budget exhausted' };
+        }
+        return {
+          text: 'turn 1',
+          toolCalls: [{ id: 'call_1', name: 'noop', arguments: { turn: 1 } }],
+        };
+      }),
+    };
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', [dummyTool], undefined, false, undefined, 1);
+    await worker.start();
+
+    for await (const _event of worker.executeTask('run forever', undefined, undefined, 'task-min')) {
+      // drain
+    }
+
+    // 1 tool turn + 1 summary call after the budget is exhausted
+    expect((stubLlm.generate as jest.Mock).mock.calls.length).toBe(2);
+
+    jest.resetModules();
+  }, 15_000);
 });
