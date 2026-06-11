@@ -122,6 +122,47 @@ describe('RoundContext disk persistence (spec §3.2)', () => {
     expect(restored!.roundContext).toBeDefined();
     expect(restored!.roundContext!.resolutionRoots).toEqual(roots);
     expect(restored!.roundContext!.warnings).toEqual([]);
+    // No lenses field existed in the flat record — the reconstructed round must
+    // not invent one (back-compat lenses behavior, spec §5 lens-propagation).
+    expect(restored!.roundContext!.lenses).toBeUndefined();
+  });
+
+  it('new-format record with intentionally-empty roundContext.resolutionRoots is honored (not flat-fallback)', () => {
+    // A NEW-format record may legitimately carry roundContext.resolutionRoots:[]
+    // ("resolve against project root"). The restore MUST honor that empty array
+    // as authoritative — NOT fall through to a stale flat resolutionRoots. This
+    // pins the `??`-semantics fix (no length-gated fallback).
+    const roundId = '11112222-33334444';
+    const record = {
+      [roundId]: {
+        consensusId: roundId,
+        allResults: [],
+        relayCrossReviewEntries: [],
+        pendingNativeAgents: ['sonnet'],
+        participatingNativeAgents: ['sonnet'],
+        nativeCrossReviewEntries: [],
+        deadline: Date.now() + 60_000,
+        createdAt: Date.now(),
+        nativePrompts: [],
+        // A divergent flat value that MUST be ignored in favor of the embedded
+        // empty roundContext.resolutionRoots.
+        resolutionRoots: [tmp + '/stale/flat'],
+        roundContext: {
+          consensusId: roundId,
+          resolutionRoots: [],
+          warnings: [{ code: 'roots_empty_after_validation', message: 'all rejected' }],
+        },
+      },
+    };
+    writeFileSync(join(tmp, '.gossip', 'pending-consensus.json'), JSON.stringify(record));
+
+    restorePendingConsensus(tmp);
+    const restored = ctx.pendingConsensusRounds.get(roundId);
+    expect(restored).toBeDefined();
+    expect(restored!.roundContext).toBeDefined();
+    // Embedded empty roots win — the stale flat value is NOT resurrected.
+    expect(restored!.roundContext!.resolutionRoots).toEqual([]);
+    expect(restored!.roundContext!.warnings).toHaveLength(1);
   });
 
   it('(c) old flat-shape file with NO roots reconstructs no round (legacy rootless)', () => {

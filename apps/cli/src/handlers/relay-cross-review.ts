@@ -377,8 +377,14 @@ const CONSENSUS_FILE = 'pending-consensus.json';
 function restoreRoundContext(data: any): import('@gossip/orchestrator').RoundContext | undefined {
   const { makeRoundContext } = require('@gossip/orchestrator');
   const rc = data.roundContext;
+  // Per-field fallback with `??` semantics (spec §3.2): an embedded
+  // roundContext is AUTHORITATIVE — honor its resolutionRoots array even when
+  // it is intentionally empty (`[]` = "resolve against project root"). Only
+  // when there is NO embedded round do we read the old flat field. A
+  // length-gated check would wrongly treat a new-format empty-roots record as
+  // if it were old-flat-shape and resurrect a stale flat value.
   const roots: readonly string[] =
-    (rc && Array.isArray(rc.resolutionRoots) && rc.resolutionRoots.length > 0)
+    (rc && Array.isArray(rc.resolutionRoots))
       ? rc.resolutionRoots
       : (Array.isArray(data.resolutionRoots) ? data.resolutionRoots : []);
   const warnings = rc && Array.isArray(rc.warnings) ? rc.warnings : [];

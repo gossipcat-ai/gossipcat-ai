@@ -1526,6 +1526,19 @@ export function createMcpServer(): McpServer {
       let validatedDispatchRoots: string[] = [];
       // Non-fatal rejection reasons surfaced in the response (item 3a) so a
       // dropped dispatch-time root is visible to the operator, not stderr-only.
+      //
+      // RoundContext boundary #1 — DEFERRED past PR-A (documented divergence
+      // from spec §3.2's "construct at all three boundaries"). The dispatch
+      // handler does NOT create a consensus round (that happens at collect), so
+      // there is no round object here to embed a RoundContext into; only the
+      // dispatch-time roots stash (pendingDispatchResolutionRoots) is threaded
+      // forward, and collect wraps it into the RoundContext it constructs. The
+      // remaining functional gap — routing these dispatch-time rejectedRootReasons
+      // into the collect-built round so they reach report.warnings — needs a
+      // parallel warnings stash keyed by the handler-minted task_ids and a drain
+      // at collect; that crosses three handler signatures and is scoped to a
+      // follow-up. Today these reasons still surface via prependResolutionRootWarning
+      // on the dispatch RESPONSE (below), so they are not silently dropped.
       const rejectedRootReasons: string[] = [];
       if (resolutionRoots && resolutionRoots.length > 0) {
         const { validateResolutionRoot } = await import('@gossip/orchestrator');

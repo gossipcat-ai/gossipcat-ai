@@ -11,19 +11,31 @@
  */
 
 /**
- * The closed code union for round-level warnings. New codes are added here, not
- * invented at producer sites — an unknown code string would silently slip past
- * the drain renderer's switch and never reach the operator. Only the boundary
- * producer (roots_rejected / roots_empty_after_validation) is wired in PR-A;
- * the remaining codes are reserved for PR-B producer conversions
- * (relayCrossReviewSkipped → coverage_degraded, partialReview → partial_review).
+ * The known code union for round-level warnings. The PR-A boundary producer
+ * uses ONLY `roots_rejected` / `roots_empty_after_validation`; the remaining
+ * named codes are reserved for the PR-B producer conversions per spec §6.1:
+ *   - `anchor_master_fallback` — citation resolved against project root, not the
+ *     worktree (today the `via="⚠ resolved against project root…"` anchor note).
+ *   - `cross_review_skipped` — a relay agent's Phase-2 cross-review was skipped
+ *     (quota / parse / network); today `report.relayCrossReviewSkipped`.
+ *   - `zero_tags` — an agent emitted zero `<agent_finding>` tags; today
+ *     `report.zeroTagAgents`.
+ *
+ * The trailing `(string & {})` is an INTENTIONAL open extension point: it keeps
+ * autocomplete on the named codes while letting a future PR-B producer emit a
+ * not-yet-enumerated code without a compile error against this union (and
+ * without editing this PR-A file). Unknown codes still render in the drain block
+ * (it iterates, not switches), so they reach the operator rather than slipping
+ * past silently.
  */
 export type RoundWarningCode =
   | 'roots_rejected'
   | 'roots_empty_after_validation'
-  | 'coverage_degraded'
-  | 'partial_review'
-  | 'relay_cross_review_skipped';
+  | 'anchor_master_fallback'
+  | 'cross_review_skipped'
+  | 'zero_tags'
+  // eslint-disable-next-line @typescript-eslint/ban-types
+  | (string & {});
 
 /**
  * A single fail-loud warning produced during a consensus round. `agentId` is
@@ -58,8 +70,10 @@ export interface RoundContext {
    * boundary (`validateResolutionRoot`). An empty array means "resolve against
    * project root only" and is the correct shape for boundaries that have no
    * roots (e.g. ToolRouter's in-process consensus). NEVER undefined: use `[]`.
+   * The FIELD REFERENCE is readonly (cannot reassign), symmetric with the
+   * `warnings` field below and the array element-readonly already on the type.
    */
-  resolutionRoots: readonly string[];
+  readonly resolutionRoots: readonly string[];
 
   /**
    * Optional per-agent (or per-key) descriptive lenses. PLAIN OBJECT, never a
@@ -80,6 +94,26 @@ export interface RoundContext {
    * intentional: each push records a distinct rejection event.
    */
   readonly warnings: RoundWarning[];
+}
+
+/**
+ * Type guard: is `value` a structurally-valid RoundContext? Used at union
+ * boundaries (e.g. `coordinator.runConsensus(results, roundOrRoots)`) where the
+ * alternative is a `readonly string[]`. A bare `!Array.isArray` check is NOT
+ * sufficient — any non-array object ({}, a Map, a Date) would slip through and
+ * be cast to RoundContext, then read `.resolutionRoots` as undefined and
+ * silently fall through to empty roots (the exact stale-anchor bug class this
+ * carrier exists to prevent). Validates the two required-shape fields:
+ * `resolutionRoots` is an array and `warnings` is an array.
+ */
+export function isRoundContext(value: unknown): value is RoundContext {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Array.isArray((value as { resolutionRoots?: unknown }).resolutionRoots) &&
+    Array.isArray((value as { warnings?: unknown }).warnings)
+  );
 }
 
 /**

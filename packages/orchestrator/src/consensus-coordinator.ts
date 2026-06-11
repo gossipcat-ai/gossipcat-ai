@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { ILLMProvider, createProvider } from './llm-client';
 import { ConsensusEngine } from './consensus-engine';
 import { ConsensusReport } from './consensus-types';
-import type { RoundContext } from './round-context';
+import { isRoundContext, type RoundContext } from './round-context';
 import { MemoryWriter } from './memory-writer';
 import { AgentConfig, TaskEntry } from './types';
 import { GossipPublisher } from './gossip-publisher';
@@ -91,12 +91,15 @@ export class ConsensusCoordinator {
   ): Promise<ConsensusReport | undefined> {
     if (!this.llm || results.filter(r => r.status === 'completed').length < 2) return undefined;
 
-    // Discriminate the union: a RoundContext is a plain object with a
-    // `resolutionRoots` array field; the legacy shape is the array itself.
+    // Discriminate the union via a structural type guard — a bare
+    // !Array.isArray check would let any non-array object pass as a
+    // RoundContext, then read .resolutionRoots as undefined and silently fall
+    // through to empty roots (the stale-anchor bug class). isRoundContext
+    // validates the resolutionRoots + warnings array fields.
     const perRoundRound: RoundContext | undefined =
-      roundOrRoots && !Array.isArray(roundOrRoots) ? (roundOrRoots as RoundContext) : undefined;
+      isRoundContext(roundOrRoots) ? roundOrRoots : undefined;
     const perRoundRoots: readonly string[] | undefined =
-      roundOrRoots && Array.isArray(roundOrRoots) ? (roundOrRoots as readonly string[]) : undefined;
+      Array.isArray(roundOrRoots) ? (roundOrRoots as readonly string[]) : undefined;
 
     // Effective round: per-round context wins, else constructor default.
     const effectiveRound: RoundContext | undefined = perRoundRound ?? this.round;

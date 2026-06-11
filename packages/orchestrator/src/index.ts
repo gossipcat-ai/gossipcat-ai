@@ -29,7 +29,7 @@ export type { AuthFailure } from './auth-state';
 export * from './types';
 export * from './consensus-types';
 export type { ImplSignal, MetaSignal, PerformanceSignal } from './consensus-types';
-export { makeRoundContext, testRound } from './round-context';
+export { makeRoundContext, testRound, isRoundContext } from './round-context';
 export type { RoundContext, RoundWarning, RoundWarningCode } from './round-context';
 export { SkillCatalog } from './skill-catalog';
 export type { CatalogEntry } from './skill-catalog';
