@@ -120,9 +120,14 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
     // Only show real consensus runs (multiple signals from cross-review), not manual recordings
     if (agents.size >= 2 && taskSignals.length >= 3) {
       const tombstone = retractionByConsensusId.get(taskId);
+      // Derive run timestamp defensively: find first signal with a non-empty
+      // string timestamp. A torn/partial JSONL write can produce a signal whose
+      // timestamp field is missing or non-string; falling back to '' sorts the
+      // run last (lexicographic) rather than throwing a TypeError at sort time.
+      const runTimestamp = taskSignals.find(s => typeof s.timestamp === 'string' && s.timestamp)?.timestamp ?? '';
       runs.push({
         taskId,
-        timestamp: taskSignals[0].timestamp,
+        timestamp: runTimestamp,
         agents: [...agents].sort(),
         signals: taskSignals.map(s => {
           // Forward findingId and resolve display signal
@@ -145,8 +150,10 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
     }
   }
 
-  // Most recent first
-  runs.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  // Most recent first. Use nullish fallback so a run whose timestamp ended up
+  // as '' (malformed first signal, defensive derivation above) sorts last
+  // without throwing.
+  runs.sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? ''));
 
   // Paginate
   const totalRuns = runs.length;
