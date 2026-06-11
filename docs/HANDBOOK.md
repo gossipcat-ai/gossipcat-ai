@@ -197,6 +197,8 @@ Pre-merge consensus is cheap; bugs in trust-boundary-adjacent code are expensive
 
 **Remediation when missed:** run post-hoc consensus on the merged diff, file follow-up PRs if findings surface, and document the gap as feedback.
 
+**CI enforcement — the consensus-id token is literal, not prose.** The impact-adjacency CI gate (`scripts/impact-adjacency-gate.mjs`, `consensusIdInPr()`) matches the PR title/body against `/\bconsensus[-_]id:\s*([0-9a-f]{8}-[0-9a-f]{8})\b/i`. Write the token exactly as `consensus-id: <8hex>-<8hex>` (e.g. `consensus-id: 840fcedf-c450408e`). Prose forms like "Pre-merge consensus: `840fcedf-c450408e`" do NOT match and fail the gate — PR #539's first CI run failed on exactly this. Put the literal token on its own line in the PR body when the diff touches any impact-adjacent category above.
+
 ### Consensus protocol — 3 steps
 
 When you dispatch with `mode: "consensus"`, the orchestrator follows **three** steps. Phase 2 cross-review runs server-side automatically.
