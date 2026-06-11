@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from 'fs/promises';
 import { mkdirSync, writeFileSync, realpathSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { join, resolve, dirname, relative, sep } from 'path';
+import { join, resolve, dirname, relative, sep, isAbsolute } from 'path';
 import { log as _log } from './log';
 
 /** Generate a short consensus round ID: xxxxxxxx-xxxxxxxx (17 chars from UUID) */
@@ -231,6 +231,22 @@ export class ConsensusEngine {
       const wt = r.worktreeInfo?.path;
       if (wt && typeof wt === 'string') {
         next.add(resolve(wt));
+      }
+      // Defense-in-depth: per-task resolutionRoots are stamped on the TaskEntry
+      // at dispatch time (dispatch-pipeline.ts:406-408) but were otherwise
+      // ignored here. Union them so a round whose roots only ever lived on the
+      // task entries (not on worktreeInfo and not on config.resolutionRoots)
+      // still anchors citations correctly. Same validation/dedup as the
+      // worktreeInfo and extraRoots entries (non-empty string → resolve()).
+      const taskRoots = r.resolutionRoots;
+      if (taskRoots) {
+        for (const p of taskRoots) {
+          // Mirror the constructor's absolute-path discipline as
+          // defense-in-depth. TaskEntry roots are post-validation, but unlike
+          // the constructor (programmer-error contract → throw) this path
+          // fails soft: silently skip non-absolute entries rather than throw.
+          if (typeof p === 'string' && p.length > 0 && isAbsolute(p)) next.add(resolve(p));
+        }
       }
     }
     // extraRoots arrive post-validation (realpath'd absolute paths from

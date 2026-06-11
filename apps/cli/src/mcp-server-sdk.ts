@@ -405,6 +405,34 @@ function lookupFindingSeverity(findingId: string, projectRoot: string): string |
   return null;
 }
 
+/**
+ * Item 3a — surface non-fatal resolutionRoots rejections in the tool RESPONSE,
+ * not just stderr. When validateResolutionRoot drops an entry non-fatally, the
+ * round proceeds with fewer (or zero) roots and anchors silently resolve
+ * against project root. Prepend a visible warning line so the operator can
+ * correct the input before stale-anchor false disputes occur (the #389 class).
+ * No-op when nothing was rejected, preserving existing response bytes.
+ */
+function prependResolutionRootWarning<T extends { content: Array<{ type: 'text'; text: string }> }>(
+  result: T,
+  rejectedReasons: readonly string[],
+): T {
+  if (!rejectedReasons || rejectedReasons.length === 0) return result;
+  // Render each distinct reason with its count so the raw rejected total and
+  // the per-reason breakdown agree (e.g. "3 entry(ies) rejected (not found ×3)").
+  // A bare Set dedup hides how many entries shared a reason.
+  const counts = new Map<string, number>();
+  for (const r of rejectedReasons) counts.set(r, (counts.get(r) ?? 0) + 1);
+  const reasons = Array.from(counts.entries())
+    .map(([reason, n]) => (n > 1 ? `${reason} ×${n}` : reason))
+    .join('; ');
+  const warning = {
+    type: 'text' as const,
+    text: `⚠ resolutionRoots: ${rejectedReasons.length} entry(ies) rejected (${reasons}) — anchors will resolve against project root`,
+  };
+  return { ...result, content: [warning, ...result.content] };
+}
+
 async function getModules() {
   if (_modules) return _modules;
   _modules = {
@@ -1496,6 +1524,9 @@ export function createMcpServer(): McpServer {
       // #126 PR-B: validate resolutionRoots at the MCP boundary. Fatal (NUL /
       // control char) outcomes REJECT the round — do not dispatch.
       let validatedDispatchRoots: string[] = [];
+      // Non-fatal rejection reasons surfaced in the response (item 3a) so a
+      // dropped dispatch-time root is visible to the operator, not stderr-only.
+      const rejectedRootReasons: string[] = [];
       if (resolutionRoots && resolutionRoots.length > 0) {
         const { validateResolutionRoot } = await import('@gossip/orchestrator');
         for (const raw of resolutionRoots) {
@@ -1507,6 +1538,7 @@ export function createMcpServer(): McpServer {
             planExecutionDepth--;
             return { content: [{ type: 'text' as const, text: `Error: resolutionRoots REJECTED ROUND (adversarial input): ${r.reason} [${r.hashedInput}]` }] };
           } else {
+            rejectedRootReasons.push(r.reason ?? 'unknown');
             process.stderr.write(`[consensus] resolutionRoots rejected: ${r.reason} [${r.hashedInput}]\n`);
           }
         }
@@ -1519,27 +1551,30 @@ export function createMcpServer(): McpServer {
           // Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md — forward
           // validatedDispatchRoots so a single-mode relay agent (e.g. gemini-tester
           // dispatched solo against a PR worktree) gets its tool-call cwd pinned.
-          return handleDispatchSingle(
+          return prependResolutionRootWarning(await handleDispatchSingle(
             agent_id, task, write_mode, scope, timeout_ms, plan_id, step,
             validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
             prompt_format,
-          );
+          ), rejectedRootReasons);
         }
         if (mode === 'parallel') {
           if (!tasks || tasks.length === 0) {
             return { content: [{ type: 'text' as const, text: 'Error: mode:"parallel" requires a non-empty tasks array.' }] };
           }
-          return handleDispatchParallel(
+          return prependResolutionRootWarning(await handleDispatchParallel(
             tasks, false,
             validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
             prompt_format,
-          );
+          ), rejectedRootReasons);
         }
         if (mode === 'consensus') {
           if (!tasks || tasks.length === 0) {
             return { content: [{ type: 'text' as const, text: 'Error: mode:"consensus" requires a non-empty tasks array.' }] };
           }
-          return handleDispatchConsensus(tasks, _utility_task_id, validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined, prompt_format);
+          return prependResolutionRootWarning(
+            await handleDispatchConsensus(tasks, _utility_task_id, validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined, prompt_format),
+            rejectedRootReasons,
+          );
         }
         return { content: [{ type: 'text' as const, text: `Unknown mode: ${mode}` }] };
       } finally {
@@ -1571,6 +1606,11 @@ export function createMcpServer(): McpServer {
     async ({ task_ids, timeout_ms, consensus, resolutionRoots, prompt_format }) => {
       // Validate at MCP boundary. Fatal (NUL / control char) REJECTS the round.
       let validated: string[] | undefined;
+      // Non-fatal rejection reasons collected for response-surfacing (item 3a):
+      // these previously went to stderr only, so an operator never saw that
+      // their worktree roots were silently dropped → anchors resolved against
+      // project root → stale-anchor false disputes.
+      const rejectedRootReasons: string[] = [];
       if (resolutionRoots && resolutionRoots.length > 0) {
         const { validateResolutionRoot } = await import('@gossip/orchestrator');
         const out: string[] = [];
@@ -1582,6 +1622,7 @@ export function createMcpServer(): McpServer {
           } else if (r.fatal) {
             return { content: [{ type: 'text' as const, text: `Error: resolutionRoots REJECTED ROUND (adversarial input): ${r.reason} [${r.hashedInput}]` }] };
           } else {
+            rejectedRootReasons.push(r.reason ?? 'unknown');
             process.stderr.write(`[consensus] resolutionRoots rejected: ${r.reason} [${r.hashedInput}]\n`);
           }
         }
@@ -1605,7 +1646,8 @@ export function createMcpServer(): McpServer {
           for (const tid of task_ids) ctx.pendingDispatchResolutionRoots.delete(tid);
         }
       }
-      return handleCollect(task_ids, timeout_ms, consensus, validated, prompt_format);
+      const collectResult = await handleCollect(task_ids, timeout_ms, consensus, validated, prompt_format);
+      return prependResolutionRootWarning(collectResult, rejectedRootReasons);
     }
   );
 

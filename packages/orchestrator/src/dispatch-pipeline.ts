@@ -709,7 +709,7 @@ export class DispatchPipeline {
     this.sessionContext.registerPlan(plan);
   }
 
-  async collect(taskIds?: string[], timeoutMs: number = 120_000, options?: { consensus?: boolean; consume?: boolean }): Promise<CollectResult> {
+  async collect(taskIds?: string[], timeoutMs: number = 120_000, options?: { consensus?: boolean; consume?: boolean; resolutionRoots?: readonly string[] }): Promise<CollectResult> {
     const targets = taskIds
       ? taskIds.map(id => this.tasks.get(id)).filter((t): t is TrackedTask => t !== undefined)
       : Array.from(this.tasks.values());
@@ -906,7 +906,7 @@ export class DispatchPipeline {
     // Consensus round
     let consensusReport: import('./consensus-types').ConsensusReport | undefined;
     if (options?.consensus && this.llm && results.filter(r => r.status === 'completed').length >= MIN_AGENTS_FOR_CONSENSUS) {
-      consensusReport = await this.runConsensus(results);
+      consensusReport = await this.runConsensus(results, options?.resolutionRoots);
     }
 
     // Cleanup tasks from tracking map.
@@ -1270,9 +1270,17 @@ export class DispatchPipeline {
   /**
    * Run consensus cross-review + judge verification + signal pipeline on any set of results.
    * Delegates to ConsensusCoordinator which owns the full consensus logic.
+   *
+   * @param resolutionRoots Optional per-round collect-time roots (validated at
+   *   the MCP boundary). Forwarded so the all-relay consensus path — which
+   *   short-circuits here from collect.ts without going through the dispatch
+   *   handler — still pins citation anchors to the feature-branch worktree.
    */
-  async runConsensus(results: TaskEntry[]): Promise<import('./consensus-types').ConsensusReport | undefined> {
-    return this.consensusCoordinator.runConsensus(results);
+  async runConsensus(
+    results: TaskEntry[],
+    resolutionRoots?: readonly string[],
+  ): Promise<import('./consensus-types').ConsensusReport | undefined> {
+    return this.consensusCoordinator.runConsensus(results, resolutionRoots);
   }
 
   /** Flush TaskGraph index on shutdown */
