@@ -98,4 +98,62 @@ describe('consensusHandler — missing timestamp on run first signal', () => {
     expect(res.runs[0].taskId).toBe('good-ddd');
     expect(res.runs[1].taskId).toBe('torn-ccc');
   });
+
+  it('TWO fully-torn runs (the deterministic pre-fix repro) — both returned, both sort last, no throw', async () => {
+    // Live replication on 2026-06-12 (consensus 712cb6d4-aa34460f:f5/f6): ONE
+    // torn run only threw when V8's sort happened to use it in the `b` role;
+    // TWO torn runs always compared against each other and threw
+    // deterministically. This pins the exact incident shape from issue #547.
+    const root = makeTmpRoot();
+
+    const torn = (task: string, cid: string, a: string, b: string): object[] => [
+      { type: 'consensus', taskId: task, consensusId: cid, signal: 'agreement', agentId: a, counterpartId: b },
+      { type: 'consensus', taskId: task, consensusId: cid, signal: 'agreement', agentId: b, counterpartId: a },
+      { type: 'consensus', taskId: task, consensusId: cid, signal: 'unique_confirmed', agentId: a, counterpartId: b },
+    ];
+    const goodRun: object[] = [
+      { type: 'consensus', taskId: 'good', consensusId: 'good-eee', signal: 'agreement', agentId: 'agent-a', counterpartId: 'agent-b', timestamp: '2026-06-11T08:00:00Z' },
+      { type: 'consensus', taskId: 'good', consensusId: 'good-eee', signal: 'agreement', agentId: 'agent-b', counterpartId: 'agent-a', timestamp: '2026-06-11T08:01:00Z' },
+      { type: 'consensus', taskId: 'good', consensusId: 'good-eee', signal: 'unique_confirmed', agentId: 'agent-a', counterpartId: 'agent-b', timestamp: '2026-06-11T08:02:00Z' },
+    ];
+
+    writeFileSync(
+      join(root, '.gossip', 'agent-performance.jsonl'),
+      [...torn('tA', 'torn-one', 'agent-p', 'agent-q'), ...torn('tB', 'torn-two', 'agent-r', 'agent-s'), ...goodRun]
+        .map(r => JSON.stringify(r)).join('\n') + '\n',
+    );
+
+    const res = await consensusHandler(root);
+    expect(res.runs).toHaveLength(3);
+    expect(res.runs[0].taskId).toBe('good-eee');
+    const tail = res.runs.slice(1).map(r => r.taskId).sort();
+    expect(tail).toEqual(['torn-one', 'torn-two']);
+    for (const id of tail) {
+      expect(res.runs.find(r => r.taskId === id)?.timestamp).toBe('');
+    }
+  });
+
+  it('a signal missing agentId does not corrupt the agents array (712cb6d4-aa34460f:f1)', async () => {
+    const root = makeTmpRoot();
+
+    // 4 signals, 2 REAL agents, one torn signal with no agentId at all.
+    const run: object[] = [
+      { type: 'consensus', taskId: 'tg', consensusId: 'guard-fff', signal: 'agreement', agentId: 'agent-a', counterpartId: 'agent-b', timestamp: '2026-06-11T07:00:00Z' },
+      { type: 'consensus', taskId: 'tg', consensusId: 'guard-fff', signal: 'agreement', /* no agentId */ counterpartId: 'agent-b', timestamp: '2026-06-11T07:01:00Z' },
+      { type: 'consensus', taskId: 'tg', consensusId: 'guard-fff', signal: 'agreement', agentId: 'agent-b', counterpartId: 'agent-a', timestamp: '2026-06-11T07:02:00Z' },
+      { type: 'consensus', taskId: 'tg', consensusId: 'guard-fff', signal: 'unique_confirmed', agentId: 'agent-a', counterpartId: 'agent-b', timestamp: '2026-06-11T07:03:00Z' },
+    ];
+
+    writeFileSync(
+      join(root, '.gossip', 'agent-performance.jsonl'),
+      run.map(r => JSON.stringify(r)).join('\n') + '\n',
+    );
+
+    const res = await consensusHandler(root);
+    const guarded = res.runs.find(r => r.taskId === 'guard-fff');
+    expect(guarded).toBeDefined();
+    // No undefined/null leaked into the agents array
+    expect(guarded?.agents).toEqual(['agent-a', 'agent-b']);
+    expect(guarded?.agents.every(a => typeof a === 'string' && a.length > 0)).toBe(true);
+  });
 });

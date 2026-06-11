@@ -34,8 +34,11 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   try {
     const res = await fetch(`${BASE}/${path}`, {
       credentials: 'include',
-      signal: timeoutSignal,
       ...options,
+      // After the spread so a caller-supplied options.signal can never
+      // silently disable the timeout (the hang class this guard closes).
+      // A future cancellable caller must compose via AbortSignal.any.
+      signal: timeoutSignal,
     });
     if (res.status === 401) throw new Error('unauthorized');
     if (!res.ok) throw new Error(`API error: ${res.status}`);

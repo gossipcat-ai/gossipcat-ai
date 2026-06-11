@@ -100,8 +100,11 @@ export async function consensusHandler(projectRoot: string, query?: URLSearchPar
     const counts = { agreement: 0, disagreement: 0, unverified: 0, unique: 0, hallucination: 0, new: 0, insights: 0 };
 
     for (const s of taskSignals) {
-      agents.add(s.agentId);
-      if (s.counterpartId) agents.add(s.counterpartId);
+      // Torn JSONL writes can omit agentId/counterpartId (same class as the
+      // missing-timestamp case below) — an undefined entry would corrupt the
+      // agents array and could even satisfy the agents.size >= 2 gate.
+      if (typeof s.agentId === 'string' && s.agentId) agents.add(s.agentId);
+      if (typeof s.counterpartId === 'string' && s.counterpartId) agents.add(s.counterpartId);
 
       // Resolve UNVERIFIED signals that have a later resolution for the same findingId
       let effectiveSignal = s.signal;
