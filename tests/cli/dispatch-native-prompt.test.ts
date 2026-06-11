@@ -979,3 +979,38 @@ describe('worktree-isolation prompt hardening (spec 2026-05-22)', () => {
     expect(promptFile.startsWith('// GOSSIP_ISOLATION')).toBe(false);
   });
 });
+
+describe('native dispatch — git-downgrade warning text (issue #538 item 2)', () => {
+  let testDir: string;
+  let prevCwd: string;
+
+  beforeEach(() => {
+    prevCwd = process.cwd();
+    // mkdtemp under os.tmpdir() — NOT a git repo, so write_mode:"worktree"
+    // must downgrade and the warning text must appear in the banner.
+    testDir = mkdtempSync(join(tmpdir(), 'gossip-downgrade-warn-'));
+    mkdirSync(join(testDir, '.gossip', 'skills'), { recursive: true });
+    process.chdir(testDir);
+    resetCtx();
+  });
+
+  afterEach(() => {
+    restoreCtx();
+    process.chdir(prevCwd);
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('handleDispatchSingle banner carries the Isolation downgraded warning and omits the isolation flag', async () => {
+    ctx.nativeAgentConfigs.set('native-claude', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You are a reviewer.',
+      description: 'Native reviewer',
+      skills: [],
+    });
+
+    const result = await handleDispatchSingle('native-claude', 'Implement a thing', 'worktree');
+    const banner = (result.content[0] as { text: string }).text;
+    expect(banner).toContain('Isolation downgraded');
+    expect(banner).not.toContain('isolation: "worktree"');
+  });
+});

@@ -189,12 +189,17 @@ export function checkWorktreeEngaged(startedAt: number, projectRoot: string = pr
       if (!entry.startsWith('agent-')) continue;
       try {
         const st = statSync(join(wtDir, entry));
-        if (st.isDirectory() && st.mtimeMs >= startedAt) return true;
+        // 2s backdate mirrors stampTaskSentinel (sandbox.ts): coarse-mtime
+        // filesystems can round a same-second creation below startedAt.
+        if (st.isDirectory() && st.mtimeMs >= startedAt - 2000) return true;
       } catch { /* skip unreadable entries */ }
     }
     return false;
-  } catch {
-    return false; // fail-open — engagement check never blocks relay
+  } catch (err) {
+    // fail-open — engagement check never blocks relay; log so persistent
+    // non-ENOENT failures (e.g. EACCES) stay diagnosable.
+    process.stderr.write(`[gossipcat] worktree engagement check failed: ${(err as Error).message}\n`);
+    return false;
   }
 }
 

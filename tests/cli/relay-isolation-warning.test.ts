@@ -415,3 +415,49 @@ describe('handleNativeRelay — worktree isolation warning integration', () => {
     expect(skippedEntry.reason).toBe('worktree_isolation_skipped');
   });
 });
+
+describe('handleNativeRelay — worktree engagement warning (issue #538)', () => {
+  it('appends worktree_engagement_unknown to receipt and ledger when no fresh agent worktree exists', async () => {
+    seedWorktreeTask(TASK_ID, AGENT_ID, { withSnapshot: false, concurrentWorktreeTaint: true });
+    // testDir has no .claude/worktrees at all → engagement unknown
+
+    const res = await handleNativeRelay(TASK_ID, 'task complete');
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('worktree_engagement_unknown');
+
+    const { readFileSync } = require('fs');
+    const raw = readFileSync(join(testDir, '.gossip', 'relay-warnings.jsonl'), 'utf8').trim();
+    const evt = raw.split('\n').filter(Boolean)
+      .map((l: string) => JSON.parse(l))
+      .find((e: any) => e.reason === 'worktree_engagement_unknown');
+    expect(evt).toBeDefined();
+    expect(evt.taskId).toBe(TASK_ID);
+    expect(evt.triageClass).toBe('engage_gap_candidate');
+    expect(evt.concurrentWorktreeTaint).toBe(true);
+  });
+
+  it('stays silent when a fresh agent worktree directory exists', async () => {
+    const { mkdirSync } = require('fs');
+    seedWorktreeTask('iso-task-engaged', AGENT_ID, { withSnapshot: false });
+    mkdirSync(join(testDir, '.claude', 'worktrees', 'agent-fresh-xyz'), { recursive: true });
+
+    const res = await handleNativeRelay('iso-task-engaged', 'task complete');
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).not.toContain('worktree_engagement_unknown');
+  });
+
+  it('does not run the engagement check for downgraded dispatches (effectiveWriteMode sequential)', async () => {
+    ctx.nativeTaskMap.set('iso-task-downgraded', {
+      agentId: AGENT_ID,
+      task: 'downgraded task',
+      startedAt: Date.now() - 1000,
+      timeoutMs: 120_000,
+      writeMode: 'worktree',
+      effectiveWriteMode: 'sequential',
+    } as any);
+
+    const res = await handleNativeRelay('iso-task-downgraded', 'task complete');
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).not.toContain('worktree_engagement_unknown');
+  });
+});

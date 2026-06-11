@@ -86,10 +86,38 @@ describe('checkWorktreeEngaged', () => {
     // Create a file (not a directory) named agent-xyz
     writeFileSync(join(root, '.claude', 'worktrees', 'agent-file'), 'not a dir');
     const startedAt = Date.now() - 1000;
-    // A file stat will still succeed but we require isDirectory() to be true
-    // — actually the implementation uses statSync without isDirectory check,
-    // so this tests the current behaviour: any stat with fresh mtime returns true.
-    // Update: implementation checks isDirectory() — file should NOT match.
+    // A fresh-mtime FILE must not count as an engaged worktree.
+    expect(checkWorktreeEngaged(startedAt, root)).toBe(false);
+  });
+
+  it('returns false when .claude/worktrees exists but is empty', () => {
+    const root = makeTmpDir();
+    created.push(root);
+    mkdirSync(join(root, '.claude', 'worktrees'), { recursive: true });
+    expect(checkWorktreeEngaged(Date.now(), root)).toBe(false);
+  });
+
+  it('tolerates up to 2s of filesystem mtime granularity (backdate window)', () => {
+    const root = makeTmpDir();
+    created.push(root);
+    const wtDir = join(root, '.claude', 'worktrees', 'agent-coarse');
+    mkdirSync(wtDir, { recursive: true });
+    // Entry mtime 1.5s BEFORE startedAt — within the 2s tolerance, so it
+    // still counts as engaged (mirrors the stampTaskSentinel backdate).
+    const startedAt = Date.now();
+    const justBefore = new Date(startedAt - 1500);
+    utimesSync(wtDir, justBefore, justBefore);
+    expect(checkWorktreeEngaged(startedAt, root)).toBe(true);
+  });
+
+  it('stays stale beyond the 2s tolerance window', () => {
+    const root = makeTmpDir();
+    created.push(root);
+    const wtDir = join(root, '.claude', 'worktrees', 'agent-too-old');
+    mkdirSync(wtDir, { recursive: true });
+    const startedAt = Date.now();
+    const beyond = new Date(startedAt - 3500);
+    utimesSync(wtDir, beyond, beyond);
     expect(checkWorktreeEngaged(startedAt, root)).toBe(false);
   });
 });
