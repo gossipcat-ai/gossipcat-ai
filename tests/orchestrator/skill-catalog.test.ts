@@ -46,6 +46,61 @@ describe('SkillCatalog', () => {
     const issues = catalog.validate();
     expect(issues).toEqual([]);
   });
+
+  // Regression: coverage-gap detector single-source-of-truth
+  // (project_coverage_gap_detector_config_vs_index, CONFIRMED 2026-06-11).
+  // checkCoverage must receive the SAME effective skill set the prompt builder
+  // injects — index-precedence, not the raw config.json list. A skill enabled
+  // in the index but absent from the config list WAS injected, so it must NOT
+  // produce a false "skill may be relevant but is not assigned" warning.
+  it('no coverage warning for a skill enabled in the index but absent from the config list', () => {
+    const { SkillIndex } = require('../../packages/orchestrator/src/skill-index');
+    const { resolveEffectiveSkills } = require('../../packages/orchestrator/src/skill-loader');
+    const dir = join(tmpdir(), `gossip-coverage-single-source-${Date.now()}`);
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    try {
+      const index = new SkillIndex(dir);
+      // security-audit is bound in the INDEX but NOT in the config list below.
+      index.bind('agent-x', 'security-audit', { source: 'auto', mode: 'contextual' });
+
+      const configSkills = ['code-review']; // does NOT list security-audit
+      const effective = resolveEffectiveSkills('agent-x', configSkills, index);
+      // Index has slots → effective set is the index-enabled list.
+      expect(effective).toContain('security-audit');
+
+      // Feeding the EFFECTIVE set (the fix) yields no false warning.
+      const warnEffective = catalog.checkCoverage(
+        effective,
+        'review this code for security vulnerabilities and injection attacks',
+      );
+      expect(warnEffective.some(w => w.includes('security-audit'))).toBe(false);
+
+      // Feeding the raw CONFIG list (the bug) WOULD have produced the false
+      // warning — pin that the difference is real, not vacuous.
+      const warnConfig = catalog.checkCoverage(
+        configSkills,
+        'review this code for security vulnerabilities and injection attacks',
+      );
+      expect(warnConfig.some(w => w.includes('security-audit'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveEffectiveSkills falls back to the config list when the index has no slots', () => {
+    const { SkillIndex } = require('../../packages/orchestrator/src/skill-index');
+    const { resolveEffectiveSkills } = require('../../packages/orchestrator/src/skill-loader');
+    const dir = join(tmpdir(), `gossip-coverage-fallback-${Date.now()}`);
+    mkdirSync(join(dir, '.gossip'), { recursive: true });
+    try {
+      const index = new SkillIndex(dir); // no binds → no slots for agent-y
+      expect(resolveEffectiveSkills('agent-y', ['code-review'], index)).toEqual(['code-review']);
+      // No index at all → config list.
+      expect(resolveEffectiveSkills('agent-y', ['debugging'], undefined)).toEqual(['debugging']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('SkillCatalog with project skills', () => {

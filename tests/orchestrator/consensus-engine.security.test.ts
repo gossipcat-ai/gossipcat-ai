@@ -1,4 +1,5 @@
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { AgentConfig, TaskEntry } from '../../packages/orchestrator/src/types';
 import { ILLMProvider, LLMGenerateOptions } from '../../packages/orchestrator/src/llm-client';
 import { LLMMessage } from '@gossip/types';
@@ -23,6 +24,8 @@ describe('ConsensusEngine Security', () => {
     engine = new ConsensusEngine({
       llm: mockLlm,
       registryGet: (agentId: string) => mockRegistry.get(agentId),
+
+      round: testRound(),
     });
   });
 
@@ -117,6 +120,8 @@ describe('ConsensusEngine Security', () => {
       const localEngine = new ConsensusEngine({
         llm: mockLlm,
         registryGet: (agentId: string) => mockRegistry.get(agentId),
+
+        round: testRound(),
       });
 
       // Access the private method via bracket notation for the test.

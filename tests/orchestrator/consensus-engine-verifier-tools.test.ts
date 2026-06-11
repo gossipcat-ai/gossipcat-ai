@@ -10,6 +10,7 @@
 //   - engine config: { llm, registryGet, verifierToolRunner? }
 
 import { ConsensusEngine, ConsensusEngineConfig } from '../../packages/orchestrator/src/consensus-engine';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { TaskEntry, LLMResponse } from '../../packages/orchestrator/src/types';
 import { ILLMProvider } from '../../packages/orchestrator/src/llm-client';
 
@@ -86,6 +87,8 @@ describe('crossReviewForAgent — text-only fallback (no verifierToolRunner)', (
     const config: ConsensusEngineConfig = {
       llm: mockLlm,
       registryGet: makeMockRegistryGet(),
+
+      round: testRound(),
     };
     engine = new ConsensusEngine(config);
   });
@@ -136,6 +139,8 @@ describe('crossReviewForAgent — tool loop basic', () => {
       llm: mockLlm,
       registryGet: makeMockRegistryGet(),
       verifierToolRunner,
+
+      round: testRound(),
     };
     engine = new ConsensusEngine(config);
   });
@@ -229,6 +234,8 @@ describe('crossReviewForAgent — cap-hit recovery at MAX_VERIFIER_TURNS=7', () 
       llm: mockLlm,
       registryGet: makeMockRegistryGet(),
       verifierToolRunner,
+
+      round: testRound(),
     };
     engine = new ConsensusEngine(config);
   });
@@ -309,6 +316,8 @@ describe('crossReviewForAgent — tool error handling', () => {
       llm: mockLlm,
       registryGet: makeMockRegistryGet(),
       verifierToolRunner,
+
+      round: testRound(),
     };
     engine = new ConsensusEngine(config);
   });
@@ -379,6 +388,8 @@ describe('crossReviewForAgent — tool output truncation', () => {
       llm: mockLlm,
       registryGet: makeMockRegistryGet(),
       verifierToolRunner,
+
+      round: testRound(),
     };
     engine = new ConsensusEngine(config);
   });

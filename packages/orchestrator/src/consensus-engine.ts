@@ -14,6 +14,7 @@ import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry, RelayWarningEntry } from './consensus-types';
 import type { RoundContext } from './round-context';
+import { buildCoverageDegradedMessage } from './coverage-degraded';
 import { autoVerifyUnverifiedFindings, buildSkipSignal, type AutoVerifiableFinding } from './consensus-auto-verify';
 import { getRuntimeFlagBool } from './runtime-config';
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
@@ -109,28 +110,17 @@ export interface ConsensusEngineConfig {
    */
   getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
   /**
-   * Post-validation, post-realpath resolution roots supplied by the caller
-   * (e.g. gossip_collect({ resolutionRoots: [...] })) or derived from
-   * opt-in auto-discovery. Used in addition to projectRoot + TaskEntry
-   * worktree paths for citation resolution and path-traversal guards.
-   *
-   * INVARIANT: strings in this array MUST be post-realpath absolute paths.
-   * Validation lives at the MCP boundary (validateResolutionRoot); supplying
-   * unvalidated input here is a programmer error. Any construction-time
-   * issue throws rather than silent-dropping.
-   *
-   * Issue #126 / PR-B.
-   */
-  resolutionRoots?: readonly string[];
-  /**
    * Per-round consensus context (spec 2026-06-11-round-context-fail-loud.md
-   * §3.1). When present it WINS over the loose `resolutionRoots` field: the
-   * constructor seeds worktree roots from `round.resolutionRoots` instead, and
-   * synthesize() drains `round.warnings` into `report.warnings`. When absent,
-   * the legacy `resolutionRoots` path is byte-identical. Alias mode (PR-A) —
-   * the loose field is removed in PR-C.
+   * §3.1/§3.3). REQUIRED — every ConsensusEngine carries a RoundContext. The
+   * constructor seeds worktree roots from `round.resolutionRoots`, and
+   * synthesize() drains `round.warnings` into `report.warnings`. A boundary
+   * with no roots passes `makeRoundContext()` (empty resolutionRoots), NOT
+   * undefined — "resolve against project root only" is `resolutionRoots: []`,
+   * a valid RoundContext. Making this field required (PR-C) turns "forgot to
+   * pass a round" into a compile error, killing the stale-anchor door before
+   * a new code path can open it.
    */
-  round?: RoundContext;
+  round: RoundContext;
   /**
    * Verifier dispatcher resolved by the cli layer via `discoverVerifier(team)`
    * (spec docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md).
@@ -198,10 +188,9 @@ export class ConsensusEngine {
     // and post-realpath (invariant enforced at MCP boundary); mis-supplied
     // input here is a programmer error that throws immediately.
     //
-    // Alias mode (PR-A): when `config.round` is present it WINS — seed from
-    // `round.resolutionRoots`. Otherwise fall back to the legacy loose
-    // `config.resolutionRoots`. Same validation/throw semantics for both.
-    const seeded = config.round ? config.round.resolutionRoots : config.resolutionRoots;
+    // PR-C: `config.round` is REQUIRED — always seed from
+    // `round.resolutionRoots`. An empty array means "project root only".
+    const seeded = config.round.resolutionRoots;
     if (seeded && seeded.length > 0) {
       for (const p of seeded) {
         if (typeof p !== 'string' || p.length === 0) {
@@ -228,26 +217,23 @@ export class ConsensusEngine {
   }
 
   /**
-   * Effective per-round resolution roots: `config.round.resolutionRoots` when a
-   * RoundContext is present (alias mode — round WINS), else the legacy loose
-   * `config.resolutionRoots`. Every `updateWorktreeRoots` call site reads this
-   * so the round and legacy paths stay byte-identical at the boundary.
+   * Effective per-round resolution roots: `config.round.resolutionRoots`. The
+   * RoundContext is always present (PR-C made it required), so this is the
+   * single source of truth every `updateWorktreeRoots` call site reads.
    */
-  private effectiveResolutionRoots(): readonly string[] | undefined {
-    return this.config.round ? this.config.round.resolutionRoots : this.config.resolutionRoots;
+  private effectiveResolutionRoots(): readonly string[] {
+    return this.config.round.resolutionRoots;
   }
 
   /**
-   * Append a fail-loud warning to the round (spec §4). No-op when no
-   * RoundContext is threaded (legacy roots-only construction). Warnings pushed
-   * BEFORE `synthesize()` runs are drained into `report.warnings` by the drain
-   * at the bottom of `synthesize()`. Warnings produced AFTER synthesis (the
-   * post-synthesis legacy-field producers in `synthesizeWithCrossReview`) must
-   * ALSO be mirrored onto the report via `appendReportWarning`, because the
-   * drain already ran. APPEND-ONLY, no dedup — every instance is recorded.
+   * Append a fail-loud warning to the round (spec §4). Warnings pushed BEFORE
+   * `synthesize()` runs are drained into `report.warnings` by the drain at the
+   * bottom of `synthesize()`. Warnings produced AFTER synthesis (the
+   * post-synthesis producers in `synthesizeWithCrossReview`) must ALSO be
+   * mirrored onto the report via `appendReportWarning`, because the drain
+   * already ran. APPEND-ONLY, no dedup — every instance is recorded.
    */
   private appendRoundWarning(code: import('./round-context').RoundWarningCode, message: string, agentId?: string): void {
-    if (!this.config.round) return;
     this.config.round.warnings.push({ code, message, ...(agentId !== undefined ? { agentId } : {}) });
   }
 
@@ -1662,7 +1648,7 @@ Return only valid JSON.${skillsBlock}`;
       // Drain fail-loud round warnings into the report (spec §6.1). Copy
       // (not alias) so later mutation of round.warnings can't retroactively
       // change a synthesized report. Omitted when the round carried none.
-      ...(this.config.round && this.config.round.warnings.length > 0
+      ...(this.config.round.warnings.length > 0
         ? { warnings: [...this.config.round.warnings] }
         : {}),
     };
@@ -2874,8 +2860,8 @@ Return only valid JSON.${skillsBlock}`;
    * (docs/specs/2026-04-10-relay-only-consensus.md lines 237-242).
    *
    * Requires `config.performanceReader` — throws if not set.
-   * Sets `partialReview: true` on the report if any finding received fewer
-   * than K cross-reviewers (K = 3 for critical, 2 for all others).
+   * Emits a `partial_review` RoundWarning on the report if any finding received
+   * fewer than K cross-reviewers (K = 3 for critical, 2 for all others).
    */
   async runSelectedCrossReview(
     results: TaskEntry[],
@@ -2949,8 +2935,8 @@ Return only valid JSON.${skillsBlock}`;
     if (assignments.size === 0) {
       _log('consensus', 'runSelectedCrossReview: no reviewers selected; synthesizing without cross-review');
       const report = await this.synthesize(results, [], consensusId);
-      report.partialReview = true;
-      // Spec §4 dual-write — fires after synthesize()'s drain.
+      // Spec §4 — the warnings channel SUBSUMES the legacy report.partialReview
+      // field (deleted in PR-C). Fires after synthesize()'s drain.
       this.appendReportWarning(report, 'partial_review', 'no cross-reviewers selected — every finding is under-reviewed (0 of target K)');
       return report;
     }
@@ -3015,9 +3001,9 @@ Return only valid JSON.${skillsBlock}`;
 
     const report = await this.synthesize(results, allCrossReviewEntries, consensusId);
     if (partialReview) {
-      report.partialReview = true;
-      // Spec §4 dual-write — at least one finding got fewer than its target K
-      // cross-reviewers. Fires after synthesize()'s drain.
+      // Spec §4 — warnings channel subsumes the legacy report.partialReview
+      // field (deleted in PR-C). At least one finding got fewer than its
+      // target K cross-reviewers. Fires after synthesize()'s drain.
       this.appendReportWarning(report, 'partial_review', 'at least one finding received fewer than its target K cross-reviewers');
     }
 
@@ -3091,27 +3077,28 @@ Return only valid JSON.${skillsBlock}`;
     const droppedAgents = results.filter(isDropped).map(r => r.agentId);
     const received = results.length - droppedAgents.length;
     if (results.length > 0 && droppedAgents.length > 0) {
-      const evidence = `Coverage degraded: ${received}/${results.length} agents returned content (dropped: ${droppedAgents.join(', ')})`;
-      report.coverageDegraded = { expected: results.length, received, droppedAgents };
+      const evidence = buildCoverageDegradedMessage({ received, expected: results.length, droppedAgents });
       report.signals.push({
         type: 'consensus', taskId: '', consensusId, signal: 'consensus_coverage_degraded',
         signal_class: 'operational', agentId: '_round', evidence, timestamp: new Date().toISOString(),
       });
       report.summary += `\n⚠️  ${evidence}\n`;
-      // Spec §4 dual-write: also surface on the fail-loud warnings channel.
-      // Fires after synthesize()'s drain, so write to both round + report.
+      // Spec §4 — warnings channel subsumes the legacy report.coverageDegraded
+      // field (deleted in PR-C). The structured drop count + dropped-agent list
+      // travel in the warning message. Fires after synthesize()'s drain, so
+      // write to both round + report.
       this.appendReportWarning(report, 'coverage_degraded', evidence);
     }
 
     // Surface dropped relay agents so the orchestrator can see who silently
     // failed instead of pretending the round was complete.
     if (relayCrossReviewSkipped && relayCrossReviewSkipped.length > 0) {
-      report.relayCrossReviewSkipped = relayCrossReviewSkipped;
       const lines = ['', '⚠️  Relay cross-review skipped:'];
       for (const s of relayCrossReviewSkipped) {
         lines.push(`  - ${s.agentId}: ${s.reason}`);
-        // Spec §4 dual-write — one cross_review_skipped warning per skipped
-        // agent, attributed via agentId. KEEP the legacy report field above.
+        // Spec §4 — warnings channel subsumes the legacy
+        // report.relayCrossReviewSkipped field (deleted in PR-C). One
+        // cross_review_skipped warning per skipped agent, attributed via agentId.
         this.appendReportWarning(report, 'cross_review_skipped', `cross-review skipped: ${s.reason}`, s.agentId);
       }
       report.summary += '\n' + lines.join('\n') + '\n';

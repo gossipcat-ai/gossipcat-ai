@@ -22,6 +22,7 @@ import { violationsHandler } from './api-violations';
 import { handleChat } from './api-chat';
 import { ChatConversationStore } from './chat-session-store';
 import type { ChatbotAgent } from '@gossip/orchestrator';
+import { buildCoverageDegradedMessage } from './coverage-degraded-utils';
 import { readFileSync, existsSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { createHash, timingSafeEqual } from 'crypto';
@@ -43,6 +44,54 @@ interface DashboardContext {
 
 const AUTH_MAX_ATTEMPTS = 10;
 const AUTH_LOCKOUT_MS = 60_000; // 1 minute lockout after max attempts
+
+interface LegacyRoundWarning { code: string; message: string; agentId?: string }
+
+/**
+ * DISK BACK-COMPAT (spec §4 / PR-C): consensus reports persisted by older
+ * versions carry the deprecated degraded-mode trio
+ * (relayCrossReviewSkipped / coverageDegraded / partialReview) but NO
+ * `warnings` array. The warnings channel now SUBSUMES those fields, so when a
+ * historical report lacks `warnings`, synthesize equivalent RoundWarnings from
+ * the trio at READ time so the dashboard still renders the degraded modes.
+ * Reports that already carry `warnings` (written by PR-C+) pass through
+ * untouched. Never mutates the legacy fields — only adds `warnings`.
+ */
+export function normalizeLegacyDegradedFields(report: any): any {
+  if (!report || typeof report !== 'object') return report;
+  if (Array.isArray(report.warnings) && report.warnings.length > 0) return report;
+  const synthesized: LegacyRoundWarning[] = [];
+  const cd = report.coverageDegraded;
+  if (cd && typeof cd === 'object') {
+    synthesized.push({
+      code: 'coverage_degraded',
+      message: buildCoverageDegradedMessage({
+        received: cd.received ?? 0,
+        expected: cd.expected ?? 0,
+        droppedAgents: Array.isArray(cd.droppedAgents) ? cd.droppedAgents : [],
+      }),
+    });
+  }
+  if (Array.isArray(report.relayCrossReviewSkipped)) {
+    for (const s of report.relayCrossReviewSkipped) {
+      if (s && typeof s === 'object') {
+        synthesized.push({
+          code: 'cross_review_skipped',
+          message: `cross-review skipped: ${s.reason ?? 'unknown'}`,
+          ...(typeof s.agentId === 'string' ? { agentId: s.agentId } : {}),
+        });
+      }
+    }
+  }
+  if (report.partialReview === true) {
+    synthesized.push({
+      code: 'partial_review',
+      message: 'at least one finding received fewer than its target K cross-reviewers',
+    });
+  }
+  if (synthesized.length === 0) return report;
+  return { ...report, warnings: synthesized };
+}
 
 // Per-route body cap for POST /dashboard/api/chat. Larger than the shared
 // MAX_BODY_SIZE (8 KB) because a chat message can be a reasonable paragraph,
@@ -611,7 +660,7 @@ export class DashboardRouter {
           const filePath = join(reportsDir, f);
           const realFile = realpathSync(filePath);
           if (!realFile.startsWith(realReportsDir + '/')) return null;
-          return JSON.parse(readFileSync(realFile, 'utf-8'));
+          return normalizeLegacyDegradedFields(JSON.parse(readFileSync(realFile, 'utf-8')));
         } catch { return null; }
       }).filter(Boolean);
 

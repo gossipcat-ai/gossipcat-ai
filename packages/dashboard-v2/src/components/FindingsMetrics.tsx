@@ -647,18 +647,18 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                         </button>
                       ))}
                     </div>
-                    {report.coverageDegraded && (
-                      <div className="mb-3 rounded-md border border-unverified/20 bg-unverified/8 px-3 py-2">
-                        <p className="font-mono text-[10px] font-semibold text-unverified">
-                          ⚠ Coverage degraded — {report.coverageDegraded.received} of {report.coverageDegraded.expected} agents responded
-                        </p>
-                        {report.coverageDegraded.droppedAgents.length > 0 && (
-                          <p className="mt-0.5 font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
-                            Dropped: {report.coverageDegraded.droppedAgents.join(', ')}
-                          </p>
-                        )}
+                    {/* Degraded-mode detail now driven by report.warnings (spec
+                        §4 — the warnings channel subsumes the legacy
+                        coverageDegraded / relayCrossReviewSkipped fields, deleted
+                        in PR-C). Old persisted reports are mapped to synthetic
+                        warnings at READ time (routes.ts
+                        normalizeLegacyDegradedFields), so this single path renders
+                        both. Amber --warn per DESIGN.md. */}
+                    {(report.warnings ?? []).filter(w => w.code === 'coverage_degraded').map((w, i) => (
+                      <div key={`cd-${i}`} className="mb-3 rounded-md border border-warn/30 bg-warn/10 px-3 py-2">
+                        <p className="font-mono text-[10px] font-semibold text-warn">⚠ {w.message}</p>
                       </div>
-                    )}
+                    ))}
                     {report.zeroTagAgents && report.zeroTagAgents.length > 0 && (
                       <div className="mb-3 rounded-md border border-unverified/20 bg-unverified/8 px-3 py-2">
                         <p className="font-mono text-[10px] font-semibold text-unverified">
@@ -676,16 +676,23 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                         </p>
                       </div>
                     )}
-                    {report.relayCrossReviewSkipped && report.relayCrossReviewSkipped.length > 0 && (
-                      <div className="mb-3 rounded-md border border-unverified/20 bg-unverified/8 px-3 py-2">
-                        <p className="font-mono text-[10px] font-semibold text-unverified">
-                          ⚠ Cross-review skipped: {report.relayCrossReviewSkipped.length} relay agent{report.relayCrossReviewSkipped.length === 1 ? '' : 's'} failed Phase 2
-                        </p>
-                        <p className="mt-0.5 font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
-                          {report.relayCrossReviewSkipped.map(s => s.agentId).join(', ')}
-                        </p>
-                      </div>
-                    )}
+                    {(() => {
+                      const skipped = (report.warnings ?? []).filter(w => w.code === 'cross_review_skipped');
+                      if (skipped.length === 0) return null;
+                      const named = skipped.map(w => w.agentId).filter(Boolean) as string[];
+                      return (
+                        <div className="mb-3 rounded-md border border-warn/30 bg-warn/10 px-3 py-2">
+                          <p className="font-mono text-[10px] font-semibold text-warn">
+                            ⚠ Cross-review skipped: {skipped.length} relay agent{skipped.length === 1 ? '' : 's'} failed Phase 2
+                          </p>
+                          {named.length > 0 && (
+                            <p className="mt-0.5 font-mono text-[9px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
+                              {named.join(', ')}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {(report.crossReviewAssignments || report.crossReviewCoverage) && (() => {
                       // Invert assignments: reviewerId → findingIds
                       const assignments = report.crossReviewAssignments || {};
@@ -694,12 +701,16 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       const coverage = report.crossReviewCoverage || [];
                       const totalCovered = coverage.length;
                       const underReviewed = coverage.filter(c => c.assigned < c.targetK);
+                      // partial_review is now a warning code (spec §4 — legacy
+                      // report.partialReview field deleted in PR-C; old reports
+                      // mapped at read time).
+                      const isPartial = (report.warnings ?? []).some(w => w.code === 'partial_review');
                       return (
                         <details className="mb-3 rounded-md border border-border/30" style={{ background: 'color-mix(in oklch, var(--surface-elev) 30%, transparent)' }}>
                           <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 h-section select-none">
                             Cross-Review Assignments
-                            {report.partialReview && (
-                              <span className="rounded border border-unverified/15 bg-unverified/5 px-1.5 py-0.5 font-mono text-[9px] font-bold normal-case tracking-normal text-unverified">
+                            {isPartial && (
+                              <span className="rounded border border-warn/20 bg-warn/10 px-1.5 py-0.5 font-mono text-[9px] font-bold normal-case tracking-normal text-warn">
                                 partial
                               </span>
                             )}

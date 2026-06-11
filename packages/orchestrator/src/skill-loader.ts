@@ -119,6 +119,29 @@ export interface LoadSkillsResult {
 }
 
 /**
+ * The effective skill set for an agent — the SINGLE source of truth shared by
+ * the prompt builder (`loadSkills`) and the coverage-gap detector
+ * (`SkillCatalog.checkCoverage`). When the skill index has slots for the agent,
+ * the index-enabled set wins (it reflects bind/disable lifecycle decisions);
+ * otherwise the raw config.json `skills` list is used.
+ *
+ * Before this helper, `loadSkills` resolved the index-enabled set while
+ * `checkCoverage` was handed the raw config list, so an index-bound skill that
+ * WAS injected still produced a false "skill may be relevant but is not
+ * assigned" warning (project_coverage_gap_detector_config_vs_index, CONFIRMED
+ * 2026-06-11). Both consumers now call this function.
+ */
+export function resolveEffectiveSkills(
+  agentId: string,
+  configSkills: string[],
+  index?: SkillIndex,
+): string[] {
+  return index && index.getAgentSlots(agentId).length > 0
+    ? index.getEnabledSkills(agentId)
+    : configSkills;
+}
+
+/**
  * Compute the category match boost for a contextual skill.
  * Returns CATEGORY_BOOST (0.5) if the skill's category is in the task's
  * extracted categories, otherwise 0. Zero-category tasks always return 0.
@@ -166,9 +189,7 @@ export function loadSkills(
    */
   dispatchTaskType?: 'review' | 'implement' | 'research',
 ): LoadSkillsResult {
-  const effectiveSkills = index && index.getAgentSlots(agentId).length > 0
-    ? index.getEnabledSkills(agentId)
-    : skills;
+  const effectiveSkills = resolveEffectiveSkills(agentId, skills, index);
 
   const categories = taskCategories ?? [];
 

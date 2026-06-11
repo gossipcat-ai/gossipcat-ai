@@ -18,7 +18,7 @@ import { join } from 'path';
 
 // Capture the config each ConsensusEngine is constructed with, while stubbing
 // out the heavy run()/synthesize() path so the coordinator test stays fast.
-const engineConfigs: Array<{ resolutionRoots?: readonly string[] }> = [];
+const engineConfigs: Array<{ round?: { resolutionRoots?: readonly string[] } }> = [];
 
 jest.mock('../../packages/orchestrator/src/consensus-engine', () => {
   const actual = jest.requireActual('../../packages/orchestrator/src/consensus-engine');
@@ -40,6 +40,7 @@ jest.mock('../../packages/orchestrator/src/consensus-engine', () => {
 });
 
 import { ConsensusCoordinator } from '../../packages/orchestrator/src/consensus-coordinator';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import type { TaskEntry } from '../../packages/orchestrator/src/types';
 
 const makeLlm = (): any => ({
@@ -79,36 +80,39 @@ describe('all-relay consensus resolutionRoots plumbing', () => {
       [wt],
     );
 
+    // PR-C: the engine now REQUIRES a RoundContext, so the coordinator wraps the
+    // legacy roots array into `round.resolutionRoots` (no loose config field).
     expect(engineConfigs).toHaveLength(1);
-    expect(engineConfigs[0].resolutionRoots).toEqual([wt]);
+    expect(engineConfigs[0].round?.resolutionRoots).toEqual([wt]);
   });
 
-  it('per-round roots OVERRIDE the coordinator constructor default', async () => {
-    const ctorRoot = realpathSync(mkdtempSync(join(tmp, 'ctor')));
+  it('per-round roots are wrapped into round.resolutionRoots; absent → empty round', async () => {
     const perRoundRoot = realpathSync(mkdtempSync(join(tmp, 'round')));
 
+    // PR-C deleted the coordinator constructor `resolutionRoots`/`round`
+    // defaults (consensus-verified production-dead — the sole construction site
+    // never passed them). runConsensus(results, round) is the only carrier.
     const coordinator = new ConsensusCoordinator({
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: root,
       keyProvider: null,
-      resolutionRoots: [ctorRoot],
     });
 
-    // Per-round value supplied → must REPLACE the constructor default.
+    // Per-round roots array → wrapped into round.resolutionRoots.
     await coordinator.runConsensus(
       [completed('relay-a'), completed('relay-b')],
       [perRoundRoot],
     );
-    expect(engineConfigs[engineConfigs.length - 1].resolutionRoots).toEqual([perRoundRoot]);
+    expect(engineConfigs[engineConfigs.length - 1].round?.resolutionRoots).toEqual([perRoundRoot]);
 
-    // No per-round value → constructor default is used (back-compat).
+    // No per-round value → a fresh empty round (project-root-only).
     await coordinator.runConsensus([completed('relay-a'), completed('relay-b')]);
-    expect(engineConfigs[engineConfigs.length - 1].resolutionRoots).toEqual([ctorRoot]);
+    expect(engineConfigs[engineConfigs.length - 1].round?.resolutionRoots).toEqual([]);
 
-    // Empty per-round array → treated as absent, constructor default used.
+    // Empty per-round array → wrapped into an empty round.
     await coordinator.runConsensus([completed('relay-a'), completed('relay-b')], []);
-    expect(engineConfigs[engineConfigs.length - 1].resolutionRoots).toEqual([ctorRoot]);
+    expect(engineConfigs[engineConfigs.length - 1].round?.resolutionRoots).toEqual([]);
   });
 });
 
@@ -133,6 +137,7 @@ describe('ConsensusEngine.updateWorktreeRoots unions TaskEntry.resolutionRoots',
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: root,
+      round: testRound(),
     });
 
     const entry: TaskEntry = {
@@ -165,7 +170,7 @@ describe('ConsensusEngine.updateWorktreeRoots unions TaskEntry.resolutionRoots',
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: root,
-      resolutionRoots: [configRoot],
+      round: testRound({ resolutionRoots: [configRoot] }),
     });
 
     const entry: TaskEntry = {
@@ -197,6 +202,7 @@ describe('ConsensusEngine.updateWorktreeRoots unions TaskEntry.resolutionRoots',
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: root,
+      round: testRound(),
     });
 
     const entry: TaskEntry = {

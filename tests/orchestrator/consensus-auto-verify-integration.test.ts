@@ -7,6 +7,7 @@
  * Spec: docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md.
  */
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import type { ConsensusFinding, ConsensusSignal, RelayWarningEntry } from '../../packages/orchestrator/src/consensus-types';
 
 const stubLlm: any = {
@@ -43,6 +44,8 @@ describe('maybeAutoVerify integration — gate-ON', () => {
     const engine = new ConsensusEngine({
       llm: stubLlm, registryGet: () => undefined, projectRoot: process.cwd(),
       verifierDispatch: dispatch,
+
+      round: testRound(),
     });
     const sig: ConsensusSignal[] = [];
     const fs = findings(3);
@@ -61,6 +64,8 @@ describe('maybeAutoVerify integration — gate-ON', () => {
       llm: stubLlm, registryGet: () => undefined, projectRoot: process.cwd(),
       // verifierDispatch intentionally omitted
       warningSink,
+
+      round: testRound(),
     });
     const sig: ConsensusSignal[] = [];
     const fs = findings(2);
@@ -81,6 +86,8 @@ describe('maybeAutoVerify integration — gate-ON', () => {
     const engine = new ConsensusEngine({
       llm: stubLlm, registryGet: () => undefined, projectRoot: process.cwd(),
       verifierDispatch: dispatch, warningSink,
+
+      round: testRound(),
     });
     const sig: ConsensusSignal[] = [];
     const r = await (engine as any).maybeAutoVerify(findings(2), sig, 'cid', 'seed') as ConsensusFinding[];
@@ -107,6 +114,8 @@ describe('maybeAutoVerify integration — gate-ON', () => {
     const engine = new ConsensusEngine({
       llm: stubLlm, registryGet: () => undefined, projectRoot: process.cwd(),
       verifierDispatch: dispatch, warningSink,
+
+      round: testRound(),
     });
     const sig: ConsensusSignal[] = [];
     // The synchronous throw is caught inside verifyOne (rejected promise);
@@ -132,6 +141,8 @@ describe('maybeAutoVerify integration — idempotency under retry', () => {
     const engine = new ConsensusEngine({
       llm: stubLlm, registryGet: () => undefined, projectRoot: process.cwd(),
       verifierDispatch: dispatch,
+
+      round: testRound(),
     });
     const sig: ConsensusSignal[] = [];
     const fs = findings(4);
@@ -150,6 +161,8 @@ describe('maybeAutoVerify integration — idempotency under retry', () => {
     const engine = new ConsensusEngine({
       llm: stubLlm, registryGet: () => undefined, projectRoot: process.cwd(),
       verifierDispatch: dispatch,
+
+      round: testRound(),
     });
     const fs = findings(3);
     // Pre-stamp f1 with a "first pass" verdict.

@@ -1,4 +1,5 @@
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, symlinkSync } from 'fs';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { execFileSync } from 'child_process';
@@ -135,7 +136,7 @@ describe('#520 integration — path-carrying cite into a sibling repo', () => {
     if (!accepted.valid) throw new Error('precondition');
     const eng = new ConsensusEngine({
       projectRoot: root,
-      resolutionRoots: [accepted.canonical],
+      round: testRound({ resolutionRoots: [accepted.canonical] }),
       registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
     } as any);
     const resolved = await (eng as any).resolveFilePath('services/core/handler.ts');
@@ -145,6 +146,8 @@ describe('#520 integration — path-carrying cite into a sibling repo', () => {
     const engNoRoot = new ConsensusEngine({
       projectRoot: root,
       registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+
+      round: testRound(),
     } as any);
     const unresolved = await (engNoRoot as any).resolveFilePath('services/core/handler.ts');
     expect(unresolved).toBeNull();

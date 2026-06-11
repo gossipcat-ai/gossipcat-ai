@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { parseCoverageDegradedMessage } from './coverage-degraded-utils';
 
 /**
  * Strict 8-8 hex consensus-id shape: `xxxxxxxx-xxxxxxxx`. The id reaches this
@@ -181,9 +182,29 @@ export function consensusFlowHandler(
   if (Array.isArray(report?.crossReviewCoverage)) {
     out.crossReviewCoverage = report.crossReviewCoverage;
   }
-  if (report?.partialReview === true) out.partialReview = true;
+  // Degraded-mode flags now derive from the warnings channel (spec §4 — the
+  // legacy report.partialReview / report.coverageDegraded fields were deleted in
+  // PR-C). Old persisted reports still carry the legacy fields, so read the
+  // warnings array FIRST and fall back to the legacy shape for back-compat.
+  const warnings: Array<{ code?: unknown }> = Array.isArray(report?.warnings) ? report.warnings : [];
+  const hasWarning = (code: string) => warnings.some(w => w && (w as any).code === code);
+
+  if (hasWarning('partial_review') || report?.partialReview === true) out.partialReview = true;
+
   if (report?.coverageDegraded && typeof report.coverageDegraded === 'object') {
     out.coverageDegraded = report.coverageDegraded;
+  } else {
+    // PR-C reports carry only the warning, whose message is the deterministic
+    // engine format produced by buildCoverageDegradedMessage. Parse via the
+    // shared parseCoverageDegradedMessage so a template change is a one-file
+    // edit that fails CI via the round-trip test.
+    const cd = warnings.find(w => w && (w as any).code === 'coverage_degraded') as { message?: string } | undefined;
+    if (cd && typeof cd.message === 'string') {
+      const parsed = parseCoverageDegradedMessage(cd.message);
+      if (parsed) {
+        out.coverageDegraded = parsed;
+      }
+    }
   }
 
   return out;

@@ -124,6 +124,16 @@ export interface NativeTaskInfo {
    * in favour of a worktree_isolation_skipped breadcrumb.
    */
   concurrentWorktreeTaint?: boolean;
+  /**
+   * True when dispatch-time fail-loud warnings were stashed under this task_id
+   * (spec §3.2 / consensus f11 follow-up). The stash itself
+   * (`pendingDispatchWarnings`) is in-memory only and lost on /mcp reconnect,
+   * but THIS marker is persisted on the native task entry. At collect time, if
+   * the marker is set but the in-memory stash has no entry for the task, the
+   * loss is fail-loud: a `dispatch_warnings_lost` RoundWarning is emitted on the
+   * round so the dropped warnings are observable rather than silently gone.
+   */
+  dispatchWarningsStashed?: boolean;
 }
 
 export interface NativeResultInfo {
@@ -135,6 +145,13 @@ export interface NativeResultInfo {
   error?: string;
   startedAt: number;
   completedAt: number;
+  /**
+   * Carried over from NativeTaskInfo.dispatchWarningsStashed at relay time.
+   * Survives reconnect via the persisted slimResults. Allows
+   * detectLostDispatchWarnings to detect the lost-warnings case for tasks
+   * that completed before the next /mcp reconnect wiped the in-memory stash.
+   */
+  dispatchWarningsStashed?: boolean;
 }
 
 export interface McpContext {

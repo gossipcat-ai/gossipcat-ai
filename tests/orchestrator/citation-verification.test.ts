@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { resolve } from 'path';
 import { tmpdir } from 'os';
 import { ConsensusEngine, ILLMProvider } from '@gossip/orchestrator';
@@ -55,6 +56,8 @@ describe('ConsensusEngine.verifyCitations', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
   });
 
@@ -105,6 +108,7 @@ describe('ConsensusEngine.verifyCitations', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       // no projectRoot
+      round: testRound(),
     });
 
     const evidence = 'The code at task-dispatcher.ts:14 explicitly throws an error.';
@@ -161,6 +165,8 @@ describe('ConsensusEngine.synthesize — citation verification integration', () 
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
   });
 
@@ -230,6 +236,8 @@ describe('Tier 1A Fix #4 — fileCache parity with pathCache on worktree change'
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
 
     // Warm cache with a legitimate resolution
@@ -294,6 +302,8 @@ describe('Tier 1A Fix #5 — I/O errors count as failed citations', () => {
         llm: mockLlm,
         registryGet: mockRegistryGet,
         projectRoot: testDir,
+
+        round: testRound(),
       });
       // One citation, one EISDIR failure — should now trip `failed > 0.5` (majority of 1).
       const result = await engine.verifyCitations('At src/isadir.ts:1 we have a constant');
@@ -316,6 +326,8 @@ describe('Tier 1A Fix #5 — I/O errors count as failed citations', () => {
         llm: mockLlm,
         registryGet: mockRegistryGet,
         projectRoot: testDir,
+
+        round: testRound(),
       });
       const result = await engine.verifyCitations(
         'See src/isadir2.ts:1 and src/readable.ts:2',
@@ -352,6 +364,8 @@ describe('Tier 1B Fix #3 — strict-mode citation verification', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     // Single fabricated citation → failed=1, strict → 1 >= 1 === true.
     const result = await engine.verifyCitations(
@@ -371,6 +385,8 @@ describe('Tier 1B Fix #3 — strict-mode citation verification', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     const result = await engine.verifyCitations(
       'See src/real.ts:1 and fake-module.ts:42',
@@ -384,6 +400,8 @@ describe('Tier 1B Fix #3 — strict-mode citation verification', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     const result = await engine.verifyCitations(
       'See src/real.ts:1, src/real.ts:2, and fake-module.ts:42',
@@ -397,6 +415,8 @@ describe('Tier 1B Fix #3 — strict-mode citation verification', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     const result = await engine.verifyCitations(
       'This is a qualitative disagreement with no file references at all',
@@ -413,6 +433,8 @@ describe('Tier 1B Fix #3 — strict-mode citation verification', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     const result = await engine.verifyCitations(
       'See src/real.ts:1 and src/real.ts:2',
@@ -430,6 +452,8 @@ describe('Tier 1B Fix #3 — strict-mode citation verification', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     // 2 citations, 1 bad — under majority, 1 > 1 === false.
     const result = await engine.verifyCitations(
@@ -470,6 +494,8 @@ describe('Task #9 — citation dedup + meta-reference exemption', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     // Mix: 1 real citation (deduped) + 1 fake citation (deduped) = 2 total.
     // 1 fake of 2 = default majority 1 > 1 = false (not fabricated).
@@ -492,6 +518,8 @@ describe('Task #9 — citation dedup + meta-reference exemption', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     // Narrative mentions fake-module.ts:42 three times.
     // Post-dedup: 1 citation (fake). 1 >= 1 strict = true (still fires).
@@ -512,6 +540,8 @@ describe('Task #9 — citation dedup + meta-reference exemption', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     const result = await engine.verifyCitations(
       'When a reviewer writes `fake-path.ts:100` in dispute evidence, ' +
@@ -527,6 +557,8 @@ describe('Task #9 — citation dedup + meta-reference exemption', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     const result = await engine.verifyCitations(
       'Here is the example:\n```\nconst x = require("fake-lib.ts:99");\n```\n' +
@@ -541,6 +573,8 @@ describe('Task #9 — citation dedup + meta-reference exemption', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     const result = await engine.verifyCitations(
       '<example>fake-thing.ts:999 is not real</example> but src/real.ts:1 is real',
@@ -554,6 +588,8 @@ describe('Task #9 — citation dedup + meta-reference exemption', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     const result = await engine.verifyCitations(
       'When reviewer B writes "fake-file.ts:100 does not exist", the regex extracts it. src/real.ts:1 is the only real claim.',
@@ -577,6 +613,8 @@ describe('Task #9 — citation dedup + meta-reference exemption', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
 
     const results = [
@@ -638,6 +676,8 @@ describe('Task #9 — citation dedup + meta-reference exemption', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
     const sonnetF5Text =
       'The current AND-gate at src/real.ts:1 is semantically inverted. ' +
@@ -685,6 +725,8 @@ describe('Tier 1A Fix #2 — dispute hallucination signal outcome is always fabr
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
 
     // Result text uses the `## Consensus Summary\n- ` format so the bullet-

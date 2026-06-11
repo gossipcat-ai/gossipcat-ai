@@ -5,7 +5,7 @@ import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, PlanState
 import { WorkerAgent } from './worker-agent';
 import { emitConsensusSignals } from './signal-helpers';
 import { ILLMProvider } from './llm-client';
-import { loadSkills } from './skill-loader';
+import { loadSkills, resolveEffectiveSkills } from './skill-loader';
 import { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment, parseSpecFrontMatter } from './prompt-assembler';
 import { AgentMemoryReader } from './agent-memory';
 import { MemoryWriter } from './memory-writer';
@@ -319,9 +319,16 @@ export class DispatchPipeline {
       log(`📋 pre-fetched ${consensusFindings.length} consensus findings for ${agentId}`);
     }
 
-    // 3. Check skill coverage
+    // 3. Check skill coverage — SINGLE SOURCE OF TRUTH fix
+    //    (project_coverage_gap_detector_config_vs_index, CONFIRMED 2026-06-11).
+    //    checkCoverage must see the SAME effective skill set the prompt builder
+    //    injected (`loadSkills` resolves index-precedence at :299), not the raw
+    //    config.json list. Feeding it the config list produced false "skill may
+    //    be relevant but is not assigned" warnings for index-bound skills that
+    //    WERE injected, misleading an external user.
+    const effectiveSkills = resolveEffectiveSkills(agentId, agentSkills, this.skillIndex ?? undefined);
     const skillWarnings = this.catalog
-      ? this.catalog.checkCoverage(agentSkills, task)
+      ? this.catalog.checkCoverage(effectiveSkills, task)
       : [];
 
     // 4. Build session + chain context

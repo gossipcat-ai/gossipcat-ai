@@ -2,12 +2,12 @@
  * PR-B fail-loud PRODUCER conversion + timeout-synthesis seam tests
  * (spec 2026-06-11-round-context-fail-loud.md §4/§5/§6.2, consensus 5e9804d3-91fe440d).
  *
- * Each degraded-mode producer must DUAL-WRITE: emit the structured RoundWarning
- * on the round AND keep the legacy ConsensusReport field populated (PR-C deletes
- * the legacy fields, not PR-B). These tests pin both halves:
- *   - cross_review_skipped  ↔ report.relayCrossReviewSkipped
- *   - coverage_degraded     ↔ report.coverageDegraded
- *   - partial_review        ↔ report.partialReview
+ * PR-C deleted the legacy ConsensusReport degraded-mode trio; the warnings
+ * channel is now the SOLE carrier. These tests pin that each producer emits the
+ * structured RoundWarning AND that the deleted legacy field is absent:
+ *   - cross_review_skipped  (was report.relayCrossReviewSkipped)
+ *   - coverage_degraded     (was report.coverageDegraded)
+ *   - partial_review        (was report.partialReview)
  *   - anchor_master_fallback (new structured producer alongside the via= note)
  *
  * Plus the DIRECT timeout-synthesis seam (§5): the timeout path constructs a
@@ -19,7 +19,6 @@
  */
 import {
   ConsensusEngine,
-  type ConsensusEngineConfig,
 } from '../../packages/orchestrator/src/consensus-engine';
 import { makeRoundContext } from '../../packages/orchestrator/src/round-context';
 import type { TaskEntry } from '../../packages/orchestrator/src/types';
@@ -60,11 +59,11 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
   });
   afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
-  it('cross_review_skipped: emits one warning per skipped agent AND keeps report.relayCrossReviewSkipped', async () => {
+  it('cross_review_skipped: emits one warning per skipped agent AND legacy report.relayCrossReviewSkipped is absent (warnings-channel sole carrier)', async () => {
     const round = makeRoundContext({ resolutionRoots: [], warnings: [] });
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: root, round,
-    } as ConsensusEngineConfig);
+    });
 
     const skipped = [
       { agentId: 'gemini-reviewer', reason: 'quota exhausted' },
@@ -77,8 +76,9 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
       skipped,
     );
 
-    // Legacy field intact (dual-write — PR-C deletes it, not PR-B).
-    expect(report.relayCrossReviewSkipped).toEqual(skipped);
+    // PR-C: the legacy report.relayCrossReviewSkipped field is GONE — the
+    // warnings channel is the sole carrier.
+    expect((report as unknown as { relayCrossReviewSkipped?: unknown }).relayCrossReviewSkipped).toBeUndefined();
     // Structured warnings: one per skipped agent, code + agentId attribution.
     const crw = (report.warnings ?? []).filter(w => w.code === 'cross_review_skipped');
     expect(crw).toHaveLength(2);
@@ -88,11 +88,11 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
     expect(round.warnings.filter(w => w.code === 'cross_review_skipped')).toHaveLength(2);
   });
 
-  it('coverage_degraded: emits warning AND keeps report.coverageDegraded when an agent returns 0 chars', async () => {
+  it('coverage_degraded: emits warning via warnings-channel AND legacy report.coverageDegraded is absent (PR-C: warnings sole carrier)', async () => {
     const round = makeRoundContext({ resolutionRoots: [], warnings: [] });
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: root, round,
-    } as ConsensusEngineConfig);
+    });
 
     const dropped = { id: 't-x', agentId: 'agent-dropped', task: 'review', status: 'completed', result: '', startedAt: Date.now() } as TaskEntry;
     const report = await engine.synthesizeWithCrossReview(
@@ -102,14 +102,16 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
       undefined,
     );
 
-    expect(report.coverageDegraded).toBeDefined();
-    expect(report.coverageDegraded!.droppedAgents).toContain('agent-dropped');
+    // PR-C: the legacy report.coverageDegraded field is GONE — the warning
+    // message carries the structured drop info (dropped-agent list inline).
+    expect((report as unknown as { coverageDegraded?: unknown }).coverageDegraded).toBeUndefined();
     const cd = (report.warnings ?? []).filter(w => w.code === 'coverage_degraded');
     expect(cd).toHaveLength(1);
     expect(cd[0].message).toContain('Coverage degraded');
+    expect(cd[0].message).toContain('agent-dropped');
   });
 
-  it('partial_review: emits warning AND sets report.partialReview when fewer than K reviewers selected', async () => {
+  it('partial_review: emits warning via warnings-channel AND legacy report.partialReview is absent (PR-C: warnings sole carrier)', async () => {
     // runSelectedCrossReview requires a performanceReader. Two agents → K=2 for
     // each non-critical finding, but with only 2 candidates a reviewer cannot
     // review its own finding, so coverage falls short of K → partialReview.
@@ -118,7 +120,7 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: root, round,
       performanceReader: perfReader,
-    } as ConsensusEngineConfig);
+    });
 
     const report = await engine.runSelectedCrossReview(
       [
@@ -128,7 +130,9 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
       'feedface-deadbeef',
     );
 
-    expect(report.partialReview).toBe(true);
+    // PR-C: the legacy report.partialReview field is GONE — the warning is
+    // the sole signal.
+    expect((report as unknown as { partialReview?: unknown }).partialReview).toBeUndefined();
     const pr = (report.warnings ?? []).filter(w => w.code === 'partial_review');
     expect(pr).toHaveLength(1);
   });
@@ -147,7 +151,7 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
     const round = makeRoundContext({ resolutionRoots: [wt], warnings: [] });
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: proj, round,
-    } as ConsensusEngineConfig);
+    });
 
     // dispatchCrossReview generates prompts that resolve the cite anchors.
     await engine.generateCrossReviewPrompts([
@@ -162,54 +166,10 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
   });
 });
 
-describe('(§5) DIRECT timeout-synthesis seam — snapshot carries round roots into synthesizeWithCrossReview', () => {
-  let tmp: string;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'rcp-tmo-')); });
-  afterEach(() => rmSync(tmp, { recursive: true, force: true }));
-
-  it('the round\'s worktree root reaches anchor CONTENT in cross-review prompts via the timeout-path engine construction', async () => {
-    // Faithfully reproduce the relay-cross-review.ts:72 timeout-synthesis engine
-    // construction: a snapshot.roundContext (NOT the resume path) is forwarded
-    // as `round` to a freshly-constructed ConsensusEngine. Assert the worktree
-    // copy of a cited file reaches the prompt content — the boundary value
-    // (round.resolutionRoots) is observable in the FINAL artifact, not just the
-    // config. This is the distinct construction the resume path does not exercise.
-    const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
-    const wt = realpathSync(mkdtempSync(join(tmp, 'wt')));
-    mkdirSync(join(proj, 'src'), { recursive: true });
-    mkdirSync(join(wt, 'src'), { recursive: true });
-    writeFileSync(join(proj, 'src', 'target.ts'), 'export const v = "master-HEAD";');
-    writeFileSync(join(wt, 'src', 'target.ts'), 'export const v = "worktree-branch";');
-
-    // Snapshot exactly as the timeout watcher builds it.
-    const snapshot = {
-      roundContext: makeRoundContext({ resolutionRoots: [wt], consensusId: 'cafef00d-feedface' }),
-    };
-
-    // The timeout path constructs the engine with `round: snapshot.roundContext`.
-    const engine = new ConsensusEngine({
-      llm: makeLlm(),
-      registryGet: () => undefined,
-      projectRoot: proj,
-      round: snapshot.roundContext,
-    } as ConsensusEngineConfig);
-
-    const results = [
-      completed('agent-a', finding('Issue A <cite tag="file">src/target.ts:1</cite>')),
-      completed('agent-b', finding('Issue B <cite tag="file">src/target.ts:1</cite>')),
-    ];
-
-    // generateCrossReviewPrompts is where anchors are resolved against the
-    // round's roots and embedded as <anchor> snippet CONTENT in the prompts.
-    const { prompts } = await engine.generateCrossReviewPrompts(results);
-    // synthesizeWithCrossReview is the distinct timeout-path call.
-    const report = await engine.synthesizeWithCrossReview(results, [], 'cafef00d-feedface', undefined);
-
-    expect(report).toBeDefined();
-    const all = prompts.map(p => `${p.system}\n${p.user}`).join('\n');
-    // The cited file exists in BOTH roots with distinct content — the prompts
-    // built by the timeout-path engine must carry the WORKTREE version.
-    expect(all).toContain('worktree-branch');
-    expect(all).not.toContain('master-HEAD');
-  });
-});
+// (§5) DIRECT timeout-synthesis seam MOVED to tests/cli/timeout-synthesis-seam.test.ts
+// (f8 follow-up). The previous block here REPRODUCED the timeout-path engine
+// construction inline. It now drives the REAL exported core
+// (apps/cli/src/handlers/relay-cross-review.ts → synthesizeTimeoutRound), so the
+// genuine outer layer feeds the genuine inner layer and the boundary value
+// (round.resolutionRoots → anchor CONTENT) is observed in the final artifact —
+// the true Test 21 pattern, not a hand-rebuilt copy.

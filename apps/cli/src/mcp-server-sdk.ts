@@ -204,7 +204,7 @@ try {
   if (stalenessResult.stale) logStalenessToMcpLog(stalenessResult, process.cwd());
 } catch { /* never break boot */ }
 import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction } from './handlers/native-tasks';
-import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus } from './handlers/dispatch';
+import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus, detectLostDispatchWarnings } from './handlers/dispatch';
 import {
   invalidateAgent as invalidateDispatchPromptCacheForAgent,
   invalidateAll as invalidateAllDispatchPromptCache,
@@ -1716,6 +1716,16 @@ export function createMcpServer(): McpServer {
       // above — a dispatch-time rejection is visible at collect even when the
       // operator passes fresh (or no) collect-time roots.
       if (task_ids && task_ids.length > 0) {
+        // f11 follow-up (consensus dfe05be2-73794442:f11): detect lost
+        // dispatch-time warnings BEFORE draining/deleting the stash — a task
+        // whose native entry carries the persisted `dispatchWarningsStashed`
+        // marker but has no live stash entry lost its warnings to a /mcp
+        // reconnect OR bounded stash eviction. Also checks nativeResultMap
+        // for tasks that completed before the reconnect (the marker is carried
+        // from NativeTaskInfo onto the result record at relay time).
+        for (const w of detectLostDispatchWarnings(task_ids, ctx.nativeTaskMap, ctx.pendingDispatchWarnings, ctx.nativeResultMap)) {
+          round.warnings.push(w);
+        }
         const seen = new Set<readonly import('@gossip/orchestrator').RoundWarning[]>();
         for (const tid of task_ids) {
           const stashed = ctx.pendingDispatchWarnings.get(tid);

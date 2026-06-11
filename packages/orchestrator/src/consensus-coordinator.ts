@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { ILLMProvider, createProvider } from './llm-client';
 import { ConsensusEngine } from './consensus-engine';
 import { ConsensusReport } from './consensus-types';
-import { isRoundContext, type RoundContext } from './round-context';
+import { isRoundContext, makeRoundContext, type RoundContext } from './round-context';
 import { MemoryWriter } from './memory-writer';
 import { AgentConfig, TaskEntry } from './types';
 import { GossipPublisher } from './gossip-publisher';
@@ -19,18 +19,6 @@ export interface ConsensusCoordinatorConfig {
   keyProvider: ((provider: string) => Promise<string | null>) | null;
   /** Forwarded to ConsensusEngine so Phase-2 reviewers keep their skills. */
   getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
-  /**
-   * Post-validation resolution roots forwarded to ConsensusEngine. Must be
-   * realpath'd absolute paths (validation happens at MCP boundary). Issue
-   * #126 / PR-B.
-   */
-  resolutionRoots?: readonly string[];
-  /**
-   * Per-round consensus context (spec §3.1). Alias-mode default forwarded to
-   * ConsensusEngine when no per-round override is supplied to runConsensus.
-   * When present it WINS over the loose `resolutionRoots` field.
-   */
-  round?: RoundContext;
 }
 
 type ConsensusPhase = 'idle' | 'review' | 'cross_review' | 'synthesis';
@@ -41,8 +29,6 @@ export class ConsensusCoordinator {
   private projectRoot: string;
   private keyProvider: ((provider: string) => Promise<string | null>) | null;
   private getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
-  private resolutionRoots?: readonly string[];
-  private round?: RoundContext;
   private gossipPublisher: GossipPublisher | null = null;
   private memWriter: MemoryWriter;
 
@@ -56,8 +42,6 @@ export class ConsensusCoordinator {
     this.projectRoot = config.projectRoot;
     this.keyProvider = config.keyProvider;
     this.getAgentSkillsContent = config.getAgentSkillsContent;
-    this.resolutionRoots = config.resolutionRoots;
-    this.round = config.round;
     this.memWriter = new MemoryWriter(config.projectRoot);
   }
 
@@ -75,15 +59,15 @@ export class ConsensusCoordinator {
 
   /**
    * @param roundOrRoots Optional per-round context OR collect-time resolution
-   *   roots (already validated at the MCP boundary). Alias mode (spec §3.2):
-   *   - A `RoundContext` WINS — it is forwarded whole to the engine (carrying
-   *     resolutionRoots AND the warnings array), overriding the constructor
-   *     default `this.round` / `this.resolutionRoots`.
-   *   - A non-empty `readonly string[]` (legacy shape) OVERRIDES the
-   *     constructor default `this.resolutionRoots`, mirroring the "collect-time
-   *     REPLACES dispatch-time" semantics (collect.ts). Byte-identical to the
-   *     pre-RoundContext path.
-   *   When absent, the constructor defaults are used (round wins over roots).
+   *   roots (already validated at the MCP boundary). PR-C — the engine now
+   *   REQUIRES a RoundContext, so this method always derives one:
+   *   - A `RoundContext` is forwarded whole to the engine (carrying
+   *     resolutionRoots AND the warnings array).
+   *   - A `readonly string[]` (legacy shape) is wrapped into a fresh
+   *     RoundContext via `makeRoundContext({ resolutionRoots })`.
+   *   - When absent, an empty `makeRoundContext()` is used (resolve against
+   *     project root only). There is no constructor-level default — the sole
+   *     production construction site never passed one (consensus-verified).
    */
   async runConsensus(
     results: TaskEntry[],
@@ -95,21 +79,15 @@ export class ConsensusCoordinator {
     // !Array.isArray check would let any non-array object pass as a
     // RoundContext, then read .resolutionRoots as undefined and silently fall
     // through to empty roots (the stale-anchor bug class). isRoundContext
-    // validates the resolutionRoots + warnings array fields.
-    const perRoundRound: RoundContext | undefined =
-      isRoundContext(roundOrRoots) ? roundOrRoots : undefined;
-    const perRoundRoots: readonly string[] | undefined =
-      Array.isArray(roundOrRoots) ? (roundOrRoots as readonly string[]) : undefined;
-
-    // Effective round: per-round context wins, else constructor default.
-    const effectiveRound: RoundContext | undefined = perRoundRound ?? this.round;
-    // Effective legacy roots: only used when NO round is in play (round carries
-    // its own resolutionRoots). Per-round legacy array overrides constructor.
-    const effectiveResolutionRoots = effectiveRound
-      ? effectiveRound.resolutionRoots
-      : (perRoundRoots && perRoundRoots.length > 0)
-        ? perRoundRoots
-        : this.resolutionRoots;
+    // validates the resolutionRoots + warnings array fields. Always resolve to
+    // a concrete RoundContext: forward a passed round, wrap a legacy roots
+    // array, or build an empty one (project-root-only).
+    const effectiveRound: RoundContext = isRoundContext(roundOrRoots)
+      ? roundOrRoots
+      : makeRoundContext(
+          Array.isArray(roundOrRoots) ? { resolutionRoots: roundOrRoots as readonly string[] } : {},
+        );
+    const effectiveResolutionRoots = effectiveRound.resolutionRoots;
 
     try {
       this.currentPhase = 'review';
@@ -142,12 +120,10 @@ export class ConsensusCoordinator {
         projectRoot: this.projectRoot,
         agentLlm,
         getAgentSkillsContent: this.getAgentSkillsContent,
-        // Alias mode: when a round is in play, forward it whole (it carries its
-        // own resolutionRoots AND the warnings array the engine drains into the
-        // report). Else fall back to the legacy loose roots — byte-identical.
-        ...(effectiveRound
-          ? { round: effectiveRound }
-          : { resolutionRoots: effectiveResolutionRoots }),
+        // PR-C: the engine REQUIRES a round; forward the effective one whole
+        // (it carries resolutionRoots AND the warnings array the engine drains
+        // into the report).
+        round: effectiveRound,
       });
       const consensusReport = await engine.run(results);
       this.currentPhase = 'cross_review';

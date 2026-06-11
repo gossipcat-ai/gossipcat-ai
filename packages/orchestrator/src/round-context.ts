@@ -1,11 +1,11 @@
 /**
- * RoundContext — single carrier for per-consensus-round state that today is
+ * RoundContext — single carrier for per-consensus-round state that was once
  * threaded as a loose `resolutionRoots?: readonly string[]` through five
  * separate door boundaries (collect handler, dispatch handler, coordinator,
- * pipeline, engine). This is the alias-mode introduction (PR-A): every call
- * site that accepts `resolutionRoots` gains an OPTIONAL `round?: RoundContext`
- * alongside it. When `round` is present it WINS; when absent, the legacy
- * `resolutionRoots` path behaves byte-identically. PR-C removes the aliases.
+ * pipeline, engine). PR-A introduced it in alias mode; PR-C (this revision)
+ * removed the aliases: `ConsensusEngineConfig.round` is now REQUIRED and the
+ * loose `resolutionRoots` config field is gone. The RoundContext is the single
+ * carrier for per-round resolutionRoots + fail-loud warnings.
  *
  * Spec: 2026-06-11-round-context-fail-loud.md §3.1, consensus 5e9804d3-91fe440d.
  */
@@ -18,15 +18,21 @@
  *     worktree (alongside the `via="⚠ resolved against project root…"` anchor
  *     note; one warning per resolved-from-project-root anchor instance, no dedup).
  *   - `cross_review_skipped` — a relay agent's Phase-2 cross-review was skipped
- *     (quota / parse / network); dual-written with `report.relayCrossReviewSkipped`.
+ *     (quota / parse / network). Sole carrier since PR-C deleted
+ *     `report.relayCrossReviewSkipped`.
  *   - `coverage_degraded` — at least one dispatched agent returned a 0-char /
- *     sentinel response; dual-written with `report.coverageDegraded`.
+ *     sentinel response. Sole carrier since PR-C deleted `report.coverageDegraded`.
  *   - `partial_review` — at least one finding received fewer than its target K
- *     cross-reviewers; dual-written with `report.partialReview`.
+ *     cross-reviewers. Sole carrier since PR-C deleted `report.partialReview`.
  *   - `zero_tags` — an agent relayed a consensus result carrying zero
  *     `<agent_finding>` tags; dual-written with the relay-lint receipt line.
  *   - `round_restore_malformed` — a persisted round record carried a malformed
  *     field shape that was dropped on restore (relay-cross-review restore path).
+ *   - `dispatch_warnings_lost` — the native task entry's persisted
+ *     `dispatchWarningsStashed` marker is set but the in-memory dispatch-time
+ *     warnings stash was wiped (likely /mcp reconnect) before collect drained
+ *     it; the warning content is unrecoverable but its LOSS is now observable
+ *     (f11 follow-up).
  *
  * The trailing `(string & {})` is an INTENTIONAL open extension point: it keeps
  * autocomplete on the named codes while letting a future PR-B producer emit a
@@ -44,6 +50,7 @@ export type RoundWarningCode =
   | 'partial_review'
   | 'zero_tags'
   | 'round_restore_malformed'
+  | 'dispatch_warnings_lost'
   // eslint-disable-next-line @typescript-eslint/ban-types
   | (string & {});
 

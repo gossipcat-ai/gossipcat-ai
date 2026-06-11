@@ -11,6 +11,7 @@ import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
 import type { PromptFormat } from './dispatch';
 import { discoverVerifier, type VerifierBinding } from './auto-verify-discovery';
+import { makeRoundContext } from '@gossip/orchestrator';
 import type { RelayWarningEntry, RoundContext } from '@gossip/orchestrator';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
@@ -545,6 +546,12 @@ export async function handleCollect(
       }
       outerEffectiveRoots = effectiveRoots;
 
+      // PR-C: the engine REQUIRES a RoundContext. Prefer the boundary-built
+      // round (carries the fail-loud warnings array); otherwise wrap the
+      // collect-validated effectiveRoots into a fresh one so its warnings still
+      // drain into report.warnings.
+      const effectiveRound: RoundContext = round ?? makeRoundContext({ resolutionRoots: effectiveRoots });
+
       // Hoisted so verifierToolRunner callback can close over it when building the engine config.
       // Constructed AFTER effectiveRoots so fileSearch can prioritize matches under a
       // resolution root (e.g. sibling worktrees) instead of blindly taking the first hit.
@@ -608,13 +615,12 @@ export async function handleCollect(
         projectRoot: process.cwd(),
         agentLlm: (id: string) => agentLlmCache.get(id),
         performanceReader,
-        // Alias mode: a RoundContext WINS — forward it whole so its warnings
+        // PR-C: forward the effective RoundContext (required) so its warnings
         // array drains into report.warnings (the immediate-synthesis path at
-        // :811 builds the report on THIS engine). Else fall back to the legacy
-        // roots-only field (byte-identical). The pending-round path below
-        // re-seeds resolutionRoots from snapshot/round per phase, so this only
+        // :811 builds the report on THIS engine). The pending-round path below
+        // re-seeds the round from snapshot/roundContext per phase, so this only
         // governs the immediate synthesizeWithCrossReview branch.
-        ...(round ? { round } : { resolutionRoots: effectiveRoots }),
+        round: effectiveRound,
         verifierDispatch: _autoVerifyDispatch,
         warningSink: _autoVerifyWarningSink,
         verifierToolRunner: async (agentId: string, toolName: string, args: Record<string, unknown>): Promise<string> => {
@@ -854,11 +860,12 @@ export async function handleCollect(
           createdAt: Date.now(),
           nativePrompts: nativePrompts.map((p: any) => ({ agentId: p.agentId, system: p.system, user: p.user })),
           resolutionRoots: effectiveRoots.length > 0 ? [...effectiveRoots] : undefined,
-          // Alias mode (spec §3.2): embed the round so later phases
+          // Spec §3.2: embed the effective round so later phases
           // (relay-cross-review arrival/timeout/synthesis) can drain its
           // warnings + read its roots. The flat resolutionRoots above stays
-          // populated in parallel for old-reader back-compat.
-          roundContext: round,
+          // populated in parallel for old-reader back-compat. PR-C: this is
+          // always a concrete RoundContext (the engine now requires one).
+          roundContext: effectiveRound,
         });
 
         // Seed the relay-lint fallback membership map — keeps round-membership

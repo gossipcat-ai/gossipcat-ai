@@ -1,4 +1,5 @@
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { CrossReviewEntry } from '../../packages/orchestrator/src/consensus-types';
 import { AgentConfig, TaskEntry } from '../../packages/orchestrator/src/types';
 import { ILLMProvider } from '../../packages/orchestrator/src/llm-client';
@@ -31,6 +32,8 @@ describe('ConsensusEngine DoS', () => {
       registryGet: (agentId: string): AgentConfig | undefined => ({
         id: agentId, provider: 'local', model: 'test-model', skills: [], preset: 'test-preset'
       }),
+
+      round: testRound(),
     });
   });
 
