@@ -40,7 +40,7 @@ export class ConsensusCoordinator {
 
   private currentPhase: ConsensusPhase = 'idle';
 
-  readonly sessionConsensusHistory: Array<{ timestamp: string; confirmed: number; disputed: number; unverified: number; unique: number; newFindings?: number; agents?: string[]; summary: string }> = [];
+  readonly sessionConsensusHistory: Array<{ timestamp: string; confirmed: number; disputed: number; unverified: number; unique: number; newFindings?: number; agents?: string[]; summary: string; resolutionRoots?: string[] }> = [];
 
   constructor(config: ConsensusCoordinatorConfig) {
     this.llm = config.llm;
@@ -180,7 +180,7 @@ export class ConsensusCoordinator {
           }));
           const participants = new Set(results.filter(r => r.status === 'completed').map(r => r.agentId));
           for (const agentId of participants) {
-            this.memWriter.writeConsensusKnowledge(agentId, findings, this.resolutionRoots ? [...this.resolutionRoots] : undefined, consensusId);
+            this.memWriter.writeConsensusKnowledge(agentId, findings, (effectiveResolutionRoots && effectiveResolutionRoots.length > 0) ? [...effectiveResolutionRoots] : undefined, consensusId);
           }
           for (const agentId of participants) {
             try { this.memWriter.rebuildIndex(agentId); } catch { /* best-effort */ }
@@ -198,6 +198,12 @@ export class ConsensusCoordinator {
         newFindings: consensusReport.newFindings?.length ?? 0,
         agents: results.filter(r => r.status === 'completed').map(r => r.agentId),
         summary: consensusReport.summary.slice(0, 2000),
+        // Per-round audit trail: which resolution roots anchored this round's
+        // citations (the effective set, not the constructor default). undefined
+        // when the round ran with no roots (resolved against project root only).
+        resolutionRoots: (effectiveResolutionRoots && effectiveResolutionRoots.length > 0)
+          ? [...effectiveResolutionRoots]
+          : undefined,
       };
       this.sessionConsensusHistory.push(historyEntry);
 

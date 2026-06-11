@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from 'fs/promises';
 import { mkdirSync, writeFileSync, realpathSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { join, resolve, dirname, relative, sep } from 'path';
+import { join, resolve, dirname, relative, sep, isAbsolute } from 'path';
 import { log as _log } from './log';
 
 /** Generate a short consensus round ID: xxxxxxxx-xxxxxxxx (17 chars from UUID) */
@@ -241,7 +241,11 @@ export class ConsensusEngine {
       const taskRoots = r.resolutionRoots;
       if (taskRoots) {
         for (const p of taskRoots) {
-          if (typeof p === 'string' && p.length > 0) next.add(resolve(p));
+          // Mirror the constructor's absolute-path discipline as
+          // defense-in-depth. TaskEntry roots are post-validation, but unlike
+          // the constructor (programmer-error contract → throw) this path
+          // fails soft: silently skip non-absolute entries rather than throw.
+          if (typeof p === 'string' && p.length > 0 && isAbsolute(p)) next.add(resolve(p));
         }
       }
     }
@@ -290,25 +294,6 @@ export class ConsensusEngine {
       this.fileCache.clear();
       this.anchorPathCache.clear();
       this.anchorWarnedRefs.clear();
-    }
-  }
-
-  /**
-   * Loud-fail observability for the rootless-degraded state: when the round was
-   * constructed WITH resolutionRoots but they all dropped during validation /
-   * union (currentWorktreeRoots ended up empty), every <anchor> silently
-   * resolves against project root and isResolvedFromProjectRootOnly is
-   * structurally suppressed. Surface that on stderr so the regression is
-   * visible at cross-review time. Does NOT alter isResolvedFromProjectRootOnly.
-   */
-  private warnIfRootsDroppedToEmpty(): void {
-    const declared = this.config.resolutionRoots;
-    if (declared && declared.length > 0 && this.currentWorktreeRoots.size === 0) {
-      process.stderr.write(
-        `[consensus] ⚠ resolutionRoots: ${declared.length} root(s) declared but 0 resolved ` +
-        `(all dropped during validation) — every anchor will resolve against project root, ` +
-        `NOT the feature-branch worktree. Stale-anchor false disputes likely.\n`,
-      );
     }
   }
 
@@ -496,7 +481,6 @@ export class ConsensusEngine {
     const consensusStart = Date.now();
     _log('consensus', `Starting cross-review for ${successful.length} agents`);
     this.updateWorktreeRoots(results, this.config.resolutionRoots);
-    this.warnIfRootsDroppedToEmpty();
     // Generate consensusId ONCE per round and thread it through cross-review
     // and synthesize so NEW findingIds rewritten in crossReviewForAgent match
     // the consensusId used by synthesize's signal/finding id assembly.

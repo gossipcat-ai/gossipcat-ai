@@ -418,7 +418,14 @@ function prependResolutionRootWarning<T extends { content: Array<{ type: 'text';
   rejectedReasons: readonly string[],
 ): T {
   if (!rejectedReasons || rejectedReasons.length === 0) return result;
-  const reasons = Array.from(new Set(rejectedReasons)).join('; ');
+  // Render each distinct reason with its count so the raw rejected total and
+  // the per-reason breakdown agree (e.g. "3 entry(ies) rejected (not found ×3)").
+  // A bare Set dedup hides how many entries shared a reason.
+  const counts = new Map<string, number>();
+  for (const r of rejectedReasons) counts.set(r, (counts.get(r) ?? 0) + 1);
+  const reasons = Array.from(counts.entries())
+    .map(([reason, n]) => (n > 1 ? `${reason} ×${n}` : reason))
+    .join('; ');
   const warning = {
     type: 'text' as const,
     text: `⚠ resolutionRoots: ${rejectedReasons.length} entry(ies) rejected (${reasons}) — anchors will resolve against project root`,
