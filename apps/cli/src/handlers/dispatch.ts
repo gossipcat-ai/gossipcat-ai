@@ -19,7 +19,7 @@ import {
   type RoundWarning,
 } from '@gossip/orchestrator';
 import { formatIdentityBlock } from '@gossip/tools';
-import { ctx, NATIVE_TASK_TTL_MS } from '../mcp-context';
+import { ctx, NATIVE_TASK_TTL_MS, MAX_PENDING_DISPATCH_WARNINGS } from '../mcp-context';
 
 /**
  * Stash dispatch-time fail-loud warnings (spec §3.2 boundary #1) under every
@@ -32,6 +32,13 @@ function stashDispatchWarnings(taskIds: readonly string[], warnings?: readonly R
   if (!warnings || warnings.length === 0 || taskIds.length === 0) return;
   const frozen = Object.freeze(warnings.map(w => Object.freeze({ ...w })));
   for (const tid of taskIds) {
+    // Bounded eviction: evict the eldest entry (first by Map insertion order)
+    // when the cap is reached, so uncollected tasks don't grow the map without
+    // bound for the server lifetime.
+    if (ctx.pendingDispatchWarnings.size >= MAX_PENDING_DISPATCH_WARNINGS) {
+      const eldest = ctx.pendingDispatchWarnings.keys().next().value;
+      if (eldest !== undefined) ctx.pendingDispatchWarnings.delete(eldest);
+    }
     ctx.pendingDispatchWarnings.set(tid, frozen);
   }
 }

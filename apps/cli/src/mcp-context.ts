@@ -5,6 +5,14 @@
 import { randomUUID } from 'crypto';
 import type { CrossReviewEntry, MainAgent, RoundContext, RoundWarning } from '@gossip/orchestrator';
 
+/**
+ * Maximum number of task_ids held in pendingDispatchWarnings at any time.
+ * When at cap, stashDispatchWarnings evicts the eldest (first Map entry by
+ * insertion order) before inserting a new entry. Tasks dispatched and never
+ * collected would otherwise leak entries for the server lifetime.
+ */
+export const MAX_PENDING_DISPATCH_WARNINGS = 200;
+
 export interface NativeCrossReviewPrompt {
   agentId: string;
   system: string;
@@ -201,6 +209,11 @@ export interface McpContext {
    * reconnect between dispatch and collect loses an undrained stash entry; that
    * is the accepted residual window (symmetric with pendingDispatchResolutionRoots,
    * which is also reconnect-volatile).
+   *
+   * Bounded to MAX_PENDING_DISPATCH_WARNINGS entries. stashDispatchWarnings in
+   * dispatch.ts evicts the eldest (first Map entry by insertion order) when the
+   * cap is reached, preventing unbounded growth for tasks dispatched but never
+   * collected (e.g. long-lived server under repeated dispatch-only workflows).
    */
   pendingDispatchWarnings: Map<string, readonly RoundWarning[]>;
   nativeUtilityConfig: { model: string } | null;

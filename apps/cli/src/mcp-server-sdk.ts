@@ -1736,13 +1736,17 @@ export function createMcpServer(): McpServer {
         warnings: round.warnings,
       });
       const collectResult = await handleCollect(task_ids, timeout_ms, consensus, validated, prompt_format, finalRound);
-      // handleCollect already renders a "⚠ Round warnings:" block from
-      // report.warnings (the PR-A drain) for consensus rounds, so the collect-
-      // time rejections + drained dispatch-time warnings on `round.warnings`
-      // surface there. For a NON-consensus collect there is no report/drain, so
-      // surface the round's warnings directly on the response — fail-loud
-      // invariant §4: visible at the call the operator made.
-      if (!consensus && round.warnings.length > 0) {
+      // handleCollect renders a "⚠ Round warnings:" block only when a
+      // consensusReport was built AND it carried warnings (the PR-A drain path).
+      // That path requires consensus:true AND ≥2 completed results. When fewer
+      // than 2 completed (or consensus:false), no report is built and no block
+      // is rendered — the round's warnings (including drained dispatch-time
+      // roots_rejected entries) would be silently lost. Guard: append whenever
+      // handleCollect did NOT already render them.  The `warningsRendered` flag
+      // on the return value is the explicit signal — avoids double-render on the
+      // ≥2-completed happy path while closing the <2-completed loss hole.
+      // Fail-loud invariant §4: round.warnings.length > 0 ⟹ visible in response.
+      if (!collectResult.warningsRendered && round.warnings.length > 0) {
         return appendDispatchWarningsBlock(collectResult, round.warnings);
       }
       return collectResult;

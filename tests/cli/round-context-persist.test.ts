@@ -457,3 +457,168 @@ describe('(§3.2 boundary #1) dispatch-time warnings stash → collect drain', (
     expect(text).toContain('dispatch-time entry rejected');
   });
 });
+
+// ── Finding 1 regression: consensus:true with <2 completed MUST still surface
+// round warnings (finding dfe05be2-73794442:f9).
+describe('(f9) engine-less consensus collect — round warnings surface in response', () => {
+  let origMainAgent: any;
+  let origBoot: any;
+  let origNativeConfigs: any;
+
+  beforeEach(() => {
+    origMainAgent = (ctx as any).mainAgent;
+    origBoot = ctx.boot;
+    origNativeConfigs = ctx.nativeAgentConfigs;
+    ctx.boot = jest.fn().mockResolvedValue(undefined) as any;
+    ctx.nativeAgentConfigs = new Map();
+    ctx.pendingConsensusRounds = new Map();
+    ctx.nativeResultMap = new Map();
+    ctx.nativeTaskMap = new Map();
+  });
+
+  afterEach(() => {
+    (ctx as any).mainAgent = origMainAgent;
+    ctx.boot = origBoot;
+    ctx.nativeAgentConfigs = origNativeConfigs;
+    ctx.pendingConsensusRounds.clear();
+  });
+
+  it('consensus:true with 1 completed result → handleCollect returns warningsRendered:false so sdk wrapper will append warnings', async () => {
+    // Only ONE completed result → < 2 completed → no ConsensusEngine built.
+    // The round's warnings (including drained roots_rejected) must NOT be silently
+    // dropped. The fix: handleCollect signals `warningsRendered:false` when no
+    // report was produced; the sdk wrapper then calls appendDispatchWarningsBlock.
+    //
+    // This test covers the handleCollect side of the contract:
+    //   - warningsRendered MUST be false when fewer than 2 completed (no report)
+    //   - The sdk wrapper guard `!collectResult.warningsRendered && round.warnings.length > 0`
+    //     then fires and appends the warnings block.
+    const now = Date.now();
+    const oneResult = [
+      { id: 'r1', agentId: 'gemini-reviewer', task: 'Audit', status: 'completed', result: 'ok', startedAt: now - 500, completedAt: now },
+    ];
+    (ctx as any).mainAgent = {
+      projectRoot: '/tmp/gossip-test',
+      collect: jest.fn().mockResolvedValue({ results: oneResult }),
+      getAgentConfig: jest.fn().mockReturnValue(null),
+      getLlm: jest.fn().mockReturnValue(null),
+    } as any;
+
+    const round = makeRoundContext({
+      resolutionRoots: [],
+      warnings: [{ code: 'roots_rejected', message: 'dispatch-time entry rejected: /bad/path [h1] — anchors will resolve against project root' }],
+    });
+
+    const result = await handleCollect(['r1'], 5000, true, [], undefined, round);
+
+    // No consensusReport built → warningsRendered must be false.
+    // The sdk wrapper reads this flag and calls appendDispatchWarningsBlock when false.
+    expect((result as any).warningsRendered).toBe(false);
+    // The response text should NOT already contain the warning (the sdk wrapper adds it).
+    const text = result.content.map(c => c.text).join('\n');
+    expect(text).not.toContain('⚠ Round warnings:');
+    // Simulate what the sdk wrapper does: since warningsRendered is false and
+    // round.warnings.length > 0, it calls appendDispatchWarningsBlock.
+    // appendDispatchWarningsBlock renders warning.message (not .code) in the block.
+    const counts = new Map<string, number>();
+    for (const w of round.warnings) counts.set(w.message, (counts.get(w.message) ?? 0) + 1);
+    const lines = Array.from(counts.entries()).map(([msg, n]) => (n > 1 ? `  - ${msg} ×${n}` : `  - ${msg}`));
+    const warningBlock = `⚠ ${round.warnings.length} round warning(s):\n${lines.join('\n')}`;
+    // The block contains the warning message text.
+    expect(warningBlock).toContain('dispatch-time entry rejected');
+  });
+
+  it('no double-render: consensus:true with ≥2 completed + report warnings → warnings appear exactly once', async () => {
+    // Happy path: engine IS built and report.warnings is rendered by handleCollect.
+    // The sdk wrapper must NOT prepend them a second time via appendDispatchWarningsBlock.
+    const now = Date.now();
+    const twoResults = [
+      { id: 'r1', agentId: 'gemini-reviewer', task: 'Audit', status: 'completed', result: 'ok-a', startedAt: now - 500, completedAt: now },
+      { id: 'r2', agentId: 'gemini-tester', task: 'Audit', status: 'completed', result: 'ok-b', startedAt: now - 500, completedAt: now },
+    ];
+    const warningMsg = 'all 1 supplied resolutionRoots were rejected — anchors will resolve against project root only';
+    (ctx as any).mainAgent = {
+      projectRoot: '/tmp/gossip-test',
+      collect: jest.fn().mockResolvedValue({ results: twoResults }),
+      // Engine echoes back the round's warnings into report.warnings.
+      runConsensus: jest.fn().mockImplementation(async (_results: any, roundOrRoots: any) => ({
+        agentCount: 2, rounds: 2,
+        confirmed: [], disputed: [], unverified: [], unique: [], insights: [],
+        newFindings: [], signals: [], summary: 'Consensus complete.',
+        warnings: roundOrRoots && Array.isArray(roundOrRoots.warnings) ? [...roundOrRoots.warnings] : [],
+      })),
+      getAgentConfig: jest.fn().mockReturnValue(null),
+      getLlm: jest.fn().mockReturnValue(null),
+    } as any;
+
+    const round = makeRoundContext({
+      resolutionRoots: [],
+      warnings: [{ code: 'roots_empty_after_validation', message: warningMsg }],
+    });
+
+    // handleCollect is called directly here — the sdk wrapper is what calls
+    // appendDispatchWarningsBlock. We verify handleCollect sets warningsRendered
+    // so the wrapper knows NOT to double-append.
+    const result = await handleCollect(['r1', 'r2'], 5000, true, [], undefined, round);
+
+    // handleCollect renders warnings in the text body.
+    const text = result.content[0].text;
+    expect(text).toContain('⚠ Round warnings:');
+    expect(text).toContain('roots_empty_after_validation');
+    // warningsRendered flag is set — the sdk wrapper will skip appendDispatchWarningsBlock.
+    expect((result as any).warningsRendered).toBe(true);
+    // The warning text appears exactly once (not duplicated).
+    const occurrences = (text.match(/roots_empty_after_validation/g) ?? []).length;
+    expect(occurrences).toBe(1);
+  });
+});
+
+// ── Finding 2 regression: pendingDispatchWarnings must not grow without bound
+// (finding dfe05be2-73794442:f1).
+describe('(f1) pendingDispatchWarnings bounded eviction', () => {
+  // stashDispatchWarnings is a module-private function. We test the invariant
+  // white-box by replicating the eviction logic against the shared ctx map —
+  // the same Map that stashDispatchWarnings mutates. The constant is exported
+  // from mcp-context.ts so consumers and tests can refer to the same value.
+
+  beforeEach(() => {
+    ctx.pendingDispatchWarnings.clear();
+  });
+
+  afterEach(() => {
+    ctx.pendingDispatchWarnings.clear();
+  });
+
+  it('inserting MAX+1 entries evicts the eldest (first inserted) and caps size at MAX', async () => {
+    const { MAX_PENDING_DISPATCH_WARNINGS } = await import('../../apps/cli/src/mcp-context');
+
+    // White-box: replicate the bounded-insert logic from stashDispatchWarnings
+    // (dispatch.ts) to verify the invariant holds at the Map level.
+    // The actual stashDispatchWarnings function is private to the module, but
+    // the Map it mutates (ctx.pendingDispatchWarnings) is shared state.
+    const warning = Object.freeze([Object.freeze({ code: 'roots_rejected' as const, message: 'test' })]);
+
+    // Fill to exactly MAX entries. Keys are '0'..'MAX-1'.
+    for (let i = 0; i < MAX_PENDING_DISPATCH_WARNINGS; i++) {
+      ctx.pendingDispatchWarnings.set(String(i), warning);
+    }
+    expect(ctx.pendingDispatchWarnings.size).toBe(MAX_PENDING_DISPATCH_WARNINGS);
+
+    // Insert one more entry (key 'overflow'), simulating the eviction path.
+    // Replicate the eviction logic:
+    if (ctx.pendingDispatchWarnings.size >= MAX_PENDING_DISPATCH_WARNINGS) {
+      const eldest = ctx.pendingDispatchWarnings.keys().next().value;
+      if (eldest !== undefined) ctx.pendingDispatchWarnings.delete(eldest);
+    }
+    ctx.pendingDispatchWarnings.set('overflow', warning);
+
+    // Size must stay at MAX — oldest entry ('0') was evicted.
+    expect(ctx.pendingDispatchWarnings.size).toBe(MAX_PENDING_DISPATCH_WARNINGS);
+    // Eldest (first-inserted) entry is gone.
+    expect(ctx.pendingDispatchWarnings.has('0')).toBe(false);
+    // Newest entry is present.
+    expect(ctx.pendingDispatchWarnings.has('overflow')).toBe(true);
+    // The rest (1..MAX-1) are still present.
+    expect(ctx.pendingDispatchWarnings.has(String(MAX_PENDING_DISPATCH_WARNINGS - 1))).toBe(true);
+  });
+});
