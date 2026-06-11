@@ -16,6 +16,13 @@ import { join, resolve, dirname } from 'path';
 
 export interface HookInstallResult {
   installed: boolean;
+  /**
+   * Distinguishes fresh registration from an idempotent no-op.
+   * Only present when `installed: true`.
+   *   - `"registered"` — hook entry was written to settings.json for the first time.
+   *   - `"already-registered"` — the exact command was already present; no write needed.
+   */
+  action?: 'registered' | 'already-registered';
   reason?: string;
 }
 
@@ -168,9 +175,41 @@ export function installWorktreeSandboxHook(projectRoot: string): HookInstallResu
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
     }
 
-    return { installed: true };
+    return { installed: true, action: mutated ? 'registered' : 'already-registered' };
   } catch (err) {
     return { installed: false, reason: (err as Error).message };
+  }
+}
+
+/**
+ * Check whether the worktree-sandbox PreToolUse hook entry is registered in
+ * `<projectRoot>/.claude/settings.json`. Used by gossip_status to emit a
+ * visible warning when the hook script exists on disk but the settings entry
+ * is missing (i.e. the hook was installed but the registration was lost, e.g.
+ * via settings.json reset or manual edit).
+ *
+ * Returns `true` when the exact HOOK_COMMAND is registered, `false` otherwise.
+ * Returns `false` (silently) on any IO or parse error — the status handler
+ * must fail-open.
+ */
+export function isWorktreeSandboxHookRegistered(projectRoot: string): boolean {
+  try {
+    const settingsPath = join(projectRoot, '.claude', 'settings.json');
+    let settings: Record<string, any>;
+    try {
+      settings = loadSettings(settingsPath);
+    } catch {
+      return false; // malformed → treat as not registered
+    }
+    const hooks = settings.hooks;
+    if (!hooks || !Array.isArray(hooks.PreToolUse)) return false;
+    for (const entry of hooks.PreToolUse) {
+      if (!entry || !Array.isArray(entry.hooks)) continue;
+      if (entry.hooks.some((h: any) => h && h.command === HOOK_COMMAND)) return true;
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 

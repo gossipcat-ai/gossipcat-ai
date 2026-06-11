@@ -1776,6 +1776,19 @@ export function createMcpServer(): McpServer {
         }
       } catch { /* auth-state.json not present — skip */ }
 
+      // Worktree-sandbox hook registration check (issue #538 item 4): when the
+      // hook script exists on disk but the PreToolUse settings.json entry is
+      // missing, emit a one-line warning so the operator knows to re-run
+      // gossip_setup. Silent when healthy (both present or both absent).
+      try {
+        const { existsSync: hookExists } = await import('fs');
+        const hookScriptPath = join(process.cwd(), '.claude', 'hooks', 'worktree-sandbox.sh');
+        const { isWorktreeSandboxHookRegistered } = await import('@gossip/orchestrator');
+        if (hookExists(hookScriptPath) && !isWorktreeSandboxHookRegistered(process.cwd())) {
+          lines.push('  ⚠️ Sandbox: worktree-sandbox hook installed but UNREGISTERED — run gossip_setup to re-register');
+        }
+      } catch { /* fail-open — hook check must never break status output */ }
+
       // Signals pending — recent consensus rounds with no manually-recorded signals.
       // Surfaces the back-search gap (per consensus 4c88bcd3, haiku:f17) so the
       // orchestrator can SEE which rounds it skipped without having to remember.
@@ -2354,7 +2367,9 @@ export function createMcpServer(): McpServer {
         const { installWorktreeSandboxHook, writeOrchestratorRoleMarker } = require('@gossip/orchestrator') as typeof import('@gossip/orchestrator');
         const hookResult = installWorktreeSandboxHook(root);
         hookSummary = hookResult.installed
-          ? 'Sandbox hook: .claude/hooks/worktree-sandbox.sh installed (Layer 2)'
+          ? (hookResult.action === 'already-registered'
+              ? 'Sandbox hook: already registered (Layer 2)'
+              : 'Sandbox hook: .claude/hooks/worktree-sandbox.sh registered (Layer 2)')
           : `Sandbox hook: skipped (${hookResult.reason ?? 'unknown'})`;
         // Issue #176: write orchestrator-role marker so the hook auto-exempts
         // the orchestrator when it cd's into a worktree. Idempotent no-op if

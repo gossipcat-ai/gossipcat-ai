@@ -149,7 +149,7 @@ export function taskWasInConsensusRound(
 /** Append one warning line to .gossip/relay-warnings.jsonl. Fail-open. */
 function appendRelayWarning(
   projectRoot: string,
-  entry: { taskId: string; agentId: string; reason: string; resultLength: number; suspectedReason: string; timestamp: string },
+  entry: { taskId: string; agentId: string; reason: string; resultLength: number; suspectedReason: string; timestamp: string; triageClass?: string; concurrentWorktreeTaint?: boolean },
 ): void {
   try {
     const { appendFileSync, mkdirSync } = require('fs');
@@ -159,6 +159,42 @@ function appendRelayWarning(
     appendFileSync(join(dir, RELAY_WARNINGS_FILE), JSON.stringify(entry) + '\n', 'utf8');
   } catch (err) {
     process.stderr.write(`[gossipcat] append relay-warning failed: ${(err as Error).message}\n`);
+  }
+}
+
+/**
+ * Check whether a worktree actually engaged for a `write_mode: "worktree"`
+ * native dispatch. Looks for an `agent-*` subdirectory under
+ * `.claude/worktrees/` whose mtime is >= the task's startedAt timestamp.
+ *
+ * Returns `true` when at least one candidate directory is found (engaged),
+ * `false` when the directory doesn't exist or has no fresh enough entries
+ * (engagement unknown — isolation may have been silently skipped).
+ *
+ * Exported for unit tests.
+ */
+export function checkWorktreeEngaged(startedAt: number, projectRoot: string = process.cwd()): boolean {
+  try {
+    const { readdirSync, statSync } = require('fs');
+    const { join } = require('path');
+    const wtDir = join(projectRoot, '.claude', 'worktrees');
+    let entries: string[];
+    try {
+      entries = readdirSync(wtDir) as string[];
+    } catch (err: any) {
+      if (err && err.code === 'ENOENT') return false; // directory doesn't exist → no worktrees
+      throw err;
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith('agent-')) continue;
+      try {
+        const st = statSync(join(wtDir, entry));
+        if (st.isDirectory() && st.mtimeMs >= startedAt) return true;
+      } catch { /* skip unreadable entries */ }
+    }
+    return false;
+  } catch {
+    return false; // fail-open — engagement check never blocks relay
   }
 }
 
@@ -649,7 +685,11 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   let isolationDiff:
     | { headChanged: boolean; dirtyPathsAdded: string[]; isViolation: boolean; excludedPaths?: string[] }
     | null = null;
-  if (taskInfo.writeMode === 'worktree' && taskInfo.isolationSnapshot) {
+  // Use effectiveWriteMode when present (set after git-repo downgrade at
+  // dispatch). Falls back to raw writeMode for old persisted entries that
+  // pre-date the effectiveWriteMode field.
+  const effectiveMode = taskInfo.effectiveWriteMode ?? taskInfo.writeMode;
+  if (effectiveMode === 'worktree' && taskInfo.isolationSnapshot) {
     try {
       // Operator-configured extra orchestrator-owned globs (spec 2026-06-09
       // Layer A, §3.4). Unioned with the built-in .gossip//.claude/ prefixes
@@ -679,6 +719,38 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
         orchestratorOwnedGlobs,
       );
     } catch { /* best-effort — detector must not block relay completion */ }
+  }
+
+  // Worktree engagement check (issue #538 item 1): when write_mode was
+  // effectively 'worktree' (i.e. not downgraded), verify that a worktree
+  // directory actually appeared after dispatch. Detection-only — does NOT
+  // fail the relay. Records a warning in the receipt text and in
+  // .gossip/relay-warnings.jsonl so operators can see silent engagement gaps.
+  let worktreeEngagementWarning = false;
+  if (effectiveMode === 'worktree' && !error) {
+    try {
+      const projectRoot = ctx.mainAgent?.projectRoot ?? process.cwd();
+      const engaged = checkWorktreeEngaged(taskInfo.startedAt, projectRoot);
+      if (!engaged) {
+        worktreeEngagementWarning = true;
+        appendRelayWarning(projectRoot, {
+          taskId: task_id,
+          agentId: taskInfo.agentId,
+          reason: 'worktree_engagement_unknown',
+          // 3-class triage (issue #538, GravyaDev): this event is the
+          // 'engage_gap_candidate' class — distinct from recovery-FP
+          // (orchestrator-owned dirty paths, handled by the isolation
+          // detector's owned-prefix exclusion) and deliberate non-isolation
+          // (downgrade path, recorded via effectiveWriteMode). The taint flag
+          // lets parallel-vs-sequential correlation be read off the ledger.
+          triageClass: 'engage_gap_candidate',
+          concurrentWorktreeTaint: taskInfo.concurrentWorktreeTaint === true,
+          resultLength: result?.length ?? 0,
+          suspectedReason: 'no_agent_worktree_dir_found_after_dispatch',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch { /* best-effort — engagement check never blocks relay completion */ }
   }
 
   // Worktree cleanup: on error, prune orphan gossip-wt-* worktrees whose task
@@ -1017,6 +1089,9 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   }
   if (relayLintFired) {
     responseText += `\n⚠ relay_findings_dropped: result has 0 <agent_finding> tags but task was a consensus dispatch — orchestrator may have paraphrased; original tagged findings are lost from the dashboard.`;
+  }
+  if (worktreeEngagementWarning) {
+    responseText += `\n⚠ worktree_engagement_unknown: write_mode="worktree" dispatch but no agent- worktree directory found with mtime >= task startedAt — the Agent() call may have silently dropped isolation:"worktree". Run gossip_setup to (re-)register the sandbox hook; verify via .gossip/relay-warnings.jsonl.`;
   }
   // Base-rate audit (spec 2026-06-09 §3.1 / §8.2 item 5): record orchestrator-
   // owned paths excluded from attribution BEFORE the violation/revert decision,

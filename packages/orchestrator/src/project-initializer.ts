@@ -244,6 +244,10 @@ Respond with JSON:
           `[gossipcat] worktree sandbox hook skipped: ${hookResult.reason ?? 'unknown reason'}\n`,
         );
       } catch { /* best-effort logging */ }
+    } else if (hookResult.action === 'registered') {
+      try {
+        process.stderr.write('[gossipcat] worktree sandbox hook: registered in .claude/settings.json\n');
+      } catch { /* best-effort logging */ }
     }
   }
 
