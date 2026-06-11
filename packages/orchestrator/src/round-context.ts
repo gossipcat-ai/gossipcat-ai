@@ -13,13 +13,20 @@
 /**
  * The known code union for round-level warnings. The PR-A boundary producer
  * uses ONLY `roots_rejected` / `roots_empty_after_validation`; the remaining
- * named codes are reserved for the PR-B producer conversions per spec §6.1:
+ * named codes are the PR-B producer conversions per spec §6.1/§4:
  *   - `anchor_master_fallback` — citation resolved against project root, not the
- *     worktree (today the `via="⚠ resolved against project root…"` anchor note).
+ *     worktree (alongside the `via="⚠ resolved against project root…"` anchor
+ *     note; one warning per resolved-from-project-root anchor instance, no dedup).
  *   - `cross_review_skipped` — a relay agent's Phase-2 cross-review was skipped
- *     (quota / parse / network); today `report.relayCrossReviewSkipped`.
- *   - `zero_tags` — an agent emitted zero `<agent_finding>` tags; today
- *     `report.zeroTagAgents`.
+ *     (quota / parse / network); dual-written with `report.relayCrossReviewSkipped`.
+ *   - `coverage_degraded` — at least one dispatched agent returned a 0-char /
+ *     sentinel response; dual-written with `report.coverageDegraded`.
+ *   - `partial_review` — at least one finding received fewer than its target K
+ *     cross-reviewers; dual-written with `report.partialReview`.
+ *   - `zero_tags` — an agent relayed a consensus result carrying zero
+ *     `<agent_finding>` tags; dual-written with the relay-lint receipt line.
+ *   - `round_restore_malformed` — a persisted round record carried a malformed
+ *     field shape that was dropped on restore (relay-cross-review restore path).
  *
  * The trailing `(string & {})` is an INTENTIONAL open extension point: it keeps
  * autocomplete on the named codes while letting a future PR-B producer emit a
@@ -33,7 +40,10 @@ export type RoundWarningCode =
   | 'roots_empty_after_validation'
   | 'anchor_master_fallback'
   | 'cross_review_skipped'
+  | 'coverage_degraded'
+  | 'partial_review'
   | 'zero_tags'
+  | 'round_restore_malformed'
   // eslint-disable-next-line @typescript-eslint/ban-types
   | (string & {});
 

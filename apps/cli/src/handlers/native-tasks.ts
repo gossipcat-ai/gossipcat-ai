@@ -883,6 +883,31 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
           suspectedReason: 'orchestrator_paraphrase',
           timestamp: ts,
         });
+        // Spec §4 producer: structured zero_tags warning on the live consensus
+        // round (in ADDITION to the receipt line + jsonl above). PERSIST-AFTER-
+        // APPEND — the round record is the persisted carrier (relay-cross-review.ts
+        // pattern), so re-persist immediately so the warning survives /mcp
+        // reconnect. No-op when the round was already torn down (the membership
+        // fallback fired on recentConsensusTaskIds, not a live round) — the
+        // jsonl + receipt line still record it.
+        try {
+          for (const r of ctx.pendingConsensusRounds.values()) {
+            const member =
+              (Array.isArray(r.allResults) && r.allResults.some((x: any) => x && (x.id === task_id || x.agentId === agentId))) ||
+              (r.pendingNativeAgents instanceof Set && r.pendingNativeAgents.has(agentId)) ||
+              (Array.isArray(r.nativeCrossReviewEntries) && r.nativeCrossReviewEntries.some((e: any) => e && (e.taskId === task_id || e.agentId === agentId)));
+            if (member && r.roundContext) {
+              r.roundContext.warnings.push({
+                code: 'zero_tags',
+                message: `relayed consensus result carried 0 <agent_finding> tags (resultLength=${result?.length ?? 0}) — findings likely paraphrased and lost`,
+                agentId,
+              });
+              const { persistPendingConsensus } = require('./relay-cross-review');
+              persistPendingConsensus();
+              break;
+            }
+          }
+        } catch { /* best-effort — receipt + jsonl already recorded */ }
         try {
           const { emitPipelineSignals } = await import('@gossip/orchestrator');
           emitPipelineSignals(projectRoot, [{

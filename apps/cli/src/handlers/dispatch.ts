@@ -16,9 +16,25 @@ import {
   type ClaimBlock,
   type ClaimVerdict,
   type PerformanceSignal,
+  type RoundWarning,
 } from '@gossip/orchestrator';
 import { formatIdentityBlock } from '@gossip/tools';
 import { ctx, NATIVE_TASK_TTL_MS } from '../mcp-context';
+
+/**
+ * Stash dispatch-time fail-loud warnings (spec §3.2 boundary #1) under every
+ * minted task_id so gossip_collect can drain them into the collect-built
+ * RoundContext. No-op when there are no warnings. The same warnings array is
+ * stored under each id (collect dedups by draining once); frozen so a later
+ * mutation can't retroactively change a stashed entry.
+ */
+function stashDispatchWarnings(taskIds: readonly string[], warnings?: readonly RoundWarning[]): void {
+  if (!warnings || warnings.length === 0 || taskIds.length === 0) return;
+  const frozen = Object.freeze(warnings.map(w => Object.freeze({ ...w })));
+  for (const tid of taskIds) {
+    ctx.pendingDispatchWarnings.set(tid, frozen);
+  }
+}
 
 /** Build the identity block for a native subagent dispatch. */
 function buildNativeIdentity(agentId: string, model: string): string {
@@ -558,6 +574,14 @@ export async function handleDispatchSingle(
    * Default 'inline' preserves byte-for-byte the pre-PR behavior.
    */
   prompt_format?: PromptFormat,
+  /**
+   * Spec §3.2 boundary #1: dispatch-time fail-loud warnings. Stashed under the
+   * minted task_id so a later gossip_collect on this single task drains them.
+   * A solo dispatch rarely feeds a consensus round, so the operator-facing
+   * visibility for single comes from the dispatch-response warning block; the
+   * stash is best-effort for the collect path.
+   */
+  dispatchWarnings?: readonly RoundWarning[],
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -613,6 +637,8 @@ export async function handleDispatchSingle(
     const taskId = randomUUID().slice(0, 8);
     const relayToken = randomUUID().slice(0, 12);
     const timeoutMs = timeout_ms ?? NATIVE_TASK_TTL_MS;
+    // Spec §3.2 boundary #1: stash dispatch-time warnings under this task_id.
+    stashDispatchWarnings([taskId], dispatchWarnings);
 
     // Stage 2 premise-verification — parse + verify any ```premise-claims
     // block in the task. Runs BEFORE assemblePrompt so the PREMISE-MISMATCH
@@ -928,6 +954,12 @@ export async function handleDispatchParallel(
    * is replaced by an Item-1 marker citing the on-disk path. Default 'inline'.
    */
   prompt_format?: PromptFormat,
+  /**
+   * Spec §3.2 boundary #1: dispatch-time fail-loud warnings (e.g. rejected
+   * resolutionRoots). Stashed under every minted task_id so gossip_collect can
+   * drain them into the collect-built RoundContext → report.warnings.
+   */
+  dispatchWarnings?: readonly RoundWarning[],
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -1219,6 +1251,8 @@ export async function handleDispatchParallel(
       ctx.pendingDispatchResolutionRoots.set(tid, frozen);
     }
   }
+  // Spec §3.2 boundary #1: stash dispatch-time warnings under each task_id.
+  stashDispatchWarnings(allParallelTaskIds, dispatchWarnings);
 
   let msg = '';
   if (nativeInstructions.length > 0) {
@@ -1260,6 +1294,14 @@ export async function handleDispatchConsensus(
    * Per-task elision for the consensus cross-review batch. Default 'inline'.
    */
   prompt_format?: PromptFormat,
+  /**
+   * Spec §3.2 boundary #1: dispatch-time fail-loud warnings (e.g. rejected
+   * resolutionRoots). Stashed under every minted task_id so gossip_collect can
+   * drain them into the collect-built RoundContext → report.warnings. Named
+   * `dispatchRoundWarnings` to avoid shadowing the local `dispatchWarnings`
+   * string[] returned by resolveDispatchResolutionRoots below.
+   */
+  dispatchRoundWarnings?: readonly RoundWarning[],
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -1529,6 +1571,8 @@ export async function handleDispatchConsensus(
       ctx.pendingDispatchResolutionRoots.set(tid, frozen);
     }
   }
+  // Spec §3.2 boundary #1: stash dispatch-time warnings under each task_id.
+  stashDispatchWarnings(allTaskIds, dispatchRoundWarnings);
 
   const collectCall = `gossip_collect(task_ids: [${allTaskIds.map(id => `"${id}"`).join(', ')}], consensus: true)`;
   let msg = `⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.\n`;

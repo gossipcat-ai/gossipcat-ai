@@ -242,6 +242,20 @@ export interface ConsensusReport {
   zeroTagAgents?: string[];
   /** Count of zero-tag agents past the 5-entry `zeroTagAgents` cap. */
   zeroTagOverflow?: number;
+  /**
+   * Fail-loud round warnings drained from the round's RoundContext (spec
+   * 2026-06-11-round-context-fail-loud.md §4). Append-only, no dedup — the
+   * array keeps every instance; the report card aggregates visually by code
+   * with a per-code count while preserving per-instance messages in a tooltip.
+   */
+  warnings?: RoundWarning[];
+}
+
+/** One fail-loud warning entry. Mirrors orchestrator `RoundWarning`. */
+export interface RoundWarning {
+  code: string;
+  message: string;
+  agentId?: string;
 }
 
 export type ParseDiagnostic =

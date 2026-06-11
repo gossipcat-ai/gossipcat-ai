@@ -566,6 +566,29 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                           </span>
                         );
                       })()}
+                      {/* Fail-loud round warnings (spec 2026-06-11-round-context-
+                          fail-loud §4/§6). Aggregated visually by code with a
+                          per-code count (e.g. "anchor_master_fallback ×4") while
+                          the underlying array keeps every instance; the tooltip
+                          lists per-instance messages. Semantic --warn amber per
+                          DESIGN.md — NOT terracotta --accent. */}
+                      {report.warnings && report.warnings.length > 0 && (() => {
+                        const byCode = new Map<string, string[]>();
+                        for (const w of report.warnings) {
+                          const list = byCode.get(w.code) ?? [];
+                          list.push(w.agentId ? `${w.agentId}: ${w.message}` : w.message);
+                          byCode.set(w.code, list);
+                        }
+                        return Array.from(byCode.entries()).map(([code, msgs]) => (
+                          <span
+                            key={code}
+                            className="shrink-0 rounded border border-warn/30 bg-warn/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-warn"
+                            title={msgs.join('\n')}
+                          >
+                            {code}{msgs.length > 1 ? ` ×${msgs.length}` : ''}
+                          </span>
+                        ));
+                      })()}
                       <span className="ml-auto font-mono text-[10px] shrink-0" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>
                         {timeAgo(report.timestamp)}
                       </span>

@@ -165,6 +165,114 @@ describe('RoundContext disk persistence (spec §3.2)', () => {
     expect(restored!.roundContext!.warnings).toHaveLength(1);
   });
 
+  it('(restore-hardening) drops malformed warnings/roots/lenses entries with a round_restore_malformed warning, fail-open', () => {
+    const roundId = 'badc0ffe-0ddba11';
+    const goodRoot = tmp + '/worktrees/ok';
+    const record = {
+      [roundId]: {
+        consensusId: roundId,
+        allResults: [],
+        relayCrossReviewEntries: [],
+        pendingNativeAgents: ['sonnet'],
+        participatingNativeAgents: ['sonnet'],
+        nativeCrossReviewEntries: [],
+        deadline: Date.now() + 60_000,
+        createdAt: Date.now(),
+        nativePrompts: [],
+        roundContext: {
+          consensusId: roundId,
+          // One valid string root + one non-string entry that must be dropped.
+          resolutionRoots: [goodRoot, 42],
+          // One valid warning + one missing message + one non-object.
+          warnings: [
+            { code: 'roots_rejected', message: 'ok one' },
+            { code: 'roots_rejected' },          // missing message → drop
+            'not-an-object',                       // non-object → drop
+            { code: 'cross_review_skipped', message: 'm', agentId: 99 }, // non-string agentId → drop
+          ],
+          // Non-string lens value must be dropped; valid one kept.
+          lenses: { good: 'lens text', bad: 123 },
+        },
+      },
+    };
+    writeFileSync(join(tmp, '.gossip', 'pending-consensus.json'), JSON.stringify(record));
+
+    restorePendingConsensus(tmp);
+    const restored = ctx.pendingConsensusRounds.get(roundId);
+    expect(restored).toBeDefined();
+    const rc = restored!.roundContext!;
+    // Non-string root dropped, valid one kept.
+    expect(rc.resolutionRoots).toEqual([goodRoot]);
+    // Valid lens kept, non-string dropped.
+    expect(rc.lenses).toEqual({ good: 'lens text' });
+    // One valid warning + round_restore_malformed drop-notices appended.
+    const valid = rc.warnings.filter(w => w.code === 'roots_rejected');
+    const drops = rc.warnings.filter(w => w.code === 'round_restore_malformed');
+    expect(valid).toHaveLength(1);
+    expect(valid[0].message).toBe('ok one');
+    // At least one drop notice (roots + warnings + lenses each produce one).
+    expect(drops.length).toBeGreaterThanOrEqual(3);
+    expect(drops.every(d => d.message.startsWith('restore dropped malformed'))).toBe(true);
+  });
+
+  it('(restore-hardening) a warnings field that is not an array is dropped-with-warning, round still restores', () => {
+    const roundId = 'feed0000-1111feed';
+    const record = {
+      [roundId]: {
+        consensusId: roundId,
+        allResults: [],
+        relayCrossReviewEntries: [],
+        pendingNativeAgents: ['sonnet'],
+        participatingNativeAgents: ['sonnet'],
+        nativeCrossReviewEntries: [],
+        deadline: Date.now() + 60_000,
+        createdAt: Date.now(),
+        nativePrompts: [],
+        roundContext: {
+          consensusId: roundId,
+          resolutionRoots: [tmp + '/wt'],
+          warnings: 'corrupt-not-array',
+        },
+      },
+    };
+    writeFileSync(join(tmp, '.gossip', 'pending-consensus.json'), JSON.stringify(record));
+
+    restorePendingConsensus(tmp);
+    const rc = ctx.pendingConsensusRounds.get(roundId)!.roundContext!;
+    expect(rc.resolutionRoots).toEqual([tmp + '/wt']);
+    const drops = rc.warnings.filter(w => w.code === 'round_restore_malformed');
+    expect(drops).toHaveLength(1);
+    expect(drops[0].message).toContain('warnings field');
+  });
+
+  it('(restore-hardening) old flat shape still restores cleanly (back-compat path intact)', () => {
+    // The deep-hardening must NOT regress the data.roundContext?.x ?? data.x
+    // flat-shape read path. A pre-PR-A flat record restores with NO spurious
+    // round_restore_malformed warnings.
+    const roundId = 'c0ffee00-babe1234';
+    const roots = [tmp + '/worktrees/flat'];
+    const flat = {
+      [roundId]: {
+        consensusId: roundId,
+        allResults: [],
+        relayCrossReviewEntries: [],
+        pendingNativeAgents: ['sonnet'],
+        participatingNativeAgents: ['sonnet'],
+        nativeCrossReviewEntries: [],
+        deadline: Date.now() + 60_000,
+        createdAt: Date.now(),
+        nativePrompts: [],
+        resolutionRoots: roots,
+      },
+    };
+    writeFileSync(join(tmp, '.gossip', 'pending-consensus.json'), JSON.stringify(flat));
+
+    restorePendingConsensus(tmp);
+    const rc = ctx.pendingConsensusRounds.get(roundId)!.roundContext!;
+    expect(rc.resolutionRoots).toEqual(roots);
+    expect(rc.warnings).toEqual([]);
+  });
+
   it('(c) old flat-shape file with NO roots reconstructs no round (legacy rootless)', () => {
     const roundId = 'eeeeffff-00001111';
     const flat = {
@@ -267,5 +375,85 @@ describe('(d) drain rendering — warnings block in gossip_collect response', ()
 
     const result = await handleCollect(['t1', 't2'], 5000, true, [], undefined, makeRoundContext());
     expect(result.content[0].text).not.toContain('Round warnings');
+  });
+});
+
+describe('(§3.2 boundary #1) dispatch-time warnings stash → collect drain', () => {
+  let origMainAgent: any;
+  let origBoot: any;
+  let origNativeConfigs: any;
+
+  beforeEach(() => {
+    origMainAgent = (ctx as any).mainAgent;
+    origBoot = ctx.boot;
+    origNativeConfigs = ctx.nativeAgentConfigs;
+    ctx.boot = jest.fn().mockResolvedValue(undefined) as any;
+    ctx.nativeAgentConfigs = new Map();
+    ctx.pendingConsensusRounds = new Map();
+    ctx.nativeResultMap = new Map();
+    ctx.nativeTaskMap = new Map();
+    ctx.pendingDispatchWarnings = new Map();
+  });
+
+  afterEach(() => {
+    (ctx as any).mainAgent = origMainAgent;
+    ctx.boot = origBoot;
+    ctx.nativeAgentConfigs = origNativeConfigs;
+    ctx.pendingConsensusRounds.clear();
+    ctx.pendingDispatchWarnings.clear();
+  });
+
+  it('a dispatch-time rejection stashed under a task_id is drained into the collect-built round and surfaces in report.warnings', async () => {
+    const now = Date.now();
+    const twoRelayResults = [
+      { id: 't1', agentId: 'gemini-reviewer', task: 'Audit', status: 'completed', result: 'ok-a', startedAt: now - 1000, completedAt: now },
+      { id: 't2', agentId: 'gemini-tester', task: 'Audit', status: 'completed', result: 'ok-b', startedAt: now - 1000, completedAt: now },
+    ];
+
+    // Simulate what stashDispatchWarnings did: stash the SAME frozen array
+    // under every minted task_id (no consensus round exists at dispatch time).
+    const dispatchWarning = { code: 'roots_rejected' as const, message: 'dispatch-time entry rejected: not found [h0]' };
+    const stashed = Object.freeze([Object.freeze({ ...dispatchWarning })]) as readonly typeof dispatchWarning[];
+    ctx.pendingDispatchWarnings.set('t1', stashed);
+    ctx.pendingDispatchWarnings.set('t2', stashed);
+
+    // Reproduce the collect-handler drain: pull stashed warnings for the
+    // task_ids into the round (dedup by stored array reference), consume the
+    // stash, then build the round the handler forwards to handleCollect.
+    const round = makeRoundContext({ resolutionRoots: [], warnings: [] });
+    const seen = new Set<readonly typeof dispatchWarning[]>();
+    for (const tid of ['t1', 't2']) {
+      const stashed = ctx.pendingDispatchWarnings.get(tid) as readonly typeof dispatchWarning[] | undefined;
+      if (stashed && stashed.length > 0 && !seen.has(stashed)) {
+        seen.add(stashed);
+        for (const w of stashed) round.warnings.push({ ...w });
+      }
+      ctx.pendingDispatchWarnings.delete(tid);
+    }
+    // Both task_ids shared the SAME array reference → drained exactly once.
+    expect(round.warnings).toHaveLength(1);
+    // Stash consumed.
+    expect(ctx.pendingDispatchWarnings.size).toBe(0);
+
+    (ctx as any).mainAgent = {
+      projectRoot: '/tmp/gossip-test',
+      collect: jest.fn().mockResolvedValue({ results: twoRelayResults }),
+      // Emulate the engine drain: the round's warnings reach report.warnings.
+      runConsensus: jest.fn().mockImplementation(async (_results: any, roundOrRoots: any) => ({
+        agentCount: 2, rounds: 2,
+        confirmed: [], disputed: [], unverified: [], unique: [], insights: [],
+        newFindings: [], signals: [], summary: 'Consensus complete.',
+        warnings: roundOrRoots && Array.isArray(roundOrRoots.warnings) ? [...roundOrRoots.warnings] : [],
+      })),
+      getAgentConfig: jest.fn().mockReturnValue(null),
+      getLlm: jest.fn().mockReturnValue(null),
+    } as any;
+
+    const result = await handleCollect(['t1', 't2'], 5000, true, [], undefined, round);
+    const text = result.content[0].text;
+    // The dispatch-time rejection is visible in the collect-built round's report.
+    expect(text).toContain('⚠ Round warnings:');
+    expect(text).toContain('roots_rejected');
+    expect(text).toContain('dispatch-time entry rejected');
   });
 });

@@ -406,29 +406,33 @@ function lookupFindingSeverity(findingId: string, projectRoot: string): string |
 }
 
 /**
- * Item 3a — surface non-fatal resolutionRoots rejections in the tool RESPONSE,
- * not just stderr. When validateResolutionRoot drops an entry non-fatally, the
- * round proceeds with fewer (or zero) roots and anchors silently resolve
- * against project root. Prepend a visible warning line so the operator can
- * correct the input before stale-anchor false disputes occur (the #389 class).
- * No-op when nothing was rejected, preserving existing response bytes.
+ * Fail-loud invariant (spec §4): surface dispatch-time `RoundWarning`s in the
+ * dispatch tool RESPONSE, not only later at collect. When validateResolutionRoot
+ * drops an entry non-fatally, the round proceeds with fewer (or zero) roots and
+ * anchors silently resolve against project root; the operator must see that at
+ * the call they made (the #389 stale-anchor class). No-op when there are no
+ * warnings, preserving existing response bytes.
+ *
+ * Built on the generic `RoundWarning` shape (replacing the old bespoke
+ * `prependResolutionRootWarning`), so dispatch responses and the collect-time
+ * report.warnings drain render the same warning vocabulary. Aggregates visually
+ * by message with a count (e.g. "…rejected ×3") while every instance still
+ * flows into the round via the dispatch-warnings stash.
  */
-function prependResolutionRootWarning<T extends { content: Array<{ type: 'text'; text: string }> }>(
+function appendDispatchWarningsBlock<T extends { content: Array<{ type: 'text'; text: string }> }>(
   result: T,
-  rejectedReasons: readonly string[],
+  warnings: readonly import('@gossip/orchestrator').RoundWarning[],
 ): T {
-  if (!rejectedReasons || rejectedReasons.length === 0) return result;
-  // Render each distinct reason with its count so the raw rejected total and
-  // the per-reason breakdown agree (e.g. "3 entry(ies) rejected (not found ×3)").
-  // A bare Set dedup hides how many entries shared a reason.
+  if (!warnings || warnings.length === 0) return result;
+  // Aggregate identical messages with a count so the per-message breakdown is
+  // legible without hiding how many entries shared a reason.
   const counts = new Map<string, number>();
-  for (const r of rejectedReasons) counts.set(r, (counts.get(r) ?? 0) + 1);
-  const reasons = Array.from(counts.entries())
-    .map(([reason, n]) => (n > 1 ? `${reason} ×${n}` : reason))
-    .join('; ');
+  for (const w of warnings) counts.set(w.message, (counts.get(w.message) ?? 0) + 1);
+  const lines = Array.from(counts.entries())
+    .map(([message, n]) => (n > 1 ? `  - ${message} ×${n}` : `  - ${message}`));
   const warning = {
     type: 'text' as const,
-    text: `⚠ resolutionRoots: ${rejectedReasons.length} entry(ies) rejected (${reasons}) — anchors will resolve against project root`,
+    text: `⚠ ${warnings.length} round warning(s):\n${lines.join('\n')}`,
   };
   return { ...result, content: [warning, ...result.content] };
 }
@@ -1527,19 +1531,27 @@ export function createMcpServer(): McpServer {
       // Non-fatal rejection reasons surfaced in the response (item 3a) so a
       // dropped dispatch-time root is visible to the operator, not stderr-only.
       //
-      // RoundContext boundary #1 — DEFERRED past PR-A (documented divergence
-      // from spec §3.2's "construct at all three boundaries"). The dispatch
-      // handler does NOT create a consensus round (that happens at collect), so
-      // there is no round object here to embed a RoundContext into; only the
-      // dispatch-time roots stash (pendingDispatchResolutionRoots) is threaded
-      // forward, and collect wraps it into the RoundContext it constructs. The
-      // remaining functional gap — routing these dispatch-time rejectedRootReasons
-      // into the collect-built round so they reach report.warnings — needs a
-      // parallel warnings stash keyed by the handler-minted task_ids and a drain
-      // at collect; that crosses three handler signatures and is scoped to a
-      // follow-up. Today these reasons still surface via prependResolutionRootWarning
-      // on the dispatch RESPONSE (below), so they are not silently dropped.
-      const rejectedRootReasons: string[] = [];
+      // RoundContext boundary #1 (spec §3.2). The dispatch handler does NOT
+      // create a consensus round (that happens at collect), so there is no
+      // round object here to embed a RoundContext into. PR-B closes the
+      // boundary-#1 deferral: dispatch-time rejections are now accumulated as
+      // structured `RoundWarning`s and stashed (by the dispatch handlers) under
+      // every minted task_id on `ctx.pendingDispatchWarnings`. gossip_collect
+      // drains that stash into the collect-built RoundContext, so the rejection
+      // reaches `report.warnings` via the PR-A drains.
+      //
+      // Lifetime boundary: the stash is in-memory only and reconnect-volatile.
+      // It must survive being read at collect within the SAME server lifetime;
+      // once drained, the round record's own persistence carries the warnings.
+      // A /mcp reconnect between dispatch and collect loses an undrained entry
+      // (accepted residual window, symmetric with pendingDispatchResolutionRoots).
+      //
+      // Fail-loud invariant (§4): a dispatch-time rejection must ALSO be visible
+      // in the DISPATCH response, not only later at collect — so we still emit a
+      // warning block on the dispatch response (appendDispatchWarningsBlock),
+      // now built on the generic RoundWarning shape rather than the old bespoke
+      // prependResolutionRootWarning.
+      const dispatchWarnings: import('@gossip/orchestrator').RoundWarning[] = [];
       if (resolutionRoots && resolutionRoots.length > 0) {
         const { validateResolutionRoot } = await import('@gossip/orchestrator');
         for (const raw of resolutionRoots) {
@@ -1551,9 +1563,21 @@ export function createMcpServer(): McpServer {
             planExecutionDepth--;
             return { content: [{ type: 'text' as const, text: `Error: resolutionRoots REJECTED ROUND (adversarial input): ${r.reason} [${r.hashedInput}]` }] };
           } else {
-            rejectedRootReasons.push(r.reason ?? 'unknown');
+            // One roots_rejected warning per dropped entry (no dedup, spec §4).
+            dispatchWarnings.push({
+              code: 'roots_rejected',
+              message: `resolutionRoots entry rejected: ${r.reason ?? 'unknown'} [${r.hashedInput}] — anchors will resolve against project root`,
+            });
             process.stderr.write(`[consensus] resolutionRoots rejected: ${r.reason} [${r.hashedInput}]\n`);
           }
+        }
+        // When roots were supplied but ALL were rejected, the round proceeds
+        // with zero roots → anchors resolve against project root only.
+        if (validatedDispatchRoots.length === 0) {
+          dispatchWarnings.push({
+            code: 'roots_empty_after_validation',
+            message: `all ${resolutionRoots.length} supplied resolutionRoots were rejected — anchors will resolve against project root only`,
+          });
         }
       }
       try {
@@ -1564,29 +1588,36 @@ export function createMcpServer(): McpServer {
           // Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md — forward
           // validatedDispatchRoots so a single-mode relay agent (e.g. gemini-tester
           // dispatched solo against a PR worktree) gets its tool-call cwd pinned.
-          return prependResolutionRootWarning(await handleDispatchSingle(
+          return appendDispatchWarningsBlock(await handleDispatchSingle(
             agent_id, task, write_mode, scope, timeout_ms, plan_id, step,
             validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
             prompt_format,
-          ), rejectedRootReasons);
+            dispatchWarnings.length > 0 ? dispatchWarnings : undefined,
+          ), dispatchWarnings);
         }
         if (mode === 'parallel') {
           if (!tasks || tasks.length === 0) {
             return { content: [{ type: 'text' as const, text: 'Error: mode:"parallel" requires a non-empty tasks array.' }] };
           }
-          return prependResolutionRootWarning(await handleDispatchParallel(
+          return appendDispatchWarningsBlock(await handleDispatchParallel(
             tasks, false,
             validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
             prompt_format,
-          ), rejectedRootReasons);
+            dispatchWarnings.length > 0 ? dispatchWarnings : undefined,
+          ), dispatchWarnings);
         }
         if (mode === 'consensus') {
           if (!tasks || tasks.length === 0) {
             return { content: [{ type: 'text' as const, text: 'Error: mode:"consensus" requires a non-empty tasks array.' }] };
           }
-          return prependResolutionRootWarning(
-            await handleDispatchConsensus(tasks, _utility_task_id, validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined, prompt_format),
-            rejectedRootReasons,
+          return appendDispatchWarningsBlock(
+            await handleDispatchConsensus(
+              tasks, _utility_task_id,
+              validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
+              prompt_format,
+              dispatchWarnings.length > 0 ? dispatchWarnings : undefined,
+            ),
+            dispatchWarnings,
           );
         }
         return { content: [{ type: 'text' as const, text: `Unknown mode: ${mode}` }] };
@@ -1619,15 +1650,13 @@ export function createMcpServer(): McpServer {
     async ({ task_ids, timeout_ms, consensus, resolutionRoots, prompt_format }) => {
       // Validate at MCP boundary. Fatal (NUL / control char) REJECTS the round.
       let validated: string[] | undefined;
-      // Non-fatal rejection reasons collected for response-surfacing (item 3a):
-      // these previously went to stderr only, so an operator never saw that
-      // their worktree roots were silently dropped → anchors resolved against
-      // project root → stale-anchor false disputes.
-      const rejectedRootReasons: string[] = [];
-      // Spec §6.1 boundary producer: accumulate fail-loud warnings as roots are
+      // Spec §4 boundary producer: accumulate fail-loud warnings as roots are
       // rejected, then embed them in the RoundContext threaded into the round.
-      // Generalizes (does NOT yet replace) prependResolutionRootWarning — the
-      // stderr/response-prepend path stays for PR-A; PR-B removes it.
+      // These reach report.warnings (PR-A drains) AND the collect response
+      // (appendDispatchWarningsBlock below) — a non-fatal rejection that
+      // silently drops worktree roots → anchors resolving against project root
+      // → stale-anchor false disputes (#389) is now visible at the operator's
+      // call, not stderr-only.
       const { makeRoundContext } = await import('@gossip/orchestrator');
       const round = makeRoundContext({ resolutionRoots: [], warnings: [] });
       if (resolutionRoots && resolutionRoots.length > 0) {
@@ -1641,11 +1670,10 @@ export function createMcpServer(): McpServer {
           } else if (r.fatal) {
             return { content: [{ type: 'text' as const, text: `Error: resolutionRoots REJECTED ROUND (adversarial input): ${r.reason} [${r.hashedInput}]` }] };
           } else {
-            rejectedRootReasons.push(r.reason ?? 'unknown');
             // Append one roots_rejected warning per dropped entry (no dedup).
             round.warnings.push({
               code: 'roots_rejected',
-              message: `resolutionRoots entry rejected: ${r.reason ?? 'unknown'} [${r.hashedInput}]`,
+              message: `resolutionRoots entry rejected: ${r.reason ?? 'unknown'} [${r.hashedInput}] — anchors will resolve against project root`,
             });
             process.stderr.write(`[consensus] resolutionRoots rejected: ${r.reason} [${r.hashedInput}]\n`);
           }
@@ -1679,8 +1707,28 @@ export function createMcpServer(): McpServer {
           for (const tid of task_ids) ctx.pendingDispatchResolutionRoots.delete(tid);
         }
       }
+      // Spec §3.2 boundary #1 drain: pull any dispatch-time fail-loud warnings
+      // stashed under these task_ids (e.g. rejected resolutionRoots at dispatch
+      // when no collect-time roots were supplied) into the round's warnings so
+      // they reach report.warnings via the PR-A drains. Drained ONCE then
+      // consumed; deduped by task_id so the same stashed array isn't merged
+      // twice when multiple ids share it. Runs independently of the roots path
+      // above — a dispatch-time rejection is visible at collect even when the
+      // operator passes fresh (or no) collect-time roots.
+      if (task_ids && task_ids.length > 0) {
+        const seen = new Set<readonly import('@gossip/orchestrator').RoundWarning[]>();
+        for (const tid of task_ids) {
+          const stashed = ctx.pendingDispatchWarnings.get(tid);
+          if (stashed && stashed.length > 0 && !seen.has(stashed)) {
+            seen.add(stashed);
+            for (const w of stashed) round.warnings.push({ ...w });
+          }
+          ctx.pendingDispatchWarnings.delete(tid);
+        }
+      }
       // Finalize the round with the validated resolutionRoots, carrying over
-      // the boundary-producer warnings accumulated above. `validated` is the
+      // the boundary-producer warnings accumulated above (collect-time
+      // rejections + drained dispatch-time warnings). `validated` is the
       // post-filter set (collect-time or dispatch-time stash); undefined →
       // empty roots. makeRoundContext copies the warnings array reference.
       const finalRound = makeRoundContext({
@@ -1688,7 +1736,16 @@ export function createMcpServer(): McpServer {
         warnings: round.warnings,
       });
       const collectResult = await handleCollect(task_ids, timeout_ms, consensus, validated, prompt_format, finalRound);
-      return prependResolutionRootWarning(collectResult, rejectedRootReasons);
+      // handleCollect already renders a "⚠ Round warnings:" block from
+      // report.warnings (the PR-A drain) for consensus rounds, so the collect-
+      // time rejections + drained dispatch-time warnings on `round.warnings`
+      // surface there. For a NON-consensus collect there is no report/drain, so
+      // surface the round's warnings directly on the response — fail-loud
+      // invariant §4: visible at the call the operator made.
+      if (!consensus && round.warnings.length > 0) {
+        return appendDispatchWarningsBlock(collectResult, round.warnings);
+      }
+      return collectResult;
     }
   );
 
