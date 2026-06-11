@@ -13,6 +13,7 @@ import { LLMMessage, ToolDefinition } from '@gossip/types';
 import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry, RelayWarningEntry } from './consensus-types';
+import type { RoundContext } from './round-context';
 import { autoVerifyUnverifiedFindings, buildSkipSignal, type AutoVerifiableFinding } from './consensus-auto-verify';
 import { getRuntimeFlagBool } from './runtime-config';
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
@@ -122,6 +123,15 @@ export interface ConsensusEngineConfig {
    */
   resolutionRoots?: readonly string[];
   /**
+   * Per-round consensus context (spec 2026-06-11-round-context-fail-loud.md
+   * §3.1). When present it WINS over the loose `resolutionRoots` field: the
+   * constructor seeds worktree roots from `round.resolutionRoots` instead, and
+   * synthesize() drains `round.warnings` into `report.warnings`. When absent,
+   * the legacy `resolutionRoots` path is byte-identical. Alias mode (PR-A) —
+   * the loose field is removed in PR-C.
+   */
+  round?: RoundContext;
+  /**
    * Verifier dispatcher resolved by the cli layer via `discoverVerifier(team)`
    * (spec docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md).
    * When omitted AND `GOSSIP_CONSENSUS_AUTO_VERIFY_UNVERIFIED='1'`, the engine
@@ -182,12 +192,16 @@ export class ConsensusEngine {
   constructor(config: ConsensusEngineConfig) {
     this.config = config;
 
-    // Seed BOTH root sets from config.resolutionRoots so round-1
+    // Seed BOTH root sets from the round's resolutionRoots so round-1
     // getValidRoots() — called before any updateWorktreeRoots invocation —
     // returns projectRoot + seeded roots. Paths arrive post-validation
     // and post-realpath (invariant enforced at MCP boundary); mis-supplied
     // input here is a programmer error that throws immediately.
-    const seeded = config.resolutionRoots;
+    //
+    // Alias mode (PR-A): when `config.round` is present it WINS — seed from
+    // `round.resolutionRoots`. Otherwise fall back to the legacy loose
+    // `config.resolutionRoots`. Same validation/throw semantics for both.
+    const seeded = config.round ? config.round.resolutionRoots : config.resolutionRoots;
     if (seeded && seeded.length > 0) {
       for (const p of seeded) {
         if (typeof p !== 'string' || p.length === 0) {
@@ -211,6 +225,16 @@ export class ConsensusEngine {
         catch { this.currentRealpathRoots.add(resolve(config.projectRoot)); }
       }
     }
+  }
+
+  /**
+   * Effective per-round resolution roots: `config.round.resolutionRoots` when a
+   * RoundContext is present (alias mode — round WINS), else the legacy loose
+   * `config.resolutionRoots`. Every `updateWorktreeRoots` call site reads this
+   * so the round and legacy paths stay byte-identical at the boundary.
+   */
+  private effectiveResolutionRoots(): readonly string[] | undefined {
+    return this.config.round ? this.config.round.resolutionRoots : this.config.resolutionRoots;
   }
 
   /** True when a PerformanceReader is available for orchestrator-selected cross-review (Step 3). */
@@ -480,7 +504,7 @@ export class ConsensusEngine {
 
     const consensusStart = Date.now();
     _log('consensus', `Starting cross-review for ${successful.length} agents`);
-    this.updateWorktreeRoots(results, this.config.resolutionRoots);
+    this.updateWorktreeRoots(results, this.effectiveResolutionRoots());
     // Generate consensusId ONCE per round and thread it through cross-review
     // and synthesize so NEW findingIds rewritten in crossReviewForAgent match
     // the consensusId used by synthesize's signal/finding id assembly.
@@ -528,7 +552,7 @@ export class ConsensusEngine {
    * Each agent reviews all peer summaries and produces agree/disagree/new entries.
    */
   async dispatchCrossReview(results: TaskEntry[], consensusId?: string): Promise<CrossReviewEntry[]> {
-    this.updateWorktreeRoots(results, this.config.resolutionRoots);
+    this.updateWorktreeRoots(results, this.effectiveResolutionRoots());
     const successful = results.filter(r => r.status === 'completed' && r.result);
     if (successful.length < 2) return [];
 
@@ -915,7 +939,7 @@ Return only valid JSON.${skillsBlock}`;
     summaries: Map<string, string>;
     consensusId: string;
   }> {
-    this.updateWorktreeRoots(results, this.config.resolutionRoots);
+    this.updateWorktreeRoots(results, this.effectiveResolutionRoots());
     const successful = results.filter(r => r.status === 'completed' && r.result);
     const consensusId = shortConsensusId();
 
@@ -945,7 +969,7 @@ Return only valid JSON.${skillsBlock}`;
    * Phase 3: Synthesize Phase 1 results and Phase 2 cross-review entries into a consensus report.
    */
   async synthesize(results: TaskEntry[], crossReviewEntries: CrossReviewEntry[], externalConsensusId?: string): Promise<ConsensusReport> {
-    this.updateWorktreeRoots(results, this.config.resolutionRoots);
+    this.updateWorktreeRoots(results, this.effectiveResolutionRoots());
     const consensusId = externalConsensusId ?? shortConsensusId();
     const signals: ConsensusSignal[] = [];
     const newFindings: ConsensusNewFinding[] = [];
@@ -1602,6 +1626,12 @@ Return only valid JSON.${skillsBlock}`;
       // Surface zero-tag agents in-band so the gossip_collect tool response
       // + dashboard JSON can highlight the silent dropout, not just stderr.
       ...(zeroTagAgents.length > 0 ? { zeroTagAgents, ...(zeroTagOverflow > 0 ? { zeroTagOverflow } : {}) } : {}),
+      // Drain fail-loud round warnings into the report (spec §6.1). Copy
+      // (not alias) so later mutation of round.warnings can't retroactively
+      // change a synthesized report. Omitted when the round carried none.
+      ...(this.config.round && this.config.round.warnings.length > 0
+        ? { warnings: [...this.config.round.warnings] }
+        : {}),
     };
   }
 
@@ -2820,7 +2850,7 @@ Return only valid JSON.${skillsBlock}`;
       };
     }
 
-    this.updateWorktreeRoots(results, this.config.resolutionRoots);
+    this.updateWorktreeRoots(results, this.effectiveResolutionRoots());
 
     // Build summaries and rawResults maps (same pattern as dispatchCrossReview)
     const summaries = new Map<string, string>();

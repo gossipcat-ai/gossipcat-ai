@@ -3,7 +3,7 @@
  * Single mutable context object avoids passing dozens of parameters.
  */
 import { randomUUID } from 'crypto';
-import type { CrossReviewEntry, MainAgent } from '@gossip/orchestrator';
+import type { CrossReviewEntry, MainAgent, RoundContext } from '@gossip/orchestrator';
 
 export interface NativeCrossReviewPrompt {
   agentId: string;
@@ -44,6 +44,15 @@ export interface PendingConsensusRound {
    * via persistPendingConsensus.
    */
   resolutionRoots?: readonly string[];
+  /**
+   * Per-round consensus context (spec §3.1/§3.2) EMBEDDING the resolutionRoots
+   * plus the fail-loud warnings array. Constructed at the MCP boundary
+   * immediately after validateResolutionRoot filtering. Alias mode (PR-A): the
+   * loose `resolutionRoots` field above is kept populated in parallel; readers
+   * prefer `roundContext` when present and fall back to the flat field for
+   * old persisted records. Persisted/restored with per-field back-compat.
+   */
+  roundContext?: RoundContext;
 }
 
 export interface NativeTaskInfo {

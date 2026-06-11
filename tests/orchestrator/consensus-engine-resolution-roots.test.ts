@@ -6,6 +6,7 @@ import {
   type ConsensusEngineConfig,
 } from '../../packages/orchestrator/src/consensus-engine';
 import { ConsensusCoordinator } from '../../packages/orchestrator/src/consensus-coordinator';
+import { makeRoundContext } from '../../packages/orchestrator/src/round-context';
 import {
   mkdtempSync,
   mkdirSync,
@@ -334,6 +335,54 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
     const all = seen.join('\n');
     // The cited file exists in BOTH roots with distinct content — the prompts
     // must carry the worktree version, never the master copy.
+    expect(all).toContain('worktree-branch');
+    expect(all).not.toContain('master-HEAD');
+  });
+  it('Test 22 — e2e: a RoundContext OBJECT via the coordinator union reaches anchor CONTENT (ToolRouter/door-#5 seam)', async () => {
+    // Test 21 proves the legacy roots-ARRAY arm of the coordinator union
+    // delivers worktree content. This test proves the RoundContext-OBJECT arm
+    // — the shape the in-process ToolRouter boundary (#3) constructs and
+    // pipeline.collect forwards — reaches anchor content too. Spec §5 row
+    // "in-process ToolRouter": the seam that was structurally impossible
+    // before PR-A. Chain pinned elsewhere: router constructs the round
+    // (tool-router.test.ts) and pipeline forwards it (plumbing suite); this
+    // test closes the final link: round object → coordinator → real engine →
+    // prompt content from the round's worktree root.
+    const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
+    const wt = realpathSync(mkdtempSync(join(tmp, 'wt')));
+    mkdirSync(join(proj, 'src'), { recursive: true });
+    mkdirSync(join(wt, 'src'), { recursive: true });
+    writeFileSync(join(proj, 'src', 'target.ts'), 'export function old() { return "master-HEAD"; }');
+    writeFileSync(join(wt, 'src', 'target.ts'), 'export function newImpl() { return "worktree-branch"; }');
+
+    const seen: string[] = [];
+    const llm = {
+      generate: jest.fn(async (messages: Array<{ content?: string }>) => {
+        for (const m of messages) if (typeof m?.content === 'string') seen.push(m.content);
+        return { text: '[]', usage: { inputTokens: 0, outputTokens: 0 } };
+      }),
+    };
+
+    const coordinator = new ConsensusCoordinator({
+      llm: llm as any,
+      registryGet: () => undefined,
+      projectRoot: proj,
+      keyProvider: null,
+      getAgentSkillsContent: () => undefined,
+    });
+
+    const finding = (desc: string) =>
+      `<agent_finding type="finding" severity="low">${desc} <cite tag="file">src/target.ts:1</cite></agent_finding>`;
+    const results = [
+      { id: 't1', agentId: 'agent-a', task: 'review', status: 'completed', result: finding('Issue A') },
+      { id: 't2', agentId: 'agent-b', task: 'review', status: 'completed', result: finding('Issue B') },
+    ] as any;
+
+    const round = makeRoundContext({ resolutionRoots: [wt] });
+    await coordinator.runConsensus(results, round);
+
+    expect(llm.generate).toHaveBeenCalled();
+    const all = seen.join('\n');
     expect(all).toContain('worktree-branch');
     expect(all).not.toContain('master-HEAD');
   });

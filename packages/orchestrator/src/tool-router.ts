@@ -4,6 +4,7 @@
  */
 
 import { TOOL_SCHEMAS, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';
+import { makeRoundContext } from './round-context';
 import type { ToolCall, ToolResult, DispatchPlan, PlannedTask, TaskProgressEvent } from './types';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
@@ -769,7 +770,12 @@ Be concise — 10-15 lines max. The developer has already seen the progress bars
       return { text: `Tool error: ${errors.join('; ')}`, agents: agentIds };
     }
 
-    const collectResult: CollectResultLike = await this.pipeline.collect(taskIds, 600_000, { consensus: true });
+    // Spec §3.2 boundary #3: construct a minimal RoundContext for the
+    // in-process consensus path. The router has no resolutionRoots today
+    // (consensus runs against project root), so roots is the empty array and
+    // warnings starts empty; consensusId is minted downstream by the engine.
+    const round = makeRoundContext({ resolutionRoots: [], warnings: [] });
+    const collectResult: CollectResultLike = await this.pipeline.collect(taskIds, 600_000, { consensus: true, round });
     const lines = collectResult.results.map(r =>
       `[${r.agentId}] ${r.status === 'completed' ? r.result : `ERROR: ${r.error}`}`
     );

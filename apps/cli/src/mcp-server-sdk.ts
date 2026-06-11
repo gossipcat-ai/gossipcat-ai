@@ -1526,6 +1526,19 @@ export function createMcpServer(): McpServer {
       let validatedDispatchRoots: string[] = [];
       // Non-fatal rejection reasons surfaced in the response (item 3a) so a
       // dropped dispatch-time root is visible to the operator, not stderr-only.
+      //
+      // RoundContext boundary #1 — DEFERRED past PR-A (documented divergence
+      // from spec §3.2's "construct at all three boundaries"). The dispatch
+      // handler does NOT create a consensus round (that happens at collect), so
+      // there is no round object here to embed a RoundContext into; only the
+      // dispatch-time roots stash (pendingDispatchResolutionRoots) is threaded
+      // forward, and collect wraps it into the RoundContext it constructs. The
+      // remaining functional gap — routing these dispatch-time rejectedRootReasons
+      // into the collect-built round so they reach report.warnings — needs a
+      // parallel warnings stash keyed by the handler-minted task_ids and a drain
+      // at collect; that crosses three handler signatures and is scoped to a
+      // follow-up. Today these reasons still surface via prependResolutionRootWarning
+      // on the dispatch RESPONSE (below), so they are not silently dropped.
       const rejectedRootReasons: string[] = [];
       if (resolutionRoots && resolutionRoots.length > 0) {
         const { validateResolutionRoot } = await import('@gossip/orchestrator');
@@ -1611,6 +1624,12 @@ export function createMcpServer(): McpServer {
       // their worktree roots were silently dropped → anchors resolved against
       // project root → stale-anchor false disputes.
       const rejectedRootReasons: string[] = [];
+      // Spec §6.1 boundary producer: accumulate fail-loud warnings as roots are
+      // rejected, then embed them in the RoundContext threaded into the round.
+      // Generalizes (does NOT yet replace) prependResolutionRootWarning — the
+      // stderr/response-prepend path stays for PR-A; PR-B removes it.
+      const { makeRoundContext } = await import('@gossip/orchestrator');
+      const round = makeRoundContext({ resolutionRoots: [], warnings: [] });
       if (resolutionRoots && resolutionRoots.length > 0) {
         const { validateResolutionRoot } = await import('@gossip/orchestrator');
         const out: string[] = [];
@@ -1623,10 +1642,24 @@ export function createMcpServer(): McpServer {
             return { content: [{ type: 'text' as const, text: `Error: resolutionRoots REJECTED ROUND (adversarial input): ${r.reason} [${r.hashedInput}]` }] };
           } else {
             rejectedRootReasons.push(r.reason ?? 'unknown');
+            // Append one roots_rejected warning per dropped entry (no dedup).
+            round.warnings.push({
+              code: 'roots_rejected',
+              message: `resolutionRoots entry rejected: ${r.reason ?? 'unknown'} [${r.hashedInput}]`,
+            });
             process.stderr.write(`[consensus] resolutionRoots rejected: ${r.reason} [${r.hashedInput}]\n`);
           }
         }
         validated = out;
+        // When at least one root was supplied but ALL were rejected, the round
+        // proceeds with zero roots → anchors resolve against project root only.
+        // Surface that loudly so the operator can correct before false disputes.
+        if (out.length === 0) {
+          round.warnings.push({
+            code: 'roots_empty_after_validation',
+            message: `all ${resolutionRoots.length} supplied resolutionRoots were rejected — anchors will resolve against project root only`,
+          });
+        }
       } else if (task_ids && task_ids.length > 0) {
         // No collect-time input — fall back to any dispatch-time roots stashed
         // under these task_ids. If NONE are found but the round has a persisted
@@ -1646,7 +1679,15 @@ export function createMcpServer(): McpServer {
           for (const tid of task_ids) ctx.pendingDispatchResolutionRoots.delete(tid);
         }
       }
-      const collectResult = await handleCollect(task_ids, timeout_ms, consensus, validated, prompt_format);
+      // Finalize the round with the validated resolutionRoots, carrying over
+      // the boundary-producer warnings accumulated above. `validated` is the
+      // post-filter set (collect-time or dispatch-time stash); undefined →
+      // empty roots. makeRoundContext copies the warnings array reference.
+      const finalRound = makeRoundContext({
+        resolutionRoots: validated ?? [],
+        warnings: round.warnings,
+      });
+      const collectResult = await handleCollect(task_ids, timeout_ms, consensus, validated, prompt_format, finalRound);
       return prependResolutionRootWarning(collectResult, rejectedRootReasons);
     }
   );

@@ -29,7 +29,7 @@ export function startConsensusTimeout(consensusId: string): void {
 
     const missingAgents = [...current.pendingNativeAgents];
     // Delete round BEFORE async work to prevent double-synthesis race with concurrent relay
-    const snapshot = { allResults: current.allResults, relayCrossReviewEntries: current.relayCrossReviewEntries, relayCrossReviewSkipped: current.relayCrossReviewSkipped, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries], resolutionRoots: current.resolutionRoots };
+    const snapshot = { allResults: current.allResults, relayCrossReviewEntries: current.relayCrossReviewEntries, relayCrossReviewSkipped: current.relayCrossReviewSkipped, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries], resolutionRoots: current.resolutionRoots, roundContext: current.roundContext };
     // PR #270 v3 review (HIGH): seed the agent-id fallback BEFORE delete from
     // the EXHAUSTIVE participation set, not just the still-pending agents.
     // Covers two cases: (1) agents that never relayed (still in
@@ -73,7 +73,11 @@ export function startConsensusTimeout(consensusId: string): void {
         llm: timeoutLlm,
         registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
         projectRoot: process.cwd(),
-        resolutionRoots: snapshot.resolutionRoots,
+        // Alias mode: forward the embedded round when present so its warnings
+        // drain into the timeout-synthesis report; else legacy roots-only.
+        ...(snapshot.roundContext
+          ? { round: snapshot.roundContext }
+          : { resolutionRoots: snapshot.resolutionRoots }),
       });
 
       const allEntries = [...snapshot.relayCrossReviewEntries, ...snapshot.nativeCrossReviewEntries];
@@ -154,7 +158,11 @@ export async function handleRelayCrossReview(
       llm: parseLlm || ({ generate: async () => ({ text: '', usage: { inputTokens: 0, outputTokens: 0 } }) } as any),
       registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
       projectRoot: process.cwd(),
-      resolutionRoots: round.resolutionRoots,
+      // Alias mode: forward embedded round when present (parse-only path, but
+      // keep the boundary consistent); else legacy roots-only.
+      ...(round.roundContext
+        ? { round: round.roundContext }
+        : { resolutionRoots: round.resolutionRoots }),
     });
     const entries = engine.parseCrossReviewResponse(agent_id, result, 50);
     parsedCount = entries.length;
@@ -259,6 +267,7 @@ export async function handleRelayCrossReview(
     // synthesis step because the engine re-runs projectRoot-only
     // validation (round-3 consensus e507e375-50c2420b:f10).
     resolutionRoots: round.resolutionRoots,
+    roundContext: round.roundContext,
   };
   // PR #270 v3 review (HIGH): seed the agent-id fallback BEFORE delete from the
   // EXHAUSTIVE participation set, not the post-parse derivation. The previous
@@ -284,7 +293,11 @@ export async function handleRelayCrossReview(
       llm: mainLlm,
       registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
       projectRoot: process.cwd(),
-      resolutionRoots: synthSnapshot.resolutionRoots,
+      // Alias mode: forward the embedded round so its fail-loud warnings drain
+      // into the final-synthesis report; else legacy roots-only.
+      ...(synthSnapshot.roundContext
+        ? { round: synthSnapshot.roundContext }
+        : { resolutionRoots: synthSnapshot.resolutionRoots }),
     });
 
     const allCrossReviewEntries = [
@@ -352,6 +365,41 @@ export async function handleRelayCrossReview(
 
 const CONSENSUS_FILE = 'pending-consensus.json';
 
+/**
+ * Reconstruct a RoundContext from a persisted pending-round record (spec §3.2
+ * disk back-compat). Prefers the embedded `roundContext`; per field, falls back
+ * to the old flat shape — `data.roundContext?.resolutionRoots ?? data.resolutionRoots`,
+ * mirroring the participatingNativeAgents back-compat pattern. Returns undefined
+ * only when NEITHER an embedded round nor flat roots are present (a pre-#126
+ * record with no roots at all), so old flat-shape files restore with roots
+ * intact.
+ */
+function restoreRoundContext(data: any): import('@gossip/orchestrator').RoundContext | undefined {
+  const { makeRoundContext } = require('@gossip/orchestrator');
+  const rc = data.roundContext;
+  // Per-field fallback with `??` semantics (spec §3.2): an embedded
+  // roundContext is AUTHORITATIVE — honor its resolutionRoots array even when
+  // it is intentionally empty (`[]` = "resolve against project root"). Only
+  // when there is NO embedded round do we read the old flat field. A
+  // length-gated check would wrongly treat a new-format empty-roots record as
+  // if it were old-flat-shape and resurrect a stale flat value.
+  const roots: readonly string[] =
+    (rc && Array.isArray(rc.resolutionRoots))
+      ? rc.resolutionRoots
+      : (Array.isArray(data.resolutionRoots) ? data.resolutionRoots : []);
+  const warnings = rc && Array.isArray(rc.warnings) ? rc.warnings : [];
+  const consensusId = rc && typeof rc.consensusId === 'string' ? rc.consensusId : undefined;
+  const lenses = rc && rc.lenses && typeof rc.lenses === 'object' ? rc.lenses : undefined;
+  // Nothing to carry — no embedded round and no flat roots: legacy rootless.
+  if (!rc && roots.length === 0) return undefined;
+  return makeRoundContext({
+    ...(consensusId !== undefined ? { consensusId } : {}),
+    resolutionRoots: roots,
+    ...(lenses !== undefined ? { lenses } : {}),
+    warnings,
+  });
+}
+
 /** Persist pending consensus rounds to disk so /mcp reconnects don't lose them */
 export function persistPendingConsensus(): void {
   try {
@@ -381,6 +429,17 @@ export function persistPendingConsensus(): void {
         nativePrompts: (round.nativePrompts || []).filter(p => round.pendingNativeAgents.has(p.agentId)),
         // #126 PR-B: carry validated resolution roots across reconnects.
         resolutionRoots: round.resolutionRoots ? [...round.resolutionRoots] : undefined,
+        // Spec §3.2: persist the embedded RoundContext (resolutionRoots +
+        // warnings) so fail-loud state survives /mcp reconnect. The flat
+        // resolutionRoots above is kept in parallel for old-reader back-compat.
+        roundContext: round.roundContext
+          ? {
+              ...(round.roundContext.consensusId !== undefined ? { consensusId: round.roundContext.consensusId } : {}),
+              resolutionRoots: [...round.roundContext.resolutionRoots],
+              ...(round.roundContext.lenses !== undefined ? { lenses: round.roundContext.lenses } : {}),
+              warnings: [...round.roundContext.warnings],
+            }
+          : undefined,
       };
     }
     writeFileSync(join(dir, CONSENSUS_FILE), JSON.stringify(rounds));
@@ -429,6 +488,12 @@ export function restorePendingConsensus(projectRoot: string): void {
         resolutionRoots: Array.isArray(data.resolutionRoots) && data.resolutionRoots.length > 0
           ? data.resolutionRoots
           : undefined,
+        // Spec §3.2 disk back-compat: prefer the embedded roundContext; fall
+        // back per-field to the old flat shape (mirrors the
+        // participatingNativeAgents back-compat pattern above). Old pre-PR-A
+        // files lack `roundContext` entirely — reconstruct one from the flat
+        // resolutionRoots so downstream phases still see a RoundContext.
+        roundContext: restoreRoundContext(data),
       });
 
       // Re-arm timeout watcher

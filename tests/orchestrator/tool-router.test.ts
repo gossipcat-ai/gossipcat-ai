@@ -427,7 +427,17 @@ describe('ToolExecutor', () => {
       ]),
       { consensus: true },
     );
-    expect(mockPipeline.collect).toHaveBeenCalledWith(['task-1', 'task-2'], 600_000, { consensus: true });
+    // PR-A: the router now constructs a minimal RoundContext (boundary #3,
+    // spec §3.2) and threads it alongside consensus:true. Roots empty, warnings
+    // empty — the in-process consensus path has no resolutionRoots today.
+    expect(mockPipeline.collect).toHaveBeenCalledWith(
+      ['task-1', 'task-2'],
+      600_000,
+      expect.objectContaining({
+        consensus: true,
+        round: expect.objectContaining({ resolutionRoots: [], warnings: [] }),
+      }),
+    );
     expect(result.text).toContain('Review done');
     expect(result.text).toContain('Consensus Report');
     expect(result.text).toContain('Both agents agree');
