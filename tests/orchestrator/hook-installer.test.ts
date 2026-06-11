@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import {
   installWorktreeSandboxHook,
   findBundledHook,
+  isWorktreeSandboxHookRegistered,
 } from '../../packages/orchestrator/src/hook-installer';
 
 const HOOK_COMMAND = '$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-sandbox.sh';
@@ -135,5 +136,78 @@ describe('installWorktreeSandboxHook', () => {
     // File must be byte-identical to malformed input — zero data loss.
     const after = readFileSync(join(root, '.claude', 'settings.json'), 'utf-8');
     expect(after).toBe(malformed);
+  });
+
+  // ── action field disambiguation (issue #538 item 3) ────────────────────────
+
+  it('returns action:"registered" on fresh install', () => {
+    const root = makeTmpProject();
+    created.push(root);
+
+    const result = installWorktreeSandboxHook(root);
+    expect(result.installed).toBe(true);
+    expect(result.action).toBe('registered');
+  });
+
+  it('returns action:"already-registered" on second call (idempotent)', () => {
+    const root = makeTmpProject();
+    created.push(root);
+
+    installWorktreeSandboxHook(root);
+    const second = installWorktreeSandboxHook(root);
+    expect(second.installed).toBe(true);
+    expect(second.action).toBe('already-registered');
+  });
+
+  it('returns installed:false with no action field on malformed settings', () => {
+    const root = makeTmpProject();
+    created.push(root);
+    require('fs').mkdirSync(join(root, '.claude'), { recursive: true });
+    writeFileSync(join(root, '.claude', 'settings.json'), '{bad json');
+
+    const result = installWorktreeSandboxHook(root);
+    expect(result.installed).toBe(false);
+    expect(result.action).toBeUndefined();
+    expect(typeof result.reason).toBe('string');
+  });
+});
+
+describe('isWorktreeSandboxHookRegistered', () => {
+  const created: string[] = [];
+
+  afterEach(() => {
+    while (created.length) {
+      const dir = created.pop()!;
+      try { require('fs').rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  });
+
+  it('returns false when settings.json does not exist', () => {
+    const root = makeTmpProject();
+    created.push(root);
+    expect(isWorktreeSandboxHookRegistered(root)).toBe(false);
+  });
+
+  it('returns false when settings.json exists but has no PreToolUse hook', () => {
+    const root = makeTmpProject();
+    created.push(root);
+    require('fs').mkdirSync(join(root, '.claude'), { recursive: true });
+    writeFileSync(join(root, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
+    expect(isWorktreeSandboxHookRegistered(root)).toBe(false);
+  });
+
+  it('returns true after installWorktreeSandboxHook registers the entry', () => {
+    const root = makeTmpProject();
+    created.push(root);
+    installWorktreeSandboxHook(root);
+    expect(isWorktreeSandboxHookRegistered(root)).toBe(true);
+  });
+
+  it('returns false on malformed settings.json', () => {
+    const root = makeTmpProject();
+    created.push(root);
+    require('fs').mkdirSync(join(root, '.claude'), { recursive: true });
+    writeFileSync(join(root, '.claude', 'settings.json'), '{not json');
+    expect(isWorktreeSandboxHookRegistered(root)).toBe(false);
   });
 });

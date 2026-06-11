@@ -55,6 +55,14 @@ export interface NativeTaskInfo {
   step?: number;
   utilityType?: 'lens' | 'gossip' | 'summary' | 'session_summary' | 'verify_memory' | 'skill_develop' | 'plan';
   writeMode?: 'sequential' | 'scoped' | 'worktree';
+  /**
+   * The effective write mode after runtime downgrade decisions (e.g. git-repo
+   * check at dispatch). When present, the relay-receipt isolation checker uses
+   * this instead of `writeMode` to avoid false-positive violation alerts on
+   * dispatches that were silently downgraded. Falls back to `writeMode` when
+   * absent (for old persisted entries restored from .gossip/native-tasks.json).
+   */
+  effectiveWriteMode?: 'sequential' | 'scoped' | 'worktree';
   /** One-time token that must accompany gossip_relay — prevents task-ID spoofing */
   relayToken?: string;
   /**

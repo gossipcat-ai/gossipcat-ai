@@ -46,6 +46,12 @@ export interface DispatchMetadata {
   taskId: string;
   agentId: string;
   writeMode?: DispatchWriteMode;
+  /**
+   * The effective write mode after runtime downgrade (e.g. non-git-repo
+   * causes worktree → sequential downgrade). When absent, falls back to
+   * writeMode for backward compatibility with old persisted entries.
+   */
+  effectiveWriteMode?: DispatchWriteMode;
   scope?: string;
   worktreePath?: string;
   timestamp: number;

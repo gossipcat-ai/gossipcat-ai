@@ -51,6 +51,26 @@ import { existsSync } from 'fs';
 export type PromptFormat = 'inline' | 'elided';
 
 /**
+ * Check whether `cwd` is inside a git repository.
+ *
+ * Used by all three dispatch paths (single, parallel, consensus) to gate
+ * worktree isolation: if the project is not a git repo, we silently downgrade
+ * `write_mode === 'worktree'` to a non-worktree dispatch and emit a visible
+ * warning so the operator knows isolation was not engaged.
+ *
+ * Exported for unit tests.
+ */
+export function isGitRepo(cwd: string): boolean {
+  try {
+    const { execSync } = require('child_process');
+    execSync('git rev-parse --git-dir', { cwd, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Stamp concurrency taint at dispatch time.
  *
  * If ANY existing entry in the map has `writeMode === 'worktree'`, mutate all
@@ -705,19 +725,25 @@ export async function handleDispatchSingle(
 
     // Only use worktree if explicitly requested AND project is a git repo
     let useWorktree = write_mode === 'worktree';
-    if (useWorktree) {
-      try {
-        const { execSync } = require('child_process');
-        execSync('git rev-parse --git-dir', { cwd: process.cwd(), stdio: 'ignore' });
-      } catch {
-        useWorktree = false; // not a git repo, skip worktree
-      }
+    let gitDowngradeReason: string | undefined;
+    if (useWorktree && !isGitRepo(process.cwd())) {
+      useWorktree = false;
+      gitDowngradeReason = 'not a git repository — worktree isolation unavailable';
+    }
+
+    // When we downgraded, record the effective mode back onto the nativeTaskMap
+    // entry (set above at L633, before this point) so the relay-receipt isolation
+    // checker can avoid false-positive alerts.
+    if (!useWorktree && write_mode === 'worktree') {
+      const info = ctx.nativeTaskMap.get(taskId);
+      if (info) info.effectiveWriteMode = 'sequential';
     }
 
     recordDispatchMetadata(process.cwd(), {
       taskId,
       agentId: agent_id,
       writeMode: write_mode,
+      effectiveWriteMode: useWorktree ? 'worktree' : (write_mode === 'worktree' ? 'sequential' : write_mode as any),
       scope,
       worktreePath: undefined,
       timestamp: Date.now(),
@@ -767,6 +793,7 @@ export async function handleDispatchSingle(
         `Task ID: ${taskId}\n` +
         `Agent: ${agent_id}\n` +
         `Model: ${nativeConfig.model}\n` +
+        (gitDowngradeReason ? `⚠️ Isolation downgraded: requested write_mode="worktree" but ${gitDowngradeReason}. Agent will run without worktree isolation.\n` : '') +
         (useWorktree ? `Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"\n\n` : `\n`) +
         promptInstruction +
         `Step 2 — REQUIRED after agent completes:\n` +
@@ -1143,7 +1170,17 @@ export async function handleDispatchParallel(
       ? parallelElision.marker
       : `<AGENT_PROMPT:${taskId} below>`;
 
-    const parallelUseWorktree = def.write_mode === 'worktree';
+    let parallelUseWorktree = def.write_mode === 'worktree';
+    if (parallelUseWorktree && !isGitRepo(process.cwd())) {
+      parallelUseWorktree = false;
+      parallelDispatchWarnings.push(
+        `Task ${taskId} (${def.agent_id}): requested write_mode="worktree" but not a git repository — isolation downgraded to sequential.`,
+      );
+      // Record effective mode on the nativeTaskMap entry so the relay-receipt
+      // isolation checker avoids false-positive alerts on this dispatch.
+      const parallelInfo = ctx.nativeTaskMap.get(taskId);
+      if (parallelInfo) parallelInfo.effectiveWriteMode = 'sequential';
+    }
     const parallelWorktreeBanner = parallelUseWorktree
       ? `\n  Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"`
       : '';
@@ -1449,7 +1486,17 @@ export async function handleDispatchConsensus(
     // Spec 2026-05-22: this consensus-dispatch site previously did NOT emit
     // isolation:"worktree" at all (latent gap from before write_mode existed in
     // the consensus path). Closing the gap and applying multi-line hardening.
-    const consensusUseWorktree = def.write_mode === 'worktree';
+    let consensusUseWorktree = def.write_mode === 'worktree';
+    if (consensusUseWorktree && !isGitRepo(process.cwd())) {
+      consensusUseWorktree = false;
+      dispatchWarnings.push(
+        `Task ${taskId} (${def.agent_id}): requested write_mode="worktree" but not a git repository — isolation downgraded to sequential.`,
+      );
+      // Record effective mode on the nativeTaskMap entry so the relay-receipt
+      // isolation checker avoids false-positive alerts on this dispatch.
+      const consensusInfo = ctx.nativeTaskMap.get(taskId);
+      if (consensusInfo) consensusInfo.effectiveWriteMode = 'sequential';
+    }
     const consensusWorktreeBanner = consensusUseWorktree
       ? `\n  Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"`
       : '';
