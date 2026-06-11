@@ -257,6 +257,10 @@ export class WorkerAgent {
     ];
 
     try {
+      // Budget-awareness offsets go negative for maxToolTurns < 5 (< 3 for
+      // FINAL_AT), so the warnings are silently suppressed at tiny budgets —
+      // accepted behavior (consensus c9395068 f10): there is no room to warn
+      // inside a 1-2 turn budget anyway.
       const WRAP_UP_AT = this.maxToolTurns - 4;  // warn with 4 turns left
       const FINAL_AT = this.maxToolTurns - 2;    // second-to-last turn: save all work (turn after this is for summary only)
       let lastToolSig = '';   // signature of last tool call for repetition detection

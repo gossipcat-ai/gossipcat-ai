@@ -2144,7 +2144,7 @@ export function createMcpServer(): McpServer {
         skills: z.array(z.string()).optional()
           .describe('Skill tags (e.g. ["typescript", "code_review"])'),
         maxToolTurns: z.number().int().min(1).max(MAX_TOOL_TURNS_CEILING).optional()
-          .describe(`Per-agent tool-turn budget override (integer in [1, ${MAX_TOOL_TURNS_CEILING}]). Defaults to 15 when omitted. Useful for slow-reasoning agents (e.g. deepseek-reasoner) that need more turns per cross-review.`),
+          .describe(`Per-agent tool-turn budget override (integer in [1, ${MAX_TOOL_TURNS_CEILING}]). Defaults to 15 when omitted. Useful for slow-reasoning agents (e.g. deepseek-reasoner) that need more turns per cross-review. NOTE: re-declaring an existing agent replaces its whole config entry (even in merge mode) — omitting this field on a re-declare resets the agent to the default.`),
       })).describe('Array of agents to create'),
     },
     async ({ main_provider, main_model, mode, agents, instruction_agent_ids, instruction_update, instruction_mode }) => {
