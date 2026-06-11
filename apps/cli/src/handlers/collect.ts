@@ -448,8 +448,22 @@ export async function handleCollect(
     }
 
     if (nativeAgentIds.size === 0) {
-      // All relay — use existing path (each agent cross-reviewed by its own LLM)
-      consensusReport = await ctx.mainAgent.runConsensus(allResults);
+      // All relay — use existing path (each agent cross-reviewed by its own LLM).
+      // Thread the collect-validated roots through so a zero-native round still
+      // pins <anchor> resolution to the feature-branch worktree instead of
+      // master HEAD. Without this the round builds ConsensusEngine with
+      // resolutionRoots:undefined → empty currentWorktreeRoots → every anchor
+      // resolves against project root and the rootless-degraded warning is
+      // structurally suppressed (recurrence of the #389 stale-anchor class).
+      // effectiveRoots is block-scoped to the native-present branch below, so
+      // recompute here from the collect-validated input (auto-discovery is
+      // discovery-only and never augments effectiveRoots — collect.ts:483-486).
+      const allRelayRoots: readonly string[] = resolutionRoots ?? [];
+      outerEffectiveRoots = allRelayRoots;
+      consensusReport = await ctx.mainAgent.runConsensus(
+        allResults,
+        allRelayRoots.length > 0 ? allRelayRoots : undefined,
+      );
     } else {
       // Two-phase flow: relay agents cross-reviewed inline, native agents get prompts returned
       const { ConsensusEngine, createProvider } = await import('@gossip/orchestrator');

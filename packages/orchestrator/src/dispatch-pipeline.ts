@@ -1270,9 +1270,17 @@ export class DispatchPipeline {
   /**
    * Run consensus cross-review + judge verification + signal pipeline on any set of results.
    * Delegates to ConsensusCoordinator which owns the full consensus logic.
+   *
+   * @param resolutionRoots Optional per-round collect-time roots (validated at
+   *   the MCP boundary). Forwarded so the all-relay consensus path — which
+   *   short-circuits here from collect.ts without going through the dispatch
+   *   handler — still pins citation anchors to the feature-branch worktree.
    */
-  async runConsensus(results: TaskEntry[]): Promise<import('./consensus-types').ConsensusReport | undefined> {
-    return this.consensusCoordinator.runConsensus(results);
+  async runConsensus(
+    results: TaskEntry[],
+    resolutionRoots?: readonly string[],
+  ): Promise<import('./consensus-types').ConsensusReport | undefined> {
+    return this.consensusCoordinator.runConsensus(results, resolutionRoots);
   }
 
   /** Flush TaskGraph index on shutdown */

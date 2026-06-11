@@ -232,6 +232,18 @@ export class ConsensusEngine {
       if (wt && typeof wt === 'string') {
         next.add(resolve(wt));
       }
+      // Defense-in-depth: per-task resolutionRoots are stamped on the TaskEntry
+      // at dispatch time (dispatch-pipeline.ts:406-408) but were otherwise
+      // ignored here. Union them so a round whose roots only ever lived on the
+      // task entries (not on worktreeInfo and not on config.resolutionRoots)
+      // still anchors citations correctly. Same validation/dedup as the
+      // worktreeInfo and extraRoots entries (non-empty string → resolve()).
+      const taskRoots = r.resolutionRoots;
+      if (taskRoots) {
+        for (const p of taskRoots) {
+          if (typeof p === 'string' && p.length > 0) next.add(resolve(p));
+        }
+      }
     }
     // extraRoots arrive post-validation (realpath'd absolute paths from
     // validateResolutionRoot + optional discovery). Union into `next` so
@@ -278,6 +290,25 @@ export class ConsensusEngine {
       this.fileCache.clear();
       this.anchorPathCache.clear();
       this.anchorWarnedRefs.clear();
+    }
+  }
+
+  /**
+   * Loud-fail observability for the rootless-degraded state: when the round was
+   * constructed WITH resolutionRoots but they all dropped during validation /
+   * union (currentWorktreeRoots ended up empty), every <anchor> silently
+   * resolves against project root and isResolvedFromProjectRootOnly is
+   * structurally suppressed. Surface that on stderr so the regression is
+   * visible at cross-review time. Does NOT alter isResolvedFromProjectRootOnly.
+   */
+  private warnIfRootsDroppedToEmpty(): void {
+    const declared = this.config.resolutionRoots;
+    if (declared && declared.length > 0 && this.currentWorktreeRoots.size === 0) {
+      process.stderr.write(
+        `[consensus] ⚠ resolutionRoots: ${declared.length} root(s) declared but 0 resolved ` +
+        `(all dropped during validation) — every anchor will resolve against project root, ` +
+        `NOT the feature-branch worktree. Stale-anchor false disputes likely.\n`,
+      );
     }
   }
 
@@ -465,6 +496,7 @@ export class ConsensusEngine {
     const consensusStart = Date.now();
     _log('consensus', `Starting cross-review for ${successful.length} agents`);
     this.updateWorktreeRoots(results, this.config.resolutionRoots);
+    this.warnIfRootsDroppedToEmpty();
     // Generate consensusId ONCE per round and thread it through cross-review
     // and synthesize so NEW findingIds rewritten in crossReviewForAgent match
     // the consensusId used by synthesize's signal/finding id assembly.
