@@ -457,7 +457,8 @@ export async function handleCollect(
       // structurally suppressed (recurrence of the #389 stale-anchor class).
       // effectiveRoots is block-scoped to the native-present branch below, so
       // recompute here from the collect-validated input (auto-discovery is
-      // discovery-only and never augments effectiveRoots — collect.ts:483-486).
+      // discovery-only and never augments effectiveRoots — see the
+      // autoDiscoverWorktrees block in the native-present branch below).
       const allRelayRoots: readonly string[] = resolutionRoots ?? [];
       outerEffectiveRoots = allRelayRoots;
       consensusReport = await ctx.mainAgent.runConsensus(
