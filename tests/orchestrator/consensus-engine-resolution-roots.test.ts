@@ -5,6 +5,7 @@ import {
   ConsensusEngine,
   type ConsensusEngineConfig,
 } from '../../packages/orchestrator/src/consensus-engine';
+import { ConsensusCoordinator } from '../../packages/orchestrator/src/consensus-coordinator';
 import {
   mkdtempSync,
   mkdirSync,
@@ -283,5 +284,57 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
     const wt2 = realpathSync(mkdtempSync(join(tmp, 'wt2')));
     (engine as any).updateWorktreeRoots([], [wt2]);
     expect((engine as any).anchorPathCache.size).toBe(0);
+  });
+
+  it('Test 21 — e2e: per-round roots via ConsensusCoordinator reach anchor CONTENT in cross-review prompts', async () => {
+    // Tests 16/18/19 prove the engine resolves anchors worktree-first when
+    // constructed directly with resolutionRoots. This test covers the layer
+    // above: ConsensusCoordinator.runConsensus(results, perRoundRoots) must
+    // deliver the roots through engine construction AND engine.run() such
+    // that the cross-review prompts sent to the LLM embed the WORKTREE copy
+    // of a cited file, not the projectRoot (master HEAD) copy. This is the
+    // exact hop that broke in the all-relay path (PR #541 / round 840fcedf):
+    // the engine internals were correct, but a wiring layer above them
+    // constructed the engine rootless.
+    const proj = realpathSync(mkdtempSync(join(tmp, 'proj')));
+    const wt = realpathSync(mkdtempSync(join(tmp, 'wt')));
+    mkdirSync(join(proj, 'src'), { recursive: true });
+    mkdirSync(join(wt, 'src'), { recursive: true });
+    writeFileSync(join(proj, 'src', 'target.ts'), 'export function old() { return "master-HEAD"; }');
+    writeFileSync(join(wt, 'src', 'target.ts'), 'export function newImpl() { return "worktree-branch"; }');
+
+    // Capture every message content the engine sends to the LLM — the
+    // cross-review prompts (with embedded <anchor> blocks) flow through here.
+    const seen: string[] = [];
+    const llm = {
+      generate: jest.fn(async (messages: Array<{ content?: string }>) => {
+        for (const m of messages) if (typeof m?.content === 'string') seen.push(m.content);
+        return { text: '[]', usage: { inputTokens: 0, outputTokens: 0 } };
+      }),
+    };
+
+    const coordinator = new ConsensusCoordinator({
+      llm: llm as any,
+      registryGet: () => undefined,
+      projectRoot: proj,
+      keyProvider: null,
+      getAgentSkillsContent: () => undefined,
+    });
+
+    const finding = (desc: string) =>
+      `<agent_finding type="finding" severity="low">${desc} <cite tag="file">src/target.ts:1</cite></agent_finding>`;
+    const results = [
+      { id: 't1', agentId: 'agent-a', task: 'review', status: 'completed', result: finding('Issue A') },
+      { id: 't2', agentId: 'agent-b', task: 'review', status: 'completed', result: finding('Issue B') },
+    ] as any;
+
+    await coordinator.runConsensus(results, [wt]);
+
+    expect(llm.generate).toHaveBeenCalled();
+    const all = seen.join('\n');
+    // The cited file exists in BOTH roots with distinct content — the prompts
+    // must carry the worktree version, never the master copy.
+    expect(all).toContain('worktree-branch');
+    expect(all).not.toContain('master-HEAD');
   });
 });
