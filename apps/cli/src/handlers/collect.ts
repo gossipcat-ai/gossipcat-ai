@@ -11,7 +11,7 @@ import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
 import type { PromptFormat } from './dispatch';
 import { discoverVerifier, type VerifierBinding } from './auto-verify-discovery';
-import type { RelayWarningEntry } from '@gossip/orchestrator';
+import type { RelayWarningEntry, RoundContext } from '@gossip/orchestrator';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
 
@@ -247,6 +247,16 @@ export async function handleCollect(
    * preserves the existing ---SYSTEM---/---USER--- embedded block.
    */
   prompt_format?: PromptFormat,
+  /**
+   * Per-round consensus context (spec §3.1/§3.2) constructed at the MCP
+   * boundary AFTER validateResolutionRoot filtering. Carries the validated
+   * resolutionRoots plus the fail-loud warnings array (roots_rejected /
+   * roots_empty_after_validation). Alias mode (PR-A): when present it WINS and
+   * is threaded to the engine + embedded in the pending round; the loose
+   * `resolutionRoots` param above stays populated in parallel. When absent the
+   * legacy path is byte-identical.
+   */
+  round?: RoundContext,
 ) {
   await ctx.boot();
 
@@ -461,9 +471,12 @@ export async function handleCollect(
       // autoDiscoverWorktrees block in the native-present branch below).
       const allRelayRoots: readonly string[] = resolutionRoots ?? [];
       outerEffectiveRoots = allRelayRoots;
+      // Alias mode: a RoundContext WINS — forward it whole so the round's
+      // warnings array drains into report.warnings. Without a round, fall back
+      // to the legacy roots-only path (byte-identical).
       consensusReport = await ctx.mainAgent.runConsensus(
         allResults,
-        allRelayRoots.length > 0 ? allRelayRoots : undefined,
+        round ?? (allRelayRoots.length > 0 ? allRelayRoots : undefined),
       );
     } else {
       // Two-phase flow: relay agents cross-reviewed inline, native agents get prompts returned
@@ -595,7 +608,13 @@ export async function handleCollect(
         projectRoot: process.cwd(),
         agentLlm: (id: string) => agentLlmCache.get(id),
         performanceReader,
-        resolutionRoots: effectiveRoots,
+        // Alias mode: a RoundContext WINS — forward it whole so its warnings
+        // array drains into report.warnings (the immediate-synthesis path at
+        // :811 builds the report on THIS engine). Else fall back to the legacy
+        // roots-only field (byte-identical). The pending-round path below
+        // re-seeds resolutionRoots from snapshot/round per phase, so this only
+        // governs the immediate synthesizeWithCrossReview branch.
+        ...(round ? { round } : { resolutionRoots: effectiveRoots }),
         verifierDispatch: _autoVerifyDispatch,
         warningSink: _autoVerifyWarningSink,
         verifierToolRunner: async (agentId: string, toolName: string, args: Record<string, unknown>): Promise<string> => {
@@ -835,6 +854,11 @@ export async function handleCollect(
           createdAt: Date.now(),
           nativePrompts: nativePrompts.map((p: any) => ({ agentId: p.agentId, system: p.system, user: p.user })),
           resolutionRoots: effectiveRoots.length > 0 ? [...effectiveRoots] : undefined,
+          // Alias mode (spec §3.2): embed the round so later phases
+          // (relay-cross-review arrival/timeout/synthesis) can drain its
+          // warnings + read its roots. The flat resolutionRoots above stays
+          // populated in parallel for old-reader back-compat.
+          roundContext: round,
         });
 
         // Seed the relay-lint fallback membership map — keeps round-membership
@@ -1285,6 +1309,19 @@ export async function handleCollect(
     const overflow = consensusReport.zeroTagOverflow ?? 0;
     const suffix = overflow > 0 ? ` (+${overflow} more)` : '';
     output += `\n⚠ zeroTagAgents: ${shown}${suffix}`;
+  }
+
+  // Fail-loud round warnings (spec §6.1) — drained from RoundContext.warnings
+  // into report.warnings at synthesis. Render one line per warning so the
+  // operator sees rejected/empty resolutionRoots (and, post-PR-B, coverage /
+  // partial-review drops) in-band, not just on stderr. Append-only, no dedup.
+  if (consensusReport?.warnings && consensusReport.warnings.length > 0) {
+    output += '\n\n⚠ Round warnings:';
+    for (const w of consensusReport.warnings) {
+      const agent = w.agentId ? ` [${w.agentId.replace(/[\r\n]/g, ' ')}]` : '';
+      const msg = w.message.replace(/[\r\n]/g, ' ');
+      output += `\n  • ${w.code}${agent}: ${msg}`;
+    }
   }
 
   if (provisionalSignalCount > 0) {

@@ -142,6 +142,14 @@ export interface ConsensusReport {
   zeroTagAgents?: string[];
   /** Count of zero-tag agents past the 5-entry `zeroTagAgents` cap. */
   zeroTagOverflow?: number;
+  /**
+   * Fail-loud warnings drained from the round's `RoundContext.warnings` at
+   * synthesis (spec §6.1). Populated only when the round carried a
+   * RoundContext with at least one warning; clean rounds keep it undefined.
+   * Surfaced in the gossip_collect tool response (PR-A) and the dashboard
+   * (PR-B). Append-only — mirrors the producer order, no dedup.
+   */
+  warnings?: import('./round-context').RoundWarning[];
 }
 
 /** Return type for collect() */

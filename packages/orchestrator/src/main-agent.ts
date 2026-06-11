@@ -245,7 +245,7 @@ export class MainAgent {
   /** Update bootstrap prompt after MCP reconnect so agents see fresh session context. */
   setBootstrapPrompt(prompt: string) { this.bootstrapPrompt = prompt; }
   dispatch(agentId: string, task: string, options?: DispatchOptions) { return this.pipeline.dispatch(agentId, task, options); }
-  async collect(taskIds?: string[], timeoutMs?: number, options?: { consensus?: boolean; consume?: boolean }) { return this.pipeline.collect(taskIds, timeoutMs, options); }
+  async collect(taskIds?: string[], timeoutMs?: number, options?: { consensus?: boolean; consume?: boolean; resolutionRoots?: readonly string[]; round?: import('./round-context').RoundContext }) { return this.pipeline.collect(taskIds, timeoutMs, options); }
   async dispatchParallel(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>, options?: { consensus?: boolean }) { return this.pipeline.dispatchParallel(tasks, options); }
   async dispatchParallelWithLenses(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>, options?: { consensus?: boolean }, precomputedLenses?: Map<string, string>) { return this.pipeline.dispatchParallelWithLenses(tasks, options, precomputedLenses); }
   async generateLensesForAgents(taskDefs: Array<{ agentId: string; task: string }>) { return this.pipeline.generateLensesForAgents(taskDefs); }
@@ -256,7 +256,7 @@ export class MainAgent {
   getTask(taskId: string) { return this.pipeline.getTask(taskId); }
   setGossipPublisher(publisher: any) { this.pipeline.setGossipPublisher(publisher); }
   setOverlapDetector(detector: any): void { this.pipeline.setOverlapDetector(detector); }
-  async runConsensus(results: any[], resolutionRoots?: readonly string[]): Promise<any> { return this.pipeline.runConsensus(results, resolutionRoots); }
+  async runConsensus(results: any[], roundOrRoots?: import('./round-context').RoundContext | readonly string[]): Promise<any> { return this.pipeline.runConsensus(results, roundOrRoots); }
   setLensGenerator(generator: any): void { this.pipeline.setLensGenerator(generator); }
   setDispatchDifferentiator(differ: any): void { this.pipeline.setDispatchDifferentiator(differ); }
   getSkillGapSuggestions() { return this.pipeline.getSkillGapSuggestions(); }

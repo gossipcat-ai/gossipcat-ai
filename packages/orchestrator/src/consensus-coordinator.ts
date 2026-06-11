@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { ILLMProvider, createProvider } from './llm-client';
 import { ConsensusEngine } from './consensus-engine';
 import { ConsensusReport } from './consensus-types';
+import type { RoundContext } from './round-context';
 import { MemoryWriter } from './memory-writer';
 import { AgentConfig, TaskEntry } from './types';
 import { GossipPublisher } from './gossip-publisher';
@@ -24,6 +25,12 @@ export interface ConsensusCoordinatorConfig {
    * #126 / PR-B.
    */
   resolutionRoots?: readonly string[];
+  /**
+   * Per-round consensus context (spec §3.1). Alias-mode default forwarded to
+   * ConsensusEngine when no per-round override is supplied to runConsensus.
+   * When present it WINS over the loose `resolutionRoots` field.
+   */
+  round?: RoundContext;
 }
 
 type ConsensusPhase = 'idle' | 'review' | 'cross_review' | 'synthesis';
@@ -35,6 +42,7 @@ export class ConsensusCoordinator {
   private keyProvider: ((provider: string) => Promise<string | null>) | null;
   private getAgentSkillsContent?: (agentId: string, task: string) => string | undefined;
   private resolutionRoots?: readonly string[];
+  private round?: RoundContext;
   private gossipPublisher: GossipPublisher | null = null;
   private memWriter: MemoryWriter;
 
@@ -49,6 +57,7 @@ export class ConsensusCoordinator {
     this.keyProvider = config.keyProvider;
     this.getAgentSkillsContent = config.getAgentSkillsContent;
     this.resolutionRoots = config.resolutionRoots;
+    this.round = config.round;
     this.memWriter = new MemoryWriter(config.projectRoot);
   }
 
@@ -65,19 +74,39 @@ export class ConsensusCoordinator {
   }
 
   /**
-   * @param perRoundRoots Optional collect-time resolution roots (already
-   *   validated at the MCP boundary). When non-empty these OVERRIDE the
-   *   constructor default `this.resolutionRoots`, mirroring the "collect-time
-   *   REPLACES dispatch-time" spec semantics (collect.ts:478-487). Threaded
-   *   through the all-relay consensus path so a zero-native round still pins
-   *   anchors to the feature-branch worktree instead of master HEAD.
+   * @param roundOrRoots Optional per-round context OR collect-time resolution
+   *   roots (already validated at the MCP boundary). Alias mode (spec §3.2):
+   *   - A `RoundContext` WINS — it is forwarded whole to the engine (carrying
+   *     resolutionRoots AND the warnings array), overriding the constructor
+   *     default `this.round` / `this.resolutionRoots`.
+   *   - A non-empty `readonly string[]` (legacy shape) OVERRIDES the
+   *     constructor default `this.resolutionRoots`, mirroring the "collect-time
+   *     REPLACES dispatch-time" semantics (collect.ts). Byte-identical to the
+   *     pre-RoundContext path.
+   *   When absent, the constructor defaults are used (round wins over roots).
    */
-  async runConsensus(results: TaskEntry[], perRoundRoots?: readonly string[]): Promise<ConsensusReport | undefined> {
+  async runConsensus(
+    results: TaskEntry[],
+    roundOrRoots?: RoundContext | readonly string[],
+  ): Promise<ConsensusReport | undefined> {
     if (!this.llm || results.filter(r => r.status === 'completed').length < 2) return undefined;
 
-    const effectiveResolutionRoots = (perRoundRoots && perRoundRoots.length > 0)
-      ? perRoundRoots
-      : this.resolutionRoots;
+    // Discriminate the union: a RoundContext is a plain object with a
+    // `resolutionRoots` array field; the legacy shape is the array itself.
+    const perRoundRound: RoundContext | undefined =
+      roundOrRoots && !Array.isArray(roundOrRoots) ? (roundOrRoots as RoundContext) : undefined;
+    const perRoundRoots: readonly string[] | undefined =
+      roundOrRoots && Array.isArray(roundOrRoots) ? (roundOrRoots as readonly string[]) : undefined;
+
+    // Effective round: per-round context wins, else constructor default.
+    const effectiveRound: RoundContext | undefined = perRoundRound ?? this.round;
+    // Effective legacy roots: only used when NO round is in play (round carries
+    // its own resolutionRoots). Per-round legacy array overrides constructor.
+    const effectiveResolutionRoots = effectiveRound
+      ? effectiveRound.resolutionRoots
+      : (perRoundRoots && perRoundRoots.length > 0)
+        ? perRoundRoots
+        : this.resolutionRoots;
 
     try {
       this.currentPhase = 'review';
@@ -110,7 +139,12 @@ export class ConsensusCoordinator {
         projectRoot: this.projectRoot,
         agentLlm,
         getAgentSkillsContent: this.getAgentSkillsContent,
-        resolutionRoots: effectiveResolutionRoots,
+        // Alias mode: when a round is in play, forward it whole (it carries its
+        // own resolutionRoots AND the warnings array the engine drains into the
+        // report). Else fall back to the legacy loose roots — byte-identical.
+        ...(effectiveRound
+          ? { round: effectiveRound }
+          : { resolutionRoots: effectiveResolutionRoots }),
       });
       const consensusReport = await engine.run(results);
       this.currentPhase = 'cross_review';
