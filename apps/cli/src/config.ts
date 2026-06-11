@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'fs';
 import { resolve, join, relative } from 'path';
-import { AgentConfig } from '@gossip/orchestrator';
+import { execFileSync } from 'child_process';
+import { AgentConfig, parseWorktreePorcelain, GIT_ENV } from '@gossip/orchestrator';
 
 export interface GossipConfig {
   main_agent: {
@@ -365,6 +366,28 @@ export function resolveSiblingRoots(config: GossipConfig, projectRoot: string): 
     const rel = relative(rootReal, abs);
     return rel === '' || (!rel.startsWith('..') && !rel.startsWith('/'));
   };
+  // v2 (#520): enumerate a declared repo's real worktree checkouts from git so
+  // path-carrying cites resolve regardless of where `git worktree add` put the
+  // tree. Fail-soft: a non-git dir / git absent / parse error yields [] (the
+  // declared root itself is still a valid root). The returned paths are realpath'd
+  // by parseWorktreePorcelain; each is independently validateDir-gated by the caller.
+  const enumerateWorktrees = (repoRoot: string): string[] => {
+    try {
+      // Harden git: neutralize global/system config (GIT_ENV, shared with
+      // validateResolutionRoot) AND clear any inherited GIT_DIR/GIT_WORK_TREE so
+      // `git -C <repoRoot>` enumerates the declared sibling, not an outer repo
+      // (consensus f65b8bc3 deepseek:f1 + sonnet:f13).
+      const env: Record<string, string | undefined> = { ...process.env, ...GIT_ENV };
+      delete env.GIT_DIR;
+      delete env.GIT_WORK_TREE;
+      const stdout = execFileSync('git', ['-C', repoRoot, 'worktree', 'list', '-z', '--porcelain'], {
+        encoding: 'utf8', timeout: 5000, maxBuffer: 1 << 20, stdio: ['ignore', 'pipe', 'ignore'], env,
+      });
+      return parseWorktreePorcelain(stdout, { includeLocked: true });
+    } catch {
+      return [];
+    }
+  };
   for (const entry of declared) {
     if (entry.endsWith('/*')) {
       // Validate the glob parent (stat + isDirectory + uid + realpath) before
@@ -394,9 +417,16 @@ export function resolveSiblingRoots(config: GossipConfig, projectRoot: string): 
         throw new Error(`Config "consensus.siblingRoots": "${canonical}" is inside the project root — siblingRoots are for EXTERNAL repos; use a normal scope instead`);
       }
       out.push(canonical);
+      // v2: also admit the declared repo's checked-out worktrees (primary path).
+      for (const wt of enumerateWorktrees(canonical)) {
+        let wtCanonical: string;
+        try { wtCanonical = validateDir(wt); } catch { continue; } // vanished / uid-mismatch → skip, don't fail boot
+        if (isInsideProject(wtCanonical)) continue; // worktrees inside projectRoot are not external siblings — skip
+        out.push(wtCanonical);
+      }
     }
   }
-  return out;
+  return [...new Set(out)]; // dedup by canonical path (parseWorktreePorcelain + validateDir both realpath)
 }
 
 export function configToAgentConfigs(config: GossipConfig): AgentConfig[] {
