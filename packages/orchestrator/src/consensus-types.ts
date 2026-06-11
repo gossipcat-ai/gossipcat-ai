@@ -82,25 +82,6 @@ export interface ConsensusReport {
   signals: ConsensusSignal[];
   summary: string;       // formatted text report
   /**
-   * Relay agents whose cross-review LLM call failed (quota / parse / network).
-   * Surfaced so the orchestrator can see when an agent silently dropped from
-   * consensus instead of pretending the round was complete.
-   */
-  relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;
-  /**
-   * Coverage degraded when an agent dispatched to the round produced an empty
-   * 0-char response (e.g. Gemini MALFORMED_FUNCTION_CALL). The round still
-   * completes but with fewer voices than dispatched; surfaced here so the
-   * orchestrator can see silent dropouts at the round level rather than only
-   * per-task in collect.ts:178 auto-signals.
-   */
-  coverageDegraded?: { expected: number; received: number; droppedAgents: string[] };
-  /**
-   * True when at least one finding received fewer cross-reviewers than the
-   * target K (e.g. not enough eligible agents). Set by runSelectedCrossReview.
-   */
-  partialReview?: boolean;
-  /**
    * Cross-review assignments: which reviewer was assigned which findings.
    * Map serialized as Record<reviewerAgentId, findingId[]>.
    */

@@ -1,10 +1,12 @@
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { TaskEntry } from '../../packages/orchestrator/src/types';
 
 // Minimal engine config so formatReport's registryGet call doesn't throw.
 const makeEngine = () => new ConsensusEngine({
   llm: { generate: jest.fn() } as any,
   registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: `preset-${id}`, skills: [] }),
+  round: testRound(),
 } as any);
 
 const makeTask = (agentId: string, result: string): TaskEntry => ({

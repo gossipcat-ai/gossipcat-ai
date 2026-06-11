@@ -4,6 +4,99 @@
  */
 import { ctx, RECENT_CONSENSUS_TASK_TTL_MS } from '../mcp-context';
 import { seedRecentConsensusAgentIds } from './native-tasks';
+import type {
+  ConsensusEngine as ConsensusEngineType,
+  ConsensusReport,
+  CrossReviewEntry,
+  ILLMProvider,
+  RoundContext,
+  TaskEntry,
+} from '@gossip/orchestrator';
+
+/**
+ * The minimal slice of a pending-round snapshot the timeout-synthesis path
+ * consumes. Mirrors the object the timeout watcher builds from the live round.
+ */
+export interface TimeoutSynthesisSnapshot {
+  allResults: TaskEntry[];
+  relayCrossReviewEntries: CrossReviewEntry[];
+  relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;
+  nativeCrossReviewEntries: CrossReviewEntry[];
+  resolutionRoots?: readonly string[];
+  roundContext?: RoundContext;
+}
+
+/**
+ * REAL timeout-synthesis core (spec §5 / consensus f8 follow-up). Extracted from
+ * the `checkTimeout` closure so a test can drive the genuine outer→inner layers:
+ * it constructs the SAME engine the timeout watcher does, resolves cross-review
+ * prompt anchors against the round's roots, runs `synthesizeWithCrossReview`, and
+ * persists the report. Returns the report PLUS the resolved prompts so the
+ * boundary value (round.resolutionRoots reaching anchor CONTENT) is observable in
+ * the final artifact — not just asserted on the engine config.
+ *
+ * The engine REQUIRES a RoundContext (PR-C). When the snapshot lacks an embedded
+ * round (old pre-PR-A persisted record), one is reconstructed from the flat
+ * resolutionRoots so the synthesis still pins anchors to the worktree.
+ */
+export async function synthesizeTimeoutRound(
+  snapshot: TimeoutSynthesisSnapshot,
+  consensusId: string,
+  missingAgents: string[],
+  llm: ILLMProvider,
+  projectRoot: string = process.cwd(),
+): Promise<{ report: ConsensusReport; prompts: Array<{ system: string; user: string }> }> {
+  const { ConsensusEngine, makeRoundContext } = await import('@gossip/orchestrator');
+  const round: RoundContext =
+    snapshot.roundContext ?? makeRoundContext({ resolutionRoots: snapshot.resolutionRoots ?? [] });
+  const engine: ConsensusEngineType = new ConsensusEngine({
+    llm,
+    registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
+    projectRoot,
+    // PR-C: the engine requires a round; forward the effective one so its
+    // warnings drain into the timeout-synthesis report and its roots pin anchors.
+    round,
+  });
+
+  const allEntries = [...snapshot.relayCrossReviewEntries, ...snapshot.nativeCrossReviewEntries];
+  // Resolve anchors against the round's roots — the prompts carry the worktree
+  // version of cited files as <anchor> CONTENT. Surfaced for the §5 seam test.
+  const { prompts } = await engine.generateCrossReviewPrompts(snapshot.allResults);
+  const report = await engine.synthesizeWithCrossReview(
+    snapshot.allResults,
+    allEntries,
+    consensusId,
+    snapshot.relayCrossReviewSkipped,
+  );
+
+  // Persist report
+  try {
+    const { writeFileSync, mkdirSync } = require('fs');
+    const { join } = require('path');
+    const reportsDir = join(projectRoot, '.gossip', 'consensus-reports');
+    mkdirSync(reportsDir, { recursive: true });
+    const topic = snapshot.allResults?.find((r: any) => r.task)?.task?.slice(0, 500) || '';
+    writeFileSync(join(reportsDir, `${consensusId}.json`), JSON.stringify({
+      id: consensusId,
+      timestamp: new Date().toISOString(),
+      topic,
+      agentCount: report.agentCount,
+      rounds: report.rounds,
+      confirmed: report.confirmed || [],
+      disputed: report.disputed || [],
+      unverified: report.unverified || [],
+      unique: report.unique || [],
+      insights: report.insights || [],
+      newFindings: report.newFindings || [],
+      timedOut: missingAgents,
+      ...(report.droppedFindingsByType ? { droppedFindingsByType: report.droppedFindingsByType } : {}),
+      ...(report.authorDiagnostics ? { authorDiagnostics: report.authorDiagnostics } : {}),
+      ...(report.warnings && report.warnings.length > 0 ? { warnings: report.warnings } : {}),
+    }, null, 2));
+  } catch { /* best-effort */ }
+
+  return { report, prompts: prompts.map(p => ({ system: p.system, user: p.user })) };
+}
 
 /**
  * Start a timeout watcher for a pending consensus round.
@@ -61,54 +154,14 @@ export function startConsensusTimeout(consensusId: string): void {
       })));
     } catch { /* best-effort */ }
 
-    // Synthesize with what we have
+    // Synthesize with what we have — via the extracted, test-driven core.
     try {
-      const { ConsensusEngine } = await import('@gossip/orchestrator');
       const timeoutLlm = ctx.mainAgent.getLlm();
       if (!timeoutLlm) {
         process.stderr.write(`[gossipcat] ⚠️  Timeout synthesis skipped: no LLM configured\n`);
         return;
       }
-      const engine = new ConsensusEngine({
-        llm: timeoutLlm,
-        registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
-        projectRoot: process.cwd(),
-        // Alias mode: forward the embedded round when present so its warnings
-        // drain into the timeout-synthesis report; else legacy roots-only.
-        ...(snapshot.roundContext
-          ? { round: snapshot.roundContext }
-          : { resolutionRoots: snapshot.resolutionRoots }),
-      });
-
-      const allEntries = [...snapshot.relayCrossReviewEntries, ...snapshot.nativeCrossReviewEntries];
-      const report = await engine.synthesizeWithCrossReview(snapshot.allResults, allEntries, consensusId, snapshot.relayCrossReviewSkipped);
-
-      // Persist report
-      try {
-        const { writeFileSync, mkdirSync } = require('fs');
-        const { join } = require('path');
-        const reportsDir = join(process.cwd(), '.gossip', 'consensus-reports');
-        mkdirSync(reportsDir, { recursive: true });
-        const topic = snapshot.allResults?.find((r: any) => r.task)?.task?.slice(0, 500) || '';
-        writeFileSync(join(reportsDir, `${consensusId}.json`), JSON.stringify({
-          id: consensusId,
-          timestamp: new Date().toISOString(),
-          topic,
-          agentCount: report.agentCount,
-          rounds: report.rounds,
-          confirmed: report.confirmed || [],
-          disputed: report.disputed || [],
-          unverified: report.unverified || [],
-          unique: report.unique || [],
-          insights: report.insights || [],
-          newFindings: report.newFindings || [],
-          timedOut: missingAgents,
-          ...(report.droppedFindingsByType ? { droppedFindingsByType: report.droppedFindingsByType } : {}),
-          ...(report.authorDiagnostics ? { authorDiagnostics: report.authorDiagnostics } : {}),
-          ...(report.warnings && report.warnings.length > 0 ? { warnings: report.warnings } : {}),
-        }, null, 2));
-      } catch { /* best-effort */ }
-
+      const { report } = await synthesizeTimeoutRound(snapshot, consensusId, missingAgents, timeoutLlm);
       process.stderr.write(`[gossipcat] 🔮 Timeout synthesis complete: ${report.confirmed.length} confirmed, ${report.disputed.length} disputed\n`);
     } catch (err) {
       process.stderr.write(`[gossipcat] ❌ Timeout synthesis failed: ${(err as Error).message}\n`);
@@ -152,18 +205,17 @@ export async function handleRelayCrossReview(
   const rejectedPeerIds = new Set<string>();
   let parseError: string | null = null;
   try {
-    const { ConsensusEngine } = await import('@gossip/orchestrator');
+    const { ConsensusEngine, makeRoundContext } = await import('@gossip/orchestrator');
     const parseLlm = ctx.mainAgent.getLlm();
     // parseCrossReviewResponse doesn't call LLM, but ConsensusEngine requires one in config
     const engine = new ConsensusEngine({
       llm: parseLlm || ({ generate: async () => ({ text: '', usage: { inputTokens: 0, outputTokens: 0 } }) } as any),
       registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
       projectRoot: process.cwd(),
-      // Alias mode: forward embedded round when present (parse-only path, but
-      // keep the boundary consistent); else legacy roots-only.
-      ...(round.roundContext
-        ? { round: round.roundContext }
-        : { resolutionRoots: round.resolutionRoots }),
+      // PR-C: the engine requires a round. Forward the embedded one; if an old
+      // restored record lacks it, wrap the flat roots (parse-only path — the
+      // round is just for boundary consistency).
+      round: round.roundContext ?? makeRoundContext({ resolutionRoots: round.resolutionRoots ?? [] }),
     });
     const entries = engine.parseCrossReviewResponse(agent_id, result, 50);
     parsedCount = entries.length;
@@ -285,7 +337,7 @@ export async function handleRelayCrossReview(
   process.stderr.write(`[gossipcat] 🔮 All native cross-reviews received. Synthesizing consensus for ${consensus_id}...\n`);
 
   try {
-    const { ConsensusEngine } = await import('@gossip/orchestrator');
+    const { ConsensusEngine, makeRoundContext } = await import('@gossip/orchestrator');
     const mainLlm = ctx.mainAgent.getLlm();
     if (!mainLlm) {
       return { content: [{ type: 'text' as const, text: 'Error: No LLM configured for consensus synthesis. Check gossip_setup.' }] };
@@ -294,11 +346,10 @@ export async function handleRelayCrossReview(
       llm: mainLlm,
       registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
       projectRoot: process.cwd(),
-      // Alias mode: forward the embedded round so its fail-loud warnings drain
-      // into the final-synthesis report; else legacy roots-only.
-      ...(synthSnapshot.roundContext
-        ? { round: synthSnapshot.roundContext }
-        : { resolutionRoots: synthSnapshot.resolutionRoots }),
+      // PR-C: the engine requires a round. Forward the embedded one so its
+      // fail-loud warnings drain into the final-synthesis report; wrap the flat
+      // roots when an old restored record lacks an embedded round.
+      round: synthSnapshot.roundContext ?? makeRoundContext({ resolutionRoots: synthSnapshot.resolutionRoots ?? [] }),
     });
 
     const allCrossReviewEntries = [

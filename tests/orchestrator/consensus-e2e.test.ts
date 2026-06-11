@@ -5,6 +5,7 @@
  * Run: npx jest tests/orchestrator/consensus-e2e.test.ts --testTimeout=600000
  */
 import { createProvider } from '../../packages/orchestrator/src/llm-client';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { existsSync, readFileSync, unlinkSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
@@ -70,7 +71,9 @@ describe('Consensus Protocol E2E', () => {
       return { id, provider: ac.provider, model: ac.model, preset: ac.preset, skills: ac.skills || [] };
     };
 
-    const engine = new ConsensusEngine({ llm, registryGet });
+    const engine = new ConsensusEngine({ llm, registryGet,
+      round: testRound(),
+    });
 
     // Synthetic Phase 1 results — 4 agents reviewing consensus-engine.ts
     const mockResults = [

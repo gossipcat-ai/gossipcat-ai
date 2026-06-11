@@ -1,4 +1,5 @@
 import { ConsensusEngine, ConsensusEngineConfig, CrossReviewEntry } from '../../packages/orchestrator/src/consensus-engine';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { TaskEntry } from '../../packages/orchestrator/src/types';
 import { ILLMProvider } from '../../packages/orchestrator/src/llm-client';
 
@@ -22,6 +23,8 @@ describe('Two-phase consensus flow', () => {
     const config: ConsensusEngineConfig = {
       llm: mockLlm,
       registryGet: mockRegistryGet,
+
+      round: testRound(),
     };
     const engine = new ConsensusEngine(config);
 
@@ -70,6 +73,8 @@ describe('Two-phase consensus flow', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       agentLlm: (id) => id === 'relay-b' ? relayLlm : undefined,
+
+      round: testRound(),
     };
     const engine = new ConsensusEngine(config);
 
@@ -125,6 +130,7 @@ describe('Two-phase consensus flow', () => {
       registryGet: mockRegistryGet,
       // Intentionally NO agentLlm — mirrors all-native reality where
       // agentLlmCache would be empty.
+      round: testRound(),
     };
     const engine = new ConsensusEngine(config);
 
@@ -156,6 +162,8 @@ describe('Two-phase consensus flow', () => {
     const config: ConsensusEngineConfig = {
       llm: mockLlm,
       registryGet: mockRegistryGet,
+
+      round: testRound(),
     };
     const engine = new ConsensusEngine(config);
 
@@ -176,7 +184,7 @@ describe('Two-phase consensus flow', () => {
   });
 
   it('flags coverageDegraded and emits consensus_coverage_degraded signal for 0-char dropouts', async () => {
-    const config: ConsensusEngineConfig = { llm: mockLlm, registryGet: mockRegistryGet };
+    const config: ConsensusEngineConfig = { llm: mockLlm, registryGet: mockRegistryGet, round: testRound() };
     const engine = new ConsensusEngine(config);
 
     // Three dispatched agents, one returns empty text (simulating Gemini MFC).
@@ -190,17 +198,20 @@ describe('Two-phase consensus flow', () => {
     const { consensusId } = await engine.generateCrossReviewPrompts(results, nativeIds);
     const report = await engine.synthesizeWithCrossReview(results, [], consensusId);
 
-    expect(report.coverageDegraded).toBeDefined();
-    expect(report.coverageDegraded!.expected).toBe(3);
-    expect(report.coverageDegraded!.received).toBe(2);
-    expect(report.coverageDegraded!.droppedAgents).toEqual(['native-c']);
+    // PR-C: legacy report.coverageDegraded is gone — assert the warning message
+    // (carries received/total + dropped-agent list) + the round-level signal.
+    expect((report as unknown as { coverageDegraded?: unknown }).coverageDegraded).toBeUndefined();
+    const cd = (report.warnings ?? []).filter(w => w.code === 'coverage_degraded');
+    expect(cd).toHaveLength(1);
+    expect(cd[0].message).toContain('2/3');
+    expect(cd[0].message).toContain('native-c');
     const covSignals = report.signals.filter(s => s.signal === 'consensus_coverage_degraded');
     expect(covSignals).toHaveLength(1);
     expect(covSignals[0].agentId).toBe('_round');
   });
 
   it('flags coverageDegraded for Gemini MALFORMED_FUNCTION_CALL sentinel (non-empty dropout)', async () => {
-    const config: ConsensusEngineConfig = { llm: mockLlm, registryGet: mockRegistryGet };
+    const config: ConsensusEngineConfig = { llm: mockLlm, registryGet: mockRegistryGet, round: testRound() };
     const engine = new ConsensusEngine(config);
 
     // One agent returns the Gemini sentinel — non-empty string, zero analytical content.
@@ -215,9 +226,12 @@ describe('Two-phase consensus flow', () => {
     const { consensusId } = await engine.generateCrossReviewPrompts(results, nativeIds);
     const report = await engine.synthesizeWithCrossReview(results, [], consensusId);
 
-    expect(report.coverageDegraded).toBeDefined();
-    expect(report.coverageDegraded!.droppedAgents).toEqual(['gemini-reviewer']);
-    expect(report.coverageDegraded!.received).toBe(2);
+    // PR-C: legacy report.coverageDegraded is gone — assert the warning.
+    expect((report as unknown as { coverageDegraded?: unknown }).coverageDegraded).toBeUndefined();
+    const cd = (report.warnings ?? []).filter(w => w.code === 'coverage_degraded');
+    expect(cd).toHaveLength(1);
+    expect(cd[0].message).toContain('gemini-reviewer');
+    expect(cd[0].message).toContain('2/3');
     const covSignals = report.signals.filter(s => s.signal === 'consensus_coverage_degraded');
     expect(covSignals).toHaveLength(1);
   });

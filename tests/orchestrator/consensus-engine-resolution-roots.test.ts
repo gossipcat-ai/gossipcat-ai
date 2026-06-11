@@ -6,7 +6,7 @@ import {
   type ConsensusEngineConfig,
 } from '../../packages/orchestrator/src/consensus-engine';
 import { ConsensusCoordinator } from '../../packages/orchestrator/src/consensus-coordinator';
-import { makeRoundContext } from '../../packages/orchestrator/src/round-context';
+import { makeRoundContext, testRound } from '../../packages/orchestrator/src/round-context';
 import {
   mkdtempSync,
   mkdirSync,
@@ -41,7 +41,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: root,
-      resolutionRoots: [real],
+      round: testRound({ resolutionRoots: [real] }),
     } as ConsensusEngineConfig);
     // getValidRoots is private — exercise via matchesRelativePath which
     // works off the roots the engine was seeded with.
@@ -54,13 +54,15 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: root,
-      resolutionRoots: ['relative/path'],
+      round: testRound({ resolutionRoots: ['relative/path'] }),
     } as ConsensusEngineConfig)).toThrow(/absolute/);
   });
 
   it('Test 14 — matchesRelativePath: exact trailing match', () => {
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: root,
+
+      round: testRound(),
     });
     const m = (engine as any).matchesRelativePath.bind(engine);
     // trailing match succeeds
@@ -88,6 +90,8 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
     symlinkSync(outside, join(repo, 'packages', 'evil'));
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: repo,
+
+      round: testRound(),
     });
     // findFile is private — invoke via the resolver path.
     const resolved = await (engine as any).resolveFilePath('config.ts');
@@ -110,7 +114,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: proj,
-      resolutionRoots: [extra],
+      round: testRound({ resolutionRoots: [extra] }),
     } as ConsensusEngineConfig);
     const resolved = await (engine as any).resolveFilePath('A.ts');
     // Bare-filename recursion restricted to projectRoot — must find the
@@ -127,7 +131,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
 
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: proj,
-      resolutionRoots: [wt1],
+      round: testRound({ resolutionRoots: [wt1] }),
     } as ConsensusEngineConfig);
 
     // Trigger cache population via updateWorktreeRoots
@@ -157,7 +161,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: proj,
-      resolutionRoots: [wt],
+      round: testRound({ resolutionRoots: [wt] }),
     } as ConsensusEngineConfig);
 
     // snippetsForFinding is protected — invoke via cast.
@@ -188,7 +192,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: proj,
-      resolutionRoots: [wt],
+      round: testRound({ resolutionRoots: [wt] }),
     } as ConsensusEngineConfig);
 
     const snippets: string = await (engine as any).snippetsForFinding(
@@ -221,7 +225,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: proj,
-      resolutionRoots: [wt],
+      round: testRound({ resolutionRoots: [wt] }),
     } as ConsensusEngineConfig);
 
     const snippets: string = await (engine as any).snippetsForFinding(
@@ -254,7 +258,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       llm: makeLlm(),
       registryGet: () => undefined,
       projectRoot: proj,
-      resolutionRoots: [wt],
+      round: testRound({ resolutionRoots: [wt] }),
     } as ConsensusEngineConfig);
 
     const snippets: string = await (engine as any).snippetsForFinding(
@@ -276,7 +280,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
 
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: proj,
-      resolutionRoots: [wt],
+      round: testRound({ resolutionRoots: [wt] }),
     } as ConsensusEngineConfig);
 
     // Seed the anchorPathCache with a stale entry.

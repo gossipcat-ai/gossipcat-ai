@@ -181,9 +181,33 @@ export function consensusFlowHandler(
   if (Array.isArray(report?.crossReviewCoverage)) {
     out.crossReviewCoverage = report.crossReviewCoverage;
   }
-  if (report?.partialReview === true) out.partialReview = true;
+  // Degraded-mode flags now derive from the warnings channel (spec §4 — the
+  // legacy report.partialReview / report.coverageDegraded fields were deleted in
+  // PR-C). Old persisted reports still carry the legacy fields, so read the
+  // warnings array FIRST and fall back to the legacy shape for back-compat.
+  const warnings: Array<{ code?: unknown }> = Array.isArray(report?.warnings) ? report.warnings : [];
+  const hasWarning = (code: string) => warnings.some(w => w && (w as any).code === code);
+
+  if (hasWarning('partial_review') || report?.partialReview === true) out.partialReview = true;
+
   if (report?.coverageDegraded && typeof report.coverageDegraded === 'object') {
     out.coverageDegraded = report.coverageDegraded;
+  } else {
+    // PR-C reports carry only the warning, whose message is the deterministic
+    // engine format: "Coverage degraded: <received>/<total> agents returned
+    // content (dropped: a, b)". Parse the structured shape back out for the
+    // ConsensusFlow coverage chip. Falls through to no-chip if the message
+    // doesn't match (defensive — never throw on a malformed warning).
+    const cd = warnings.find(w => w && (w as any).code === 'coverage_degraded') as { message?: string } | undefined;
+    if (cd && typeof cd.message === 'string') {
+      const m = cd.message.match(/Coverage degraded:\s*(\d+)\/(\d+)\s*agents returned content(?:\s*\(dropped:\s*([^)]*)\))?/i);
+      if (m) {
+        const received = parseInt(m[1], 10);
+        const expected = parseInt(m[2], 10);
+        const droppedAgents = m[3] ? m[3].split(',').map(s => s.trim()).filter(Boolean) : [];
+        out.coverageDegraded = { expected, received, droppedAgents };
+      }
+    }
   }
 
   return out;

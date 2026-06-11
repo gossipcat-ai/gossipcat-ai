@@ -40,7 +40,53 @@ function stashDispatchWarnings(taskIds: readonly string[], warnings?: readonly R
       if (eldest !== undefined) ctx.pendingDispatchWarnings.delete(eldest);
     }
     ctx.pendingDispatchWarnings.set(tid, frozen);
+    // Spec §3.2 / f11 follow-up: persist a marker on the native task entry (when
+    // one exists) so a reconnect that wipes the in-memory stash above leaves a
+    // durable breadcrumb. Collect emits `dispatch_warnings_lost` when the marker
+    // is set but the stash entry is gone. Set unconditionally where the entry
+    // already exists; the single-native path (entry created after stash) marks
+    // at creation via markDispatchWarningsStashedIfNeeded.
+    const native = ctx.nativeTaskMap.get(tid);
+    if (native) native.dispatchWarningsStashed = true;
   }
+}
+
+/**
+ * Set the persisted `dispatchWarningsStashed` marker on a native task entry when
+ * dispatch-time warnings were stashed under its task_id but the entry was created
+ * AFTER the stash call (single-native dispatch path). Spec §3.2 / f11 follow-up.
+ */
+function markDispatchWarningsStashedIfNeeded(taskId: string): void {
+  if (!ctx.pendingDispatchWarnings.has(taskId)) return;
+  const native = ctx.nativeTaskMap.get(taskId);
+  if (native) native.dispatchWarningsStashed = true;
+}
+
+/**
+ * f11 follow-up (consensus dfe05be2-73794442:f11): the in-memory
+ * `pendingDispatchWarnings` stash is reconnect-volatile. For each collected
+ * task whose native entry carries the persisted `dispatchWarningsStashed`
+ * marker but has NO live stash entry, a /mcp reconnect wiped the warnings
+ * between dispatch and collect. Returns one `dispatch_warnings_lost`
+ * RoundWarning per affected task so the LOSS is fail-loud rather than silently
+ * unobservable. Pure over (taskMap, stash) — unit-testable in isolation.
+ */
+export function detectLostDispatchWarnings(
+  taskIds: readonly string[],
+  nativeTaskMap: Map<string, { dispatchWarningsStashed?: boolean }>,
+  stash: Map<string, unknown>,
+): RoundWarning[] {
+  const out: RoundWarning[] = [];
+  for (const tid of taskIds) {
+    const native = nativeTaskMap.get(tid);
+    if (native?.dispatchWarningsStashed === true && !stash.has(tid)) {
+      out.push({
+        code: 'dispatch_warnings_lost',
+        message: `dispatch-time warnings for task ${tid} were stashed but lost before collect (likely /mcp reconnect) — their content is unrecoverable`,
+      });
+    }
+  }
+  return out;
 }
 
 /** Build the identity block for a native subagent dispatch. */
@@ -684,6 +730,9 @@ export async function handleDispatchSingle(
       ? stampConcurrencyTaint(ctx.nativeTaskMap) || undefined
       : undefined;
     ctx.nativeTaskMap.set(taskId, { agentId: agent_id, task, startedAt: Date.now(), timeoutMs, planId: plan_id, step, writeMode: write_mode, relayToken, preDispatchSha, isolationSnapshot, concurrentWorktreeTaint });
+    // Entry created AFTER stashDispatchWarnings([taskId]) above — mark it now so
+    // the persisted breadcrumb survives a reconnect (spec §3.2 / f11 follow-up).
+    markDispatchWarningsStashedIfNeeded(taskId);
     spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
     // promptPath is filled in below after elision (if requested).
     process.stderr.write(`[gossipcat] → dispatch → ${agent_id} (${nativeConfig.model}) [${taskId}]\n`);

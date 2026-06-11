@@ -1,4 +1,5 @@
 import { getRuntimeFlagBool } from '../../packages/orchestrator/src/runtime-config';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { RUNTIME_FLAG_REGISTRY } from '../../packages/orchestrator/src/runtime-config-schema';
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
 import { TaskEntry } from '../../packages/orchestrator/src/types';
@@ -8,7 +9,9 @@ const makeTask = (agentId: string, result: string): TaskEntry => ({
   startedAt: 1, completedAt: 2, inputTokens: 0, outputTokens: 0,
 });
 
-const engine = () => new ConsensusEngine({} as any);
+const engine = () => new ConsensusEngine({
+  round: testRound(),
+} as any);
 
 describe('GOSSIP_VERIFIED_CHAINING flag', () => {
   it('is registered and defaults to off', () => {
@@ -49,6 +52,8 @@ describe('synthesize — NEW entry verification + field carry', () => {
     const eng = new ConsensusEngine({
       llm: { generate: jest.fn() } as any,
       registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+
+      round: testRound(),
     } as any);
     const results = [makeTask('a', 'x'), makeTask('b', 'y')];
     const entries = [{
@@ -67,6 +72,8 @@ describe('synthesize — NEW entry verification + field carry', () => {
     const eng = new ConsensusEngine({
       llm: { generate: jest.fn() } as any,
       registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+
+      round: testRound(),
     } as any);
     (eng as any).verifyCitations = jest.fn().mockResolvedValue(true);
     const results = [makeTask('a', 'x'), makeTask('b', 'y')];
@@ -89,6 +96,8 @@ describe('cross-review prompt — chaining solicitation', () => {
     else delete process.env.GOSSIP_VERIFIED_CHAINING;
     const eng = new ConsensusEngine({
       registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+
+      round: testRound(),
     } as any);
     const results = [
       makeTask('a', '<agent_finding type="finding" severity="high">SQL inj at db.ts:42</agent_finding>'),
@@ -117,6 +126,8 @@ describe('formatReport — chain rendering', () => {
     const eng = new ConsensusEngine({
       llm: { generate: jest.fn() } as any,
       registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+
+      round: testRound(),
     } as any);
     const results = [makeTask('a', 'x'), makeTask('b', 'y')];
     const entries = [{
@@ -134,6 +145,8 @@ describe('synthesize — chained extension does not mutate parent', () => {
     const eng = new ConsensusEngine({
       llm: { generate: jest.fn() } as any,
       registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+
+      round: testRound(),
     } as any);
     // agent 'a' emits a real low-severity finding so it lands in the report
     const results = [
@@ -166,6 +179,8 @@ describe('synthesize — chaining metric', () => {
       const eng = new ConsensusEngine({
         llm: { generate: jest.fn() } as any,
         registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+
+        round: testRound(),
       } as any);
       const results = [makeTask('a', 'x'), makeTask('b', 'y')];
       const entries = [{

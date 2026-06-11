@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { resolve } from 'path';
 import { tmpdir } from 'os';
 import { ConsensusEngine, CrossReviewEntry } from '../../packages/orchestrator/src/consensus-engine';
@@ -8,6 +9,7 @@ import { TaskEntry } from '../../packages/orchestrator/src/types';
 const makeEngine = () => new ConsensusEngine({
   llm: { generate: jest.fn() } as any,
   registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: `preset-${id}`, skills: [] }),
+  round: testRound(),
 } as any);
 
 // Minimal stub: synthesize() only needs status/result/id/agentId from TaskEntry
@@ -25,7 +27,9 @@ const makeTask = (agentId: string, result: string): TaskEntry => ({
 
 describe('ConsensusEngine — category attribute parsing', () => {
   it('extracts category from <agent_finding> tag attribute', () => {
-    const engine = new ConsensusEngine({} as any);
+    const engine = new ConsensusEngine({
+      round: testRound(),
+    } as any);
     const raw = `## Consensus Summary
 <agent_finding type="finding" severity="high" category="injection_vectors">
 SQL injection at db.ts:42
@@ -36,7 +40,9 @@ SQL injection at db.ts:42
   });
 
   it('returns undefined category when attribute is absent', () => {
-    const engine = new ConsensusEngine({} as any);
+    const engine = new ConsensusEngine({
+      round: testRound(),
+    } as any);
     const raw = `<agent_finding type="finding" severity="high">No category here at all</agent_finding>`;
     const findings = (engine as any).parseAgentFindings('agent-x', raw);
     expect(findings).toHaveLength(1);
@@ -309,7 +315,9 @@ SQL injection at db.ts:42
 
   describe('deduplicateFindings — category merge', () => {
     it('surviving entry inherits category from loser when survivor has none (A-wins branch)', () => {
-      const engine = new ConsensusEngine({} as any);
+      const engine = new ConsensusEngine({
+        round: testRound(),
+      } as any);
 
       // entryA: no category (will survive as A-wins default branch)
       // entryB: has category "injection_vectors" (will be merged into A)
@@ -349,7 +357,9 @@ SQL injection at db.ts:42
     });
 
     it('surviving entry inherits category from loser when survivor has none (B-wins branch)', () => {
-      const engine = new ConsensusEngine({} as any);
+      const engine = new ConsensusEngine({
+        round: testRound(),
+      } as any);
 
       // entryA: HAS category "injection_vectors", but NO line citation (so B wins — B has :42 citation)
       // entryB: no category but has a line citation (B-wins branch, B survives without category)
@@ -409,6 +419,8 @@ describe('record-undefined policy — hallucination_caught with projectRoot (cit
     llm: { generate: async () => ({ text: '', toolCalls: [] }) } as any,
     registryGet: () => undefined,
     projectRoot: testDir,
+
+    round: testRound(),
   });
 
   it('hallucination_caught (pre-filter path) — emitted with category undefined when no CATEGORY_PATTERNS keyword matches', async () => {
@@ -515,7 +527,9 @@ describe('record-undefined policy — hallucination_caught with projectRoot (cit
 
 describe('parseCrossReviewResponse — category attribute (PARTS C + F)', () => {
   it('extracts a valid category from cross-review JSON', () => {
-    const engine = new ConsensusEngine({} as any);
+    const engine = new ConsensusEngine({
+      round: testRound(),
+    } as any);
     const raw = JSON.stringify([{
       action: 'new',
       findingId: 'self:n1',
@@ -530,7 +544,9 @@ describe('parseCrossReviewResponse — category attribute (PARTS C + F)', () => 
   });
 
   it('rejects invalid category — yields undefined silently', () => {
-    const engine = new ConsensusEngine({} as any);
+    const engine = new ConsensusEngine({
+      round: testRound(),
+    } as any);
     const raw = JSON.stringify([{
       action: 'new',
       findingId: 'self:n1',
@@ -551,6 +567,8 @@ describe('synthesize() — bullet-fallback populates category at insertion (PART
     const engine = (() => new ConsensusEngine({
       llm: { generate: jest.fn() } as any,
       registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: `preset-${id}`, skills: [] }),
+
+      round: testRound(),
     } as any))();
 
     // Agent A emits NO <agent_finding> tags but a bullet containing "race condition"

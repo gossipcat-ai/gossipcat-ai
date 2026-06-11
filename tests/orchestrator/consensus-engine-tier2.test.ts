@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { resolve } from 'path';
 import { tmpdir } from 'os';
 import { ConsensusEngine, ILLMProvider } from '@gossip/orchestrator';
@@ -45,6 +46,8 @@ describe('Tier 2 fabrication pre-filter — unverified branch', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
   });
 
@@ -167,6 +170,8 @@ describe('Tier 2 fabrication pre-filter — fallthrough branch', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
   });
 
@@ -256,6 +261,8 @@ describe('capAutoSeverity — clamping via Tier 2 fallthrough branch', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
   });
 
@@ -349,6 +356,8 @@ describe('authorFindingId — per-agent id carried through synthesis', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: testDir,
+
+      round: testRound(),
     });
   });
 

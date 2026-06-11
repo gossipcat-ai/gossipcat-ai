@@ -141,28 +141,27 @@ describe('(a/e/g) coordinator.runConsensus alias-mode threading', () => {
     await coordinator.runConsensus([completed('relay-a'), completed('relay-b')], round);
 
     expect(engineConfigs).toHaveLength(1);
+    // PR-C: the engine REQUIRES a round; the passed RoundContext is forwarded
+    // whole as `round`. There is no loose `resolutionRoots` config field.
     expect(engineConfigs[0].round).toBe(round);
-    // Round wins → the loose resolutionRoots field is NOT set in alias mode.
-    expect(engineConfigs[0].resolutionRoots).toBeUndefined();
+    expect((engineConfigs[0] as { resolutionRoots?: unknown }).resolutionRoots).toBeUndefined();
   });
 
-  it('(e) a round arg WINS over the constructor default round', async () => {
-    const ctorRound = makeRoundContext({ resolutionRoots: [realpathSync(mkdtempSync(join(tmp, 'ctor')))] });
-    const perRoundRound = makeRoundContext({ resolutionRoots: [realpathSync(mkdtempSync(join(tmp, 'round')))] });
+  it('(e) no per-round arg → a fresh empty round is built (no constructor default exists)', async () => {
+    // PR-C deleted the coordinator constructor `round` default. With no
+    // per-round arg, runConsensus builds an empty makeRoundContext().
     const coordinator = new ConsensusCoordinator({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: root, keyProvider: null,
-      round: ctorRound,
     });
 
-    await coordinator.runConsensus([completed('relay-a'), completed('relay-b')], perRoundRound);
-    expect(engineConfigs[engineConfigs.length - 1].round).toBe(perRoundRound);
-
-    // No per-round arg → constructor default round is used.
     await coordinator.runConsensus([completed('relay-a'), completed('relay-b')]);
-    expect(engineConfigs[engineConfigs.length - 1].round).toBe(ctorRound);
+    const cfg = engineConfigs[engineConfigs.length - 1];
+    expect(cfg.round).toBeDefined();
+    expect(cfg.round!.resolutionRoots).toEqual([]);
+    expect(cfg.round!.warnings).toEqual([]);
   });
 
-  it('(g) legacy mode: no round, loose roots arg → engine gets resolutionRoots, no round (byte-identical)', async () => {
+  it('(g) a loose roots arg is wrapped into round.resolutionRoots (no loose config field)', async () => {
     const wt = realpathSync(mkdtempSync(join(tmp, 'legacy')));
     const coordinator = new ConsensusCoordinator({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: root, keyProvider: null,
@@ -170,8 +169,9 @@ describe('(a/e/g) coordinator.runConsensus alias-mode threading', () => {
 
     await coordinator.runConsensus([completed('relay-a'), completed('relay-b')], [wt]);
 
-    expect(engineConfigs[0].round).toBeUndefined();
-    expect(engineConfigs[0].resolutionRoots).toEqual([wt]);
+    expect(engineConfigs[0].round).toBeDefined();
+    expect(engineConfigs[0].round!.resolutionRoots).toEqual([wt]);
+    expect((engineConfigs[0] as { resolutionRoots?: unknown }).resolutionRoots).toBeUndefined();
   });
 
   it('(d) round.warnings drain into the consensus report', async () => {
@@ -211,26 +211,29 @@ describe('(g) ConsensusEngine constructor — round-vs-legacy seeding parity', (
 
   afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
-  it('round.resolutionRoots seeds currentWorktreeRoots identically to loose resolutionRoots', () => {
+  it('round.resolutionRoots seeds currentWorktreeRoots from the required round', () => {
     // Use the REAL engine (the module mock above only swaps for the coordinator
     // import; here we requireActual to exercise the constructor seeding).
+    // PR-C: the loose `resolutionRoots` config field is gone — `round` is the
+    // single source. Seeding is driven entirely by round.resolutionRoots.
     const { ConsensusEngine: RealEngine } = jest.requireActual(
       '../../packages/orchestrator/src/consensus-engine',
     );
     const llm = makeLlm();
 
-    const viaLegacy = new RealEngine({
-      llm, registryGet: () => undefined, projectRoot: root, resolutionRoots: [wt],
-    });
     const viaRound = new RealEngine({
       llm, registryGet: () => undefined, projectRoot: root,
       round: makeRoundContext({ resolutionRoots: [wt] }),
     });
+    const emptyRound = new RealEngine({
+      llm, registryGet: () => undefined, projectRoot: root,
+      round: makeRoundContext({ resolutionRoots: [] }),
+    });
 
-    const legacyRoots: Set<string> = (viaLegacy as any).currentWorktreeRoots;
     const roundRoots: Set<string> = (viaRound as any).currentWorktreeRoots;
-    expect([...roundRoots].sort()).toEqual([...legacyRoots].sort());
     expect(roundRoots.has(wt)).toBe(true);
+    // Empty round → no seeded worktree roots (project-root-only).
+    expect((emptyRound as any).currentWorktreeRoots.size).toBe(0);
   });
 
   it('round path enforces the same absolute-path invariant (throws on relative)', () => {

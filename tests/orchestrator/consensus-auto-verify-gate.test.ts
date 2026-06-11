@@ -6,6 +6,7 @@
  * Spec: docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md.
  */
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import type { ConsensusFinding, ConsensusSignal } from '../../packages/orchestrator/src/consensus-types';
 
 // Stub LLM provider — never called by maybeAutoVerify (gated off).
@@ -27,6 +28,8 @@ describe('maybeAutoVerify gate-OFF', () => {
       registryGet: () => undefined,
       projectRoot: process.cwd(),
       verifierDispatch: dispatch,
+
+      round: testRound(),
     });
     const findings: ConsensusFinding[] = [{
       id: 'f1',
@@ -54,6 +57,8 @@ describe('maybeAutoVerify gate-OFF', () => {
       registryGet: () => undefined,
       projectRoot: process.cwd(),
       verifierDispatch: dispatch,
+
+      round: testRound(),
     });
     const findings: ConsensusFinding[] = [{
       id: 'f1',
@@ -78,6 +83,8 @@ describe('maybeAutoVerify gate-OFF', () => {
       registryGet: () => undefined,
       projectRoot: process.cwd(),
       verifierDispatch: dispatch,
+
+      round: testRound(),
     });
     const signals: ConsensusSignal[] = [];
     await (engine as any).maybeAutoVerify([], signals, 'cid', 'seed');

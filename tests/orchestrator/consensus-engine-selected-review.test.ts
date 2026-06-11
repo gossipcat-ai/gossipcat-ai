@@ -7,6 +7,7 @@
  */
 
 import { ConsensusEngine, ConsensusEngineConfig } from '../../packages/orchestrator/src/consensus-engine';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { TaskEntry } from '../../packages/orchestrator/src/types';
 import { ILLMProvider } from '../../packages/orchestrator/src/llm-client';
 import { PerformanceReader } from '../../packages/orchestrator/src/performance-reader';
@@ -111,6 +112,8 @@ function makeEngine(opts: {
     projectRoot: TEST_ROOT,
     performanceReader: opts.performanceReader ?? new PerformanceReader(TEST_ROOT),
     verifierToolRunner: opts.verifierToolRunner,
+
+    round: testRound(),
   });
 }
 
@@ -127,6 +130,7 @@ describe('runSelectedCrossReview (Step 3)', () => {
       llm: makeMockLlm('[]'),
       registryGet: makeMockRegistryGet(),
       // no performanceReader
+      round: testRound(),
     });
 
     await expect(engine.runSelectedCrossReview([])).rejects.toThrow(
@@ -207,10 +211,12 @@ describe('runSelectedCrossReview (Step 3)', () => {
 
     const report = await engine.runSelectedCrossReview(results);
 
-    // With only one non-author agent and K=2 for medium, partialReview should be true
+    // With only one non-author agent and K=2 for medium, partial_review fires.
     expect(report).toBeDefined();
-    // agent-b is the only candidate (agent-a is author), but K=2 → partial
-    expect(report.partialReview).toBe(true);
+    // agent-b is the only candidate (agent-a is author), but K=2 → partial.
+    // PR-C: legacy report.partialReview is gone — assert the warning.
+    expect((report as unknown as { partialReview?: unknown }).partialReview).toBeUndefined();
+    expect((report.warnings ?? []).some(w => w.code === 'partial_review')).toBe(true);
   });
 
   describe('Scoped Summaries', () => {
@@ -301,6 +307,7 @@ describe('runSelectedCrossReview (Step 3)', () => {
         registryGet: makeMockRegistryGet(),
         projectRoot: TEST_ROOT,
         performanceReader: new PerformanceReader(TEST_ROOT),
+        round: testRound(),
       });
 
       // Spy on crossReviewForAgent to avoid actual LLM calls
@@ -419,8 +426,10 @@ describe('runSelectedCrossReview (Step 3)', () => {
 
       const report = await engine.runSelectedCrossReview(results);
 
-      // K=3 for critical but only 2 non-author candidates → partial
-      expect(report.partialReview).toBe(true);
+      // K=3 for critical but only 2 non-author candidates → partial.
+      // PR-C: legacy report.partialReview is gone — assert the warning.
+      expect((report as unknown as { partialReview?: unknown }).partialReview).toBeUndefined();
+      expect((report.warnings ?? []).some(w => w.code === 'partial_review')).toBe(true);
     });
 
     it('should NOT set partialReview when all findings have sufficient reviewers', async () => {

@@ -1,5 +1,6 @@
 // tests/orchestrator/consensus-engine.test.ts
 import { ConsensusEngine, ConsensusEngineConfig, CrossReviewEntry } from '../../packages/orchestrator/src/consensus-engine';
+import { testRound } from '../../packages/orchestrator/src/round-context';
 import { AgentConfig, TaskEntry, LLMResponse } from '../../packages/orchestrator/src/types';
 import { ILLMProvider } from '../../packages/orchestrator/src/llm-client';
 import { join } from 'path';
@@ -23,6 +24,7 @@ const mockRegistryGet = jest.fn((agentId: string): AgentConfig | undefined => {
 const baseConfig: ConsensusEngineConfig = {
   llm: mockLlm,
   registryGet: mockRegistryGet,
+  round: testRound(),
 };
 
 // Helper to create TaskEntry objects
@@ -796,7 +798,9 @@ Summary: 1 agree, 1 disagree.`;
         return undefined;
       });
 
-      const engineWithAgentLlm = new ConsensusEngine({ ...baseConfig, agentLlm });
+      const engineWithAgentLlm = new ConsensusEngine({ ...baseConfig, agentLlm,
+        round: testRound(),
+      });
 
       agentALlm.generate.mockResolvedValue({
         text: JSON.stringify([
@@ -827,7 +831,9 @@ Summary: 1 agree, 1 disagree.`;
         return undefined;
       });
 
-      const engineWithSkills = new ConsensusEngine({ ...baseConfig, getAgentSkillsContent });
+      const engineWithSkills = new ConsensusEngine({ ...baseConfig, getAgentSkillsContent,
+        round: testRound(),
+      });
       const results: TaskEntry[] = [
         createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- Finding A at file.ts:10'),
         createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- Finding B at other.ts:20'),
@@ -849,7 +855,9 @@ Summary: 1 agree, 1 disagree.`;
 
     it('survives a throw from getAgentSkillsContent without aborting the round (F8)', async () => {
       const getAgentSkillsContent = jest.fn(() => { throw new Error('skill loader blew up'); });
-      const engineWithBad = new ConsensusEngine({ ...baseConfig, getAgentSkillsContent });
+      const engineWithBad = new ConsensusEngine({ ...baseConfig, getAgentSkillsContent,
+        round: testRound(),
+      });
       const results: TaskEntry[] = [
         createTaskEntry('agent-a', 'completed', '## Consensus Summary\n- Finding A'),
         createTaskEntry('agent-b', 'completed', '## Consensus Summary\n- Finding B'),
@@ -862,7 +870,9 @@ Summary: 1 agree, 1 disagree.`;
     it('falls back to default llm when agentLlm returns undefined', async () => {
       const agentLlm = jest.fn((_agentId: string): ILLMProvider | undefined => undefined);
 
-      const engineWithFallback = new ConsensusEngine({ ...baseConfig, agentLlm });
+      const engineWithFallback = new ConsensusEngine({ ...baseConfig, agentLlm,
+        round: testRound(),
+      });
 
       mockLlm.generate.mockResolvedValue({
         text: JSON.stringify([
@@ -945,6 +955,8 @@ describe('snippetsForFinding()', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: tmpDir,
+
+      round: testRound(),
     });
   });
 
@@ -1074,6 +1086,8 @@ describe('crossReviewForAgent per-finding snippets', () => {
       llm: mockLlm,
       registryGet: mockRegistryGet,
       projectRoot: tmpDir,
+
+      round: testRound(),
     });
 
     mockLlm.generate.mockResolvedValue({
@@ -1357,7 +1371,13 @@ describe('synthesizeWithCrossReview()', () => {
 
     const report = await engine.synthesizeWithCrossReview(results, [], 'skip0001-skip0001', skipped);
 
-    expect(report.relayCrossReviewSkipped).toEqual(skipped);
+    // PR-C: legacy report.relayCrossReviewSkipped is gone — assert the warning
+    // channel + the human-readable summary text instead.
+    expect((report as unknown as { relayCrossReviewSkipped?: unknown }).relayCrossReviewSkipped).toBeUndefined();
+    const crw = (report.warnings ?? []).filter(w => w.code === 'cross_review_skipped');
+    expect(crw).toHaveLength(1);
+    expect(crw[0].agentId).toBe('gemini-reviewer');
+    expect(crw[0].message).toContain('google quota exhausted');
     expect(report.summary).toContain('Relay cross-review skipped');
     expect(report.summary).toContain('gemini-reviewer');
     expect(report.summary).toContain('google quota exhausted');
