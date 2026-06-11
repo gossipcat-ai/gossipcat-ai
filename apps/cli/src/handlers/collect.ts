@@ -1030,6 +1030,10 @@ export async function handleCollect(
         // same silent-dropout indicator the gossip_collect tool response shows.
         ...(consensusReport.zeroTagAgents ? { zeroTagAgents: consensusReport.zeroTagAgents } : {}),
         ...(consensusReport.zeroTagOverflow ? { zeroTagOverflow: consensusReport.zeroTagOverflow } : {}),
+        // Fail-loud round warnings (spec 2026-06-11 §4) — round-trip through the
+        // persisted report so the dashboard report card can render them as
+        // amber badges (FindingsMetrics warnings group).
+        ...(consensusReport.warnings && consensusReport.warnings.length > 0 ? { warnings: consensusReport.warnings } : {}),
       }, null, 2));
     } catch (e) {
       // Best-effort still applies (we don't throw to the caller), but the
@@ -1315,7 +1319,9 @@ export async function handleCollect(
   // into report.warnings at synthesis. Render one line per warning so the
   // operator sees rejected/empty resolutionRoots (and, post-PR-B, coverage /
   // partial-review drops) in-band, not just on stderr. Append-only, no dedup.
+  let warningsRendered = false;
   if (consensusReport?.warnings && consensusReport.warnings.length > 0) {
+    warningsRendered = true;
     output += '\n\n⚠ Round warnings:';
     for (const w of consensusReport.warnings) {
       const agent = w.agentId ? ` [${w.agentId.replace(/[\r\n]/g, ' ')}]` : '';
@@ -1455,5 +1461,5 @@ export async function handleCollect(
     }
   } catch { /* best-effort */ }
 
-  return { content: [{ type: 'text' as const, text: output }] };
+  return { content: [{ type: 'text' as const, text: output }], warningsRendered };
 }

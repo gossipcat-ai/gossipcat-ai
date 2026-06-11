@@ -3,7 +3,15 @@
  * Single mutable context object avoids passing dozens of parameters.
  */
 import { randomUUID } from 'crypto';
-import type { CrossReviewEntry, MainAgent, RoundContext } from '@gossip/orchestrator';
+import type { CrossReviewEntry, MainAgent, RoundContext, RoundWarning } from '@gossip/orchestrator';
+
+/**
+ * Maximum number of task_ids held in pendingDispatchWarnings at any time.
+ * When at cap, stashDispatchWarnings evicts the eldest (first Map entry by
+ * insertion order) before inserting a new entry. Tasks dispatched and never
+ * collected would otherwise leak entries for the server lifetime.
+ */
+export const MAX_PENDING_DISPATCH_WARNINGS = 200;
 
 export interface NativeCrossReviewPrompt {
   agentId: string;
@@ -186,6 +194,28 @@ export interface McpContext {
    * bound memory.
    */
   pendingDispatchResolutionRoots: Map<string, readonly string[]>;
+  /**
+   * Dispatch-time fail-loud warnings (spec §3.2 boundary #1) keyed by task_id.
+   * The dispatch handler creates NO consensus round (that happens at collect),
+   * so dispatch-time resolutionRoots rejections have no round to attach to.
+   * They are stashed here under the handler-minted task_ids and drained into
+   * the collect-built RoundContext at handleCollect time, where they reach
+   * `report.warnings` via the PR-A drains.
+   *
+   * Lifetime boundary: this stash is in-memory only. It MUST survive being read
+   * at collect within the SAME server lifetime, but it is NOT persisted across
+   * /mcp reconnect — once drained into the round, the round record's own
+   * persistence (pending-consensus.json) carries the warnings forward. A
+   * reconnect between dispatch and collect loses an undrained stash entry; that
+   * is the accepted residual window (symmetric with pendingDispatchResolutionRoots,
+   * which is also reconnect-volatile).
+   *
+   * Bounded to MAX_PENDING_DISPATCH_WARNINGS entries. stashDispatchWarnings in
+   * dispatch.ts evicts the eldest (first Map entry by insertion order) when the
+   * cap is reached, preventing unbounded growth for tasks dispatched but never
+   * collected (e.g. long-lived server under repeated dispatch-only workflows).
+   */
+  pendingDispatchWarnings: Map<string, readonly RoundWarning[]>;
   nativeUtilityConfig: { model: string } | null;
   /** Post-fallback runtime provider actually being used by the orchestrator LLM. */
   mainProvider: string;
@@ -244,6 +274,7 @@ export const ctx: McpContext = {
   recentConsensusTaskIds: new Map(),
   recentConsensusAgentIds: new Map(),
   pendingDispatchResolutionRoots: new Map(),
+  pendingDispatchWarnings: new Map(),
   nativeUtilityConfig: null,
   mainProvider: 'google',
   mainModel: 'gemini-2.5-pro',

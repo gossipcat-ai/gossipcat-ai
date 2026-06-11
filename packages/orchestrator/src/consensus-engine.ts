@@ -237,6 +237,39 @@ export class ConsensusEngine {
     return this.config.round ? this.config.round.resolutionRoots : this.config.resolutionRoots;
   }
 
+  /**
+   * Append a fail-loud warning to the round (spec §4). No-op when no
+   * RoundContext is threaded (legacy roots-only construction). Warnings pushed
+   * BEFORE `synthesize()` runs are drained into `report.warnings` by the drain
+   * at the bottom of `synthesize()`. Warnings produced AFTER synthesis (the
+   * post-synthesis legacy-field producers in `synthesizeWithCrossReview`) must
+   * ALSO be mirrored onto the report via `appendReportWarning`, because the
+   * drain already ran. APPEND-ONLY, no dedup — every instance is recorded.
+   */
+  private appendRoundWarning(code: import('./round-context').RoundWarningCode, message: string, agentId?: string): void {
+    if (!this.config.round) return;
+    this.config.round.warnings.push({ code, message, ...(agentId !== undefined ? { agentId } : {}) });
+  }
+
+  /**
+   * Dual-write a warning onto BOTH the round (for persistence + visibility on
+   * later phases) AND the already-synthesized `report.warnings` array. Used for
+   * producers that fire AFTER `synthesize()`'s drain has run — without the
+   * direct report mutation the warning would never reach the operator artifact.
+   * Initializes `report.warnings` on first use.
+   */
+  private appendReportWarning(
+    report: ConsensusReport,
+    code: import('./round-context').RoundWarningCode,
+    message: string,
+    agentId?: string,
+  ): void {
+    const entry = { code, message, ...(agentId !== undefined ? { agentId } : {}) };
+    this.appendRoundWarning(code, message, agentId);
+    if (!report.warnings) report.warnings = [];
+    report.warnings.push(entry);
+  }
+
   /** True when a PerformanceReader is available for orchestrator-selected cross-review (Step 3). */
   get hasPerformanceReader(): boolean {
     return this.config.performanceReader !== undefined;
@@ -1699,6 +1732,15 @@ Return only valid JSON.${skillsBlock}`;
         const projectRootWarning = resolvedFromProjectRoot
           ? ' via="⚠ resolved against project root, NOT worktree"'
           : '';
+        // Spec §4 producer: structured fail-loud warning alongside the per-anchor
+        // via= attribute. One warning per resolved-from-project-root instance,
+        // NO dedup — renderers aggregate visually (e.g. anchor_master_fallback ×4).
+        if (resolvedFromProjectRoot) {
+          this.appendRoundWarning(
+            'anchor_master_fallback',
+            `cite ${safeRef}:${lineNum} resolved against project root, NOT a declared worktree — anchor may reflect master HEAD, not the branch under review`,
+          );
+        }
         anchors.push(`<anchor src="${safeRef}:${lineNum}"${projectRootWarning}>\n${safeSnippet}\n</anchor>`);
       } catch { /* file unreadable, skip */ }
     }
@@ -1741,6 +1783,13 @@ Return only valid JSON.${skillsBlock}`;
                     const projectRootWarning = resolvedFromProjectRoot
                       ? ' via="⚠ resolved against project root, NOT worktree"'
                       : ' via="cite:file"';
+                    // Spec §4 producer — same as the regex-anchor site above.
+                    if (resolvedFromProjectRoot) {
+                      this.appendRoundWarning(
+                        'anchor_master_fallback',
+                        `cite ${safeRef}:${lineNum} resolved against project root, NOT a declared worktree — anchor may reflect master HEAD, not the branch under review`,
+                      );
+                    }
                     anchors.push(`<anchor src="${safeRef}:${lineNum}"${projectRootWarning}>\n${safeSnippet}\n</anchor>`);
                   }
                 }
@@ -2901,6 +2950,8 @@ Return only valid JSON.${skillsBlock}`;
       _log('consensus', 'runSelectedCrossReview: no reviewers selected; synthesizing without cross-review');
       const report = await this.synthesize(results, [], consensusId);
       report.partialReview = true;
+      // Spec §4 dual-write — fires after synthesize()'s drain.
+      this.appendReportWarning(report, 'partial_review', 'no cross-reviewers selected — every finding is under-reviewed (0 of target K)');
       return report;
     }
 
@@ -2965,6 +3016,9 @@ Return only valid JSON.${skillsBlock}`;
     const report = await this.synthesize(results, allCrossReviewEntries, consensusId);
     if (partialReview) {
       report.partialReview = true;
+      // Spec §4 dual-write — at least one finding got fewer than its target K
+      // cross-reviewers. Fires after synthesize()'s drain.
+      this.appendReportWarning(report, 'partial_review', 'at least one finding received fewer than its target K cross-reviewers');
     }
 
     // Store cross-review assignments and coverage for dashboard monitoring
@@ -3044,6 +3098,9 @@ Return only valid JSON.${skillsBlock}`;
         signal_class: 'operational', agentId: '_round', evidence, timestamp: new Date().toISOString(),
       });
       report.summary += `\n⚠️  ${evidence}\n`;
+      // Spec §4 dual-write: also surface on the fail-loud warnings channel.
+      // Fires after synthesize()'s drain, so write to both round + report.
+      this.appendReportWarning(report, 'coverage_degraded', evidence);
     }
 
     // Surface dropped relay agents so the orchestrator can see who silently
@@ -3053,6 +3110,9 @@ Return only valid JSON.${skillsBlock}`;
       const lines = ['', '⚠️  Relay cross-review skipped:'];
       for (const s of relayCrossReviewSkipped) {
         lines.push(`  - ${s.agentId}: ${s.reason}`);
+        // Spec §4 dual-write — one cross_review_skipped warning per skipped
+        // agent, attributed via agentId. KEEP the legacy report field above.
+        this.appendReportWarning(report, 'cross_review_skipped', `cross-review skipped: ${s.reason}`, s.agentId);
       }
       report.summary += '\n' + lines.join('\n') + '\n';
     }

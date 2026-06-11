@@ -105,6 +105,7 @@ export function startConsensusTimeout(consensusId: string): void {
           timedOut: missingAgents,
           ...(report.droppedFindingsByType ? { droppedFindingsByType: report.droppedFindingsByType } : {}),
           ...(report.authorDiagnostics ? { authorDiagnostics: report.authorDiagnostics } : {}),
+          ...(report.warnings && report.warnings.length > 0 ? { warnings: report.warnings } : {}),
         }, null, 2));
       } catch { /* best-effort */ }
 
@@ -334,6 +335,7 @@ export async function handleRelayCrossReview(
         newFindings: report.newFindings || [],
         ...(report.droppedFindingsByType ? { droppedFindingsByType: report.droppedFindingsByType } : {}),
         ...(report.authorDiagnostics ? { authorDiagnostics: report.authorDiagnostics } : {}),
+        ...(report.warnings && report.warnings.length > 0 ? { warnings: report.warnings } : {}),
       }, null, 2));
     } catch { /* best-effort */ }
 
@@ -377,21 +379,84 @@ const CONSENSUS_FILE = 'pending-consensus.json';
 function restoreRoundContext(data: any): import('@gossip/orchestrator').RoundContext | undefined {
   const { makeRoundContext } = require('@gossip/orchestrator');
   const rc = data.roundContext;
+  // Deep-shape hardening (spec §4, gemini f1): a hand-edited / partially-written
+  // pending-consensus.json may carry malformed field shapes. Drop the malformed
+  // pieces (fail-OPEN — the round still restores) but record a
+  // `round_restore_malformed` warning per drop so the degradation is visible in
+  // report.warnings rather than silently swallowed (fail-LOUD). NEVER throw.
+  const restoreWarnings: import('@gossip/orchestrator').RoundWarning[] = [];
+  const noteDrop = (what: string) =>
+    restoreWarnings.push({ code: 'round_restore_malformed', message: `restore dropped malformed ${what}` });
+
   // Per-field fallback with `??` semantics (spec §3.2): an embedded
   // roundContext is AUTHORITATIVE — honor its resolutionRoots array even when
   // it is intentionally empty (`[]` = "resolve against project root"). Only
   // when there is NO embedded round do we read the old flat field. A
   // length-gated check would wrongly treat a new-format empty-roots record as
   // if it were old-flat-shape and resurrect a stale flat value.
-  const roots: readonly string[] =
+  const rawRoots: unknown =
     (rc && Array.isArray(rc.resolutionRoots))
       ? rc.resolutionRoots
       : (Array.isArray(data.resolutionRoots) ? data.resolutionRoots : []);
-  const warnings = rc && Array.isArray(rc.warnings) ? rc.warnings : [];
+  // resolutionRoots entries must be strings — drop non-string members.
+  let roots: readonly string[] = [];
+  if (Array.isArray(rawRoots)) {
+    const clean = (rawRoots as unknown[]).filter((x): x is string => typeof x === 'string');
+    if (clean.length !== rawRoots.length) noteDrop(`${rawRoots.length - clean.length} non-string resolutionRoots entr(y/ies)`);
+    roots = clean;
+  }
+
+  // warnings entries must be objects with string code+message; agentId optional
+  // string. Drop entries missing code/message or carrying non-string fields.
+  let warnings: import('@gossip/orchestrator').RoundWarning[] = [];
+  if (rc && Array.isArray(rc.warnings)) {
+    let dropped = 0;
+    for (const w of rc.warnings as unknown[]) {
+      if (
+        w && typeof w === 'object' &&
+        typeof (w as any).code === 'string' &&
+        typeof (w as any).message === 'string' &&
+        ((w as any).agentId === undefined || typeof (w as any).agentId === 'string')
+      ) {
+        const entry: import('@gossip/orchestrator').RoundWarning = { code: (w as any).code, message: (w as any).message };
+        if ((w as any).agentId !== undefined) entry.agentId = (w as any).agentId;
+        warnings.push(entry);
+      } else {
+        dropped++;
+      }
+    }
+    if (dropped > 0) noteDrop(`${dropped} warnings entr(y/ies) (missing code/message or non-string field)`);
+  } else if (rc && rc.warnings !== undefined) {
+    noteDrop('warnings field (not an array)');
+  }
+
   const consensusId = rc && typeof rc.consensusId === 'string' ? rc.consensusId : undefined;
-  const lenses = rc && rc.lenses && typeof rc.lenses === 'object' ? rc.lenses : undefined;
+  // lenses must be a plain object whose values are all strings; drop the whole
+  // map if it is non-object, or drop individual non-string values.
+  let lenses: Record<string, string> | undefined;
+  if (rc && rc.lenses !== undefined) {
+    if (rc.lenses && typeof rc.lenses === 'object' && !Array.isArray(rc.lenses)) {
+      const out: Record<string, string> = {};
+      let droppedLens = 0;
+      for (const [k, v] of Object.entries(rc.lenses as Record<string, unknown>)) {
+        if (typeof v === 'string') out[k] = v;
+        else droppedLens++;
+      }
+      if (droppedLens > 0) noteDrop(`${droppedLens} non-string lens value(s)`);
+      lenses = Object.keys(out).length > 0 ? out : undefined;
+    } else {
+      noteDrop('lenses field (not a plain object)');
+    }
+  }
+
+  // Append the restore-drop warnings AFTER the restored ones so the degradation
+  // shows up in report.warnings (spec §4 fail-loud).
+  if (restoreWarnings.length > 0) warnings = [...warnings, ...restoreWarnings];
+
   // Nothing to carry — no embedded round and no flat roots: legacy rootless.
-  if (!rc && roots.length === 0) return undefined;
+  // (A malformed-but-present rc still produces a round so its drop warnings
+  // surface; only the truly-empty pre-PR-A record returns undefined.)
+  if (!rc && roots.length === 0 && warnings.length === 0) return undefined;
   return makeRoundContext({
     ...(consensusId !== undefined ? { consensusId } : {}),
     resolutionRoots: roots,
