@@ -22,6 +22,7 @@ import { violationsHandler } from './api-violations';
 import { handleChat } from './api-chat';
 import { ChatConversationStore } from './chat-session-store';
 import type { ChatbotAgent } from '@gossip/orchestrator';
+import { buildCoverageDegradedMessage } from './coverage-degraded-utils';
 import { readFileSync, existsSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { createHash, timingSafeEqual } from 'crypto';
@@ -62,10 +63,13 @@ export function normalizeLegacyDegradedFields(report: any): any {
   const synthesized: LegacyRoundWarning[] = [];
   const cd = report.coverageDegraded;
   if (cd && typeof cd === 'object') {
-    const dropped = Array.isArray(cd.droppedAgents) ? cd.droppedAgents.join(', ') : '';
     synthesized.push({
       code: 'coverage_degraded',
-      message: `Coverage degraded: ${cd.received ?? '?'}/${cd.expected ?? '?'} agents returned content${dropped ? ` (dropped: ${dropped})` : ''}`,
+      message: buildCoverageDegradedMessage({
+        received: cd.received ?? 0,
+        expected: cd.expected ?? 0,
+        droppedAgents: Array.isArray(cd.droppedAgents) ? cd.droppedAgents : [],
+      }),
     });
   }
   if (Array.isArray(report.relayCrossReviewSkipped)) {

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { parseCoverageDegradedMessage } from './coverage-degraded-utils';
 
 /**
  * Strict 8-8 hex consensus-id shape: `xxxxxxxx-xxxxxxxx`. The id reaches this
@@ -194,18 +195,14 @@ export function consensusFlowHandler(
     out.coverageDegraded = report.coverageDegraded;
   } else {
     // PR-C reports carry only the warning, whose message is the deterministic
-    // engine format: "Coverage degraded: <received>/<total> agents returned
-    // content (dropped: a, b)". Parse the structured shape back out for the
-    // ConsensusFlow coverage chip. Falls through to no-chip if the message
-    // doesn't match (defensive — never throw on a malformed warning).
+    // engine format produced by buildCoverageDegradedMessage. Parse via the
+    // shared parseCoverageDegradedMessage so a template change is a one-file
+    // edit that fails CI via the round-trip test.
     const cd = warnings.find(w => w && (w as any).code === 'coverage_degraded') as { message?: string } | undefined;
     if (cd && typeof cd.message === 'string') {
-      const m = cd.message.match(/Coverage degraded:\s*(\d+)\/(\d+)\s*agents returned content(?:\s*\(dropped:\s*([^)]*)\))?/i);
-      if (m) {
-        const received = parseInt(m[1], 10);
-        const expected = parseInt(m[2], 10);
-        const droppedAgents = m[3] ? m[3].split(',').map(s => s.trim()).filter(Boolean) : [];
-        out.coverageDegraded = { expected, received, droppedAgents };
+      const parsed = parseCoverageDegradedMessage(cd.message);
+      if (parsed) {
+        out.coverageDegraded = parsed;
       }
     }
   }

@@ -3,7 +3,6 @@
  */
 import {
   ConsensusEngine,
-  type ConsensusEngineConfig,
 } from '../../packages/orchestrator/src/consensus-engine';
 import { ConsensusCoordinator } from '../../packages/orchestrator/src/consensus-coordinator';
 import { makeRoundContext, testRound } from '../../packages/orchestrator/src/round-context';
@@ -42,7 +41,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       registryGet: () => undefined,
       projectRoot: root,
       round: testRound({ resolutionRoots: [real] }),
-    } as ConsensusEngineConfig);
+    });
     // getValidRoots is private — exercise via matchesRelativePath which
     // works off the roots the engine was seeded with.
     const m = (engine as any).matchesRelativePath(real, join(real, 'a.ts'), 'a.ts');
@@ -55,7 +54,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       registryGet: () => undefined,
       projectRoot: root,
       round: testRound({ resolutionRoots: ['relative/path'] }),
-    } as ConsensusEngineConfig)).toThrow(/absolute/);
+    })).toThrow(/absolute/);
   });
 
   it('Test 14 — matchesRelativePath: exact trailing match', () => {
@@ -115,7 +114,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       registryGet: () => undefined,
       projectRoot: proj,
       round: testRound({ resolutionRoots: [extra] }),
-    } as ConsensusEngineConfig);
+    });
     const resolved = await (engine as any).resolveFilePath('A.ts');
     // Bare-filename recursion restricted to projectRoot — must find the
     // proj copy, never the extra copy.
@@ -132,7 +131,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: proj,
       round: testRound({ resolutionRoots: [wt1] }),
-    } as ConsensusEngineConfig);
+    });
 
     // Trigger cache population via updateWorktreeRoots
     (engine as any).updateWorktreeRoots([], [wt1]);
@@ -162,7 +161,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       registryGet: () => undefined,
       projectRoot: proj,
       round: testRound({ resolutionRoots: [wt] }),
-    } as ConsensusEngineConfig);
+    });
 
     // snippetsForFinding is protected — invoke via cast.
     const snippets: string = await (engine as any).snippetsForFinding(
@@ -193,7 +192,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       registryGet: () => undefined,
       projectRoot: proj,
       round: testRound({ resolutionRoots: [wt] }),
-    } as ConsensusEngineConfig);
+    });
 
     const snippets: string = await (engine as any).snippetsForFinding(
       'Potential issue at src/master-only.ts:1',
@@ -226,7 +225,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       registryGet: () => undefined,
       projectRoot: proj,
       round: testRound({ resolutionRoots: [wt] }),
-    } as ConsensusEngineConfig);
+    });
 
     const snippets: string = await (engine as any).snippetsForFinding(
       'Potential issue at src/new-feature.ts:1',
@@ -259,7 +258,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
       registryGet: () => undefined,
       projectRoot: proj,
       round: testRound({ resolutionRoots: [wt] }),
-    } as ConsensusEngineConfig);
+    });
 
     const snippets: string = await (engine as any).snippetsForFinding(
       'Potential issue at src/master-only.ts:1',
@@ -281,7 +280,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: proj,
       round: testRound({ resolutionRoots: [wt] }),
-    } as ConsensusEngineConfig);
+    });
 
     // Seed the anchorPathCache with a stale entry.
     (engine as any).anchorPathCache.set('src/a.ts', '/stale/path/a.ts');

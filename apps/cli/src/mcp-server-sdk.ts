@@ -1720,10 +1720,10 @@ export function createMcpServer(): McpServer {
         // dispatch-time warnings BEFORE draining/deleting the stash — a task
         // whose native entry carries the persisted `dispatchWarningsStashed`
         // marker but has no live stash entry lost its warnings to a /mcp
-        // reconnect. Make the LOSS fail-loud (the content is gone, but its
-        // absence is now visible). detectLostDispatchWarnings is pure over
-        // (taskMap, stash) and unit-tested in dispatch.test.ts.
-        for (const w of detectLostDispatchWarnings(task_ids, ctx.nativeTaskMap, ctx.pendingDispatchWarnings)) {
+        // reconnect OR bounded stash eviction. Also checks nativeResultMap
+        // for tasks that completed before the reconnect (the marker is carried
+        // from NativeTaskInfo onto the result record at relay time).
+        for (const w of detectLostDispatchWarnings(task_ids, ctx.nativeTaskMap, ctx.pendingDispatchWarnings, ctx.nativeResultMap)) {
           round.warnings.push(w);
         }
         const seen = new Set<readonly import('@gossip/orchestrator').RoundWarning[]>();

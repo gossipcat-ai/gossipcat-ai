@@ -145,6 +145,13 @@ export interface NativeResultInfo {
   error?: string;
   startedAt: number;
   completedAt: number;
+  /**
+   * Carried over from NativeTaskInfo.dispatchWarningsStashed at relay time.
+   * Survives reconnect via the persisted slimResults. Allows
+   * detectLostDispatchWarnings to detect the lost-warnings case for tasks
+   * that completed before the next /mcp reconnect wiped the in-memory stash.
+   */
+  dispatchWarningsStashed?: boolean;
 }
 
 export interface McpContext {

@@ -19,7 +19,6 @@
  */
 import {
   ConsensusEngine,
-  type ConsensusEngineConfig,
 } from '../../packages/orchestrator/src/consensus-engine';
 import { makeRoundContext } from '../../packages/orchestrator/src/round-context';
 import type { TaskEntry } from '../../packages/orchestrator/src/types';
@@ -60,11 +59,11 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
   });
   afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
-  it('cross_review_skipped: emits one warning per skipped agent AND keeps report.relayCrossReviewSkipped', async () => {
+  it('cross_review_skipped: emits one warning per skipped agent AND legacy report.relayCrossReviewSkipped is absent (warnings-channel sole carrier)', async () => {
     const round = makeRoundContext({ resolutionRoots: [], warnings: [] });
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: root, round,
-    } as ConsensusEngineConfig);
+    });
 
     const skipped = [
       { agentId: 'gemini-reviewer', reason: 'quota exhausted' },
@@ -89,11 +88,11 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
     expect(round.warnings.filter(w => w.code === 'cross_review_skipped')).toHaveLength(2);
   });
 
-  it('coverage_degraded: emits warning AND keeps report.coverageDegraded when an agent returns 0 chars', async () => {
+  it('coverage_degraded: emits warning via warnings-channel AND legacy report.coverageDegraded is absent (PR-C: warnings sole carrier)', async () => {
     const round = makeRoundContext({ resolutionRoots: [], warnings: [] });
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: root, round,
-    } as ConsensusEngineConfig);
+    });
 
     const dropped = { id: 't-x', agentId: 'agent-dropped', task: 'review', status: 'completed', result: '', startedAt: Date.now() } as TaskEntry;
     const report = await engine.synthesizeWithCrossReview(
@@ -112,7 +111,7 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
     expect(cd[0].message).toContain('agent-dropped');
   });
 
-  it('partial_review: emits warning AND sets report.partialReview when fewer than K reviewers selected', async () => {
+  it('partial_review: emits warning via warnings-channel AND legacy report.partialReview is absent (PR-C: warnings sole carrier)', async () => {
     // runSelectedCrossReview requires a performanceReader. Two agents → K=2 for
     // each non-critical finding, but with only 2 candidates a reviewer cannot
     // review its own finding, so coverage falls short of K → partialReview.
@@ -121,7 +120,7 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: root, round,
       performanceReader: perfReader,
-    } as ConsensusEngineConfig);
+    });
 
     const report = await engine.runSelectedCrossReview(
       [
@@ -152,7 +151,7 @@ describe('PR-B producer conversions — dual-write warning + legacy field', () =
     const round = makeRoundContext({ resolutionRoots: [wt], warnings: [] });
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: proj, round,
-    } as ConsensusEngineConfig);
+    });
 
     // dispatchCrossReview generates prompts that resolve the cite anchors.
     await engine.generateCrossReviewPrompts([

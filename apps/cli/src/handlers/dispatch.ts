@@ -65,24 +65,29 @@ function markDispatchWarningsStashedIfNeeded(taskId: string): void {
 /**
  * f11 follow-up (consensus dfe05be2-73794442:f11): the in-memory
  * `pendingDispatchWarnings` stash is reconnect-volatile. For each collected
- * task whose native entry carries the persisted `dispatchWarningsStashed`
- * marker but has NO live stash entry, a /mcp reconnect wiped the warnings
- * between dispatch and collect. Returns one `dispatch_warnings_lost`
- * RoundWarning per affected task so the LOSS is fail-loud rather than silently
- * unobservable. Pure over (taskMap, stash) — unit-testable in isolation.
+ * task whose native entry (task map OR result map) carries the persisted
+ * `dispatchWarningsStashed` marker but has NO live stash entry, the warnings
+ * were lost — either by /mcp reconnect or by bounded stash eviction (cap=200,
+ * eldest-evict). Returns one `dispatch_warnings_lost` RoundWarning per
+ * affected task so the LOSS is fail-loud rather than silently unobservable.
+ * Pure over (taskMap, resultMap, stash) — unit-testable in isolation.
  */
 export function detectLostDispatchWarnings(
   taskIds: readonly string[],
   nativeTaskMap: Map<string, { dispatchWarningsStashed?: boolean }>,
   stash: Map<string, unknown>,
+  nativeResultMap?: Map<string, { dispatchWarningsStashed?: boolean }>,
 ): RoundWarning[] {
   const out: RoundWarning[] = [];
   for (const tid of taskIds) {
-    const native = nativeTaskMap.get(tid);
-    if (native?.dispatchWarningsStashed === true && !stash.has(tid)) {
+    if (stash.has(tid)) continue; // live stash — no loss
+    const marker =
+      nativeTaskMap.get(tid)?.dispatchWarningsStashed === true ||
+      nativeResultMap?.get(tid)?.dispatchWarningsStashed === true;
+    if (marker) {
       out.push({
         code: 'dispatch_warnings_lost',
-        message: `dispatch-time warnings for task ${tid} were stashed but lost before collect (likely /mcp reconnect) — their content is unrecoverable`,
+        message: `dispatch-time warnings for task ${tid} were lost before collect (server reconnect or stash eviction) — rejected-root reasons unavailable`,
       });
     }
   }

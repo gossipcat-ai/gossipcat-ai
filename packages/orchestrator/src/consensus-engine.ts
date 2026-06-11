@@ -14,6 +14,7 @@ import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry, RelayWarningEntry } from './consensus-types';
 import type { RoundContext } from './round-context';
+import { buildCoverageDegradedMessage } from './coverage-degraded';
 import { autoVerifyUnverifiedFindings, buildSkipSignal, type AutoVerifiableFinding } from './consensus-auto-verify';
 import { getRuntimeFlagBool } from './runtime-config';
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
@@ -3076,7 +3077,7 @@ Return only valid JSON.${skillsBlock}`;
     const droppedAgents = results.filter(isDropped).map(r => r.agentId);
     const received = results.length - droppedAgents.length;
     if (results.length > 0 && droppedAgents.length > 0) {
-      const evidence = `Coverage degraded: ${received}/${results.length} agents returned content (dropped: ${droppedAgents.join(', ')})`;
+      const evidence = buildCoverageDegradedMessage({ received, expected: results.length, droppedAgents });
       report.signals.push({
         type: 'consensus', taskId: '', consensusId, signal: 'consensus_coverage_degraded',
         signal_class: 'operational', agentId: '_round', evidence, timestamp: new Date().toISOString(),

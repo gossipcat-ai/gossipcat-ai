@@ -31,6 +31,8 @@ export * from './consensus-types';
 export type { ImplSignal, MetaSignal, PerformanceSignal } from './consensus-types';
 export { makeRoundContext, testRound, isRoundContext } from './round-context';
 export type { RoundContext, RoundWarning, RoundWarningCode } from './round-context';
+export { buildCoverageDegradedMessage, parseCoverageDegradedMessage } from './coverage-degraded';
+export type { CoverageDegradedParams } from './coverage-degraded';
 export { SkillCatalog } from './skill-catalog';
 export type { CatalogEntry } from './skill-catalog';
 export { SkillGapTracker, SKILL_FRESHNESS_MS } from './skill-gap-tracker';

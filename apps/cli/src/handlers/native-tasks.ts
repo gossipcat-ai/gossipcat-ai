@@ -404,6 +404,9 @@ export function persistNativeTaskMap(): void {
         id: info.id, agentId: info.agentId, task: info.task?.slice(0, 5000),
         status: info.status, startedAt: info.startedAt, completedAt: info.completedAt,
         error: info.error, result: info.result?.slice(0, 50000),
+        // Persist the breadcrumb so detectLostDispatchWarnings works across
+        // /mcp reconnects for tasks that completed before the reconnect.
+        ...(info.dispatchWarningsStashed ? { dispatchWarningsStashed: true } : {}),
       };
     }
     // Filter utility tasks — they're ephemeral, don't persist
@@ -652,6 +655,11 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
     result: effectiveResult,
     error: effectiveError || undefined,
     startedAt: effectiveStart, completedAt: Date.now(),
+    // Carry the dispatch-warnings breadcrumb onto the result record so the
+    // detect-lost-warnings check at collect time can find it even after the
+    // native task entry is deleted above. Persisted via slimResults so it
+    // survives /mcp reconnect.
+    ...(taskInfo.dispatchWarningsStashed ? { dispatchWarningsStashed: true as const } : {}),
   };
   // skill_develop utility results go to the separate non-evicted map so that
   // long-running dispatch→relay→re-entry chains (>2h) don't fall back to stale
