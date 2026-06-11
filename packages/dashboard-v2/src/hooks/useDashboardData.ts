@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
+import { formatFetchError } from '@/lib/fetchError';
 import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile, FleetTrendResponse, SignalActivityResponse } from '@/lib/types';
 import type { SkillsApiResponse } from '@gossip/types';
 
@@ -56,6 +57,25 @@ export interface DashboardState {
   error: string | null;
 }
 
+/**
+ * Wraps an api() call with an endpoint label so that when Promise.all rejects,
+ * the error message names the failing endpoint and HTTP status (e.g.
+ * "overview: HTTP 500", "consensus: network error") instead of a bare
+ * "Failed to fetch" that gives the user zero diagnostic context.
+ *
+ * Only used for the core endpoints that do NOT have .catch() fallbacks — the
+ * optional endpoints (fleet-trend, skills, etc.) already swallow their errors
+ * and return safe defaults.
+ */
+async function namedFetch<T>(endpoint: string, path: string): Promise<T> {
+  try {
+    return await api<T>(path);
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    throw new Error(formatFetchError(endpoint, raw));
+  }
+}
+
 export function useDashboardData() {
   const [state, setState] = useState<DashboardState>({
     overview: null, agents: null, tasks: null, consensus: null, consensusReports: null,
@@ -76,13 +96,15 @@ export function useDashboardData() {
     inFlight.current = true;
     try {
       const [overview, agents, tasks, consensus, consensusReports, fleetTrend, signalActivity, skills, nativeResp, gossipResp] = await Promise.all([
-        api<OverviewData>('overview'),
-        api<AgentData[]>('agents'),
-        api<TasksData>('tasks?limit=2000'),
+        // Core endpoints: no .catch() — a failure here rejects the whole Promise.all
+        // so the catch block below can set error with a named-endpoint message.
+        namedFetch<OverviewData>('overview', 'overview'),
+        namedFetch<AgentData[]>('agents', 'agents'),
+        namedFetch<TasksData>('tasks', 'tasks?limit=2000'),
         // pageSize=50 matches api-consensus MAX_PAGE_SIZE so header aggregates
         // (confirmedTotal/disputedTotal/unverifiedTotal in App.tsx:383-385) cover
         // the full round history instead of the first 10 runs.
-        api<ConsensusData>('consensus?pageSize=500'),
+        namedFetch<ConsensusData>('consensus', 'consensus?pageSize=500'),
         // pageSize=200 (was 5) — Step 6 useSeverityCounts needs recent reports
         // to derive per-agent severity distributions for the card gauge/strip.
         api<ConsensusReportsData>('consensus-reports?page=1&pageSize=200').catch(() => ({ reports: [] })),
