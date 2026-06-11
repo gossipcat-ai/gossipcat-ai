@@ -358,14 +358,50 @@ describe('maxToolTurns config plumbing (fix/per-agent-turn-cap)', () => {
     expect(ac?.maxToolTurns).toBe(25);
   });
 
-  it('rejects a non-integer / out-of-range maxToolTurns', () => {
+  it('rejects 0 (below floor)', () => {
     expect(() => validateConfig({
       main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
       agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: 0 } },
     })).toThrow(/maxToolTurns/);
+  });
+
+  it('rejects 101 (above ceiling)', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: 101 } },
+    })).toThrow(/maxToolTurns/);
+  });
+
+  it('accepts boundary values 1 and 100', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: 1 } },
+    })).not.toThrow();
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: 100 } },
+    })).not.toThrow();
+  });
+
+  it('accepts 99 (was at old 50 ceiling, now valid)', () => {
+    // Previously 99 was rejected (> 50). With the ceiling raised to 100, 99 must be accepted.
     expect(() => validateConfig({
       main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
       agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: 99 } },
+    })).not.toThrow();
+  });
+
+  it('rejects float 2.5 (non-integer)', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: 2.5 } },
+    })).toThrow(/maxToolTurns/);
+  });
+
+  it('rejects string "10" (wrong type)', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      agents: { x: { provider: 'anthropic', model: 'claude-sonnet-4-6', skills: ['typescript'], maxToolTurns: '10' as any } },
     })).toThrow(/maxToolTurns/);
   });
 

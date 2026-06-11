@@ -19,8 +19,9 @@ export interface AgentConfig {
   key_ref?: string;
   /** Per-agent override for the WorkerAgent tool-turn budget. When omitted,
    *  WorkerAgent falls back to the MAX_TOOL_TURNS default (15). Lets a
-   *  slow-reasoning agent (e.g. deepseek-challenger) get more turns without
-   *  raising the global cap. Validated in validateConfig; carried through
+   *  slow-reasoning agent (e.g. deepseek-challenger at 60-74s/turn, 40-55
+   *  turns per cross-review) get more turns without raising the global cap.
+   *  Validated in validateConfig as an integer in [1, 100]; carried through
    *  configToAgentConfigs. */
   maxToolTurns?: number;
   /** Freeform role description — replaces preset. e.g. "ui-architect", "security-auditor" */

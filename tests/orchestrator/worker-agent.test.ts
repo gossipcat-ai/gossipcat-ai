@@ -386,4 +386,146 @@ describe('WorkerAgent per-agent maxToolTurns (fix/per-agent-turn-cap)', () => {
     const w = new WorkerAgent('a1', stubLlm as any, 'ws://x', [], undefined, false, undefined);
     expect((w as any).maxToolTurns).toBe(15);
   });
+
+  it('executeTask loop terminates after exactly maxToolTurns turns when LLM always returns a tool call', async () => {
+    // Mock @gossip/client so WorkerAgent can be constructed and started without
+    // a real relay. The mock GossipAgent captures the 'message' handler registered
+    // in start() and fires back a synthetic RPC_RESPONSE so callTool() resolves
+    // immediately instead of timing out.
+    const { MessageType } = require('@gossip/types');
+
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        // Fire the RPC_RESPONSE on the next tick so callTool's Promise is already registered
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler(
+              { result: 'tool-ok' },
+              { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req }
+            );
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    // Reload WorkerAgent with the mock in scope. jest.doMock (unlike
+    // jest.mock) is not hoisted, so it reliably applies to the require()
+    // below after resetModules — jest.mock inside a test body has
+    // resolution-order-dependent behavior.
+    jest.resetModules();
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    let llmCallCount = 0;
+    const dummyTool: ToolDefinition = {
+      name: 'noop',
+      description: 'no-op',
+      parameters: { type: 'object', properties: {} },
+    };
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async () => {
+        const callN = (stubLlm.generate as jest.Mock).mock.calls.length;
+        // After 3 tool-turn calls the budget is exhausted; executeTask then
+        // calls generate once more for the summary. Return plain text for that.
+        if (callN > 3) {
+          return { text: 'summary after budget exhausted' };
+        }
+        // Vary the argument each turn so the repeat-detection (same toolSig
+        // 3x = exit early) doesn't fire before the budget cap.
+        llmCallCount++;
+        return {
+          text: `turn ${llmCallCount}`,
+          toolCalls: [{ id: `call_${llmCallCount}`, name: 'noop', arguments: { turn: llmCallCount } }],
+        };
+      }),
+    };
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', [dummyTool], undefined, false, undefined, 3);
+    await worker.start();
+
+    // Drain the async generator to completion
+    const events: unknown[] = [];
+    for await (const event of worker.executeTask('run forever', undefined, undefined, 'task-1')) {
+      events.push(event);
+    }
+
+    // The LLM was called 3 times for tool turns + 1 summary call after budget exhausted
+    const llmCalls = (stubLlm.generate as jest.Mock).mock.calls.length;
+    expect(llmCalls).toBe(4); // 3 tool turns + 1 summary
+    expect(llmCallCount).toBe(3); // incremented only during tool-turn calls
+
+    // Restore mocks so subsequent tests in the file are not affected
+    jest.resetModules();
+  }, 15_000);
+
+  it('executeTask loop runs exactly once for the minimal maxToolTurns of 1', async () => {
+    const { MessageType } = require('@gossip/types');
+
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler(
+              { result: 'tool-ok' },
+              { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req }
+            );
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    jest.resetModules();
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    const dummyTool: ToolDefinition = {
+      name: 'noop',
+      description: 'no-op',
+      parameters: { type: 'object', properties: {} },
+    };
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async () => {
+        const callN = (stubLlm.generate as jest.Mock).mock.calls.length;
+        if (callN > 1) {
+          return { text: 'summary after budget exhausted' };
+        }
+        return {
+          text: 'turn 1',
+          toolCalls: [{ id: 'call_1', name: 'noop', arguments: { turn: 1 } }],
+        };
+      }),
+    };
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', [dummyTool], undefined, false, undefined, 1);
+    await worker.start();
+
+    for await (const _event of worker.executeTask('run forever', undefined, undefined, 'task-min')) {
+      // drain
+    }
+
+    // 1 tool turn + 1 summary call after the budget is exhausted
+    expect((stubLlm.generate as jest.Mock).mock.calls.length).toBe(2);
+
+    jest.resetModules();
+  }, 15_000);
 });

@@ -74,6 +74,64 @@ describe('gossip_setup merge logic', () => {
     });
 });
 
+// Simulate the configAgents write-literal logic from gossip_setup for maxToolTurns.
+// This mirrors the actual code at the native + custom agent write-literal blocks
+// in mcp-server-sdk.ts, ensuring maxToolTurns is carried into the persisted config.
+function buildNativeAgentEntry(agent: { id: string; skills?: string[]; maxToolTurns?: number }) {
+  return {
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+    skills: agent.skills || ['general'],
+    native: true,
+    ...(agent.maxToolTurns !== undefined ? { maxToolTurns: agent.maxToolTurns } : {}),
+  };
+}
+
+function buildCustomAgentEntry(agent: { id: string; provider: string; model: string; skills?: string[]; base_url?: string; maxToolTurns?: number }) {
+  return {
+    provider: agent.provider,
+    model: agent.model,
+    skills: agent.skills || ['general'],
+    ...(agent.base_url ? { base_url: agent.base_url } : {}),
+    ...(agent.maxToolTurns !== undefined ? { maxToolTurns: agent.maxToolTurns } : {}),
+  };
+}
+
+describe('gossip_setup — maxToolTurns persisted into config (v2 follow-up)', () => {
+  it('native agent with maxToolTurns includes it in config entry', () => {
+    const entry = buildNativeAgentEntry({ id: 'haiku-researcher', skills: ['typescript'], maxToolTurns: 30 });
+    expect(entry.maxToolTurns).toBe(30);
+  });
+
+  it('native agent without maxToolTurns omits the field (no undefined pollution)', () => {
+    const entry = buildNativeAgentEntry({ id: 'haiku-researcher', skills: ['typescript'] });
+    expect('maxToolTurns' in entry).toBe(false);
+  });
+
+  it('custom agent with maxToolTurns includes it in config entry', () => {
+    const entry = buildCustomAgentEntry({ id: 'deepseek-challenger', provider: 'deepseek', model: 'deepseek-chat', skills: ['typescript'], maxToolTurns: 55 });
+    expect(entry.maxToolTurns).toBe(55);
+  });
+
+  it('custom agent without maxToolTurns omits the field', () => {
+    const entry = buildCustomAgentEntry({ id: 'gemini-reviewer', provider: 'google', model: 'gemini-2.5-pro', skills: ['code_review'] });
+    expect('maxToolTurns' in entry).toBe(false);
+  });
+
+  it('custom agent preserves base_url alongside maxToolTurns', () => {
+    const entry = buildCustomAgentEntry({
+      id: 'deepseek-challenger',
+      provider: 'openai',
+      model: 'deepseek-chat',
+      skills: ['typescript'],
+      base_url: 'https://api.deepseek.com/v1',
+      maxToolTurns: 25,
+    });
+    expect(entry.base_url).toBe('https://api.deepseek.com/v1');
+    expect(entry.maxToolTurns).toBe(25);
+  });
+});
+
 function defaultImportanceScores(): { relevance: number; accuracy: number; uniqueness: number } {
   return { relevance: 3, accuracy: 3, uniqueness: 3 };
 }
