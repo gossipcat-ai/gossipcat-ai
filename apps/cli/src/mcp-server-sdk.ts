@@ -189,6 +189,7 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 
 // ── Extracted modules ────────────────────────────────────────────────────
 import { ctx } from './mcp-context';
+import { MAX_TOOL_TURNS_CEILING } from './config';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
 import { buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog, isValidCategory, seedPermanentDefaults, GLOBAL_PERMANENT_DEFAULTS, IMPLEMENTER_PERMANENT_DEFAULTS, RESEARCHER_REVIEWER_PERMANENT_DEFAULTS } from '@gossip/orchestrator';
@@ -2142,6 +2143,8 @@ export function createMcpServer(): McpServer {
           .describe('Agent role — freeform, e.g. "ui-architect", "security-auditor", "reviewer"'),
         skills: z.array(z.string()).optional()
           .describe('Skill tags (e.g. ["typescript", "code_review"])'),
+        maxToolTurns: z.number().int().min(1).max(MAX_TOOL_TURNS_CEILING).optional()
+          .describe(`Per-agent tool-turn budget override (integer in [1, ${MAX_TOOL_TURNS_CEILING}]). Defaults to 15 when omitted. Useful for slow-reasoning agents (e.g. deepseek-reasoner) that need more turns per cross-review.`),
       })).describe('Array of agents to create'),
     },
     async ({ main_provider, main_model, mode, agents, instruction_agent_ids, instruction_update, instruction_mode }) => {
@@ -2287,6 +2290,7 @@ export function createMcpServer(): McpServer {
             role: (agent as any).role || (agent as any).preset,
             skills: agent.skills || ['general'],
             native: true,
+            ...(agent.maxToolTurns !== undefined ? { maxToolTurns: agent.maxToolTurns } : {}),
           };
         } else {
           // Custom provider agent → gossipcat config only
@@ -2311,6 +2315,7 @@ export function createMcpServer(): McpServer {
             role: (agent as any).role || (agent as any).preset,
             skills: agent.skills || ['general'],
             ...(agent.base_url ? { base_url: agent.base_url } : {}),
+            ...(agent.maxToolTurns !== undefined ? { maxToolTurns: agent.maxToolTurns } : {}),
           };
           customCreated.push(agent.id);
 

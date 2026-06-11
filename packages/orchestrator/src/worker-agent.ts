@@ -1,7 +1,8 @@
 /**
  * WorkerAgent — executes a sub-task using its LLM and requests tools via relay.
  *
- * Multi-turn tool loop with max 10 turns to prevent infinite loops.
+ * Multi-turn tool loop capped at maxToolTurns (default 15, per-agent
+ * configurable up to 100) to prevent infinite loops.
  * Tool calls are sent as RPC_REQUEST to tool-server via relay.
  */
 

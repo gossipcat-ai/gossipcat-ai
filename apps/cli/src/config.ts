@@ -119,6 +119,12 @@ export function loadConfig(configPath: string): GossipConfig {
 // bug. If you change one, change the other.
 export const VALID_PROVIDERS = ['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local', 'native', 'none'];
 
+// Upper bound for per-agent maxToolTurns. Enforced both here (validateConfig,
+// runtime load of .gossip/config.json) and in the gossip_setup Zod schema
+// (apps/cli/src/mcp-server-sdk.ts) — import this constant in both so the two
+// guards cannot drift apart.
+export const MAX_TOOL_TURNS_CEILING = 100;
+
 // Keychain SERVICE-NAME allowlist for `agent.key_ref`. Mirrors the
 // VALID_PROVIDERS regex in apps/cli/src/keychain.ts:8 — a key_ref is read by
 // Keychain.getKey(service) and MUST pass the same validateProvider gate, so a
@@ -326,8 +332,8 @@ export function validateConfig(raw: any): GossipConfig {
       // positive integer within a sane bound (a runaway cap wastes quota).
       if (agent.maxToolTurns !== undefined) {
         const n = agent.maxToolTurns;
-        if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 50) {
-          throw new Error(`Agent "${id}" has invalid maxToolTurns (${JSON.stringify(n)}); must be an integer in [1, 50]`);
+        if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > MAX_TOOL_TURNS_CEILING) {
+          throw new Error(`Agent "${id}" has invalid maxToolTurns (${JSON.stringify(n)}); must be an integer in [1, ${MAX_TOOL_TURNS_CEILING}]`);
         }
       }
     }
