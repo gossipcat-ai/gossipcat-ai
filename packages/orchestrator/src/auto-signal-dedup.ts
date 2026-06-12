@@ -30,7 +30,14 @@ function tripleKey(agentId: string, taskId: string, signal: string): string {
  *
  * Returns the signals that should actually be written, plus the skipped count.
  * Fail-open: if the read throws, returns the input batch unchanged (better to
- * risk a rare double-count than to silently drop a real signal).
+ * risk a rare double-count than to silently drop a real signal); the failure
+ * is logged to stderr so an inert dedup is diagnosable.
+ *
+ * Key constraints (consensus f7d8b67a f14): the triple omits `counterpartId`,
+ * so a future multi-peer batch caller would collapse distinct peers' signals —
+ * do not route multi-peer batches through this. It also ignores retraction
+ * tombstones, so a retracted signal type can never be legitimately re-emitted
+ * via the deduped emitters — do not route retractable consensus signals here.
  */
 export function dedupeOncePerTaskSignals<T extends PerformanceSignal>(
   projectRoot: string,
@@ -68,7 +75,10 @@ export function dedupeOncePerTaskSignals<T extends PerformanceSignal>(
       kept.push(s);
     }
     return { kept, skipped };
-  } catch {
+  } catch (err) {
+    process.stderr.write(
+      `[gossipcat] auto-signal dedup read failed (fail-open, batch passes undeduped): ${(err as Error).message}\n`,
+    );
     return { kept: [...signals], skipped: 0 };
   }
 }

@@ -26,6 +26,7 @@ import {
   emitConsensusSignals,
   PerformanceReader,
 } from '@gossip/orchestrator';
+import { __resetWarnRateLimiterForTests } from '../../packages/orchestrator/src/performance-reader';
 import type { ConsensusSignal } from '../../packages/orchestrator/src/consensus-types';
 
 const JSONL = '.gossip/agent-performance.jsonl';
@@ -42,11 +43,30 @@ function readRows(dir: string): any[] {
     .filter(r => r && typeof r.signal === 'string' && typeof r.agentId === 'string');
 }
 
+const tmpDirs: string[] = [];
+
 function makeTmpDir(label: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `gossip-${label}-`));
   fs.mkdirSync(path.join(dir, '.gossip'), { recursive: true });
+  tmpDirs.push(dir);
   return dir;
 }
+
+beforeEach(() => {
+  // The dedup read path goes through parseJsonlLines, whose torn-line warn
+  // rate-limiter is module-level state — reset like the sibling suites do.
+  __resetWarnRateLimiterForTests();
+});
+
+afterAll(() => {
+  for (const dir of tmpDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+});
 
 // ──────────────────────────────────────────────────────────────────────────
 // FIX A — scoped late-relay retraction (reader-side semantics, writer-side fix)
@@ -169,12 +189,15 @@ describe('FIX A — late-relay scoped retraction', () => {
     // task_timeout consensus signal: late-agent has no surviving consensus
     // scoring signal, so getScores yields no penalising timeout entry.
     const scores = reader.getScores();
+    // Unconditional (consensus f7d8b67a f15/f20 follow-up): an acc entry DOES
+    // exist for late-agent (execution disproved the round's "unreachable
+    // branch" claim — the impl task seeds an entry), so assert the retraction
+    // semantics directly: zero surviving consensus signals, and specifically
+    // no timeout-derived penalty rows.
     const late = scores.get('late-agent');
-    // Either no consensus signals survived (timeout retracted) or, if present,
-    // none is the retracted task_timeout.
-    if (late) {
-      expect(late.totalSignals ?? 0).toBe(0);
-    }
+    expect(late?.totalSignals ?? 0).toBe(0);
+    expect(late?.disagreements ?? 0).toBe(0);
+    expect(late?.hallucinations ?? 0).toBe(0);
   });
 });
 

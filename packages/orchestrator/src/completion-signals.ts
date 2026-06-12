@@ -105,8 +105,6 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
         timestamp: now,
         source: 'auto',
       };
-      const writer = new PerformanceWriter(projectRoot);
-      writer[WRITER_INTERNAL].appendSignal(transportSignal, 'completion-signals-helper');
       // Still emit task_completed (duration telemetry is valid) but skip format_compliance
       // and finding_dropped_format — those metrics are meaningless for placeholder responses.
       const durationValue = elapsedMs !== null ? elapsedMs : 0;
@@ -122,7 +120,20 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
         metadata: metadataEntries,
         timestamp: now,
       };
-      writer[WRITER_INTERNAL].appendSignal(completedSignal, 'completion-signals-helper');
+      // Route through the same once-per-task dedup as the main path so a
+      // crash-retry cannot double-append transport_failure/task_completed
+      // (consensus f7d8b67a f13). transport_failure is consensus-type but
+      // never retracted and strictly once-per-task, so the dedup constraints
+      // documented in auto-signal-dedup.ts hold.
+      const placeholderBatch = [transportSignal, completedSignal];
+      const placeholderDedup = dedupeOncePerTaskSignals(projectRoot, placeholderBatch);
+      if (placeholderDedup.skipped > 0) {
+        process.stderr.write(`[gossipcat] skipped ${placeholderDedup.skipped} duplicate auto-signal(s) for task ${taskId}\n`);
+      }
+      if (placeholderDedup.kept.length > 0) {
+        const writer = new PerformanceWriter(projectRoot);
+        writer[WRITER_INTERNAL].appendSignals(placeholderDedup.kept, 'completion-signals-helper');
+      }
       return;
     }
 
