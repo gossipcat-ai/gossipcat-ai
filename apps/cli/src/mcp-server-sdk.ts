@@ -188,7 +188,7 @@ import { randomUUID, randomBytes, timingSafeEqual } from 'crypto';
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'http';
 
 // ── Extracted modules ────────────────────────────────────────────────────
-import { ctx } from './mcp-context';
+import { ctx, NATIVE_TASK_TTL_MS } from './mcp-context';
 import { MAX_TOOL_TURNS_CEILING } from './config';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
@@ -1423,15 +1423,16 @@ export function createMcpServer(): McpServer {
               spawnTimeoutWatcher(utilityTaskId, ctx.nativeTaskMap.get(utilityTaskId)!);
               // F13 hardening: evict the stash if the orchestrator never
               // re-enters (agent crash, Claude restart). Matches the
-              // _pendingVerifyData pattern. Issue #545: align the lifetime with
-              // UTILITY_RESULT_TTL_MS (24h) — the relayed result lives that long
-              // in ctx.nativeResultMap, so a shorter stash TTL would evict before
-              // a slow re-entry. Also evict the guard snapshot (deleted inline on
-              // re-entry, otherwise leaks for the process lifetime).
+              // _pendingVerifyData pattern. Issue #545: align the stash lifetime
+              // with the result map lifetime. gossip_plan results go to
+              // ctx.nativeResultMap, swept at NATIVE_TASK_TTL_MS (2h); only
+              // skill_develop results go to the 24h nativeUtilityResultMap.
+              // Also evict the guard snapshot (deleted inline on re-entry,
+              // otherwise leaks for the process lifetime).
               setTimeout(() => {
                 _pendingPlanData.delete(utilityTaskId);
                 _utilityGuardSnapshots.delete(utilityTaskId);
-              }, UTILITY_RESULT_TTL_MS).unref();
+              }, NATIVE_TASK_TTL_MS).unref();
 
               const { assembleUtilityPrompt } = await import('@gossip/orchestrator');
               const modelShort = ctx.nativeUtilityConfig.model;
@@ -4160,6 +4161,13 @@ export function createMcpServer(): McpServer {
             });
             try { ctx.mainAgent.recordNativeTask(taskId, '_utility', `skill_develop:${category}`); } catch { /* best-effort */ }
             spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
+            // Stash eviction: skill_develop results go to ctx.nativeUtilityResultMap
+            // (swept at UTILITY_RESULT_TTL_MS, 24h) — align the stash lifetime so
+            // re-entry never sees a missing stash while the result is still alive.
+            setTimeout(() => {
+              _pendingSkillData.delete(taskId);
+              _utilityGuardSnapshots.delete(taskId);
+            }, UTILITY_RESULT_TTL_MS).unref();
 
             const modelShort = ctx.nativeUtilityConfig.model;
             return {
@@ -4692,6 +4700,12 @@ export function createMcpServer(): McpServer {
         });
         try { ctx.mainAgent.recordNativeTask(taskId, '_utility', 'session_summary'); } catch { /* best-effort */ }
         spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
+        // Stash eviction: session_summary results go to ctx.nativeResultMap
+        // (swept at NATIVE_TASK_TTL_MS, 2h) — align the stash lifetime to match.
+        setTimeout(() => {
+          _pendingSessionData.delete(taskId);
+          _utilityGuardSnapshots.delete(taskId);
+        }, NATIVE_TASK_TTL_MS).unref();
 
         const agentPrompt = `${system}\n\n---\n\n${user}`;
         const modelShort = ctx.nativeUtilityConfig.model;
@@ -4944,20 +4958,17 @@ export function createMcpServer(): McpServer {
       // F3 hardening: spawnTimeoutWatcher only writes a timed_out record into
       // ctx.nativeResultMap; it does not know about _pendingVerifyData. Schedule
       // an independent eviction so the stash never outlives a never-re-entered
-      // dispatch. Issue #545: the eviction must outlive the documented 3-step
-      // re-entry protocol (dispatch → run haiku Agent → relay → re-call), which
-      // routinely exceeds 150s because the haiku agent alone runs 1-3+ minutes.
-      // The relayed result lives in ctx.nativeResultMap for UTILITY_RESULT_TTL_MS
-      // (24h) by design, so the stash must match it — a shorter TTL evicted the
-      // stash before re-entry and forced a spurious INCONCLUSIVE "unknown
-      // _utility_task_id" even though the result was healthy. Also evict the
-      // guard snapshot on the same schedule: on re-entry it is deleted inline,
-      // but if the orchestrator never re-calls it would otherwise leak for the
-      // process lifetime.
+      // dispatch. verify_memory results go to ctx.nativeResultMap, swept at
+      // NATIVE_TASK_TTL_MS (2h); only skill_develop uses the 24h
+      // nativeUtilityResultMap. The stash TTL matches the result map lifetime
+      // so re-entry never sees a missing stash while the result is still alive.
+      // Also evict the guard snapshot on the same schedule: on re-entry it is
+      // deleted inline, but if the orchestrator never re-calls it would
+      // otherwise leak for the process lifetime.
       setTimeout(() => {
         _pendingVerifyData.delete(taskId);
         _utilityGuardSnapshots.delete(taskId);
-      }, UTILITY_RESULT_TTL_MS).unref();
+      }, NATIVE_TASK_TTL_MS).unref();
 
       const modelShort = ctx.nativeUtilityConfig.model;
       return {
