@@ -9,7 +9,7 @@ export type AuthError = 'bad_key' | 'network' | 'no_cookie' | null;
  * key if present so the SPA can auto-login with it; the URL is scrubbed
  * regardless so the secret never lingers in history or gets copy-pasted.
  */
-function consumeKeyFromUrl(): string | null {
+export function consumeKeyFromUrl(): string | null {
   if (typeof window === 'undefined') return null;
   const params = new URLSearchParams(window.location.search);
   const key = params.get('key');
