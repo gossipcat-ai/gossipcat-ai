@@ -9,7 +9,7 @@ interface Props {
 
 const STATUS_TOOLTIP: Record<SkillStatus, string> = {
   silent_skill: 'No signals recorded after bind — skill may not be injecting correctly',
-  insufficient_evidence: 'Fewer than 120 post-bind signals — verdict pending more data',
+  insufficient_evidence: 'Fewer than 80 post-bind signals — verdict pending more data',
   inconclusive: 'Mixed signals — needs further evaluation',
   passed: 'Skill verified effective',
   failed: 'Skill verified ineffective',

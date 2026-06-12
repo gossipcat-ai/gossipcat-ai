@@ -57,8 +57,8 @@ const STATUS_META: Record<StatusKey, {
   },
   failed: {
     label: 'Failed',
-    iconBox: 'bg-destructive/10 border-destructive/30',
-    text: 'text-destructive',
+    iconBox: 'bg-bad/10 border-bad/30',
+    text: 'text-bad',
     pulse: false,
   },
   cancelled: {

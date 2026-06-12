@@ -72,9 +72,9 @@ const VERDICT_COLOR: Record<string, string> = {
   impl_typecheck_fail: 'var(--bad)',
   impl_peer_rejected: 'var(--bad)',
   boundary_escape: 'var(--bad)',
-  unique_confirmed: 'var(--info)',
-  unique_unconfirmed: 'var(--info)',
-  new_finding: 'var(--info)',
+  unique_confirmed: 'var(--unique)',
+  unique_unconfirmed: 'var(--unique)',
+  new_finding: 'var(--unique)',
   unverified: 'var(--info)',
 };
 

@@ -28,9 +28,9 @@ const VERDICT_COLOR: Record<string, string> = {
   consensus_verified: 'var(--ok)',
   disagreement: 'var(--bad)',
   hallucination_caught: 'var(--bad)',
-  unique_confirmed: 'var(--info)',
+  unique_confirmed: 'var(--unique)',
   unique_unconfirmed: 'var(--warn)',
-  new_finding: 'var(--info)',
+  new_finding: 'var(--unique)',
   unverified: 'var(--info)',
 };
 

@@ -176,7 +176,7 @@ export function AgentCardBig({ agent, severityCounts, trendPoints }: AgentCardBi
                   const kind = getBenchBadgeKind(s);
                   if (kind === 'benched') return (
                     <span
-                      className="shrink-0 rounded-sm bg-destructive/10 px-1 py-0.5 font-mono text-[8px] font-bold text-destructive"
+                      className="shrink-0 rounded-sm bg-bad/10 px-1 py-0.5 font-mono text-[8px] font-bold text-bad"
                       aria-label={`Benched (${s.bench.reason ?? 'auto'}). Excluded from dispatch until recovery.`}
                       data-tooltip={`Benched (${s.bench.reason ?? 'auto'}). Excluded from dispatch until recovery.`}
                     >

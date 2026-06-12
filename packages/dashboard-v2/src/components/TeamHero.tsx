@@ -48,8 +48,8 @@ export function TeamHero({ agents, highlightedAgentId, severityMap, trendByAgent
               key={agent.id}
               style={{
                 borderRadius: '0.5rem',
-                boxShadow: isHighlighted ? '0 0 0 2px var(--border-strong)' : undefined,
-                transition: 'box-shadow 200ms cubic-bezier(0.4,0,0.2,1)',
+                outline: isHighlighted ? '2px solid var(--border-strong)' : undefined,
+                transition: 'outline-color 200ms cubic-bezier(0.4,0,0.2,1)',
               }}
             >
               <AgentCardBig
