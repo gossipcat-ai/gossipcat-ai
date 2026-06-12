@@ -8,7 +8,11 @@
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { readJsonlWithRotated, PerformanceReader } from '../../packages/orchestrator/src/performance-reader';
+import {
+  readJsonlWithRotated,
+  PerformanceReader,
+  __resetWarnRateLimiterForTests,
+} from '../../packages/orchestrator/src/performance-reader';
 import * as RoundCounter from '../../packages/orchestrator/src/round-counter';
 
 let tmpDir: string;
@@ -129,6 +133,7 @@ describe('PerformanceReader — warns once per read on torn JSONL lines (f2)', (
   let warnSpy: jest.SpyInstance;
 
   beforeEach(() => {
+    __resetWarnRateLimiterForTests();
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
   });
 

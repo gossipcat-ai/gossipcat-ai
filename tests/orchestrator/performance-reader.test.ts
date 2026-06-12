@@ -1,4 +1,7 @@
-import { PerformanceReader } from '../../packages/orchestrator/src/performance-reader';
+import {
+  PerformanceReader,
+  __resetWarnRateLimiterForTests,
+} from '../../packages/orchestrator/src/performance-reader';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 
@@ -23,9 +26,19 @@ function writeSignals(signals: any[]): void {
   writeFileSync(join(TEST_DIR, '.gossip', 'agent-performance.jsonl'), data);
 }
 
+let warnSpy: jest.SpyInstance;
+
 beforeEach(() => {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_DIR, { recursive: true });
+  // Torn-line fixtures route through the module-level warn rate-limiter; reset
+  // it and silence the warn so tests stay hermetic and CI output stays clean.
+  __resetWarnRateLimiterForTests();
+  warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  warnSpy.mockRestore();
 });
 
 afterAll(() => {
