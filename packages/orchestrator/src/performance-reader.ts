@@ -43,13 +43,23 @@ function stripBom(content: string): string {
  * deliberate hardening so a single corrupt line never refuses the whole file.
  * f2: surface the drop with ONE console.warn per read when count > 0, never
  * one warn per line (files can have thousands of lines).
+ *
+ * Non-object parses count as torn too: a literal `null` line is valid JSON
+ * (JSON.parse('null') returns null without throwing), and propagating it would
+ * make a downstream property access throw inside the caller's try/catch —
+ * collapsing the entire read to []. See consensus 4ee5ced2-b654497a (n1).
  */
 function parseJsonlLines<T>(lines: string[], sourcePath: string): T[] {
   let dropped = 0;
   const out: T[] = [];
   for (const line of lines) {
     try {
-      out.push(JSON.parse(line) as T);
+      const parsed: unknown = JSON.parse(line);
+      if (parsed === null || typeof parsed !== 'object') {
+        dropped++;
+        continue;
+      }
+      out.push(parsed as T);
     } catch {
       dropped++;
     }

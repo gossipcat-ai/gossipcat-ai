@@ -2305,7 +2305,7 @@ export function createMcpServer(): McpServer {
       instruction_update: z.string().optional().describe('Instruction text to append/replace'),
       instruction_mode: z.enum(['append', 'replace']).optional().describe('How to apply instruction update'),
       agents: z.array(z.object({
-        id: z.string().describe('Agent ID (lowercase, hyphens). e.g. "claude-reviewer", "gemini-impl"'),
+        id: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/, 'Agent ID must be alphanumeric with hyphens/underscores — path separators and ".." are rejected').describe('Agent ID (lowercase, hyphens). e.g. "claude-reviewer", "gemini-impl"'),
         type: z.enum(['native', 'custom']).describe(
           '"native" = Claude Code subagent (.claude/agents/*.md), uses Anthropic API on the relay. ' +
           '"custom" = any provider (anthropic/openai/google/local)'
@@ -2515,9 +2515,11 @@ export function createMcpServer(): McpServer {
             errors.push(`${agent.id}: custom agent requires "custom_model" field`);
             continue;
           }
-          // Prevent split-brain: warn if this ID was previously a native agent
+          // Prevent split-brain: warn if this ID was previously a native agent.
+          // configAgents is checked too — a native entry earlier in THIS batch
+          // is staged (not yet on disk), so disk-only checks would miss it.
           const nativeFile = join(root, '.claude', 'agents', `${agent.id}.md`);
-          const wasNative = existingAgents[agent.id]?.native || existsSync(nativeFile);
+          const wasNative = existingAgents[agent.id]?.native || configAgents[agent.id]?.native || existsSync(nativeFile);
           if (wasNative) {
             errors.push(`${agent.id}: cannot re-register native agent as custom — .claude/agents/${agent.id}.md exists. Remove the file first or keep it as native.`);
             continue;

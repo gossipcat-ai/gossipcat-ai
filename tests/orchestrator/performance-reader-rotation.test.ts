@@ -157,9 +157,36 @@ describe('PerformanceReader — warns once per read on torn JSONL lines (f2)', (
       (c) => typeof c[0] === 'string' && c[0].includes('unparseable JSONL line(s)'),
     );
     // getScores reads via readSignals; exactly one warn for this read path.
-    expect(tornWarns.length).toBeGreaterThanOrEqual(1);
+    expect(tornWarns).toHaveLength(1);
     expect(tornWarns[0][0]).toContain('dropped 2 unparseable JSONL line(s)');
     expect(tornWarns[0][0]).toContain('agent-performance.jsonl');
+  });
+
+  it('counts a literal "null" line as dropped and does not collapse the read', () => {
+    const gossipDir = join(tmpDir, '.gossip');
+    mkdirSync(gossipDir, { recursive: true });
+    const perfPath = join(gossipDir, 'agent-performance.jsonl');
+
+    // JSON.parse('null') succeeds — without the non-object drop in
+    // parseJsonlLines the null would reach the filter predicate and a property
+    // access would throw, collapsing the entire read to [].
+    const content = [
+      makeSignal('agent-z', 'agreement'),
+      'null',
+      makeSignal('agent-z', 'agreement'),
+    ].join('\n') + '\n';
+    writeFileSync(perfPath, content);
+
+    const reader = new PerformanceReader(tmpDir);
+    const scores = reader.getScores();
+
+    // The two valid signals survive — the read did not collapse.
+    expect(scores.get('agent-z')?.totalSignals).toBe(2);
+    const tornWarns = warnSpy.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && c[0].includes('unparseable JSONL line(s)'),
+    );
+    expect(tornWarns).toHaveLength(1);
+    expect(tornWarns[0][0]).toContain('dropped 1 unparseable JSONL line(s)');
   });
 
   it('does not warn for a clean file', () => {

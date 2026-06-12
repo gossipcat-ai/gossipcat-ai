@@ -114,7 +114,8 @@ describe('gossip_setup handler — validate-before-write ordering (f15)', () => 
     expect(source).toContain('pendingAgentFileWrites');
     // No writeFileSync of an `<id>.md` agent file may appear with the loop's
     // per-agent `${agent.id}.md` template — those are flushed post-validation.
-    expect(source).not.toMatch(/writeFileSync\(join\(agentsDir, `\$\{agent\.id\}\.md`\)/);
+    // (Matches the handler's actual inline-path shape, not a variable name.)
+    expect(source).not.toMatch(/writeFileSync\(join\(root, '\.claude', 'agents', `\$\{agent\.id\}\.md`\)/);
   });
 
   it('stages custom-agent instructions.md instead of writing it in the loop (v2)', () => {
@@ -164,27 +165,35 @@ describe('flushStagedAgentFileWrites — staged custom instructions.md (v2)', ()
     if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true });
   });
 
+  // Mirrors the handler's actual sequence: validateConfig, early-return on
+  // throw, flushStagedAgentFileWrites only on success. Driving the staged
+  // array through this REAL guard (not just asserting validateConfig throws)
+  // is what makes the disk assertions meaningful.
+  function validateThenFlush(
+    config: unknown,
+    staged: Array<{ dir: string; path: string; content: string }>,
+  ): boolean {
+    try {
+      validateConfig(config as never);
+    } catch {
+      return false; // handler early-returns — flush never runs
+    }
+    flushStagedAgentFileWrites(staged, realFs);
+    return true;
+  }
+
   it('leaves NO instructions.md on disk when validateConfig fails (flush never runs)', () => {
     const instrDir = join(tmpDir, '.gossip', 'agents', 'custom-x');
     const instrPath = join(instrDir, 'instructions.md');
     const staged = [{ dir: instrDir, path: instrPath, content: 'You are custom-x.' }];
 
-    // Simulate the handler's validate-before-flush guard: validation throws,
-    // so the early return happens and flushStagedAgentFileWrites is never called.
-    let validationFailed = false;
-    try {
-      // A config missing main_agent is rejected by validateConfig.
-      validateConfig({ agents: {} } as never);
-    } catch {
-      validationFailed = true;
-    }
-    expect(validationFailed).toBe(true);
+    // A config missing main_agent is rejected by validateConfig, so the flush
+    // is never reached — even though the write was staged.
+    const flushed = validateThenFlush({ agents: {} }, staged);
 
-    // Because validation failed, the flush is skipped — no orphan file/dir.
+    expect(flushed).toBe(false);
     expect(existsSync(instrPath)).toBe(false);
     expect(existsSync(instrDir)).toBe(false);
-    // And the staged entry was never materialized.
-    expect(staged).toHaveLength(1);
   });
 
   it('writes the custom instructions.md (mkdir-ing its dir) on the success path', () => {
