@@ -316,16 +316,17 @@ export function cancelTimeoutWatcher(taskId: string): void {
 function recordTimeoutSignal(taskId: string, agentId: string): void {
   try {
     const { emitConsensusSignals } = require('@gossip/orchestrator');
-    // PR 4 Part A: operational disagreement — no finding context exists because
-    // the agent never produced a review verdict to tag. Intentionally written
-    // without `category` so the Part B no-op guard in
-    // performance-reader.ts:computeScores treats this as a transport/lifecycle
-    // event rather than a finding-evaluation signal. Routing to the dedicated
-    // task_timeout stream is tracked separately in PR 5.
+    // Operational timeout — no finding context exists because the agent never
+    // produced a review verdict to tag. Emitted as `task_timeout` (a scoring
+    // no-op, like the collect-time row at collect.ts) so the late-relay scoped
+    // tombstone (retractedSignal: 'task_timeout') covers BOTH timeout rows.
+    // Intentionally written without `category`. Previously this was a
+    // categoryless `disagreement` (also a scoring no-op via the Part B guard),
+    // which the scoped tombstone could not reach — consensus f7d8b67a (f9).
     emitConsensusSignals(process.cwd(), [{
       type: 'consensus' as const,
       taskId,
-      signal: 'disagreement' as const,
+      signal: 'task_timeout' as const,
       agentId,
       evidence: 'Native agent timed out — no gossip_relay call received',
       timestamp: new Date().toISOString(),
@@ -582,6 +583,14 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
             signal: 'signal_retracted' as const,
             agentId: taskInfo.agentId,
             taskId: task_id,
+            // Scoped tombstone (PR #557): void ONLY the timeout rows — both the
+            // watcher's task_timeout (recordTimeoutSignal above) and any
+            // collect-time task_timeout share this name+agent+taskId — not the
+            // fresh auto-signals (impl_test_pass, task_completed, format_compliance)
+            // re-emitted later in this same handler. Without retractedSignal the
+            // reader treats this as a wildcard and zeroes ALL scoring credit for
+            // the late-completing agent (performance-reader.ts:714-722).
+            retractedSignal: 'task_timeout',
             evidence: 'Late relay arrived — agent completed successfully after timeout',
             timestamp: new Date().toISOString(),
           }]);

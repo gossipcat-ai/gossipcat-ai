@@ -21,6 +21,7 @@
 
 import { PerformanceWriter } from './performance-writer';
 import { WRITER_INTERNAL } from './_writer-internal';
+import { dedupeOncePerTaskSignals } from './auto-signal-dedup';
 import type { PerformanceSignal } from './consensus-types';
 
 // ── Helper 1: emitConsensusSignals ────────────────────────────────────────────
@@ -107,8 +108,18 @@ export function emitImplSignals(
         `[${[...new Set(signals.map(s => s.type))].join(', ')}]`
       );
     }
+    // Append-time dedup (audit 6eed37aa f9): impl_test_pass / impl_test_fail are
+    // emitted once per write-mode task. A crash/retry before nativeTaskMap.delete
+    // re-runs emission for the same task; skip any (agentId, taskId, signal)
+    // triple already on disk.
+    const { kept, skipped } = dedupeOncePerTaskSignals(projectRoot, signals);
+    if (skipped > 0) {
+      const taskId = signals[0]?.taskId ?? 'unknown';
+      process.stderr.write(`[gossipcat] skipped ${skipped} duplicate auto-signal(s) for task ${taskId}\n`);
+    }
+    if (kept.length === 0) return;
     const writer = new PerformanceWriter(projectRoot);
-    writer[WRITER_INTERNAL].appendSignals(signals, 'signal-helpers-impl');
+    writer[WRITER_INTERNAL].appendSignals(kept, 'signal-helpers-impl');
   } catch (err) {
     process.stderr.write(`[gossipcat] emitImplSignals failed: ${(err as Error).message}\n`);
   }
