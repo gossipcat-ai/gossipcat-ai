@@ -43,17 +43,20 @@ function stripBom(content: string): string {
  * consensus round the same torn file is re-read many times within milliseconds
  * (every agent completion triggers a dispatch-weight lookup), so an unthrottled
  * per-read warn floods mcp.log with identical lines. Rate-limit to one warn per
- * source per window; suppressed occurrences are counted and surfaced on the next
- * emit so no information is lost (f1, consensus 4ee5ced2-b654497a).
+ * source per window; suppressed occurrences are counted (with the peak dropped-line
+ * count among them) and surfaced on the next emit. Per-read dropped totals from
+ * suppressed reads are NOT preserved — only the event count and the peak
+ * (f1, consensus 4ee5ced2-b654497a; wording/maxDropped per 8b23a8f3-2cc348d1).
  */
 const WARN_RATE_LIMIT_WINDOW_MS = 60_000;
 
 /**
- * Per-source warn state: timestamp of last emitted warn and the number of warns
- * suppressed since then. Keyed by the full source path so different files
+ * Per-source warn state: timestamp of last emitted warn, the number of warns
+ * suppressed since then, and the largest dropped-line count seen among the
+ * suppressed reads. Keyed by the full source path so different files
  * rate-limit independently.
  */
-const warnRateLimiter = new Map<string, { lastWarnMs: number; suppressed: number }>();
+const warnRateLimiter = new Map<string, { lastWarnMs: number; suppressed: number; maxDropped: number }>();
 
 /**
  * Test-only hook to clear the module-level warn rate-limiter between cases.
@@ -105,23 +108,26 @@ export function parseJsonlLines<T>(
 
 /**
  * Emit the torn-line warning for `sourcePath`, throttled to one per window.
- * Within the window the call is suppressed and counted; the next emit after the
- * window reports how many similar warns were suppressed so nothing is lost.
+ * Within the window the call is suppressed and counted (tracking the peak dropped
+ * count); the next emit reports how many warns were suppressed since the last
+ * emitted warn and the largest dropped count among them. Per-read dropped totals
+ * from suppressed reads are not preserved.
  */
 function emitTornLineWarn(sourcePath: string, dropped: number, nowMs: number): void {
   const state = warnRateLimiter.get(sourcePath);
   if (state && nowMs - state.lastWarnMs < WARN_RATE_LIMIT_WINDOW_MS) {
     state.suppressed++;
+    if (dropped > state.maxDropped) state.maxDropped = dropped;
     return;
   }
   const suppressedNote =
     state && state.suppressed > 0
-      ? ` (suppressed ${state.suppressed} similar warn(s) in the last ${WARN_RATE_LIMIT_WINDOW_MS / 1000}s)`
+      ? ` (suppressed ${state.suppressed} similar warn(s) since last warn, max dropped=${state.maxDropped})`
       : '';
   console.warn(
     `[performance-reader] dropped ${dropped} unparseable JSONL line(s) from ${basename(sourcePath)}${suppressedNote}`,
   );
-  warnRateLimiter.set(sourcePath, { lastWarnMs: nowMs, suppressed: 0 });
+  warnRateLimiter.set(sourcePath, { lastWarnMs: nowMs, suppressed: 0, maxDropped: 0 });
 }
 
 export function readJsonlWithRotated(filePath: string): string {

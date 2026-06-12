@@ -71,12 +71,47 @@ describe('parseJsonlLines — warn rate-limiting (f1)', () => {
 
     const warns = tornWarnCalls();
     expect(warns).toHaveLength(2);
-    expect(warns[1][0]).toContain('suppressed 3 similar warn(s) in the last 60s');
+    expect(warns[1][0]).toContain('suppressed 3 similar warn(s) since last warn');
+  });
+
+  it('reports the peak dropped count among suppressed reads', () => {
+    const src = '/tmp/peak/agent-performance.jsonl';
+    const tornN = (n: number) => ['{"ok":1}', ...Array.from({ length: n }, () => '{ torn')];
+
+    parseJsonlLines(tornN(10), src, now); // emit #1: dropped 10
+    nowMs += 5;
+    parseJsonlLines(tornN(50), src, now); // suppressed, peak 50
+    nowMs += 5;
+    parseJsonlLines(tornN(2), src, now); // suppressed, peak stays 50
+    nowMs += WINDOW_MS;
+    parseJsonlLines(tornN(2), src, now); // emit #2: current dropped 2, reports peak
+
+    const warns = tornWarnCalls();
+    expect(warns).toHaveLength(2);
+    expect(warns[1][0]).toContain('dropped 2 unparseable JSONL line(s)');
+    expect(warns[1][0]).toContain('suppressed 2 similar warn(s) since last warn, max dropped=50');
+  });
+
+  it('reports suppressed count accurately after a long silence past the window', () => {
+    const src = '/tmp/gap/agent-performance.jsonl';
+
+    parseJsonlLines(TORN_LINES, src, now); // emit #1
+    nowMs += 5;
+    parseJsonlLines(TORN_LINES, src, now); // suppressed at t≈0
+    nowMs += 10 * WINDOW_MS; // long silence — suppression happened far in the past
+    parseJsonlLines(TORN_LINES, src, now); // emit #2
+
+    const warns = tornWarnCalls();
+    expect(warns).toHaveLength(2);
+    // The message claims "since last warn", which stays accurate however long the
+    // gap is — it must NOT claim a fixed recency window like "in the last 60s".
+    expect(warns[1][0]).toContain('suppressed 1 similar warn(s) since last warn');
+    expect(warns[1][0]).not.toContain('in the last');
   });
 
   it('rate-limits different source files independently', () => {
-    const a = '/tmp/a/agent-performance.jsonl';
-    const b = '/tmp/b/agent-performance.jsonl';
+    const a = '/tmp/a/a.jsonl';
+    const b = '/tmp/b/b.jsonl';
 
     parseJsonlLines(TORN_LINES, a, now); // emit for a
     parseJsonlLines(TORN_LINES, b, now); // emit for b — different key, not throttled
@@ -86,9 +121,10 @@ describe('parseJsonlLines — warn rate-limiting (f1)', () => {
 
     const warns = tornWarnCalls();
     expect(warns).toHaveLength(2);
+    // Distinct basenames make the per-file assertions discriminating.
     expect(warns.map((c) => c[0])).toEqual([
-      expect.stringContaining('agent-performance.jsonl'),
-      expect.stringContaining('agent-performance.jsonl'),
+      expect.stringContaining('a.jsonl'),
+      expect.stringContaining('b.jsonl'),
     ]);
   });
 
