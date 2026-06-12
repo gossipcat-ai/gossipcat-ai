@@ -12,6 +12,7 @@ import { AgentPage } from '@/components/AgentPage';
 import { LogsPage } from '@/components/LogsPage';
 import { SignalsPage } from '@/components/SignalsPage';
 import { TaskRow } from '@/components/TaskRow';
+import { OverviewSkeleton, TeamPageSkeleton, TasksPageSkeleton, DebatesPageSkeleton } from '@/components/Skeleton';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useDashboardData } from '@/hooks/useDashboardData';
@@ -544,7 +545,7 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
     return (
       <div className="min-h-screen" style={{ background: 'var(--surface)' }}>
         <TopBar />
-        <div className="flex items-center justify-center py-20" style={{ color: 'var(--ink-3)' }}>Loading dashboard...</div>
+        <OverviewSkeleton />
       </div>
     );
   }
@@ -558,12 +559,30 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
   } else if (consensusFlowMatch) {
     const consensusId = decodeURIComponent(consensusFlowMatch[1]);
     content = <ConsensusFlowPage consensusId={consensusId} />;
-  } else if (route === '/team' && agents) {
-    content = <TeamPage agents={agents} tasks={tasks} consensusReports={consensusReports} fleetTrend={fleetTrend} />;
-  } else if (route === '/tasks' && tasks) {
-    content = <TasksPage tasks={tasks} />;
-  } else if (route === '/debates' && consensus) {
-    content = <FindingsPage consensus={consensus} consensusReports={consensusReports} />;
+  } else if (route === '/team') {
+    content = agents
+      ? <TeamPage agents={agents} tasks={tasks} consensusReports={consensusReports} fleetTrend={fleetTrend} />
+      : (
+        <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+          <TeamPageSkeleton />
+        </div>
+      );
+  } else if (route === '/tasks') {
+    content = tasks
+      ? <TasksPage tasks={tasks} />
+      : (
+        <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+          <TasksPageSkeleton />
+        </div>
+      );
+  } else if (route === '/debates') {
+    content = consensus
+      ? <FindingsPage consensus={consensus} consensusReports={consensusReports} />
+      : (
+        <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+          <DebatesPageSkeleton />
+        </div>
+      );
   } else if (route === '/logs') {
     content = <LogsPage />;
   } else if (route === '/signals') {

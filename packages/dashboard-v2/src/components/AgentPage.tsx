@@ -9,6 +9,7 @@ import { FindingDetailDrawer } from './FindingDetailDrawer';
 import { SignalTimeline } from './SignalTimeline';
 import { TaskRow } from './TaskRow';
 import { TaskDetailModal } from './TaskDetailModal';
+import { AgentMemorySkeleton, AgentReportsSkeleton } from './Skeleton';
 import { timeAgo, renderFindingMarkdown } from '@/lib/utils';
 import { getBenchBadgeKind } from '@/lib/bench';
 import { escapeHtml } from '@/lib/sanitize';
@@ -30,7 +31,9 @@ const DIAGNOSTIC_BANNER_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps) {
   const agent = agents.find(a => a.id === agentId);
   const [memories, setMemories] = useState<MemoryFile[]>([]);
+  const [memoriesLoading, setMemoriesLoading] = useState(true);
   const [reports, setReports] = useState<ConsensusReport[]>([]);
+  const [reportsLoading, setReportsLoading] = useState(true);
   const [expandedMem, setExpandedMem] = useState<string | null>(null);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [drawerFinding, setDrawerFinding] = useState<{ consensusId: string; findingId: string } | null>(null);
@@ -39,9 +42,10 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
 
   useEffect(() => {
+    setMemoriesLoading(true);
     api<MemoryData>(`memory/${agentId}`).then(data => {
       setMemories(data.knowledge || []);
-    }).catch(() => setMemories([]));
+    }).catch(() => setMemories([])).finally(() => setMemoriesLoading(false));
   }, [agentId]);
 
   // Fetch consensus reports to compute per-agent diagnostic frequency.
@@ -49,11 +53,13 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
   // size of 200 covers the 30d window on any realistic project size.
   useEffect(() => {
     let cancelled = false;
+    setReportsLoading(true);
     api<ConsensusReportsData>('consensus-reports?page=1&pageSize=200')
       .then(data => {
         if (!cancelled) setReports(data.reports || []);
       })
-      .catch(() => { if (!cancelled) setReports([]); });
+      .catch(() => { if (!cancelled) setReports([]); })
+      .finally(() => { if (!cancelled) setReportsLoading(false); });
     return () => { cancelled = true; };
   }, []);
 
@@ -404,9 +410,11 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
           drawer surfaces both in one click. */}
       <section className="mb-8">
         <h2 className="mb-3 h-section">
-          Consensus Runs <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{agentRuns.length}</span>
+          Consensus Runs{!reportsLoading && <span style={{ color: 'var(--ink)', fontWeight: 700 }}> {agentRuns.length}</span>}
         </h2>
-        {agentRuns.length > 0 ? (
+        {reportsLoading ? (
+          <AgentReportsSkeleton />
+        ) : agentRuns.length > 0 ? (
           <div className="space-y-2">
             {agentRuns.slice(0, 20).map((run, i) => {
               const c = run.counts;
@@ -521,14 +529,14 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="h-section">
-            Memory <span style={{ color: 'var(--ink)', fontWeight: 700 }}>{memories.length} files</span>
-            {currentDay && (
+            Memory{!memoriesLoading && <span style={{ color: 'var(--ink)', fontWeight: 700 }}> {memories.length} files</span>}
+            {!memoriesLoading && currentDay && (
               <span className="ml-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
                 · {currentDay.day} ({currentDay.items.length})
               </span>
             )}
           </h2>
-          {memoryDays.length > 1 && (
+          {!memoriesLoading && memoryDays.length > 1 && (
             <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
               <button
                 onClick={() => setMemDayIdx(i => Math.max(0, i - 1))}
@@ -546,7 +554,9 @@ export function AgentPage({ agentId, agents, tasks, consensus }: AgentPageProps)
             </div>
           )}
         </div>
-        {currentDay && currentDay.items.length > 0 ? (
+        {memoriesLoading ? (
+          <AgentMemorySkeleton />
+        ) : currentDay && currentDay.items.length > 0 ? (
           <div className="space-y-1.5">
             {currentDay.items.map(mem => {
               const isOpen = expandedMem === mem.filename;
