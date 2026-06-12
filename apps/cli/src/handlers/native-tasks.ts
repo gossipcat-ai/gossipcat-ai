@@ -582,6 +582,12 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
             signal: 'signal_retracted' as const,
             agentId: taskInfo.agentId,
             taskId: task_id,
+            // Scoped tombstone (PR #557): void ONLY the timeout signal, not the
+            // fresh auto-signals (impl_test_pass, task_completed, format_compliance)
+            // re-emitted later in this same handler. Without retractedSignal the
+            // reader treats this as a wildcard and zeroes ALL scoring credit for
+            // the late-completing agent (performance-reader.ts:714-722).
+            retractedSignal: 'task_timeout',
             evidence: 'Late relay arrived — agent completed successfully after timeout',
             timestamp: new Date().toISOString(),
           }]);

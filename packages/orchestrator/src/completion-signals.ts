@@ -20,6 +20,7 @@ import { PerformanceWriter } from './performance-writer';
 import { WRITER_INTERNAL } from './_writer-internal';
 import { detectFormatCompliance } from './dispatch-pipeline';
 import { PROVIDER_PLACEHOLDER_RE } from './llm-client';
+import { dedupeOncePerTaskSignals } from './auto-signal-dedup';
 import type { ConsensusSignal, MetaSignal, PipelineSignal } from './consensus-types';
 
 export interface CompletionSignalInput {
@@ -210,8 +211,16 @@ export function emitCompletionSignals(projectRoot: string, input: CompletionSign
       } as PipelineSignal);
     }
 
+    // Append-time dedup (audit 6eed37aa f9): a crash/retry between this append
+    // and nativeTaskMap.delete(task_id) re-runs emission for the same task.
+    // Skip any (agentId, taskId, signal) triple already on disk.
+    const { kept, skipped } = dedupeOncePerTaskSignals(projectRoot, signals);
+    if (skipped > 0) {
+      process.stderr.write(`[gossipcat] skipped ${skipped} duplicate auto-signal(s) for task ${taskId}\n`);
+    }
+    if (kept.length === 0) return;
     const writer = new PerformanceWriter(projectRoot);
-    writer[WRITER_INTERNAL].appendSignals(signals, 'completion-signals-helper');
+    writer[WRITER_INTERNAL].appendSignals(kept, 'completion-signals-helper');
   } catch (err) {
     process.stderr.write(`[gossipcat] emitCompletionSignals failed: ${(err as Error).message}\n`);
   }
