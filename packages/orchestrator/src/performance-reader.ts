@@ -465,14 +465,12 @@ export class PerformanceReader {
       const raw = readJsonlWithRotated(this.filePath);
       if (!raw) return new Set();
       const lines = raw.trim().split('\n').filter(Boolean);
+      const parsed = parseJsonlLines<Record<string, unknown>>(lines, this.filePath);
       const ids = new Set<string>();
-      for (const line of lines) {
-        try {
-          const r = JSON.parse(line);
-          if (r && r.type === 'consensus' && r.signal === 'consensus_round_retracted' && typeof r.consensus_id === 'string') {
-            ids.add(r.consensus_id);
-          }
-        } catch { /* skip */ }
+      for (const r of parsed) {
+        if (r.type === 'consensus' && r.signal === 'consensus_round_retracted' && typeof r.consensus_id === 'string') {
+          ids.add(r.consensus_id);
+        }
       }
       return ids;
     } catch {
@@ -489,18 +487,18 @@ export class PerformanceReader {
       const raw = readJsonlWithRotated(this.filePath);
       if (!raw) return [];
       const lines = raw.trim().split('\n').filter(Boolean);
+      const parsed = parseJsonlLines<Record<string, unknown>>(lines, this.filePath);
       const out: Array<{ consensus_id: string; reason: string; retracted_at: string }> = [];
-      for (const line of lines) {
-        try {
-          const r = JSON.parse(line);
-          if (r && r.type === 'consensus' && r.signal === 'consensus_round_retracted' && typeof r.consensus_id === 'string') {
-            out.push({
-              consensus_id: r.consensus_id,
-              reason: typeof r.reason === 'string' ? r.reason : '',
-              retracted_at: typeof r.retracted_at === 'string' ? r.retracted_at : (r.timestamp || ''),
-            });
-          }
-        } catch { /* skip */ }
+      for (const r of parsed) {
+        if (r.type === 'consensus' && r.signal === 'consensus_round_retracted' && typeof r.consensus_id === 'string') {
+          out.push({
+            consensus_id: r.consensus_id,
+            reason: typeof r.reason === 'string' ? r.reason : '',
+            retracted_at: typeof r.retracted_at === 'string'
+              ? r.retracted_at
+              : (typeof r.timestamp === 'string' ? r.timestamp : ''),
+          });
+        }
       }
       return out;
     } catch {
@@ -1381,19 +1379,19 @@ export class PerformanceReader {
       const now = Date.now();
       const expiryMs = now - SIGNAL_EXPIRY_DAYS * 86400000;
       const lines = readJsonlWithRotated(this.filePath).trim().split('\n').filter(Boolean);
+      const signals = parseJsonlLines<Record<string, unknown>>(lines, this.filePath);
       let pass = 0, fail = 0, approved = 0, rejected = 0, lastImplSignalMs = 0;
-      for (const line of lines) {
-        try {
-          const s = JSON.parse(line);
-          if (s.type !== 'impl' || s.agentId !== agentId) continue;
-          const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
-          if (ts < expiryMs) continue;
-          if (ts > lastImplSignalMs) lastImplSignalMs = ts;
-          if (s.signal === 'impl_test_pass') pass++;
-          if (s.signal === 'impl_test_fail') fail++;
-          if (s.signal === 'impl_peer_approved') approved++;
-          if (s.signal === 'impl_peer_rejected') rejected++;
-        } catch { continue; }
+      for (const s of signals) {
+        if (s.type !== 'impl' || s.agentId !== agentId) continue;
+        const ts = typeof s.timestamp === 'string' || typeof s.timestamp === 'number'
+          ? new Date(s.timestamp).getTime()
+          : 0;
+        if (ts < expiryMs) continue;
+        if (ts > lastImplSignalMs) lastImplSignalMs = ts;
+        if (s.signal === 'impl_test_pass') pass++;
+        if (s.signal === 'impl_test_fail') fail++;
+        if (s.signal === 'impl_peer_approved') approved++;
+        if (s.signal === 'impl_peer_rejected') rejected++;
       }
       const total = pass + fail;
       const peerTotal = approved + rejected;
