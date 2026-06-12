@@ -500,9 +500,9 @@ function FindingsPage({
   );
 }
 
-function Dashboard() {
+function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
   const route = useRoute();
-  const { overview, agents, tasks, consensus, consensusReports, fleetTrend, signalActivity, skills, loading, error, refresh } = useDashboardData();
+  const { overview, agents, tasks, consensus, consensusReports, fleetTrend, signalActivity, skills, loading, error, refresh } = useDashboardData(onUnauthorized);
   const [activeTaskCount, setActiveTaskCount] = useState(0);
 
   const handleWsEvent = useCallback((event: DashboardEvent) => {
@@ -607,7 +607,7 @@ function Dashboard() {
 }
 
 export function App() {
-  const { authed, login, error } = useAuth();
+  const { authed, login, error, recheck } = useAuth();
 
   if (authed === null) {
     return <div className="flex min-h-screen items-center justify-center" style={{ color: 'var(--ink-3)' }}>Loading...</div>;
@@ -619,7 +619,7 @@ export function App() {
 
   return (
     <>
-      <Dashboard />
+      <Dashboard onUnauthorized={recheck} />
       <NotificationStack />
     </>
   );

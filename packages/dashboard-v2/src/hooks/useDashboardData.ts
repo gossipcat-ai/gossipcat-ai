@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { api } from '@/lib/api';
+import { api, isUnauthorizedError } from '@/lib/api';
 import { formatFetchError } from '@/lib/fetchError';
 import type { OverviewData, AgentData, TasksData, ConsensusData, ConsensusReportsData, MemoryFile, FleetTrendResponse, SignalActivityResponse } from '@/lib/types';
 import type { SkillsApiResponse } from '@gossip/types';
@@ -76,7 +76,13 @@ async function namedFetch<T>(endpoint: string, path: string): Promise<T> {
   }
 }
 
-export function useDashboardData() {
+/**
+ * @param onUnauthorized Called when a core fetch returns 401 — wired by App to
+ * the auth recheck so a dead session (e.g. relay restarted, cookie expired)
+ * sends the user back to AuthGate instead of an error card / infinite spinner
+ * (issue #548 item 3b).
+ */
+export function useDashboardData(onUnauthorized?: () => void) {
   const [state, setState] = useState<DashboardState>({
     overview: null, agents: null, tasks: null, consensus: null, consensusReports: null,
     fleetTrend: null,
@@ -90,6 +96,10 @@ export function useDashboardData() {
   // project with thousands of auto-memory files). Skipping is safe — the next
   // tick fires a fresh request.
   const inFlight = useRef(false);
+  // Keep the latest onUnauthorized in a ref so refresh stays a stable callback
+  // (empty dep array) — the polling interval below depends on refresh identity.
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  onUnauthorizedRef.current = onUnauthorized;
 
   const refresh = useCallback(async () => {
     if (inFlight.current) return;
@@ -146,7 +156,16 @@ export function useDashboardData() {
         loading: false, error: null,
       });
     } catch (err) {
-      setState((s) => ({ ...s, loading: false, error: (err as Error).message }));
+      // A 401 means the session died (relay restart, expired cookie). Hand off
+      // to the auth recheck instead of rendering an error card — it lands the
+      // user back at AuthGate. Skip setting the error string so we don't flash
+      // a stale "unauthorized" card during the transition.
+      if (isUnauthorizedError(err)) {
+        onUnauthorizedRef.current?.();
+        setState((s) => ({ ...s, loading: false }));
+      } else {
+        setState((s) => ({ ...s, loading: false, error: (err as Error).message }));
+      }
     } finally {
       inFlight.current = false;
     }
