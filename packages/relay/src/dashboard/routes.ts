@@ -22,7 +22,7 @@ import { violationsHandler } from './api-violations';
 import { handleChat } from './api-chat';
 import { ChatConversationStore } from './chat-session-store';
 import type { ChatbotAgent } from '@gossip/orchestrator';
-import { buildCoverageDegradedMessage } from './coverage-degraded-utils';
+import { buildCoverageDegradedMessage } from '@gossip/orchestrator';
 import { readFileSync, existsSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { createHash, timingSafeEqual } from 'crypto';
