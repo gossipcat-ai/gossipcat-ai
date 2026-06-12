@@ -81,7 +81,7 @@ export function NarrativeStripe() {
           if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }}
         className="ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] transition hover:[background:color-mix(in_oklch,var(--info)_12%,transparent)]"
-        style={{ color: 'var(--text-faint)', cursor: 'pointer' }}
+        style={{ color: 'var(--ink-3)', cursor: 'pointer' }}
       >
         watch ↓
       </button>

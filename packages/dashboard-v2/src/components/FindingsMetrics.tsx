@@ -49,14 +49,14 @@ const SEV_FILTER_CHIPS: { key: 'all' | 'critical' | 'high' | 'medium' | 'low'; l
   { key: 'all', label: 'All', cls: 'border-border/40 hover:border-border/60', activeCls: 'border-border', activeStyle: { color: 'var(--text)', background: 'var(--surface-sunk)' }, inactiveStyle: { color: 'var(--text-dim)' } },
   { key: 'critical', label: 'Critical', cls: 'text-bad/50 border-bad/20 hover:border-bad/40', activeCls: 'text-bad bg-bad/10 border-bad/40' },
   { key: 'high', label: 'High', cls: 'text-severity-high/50 border-severity-high/20 hover:border-severity-high/40', activeCls: 'text-severity-high bg-severity-high/10 border-severity-high/40' },
-  { key: 'medium', label: 'Medium', cls: 'text-warn/50 border-warn/20 hover:border-warn/40', activeCls: 'text-warn bg-warn/10 border-warn/40' },
+  { key: 'medium', label: 'Medium', cls: 'text-severity-medium/50 border-severity-medium/20 hover:border-severity-medium/40', activeCls: 'text-severity-medium bg-severity-medium/10 border-severity-medium/40' },
   { key: 'low', label: 'Low', cls: 'border-border/40 hover:border-border/60', activeCls: 'border-border', activeStyle: { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' }, inactiveStyle: { color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' } },
 ];
 
 const SEVERITY_CLS: Record<string, string> = {
   critical: 'text-bad bg-bad/10',
   high: 'text-severity-high bg-severity-high/10',
-  medium: 'text-warn bg-warn/10',
+  medium: 'text-severity-medium bg-severity-medium/10',
   low: '',
 };
 const SEVERITY_STYLE_LOW: React.CSSProperties = { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' };

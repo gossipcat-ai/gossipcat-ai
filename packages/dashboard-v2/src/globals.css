@@ -67,7 +67,7 @@
   --color-warn: #B47A2A;
   --color-bad: #A53A4A;
   --color-info: #3F8B86;
-  --color-severity-high: #c0392b;
+  --color-severity-high: #B47A2A;
   --color-impact: #cc785c;
   --color-insight: #6b6a64;
   --color-text-dim: #6b6a64;
@@ -148,6 +148,10 @@
      freeing --info to mean only unverified/info. Severity ramp: --bad rose
      (critical) → --warn amber (high) → --severity-medium blue → --idle slate (low). */
   --severity-medium: #3E6DA8;
+  /* Unique verdict — purple #7c5cbf (matches --color-unique in @theme).
+     Exposed as --unique so inline style={{ color: 'var(--unique)' }} works
+     alongside the Tailwind text-unique / bg-unique utility classes. */
+  --unique: #7c5cbf;
   /* Citations — file path vs function name in finding evidence. NOT severity,
      NOT agent identity. Muted indigo/violet chosen to clear --severity-medium
      blue (cite-file ~15deg + lower saturation) and --c2 plum (cite-fn ~33deg).
@@ -329,6 +333,8 @@
   --cite-fn: #7A6FBA;
   --idle: #807A71;
   --idle-soft: #2A2722;
+  /* Unique verdict dark — brighter purple for dark canvas. */
+  --unique: #9d7fd5;
   /* Chart palette stays identical across themes (semantically same hues). */
   /* Per-agent identity hues stay identical too. */
   /* --c8 magenta needs a slightly brighter shade in dark mode for legibility. */

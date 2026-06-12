@@ -49,11 +49,16 @@ export function AuthGate({ onLogin, error }: AuthGateProps) {
           />
         </div>
 
-        {/* Wordmark */}
+        {/* Wordmark — Geist body at 26px, not Fraunces (h-route is reserved for
+            route titles only per DESIGN.md §Typography rule 1). */}
         <p
-          className="h-route mb-1"
+          className="mb-1 font-semibold"
           style={{
+            fontFamily: "'Geist', var(--font-sans)",
+            fontSize: 26,
+            lineHeight: 1.1,
             letterSpacing: '-0.02em',
+            color: 'var(--ink)',
             textShadow: '0 0 24px var(--accent)',
           }}
         >

@@ -199,7 +199,7 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
           {overview.tasksFailed > 0 && (
             <div className="flex items-center justify-between py-1 font-mono text-[11px]">
               <span style={{ color: 'var(--ink-3)' }}>tasks failed</span>
-              <span className="font-semibold text-destructive tabular-nums">{overview.tasksFailed}</span>
+              <span className="font-semibold text-bad tabular-nums">{overview.tasksFailed}</span>
             </div>
           )}
           <div className="flex items-center justify-between py-1 font-mono text-[11px]">
@@ -209,7 +209,7 @@ export function SystemPulse({ overview, activeTasks, mode = 'dense', showActivit
           <div className="flex items-center justify-between py-1 font-mono text-[11px]">
             <span style={{ color: 'var(--ink-3)' }}>success rate</span>
             <span
-              className={`font-semibold tabular-nums ${successRate !== null && successRate >= 95 ? 'text-confirmed' : successRate !== null && successRate >= 80 ? 'text-unverified' : successRate !== null ? 'text-destructive' : ''}`}
+              className={`font-semibold tabular-nums ${successRate !== null && successRate >= 95 ? 'text-confirmed' : successRate !== null && successRate >= 80 ? 'text-unverified' : successRate !== null ? 'text-bad' : ''}`}
               style={successRate === null ? { color: 'var(--ink-3)' } : undefined}
             >
               {successRate === null ? '—' : `${successRate}%`}

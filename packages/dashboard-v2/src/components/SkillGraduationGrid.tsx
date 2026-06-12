@@ -360,15 +360,15 @@ function GridSkeleton() {
         >
           <span
             className="h-3 w-3/4 rounded-sm"
-            style={{ background: 'color-mix(in oklch, var(--text-dim) 18%, transparent)' }}
+            style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }}
           />
           <span
             className="h-[30px] w-full rounded-sm"
-            style={{ background: 'color-mix(in oklch, var(--text-dim) 10%, transparent)' }}
+            style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }}
           />
           <span
             className="h-3 w-1/2 rounded-sm"
-            style={{ background: 'color-mix(in oklch, var(--text-dim) 14%, transparent)' }}
+            style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }}
           />
         </li>
       ))}
