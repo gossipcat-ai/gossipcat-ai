@@ -173,7 +173,7 @@ function readSecretFromStdin(): Promise<string> {
 if (process.env.GOSSIPCAT_MCP_NO_MAIN !== '1' && !__argvShimHandled) {
   const gossipDir = join(process.cwd(), '.gossip');
   try { mkdirSync(gossipDir, { recursive: true }); } catch {}
-  const logStream = createWriteStream(join(gossipDir, 'mcp.log'), { flags: 'a' });
+  const logStream = createWriteStream(join(gossipDir, 'mcp.log'), { flags: 'a', mode: 0o600 });
   process.stderr.write = ((chunk: any, ...args: any[]) => {
     // Route ALL stderr to log file — Claude Code interprets any MCP stderr as server errors
     return logStream.write(chunk, ...args as any);
@@ -644,7 +644,7 @@ async function doBoot() {
   });
 
   if (ctx.relay.dashboardUrl) {
-    process.stderr.write(`[gossipcat] 🌐 Dashboard: ${dashboardClickableUrl(ctx.relay.dashboardUrl, ctx.relay.dashboardKey)}\n`);
+    process.stderr.write(`[gossipcat] 🌐 Dashboard: ${ctx.relay.dashboardUrl}\n`);
   }
 
   // Create performance writer for ATI signal collection

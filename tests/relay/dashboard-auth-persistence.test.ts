@@ -105,6 +105,78 @@ describe('DashboardAuth persistence (issue #548 item 3a)', () => {
     expect(existsSync(authFile(root))).toBe(false);
   });
 
+  it('fails closed when the file lists more than MAX_SESSIONS sessions', () => {
+    // A persisted file with 60 future-dated sessions exceeds the MAX_SESSIONS (50)
+    // cap enforced by isPersistedAuth — the file must be rejected and a fresh key
+    // + empty session set minted instead (fail-closed).
+    const root = makeRoot();
+    const auth = new DashboardAuth();
+    auth.init(root);
+    const originalKey = auth.getKey();
+
+    // Write a tampered file: 60 valid-looking future-dated sessions.
+    const tamperedSessions = Array.from({ length: 60 }, (_, i) => ({
+      token: String(i).padStart(64, 'a'),
+      expiresAt: Date.now() + 60_000,
+    }));
+    writeFileSync(
+      authFile(root),
+      JSON.stringify({ version: 1, key: originalKey, sessions: tamperedSessions }),
+      'utf8',
+    );
+
+    const auth2 = new DashboardAuth();
+    auth2.init(root);
+    // Must have regenerated — old key is NOT reused.
+    expect(auth2.getKey()).not.toBe(originalKey);
+    expect(auth2.getKey()).toMatch(/^[0-9a-f]{32}$/);
+    // Sessions must be empty after fail-closed reset.
+    const onDisk = JSON.parse(readFileSync(authFile(root), 'utf8'));
+    expect(onDisk.sessions).toHaveLength(0);
+  });
+
+  it('fails closed when a session token is not 64 hex chars', () => {
+    // Tokens that are wrong length or contain non-hex chars must be rejected.
+    const root = makeRoot();
+    const auth = new DashboardAuth();
+    auth.init(root);
+    const originalKey = auth.getKey();
+
+    const badCases = [
+      // 63 chars — one short
+      { token: 'a'.repeat(63), expiresAt: Date.now() + 60_000 },
+    ];
+    writeFileSync(
+      authFile(root),
+      JSON.stringify({ version: 1, key: originalKey, sessions: badCases }),
+      'utf8',
+    );
+
+    const auth2 = new DashboardAuth();
+    auth2.init(root);
+    expect(auth2.getKey()).not.toBe(originalKey);
+    expect(auth2.getKey()).toMatch(/^[0-9a-f]{32}$/);
+
+    // Also verify a non-hex token is rejected.
+    const root2 = makeRoot();
+    const auth3 = new DashboardAuth();
+    auth3.init(root2);
+    const key3 = auth3.getKey();
+    writeFileSync(
+      authFile(root2),
+      JSON.stringify({
+        version: 1,
+        key: key3,
+        sessions: [{ token: 'z'.repeat(64), expiresAt: Date.now() + 60_000 }],
+      }),
+      'utf8',
+    );
+    const auth4 = new DashboardAuth();
+    auth4.init(root2);
+    expect(auth4.getKey()).not.toBe(key3);
+    expect(auth4.getKey()).toMatch(/^[0-9a-f]{32}$/);
+  });
+
   it('regenerateKey() clears sessions and re-persists', () => {
     const root = makeRoot();
     const auth = new DashboardAuth();

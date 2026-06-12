@@ -176,10 +176,17 @@ function isPersistedAuth(v: unknown): v is PersistedAuth {
   if (o.version !== 1) return false;
   if (typeof o.key !== 'string' || !/^[0-9a-f]{32}$/.test(o.key)) return false;
   if (!Array.isArray(o.sessions)) return false;
+  // Reject files that list more sessions than createSession ever allows — a
+  // file with an inflated session count could be tampered or corrupt.
+  if (o.sessions.length > MAX_SESSIONS) return false;
   return o.sessions.every(
     (s) =>
       typeof s === 'object' && s !== null &&
       typeof (s as Session).token === 'string' &&
-      typeof (s as Session).expiresAt === 'number',
+      // Session tokens are randomBytes(32).toString('hex') — exactly 64 hex chars.
+      /^[0-9a-f]{64}$/.test((s as Session).token) &&
+      typeof (s as Session).expiresAt === 'number' &&
+      // expiresAt must be a finite number (not NaN / Infinity from JSON tricks).
+      Number.isFinite((s as Session).expiresAt),
   );
 }

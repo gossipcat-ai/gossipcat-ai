@@ -80,12 +80,14 @@ export type LoginResult =
  * surface that as `no_cookie` so the user sees a real error.
  */
 export async function login(key: string): Promise<LoginResult> {
+  const { signal: timeoutSignal, cleanup } = makeTimeoutSignal(API_TIMEOUT_MS);
   try {
     const res = await fetch(`${BASE}/auth`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key }),
+      signal: timeoutSignal,
     });
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) return { ok: false, kind: 'bad_key' };
@@ -97,6 +99,8 @@ export async function login(key: string): Promise<LoginResult> {
     return { ok: true };
   } catch {
     return { ok: false, kind: 'network' };
+  } finally {
+    cleanup();
   }
 }
 
@@ -106,10 +110,13 @@ export async function login(key: string): Promise<LoginResult> {
  * login (did the browser actually store the cookie?).
  */
 export async function checkAuth(): Promise<boolean> {
+  const { signal: timeoutSignal, cleanup } = makeTimeoutSignal(API_TIMEOUT_MS);
   try {
-    const res = await fetch(`${BASE}/auth/check`, { credentials: 'include' });
+    const res = await fetch(`${BASE}/auth/check`, { credentials: 'include', signal: timeoutSignal });
     return res.ok;
   } catch {
     return false;
+  } finally {
+    cleanup();
   }
 }
