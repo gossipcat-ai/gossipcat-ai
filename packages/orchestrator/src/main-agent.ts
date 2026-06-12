@@ -446,11 +446,12 @@ export class MainAgent {
   async classifyTaskComplexity(task: string): Promise<{ complexity: 'single' | 'multi'; agentId?: string }> {
     const agents = this.registry.getAll();
 
-    // Build agent summary with dispatch weights + category strengths so the LLM respects scoring
+    // Build agent summary with dispatch weights + category strengths so the LLM respects scoring.
+    // Reuse the long-lived reader (wired at construction) so its mtime-keyed score cache is shared;
+    // a fresh PerformanceReader here would have an empty cache and re-read on every call.
     let perfScores: Map<string, any> | null = null;
     try {
-      const { PerformanceReader: PerfR } = require('./performance-reader');
-      perfScores = new PerfR(this.projectRoot).getScores();
+      perfScores = this.registry.getPerformanceReader()?.getScores() ?? null;
     } catch { /* no perf data */ }
 
     const agentLines = agents.map(a => {

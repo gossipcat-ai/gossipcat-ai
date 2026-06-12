@@ -39,17 +39,50 @@ function stripBom(content: string): string {
 }
 
 /**
+ * Minimum interval between torn-line warnings for the SAME source file. During a
+ * consensus round the same torn file is re-read many times within milliseconds
+ * (every agent completion triggers a dispatch-weight lookup), so an unthrottled
+ * per-read warn floods mcp.log with identical lines. Rate-limit to one warn per
+ * source per window; suppressed occurrences are counted and surfaced on the next
+ * emit so no information is lost (f1, consensus 4ee5ced2-b654497a).
+ */
+const WARN_RATE_LIMIT_WINDOW_MS = 60_000;
+
+/**
+ * Per-source warn state: timestamp of last emitted warn and the number of warns
+ * suppressed since then. Keyed by the full source path so different files
+ * rate-limit independently.
+ */
+const warnRateLimiter = new Map<string, { lastWarnMs: number; suppressed: number }>();
+
+/**
+ * Test-only hook to clear the module-level warn rate-limiter between cases.
+ * Not part of the public API.
+ */
+export function __resetWarnRateLimiterForTests(): void {
+  warnRateLimiter.clear();
+}
+
+/**
  * Parse JSONL lines, silently skipping unparseable (torn) rows — the skip is
  * deliberate hardening so a single corrupt line never refuses the whole file.
  * f2: surface the drop with ONE console.warn per read when count > 0, never
  * one warn per line (files can have thousands of lines).
+ * f1: additionally rate-limit warns across rapid re-reads of the same source to
+ * one per WARN_RATE_LIMIT_WINDOW_MS, carrying the suppressed count forward. The
+ * dropped-line COUNTING and the returned array are unaffected — only how often
+ * the warn is emitted changes. `now` is injectable for deterministic tests.
  *
  * Non-object parses count as torn too: a literal `null` line is valid JSON
  * (JSON.parse('null') returns null without throwing), and propagating it would
  * make a downstream property access throw inside the caller's try/catch —
  * collapsing the entire read to []. See consensus 4ee5ced2-b654497a (n1).
  */
-function parseJsonlLines<T>(lines: string[], sourcePath: string): T[] {
+export function parseJsonlLines<T>(
+  lines: string[],
+  sourcePath: string,
+  now: () => number = Date.now,
+): T[] {
   let dropped = 0;
   const out: T[] = [];
   for (const line of lines) {
@@ -65,11 +98,30 @@ function parseJsonlLines<T>(lines: string[], sourcePath: string): T[] {
     }
   }
   if (dropped > 0) {
-    console.warn(
-      `[performance-reader] dropped ${dropped} unparseable JSONL line(s) from ${basename(sourcePath)}`,
-    );
+    emitTornLineWarn(sourcePath, dropped, now());
   }
   return out;
+}
+
+/**
+ * Emit the torn-line warning for `sourcePath`, throttled to one per window.
+ * Within the window the call is suppressed and counted; the next emit after the
+ * window reports how many similar warns were suppressed so nothing is lost.
+ */
+function emitTornLineWarn(sourcePath: string, dropped: number, nowMs: number): void {
+  const state = warnRateLimiter.get(sourcePath);
+  if (state && nowMs - state.lastWarnMs < WARN_RATE_LIMIT_WINDOW_MS) {
+    state.suppressed++;
+    return;
+  }
+  const suppressedNote =
+    state && state.suppressed > 0
+      ? ` (suppressed ${state.suppressed} similar warn(s) in the last ${WARN_RATE_LIMIT_WINDOW_MS / 1000}s)`
+      : '';
+  console.warn(
+    `[performance-reader] dropped ${dropped} unparseable JSONL line(s) from ${basename(sourcePath)}${suppressedNote}`,
+  );
+  warnRateLimiter.set(sourcePath, { lastWarnMs: nowMs, suppressed: 0 });
 }
 
 export function readJsonlWithRotated(filePath: string): string {

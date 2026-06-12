@@ -48,6 +48,15 @@ export class AgentRegistry {
     this.perfReader = reader;
   }
 
+  /**
+   * Expose the long-lived PerformanceReader so callers reuse its mtime-keyed
+   * score cache instead of constructing a fresh (empty-cache) reader per call.
+   * Returns null when no reader was wired (perf data optional).
+   */
+  getPerformanceReader(): PerformanceReader | null {
+    return this.perfReader;
+  }
+
   setSuggesterCache(cache: Map<string, Set<string>>): void {
     this.suggesterCache = cache;
   }
