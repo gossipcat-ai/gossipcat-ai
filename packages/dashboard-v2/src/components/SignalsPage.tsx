@@ -57,7 +57,7 @@ const SIGNAL_LABELS: Record<string, string> = {
 // DESIGN.md Step 8 — semantic verdict color per signal type. Applied as inline
 // color on a .h-section span (small-caps Geist) so verdict text reads as a
 // section-label, not all-caps mono. Confirmed = --ok green, disputed/
-// hallucination = --bad rose, unique/new_finding/unverified = --info teal.
+// hallucination = --bad rose, unique/new_finding = --unique purple, unverified = --info teal.
 // Operational pass/fail signals (impl_test_*, impl_typecheck_*) map onto the
 // same ok/bad axis. boundary_escape = --bad (security violation).
 const VERDICT_COLOR: Record<string, string> = {
