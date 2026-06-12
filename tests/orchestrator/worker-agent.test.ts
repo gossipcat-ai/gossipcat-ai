@@ -529,3 +529,266 @@ describe('WorkerAgent per-agent maxToolTurns (fix/per-agent-turn-cap)', () => {
     jest.resetModules();
   }, 15_000);
 });
+
+// ─── argumentsParseError short-circuit ───────────────────────────────────────
+describe('WorkerAgent — argumentsParseError short-circuit (deepseek relay crash fix)', () => {
+  /**
+   * Helper: build a WorkerAgent backed by a mock relay (no real WebSocket).
+   * sendEnvelope resolves the pending callTool promise immediately via
+   * messageHandler — same pattern as the per-agent maxToolTurns tests above.
+   */
+  function buildWorkerWithRelay(stubLlm: ILLMProvider, dummyTools: ToolDefinition[], maxTurns: number) {
+    const { MessageType } = require('@gossip/types');
+
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const sendEnvelopeCalls: Array<{ rid_req?: string }> = [];
+
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        sendEnvelopeCalls.push(envelope);
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler(
+              { result: 'relay-tool-ok' },
+              { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req }
+            );
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', dummyTools, undefined, false, undefined, maxTurns);
+    return { worker, mockGossipAgent, sendEnvelopeCalls };
+  }
+
+  it('a call with argumentsParseError is NOT forwarded to the relay (tool not executed)', async () => {
+    jest.resetModules();
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation((..._args: unknown[]) => buildWorkerWithRelay(null as any, [], 5).mockGossipAgent),
+    }));
+
+    const dummyTool: ToolDefinition = { name: 'file_tree', description: 'tree', parameters: { type: 'object', properties: {} } };
+
+    let llmCallCount = 0;
+    const capturedToolMessages: string[] = [];
+
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async (messages: LLMMessage[]) => {
+        llmCallCount++;
+        if (llmCallCount === 1) {
+          // Return one call with invalid JSON args (position-8 class: unquoted key)
+          return {
+            text: 'calling file_tree',
+            toolCalls: [{
+              id: 'call_bad',
+              name: 'file_tree',
+              arguments: {},
+              argumentsParseError: "Expected ':' after property name in JSON at position 8 (line 1 column 9)",
+              rawArguments: '{depth: 2}',
+            }],
+          };
+        }
+        // Second call: capture any tool result messages that were fed back
+        for (const msg of messages) {
+          if (msg.role === 'tool') {
+            capturedToolMessages.push(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content));
+          }
+        }
+        return { text: 'done after seeing error' };
+      }),
+    };
+
+    // Build relay mock directly so we can capture sendEnvelope calls
+    const { MessageType } = require('@gossip/types');
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const sendEnvelopeCalls: Array<unknown> = [];
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        sendEnvelopeCalls.push(envelope);
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler({ result: 'relay-ok' }, { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req });
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    jest.resetModules();
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', [dummyTool], undefined, false, undefined, 5);
+    await worker.start();
+
+    for await (const _event of worker.executeTask('do something', undefined, undefined, 'task-bad-args')) {
+      // drain
+    }
+
+    // The tool was NOT forwarded to the relay: sendEnvelope never called
+    expect(sendEnvelopeCalls).toHaveLength(0);
+
+    // The error message was fed back to the model and names "invalid JSON" + the raw snippet
+    expect(capturedToolMessages).toHaveLength(1);
+    expect(capturedToolMessages[0]).toContain('not valid JSON');
+    expect(capturedToolMessages[0]).toContain('{depth: 2}');
+
+    jest.resetModules();
+  }, 15_000);
+
+  it('a call with argumentsParseError increments turnErrors (streak machinery applies)', async () => {
+    jest.resetModules();
+
+    const dummyTool: ToolDefinition = { name: 'file_tree', description: 'tree', parameters: { type: 'object', properties: {} } };
+    let llmCallCount = 0;
+
+    // Three consecutive turns each returning ONE call with argumentsParseError
+    // → consecutiveErrors hits 3 → loop exits with ERROR event, not FATAL ERROR
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async () => {
+        llmCallCount++;
+        if (llmCallCount <= 3) {
+          return {
+            text: `bad turn ${llmCallCount}`,
+            toolCalls: [{
+              id: `call_bad_${llmCallCount}`,
+              name: 'file_tree',
+              arguments: {},
+              argumentsParseError: 'Unexpected token d',
+              rawArguments: `{depth: ${llmCallCount}}`,
+            }],
+          };
+        }
+        return { text: 'should not reach here' };
+      }),
+    };
+
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn(),
+      sendEnvelope: jest.fn().mockResolvedValue(undefined),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', [dummyTool], undefined, false, undefined, 10);
+    await worker.start();
+
+    const { TaskStreamEventType } = require('@gossip/orchestrator');
+    const events: Array<{ type: string }> = [];
+    for await (const event of worker.executeTask('trigger streak', undefined, undefined, 'task-streak')) {
+      events.push(event as { type: string });
+    }
+
+    // After 3 all-error turns the loop exits with FINAL_RESULT (error loop),
+    // NOT with a FATAL ERROR (which would mean an exception escaped parseOpenAIResponse)
+    const hasError = events.some(e => e.type === TaskStreamEventType.ERROR);
+    const hasFinal = events.some(e => e.type === TaskStreamEventType.FINAL_RESULT);
+    // The loop should exit cleanly — no FATAL ERROR type event
+    expect(hasError).toBe(false);
+    expect(hasFinal).toBe(true);
+    // Only 3 LLM calls before the streak exits (no summary call in the streak path)
+    expect(llmCallCount).toBe(3);
+
+    jest.resetModules();
+  }, 15_000);
+
+  it('sibling valid call in same response executes while the malformed call does not reach relay', async () => {
+    jest.resetModules();
+
+    const dummyTools: ToolDefinition[] = [
+      { name: 'file_tree', description: 'tree', parameters: { type: 'object', properties: {} } },
+      { name: 'file_read', description: 'read', parameters: { type: 'object', properties: { path: { type: 'string', description: 'path' } } } },
+    ];
+
+    let llmCallCount = 0;
+    const { MessageType } = require('@gossip/types');
+
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const sendEnvelopeCalls: Array<{ rid_req?: string }> = [];
+
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        sendEnvelopeCalls.push(envelope);
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler({ result: 'read-ok' }, { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req });
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async () => {
+        llmCallCount++;
+        if (llmCallCount === 1) {
+          // First turn: one malformed call + one valid call
+          return {
+            text: 'mixed batch',
+            toolCalls: [
+              {
+                id: 'call_bad',
+                name: 'file_tree',
+                arguments: {},
+                argumentsParseError: 'Unexpected token d',
+                rawArguments: '{depth: 2}',
+              },
+              {
+                id: 'call_ok',
+                name: 'file_read',
+                arguments: { path: '/src/index.ts' },
+              },
+            ],
+          };
+        }
+        return { text: 'all done' };
+      }),
+    };
+
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', dummyTools, undefined, false, undefined, 5);
+    await worker.start();
+
+    for await (const _event of worker.executeTask('mixed batch task', undefined, undefined, 'task-mixed')) {
+      // drain
+    }
+
+    // Only the valid file_read was forwarded to the relay
+    expect(sendEnvelopeCalls).toHaveLength(1);
+
+    jest.resetModules();
+  }, 15_000);
+});

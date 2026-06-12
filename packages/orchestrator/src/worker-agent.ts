@@ -382,13 +382,21 @@ export class WorkerAgent {
         let turnErrors = 0;
         for (const toolCall of response.toolCalls) {
           let result: string;
-          try {
-            const toolStart = Date.now();
-            result = await this.callTool(toolCall.name, toolCall.arguments);
-            yield logAndYield(`  tool ${toolCall.name} → ${Date.now() - toolStart}ms, ${result.length}chars${result.startsWith('Error:') ? ' ERROR: ' + result.slice(0, 100) : ''}`);
-          } catch (err) {
-            result = `Error: ${(err as Error).message}`;
-            yield logAndYield(`  tool ${toolCall.name} → THREW: ${result.slice(0, 150)}`);
+          if (toolCall.argumentsParseError !== undefined) {
+            // Model produced invalid JSON for this tool's arguments — do NOT execute the tool.
+            // Return an error result identical in shape to a THREW result so the retry-streak
+            // machinery (consecutiveErrors) applies and the model can correct its output.
+            result = `Error: tool call arguments were not valid JSON (${toolCall.argumentsParseError}): ${toolCall.rawArguments ?? ''}`;
+            yield logAndYield(`  tool ${toolCall.name} → INVALID JSON ARGS: ${result.slice(0, 150)}`);
+          } else {
+            try {
+              const toolStart = Date.now();
+              result = await this.callTool(toolCall.name, toolCall.arguments);
+              yield logAndYield(`  tool ${toolCall.name} → ${Date.now() - toolStart}ms, ${result.length}chars${result.startsWith('Error:') ? ' ERROR: ' + result.slice(0, 100) : ''}`);
+            } catch (err) {
+              result = `Error: ${(err as Error).message}`;
+              yield logAndYield(`  tool ${toolCall.name} → THREW: ${result.slice(0, 150)}`);
+            }
           }
           if (result.startsWith('Error:')) turnErrors++;
           messages.push({

@@ -336,6 +336,106 @@ describe('LLM Client', () => {
 
       global.fetch = originalFetch;
     });
+
+    it('malformed tool-call arguments (unquoted key — {depth: 2}) set argumentsParseError, do not throw', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{
+                id: 'call_bad', type: 'function',
+                function: { name: 'file_tree', arguments: '{depth: 2}' },
+              }],
+            },
+          }],
+        }),
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('test-key', 'deepseek-chat', undefined, 'https://api.deepseek.com/v1');
+      const response = await provider.generate([{ role: 'user', content: 'list' }]);
+
+      expect(response.toolCalls).toHaveLength(1);
+      const tc = response.toolCalls![0];
+      expect(tc.name).toBe('file_tree');
+      expect(tc.arguments).toEqual({});
+      expect(tc.argumentsParseError).toBeDefined();
+      expect(tc.rawArguments).toBe('{depth: 2}');
+
+      global.fetch = originalFetch;
+    });
+
+    it('malformed tool-call arguments (single-quoted key — {\'path\': \'x\'}) set argumentsParseError', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{
+                id: 'call_sq', type: 'function',
+                function: { name: 'file_read', arguments: "{'path': 'x'}" },
+              }],
+            },
+          }],
+        }),
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('test-key', 'deepseek-chat');
+      const response = await provider.generate([{ role: 'user', content: 'read' }]);
+
+      expect(response.toolCalls).toHaveLength(1);
+      const tc = response.toolCalls![0];
+      expect(tc.argumentsParseError).toBeDefined();
+      expect(tc.rawArguments).toBe("{'path': 'x'}");
+
+      global.fetch = originalFetch;
+    });
+
+    it('one malformed + one valid tool call in same response: valid call parses normally', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [
+                {
+                  id: 'call_bad', type: 'function',
+                  function: { name: 'file_tree', arguments: '{depth: 2}' },
+                },
+                {
+                  id: 'call_ok', type: 'function',
+                  function: { name: 'file_read', arguments: '{"path": "/src/main.ts"}' },
+                },
+              ],
+            },
+          }],
+        }),
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('test-key', 'deepseek-chat');
+      const response = await provider.generate([{ role: 'user', content: 'go' }]);
+
+      expect(response.toolCalls).toHaveLength(2);
+      const [bad, ok] = response.toolCalls!;
+
+      // Bad call carries the error marker
+      expect(bad.name).toBe('file_tree');
+      expect(bad.argumentsParseError).toBeDefined();
+      expect(bad.rawArguments).toBe('{depth: 2}');
+
+      // Good call parses normally with no marker
+      expect(ok.name).toBe('file_read');
+      expect(ok.arguments).toEqual({ path: '/src/main.ts' });
+      expect(ok.argumentsParseError).toBeUndefined();
+
+      global.fetch = originalFetch;
+    });
   });
 
   describe('createProviderForAgent — pre-flight key check (issue #522)', () => {

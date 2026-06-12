@@ -136,6 +136,10 @@ export interface LLMResponse {
     id: string;
     name: string;
     arguments: Record<string, unknown>;
+    /** Set when the model-produced arguments string was not valid JSON. The tool must NOT be executed; feed the error back to the model. */
+    argumentsParseError?: string;
+    /** The raw arguments string that failed to parse (first 200 chars). Included in the error message fed back to the model. */
+    rawArguments?: string;
   }>;
   usage?: { inputTokens: number; outputTokens: number };
 }
