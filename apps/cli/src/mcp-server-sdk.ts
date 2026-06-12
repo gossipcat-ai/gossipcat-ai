@@ -188,7 +188,7 @@ import { randomUUID, randomBytes, timingSafeEqual } from 'crypto';
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'http';
 
 // ── Extracted modules ────────────────────────────────────────────────────
-import { ctx } from './mcp-context';
+import { ctx, NATIVE_TASK_TTL_MS } from './mcp-context';
 import { MAX_TOOL_TURNS_CEILING } from './config';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
@@ -203,7 +203,7 @@ try {
   const stalenessResult = checkDistMcpStaleness(__filename);
   if (stalenessResult.stale) logStalenessToMcpLog(stalenessResult, process.cwd());
 } catch { /* never break boot */ }
-import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction } from './handlers/native-tasks';
+import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction, UTILITY_RESULT_TTL_MS } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus, detectLostDispatchWarnings } from './handlers/dispatch';
 import {
   invalidateAgent as invalidateDispatchPromptCacheForAgent,
@@ -1437,11 +1437,16 @@ export function createMcpServer(): McpServer {
               spawnTimeoutWatcher(utilityTaskId, ctx.nativeTaskMap.get(utilityTaskId)!);
               // F13 hardening: evict the stash if the orchestrator never
               // re-enters (agent crash, Claude restart). Matches the
-              // _pendingVerifyData pattern.
-              const STASH_TTL_MS = UTILITY_TTL_MS + 30_000;
+              // _pendingVerifyData pattern. Issue #545: align the stash lifetime
+              // with the result map lifetime. gossip_plan results go to
+              // ctx.nativeResultMap, swept at NATIVE_TASK_TTL_MS (2h); only
+              // skill_develop results go to the 24h nativeUtilityResultMap.
+              // Also evict the guard snapshot (deleted inline on re-entry,
+              // otherwise leaks for the process lifetime).
               setTimeout(() => {
                 _pendingPlanData.delete(utilityTaskId);
-              }, STASH_TTL_MS).unref();
+                _utilityGuardSnapshots.delete(utilityTaskId);
+              }, NATIVE_TASK_TTL_MS).unref();
 
               const { assembleUtilityPrompt } = await import('@gossip/orchestrator');
               const modelShort = ctx.nativeUtilityConfig.model;
@@ -4170,6 +4175,13 @@ export function createMcpServer(): McpServer {
             });
             try { ctx.mainAgent.recordNativeTask(taskId, '_utility', `skill_develop:${category}`); } catch { /* best-effort */ }
             spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
+            // Stash eviction: skill_develop results go to ctx.nativeUtilityResultMap
+            // (swept at UTILITY_RESULT_TTL_MS, 24h) — align the stash lifetime so
+            // re-entry never sees a missing stash while the result is still alive.
+            setTimeout(() => {
+              _pendingSkillData.delete(taskId);
+              _utilityGuardSnapshots.delete(taskId);
+            }, UTILITY_RESULT_TTL_MS).unref();
 
             const modelShort = ctx.nativeUtilityConfig.model;
             return {
@@ -4702,6 +4714,12 @@ export function createMcpServer(): McpServer {
         });
         try { ctx.mainAgent.recordNativeTask(taskId, '_utility', 'session_summary'); } catch { /* best-effort */ }
         spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
+        // Stash eviction: session_summary results go to ctx.nativeResultMap
+        // (swept at NATIVE_TASK_TTL_MS, 2h) — align the stash lifetime to match.
+        setTimeout(() => {
+          _pendingSessionData.delete(taskId);
+          _utilityGuardSnapshots.delete(taskId);
+        }, NATIVE_TASK_TTL_MS).unref();
 
         const agentPrompt = `${system}\n\n---\n\n${user}`;
         const modelShort = ctx.nativeUtilityConfig.model;
@@ -4953,12 +4971,18 @@ export function createMcpServer(): McpServer {
       spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
       // F3 hardening: spawnTimeoutWatcher only writes a timed_out record into
       // ctx.nativeResultMap; it does not know about _pendingVerifyData. Schedule
-      // an independent eviction with a small grace window so the stash never
-      // outlives a never-re-entered dispatch.
-      const STASH_TTL_MS = UTILITY_TTL_MS + 30_000;
+      // an independent eviction so the stash never outlives a never-re-entered
+      // dispatch. verify_memory results go to ctx.nativeResultMap, swept at
+      // NATIVE_TASK_TTL_MS (2h); only skill_develop uses the 24h
+      // nativeUtilityResultMap. The stash TTL matches the result map lifetime
+      // so re-entry never sees a missing stash while the result is still alive.
+      // Also evict the guard snapshot on the same schedule: on re-entry it is
+      // deleted inline, but if the orchestrator never re-calls it would
+      // otherwise leak for the process lifetime.
       setTimeout(() => {
         _pendingVerifyData.delete(taskId);
-      }, STASH_TTL_MS).unref();
+        _utilityGuardSnapshots.delete(taskId);
+      }, NATIVE_TASK_TTL_MS).unref();
 
       const modelShort = ctx.nativeUtilityConfig.model;
       return {
