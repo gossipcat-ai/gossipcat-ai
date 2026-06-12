@@ -54,6 +54,8 @@ gossip_run(agent_id: "<id>", task: "Implement X")
 - sonnet-implementer: anthropic/claude-sonnet-4-6 (custom) — native
 - opus-implementer: anthropic/claude-opus-4-6 (custom) — native
 - sonnet-designer: anthropic/claude-sonnet-4-6 (custom) — native
+- fable-reviewer: anthropic/claude-fable-5 (custom) — native
+- deepseek-challenger: deepseek/deepseek-chat (custom)
 
 ### Implementer naming convention
 
