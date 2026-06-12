@@ -82,6 +82,17 @@ interface DashboardContext {
 
 const AUTH_MAX_ATTEMPTS = 10;
 const AUTH_LOCKOUT_MS = 60_000; // 1 minute lockout after max attempts
+// Idle TTL for never-locked authAttempts entries (count below the lockout
+// threshold, lockedUntil still 0). A slow distributed scan never trips a
+// lockout, so the expired-lockout sweep alone never reaps these and the map
+// grows unbounded. 15 minutes is well past the 1-minute lockout window — long
+// enough that a real (bursty) attacker's in-progress count survives, short
+// enough that abandoned slow-scan entries fall out promptly.
+const AUTH_ATTEMPT_TTL_MS = 15 * 60_000; // 15 minutes
+// Hard cap backstop: if the map still exceeds this after a sweep, evict the
+// oldest non-locked entries by lastAttemptAt. Active lockouts are never
+// evicted — memory safety must not weaken the lockout guarantee.
+const AUTH_ATTEMPTS_HARD_CAP = 1000;
 
 interface LegacyRoundWarning { code: string; message: string; agentId?: string }
 
@@ -162,7 +173,7 @@ function resolveDashboardRoot(projectRoot: string): string | null {
 }
 
 export class DashboardRouter {
-  private authAttempts = new Map<string, { count: number; lockedUntil: number }>();
+  private authAttempts = new Map<string, { count: number; lockedUntil: number; lastAttemptAt: number }>();
   private dashboardRoot: string | null;
   // Chatbot seam (P2). Null until the app layer injects an agent via
   // setChatbot; a null agent is the graceful-degrade path (handleChat emits an
@@ -283,8 +294,13 @@ export class DashboardRouter {
       return true;
     }
 
-    const body = await readBody(req);
+    // readBody must run INSIDE the try: it rejects on an aborted socket or an
+    // oversized body (maxBytes), and an escaped rejection would surface as an
+    // unhandled promise rejection rather than a clean HTTP error. A body-read
+    // failure is NOT a failed auth attempt — the key was never evaluated, so we
+    // do not call recordFailedAuthAttempt here.
     try {
+      const body = await readBody(req);
       const { key } = JSON.parse(body);
       const token = this.auth.createSession(key);
       if (!token) {
@@ -312,13 +328,43 @@ export class DashboardRouter {
    */
   private isIpLockedOut(ip: string): boolean {
     const now = Date.now();
-    if (this.authAttempts.size > 100) {
-      for (const [k, v] of this.authAttempts) {
-        if (v.lockedUntil > 0 && v.lockedUntil < now) this.authAttempts.delete(k);
-      }
-    }
+    if (this.authAttempts.size > 100) this.sweepAuthAttempts(now);
     const attempt = this.authAttempts.get(ip);
     return !!(attempt && attempt.lockedUntil > now);
+  }
+
+  /**
+   * Opportunistic, timer-free reaper for the authAttempts map. Runs only when
+   * the map crosses 100 entries (called from isIpLockedOut). Removes two
+   * classes of dead entry, then applies a hard-cap backstop:
+   *   1. Expired lockouts — `lockedUntil > 0 && lockedUntil < now`.
+   *   2. Stale never-locked entries — `lockedUntil === 0` and the last attempt
+   *      is older than AUTH_ATTEMPT_TTL_MS. These come from slow distributed
+   *      scans that never reach AUTH_MAX_ATTEMPTS, so the expired-lockout rule
+   *      alone never reaps them and the map grows unbounded.
+   * INVARIANT: an ACTIVE lockout (`lockedUntil > now`) is never deleted here,
+   * including by the hard-cap backstop — pruning must never shorten a lockout.
+   */
+  private sweepAuthAttempts(now: number): void {
+    for (const [k, v] of this.authAttempts) {
+      const expiredLockout = v.lockedUntil > 0 && v.lockedUntil < now;
+      const staleNeverLocked = v.lockedUntil === 0 && now - v.lastAttemptAt > AUTH_ATTEMPT_TTL_MS;
+      if (expiredLockout || staleNeverLocked) this.authAttempts.delete(k);
+    }
+    // Backstop against memory exhaustion: if the map is still over the hard cap
+    // after the sweep, evict the oldest NON-LOCKED entries (oldest lastAttemptAt
+    // first) until back under the cap. Active lockouts are excluded.
+    if (this.authAttempts.size > AUTH_ATTEMPTS_HARD_CAP) {
+      const evictable = [...this.authAttempts.entries()]
+        .filter(([, v]) => !(v.lockedUntil > now))
+        .sort((a, b) => a[1].lastAttemptAt - b[1].lastAttemptAt);
+      let toEvict = this.authAttempts.size - AUTH_ATTEMPTS_HARD_CAP;
+      for (const [k] of evictable) {
+        if (toEvict <= 0) break;
+        this.authAttempts.delete(k);
+        toEvict--;
+      }
+    }
   }
 
   /**
@@ -353,10 +399,12 @@ export class DashboardRouter {
    * counter so an attacker can't double-dip.
    */
   private recordFailedAuthAttempt(ip: string): void {
-    const current = this.authAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+    const now = Date.now();
+    const current = this.authAttempts.get(ip) || { count: 0, lockedUntil: 0, lastAttemptAt: now };
     current.count++;
+    current.lastAttemptAt = now;
     if (current.count >= AUTH_MAX_ATTEMPTS) {
-      current.lockedUntil = Date.now() + AUTH_LOCKOUT_MS;
+      current.lockedUntil = now + AUTH_LOCKOUT_MS;
       current.count = 0;
     }
     this.authAttempts.set(ip, current);

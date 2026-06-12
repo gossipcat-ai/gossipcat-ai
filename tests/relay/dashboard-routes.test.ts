@@ -290,6 +290,130 @@ describe('DashboardRouter', () => {
       expect(goodRes._status).toBe(200);
     });
   });
+
+  // ─── handleAuth body-read failures (Fix A) ──────────────────────────────
+  // readBody runs INSIDE the try in handleAuth, so an oversized or aborted
+  // body produces a clean 400 instead of an unhandled promise rejection, and
+  // it is NOT counted as a failed auth attempt (the key was never evaluated).
+  describe('handleAuth body-read failures', () => {
+    it('oversized body → 400, no unhandled rejection, no failed-attempt recorded', async () => {
+      const ip = '10.20.30.50';
+      const req = mockReq('POST', '/dashboard/api/auth');
+      (req as any).socket = { remoteAddress: ip };
+      // readBody calls req.destroy() before rejecting on overflow.
+      (req as any).destroy = () => {};
+      const res = mockRes();
+
+      const handled = router.handle(req, res);
+      // 9 KB exceeds the 8 KB MAX_BODY_SIZE for the auth route.
+      req.emit('data', Buffer.alloc(9 * 1024, 0x61));
+      // The promise must resolve (return true) without rejecting.
+      await expect(handled).resolves.toBe(true);
+      expect(res._status).toBe(400);
+      expect(JSON.parse(res._body)).toEqual({ error: 'Invalid request body' });
+      // A body-read failure must not pollute the lockout counter.
+      const attempts = (router as any).authAttempts as Map<string, unknown>;
+      expect(attempts.has(ip)).toBe(false);
+    });
+
+    it('aborted socket (error event) → 400, no failed-attempt recorded', async () => {
+      const ip = '10.20.30.51';
+      const req = mockReq('POST', '/dashboard/api/auth');
+      (req as any).socket = { remoteAddress: ip };
+      const res = mockRes();
+
+      const handled = router.handle(req, res);
+      req.emit('error', new Error('socket hang up'));
+      await expect(handled).resolves.toBe(true);
+      expect(res._status).toBe(400);
+      const attempts = (router as any).authAttempts as Map<string, unknown>;
+      expect(attempts.has(ip)).toBe(false);
+    });
+  });
+
+  // ─── authAttempts opportunistic sweep + hard cap (Fix B) ────────────────
+  // The sweep runs only when the map crosses 100 entries (inside isIpLockedOut).
+  // It reaps stale never-locked entries (lockedUntil 0, lastAttemptAt past the
+  // TTL) and expired lockouts, but must never evict an ACTIVE lockout — not
+  // even the hard-cap backstop.
+  describe('authAttempts sweep', () => {
+    const TTL_MS = 15 * 60_000;
+    const HARD_CAP = 1000;
+
+    type Attempt = { count: number; lockedUntil: number; lastAttemptAt: number };
+    const seed = (n: number, make: (i: number) => Attempt) => {
+      const map = (router as any).authAttempts as Map<string, Attempt>;
+      for (let i = 0; i < n; i++) map.set(`ip-${i}`, make(i));
+      return map;
+    };
+    // Drives the private isIpLockedOut sweep without coupling to its name.
+    const triggerSweep = (ip = 'trigger-ip') => router.handle(
+      Object.assign(mockReq('GET', '/dashboard/api/overview', { authorization: 'Bearer wrong' }), {
+        socket: { remoteAddress: ip },
+      }),
+      mockRes(),
+    );
+
+    it('removes a stale never-locked entry (lockedUntil 0, past TTL) when map size > 100', async () => {
+      const now = Date.now();
+      const map = seed(150, () => ({ count: 1, lockedUntil: 0, lastAttemptAt: now }));
+      map.set('stale-ip', { count: 1, lockedUntil: 0, lastAttemptAt: now - TTL_MS - 1 });
+      expect(map.size).toBe(151);
+
+      await triggerSweep();
+
+      expect(map.has('stale-ip')).toBe(false);
+      // Fresh never-locked entries must survive.
+      expect(map.has('ip-0')).toBe(true);
+    });
+
+    it('does not sweep stale entries while map size is at or below 100', async () => {
+      const now = Date.now();
+      const map = seed(50, () => ({ count: 1, lockedUntil: 0, lastAttemptAt: now }));
+      map.set('stale-ip', { count: 1, lockedUntil: 0, lastAttemptAt: now - TTL_MS - 1 });
+
+      await triggerSweep();
+
+      // Below the 100 threshold the opportunistic sweep does not run.
+      expect(map.has('stale-ip')).toBe(true);
+    });
+
+    it('an active lockout survives the sweep', async () => {
+      const now = Date.now();
+      const map = seed(150, () => ({ count: 1, lockedUntil: 0, lastAttemptAt: now - TTL_MS - 1 }));
+      // Active lockout with a stale lastAttemptAt — must NOT be pruned.
+      map.set('locked-ip', { count: 0, lockedUntil: now + 30_000, lastAttemptAt: now - TTL_MS - 1 });
+
+      await triggerSweep();
+
+      expect(map.has('locked-ip')).toBe(true);
+      expect(map.get('locked-ip')!.lockedUntil).toBe(now + 30_000);
+    });
+
+    it('hard-cap backstop evicts oldest non-locked entries only', async () => {
+      const now = Date.now();
+      // All FRESH never-locked (within TTL) so the TTL sweep reaps none — only
+      // the hard cap can bring the map down. Oldest lastAttemptAt evicts first.
+      const map = seed(HARD_CAP + 200, (i) => ({ count: 1, lockedUntil: 0, lastAttemptAt: now - (HARD_CAP + 200 - i) }));
+      // An active lockout that is also one of the oldest — must survive the cap.
+      map.set('locked-ip', { count: 0, lockedUntil: now + 30_000, lastAttemptAt: now - 10 * (HARD_CAP + 200) });
+      const sizeBefore = map.size;
+      expect(sizeBefore).toBeGreaterThan(HARD_CAP);
+
+      await triggerSweep();
+
+      // The sweep caps at HARD_CAP; the triggering Bearer-wrong request then
+      // records its own failed attempt (trigger-ip), so the post-call size is
+      // HARD_CAP + 1 at most.
+      expect(map.size).toBeLessThanOrEqual(HARD_CAP + 1);
+      // Active lockout is excluded from the evictable set, so it survives the
+      // cap even though its lastAttemptAt is the oldest of all.
+      expect(map.has('locked-ip')).toBe(true);
+      // Oldest non-locked entry (ip-0) should be gone before newest (ip-N).
+      expect(map.has('ip-0')).toBe(false);
+      expect(map.has(`ip-${HARD_CAP + 199}`)).toBe(true);
+    });
+  });
 });
 
 describe('URL query string handling', () => {

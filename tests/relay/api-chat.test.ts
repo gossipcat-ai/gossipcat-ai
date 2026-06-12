@@ -464,15 +464,19 @@ describe('readBody backward-compat (per-route cap parametrization)', () => {
   it('(5) default call sites still enforce the shared 8KB cap', async () => {
     const { router } = freshRouter();
     // POST /api/auth reads with the DEFAULT cap (MAX_BODY_SIZE = 8KB) — proving
-    // the parametrization left existing call sites unchanged. readBody rejects
-    // an over-8KB body exactly as before this change.
+    // the parametrization left existing call sites unchanged. An over-8KB body
+    // still trips the cap; since Fix A moved readBody INSIDE handleAuth's try,
+    // the rejection is now caught and surfaced as a clean 400 instead of
+    // escaping handle() as an unhandled promise rejection.
     const req = routerReq('POST', '/dashboard/api/auth');
     const res = routerRes();
     const handled = router.handle(req, res);
     // 9KB body — over the 8KB default cap → readBody destroys req + rejects.
     req.emit('data', Buffer.alloc(9 * 1024, 0x61));
     req.emit('end');
-    await expect(handled).rejects.toThrow(/too large/i);
+    await expect(handled).resolves.toBe(true);
+    expect(res._status).toBe(400);
+    expect(JSON.parse(res._body)).toEqual({ error: 'Invalid request body' });
   });
 
   it('(5a) a normal sub-8KB auth body still parses under the default cap', async () => {
