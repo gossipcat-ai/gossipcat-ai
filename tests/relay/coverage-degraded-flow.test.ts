@@ -3,9 +3,11 @@
  * warnings from a PR-C style report (no legacy coverageDegraded field, only
  * the warnings array) and from a legacy report (coverageDegraded field only).
  *
- * Purpose: any template drift between buildCoverageDegradedMessage and the
- * parser used in consensusFlowHandler breaks this test before it breaks the
- * dashboard CoverageDegradedChip.
+ * Purpose: end-to-end round-trip — any template change in
+ * buildCoverageDegradedMessage that the consensusFlowHandler parser can't
+ * read breaks this test before it breaks the dashboard CoverageDegradedChip.
+ * (Both sides now import from @gossip/orchestrator — the relay-local copy
+ * was deleted once worktree-build constraints no longer applied.)
  *
  * consensus 1f50d89d-c28f49c4:fable-reviewer:f2
  */

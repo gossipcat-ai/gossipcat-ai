@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { parseCoverageDegradedMessage } from './coverage-degraded-utils';
+import { parseCoverageDegradedMessage } from '@gossip/orchestrator';
 
 /**
  * Strict 8-8 hex consensus-id shape: `xxxxxxxx-xxxxxxxx`. The id reaches this
