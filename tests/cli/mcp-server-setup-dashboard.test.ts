@@ -26,9 +26,14 @@ function buildSetupResponseLines(opts: {
   const lines: string[] = [];
   lines.push(`\nMode: ${opts.mode} | Config: .gossip/config.json (${opts.agentCount} agents total)`);
   lines.push(`Rules: ${opts.rulesFile} (${opts.host} will read this on next session)`);
-  // This is the logic added by Change 4 of the install-drift fix.
+  // This is the logic added by Change 4 of the install-drift fix. Issue #548
+  // item 2 changed the format from `... (key: <key>)` to a clickable
+  // `<url>?key=<key>` link that the SPA consumes + scrubs on load.
   if (opts.dashboardUrl) {
-    lines.push(`Dashboard: ${opts.dashboardUrl} (key: ${opts.dashboardKey})`);
+    const url = opts.dashboardKey
+      ? `${opts.dashboardUrl}${opts.dashboardUrl.includes('?') ? '&' : '?'}key=${encodeURIComponent(opts.dashboardKey)}`
+      : opts.dashboardUrl;
+    lines.push(`Dashboard: ${url}`);
   }
   return lines;
 }
@@ -47,6 +52,9 @@ describe('gossip_setup handler — dashboard URL in response', () => {
     expect(text).toContain('http://localhost:');
     expect(text).toContain('http://localhost:52731');
     expect(text).toContain('test-key-abc');
+    // Issue #548 item 2: key is now a clickable ?key= param, not "(key: ...)".
+    expect(text).toContain('http://localhost:52731?key=test-key-abc');
+    expect(text).not.toContain('(key:');
   });
 
   it('omits dashboard line when relay is not running', () => {

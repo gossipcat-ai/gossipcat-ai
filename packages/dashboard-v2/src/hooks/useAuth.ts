@@ -1,25 +1,78 @@
 import { useState, useEffect, useCallback } from 'react';
 import { checkAuth, login as apiLogin } from '@/lib/api';
 
-export type AuthError = 'bad_key' | 'network' | null;
+export type AuthError = 'bad_key' | 'network' | 'no_cookie' | null;
+
+/**
+ * Read `?key=<key>` from the current URL exactly once, then strip it from the
+ * address bar + history entry via replaceState (issue #548 item 2). Returns the
+ * key if present so the SPA can auto-login with it; the URL is scrubbed
+ * regardless so the secret never lingers in history or gets copy-pasted.
+ */
+function consumeKeyFromUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const key = params.get('key');
+  if (key === null) return null;
+
+  params.delete('key');
+  const qs = params.toString();
+  const scrubbed = window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash;
+  window.history.replaceState(null, '', scrubbed);
+
+  return key.trim() || null;
+}
 
 export function useAuth() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [error, setError] = useState<AuthError>(null);
 
-  useEffect(() => {
-    checkAuth().then(setAuthed);
-  }, []);
-
-  const login = useCallback(async (key: string) => {
+  const login = useCallback(async (key: string): Promise<void> => {
     setError(null);
     const result = await apiLogin(key);
     if (result.ok) {
       setAuthed(true);
     } else {
       setError(result.kind);
+      setAuthed(false);
     }
   }, []);
 
-  return { authed, login, error };
+  /**
+   * Re-verify the session against the relay. Wired to data-layer 401s (issue
+   * #548 item 3b): when a fetch 401s (e.g. the relay restarted and the session
+   * is gone), this lands the user back at AuthGate instead of an error card or
+   * infinite spinner.
+   */
+  const recheck = useCallback(async (): Promise<boolean> => {
+    const ok = await checkAuth();
+    setAuthed(ok);
+    return ok;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const urlKey = consumeKeyFromUrl();
+
+    (async () => {
+      // 1. If we already have a working session cookie, use it.
+      if (await checkAuth()) {
+        if (!cancelled) setAuthed(true);
+        return;
+      }
+      // 2. Otherwise, if the URL carried a ?key=, auto-login with it.
+      if (urlKey) {
+        if (!cancelled) await login(urlKey);
+        return;
+      }
+      // 3. No session, no key — fall through to the AuthGate login form.
+      if (!cancelled) setAuthed(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [login]);
+
+  return { authed, login, error, recheck };
 }

@@ -32,6 +32,8 @@ export function AuthGate({ onLogin, error }: AuthGateProps) {
       ? 'Invalid key. Check your terminal for the correct key.'
       : error === 'network'
       ? 'Connection error — relay may be offline.'
+      : error === 'no_cookie'
+      ? 'Your browser did not store the session cookie. Disable private/incognito mode or allow cookies for this site, then try again.'
       : null;
 
   return (

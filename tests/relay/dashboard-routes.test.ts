@@ -51,7 +51,7 @@ describe('DashboardRouter', () => {
     expect(handled).toBe(false);
   });
 
-  it('POST /dashboard/api/auth sets session cookie on valid key', async () => {
+  it('POST /dashboard/api/auth sets session cookie on valid key (no Secure over HTTP)', async () => {
     const req = mockReq('POST', '/dashboard/api/auth');
     const body = JSON.stringify({ key: auth.getKey() });
     const res = mockRes();
@@ -65,8 +65,41 @@ describe('DashboardRouter', () => {
     expect(res._status).toBe(200);
     expect(res._headers['Set-Cookie']).toContain('dashboard_session=');
     expect(res._headers['Set-Cookie']).toContain('HttpOnly');
-    expect(res._headers['Set-Cookie']).toContain('Secure');
     expect(res._headers['Set-Cookie']).toContain('SameSite=Strict');
+    // Issue #548 item 1: the relay serves plain HTTP, so Secure must be
+    // omitted or the browser silently drops the cookie.
+    expect(res._headers['Set-Cookie']).not.toMatch(/;\s*Secure/);
+  });
+
+  it('POST /dashboard/api/auth includes Secure when served over TLS', async () => {
+    const req = mockReq('POST', '/dashboard/api/auth');
+    (req as unknown as { socket: { encrypted: boolean } }).socket = { encrypted: true };
+    const body = JSON.stringify({ key: auth.getKey() });
+    const res = mockRes();
+
+    const handled = router.handle(req, res);
+    req.emit('data', Buffer.from(body));
+    req.emit('end');
+    await handled;
+
+    expect(res._status).toBe(200);
+    expect(res._headers['Set-Cookie']).toContain('Secure');
+  });
+
+  it('GET /dashboard/api/auth/check returns 200 with a valid session cookie', async () => {
+    const token = auth.createSession(auth.getKey())!;
+    const req = mockReq('GET', '/dashboard/api/auth/check', { cookie: `dashboard_session=${token}` });
+    const res = mockRes();
+    await router.handle(req, res);
+    expect(res._status).toBe(200);
+    expect(JSON.parse(res._body)).toEqual({ ok: true });
+  });
+
+  it('GET /dashboard/api/auth/check returns 401 without a session', async () => {
+    const req = mockReq('GET', '/dashboard/api/auth/check');
+    const res = mockRes();
+    await router.handle(req, res);
+    expect(res._status).toBe(401);
   });
 
   it('POST /dashboard/api/auth rejects invalid key', async () => {

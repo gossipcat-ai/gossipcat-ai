@@ -85,7 +85,10 @@ export class RelayServer {
 
       if (this.config.dashboard) {
         this.dashboardAuth = new DashboardAuth();
-        this.dashboardAuth.init();
+        // Pass projectRoot so the key + active sessions persist under
+        // `.gossip/dashboard-auth.json` across relay restarts (issue #548 item
+        // 3a) instead of regenerating and 401-ing every open tab.
+        this.dashboardAuth.init(this.config.dashboard.projectRoot);
         this.dashboardWs = new DashboardWs();
         this.dashboardWs.startLogWatcher(this.config.dashboard.projectRoot);
         this.dashboardUpgrader = new WebSocketServer({ noServer: true });

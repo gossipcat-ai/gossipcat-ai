@@ -236,6 +236,20 @@ function memoryDirForProject(cwd: string): string {
   return join(homedir(), '.claude', 'projects', cwd.replaceAll('/', '-'), 'memory');
 }
 
+/**
+ * Compose the clickable dashboard URL with the key embedded as a query param:
+ * `http://localhost:<port>/dashboard?key=<key>`. The SPA consumes `?key=` on
+ * load (auto-login) and immediately scrubs it from the URL bar (issue #548 item
+ * 2), so this is now a truthful one-click link rather than the old
+ * `... (key: <key>)` form that no code path consumed. Falls back to the bare
+ * URL when no key is set (key is URL-encoded defensively, though it is hex).
+ */
+function dashboardClickableUrl(url: string, key: string): string {
+  if (!key) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}key=${encodeURIComponent(key)}`;
+}
+
 // ── Environment detection ────────────────────────────────────────────────
 
 type HostEnvironment = 'claude-code' | 'cursor' | 'vscode' | 'windsurf' | 'unknown';
@@ -630,7 +644,7 @@ async function doBoot() {
   });
 
   if (ctx.relay.dashboardUrl) {
-    process.stderr.write(`[gossipcat] 🌐 Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKey})\n`);
+    process.stderr.write(`[gossipcat] 🌐 Dashboard: ${dashboardClickableUrl(ctx.relay.dashboardUrl, ctx.relay.dashboardKey)}\n`);
   }
 
   // Create performance writer for ATI signal collection
@@ -1823,7 +1837,7 @@ export function createMcpServer(): McpServer {
         `  Claude subagents found: ${claudeSubagentsList.length}`,
       ];
       if (ctx.relay?.dashboardUrl) {
-        lines.push(`  Dashboard: ${ctx.relay.dashboardUrl}${ctx.relayPortSource === 'sticky' ? ' (sticky)' : ''} (key: ${ctx.relay.dashboardKey})`);
+        lines.push(`  Dashboard: ${dashboardClickableUrl(ctx.relay.dashboardUrl, ctx.relay.dashboardKey)}${ctx.relayPortSource === 'sticky' ? ' (sticky)' : ''}`);
       }
       if (ctx.httpMcpPort) {
         lines.push(`  HTTP MCP: :${ctx.httpMcpPort}/mcp${ctx.httpMcpPortSource === 'sticky' ? ' (sticky)' : ''}`);
@@ -2652,7 +2666,7 @@ export function createMcpServer(): McpServer {
       lines.push(`\nMode: ${mode} | Config: .gossip/config.json (${Object.keys(config.agents).length} agents total)`);
       lines.push(`Rules: ${env.rulesFile} (${env.host} will read this on next session)`);
       if (ctx.relay?.dashboardUrl) {
-        lines.push(`Dashboard: ${ctx.relay.dashboardUrl} (key: ${ctx.relay.dashboardKey})`);
+        lines.push(`Dashboard: ${dashboardClickableUrl(ctx.relay.dashboardUrl, ctx.relay.dashboardKey)}`);
       }
       if (hookSummary) {
         lines.push(hookSummary);

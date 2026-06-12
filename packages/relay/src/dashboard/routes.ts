@@ -36,6 +36,44 @@ interface AgentConfigLike {
   native?: boolean;
 }
 
+/**
+ * True when the request reached us over TLS. The relay is its own HTTP server
+ * (no bundled TLS termination today), so direct socket detection — a
+ * TLSSocket exposes `.encrypted === true` — is the primary signal. We also
+ * honor `x-forwarded-proto: https` for the reverse-proxy-in-front case, but
+ * only as a secondary check; a plain-HTTP relay never sets it itself.
+ *
+ * Why this matters (issue #548 item 1): the session cookie was always sent
+ * with `Secure`, but the relay serves plain HTTP. Browsers drop a `Secure`
+ * cookie on http:// origins (Safari does NOT exempt localhost), so login
+ * "succeeded" with a 200 yet every subsequent API call 401'd. Emitting
+ * `Secure` only over real TLS fixes that without weakening HTTPS deployments.
+ */
+export function isRequestSecure(req: IncomingMessage): boolean {
+  const socket = req.socket as { encrypted?: boolean } | undefined;
+  if (socket?.encrypted === true) return true;
+  const xfp = req.headers['x-forwarded-proto'];
+  const proto = Array.isArray(xfp) ? xfp[0] : xfp;
+  return typeof proto === 'string' && proto.split(',')[0].trim().toLowerCase() === 'https';
+}
+
+/**
+ * Build the session Set-Cookie value. `Secure` is included only when the
+ * request arrived over TLS — see isRequestSecure. HttpOnly + SameSite=Strict +
+ * the 24h Max-Age are unchanged.
+ */
+export function buildSessionCookie(token: string, secure: boolean): string {
+  const attrs = [
+    `dashboard_session=${token}`,
+    'HttpOnly',
+    'SameSite=Strict',
+    'Path=/dashboard',
+    'Max-Age=86400',
+  ];
+  if (secure) attrs.splice(1, 0, 'Secure');
+  return attrs.join('; ');
+}
+
 interface DashboardContext {
   agentConfigs: AgentConfigLike[];
   relayConnections: number;
@@ -258,7 +296,7 @@ export class DashboardRouter {
       this.authAttempts.delete(ip);
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Set-Cookie': `dashboard_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/dashboard; Max-Age=86400`,
+        'Set-Cookie': buildSessionCookie(token, isRequestSecure(req)),
       });
       res.end(JSON.stringify({ ok: true }));
     } catch {
@@ -354,6 +392,17 @@ export class DashboardRouter {
 
   private async handleApi(req: IncomingMessage, res: ServerResponse, url: string, query: URLSearchParams | null): Promise<boolean> {
     try {
+      // Lightweight "does my session actually work" probe (issue #548 item 1).
+      // Reaching here means the session/Bearer auth in handle() already passed,
+      // so a 200 here is proof the cookie was stored and is being sent back.
+      // The SPA calls this right after a successful login POST and shows a
+      // clear "your browser did not store the session cookie" error on 401,
+      // instead of dismissing AuthGate into an infinite-loading state.
+      if (url === '/dashboard/api/auth/check' && req.method === 'GET') {
+        this.json(res, 200, { ok: true });
+        return true;
+      }
+
       if (url === '/dashboard/api/overview' && req.method === 'GET') {
         const data = await overviewHandler(this.projectRoot, this.ctx);
         this.json(res, 200, data);
