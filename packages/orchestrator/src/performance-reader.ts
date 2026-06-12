@@ -399,8 +399,13 @@ export class PerformanceReader {
     return out;
   }
 
-  /** Read all signals and compute per-agent scores (cached by file mtime) */
-  getScores(): Map<string, AgentScore> {
+  /**
+   * Read all signals and compute per-agent scores (cached by file mtime).
+   * Returns the LIVE cache by reference — typed ReadonlyMap so callers cannot
+   * mutate it and silently corrupt scores for every other consumer
+   * (consensus 8b23a8f3-2cc348d1, fable n1).
+   */
+  getScores(): ReadonlyMap<string, AgentScore> {
     // Check if file changed since last read
     let mtimeMs = 0;
     try { mtimeMs = statSync(this.filePath).mtimeMs; } catch { /* file doesn't exist */ }

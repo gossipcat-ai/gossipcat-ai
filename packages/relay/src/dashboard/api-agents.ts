@@ -295,7 +295,7 @@ export async function agentsHandler(
   onlineAgents: string[] = [],
 ): Promise<AgentResponse[]> {
   const reader = new PerformanceReader(projectRoot);
-  let scores: Map<string, AgentScore>;
+  let scores: ReadonlyMap<string, AgentScore>;
   try { scores = reader.getScores(); } catch { scores = new Map(); }
 
   const taskDataByAgent = readTaskGraphByAgent(projectRoot);
