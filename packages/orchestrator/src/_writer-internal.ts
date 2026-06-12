@@ -10,5 +10,8 @@
  *   - packages/orchestrator/src/_writer-internal.ts (this file)
  *   - packages/orchestrator/src/signal-helpers.ts
  *   - packages/orchestrator/src/performance-writer.ts (class definition)
+ *   - packages/orchestrator/src/completion-signals.ts (sanctioned internal
+ *     caller; exempted by the Step 4 parity test at
+ *     tests/orchestrator/completion-signals-parity.test.ts)
  */
 export { _WRITER_INTERNAL_FOR_HELPERS_ONLY as WRITER_INTERNAL } from './performance-writer';

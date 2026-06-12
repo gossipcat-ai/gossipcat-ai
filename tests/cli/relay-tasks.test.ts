@@ -5,6 +5,7 @@ import { MainAgent } from '@gossip/orchestrator';
 // Mock fs module
 const fs = {
   writeFileSync: jest.fn(),
+  renameSync: jest.fn(),
   readFileSync: jest.fn(),
   existsSync: jest.fn(),
   unlinkSync: jest.fn(),
@@ -59,6 +60,24 @@ describe('relay-tasks', () => {
       const written = JSON.parse(fs.writeFileSync.mock.calls[0][1]);
       expect(written.tasks).toHaveLength(1);
       expect(written.tasks[0].id).toBe(task.id);
+    });
+
+    it('should write atomically: tmp file then rename onto the real path', () => {
+      const task = mockTask();
+      (mockMainAgent.getRelayTaskRecords as jest.Mock).mockReturnValue([task]);
+      persistRelayTasks();
+
+      // The JSON payload is written to a tmp sibling, not the destination directly.
+      const writtenPath = fs.writeFileSync.mock.calls[0][0] as string;
+      expect(writtenPath).toContain('relay-tasks.json');
+      expect(writtenPath).toContain('.tmp');
+
+      // Then renamed tmp → destination (atomic publish).
+      expect(fs.renameSync).toHaveBeenCalledTimes(1);
+      const [renameFrom, renameTo] = fs.renameSync.mock.calls[0] as [string, string];
+      expect(renameFrom).toBe(writtenPath);
+      expect(renameTo).toContain('relay-tasks.json');
+      expect(renameTo).not.toContain('.tmp');
     });
 
     it('should not persist tasks that are in nativeResultMap', () => {
@@ -135,13 +154,16 @@ describe('relay-tasks', () => {
       expect(fs.unlinkSync).not.toHaveBeenCalled();
     });
 
-    it('should not crash on corrupt JSON and should not delete the file', () => {
+    it('should not crash on corrupt JSON and should unlink the corrupt file so boot starts clean', () => {
       fs.existsSync.mockReturnValue(true);
       fs.readFileSync.mockReturnValue('{"tasks": malformed}');
       expect(() => restoreRelayTasksAsFailed(projectRoot)).not.toThrow();
       expect(ctx.nativeTaskMap.size).toBe(0);
       expect(ctx.nativeResultMap.size).toBe(0);
-      expect(fs.unlinkSync).not.toHaveBeenCalled();
+      // The corrupt file must be removed — otherwise it re-throws at parse on
+      // every subsequent boot. The rm at the end of the happy path is
+      // unreachable when JSON.parse throws, so the catch unlinks it directly.
+      expect(fs.unlinkSync).toHaveBeenCalledWith(filePath);
     });
 
     it('should skip expired tasks', () => {

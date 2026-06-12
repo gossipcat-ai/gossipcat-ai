@@ -35,7 +35,7 @@ const RELAY_TASK_FILE = 'relay-tasks.json';
 /** Persist all in-flight relay task IDs to disk. Called after dispatch and collect. */
 export function persistRelayTasks(): void {
   try {
-    const { writeFileSync: wf, mkdirSync: md } = require('fs');
+    const { writeFileSync: wf, renameSync: rn, mkdirSync: md } = require('fs');
     const { join: j } = require('path');
     const projectRoot = process.cwd();
     const dir = j(projectRoot, '.gossip');
@@ -65,7 +65,14 @@ export function persistRelayTasks(): void {
       });
     }
 
-    wf(j(dir, RELAY_TASK_FILE), JSON.stringify({ tasks: records }));
+    // Atomic write: a torn relay-tasks.json (process killed mid-write) makes
+    // every subsequent boot re-fail at JSON.parse. Write a sibling tmp file in
+    // the same dir, then rename — rename is atomic within a filesystem, so a
+    // reader never observes a partial file. Mirrors auth.ts:159-165.
+    const dest = j(dir, RELAY_TASK_FILE);
+    const tmp = `${dest}.${process.pid}.tmp`;
+    wf(tmp, JSON.stringify({ tasks: records }));
+    rn(tmp, dest);
   } catch { /* best-effort */ }
 }
 
@@ -84,7 +91,17 @@ export function restoreRelayTasksAsFailed(projectRoot: string): void {
     const filePath = j(projectRoot, '.gossip', RELAY_TASK_FILE);
     if (!ex(filePath)) return;
 
-    const raw = JSON.parse(rf(filePath, 'utf-8'));
+    let raw: { tasks?: RelayTaskRecord[] };
+    try {
+      raw = JSON.parse(rf(filePath, 'utf-8'));
+    } catch (parseErr) {
+      // Corrupt / torn file. The outer catch would swallow this and leave the
+      // bad file in place, so it re-throws on every boot. Unlink it (best-effort)
+      // so the next boot starts clean.
+      try { rm(filePath); } catch { /* ignore */ }
+      process.stderr.write(`[gossipcat] Discarded corrupt relay-tasks.json: ${(parseErr as Error).message}\n`);
+      return;
+    }
     const records: RelayTaskRecord[] = raw.tasks || [];
     const now = Date.now();
     let restored = 0;
