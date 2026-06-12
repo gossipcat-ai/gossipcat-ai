@@ -7,7 +7,7 @@
  */
 
 import { readFileSync, existsSync, statSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { ConsensusSignal, ImplSignal, PerformanceSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
 import {
@@ -29,20 +29,63 @@ import {
  * 8cc22d50-93ab4d73). Phase B (write-time aggregate sidecar) is tracked
  * separately at project_signal_log_rotation_data_loss.md.
  */
+/**
+ * Strip a leading UTF-8 BOM (U+FEFF) so the first JSON line of a file that was
+ * written with a BOM doesn't fail JSON.parse and get silently dropped (f4).
+ * Each log file is stripped independently — rotated and live can each carry one.
+ */
+function stripBom(content: string): string {
+  return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+}
+
+/**
+ * Parse JSONL lines, silently skipping unparseable (torn) rows — the skip is
+ * deliberate hardening so a single corrupt line never refuses the whole file.
+ * f2: surface the drop with ONE console.warn per read when count > 0, never
+ * one warn per line (files can have thousands of lines).
+ *
+ * Non-object parses count as torn too: a literal `null` line is valid JSON
+ * (JSON.parse('null') returns null without throwing), and propagating it would
+ * make a downstream property access throw inside the caller's try/catch —
+ * collapsing the entire read to []. See consensus 4ee5ced2-b654497a (n1).
+ */
+function parseJsonlLines<T>(lines: string[], sourcePath: string): T[] {
+  let dropped = 0;
+  const out: T[] = [];
+  for (const line of lines) {
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (parsed === null || typeof parsed !== 'object') {
+        dropped++;
+        continue;
+      }
+      out.push(parsed as T);
+    } catch {
+      dropped++;
+    }
+  }
+  if (dropped > 0) {
+    console.warn(
+      `[performance-reader] dropped ${dropped} unparseable JSONL line(s) from ${basename(sourcePath)}`,
+    );
+  }
+  return out;
+}
+
 export function readJsonlWithRotated(filePath: string): string {
   let rotatedContent = '';
   let liveContent = '';
   try {
     const rotatedPath = filePath + '.1';
     if (existsSync(rotatedPath)) {
-      rotatedContent = readFileSync(rotatedPath, 'utf-8');
+      rotatedContent = stripBom(readFileSync(rotatedPath, 'utf-8'));
     }
   } catch {
     /* best-effort */
   }
   try {
     if (existsSync(filePath)) {
-      liveContent = readFileSync(filePath, 'utf-8');
+      liveContent = stripBom(readFileSync(filePath, 'utf-8'));
     }
   } catch {
     /* best-effort */
@@ -592,11 +635,9 @@ export class PerformanceReader {
       const raw = readJsonlWithRotated(this.filePath);
       if (!raw) return [];
       const lines = raw.trim().split('\n').filter(Boolean);
-      const all = lines.map(line => {
-        try { return JSON.parse(line) as ConsensusSignal; }
-        catch { return null; }
-      }).filter((s): s is ConsensusSignal =>
-        s !== null && s.type === 'consensus' && typeof s.agentId === 'string' && s.agentId.length > 0
+      const all = parseJsonlLines<ConsensusSignal>(lines, this.filePath).filter(
+        (s): s is ConsensusSignal =>
+          s !== null && s.type === 'consensus' && typeof s.agentId === 'string' && s.agentId.length > 0,
       );
 
       // Collect retraction keys: agentId + taskId + signalType combos that have been retracted
@@ -652,13 +693,11 @@ export class PerformanceReader {
       const expiryMs = Date.now() - SIGNAL_EXPIRY_DAYS * 86400000;
 
       const lines = raw.trim().split('\n').filter(Boolean);
-      const all = lines.map(line => {
-        try { return JSON.parse(line) as PerformanceSignal; }
-        catch { return null; }
-      }).filter((s): s is PerformanceSignal =>
-        s !== null &&
-        (s.type === 'consensus' || s.type === 'impl') &&
-        typeof s.agentId === 'string' && s.agentId.length > 0
+      const all = parseJsonlLines<PerformanceSignal>(lines, this.filePath).filter(
+        (s): s is PerformanceSignal =>
+          s !== null &&
+          (s.type === 'consensus' || s.type === 'impl') &&
+          typeof s.agentId === 'string' && s.agentId.length > 0,
       );
 
       // Collect retraction keys: agentId + taskId + signalType combos that have been retracted
