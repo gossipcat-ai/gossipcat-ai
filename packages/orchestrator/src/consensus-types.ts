@@ -44,6 +44,12 @@ export interface ConsensusNewFinding {
   finding: string;
   evidence: string;
   confidence: number;
+  /**
+   * Stable ID for this new finding in the format `<consensusId>:new:<agentId>:<counter>`.
+   * Always set on newly synthesized reports. Optional for back-compat with reports
+   * persisted before this field was introduced.
+   */
+  findingId?: string;
   /** Peer finding this extends, e.g. "gemini-reviewer:f1". Set only on chained extensions. */
   parentFindingId?: string;
   /** The extension's own severity — may differ from (escalate) the parent's. */
