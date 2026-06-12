@@ -449,7 +449,7 @@ export class MainAgent {
     // Build agent summary with dispatch weights + category strengths so the LLM respects scoring.
     // Reuse the long-lived reader (wired at construction) so its mtime-keyed score cache is shared;
     // a fresh PerformanceReader here would have an empty cache and re-read on every call.
-    let perfScores: Map<string, any> | null = null;
+    let perfScores: ReadonlyMap<string, any> | null = null;
     try {
       perfScores = this.registry.getPerformanceReader()?.getScores() ?? null;
     } catch { /* no perf data */ }
