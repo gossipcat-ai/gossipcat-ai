@@ -2915,12 +2915,13 @@ export function createMcpServer(): McpServer {
       // retract params
       agent_id: z.string().optional().describe('Agent whose signal to retract (required for per-signal action: "retract"; mutually exclusive with consensus_id round-scope form)'),
       reason: z.string().min(1).max(1024).optional().describe('Why this signal/round is being retracted, manually resolved, or unresolved (required for action: "retract", action: "unresolve", and resolved_by:"manual"; 1-1024 chars)'),
+      retracted_signal: z.string().optional().describe('For per-signal action: "retract" — the specific signal TYPE to void (e.g. "hallucination_caught"). When supplied (with finding_id), the reader scopes the retraction to that one signal; when omitted, ALL signals for the agent+task are voided (wildcard, back-compat).'),
       // resolve / unresolve params
       finding_id: z.string().optional().describe('Finding ID for action: "resolve" or "unresolve". Format <consensus_id>:<agent>:fN.'),
       resolved_by: z.enum(['stale_anchor', 'manual']).or(z.string().regex(/^commit:[0-9a-f]{7,40}$/, 'resolved_by must be "stale_anchor", "manual", or "commit:<sha>"')).optional().describe('How the finding was resolved (required for action: "resolve"). One of: "commit:<sha>" (auto-resolved by code change), "stale_anchor" (cited line no longer exists), "manual" (operator explicitly marked it fixed; requires reason).'),
       operator: z.string().optional().describe('Orchestrator ID recorded in the audit log for manual resolutions. Defaults to "manual" when omitted.'),
     },
-    async ({ action, task_id, task_start_time, signals, agent_id, reason, consensus_id, finding_id, resolved_by, operator }) => {
+    async ({ action, task_id, task_start_time, signals, agent_id, reason, consensus_id, finding_id, retracted_signal, resolved_by, operator }) => {
       await boot();
 
       if (action === 'retract') {
@@ -2957,15 +2958,26 @@ export function createMcpServer(): McpServer {
         }
         try {
           const { emitConsensusSignals } = await import('@gossip/orchestrator');
+          // Scoped vs wildcard retraction. The reader (performance-reader.ts)
+          // engages per-signal scoping ONLY when the tombstone carries
+          // `retractedSignal`; without it, the tombstone voids ALL signals for
+          // this agent+task (the historical wildcard). Pass both fields through
+          // so an operator can void a single bad finding instead of the batch.
+          const scoped = !!(retracted_signal && retracted_signal.trim().length > 0);
           emitConsensusSignals(process.cwd(), [{
             type: 'consensus' as const,
             taskId: task_id,
             signal: 'signal_retracted',
             agentId: agent_id,
             evidence: `Retracted: ${reason}`,
+            ...(scoped ? { retractedSignal: retracted_signal!.trim() } : {}),
+            ...(finding_id && finding_id.trim().length > 0 ? { findingId: finding_id.trim() } : {}),
             timestamp: new Date().toISOString(),
           }]);
-          return { content: [{ type: 'text' as const, text: `Retracted signal for ${agent_id} on task ${task_id}.\nReason: ${reason}\n\nThe original signal remains in the audit log but will be excluded from scoring.` }] };
+          const scopeNote = scoped
+            ? `Scoped retraction — only "${retracted_signal!.trim()}" signal(s) voided for this agent+task.`
+            : `Unscoped retraction — voids ALL signals for this agent+task. Pass retracted_signal to scope to one signal type.`;
+          return { content: [{ type: 'text' as const, text: `Retracted signal for ${agent_id} on task ${task_id}.\nReason: ${reason}\n${scopeNote}\n\nThe original signal remains in the audit log but will be excluded from scoring.` }] };
         } catch (err) {
           return { content: [{ type: 'text' as const, text: `Failed to retract: ${(err as Error).message}` }] };
         }
@@ -3200,6 +3212,19 @@ export function createMcpServer(): McpServer {
         const PUNITIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement']);
         const COUNTERPART_REQUIRED = new Set(['agreement', 'disagreement', 'impl_peer_approved', 'impl_peer_rejected']);
 
+        // finding_id schema gate. A finding_id, WHEN PROVIDED, must carry a
+        // consensus-id prefix (8-8 hex followed by ':'). The suffix is left
+        // permissive — `<cid>:fN`, `<cid>:<agent>:fN`, and `<cid>:<agent>:nN`
+        // shapes are all live. A malformed value silently breaks round-retraction
+        // prefix-match (performance-reader.ts) and resolve scoping, so reject it
+        // loudly here rather than persist an unauditable signal.
+        const FINDING_ID_PREFIX = /^[0-9a-f]{8}-[0-9a-f]{8}:/;
+        for (const s of signals) {
+          if (s.finding_id !== undefined && !FINDING_ID_PREFIX.test(s.finding_id)) {
+            return { content: [{ type: 'text' as const, text: `Error: malformed finding_id "${s.finding_id}" (agent: ${s.agent_id}). Expected a consensus-id prefix: <8hex>-<8hex>:... (e.g. "b81956b2-e0fa4ea4:sonnet-reviewer:f1"). See CLAUDE.md signal contract.` }] };
+          }
+        }
+
         // Validate: punitive signals require evidence; per-signal timestamps must be in range
         for (const s of signals) {
           if (PUNITIVE_SIGNALS.has(s.signal) && (!s.evidence || s.evidence.trim().length === 0)) {
@@ -3211,6 +3236,12 @@ export function createMcpServer(): McpServer {
           const sigTsErr = validateTimestamp(s.timestamp, `signal[${s.agent_id}].timestamp`);
           if (sigTsErr) return { content: [{ type: 'text' as const, text: sigTsErr }] };
         }
+
+        // Count signals recorded WITHOUT a finding_id. These are accepted (the
+        // ID is optional) but unauditable — back-search from dashboard finding →
+        // signal → score adjustment is impossible. Surface a loud warning in the
+        // receipt so the orchestrator notices the contract gap.
+        const missingFindingIdCount = signals.filter(s => !s.finding_id || s.finding_id.trim().length === 0).length;
 
         const IMPL_SIGNALS = new Set(['impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected']);
 
@@ -3635,6 +3666,9 @@ export function createMcpServer(): McpServer {
 
         const taskIdList = deduped.map(f => `  ${f.agentId}: ${f.taskId}`).join('\n');
         let baseReceipt = `Recorded ${deduped.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\nThese will influence future agent selection via dispatch weighting.`;
+        if (missingFindingIdCount > 0) {
+          baseReceipt += `\n\n⚠ ${missingFindingIdCount} signal(s) recorded without finding_id — unauditable, see CLAUDE.md contract`;
+        }
         if (dupes.length > 0) {
           baseReceipt += `\n\n⚠️ ${dupes.length} duplicate signal(s) skipped (cross-round content match or exact finding_id):\n  ${dupes.join('\n  ')}`;
         }

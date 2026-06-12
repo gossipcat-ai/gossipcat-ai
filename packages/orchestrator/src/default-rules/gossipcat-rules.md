@@ -81,7 +81,7 @@ The correct order is always: verify finding → record signal → next finding �
 
 ## Performance Signals & Agent Scores
 
-Call `gossip_scores()` to see: accuracy (0-1), uniqueness (0-1), dispatchWeight (0.5-1.5).
+Call `gossip_scores()` to see: accuracy (0-1), uniqueness (0-1), dispatchWeight (0.3-2.0).
 - High-accuracy agents → solo tasks, primary reviewers
 - High-uniqueness, low-accuracy → always use in consensus, never solo
 - Check scores periodically to track improvement

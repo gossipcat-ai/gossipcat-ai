@@ -270,7 +270,7 @@ export function resolveVerdict(
   //       on any dispatch yet. Common for newly-bound skills before the
   //       first relevant task arrives.
   //   (b) 0 < postTotal < MIN_EVIDENCE — some history, but below the
-  //       statistical gate (MIN_EVIDENCE = 120). Skill is active but
+  //       statistical gate (MIN_EVIDENCE = 80). Skill is active but
   //       hasn't accumulated enough signals for the Wilson regime check to
   //       reach a verdict.
   //
