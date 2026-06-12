@@ -151,4 +151,22 @@ describe('scripts/postinstall.js — error-path regression guard', () => {
     // npm install breaks on a corrupt user file we can't parse.
     expect(source).toMatch(/malformed[\s\S]*process\.exit\(0\)/);
   });
+
+  it('git-clone early-exit is gated on the built server existing (f18 build recovery)', () => {
+    // Regression guard (f18, consensus 6eed37aa-dfba43ca): the
+    // "git clone — .mcp.json exists, skip" early-exit must NOT fire when
+    // dist-mcp/mcp-server.js is absent. Otherwise a fresh clone (or a deleted
+    // dist) exits 0 and never reaches the auto-build path at the end of the
+    // script, leaving the project unrunnable. The early-exit condition must
+    // include existsSync(mcpServerPath).
+    const earlyExit = source.match(
+      /if\s*\(\s*isGitClone\s*&&\s*existsSync\([^)]*\.mcp\.json[^)]*\)([\s\S]*?)\)\s*{/,
+    );
+    expect(earlyExit).not.toBeNull();
+    // The condition guarding the `.mcp.json already exists — skipping` exit
+    // must also require existsSync(mcpServerPath).
+    expect(earlyExit![0]).toMatch(/existsSync\(mcpServerPath\)/);
+    // And the auto-build recovery path (git clone, missing server) must remain.
+    expect(source).toMatch(/!existsSync\(mcpServerPath\)[\s\S]*npm run build:mcp/);
+  });
 });

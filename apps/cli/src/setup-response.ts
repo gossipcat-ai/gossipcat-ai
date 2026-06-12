@@ -52,3 +52,46 @@ export function buildDashboardAdvisory(input: DashboardAdvisoryInput): string[] 
 
   return out;
 }
+
+/**
+ * Build the rebuilt gossipcat config for gossip_setup, preserving unknown
+ * top-level fields (f16). Extracted as a pure function so the field-preservation
+ * invariant is unit-testable without booting the MCP server.
+ *
+ * - `existingConfig` is spread first so any top-level field we don't manage
+ *   (consensus.siblingRoots, autoDiscoverWorktrees, orchestratorOwnedGlobs,
+ *   utility_model, …) survives a re-run in BOTH merge and replace modes.
+ * - `main_agent` is always overwritten from the request.
+ * - `agents` is `{ ...existingAgents, ...newAgents }`. The caller passes an
+ *   empty `existingAgents` in replace mode (team replaced) and the prior agent
+ *   map in merge mode. Either way, OTHER top-level fields are preserved —
+ *   replace replaces the team, not the whole top-level config.
+ */
+export interface MergedSetupConfig {
+  main_agent: { provider: string; model: string };
+  agents: Record<string, Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+export function mergeSetupConfig(input: {
+  existingConfig: Record<string, unknown>;
+  mainAgent: { provider: string; model: string };
+  existingAgents: Record<string, Record<string, unknown>>;
+  newAgents: Record<string, Record<string, unknown>>;
+}): MergedSetupConfig {
+  const { existingConfig, mainAgent, existingAgents, newAgents } = input;
+  return {
+    ...existingConfig,
+    main_agent: { provider: mainAgent.provider, model: mainAgent.model },
+    agents: { ...existingAgents, ...newAgents },
+  };
+}
+
+/**
+ * Build the gossip_status agent-list line shown when .gossip/config.json fails
+ * to load/validate (f19). Keeps the exact fix-hint wording in one testable place
+ * so a regression in the message format is caught by a unit test.
+ */
+export function buildMalformedConfigHint(configPath: string, message: string): string {
+  return `⚠️ config.json is malformed: ${message} — fix or delete ${configPath}`;
+}

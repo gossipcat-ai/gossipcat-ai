@@ -22,16 +22,19 @@ const isGitClone = existsSync(join(packageRoot, '.git'));
 // For git clones: skip writing if .mcp.json already exists. Still warn if the
 // built server is older than package.json — stale-build warning is the most
 // valuable signal on a developer re-running npm install after a pull.
-if (isGitClone && existsSync(join(packageRoot, '.mcp.json'))) {
-  if (existsSync(mcpServerPath)) {
-    try {
-      const serverMtime = statSync(mcpServerPath).mtime;
-      const pkgMtime = statSync(join(packageRoot, 'package.json')).mtime;
-      if (serverMtime < pkgMtime) {
-        console.log("gossipcat: dist-mcp/ is older than package.json — run 'npm run build:mcp' to rebuild");
-      }
-    } catch (_) { /* stat failure is non-fatal */ }
-  }
+//
+// f18: only take this early exit when the built server actually exists. If
+// dist-mcp/mcp-server.js is absent (fresh clone, deleted dist, interrupted
+// build), exiting here would leave the project unrunnable — fall through to the
+// build-recovery path at the end of this script instead.
+if (isGitClone && existsSync(join(packageRoot, '.mcp.json')) && existsSync(mcpServerPath)) {
+  try {
+    const serverMtime = statSync(mcpServerPath).mtime;
+    const pkgMtime = statSync(join(packageRoot, 'package.json')).mtime;
+    if (serverMtime < pkgMtime) {
+      console.log("gossipcat: dist-mcp/ is older than package.json — run 'npm run build:mcp' to rebuild");
+    }
+  } catch (_) { /* stat failure is non-fatal */ }
   console.log('gossipcat: .mcp.json already exists — skipping (git clone)');
   process.exit(0);
 }

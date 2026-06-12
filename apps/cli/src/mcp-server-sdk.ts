@@ -218,7 +218,7 @@ import { restorePendingConsensus } from './handlers/relay-cross-review';
 import { filterWatchEvents, WATCH_MAX_EVENTS } from './gossip-watch';
 import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
 import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FILE } from './stickyPort';
-import { buildDashboardAdvisory } from './setup-response';
+import { buildDashboardAdvisory, mergeSetupConfig, buildMalformedConfigHint } from './setup-response';
 import { refreshNativeAgentFromDisk } from './native-agent-cache';
 import { generateRulesContent } from './rules-content';
 import { formatDropReceipt } from './format-drop-receipt';
@@ -2037,16 +2037,23 @@ export function createMcpServer(): McpServer {
       const gossipAgents: string[] = [];
       const existingIds = new Set<string>();
       if (configPath) {
-        const config = loadConfig(configPath);
-        const agents = configToAgentConfigs(config);
-        for (const a of agents) {
-          existingIds.add(a.id);
-          gossipAgents.push(`  - ${a.id}: ${a.provider}/${a.model} (${a.preset || 'custom'}) — skills: ${a.skills.join(', ')}`);
-        }
-        // In Claude Code MCP mode, the orchestrator is Claude Code itself — don't show the
-        // internal tool LLM as "Orchestrator" or "Internal LLM", it's an implementation detail.
-        if (env.host !== 'claude-code') {
-          agentSections.push(`Orchestrator LLM: ${config.main_agent.model} (${config.main_agent.provider})`);
+        // f19: a malformed/invalid config.json must not throw the whole status
+        // tool. Render the rest of status plus a clear fix hint instead, mirroring
+        // the keychain-doctor guard above.
+        try {
+          const config = loadConfig(configPath);
+          const agents = configToAgentConfigs(config);
+          for (const a of agents) {
+            existingIds.add(a.id);
+            gossipAgents.push(`  - ${a.id}: ${a.provider}/${a.model} (${a.preset || 'custom'}) — skills: ${a.skills.join(', ')}`);
+          }
+          // In Claude Code MCP mode, the orchestrator is Claude Code itself — don't show the
+          // internal tool LLM as "Orchestrator" or "Internal LLM", it's an implementation detail.
+          if (env.host !== 'claude-code') {
+            agentSections.push(`Orchestrator LLM: ${config.main_agent.model} (${config.main_agent.provider})`);
+          }
+        } catch (err) {
+          agentSections.push(buildMalformedConfigHint(configPath, (err as Error).message));
         }
       }
 
@@ -2419,16 +2426,29 @@ export function createMcpServer(): McpServer {
       const nativeCreated: string[] = [];
       const customCreated: string[] = [];
       const errors: string[] = [];
+      // f15: defer native .md writes until AFTER validateConfig passes, so a
+      // validation failure can't leave orphan .claude/agents/<id>.md files that
+      // (a) appear as phantom subagents and (b) block re-registering the id as
+      // custom via the wasNative existsSync guard. We stage {path, content} here
+      // and flush them only on the success path below.
+      const pendingNativeWrites: Array<{ path: string; content: string }> = [];
 
-      // Load existing agents up front — needed inside the loop to detect native→custom conflicts
+      // Load the existing config up front. We need its `agents` map inside the
+      // loop to detect native→custom conflicts, AND its other top-level fields
+      // (consensus, utility_model, autoDiscoverWorktrees, …) so they survive a
+      // re-run instead of being silently dropped. `existingConfig` is preserved
+      // and spread back into the rebuilt config below in BOTH merge and replace
+      // modes; only `existingAgents` is mode-gated (replace starts agents fresh).
+      let existingConfig: Record<string, any> = {};
       let existingAgents: Record<string, any> = {};
-      if (mode === 'merge') {
-        try {
-          const { readFileSync } = require('fs');
-          const existing = JSON.parse(readFileSync(join(root, '.gossip', 'config.json'), 'utf-8'));
-          existingAgents = existing.agents || {};
-        } catch { /* no existing config — start fresh */ }
-      }
+      try {
+        const { readFileSync } = require('fs');
+        const existing = JSON.parse(readFileSync(join(root, '.gossip', 'config.json'), 'utf-8'));
+        if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+          existingConfig = existing;
+          if (mode === 'merge') existingAgents = existing.agents || {};
+        }
+      } catch { /* no existing config (or unparseable) — start fresh */ }
 
       for (const agent of agents) {
         if (isReservedAgentId(agent.id)) {
@@ -2464,9 +2484,11 @@ export function createMcpServer(): McpServer {
             body,
           ].join('\n');
 
-          const agentsDir = join(root, '.claude', 'agents');
-          mkdirSync(agentsDir, { recursive: true });
-          writeFileSync(join(agentsDir, `${agent.id}.md`), md, 'utf-8');
+          // Stage the .md write — flushed only after validateConfig passes (f15).
+          pendingNativeWrites.push({
+            path: join(root, '.claude', 'agents', `${agent.id}.md`),
+            content: md,
+          });
           nativeCreated.push(agent.id);
 
           // Register in gossipcat config — marked native so dispatch uses Agent tool bridge
@@ -2514,18 +2536,36 @@ export function createMcpServer(): McpServer {
         }
       }
 
-      // Write gossipcat config — merge with existing or replace
-
-      const config = {
-        main_agent: { provider: main_provider, model: main_model },
-        agents: { ...existingAgents, ...configAgents },
-      };
+      // Write gossipcat config — merge with existing or replace.
+      // f16: spread existingConfig first so unknown/other top-level fields
+      // (consensus.siblingRoots, autoDiscoverWorktrees, orchestratorOwnedGlobs,
+      // utility_model, …) survive a re-run in BOTH modes. main_agent and agents
+      // are then overwritten. In replace mode existingAgents is {} (agents map
+      // is replaced); in merge mode existing agents are kept and updated. Other
+      // top-level fields are preserved either way — replace replaces the team,
+      // not the whole top-level config.
+      const config = mergeSetupConfig({
+        existingConfig,
+        mainAgent: { provider: main_provider, model: main_model },
+        existingAgents,
+        newAgents: configAgents,
+      });
 
       try {
         const { validateConfig } = await import('./config');
         validateConfig(config);
       } catch (err) {
+        // f15: validation failed — no native .md files were written yet, so
+        // there is nothing to roll back. Phantom-subagent files cannot leak.
         return { content: [{ type: 'text' as const, text: `Invalid config: ${(err as Error).message}` }] };
+      }
+
+      // Validation passed — now flush the staged native .md writes (f15).
+      if (pendingNativeWrites.length > 0) {
+        mkdirSync(join(root, '.claude', 'agents'), { recursive: true });
+        for (const w of pendingNativeWrites) {
+          writeFileSync(w.path, w.content, 'utf-8');
+        }
       }
 
       mkdirSync(join(root, '.gossip'), { recursive: true });
