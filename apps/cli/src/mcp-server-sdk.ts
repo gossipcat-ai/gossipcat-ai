@@ -203,7 +203,7 @@ try {
   const stalenessResult = checkDistMcpStaleness(__filename);
   if (stalenessResult.stale) logStalenessToMcpLog(stalenessResult, process.cwd());
 } catch { /* never break boot */ }
-import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction } from './handlers/native-tasks';
+import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction, UTILITY_RESULT_TTL_MS } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus, detectLostDispatchWarnings } from './handlers/dispatch';
 import {
   invalidateAgent as invalidateDispatchPromptCacheForAgent,
@@ -1423,11 +1423,15 @@ export function createMcpServer(): McpServer {
               spawnTimeoutWatcher(utilityTaskId, ctx.nativeTaskMap.get(utilityTaskId)!);
               // F13 hardening: evict the stash if the orchestrator never
               // re-enters (agent crash, Claude restart). Matches the
-              // _pendingVerifyData pattern.
-              const STASH_TTL_MS = UTILITY_TTL_MS + 30_000;
+              // _pendingVerifyData pattern. Issue #545: align the lifetime with
+              // UTILITY_RESULT_TTL_MS (24h) — the relayed result lives that long
+              // in ctx.nativeResultMap, so a shorter stash TTL would evict before
+              // a slow re-entry. Also evict the guard snapshot (deleted inline on
+              // re-entry, otherwise leaks for the process lifetime).
               setTimeout(() => {
                 _pendingPlanData.delete(utilityTaskId);
-              }, STASH_TTL_MS).unref();
+                _utilityGuardSnapshots.delete(utilityTaskId);
+              }, UTILITY_RESULT_TTL_MS).unref();
 
               const { assembleUtilityPrompt } = await import('@gossip/orchestrator');
               const modelShort = ctx.nativeUtilityConfig.model;
@@ -4939,12 +4943,21 @@ export function createMcpServer(): McpServer {
       spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
       // F3 hardening: spawnTimeoutWatcher only writes a timed_out record into
       // ctx.nativeResultMap; it does not know about _pendingVerifyData. Schedule
-      // an independent eviction with a small grace window so the stash never
-      // outlives a never-re-entered dispatch.
-      const STASH_TTL_MS = UTILITY_TTL_MS + 30_000;
+      // an independent eviction so the stash never outlives a never-re-entered
+      // dispatch. Issue #545: the eviction must outlive the documented 3-step
+      // re-entry protocol (dispatch → run haiku Agent → relay → re-call), which
+      // routinely exceeds 150s because the haiku agent alone runs 1-3+ minutes.
+      // The relayed result lives in ctx.nativeResultMap for UTILITY_RESULT_TTL_MS
+      // (24h) by design, so the stash must match it — a shorter TTL evicted the
+      // stash before re-entry and forced a spurious INCONCLUSIVE "unknown
+      // _utility_task_id" even though the result was healthy. Also evict the
+      // guard snapshot on the same schedule: on re-entry it is deleted inline,
+      // but if the orchestrator never re-calls it would otherwise leak for the
+      // process lifetime.
       setTimeout(() => {
         _pendingVerifyData.delete(taskId);
-      }, STASH_TTL_MS).unref();
+        _utilityGuardSnapshots.delete(taskId);
+      }, UTILITY_RESULT_TTL_MS).unref();
 
       const modelShort = ctx.nativeUtilityConfig.model;
       return {

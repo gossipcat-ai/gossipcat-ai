@@ -337,7 +337,7 @@ function recordTimeoutSignal(taskId: string, agentId: string): void {
 /** 24-hour TTL for utility result map — longer than the 2h normal TTL so
  * skill_develop dispatch→relay→re-entry chains that span process restarts
  * don't silently fall back to stale template skills. */
-const UTILITY_RESULT_TTL_MS = 24 * 60 * 60 * 1000;
+export const UTILITY_RESULT_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Schedule periodic calls to {@link evictStaleNativeTasks}. Returns a
  * handle whose `stop()` clears the interval. The timer is `.unref()`'d so it
