@@ -125,6 +125,11 @@ jobs:
       - name: Run tests
         run: npm test -- --ci --reporters=default
 
+      # dashboard-v2 is a vite app and deliberately uses vitest, not the
+      # root jest config — it needs its own CI invocation.
+      - name: Run dashboard-v2 tests (vitest)
+        run: npm run test --workspace=packages/dashboard-v2
+
       - name: Build MCP bundle
         run: npm run build:mcp
 
