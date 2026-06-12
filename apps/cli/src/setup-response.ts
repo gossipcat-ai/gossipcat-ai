@@ -95,3 +95,33 @@ export function mergeSetupConfig(input: {
 export function buildMalformedConfigHint(configPath: string, message: string): string {
   return `⚠️ config.json is malformed: ${message} — fix or delete ${configPath}`;
 }
+
+/** A gossip_setup agent file write deferred until AFTER validateConfig passes. */
+export interface StagedAgentFileWrite {
+  /** Directory to mkdir (recursive) before writing the file. */
+  dir: string;
+  /** Absolute path of the file to write. */
+  path: string;
+  /** File contents. */
+  content: string;
+}
+
+/**
+ * Flush staged agent file writes to disk (loop-transactionality v2). Called
+ * only on the gossip_setup success path, AFTER validateConfig accepts the config,
+ * so a validation failure leaves zero orphan agent files on disk — neither
+ * native .claude/agents/<id>.md nor custom .gossip/agents/<id>/instructions.md.
+ * Each file's dir is created (recursive) immediately before its write.
+ */
+export function flushStagedAgentFileWrites(
+  writes: ReadonlyArray<StagedAgentFileWrite>,
+  fs: {
+    mkdirSync: (dir: string, opts: { recursive: boolean }) => void;
+    writeFileSync: (path: string, content: string, enc: 'utf-8') => void;
+  },
+): void {
+  for (const w of writes) {
+    fs.mkdirSync(w.dir, { recursive: true });
+    fs.writeFileSync(w.path, w.content, 'utf-8');
+  }
+}

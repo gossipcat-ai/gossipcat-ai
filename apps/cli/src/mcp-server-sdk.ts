@@ -218,7 +218,7 @@ import { restorePendingConsensus } from './handlers/relay-cross-review';
 import { filterWatchEvents, WATCH_MAX_EVENTS } from './gossip-watch';
 import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
 import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FILE } from './stickyPort';
-import { buildDashboardAdvisory, mergeSetupConfig, buildMalformedConfigHint } from './setup-response';
+import { buildDashboardAdvisory, mergeSetupConfig, buildMalformedConfigHint, flushStagedAgentFileWrites } from './setup-response';
 import { refreshNativeAgentFromDisk } from './native-agent-cache';
 import { generateRulesContent } from './rules-content';
 import { formatDropReceipt } from './format-drop-receipt';
@@ -2426,12 +2426,16 @@ export function createMcpServer(): McpServer {
       const nativeCreated: string[] = [];
       const customCreated: string[] = [];
       const errors: string[] = [];
-      // f15: defer native .md writes until AFTER validateConfig passes, so a
-      // validation failure can't leave orphan .claude/agents/<id>.md files that
-      // (a) appear as phantom subagents and (b) block re-registering the id as
-      // custom via the wasNative existsSync guard. We stage {path, content} here
-      // and flush them only on the success path below.
-      const pendingNativeWrites: Array<{ path: string; content: string }> = [];
+      // f15: defer agent file writes until AFTER validateConfig passes, so a
+      // validation failure can't leave orphan files on disk. For native agents
+      // these are .claude/agents/<id>.md files that (a) appear as phantom
+      // subagents and (b) block re-registering the id as custom via the wasNative
+      // existsSync guard. For custom agents these are .gossip/agents/<id>/
+      // instructions.md files that would otherwise orphan an agent dir while
+      // config.json was never written (loop-transactionality v2). We stage
+      // {dir, path, content} here and flush them only on the success path below,
+      // mkdir-ing each file's dir before the write.
+      const pendingAgentFileWrites: Array<{ dir: string; path: string; content: string }> = [];
 
       // Load the existing config up front. We need its `agents` map inside the
       // loop to detect native→custom conflicts, AND its other top-level fields
@@ -2485,7 +2489,8 @@ export function createMcpServer(): McpServer {
           ].join('\n');
 
           // Stage the .md write — flushed only after validateConfig passes (f15).
-          pendingNativeWrites.push({
+          pendingAgentFileWrites.push({
+            dir: join(root, '.claude', 'agents'),
             path: join(root, '.claude', 'agents', `${agent.id}.md`),
             content: md,
           });
@@ -2527,11 +2532,17 @@ export function createMcpServer(): McpServer {
           };
           customCreated.push(agent.id);
 
-          // Write instructions if provided
+          // Stage instructions.md if provided — flushed only after validateConfig
+          // passes (loop-transactionality v2), so a validation failure can't leave
+          // an orphan .gossip/agents/<id>/instructions.md dir while config.json was
+          // never written.
           if (agent.instructions) {
             const instrDir = join(root, '.gossip', 'agents', agent.id);
-            mkdirSync(instrDir, { recursive: true });
-            writeFileSync(join(instrDir, 'instructions.md'), agent.instructions, 'utf-8');
+            pendingAgentFileWrites.push({
+              dir: instrDir,
+              path: join(instrDir, 'instructions.md'),
+              content: agent.instructions,
+            });
           }
         }
       }
@@ -2555,18 +2566,16 @@ export function createMcpServer(): McpServer {
         const { validateConfig } = await import('./config');
         validateConfig(config);
       } catch (err) {
-        // f15: validation failed — no native .md files were written yet, so
-        // there is nothing to roll back. Phantom-subagent files cannot leak.
+        // f15: validation failed — no agent files were written yet (native .md or
+        // custom instructions.md), so there is nothing to roll back. Phantom
+        // subagents and orphan agent dirs cannot leak.
         return { content: [{ type: 'text' as const, text: `Invalid config: ${(err as Error).message}` }] };
       }
 
-      // Validation passed — now flush the staged native .md writes (f15).
-      if (pendingNativeWrites.length > 0) {
-        mkdirSync(join(root, '.claude', 'agents'), { recursive: true });
-        for (const w of pendingNativeWrites) {
-          writeFileSync(w.path, w.content, 'utf-8');
-        }
-      }
+      // Validation passed — now flush the staged agent file writes (f15 +
+      // loop-transactionality v2). mkdir each file's dir before writing so both
+      // native .md and custom instructions.md land atomically post-validation.
+      flushStagedAgentFileWrites(pendingAgentFileWrites, { mkdirSync, writeFileSync });
 
       mkdirSync(join(root, '.gossip'), { recursive: true });
       writeFileSync(join(root, '.gossip', 'config.json'), JSON.stringify(config, null, 2));

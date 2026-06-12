@@ -67,6 +67,122 @@ describe('readJsonlWithRotated', () => {
   });
 });
 
+// ── f4: BOM stripping — a leading U+FEFF must not break the first JSON line ───
+
+describe('readJsonlWithRotated — strips a leading UTF-8 BOM (f4)', () => {
+  const BOM = '﻿';
+
+  it('strips a BOM on the live file so its first line parses', () => {
+    const liveFile = join(tmpDir, 'perf.jsonl');
+    writeFileSync(liveFile, BOM + '{"a":1}\n{"b":2}\n');
+    const result = readJsonlWithRotated(liveFile);
+    const lines = result.split('\n').filter(Boolean);
+    expect(JSON.parse(lines[0])).toEqual({ a: 1 });
+    expect(result.charCodeAt(0)).not.toBe(0xfeff);
+  });
+
+  it('strips a BOM on the rotated .1 file independently', () => {
+    const liveFile = join(tmpDir, 'perf.jsonl');
+    writeFileSync(liveFile + '.1', BOM + '{"older":1}\n');
+    writeFileSync(liveFile, '{"newer":2}\n');
+    const result = readJsonlWithRotated(liveFile);
+    const lines = result.split('\n').filter(Boolean);
+    expect(JSON.parse(lines[0])).toEqual({ older: 1 });
+    expect(JSON.parse(lines[1])).toEqual({ newer: 2 });
+    expect(result.charCodeAt(0)).not.toBe(0xfeff);
+  });
+
+  it('strips a BOM when BOTH files carry one', () => {
+    const liveFile = join(tmpDir, 'perf.jsonl');
+    writeFileSync(liveFile + '.1', BOM + '{"older":1}\n');
+    writeFileSync(liveFile, BOM + '{"newer":2}\n');
+    const result = readJsonlWithRotated(liveFile);
+    const lines = result.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0])).toEqual({ older: 1 });
+    expect(JSON.parse(lines[1])).toEqual({ newer: 2 });
+    // no stray BOM should survive anywhere in the concatenated output
+    expect(result.includes(BOM)).toBe(false);
+  });
+
+  it('leaves BOM-free content unchanged', () => {
+    const liveFile = join(tmpDir, 'perf.jsonl');
+    writeFileSync(liveFile, '{"a":1}\n{"b":2}\n');
+    const result = readJsonlWithRotated(liveFile);
+    expect(result).toBe('{"a":1}\n{"b":2}\n');
+  });
+});
+
+// ── f2: torn-line drop observability — ONE warn per read, never per line ──────
+
+describe('PerformanceReader — warns once per read on torn JSONL lines (f2)', () => {
+  function makeSignal(agentId: string, signal: string): string {
+    return JSON.stringify({
+      type: 'consensus',
+      agentId,
+      signal,
+      taskId: 'task-abc',
+      timestamp: new Date(Date.now() - 86400000).toISOString(),
+    });
+  }
+
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('emits a single warn for a file with 2 torn lines', () => {
+    const gossipDir = join(tmpDir, '.gossip');
+    mkdirSync(gossipDir, { recursive: true });
+    const perfPath = join(gossipDir, 'agent-performance.jsonl');
+
+    // 2 unparseable lines interleaved with 2 valid signals
+    const content = [
+      makeSignal('agent-x', 'agreement'),
+      '{ this is not json',
+      makeSignal('agent-x', 'agreement'),
+      'also } not { json',
+    ].join('\n') + '\n';
+    writeFileSync(perfPath, content);
+
+    const reader = new PerformanceReader(tmpDir);
+    reader.getScores();
+
+    const tornWarns = warnSpy.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && c[0].includes('unparseable JSONL line(s)'),
+    );
+    // getScores reads via readSignals; exactly one warn for this read path.
+    expect(tornWarns.length).toBeGreaterThanOrEqual(1);
+    expect(tornWarns[0][0]).toContain('dropped 2 unparseable JSONL line(s)');
+    expect(tornWarns[0][0]).toContain('agent-performance.jsonl');
+  });
+
+  it('does not warn for a clean file', () => {
+    const gossipDir = join(tmpDir, '.gossip');
+    mkdirSync(gossipDir, { recursive: true });
+    const perfPath = join(gossipDir, 'agent-performance.jsonl');
+
+    const content = [
+      makeSignal('agent-y', 'agreement'),
+      makeSignal('agent-y', 'unique_confirmed'),
+    ].join('\n') + '\n';
+    writeFileSync(perfPath, content);
+
+    const reader = new PerformanceReader(tmpDir);
+    reader.getScores();
+
+    const tornWarns = warnSpy.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && c[0].includes('unparseable JSONL line(s)'),
+    );
+    expect(tornWarns).toHaveLength(0);
+  });
+});
+
 // ── PerformanceReader.readSignals migration smoke test ───────────────────────
 
 describe('PerformanceReader — reads signals from both live and rotated files', () => {

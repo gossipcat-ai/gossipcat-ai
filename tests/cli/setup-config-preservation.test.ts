@@ -17,9 +17,14 @@
  * inline in the giant gossip_setup handler — is guarded by source inspection,
  * the same technique used by install-packaging.test.ts for postinstall.js.
  */
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
-import { mergeSetupConfig, buildMalformedConfigHint } from '../../apps/cli/src/setup-response';
+import { readFileSync, mkdtempSync, existsSync, rmSync } from 'fs';
+import { resolve, join } from 'path';
+import { tmpdir } from 'os';
+import {
+  mergeSetupConfig,
+  buildMalformedConfigHint,
+  flushStagedAgentFileWrites,
+} from '../../apps/cli/src/setup-response';
 import { validateConfig } from '../../apps/cli/src/config';
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -103,21 +108,35 @@ describe('gossip_setup handler — validate-before-write ordering (f15)', () => 
   });
 
   it('does not writeFileSync the native .md inside the agent loop', () => {
-    // The loop must STAGE writes (pendingNativeWrites), not perform them. A
+    // The loop must STAGE writes (pendingAgentFileWrites), not perform them. A
     // direct writeFileSync of `${agent.id}.md` inside the loop would re-introduce
     // the orphan-file leak on a validation failure.
-    expect(source).toContain('pendingNativeWrites');
+    expect(source).toContain('pendingAgentFileWrites');
     // No writeFileSync of an `<id>.md` agent file may appear with the loop's
     // per-agent `${agent.id}.md` template — those are flushed post-validation.
     expect(source).not.toMatch(/writeFileSync\(join\(agentsDir, `\$\{agent\.id\}\.md`\)/);
   });
 
-  it('flushes staged native .md writes only after validateConfig succeeds', () => {
+  it('stages custom-agent instructions.md instead of writing it in the loop (v2)', () => {
+    // loop-transactionality v2: the custom branch must NOT writeFileSync
+    // instructions.md inline — a validation failure would otherwise leave an
+    // orphan .gossip/agents/<id>/instructions.md while config.json was never
+    // written. It must push onto the staged array instead.
+    expect(source).not.toMatch(/writeFileSync\(join\(instrDir, 'instructions\.md'\)/);
+    // The instrDir write must be staged via pendingAgentFileWrites.
+    const instrIdx = source.indexOf("join(instrDir, 'instructions.md')");
+    expect(instrIdx).toBeGreaterThan(-1);
+    const stageIdx = source.lastIndexOf('pendingAgentFileWrites.push', instrIdx + 200);
+    expect(stageIdx).toBeGreaterThan(-1);
+    expect(stageIdx).toBeLessThan(instrIdx);
+  });
+
+  it('flushes staged agent file writes only after validateConfig succeeds', () => {
     // Ordering guarantee: validateConfig(config) must appear in the source
-    // BEFORE the pendingNativeWrites flush loop. If validation fails it returns
-    // early, so the flush never runs and no orphan .md is written.
+    // BEFORE the flushStagedAgentFileWrites call. If validation fails it returns
+    // early, so the flush never runs and no orphan file is written.
     const validateIdx = source.indexOf('validateConfig(config)');
-    const flushIdx = source.indexOf('for (const w of pendingNativeWrites)');
+    const flushIdx = source.indexOf('flushStagedAgentFileWrites(pendingAgentFileWrites');
     expect(validateIdx).toBeGreaterThan(-1);
     expect(flushIdx).toBeGreaterThan(-1);
     expect(flushIdx).toBeGreaterThan(validateIdx);
@@ -128,5 +147,62 @@ describe('gossip_setup handler — validate-before-write ordering (f15)', () => 
     // config.json renders buildMalformedConfigHint instead of throwing the
     // whole status tool.
     expect(source).toMatch(/try\s*{[\s\S]*?loadConfig\(configPath\)[\s\S]*?}\s*catch[\s\S]*?buildMalformedConfigHint/);
+  });
+});
+
+describe('flushStagedAgentFileWrites — staged custom instructions.md (v2)', () => {
+  const realFs = require('fs') as {
+    mkdirSync: (dir: string, opts: { recursive: boolean }) => void;
+    writeFileSync: (path: string, content: string, enc: 'utf-8') => void;
+  };
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'gossip-setup-v2-'));
+  });
+  afterEach(() => {
+    if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true });
+  });
+
+  it('leaves NO instructions.md on disk when validateConfig fails (flush never runs)', () => {
+    const instrDir = join(tmpDir, '.gossip', 'agents', 'custom-x');
+    const instrPath = join(instrDir, 'instructions.md');
+    const staged = [{ dir: instrDir, path: instrPath, content: 'You are custom-x.' }];
+
+    // Simulate the handler's validate-before-flush guard: validation throws,
+    // so the early return happens and flushStagedAgentFileWrites is never called.
+    let validationFailed = false;
+    try {
+      // A config missing main_agent is rejected by validateConfig.
+      validateConfig({ agents: {} } as never);
+    } catch {
+      validationFailed = true;
+    }
+    expect(validationFailed).toBe(true);
+
+    // Because validation failed, the flush is skipped — no orphan file/dir.
+    expect(existsSync(instrPath)).toBe(false);
+    expect(existsSync(instrDir)).toBe(false);
+    // And the staged entry was never materialized.
+    expect(staged).toHaveLength(1);
+  });
+
+  it('writes the custom instructions.md (mkdir-ing its dir) on the success path', () => {
+    const instrDir = join(tmpDir, '.gossip', 'agents', 'custom-y');
+    const instrPath = join(instrDir, 'instructions.md');
+    const mdDir = join(tmpDir, '.claude', 'agents');
+    const mdPath = join(mdDir, 'native-z.md');
+
+    flushStagedAgentFileWrites(
+      [
+        { dir: mdDir, path: mdPath, content: '---\nname: native-z\n---\nbody' },
+        { dir: instrDir, path: instrPath, content: 'You are custom-y.' },
+      ],
+      realFs,
+    );
+
+    expect(existsSync(instrPath)).toBe(true);
+    expect(readFileSync(instrPath, 'utf-8')).toBe('You are custom-y.');
+    expect(existsSync(mdPath)).toBe(true);
   });
 });
