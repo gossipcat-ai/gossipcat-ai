@@ -482,7 +482,20 @@ export class OpenAIProvider implements ILLMProvider {
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
         const fn = tc.function as Record<string, string>;
-        toolCalls.push({ id: tc.id as string, name: fn.name, arguments: JSON.parse(fn.arguments) });
+        let parsedArgs: Record<string, unknown>;
+        try {
+          parsedArgs = JSON.parse(fn.arguments);
+          toolCalls.push({ id: tc.id as string, name: fn.name, arguments: parsedArgs });
+        } catch (parseErr) {
+          const raw = fn.arguments ?? '';
+          toolCalls.push({
+            id: tc.id as string,
+            name: fn.name,
+            arguments: {},
+            argumentsParseError: (parseErr as Error).message,
+            rawArguments: raw.slice(0, 200),
+          });
+        }
       }
     }
     const usage = data.usage as Record<string, number> | undefined;
