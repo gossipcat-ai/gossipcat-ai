@@ -506,6 +506,57 @@ Summary: 1 agree, 1 disagree.`;
         expect(newSignal!.agentId).toBe('agent-2');
       });
 
+      it('report newFindings entry findingId matches the new_finding signal findingId', async () => {
+        // The report entry and the signal must share the same findingId so the
+        // orchestrator can link report.newFindings[i] back to the emitted signal.
+        const crossReview: CrossReviewEntry[] = [
+          {
+            action: 'new',
+            agentId: 'agent-2',
+            peerAgentId: '',
+            finding: 'Brand new security finding',
+            evidence: 'Found at auth.ts:42',
+            confidence: 4,
+          },
+        ];
+        const report = await engine.synthesize(results, crossReview);
+        expect(report.newFindings).toHaveLength(1);
+        const newSignal = report.signals.find(s => s.signal === 'new_finding');
+        expect(newSignal).toBeDefined();
+        // Both must carry an identical findingId
+        expect(report.newFindings[0].findingId).toBeDefined();
+        expect(report.newFindings[0].findingId).toBe(newSignal!.findingId);
+        // Must follow the canonical `<consensusId>:new:<agentId>:<counter>` form.
+        // synthesize() is called without a consensusId here, so the defensive
+        // fallback generates a UUID-prefixed form; just verify the structural shape.
+        expect(report.newFindings[0].findingId).toMatch(/^[^:]+:new:agent-2:\d+$/);
+      });
+
+      it('report newFindings entry findingId equals pre-rewritten id supplied by agent', async () => {
+        // When the relay handler has already canonicalized the findingId
+        // (entry.findingId is present), synthesize MUST use that exact id on
+        // both the signal AND the report entry — no re-generation.
+        const rewritten = 'deadbeef-1234abcd:new:agent-2:7';
+        const crossReview: CrossReviewEntry[] = [
+          {
+            action: 'new',
+            agentId: 'agent-2',
+            peerAgentId: '',
+            findingId: rewritten,
+            finding: 'NEW with pre-rewritten id',
+            evidence: 'rewritten by relay handler',
+            confidence: 4,
+          },
+        ];
+        const report = await engine.synthesize(results, crossReview);
+        expect(report.newFindings).toHaveLength(1);
+        const newSignal = report.signals.find(s => s.signal === 'new_finding');
+        expect(newSignal).toBeDefined();
+        // Both report entry and signal must use the pre-rewritten id unchanged.
+        expect(report.newFindings[0].findingId).toBe(rewritten);
+        expect(newSignal!.findingId).toBe(rewritten);
+      });
+
       it('populates authorDiagnostics when agent output contains entity-encoded tags', async () => {
         // agent-html is emitting `&lt;agent_finding&gt;` instead of `<agent_finding>`.
         // parseAgentFindingsStrict produces 0 findings (tags invisible), but the

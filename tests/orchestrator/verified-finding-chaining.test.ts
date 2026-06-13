@@ -68,6 +68,31 @@ describe('synthesize — NEW entry verification + field carry', () => {
     expect(report.newFindings[0].severity).toBe('critical');
   });
 
+  it('carries findingId onto the newFindings entry and matching signal', async () => {
+    const eng = new ConsensusEngine({
+      llm: { generate: jest.fn() } as any,
+      registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: id, skills: [] }),
+
+      round: testRound(),
+    } as any);
+    const results = [makeTask('a', 'x'), makeTask('b', 'y')];
+    const prewrittenId = 'cid12345-67890abc:new:b:1';
+    const entries = [{
+      action: 'new' as const, agentId: 'b', peerAgentId: '',
+      findingId: prewrittenId, finding: 'auth bypass at routes.ts:88',
+      evidence: 'routes.ts:88 lacks guard', confidence: 4,
+      parentFindingId: 'a:f1', severity: 'critical' as const,
+    }];
+    const report = await (eng as any).synthesize(results, entries, 'cid12345-67890abc');
+    expect(report.newFindings).toHaveLength(1);
+    // findingId must be set on the report entry
+    expect(report.newFindings[0].findingId).toBe(prewrittenId);
+    // Signal must use the same id so orchestrator can link report entry → signal
+    const newSignal = report.signals.find((s: any) => s.signal === 'new_finding');
+    expect(newSignal).toBeDefined();
+    expect(newSignal.findingId).toBe(prewrittenId);
+  });
+
   it('drops a NEW entry whose citation is fabricated', async () => {
     const eng = new ConsensusEngine({
       llm: { generate: jest.fn() } as any,

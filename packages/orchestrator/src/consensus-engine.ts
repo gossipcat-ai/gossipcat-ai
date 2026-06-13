@@ -1298,6 +1298,7 @@ Return only valid JSON.${skillsBlock}`;
           finding: sanitize(entry.finding),
           evidence: sanitize(entry.evidence),
           confidence: entry.confidence,
+          findingId: newFindingId,
           parentFindingId: entry.parentFindingId,
           severity: entry.severity,
         });
@@ -2612,7 +2613,7 @@ Return only valid JSON.${skillsBlock}`;
     // This is the same pattern as the utility-task block in gossip_relay — surface the
     // requirement at the moment the orchestrator has the data needed to act on it,
     // not buried in bootstrap rules that decay as the conversation grows.
-    // newFindings are excluded — ConsensusNewFinding has no stable id (not in findingMap)
+    // newFindings are excluded from actionable — they use their own findingId and are not in findingMap
     const actionable = [
       ...confirmed.map(f => ({ kind: 'confirmed' as const, f })),
       ...disputed.map(f => ({ kind: 'disputed' as const, f })),
