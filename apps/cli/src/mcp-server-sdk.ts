@@ -1898,12 +1898,22 @@ export function createMcpServer(): McpServer {
         const { readFileSync } = await import('fs');
         const quotaPath = join(process.cwd(), '.gossip', 'quota-state.json');
         const quotaRaw = readFileSync(quotaPath, 'utf8');
-        const quotaState: Record<string, { exhaustedUntil?: number }> = JSON.parse(quotaRaw);
+        const quotaState: Record<string, { exhaustedUntil?: number; reason?: string; consecutive429s?: number }> = JSON.parse(quotaRaw);
         for (const [provider, state] of Object.entries(quotaState)) {
           const now = Date.now();
-          if (state.exhaustedUntil && state.exhaustedUntil > now) {
-            const cooldownSec = Math.ceil((state.exhaustedUntil - now) / 1000);
+          const cooling = !!state.exhaustedUntil && state.exhaustedUntil > now;
+          const consecutive = state.consecutive429s ?? 0;
+          if (cooling && state.reason === 'spend_cap') {
+            // Monthly spend cap: a cooldown timer is meaningless to the user —
+            // it only recovers when they raise the cap or the month rolls over.
+            lines.push(`  Quota: ${provider} — EXHAUSTED (monthly spend cap — manage at https://ai.studio/spend)`);
+          } else if (cooling) {
+            const cooldownSec = Math.ceil((state.exhaustedUntil! - now) / 1000);
             lines.push(`  Quota: ${provider} — EXHAUSTED (${cooldownSec}s cooldown)`);
+          } else if (consecutive >= 5) {
+            // Cooldown expired but a long run of 429s preceded it and no
+            // successful call has since reset the counter — do NOT claim OK.
+            lines.push(`  Quota: ${provider} — SUSPECT (${consecutive} consecutive 429s before cooldown expiry — verify with a real call)`);
           } else {
             lines.push(`  Quota: ${provider} — OK`);
           }

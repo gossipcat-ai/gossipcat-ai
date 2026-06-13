@@ -1,5 +1,5 @@
 import { createProvider, createProviderForAgent, resolveAgentProvider, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -790,5 +790,109 @@ describe('Multimodal message formatting', () => {
     await provider.generate([{ role: 'user', content: 'plain text' }]);
 
     expect(sentBody.messages[0].content).toBe('plain text');
+  });
+});
+
+describe('QuotaTracker spend-cap detection (429)', () => {
+  let projectRoot: string;
+  let originalFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'quota-spend-cap-'));
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  const read429State = () =>
+    JSON.parse(readFileSync(join(projectRoot, '.gossip', 'quota-state.json'), 'utf-8')).google;
+
+  it('a spend-cap 429 persists reason "spend_cap" with a 24h cooldown', async () => {
+    const before = Date.now();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map([['retry-after', '30']]) as any, // short header must be IGNORED for spend cap
+      text: async () =>
+        'You exceeded its monthly spending cap. Manage at https://ai.studio/spend',
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/monthly spend cap/i);
+
+    const state = read429State();
+    expect(state.reason).toBe('spend_cap');
+    expect(state.consecutive429s).toBe(1);
+    // 24h cooldown, NOT the 30s Retry-After header.
+    const remaining = state.exhaustedUntil - before;
+    expect(remaining).toBeGreaterThan(23 * 60 * 60 * 1000);
+    expect(remaining).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 5_000);
+  });
+
+  it('matches "spend cap" without the -ing as well (case-insensitive)', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map() as any,
+      text: async () => 'PROJECT SPEND CAP EXCEEDED',
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/monthly spend cap/i);
+
+    expect(read429State().reason).toBe('spend_cap');
+  });
+
+  it('an ordinary quota 429 is unchanged — reason "quota", honours Retry-After', async () => {
+    const before = Date.now();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map([['retry-after', '45']]) as any,
+      text: async () => 'Resource has been exhausted (e.g. check quota).',
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/quota exhausted/i);
+
+    const state = read429State();
+    expect(state.reason).toBe('quota');
+    expect(state.consecutive429s).toBe(1);
+    // Retry-After 45s is honoured; nowhere near the 24h spend-cap window.
+    const remaining = state.exhaustedUntil - before;
+    expect(remaining).toBeGreaterThan(40_000);
+    expect(remaining).toBeLessThan(60_000);
+  });
+
+  it('loading an OLD quota-state.json missing consecutive429s does not corrupt the counter to NaN', async () => {
+    // Simulate a state file written before the consecutive429s field existed:
+    // only exhaustedUntil present (already expired), no consecutive429s, no reason.
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.gossip', 'quota-state.json'),
+      JSON.stringify({ google: { exhaustedUntil: 1 } }),
+    );
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map([['retry-after', '45']]) as any,
+      text: async () => 'Resource has been exhausted (e.g. check quota).',
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/quota exhausted/i);
+
+    // The missing field must default to 0, so the first 429 increments to 1 — NOT NaN.
+    const state = read429State();
+    expect(state.consecutive429s).toBe(1);
+    expect(Number.isNaN(state.consecutive429s)).toBe(false);
   });
 });

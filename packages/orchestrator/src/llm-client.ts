@@ -86,7 +86,14 @@ export class QuotaExhaustedException extends Error {
   }
 }
 
-type CooldownReason = 'quota' | 'unavailable';
+type CooldownReason = 'quota' | 'unavailable' | 'spend_cap';
+
+// A monthly spend cap (Google) cannot recover via a short rate-limit cooldown —
+// it clears only when the user raises the cap or the billing month rolls over.
+// Use a 24h cooldown re-armed on every subsequent spend-cap 429 so the banner
+// stops lying about "OK" the instant a short cooldown would have expired.
+const SPEND_CAP_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const SPEND_CAP_RE = /spend(?:ing)?\s+cap/i;
 
 interface QuotaProviderState {
   exhaustedUntil: number;
@@ -116,8 +123,8 @@ class QuotaTracker {
     try {
       const state: QuotaStateFile = JSON.parse(readFileSync(this.statePath, 'utf-8'));
       if (state[this.provider]) {
-        this.exhaustedUntil = state[this.provider].exhaustedUntil;
-        this.consecutive429s = state[this.provider].consecutive429s;
+        this.exhaustedUntil = state[this.provider].exhaustedUntil ?? 0;
+        this.consecutive429s = state[this.provider].consecutive429s ?? 0;
         this.reason = state[this.provider].reason ?? 'quota';
       }
     } catch { /* start fresh */ }
@@ -140,7 +147,10 @@ class QuotaTracker {
   checkBeforeRequest(): void {
     if (this.exhaustedUntil > Date.now()) {
       const remainingMs = this.exhaustedUntil - Date.now();
-      const label = this.reason === 'unavailable' ? 'service unavailable' : 'quota exhausted';
+      const label =
+        this.reason === 'unavailable' ? 'service unavailable'
+        : this.reason === 'spend_cap' ? 'monthly spend cap reached'
+        : 'quota exhausted';
       _log(this.provider, `${label}, ${Math.round(remainingMs / 1000)}s cooldown remaining`);
       throw new QuotaExhaustedException({
         message: `${this.provider} ${label} — ${Math.round(remainingMs / 1000)}s cooldown remaining`,
@@ -153,6 +163,24 @@ class QuotaTracker {
   /** Handle a 429 response. Parses Retry-After, sets cooldown, persists, throws. */
   handle429(res: Response, errBody: string): never {
     this.consecutive429s++;
+    // A monthly spend-cap 429 (Google) is NOT a transient rate limit: a short
+    // Retry-After cooldown would expire while calls keep failing, so the banner
+    // would flip back to "OK". Detect it from the error body and arm a long
+    // cooldown re-armed on every subsequent spend-cap 429. Ordinary quota 429s
+    // keep the existing exponential-backoff behaviour.
+    const isSpendCap = SPEND_CAP_RE.test(errBody);
+    if (isSpendCap) {
+      this.reason = 'spend_cap';
+      const cooldownMs = SPEND_CAP_COOLDOWN_MS;
+      this.exhaustedUntil = Date.now() + cooldownMs;
+      this.persist();
+      _log(this.provider, `429 monthly spend cap (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s`);
+      throw new QuotaExhaustedException({
+        message: `${this.provider} monthly spend cap reached (429 #${this.consecutive429s}): ${errBody}`,
+        provider: this.provider,
+        retryAfterMs: cooldownMs,
+      });
+    }
     this.reason = 'quota';
     const retryAfter = this.parseRetryAfter(res);
     const cooldownMs = retryAfter ?? Math.min(60_000 * Math.pow(2, this.consecutive429s - 1), 300_000);
