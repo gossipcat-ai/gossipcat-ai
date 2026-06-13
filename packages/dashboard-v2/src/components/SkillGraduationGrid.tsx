@@ -72,7 +72,7 @@ const VERDICT_ORDER: Record<GraduationVerdict, number> = {
   silent_skill: 6,
 };
 
-const UNKNOWN_COLOR = 'var(--ink-4)';
+const UNKNOWN_COLOR = 'var(--ink-3)';
 
 function isGraduationVerdict(s: SkillStatus | null | undefined): s is GraduationVerdict {
   return s !== undefined && s !== null && s in VERDICT_COLOR;
@@ -97,7 +97,7 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
         <div className="flex items-baseline gap-2">
           <h3 className="h-section">skill graduation</h3>
           <span
-            className="font-mono text-[11px] tabular-nums font-bold"
+            className="font-mono text-[11px] tabular-nums font-medium"
             style={{ color: 'var(--ink)', fontFamily: "'JetBrains Mono', monospace" }}
           >
             {total}
@@ -112,7 +112,7 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
         <a
           href={href('/')}
           className="text-[11px] transition hover:underline"
-          style={{ color: 'var(--ink-3)', fontFamily: "'JetBrains Mono', monospace" }}
+          style={{ color: 'var(--ink-3)', fontFamily: 'Geist, var(--font-sans)' }}
         >
           skill detail →
         </a>
@@ -121,7 +121,7 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
 
       <div
         className="rounded-lg border p-4"
-        style={{ background: 'var(--surface-elev)', borderColor: 'var(--border)' }}
+        style={{ background: 'var(--surface-sunk)', borderColor: 'var(--border)' }}
       >
         {/* Contextual help — distinguishes the two halves */}
         <p className="mb-3 text-[11px]" style={{ color: 'var(--ink-3)', fontFamily: 'Geist, var(--font-sans)' }}>
@@ -280,7 +280,7 @@ function GraduationCard({ entry }: { entry: SkillEffectivenessEntry }) {
         {/* Verdict chip + recovered badge */}
         <div className="flex flex-wrap items-center gap-1">
           <span
-            className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+            className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
             style={{
               color: verdictColor,
               background: `color-mix(in oklch, ${verdictColor} 12%, transparent)`,
@@ -295,7 +295,7 @@ function GraduationCard({ entry }: { entry: SkillEffectivenessEntry }) {
 
           {showRecoveredBadge && (
             <span
-              className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px]"
+              className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium"
               style={{
                 color: 'var(--ok)',
                 background: 'var(--ok-soft)',
@@ -317,7 +317,9 @@ function GraduationCard({ entry }: { entry: SkillEffectivenessEntry }) {
               <span
                 className="text-[10px] tabular-nums"
                 style={{
-                  color: storedEffPp > 0 ? 'var(--ok)' : storedEffPp < 0 ? 'var(--bad)' : 'var(--ink-3)',
+                  color: storedEffPp < 0 && (verdict === 'failed' || verdict === 'flagged_for_manual_review')
+                    ? 'var(--bad)'
+                    : storedEffPp > 0 ? 'var(--ok)' : 'var(--ink-3)',
                   fontFamily: "'JetBrains Mono', monospace",
                 }}
                 title={`Stored effectiveness delta: ${storedEffPp > 0 ? '+' : ''}${storedEffPp}pp (basis for this verdict)`}
@@ -336,7 +338,7 @@ function GraduationCard({ entry }: { entry: SkillEffectivenessEntry }) {
             {verdictDateStr && (
               <span
                 className="text-[10px] tabular-nums"
-                style={{ color: 'var(--ink-4)', fontFamily: "'JetBrains Mono', monospace" }}
+                style={{ color: 'var(--ink-3)', fontFamily: "'JetBrains Mono', monospace" }}
                 title={`Verdict as of: ${entry.verdictAt}`}
               >
                 {verdictDateStr}
@@ -372,7 +374,7 @@ function GraduationCard({ entry }: { entry: SkillEffectivenessEntry }) {
         <SkillEffectivenessSparkline
           curve={entry.curve}
           threshold={entry.threshold}
-          stroke={verdictColor}
+          stroke={agentColor(entry.agentId)}
           width={120}
           height={28}
         />
@@ -417,6 +419,7 @@ function GridSkeleton() {
             style={{ borderBottom: '1px solid var(--border)' }}
           >
             <span className="h-3 w-3/4 rounded-sm" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
+            <span className="h-2 w-1/3 rounded-sm" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
             <span className="h-2.5 w-1/2 rounded-sm" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
             <span className="h-5 w-16 rounded-full" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
           </div>
