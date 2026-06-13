@@ -4,6 +4,36 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-13
+
+Adds several consensus-pipeline and resolver capabilities, a per-agent tool-turn
+cap, dashboard auth, and a large batch of consensus/signal/dashboard hardening
+fixes. 42 commits since 0.5.6.
+
+### Added
+
+- **Resolver line-anchored staleness heuristic** behind `consensus.resolverLineAnchored` (default `false`). Resolves findings whose cited identifier moved off its anchored line but still exists elsewhere in the file (`resolved_by: stale_anchor`), plus guarded ENOENT (deleted-file) resolution and `skipReasons` observability so a `resolved: 0` run is diagnosable (#578).
+- **Resolver 5% false-resolve safety brake** — when the trailing-30d manual `unresolve` rate on `stale_anchor` resolutions exceeds 5% (with a `MIN_BRAKE_SAMPLE=20` floor), the resolver pivots to `flag_for_review` and leaves the finding open instead of auto-closing it. Gates only the `stale_anchor` path; the `commit:<sha>` fastpath is never gated. Unblocks a future `resolverLineAnchored` default flip after a 7-day clean window (#580).
+- **`consensus.siblingRoots`** — resolve cross-review citations into declared sibling repositories, including enumeration of a declared repo's git worktrees (#534, #537).
+- **Verified finding-chaining** — hardens the `action:"new"` cross-review channel with an always-on citation-verification gate and `parentFindingId`/`severity` fields, behind `GOSSIP_VERIFIED_CHAINING` (ships off; default byte-identical) (#533).
+- **Per-agent `maxToolTurns` override** (default 15) with `gossip_setup` wiring and a `[1,100]` shared-constant ceiling (#536, #539).
+- **Failed-skill recovery re-test** — a terminal `failed` skill re-tests every 80 signals and can re-earn graduation (symmetric inverse of drift detection) (#575).
+- **Dashboard auth** — conditional `Secure` cookie, `?key=` auto-login with scrub, session persistence, and 401 recovery, plus a vitest harness for the auth hook (#551, #553).
+- **Dashboard loading-state skeletons** for the overview and agent pages (#556).
+- **Worktree engagement detection** + isolation-contract hardening (#540).
+- **Consensus `RoundContext`** single-source-of-truth carrier with fail-loud warning producers/drains (#543, #544, #546).
+
+### Fixed
+
+- **Resolver wiring** — `resolverLineAnchored` was dead since #310 (the flag→opts wire was never built); now threaded through the MCP handler and round-close. Per-round `resolutionRoots` now flow through the all-relay consensus path, fixing false disputes (#541). Robust finding-id rewrite + NEW-id reachability (#577).
+- **Consensus `findingId`** now populated on report `newFindings` entries (report→signal link), with v2 follow-ups for lookups, NEW-finding exemption, and `consensusId` pass-through (#566, #568).
+- **`skill-name`** length cap now applies to the normalized form, not the raw input (#579); **skill-develop** prompt uses the newest findings and a frontmatter-first instruction (#567).
+- **Quota** spend-cap 429s now get a 24h cooldown with honest banner states (#569); deepseek provider gets the 600s timeout (#535) and a guarded `JSON.parse` in `parseOpenAIResponse` to prevent a crash (#550).
+- **Signals** — `finding_id` schema gate, scoped retraction, relay-task durability (#557); late-relay retraction is now scoped and auto-signals dedup once per task (#565).
+- **`gossip_setup`** validate-before-write + config preservation + status/postinstall resilience (#558); **`verify_memory`/`gossip_plan`** re-entry stash TTL now matches its result-map TTL (#552).
+- **Dashboard** — skill-graduation separates the frozen verdict from the live 7d window (#573); sparkline brightness on dark canvas (#574); fetch-error surfacing, torn-JSONL hardening, and fetch timeouts (#549); severity color ramp + DESIGN.md token compliance (#555).
+- **Orchestrator** — `getScores()` typed as `ReadonlyMap` (#563); rate-limited torn-line warnings with a reused long-lived performance reader (#562); torn-line warn parity across retraction readers and `getImplScore` (#564); BOM strip + setup loop-transactionality (#561).
+
 ## [0.5.6] — 2026-06-10
 
 Completes the Claude Fable 5 native-agent support started in 0.5.5.
