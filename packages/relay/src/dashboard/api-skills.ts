@@ -42,12 +42,20 @@ function isCorrupt(projectRoot: string, index: SkillIndex): boolean {
   return existsSync(join(projectRoot, '.gossip', 'skill-index.json')) && !index.exists();
 }
 
-/* ── frontmatter (status + bound_at + passed_baseline_rate) ────────────── */
+/* ── frontmatter (status + bound_at + passed_baseline_rate + provenance) ── */
 
 interface SkillFrontmatter {
   status?: string;
   bound_at?: string;
   passed_baseline_rate?: number;
+  /** Stored effectiveness delta (pre/post hallucination rate) — verdict basis. */
+  effectiveness?: number;
+  /** ISO timestamp when the skill passed — best "verdict as of" stamp. */
+  passed_at?: string;
+  /** ISO timestamp when inconclusive verdict was recorded. */
+  inconclusive_at?: string;
+  /** ISO timestamp when the skill regressed from a previously-passed state. */
+  regressed_from_passed_at?: string;
 }
 
 function readSkillFrontmatter(
@@ -79,10 +87,17 @@ function readSkillFrontmatter(
       else if (key === 'passed_baseline_rate') {
         const n = Number(value);
         if (Number.isFinite(n)) out.passed_baseline_rate = n;
-      }
+      } else if (key === 'effectiveness') {
+        const n = Number(value);
+        if (Number.isFinite(n)) out.effectiveness = n;
+      } else if (key === 'passed_at') out.passed_at = value;
+      else if (key === 'inconclusive_at') out.inconclusive_at = value;
+      else if (key === 'regressed_from_passed_at') out.regressed_from_passed_at = value;
     }
     // Return null instead of empty object when no recognized fields were parsed
-    if (!out.status && !out.bound_at && out.passed_baseline_rate === undefined) return null;
+    if (!out.status && !out.bound_at && out.passed_baseline_rate === undefined
+        && out.effectiveness === undefined && !out.passed_at && !out.inconclusive_at
+        && !out.regressed_from_passed_at) return null;
     return out;
   } catch {
     return null;
@@ -230,6 +245,30 @@ function deriveEffectiveness(
       });
       const threshold = fm?.passed_baseline_rate ?? DEFAULT_THRESHOLD;
       const status = (fm?.status as SkillVerdict | undefined) ?? null;
+
+      // Verdict provenance — "verdict as of" timestamp (best-available stamp).
+      const verdictAt: string | undefined =
+        fm?.passed_at ?? fm?.inconclusive_at ?? fm?.regressed_from_passed_at ?? fm?.bound_at;
+
+      // liveRecovered: frozen verdict says failed/silent but live 7d shows recovery.
+      const isFailedVerdict = status === 'failed' || status === 'silent_skill';
+      let liveRecovered: boolean | undefined;
+      if (isFailedVerdict && n > 0) {
+        // Trailing rate: last non-null bucket value, or n-weighted mean over all buckets.
+        let trailingRate: number | null = null;
+        for (let i = curve.length - 1; i >= 0; i--) {
+          const v = curve[i].value;
+          if (v != null && Number.isFinite(v)) { trailingRate = v; break; }
+        }
+        if (trailingRate == null) {
+          // Fallback: n-weighted mean
+          let totalCorrect = 0;
+          for (const b of buckets) totalCorrect += b.c;
+          trailingRate = n > 0 ? totalCorrect / n : 0;
+        }
+        liveRecovered = trailingRate >= threshold;
+      }
+
       out.push({
         agentId,
         skill: slot.skill,
@@ -238,6 +277,9 @@ function deriveEffectiveness(
         threshold,
         n,
         boundAt: boundAtIso,
+        ...(fm?.effectiveness !== undefined ? { storedEffectiveness: fm.effectiveness } : {}),
+        ...(verdictAt !== undefined ? { verdictAt } : {}),
+        ...(liveRecovered !== undefined ? { liveRecovered } : {}),
       });
     }
   }
