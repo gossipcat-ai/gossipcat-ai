@@ -713,4 +713,74 @@ describe('finding-resolver — 5% safety brake integration', () => {
     expect(result.flaggedForReview).toBe(1);
     expect(verifyChain(root)).toBeNull();
   });
+
+  // ── audit-log dedup: a persistently-flagged finding is flagged once across
+  //    runs (no duplicate flag_for_review per run), but stays open + counted ──
+  function countFlags(root: string, findingId: string): number {
+    return readAuditEntries(root).filter(
+      e => e.action === 'flag_for_review' && e.finding_id === findingId,
+    ).length;
+  }
+
+  test('brake engaged: second run does NOT append a duplicate flag_for_review (dedup across runs)', async () => {
+    const initial = buildFileWithSymbolAt(200, 'Math.min', [110, 120, 130]);
+    const fixed = buildFileWithSymbolAt(200, 'Math.min', [110, 130]);
+    const { root } = setupRepoWithFixture('src/foo.ts', initial, fixed);
+    seedBrakeEngagedHistory(root);
+
+    writeFinding(root, {
+      taskId: 'dedup1:f1',
+      finding: '`Math.min` <cite tag="file">src/foo.ts:120</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    const r1 = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!r1.ok) throw new Error('lock contended');
+    expect(r1.flaggedForReview).toBe(1);
+    expect(countFlags(root, 'dedup1:f1')).toBe(1);
+
+    const r2 = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!r2.ok) throw new Error('lock contended');
+    // Still held open + counted this run...
+    expect(r2.flaggedForReview).toBe(1);
+    expect(r2.skipReasons?.brakeEngaged).toBe(1);
+    expect(readFindings(root)[0].status).toBe('open');
+    // ...but NO second audit WRITE for the same finding.
+    expect(countFlags(root, 'dedup1:f1')).toBe(1);
+  });
+
+  test('brake engaged: an unresolve between runs re-arms the flag (re-flag after unresolve)', async () => {
+    const initial = buildFileWithSymbolAt(200, 'Math.min', [110, 120, 130]);
+    const fixed = buildFileWithSymbolAt(200, 'Math.min', [110, 130]);
+    const { root } = setupRepoWithFixture('src/foo.ts', initial, fixed);
+    seedBrakeEngagedHistory(root);
+
+    writeFinding(root, {
+      taskId: 'dedup2:f1',
+      finding: '`Math.min` <cite tag="file">src/foo.ts:120</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    const r1 = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!r1.ok) throw new Error('lock contended');
+    expect(countFlags(root, 'dedup2:f1')).toBe(1);
+
+    // Operator unresolves the flagged finding — most-recent action is now
+    // `unresolve`, not `flag_for_review`, so the next run must re-flag.
+    appendChainedEntry(root, {
+      ts: new Date().toISOString(),
+      finding_id: 'dedup2:f1',
+      action: 'unresolve',
+      operator: 'manual',
+    });
+
+    const r2 = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!r2.ok) throw new Error('lock contended');
+    expect(r2.flaggedForReview).toBe(1);
+    expect(countFlags(root, 'dedup2:f1')).toBe(2);
+  });
 });

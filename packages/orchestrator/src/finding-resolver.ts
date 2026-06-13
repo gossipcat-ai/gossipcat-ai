@@ -144,7 +144,16 @@ export function computeStaleAnchorUnresolveRate(
       if (id && staleAnchorIds.has(id)) unresolves++;
     }
   }
+  // The numerator counts in-window unresolves of ANY all-time stale_anchor id,
+  // while the denominator counts only in-window stale_anchor resolves. Under
+  // churn (resolves whose unresolves land in-window but whose original resolve
+  // is out-of-window) `rate` CAN exceed 1.0. This is intentional and NOT capped
+  // — a >1.0 value is meaningful signal. `.engaged` is the only consumed field.
   const rate = staleAnchorResolves === 0 ? 0 : unresolves / staleAnchorResolves;
+  // MIN_BRAKE_SAMPLE=20 is calibrated to the STRICT `>` comparator: 1/20 = 0.05
+  // is NOT > 0.05, so 20 samples can never engage on a single unresolve. If `>`
+  // is ever changed to `>=`, MIN_BRAKE_SAMPLE must be bumped to 21 to preserve
+  // this floor (kept inline so the operator/sample coupling stays visible).
   const engaged = staleAnchorResolves >= MIN_BRAKE_SAMPLE && rate > BRAKE_THRESHOLD;
   return { rate, staleAnchorResolves, unresolves, engaged };
 }
@@ -297,11 +306,19 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
   // the stale_anchor path, so it is irrelevant (and the audit-log read is
   // skippable) when lineAnchored is off. Read the audit log a single time.
   let brakeEngaged = false;
+  // Most-recent audit action per finding_id (last-wins over file/append order).
+  // Only populated when the brake is engaged — it is consulted ONLY in the
+  // brake branch to dedup repeated flag_for_review writes across runs.
+  const lastActionByFinding = new Map<string, string>();
   if (opts.lineAnchored) {
-    brakeEngaged = computeStaleAnchorUnresolveRate(
-      readAuditEntries(projectRoot),
-      Date.now(),
-    ).engaged;
+    const auditEntries = readAuditEntries(projectRoot);
+    brakeEngaged = computeStaleAnchorUnresolveRate(auditEntries, Date.now()).engaged;
+    if (brakeEngaged) {
+      for (const e of auditEntries) {
+        const id = e && typeof e.finding_id === 'string' ? e.finding_id : '';
+        if (id && typeof e.action === 'string') lastActionByFinding.set(id, e.action);
+      }
+    }
   }
 
   // Per-consensus-report cache for backfill lookups. Loading the same JSON
@@ -618,25 +635,36 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
       if (firstCite.line === undefined) {
         throw new Error('finding-resolver invariant: stale_anchor brake path reached with undefined cited line');
       }
-      try {
-        appendChainedEntry(projectRoot, {
-          ts: new Date().toISOString(),
-          finding_id: findingId,
-          action: 'flag_for_review',
-          resolved_by: 'stale_anchor',
-          before_quote: beforeQuote,
-          after_check: 'present_elsewhere_only',
-          operator: 'auto',
-          cited_line: firstCite.line,
-          window: LINE_ANCHORED_WINDOW,
-          reason: `stale_anchor auto-resolve suppressed: 30d manual-unresolve rate exceeded ${BRAKE_THRESHOLD * 100}% safety brake`,
-        });
-      } catch (err) {
+      // Audit-log dedup: skip the flag_for_review WRITE when this finding's
+      // most-recent audit entry is already a flag_for_review — otherwise a
+      // persistently-flagged-but-still-open finding accumulates one duplicate
+      // entry per run (365/yr under daily polling). An `unresolve` (or any
+      // non-flag action) as the most-recent entry means lastAction !==
+      // 'flag_for_review', so a finding flagged → unresolved → re-qualifying is
+      // correctly re-flagged. A finding is processed at most once per run
+      // (findings rows are unique by id), so this dedup is across runs only.
+      const alreadyFlagged = lastActionByFinding.get(findingId) === 'flag_for_review';
+      if (!alreadyFlagged) {
         try {
-          process.stderr.write(
-            `[gossipcat] finding-resolver: failed to flag ${findingId} for review: ${(err as Error).message}\n`,
-          );
-        } catch { /* best-effort */ }
+          appendChainedEntry(projectRoot, {
+            ts: new Date().toISOString(),
+            finding_id: findingId,
+            action: 'flag_for_review',
+            resolved_by: 'stale_anchor',
+            before_quote: beforeQuote,
+            after_check: 'present_elsewhere_only',
+            operator: 'auto',
+            cited_line: firstCite.line,
+            window: LINE_ANCHORED_WINDOW,
+            reason: `stale_anchor auto-resolve suppressed: 30d manual-unresolve rate exceeded ${BRAKE_THRESHOLD * 100}% safety brake`,
+          });
+        } catch (err) {
+          try {
+            process.stderr.write(
+              `[gossipcat] finding-resolver: failed to flag ${findingId} for review: ${(err as Error).message}\n`,
+            );
+          } catch { /* best-effort */ }
+        }
       }
       // Finding stays open — do NOT mutate entry.status/resolvedAt/resolvedBy,
       // do NOT touch row.raw, do NOT push resolvedFindingIds, do NOT increment
