@@ -413,3 +413,28 @@ describe('maxToolTurns config plumbing (fix/per-agent-turn-cap)', () => {
     expect(configToAgentConfigs(cfg).find(a => a.id === 'x')?.maxToolTurns).toBeUndefined();
   });
 });
+
+describe('consensus.resolverLineAnchored validation', () => {
+  it('accepts a boolean value', () => {
+    const cfg = validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      consensus: { resolverLineAnchored: true },
+    });
+    expect(cfg.consensus?.resolverLineAnchored).toBe(true);
+  });
+
+  it('accepts an omitted value (default path)', () => {
+    const cfg = validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      consensus: {},
+    });
+    expect(cfg.consensus?.resolverLineAnchored).toBeUndefined();
+  });
+
+  it('rejects a non-boolean value', () => {
+    expect(() => validateConfig({
+      main_agent: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      consensus: { resolverLineAnchored: 'yes' as any },
+    })).toThrow(/consensus\.resolverLineAnchored/);
+  });
+});
