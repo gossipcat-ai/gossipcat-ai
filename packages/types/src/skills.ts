@@ -41,6 +41,26 @@ export interface SkillEffectivenessEntry {
   n: number;
   /** ISO. Anchor for the curve. */
   boundAt: string;
+
+  // ── Verdict provenance fields (issue #571 fix) ───────────────────────────
+  /**
+   * The stored effectiveness delta from frontmatter (the value the verdict was
+   * actually based on). Distinct from the live 7d trailing rate in the curve.
+   * Frontmatter field: `effectiveness`.
+   */
+  storedEffectiveness?: number;
+  /**
+   * Best-available "verdict as of" ISO timestamp from frontmatter.
+   * Checked in order: passed_at → inconclusive_at → regressed_from_passed_at → bound_at.
+   * Undefined when no timestamp field is present in frontmatter.
+   */
+  verdictAt?: string;
+  /**
+   * True when the frozen verdict is 'failed' or 'silent_skill' AND the live 7d
+   * window shows recovery: n > 0 AND trailing rate >= threshold. Signals skills
+   * that have recovered since the verdict was recorded (see issue #572).
+   */
+  liveRecovered?: boolean;
 }
 
 /**

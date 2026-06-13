@@ -6,30 +6,40 @@ import { href } from '@/lib/router';
 import { agentColor } from '@/lib/utils';
 
 /**
- * DESIGN.md Step 9.5 — SkillGraduationGrid as a flat card grid.
+ * DESIGN.md Step 9 — SkillGraduationGrid (redesigned for issue #571).
  *
- * Replaces the verdict-grouped layout (Step 9). Each cell shows a post-bind
- * effectiveness sparkline with a dashed graduation threshold line, plus the
- * skill name on top and the small-caps verdict + signal count on the bottom.
+ * Each card SEPARATES the frozen verdict (with the stored basis it was made on)
+ * from the live 7d activity window. This resolves the "FAILED 1.00/0.70 N=27"
+ * confation where three numbers from three eras were shown unlabeled.
  *
- * Source: GET /dashboard/api/skills `effectiveness` array — derived from
- * agent-performance.jsonl bucketed by skill into 10 equal-time post-bind
- * windows. UNKNOWN-verdict skills go into a native <details> collapsible
- * below the main grid.
+ * Card anatomy:
+ *   TOP HALF  — verdict section: chip (semantic color), stored basis (storedEffectiveness
+ *               delta + threshold), "as of" date (verdictAt).
+ *   BOTTOM HALF — live 7d section: sparkline + N, labeled "live 7d".
  *
- * Verdict palette mirrors SkillVerdictsSnapshot (single source of truth).
+ * liveRecovered badge: when status is failed/silent_skill but 7d trailing rate
+ * >= threshold, show "recovered · re-test pending" in --ok-soft.
+ *
+ * Sort order: failed/flagged → inconclusive → insufficient → passed → pending → silent.
+ * Unknown-verdict skills collapse into "▶ N unknown" <details>.
+ *
+ * Verdict → DESIGN.md semantic token (NEVER --accent for status):
+ *   passed               → --ok
+ *   pending              → --info
+ *   insufficient_evidence → --idle
+ *   inconclusive/flagged → --warn
+ *   silent_skill         → --ink-3
+ *   failed               → --bad
  */
 
-// 6 graduation verdicts that get their own sparkline color. The 7th
-// (flagged_for_manual_review) plus any unknown string fall through to the
-// UNKNOWN collapsible bucket below.
 type GraduationVerdict =
   | 'passed'
   | 'pending'
   | 'insufficient_evidence'
   | 'inconclusive'
   | 'silent_skill'
-  | 'failed';
+  | 'failed'
+  | 'flagged_for_manual_review';
 
 const VERDICT_COLOR: Record<GraduationVerdict, string> = {
   passed: 'var(--ok)',
@@ -38,6 +48,7 @@ const VERDICT_COLOR: Record<GraduationVerdict, string> = {
   inconclusive: 'var(--warn)',
   silent_skill: 'var(--ink-3)',
   failed: 'var(--bad)',
+  flagged_for_manual_review: 'var(--warn)',
 };
 
 const VERDICT_LABEL: Record<GraduationVerdict, string> = {
@@ -47,9 +58,21 @@ const VERDICT_LABEL: Record<GraduationVerdict, string> = {
   inconclusive: 'inconclusive',
   silent_skill: 'silent',
   failed: 'failed',
+  flagged_for_manual_review: 'flagged',
 };
 
-const UNKNOWN_COLOR = 'var(--ink-4)';
+// Sort priority: action-needed first, then informational, then all-clear.
+const VERDICT_ORDER: Record<GraduationVerdict, number> = {
+  failed: 0,
+  flagged_for_manual_review: 1,
+  inconclusive: 2,
+  insufficient_evidence: 3,
+  passed: 4,
+  pending: 5,
+  silent_skill: 6,
+};
+
+const UNKNOWN_COLOR = 'var(--ink-3)';
 
 function isGraduationVerdict(s: SkillStatus | null | undefined): s is GraduationVerdict {
   return s !== undefined && s !== null && s in VERDICT_COLOR;
@@ -67,31 +90,29 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
     [skills],
   );
 
-  const skillCount = total;
-
   return (
     <section className="space-y-2">
-      {/* Section header row — outside the card per the mockup. */}
+      {/* Section header — small-caps Geist per DESIGN.md */}
       <header className="flex items-baseline justify-between">
         <div className="flex items-baseline gap-2">
-          <h3 className="h-section">Skill Graduation</h3>
+          <h3 className="h-section">skill graduation</h3>
           <span
-            className="font-mono text-[11px] tabular-nums font-bold"
-            style={{ color: 'var(--ink)' }}
+            className="font-mono text-[11px] tabular-nums font-medium"
+            style={{ color: 'var(--ink)', fontFamily: "'JetBrains Mono', monospace" }}
           >
-            {skillCount}
+            {total}
           </span>
           <span
-            className="font-mono text-[11px]"
-            style={{ color: 'var(--ink-3)' }}
+            className="text-[11px]"
+            style={{ color: 'var(--ink-3)', fontFamily: 'Geist, var(--font-sans)' }}
           >
             skills · {transitions} transitions /24h
           </span>
         </div>
         <a
           href={href('/')}
-          className="font-mono text-[11px] transition hover:underline"
-          style={{ color: 'var(--ink-3)' }}
+          className="text-[11px] transition hover:underline"
+          style={{ color: 'var(--ink-3)', fontFamily: 'Geist, var(--font-sans)' }}
         >
           skill detail →
         </a>
@@ -99,33 +120,29 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
       </header>
 
       <div
-        className="rounded-lg border border-border p-4"
-        style={{ background: 'var(--surface-elev)' }}
+        className="rounded-lg border p-4"
+        style={{ background: 'var(--surface-sunk)', borderColor: 'var(--border)' }}
       >
-        <p className="mb-3 text-[11px]" style={{ color: 'var(--ink-3)' }}>
-          Each cell shows the post-bind effectiveness curve. Dashed line = graduation threshold.
-          Verdict is from the latest evidence window.
+        {/* Contextual help — distinguishes the two halves */}
+        <p className="mb-3 text-[11px]" style={{ color: 'var(--ink-3)', fontFamily: 'Geist, var(--font-sans)' }}>
+          Top: frozen verdict + stored basis. Bottom: live 7d activity. Dashed line = graduation threshold.
         </p>
 
-        {/* DESIGN.md error contract — full error reason lives in the header
-            ErrorChip; here we render the cached grid dimmed at 50% so the
-            operator keeps their context instead of seeing a destructive
-            full-width banner that replaces the data. The legacy ErrorBanner
-            is no longer used; kept in the file for compatibility but
-            unreferenced. */}
+        {/* DESIGN.md error contract: error lives in header ErrorChip; cached
+            grid dims to 50% so operator keeps last-known context. */}
         {loading && !skills && <GridSkeleton />}
         {!loading && total === 0 && !error && (
-          <p className="text-[12px]" style={{ color: 'var(--ink-3)' }}>
+          <p className="text-[12px]" style={{ color: 'var(--ink-3)', fontFamily: 'Geist, var(--font-sans)' }}>
             No skills bound yet — agents need at least one dispatch with a skill match.
           </p>
         )}
         {total > 0 && (
           <ul
-            className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6"
+            className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6"
             style={error ? { opacity: 0.5 } : undefined}
           >
             {known.map((entry) => (
-              <SkillCard key={cellKey(entry)} entry={entry} />
+              <GraduationCard key={cellKey(entry)} entry={entry} />
             ))}
           </ul>
         )}
@@ -145,14 +162,19 @@ export function SkillGraduationGrid({ skills, loading, error }: Props) {
               </span>
               <span
                 className="text-[11px]"
-                style={{ fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+                style={{
+                  fontVariant: 'small-caps',
+                  letterSpacing: '0.04em',
+                  fontFamily: 'Geist, var(--font-sans)',
+                  fontWeight: 600,
+                }}
               >
                 {unknown.length} unknown
               </span>
             </summary>
-            <ul className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+            <ul className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6">
               {unknown.map((entry) => (
-                <SkillCard key={cellKey(entry)} entry={entry} />
+                <GraduationCard key={cellKey(entry)} entry={entry} />
               ))}
             </ul>
             <style>{`
@@ -182,12 +204,7 @@ function partition(
   if (!list) return { known: [], unknown: [], total: 0, transitions: 0 };
   const known: SkillEffectivenessEntry[] = [];
   const unknown: SkillEffectivenessEntry[] = [];
-  // Transitions /24h proxy: skills whose curve has BOTH a passing and a failing
-  // window inside the last 24h slice. Approximated by checking the last two
-  // bucket values straddle the threshold (one above, one below). The backend
-  // doesn't expose drift_strike_at / regressed_from_passed_at directly yet, so
-  // this is a curve-shape heuristic, not a state-machine read. Documented drift
-  // from spec — easy to upgrade once those fields surface in the API.
+  // Transitions /24h proxy: last two buckets straddle the threshold.
   let transitions = 0;
   for (const e of list) {
     if (isGraduationVerdict(e.status)) known.push(e);
@@ -199,19 +216,9 @@ function partition(
       if (above >= 1 && below >= 1) transitions++;
     }
   }
-  // Sort known: failing-first, then by name so operator eyes land on
-  // problems immediately within the flat grid.
-  const order: Record<GraduationVerdict, number> = {
-    failed: 0,
-    inconclusive: 1,
-    silent_skill: 2,
-    insufficient_evidence: 3,
-    pending: 4,
-    passed: 5,
-  };
   known.sort((a, b) => {
-    const ra = isGraduationVerdict(a.status) ? order[a.status] : 99;
-    const rb = isGraduationVerdict(b.status) ? order[b.status] : 99;
+    const ra = isGraduationVerdict(a.status) ? VERDICT_ORDER[a.status] : 99;
+    const rb = isGraduationVerdict(b.status) ? VERDICT_ORDER[b.status] : 99;
     if (ra !== rb) return ra - rb;
     return a.skill.localeCompare(b.skill);
   });
@@ -219,157 +226,207 @@ function partition(
   return { known, unknown, total: known.length + unknown.length, transitions };
 }
 
-/* ── single skill card ─────────────────────────────────────────────────── */
+/* ── GraduationCard ─────────────────────────────────────────────────────── */
 
-function SkillCard({ entry }: { entry: SkillEffectivenessEntry }) {
+function GraduationCard({ entry }: { entry: SkillEffectivenessEntry }) {
   const verdict = isGraduationVerdict(entry.status) ? entry.status : null;
-  const color = verdict ? VERDICT_COLOR[verdict] : UNKNOWN_COLOR;
-  const label = verdict ? VERDICT_LABEL[verdict] : (entry.status ?? 'unknown');
-  // Delta only meaningful for skills that have actually graduated — for
-  // pending/failed/etc. the trend is noise, not progress.
-  const deltaPp = verdict === 'passed' ? computeDeltaPp(entry.curve) : null;
-  const currentValue = latestValue(entry.curve);
-  const currentStr = currentValue == null ? '—' : currentValue.toFixed(2);
-  const thresholdStr = entry.threshold.toFixed(2);
+  const verdictColor = verdict ? VERDICT_COLOR[verdict] : UNKNOWN_COLOR;
+  const verdictLabel = verdict ? VERDICT_LABEL[verdict] : (entry.status ?? 'unknown');
+
+  // Stored effectiveness delta (what the verdict was based on — not the live rate)
+  const storedEff = typeof entry.storedEffectiveness === 'number' ? entry.storedEffectiveness : null;
+  const storedEffPp = storedEff !== null ? Math.round(storedEff * 100) : null;
+
+  // "Verdict as of" date
+  const verdictDateStr = entry.verdictAt ? formatShortDate(entry.verdictAt) : null;
+
+  // liveRecovered: failed/silent but 7d trailing rate >= threshold
+  const showRecoveredBadge = entry.liveRecovered === true;
 
   return (
     <li
-      className="flex flex-col gap-1.5 rounded-sm border border-border p-2.5"
-      style={{ background: 'var(--surface)' }}
-      title={`${entry.agentId} · ${entry.skill} · ${label} · N=${entry.n}`}
+      className="flex flex-col rounded-lg border"
+      style={{ background: 'var(--surface-elev)', borderColor: 'var(--border)' }}
+      title={`${entry.agentId} · ${entry.skill} · ${verdictLabel} · N=${entry.n}`}
     >
-      {/* Top: skill name + 7d chip; agent identity below */}
-      <div className="flex flex-col gap-0.5">
-        <div className="flex items-baseline justify-between gap-2">
-          <div className="truncate text-[13px]" style={{ color: 'var(--ink)' }}>
-            {entry.skill}
-          </div>
-          <span
-            className="shrink-0 rounded-sm border border-border px-1 font-mono text-[9px] tabular-nums"
-            style={{ color: 'var(--ink-3)' }}
-            title="7-day effectiveness window"
-          >
-            7d
-          </span>
+      {/* ── VERDICT SECTION ─────────────────────────────────────────────── */}
+      <div
+        className="flex flex-col gap-1.5 rounded-t-lg px-2.5 pt-2.5 pb-2"
+        style={{ borderBottom: '1px solid var(--border)' }}
+      >
+        {/* Skill name */}
+        <div
+          className="truncate text-[12px] font-medium leading-tight"
+          style={{ color: 'var(--ink)', fontFamily: 'Geist, var(--font-sans)' }}
+        >
+          {entry.skill}
         </div>
-        <div className="flex items-center gap-1.5">
+
+        {/* Agent identity row — bloom dot + agent id in mono */}
+        <div className="flex items-center gap-1">
           <span
             aria-hidden
             className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
             style={{ backgroundColor: agentColor(entry.agentId) }}
           />
           <span
-            className="truncate font-mono text-[10px]"
-            style={{ color: 'var(--ink-3)' }}
+            className="truncate text-[10px]"
+            style={{ color: 'var(--ink-3)', fontFamily: "'JetBrains Mono', monospace" }}
           >
             {entry.agentId}
           </span>
         </div>
-      </div>
-      {/* Middle: sparkline */}
-      <SkillEffectivenessSparkline
-        curve={entry.curve}
-        threshold={entry.threshold}
-        stroke={color}
-      />
-      {/* Bottom: verdict label + delta-pp + N */}
-      <div className="flex items-baseline justify-between gap-2">
-        <span
-          className="truncate text-[10px]"
-          style={{
-            color,
-            fontVariant: 'small-caps',
-            letterSpacing: '0.04em',
-          }}
-        >
-          {label}
-        </span>
-        <div className="flex items-baseline gap-2">
-          {deltaPp !== null && (
+
+        {/* Verdict chip + recovered badge */}
+        <div className="flex flex-wrap items-center gap-1">
+          <span
+            className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+            style={{
+              color: verdictColor,
+              background: `color-mix(in oklch, ${verdictColor} 12%, transparent)`,
+              border: `1px solid color-mix(in oklch, ${verdictColor} 25%, transparent)`,
+              fontVariant: 'small-caps',
+              letterSpacing: '0.04em',
+              fontFamily: 'Geist, var(--font-sans)',
+            }}
+          >
+            {verdictLabel}
+          </span>
+
+          {showRecoveredBadge && (
             <span
-              className="font-mono text-[10px] tabular-nums"
+              className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium"
               style={{
-                color:
-                  deltaPp > 0 ? 'var(--ok)' : deltaPp < 0 ? 'var(--bad)' : 'var(--ink-3)',
+                color: 'var(--ok)',
+                background: 'var(--ok-soft)',
+                border: '1px solid color-mix(in oklch, var(--ok) 25%, transparent)',
+                fontFamily: 'Geist, var(--font-sans)',
+                letterSpacing: '0.02em',
               }}
-              title={`Trend ${deltaPp > 0 ? 'up' : deltaPp < 0 ? 'down' : 'flat'} ${Math.abs(deltaPp)} percentage points across the 7d window`}
-              aria-label={`Trend ${deltaPp > 0 ? 'up' : deltaPp < 0 ? 'down' : 'flat'} ${Math.abs(deltaPp)} percentage points`}
+              title="Live 7d signals show recovery above threshold — but the stored verdict is frozen. Re-test to graduate."
             >
-              {deltaPp > 0 ? '+' : ''}
-              {deltaPp}pp
+              recovered · re-test pending
             </span>
           )}
+        </div>
+
+        {/* Stored basis row: delta pp vs threshold + "as of" date */}
+        {(storedEffPp !== null || verdictDateStr) && (
+          <div className="flex items-baseline gap-1.5 flex-wrap">
+            {storedEffPp !== null && (
+              <span
+                className="text-[10px] tabular-nums"
+                style={{
+                  color: storedEffPp < 0 && (verdict === 'failed' || verdict === 'flagged_for_manual_review')
+                    ? 'var(--bad)'
+                    : storedEffPp > 0 ? 'var(--ok)' : 'var(--ink-3)',
+                  fontFamily: "'JetBrains Mono', monospace",
+                }}
+                title={`Stored effectiveness delta: ${storedEffPp > 0 ? '+' : ''}${storedEffPp}pp (basis for this verdict)`}
+              >
+                {storedEffPp > 0 ? '+' : ''}{storedEffPp}pp
+              </span>
+            )}
+            {storedEffPp !== null && (
+              <span
+                className="text-[10px]"
+                style={{ color: 'var(--ink-3)', fontFamily: 'Geist, var(--font-sans)' }}
+              >
+                vs {entry.threshold.toFixed(2)}
+              </span>
+            )}
+            {verdictDateStr && (
+              <span
+                className="text-[10px] tabular-nums"
+                style={{ color: 'var(--ink-3)', fontFamily: "'JetBrains Mono', monospace" }}
+                title={`Verdict as of: ${entry.verdictAt}`}
+              >
+                {verdictDateStr}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── LIVE 7D SECTION ─────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-1 px-2.5 pt-1.5 pb-2.5">
+        <div className="flex items-center justify-between">
           <span
-            className="font-mono text-[10px] tabular-nums"
-            style={{ color: 'var(--ink)' }}
-            title={`current ${currentStr} · threshold ${thresholdStr}`}
+            className="text-[10px]"
+            style={{
+              color: 'var(--ink-3)',
+              fontVariant: 'small-caps',
+              letterSpacing: '0.04em',
+              fontFamily: 'Geist, var(--font-sans)',
+              fontWeight: 600,
+            }}
           >
-            {currentStr}
-            <span style={{ color: 'var(--ink-3)' }}> / {thresholdStr}</span>
+            live 7d
           </span>
           <span
-            className="font-mono text-[10px] tabular-nums"
-            style={{ color: 'var(--ink-3)' }}
+            className="text-[10px] tabular-nums"
+            style={{ color: 'var(--ink-3)', fontFamily: "'JetBrains Mono', monospace" }}
+            title="Total post-bind signals in the 7d window"
           >
-            N={entry.n}
+            N=<span style={{ color: 'var(--ink)' }}>{entry.n}</span>
           </span>
         </div>
+        <SkillEffectivenessSparkline
+          curve={entry.curve}
+          threshold={entry.threshold}
+          stroke={agentColor(entry.agentId)}
+          width={120}
+          height={28}
+        />
       </div>
     </li>
   );
 }
 
-/** First→last non-null bucket delta, in percentage points (integer).
- *  Returns null if fewer than 4 non-null buckets — with 2-3 sparse buckets
- *  the delta swings to ±100pp from single signals, which is misleading
- *  (consensus eee614bd-31ba4209 finding f17). */
-const DELTA_MIN_BUCKETS = 4;
-function computeDeltaPp(curve: SkillEffectivenessEntry['curve']): number | null {
-  const defined = curve.filter((p) => p.value != null && Number.isFinite(p.value)) as Array<{ value: number }>;
-  if (defined.length < DELTA_MIN_BUCKETS) return null;
-  return Math.round((defined[defined.length - 1].value - defined[0].value) * 100);
-}
+/* ── helpers ────────────────────────────────────────────────────────────── */
 
-/** Most recent non-null bucket value, or null if all buckets are empty. */
-function latestValue(curve: SkillEffectivenessEntry['curve']): number | null {
-  for (let i = curve.length - 1; i >= 0; i--) {
-    const v = curve[i].value;
-    if (v != null && Number.isFinite(v)) return v;
+/** Format an ISO timestamp as compact "MMM D" (same year) or "MMM D 'YY". */
+function formatShortDate(iso: string): string | null {
+  try {
+    const d = new Date(iso);
+    if (!Number.isFinite(d.getTime())) return null;
+    const now = new Date();
+    const sameYear = d.getFullYear() === now.getFullYear();
+    const month = d.toLocaleString('en-US', { month: 'short' });
+    const day = d.getDate();
+    return sameYear ? `${month} ${day}` : `${month} ${day} '${String(d.getFullYear()).slice(-2)}`;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 /* ── states ────────────────────────────────────────────────────────────── */
 
-// Legacy ErrorBanner removed in favor of the shared ErrorChip in the header
-// per DESIGN.md error contract — the error reason lives top-right of the
-// card and the cached grid below dims to 50% so the operator keeps context
-// instead of seeing a full-width destructive banner replace the data.
-
 function GridSkeleton() {
   return (
     <ul
-      className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6"
+      className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6"
       aria-hidden
     >
       {Array.from({ length: 6 }).map((_, i) => (
         <li
           key={i}
-          className="flex h-[88px] flex-col gap-1.5 rounded-sm border border-border p-2.5"
-          style={{ background: 'var(--surface)' }}
+          className="flex flex-col rounded-lg border"
+          style={{ borderColor: 'var(--border)', background: 'var(--surface-elev)', minHeight: '120px' }}
         >
-          <span
-            className="h-3 w-3/4 rounded-sm"
-            style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }}
-          />
-          <span
-            className="h-[30px] w-full rounded-sm"
-            style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }}
-          />
-          <span
-            className="h-3 w-1/2 rounded-sm"
-            style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }}
-          />
+          <div
+            className="flex flex-col gap-1.5 px-2.5 pt-2.5 pb-2"
+            style={{ borderBottom: '1px solid var(--border)' }}
+          >
+            <span className="h-3 w-3/4 rounded-sm" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
+            <span className="h-2 w-1/3 rounded-sm" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
+            <span className="h-2.5 w-1/2 rounded-sm" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
+            <span className="h-5 w-16 rounded-full" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
+          </div>
+          <div className="flex flex-col gap-1 px-2.5 pt-1.5 pb-2.5">
+            <span className="h-2.5 w-10 rounded-sm" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
+            <span className="h-7 w-full rounded-sm" style={{ background: 'color-mix(in oklch, var(--border) 40%, transparent)' }} />
+          </div>
         </li>
       ))}
     </ul>
