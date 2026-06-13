@@ -102,6 +102,27 @@ export interface SkillSnapshot {
    * of the spec's α² (≈0.000625).
    */
   drift_strike_at?: string;
+  // ── Failed-skill recovery fields (symmetric inverse of drift) ─────────
+  /**
+   * ISO. Set when a skill first transitions to `failed`. Anchor for the
+   * recovery detection window — the recovery Wilson test compares signals
+   * since failed_at against RECOVERY_FLOOR. Mirrors `passed_at`'s role for
+   * drift, on the opposite (failed) population.
+   */
+  failed_at?: string;
+  /** 0 or 1. K=2 requires one prior confirming recovery window before lifting suppression. */
+  recovery_strikes?: number;
+  /**
+   * ISO. Set when recovery_strikes increments 0→1; cleared on transition to
+   * pending (recovery succeeds) and on reset (a non-confirming window). Anchors
+   * the strike-2 recovery Wilson window via getCountersSince(recovery_strike_at)
+   * so the two K=2 windows are independent — mirrors drift_strike_at exactly.
+   * Without this the strike-2 window includes strike-1's signals and the
+   * false-promote rate is α instead of α².
+   */
+  recovery_strike_at?: string;
+  /** ISO. Set when recovery flips a failed skill back to `pending`. Diagnostic provenance. */
+  recovered_at?: string;
 }
 
 /**
@@ -114,6 +135,15 @@ export const DRIFT_WINDOW_SIZE = MIN_EVIDENCE;
 export const DRIFT_DEMOTE_STRIKES = 2;
 /** Floor used in the hybrid first-window test for backfilled passed skills. */
 const HYBRID_BACKFILL_FLOOR = 0.75;
+/**
+ * Floor used by the failed-skill recovery gate. Mirrors HYBRID_BACKFILL_FLOOR
+ * (0.75) — a recovered skill must demonstrate accuracy confidently ABOVE the
+ * graduation floor before suppression is lifted. Recovery only lifts
+ * suppression (failed → pending); the skill still must clear the normal
+ * MIN_EVIDENCE=80 Wilson graduation afterward to reach `passed`. Setting the
+ * recovery bar at the same 0.75 floor keeps the two gates symmetric.
+ */
+const RECOVERY_FLOOR = 0.75;
 
 export interface VerdictResult {
   status: VerdictStatus;
@@ -208,7 +238,7 @@ export function resolveVerdict(
   snapshot: SkillSnapshot,
   delta: CategoryCounters,
   nowMs: number,
-  opts?: { role?: string; agentAccuracy?: number; driftDelta?: CategoryCounters },
+  opts?: { role?: string; agentAccuracy?: number; driftDelta?: CategoryCounters; recoveryDelta?: CategoryCounters },
 ): VerdictResult {
   // Terminal states short-circuit
   if (opts?.role === 'implementer') {
@@ -218,7 +248,7 @@ export function resolveVerdict(
     return { status: 'flagged_for_manual_review', shouldUpdate: false };
   }
   if (snapshot.status === 'failed') {
-    return { status: 'failed', shouldUpdate: false };
+    return resolveFailedRecovery(snapshot, opts?.recoveryDelta, nowMs);
   }
   if (snapshot.status === 'passed') {
     return resolvePassedDrift(snapshot, opts?.driftDelta, nowMs);
@@ -370,7 +400,18 @@ export function resolveVerdict(
         zScore,
         verdict_method: oneSampleMethod,
         shouldUpdate: true,
-        newSnapshotFields: { status: 'failed', verdict_method: oneSampleMethod },
+        newSnapshotFields: {
+          status: 'failed',
+          verdict_method: oneSampleMethod,
+          // Stamp the recovery-window anchor at fail time (symmetric inverse of
+          // passed_at). resolveFailedRecovery uses this to measure the recovery
+          // window. Without it the recovery clock never starts.
+          failed_at: new Date(nowMs).toISOString(),
+          // Clear any recovered_at from a prior recovery — this is a fresh
+          // failure, so a stale "recovered at" timestamp would be misleading in
+          // the frontmatter. (Write-only diagnostic field; no logic reads it.)
+          recovered_at: undefined,
+        },
       };
     }
     // CI straddles prior — inconclusive, fall through to strikes logic below.
@@ -451,7 +492,17 @@ export function resolveVerdict(
       zScore,
       verdict_method: verdictMethod,
       shouldUpdate: true,
-      newSnapshotFields: { status: 'failed', verdict_method: verdictMethod },
+      newSnapshotFields: {
+        status: 'failed',
+        verdict_method: verdictMethod,
+        // Stamp the recovery-window anchor at fail time (symmetric inverse of
+        // passed_at) — starts the recovery clock for resolveFailedRecovery.
+        failed_at: new Date(nowMs).toISOString(),
+        // Clear any recovered_at from a prior recovery — this is a fresh
+        // failure, so a stale "recovered at" timestamp would be misleading in
+        // the frontmatter. (Write-only diagnostic field; no logic reads it.)
+        recovered_at: undefined,
+      },
     };
   }
 
@@ -614,6 +665,128 @@ function resolvePassedDrift(
       drift_strikes: 0,
       drift_strike_at: undefined,
       passed_backfilled: undefined,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Recovery detection — failed-skill re-test (symmetric inverse of drift).
+//
+// Pipeline gate: a skill that reached `failed` is suppressed from injection
+// forever by skill-loader.ts. This gate gives it a path back: re-tested every
+// N=80 fresh signals since `failed_at`. Two consecutive Wilson lower-bound
+// CONFIRMATIONS above RECOVERY_FLOOR (K=2) lift suppression by transitioning
+// the skill to `pending` with `recovered_at` stamped. The combined K=2
+// false-promote rate is α² = 0.000625 — symmetric with drift's false-demote
+// rate, with latency bounded by 2 × DRIFT_WINDOW_SIZE.
+//
+// DISJOINT POPULATION: the recovery window anchors on failed_at /
+// recovery_strike_at, while drift anchors on passed_at / drift_strike_at. A
+// skill is never simultaneously failed and passed, so the two gates spend
+// their α budgets on non-overlapping signal populations — no α-leakage (same
+// argument as HANDBOOK invariant #11). Recovery → pending (NOT passed):
+// recovered skills still must clear the normal MIN_EVIDENCE=80 Wilson
+// graduation. Recovery only LIFTS SUPPRESSION.
+//
+// PAUSED state: when no recoveryDelta is supplied (caller couldn't compute a
+// window — e.g. failed_at not yet stamped on the first observation), recovery
+// is disabled until a window materializes. The skill stays `failed`.
+// ---------------------------------------------------------------------------
+
+function wilsonLowerBoundConfirmsAbove(
+  delta: CategoryCounters,
+  postTotal: number,
+  floor: number,
+): boolean {
+  if (postTotal <= 0) return false;
+  // Fast-skip when the post sample rate is at or below the floor — recovery is
+  // by definition "post window is ABOVE floor." Symmetric inverse of
+  // wilsonLowerBoundFailsAgainst's postP >= baseline fast-skip.
+  const postP = delta.correct / postTotal;
+  if (postP <= floor) return false;
+  // Use sparse-current α (calibrated one-sample target) — the SAME α the drift
+  // test uses. The recovery test is conceptually identical: one observed
+  // accuracy CI compared against a fixed prior, just on the other side.
+  const alpha = WILSON_SCHEDULE['sparse-current'];
+  const postCI = wilsonScoreInterval(delta.correct, postTotal, alpha);
+  // Recovery = the lower end of the post window's CI lies ABOVE the floor.
+  // Equivalent to "we can confidently say post is ABOVE floor at level α."
+  return postCI.lower > floor;
+}
+
+function resolveFailedRecovery(
+  snapshot: SkillSnapshot,
+  recoveryDelta: CategoryCounters | undefined,
+  nowMs: number,
+): VerdictResult {
+  // PAUSED: no recovery delta supplied (caller couldn't compute a window) →
+  // recovery detection disabled, skill stays failed.
+  if (!recoveryDelta) {
+    return { status: 'failed', shouldUpdate: false };
+  }
+  // Start the clock: a failed skill with no failed_at anchor stamps one now.
+  // This handles legacy `failed` snapshots written before the recovery fields
+  // existed — the recovery window can only be measured from a known anchor.
+  if (snapshot.failed_at == null) {
+    return {
+      status: 'failed',
+      shouldUpdate: true,
+      newSnapshotFields: { status: 'failed', failed_at: new Date(nowMs).toISOString() },
+    };
+  }
+  const postTotal = recoveryDelta.correct + recoveryDelta.hallucinated;
+  if (postTotal < DRIFT_WINDOW_SIZE) {
+    // Window not full yet — stay suppressed, no transition.
+    return { status: 'failed', shouldUpdate: false };
+  }
+
+  const confirm = wilsonLowerBoundConfirmsAbove(recoveryDelta, postTotal, RECOVERY_FLOOR);
+
+  if (confirm) {
+    const nextStrikes = (snapshot.recovery_strikes ?? 0) + 1;
+    if (nextStrikes >= DRIFT_DEMOTE_STRIKES) {
+      // K=2 confirming windows → lift suppression. Transition to pending (NOT
+      // passed): the skill resumes injection and must clear normal graduation.
+      const nowIso = new Date(nowMs).toISOString();
+      return {
+        status: 'pending',
+        shouldUpdate: true,
+        newSnapshotFields: {
+          status: 'pending',
+          recovered_at: nowIso,
+          failed_at: undefined,
+          recovery_strikes: 0,
+          recovery_strike_at: undefined,
+          verdict_method: undefined,
+        },
+      };
+    }
+    // First confirming window — stamp recovery_strike_at so the strike-2 Wilson
+    // window anchors here (independent from strike-1's window). Required for the
+    // α² K=2 false-promote guarantee (symmetric with drift_strike_at).
+    return {
+      status: 'failed',
+      shouldUpdate: true,
+      newSnapshotFields: {
+        status: 'failed',
+        recovery_strikes: nextStrikes,
+        recovery_strike_at: new Date(nowMs).toISOString(),
+      },
+    };
+  }
+
+  // Non-confirming window → reset strikes. No prior strike means steady-state
+  // (nothing to write); a prior strike must be cleared.
+  if ((snapshot.recovery_strikes ?? 0) === 0) {
+    return { status: 'failed', shouldUpdate: false };
+  }
+  return {
+    status: 'failed',
+    shouldUpdate: true,
+    newSnapshotFields: {
+      status: 'failed',
+      recovery_strikes: 0,
+      recovery_strike_at: undefined,
     },
   };
 }

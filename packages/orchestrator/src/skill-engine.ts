@@ -932,6 +932,16 @@ ${inputs.join('\n')}
           : undefined,
       drift_strike_at:
         typeof frontmatter.drift_strike_at === 'string' ? frontmatter.drift_strike_at : undefined,
+      failed_at:
+        typeof frontmatter.failed_at === 'string' ? frontmatter.failed_at : undefined,
+      recovery_strikes:
+        frontmatter.recovery_strikes != null && Number.isFinite(Number(frontmatter.recovery_strikes))
+          ? Number(frontmatter.recovery_strikes)
+          : undefined,
+      recovery_strike_at:
+        typeof frontmatter.recovery_strike_at === 'string' ? frontmatter.recovery_strike_at : undefined,
+      recovered_at:
+        typeof frontmatter.recovered_at === 'string' ? frontmatter.recovered_at : undefined,
     };
 
     const anchorMs = snapshot.inconclusive_at
@@ -973,10 +983,31 @@ ${inputs.join('\n')}
       }
     }
 
+    // Recovery delta: counters since failed_at (for the failed-status recovery
+    // gate). Symmetric inverse of the drift block above, on the DISJOINT failed
+    // population. When strike-1 has fired, anchor the next window at
+    // recovery_strike_at (not failed_at) so the two K=2 windows are independent
+    // — without this the strike-2 window includes strike-1's signals and the
+    // false-promote rate is α (≈0.025) instead of α² (≈0.000625). Falls back to
+    // bound_at when failed_at is absent (legacy snapshot — resolveFailedRecovery
+    // will stamp failed_at on this pass).
+    let recoveryDelta: ReturnType<PerformanceReader['getCountersSince']> | undefined;
+    if (snapshot.status === 'failed') {
+      const anchorIso =
+        (snapshot.recovery_strikes ?? 0) >= 1 && snapshot.recovery_strike_at
+          ? snapshot.recovery_strike_at
+          : (snapshot.failed_at ?? snapshot.bound_at);
+      const anchorAtMs = new Date(anchorIso).getTime();
+      if (!isNaN(anchorAtMs)) {
+        recoveryDelta = this.perfReader.getCountersSince(agentId, category, anchorAtMs);
+      }
+    }
+
     const verdictOpts: Parameters<typeof resolveVerdict>[3] = {
       ...(opts ?? {}),
       ...(agentScore != null ? { agentAccuracy: agentScore.accuracy } : {}),
       ...(driftDelta ? { driftDelta } : {}),
+      ...(recoveryDelta ? { recoveryDelta } : {}),
     };
     const verdict = resolveVerdict(snapshot, delta, nowMs, verdictOpts);
 
