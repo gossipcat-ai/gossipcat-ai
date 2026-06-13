@@ -505,7 +505,7 @@ ${projectContext || 'No project context available.'}
 </project_context>
 
 <findings_in_category>
-${findings.length > 0 ? findings.slice(0, 20).map(f => `- [${f.agentId}] ${f.evidence}`).join('\n') : 'No findings yet in this category.'}
+${findings.length > 0 ? findings.slice(-20).reverse().map(f => `- [${f.agentId}] ${f.evidence}`).join('\n') : 'No findings yet in this category.'}
 </findings_in_category>
 
 <agent_performance>
@@ -525,6 +525,7 @@ Output a skill markdown file with this exact structure:
 7. ## Quality Gate — pre-report checklist with checkboxes
 
 Requirements:
+- CRITICAL: Your ENTIRE response must be the skill markdown file itself. The FIRST line of output must be \`---\` (the opening of the YAML frontmatter). No preamble, no explanation, no code fences.
 - Write with authority — MUST, NEVER, NO EXCEPTIONS
 - Keep under 150 lines
 - CRITICAL: Tailor ALL content to the project's actual tech stack (see <tech_stack>). Only include checks relevant to technologies the project uses. If the project has no SQL database, do NOT mention SQL injection. If no HTML rendering, do NOT mention XSS. Generic security checklists waste agent prompt tokens.
