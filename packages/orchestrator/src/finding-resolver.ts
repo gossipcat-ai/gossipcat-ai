@@ -200,9 +200,23 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     // risk treating an insight as a bug-fix.
     if (entry.type === undefined || entry.type === null) {
       const taskId = String(entry.taskId ?? entry.findingId ?? '');
-      const colonIdx = taskId.lastIndexOf(':f');
-      if (colonIdx > 0) {
-        const consensusId = taskId.slice(0, colonIdx);
+      // `<cid>:f<N>` ids derive the consensusId from the `:f` suffix. NEW-format
+      // ids (`<cid>:new:<agent>:<n>`) have no `:f` segment, so derive the
+      // consensusId from the `:new:` separator instead — otherwise the report
+      // lookup (whose findFindingInReport scans the `newFindings` bucket) is
+      // unreachable for them and a NEW *insight* in a legacy row would fall to
+      // the tentative-'finding' backfill below and risk being auto-resolved as
+      // a bug-fix.
+      // Index-search direction is deliberately asymmetric: `:f` is a terminal
+      // suffix (`:fN`), so lastIndexOf is safest against a stray `:f` inside an
+      // agent name; `:new:` is an INTERIOR separator whose FIRST occurrence is
+      // the protocol boundary, so indexOf is correct — lastIndexOf would
+      // misparse an agent literally named `new` (`<cid>:new:new:<n>` → `<cid>:new`).
+      const fIdx = taskId.lastIndexOf(':f');
+      const newIdx = taskId.indexOf(':new:');
+      const consensusId =
+        fIdx > 0 ? taskId.slice(0, fIdx) : newIdx > 0 ? taskId.slice(0, newIdx) : null;
+      if (consensusId) {
         let report: any | null;
         if (consensusReportCache.has(consensusId)) {
           report = consensusReportCache.get(consensusId) ?? null;
