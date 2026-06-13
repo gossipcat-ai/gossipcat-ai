@@ -30,7 +30,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 
 import { withResolverLock } from './file-lock';
-import { appendChainedEntry } from './audit-log-chain';
+import { appendChainedEntry, readAuditEntries, type AuditEntry } from './audit-log-chain';
 
 const FINDINGS_FILENAME = 'implementation-findings.jsonl';
 const WATERMARK_FILENAME = 'last-resolve-scan.sha';
@@ -74,6 +74,82 @@ export interface ResolveOptions {
 const LINE_ANCHORED_WINDOW = 5;
 
 /**
+ * 5% false-resolve safety brake (spec §Risks §B + §Window size precedence rule).
+ *
+ * `BRAKE_THRESHOLD` is the spec's 5% manual-`unresolve` rate ceiling on
+ * `stale_anchor` resolutions within a trailing 30-day window. When the rate
+ * EXCEEDS this (strict `>`), the resolver pivots the stale_anchor path from
+ * `action:'resolve'` to `action:'flag_for_review'` — the finding stays OPEN
+ * with a flag_for_review audit trail. The brake gates ONLY the stale_anchor
+ * path; the `commit:<sha>` absent_everywhere fastpath is explicitly out of
+ * scope (spec §Risks §A — rename-without-fix is not monitored by this gate).
+ *
+ * `MIN_BRAKE_SAMPLE` is a minimum-denominator floor BELOW which the brake is
+ * PAUSED (never engages). Without a floor the first-ever unresolve is
+ * 1/1 = 100% > 5% and would permanently disable stale_anchor resolution after
+ * a single spurious unresolve. With threshold 0.05 the smallest denominator
+ * where ONE unresolve does NOT exceed 5% is 20 (1/20 = 5.0%, NOT > 5%), so 20
+ * is the floor at which a lone unresolve cannot trip the brake. This mirrors
+ * the project's statistical-floor philosophy (docs/HANDBOOK.md invariant #2,
+ * MIN_EVIDENCE=80). Both constants are exposed via FINDING_RESOLVER_INTERNALS
+ * for unit tests and future calibration sweeps.
+ */
+const BRAKE_THRESHOLD = 0.05;
+const MIN_BRAKE_SAMPLE = 20;
+
+/**
+ * Compute the trailing-window manual-unresolve rate on `stale_anchor`
+ * resolutions, and whether the 5% safety brake is engaged.
+ *
+ * - `cutoff = nowMs - windowDays*86400000`. Each entry's `ts` (ISO-8601) is
+ *   parsed via `Date.parse`; entries with NaN/absent ts are skipped.
+ * - `staleAnchorResolves` = entries IN WINDOW with `action==='resolve'` AND
+ *   `resolved_by==='stale_anchor'` (the brake denominator).
+ * - The set of finding_ids EVER resolved via stale_anchor is built ALL-TIME
+ *   (not windowed) — an unresolve can post-date its resolve's 30d edge, so an
+ *   all-time id-match is the safe (more-inclusive) numerator filter. This also
+ *   excludes unresolves of `commit:<sha>` findings (ids not in the set) per
+ *   spec §Risks §A.
+ * - `unresolves` = entries IN WINDOW with `action==='unresolve'` whose
+ *   finding_id is in that set.
+ * - `engaged` = denominator >= MIN_BRAKE_SAMPLE AND rate > BRAKE_THRESHOLD.
+ *
+ * Tolerant of malformed persisted records (trust-boundary: the JSONL is a
+ * parsed persisted record).
+ */
+export function computeStaleAnchorUnresolveRate(
+  entries: AuditEntry[],
+  nowMs: number,
+  windowDays: number = 30,
+): { rate: number; staleAnchorResolves: number; unresolves: number; engaged: boolean } {
+  const cutoff = nowMs - windowDays * 86_400_000;
+  // All-time set of finding_ids ever resolved via stale_anchor.
+  const staleAnchorIds = new Set<string>();
+  for (const e of entries) {
+    if (e && e.action === 'resolve' && e.resolved_by === 'stale_anchor') {
+      const id = typeof e.finding_id === 'string' ? e.finding_id : '';
+      if (id) staleAnchorIds.add(id);
+    }
+  }
+  let staleAnchorResolves = 0;
+  let unresolves = 0;
+  for (const e of entries) {
+    if (!e || typeof e.ts !== 'string') continue;
+    const t = Date.parse(e.ts);
+    if (Number.isNaN(t) || t < cutoff) continue;
+    if (e.action === 'resolve' && e.resolved_by === 'stale_anchor') {
+      staleAnchorResolves++;
+    } else if (e.action === 'unresolve') {
+      const id = typeof e.finding_id === 'string' ? e.finding_id : '';
+      if (id && staleAnchorIds.has(id)) unresolves++;
+    }
+  }
+  const rate = staleAnchorResolves === 0 ? 0 : unresolves / staleAnchorResolves;
+  const engaged = staleAnchorResolves >= MIN_BRAKE_SAMPLE && rate > BRAKE_THRESHOLD;
+  return { rate, staleAnchorResolves, unresolves, engaged };
+}
+
+/**
  * Three-state symbol-presence classification per `(file, identifier)` pair.
  * See spec §Heuristic — three-state evaluation.
  */
@@ -87,6 +163,13 @@ export interface ResolveResult {
   scanned: number;
   resolved: number;
   resolvedFindingIds: string[];
+  /**
+   * Count of stale_anchor candidates that were diverted to a
+   * `flag_for_review` audit entry (finding stays OPEN) because the 5% false-
+   * resolve safety brake was engaged for this run. Always present (default 0).
+   * See `computeStaleAnchorUnresolveRate` + spec §Risks §B.
+   */
+  flaggedForReview: number;
   pathRejections: number;
   headSha: string | null;
   /**
@@ -168,6 +251,7 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
       scanned: 0,
       resolved: 0,
       resolvedFindingIds: [],
+      flaggedForReview: 0,
       pathRejections: 0,
       headSha,
       watermarkAdvanced: false,
@@ -186,6 +270,7 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
   }
 
   let resolvedCount = 0;
+  let flaggedForReview = 0;
   let pathRejections = 0;
   const resolvedFindingIds: string[] = [];
   // Per-`continue`-site diagnostic counters (spec: observability). Initialized
@@ -202,7 +287,22 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     // resolve on its own but is held open by a present sibling cite under the
     // multi-cite strict-AND. Diagnoses "deleted file + still-alive cite → open".
     absentBlockedBySibling: 0,
+    // A stale_anchor candidate diverted to flag_for_review because the 5%
+    // false-resolve safety brake engaged this run (finding stays open).
+    brakeEngaged: 0,
   };
+
+  // 5% false-resolve safety brake (spec §Risks §B). Compute ONCE per run, and
+  // only when the line-anchored heuristic is enabled — the brake gates only
+  // the stale_anchor path, so it is irrelevant (and the audit-log read is
+  // skippable) when lineAnchored is off. Read the audit log a single time.
+  let brakeEngaged = false;
+  if (opts.lineAnchored) {
+    brakeEngaged = computeStaleAnchorUnresolveRate(
+      readAuditEntries(projectRoot),
+      Date.now(),
+    ).engaged;
+  }
 
   // Per-consensus-report cache for backfill lookups. Loading the same JSON
   // file once per row would be wasteful when 20+ findings share a round.
@@ -507,6 +607,45 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     const resolvedBy = useStaleAnchor
       ? 'stale_anchor'
       : (headSha ? `commit:${headSha}` : 'manual');
+
+    // 5% safety brake (spec §Risks §B): when engaged, the stale_anchor path
+    // does NOT resolve — it emits a flag_for_review audit entry (same payload
+    // shape) and leaves the finding OPEN for manual triage. The brake gates
+    // ONLY stale_anchor; absent_everywhere → commit:<sha> is never gated.
+    if (useStaleAnchor && brakeEngaged) {
+      const firstCite = safeFileCites[0];
+      // Same invariant as the resolve path: stale_anchor requires a cited line.
+      if (firstCite.line === undefined) {
+        throw new Error('finding-resolver invariant: stale_anchor brake path reached with undefined cited line');
+      }
+      try {
+        appendChainedEntry(projectRoot, {
+          ts: new Date().toISOString(),
+          finding_id: findingId,
+          action: 'flag_for_review',
+          resolved_by: 'stale_anchor',
+          before_quote: beforeQuote,
+          after_check: 'present_elsewhere_only',
+          operator: 'auto',
+          cited_line: firstCite.line,
+          window: LINE_ANCHORED_WINDOW,
+          reason: `stale_anchor auto-resolve suppressed: 30d manual-unresolve rate exceeded ${BRAKE_THRESHOLD * 100}% safety brake`,
+        });
+      } catch (err) {
+        try {
+          process.stderr.write(
+            `[gossipcat] finding-resolver: failed to flag ${findingId} for review: ${(err as Error).message}\n`,
+          );
+        } catch { /* best-effort */ }
+      }
+      // Finding stays open — do NOT mutate entry.status/resolvedAt/resolvedBy,
+      // do NOT touch row.raw, do NOT push resolvedFindingIds, do NOT increment
+      // resolvedCount (so the findings-file rewrite is not triggered by this).
+      flaggedForReview++;
+      skipReasons.brakeEngaged++;
+      continue;
+    }
+
     try {
       // mutate row in memory; we'll rewrite the file at the end
       entry.status = 'resolved';
@@ -600,6 +739,7 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     scanned: rows.length,
     resolved: resolvedCount,
     resolvedFindingIds,
+    flaggedForReview,
     pathRejections,
     headSha,
     watermarkAdvanced,
@@ -1102,4 +1242,7 @@ export const FINDING_RESOLVER_INTERNALS = {
   WATERMARK_FILENAME,
   COLD_START_SINCE,
   PATH_REJECT_REASONS,
+  BRAKE_THRESHOLD,
+  MIN_BRAKE_SAMPLE,
+  LINE_ANCHORED_WINDOW,
 };
