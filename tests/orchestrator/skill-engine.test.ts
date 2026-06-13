@@ -350,6 +350,38 @@ migration_count: 1
     }
   });
 
+  test('small list (<20 findings) — all present, newest first', async () => {
+    // Mirrors the >20 test above but with only 3 findings to verify the slice(-20)
+    // path doesn't corrupt ordering when the list fits entirely within the window.
+    const freshDir = join(tmpdir(), 'gossip-skillfresh-small-' + Date.now());
+    mkdirSync(join(freshDir, '.gossip'), { recursive: true });
+    const tag = (i: number) => `<finding-${String(i).padStart(2, '0')}>`;
+    const signals: object[] = [];
+    for (let i = 0; i < 3; i++) {
+      signals.push({
+        type: 'consensus', signal: 'category_confirmed', agentId: 'agent-small',
+        category: 'concurrency', evidence: tag(i),
+        taskId: `t${i}`, timestamp: '2026-01-01T00:00:00Z',
+      });
+    }
+    writeSignals(freshDir, signals);
+    writeFileSync(join(freshDir, '.gossip', 'bootstrap.md'), '# Small Project\n');
+
+    const gen = new SkillEngine(mockLLM(VALID_SKILL), new PerformanceReader(freshDir), freshDir);
+    try {
+      const { user } = await gen.buildPrompt('agent-small', 'concurrency');
+      // All 3 findings must be present (no truncation for small lists).
+      for (let i = 0; i < 3; i++) {
+        expect(user).toContain(tag(i));
+      }
+      // Newest-first ordering: f2 appears before f1, f1 before f0.
+      expect(user.indexOf(tag(2))).toBeLessThan(user.indexOf(tag(1)));
+      expect(user.indexOf(tag(1))).toBeLessThan(user.indexOf(tag(0)));
+    } finally {
+      rmSync(freshDir, { recursive: true, force: true });
+    }
+  });
+
   test('user prompt instructs the first line of output must be ---', async () => {
     const gen = new SkillEngine(mockLLM(VALID_SKILL), new PerformanceReader(testDir), testDir);
     const { user } = await gen.buildPrompt('agent-a', 'injection_vectors');

@@ -105,7 +105,7 @@ export async function findingHandler(
   let found: any = null;
   let tag: FindingDetail['finding']['tag'] = 'unverified';
   for (const [bucket, tagName] of buckets) {
-    const hit = (report[bucket] || []).find((f: any) => f.id === findingId);
+    const hit = (report[bucket] || []).find((f: any) => f.id === findingId || f.findingId === findingId);
     if (hit) { found = hit; tag = tagName; break; }
   }
   if (!found) throw new Error(`finding ${findingId} not found in ${consensusId}`);

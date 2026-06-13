@@ -787,7 +787,19 @@ export async function handleCollect(
           turn++;
         }
         const parsed = engine.parseCrossReviewResponse(p.agentId, response.text, 50);
-        const filtered = parsed.filter((e: any) => e.peerAgentId !== p.agentId && validPeerIds.has(e.peerAgentId));
+        // NEW findings have no peer — skip self-review/peer-validity check for them
+        // (GH #131 parity: relay-cross-review.ts:229 and consensus-engine.ts:919 both exempt NEW).
+        const filtered = parsed.filter((e: any) => e.action === 'new' || (e.peerAgentId !== p.agentId && validPeerIds.has(e.peerAgentId)));
+        // Rewrite NEW findingIds to the consensus-wide form `<consensusId>:new:<agentId>:<counter>`
+        // and clear peerAgentId residue — mirrors relay-cross-review.ts:238-249 so both
+        // collect-driven and relay-driven paths produce consistent NEW entries before synthesize.
+        let newCounter = 0;
+        for (const e of filtered) {
+          if (e.action === 'new') {
+            e.findingId = `${consensusId}:new:${p.agentId}:${++newCounter}`;
+            e.peerAgentId = '';
+          }
+        }
         if (filtered.length === 0) {
           process.stderr.write(`[consensus] ${p.agentId} cross-review produced 0 entries (attempt ${attempt + 1}${capHit ? ', cap-hit recovery path' : ''})\n`);
           relayCrossReviewSkipped.push({

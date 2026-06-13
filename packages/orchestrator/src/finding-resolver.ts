@@ -842,7 +842,7 @@ function findFindingInReport(report: any, taskId: string, findingProse: unknown)
     const arr = report[bucket];
     if (!Array.isArray(arr)) continue;
     for (const f of arr) {
-      if (f && typeof f.id === 'string' && f.id === taskId) return f;
+      if (f && ((typeof f.id === 'string' && f.id === taskId) || (typeof f.findingId === 'string' && f.findingId === taskId))) return f;
     }
   }
   // Pass 2 — fall back to exact prose match (rare but defensive)
