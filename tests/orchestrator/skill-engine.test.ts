@@ -309,4 +309,51 @@ migration_count: 1
     const tmpArtifacts = entries.filter(name => name.includes('.tmp.'));
     expect(tmpArtifacts).toEqual([]);
   });
+
+  // ─── prompt freshness + output-discipline (FIX 1 / FIX 2) ────────────────
+
+  test('embeds the NEWEST 20 category findings, not the oldest', async () => {
+    // Isolated dir so the >20 findings don't pollute the shared testDir.
+    const freshDir = join(tmpdir(), 'gossip-skillfresh-' + Date.now());
+    mkdirSync(join(freshDir, '.gossip'), { recursive: true });
+    // 25 category_confirmed findings in append (chronological) order: f0 oldest,
+    // f24 newest. The slice(-20) must keep f5..f24 and drop f0..f4.
+    // Zero-padded + delimited evidence so `finding-02` is not a substring of
+    // `finding-20`; required for the exclusion assertions below.
+    const tag = (i: number) => `<finding-${String(i).padStart(2, '0')}>`;
+    const signals: object[] = [];
+    for (let i = 0; i < 25; i++) {
+      signals.push({
+        type: 'consensus', signal: 'category_confirmed', agentId: 'agent-fresh',
+        category: 'concurrency', evidence: tag(i),
+        taskId: `t${i}`, timestamp: '2026-01-01T00:00:00Z',
+      });
+    }
+    writeSignals(freshDir, signals);
+    writeFileSync(join(freshDir, '.gossip', 'bootstrap.md'), '# Fresh Project\n');
+
+    const gen = new SkillEngine(mockLLM(VALID_SKILL), new PerformanceReader(freshDir), freshDir);
+    try {
+      const { user } = await gen.buildPrompt('agent-fresh', 'concurrency');
+      // Oldest five must be excluded.
+      for (let i = 0; i < 5; i++) {
+        expect(user).not.toContain(tag(i));
+      }
+      // Newest twenty must be present.
+      for (let i = 5; i < 25; i++) {
+        expect(user).toContain(tag(i));
+      }
+      // Newest-first ordering: f24 appears before f23.
+      expect(user.indexOf(tag(24))).toBeLessThan(user.indexOf(tag(23)));
+    } finally {
+      rmSync(freshDir, { recursive: true, force: true });
+    }
+  });
+
+  test('user prompt instructs the first line of output must be ---', async () => {
+    const gen = new SkillEngine(mockLLM(VALID_SKILL), new PerformanceReader(testDir), testDir);
+    const { user } = await gen.buildPrompt('agent-a', 'injection_vectors');
+    expect(user).toContain('The FIRST line of output must be `---`');
+    expect(user).toContain('No preamble, no explanation, no code fences.');
+  });
 });
