@@ -18,7 +18,14 @@ import { execFileSync } from 'child_process';
 import {
   resolveFindings,
   classifyPresence,
+  computeStaleAnchorUnresolveRate,
+  appendChainedEntry,
+  verifyChain,
+  FINDING_RESOLVER_INTERNALS,
+  type AuditEntry,
 } from '@gossip/orchestrator';
+
+const { MIN_BRAKE_SAMPLE, BRAKE_THRESHOLD } = FINDING_RESOLVER_INTERNALS;
 
 function makeTempProject(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'finding-resolver-line-anchored-'));
@@ -444,5 +451,336 @@ describe('finding-resolver — line-anchored staleness (resolveFindings)', () =>
     expect(result.resolved).toBe(0);
     expect(readFindings(root)[0].status).toBe('open');
     expect((result.skipReasons?.absentBlockedBySibling ?? 0)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── computeStaleAnchorUnresolveRate — pure helper (5% safety brake) ───────
+
+describe('computeStaleAnchorUnresolveRate — 5% safety brake', () => {
+  const NOW = Date.parse('2026-06-13T00:00:00.000Z');
+  const DAY = 86_400_000;
+
+  // Minimal AuditEntry factory (hashes are irrelevant to the stats reader).
+  function entry(partial: Partial<AuditEntry>): AuditEntry {
+    return {
+      prev_hash: '0'.repeat(64),
+      entry_hash: '0'.repeat(64),
+      finding_id: 'x',
+      ts: new Date(NOW).toISOString(),
+      action: 'resolve',
+      ...partial,
+    } as AuditEntry;
+  }
+
+  function staleResolve(id: string, offsetDays: number): AuditEntry {
+    return entry({
+      finding_id: id,
+      action: 'resolve',
+      resolved_by: 'stale_anchor',
+      ts: new Date(NOW - offsetDays * DAY).toISOString(),
+    });
+  }
+  function unresolve(id: string, offsetDays: number): AuditEntry {
+    return entry({
+      finding_id: id,
+      action: 'unresolve',
+      ts: new Date(NOW - offsetDays * DAY).toISOString(),
+    });
+  }
+
+  test('engaged=false when staleAnchorResolves < MIN_BRAKE_SAMPLE even at 100% rate', () => {
+    // 1 resolve + 1 unresolve of the same id → 100% rate, but denominator is
+    // 1 < 20 floor → brake PAUSED.
+    const entries = [staleResolve('f1', 1), unresolve('f1', 0)];
+    const r = computeStaleAnchorUnresolveRate(entries, NOW);
+    expect(r.staleAnchorResolves).toBe(1);
+    expect(r.unresolves).toBe(1);
+    expect(r.rate).toBe(1);
+    expect(r.engaged).toBe(false);
+  });
+
+  test('exactly 5% (1/20) → engaged=false (strict >)', () => {
+    const entries: AuditEntry[] = [];
+    for (let i = 0; i < MIN_BRAKE_SAMPLE; i++) entries.push(staleResolve(`f${i}`, 1));
+    entries.push(unresolve('f0', 0)); // 1 unresolve of a stale_anchor id
+    const r = computeStaleAnchorUnresolveRate(entries, NOW);
+    expect(r.staleAnchorResolves).toBe(MIN_BRAKE_SAMPLE);
+    expect(r.unresolves).toBe(1);
+    expect(r.rate).toBeCloseTo(0.05, 10);
+    expect(r.rate).toBe(BRAKE_THRESHOLD); // exactly 5.0%, not > 5%
+    expect(r.engaged).toBe(false);
+  });
+
+  test('>5% with denominator >= 20 (2/20=10%) → engaged=true', () => {
+    const entries: AuditEntry[] = [];
+    for (let i = 0; i < MIN_BRAKE_SAMPLE; i++) entries.push(staleResolve(`f${i}`, 1));
+    entries.push(unresolve('f0', 0));
+    entries.push(unresolve('f1', 0));
+    const r = computeStaleAnchorUnresolveRate(entries, NOW);
+    expect(r.staleAnchorResolves).toBe(MIN_BRAKE_SAMPLE);
+    expect(r.unresolves).toBe(2);
+    expect(r.rate).toBeCloseTo(0.1, 10);
+    expect(r.engaged).toBe(true);
+  });
+
+  test('unresolves of commit:<sha> findings (id not in stale_anchor set) excluded from numerator', () => {
+    const entries: AuditEntry[] = [];
+    for (let i = 0; i < MIN_BRAKE_SAMPLE; i++) entries.push(staleResolve(`f${i}`, 1));
+    // A commit:<sha> resolve + its unresolve — id NEVER appears as a
+    // stale_anchor resolve, so it must NOT count toward the numerator.
+    entries.push(entry({ finding_id: 'commitId', action: 'resolve', resolved_by: 'commit:abc', ts: new Date(NOW - DAY).toISOString() }));
+    entries.push(unresolve('commitId', 0));
+    const r = computeStaleAnchorUnresolveRate(entries, NOW);
+    expect(r.staleAnchorResolves).toBe(MIN_BRAKE_SAMPLE);
+    expect(r.unresolves).toBe(0); // commitId excluded
+    expect(r.engaged).toBe(false);
+  });
+
+  test('out-of-window resolves excluded from denominator; NaN/absent ts skipped', () => {
+    const entries: AuditEntry[] = [];
+    // 20 in-window stale_anchor resolves.
+    for (let i = 0; i < MIN_BRAKE_SAMPLE; i++) entries.push(staleResolve(`f${i}`, 1));
+    // An old (40d) stale_anchor resolve — outside the 30d window → not counted
+    // in the denominator (but its id IS in the all-time set).
+    entries.push(staleResolve('old', 40));
+    // 2 unresolves in-window → with denom 20, rate=10% > 5%.
+    entries.push(unresolve('f0', 0));
+    entries.push(unresolve('f1', 0));
+    // Malformed ts entries — must be skipped, not throw.
+    entries.push(entry({ finding_id: 'f2', action: 'unresolve', ts: 'not-a-date' }));
+    entries.push(entry({ finding_id: 'f3', action: 'resolve', resolved_by: 'stale_anchor', ts: undefined as unknown as string }));
+    const r = computeStaleAnchorUnresolveRate(entries, NOW);
+    expect(r.staleAnchorResolves).toBe(MIN_BRAKE_SAMPLE); // old (40d) + NaN-ts excluded
+    expect(r.unresolves).toBe(2);
+    expect(r.engaged).toBe(true);
+  });
+
+  test('unresolve of an all-time (out-of-window) stale_anchor resolve still counts', () => {
+    const entries: AuditEntry[] = [];
+    for (let i = 0; i < MIN_BRAKE_SAMPLE; i++) entries.push(staleResolve(`f${i}`, 1));
+    // The resolve for `old` is 40d out (not in denominator), but its in-window
+    // unresolve must still count in the numerator (all-time id set).
+    entries.push(staleResolve('old', 40));
+    entries.push(unresolve('old', 0));
+    entries.push(unresolve('f0', 0));
+    const r = computeStaleAnchorUnresolveRate(entries, NOW);
+    expect(r.staleAnchorResolves).toBe(MIN_BRAKE_SAMPLE);
+    expect(r.unresolves).toBe(2); // old + f0
+    expect(r.engaged).toBe(true);
+  });
+
+  test('zero denominator → rate 0, not NaN, not engaged', () => {
+    const r = computeStaleAnchorUnresolveRate([], NOW);
+    expect(r.staleAnchorResolves).toBe(0);
+    expect(r.rate).toBe(0);
+    expect(r.engaged).toBe(false);
+  });
+});
+
+// ─── 5% safety brake integration (resolveFindings) ─────────────────────────
+
+describe('finding-resolver — 5% safety brake integration', () => {
+  // Pre-seed the audit log with >5% manual-unresolve history on stale_anchor
+  // resolutions so the brake is engaged when resolveFindings runs.
+  function seedBrakeEngagedHistory(root: string): void {
+    for (let i = 0; i < MIN_BRAKE_SAMPLE; i++) {
+      appendChainedEntry(root, {
+        ts: new Date().toISOString(),
+        finding_id: `seed${i}`,
+        action: 'resolve',
+        resolved_by: 'stale_anchor',
+        after_check: 'present_elsewhere_only',
+        operator: 'auto',
+        cited_line: 1,
+        window: 5,
+      });
+    }
+    // 2 unresolves / 20 = 10% > 5% → engaged.
+    for (const id of ['seed0', 'seed1']) {
+      appendChainedEntry(root, {
+        ts: new Date().toISOString(),
+        finding_id: id,
+        action: 'unresolve',
+        operator: 'manual',
+      });
+    }
+  }
+
+  function setupRepoWithFixture(
+    relPath: string,
+    initialContent: string,
+    fixedContent: string,
+  ): { root: string } {
+    const root = makeTempProject();
+    initGit(root);
+    const abs = path.join(root, relPath);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, initialContent);
+    commit(root, 'init');
+    fs.writeFileSync(abs, fixedContent);
+    fs.writeFileSync(path.join(root, '.gossip', '_marker'), Date.now().toString());
+    commit(root, 'refactor');
+    return { root };
+  }
+
+  // ── brake engaged → stale_anchor finding flagged, stays open ──────────────
+  test('brake engaged: present_elsewhere finding stays open + flag_for_review audit entry', async () => {
+    const initial = buildFileWithSymbolAt(200, 'Math.min', [110, 120, 130]);
+    const fixed = buildFileWithSymbolAt(200, 'Math.min', [110, 130]);
+    const { root } = setupRepoWithFixture('src/foo.ts', initial, fixed);
+    seedBrakeEngagedHistory(root);
+
+    writeFinding(root, {
+      taskId: 'brake1:f1',
+      finding: '`Math.min` <cite tag="file">src/foo.ts:120</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    const result = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!result.ok) throw new Error('lock contended');
+    expect(result.resolved).toBe(0);
+    expect(result.flaggedForReview).toBe(1);
+    expect(result.skipReasons?.brakeEngaged).toBe(1);
+    // Finding stays open.
+    expect(readFindings(root)[0].status).toBe('open');
+    // A flag_for_review audit entry with the stale_anchor payload was appended.
+    const flag = readAuditEntries(root).find(
+      e => e.action === 'flag_for_review' && e.finding_id === 'brake1:f1',
+    );
+    expect(flag).toBeDefined();
+    expect(flag.resolved_by).toBe('stale_anchor');
+    expect(flag.after_check).toBe('present_elsewhere_only');
+    expect(flag.cited_line).toBe(120);
+    expect(flag.window).toBe(5);
+    expect(flag.operator).toBe('auto');
+    expect(typeof flag.reason).toBe('string');
+    // No resolve entry for this finding.
+    expect(
+      readAuditEntries(root).find(e => e.action === 'resolve' && e.finding_id === 'brake1:f1'),
+    ).toBeUndefined();
+  });
+
+  // ── brake does NOT gate the absent_everywhere commit:<sha> fastpath ───────
+  test('brake engaged: absent_everywhere finding still resolves as commit:<sha>', async () => {
+    const root = makeTempProject();
+    initGit(root);
+    const abs = path.join(root, 'src/gone.ts');
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, 'export const removeMe = () => 1;\n');
+    commit(root, 'init');
+    fs.rmSync(abs);
+    fs.writeFileSync(path.join(root, '.gossip', '_marker'), Date.now().toString());
+    commit(root, 'delete gone.ts');
+    seedBrakeEngagedHistory(root);
+
+    writeFinding(root, {
+      taskId: 'brake2:f1',
+      finding: 'Issue in `removeMe` <cite tag="file">src/gone.ts:1</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    // lineAnchored ON — brake is engaged — but the absent_everywhere path is
+    // explicitly NOT gated (spec §Risks §A).
+    const result = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!result.ok) throw new Error('lock contended');
+    expect(result.resolved).toBe(1);
+    expect(result.flaggedForReview).toBe(0);
+    expect(readFindings(root)[0].status).toBe('resolved');
+    expect(String(readFindings(root)[0].resolvedBy).startsWith('commit:')).toBe(true);
+  });
+
+  // ── chain stays intact after a flag_for_review append ─────────────────────
+  test('verifyChain returns null (intact) after a flag_for_review append', async () => {
+    const initial = buildFileWithSymbolAt(200, 'Math.min', [110, 120, 130]);
+    const fixed = buildFileWithSymbolAt(200, 'Math.min', [110, 130]);
+    const { root } = setupRepoWithFixture('src/foo.ts', initial, fixed);
+    seedBrakeEngagedHistory(root);
+
+    writeFinding(root, {
+      taskId: 'brake3:f1',
+      finding: '`Math.min` <cite tag="file">src/foo.ts:120</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    const result = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!result.ok) throw new Error('lock contended');
+    expect(result.flaggedForReview).toBe(1);
+    expect(verifyChain(root)).toBeNull();
+  });
+
+  // ── audit-log dedup: a persistently-flagged finding is flagged once across
+  //    runs (no duplicate flag_for_review per run), but stays open + counted ──
+  function countFlags(root: string, findingId: string): number {
+    return readAuditEntries(root).filter(
+      e => e.action === 'flag_for_review' && e.finding_id === findingId,
+    ).length;
+  }
+
+  test('brake engaged: second run does NOT append a duplicate flag_for_review (dedup across runs)', async () => {
+    const initial = buildFileWithSymbolAt(200, 'Math.min', [110, 120, 130]);
+    const fixed = buildFileWithSymbolAt(200, 'Math.min', [110, 130]);
+    const { root } = setupRepoWithFixture('src/foo.ts', initial, fixed);
+    seedBrakeEngagedHistory(root);
+
+    writeFinding(root, {
+      taskId: 'dedup1:f1',
+      finding: '`Math.min` <cite tag="file">src/foo.ts:120</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    const r1 = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!r1.ok) throw new Error('lock contended');
+    expect(r1.flaggedForReview).toBe(1);
+    expect(countFlags(root, 'dedup1:f1')).toBe(1);
+
+    const r2 = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!r2.ok) throw new Error('lock contended');
+    // Still held open + counted this run...
+    expect(r2.flaggedForReview).toBe(1);
+    expect(r2.skipReasons?.brakeEngaged).toBe(1);
+    expect(readFindings(root)[0].status).toBe('open');
+    // ...but NO second audit WRITE for the same finding.
+    expect(countFlags(root, 'dedup1:f1')).toBe(1);
+  });
+
+  test('brake engaged: an unresolve between runs re-arms the flag (re-flag after unresolve)', async () => {
+    const initial = buildFileWithSymbolAt(200, 'Math.min', [110, 120, 130]);
+    const fixed = buildFileWithSymbolAt(200, 'Math.min', [110, 130]);
+    const { root } = setupRepoWithFixture('src/foo.ts', initial, fixed);
+    seedBrakeEngagedHistory(root);
+
+    writeFinding(root, {
+      taskId: 'dedup2:f1',
+      finding: '`Math.min` <cite tag="file">src/foo.ts:120</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    const r1 = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!r1.ok) throw new Error('lock contended');
+    expect(countFlags(root, 'dedup2:f1')).toBe(1);
+
+    // Operator unresolves the flagged finding — most-recent action is now
+    // `unresolve`, not `flag_for_review`, so the next run must re-flag.
+    appendChainedEntry(root, {
+      ts: new Date().toISOString(),
+      finding_id: 'dedup2:f1',
+      action: 'unresolve',
+      operator: 'manual',
+    });
+
+    const r2 = await resolveFindings(root, { full: true, lineAnchored: true });
+    if (!r2.ok) throw new Error('lock contended');
+    expect(r2.flaggedForReview).toBe(1);
+    expect(countFlags(root, 'dedup2:f1')).toBe(2);
   });
 });

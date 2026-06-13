@@ -163,6 +163,33 @@ export function appendChainedEntry(
 }
 
 /**
+ * Best-effort read of all entries in `.gossip/finding-resolutions.jsonl`,
+ * skipping malformed/blank lines (mirrors the defensive parse style in
+ * `verifyChain` / `readLastEntryHash`). Missing file → [].
+ *
+ * This is a STATS reader: it deliberately does NOT verify the hash chain.
+ * A consumer computing trailing-window rates must tolerate an unverified
+ * (possibly corrupt) tail; `verifyChain` remains the integrity tool for
+ * tamper detection. Each parsed line is returned verbatim as an `AuditEntry`
+ * — callers that depend on specific fields (ts, action, resolved_by,
+ * finding_id) must themselves tolerate absent/NaN values, since the JSONL is
+ * a parsed persisted record that may predate current field requirements.
+ */
+export function readAuditEntries(projectRoot: string): AuditEntry[] {
+  const file = auditLogPath(projectRoot);
+  let raw: string;
+  try { raw = fs.readFileSync(file, 'utf8'); }
+  catch { return []; /* missing file → empty */ }
+  const out: AuditEntry[] = [];
+  for (const line of raw.split('\n')) {
+    if (line.length === 0) continue;
+    try { out.push(JSON.parse(line) as AuditEntry); }
+    catch { /* skip malformed line */ }
+  }
+  return out;
+}
+
+/**
  * Verify the on-disk chain. Returns `null` when intact; otherwise returns
  * the index (0-based) of the first broken entry plus the reason.
  */

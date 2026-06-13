@@ -230,6 +230,7 @@ export { bump as bumpRoundCounter, get as getRoundCounter, reset as resetRoundCo
 export { withResolverLock, RESOLVER_LOCK_INTERNALS } from './file-lock';
 export {
   appendChainedEntry,
+  readAuditEntries,
   computeEntryHash,
   verifyChain,
   stableStringify,
@@ -246,6 +247,7 @@ export {
   stripJsTsComments,
   containsToken,
   classifyPresence,
+  computeStaleAnchorUnresolveRate,
   FINDING_RESOLVER_INTERNALS,
 } from './finding-resolver';
 export type { ResolveOptions, ResolveResult, ResolveSkipped, SymbolPresence } from './finding-resolver';
