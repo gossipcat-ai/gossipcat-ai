@@ -555,6 +555,59 @@ describe('finding-resolver — resolveFindings', () => {
     expect(findings[0].status).toBe('open');
   });
 
+  test('NEW-format id (<cid>:new:<agent>:<n>) without `type`, report shows insight → skip', async () => {
+    // Regression for fable f2 (consensus 79af065f): NEW-format ids have no `:f`
+    // segment, so deriving the consensusId via lastIndexOf(':f') failed and the
+    // row fell to the tentative-'finding' backfill — wrongly auto-resolving a
+    // NEW *insight*. The `:new:` separator must derive the consensusId so the
+    // report lookup (newFindings bucket) reaches the real `insight` type.
+    const { root } = setupGitFixture();
+    fs.mkdirSync(path.join(root, '.gossip', 'consensus-reports'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '.gossip', 'consensus-reports', 'eeee5555-ffff6666.json'),
+      JSON.stringify({
+        id: 'eeee5555-ffff6666',
+        newFindings: [
+          { findingId: 'eeee5555-ffff6666:new:gemini-reviewer:1', findingType: 'insight', finding: 'x' },
+        ],
+      }),
+    );
+    writeFinding(root, {
+      taskId: 'eeee5555-ffff6666:new:gemini-reviewer:1',
+      finding: 'Note: `Math.min` no longer used <cite tag="file">src/foo.ts:1</cite>',
+      tag: 'unique',
+      // no `type` — must backfill from the newFindings bucket, NOT the legacy path
+      status: 'open',
+    });
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error();
+    expect(result.resolved).toBe(0);
+    expect(readFindings(root)[0].status).toBe('open');
+  });
+
+  test('NEW-format id without `type`, report shows finding → resolves', async () => {
+    const { root } = setupGitFixture();
+    fs.mkdirSync(path.join(root, '.gossip', 'consensus-reports'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '.gossip', 'consensus-reports', 'dddd7777-eeee8888.json'),
+      JSON.stringify({
+        id: 'dddd7777-eeee8888',
+        newFindings: [
+          { findingId: 'dddd7777-eeee8888:new:sonnet-reviewer:2', findingType: 'finding', finding: 'x' },
+        ],
+      }),
+    );
+    writeFinding(root, {
+      taskId: 'dddd7777-eeee8888:new:sonnet-reviewer:2',
+      finding: 'Bad `Math.min` <cite tag="file">src/foo.ts:1</cite>',
+      tag: 'unique',
+      status: 'open',
+    });
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error();
+    expect(result.resolved).toBe(1);
+  });
+
   test('PR-299 Bug A: row without `type`, no consensus report → conservative skip', async () => {
     const { root } = setupGitFixture();
     writeFinding(root, {

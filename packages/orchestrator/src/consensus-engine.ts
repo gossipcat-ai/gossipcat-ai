@@ -3050,12 +3050,20 @@ Return only valid JSON.${skillsBlock}`;
     for (const signal of report.signals) {
       signal.consensusId = consensusId;
     }
-    // Also update finding IDs to use the provided consensusId
-    const allFindings = [...report.confirmed, ...report.disputed, ...report.unverified, ...report.unique, ...(report.insights || [])];
-    for (const f of allFindings) {
-      if (f.id) {
-        const suffix = f.id.split(':').pop() || f.id;
-        f.id = `${consensusId}:${suffix}`;
+    // Also update finding IDs to use the provided consensusId. Guard on a real
+    // prefix mismatch (mirrors the summary rewrite below): synthesize() is now
+    // called with the external consensusId, so finding ids already carry it and
+    // this loop is a no-op in the common path. When a mismatch does exist,
+    // replace ONLY the consensusId prefix — the previous `split(':').pop()`
+    // kept just the final segment, which silently dropped the agentId from a
+    // 3-part `<cid>:<agent>:fN` id and corrupted the finding_id.
+    if (internalConsensusId && internalConsensusId !== consensusId) {
+      const allFindings = [...report.confirmed, ...report.disputed, ...report.unverified, ...report.unique, ...(report.insights || [])];
+      const internalPrefix = `${internalConsensusId}:`;
+      for (const f of allFindings) {
+        if (f.id && f.id.startsWith(internalPrefix)) {
+          f.id = `${consensusId}:${f.id.slice(internalPrefix.length)}`;
+        }
       }
     }
 
