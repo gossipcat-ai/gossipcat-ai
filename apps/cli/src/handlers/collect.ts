@@ -1133,7 +1133,7 @@ export async function handleCollect(
       const autoResolveEnabled = cfgPathAr?.consensus?.autoResolveOnRoundClose !== false;
       if (autoResolveEnabled) {
         const { resolveFindings: rf } = await import('@gossip/orchestrator');
-        const resolveResult = await rf(process.cwd());
+        const resolveResult = await rf(process.cwd(), { lineAnchored: cfgPathAr?.consensus?.resolverLineAnchored ?? false });
         if (resolveResult.ok) {
           if (resolveResult.resolved > 0) {
             process.stderr.write(

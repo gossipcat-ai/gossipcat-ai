@@ -62,6 +62,14 @@ export interface GossipConfig {
      * git-common-dir + worktree-list gates, never the other security gates.
      */
     siblingRoots?: string[];
+    /**
+     * Enable the line-anchored staleness heuristic in the findings resolver.
+     * When true, a finding whose cited identifier is still present in the file
+     * but NOT at the cited line (present_elsewhere) is auto-resolved as
+     * `stale_anchor`. Default false (opt-in) per the rollout plan — do NOT
+     * flip to true until the false-resolve safety brake is implemented.
+     */
+    resolverLineAnchored?: boolean;
   };
   agents?: Record<string, {
     provider: string;
@@ -190,6 +198,12 @@ export function validateConfig(raw: any): GossipConfig {
       typeof raw.consensus.worktreeAutoRevert !== 'boolean'
     ) {
       throw new Error('Config "consensus.worktreeAutoRevert" must be a boolean');
+    }
+    if (
+      raw.consensus.resolverLineAnchored !== undefined &&
+      typeof raw.consensus.resolverLineAnchored !== 'boolean'
+    ) {
+      throw new Error('Config "consensus.resolverLineAnchored" must be a boolean');
     }
     if (raw.consensus.orchestratorOwnedGlobs !== undefined) {
       const globs = raw.consensus.orchestratorOwnedGlobs;

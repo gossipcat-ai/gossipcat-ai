@@ -336,5 +336,113 @@ describe('finding-resolver — line-anchored staleness (resolveFindings)', () =>
     // No stale_anchor audit entries either.
     const audit = readAuditEntries(root);
     expect(audit.find(e => e.resolved_by === 'stale_anchor')).toBeUndefined();
+    // Diagnostic counter: the finding was held open purely by the disabled
+    // line-anchored gate, so skipReasons.lineAnchoredOff must record it. This
+    // is the headline explanation for a resolved:0 run.
+    expect(result.skipReasons?.lineAnchoredOff).toBeGreaterThanOrEqual(1);
+  });
+
+  // ── Case 9: deleted-file cite (ENOENT) → commit:<sha>, flag-independent ─
+  test('case 9: cited file no longer exists on disk → resolves as commit:<sha>', async () => {
+    const root = makeTempProject();
+    initGit(root);
+    const abs = path.join(root, 'src/gone.ts');
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, 'export const removeMe = () => 1;\n');
+    commit(root, 'init');
+    // Delete the file and commit the removal.
+    fs.rmSync(abs);
+    fs.writeFileSync(path.join(root, '.gossip', '_marker'), Date.now().toString());
+    const headSha = commit(root, 'delete gone.ts');
+
+    writeFinding(root, {
+      taskId: 'case9:f1',
+      finding: 'Issue in `removeMe` <cite tag="file">src/gone.ts:1</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    // lineAnchored NOT passed — deleted-file resolution is flag-independent.
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error('lock contended');
+    expect(result.resolved).toBe(1);
+    const findings = readFindings(root);
+    expect(findings[0].status).toBe('resolved');
+    expect(findings[0].resolvedBy).toBe(`commit:${headSha}`);
+    // Audit entry records the absent fastpath, not stale_anchor.
+    const audit = readAuditEntries(root);
+    const resolveEntry = audit.find(e => e.action === 'resolve' && e.finding_id === 'case9:f1');
+    expect(resolveEntry).toBeDefined();
+    expect(resolveEntry.after_check).toBe('absent');
+  });
+
+  // ── Case 10: NEVER-tracked cite path (ENOENT but not a deletion) → NOT
+  //    resolved. Guards the full-mode false-resolve (consensus da8f1aa1 f2):
+  //    in full mode the touched-set gate is bypassed, so a typo'd/fabricated
+  //    citation path reaches readFileSync → ENOENT. It must NOT be treated as
+  //    a deletion because git never tracked it.
+  test('case 10: never-tracked cite path is NOT resolved (full mode)', async () => {
+    const root = makeTempProject();
+    initGit(root);
+    // Commit a real file so HEAD exists, but the cited path was NEVER tracked.
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src/real.ts'), 'export const real = 1;\n');
+    commit(root, 'init');
+
+    writeFinding(root, {
+      taskId: 'case10:f1',
+      finding: 'Issue in `neverWas` <cite tag="file">src/never-existed.ts:1</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error('lock contended');
+    expect(result.resolved).toBe(0);
+    expect(readFindings(root)[0].status).toBe('open');
+    // The never-tracked ENOENT routes through the auditable read-error skip.
+    expect((result.skipReasons?.readError ?? 0)).toBeGreaterThanOrEqual(1);
+    const audit = readAuditEntries(root);
+    const skip = audit.find(e => e.action === 'skipped' && e.finding_id === 'case10:f1');
+    expect(skip).toBeDefined();
+    expect(skip.after_check).toBe('read_error');
+  });
+
+  // ── Case 11: multi-cite deleted-file (ENOENT→absent) + present sibling →
+  //    strict-AND blocks resolution (the most important safety property).
+  test('case 11: deleted cite + present sibling cite → NOT resolved', async () => {
+    const root = makeTempProject();
+    initGit(root);
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    // A tracked file that we will delete.
+    fs.writeFileSync(path.join(root, 'src/gone.ts'), 'export const removeMe = () => 1;\n');
+    // A present file whose symbol sits AT the cited line (present_at_anchor).
+    fs.writeFileSync(path.join(root, 'src/alive.ts'), buildFileWithSymbolAt(20, 'stillHere', [10]));
+    commit(root, 'init');
+    fs.rmSync(path.join(root, 'src/gone.ts'));
+    commit(root, 'delete gone.ts');
+
+    // Lead identifier is `stillHere` (the symbol checked against ALL cited
+    // files): present_at_anchor in alive.ts:10, and absent from the deleted
+    // gone.ts (which is ENOENT→absent regardless of symbol). The present
+    // sibling must block the deleted cite's absence under strict-AND.
+    writeFinding(root, {
+      taskId: 'case11:f1',
+      finding:
+        'Cross-file issue with `stillHere` <cite tag="file">src/alive.ts:10</cite> <cite tag="file">src/gone.ts:1</cite>',
+      tag: 'finding',
+      type: 'finding',
+      status: 'open',
+    });
+
+    const result = await resolveFindings(root, { full: true });
+    if (!result.ok) throw new Error('lock contended');
+    // Deleted cite sets sawAbsentEverywhere, but the present sibling sets
+    // sawPresentAtAnchor → allAbsentEverywhere is false → finding stays OPEN.
+    expect(result.resolved).toBe(0);
+    expect(readFindings(root)[0].status).toBe('open');
+    expect((result.skipReasons?.absentBlockedBySibling ?? 0)).toBeGreaterThanOrEqual(1);
   });
 });

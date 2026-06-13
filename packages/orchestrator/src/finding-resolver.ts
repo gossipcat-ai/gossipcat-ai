@@ -94,6 +94,16 @@ export interface ResolveResult {
    * `'lock_contended'` when the lock could not be acquired in time.
    */
   watermarkAdvanced: boolean;
+  /**
+   * Per-reason counts of open findings that were scanned but NOT resolved,
+   * keyed by the `continue` site that skipped them. Always an object (callers
+   * can read it unconditionally). The diagnostic-critical key is
+   * `lineAnchoredOff`: findings that would resolve as `stale_anchor` but are
+   * held open because `opts.lineAnchored` is false — this is what explains a
+   * `resolved: 0` run when the line-anchored heuristic is disabled. Other
+   * keys: `noCite`, `notTouched`, `readError`, `insight`, `pathRejected`.
+   */
+  skipReasons?: Record<string, number>;
 }
 
 export interface ResolveSkipped {
@@ -178,6 +188,21 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
   let resolvedCount = 0;
   let pathRejections = 0;
   const resolvedFindingIds: string[] = [];
+  // Per-`continue`-site diagnostic counters (spec: observability). Initialized
+  // to a stable key set so the shape is predictable; `lineAnchoredOff` is the
+  // headline diagnostic for resolved:0 runs with the heuristic disabled.
+  const skipReasons: Record<string, number> = {
+    noCite: 0,
+    notTouched: 0,
+    lineAnchoredOff: 0,
+    readError: 0,
+    insight: 0,
+    pathRejected: 0,
+    // An absent cite (deleted file or absent_everywhere symbol) that would
+    // resolve on its own but is held open by a present sibling cite under the
+    // multi-cite strict-AND. Diagnoses "deleted file + still-alive cite → open".
+    absentBlockedBySibling: 0,
+  };
 
   // Per-consensus-report cache for backfill lookups. Loading the same JSON
   // file once per row would be wasteful when 20+ findings share a round.
@@ -247,14 +272,14 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
         entry._legacyBackfill = true; // auditable in audit-log
       }
     }
-    if (entry.type === 'insight') continue;
+    if (entry.type === 'insight') { skipReasons.insight++; continue; }
     // tag === 'unverified' is still resolvable when its cited symbol is gone;
     // tag-level filtering is the cross-review verdict, not the bug-vs-insight
     // axis. Spec §Heuristic safety #3.
 
     const findingText = String(entry.finding ?? '');
     const cites = parseCites(findingText);
-    if (cites.fileCites.length === 0) continue; // no anchor, nothing to check
+    if (cites.fileCites.length === 0) { skipReasons.noCite++; continue; } // no anchor, nothing to check
 
     // Bucket B — skip findings citing auto-memory paths (not source code).
     // These are ~/.claude/projects/<encoded-cwd>/memory/ files. They are
@@ -304,7 +329,7 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
       }
       safeFileCites.push({ ...fc, absPath: validation.absPath });
     }
-    if (rejected) continue;
+    if (rejected) { skipReasons.pathRejected++; continue; }
 
     // multi-cite AND: every cite must be in the touched set (Path A).
     // Bug 2: use realpath of gitRoot (not projectRoot) as the base for
@@ -321,7 +346,7 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
           break;
         }
       }
-      if (!touchedAll) continue;
+      if (!touchedAll) { skipReasons.notTouched++; continue; }
     }
 
     // file-scoped symbol-presence check, AND across all cites
@@ -335,7 +360,7 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
       const inferred = inferLeadIdentifier(findingText);
       if (inferred) symbolsToCheck.add(inferred);
     }
-    if (symbolsToCheck.size === 0) continue;
+    if (symbolsToCheck.size === 0) { skipReasons.noCite++; continue; }
 
     // Three-state classification per (cite, symbol) pair.
     // Spec §Heuristic — three-state evaluation. We aggregate at the
@@ -348,10 +373,63 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     let sawPresentAtAnchor = false;
     let sawCiteWithoutLine = false;
     let readFailure = false;
+    let readErrorCode = '';
     for (const fc of safeFileCites) {
       let body: string;
-      try { body = fs.readFileSync(fc.absPath, 'utf8'); }
-      catch { readFailure = true; break; }
+      try {
+        body = fs.readFileSync(fc.absPath, 'utf8');
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') {
+          // A read miss is treated as "the cited code is definitively gone"
+          // (→ absent_everywhere → commit:<sha>, flag-independent) ONLY for a
+          // GENUINE DELETION. Two guards separate a real deletion from a
+          // false-positive (consensus da8f1aa1 f2 — without these, a `full`
+          // run bypasses the touched-set gate and a never-tracked citation
+          // would false-resolve):
+          //   1. lstat must ALSO fail — if the path entry still exists (a
+          //      dangling symlink whose target is gone), it is not a deletion.
+          //   2. git must show the path was once tracked — a never-tracked
+          //      citation (typo, fabricated, sibling-repo path) is not a
+          //      deletion. A genuine deletion appears in `git log -- <path>`.
+          let entryGone = false;
+          try { fs.lstatSync(fc.absPath); } catch { entryGone = true; }
+          // A deleted file can't be realpath'd, so fc.absPath keeps its
+          // pre-symlink-resolution form (e.g. /var/... vs realGitRoot's
+          // /private/var/... on macOS). Realpath the EXISTING parent dir and
+          // rejoin the basename so the git-relative path matches realGitRoot
+          // — otherwise path.relative yields a `../`-prefixed path and the
+          // tracked check fails for genuine deletions.
+          let relForGit: string;
+          try {
+            relForGit = path.relative(
+              realGitRoot,
+              path.join(fs.realpathSync(path.dirname(fc.absPath)), path.basename(fc.absPath)),
+            );
+          } catch {
+            relForGit = path.relative(realGitRoot, fc.absPath);
+          }
+          if (entryGone && wasTrackedInGit(gitRoot, relForGit)) {
+            // Genuine deletion of a once-tracked file. Treat this cite as
+            // absent_everywhere; continue the inner loop so it feeds the
+            // strict-AND aggregate. Any present sibling cite still blocks.
+            sawAbsentEverywhere = true;
+            continue;
+          }
+          // Dangling symlink (entry still present) or a never-tracked path →
+          // cannot be called a deletion. Skip the finding with an audit entry
+          // rather than false-resolving.
+          readFailure = true;
+          readErrorCode = entryGone ? 'ENOENT_UNTRACKED' : 'ENOENT_DANGLING';
+          break;
+        }
+        // Present-but-unreadable (EPERM/EISDIR/etc.) cannot be classified →
+        // keep skipping the whole finding, but record an audit entry so the
+        // skip is not silent.
+        readFailure = true;
+        readErrorCode = code ?? 'unknown';
+        break;
+      }
       const stripped = stripJsTsComments(body);
       for (const sym of symbolsToCheck) {
         const presence = classifyPresence(
@@ -374,7 +452,22 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
         }
       }
     }
-    if (readFailure) continue;
+    if (readFailure) {
+      // Present-but-unreadable cite → auditable skip (mirrors the
+      // skipAsMemory / path_validation_rejected audit-call pattern above).
+      try {
+        appendChainedEntry(projectRoot, {
+          ts: new Date().toISOString(),
+          finding_id: String(entry.taskId ?? entry.findingId ?? ''),
+          action: 'skipped',
+          after_check: 'read_error',
+          operator: 'auto',
+          reason: `cited file unreadable (errno ${readErrorCode})`,
+        });
+      } catch { /* best-effort */ }
+      skipReasons.readError++;
+      continue;
+    }
 
     // Aggregate per spec §Heuristic decision matrix.
     const allAbsentEverywhere =
@@ -393,6 +486,17 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     if (!allAbsentEverywhere && !(opts.lineAnchored && allPresentElsewhere)) {
       // Mixed state, any present_at_anchor, any cite without line, or
       // line-anchored heuristic disabled → leave open.
+      // Diagnostic: a finding that WOULD resolve as stale_anchor but is held
+      // open purely because opts.lineAnchored is false. This is the headline
+      // explanation for a `resolved: 0` run — surface it distinctly.
+      if (!allAbsentEverywhere && allPresentElsewhere && !opts.lineAnchored) {
+        skipReasons.lineAnchoredOff++;
+      }
+      // Diagnostic: an absent cite (deleted file / absent_everywhere symbol)
+      // held open because a sibling cite is still present (strict-AND block).
+      if (sawAbsentEverywhere && (sawPresentElsewhere || sawPresentAtAnchor)) {
+        skipReasons.absentBlockedBySibling++;
+      }
       continue;
     }
 
@@ -499,6 +603,7 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     pathRejections,
     headSha,
     watermarkAdvanced,
+    skipReasons,
   };
 }
 
@@ -873,6 +978,26 @@ function findFindingInReport(report: any, taskId: string, findingProse: unknown)
 }
 
 // ─── git helpers ──────────────────────────────────────────────────────────
+
+/**
+ * True if `relPath` (relative to gitRoot) was ever tracked in git history —
+ * i.e. `git log -- <path>` returns at least one commit. Used to distinguish a
+ * GENUINE DELETION (tracked-then-removed → safe to treat a missing file as
+ * absent_everywhere) from a never-tracked citation path (typo / fabricated /
+ * sibling-repo), which must NOT auto-resolve. Fail-closed: any error or an
+ * escaping relPath returns false (do not resolve on uncertainty).
+ */
+function wasTrackedInGit(gitRoot: string, relPath: string): boolean {
+  if (!relPath || relPath.startsWith('..') || path.isAbsolute(relPath)) return false;
+  try {
+    const out = execFileSync('git', ['log', '--max-count=1', '--format=%H', '--', relPath], {
+      cwd: gitRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out.length > 0;
+  } catch { return false; }
+}
 
 function readHeadSha(projectRoot: string): string | null {
   try {

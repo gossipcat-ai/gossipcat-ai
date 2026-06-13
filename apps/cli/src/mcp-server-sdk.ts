@@ -3879,7 +3879,8 @@ export function createMcpServer(): McpServer {
       await boot();
       try {
         const { resolveFindings } = await import('@gossip/orchestrator');
-        const result = await resolveFindings(process.cwd(), { full, sinceSha });
+        const cfg = (() => { try { const { findConfigPath, loadConfig } = require('./config'); const p = findConfigPath(process.cwd()); return p ? loadConfig(p) : null; } catch { return null; } })();
+        const result = await resolveFindings(process.cwd(), { full, sinceSha, lineAnchored: cfg?.consensus?.resolverLineAnchored ?? false });
         if (!result.ok) {
           return { content: [{ type: 'text' as const, text: `Resolver skipped: ${result.reason} (another resolver run in progress; try again in a moment).` }] };
         }
@@ -3895,6 +3896,16 @@ export function createMcpServer(): McpServer {
         }
         lines.push(`  head_sha: ${result.headSha ?? '(none)'}`);
         lines.push(`  watermark_advanced: ${result.watermarkAdvanced}`);
+        // Diagnostic: surface non-zero skip-reason counts. `lineAnchoredOff` is
+        // the headline explanation for a resolved:0 run when the line-anchored
+        // staleness heuristic is disabled (consensus.resolverLineAnchored).
+        const nonZeroSkips = Object.entries(result.skipReasons ?? {}).filter(([, n]) => n > 0);
+        if (nonZeroSkips.length > 0) {
+          lines.push(`  skipped: ${nonZeroSkips.map(([k, n]) => `${k}=${n}`).join(', ')}`);
+          if ((result.skipReasons?.lineAnchoredOff ?? 0) > 0) {
+            lines.push(`  (lineAnchoredOff: enable consensus.resolverLineAnchored to resolve present-elsewhere findings as stale_anchor)`);
+          }
+        }
         return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Failed to run resolver: ${(err as Error).message}` }] };
