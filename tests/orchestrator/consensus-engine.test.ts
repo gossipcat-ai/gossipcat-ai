@@ -1480,4 +1480,44 @@ describe('synthesizeWithCrossReview()', () => {
     // 2 agents × 3 findings each = 6 total, minus any semantic dedup.
     expect(total).toBeGreaterThanOrEqual(3);
   });
+
+  it('NEW finding IDs carry the external consensusId directly — no post-hoc rewrite needed', async () => {
+    // FIX 3 regression: synthesizeWithCrossReview called synthesize() without
+    // forwarding consensusId. synthesize() then generated an internal id and
+    // used it for newFindings[].findingId and new_finding signals. The post-hoc
+    // rewrite at :3053-3059 only touched confirmed/disputed/unverified/unique/insights
+    // (not newFindings), so NEW entries kept the wrong internal id.
+    //
+    // Fix: pass consensusId to synthesize(). This test asserts that newFindings
+    // entries already carry the external id WITHOUT needing the post-hoc rewrite.
+    const engine = new ConsensusEngine(baseConfig);
+    const results: TaskEntry[] = [
+      createTaskEntry('agent-a', 'completed', '## Consensus Summary\n<agent_finding type="finding" severity="high">Race condition in db.ts:10</agent_finding>'),
+      createTaskEntry('agent-b', 'completed', '## Consensus Summary\n<agent_finding type="finding" severity="medium">Null deref in router.ts:5</agent_finding>'),
+    ];
+    const externalConsensusId = 'fix3test-newids01';
+    // Provide a NEW cross-review entry (pre-canonicalized as the collect path now does).
+    const crossReviewEntries: CrossReviewEntry[] = [
+      {
+        action: 'new',
+        agentId: 'agent-a',
+        peerAgentId: '',
+        findingId: `${externalConsensusId}:new:agent-a:1`,
+        finding: 'A new issue discovered during cross-review',
+        evidence: 'Spotted at foo.ts:42',
+        confidence: 4,
+      },
+    ];
+
+    const report = await engine.synthesizeWithCrossReview(results, crossReviewEntries, externalConsensusId);
+
+    expect(report.newFindings).toHaveLength(1);
+    // findingId must carry the external consensusId from the start — not an internal id.
+    expect(report.newFindings[0].findingId).toBe(`${externalConsensusId}:new:agent-a:1`);
+    // The new_finding signal must also carry the external consensusId.
+    const newSignal = report.signals.find(s => s.signal === 'new_finding');
+    expect(newSignal).toBeDefined();
+    expect(newSignal!.consensusId).toBe(externalConsensusId);
+    expect(newSignal!.findingId).toBe(`${externalConsensusId}:new:agent-a:1`);
+  });
 });

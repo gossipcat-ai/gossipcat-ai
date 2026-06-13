@@ -205,7 +205,7 @@ export interface ConsensusReport {
   unverified: ConsensusReportFinding[];
   unique: ConsensusReportFinding[];
   insights: ConsensusReportFinding[];
-  newFindings: Array<{ agentId: string; finding: string; evidence: string; confidence: number; findingId?: string }>;
+  newFindings: Array<{ agentId: string; finding: string; evidence: string; confidence: number; findingId?: string; parentFindingId?: string; severity?: 'critical' | 'high' | 'medium' | 'low' }>;
   crossReviewAssignments?: Record<string, string[]>;
   crossReviewCoverage?: Array<{ findingId: string; assigned: number; targetK: number }>;
   /**

@@ -108,4 +108,31 @@ describe('findingHandler', () => {
     const res = await findingHandler(root, 'c1-c2', 'c1-c2:f1');
     expect(res.citations).toHaveLength(0);
   });
+
+  it('finds a newFindings entry by findingId (not id field)', async () => {
+    // ConsensusNewFinding carries `findingId`, not `id`. The bucket search must
+    // also check f.findingId so newFindings entries are resolvable via the API.
+    const root = mkdtempSync(join(tmpdir(), 'gossip-test-finding-new-'));
+    mkdirSync(join(root, '.gossip', 'consensus-reports'), { recursive: true });
+    const findingId = 'abc-new:new:agent-a:1';
+
+    writeFileSync(join(root, '.gossip', 'consensus-reports', 'abc-new.json'), JSON.stringify({
+      id: 'abc-new',
+      timestamp: '2026-06-13T10:00:00Z',
+      confirmed: [], disputed: [], unverified: [], unique: [], insights: [],
+      newFindings: [{
+        agentId: 'agent-a',
+        finding: 'A new issue surfaced during cross-review',
+        evidence: 'Found at foo.ts:10',
+        confidence: 4,
+        findingId,
+      }],
+    }));
+
+    writeFileSync(join(root, '.gossip', 'agent-performance.jsonl'), '');
+
+    const res = await findingHandler(root, 'abc-new', findingId);
+    expect(res.finding.tag).toBe('newFinding');
+    expect(res.finding.finding).toContain('A new issue');
+  });
 });

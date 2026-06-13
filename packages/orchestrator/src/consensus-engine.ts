@@ -2591,7 +2591,8 @@ Return only valid JSON.${skillsBlock}`;
         const chainSuffix = f.parentFindingId
           ? ` _(↳ extends ${f.parentFindingId}${f.severity ? `, severity ${f.severity}` : ''})_`
           : '';
-        lines.push(`  ★ [${preset}] "${f.finding}"${chainSuffix}`);
+        const findingIdSuffix = f.findingId ? ` [${f.findingId}]` : '';
+        lines.push(`  ★ [${preset}] "${f.finding}"${chainSuffix}${findingIdSuffix}`);
       }
       lines.push('');
     }
@@ -3032,7 +3033,7 @@ Return only valid JSON.${skillsBlock}`;
     consensusId: string,
     relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>,
   ): Promise<ConsensusReport> {
-    const report = await this.synthesize(results, crossReviewEntries);
+    const report = await this.synthesize(results, crossReviewEntries, consensusId);
 
     // Capture the auto-generated (internal) consensusId BEFORE overwriting it,
     // so we can also rewrite the formatted summary text. The summary was built
