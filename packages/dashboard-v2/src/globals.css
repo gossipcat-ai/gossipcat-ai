@@ -373,6 +373,15 @@ body {
    Dark activates via [data-theme="dark"] from useTheme.ts.
    Tokens live in the :root + [data-theme="dark"] blocks above. ───── */
 
+/* Skill-graduation sparkline — lift the agent-hued curve on the dark canvas.
+   agentColor() returns fixed spec hexes (not --a-* tokens), so dim hues
+   (slate/plum/sage) wash out on the #252320 card. Opacity is already 1; the
+   lever is brightness + a hair more weight. Light mode is untouched. */
+[data-theme="dark"] .skill-spark-curve {
+  filter: brightness(1.3) saturate(1.1);
+  stroke-width: 1.85px;
+}
+
 /* Subtle vignette — dark theme only (washes out the warm light palette).
    z-index 1 keeps it above body content but below dialogs/drawers (z-50) and
    notification stacks. The earlier z-index 9998 obscured modals once the

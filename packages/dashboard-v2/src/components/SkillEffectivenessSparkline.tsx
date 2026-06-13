@@ -87,6 +87,7 @@ export function SkillEffectivenessSparkline({
           return (
             <circle
               key={i}
+              className="skill-spark-curve"
               cx={xFor(idx)}
               cy={yFor(value)}
               r={1.4}
@@ -100,6 +101,7 @@ export function SkillEffectivenessSparkline({
         return (
           <path
             key={i}
+            className="skill-spark-curve"
             d={d}
             fill="none"
             stroke={stroke}
