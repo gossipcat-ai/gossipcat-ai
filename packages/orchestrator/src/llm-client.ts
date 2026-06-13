@@ -123,8 +123,8 @@ class QuotaTracker {
     try {
       const state: QuotaStateFile = JSON.parse(readFileSync(this.statePath, 'utf-8'));
       if (state[this.provider]) {
-        this.exhaustedUntil = state[this.provider].exhaustedUntil;
-        this.consecutive429s = state[this.provider].consecutive429s;
+        this.exhaustedUntil = state[this.provider].exhaustedUntil ?? 0;
+        this.consecutive429s = state[this.provider].consecutive429s ?? 0;
         this.reason = state[this.provider].reason ?? 'quota';
       }
     } catch { /* start fresh */ }

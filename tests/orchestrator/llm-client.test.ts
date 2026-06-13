@@ -1,5 +1,5 @@
 import { createProvider, createProviderForAgent, resolveAgentProvider, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -868,5 +868,31 @@ describe('QuotaTracker spend-cap detection (429)', () => {
     const remaining = state.exhaustedUntil - before;
     expect(remaining).toBeGreaterThan(40_000);
     expect(remaining).toBeLessThan(60_000);
+  });
+
+  it('loading an OLD quota-state.json missing consecutive429s does not corrupt the counter to NaN', async () => {
+    // Simulate a state file written before the consecutive429s field existed:
+    // only exhaustedUntil present (already expired), no consecutive429s, no reason.
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.gossip', 'quota-state.json'),
+      JSON.stringify({ google: { exhaustedUntil: 1 } }),
+    );
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map([['retry-after', '45']]) as any,
+      text: async () => 'Resource has been exhausted (e.g. check quota).',
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/quota exhausted/i);
+
+    // The missing field must default to 0, so the first 429 increments to 1 — NOT NaN.
+    const state = read429State();
+    expect(state.consecutive429s).toBe(1);
+    expect(Number.isNaN(state.consecutive429s)).toBe(false);
   });
 });
