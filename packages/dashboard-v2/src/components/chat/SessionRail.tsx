@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useEventStream, type DashboardEvent } from '@/lib/useEventStream';
 import { StatusDot } from '@/components/chat/ChatPrimitives';
 import { ActivitySparkline } from '@/components/chat/ActivitySparkline';
+import { SignalsByAgent } from '@/components/chat/SignalsByAgent';
 import type { UseBridgeResult } from '@/lib/useBridge';
 import type { SignalActivityResponse } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -80,6 +81,8 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
   });
   // null = loading/failed (omit row); number = real data (show even if 0).
   const [signalTotal, setSignalTotal] = useState<number | null>(null);
+  // null = loading/failed; [] = no agents (graceful). Retained from same fetch as signalTotal.
+  const [signalAgents, setSignalAgents] = useState<SignalActivityResponse['agents'] | null>(null);
 
   // Fetch session info once on mount. Gracefully degrades on any error
   // (network failure, 404 from old relay, missing git). The branch row is
@@ -113,6 +116,8 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
         // total:0 is valid data — show "0 · 24h". Only omit on fetch failure.
         if (typeof data.total === 'number') {
           setSignalTotal(data.total);
+          // Retain agents array for per-agent breakdown (same fetch, no second call).
+          setSignalAgents(Array.isArray(data.agents) ? data.agents : []);
         }
       })
       .catch(() => {
@@ -212,21 +217,27 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
             </span>
           </div>
 
-          {/* 24h signal count — only rendered when endpoint returned valid data */}
+          {/* 24h signal count + per-agent breakdown — only rendered when endpoint returned valid data */}
           {signalTotal !== null && (
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-              <span
-                className="text-[11px]"
-                style={{ color: 'var(--ink-4)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
-              >
-                signals
-              </span>
-              <span
-                className="font-mono text-[11px]"
-                style={{ color: 'var(--ink-3)' }}
-              >
-                {signalTotal} · 24h
-              </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                <span
+                  className="text-[11px]"
+                  style={{ color: 'var(--ink-4)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+                >
+                  signals
+                </span>
+                <span
+                  className="font-mono text-[11px]"
+                  style={{ color: 'var(--ink-3)' }}
+                >
+                  {signalTotal} · 24h
+                </span>
+              </div>
+              {/* Per-agent breakdown — uses same fetched data, no second network call */}
+              {signalAgents !== null && signalAgents.length > 0 && (
+                <SignalsByAgent agents={signalAgents} />
+              )}
             </div>
           )}
 
