@@ -7,12 +7,12 @@ import { MessageBubble, StatusDot, AwaitingDots } from '@/components/chat/ChatPr
  * ChatDock — bottom-RIGHT docked conversation panel wired to the LIVE Claude
  * Code orchestrator session over the P1 bridge.
  *
- * Placement: fixed bottom-right. The NotificationStack also anchors at
- * bottom-4 right-4 and stacks toasts upward. The FAB is placed at
- * bottom-28 right-4 (7rem from bottom) so it sits ABOVE the toast lane.
- * At 48-56px per toast, bottom-28 (112px) gives a clear gap above two
- * stacked toasts before the FAB enters the same zone. The expanded panel
- * also anchors at bottom-28 right-4, growing upward to avoid toast occlusion.
+ * Placement: fixed bottom-right CORNER (bottom-5 right-5), the conventional
+ * chat-launcher anchor. The NotificationStack toast lane is offset upward
+ * (bottom-20) so transient toasts stack ABOVE the launcher instead of
+ * colliding with it — the standard "launcher in the corner, notifications
+ * above it" pattern. The expanded panel shares the same corner anchor and
+ * grows upward.
  *
  * Shared conversation: ChatDock consumes useBridgeContext() (NOT useBridge()
  * directly) so it shares the same SSE stream, chat_id, and messages as
@@ -69,18 +69,13 @@ export function ChatDock() {
     navigate('/chat');
   };
 
-  // FAB anchors at bottom-28 right-4 (112px from bottom) to stay ABOVE the
-  // NotificationStack toast lane which anchors at bottom-4 right-4 and grows
-  // upward. Toasts are max-w-sm (~384px) and take ~48-56px each; 112px baseline
-  // gives a clear gap above two toasts before the FAB enters the same zone.
-  //
-  // ── Collapsed launcher ──
+  // ── Collapsed launcher (bottom-right corner) ──
   if (!openPanel) {
     return (
       <button
         type="button"
         onClick={() => setOpenPanel(true)}
-        className="fixed bottom-28 right-4 z-50 flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors"
+        className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors"
         // position:fixed inline because the global `[data-tooltip]{position:relative}`
         // rule has equal specificity to Tailwind's `.fixed` and is declared later, so
         // it would otherwise override the fixed anchor and drop the FAB into page flow.
@@ -95,10 +90,10 @@ export function ChatDock() {
     );
   }
 
-  // ── Expanded panel — bottom-right, grows upward ──
+  // ── Expanded panel — bottom-right corner, grows upward ──
   return (
     <div
-      className="fixed bottom-28 right-4 z-50 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col rounded-xl"
+      className="fixed bottom-5 right-5 z-50 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col rounded-xl"
       style={{
         height: 'min(560px, calc(100vh - 6rem))',
         background: 'var(--surface-elev)',

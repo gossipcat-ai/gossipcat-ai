@@ -132,7 +132,7 @@ export function NotificationStack() {
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-2 pointer-events-none"
+      className="fixed bottom-20 right-4 z-50 flex flex-col-reverse gap-2 pointer-events-none"
       role="region"
       aria-label="Notifications"
       aria-live="polite"
