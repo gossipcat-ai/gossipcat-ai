@@ -24,14 +24,18 @@ describe('argv shim source — code branch present', () => {
     'utf-8',
   );
 
-  it('contains a `code` branch in the IIFE', () => {
-    expect(SRC).toMatch(/if \(sub === 'code'\)/);
+  it('IIFE derives route from classifyShimSubcommand (no duplicate raw-string routing)', () => {
+    // After the refactor the IIFE uses `const kind = classifyShimSubcommand(sub)`
+    // and branches on `kind`, not on raw `sub` strings — ensuring the helper is
+    // the single source of routing truth and cannot silently diverge.
+    expect(SRC).toMatch(/classifyShimSubcommand\(sub\)/);
+    // The kind-based code branch must be present in the IIFE.
+    expect(SRC).toMatch(/if \(kind === 'code'\)/);
   });
 
   it('the `code` branch returns true so the async handler owns the process', () => {
     // "return true" must appear in the code branch context.
-    // The comment "async handler owns the process" appears after return true on the same line.
-    expect(SRC).toMatch(/if \(sub === 'code'\)[\s\S]{0,800}return true;/);
+    expect(SRC).toMatch(/if \(kind === 'code'\)[\s\S]{0,800}return true;/);
   });
 
   it('the `code` branch imports code-launch and calls runCodeCommand', () => {
@@ -47,8 +51,8 @@ describe('argv shim source — code branch present', () => {
     expect(SRC).toMatch(/gossipcat code \[args\.\.\.\]/);
   });
 
-  it('`code` branch appears BEFORE the unknown-subcommand rejection', () => {
-    const codeIdx = SRC.indexOf("if (sub === 'code')");
+  it('`code` kind-branch appears BEFORE the unknown-subcommand rejection in the IIFE', () => {
+    const codeIdx = SRC.indexOf("if (kind === 'code')");
     const unknownIdx = SRC.indexOf("unknown subcommand");
     expect(codeIdx).toBeGreaterThan(-1);
     expect(unknownIdx).toBeGreaterThan(-1);

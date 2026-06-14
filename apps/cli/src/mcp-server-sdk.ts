@@ -49,7 +49,8 @@ import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgra
  * Classify the first argv token for the published binary's dispatch shim.
  *
  * Exported so unit tests can assert routing without spawning the bundle.
- * The IIFE below is the sole consumer at runtime.
+ * The IIFE below consumes this helper — all top-level routing decisions
+ * are derived from the kind it returns, not from re-testing raw `sub` strings.
  */
 export function classifyShimSubcommand(
   sub: string | undefined,
@@ -65,7 +66,9 @@ export function classifyShimSubcommand(
 const __argvShimHandled = (() => {
   const argv = process.argv.slice(2);
   const sub = argv[0];
-  if (sub === 'hook') {
+  const kind = classifyShimSubcommand(sub);
+
+  if (kind === 'hook') {
     const decision = parseHookSubcommand(argv[1]);
     if (decision === 'usage') {
       process.stderr.write('Usage: gossipcat hook --run\n');
@@ -74,7 +77,7 @@ const __argvShimHandled = (() => {
     runHook();
     process.exit(0);
   }
-  if (sub === 'help' || sub === '--help' || sub === '-h') {
+  if (kind === 'help') {
     process.stdout.write(
       'gossipcat — Multi-Agent Orchestration\n' +
       '\n' +
@@ -93,7 +96,7 @@ const __argvShimHandled = (() => {
     );
     process.exit(0);
   }
-  if (sub === 'key') {
+  if (kind === 'key') {
     // Terminal-only credential bootstrap for the published binary. Deliberately
     // NOT an MCP tool: a secret must never traverse the LLM tool layer.
     void (async () => {
@@ -119,7 +122,7 @@ const __argvShimHandled = (() => {
     });
     return true; // async handler owns the process; do NOT boot the MCP server
   }
-  if (sub === 'code') {
+  if (kind === 'code') {
     // Launch Claude Code with the gossipcat channel active.
     // `argv` is process.argv.slice(2), so argv.slice(1) drops 'code' and passes
     // the remaining tokens to runCodeCommand — matching process.argv.slice(3).
@@ -133,15 +136,13 @@ const __argvShimHandled = (() => {
     });
     return true; // async handler owns the process; do NOT boot the MCP server
   }
-  // `mcp` is a back-compat alias for no-args; legacy `.mcp.json` files written
-  // by older `gossip_setup` invocations pass `"args": ["mcp"]`. Without this
-  // exemption v0.4.29 broke every such user with a -32000 MCP handshake error.
-  // Intentionally NOT advertised in help — new configs should use no args.
-  if (sub !== undefined && sub !== 'mcp') {
+  if (kind === 'unknown') {
+    // `mcp` alias is classified as 'server' so it falls through; only truly
+    // unrecognised tokens reach here.
     process.stderr.write(`gossipcat: unknown subcommand '${sub}'. Try 'gossipcat help'.\n`);
     process.exit(2);
   }
-  // No args (or `mcp` alias) → fall through; the MCP server boots below.
+  // kind === 'server': no args or `mcp` alias → fall through; MCP server boots below.
   return false;
 })();
 
