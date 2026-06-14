@@ -1,4 +1,4 @@
-import { resolve, dirname } from 'path';
+import { resolve, dirname, sep } from 'path';
 import { existsSync, realpathSync } from 'fs';
 
 /**
@@ -15,13 +15,18 @@ function fold(p: string): string {
 }
 
 /**
- * Canonical trailing-slash form for the root side of a prefix comparison.
+ * Canonical trailing-separator form for the root side of a prefix comparison.
  * Blocks sibling-prefix bypass: e.g. a root of `/tmp/gossip-wt-AB` must not
- * accept `/tmp/gossip-wt-ABXYZ/file.txt`. A filesystem root (`/`) is left
- * as-is since it already ends in `/`.
+ * accept `/tmp/gossip-wt-ABXYZ/file.txt`.
+ *
+ * Uses the platform path separator (`path.sep`). On Windows, `realpathSync`
+ * and `resolve` yield back-slash paths, so appending a hard-coded `/` here
+ * made the `startsWith` containment check below fail for EVERY in-root path
+ * — every relay-agent file_read got "resolves outside project root". A path
+ * that already ends in the separator (e.g. a filesystem root) is left as-is.
  */
 function rootWithSlash(p: string): string {
-  return p.endsWith('/') ? p : p + '/';
+  return p.endsWith(sep) ? p : p + sep;
 }
 
 export class Sandbox {
