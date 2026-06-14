@@ -706,9 +706,16 @@ export class DashboardRouter {
       }
 
       // Bridge OUTBOUND SSE — /dashboard/api/bridge/stream (live CC → dashboard).
-      // Auth already verified above. Long-lived: handleStream takes over the
-      // response and must NOT go through json().
+      // Auth already verified above. Per-IP throttle on connection opens too
+      // (consensus f7e5bc15 f2 — defense-in-depth so a leaked key can't churn
+      // SSE slots; the MAX_BRIDGE_CLIENTS cap still bounds concurrency). Long-
+      // lived: handleStream takes over the response and must NOT go through json().
       if (url === '/dashboard/api/bridge/stream' && req.method === 'GET') {
+        const ip = req.socket?.remoteAddress || 'unknown';
+        if (!this.allowChatTurn(ip)) {
+          this.json(res, 429, { error: 'Too many bridge stream opens. Slow down.' });
+          return true;
+        }
         this.bridge.handleStream(req, res);
         return true;
       }

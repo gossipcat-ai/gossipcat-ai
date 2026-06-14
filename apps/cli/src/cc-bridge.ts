@@ -117,6 +117,11 @@ export function createBridgeHost(server: McpServer): BridgeHost {
   }
 
   function deliverBridgeMessage(chatId: string, content: string): boolean {
+    // Retry any messages re-buffered by a prior async send rejection BEFORE
+    // sending the new one, so a transient failure recovers on the next message
+    // instead of lingering until TTL expiry (consensus f7e5bc15 f8 — flush was
+    // never otherwise triggered). flush() is idempotent + bounded.
+    if (buffer.length > 0) flush();
     const msg: BufferedMessage = { chatId, content, queuedAt: Date.now() };
     return send(msg);
   }

@@ -159,6 +159,10 @@ export class BridgeHub {
     const chatId = validateChatId(rawChatId);
     if (chatId === null) return false;
     if (!this.isKnownChatId(chatId)) return false;
+    // No connected SSE client → the reply cannot be delivered. Return false so
+    // the MCP `reply` tool surfaces an honest "no open stream" error instead of
+    // reporting a success that silently vanished (consensus f7e5bc15 f5).
+    if (this.clients.size === 0) return false;
     this.broadcast({ type: 'reply', chat_id: chatId, text, ts: new Date().toISOString() });
     return true;
   }
@@ -172,6 +176,7 @@ export class BridgeHub {
     const chatId = validateChatId(rawChatId);
     if (chatId === null) return false;
     if (!this.isKnownChatId(chatId)) return false;
+    if (this.clients.size === 0) return false;
     this.broadcast({ type: 'ack', chat_id: chatId, ts: new Date().toISOString() });
     return true;
   }
