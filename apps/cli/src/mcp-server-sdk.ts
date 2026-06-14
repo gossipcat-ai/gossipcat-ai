@@ -26,6 +26,7 @@ import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgra
 //   - `gossipcat hook --run` or `gossipcat hook run` → execute hook body, exit 0
 //   - `gossipcat hook` or `gossipcat hook <unknown>` → usage to stderr, exit 2
 //   - `gossipcat help|--help|-h`                     → usage to stdout, exit 0
+//   - `gossipcat code [args...]`                     → launch Claude Code with channel, exit via child
 //   - `gossipcat <unknown>`                          → error to stderr, exit 2
 //   - no args                                        → fall through, boot MCP server
 //   - `gossipcat mcp`                                → back-compat alias for no-args;
@@ -39,10 +40,28 @@ import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgra
 // See memory `project_bootstrap_hook_command_dispatch_bug.md` for the
 // full diagnosis and the dist-mcp-only build context.
 //
-// Wrapped in an IIFE (not a bare block) so the `key` branch can `return` after
-// spawning its async handler — the async work keeps the event loop alive and
+// Wrapped in an IIFE (not a bare block) so the `key` / `code` branches can
+// `return` after spawning their async handler — the async work keeps the event
+// loop alive and
 // calls process.exit(code) when done, while the synchronous `return` prevents
 // fall-through to the MCP server boot below.
+/**
+ * Classify the first argv token for the published binary's dispatch shim.
+ *
+ * Exported so unit tests can assert routing without spawning the bundle.
+ * The IIFE below is the sole consumer at runtime.
+ */
+export function classifyShimSubcommand(
+  sub: string | undefined,
+): 'hook' | 'key' | 'code' | 'help' | 'server' | 'unknown' {
+  if (sub === 'hook') return 'hook';
+  if (sub === 'key') return 'key';
+  if (sub === 'code') return 'code';
+  if (sub === 'help' || sub === '--help' || sub === '-h') return 'help';
+  if (sub === undefined || sub === 'mcp') return 'server';
+  return 'unknown';
+}
+
 const __argvShimHandled = (() => {
   const argv = process.argv.slice(2);
   const sub = argv[0];
@@ -64,11 +83,13 @@ const __argvShimHandled = (() => {
       '  gossipcat hook --run     Run UserPromptSubmit bootstrap hook (internal)\n' +
       '  gossipcat key set <provider>   Store an API key in the OS keychain (service: gossip-mesh)\n' +
       '  gossipcat key list             Show which providers have a stored key\n' +
+      '  gossipcat code [args...]       Launch Claude Code with the gossipcat channel active\n' +
       '  gossipcat help           Show this help\n' +
       '\n' +
       'The published binary is the MCP server bundle. The full CLI\n' +
       '(setup wizard, create-agent, chat, etc.) lives in apps/cli/src/index.ts\n' +
-      'and is available via `npm start` / `npx ts-node` in the source repo.\n'
+      'and is available via `npm start` / `npx ts-node` in the source repo.\n' +
+      'The `code` subcommand is available in the published binary.\n'
     );
     process.exit(0);
   }
@@ -94,6 +115,20 @@ const __argvShimHandled = (() => {
       // raw stack trace. Surface a clean message and a non-zero exit instead.
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(`gossipcat key: ${msg}\n`);
+      process.exit(1);
+    });
+    return true; // async handler owns the process; do NOT boot the MCP server
+  }
+  if (sub === 'code') {
+    // Launch Claude Code with the gossipcat channel active.
+    // `argv` is process.argv.slice(2), so argv.slice(1) drops 'code' and passes
+    // the remaining tokens to runCodeCommand — matching process.argv.slice(3).
+    void (async () => {
+      const { runCodeCommand } = await import('./code-launch');
+      runCodeCommand(argv.slice(1));
+    })().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`gossipcat code: ${msg}\n`);
       process.exit(1);
     });
     return true; // async handler owns the process; do NOT boot the MCP server
