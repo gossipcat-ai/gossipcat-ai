@@ -4,6 +4,26 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-06-14
+
+Patch release. Headline fix: `gossipcat code` now actually works from the
+published npm binary. Also lands the dashboard ⇄ Claude Code channel bridge
+(P1, experimental) and a dependency security bump. 7 commits since 0.6.0.
+
+### Fixed
+
+- **`gossipcat code` now reachable from the published binary.** The subcommand was wired only into the dev CLI (`apps/cli/src/index.ts`), but the published `bin` is `dist-mcp/mcp-server.js` (built from `apps/cli/src/mcp-server-sdk.ts`), whose argv shim rejected every unknown subcommand — so `gossipcat code` exited with `unknown subcommand 'code'` for all npm users. The published entry now routes `code` through the shared `classifyShimSubcommand` classifier (single source of truth), with a spawn-based behavioral regression test (#587).
+- **Sandbox Layer-3 boundary-escape noise** — inverted a rotted test-fixture gate that was flooding the boundary-escape log (#582); empty consensus rounds no longer trip the Signals-pending status detector (#584).
+
+### Added
+
+- **Dashboard ⇄ Claude Code channel bridge (P1, experimental).** The web dashboard can now drive the *same* live Claude Code orchestrator session — start and steer work from a chat dock — via a channel folded into the gossipcat MCP server (in-process; no headless SDK). Launch with the new `gossipcat code` wrapper. Still requires `--dangerously-load-development-channels` until gossipcat's channel is on Anthropic's allowlist; P2 (activity mirror) and P3 (per-request permission relay) are not yet shipped (#585, #586).
+- **Sandbox Layer-3 main-pass observability** — diagnostics for main-pass noise drops (#583).
+
+### Security
+
+- **esbuild `^0.27.4` → `^0.28.1`** (dev dependency), clearing Dependabot `GHSA-gv7w-rqvm-qjhr` (High) and `GHSA-g7r4-m6w7-qqqr` (Low). Build-time only; never shipped to npm users (#588).
+
 ## [0.6.0] — 2026-06-13
 
 Adds several consensus-pipeline and resolver capabilities, a per-agent tool-turn
