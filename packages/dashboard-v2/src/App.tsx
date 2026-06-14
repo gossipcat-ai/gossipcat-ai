@@ -20,6 +20,8 @@ import { timeAgo } from '@/lib/utils';
 import { getBenchBadgeKind, needsAttention } from '@/lib/bench';
 import { NotificationStack } from '@/components/NotificationStack';
 import { ChatDock } from '@/components/ChatDock';
+import { ChatPage } from '@/components/ChatPage';
+import { BridgeProvider } from '@/lib/BridgeContext';
 import { useSeverityCounts } from '@/hooks/useSeverityCounts';
 import { AgentCardBig } from '@/components/AgentCardBig';
 import type { DashboardEvent, AgentData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint } from '@/lib/types';
@@ -584,6 +586,8 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
           <DebatesPageSkeleton />
         </div>
       );
+  } else if (route === '/chat') {
+    content = <ChatPage />;
   } else if (route === '/logs') {
     content = <LogsPage />;
   } else if (route === '/signals') {
@@ -611,7 +615,7 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
   // Overview owns its own outer container (max-w-5xl). For everything else,
   // the historical max-w-7xl + space-y-6 wrapper applies.
   const isOverview = route === '/' || route === '/overview' ||
-    !(/^\/(agent\/|consensus\/|team|tasks|debates|logs|signals|violations)/.test(route));
+    !(/^\/(agent\/|consensus\/|team|tasks|debates|logs|signals|violations|chat)/.test(route));
   const mainClass = isOverview
     ? 'px-6 py-6'
     : 'mx-auto max-w-7xl space-y-6 px-6 py-6';
@@ -638,10 +642,10 @@ export function App() {
   }
 
   return (
-    <>
+    <BridgeProvider>
       <Dashboard onUnauthorized={recheck} />
       <NotificationStack />
       <ChatDock />
-    </>
+    </BridgeProvider>
   );
 }

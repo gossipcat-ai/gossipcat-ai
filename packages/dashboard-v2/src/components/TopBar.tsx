@@ -10,6 +10,7 @@ const TABS = [
   { to: '/tasks', label: 'Tasks', match: (r: string) => r === '/tasks' },
   { to: '/signals', label: 'Signals', match: (r: string) => r === '/signals' },
   { to: '/logs', label: 'Logs', match: (r: string) => r === '/logs' },
+  { to: '/chat', label: 'Chat', match: (r: string) => r === '/chat' },
 ];
 
 export function TopBar() {
