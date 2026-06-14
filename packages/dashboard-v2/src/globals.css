@@ -214,6 +214,7 @@
 @media (prefers-reduced-motion: reduce) {
   /* Respect motion sensitivity: easter egg still fires but instantly. */
   [style*="orch-smile-pop"], [style*="orch-ripple"] { animation: none !important; opacity: 0; }
+  .animate-pulse { animation: none; }
 }
 
 /* DESIGN.md section header signature (small-caps Geist).

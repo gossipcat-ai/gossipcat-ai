@@ -82,13 +82,13 @@ function MessageBubble({ msg }: { msg: BridgeMessage }) {
         style={bubbleStyle}
       >
         {isError && (
-          <span className="mb-0.5 block font-mono text-[10px]" style={{ fontVariant: 'small-caps', letterSpacing: '0.04em' }}>
+          <span className="h-section mb-0.5 block" style={{ color: 'var(--bad)' }}>
             session error
           </span>
         )}
         {msg.text}
       </div>
-      <span className="px-1 font-mono text-[9px]" style={{ color: 'var(--text-faint)' }}>
+      <span className="px-1 font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>
         {timeShort(msg.ts)}
       </span>
     </div>
@@ -96,12 +96,13 @@ function MessageBubble({ msg }: { msg: BridgeMessage }) {
 }
 
 function StatusDot({ status }: { status: ReturnType<typeof useBridge>['status'] }) {
-  const map = {
+  const map: Record<string, { color: string; label: string }> = {
     open: { color: 'var(--ok)', label: 'live' },
     connecting: { color: 'var(--warn)', label: 'connecting' },
     closed: { color: 'var(--idle)', label: 'offline' },
-  } as const;
-  const { color, label } = map[status];
+    error: { color: 'var(--bad)', label: 'relay down' },
+  };
+  const { color, label } = map[status] ?? map['closed'];
   return (
     <span className="inline-flex items-center gap-1.5">
       <span
@@ -189,7 +190,7 @@ export function ChatDock() {
             <span className="h-section">live claude code</span>
             <StatusDot status={status} />
           </div>
-          <div className="mt-0.5 truncate font-mono text-[10px]" style={{ color: 'var(--text-faint)' }}>
+          <div className="mt-0.5 truncate font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
             {chatId ? `chat ${chatId.slice(0, 8)}` : 'same session as your terminal'}
           </div>
         </div>
@@ -208,7 +209,7 @@ export function ChatDock() {
       <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center">
-            <div className="font-mono text-xs" style={{ color: 'var(--text-dim)' }}>
+            <div className="text-xs" style={{ color: 'var(--text-dim)' }}>
               {status === 'connecting' ? 'connecting to the live session…' : 'no messages yet'}
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 70%, transparent)' }}>
@@ -224,7 +225,7 @@ export function ChatDock() {
             <span className="inline-flex gap-1" aria-hidden>
               <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: 'var(--text-faint)' }} />
             </span>
-            <span className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
+            <span className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
               working…
             </span>
           </div>

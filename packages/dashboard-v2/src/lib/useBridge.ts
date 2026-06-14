@@ -51,7 +51,7 @@ export interface BridgeMessage {
 }
 
 /** Connection lifecycle of the SSE stream. */
-export type BridgeStatus = 'connecting' | 'open' | 'closed';
+export type BridgeStatus = 'connecting' | 'open' | 'closed' | 'error';
 
 export interface UseBridgeResult {
   messages: BridgeMessage[];
@@ -70,6 +70,8 @@ export interface UseBridgeResult {
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 5_000;
 const STREAM_PATH = '/dashboard/api/bridge/stream';
+/** After this many consecutive onerror events with no successful onopen, surface 'error' status. */
+const ERROR_AFTER_FAILURES = 4;
 const POST_PATH = '/dashboard/api/bridge';
 const POST_TIMEOUT_MS = 30_000;
 
@@ -118,6 +120,7 @@ export function useBridge(): UseBridgeResult {
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let backoff = BACKOFF_MIN_MS;
     let destroyed = false;
+    let consecutiveFailures = 0;
 
     function open(): void {
       if (destroyed) return;
@@ -126,6 +129,7 @@ export function useBridge(): UseBridgeResult {
 
       es.onopen = () => {
         if (destroyed) return;
+        consecutiveFailures = 0;
         setStatus('open');
         backoff = BACKOFF_MIN_MS;
       };
@@ -164,7 +168,12 @@ export function useBridge(): UseBridgeResult {
           es = null;
         }
         if (destroyed) return;
-        setStatus('connecting');
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= ERROR_AFTER_FAILURES) {
+          setStatus('error');
+        } else {
+          setStatus('connecting');
+        }
         retryTimer = setTimeout(() => open(), backoff);
         backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
       };
