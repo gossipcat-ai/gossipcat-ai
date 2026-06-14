@@ -1978,7 +1978,7 @@ export function createMcpServer(): McpServer {
       // Mirrors the existing gossip_status reconnect-recovery pattern for
       // pendingConsensusRounds re-surfacing.
       try {
-        const { readdirSync, statSync } = await import('fs');
+        const { readdirSync, statSync, readFileSync } = await import('fs');
         const { readJsonlWithRotated: readJsonlRotated1506 } = await import('@gossip/orchestrator');
         const reportsDir = join(process.cwd(), '.gossip', 'consensus-reports');
         const perfPath = join(process.cwd(), '.gossip', 'agent-performance.jsonl');
@@ -1993,6 +1993,22 @@ export function createMcpServer(): McpServer {
             const fpath = join(reportsDir, fname);
             const st = statSync(fpath);
             if (now - st.mtimeMs > WINDOW_MS) continue;
+            // Skip TRULY-empty rounds (zero findings across every bucket). They can
+            // never be "covered" because there are no findings to attribute a signal
+            // to, so they would otherwise be flagged as pending forever until they
+            // age out of the 24h window — a false positive. Fail toward surfacing:
+            // any read/parse failure falls through to flagging the round (push below).
+            try {
+              const report = JSON.parse(readFileSync(fpath, 'utf8'));
+              const isEmpty =
+                (report.confirmed?.length ?? 0) === 0 &&
+                (report.disputed?.length ?? 0) === 0 &&
+                (report.unverified?.length ?? 0) === 0 &&
+                (report.unique?.length ?? 0) === 0 &&
+                (report.newFindings?.length ?? 0) === 0 &&
+                (report.insights?.length ?? 0) === 0;
+              if (isEmpty) continue;
+            } catch { /* unreadable/malformed report — fall through and flag it (fail toward surfacing) */ }
             recentReports.push({ id: fname.replace(/\.json$/, ''), mtimeMs: st.mtimeMs });
           }
         } catch { /* reports dir missing — no rounds yet */ }
