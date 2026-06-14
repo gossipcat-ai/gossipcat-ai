@@ -25,9 +25,15 @@ const EXAMPLE_PROMPTS = [
 interface ChatEmptyStateProps {
   status: BridgeStatus;
   onChipClick: (text: string) => void;
+  /**
+   * compact=true — dock mode (~320px interior): smaller vertical padding,
+   * smaller glyph, chips wrap cleanly at narrow width.
+   * compact=false (default) — full ChatPage look, unchanged.
+   */
+  compact?: boolean;
 }
 
-export function ChatEmptyState({ status, onChipClick }: ChatEmptyStateProps) {
+export function ChatEmptyState({ status, onChipClick, compact = false }: ChatEmptyStateProps) {
   const isConnecting = status === 'connecting';
   const isError = status === 'error';
   const isClosed = status === 'closed';
@@ -58,12 +64,16 @@ export function ChatEmptyState({ status, onChipClick }: ChatEmptyStateProps) {
 
   return (
     <div
-      className="flex h-full flex-col items-center justify-center gap-4 text-center"
-      style={{ padding: '48px 24px', minHeight: '320px' }}
+      className="flex h-full flex-col items-center justify-center text-center"
+      style={{
+        gap: compact ? '10px' : '16px',
+        padding: compact ? '20px 16px' : '48px 24px',
+        minHeight: compact ? '160px' : '320px',
+      }}
     >
       {/* Glyph */}
       <span
-        className={`select-none text-4xl leading-none ${isConnecting ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+        className={`select-none leading-none ${compact ? 'text-2xl' : 'text-4xl'} ${isConnecting ? 'animate-pulse motion-reduce:animate-none' : ''}`}
         style={{ color: glyphColor }}
         aria-hidden
       >
@@ -71,15 +81,15 @@ export function ChatEmptyState({ status, onChipClick }: ChatEmptyStateProps) {
       </span>
 
       {/* Headline */}
-      <div style={{ maxWidth: '380px' }}>
+      <div style={{ maxWidth: compact ? '260px' : '380px' }}>
         <div
-          className="text-[15px] font-medium"
+          className={`font-medium ${compact ? 'text-[13px]' : 'text-[15px]'}`}
           style={{ color: 'var(--ink)', lineHeight: 1.4 }}
         >
           {headline}
         </div>
         <div
-          className="mt-2 text-[13px]"
+          className={`mt-1.5 ${compact ? 'text-[11px]' : 'text-[13px]'}`}
           style={{ color: 'var(--ink-3)', lineHeight: 1.55 }}
         >
           {helper}
@@ -88,7 +98,10 @@ export function ChatEmptyState({ status, onChipClick }: ChatEmptyStateProps) {
 
       {/* Example prompt chips — only when open/idle (not connecting/error/closed) */}
       {status === 'open' && (
-        <div className="flex flex-wrap justify-center gap-2" style={{ maxWidth: '440px' }}>
+        <div
+          className="flex flex-wrap justify-center gap-1.5"
+          style={{ maxWidth: compact ? '280px' : '440px' }}
+        >
           <span className="h-section w-full" style={{ color: 'var(--ink-3)' }}>
             try an example
           </span>
@@ -97,7 +110,7 @@ export function ChatEmptyState({ status, onChipClick }: ChatEmptyStateProps) {
               key={prompt}
               type="button"
               onClick={() => onChipClick(prompt)}
-              className="rounded-full px-3.5 py-1.5 text-[12px] font-medium transition-colors hover:[background:var(--accent-soft)]"
+              className={`rounded-full font-medium transition-colors hover:[background:var(--accent-soft)] ${compact ? 'px-2.5 py-1 text-[11px]' : 'px-3.5 py-1.5 text-[12px]'}`}
               style={{
                 background: 'var(--surface-sunk)',
                 border: '1px solid var(--border)',

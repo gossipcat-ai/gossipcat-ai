@@ -3,6 +3,7 @@ import { useEventStream, type DashboardEvent } from '@/lib/useEventStream';
 import { StatusDot } from '@/components/chat/ChatPrimitives';
 import { ActivitySparkline } from '@/components/chat/ActivitySparkline';
 import type { UseBridgeResult } from '@/lib/useBridge';
+import type { SignalActivityResponse } from '@/lib/types';
 import { api } from '@/lib/api';
 
 /**
@@ -77,6 +78,8 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
     projectName: null,
     activeTasks: 0,
   });
+  // null = loading/failed (omit row); number = real data (show even if 0).
+  const [signalTotal, setSignalTotal] = useState<number | null>(null);
 
   // Fetch session info once on mount. Gracefully degrades on any error
   // (network failure, 404 from old relay, missing git). The branch row is
@@ -97,6 +100,23 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
       .catch(() => {
         // Intentionally silenced — old relay (no endpoint) or network error;
         // defaults (null/0) keep the rail usable.
+      });
+    return () => controller.abort();
+  }, []);
+
+  // Fetch 24h signal activity once on mount. Omit row on any failure.
+  useEffect(() => {
+    const controller = new AbortController();
+    api<SignalActivityResponse>('signal-activity')
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        // total:0 is valid data — show "0 · 24h". Only omit on fetch failure.
+        if (typeof data.total === 'number') {
+          setSignalTotal(data.total);
+        }
+      })
+      .catch(() => {
+        // Silenced — graceful degradation: row is omitted (signalTotal stays null).
       });
     return () => controller.abort();
   }, []);
@@ -191,6 +211,24 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
               {session.activeTasks} active
             </span>
           </div>
+
+          {/* 24h signal count — only rendered when endpoint returned valid data */}
+          {signalTotal !== null && (
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+              <span
+                className="text-[11px]"
+                style={{ color: 'var(--ink-4)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+              >
+                signals
+              </span>
+              <span
+                className="font-mono text-[11px]"
+                style={{ color: 'var(--ink-3)' }}
+              >
+                {signalTotal} · 24h
+              </span>
+            </div>
+          )}
 
           <p
             className="text-[12px]"

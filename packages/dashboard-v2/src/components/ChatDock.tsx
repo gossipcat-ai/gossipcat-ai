@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { navigate } from '@/lib/router';
 import { useBridgeContext } from '@/lib/BridgeContext';
 import { MessageBubble, StatusDot, AwaitingDots } from '@/components/chat/ChatPrimitives';
+import { ChatEmptyState } from '@/components/chat/ChatEmptyState';
 
 /**
  * ChatDock — bottom-RIGHT docked conversation panel wired to the LIVE Claude
@@ -120,18 +121,21 @@ export function ChatDock() {
           onClick={expandToPage}
           className="shrink-0 rounded px-2 py-1 text-sm leading-none transition-colors hover:[background:var(--surface-sunk)]"
           style={{ color: 'var(--ink-3)' }}
-          aria-label="Expand to full chat page"
-          title="Open full Chat page"
+          aria-label="Open full Chat page"
+          data-tooltip="Open full Chat page"
+          data-tooltip-pos="left"
         >
           ⤢
         </button>
-        {/* Collapse */}
+        {/* Minimize */}
         <button
           type="button"
           onClick={() => setOpenPanel(false)}
           className="shrink-0 rounded px-2 py-1 text-sm leading-none transition-colors hover:[background:var(--surface-sunk)]"
           style={{ color: 'var(--ink-3)' }}
-          aria-label="Collapse chat dock"
+          aria-label="Minimize chat"
+          data-tooltip="Minimize chat"
+          data-tooltip-pos="left"
         >
           –
         </button>
@@ -140,14 +144,15 @@ export function ChatDock() {
       {/* Conversation */}
       <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
         {messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center px-4 text-center">
-            <div className="text-xs" style={{ color: 'var(--ink-3)' }}>
-              {status === 'connecting' ? 'connecting to the live session…' : 'no messages yet'}
-            </div>
-            <div className="mt-1 text-[11px]" style={{ color: 'color-mix(in oklch, var(--ink-3) 70%, transparent)' }}>
-              Type below to steer or start work. This reaches the same Claude Code session running in your terminal.
-            </div>
-          </div>
+          <ChatEmptyState
+            status={status}
+            onChipClick={(text) => {
+              setDraft(text);
+              // Focus the composer after chip click so user can send immediately.
+              requestAnimationFrame(() => inputRef.current?.focus());
+            }}
+            compact={true}
+          />
         ) : (
           messages.map((m) => <MessageBubble key={m.id} msg={m} compact={true} />)
         )}
@@ -178,7 +183,7 @@ export function ChatDock() {
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           rows={1}
-          placeholder="Message the live session…  (Enter to send)"
+          placeholder="Message the live session…"
           className="max-h-28 min-h-[36px] flex-1 resize-none rounded-md border px-3 py-2 text-[13px] focus:outline-none"
           style={{
             background: 'var(--surface)',
