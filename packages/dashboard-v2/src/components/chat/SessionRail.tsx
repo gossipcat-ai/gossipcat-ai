@@ -4,8 +4,18 @@ import { StatusDot } from '@/components/chat/ChatPrimitives';
 import { ActivitySparkline } from '@/components/chat/ActivitySparkline';
 import { SignalsByAgent } from '@/components/chat/SignalsByAgent';
 import type { UseBridgeResult } from '@/lib/useBridge';
-import type { SignalActivityResponse } from '@/lib/types';
 import { api } from '@/lib/api';
+
+/** Minimal slice of each agent entry we consume from GET /dashboard/api/agents. */
+interface AgentScoreEntry {
+  id: string;
+  scores: {
+    agreements: number;
+    uniqueFindings: number;
+    hallucinations: number;
+    disagreements: number;
+  };
+}
 
 /**
  * SessionRail — right-side rail for ChatPage operator command surface.
@@ -81,8 +91,8 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
   });
   // null = loading/failed (omit row); number = real data (show even if 0).
   const [signalTotal, setSignalTotal] = useState<number | null>(null);
-  // null = loading/failed; [] = no agents (graceful). Retained from same fetch as signalTotal.
-  const [signalAgents, setSignalAgents] = useState<SignalActivityResponse['agents'] | null>(null);
+  // null = loading/failed (omit breakdown); [] = no agents with signals.
+  const [agentScores, setAgentScores] = useState<AgentScoreEntry[] | null>(null);
 
   // Fetch session info once on mount. Gracefully degrades on any error
   // (network failure, 404 from old relay, missing git). The branch row is
@@ -107,21 +117,47 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
     return () => controller.abort();
   }, []);
 
-  // Fetch 24h signal activity once on mount. Omit row on any failure.
+  // Fetch 24h signal activity once on mount. Only total is used — breakdown
+  // now comes from /api/agents polarity data. Omit row on any failure.
   useEffect(() => {
     const controller = new AbortController();
-    api<SignalActivityResponse>('signal-activity')
+    api<{ total: number }>('signal-activity')
       .then((data) => {
         if (controller.signal.aborted) return;
         // total:0 is valid data — show "0 · 24h". Only omit on fetch failure.
         if (typeof data.total === 'number') {
           setSignalTotal(data.total);
-          // Retain agents array for per-agent breakdown (same fetch, no second call).
-          setSignalAgents(Array.isArray(data.agents) ? data.agents : []);
         }
       })
       .catch(() => {
         // Silenced — graceful degradation: row is omitted (signalTotal stays null).
+      });
+    return () => controller.abort();
+  }, []);
+
+  // Fetch per-agent polarity scores from /dashboard/api/agents once on mount.
+  // Used by SignalsByAgent for the two-segment (positive/negative) bar.
+  // Omit breakdown on any failure — graceful degradation.
+  useEffect(() => {
+    const controller = new AbortController();
+    api<AgentScoreEntry[]>('agents')
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        if (Array.isArray(data)) {
+          // Only keep agents that have the scores shape we need; skip malformed entries.
+          const filtered = data.filter(
+            (a): a is AgentScoreEntry =>
+              typeof a === 'object' &&
+              a !== null &&
+              typeof a.id === 'string' &&
+              typeof a.scores === 'object' &&
+              a.scores !== null,
+          );
+          setAgentScores(filtered);
+        }
+      })
+      .catch(() => {
+        // Silenced — graceful degradation: breakdown omitted (agentScores stays null).
       });
     return () => controller.abort();
   }, []);
@@ -234,9 +270,9 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
                   {signalTotal} · 24h
                 </span>
               </div>
-              {/* Per-agent breakdown — uses same fetched data, no second network call */}
-              {signalAgents !== null && signalAgents.length > 0 && (
-                <SignalsByAgent agents={signalAgents} />
+              {/* Per-agent polarity breakdown — uses /api/agents scores for positive/negative split */}
+              {agentScores !== null && agentScores.length > 0 && (
+                <SignalsByAgent agents={agentScores} />
               )}
             </div>
           )}
