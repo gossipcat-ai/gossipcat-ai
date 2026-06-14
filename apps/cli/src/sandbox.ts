@@ -1330,6 +1330,13 @@ export function auditFilesystemSinceSentinel(
     process.env.JEST_WORKER_ID !== undefined || process.env.NODE_ENV === 'test';
   const tmpRoots = tmpRootPrefixes();
   const canonProjectRoot = canonicalize(projectRoot);
+  // Observability (f12): the noise filter could in principle over-suppress and
+  // silently mask a real escape. Record HOW MANY paths it discarded plus a
+  // bounded sample (same slice(0, 20) cap as the violation logging below) so a
+  // sudden spike in drops is auditable. Pure instrumentation — the set of paths
+  // actually deleted from mainSet is byte-for-byte identical with or without it.
+  let droppedCount = 0;
+  const droppedSample: string[] = [];
   for (const p of Array.from(mainSet)) {
     // Belt-and-suspenders: never filter a sensitive-pass path here even if the
     // dedup above is ever reordered. Pass 2 is a vetted zero-noise watchlist;
@@ -1339,7 +1346,20 @@ export function auditFilesystemSinceSentinel(
       isLayer3MainNoise(p, { inTestRunner, tmpRoots, projectRoot: canonProjectRoot })
     ) {
       mainSet.delete(p);
+      droppedCount += 1;
+      if (droppedSample.length < 20) droppedSample.push(p);
     }
+  }
+  // These are EXPECTED drops (build artifacts / Cursor cache / test fixtures),
+  // NOT violations — debug surface only, never a ⚠ warning, never JSONL, never a
+  // score-affecting signal. Gated behind the same logFailures flag as the
+  // violation logging.
+  if (droppedCount > 0 && logFailures) {
+    process.stderr.write(
+      `[gossipcat] Layer 3 main-pass noise filter discarded ${droppedCount} path(s) (sample):\n` +
+        droppedSample.map(v => `    ${v}`).join('\n') +
+        '\n',
+    );
   }
 
   const mainViolations = Array.from(mainSet);
