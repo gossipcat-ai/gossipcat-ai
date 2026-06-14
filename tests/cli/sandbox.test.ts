@@ -29,6 +29,7 @@ import {
   auditDispatchBoundary,
   DispatchMetadata,
   buildAuditExclusions,
+  isLayer3MainNoise,
   rotateIfNeeded,
   MAX_BOUNDARY_ESCAPE_BYTES,
 } from '../../apps/cli/src/sandbox';
@@ -427,21 +428,34 @@ describe('buildAuditExclusions — test-fixture gate (NODE_ENV / JEST_WORKER_ID)
     else process.env.NODE_ENV = originalNodeEnv;
   });
 
-  it('NODE_ENV=test: gossip-test- prefix IS excluded from the main-pass list', () => {
-    delete process.env.JEST_WORKER_ID;
-    process.env.NODE_ENV = 'test';
-    const excl = buildAuditExclusions(root, undefined, undefined);
-    expect(excl).toContain(`${tmp}/gossip-test-*`);
+  // The hand-maintained TEST_FIXTURE_PREFIXES allowlist was deleted (it rotted
+  // — every new test prefix leaked into boundary-escapes.jsonl). The gate is
+  // now an INVERTED post-scan filter (isLayer3MainNoise): under a test runner,
+  // every tmpdir child is noise EXCEPT the gossip-l3-* keep-list. These tests
+  // verify the new contract; buildAuditExclusions no longer carries the glob
+  // entries (see the worktree-audit-layer3-noise suite for end-to-end coverage).
+
+  it('inverted gate: a gossip-test- tmpdir child is noise under the test gate', () => {
+    const p = join(tmp, 'gossip-test-fixtureXYZ', '.gossip', 'fake.jsonl');
+    expect(isLayer3MainNoise(p, { inTestRunner: true })).toBe(true);
   });
 
-  it('JEST_WORKER_ID set: gossip-test- prefix IS excluded from the main-pass list', () => {
-    delete process.env.NODE_ENV;
-    process.env.JEST_WORKER_ID = '1';
-    const excl = buildAuditExclusions(root, undefined, undefined);
-    expect(excl).toContain(`${tmp}/gossip-test-*`);
+  it('inverted gate: a sandbox-test- / gossip-wt- tmpdir child is noise under the test gate', () => {
+    expect(isLayer3MainNoise(join(tmp, 'sandbox-test-AAA', 'f.txt'), { inTestRunner: true })).toBe(true);
+    expect(isLayer3MainNoise(join(tmp, 'gossip-wt-BBB', 'f.txt'), { inTestRunner: true })).toBe(true);
   });
 
-  it('NODE_ENV and JEST_WORKER_ID both unset: test-fixture prefixes are NOT excluded', () => {
+  it('inverted gate: the gossip-l3-* keep-list survives the gate (regression guard)', () => {
+    expect(isLayer3MainNoise(join(tmp, 'gossip-l3-scan-AAA', 'outside.txt'), { inTestRunner: true })).toBe(false);
+    expect(isLayer3MainNoise(join(tmp, 'gossip-l3-bin-BBB', 'fake-find'), { inTestRunner: true })).toBe(false);
+  });
+
+  it('gate is test-only: the SAME fixture child is NOT noise when the gate is closed', () => {
+    const p = join(tmp, 'gossip-test-fixtureXYZ', 'exfil.txt');
+    expect(isLayer3MainNoise(p, { inTestRunner: false })).toBe(false);
+  });
+
+  it('NODE_ENV and JEST_WORKER_ID both unset: test-fixture prefixes are NOT excluded by buildAuditExclusions', () => {
     delete process.env.JEST_WORKER_ID;
     delete process.env.NODE_ENV;
     const excl = buildAuditExclusions(root, undefined, undefined);
@@ -451,38 +465,17 @@ describe('buildAuditExclusions — test-fixture gate (NODE_ENV / JEST_WORKER_ID)
     expect(excl).not.toContain(`${tmp}/perf-writer-*`);
     // Non-test churn exclusions MUST still be present (baseline behavior).
     expect(excl).toContain(`${tmp}/node-compile-cache`);
+    // cursor-sandbox-cache is now an always-on prune entry (design B).
+    expect(excl).toContain(`${tmp}/cursor-sandbox-cache`);
   });
 
-  it('NODE_ENV=test: gossip-wt- prefix IS excluded (covers worktree-manager tmp dirs)', () => {
+  it('the dead allowlist gloss is gone: buildAuditExclusions emits no gossip-*-* glob entries even under the gate', () => {
     delete process.env.JEST_WORKER_ID;
     process.env.NODE_ENV = 'test';
     const excl = buildAuditExclusions(root, undefined, undefined);
-    expect(excl).toContain(`${tmp}/gossip-wt-*`);
-  });
-
-  it('NODE_ENV=test: sandbox-test- prefix IS excluded', () => {
-    delete process.env.JEST_WORKER_ID;
-    process.env.NODE_ENV = 'test';
-    const excl = buildAuditExclusions(root, undefined, undefined);
-    expect(excl).toContain(`${tmp}/sandbox-test-*`);
-  });
-
-  it('NODE_ENV=test: test-fixture exclusions emit /tmp ↔ /private/tmp twin variants', () => {
-    // If tmpdir() itself resolves to /tmp or /var/folders, expandTmpVariants
-    // may or may not emit a /private twin. But gossip-l3-* under an in-test
-    // /tmp path must be symmetric. Synthesize by asserting both forms
-    // coexist for the /tmp branch if tmpdir is /tmp-shaped. Otherwise skip
-    // the twin assertion — the expansion is already unit-tested upstream.
-    delete process.env.JEST_WORKER_ID;
-    process.env.NODE_ENV = 'test';
-    const excl = buildAuditExclusions(root, undefined, undefined);
-    // Every emitted test-fixture entry MUST end in '*' so `find -path`
-    // matches descendants. Guard against accidentally dropping the suffix.
-    const fixtureEntries = excl.filter(e => e.includes('gossip-test-'));
-    expect(fixtureEntries.length).toBeGreaterThan(0);
-    for (const e of fixtureEntries) {
-      expect(e.endsWith('*')).toBe(true);
-    }
+    expect(excl.some(e => e.endsWith('gossip-test-*'))).toBe(false);
+    expect(excl.some(e => e.endsWith('sandbox-test-*'))).toBe(false);
+    expect(excl.some(e => e.endsWith('gossip-wt-*'))).toBe(false);
   });
 
   it('gate MUST NOT alter buildSensitiveFindArgs (Layer 3 Pass 2 is independent of exclusions)', () => {
