@@ -4,6 +4,24 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-06-14
+
+Patch release. Makes the published MCP server binary **self-contained** so it
+runs regardless of the consumer's `node_modules` state.
+
+### Fixed
+
+- **Published `dist-mcp/mcp-server.js` is now self-contained.** `build:mcp`
+  previously externalized `ws` and `@modelcontextprotocol/sdk`, so the binary
+  depended on npm resolving those at runtime — a normal `npm i -g gossipcat`
+  worked, but the bin could not run standalone and was fragile to broken /
+  partially-hoisted / version-mismatched `node_modules` on upgrade. The bundler
+  now inlines both (only `ws`'s optional native addons `bufferutil` /
+  `utf-8-validate` stay external, matching `ws`'s own graceful fallback), so the
+  binary boots with zero installed dependencies. Bundle grows ~2.3MB → ~3.0MB.
+  Verified: standalone MCP `initialize` handshake succeeds with no
+  `node_modules` present.
+
 ## [0.6.1] — 2026-06-14
 
 Patch release. Headline fix: `gossipcat code` now actually works from the
