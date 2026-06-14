@@ -27,6 +27,14 @@ const NO_BOOTSTRAP_HINT =
 const SUPPRESSED_LINE =
   '[gossipcat: bootstrap already loaded — call gossip_status() if you need a refresh]';
 
+/**
+ * One-line nudge appended after the bootstrap when the dashboard channel is
+ * not active. Suppressed when CLAUDE_CHANNEL_ID is set (CC injects it when a
+ * channel is live) or when GOSSIPCAT_CHANNEL_ACTIVE=1 is set manually.
+ */
+const CHANNEL_NUDGE =
+  '[gossipcat] 💬 Drive me from the dashboard: run `gossipcat code` to launch with the channel active.';
+
 export interface HookRunOptions {
   /** Override `process.cwd()` for tests. */
   cwd?: string;
@@ -90,6 +98,12 @@ export function runHook(opts: HookRunOptions = {}): void {
     }
     write(content);
     if (!content.endsWith('\n')) write('\n');
+
+    // Append channel nudge only when the CC channel is not already active.
+    // CLAUDE_CHANNEL_ID is injected by Claude Code when --channels is in effect.
+    if (!process.env['CLAUDE_CHANNEL_ID'] && !process.env['GOSSIPCAT_CHANNEL_ACTIVE']) {
+      write(CHANNEL_NUDGE + '\n');
+    }
 
     // Update sentinel best-effort (any failure is silent).
     if (currentMtime !== null && sentinelPath) {

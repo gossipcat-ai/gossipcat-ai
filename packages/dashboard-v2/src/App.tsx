@@ -19,6 +19,7 @@ import { useDashboardData } from '@/hooks/useDashboardData';
 import { timeAgo } from '@/lib/utils';
 import { getBenchBadgeKind, needsAttention } from '@/lib/bench';
 import { NotificationStack } from '@/components/NotificationStack';
+import { ChatDock } from '@/components/ChatDock';
 import { useSeverityCounts } from '@/hooks/useSeverityCounts';
 import { AgentCardBig } from '@/components/AgentCardBig';
 import type { DashboardEvent, AgentData, ConsensusReportsData, FleetTrendResponse, FleetTrendPoint } from '@/lib/types';
@@ -640,6 +641,7 @@ export function App() {
     <>
       <Dashboard onUnauthorized={recheck} />
       <NotificationStack />
+      <ChatDock />
     </>
   );
 }

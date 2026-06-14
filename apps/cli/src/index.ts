@@ -32,6 +32,12 @@ async function main(): Promise<void> {
       await createTeam(args.slice(1).join(' ') || undefined);
       return;
 
+    case 'code': {
+      const { runCodeCommand } = await import('./code-launch');
+      runCodeCommand(process.argv.slice(3));
+      return;
+    }
+
     case 'mcp-serve':
       // Run MCP server via stdio — used by Claude Code / Cursor / any MCP client
       await import('./mcp-server-sdk');
@@ -202,6 +208,7 @@ function printHelp(): void {
     gossipcat sync             Sync task history to Supabase
     gossipcat sync --setup     Configure Supabase connection
     gossipcat sync --status    Show sync status
+    gossipcat code [args...]   Launch Claude Code with gossipcat channel active
     gossipcat mcp-serve        Start MCP server (for Claude Code / Cursor)
     gossipcat hook --run       Run UserPromptSubmit bootstrap hook (internal)
     gossipcat help             Show this help
