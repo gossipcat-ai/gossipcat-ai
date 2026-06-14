@@ -15,6 +15,7 @@ import { AgentConnection, livenessMap } from './agent-connection';
 import { DashboardAuth } from './dashboard/auth';
 import { DashboardRouter } from './dashboard/routes';
 import { DashboardWs } from './dashboard/ws';
+import type { BridgeSink } from './dashboard/api-bridge';
 import type { ChatbotAgent } from '@gossip/orchestrator';
 
 export interface DashboardConfig {
@@ -468,5 +469,28 @@ export class RelayServer {
    */
   setChatbot(agent: ChatbotAgent | null): void {
     this.dashboardRouter?.setChatbot(agent);
+  }
+
+  /**
+   * Register the in-process bridge sink (dashboard → live Claude Code session).
+   * Called by the app layer (mcp-server-sdk.ts) after the MCP server is
+   * constructed: the dashboard POST handler invokes this callback, which emits
+   * a `notifications/claude/channel` notification over stdio. The relay and MCP
+   * server share one process (spec "#1 unknown RESOLVED") — no wire protocol.
+   * No-op if the dashboard is disabled. Pass null to clear.
+   */
+  registerBridgeSink(fn: BridgeSink | null): void {
+    this.dashboardRouter?.registerBridgeSink(fn);
+  }
+
+  /**
+   * Forward a reply from the live CC session (MCP `reply` tool) out to the
+   * dashboard over SSE. chat_id is re-validated + bound to a stream the
+   * dashboard actually opened (consensus f5). Returns false when the dashboard
+   * is disabled or the chat_id is unbound/malformed so the caller can no-op
+   * honestly rather than claiming a delivery.
+   */
+  emitBridgeReply(chatId: string, text: string): boolean {
+    return this.dashboardRouter?.emitBridgeReply(chatId, text) ?? false;
   }
 }

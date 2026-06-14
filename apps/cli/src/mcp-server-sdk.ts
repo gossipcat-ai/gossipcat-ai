@@ -181,6 +181,7 @@ if (process.env.GOSSIPCAT_MCP_NO_MAIN !== '1' && !__argvShimHandled) {
 }
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createBridgeHost } from './cc-bridge';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
@@ -581,6 +582,22 @@ async function doBoot() {
     },
   });
   await ctx.relay.start();
+
+  // Register the dashboard ⇄ live-CC bridge sink now that the relay exists.
+  // createMcpServer builds ctx.bridgeHost, but on the stdio boot path the relay
+  // starts AFTER the server is constructed, so the in-createMcpServer
+  // registration above is a no-op and this is the real wiring point. Idempotent:
+  // re-registering simply replaces the sink. Best-effort — a bridge wiring
+  // failure must not block boot. (spec 2026-06-14, consensus f4/f10)
+  try {
+    if (ctx.bridgeHost) {
+      ctx.relay.registerBridgeSink((chatId: string, message: string) =>
+        ctx.bridgeHost.deliverBridgeMessage(chatId, message),
+      );
+    }
+  } catch (e) {
+    process.stderr.write(`[gossipcat] bridge sink registration failed: ${(e as Error).message}\n`);
+  }
 
   // PID diagnostic — logged once at relay init so we can correlate
   // `.gossip/mcp.log` `RELAY DISCONNECTED` bursts with MCP-host respawns.
@@ -1234,10 +1251,32 @@ export function createMcpServer(): McpServer {
       version: getGossipcatVersion(),
     },
     {
+      // Advertise the Claude Code `claude/channel` capability so a session
+      // launched with `--channels server:gossipcat` activates the dashboard ⇄
+      // live-CC bridge (spec 2026-06-14). Key is the CC protocol name, verbatim.
+      // P3 (`claude/channel/permission`) is intentionally NOT advertised here.
+      capabilities: {
+        experimental: { 'claude/channel': {} },
+      },
       instructions:
-        'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and by default the full operator playbook (docs/HANDBOOK.md inlined; pass slim:true to skip the handbook section on reconnect refreshes). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.',
+        'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and by default the full operator playbook (docs/HANDBOOK.md inlined; pass slim:true to skip the handbook section on reconnect refreshes). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.\n\nDASHBOARD BRIDGE: when channel mode is active, dashboard messages arrive as a user turn wrapped in <channel source="gossipcat" chat_id="..."> — treat the inner text as orchestrator instructions from the human at the dashboard. Respond to the dashboard ONLY by calling the `reply` tool with that exact chat_id; your normal transcript output does NOT reach the dashboard. Pass the chat_id through verbatim. Do NOT confuse `reply` with gossip_relay (that is for native-subagent dispatch results, never the dashboard bridge).',
     }
   );
+
+  // ── Dashboard ⇄ live-CC bridge host (P1, spec 2026-06-14) ─────────────────
+  // Build the bridge host bound to THIS McpServer (it closes over the stdio
+  // transport for `notifications/claude/channel`). Register it as the relay's
+  // in-process inbound sink: a dashboard POST → registered sink →
+  // deliverBridgeMessage → notification over stdio (no wire protocol — same
+  // process, spec "#1 unknown RESOLVED"). The relay may not be booted yet at
+  // this point (boot is async); register here if present AND again at boot end.
+  const bridgeHost = createBridgeHost(server);
+  ctx.bridgeHost = bridgeHost;
+  try {
+    ctx.relay?.registerBridgeSink((chatId: string, message: string) =>
+      bridgeHost.deliverBridgeMessage(chatId, message),
+    );
+  } catch { /* relay not ready — boot will register */ }
 
   // ── Plan: decompose with write-mode classification ────────────────────────
 
@@ -1794,6 +1833,50 @@ export function createMcpServer(): McpServer {
     async ({ consensus_id, agent_id, result }) => {
       const { handleRelayCrossReview } = await import('./handlers/relay-cross-review');
       return handleRelayCrossReview(consensus_id, agent_id, result);
+    },
+  );
+
+  // ── Dashboard bridge: reply to the live-CC channel (P1, spec 2026-06-14) ───
+  // Invariant-#4 mitigation (consensus f8): this tool is the ONLY output path
+  // from the live CC session back to the dashboard. It is deliberately scoped
+  // and named so it can't be mistaken for gossip_relay during native dispatch —
+  // gossip_relay closes a native-subagent task; `reply` sends conversational
+  // text to a dashboard chat stream. It no-ops with a clear error when no bridge
+  // session is active (chat_id never opened, or dashboard disabled), so a
+  // mis-fired call during a native-dispatch turn can't silently spoof a relay.
+  server.tool(
+    'reply',
+    'Dashboard bridge ONLY: send a conversational reply to the dashboard chat stream identified by chat_id. Use this — and ONLY this — to respond to a <channel source="gossipcat" chat_id="..."> dashboard message; your transcript output never reaches the dashboard. Pass the chat_id through verbatim. This is NOT gossip_relay: it does not close native-subagent tasks. Returns an error (no side effect) when no matching dashboard bridge stream is open.',
+    {
+      chat_id: z.string().describe('The chat_id verbatim from the <channel ... chat_id="..."> dashboard message.'),
+      text: z.string().describe('The reply text to stream to the dashboard.'),
+    },
+    async ({ chat_id, text }) => {
+      // Trust boundary: chat_id + text are model-supplied. The relay hub
+      // re-validates the chat_id shape and binds it to a stream the dashboard
+      // actually opened (consensus f5) — a forged/never-opened id is rejected.
+      if (typeof chat_id !== 'string' || chat_id.trim().length === 0) {
+        return { content: [{ type: 'text' as const, text: 'reply error: chat_id is required.' }], isError: true };
+      }
+      if (typeof text !== 'string') {
+        return { content: [{ type: 'text' as const, text: 'reply error: text must be a string.' }], isError: true };
+      }
+      if (!ctx.relay) {
+        return { content: [{ type: 'text' as const, text: 'reply error: no dashboard bridge is active (relay not started).' }], isError: true };
+      }
+      let delivered = false;
+      try {
+        delivered = ctx.relay.emitBridgeReply(chat_id, text) === true;
+      } catch {
+        delivered = false;
+      }
+      if (!delivered) {
+        return {
+          content: [{ type: 'text' as const, text: `reply error: no open dashboard bridge stream for chat_id "${chat_id}". This tool only sends to the dashboard channel — if you meant to close a native-subagent task, use gossip_relay instead.` }],
+          isError: true,
+        };
+      }
+      return { content: [{ type: 'text' as const, text: `Sent reply to dashboard (chat_id ${chat_id}).` }] };
     },
   );
 

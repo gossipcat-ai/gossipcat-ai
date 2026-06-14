@@ -255,6 +255,14 @@ export interface McpContext {
   httpMcpPortSource: 'env' | 'sticky' | 'auto' | null;
   booted: boolean;
   /**
+   * Dashboard ⇄ live-CC bridge host (P1, spec 2026-06-14). Created in
+   * createMcpServer (it closes over the McpServer for stdio notifications) and
+   * registered as the relay's in-process inbound sink at boot. Null until the
+   * MCP server is constructed; null when the bridge module is absent. Typed
+   * `any` to avoid a cross-package import cycle (mirrors `relay`/`toolServer`).
+   */
+  bridgeHost: any;
+  /**
    * True when `doBoot()` ran without a config file and synthesized an empty
    * one (fresh-install / degraded-mode). The dashboard boots with 0 agents
    * in this case — subsequent gossip_setup calls refresh it via
@@ -301,6 +309,7 @@ export const ctx: McpContext = {
   relayPortSource: null,
   httpMcpPortSource: null,
   booted: false,
+  bridgeHost: null,
   bootedInDegradedMode: false,
   lastSyncResult: null,
   boot: async () => { throw new Error('boot not initialized'); },

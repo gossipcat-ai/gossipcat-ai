@@ -20,6 +20,7 @@ import { activeTasksHandler } from './api-active-tasks';
 import { logsHandler } from './api-logs';
 import { violationsHandler } from './api-violations';
 import { handleChat } from './api-chat';
+import { BridgeHub, type BridgeSink } from './api-bridge';
 import { ChatConversationStore } from './chat-session-store';
 import type { ChatbotAgent } from '@gossip/orchestrator';
 import { buildCoverageDegradedMessage } from '@gossip/orchestrator';
@@ -148,6 +149,12 @@ export function normalizeLegacyDegradedFields(report: any): any {
 // readBody, don't bump the shared cap).
 const CHAT_MAX_BODY = 64 * 1024; // 64 KB
 
+// Per-route body cap for POST /dashboard/api/bridge (dashboard → live CC). A
+// steering message can be a paragraph, but is tightly bounded as a DoS guard —
+// same posture as CHAT_MAX_BODY, parametrizing readBody rather than bumping the
+// shared cap (consensus f3 — bound the inbound buffer).
+const BRIDGE_MAX_BODY = 64 * 1024; // 64 KB
+
 // Minimum interval between chat turns from one IP — a simple per-IP throttle so
 // a single client can't fan out concurrent/rapid turns (each turn can run up to
 // maxToolCallsPerTurn tool executions). Mirrors the isIpLockedOut style.
@@ -182,6 +189,10 @@ export class DashboardRouter {
   private chatStore = new ChatConversationStore();
   // Per-IP last-chat-turn timestamp for the min-interval throttle.
   private chatLastTurn = new Map<string, number>();
+  // Dashboard ⇄ live-CC bridge transport (P1). Owns the outbound SSE client set
+  // and the in-process inbound sink the MCP server registers. Distinct from the
+  // dormant chatbot (consensus f14 — no dual-brain; /api/chat stays dormant).
+  private bridge = new BridgeHub();
 
   constructor(
     private auth: DashboardAuth,
@@ -198,6 +209,27 @@ export class DashboardRouter {
    */
   setChatbot(agent: ChatbotAgent | null): void {
     this.chatbot = agent;
+  }
+
+  /**
+   * Register (or clear) the in-process bridge sink that delivers dashboard
+   * messages to the live Claude Code session. Called by the app layer via
+   * RelayServer.registerBridgeSink once the MCP server is constructed. The relay
+   * and MCP server share one process (no wire protocol), so this is a direct
+   * callback — see api-bridge.ts.
+   */
+  registerBridgeSink(fn: BridgeSink | null): void {
+    this.bridge.registerSink(fn);
+  }
+
+  /**
+   * Forward a reply from the live CC session (MCP `reply` tool) to the dashboard
+   * over SSE. chat_id is re-validated + bound inside the hub (consensus f5).
+   * Returns false when the id was unbound / malformed so the caller can no-op
+   * honestly.
+   */
+  emitBridgeReply(chatId: string, text: string): boolean {
+    return this.bridge.emitReply(chatId, text);
   }
 
   /** Update live context (call when agents connect/disconnect) */
@@ -647,6 +679,44 @@ export class DashboardRouter {
           return true;
         }
         await handleChat(req, res, body, { chatbot: this.chatbot, store: this.chatStore });
+        return true;
+      }
+
+      // Bridge INBOUND — /dashboard/api/bridge (dashboard → live CC session).
+      // Auth already verified above. Reuse the SAME per-IP rate-limit the chat
+      // route uses (consensus f13), a per-route readBody cap (consensus f3), then
+      // hand the parsed body to the bridge hub, which validates {chat_id?,
+      // message} and invokes the in-process sink.
+      if (url === '/dashboard/api/bridge' && req.method === 'POST') {
+        const ip = req.socket?.remoteAddress || 'unknown';
+        if (!this.allowChatTurn(ip)) {
+          this.json(res, 429, { error: 'Too many bridge requests. Slow down.' });
+          return true;
+        }
+        let body: unknown;
+        try {
+          body = JSON.parse(await readBody(req, BRIDGE_MAX_BODY));
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON body' });
+          return true;
+        }
+        const { status, payload } = this.bridge.handlePost(body);
+        this.json(res, status, payload);
+        return true;
+      }
+
+      // Bridge OUTBOUND SSE — /dashboard/api/bridge/stream (live CC → dashboard).
+      // Auth already verified above. Per-IP throttle on connection opens too
+      // (consensus f7e5bc15 f2 — defense-in-depth so a leaked key can't churn
+      // SSE slots; the MAX_BRIDGE_CLIENTS cap still bounds concurrency). Long-
+      // lived: handleStream takes over the response and must NOT go through json().
+      if (url === '/dashboard/api/bridge/stream' && req.method === 'GET') {
+        const ip = req.socket?.remoteAddress || 'unknown';
+        if (!this.allowChatTurn(ip)) {
+          this.json(res, 429, { error: 'Too many bridge stream opens. Slow down.' });
+          return true;
+        }
+        this.bridge.handleStream(req, res);
         return true;
       }
 
