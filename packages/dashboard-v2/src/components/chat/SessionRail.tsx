@@ -1,7 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useEventStream, type DashboardEvent } from '@/lib/useEventStream';
 import { StatusDot } from '@/components/chat/ChatPrimitives';
 import type { UseBridgeResult } from '@/lib/useBridge';
+import { api } from '@/lib/api';
 
 /**
  * SessionRail — right-side rail for ChatPage operator command surface.
@@ -9,26 +10,38 @@ import type { UseBridgeResult } from '@/lib/useBridge';
  * Shows:
  *  1. Connection — StatusDot (live/connecting/offline/error) + chat_id in
  *     font-mono + one-liner copy.
- *  2. Activity feed — last ~6 SSE DashboardEvents (task.completed /
+ *  2. Session info (from /dashboard/api/session):
+ *     - Working dir: `projectName · branch` (conditional — only when gitBranch
+ *       is a non-empty string; absent on old relays or detached HEAD).
+ *     - Tasks: active task count (always shown, 0 is fine).
+ *  3. Activity feed — last ~6 SSE DashboardEvents (task.completed /
  *     consensus.completed) via useEventStream with mono timestamps.
  *     Empty state: "no recent activity" when stream is empty.
  *
- * DATA SOURCES (no fabricated data, no git branch):
- *  - status, chatId  → passed from useBridgeContext() in ChatPage
- *  - events          → useEventStream (SSE /dashboard/api/events)
+ * DATA SOURCES (no fabricated data):
+ *  - status, chatId     → passed from useBridgeContext() in ChatPage
+ *  - gitBranch, projectName, activeTasks → GET /dashboard/api/session (fetch
+ *    once on mount; graceful degradation on failure / 404 / old relay)
+ *  - events             → useEventStream (SSE /dashboard/api/events)
  *
  * DESIGN.md conformance:
  *  - .h-section small-caps Geist section labels ("session", "activity")
  *  - hairline --border card; --surface-elev background; --r-lg radius
  *  - StatusDot semantic colors (--ok/--warn/--bad/--idle)
- *  - font-mono for chat_id and timestamps (JetBrains Mono via --font-mono)
+ *  - font-mono for chat_id, branch, counts (JetBrains Mono via --font-mono)
  *  - --ink-3 / --ink-4 for secondary / decorative text
  *  - prefers-reduced-motion honored by StatusDot animate-pulse
- *  - No --accent except on the Send button (owned by ChatPage)
+ *  - No --accent in the rail (owned by ChatPage's Send button)
  *  - No new colors, shadows, or fonts beyond DESIGN.md spec
  */
 
 const MAX_EVENTS = 6;
+
+interface SessionInfo {
+  gitBranch: string | null;
+  projectName: string | null;
+  activeTasks: number;
+}
 
 function formatEventLabel(event: DashboardEvent): string {
   const { type, payload } = event;
@@ -58,6 +71,34 @@ interface SessionRailProps {
 
 export function SessionRail({ status, chatId }: SessionRailProps) {
   const [events, setEvents] = useState<DashboardEvent[]>([]);
+  const [session, setSession] = useState<SessionInfo>({
+    gitBranch: null,
+    projectName: null,
+    activeTasks: 0,
+  });
+
+  // Fetch session info once on mount. Gracefully degrades on any error
+  // (network failure, 404 from old relay, missing git). The branch row is
+  // conditionally rendered only when gitBranch is a non-empty string.
+  useEffect(() => {
+    const controller = new AbortController();
+    api<{ gitBranch: string | null; projectName: string; activeTasks: number }>(
+      'dashboard/api/session',
+    )
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        setSession({
+          gitBranch: data.gitBranch ?? null,
+          projectName: data.projectName ?? null,
+          activeTasks: typeof data.activeTasks === 'number' ? data.activeTasks : 0,
+        });
+      })
+      .catch(() => {
+        // Intentionally silenced — old relay (no endpoint) or network error;
+        // defaults (null/0) keep the rail usable.
+      });
+    return () => controller.abort();
+  }, []);
 
   const onEvent = useCallback((e: DashboardEvent) => {
     setEvents((prev) => {
@@ -68,6 +109,9 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
   }, []);
 
   useEventStream(onEvent);
+
+  const showWorkingDir =
+    typeof session.gitBranch === 'string' && session.gitBranch.length > 0;
 
   return (
     <aside
@@ -85,7 +129,7 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
       }}
       aria-label="Session info"
     >
-      {/* ── Section 1: Connection ── */}
+      {/* ── Section 1: Session ── */}
       <section>
         <h2
           className="h-section"
@@ -95,8 +139,10 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
         </h2>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* Status dot */}
           <StatusDot status={status} compact={false} />
 
+          {/* chat_id */}
           {chatId && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
               <span
@@ -107,6 +153,43 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
               </span>
             </div>
           )}
+
+          {/* Working dir — only when gitBranch resolved (non-null, non-empty) */}
+          {showWorkingDir && (
+            <div
+              style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}
+              title="directory the gossipcat relay was launched in (worktree dispatches may differ)"
+            >
+              <span
+                className="text-[11px]"
+                style={{ color: 'var(--ink-4)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+              >
+                working dir
+              </span>
+              <span
+                className="font-mono text-[11px]"
+                style={{ color: 'var(--ink-3)', wordBreak: 'break-all' }}
+              >
+                {session.projectName} · {session.gitBranch}
+              </span>
+            </div>
+          )}
+
+          {/* Active tasks — always shown */}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+            <span
+              className="text-[11px]"
+              style={{ color: 'var(--ink-4)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+            >
+              tasks
+            </span>
+            <span
+              className="font-mono text-[11px]"
+              style={{ color: 'var(--ink-3)' }}
+            >
+              {session.activeTasks} active
+            </span>
+          </div>
 
           <p
             className="text-[12px]"

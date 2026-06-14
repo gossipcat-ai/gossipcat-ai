@@ -17,6 +17,7 @@ import { openFindingsHandler } from './api-open-findings';
 import { learningsHandler } from './api-learnings';
 import { tasksHandler } from './api-tasks';
 import { activeTasksHandler } from './api-active-tasks';
+import { sessionHandler } from './api-session';
 import { logsHandler } from './api-logs';
 import { violationsHandler } from './api-violations';
 import { handleChat } from './api-chat';
@@ -509,6 +510,12 @@ export class DashboardRouter {
 
       if (url === '/dashboard/api/active-tasks' && req.method === 'GET') {
         const data = await activeTasksHandler(this.projectRoot);
+        this.json(res, 200, data);
+        return true;
+      }
+
+      if (url === '/dashboard/api/session' && req.method === 'GET') {
+        const data = await sessionHandler(this.projectRoot);
         this.json(res, 200, data);
         return true;
       }
