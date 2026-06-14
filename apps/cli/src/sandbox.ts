@@ -913,122 +913,31 @@ export function buildAuditExclusions(
   // itunescloudd, TemporaryItems) fill up during a dispatch regardless of
   // agent activity. Exclude the well-known prefixes; any other file under
   // tmpdir is still flagged.
+  //
+  // `cursor-sandbox-cache` is UNCONDITIONAL (not test-gated): the Cursor
+  // editor runs during real agent dispatches and churns this dir every few
+  // seconds (1,054 live noise entries pre-fix). It is editor cache, never a
+  // boundary violation, so prune it on every dispatch — same as the OS dirs.
   try {
     const tmp = canonicalize(tmpdir());
-    for (const pat of ['com.apple.*', 'itunescloudd', 'TemporaryItems', 'node-compile-cache']) {
+    for (const pat of ['com.apple.*', 'itunescloudd', 'TemporaryItems', 'node-compile-cache', 'cursor-sandbox-cache']) {
       for (const v of expandTmpVariants(`${tmp}/${pat}`)) excl.add(v);
     }
   } catch { /* tmpdir() failure — best-effort */ }
-  // Test-fixture exclusion — only active under a real test runner.
-  // JEST_WORKER_ID is set by jest (including --runInBand). NODE_ENV=test is
-  // the universal fallback. Neither is settable by a dispatched agent —
-  // agents run in child processes launched via execFileSync / native bridge,
-  // never inside a jest runner. That makes this gate structurally unforgeable.
+  // Test-fixture noise is NO LONGER handled here via a hand-maintained
+  // allowlist. The old TEST_FIXTURE_PREFIXES list (60+ entries) rotted: every
+  // new test that mkdtemp'd a fresh prefix (jest_dx, finding-resolver-,
+  // siblingroots-, monorepo-, skill-engine-status-, …) leaked into
+  // boundary-escapes.jsonl (8,446/8,486 live entries were such tmpdir noise).
   //
-  // Noise accounting (pre-fix): 6,128 / 8,590 = 71% of entries in
-  // .gossip/boundary-escapes.jsonl came from mkdtempSync(join(tmpdir(),
-  // 'gossip-*')) fixtures during `npm test`. Prefix list enumerated by
-  // grepping `mkdtemp.*'gossip-|join\(tmpdir.*'gossip-` — do NOT collapse
-  // to a bare `gossip-*` glob (too broad even when gated).
-  if (process.env.JEST_WORKER_ID !== undefined || process.env.NODE_ENV === 'test') {
-    try {
-      const tmp = canonicalize(tmpdir());
-      const TEST_FIXTURE_PREFIXES = [
-        // Spec'd core set.
-        'gossip-test-',
-        'gossip-wt-',
-        'gossip-verify-',
-        'gossip-native-prompt-',
-        'gossip-mcp-test-',
-        'gossip-signals-val-',
-        'gossip-pipeline-test-',
-        'gossip-relay-duration-test-',
-        'gossip-hook-ns-',
-        'gossip-memory-test-',
-        'sandbox-test-',
-        'perf-writer-',
-        // Observed via grep (mkdtemp*/join(tmpdir()*) — all test-fixture-only.
-        'gossip-empty-',
-        'gossip-no-mem-',
-        'gossip-symlink-',
-        'gossip-outside-',
-        'gossip-bridge-',
-        'gossip-native-consensus-',
-        'gossip-dash-',
-        'gossip-dash-edge-',
-        'gossip-home-',
-        'gossip-consensus-',
-        'gossip-real-',
-        'gossip-skillgen-',
-        'gossip-signal-types-',
-        'gossip-profile-dispatch-',
-        'gossip-ati-integration-',
-        'gossip-skilldev-integ-',
-        'gossip-migration-',
-        'gossip-cat-hook-',
-        'gossip-hook-install-',
-        'gossip-hook-sentinel-',
-        'gossip-wt-test-',
-        'gossip-skill-tools-test-',
-        'gossip-hygiene-seed-test-',
-        'gossip-searcher-test-',
-        'gossip-registry-test-',
-        'gossip-catalog-test-',
-        'gossip-taskgraph-test-',
-        'gossip-memwriter-test-',
-        'gossip-memwriter-edge-test-',
-        'gossip-memreader-edge-test-',
-        'gossip-prefetch-test-',
-        'gossip-bootstrap-test-',
-        'gossip-bootstrap-spec-test-',
-        'gossip-skill-index-test-',
-        'gossip-gap-tracker-test-',
-        'gossip-gap-tracker-fresh-test-',
-        'gossip-gap-tracker-malformed-',
-        'gossip-gap-test-',
-        'gossip-ctx-',
-        'gossip-lru-',
-        'gossip-task-type-',
-        'gossip-cat-boost-',
-        'gossip-status-filter-',
-        'gossip-discovery-e2e-',
-        'gossip-compactor-test-',
-        'gossip-rules-test-',
-        'gossip-audit-roundtrip-',
-        'gossip-remember-validation-',
-        'gossip-skills-test-',
-        'gossip-verify-mem-',
-        'gossip-fullstack-',
-        'gossip-sim-',
-        'gossip-round-retract-',
-        // NOTE: `gossip-l3-`, `gossip-l3-scan-`, `gossip-l3-bin-` are used by
-        // the Layer-3 audit tests THEMSELVES as scan roots — excluding them
-        // would make those tests silently pass without verifying behavior.
-        // They don't appear in real-world boundary-escapes.jsonl noise; they
-        // exist only as in-test isolation directories and are rmSync'd at
-        // teardown. Intentionally omitted.
-        // Non-gossip test prefixes (scoped fixtures).
-        'scope-tracker-',
-        'scope-outside-',
-        'tg-sync-',
-        'findings-cat-',
-        'signals-dedup-',
-        'cer-',
-        'pcr-',
-        'vrr-',
-        'dgw-',
-        'skill-gen-test-',
-        'skill-eff-test-',
-        'skill-migration-test-',
-        'skill-nan-test-',
-        'skill-safename-test-',
-        'collect-eff-test-',
-      ];
-      for (const prefix of TEST_FIXTURE_PREFIXES) {
-        for (const v of expandTmpVariants(`${tmp}/${prefix}`)) excl.add(v + '*');
-      }
-    } catch { /* tmpdir() failure — best-effort */ }
-  }
+  // It is replaced by an INVERTED gate enforced as a post-scan filter
+  // (isLayer3MainNoise, applied to mainSet in auditFilesystemSinceSentinel):
+  // under a real test runner, EVERY immediate tmpdir child is treated as noise
+  // EXCEPT the gossip-l3-* scan-root keep-list the Layer-3 audit tests use.
+  // The gate stays test-only (JEST_WORKER_ID / NODE_ENV=test, neither settable
+  // by a dispatched child process), so outside a test runner real agent writes
+  // to tmpdir are STILL caught. See isLayer3MainNoise for the keep-list and the
+  // always-on Cursor + build-artifact exclusions.
   if (ownWorktree) {
     const wt = canonicalize(ownWorktree);
     for (const v of expandTmpVariants(wt)) excl.add(v);
@@ -1040,6 +949,122 @@ export function buildAuditExclusions(
     for (const v of expandTmpVariants(s)) excl.add(v);
   }
   return Array.from(excl);
+}
+
+/**
+ * Keep-list of tmpdir-child prefixes that MUST stay flagged even under the
+ * inverted test-fixture gate. These are the scan-root / bin / sentinel dirs
+ * the Layer-3 audit tests THEMSELVES create (mkTmp('gossip-l3-scan-'), etc.)
+ * and write deliberate "bypass" files into. Excluding them would make those
+ * tests silently pass without verifying recording behavior.
+ *
+ * `gossip-l3-` is a prefix of every Layer-3 scan-root/bin/sentinel dir the
+ * audit tests create (`gossip-l3-scan-`, `gossip-l3-bin-`, …), so the single
+ * prefix covers them all — the rename-survival justification for listing the
+ * siblings explicitly is void.
+ *
+ * NOTE (test authors): any NEW test that asserts a Layer-3 MAIN-pass RECORDING
+ * must create its tmpdir under a `gossip-l3-*` prefix. Otherwise the inverted
+ * test-fixture gate (Rule A) suppresses that path's violation under the test
+ * runner and the assertion passes vacuously (no recording to observe).
+ */
+const LAYER3_KEEP_TMPDIR_PREFIXES = ['gossip-l3-'];
+
+/** Build the set of canonical tmp-root prefixes (tmpdir() + /tmp + /private/tmp
+ * twins) that a violating path may sit directly under. Lexical-only. */
+function tmpRootPrefixes(): string[] {
+  const roots = new Set<string>();
+  try {
+    for (const v of expandTmpVariants(canonicalize(tmpdir()))) roots.add(v);
+  } catch { /* tmpdir() failure — best-effort */ }
+  for (const r of ['/tmp', '/private/tmp']) roots.add(r);
+  return Array.from(roots);
+}
+
+/**
+ * Return the immediate child segment of `canonPath` under any tmp root, or
+ * null if `canonPath` is not under a tmp root. e.g. under tmpdir()
+ * `/var/folders/xx/T`, the path `/var/folders/xx/T/jest_dx-AB/sub/f.txt`
+ * yields `jest_dx-AB`.
+ */
+function tmpdirChildSegment(canonPath: string, tmpRoots: string[]): string | null {
+  for (const root of tmpRoots) {
+    const prefix = root.replace(/\/+$/, '') + '/';
+    if (canonPath.startsWith(prefix)) {
+      const rest = canonPath.slice(prefix.length);
+      const slash = rest.indexOf('/');
+      return slash === -1 ? rest : rest.slice(0, slash);
+    }
+  }
+  return null;
+}
+
+/**
+ * Decide whether a Layer-3 MAIN-pass violation path is pure noise that must
+ * NOT be recorded. Applied to each canonicalized mainSet entry AFTER the find
+ * scan (the `find -prune` exclusions handle the coarse, always-known dirs; this
+ * post-filter handles the rules that `-path` globs cannot express inline).
+ *
+ * Three rules, in order:
+ *   A. INVERTED test-fixture gate (test-only). Under a real test runner, every
+ *      immediate tmpdir child is noise EXCEPT the gossip-l3-* keep-list. This
+ *      replaces the rotted 60+ TEST_FIXTURE_PREFIXES allowlist. Outside a test
+ *      runner this rule is inert — real agent writes to tmpdir stay flagged.
+ *   B. Cursor churn (always-on). A `cursor-sandbox-cache` tmpdir child is
+ *      editor cache, never a violation. (Also pruned at find time via
+ *      buildAuditExclusions; kept here as defense-in-depth for non-tmpdir
+ *      canonical forms.)
+ *   C. Build artifacts (projectRoot-anchored). A path with a `dist-mcp/` or
+ *      `dist-dashboard/` segment, or ending in `.tsbuildinfo`, is build output
+ *      — but ONLY when it lives under `opts.projectRoot`. Build artifacts only
+ *      ever appear inside the repo; tmpdir() is itself a main-pass scan root
+ *      for worktree/sequential dispatches, so an unanchored Rule C would let an
+ *      agent hide a REAL escape by writing `/tmp/dist-mcp/evil` or
+ *      `/tmp/anything.tsbuildinfo`. Fail-closed: if `projectRoot` is absent we
+ *      do NOT suppress (cannot anchor → must not drop).
+ *
+ * Matches on the canonicalized path (symlink-safe) — never raw input strings.
+ * `opts.projectRoot` MUST be canonicalized by the caller (same canonicalize()
+ * helper used elsewhere). Cursor rule applies even under a kept gossip-l3-*
+ * root; the build-artifact rule is projectRoot-scoped so it cannot fire on a
+ * tmpdir near-miss.
+ */
+export function isLayer3MainNoise(
+  canonPath: string,
+  opts: { inTestRunner?: boolean; tmpRoots?: string[]; projectRoot?: string } = {},
+): boolean {
+  // Rule C: build artifacts — segment-anchored so `dist-mcp` as a filename
+  // substring (e.g. src/dist-mcp-notes.ts) does NOT match, AND projectRoot-
+  // anchored so a tmpdir path like `/tmp/dist-mcp/evil` or `/tmp/x.tsbuildinfo`
+  // (tmpdir is a scan root) can NEVER be suppressed. Fail-closed when
+  // projectRoot is absent — an unanchored match would mask real escapes.
+  if (
+    opts.projectRoot &&
+    canonPath.startsWith(opts.projectRoot + '/') &&
+    (canonPath.includes('/dist-mcp/') ||
+      canonPath.includes('/dist-dashboard/') ||
+      canonPath.endsWith('.tsbuildinfo'))
+  ) {
+    return true;
+  }
+
+  const tmpRoots = opts.tmpRoots ?? tmpRootPrefixes();
+  const child = tmpdirChildSegment(canonPath, tmpRoots);
+
+  // Rule B: Cursor cache — always-on, gate-independent. Exact dir name (the
+  // find -prune in buildAuditExclusions already covers it; this is the exact
+  // canonical-form twin, not a prefix — no churn dir is a superstring of it).
+  if (child === 'cursor-sandbox-cache') {
+    return true;
+  }
+
+  // Rule A: inverted test-fixture gate — test-only.
+  if (opts.inTestRunner && child !== null) {
+    const isKept = LAYER3_KEEP_TMPDIR_PREFIXES.some(p => child.startsWith(p));
+    if (!isKept) return true;
+  }
+
+  return false;
 }
 
 /**
@@ -1293,6 +1318,29 @@ export function auditFilesystemSinceSentinel(
 
   // Dedup: a path in both passes goes to sensitive only (stronger signal).
   for (const p of sensitiveSet) mainSet.delete(p);
+
+  // Main-pass noise filter (allowlist-rot fix). The `find -prune` exclusions
+  // shed the coarse always-known dirs; this post-filter sheds the rules that
+  // `-path` globs cannot express inline: the inverted test-fixture gate, the
+  // always-on Cursor cache, and build artifacts. Sensitive-pass violations are
+  // NEVER filtered here — Pass 2 is a vetted watchlist with zero noise. The
+  // gate is test-only and structurally unforgeable by a dispatched child
+  // process (it cannot set JEST_WORKER_ID / NODE_ENV in the orchestrator).
+  const inTestRunner =
+    process.env.JEST_WORKER_ID !== undefined || process.env.NODE_ENV === 'test';
+  const tmpRoots = tmpRootPrefixes();
+  const canonProjectRoot = canonicalize(projectRoot);
+  for (const p of Array.from(mainSet)) {
+    // Belt-and-suspenders: never filter a sensitive-pass path here even if the
+    // dedup above is ever reordered. Pass 2 is a vetted zero-noise watchlist;
+    // the noise filter is a main-pass-only concern by construction.
+    if (
+      !sensitiveSet.has(p) &&
+      isLayer3MainNoise(p, { inTestRunner, tmpRoots, projectRoot: canonProjectRoot })
+    ) {
+      mainSet.delete(p);
+    }
+  }
 
   const mainViolations = Array.from(mainSet);
   const sensitiveViolations = Array.from(sensitiveSet);
