@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useEventStream, type DashboardEvent } from '@/lib/useEventStream';
 import { StatusDot } from '@/components/chat/ChatPrimitives';
+import { ActivitySparkline } from '@/components/chat/ActivitySparkline';
 import type { UseBridgeResult } from '@/lib/useBridge';
 import { api } from '@/lib/api';
 
@@ -208,6 +209,9 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
         >
           activity
         </h2>
+
+        {/* Fleet signal-volume sparkline (7d). Renders only when ≥2 data points. */}
+        <ActivitySparkline />
 
         {events.length === 0 ? (
           <p

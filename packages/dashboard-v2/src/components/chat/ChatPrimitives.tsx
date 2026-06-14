@@ -102,6 +102,7 @@ export function MessageBubble({ msg, compact = false }: MessageBubbleProps) {
       <span
         className="px-1 font-mono text-[11px]"
         style={{ color: 'var(--ink-3)' }}
+        title={new Date(msg.ts).toLocaleString()}
       >
         {timeShort(msg.ts)}
       </span>
