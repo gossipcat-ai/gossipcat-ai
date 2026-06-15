@@ -125,7 +125,7 @@ export function loadConfig(configPath: string): GossipConfig {
 // enabled". Drift between these two lists means some values pass schema but
 // fail validateConfig (or vice versa) — that is a hard-to-diagnose user-facing
 // bug. If you change one, change the other.
-export const VALID_PROVIDERS = ['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local', 'native', 'none'];
+export const VALID_PROVIDERS = ['anthropic', 'openai', 'deepseek', 'grok', 'openclaw', 'google', 'local', 'native', 'none'];
 
 // Upper bound for per-agent maxToolTurns. Enforced both here (validateConfig,
 // runtime load of .gossip/config.json) and in the gossip_setup Zod schema

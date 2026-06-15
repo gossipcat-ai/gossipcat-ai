@@ -14,3 +14,20 @@ describe('createProvider — deepseek timeout (regression: #522 missed the long 
     expect(p.timeoutMs).toBe(120_000);
   });
 });
+
+describe('createProvider — grok (xAI) provider arm', () => {
+  it('returns an OpenAIProvider pointed at the xAI endpoint with the Grok label', () => {
+    const p = createProvider('grok', 'grok-4', 'sk-test') as any;
+    expect(p.constructor.name).toBe('OpenAIProvider');
+    expect(p.baseUrl).toBe('https://api.x.ai/v1');
+    expect(p.providerLabel).toBe('Grok');
+  });
+  it('gives grok the 600s timeout (grok-4 is a long-streaming reasoning model)', () => {
+    const p = createProvider('grok', 'grok-4', 'sk-test') as any;
+    expect(p.timeoutMs).toBe(600_000);
+  });
+  it('honours an explicit base_url override', () => {
+    const p = createProvider('grok', 'grok-4', 'sk-test', undefined, 'https://proxy.example/v1') as any;
+    expect(p.baseUrl).toBe('https://proxy.example/v1');
+  });
+});
