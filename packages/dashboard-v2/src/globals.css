@@ -196,6 +196,16 @@
   --s-6: 32px;
   --s-7: 48px;
   --s-8: 64px;
+  /* Syntax-highlight palette (highlight.js token → color). Light theme: tuned for
+     WCAG AA (≥4.5:1) on the code-block surface --surface-sunk #ede9e0. NEVER use
+     --accent here — terracotta stays reserved (DESIGN.md). */
+  --sx-keyword: #845a90; /* 4.51:1 */
+  --sx-string: #347554; /* 4.54:1 */
+  --sx-number: #866225; /* 4.58:1 */
+  --sx-fn: #675990; /* 5.08:1 */
+  --sx-type: #34736e; /* 4.53:1 */
+  --sx-comment: #6B6862; /* 4.58:1 */
+  --sx-punc: #6e6860; /* 4.55:1 */
 }
 
 /* Orchestrator easter egg — click the center blackhole.
@@ -340,6 +350,16 @@
   /* Per-agent identity hues stay identical too. */
   /* --c8 magenta needs a slightly brighter shade in dark mode for legibility. */
   --c8: #D478B8;
+  /* Syntax-highlight palette — dark theme. Values match the chat-surface palette
+     already in flight, AA-verified on code-block surface --surface-sunk #131210.
+     NEVER use --accent (terracotta is reserved, DESIGN.md). */
+  --sx-keyword: #9D72A8;
+  --sx-string: #4FA97D;
+  --sx-number: #C99A52;
+  --sx-fn: #7e72c0; /* AA-corrected from #7A6FBA (4.29:1 → 4.51:1 on #131210) */
+  --sx-type: #5FB0AA;
+  --sx-comment: #9B958D;
+  --sx-punc: #B8B2A6;
 }
 
 /* Tailwind utility classes (text-foreground, bg-card, etc.) resolve against
@@ -926,3 +946,35 @@ html[data-theme="dark"]::after {
   margin: 6px 0;
 }
 .cx-dimmed { opacity: 0.5; }
+
+/* ── highlight.js token mapping ──────────────────────────────────────────────
+   Scoped under .md-code-block so highlight.js's emitted .hljs-* classes pick up
+   the --sx-* tokens. Base .hljs gets NO color override (inherits the surrounding
+   code color). NEVER map any token to --accent (terracotta is reserved). The
+   palette theme-switches via the --sx-* tokens in :root / [data-theme="dark"]. */
+.md-code-block .hljs-keyword { color: var(--sx-keyword); }
+.md-code-block .hljs-string,
+.md-code-block .hljs-meta .hljs-string { color: var(--sx-string); }
+.md-code-block .hljs-number,
+.md-code-block .hljs-literal { color: var(--sx-number); }
+.md-code-block .hljs-title,
+.md-code-block .hljs-title.function_,
+.md-code-block .hljs-section { color: var(--sx-fn); }
+.md-code-block .hljs-type,
+.md-code-block .hljs-built_in,
+.md-code-block .hljs-class .hljs-title { color: var(--sx-type); }
+.md-code-block .hljs-comment,
+.md-code-block .hljs-quote { color: var(--sx-comment); }
+.md-code-block .hljs-punctuation,
+.md-code-block .hljs-operator { color: var(--sx-punc); }
+.md-code-block .hljs-attr,
+.md-code-block .hljs-attribute { color: var(--sx-type); }
+/* HTML/CSS/JS token coverage so these don't fall back to flat base text. */
+.md-code-block .hljs-tag,
+.md-code-block .hljs-name,
+.md-code-block .hljs-selector-tag { color: var(--sx-keyword); }
+.md-code-block .hljs-selector-class,
+.md-code-block .hljs-selector-id { color: var(--sx-type); }
+.md-code-block .hljs-variable,
+.md-code-block .hljs-template-variable,
+.md-code-block .hljs-params { color: var(--sx-fn); }
