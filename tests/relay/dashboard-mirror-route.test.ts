@@ -120,4 +120,62 @@ describe('POST /dashboard/api/bridge/mirror', () => {
     expect(allow('chatA')).toBe(false); // same key, too fast → throttled
     expect(allow('chatB')).toBe(true);  // different key → its own bucket, allowed
   });
+
+  it('rejects an empty-string chat_id with 400, not a silent no-chat_id fallback (f13)', async () => {
+    const res = await post(router, '/dashboard/api/bridge/mirror', {
+      chat_id: '',
+      frames: [{ role: 'activity', text: 'x' }],
+    }, key);
+    expect(res._status).toBe(400);
+    expect(JSON.parse(res._body)).toMatchObject({ error: 'invalid chat_id' });
+  });
+
+  it('rejects a malformed chat_id at the route before bucket derivation (f15/f16)', async () => {
+    const res = await post(router, '/dashboard/api/bridge/mirror', {
+      chat_id: 'bad id!',
+      frames: [{ role: 'activity', text: 'x' }],
+    }, key);
+    expect(res._status).toBe(400);
+  });
+
+  it('derives the rate bucket from the VALIDATED chat_id (f15)', async () => {
+    await openStream('chatA');
+    const spy = jest.spyOn(router as any, 'allowMirrorTurn');
+    await post(router, '/dashboard/api/bridge/mirror', {
+      chat_id: 'chatA',
+      frames: [{ role: 'user', text: 'hi' }],
+    }, key);
+    // The bucket key is the validated chat_id itself, never a raw/coerced value.
+    expect(spy).toHaveBeenCalledWith('chatA');
+    spy.mockRestore();
+  });
+
+  it('keys the bucket by validated session_id when chat_id is absent (f11/f3)', async () => {
+    const spy = jest.spyOn(router as any, 'allowMirrorTurn');
+    await post(router, '/dashboard/api/bridge/mirror', {
+      session_id: 'sess-7',
+      frames: [{ role: 'activity', text: 'terminal' }],
+    }, key);
+    // Distinct sessions get distinct buckets — keyed by the session, not a single
+    // global '_nochatid'.
+    expect(spy).toHaveBeenCalledWith('_sess:sess-7');
+    spy.mockRestore();
+  });
+
+  it('falls back to a single anonymous bucket only when neither id is present', async () => {
+    const spy = jest.spyOn(router as any, 'allowMirrorTurn');
+    await post(router, '/dashboard/api/bridge/mirror', {
+      frames: [{ role: 'activity', text: 'anon' }],
+    }, key);
+    expect(spy).toHaveBeenCalledWith('_nochatid');
+    spy.mockRestore();
+  });
+
+  it('hard-caps the mirrorLastTurn map under a flood of distinct keys (f18)', () => {
+    const allow = (k: string) => (router as any).allowMirrorTurn(k);
+    // Push well past the 1000 hard cap with distinct fresh keys. The soft >100
+    // prune reaps nothing (all fresh), so the hard cap must bound the map.
+    for (let i = 0; i < 1300; i++) allow(`k${i}`);
+    expect((router as any).mirrorLastTurn.size).toBeLessThanOrEqual(1000);
+  });
 });

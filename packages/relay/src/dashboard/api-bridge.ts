@@ -127,6 +127,10 @@ export class BridgeHub {
   private sink: BridgeSink | null = null;
   private clients = new Set<ServerResponse>();
   private backpressure = new WeakMap<ServerResponse, number>();
+  // Per-client keepalive interval (f12). Tracked so broadcast()'s backpressure
+  // eviction can clearInterval too — the req 'close' handler may never fire on
+  // an abrupt res.destroy(), which would otherwise leak the timer.
+  private keepalives = new Map<ServerResponse, ReturnType<typeof setInterval>>();
   // chat_ids we have seen on an INBOUND POST. Outbound replies bind against this
   // set (consensus f5): the live session can only address a stream the dashboard
   // actually opened, never an arbitrary/forged id. Bounded + TTL'd so a long
@@ -423,18 +427,36 @@ export class BridgeHub {
     const lastId = parseInt(params.get('last_id') ?? '0', 10) || 0;
 
     if (chatId !== null) {
+      // f6: serving a chat_id that's an open mirror stream TOUCHES its TTL so an
+      // actively-observed stream isn't deauthorized just because mirror POSTs
+      // paused (the only other TTL bump is registerMirrorChatId, on inbound POST).
+      // An idle-but-OPEN SSE observer keeps its own authorization alive.
+      this.touchMirrorChatId(chatId);
       const highest = this.mirror.highestId(chatId);
       if (lastId > highest) {
         // Restart discontinuity (P1#3): our counter is behind the client's
         // cursor → a restart reset it. Tell the client to drop last_id, then
         // replay the entire current ring from the start.
-        this.writeFrame(res, { type: 'restart', chat_id: chatId, ts: new Date().toISOString() });
-        for (const frame of this.mirror.replaySlice(chatId, 0)) {
-          this.writeFrame(res, frame);
+        if (!this.writeFrame(res, { type: 'restart', chat_id: chatId, ts: new Date().toISOString() })) {
+          // Slow client backed up on the very first frame — abandon replay.
+          // The client reconnects with its last_id and we replay again (f10).
+          return;
         }
+        this.replayWithBackpressure(res, chatId, 0);
       } else {
-        for (const frame of this.mirror.replaySlice(chatId, lastId)) {
-          this.writeFrame(res, frame);
+        // FIFO-overflow gap (f7): the lowest frame we can still serve is past
+        // lastId+1 because the oldest frames were FIFO-evicted. A late observer
+        // would silently lose that history. Detect it and emit the SAME restart
+        // sentinel used for the counter-reset case so the client drops its
+        // cursor and refetches the full retained ring from 0.
+        const slice = this.mirror.replaySlice(chatId, lastId);
+        if (lastId > 0 && slice.length > 0 && slice[0].id > lastId + 1) {
+          if (!this.writeFrame(res, { type: 'restart', chat_id: chatId, ts: new Date().toISOString() })) {
+            return;
+          }
+          this.replayWithBackpressure(res, chatId, 0);
+        } else {
+          if (!this.replayFrames(res, slice)) return;
         }
       }
     }
@@ -446,21 +468,47 @@ export class BridgeHub {
       try { res.write(':keepalive\n\n'); } catch { clearInterval(keepalive); }
     }, KEEPALIVE_MS);
     keepalive.unref?.();
+    // f12: track the interval per client so broadcast()'s backpressure eviction
+    // can clear it too — the req 'close' handler may never fire on an abrupt
+    // socket destroy, leaking the timer.
+    this.keepalives.set(res, keepalive);
 
     req.on('close', () => {
-      clearInterval(keepalive);
+      this.clearKeepalive(res);
       this.clients.delete(res);
     });
+  }
+
+  /**
+   * Replay a chat_id's ring (id > lastId) to a single client, honoring
+   * backpressure (f10): stop the moment a write returns false instead of
+   * silently dropping later frames into a full socket buffer. The client
+   * reconnects with its last SSE id and replay resumes from there. Returns false
+   * when replay was cut short.
+   */
+  private replayWithBackpressure(res: ServerResponse, chatId: string, lastId: number): boolean {
+    return this.replayFrames(res, this.mirror.replaySlice(chatId, lastId));
+  }
+
+  /** Write a pre-fetched frame slice with backpressure, stopping on first false. */
+  private replayFrames(res: ServerResponse, slice: MirrorFrame[]): boolean {
+    for (const frame of slice) {
+      if (!this.writeFrame(res, frame)) return false;
+    }
+    return true;
   }
 
   /**
    * Write one frame to a single SSE response (used during replay, before the
    * client joins the broadcast set). Mirror frames carry an SSE `id:` line so
    * the browser EventSource exposes lastEventId for reconnect-cursor reuse.
+   * Returns the underlying res.write() result so the replay loop can honor
+   * backpressure (f10) — false means the socket buffer is full / the client is
+   * gone, and the caller must stop replaying.
    */
-  private writeFrame(res: ServerResponse, frame: BridgeReplyFrame | MirrorFrame): void {
+  private writeFrame(res: ServerResponse, frame: BridgeReplyFrame | MirrorFrame): boolean {
     const idLine = 'id' in frame && typeof frame.id === 'number' ? `id: ${frame.id}\n` : '';
-    try { res.write(`${idLine}data: ${JSON.stringify(frame)}\n\n`); } catch { /* client gone */ }
+    try { return res.write(`${idLine}data: ${JSON.stringify(frame)}\n\n`); } catch { return false; }
   }
 
   /** Fan out one frame to every connected SSE client, with backpressure eviction. */
@@ -478,14 +526,42 @@ export class BridgeHub {
           const count = (this.backpressure.get(res) ?? 0) + 1;
           this.backpressure.set(res, count);
           if (count > BACKPRESSURE_EVICT_THRESHOLD) {
+            this.clearKeepalive(res); // f12: don't leak the timer on eviction
             res.destroy();
             this.clients.delete(res);
           }
         }
       } catch {
+        this.clearKeepalive(res);
         this.clients.delete(res);
       }
     }
+  }
+
+  /** Clear + drop a client's keepalive interval (f12). Safe if absent. */
+  private clearKeepalive(res: ServerResponse): void {
+    const timer = this.keepalives.get(res);
+    if (timer !== undefined) {
+      clearInterval(timer);
+      this.keepalives.delete(res);
+    }
+  }
+
+  /**
+   * Bump the TTL of an OPEN mirror chat_id (f6) without seeding a new one. Unlike
+   * registerMirrorChatId this NEVER adds an id — it only refreshes the timestamp
+   * of an id that is already an open mirror stream, so an actively-observed SSE
+   * stream stays authorized even when mirror POSTs pause. A chat_id that isn't a
+   * mirror stream (or has already aged out) is left untouched (fail closed).
+   */
+  private touchMirrorChatId(chatId: string): void {
+    const now = Date.now();
+    // Refresh FIRST, then evict: an open SSE stream re-authorizes its own
+    // chat_id even if it had aged past the TTL since the last mirror POST. If we
+    // evicted before refreshing, an idle-but-open stream would be dropped right
+    // before the touch could save it (f6). Other stale ids are still reaped.
+    if (this.mirrorChatIds.has(chatId)) this.mirrorChatIds.set(chatId, now);
+    this.evictMirrorChatIds(now);
   }
 
   private rememberChatId(chatId: string): void {
@@ -528,7 +604,8 @@ export class BridgeHub {
   private registerMirrorChatId(chatId: string): void {
     const now = Date.now();
     this.evictMirrorChatIds(now);
-    if (!this.mirrorChatIds.has(chatId) && this.mirrorChatIds.size >= BridgeHub.MAX_KNOWN_CHAT_IDS) {
+    const isNew = !this.mirrorChatIds.has(chatId);
+    if (isNew && this.mirrorChatIds.size >= BridgeHub.MAX_KNOWN_CHAT_IDS) {
       let oldestKey: string | null = null;
       let oldest = Infinity;
       for (const [k, v] of this.mirrorChatIds) {
@@ -537,6 +614,30 @@ export class BridgeHub {
       if (oldestKey !== null) this.mirrorChatIds.delete(oldestKey);
     }
     this.mirrorChatIds.set(chatId, now);
+    // Provisional backfill (spec §2 / P2 — f1/f7): the FIRST time a stream is
+    // established, drain any frames buffered under the provisional id (terminal
+    // mirror POSTs that arrived before this chat_id existed) into THIS ring,
+    // re-stamped with this ring's monotonic ids + a fresh server ts, capped at
+    // MIRROR_RING_MAX by the ring's own FIFO. Then the provisional ring is
+    // cleared. Only on first-seen so a re-touch of an existing stream doesn't
+    // re-drain (the provisional ring is empty after the first drain anyway, but
+    // guarding on isNew makes the single-shot intent explicit). If dropping is
+    // configured the provisional buffer is never populated, so this is a no-op.
+    if (isNew) this.backfillProvisional(chatId, now);
+  }
+
+  /**
+   * Drain the provisional ring into a newly-established chat_id ring and fan the
+   * re-stamped frames out to any currently-connected SSE client whose cursor is
+   * on this chat_id (they receive them as live frames; a later reconnect replays
+   * them from the ring). Cap is enforced by MirrorEventStore.drainInto's FIFO.
+   */
+  private backfillProvisional(chatId: string, now: number): void {
+    if (chatId === BridgeHub.PROVISIONAL_CHAT_ID) return;
+    const transferred = this.mirror.drainInto(BridgeHub.PROVISIONAL_CHAT_ID, chatId, now);
+    for (const frame of transferred) {
+      this.broadcast(frame);
+    }
   }
 
   private isMirrorChatId(chatId: string): boolean {
@@ -615,13 +716,32 @@ export class BridgeHub {
     this.mirror.sweep(now);
   }
 
+  /**
+   * Test helper (f6): age an open mirror chat_id's last-touch timestamp into the
+   * past by `ms`, so the next TTL check would evict it unless something (an open
+   * SSE stream) touches it first. Returns false if the id isn't an open stream.
+   */
+  ageMirrorChatId(chatId: string, ms: number): boolean {
+    const cur = this.mirrorChatIds.get(chatId);
+    if (cur === undefined) return false;
+    this.mirrorChatIds.set(chatId, cur - ms);
+    return true;
+  }
+
+  /** Test helper: count of live keepalive timers (f12 leak check). */
+  keepaliveCount(): number {
+    return this.keepalives.size;
+  }
+
   /** Test helper: number of live mirror rings. */
   mirrorRingCount(): number {
     return this.mirror.ringCount();
   }
 
-  /** Stop the mirror sweep timer (clean shutdown / tests). */
+  /** Stop the mirror sweep timer + all per-client keepalives (clean shutdown / tests). */
   dispose(): void {
+    for (const timer of this.keepalives.values()) clearInterval(timer);
+    this.keepalives.clear();
     this.mirror.dispose();
   }
 }

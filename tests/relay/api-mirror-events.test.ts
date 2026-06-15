@@ -84,3 +84,54 @@ describe('MirrorEventStore', () => {
     expect(s.ringCount()).toBe(1);
   });
 });
+
+describe('MirrorEventStore.drainInto (provisional backfill, spec §2)', () => {
+  function store(ringMax = MIRROR_RING_MAX, ttlMs = 1000): MirrorEventStore {
+    return new MirrorEventStore(ringMax, ttlMs, 0);
+  }
+
+  it('re-stamps provisional frames into the destination ring with the dest counter', () => {
+    const s = store();
+    // Provisional frames accumulate under the reserved id with ids 1,2,3.
+    s.push('_provisional', 'activity', 'p0');
+    s.push('_provisional', 'user', 'p1');
+    s.push('_provisional', 'assistant', 'p2');
+    // Destination already has one live frame (id 1).
+    s.push('chatA', 'user', 'live');
+    const moved = s.drainInto('_provisional', 'chatA');
+    // role+text preserved, ids RE-STAMPED onto chatA's counter (continues at 2,3,4).
+    expect(moved.map((f) => f.id)).toEqual([2, 3, 4]);
+    expect(moved.map((f) => [f.role, f.text])).toEqual([
+      ['activity', 'p0'],
+      ['user', 'p1'],
+      ['assistant', 'p2'],
+    ]);
+    // Source ring cleared; destination holds 1 live + 3 backfilled.
+    expect(s.replaySlice('_provisional', 0)).toEqual([]);
+    expect(s.replaySlice('chatA', 0).map((f) => f.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('caps the merged ring at ringMax via the destination FIFO', () => {
+    const s = store(3); // ring max 3
+    // The provisional source ring is ALSO FIFO-bounded at ringMax=3, so pushing
+    // 4 leaves it holding only the last 3 (p1,p2,p3) — p0 was already evicted.
+    for (let i = 0; i < 4; i++) s.push('_provisional', 'activity', `p${i}`);
+    expect(s.replaySlice('_provisional', 0)).toHaveLength(3);
+    const moved = s.drainInto('_provisional', 'chatA');
+    // Those 3 transfer into the (empty) dest ring, re-stamped 1,2,3.
+    expect(s.replaySlice('chatA', 0)).toHaveLength(3);
+    expect(s.replaySlice('chatA', 0).map((f) => f.text)).toEqual(['p1', 'p2', 'p3']);
+    // drainInto returns exactly the frames it transferred.
+    expect(moved).toHaveLength(3);
+    expect(moved.map((f) => f.id)).toEqual([1, 2, 3]);
+  });
+
+  it('is a no-op for an empty/absent source and clears the empty source ring', () => {
+    const s = store();
+    expect(s.drainInto('_provisional', 'chatA')).toEqual([]);
+    // from === to short-circuit.
+    s.push('chatA', 'user', 'x');
+    expect(s.drainInto('chatA', 'chatA')).toEqual([]);
+    expect(s.replaySlice('chatA', 0)).toHaveLength(1); // untouched
+  });
+});

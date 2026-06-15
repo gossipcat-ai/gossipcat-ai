@@ -107,8 +107,46 @@ export class MirrorEventStore {
     const ring = this.rings.get(chatId);
     if (!ring) return [];
     ring.touchedAt = now;
+    // lastId<=0: return a defensive COPY (callers iterate while the ring may be
+    // mutated by a concurrent push/FIFO-shift; handing out the live array would
+    // let an in-flight broadcast splice from under the replay loop). f2.
     if (lastId <= 0) return ring.frames.slice();
     return ring.frames.filter((f) => f.id > lastId);
+  }
+
+  /**
+   * Drain every frame currently buffered under `fromChatId` and re-push it into
+   * `toChatId`, re-stamping each frame with the destination ring's own
+   * monotonic id + a fresh server ts (provisional backfill, spec §2 / P2).
+   *
+   * Why re-stamp rather than copy ids: the provisional ring has its OWN id
+   * sequence; merging raw ids into the resolved ring would collide with that
+   * ring's counter and break the `?last_id` cursor. So each transferred frame
+   * goes through push() exactly like a fresh frame — capped at ringMax by the
+   * same FIFO. role + text are preserved; id/ts/chat_id are reassigned.
+   *
+   * The source ring is fully cleared after the drain (frames are write-once;
+   * a partial transfer can't happen because push never throws). Returns the
+   * re-stamped frames in destination-id order so the hub can broadcast exactly
+   * what was retained. A no-op (returns []) when the source ring is absent or
+   * empty, or when from===to (nothing to merge).
+   */
+  drainInto(fromChatId: string, toChatId: string, now: number = Date.now()): MirrorFrame[] {
+    if (fromChatId === toChatId) return [];
+    const src = this.rings.get(fromChatId);
+    if (!src || src.frames.length === 0) {
+      // Still clear an empty source ring so it doesn't linger for TTL sweep.
+      this.rings.delete(fromChatId);
+      return [];
+    }
+    const carried = src.frames.slice();
+    // Clear the source ring entirely — provisional frames live exactly once.
+    this.rings.delete(fromChatId);
+    const transferred: MirrorFrame[] = [];
+    for (const f of carried) {
+      transferred.push(this.push(toChatId, f.role, f.text, now));
+    }
+    return transferred;
   }
 
   /**

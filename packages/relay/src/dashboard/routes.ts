@@ -21,7 +21,7 @@ import { sessionHandler } from './api-session';
 import { logsHandler } from './api-logs';
 import { violationsHandler } from './api-violations';
 import { handleChat } from './api-chat';
-import { BridgeHub, type BridgeSink, type InboundMirrorFrame } from './api-bridge';
+import { BridgeHub, validateChatId, type BridgeSink, type InboundMirrorFrame } from './api-bridge';
 import { ChatConversationStore } from './chat-session-store';
 import type { ChatbotAgent } from '@gossip/orchestrator';
 import { buildCoverageDegradedMessage } from '@gossip/orchestrator';
@@ -170,6 +170,13 @@ const MIRROR_MAX_BODY = 64 * 1024; // 64 KB
 // interval that tolerates a hook burst. A bucket-miss is a soft 429, never a
 // data drop — the hook is fail-open and the next turn re-POSTs.
 const MIRROR_MIN_INTERVAL_MS = 200;
+// Hard cap backstop for the mirrorLastTurn map (f18). The soft >100 prune only
+// drops entries idle past 10x the interval; under a burst of many DISTINCT
+// validated keys (e.g. per-session terminal buckets) the freshest entries are
+// all recent and the soft prune reaps nothing, so the map could grow unbounded.
+// When the map still exceeds this cap after the soft prune, evict the oldest
+// entries (by last-turn timestamp) until back under the cap.
+const MIRROR_LAST_TURN_HARD_CAP = 1000;
 
 // Minimum interval between chat turns from one IP — a simple per-IP throttle so
 // a single client can't fan out concurrent/rapid turns (each turn can run up to
@@ -459,6 +466,19 @@ export class DashboardRouter {
       const staleBefore = MIRROR_MIN_INTERVAL_MS * 10;
       for (const [k, v] of this.mirrorLastTurn) {
         if (now - v > staleBefore) this.mirrorLastTurn.delete(k);
+      }
+      // f18: hard-cap backstop — if the soft prune left the map over the cap
+      // (many distinct fresh keys), evict the oldest-by-timestamp until under it.
+      // Evict down to HARD_CAP-1 so the set() at the end of this call (which may
+      // add a NEW key) leaves the map at HARD_CAP, never above it.
+      if (this.mirrorLastTurn.size >= MIRROR_LAST_TURN_HARD_CAP) {
+        const oldestFirst = [...this.mirrorLastTurn.entries()].sort((a, b) => a[1] - b[1]);
+        let toEvict = this.mirrorLastTurn.size - (MIRROR_LAST_TURN_HARD_CAP - 1);
+        for (const [k] of oldestFirst) {
+          if (toEvict <= 0) break;
+          this.mirrorLastTurn.delete(k);
+          toEvict--;
+        }
       }
     }
     const last = this.mirrorLastTurn.get(key);
@@ -784,19 +804,33 @@ export class DashboardRouter {
           return true;
         }
         const b = (body ?? {}) as { chat_id?: unknown; session_id?: unknown; frames?: unknown };
-        // Rate-limit key: the supplied chat_id when present (per-stream bucket),
-        // else a fixed no-chat_id key so terminal bursts are still bounded.
-        const bucketKey = typeof b.chat_id === 'string' && b.chat_id.length > 0 ? b.chat_id : '_nochatid';
+        // Validate BOTH ids at the route boundary BEFORE deriving the rate bucket
+        // (f15/f16): a malformed/oversize id must never become a bucket key (log/
+        // keyspace injection) and a validated id is what emitMirror keys on too.
+        const chatIdPresent = b.chat_id !== undefined && b.chat_id !== null;
+        const validChatId = chatIdPresent ? validateChatId(b.chat_id) : null;
+        // f13: a present-but-invalid chat_id (including the empty string) is a
+        // hard 400 at the route — it must NOT silently fall back to the no-chat_id
+        // bucket as if it were a terminal POST.
+        if (chatIdPresent && validChatId === null) {
+          this.json(res, 400, { error: 'invalid chat_id' });
+          return true;
+        }
+        const validSessionId = validateChatId(b.session_id);
+        // Rate-limit key (f15/f11/f3): the VALIDATED chat_id (per-stream bucket)
+        // when present; else the VALIDATED session_id so distinct terminal
+        // sessions get independent buckets instead of all sharing one global
+        // '_nochatid' key (one noisy session can't 429 every other session's
+        // terminal frames); else a single fixed key for the truly-anonymous case.
+        const bucketKey = validChatId ?? (validSessionId !== null ? `_sess:${validSessionId}` : '_nochatid');
         if (!this.allowMirrorTurn(bucketKey)) {
           this.json(res, 429, { error: 'Too many mirror frames. Slow down.' });
           return true;
         }
-        const rawChatId = b.chat_id === undefined || b.chat_id === null ? null : (b.chat_id as string | null);
-        const sessionId = typeof b.session_id === 'string' ? b.session_id : null;
         const { status, payload } = this.bridge.emitMirror(
-          rawChatId,
+          validChatId,
           Array.isArray(b.frames) ? (b.frames as InboundMirrorFrame[]) : [],
-          sessionId,
+          validSessionId,
         );
         this.json(res, status, payload);
         return true;
