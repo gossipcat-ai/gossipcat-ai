@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { navigate } from '@/lib/router';
 import { useBridgeContext } from '@/lib/BridgeContext';
-import { MessageBubble, StatusDot, AwaitingDots } from '@/components/chat/ChatPrimitives';
-import { ChatEmptyState } from '@/components/chat/ChatEmptyState';
+import { StatusDot, AwaitingDots } from '@/components/chat/ChatPrimitives';
+import { Transcript } from '@/components/chat/Transcript';
 
 /**
  * ChatDock — bottom-RIGHT docked conversation panel wired to the LIVE Claude
@@ -141,22 +141,9 @@ export function ChatDock() {
         </button>
       </div>
 
-      {/* Conversation */}
-      <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
-        {messages.length === 0 ? (
-          <ChatEmptyState
-            status={status}
-            onChipClick={(text) => {
-              setDraft(text);
-              // Focus the composer after chip click so user can send immediately.
-              requestAnimationFrame(() => inputRef.current?.focus());
-            }}
-            compact={true}
-          />
-        ) : (
-          messages.map((m) => <MessageBubble key={m.id} msg={m} compact={true} />)
-        )}
-
+      {/* Conversation — flowing CC-transcript view (activity-mirror v2) */}
+      <div ref={scrollRef} className="chat-surface flex-1 overflow-y-auto px-3 py-3">
+        <Transcript messages={messages} status={status} />
         {awaitingReply && <AwaitingDots compact={true} />}
       </div>
 

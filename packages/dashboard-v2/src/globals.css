@@ -330,7 +330,7 @@
   --info: #7CC1C7;
   --info-soft: #1A2729;
   --severity-medium: #6E9BD4;
-  --cite-file: #6674C2;
+  --cite-file: #7A8ED6; /* AA on dark surfaces — bumped from #6674C2 (2026-06-15 a11y pass) */
   --cite-fn: #7A6FBA;
   --idle: #807A71;
   --idle-soft: #2A2722;
@@ -733,3 +733,196 @@ html[data-theme="dark"]::after {
   padding: 0;
   font-size: inherit;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Chat surface — activity-mirror v2 "CC-transcript" look
+   ────────────────────────────────────────────────────────────────────────
+   SCOPED dark warm-charcoal carve-out (DESIGN.md 2026-06-15 rows + spec
+   2026-06-14-dashboard-cc-activity-mirror-v2.md §6). These tokens override the
+   app theme ONLY inside `.chat-surface`; they do NOT leak app-wide. Values are
+   the AA-corrected mockup tokens (docs/specs/mockups/chat-transcript-dark.html).
+   ════════════════════════════════════════════════════════════════════════ */
+.chat-surface {
+  --bg: #14120F;
+  --surface: #1C1A16;
+  --surface-2: #232019;
+  --ink: #F2EDE3;
+  --ink-2: #B8B2A6;
+  --ink-3: #8A857B; /* AA text min (≈5.3:1 on --bg #14120F) — line numbers, hints, meta */
+  --ink-4: #6B6862; /* NON-TEXT only — gutter borders, decorative glyphs */
+  --border: #2A2620;
+  --border-strong: #3A3429;
+  --accent: #D58267;
+  --ok: #4FA97D;
+  --ok-soft: rgba(79, 169, 125, 0.13);
+  --bad: #D2697A;
+  --bad-soft: rgba(210, 105, 122, 0.13);
+  --warn: #D6A04E;
+  --info: #5FB0AA;
+  --idle: #8A867E;
+  --cite-file: #7A8ED6;
+  --cite-fn: #7A6FBA;
+  /* syntax palette — derived from chart/cite tokens, NEVER --accent */
+  --sx-keyword: #9D72A8;
+  --sx-string: #4FA97D;
+  --sx-number: #C99A52;
+  --sx-fn: #7A6FBA;
+  --sx-type: #5FB0AA;
+  --sx-comment: #9B958D;
+  --sx-punc: #B8B2A6;
+  --r-md: 8px;
+  --r-lg: 12px;
+
+  background: var(--bg);
+  color: var(--ink);
+  background-image: radial-gradient(120% 80% at 50% -10%, #1a1713 0%, #14120f 60%);
+}
+
+/* ── transcript turns ── */
+.cx-turn { margin: 0 0 22px; }
+.cx-turn + .cx-turn {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  padding-top: 18px;
+}
+.cx-turn.user { display: flex; gap: 11px; align-items: flex-start; }
+.cx-turn.user .cx-gutter {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  flex: none;
+  padding-top: 1px;
+}
+.cx-turn.user .cx-body { color: var(--ink-2); }
+.cx-row { display: flex; gap: 11px; align-items: flex-start; }
+.cx-bullet {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 9px;
+  line-height: 1.9;
+  user-select: none;
+}
+.cx-body { flex: 1; min-width: 0; }
+
+/* prose (markdown) inside an assistant/mirror turn */
+.cx-prose { color: var(--ink); }
+.cx-prose p, .cx-prose { margin: 0 0 10px; }
+.cx-prose :last-child { margin-bottom: 0; }
+.cx-prose strong { color: var(--ink); font-weight: 600; }
+.cx-prose a {
+  color: var(--info);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--info) 40%, transparent);
+}
+.cx-prose code.md-inline-code,
+.cx-prose code.cite-fn {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--ink);
+}
+.cx-prose code.cite-file {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--cite-file);
+  background: color-mix(in srgb, var(--cite-file) 12%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.cx-prose ul.md-list { list-style: disc; padding-left: 1.1rem; margin: 0.25rem 0; }
+.cx-prose h1.md-h1, .cx-prose h2.md-h2, .cx-prose h3.md-h3 {
+  color: var(--ink);
+  font-weight: 600;
+  margin: 0.4rem 0 0.2rem;
+}
+
+/* code fence (plain — NO syntax highlighting in this PR) */
+.cx-prose pre.md-code-block {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  margin: 4px 0 12px;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--ink);
+}
+.cx-prose pre.md-code-block code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* ── activity row (curated tool/dispatch mirror) ── */
+.cx-activity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  margin: 0 0 9px;
+}
+.cx-activity .cx-label {
+  font-variant: small-caps;
+  letter-spacing: 0.02em;
+  color: var(--idle);
+}
+.cx-activity .cx-agent {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--info);
+}
+.cx-activity .cx-cmd {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+/* Unstructured / ack one-liners that parsed no label or agent — de-emphasize so
+ * they don't read as equal-weight body copy next to semantic activity rows. */
+.cx-activity .cx-cmd-bare {
+  color: var(--ink-3);
+}
+/* Emoji icon must not inherit small-caps from any future parent change. */
+.cx-activity .cx-ic {
+  font-variant: normal;
+}
+
+/* ── states ── */
+.cx-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  color: var(--ink-3);
+  font-size: 13px;
+  margin: 4px 0;
+}
+.cx-state.err { border-style: solid; }
+.cx-chip-bad {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: var(--bad-soft);
+  color: var(--bad);
+  font-family: var(--font-mono);
+}
+.cx-skel {
+  height: 11px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+  margin: 6px 0;
+}
+.cx-dimmed { opacity: 0.5; }

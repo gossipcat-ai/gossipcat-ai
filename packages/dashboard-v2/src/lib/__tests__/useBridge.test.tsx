@@ -1,0 +1,251 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { renderHook, act, waitFor } from '@testing-library/react';
+import { useBridge } from '../useBridge';
+
+/**
+ * useBridge — activity-mirror v2 frame handling.
+ *
+ * Covers the new mirror/restart/last_id behavior on the SHARED bridge SSE stream
+ * (spec 2026-06-14-dashboard-cc-activity-mirror-v2.md §3/§6):
+ *   - mirror frame → appends a turn carrying role/text/ts/serverId
+ *   - chat_id filter still applies to mirror frames
+ *   - highest mirror id seen drives ?last_id on (re)connect
+ *   - restart frame → reset last_id to 0 and reconnect
+ *   - unknown frame type silently ignored (forward-compat)
+ */
+
+// ── Mock EventSource ────────────────────────────────────────────────────────
+const instances: MockEventSource[] = [];
+
+class MockEventSource {
+  url: string;
+  onopen: ((this: EventSource, ev: Event) => unknown) | null = null;
+  onmessage: ((this: EventSource, ev: MessageEvent) => unknown) | null = null;
+  onerror: ((this: EventSource, ev: Event) => unknown) | null = null;
+  closed = false;
+
+  constructor(url: string) {
+    this.url = url;
+    instances.push(this);
+  }
+  close() {
+    this.closed = true;
+  }
+  /** Test helper: deliver a frame as an SSE message. */
+  emit(frame: unknown) {
+    this.onmessage?.call(this as unknown as EventSource, { data: JSON.stringify(frame) } as MessageEvent);
+  }
+  open() {
+    this.onopen?.call(this as unknown as EventSource, new Event('open'));
+  }
+}
+
+/** Read the last_id query param off a stream URL. */
+function lastIdOf(url: string): string {
+  return new URL(url, 'http://localhost').searchParams.get('last_id') ?? '';
+}
+
+let realEventSource: unknown;
+
+beforeEach(() => {
+  instances.length = 0;
+  // Patch ONLY window.EventSource on the real jsdom window — replacing the whole
+  // window would break @testing-library/react's render (needs jsdom document).
+  realEventSource = (window as unknown as { EventSource?: unknown }).EventSource;
+  (window as unknown as { EventSource: unknown }).EventSource = MockEventSource;
+  // POST is only exercised to mint a chat_id; stub fetch so send() resolves.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({
+      status: 202,
+      json: async () => ({ ok: true, chat_id: 'chat-1' }),
+    })) as unknown as typeof fetch
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  (window as unknown as { EventSource: unknown }).EventSource = realEventSource;
+});
+
+/** Mount the hook and adopt chat_id 'chat-1' via a send() so frames pass the filter. */
+async function mountWithChat() {
+  const hook = renderHook(() => useBridge());
+  // The mount effect opens the first EventSource.
+  await waitFor(() => expect(instances.length).toBeGreaterThan(0));
+  act(() => instances[0].open());
+  await act(async () => {
+    await hook.result.current.send('hello');
+  });
+  await waitFor(() => expect(hook.result.current.chatId).toBe('chat-1'));
+  return hook;
+}
+
+describe('useBridge — ?last_id plumbing', () => {
+  it('opens the stream with last_id=0 on first connect', async () => {
+    renderHook(() => useBridge());
+    await waitFor(() => expect(instances.length).toBe(1));
+    expect(lastIdOf(instances[0].url)).toBe('0');
+  });
+});
+
+describe('useBridge — mirror frames', () => {
+  it('appends a mirror frame as a turn carrying role/text/ts/serverId', async () => {
+    const hook = await mountWithChat();
+    act(() => {
+      instances[0].emit({
+        type: 'mirror',
+        chat_id: 'chat-1',
+        role: 'assistant',
+        text: 'live answer',
+        ts: '2026-06-15T10:00:00.000Z',
+        id: 7,
+      });
+    });
+    await waitFor(() => {
+      const turns = hook.result.current.messages;
+      const mirror = turns.find((m) => m.text === 'live answer');
+      expect(mirror).toBeTruthy();
+      expect(mirror!.role).toBe('assistant');
+      expect(mirror!.serverId).toBe(7);
+    });
+  });
+
+  it('appends an activity-role mirror frame', async () => {
+    const hook = await mountWithChat();
+    act(() => {
+      instances[0].emit({
+        type: 'mirror',
+        chat_id: 'chat-1',
+        role: 'activity',
+        text: '🔧 bash · npm run build',
+        ts: '2026-06-15T10:00:01.000Z',
+        id: 8,
+      });
+    });
+    await waitFor(() =>
+      expect(hook.result.current.messages.some((m) => m.role === 'activity')).toBe(true)
+    );
+  });
+
+  it('drops a mirror frame whose chat_id does not match the active chat', async () => {
+    const hook = await mountWithChat();
+    const before = hook.result.current.messages.length;
+    act(() => {
+      instances[0].emit({
+        type: 'mirror',
+        chat_id: 'other-chat',
+        role: 'assistant',
+        text: 'should be filtered',
+        ts: '2026-06-15T10:00:02.000Z',
+        id: 99,
+      });
+    });
+    // No new turn should appear.
+    expect(hook.result.current.messages.length).toBe(before);
+    expect(hook.result.current.messages.some((m) => m.text === 'should be filtered')).toBe(false);
+  });
+
+  it('ignores an unknown frame type without throwing', async () => {
+    const hook = await mountWithChat();
+    const before = hook.result.current.messages.length;
+    act(() => {
+      instances[0].emit({ type: 'future-kind', chat_id: 'chat-1', text: 'x', ts: '2026-06-15T10:00:03.000Z' });
+    });
+    expect(hook.result.current.messages.length).toBe(before);
+  });
+
+  it('coerces a non-string text to empty instead of crashing the render', async () => {
+    const hook = await mountWithChat();
+    act(() => {
+      // Malformed relay payload: text is an object, not a string. The guard must
+      // coerce to '' so downstream .trim()/.replace() renderers don't throw.
+      instances[0].emit({
+        type: 'mirror',
+        chat_id: 'chat-1',
+        role: 'assistant',
+        text: { not: 'a string' },
+        ts: '2026-06-15T10:00:06.000Z',
+        id: 13,
+      });
+    });
+    await waitFor(() => {
+      const mirror = hook.result.current.messages.find((m) => m.serverId === 13);
+      expect(mirror).toBeTruthy();
+      expect(mirror!.text).toBe('');
+    });
+  });
+
+  it('ignores a mirror frame with an unknown role', async () => {
+    const hook = await mountWithChat();
+    const before = hook.result.current.messages.length;
+    act(() => {
+      instances[0].emit({
+        type: 'mirror',
+        chat_id: 'chat-1',
+        role: 'system',
+        text: 'unknown role',
+        ts: '2026-06-15T10:00:04.000Z',
+        id: 12,
+      });
+    });
+    expect(hook.result.current.messages.length).toBe(before);
+  });
+});
+
+describe('useBridge — last_id high-water mark', () => {
+  it('reconnects with ?last_id set to the highest mirror id seen', async () => {
+    await mountWithChat();
+    act(() => {
+      instances[0].emit({
+        type: 'mirror',
+        chat_id: 'chat-1',
+        role: 'assistant',
+        text: 'a',
+        ts: '2026-06-15T10:00:00.000Z',
+        id: 5,
+      });
+      instances[0].emit({
+        type: 'mirror',
+        chat_id: 'chat-1',
+        role: 'assistant',
+        text: 'b',
+        ts: '2026-06-15T10:00:01.000Z',
+        id: 9,
+      });
+    });
+    // Trigger a reconnect via onerror — the retry is scheduled behind a backoff
+    // timer, so drive it with fake timers to reach the second connect deterministically.
+    vi.useFakeTimers();
+    act(() => instances[0].onerror?.call(instances[0] as unknown as EventSource, new Event('error')));
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    vi.useRealTimers();
+    expect(instances.length).toBe(2);
+    expect(lastIdOf(instances[1].url)).toBe('9');
+  });
+});
+
+describe('useBridge — restart frame', () => {
+  it('resets last_id to 0 and reconnects on a restart frame', async () => {
+    await mountWithChat();
+    act(() => {
+      instances[0].emit({
+        type: 'mirror',
+        chat_id: 'chat-1',
+        role: 'assistant',
+        text: 'a',
+        ts: '2026-06-15T10:00:00.000Z',
+        id: 42,
+      });
+    });
+    // Restart → relay counter reset; client must drop last_id and refetch from 0.
+    act(() => {
+      instances[0].emit({ type: 'restart', chat_id: 'chat-1', ts: '2026-06-15T10:00:05.000Z' });
+    });
+    await waitFor(() => expect(instances.length).toBe(2));
+    expect(lastIdOf(instances[1].url)).toBe('0');
+    expect(instances[0].closed).toBe(true);
+  });
+});
