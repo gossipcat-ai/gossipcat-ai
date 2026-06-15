@@ -838,7 +838,7 @@ export async function resolveAgentProvider(
 // tests/cli/config.test.ts asserts this matches VALID_MAIN_PROVIDERS in
 // apps/cli/src/config.ts so a provider can never pass schema validation but
 // fail at runtime (or vice versa).
-export const CREATE_PROVIDER_CASES = ['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local', 'none'] as const;
+export const CREATE_PROVIDER_CASES = ['anthropic', 'openai', 'deepseek', 'grok', 'openclaw', 'google', 'local', 'none'] as const;
 
 export function createProvider(provider: string, model: string, apiKey?: string, projectRoot?: string, baseUrl?: string, authSlot?: string): ILLMProvider {
   switch (provider) {
@@ -854,6 +854,17 @@ export function createProvider(provider: string, model: string, apiKey?: string,
       apiKey ?? '', model, projectRoot,
       baseUrl ?? 'https://api.deepseek.com/v1',
       'deepseek', 600_000, 'DeepSeek', authSlot,
+    );
+    // xAI's Grok is OpenAI-wire-compatible at api.x.ai/v1 — reuse OpenAIProvider.
+    // Default the base_url to https://api.x.ai/v1 (an explicit base_url still
+    // overrides), give it a 'grok' quota slot, and a 'Grok' label so 401/403 auth
+    // errors name Grok instead of the generic "OpenAI-compatible".
+    // 600s timeout (like deepseek): grok-4 is a long-streaming reasoning model
+    // and the 120s default would terminate it mid-stream.
+    case 'grok': return new OpenAIProvider(
+      apiKey ?? '', model, projectRoot,
+      baseUrl ?? 'https://api.x.ai/v1',
+      'grok', 600_000, 'Grok', authSlot,
     );
     // OpenClaw is a remote agentic LLM with its own server-side tool chain
     // (web_fetch, exec, browser, etc.). Its wallclock regularly exceeds the
