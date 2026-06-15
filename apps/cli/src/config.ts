@@ -144,7 +144,7 @@ const KEY_REF_PATTERN = /^[a-zA-Z0-9_-]{1,32}$/;
 // from the agent's own provider is very likely an operator typo (the agent would
 // authenticate with the wrong key), so validateConfig WARNS — not a hard error,
 // because a shared custom service name across providers is a legitimate use. #522
-const WELL_KNOWN_KEY_SERVICES = ['anthropic', 'openai', 'deepseek', 'openclaw', 'google'];
+const WELL_KNOWN_KEY_SERVICES = ['anthropic', 'openai', 'deepseek', 'grok', 'openclaw', 'google'];
 
 // Subset for `main_agent.provider`: 'native' is excluded because the main
 // agent must be able to invoke a real LLM (the orchestrator that dispatches
@@ -157,6 +157,17 @@ const WELL_KNOWN_KEY_SERVICES = ['anthropic', 'openai', 'deepseek', 'openclaw', 
 // throw "Unknown provider: native" at boot. 'native' remains valid for
 // `utility_model.provider` and `agents[*].provider` where it's design-correct.
 export const VALID_MAIN_PROVIDERS = VALID_PROVIDERS.filter(p => p !== 'native');
+
+// Provider enums for the gossip_setup MCP tool's intake schema
+// (apps/cli/src/mcp-server-sdk.ts). z.enum requires a literal tuple, so these
+// cannot be derived from VALID_PROVIDERS at runtime — the parity test in
+// tests/cli/config.test.ts asserts they stay in lockstep. This closes the gap
+// that shipped grok in #598 (added to VALID_PROVIDERS + createProvider) but left
+// it unsettable via gossip_setup because the Zod enums were not updated.
+//   MCP_MAIN_PROVIDER_ENUM   ≡ VALID_MAIN_PROVIDERS (orchestrator LLM; no 'native')
+//   MCP_CUSTOM_PROVIDER_ENUM ≡ VALID_PROVIDERS minus 'native' and 'none' (custom agents)
+export const MCP_MAIN_PROVIDER_ENUM = ['anthropic', 'openai', 'deepseek', 'grok', 'openclaw', 'google', 'local', 'none'] as const;
+export const MCP_CUSTOM_PROVIDER_ENUM = ['anthropic', 'openai', 'deepseek', 'grok', 'openclaw', 'google', 'local'] as const;
 
 const CLAUDE_MODEL_MAP: Record<string, { provider: string; model: string }> = {
   opus:   { provider: 'anthropic', model: 'claude-opus-4-6' },
