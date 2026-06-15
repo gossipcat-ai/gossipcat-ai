@@ -21,7 +21,7 @@ import { sessionHandler } from './api-session';
 import { logsHandler } from './api-logs';
 import { violationsHandler } from './api-violations';
 import { handleChat } from './api-chat';
-import { BridgeHub, type BridgeSink } from './api-bridge';
+import { BridgeHub, type BridgeSink, type InboundMirrorFrame } from './api-bridge';
 import { ChatConversationStore } from './chat-session-store';
 import type { ChatbotAgent } from '@gossip/orchestrator';
 import { buildCoverageDegradedMessage } from '@gossip/orchestrator';
@@ -156,6 +156,21 @@ const CHAT_MAX_BODY = 64 * 1024; // 64 KB
 // shared cap (consensus f3 — bound the inbound buffer).
 const BRIDGE_MAX_BODY = 64 * 1024; // 64 KB
 
+// Per-route body cap for POST /dashboard/api/bridge/mirror. A batched mirror
+// turn (UserPromptSubmit + several PostToolUse one-liners + the Stop assistant
+// text) can be larger than a single chat message, but is still tightly bounded.
+// SEPARATE from MIRROR_MAX_TEXT (the per-FRAME cap in api-bridge.ts) — this
+// bounds the whole batch buffer, that bounds each frame (consensus f3 posture).
+const MIRROR_MAX_BODY = 64 * 1024; // 64 KB
+
+// Dedicated mirror rate bucket (P1#2). The /mirror route must NOT reuse
+// allowChatTurn(ip) — a single turn fires 5–10 localhost hooks and would 429
+// the human's chat from the same 127.0.0.1. Key the bucket PER-CHAT_ID (all
+// hooks are localhost, so per-IP is meaningless here), with a short min
+// interval that tolerates a hook burst. A bucket-miss is a soft 429, never a
+// data drop — the hook is fail-open and the next turn re-POSTs.
+const MIRROR_MIN_INTERVAL_MS = 200;
+
 // Minimum interval between chat turns from one IP — a simple per-IP throttle so
 // a single client can't fan out concurrent/rapid turns (each turn can run up to
 // maxToolCallsPerTurn tool executions). Mirrors the isIpLockedOut style.
@@ -190,6 +205,11 @@ export class DashboardRouter {
   private chatStore = new ChatConversationStore();
   // Per-IP last-chat-turn timestamp for the min-interval throttle.
   private chatLastTurn = new Map<string, number>();
+  // Per-CHAT_ID last-mirror-POST timestamp (P1#2). DEDICATED bucket — does NOT
+  // touch chatLastTurn / allowChatTurn, so a hook burst never 429s the human's
+  // chat. Keyed by chat_id (or a fixed no-chat_id key) since all hooks are
+  // 127.0.0.1 and per-IP would conflate every session.
+  private mirrorLastTurn = new Map<string, number>();
   // Dashboard ⇄ live-CC bridge transport (P1). Owns the outbound SSE client set
   // and the in-process inbound sink the MCP server registers. Distinct from the
   // dormant chatbot (consensus f14 — no dual-brain; /api/chat stays dormant).
@@ -423,6 +443,27 @@ export class DashboardRouter {
     const last = this.chatLastTurn.get(ip);
     if (last !== undefined && now - last < CHAT_MIN_INTERVAL_MS) return false;
     this.chatLastTurn.set(ip, now);
+    return true;
+  }
+
+  /**
+   * Per-CHAT_ID min-interval throttle for mirror POSTs (P1#2). DEDICATED bucket
+   * — deliberately separate from allowChatTurn so a turn's hook burst never 429s
+   * the human's chat (both arrive from 127.0.0.1). A no-chat_id terminal POST
+   * shares one fixed key (`_nochatid`) so purely-terminal bursts are still
+   * bounded. Same opportunistic pruning posture as allowChatTurn.
+   */
+  private allowMirrorTurn(key: string): boolean {
+    const now = Date.now();
+    if (this.mirrorLastTurn.size > 100) {
+      const staleBefore = MIRROR_MIN_INTERVAL_MS * 10;
+      for (const [k, v] of this.mirrorLastTurn) {
+        if (now - v > staleBefore) this.mirrorLastTurn.delete(k);
+      }
+    }
+    const last = this.mirrorLastTurn.get(key);
+    if (last !== undefined && now - last < MIRROR_MIN_INTERVAL_MS) return false;
+    this.mirrorLastTurn.set(key, now);
     return true;
   }
 
@@ -724,6 +765,40 @@ export class DashboardRouter {
           return true;
         }
         this.bridge.handleStream(req, res);
+        return true;
+      }
+
+      // Mirror INGRESS — /dashboard/api/bridge/mirror (CC hooks → dashboard).
+      // Auth already verified above. P1#2: a DEDICATED per-chat_id rate bucket
+      // (NOT allowChatTurn — a hook burst must never 429 the human chat). A
+      // per-route readBody cap (MIRROR_MAX_BODY, separate from the per-frame
+      // MIRROR_MAX_TEXT cap). Body {chat_id?, session_id?, frames:[{role,text}]};
+      // the hub validates each frame's role/text and stamps id+ts server-side,
+      // rejecting a bad/oversize/malformed batch with 400.
+      if (url === '/dashboard/api/bridge/mirror' && req.method === 'POST') {
+        let body: unknown;
+        try {
+          body = JSON.parse(await readBody(req, MIRROR_MAX_BODY));
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON body' });
+          return true;
+        }
+        const b = (body ?? {}) as { chat_id?: unknown; session_id?: unknown; frames?: unknown };
+        // Rate-limit key: the supplied chat_id when present (per-stream bucket),
+        // else a fixed no-chat_id key so terminal bursts are still bounded.
+        const bucketKey = typeof b.chat_id === 'string' && b.chat_id.length > 0 ? b.chat_id : '_nochatid';
+        if (!this.allowMirrorTurn(bucketKey)) {
+          this.json(res, 429, { error: 'Too many mirror frames. Slow down.' });
+          return true;
+        }
+        const rawChatId = b.chat_id === undefined || b.chat_id === null ? null : (b.chat_id as string | null);
+        const sessionId = typeof b.session_id === 'string' ? b.session_id : null;
+        const { status, payload } = this.bridge.emitMirror(
+          rawChatId,
+          Array.isArray(b.frames) ? (b.frames as InboundMirrorFrame[]) : [],
+          sessionId,
+        );
+        this.json(res, status, payload);
         return true;
       }
 
