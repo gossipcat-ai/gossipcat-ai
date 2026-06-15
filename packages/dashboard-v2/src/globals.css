@@ -837,11 +837,10 @@ html[data-theme="dark"]::after {
 .cx-prose p, .cx-prose { margin: 0 0 10px; }
 .cx-prose :last-child { margin-bottom: 0; }
 .cx-prose strong { color: var(--ink); font-weight: 600; }
-.cx-prose a {
-  color: var(--info);
-  text-decoration: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--info) 40%, transparent);
-}
+/* No `.cx-prose a` rule: renderFindingMarkdown emits no <a> tags (untrusted
+ * mirror text). If a markdown-link pass is ever added, the renderer MUST validate
+ * the URL scheme (reject javascript:/data:) and set rel="noopener noreferrer"
+ * before any link styling is reintroduced here. */
 .cx-prose code.md-inline-code,
 .cx-prose code.cite-fn {
   font-family: var(--font-mono);

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { validateConfig, findConfigPath, configToAgentConfigs, loadClaudeSubagents, VALID_MAIN_PROVIDERS } from '../../apps/cli/src/config';
+import { validateConfig, findConfigPath, configToAgentConfigs, loadClaudeSubagents, VALID_MAIN_PROVIDERS, VALID_PROVIDERS, MCP_MAIN_PROVIDER_ENUM, MCP_CUSTOM_PROVIDER_ENUM } from '../../apps/cli/src/config';
 import { CREATE_PROVIDER_CASES } from '../../packages/orchestrator/src/llm-client';
 
 describe('Config Validation', () => {
@@ -121,6 +121,22 @@ describe('Config Validation', () => {
       const config = validateConfig({ main_agent: { provider: p, model: 'x' } });
       expect(config.main_agent.provider).toBe(p);
     }
+  });
+
+  // Guards the #598 drift: grok was added to VALID_PROVIDERS + createProvider but
+  // NOT to the gossip_setup Zod enums, so operators couldn't create a Grok agent.
+  // The enums must be supersettable from the canonical lists, so a new provider
+  // can't reach VALID_PROVIDERS without also reaching the MCP intake schema.
+  it('gossip_setup provider Zod enums stay in lockstep with VALID_PROVIDERS', () => {
+    const sorted = (a: readonly string[]) => [...a].sort();
+    // main_provider intake ≡ VALID_MAIN_PROVIDERS (orchestrator LLM; excludes 'native')
+    expect(sorted(MCP_MAIN_PROVIDER_ENUM)).toEqual(sorted(VALID_MAIN_PROVIDERS));
+    // per-agent custom provider ≡ VALID_PROVIDERS minus 'native' and 'none'
+    const customExpected = VALID_PROVIDERS.filter((p) => p !== 'native' && p !== 'none');
+    expect(sorted(MCP_CUSTOM_PROVIDER_ENUM)).toEqual(sorted(customExpected));
+    // grok specifically must be settable both ways (the exact #598 gap).
+    expect(MCP_MAIN_PROVIDER_ENUM).toContain('grok');
+    expect(MCP_CUSTOM_PROVIDER_ENUM).toContain('grok');
   });
 });
 

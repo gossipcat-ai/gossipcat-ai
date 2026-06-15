@@ -261,7 +261,12 @@ export function useBridge(): UseBridgeResult {
       // non-string `text` (object/number), which would throw in the downstream
       // .trim()/.replace() renderers. `?? ''` only guards null/undefined.
       const text = typeof frame.text === 'string' ? frame.text : '';
-      setMessages((prev) => insertByTs(prev, makeMessage(role, text, frame.ts, frame.id)));
+      // Guard the ts too: insertByTs orders by lexicographic string compare, so a
+      // malformed/empty ts from a relay bug would mis-sort (e.g. '' jumps to the
+      // top). Drop a non-ISO ts to undefined so makeMessage stamps the local clock
+      // and the frame interleaves near "now" instead of at an arbitrary position.
+      const ts = typeof frame.ts === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(frame.ts) ? frame.ts : undefined;
+      setMessages((prev) => insertByTs(prev, makeMessage(role, text, ts, frame.id)));
     }
 
     /** Close + reopen the stream immediately (used by the `restart` frame). */

@@ -226,7 +226,7 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 
 // ── Extracted modules ────────────────────────────────────────────────────
 import { ctx, NATIVE_TASK_TTL_MS } from './mcp-context';
-import { MAX_TOOL_TURNS_CEILING } from './config';
+import { MAX_TOOL_TURNS_CEILING, MCP_MAIN_PROVIDER_ENUM, MCP_CUSTOM_PROVIDER_ENUM } from './config';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
 import { buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog, isValidCategory, seedPermanentDefaults, GLOBAL_PERMANENT_DEFAULTS, IMPLEMENTER_PERMANENT_DEFAULTS, RESEARCHER_REVIEWER_PERMANENT_DEFAULTS } from '@gossip/orchestrator';
@@ -2440,7 +2440,7 @@ export function createMcpServer(): McpServer {
       // lens generator, gossip publisher all call createProvider on this value),
       // and createProvider has no 'native' branch. 'native' remains valid for
       // utility_model and per-agent overrides.
-      main_provider: z.enum(['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local', 'none']).default('google')
+      main_provider: z.enum(MCP_MAIN_PROVIDER_ENUM).default('google')
         .describe('Provider for the orchestrator LLM. Use "none" when no API key is available — features degrade gracefully to profile-based. Note: "native" is not valid here (use it only for utility_model or per-agent overrides).'),
       main_model: z.string().default('gemini-2.5-pro')
         .describe('Model ID for orchestrator (e.g. gemini-2.5-pro, claude-sonnet-4-6, gpt-4o)'),
@@ -2463,7 +2463,7 @@ export function createMcpServer(): McpServer {
         instructions: z.string().optional()
           .describe('For native agents: full instructions (markdown body of .claude/agents/*.md)'),
         // Custom agent fields
-        provider: z.enum(['anthropic', 'openai', 'deepseek', 'openclaw', 'google', 'local']).optional()
+        provider: z.enum(MCP_CUSTOM_PROVIDER_ENUM).optional()
           .describe('For custom agents: LLM provider'),
         custom_model: z.string().optional()
           .describe('For custom agents: model ID (e.g. gemini-2.5-pro, gpt-4o, claude-sonnet-4-6)'),

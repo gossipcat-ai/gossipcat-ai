@@ -13,7 +13,16 @@ import type { BridgeMessage } from '@/lib/useBridge';
  * highlighting is intentionally OUT OF SCOPE for this PR (no tokenizer dep).
  */
 
-/** A user turn: `›` gutter glyph in --accent + Geist body, no bubble chrome. */
+/**
+ * A user turn: `›` gutter glyph in --accent + Geist body, no bubble chrome.
+ *
+ * `msg.text` is rendered as a React text child (NOT through renderFindingMarkdown)
+ * — INTENTIONALLY. User/terminal-prompt mirror frames are plain text, and React
+ * auto-escapes the string so this is XSS-safe. Do NOT "upgrade" this to
+ * dangerouslySetInnerHTML / renderFindingMarkdown to get markdown styling without
+ * re-auditing the trust boundary: this text crosses the same untrusted hook→relay
+ * →SSE path as assistant frames.
+ */
 export function UserTurn({ msg }: { msg: BridgeMessage }) {
   return (
     <div className="cx-turn user">
