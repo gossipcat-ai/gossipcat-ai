@@ -75,6 +75,15 @@ function truncateAtLine(text: string, maxLength: number): string {
   return text.slice(0, cut !== -1 ? cut : maxLength);
 }
 
+/**
+ * Cap for file_read results. Must stay comfortably under the relay WS
+ * maxPayload (1 MB, packages/relay/src/server.ts:107) even after JSON-envelope
+ * escaping (~2x worst case) AND when multiple file_reads land in the same turn.
+ * 256 KB × 2 (escaping) × 2 (two reads) = 1 MB — right at the limit, so the
+ * cap itself provides the safety margin.
+ */
+const MAX_FILE_READ_CHARS = 256 * 1024;
+
 export class ToolServer {
   private agent: GossipAgent;
   private fileTools: FileTools;
@@ -336,7 +345,13 @@ export class ToolServer {
             throw new Error(`Read blocked: "${args.path}" is outside scope "${readScope}"`);
           }
         }
-        return this.fileTools.fileRead(args as { path: string; startLine?: number; endLine?: number }, agentRoot);
+        let fileContent = await this.fileTools.fileRead(args as { path: string; startLine?: number; endLine?: number }, agentRoot);
+        if (fileContent.length > MAX_FILE_READ_CHARS) {
+          const originalLength = fileContent.length;
+          fileContent = truncateAtLine(fileContent, MAX_FILE_READ_CHARS)
+            + `\n\n[file_read truncated: file is ${originalLength} chars (cap ${MAX_FILE_READ_CHARS}); read a specific range with startLine/endLine]`;
+        }
+        return fileContent;
       }
       case 'file_write': {
         // Check cap BEFORE write to avoid write-success-with-false-error
