@@ -99,8 +99,11 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
   // conditionally rendered only when gitBranch is a non-empty string.
   useEffect(() => {
     const controller = new AbortController();
+    // FIX 1: pass the bare path 'session' — api() already prepends BASE
+    // ('/dashboard/api'). Passing the full 'dashboard/api/session' here produced
+    // the doubled URL '/dashboard/api/dashboard/api/session' → 404.
     api<{ gitBranch: string | null; projectName: string; activeTasks: number }>(
-      'dashboard/api/session',
+      'session',
     )
       .then((data) => {
         if (controller.signal.aborted) return;
