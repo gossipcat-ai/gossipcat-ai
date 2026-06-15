@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useBridgeContext } from '@/lib/BridgeContext';
-import { MessageBubble, AwaitingDots } from '@/components/chat/ChatPrimitives';
-import { ChatEmptyState } from '@/components/chat/ChatEmptyState';
+import { AwaitingDots } from '@/components/chat/ChatPrimitives';
+import { Transcript } from '@/components/chat/Transcript';
 import { SessionRail } from '@/components/chat/SessionRail';
 
 /**
@@ -61,14 +61,6 @@ export function ChatPage() {
     }
   };
 
-  /** Prefill the composer from an example chip click. */
-  const prefill = (text: string) => {
-    setDraft(text);
-    inputRef.current?.focus();
-  };
-
-  const hasMessages = messages.length > 0;
-
   return (
     /*
      * Outer shell: full viewport height minus topbar (~56px), padded at top.
@@ -117,39 +109,27 @@ export function ChatPage() {
          * the full column height.
          */}
         <div
-          className="flex flex-col"
+          className="chat-surface flex flex-col"
           style={{
             minHeight: 0,
             border: '1px solid var(--border)',
             borderRadius: 'var(--r-lg)',
-            background: 'var(--surface-elev)',
             overflow: 'hidden',
           }}
         >
-          {/* Scrollable transcript */}
+          {/* Scrollable transcript — flowing CC-transcript view (activity-mirror v2) */}
           <div
             ref={scrollRef}
             className="flex-1 overflow-y-auto"
             style={{
               padding: '20px 20px 8px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
               // Ensure the scroll region fills the card height so the composer
               // stays pinned at the bottom even when there are few messages.
               minHeight: 0,
             }}
           >
-            {!hasMessages ? (
-              <ChatEmptyState status={status} onChipClick={prefill} />
-            ) : (
-              <>
-                {messages.map((m) => (
-                  <MessageBubble key={m.id} msg={m} compact={false} />
-                ))}
-                {awaitingReply && <AwaitingDots compact={false} />}
-              </>
-            )}
+            <Transcript messages={messages} status={status} />
+            {awaitingReply && <AwaitingDots compact={false} />}
           </div>
 
           {/* Transient send error — sits between transcript and composer */}

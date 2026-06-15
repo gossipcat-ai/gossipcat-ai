@@ -224,7 +224,7 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
             >
               <span
                 className="text-[11px]"
-                style={{ color: 'var(--ink-4)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+                style={{ color: 'var(--ink-3)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
               >
                 working dir
               </span>
@@ -241,7 +241,7 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
           <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
             <span
               className="text-[11px]"
-              style={{ color: 'var(--ink-4)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+              style={{ color: 'var(--ink-3)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
             >
               tasks
             </span>
@@ -259,7 +259,7 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
                 <span
                   className="text-[11px]"
-                  style={{ color: 'var(--ink-4)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
+                  style={{ color: 'var(--ink-3)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
                 >
                   signals
                 </span>
@@ -333,7 +333,7 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
                 </span>
                 <span
                   className="font-mono text-[10px]"
-                  style={{ color: 'var(--ink-4)' }}
+                  style={{ color: 'var(--ink-3)' }}
                   aria-hidden
                 >
                   {timeShortFromTs(e.ts)}

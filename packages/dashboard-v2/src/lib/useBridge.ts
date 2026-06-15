@@ -18,8 +18,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * Backend contract (do NOT change — fixed by api-bridge.ts):
  *   POST /dashboard/api/bridge {chat_id?, message}
  *     → 202 {ok:true, chat_id} | 400 | 429 | 503
- *   GET  /dashboard/api/bridge/stream  (SSE)
- *     → frames {type:'reply'|'ack'|'error', chat_id, text?, ts}
+ *   GET  /dashboard/api/bridge/stream[?last_id=N]  (SSE)
+ *     Frames arriving on the SHARED stream (activity-mirror v2, spec
+ *     2026-06-14-dashboard-cc-activity-mirror-v2.md §5/§6):
+ *       {type:'reply'|'ack'|'error', chat_id, text?, ts}      — dashboard-typed turns
+ *       {type:'mirror', chat_id, role, text, ts, id}          — live CC-session mirror
+ *           role ∈ 'user'|'assistant'|'activity'; id is a per-chat_id monotonic
+ *           counter, ts is server-stamped ISO. On connect the relay replays this
+ *           chat_id's ring where id > ?last_id, then goes live.
+ *       {type:'restart', chat_id, ts}                          — relay restarted; the
+ *           per-chat_id counter reset to 1, so a client holding last_id=N would
+ *           starve waiting for id>N. Drop last_id and reconnect with ?last_id=0.
+ *   Forward-compat: any unknown frame `type` is silently ignored so a newer relay
+ *   can add frame kinds without breaking an older dashboard build.
  */
 
 // Minimal window surface — mirrors useEventStream so node/jsdom test envs that
@@ -30,16 +41,25 @@ declare const window:
     }
   | undefined;
 
-/** A single inbound SSE frame from the bridge. */
+/** A single inbound SSE frame from the bridge (known frame kinds only). */
 export interface BridgeFrame {
-  type: 'reply' | 'ack' | 'error';
+  type: 'reply' | 'ack' | 'error' | 'mirror' | 'restart';
   chat_id: string;
   text?: string;
   ts: string;
+  /** Present on `mirror` frames: 'user'|'assistant'|'activity'. */
+  role?: string;
+  /** Present on `mirror` frames: per-chat_id monotonic server counter. */
+  id?: number;
 }
 
-/** Role of a rendered conversation turn. */
-export type BridgeRole = 'user' | 'assistant' | 'ack' | 'error';
+/**
+ * Role of a rendered conversation turn.
+ *   user/assistant — typed turns AND mirrored CC-session prose
+ *   activity       — mirrored curated tool/dispatch row (v2)
+ *   ack/error      — dashboard-typed status frames
+ */
+export type BridgeRole = 'user' | 'assistant' | 'activity' | 'ack' | 'error';
 
 /** One rendered turn in the conversation view. */
 export interface BridgeMessage {
@@ -48,6 +68,12 @@ export interface BridgeMessage {
   role: BridgeRole;
   text: string;
   ts: string;
+  /**
+   * Server-assigned per-chat_id id for `mirror`-sourced turns (undefined for
+   * locally-minted user echoes and dashboard reply/ack/error turns). Used to
+   * track the high-water mark for ?last_id replay.
+   */
+  serverId?: number;
 }
 
 /** Connection lifecycle of the SSE stream. */
@@ -92,8 +118,26 @@ function postErrorMessage(status: number): string {
 }
 
 let nextMessageId = 1;
-function makeMessage(role: BridgeRole, text: string, ts?: string): BridgeMessage {
-  return { id: nextMessageId++, role, text, ts: ts ?? new Date().toISOString() };
+function makeMessage(role: BridgeRole, text: string, ts?: string, serverId?: number): BridgeMessage {
+  return { id: nextMessageId++, role, text, ts: ts ?? new Date().toISOString(), serverId };
+}
+
+/**
+ * Insert a message keeping the list ordered by server-stamped `ts` (ascending).
+ * Mirror frames and dashboard reply/ack/error frames arrive on the same stream
+ * but are not guaranteed to be globally ordered, so we interleave by ts.
+ *
+ * Optimistic local user echoes (no serverId, ts = client clock) are appended in
+ * arrival order: we only reorder when the incoming frame's ts is strictly older
+ * than the last turn, so a normal forward-moving stream stays append-only.
+ */
+function insertByTs(prev: readonly BridgeMessage[], msg: BridgeMessage): BridgeMessage[] {
+  const last = prev[prev.length - 1];
+  if (!last || msg.ts >= last.ts) return [...prev, msg];
+  // Out-of-order arrival: find the first turn strictly newer than msg and splice before it.
+  const idx = prev.findIndex((m) => m.ts > msg.ts);
+  if (idx < 0) return [...prev, msg];
+  return [...prev.slice(0, idx), msg, ...prev.slice(idx)];
 }
 
 export function useBridge(): UseBridgeResult {
@@ -112,6 +156,16 @@ export function useBridge(): UseBridgeResult {
     setChatId(id);
   }, []);
 
+  // Highest mirror `id` seen for the active chat. Read on each (re)connect to
+  // build ?last_id (mirrors useEventStream's read-on-open pattern so a reconnect
+  // replays only the gap). Reset to 0 on a `restart` frame (server counter reset)
+  // and a manual reconnect is triggered so the client doesn't starve on id>N.
+  const lastMirrorIdRef = useRef(0);
+  // Set by a `restart` frame to ask the open EventSource to close + reopen with
+  // ?last_id=0. Read by onerror's reconnect path is not enough (no error fires),
+  // so restart calls the captured reconnect() directly.
+  const reconnectRef = useRef<(() => void) | null>(null);
+
   // ── SSE stream: open once, manual reconnect, filter frames to active chat ──
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') return;
@@ -125,7 +179,11 @@ export function useBridge(): UseBridgeResult {
     function open(): void {
       if (destroyed) return;
       setStatus('connecting');
-      es = new window!.EventSource(STREAM_PATH);
+      // Re-read the high-water mark on each (re)connect so a reconnect replays
+      // only the gap (id > lastSeen), per spec §3 / P1#3. ?last_id mirrors the
+      // working pattern in useEventStream.ts.
+      const lastId = lastMirrorIdRef.current;
+      es = new window!.EventSource(`${STREAM_PATH}?last_id=${lastId}`);
 
       es.onopen = () => {
         if (destroyed) return;
@@ -143,23 +201,31 @@ export function useBridge(): UseBridgeResult {
         }
         // Filter to the active conversation. Before our first send chatIdRef is
         // null and we have no stream to claim, so ignore frames until then.
+        // Mirror frames carry chat_id too — the same filter applies.
         const active = chatIdRef.current;
         if (!active || frame.chat_id !== active) return;
 
         if (frame.type === 'reply') {
           setAwaitingReply(false);
-          setMessages((prev) => [...prev, makeMessage('assistant', frame.text ?? '', frame.ts)]);
+          setMessages((prev) => insertByTs(prev, makeMessage('assistant', frame.text ?? '', frame.ts)));
         } else if (frame.type === 'ack') {
           // Ack means "received / working" — keep the awaiting indicator on but
           // record a discrete ack turn so the user sees the session is alive.
-          setMessages((prev) => [...prev, makeMessage('ack', 'received — working…', frame.ts)]);
+          setMessages((prev) => insertByTs(prev, makeMessage('ack', 'received — working…', frame.ts)));
         } else if (frame.type === 'error') {
           setAwaitingReply(false);
-          setMessages((prev) => [
-            ...prev,
-            makeMessage('error', frame.text ?? 'the live session reported an error', frame.ts),
-          ]);
+          setMessages((prev) =>
+            insertByTs(prev, makeMessage('error', frame.text ?? 'the live session reported an error', frame.ts))
+          );
+        } else if (frame.type === 'mirror') {
+          handleMirrorFrame(frame);
+        } else if (frame.type === 'restart') {
+          // Relay restarted → per-chat_id counter reset to 1. Drop our high-water
+          // mark and reconnect with ?last_id=0 so we don't starve on id>previous.
+          lastMirrorIdRef.current = 0;
+          reconnectRef.current?.();
         }
+        // Forward-compat: any other frame.type is silently ignored (staged rollout).
       };
 
       es.onerror = () => {
@@ -179,10 +245,46 @@ export function useBridge(): UseBridgeResult {
       };
     }
 
+    /** Append a `mirror` frame as a turn, tracking the high-water id. */
+    function handleMirrorFrame(frame: BridgeFrame): void {
+      const role = frame.role;
+      if (role !== 'user' && role !== 'assistant' && role !== 'activity') {
+        return; // unknown mirror role — ignore (forward-compat with future roles)
+      }
+      if (typeof frame.id === 'number' && frame.id > lastMirrorIdRef.current) {
+        lastMirrorIdRef.current = frame.id;
+      }
+      // An assistant mirror frame is the live session answering — clear the
+      // awaiting indicator so a typed turn's spinner doesn't linger.
+      if (role === 'assistant') setAwaitingReply(false);
+      // Coerce text defensively: a malformed relay payload could carry a
+      // non-string `text` (object/number), which would throw in the downstream
+      // .trim()/.replace() renderers. `?? ''` only guards null/undefined.
+      const text = typeof frame.text === 'string' ? frame.text : '';
+      setMessages((prev) => insertByTs(prev, makeMessage(role, text, frame.ts, frame.id)));
+    }
+
+    /** Close + reopen the stream immediately (used by the `restart` frame). */
+    function reconnect(): void {
+      if (destroyed) return;
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      if (es) {
+        es.close();
+        es = null;
+      }
+      backoff = BACKOFF_MIN_MS;
+      open();
+    }
+    reconnectRef.current = reconnect;
+
     open();
 
     return () => {
       destroyed = true;
+      reconnectRef.current = null;
       setStatus('closed');
       if (retryTimer !== null) clearTimeout(retryTimer);
       if (es) {
