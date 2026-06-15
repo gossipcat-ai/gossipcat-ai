@@ -76,13 +76,39 @@ function truncateAtLine(text: string, maxLength: number): string {
 }
 
 /**
- * Cap for file_read results. Must stay comfortably under the relay WS
- * maxPayload (1 MB, packages/relay/src/server.ts:107) even after JSON-envelope
- * escaping (~2x worst case) AND when multiple file_reads land in the same turn.
- * 256 KB × 2 (escaping) × 2 (two reads) = 1 MB — right at the limit, so the
- * cap itself provides the safety margin.
+ * Truncate text so its UTF-8 byte length stays <= maxBytes, without splitting
+ * a multi-byte character. Prefers cutting at the last newline in the second
+ * half of the slice so the returned string ends at a clean line boundary.
  */
-const MAX_FILE_READ_CHARS = 256 * 1024;
+function truncateToBytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  // Slice to maxBytes, then decode — the subarray may end mid-char, but
+  // TextDecoder with fatal:false replaces the incomplete sequence with U+FFFD.
+  let slice = Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8');
+  // Strip any trailing replacement character left by the incomplete sequence.
+  // Use the � escape (not a literal char) so a build/encoding transform
+  // can't silently break the strip and let the result exceed maxBytes.
+  slice = slice.replace(/\uFFFD$/, '');
+  // Prefer cutting at a newline in the latter half of the slice to avoid
+  // dropping a large chunk of content due to an early newline.
+  const midpoint = Math.floor(slice.length / 2);
+  const lastNl = slice.lastIndexOf('\n');
+  if (lastNl > midpoint) slice = slice.slice(0, lastNl);
+  return slice;
+}
+
+/**
+ * Cap for file_read results (byte-based). Each file_read response is its own WS
+ * message bounded by the relay maxPayload of 1 MB (packages/relay/src/server.ts:107)
+ * — reads are NOT batched into one frame. The envelope is MessagePack-encoded
+ * (Codec in @gossip/client / @msgpack/msgpack), NOT JSON: a string costs its raw
+ * UTF-8 bytes + a ≤5-byte length prefix, with no per-character escaping. So a
+ * 512 KB result is ~512 KB on the wire (~half the limit), plus a small msgpack
+ * envelope and the ~100-byte truncation notice — comfortable headroom, no
+ * JSON-style 2× escaping factor. The cap is also a sane content ceiling: agents
+ * should range-read (startLine/endLine) rather than dump near-MB files.
+ */
+const MAX_FILE_READ_BYTES = 512 * 1024;
 
 export class ToolServer {
   private agent: GossipAgent;
@@ -346,10 +372,10 @@ export class ToolServer {
           }
         }
         let fileContent = await this.fileTools.fileRead(args as { path: string; startLine?: number; endLine?: number }, agentRoot);
-        if (fileContent.length > MAX_FILE_READ_CHARS) {
-          const originalLength = fileContent.length;
-          fileContent = truncateAtLine(fileContent, MAX_FILE_READ_CHARS)
-            + `\n\n[file_read truncated: file is ${originalLength} chars (cap ${MAX_FILE_READ_CHARS}); read a specific range with startLine/endLine]`;
+        if (Buffer.byteLength(fileContent, 'utf8') > MAX_FILE_READ_BYTES) {
+          const originalBytes = Buffer.byteLength(fileContent, 'utf8');
+          fileContent = truncateToBytes(fileContent, MAX_FILE_READ_BYTES)
+            + `\n\n[file_read truncated: ${originalBytes} bytes (cap ${MAX_FILE_READ_BYTES}); read a specific range with startLine/endLine]`;
         }
         return fileContent;
       }
