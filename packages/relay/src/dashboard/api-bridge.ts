@@ -219,6 +219,17 @@ export class BridgeHub {
       if (v === null) {
         return { status: 400, payload: { error: 'invalid chat_id' } };
       }
+      // Reserve the internal provisional sentinel from client input (trust
+      // boundary). CHAT_ID_RE admits a leading `_`, so '_provisional' (and any
+      // other leading-`_` reserved form) would otherwise pass validateChatId.
+      // A client must NOT be able to register a real stream under the sentinel
+      // key: a later backfillProvisional → drainInto('_provisional', other)
+      // would STEAL + DELETE that client's buffered frames. Internal callers
+      // (drainInto / backfillProvisional) pass the constant directly, not
+      // through here, so this only closes the inbound-client path.
+      if (v === BridgeHub.PROVISIONAL_CHAT_ID || v.startsWith('_')) {
+        return { status: 400, payload: { error: 'invalid chat_id' } };
+      }
       chatId = v;
     }
 
@@ -465,6 +476,16 @@ export class BridgeHub {
     this.clients.add(res);
 
     const keepalive = setInterval(() => {
+      // f6 (completion): an OPEN-but-idle stream — no mirror POST, no reconnect —
+      // would still TTL-evict its mirror authorization after CHAT_ID_TTL_MS even
+      // though the socket is live. The connect-time touchMirrorChatId only covers
+      // the open instant; refresh on every keepalive tick (~25s) so an actively
+      // CONNECTED stream stays mirror-authorized for as long as the socket is up.
+      // touchMirrorChatId is fail-closed: it no-ops unless chatId is already a
+      // registered mirror stream, so a never-registered/legacy id is NOT
+      // resurrected. chatId is captured in this closure (null for legacy
+      // live-only consumers → skipped).
+      if (chatId !== null) this.touchMirrorChatId(chatId);
       try { res.write(':keepalive\n\n'); } catch { clearInterval(keepalive); }
     }, KEEPALIVE_MS);
     keepalive.unref?.();

@@ -350,6 +350,89 @@ describe('BridgeHub mirror chat_id TTL kept alive by an open SSE stream (f6)', (
     expect(hub.hasMirrorChatId('ghost')).toBe(false);
     expect(hub.emitMirror('ghost', frames(['activity', 'x'])).status).toBe(400);
   });
+
+  it('an open SSE stream KEEPS its mirror authorization past the TTL on keepalive ticks (f6 completion)', () => {
+    jest.useFakeTimers();
+    try {
+      hub = new BridgeHub();
+      openDashboardStream(hub, 'chatIdle');
+      expect(hub.hasMirrorChatId('chatIdle')).toBe(true);
+
+      // Open an SSE observer on this chat_id, then let it sit idle (no mirror
+      // POST, no reconnect) for longer than the 2h TTL. The connect touch alone
+      // would NOT save it — only the keepalive tick keeps it authorized.
+      const res = mockRes();
+      hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=chatIdle&last_id=0'), res);
+
+      // Advance well past CHAT_ID_TTL_MS (2h) so many keepalive ticks (~25s)
+      // fire. Modern jest fake timers also advance Date.now(), so the TTL math
+      // and the keepalive touch stay on the same clock.
+      const TTL = 2 * 60 * 60 * 1000;
+      jest.advanceTimersByTime(TTL + 60_000);
+
+      // Still authorized — a subsequent mirror POST is NOT 400'd, because the
+      // keepalive ticks kept refreshing the mirror chat_id TTL.
+      expect(hub.hasMirrorChatId('chatIdle')).toBe(true);
+      expect(hub.emitMirror('chatIdle', frames(['activity', 'long-idle'])).status).toBe(202);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it('keepalive ticks do NOT resurrect a never-registered mirror chat_id (fail closed)', () => {
+    jest.useFakeTimers();
+    try {
+      hub = new BridgeHub();
+      // Legacy/ghost id: never opened via a dashboard inbound POST.
+      const res = mockRes();
+      hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=ghost&last_id=0'), res);
+      jest.advanceTimersByTime(60_000); // several keepalive ticks
+      expect(hub.hasMirrorChatId('ghost')).toBe(false);
+      expect(hub.emitMirror('ghost', frames(['activity', 'x'])).status).toBe(400);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('BridgeHub reserves the provisional sentinel from client input (trust boundary)', () => {
+  let hub: BridgeHub;
+  afterEach(() => hub?.dispose());
+
+  it('rejects an inbound POST chat_id equal to the provisional sentinel with 400', () => {
+    hub = new BridgeHub();
+    hub.registerSink(() => true);
+    const r = hub.handlePost({ chat_id: '_provisional', message: 'steal the buffer' });
+    expect(r.status).toBe(400);
+    expect(r.payload).toMatchObject({ error: 'invalid chat_id' });
+    // No stream was registered under the sentinel key.
+    expect(hub.hasMirrorChatId('_provisional')).toBe(false);
+  });
+
+  it('rejects any leading-underscore reserved chat_id form from a client (defensive)', () => {
+    hub = new BridgeHub();
+    hub.registerSink(() => true);
+    const r = hub.handlePost({ chat_id: '_reserved', message: 'x' });
+    expect(r.status).toBe(400);
+    expect(hub.hasMirrorChatId('_reserved')).toBe(false);
+  });
+
+  it('a client-registered real stream is NOT clobbered by a sentinel POST + backfill', () => {
+    // A client opens a real stream, then an attacker tries to register the
+    // sentinel as a stream. The attacker POST must fail, so a later backfill
+    // (drainInto from '_provisional') can never STEAL the client's frames —
+    // the provisional ring stays an internal-only buffer.
+    hub = new BridgeHub();
+    hub.registerSink(() => true);
+    expect(hub.handlePost({ chat_id: 'realClient', message: 'open' }).status).toBe(202);
+    expect(hub.emitMirror('realClient', frames(['user', 'mine'])).status).toBe(202);
+    // Attacker attempt: rejected at the boundary.
+    expect(hub.handlePost({ chat_id: '_provisional', message: 'hijack' }).status).toBe(400);
+    // The real client's frames are untouched.
+    expect(hub.mirrorReplay('realClient', 0).map((f) => f.text)).toEqual(['mine']);
+  });
 });
 
 describe('BridgeHub keepalive lifecycle (f12)', () => {
