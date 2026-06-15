@@ -480,6 +480,95 @@ export function installBootstrapHook(projectRoot: string): BootstrapHookInstallR
   }
 }
 
+// ── Activity-mirror v2 hooks (settings.local.json) ───────────────────────────
+
+export interface MirrorHookInstallResult {
+  installed: string[];
+  skipped: string[];
+  reason?: string;
+}
+
+/**
+ * The three activity-mirror hooks (spec
+ * `docs/specs/2026-06-14-dashboard-cc-activity-mirror-v2.md` §Component 1).
+ * Each maps a CC hook event to a `gossipcat hook mirror-*` subcommand.
+ *
+ *   - UserPromptSubmit → mirror the human's terminal prompt (matcher '' = all).
+ *   - Stop            → mirror the orchestrator's final assistant text.
+ *   - PostToolUse     → mirror a curated, scrubbed tool/dispatch one-liner.
+ *
+ * matcher '' (UserPromptSubmit/Stop) matches every event; PostToolUse matches
+ * only the curated tool names so non-allowlisted tools never even spawn the
+ * hook (the hook ALSO re-checks the allowlist defensively).
+ */
+const MIRROR_HOOKS = [
+  { name: 'mirror-prompt', event: 'UserPromptSubmit' as const, matcher: '', command: 'gossipcat hook mirror-prompt' },
+  { name: 'mirror-stop', event: 'Stop' as const, matcher: '', command: 'gossipcat hook mirror-stop' },
+  {
+    name: 'mirror-tool',
+    event: 'PostToolUse' as const,
+    matcher: 'Bash|Edit|Write|mcp__gossipcat__gossip_dispatch|mcp__gossipcat__gossip_run|mcp__gossipcat__gossip_collect',
+    command: 'gossipcat hook mirror-tool',
+  },
+] as const;
+
+/**
+ * Register the three activity-mirror hooks in
+ * `<projectRoot>/.claude/settings.local.json`.
+ *
+ * IMPORTANT: this is NOT called from `gossip_setup` / any auto-enable path —
+ * activation of the activity mirror is a deliberate follow-up after the
+ * orchestrator has verified the relay + dashboard render are ready. Exported
+ * here so that follow-up (and unit tests) can register the hooks idempotently
+ * with the same atomic-write + malformed-skip discipline as the other
+ * installers. Never throws.
+ */
+export function installMirrorHooks(projectRoot: string): MirrorHookInstallResult {
+  const installed: string[] = [];
+  const skipped: string[] = [];
+  try {
+    const settingsPath = join(projectRoot, '.claude', 'settings.local.json');
+    mkdirSync(dirname(settingsPath), { recursive: true });
+
+    let settings: Record<string, any>;
+    try {
+      settings = loadLocalSettings(settingsPath);
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] settings.local.json at ${settingsPath} is malformed; skipping mirror hook install. ` +
+        `Fix the file or delete it and re-run.\n`,
+      );
+      return { installed, skipped, reason: (err as Error).message };
+    }
+
+    let anyMutated = false;
+    for (const hook of MIRROR_HOOKS) {
+      const mutated = mergeHookEntry(settings, hook.event, hook.matcher, hook.command);
+      if (mutated) {
+        installed.push(hook.name);
+        anyMutated = true;
+      } else {
+        skipped.push(hook.name);
+      }
+    }
+
+    if (anyMutated) {
+      const tmp = settingsPath + '.tmp.' + process.pid;
+      writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
+      try {
+        renameSync(tmp, settingsPath);
+      } catch (renameErr) {
+        try { unlinkSync(tmp); } catch { /* best-effort */ }
+        throw renameErr;
+      }
+    }
+
+    return { installed, skipped };
+  } catch (err) {
+    return { installed, skipped, reason: (err as Error).message };
+  }
+}
+
 /**
  * Install the v1 orchestrator-discipline hook bundle into
  * `<projectRoot>/.claude/settings.local.json` (personal hooks, gitignored).

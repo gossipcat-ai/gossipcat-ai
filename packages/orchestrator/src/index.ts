@@ -94,8 +94,8 @@ export {
 export type { StalenessResult } from './dist-mcp-staleness';
 export type { BootstrapResult } from './bootstrap';
 export { findBundledRules, ensureRulesFile, readRulesContent } from './rules-loader';
-export { installWorktreeSandboxHook, findBundledHook, writeOrchestratorRoleMarker, installDisciplineHooks, installBootstrapHook, BOOTSTRAP_HOOK_COMMAND, isWorktreeSandboxHookRegistered } from './hook-installer';
-export type { HookInstallResult, DisciplineHookInstallResult, BootstrapHookInstallResult } from './hook-installer';
+export { installWorktreeSandboxHook, findBundledHook, writeOrchestratorRoleMarker, installDisciplineHooks, installBootstrapHook, installMirrorHooks, BOOTSTRAP_HOOK_COMMAND, isWorktreeSandboxHookRegistered } from './hook-installer';
+export type { HookInstallResult, DisciplineHookInstallResult, BootstrapHookInstallResult, MirrorHookInstallResult } from './hook-installer';
 export { OverlapDetector } from './overlap-detector';
 export { LensGenerator } from './lens-generator';
 export { PerformanceWriter, rotateJsonlIfNeeded, MAX_TELEMETRY_BYTES } from './performance-writer';
