@@ -62,18 +62,39 @@ async function main(): Promise<void> {
     }
 
     case 'hook': {
-      // UserPromptSubmit bootstrap hook body. Only valid invocation is
-      // `gossipcat hook --run` (or `gossipcat hook run`). Bare `gossipcat
-      // hook` previously fell through and silently fired the hook — fix
-      // MEDIUM f2 from consensus d88f27db-c0454640.
+      // UserPromptSubmit bootstrap hook body + the activity-mirror v2 hooks.
+      // Valid invocations: `gossipcat hook --run` (bootstrap), `mirror-prompt`,
+      // `mirror-stop`, `mirror-tool`. Bare `gossipcat hook` previously fell
+      // through and silently fired the hook — fix MEDIUM f2 from consensus
+      // d88f27db-c0454640.
       const decision = parseHookSubcommand(args[1]);
       if (decision === 'usage') {
-        process.stderr.write('Usage: gossipcat hook --run\n');
+        process.stderr.write('Usage: gossipcat hook --run | mirror-prompt | mirror-stop | mirror-tool\n');
         process.exit(2);
       }
-      const { runHook } = await import('./hook-run');
-      runHook();
-      return;
+      if (decision === 'run') {
+        const { runHook } = await import('./hook-run');
+        runHook();
+        return;
+      }
+      // Activity-mirror hooks are fail-open + non-blocking: never let a thrown
+      // error or a missing relay propagate to a non-zero exit that would block
+      // the user's turn. exit 0 unconditionally.
+      try {
+        if (decision === 'mirror-prompt') {
+          const { runMirrorPromptHook } = await import('./hooks/mirror-prompt');
+          await runMirrorPromptHook();
+        } else if (decision === 'mirror-stop') {
+          const { runMirrorStopHook } = await import('./hooks/mirror-stop');
+          await runMirrorStopHook();
+        } else if (decision === 'mirror-tool') {
+          const { runMirrorToolHook } = await import('./hooks/mirror-tool');
+          await runMirrorToolHook();
+        }
+      } catch {
+        // fail-open — swallow.
+      }
+      process.exit(0);
     }
 
     case 'help':
