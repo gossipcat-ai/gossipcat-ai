@@ -766,7 +766,7 @@ html[data-theme="dark"]::after {
   --sx-keyword: #9D72A8;
   --sx-string: #4FA97D;
   --sx-number: #C99A52;
-  --sx-fn: #7A6FBA;
+  --sx-fn: #7e72c0; /* AA on code-block surface --surface-sunk #131210 (was #7A6FBA, 4.29:1) */
   --sx-type: #5FB0AA;
   --sx-comment: #9B958D;
   --sx-punc: #B8B2A6;
