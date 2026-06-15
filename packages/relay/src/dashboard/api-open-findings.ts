@@ -11,6 +11,39 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
+/** Returns true if the entry should be skipped because it is an insight (not actionable). */
+function isInsightEntry(entry: any): boolean {
+  return entry.type === 'insight';
+}
+
+/** Returns true if the entry counts as open (not resolved). */
+function isOpenEntry(entry: any): boolean {
+  return entry.status !== 'resolved';
+}
+
+/**
+ * Count open, non-insight findings in implementation-findings.jsonl.
+ * Returns 0 when the file is missing or unreadable.
+ * This is the single authoritative definition of "actionable open findings".
+ */
+export function countOpenActionableFindings(projectRoot: string): number {
+  const findingsPath = join(projectRoot, '.gossip', 'implementation-findings.jsonl');
+  if (!existsSync(findingsPath)) return 0;
+  let raw: string;
+  try { raw = readFileSync(findingsPath, 'utf-8'); }
+  catch { return 0; }
+  let count = 0;
+  for (const line of raw.split('\n').filter(Boolean)) {
+    let entry: any;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const findingId = String(entry.taskId ?? entry.findingId ?? entry.id ?? '');
+    if (!findingId) continue;
+    if (isInsightEntry(entry)) continue;
+    if (isOpenEntry(entry)) count++;
+  }
+  return count;
+}
+
 export interface OpenFindingRow {
   finding_id: string;
   state: 'open' | 'resolved' | 'stale-anchor';
@@ -52,9 +85,9 @@ export async function openFindingsHandler(projectRoot: string): Promise<OpenFind
     if (!findingId) continue;
     // Skip insight rows — they pollute the actionable findings count.
     // type:null legacy rows are preserved (spec §Design cheap variant).
-    if (entry.type === 'insight') continue;
+    if (isInsightEntry(entry)) continue;
     let state: 'open' | 'resolved' | 'stale-anchor';
-    if (entry.status === 'resolved') {
+    if (!isOpenEntry(entry)) {
       state = entry.resolvedBy === 'stale_anchor' ? 'stale-anchor' : 'resolved';
     } else {
       state = 'open';

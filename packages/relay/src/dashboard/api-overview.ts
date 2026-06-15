@@ -2,6 +2,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { readJsonlWithRotated } from '@gossip/orchestrator';
 import { isUtilityAgent } from './utility-agents';
+import { countOpenActionableFindings } from './api-open-findings';
 
 interface AgentConfigLike {
   id: string;
@@ -212,7 +213,6 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
   let totalFindings = 0;
   let confirmedFindings = 0;
   let lastConsensusTimestamp = '';
-  let actionableFindings = 0;
   // Per-run buckets for the consensus-runs count: mirror api-consensus.ts:98's
   // "real consensus run" definition (≥2 agents, ≥3 signals). Without this filter,
   // SystemPulse.consensusRuns counts manual/singleton signal recordings and
@@ -264,10 +264,8 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
             confirmedFindings++;
           } else if (entry.signal === 'disagreement' || entry.signal === 'hallucination_caught') {
             totalFindings++;
-            actionableFindings++;
           } else if (entry.signal === 'new_finding') {
             totalFindings++;
-            actionableFindings++;
           } else if (entry.signal === 'unverified' || entry.signal === 'unique_unconfirmed') {
             totalFindings++;
           }
@@ -279,6 +277,10 @@ export async function overviewHandler(projectRoot: string, ctx: OverviewContext)
   for (const bucket of runBuckets.values()) {
     if (bucket.agents.size >= 2 && bucket.signalCount >= 3) consensusRuns++;
   }
+
+  // Resolution-aware open-findings count: read implementation-findings.jsonl once.
+  // Uses the shared predicate from api-open-findings so the two endpoints can never drift.
+  const actionableFindings = countOpenActionableFindings(projectRoot);
 
   const avgDurationMs = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
 

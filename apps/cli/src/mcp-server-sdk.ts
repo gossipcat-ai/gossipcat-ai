@@ -2802,7 +2802,7 @@ export function createMcpServer(): McpServer {
         const seedResult = seedMemoryHygiene(root);
         const msg = seedResult.action === 'appended' ? 'appended'
           : seedResult.action === 'already-present' ? 'already present'
-          : seedResult.action === 'skipped-no-claude-md' ? 'skipped (no CLAUDE.md)'
+          : seedResult.action === 'skipped-no-claude-md' ? 'no CLAUDE.md to annotate — rules shipped via .claude/rules/gossipcat.md'
           : `error (${(seedResult as { error: string }).error})`;
         process.stderr.write(`[gossipcat] gossip_setup: memory hygiene — ${msg}\n`);
       } catch (e) {
