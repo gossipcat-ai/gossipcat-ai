@@ -1,3 +1,5 @@
+import { highlightToHtml, normalizeLang } from './highlight';
+
 /**
  * Render markdown text to safe HTML for task descriptions and similar content.
  * Extends cleanFindingTags with heading and list support.
@@ -113,14 +115,45 @@ export function cleanFindingTags(text: string): string {
   return cleaned;
 }
 
+// Sentinel marker char (U+0000 NUL). Defined via fromCharCode so NO literal NUL
+// byte ever appears in this source file — that keeps the token unambiguous across
+// editors/encodings while remaining a char that can never appear in legitimate
+// markdown input and is NOT in the HTML-escape map (so it survives Step 1 intact).
+const FENCE_NUL = String.fromCharCode(0);
+const FENCE_STRIP_RE = new RegExp(FENCE_NUL, 'g');
+// Matches the exact tokens we emit: NUL + "HLJS" + index + NUL.
+const FENCE_TOKEN_RE = new RegExp(`${FENCE_NUL}HLJS(\\d+)${FENCE_NUL}`, 'g');
+
 /**
  * Unified markdown renderer for agent findings, signal evidence, and task results.
  * Superset of both cleanFindingTags (cite tags, prefix strip) and renderMarkdown
  * (headings, lists). Use this for all agent-authored content.
  */
 export function renderFindingMarkdown(text: string): string {
+  // Step 0: Extract code fences from the RAW (un-escaped) source BEFORE any
+  // escaping, because highlight.js needs the original characters. Each fence is
+  // replaced with a sentinel token that is re-substituted AFTER the pipeline.
+  //
+  // XSS safety of the sentinel: the marker char (U+0000) is stripped from the
+  // input first, so a user can never forge a sentinel. We only ever substitute
+  // back the exact tokens we inserted, matched by numeric index, and the
+  // replacement HTML is built from hljs-escaped (or manually-escaped) body plus a
+  // charset-sanitized language class — no raw user text reaches the DOM as markup.
+  const fences: Array<{ lang: string; body: string }> = [];
+  // Strip any pre-existing sentinel char so it can't be used to forge a token.
+  let work = text.replace(FENCE_STRIP_RE, '');
+  // Known limitation: the non-greedy body stops at the FIRST ``` it sees, so a
+  // fence whose body itself contains ``` (e.g. a markdown-demonstrating example)
+  // is truncated. This is a rendering edge, not a security issue (all output is
+  // escaped); a faithful fix needs a real block parser, out of scope here.
+  work = work.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang: string, body: string) => {
+    const i = fences.length;
+    fences.push({ lang, body });
+    return `${FENCE_NUL}HLJS${i}${FENCE_NUL}`;
+  });
+
   // Step 1: HTML-escape everything
-  let out = text
+  let out = work
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -141,8 +174,8 @@ export function renderFindingMarkdown(text: string): string {
   // Legacy <fn> → purple code span
   out = out.replace(/&lt;fn&gt;([^&]+)&lt;\/fn&gt;/g, '<code class="cite-fn">$1</code>');
 
-  // Step 5: Code fences (must run before inline backtick pass)
-  out = out.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre class="md-code-block"><code>$2</code></pre>');
+  // Step 5: Code fences are handled out-of-band (extracted pre-escape in Step 0,
+  // re-substituted after the line pipeline below). No regex here.
 
   // Step 6: Inline code
   out = out.replace(/`([^`\n]+)`/g, '<code class="md-inline-code">$1</code>');
@@ -199,7 +232,25 @@ export function renderFindingMarkdown(text: string): string {
 
   if (inList) processedLines.push('</ul>');
 
-  return processedLines.join('\n');
+  out = processedLines.join('\n');
+
+  // Step 9: Re-substitute code fences extracted in Step 0. The sentinel survived
+  // the escape pass verbatim (NUL is not in the escape map) and the line pipeline
+  // (NUL matches no heading/list/bold/italic rule). Each token is matched by the
+  // exact index we assigned, so collisions/forgery are impossible. The replacement
+  // HTML is fully escape-safe: highlightToHtml returns hljs- or manually-escaped
+  // markup, and the language class is normalized to /^[a-z0-9+-]*$/i so it cannot
+  // break out of the attribute.
+  out = out.replace(FENCE_TOKEN_RE, (_m, idxStr: string) => {
+    const fence = fences[Number(idxStr)];
+    if (!fence) return '';
+    const safeLang = normalizeLang(fence.lang); // charset-stripped to [a-z0-9+-]*
+    const classAttr = safeLang ? ` language-${safeLang}` : '';
+    const body = highlightToHtml(fence.body.replace(/\n$/, ''), fence.lang);
+    return `<pre class="md-code-block"><code class="hljs${classAttr}">${body}</code></pre>`;
+  });
+
+  return out;
 }
 
 export function timeAgo(ts: string | number): string {
