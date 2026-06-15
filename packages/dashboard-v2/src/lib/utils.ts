@@ -13,8 +13,11 @@ export function renderMarkdown(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
-  // Step 2: Code fences (must run before inline backtick pass)
-  out = out.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, code) => {
+  // Step 2: Code fences (must run before inline backtick pass). The closer is
+  // anchored to line-start (`^``` ` with the `m` flag) so an inline ``` inside a
+  // body no longer truncates the block; `[^\n]*` consumes an opener info-string.
+  // (Same fix as renderFindingMarkdown; operates on already-escaped text here.)
+  out = out.replace(/```(\w*)[^\n]*\n([\s\S]*?)^```/gm, (_m, _lang, code) => {
     return `<pre class="md-code-block"><code>${code.trimEnd()}</code></pre>`;
   });
 
@@ -142,11 +145,18 @@ export function renderFindingMarkdown(text: string): string {
   const fences: Array<{ lang: string; body: string }> = [];
   // Strip any pre-existing sentinel char so it can't be used to forge a token.
   let work = text.replace(FENCE_STRIP_RE, '');
-  // Known limitation: the non-greedy body stops at the FIRST ``` it sees, so a
-  // fence whose body itself contains ``` (e.g. a markdown-demonstrating example)
-  // is truncated. This is a rendering edge, not a security issue (all output is
-  // escaped); a faithful fix needs a real block parser, out of scope here.
-  work = work.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang: string, body: string) => {
+  // FIX 3: the CLOSING fence must start a line (`^` + `m` flag), and the opener
+  // must be a real fenced block (lang token + rest-of-line info-string + a
+  // required `\n`). This stops an INLINE ``` mid-line (e.g. prose demonstrating
+  // markdown) from prematurely closing the block — the old non-greedy `...```/g`
+  // truncated at the first ``` it saw. The `[^\n]*` after the lang preserves the
+  // existing behavior of tolerating trailing opener text (e.g. a hostile
+  // info-string `ts"><img ...>` whose lang still normalizes to a safe token).
+  // This changes only WHICH text is treated as a fence body; all of it still
+  // flows through highlightToHtml (which escapes), so the escape-first XSS
+  // property is unchanged. (A degenerate single-line opener+closer like
+  // ` ```ts``` ` no longer matches, since the opener now requires a newline.)
+  work = work.replace(/```(\w*)[^\n]*\n([\s\S]*?)^```/gm, (_m, lang: string, body: string) => {
     const i = fences.length;
     fences.push({ lang, body });
     return `${FENCE_NUL}HLJS${i}${FENCE_NUL}`;

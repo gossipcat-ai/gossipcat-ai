@@ -765,6 +765,11 @@ html[data-theme="dark"]::after {
 .chat-surface {
   --bg: #14120F;
   --surface: #1C1A16;
+  /* FIX 2a: .chat-surface is ALWAYS dark regardless of app theme. Without this,
+     --surface-sunk leaks the LIGHT app value (#ede9e0) into chat code blocks and
+     the MessageBubble cascade (#599 review). Pin it to the dark sunk value so the
+     whole --sx-* palette is AA-verified on it (--sx-fn #7e72c0 = 4.50:1). */
+  --surface-sunk: #131210;
   --surface-2: #232019;
   --ink: #F2EDE3;
   --ink-2: #B8B2A6;
@@ -867,7 +872,10 @@ html[data-theme="dark"]::after {
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.6;
-  background: var(--surface);
+  /* FIX 2b: render chat code blocks on --surface-sunk (#131210), not the lighter
+     --surface (#1C1A16). On #131210 the entire --sx-* syntax palette passes WCAG
+     AA — notably --sx-fn #7e72c0 (4.50:1 vs only ~4.18:1 on #1C1A16). */
+  background: var(--surface-sunk);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   padding: 10px 12px;

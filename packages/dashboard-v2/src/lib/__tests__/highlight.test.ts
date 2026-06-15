@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderFindingMarkdown } from '../utils';
+import { renderFindingMarkdown, renderMarkdown } from '../utils';
 import { highlightToHtml, normalizeLang } from '../highlight';
 
 // ---------------------------------------------------------------------------
@@ -84,6 +84,9 @@ describe('renderFindingMarkdown — code fences', () => {
     const out = renderFindingMarkdown('```ts"><img onerror=x>\nconst a = 1;\n```');
     // No injected <img via the language-class attribute.
     expect(out).not.toMatch(/<img/);
+    // The opener info-string after the lang is consumed by [^\n]* and DISCARDED
+    // (not captured) — no fragment of it should reach the output (consensus 655e6350:f5).
+    expect(out).not.toContain('onerror');
     // The class attr only ever contains a sanitized [a-z0-9+-]* token.
     const m = out.match(/class="hljs(?: language-([a-z0-9+-]*))?"/);
     expect(m).not.toBeNull();
@@ -122,6 +125,29 @@ describe('renderFindingMarkdown — code fences', () => {
     expect(out).toContain('language-typescript');
     expect(out).toMatch(/<span class="hljs-[a-z_]+">/);
   });
+
+  // -------------------------------------------------------------------------
+  // FIX 3 — a fence body containing an INLINE ``` must NOT truncate the block.
+  // The closing fence now requires line-start (`^``` with the `m` flag), so a
+  // mid-line ``` inside the body is preserved as escaped text, not a closer.
+  // -------------------------------------------------------------------------
+  it('keeps an inline ``` inside the body as one block (no truncation)', () => {
+    const out = renderFindingMarkdown(
+      '```ts\nconst s = "a ```x``` b";\nconst t = 2;\n```',
+    );
+    // Exactly ONE code block — the inline ``` did not close it early.
+    const blocks = out.match(/<pre class="md-code-block">/g) || [];
+    expect(blocks.length).toBe(1);
+    // The full body survives, including the inline backticks (kept as text inside
+    // the block, never as a real fence) and the `const t = 2;` line that follows
+    // them. (Body is syntax-highlighted, so `const`/`2` are wrapped in hljs spans
+    // — assert on the surviving literal fragments rather than the raw source.)
+    expect(out).toContain('```x```');
+    expect(out).toContain('t = ');
+    expect(out).toContain('2');
+    // Escape-first still holds: the embedded quote is entity-escaped.
+    expect(out).toContain('&quot;a ```x``` b&quot;');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -148,6 +174,26 @@ describe('renderFindingMarkdown — non-fence pipeline unchanged', () => {
 
   it('still escapes raw HTML outside fences (escape-first preserved)', () => {
     const out = renderFindingMarkdown('text <img src=x onerror=alert(1)> more');
+    expect(out).not.toMatch(/<img /);
+    expect(out).toContain('&lt;img');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderMarkdown (task descriptions / memory dialogs) — same fence fix applied
+// to this sibling escape-first renderer (the live second instance the
+// cleanFindingTags finding pointed to; consensus 655e6350:f7).
+// ---------------------------------------------------------------------------
+describe('renderMarkdown — inline ``` no longer truncates', () => {
+  it('keeps an inline ``` inside the body as one block', () => {
+    const out = renderMarkdown('```ts\nconst s = "a ```x``` b";\nconst t = 2;\n```');
+    const blocks = out.match(/<pre class="md-code-block">/g) || [];
+    expect(blocks.length).toBe(1);
+    expect(out).toContain('const t = 2;'); // content after the inline ``` survives
+  });
+
+  it('still escapes raw HTML in a code body (escape-first preserved)', () => {
+    const out = renderMarkdown('```\n<img src=x onerror=alert(1)>\n```');
     expect(out).not.toMatch(/<img /);
     expect(out).toContain('&lt;img');
   });
