@@ -235,6 +235,73 @@ describe('useBridge — last_id high-water mark', () => {
   });
 });
 
+describe('useBridge — unread (inactive conversation)', () => {
+  it('increments unread when an inbound frame lands while inactive, markRead clears it', async () => {
+    const hook = renderHook(({ active }) => useBridge({ active }), {
+      initialProps: { active: false },
+    });
+    await waitFor(() => expect(instances.length).toBeGreaterThan(0));
+    act(() => instances[0].open());
+    await act(async () => {
+      await hook.result.current.send('hello');
+    });
+    await waitFor(() => expect(hook.result.current.chatId).toBe('chat-1'));
+    await waitFor(() => expect(instances.length).toBeGreaterThanOrEqual(2));
+    const active = instances[instances.length - 1];
+
+    act(() => {
+      active.emit({
+        type: 'mirror',
+        chat_id: 'chat-1',
+        role: 'assistant',
+        text: 'reply while hidden',
+        ts: '2026-06-16T10:00:00.000Z',
+        id: 3,
+      });
+    });
+    await waitFor(() => expect(hook.result.current.unread).toBe(1));
+
+    act(() => hook.result.current.markRead());
+    expect(hook.result.current.unread).toBe(0);
+  });
+
+  it('does NOT increment unread when the conversation is active', async () => {
+    const hook = renderHook(() => useBridge({ active: true }));
+    await waitFor(() => expect(instances.length).toBeGreaterThan(0));
+    act(() => instances[0].open());
+    await act(async () => {
+      await hook.result.current.send('hi');
+    });
+    await waitFor(() => expect(hook.result.current.chatId).toBe('chat-1'));
+    await waitFor(() => expect(instances.length).toBeGreaterThanOrEqual(2));
+    const active = instances[instances.length - 1];
+    act(() => {
+      active.emit({
+        type: 'mirror',
+        chat_id: 'chat-1',
+        role: 'assistant',
+        text: 'visible reply',
+        ts: '2026-06-16T10:00:01.000Z',
+        id: 4,
+      });
+    });
+    await waitFor(() =>
+      expect(hook.result.current.messages.some((m) => m.text === 'visible reply')).toBe(true)
+    );
+    expect(hook.result.current.unread).toBe(0);
+  });
+});
+
+describe('useBridge — initialChatId', () => {
+  it('opens the stream subscribed to a restored chat_id and replays the ring (last_id=0)', async () => {
+    renderHook(() => useBridge({ initialChatId: 'restored-chat' }));
+    await waitFor(() => expect(instances.length).toBe(1));
+    const url = new URL(instances[0].url, 'http://localhost');
+    expect(url.searchParams.get('chat_id')).toBe('restored-chat');
+    expect(url.searchParams.get('last_id')).toBe('0');
+  });
+});
+
 describe('useBridge — restart frame', () => {
   it('resets last_id to 0 and reconnects on a restart frame', async () => {
     await mountWithChat();

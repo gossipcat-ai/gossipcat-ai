@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { useBridgeContext } from '@/lib/BridgeContext';
+import { useBridgeStore } from '@/lib/BridgeContext';
 import { AwaitingDots } from '@/components/chat/ChatPrimitives';
 import { Transcript } from '@/components/chat/Transcript';
 import { SessionRail } from '@/components/chat/SessionRail';
+import { ChatTabs } from '@/components/chat/ChatTabs';
 
 /**
  * ChatPage — operator command surface for the dashboard ⇄ Claude Code bridge.
@@ -11,11 +12,13 @@ import { SessionRail } from '@/components/chat/SessionRail';
  * Only the transcript region and the rail's activity feed scroll internally.
  *
  * Two-column on lg+:
- *   LEFT  — chat card: compact info-bar + transcript (flex-1, overflow-y:auto) + composer
+ *   LEFT  — chat card: compact info-bar + TAB STRIP + transcript (flex-1) + composer
  *   RIGHT — SessionRail: ~288px — working agents + activity feed
  *
- * Shares the SAME bridge conversation as the bottom-right launcher via
- * BridgeContext (single useBridge() instance).
+ * MULTI-CONVERSATION: a browser-tab-style strip (ChatTabs) sits under the info-bar.
+ * Each tab is an INDEPENDENT conversation (own chat_id, history, SSE) managed by
+ * the multi-conversation BridgeContext store (useBridgeStore). The bottom-right
+ * launcher (ChatDock) mirrors whichever tab is ACTIVE via useBridgeContext().
  *
  * DESIGN.md conformance (2026-06-15 dark carve-out):
  *   - .chat-surface scoped dark warm-charcoal tokens inside the card.
@@ -29,22 +32,39 @@ import { SessionRail } from '@/components/chat/SessionRail';
  */
 
 export function ChatPage() {
-  const { messages, status, awaitingReply, chatId, send, sendError } = useBridgeContext();
+  const {
+    conversations,
+    activeId,
+    active,
+    sendError,
+    send,
+    newConversation,
+    closeConversation,
+    switchConversation,
+    canAddTab,
+  } = useBridgeStore();
   const [draft, setDraft] = useState('');
+
+  // Active conversation slice (always present — store guarantees ≥1 tab).
+  const messages = active?.messages ?? [];
+  const status = active?.status ?? 'connecting';
+  const awaitingReply = active?.awaitingReply ?? false;
+  const chatId = active?.chatId ?? null;
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Auto-scroll to newest turn when conversation grows or awaiting indicator toggles.
+  // Auto-scroll to newest turn when the conversation grows, the awaiting
+  // indicator toggles, OR the active tab changes (jump to that tab's latest).
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, awaitingReply]);
+  }, [messages, awaitingReply, activeId]);
 
-  // Focus composer on page mount.
+  // Focus composer on page mount and when switching tabs.
   useEffect(() => {
     inputRef.current?.focus();
-  }, []);
+  }, [activeId]);
 
   const submit = () => {
     const text = draft.trim();
@@ -184,6 +204,16 @@ export function ChatPage() {
               cc transcript
             </span>
           </div>
+
+          {/* Tab strip — one tab per independent conversation, directly under the info-bar */}
+          <ChatTabs
+            conversations={conversations}
+            activeId={activeId}
+            canAddTab={canAddTab}
+            onSwitch={switchConversation}
+            onClose={closeConversation}
+            onNew={newConversation}
+          />
 
           {/* Scrollable transcript — fills remaining card height */}
           <div
