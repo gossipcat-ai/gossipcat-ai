@@ -148,6 +148,19 @@ export class BridgeHub {
   // emitReply STILL gates on knownChatIds, so mirroring never widens the
   // outbound reply boundary (api-bridge.ts emitReply isKnownChatId check).
   private mirrorChatIds = new Map<string, number>();
+  // The most-recently-registered active mirror chat_id (set in
+  // registerMirrorChatId, cleared/recomputed when that id is TTL-evicted).
+  // Used by emitMirror to route unresolved terminal frames to a live observer
+  // instead of the provisional buffer when one exists (fix: mirror frames
+  // previously fell into _provisional and were dropped by the dashboard client
+  // because bindSession never ran — the browser cannot send a session_id it
+  // doesn't know). SECURITY: only ever a chat_id already in mirrorChatIds.
+  // KNOWN LIMITATION (consensus 96350953-8ce94428): single-pointer, so with
+  // multiple concurrent dashboard tabs only the most-recently-registered one
+  // receives unresolved terminal frames; earlier tabs see no live activity until
+  // they send again. Accepted tradeoff — a strict improvement over the prior
+  // behaviour where the frames went to _provisional and EVERY tab saw nothing.
+  private latestMirrorChatId: string | null = null;
   // Session→chat_id map (P1#5). The relay has no native "active session
   // chat_id" notion — a no-chat_id inbound POST mints a fresh UUID. We learn the
   // mapping from the dashboard turn: a turn carries BOTH a chat_id (validated)
@@ -378,6 +391,19 @@ export class BridgeHub {
       } else if (this.dropUnresolvedMirror) {
         // Config: drop purely-terminal frames with no observer/mapping.
         return { status: 202, payload: { ok: true, chat_id: null, dropped: validated.length } };
+      } else if (
+        this.latestMirrorChatId !== null &&
+        this.isMirrorChatId(this.latestMirrorChatId)
+      ) {
+        // Fix: route to the most-recently-registered active mirror chat_id.
+        // The browser cannot send a session_id it doesn't know, so bindSession
+        // never runs and resolveSession always returns null. Without this branch
+        // every terminal mirror frame fell into the provisional ring, which the
+        // dashboard client filtered out (it gates on the active chat_id). We
+        // only ever route to a chat_id already in mirrorChatIds (relay-seeded
+        // from a validated dashboard inbound POST), so the trust boundary is
+        // unchanged: hook values CANNOT seed mirrorChatIds and cannot arrive here.
+        chatId = this.latestMirrorChatId;
       } else {
         // Buffer under the reserved provisional id for later backfill. This id
         // can never be a real chat_id (CHAT_ID_RE forbids the `_` route-side).
@@ -635,6 +661,11 @@ export class BridgeHub {
       if (oldestKey !== null) this.mirrorChatIds.delete(oldestKey);
     }
     this.mirrorChatIds.set(chatId, now);
+    // Track the most-recently-registered mirror chat_id so emitMirror can route
+    // unresolved terminal frames to a live observer instead of the provisional
+    // buffer (fix: the browser can't know the CC session_id so bindSession never
+    // runs; latestMirrorChatId fills that gap without widening any trust boundary).
+    this.latestMirrorChatId = chatId;
     // Provisional backfill (spec §2 / P2 — f1/f7): the FIRST time a stream is
     // established, drain any frames buffered under the provisional id (terminal
     // mirror POSTs that arrived before this chat_id existed) into THIS ring,
@@ -667,8 +698,21 @@ export class BridgeHub {
   }
 
   private evictMirrorChatIds(now: number): void {
+    let evictedLatest = false;
     for (const [k, v] of this.mirrorChatIds) {
-      if (now - v > BridgeHub.CHAT_ID_TTL_MS) this.mirrorChatIds.delete(k);
+      if (now - v > BridgeHub.CHAT_ID_TTL_MS) {
+        this.mirrorChatIds.delete(k);
+        if (k === this.latestMirrorChatId) evictedLatest = true;
+      }
+    }
+    if (evictedLatest) {
+      // Recompute to the newest remaining entry (highest timestamp), or null.
+      let newestKey: string | null = null;
+      let newest = -Infinity;
+      for (const [k, v] of this.mirrorChatIds) {
+        if (v > newest) { newest = v; newestKey = k; }
+      }
+      this.latestMirrorChatId = newestKey;
     }
   }
 
