@@ -138,7 +138,13 @@ const __argvShimHandled = (() => {
         // fail-open — swallow.
       }
       process.exit(0);
-    })();
+    })().catch(() => {
+      // Defense-in-depth backstop, parity with the key/code branches. The inner
+      // try/catch already covers handler throws; this guards a future edit that
+      // introduces an await before the try. Mirror hooks are fail-open and must
+      // NEVER block a turn, so swallow and exit 0 (NOT exit 1 like key/code).
+      process.exit(0);
+    });
     return true; // async handler owns the process; do NOT boot the MCP server
   }
   if (kind === 'help') {
@@ -148,6 +154,7 @@ const __argvShimHandled = (() => {
       'Usage:\n' +
       '  gossipcat                Start MCP server (for Claude Code / Cursor)\n' +
       '  gossipcat hook --run     Run UserPromptSubmit bootstrap hook (internal)\n' +
+      '  gossipcat hook mirror-prompt|mirror-stop|mirror-tool   Activity-mirror hooks (internal; opt-in via gossip_setup mirror_hooks)\n' +
       '  gossipcat key set <provider>   Store an API key in the OS keychain (service: gossip-mesh)\n' +
       '  gossipcat key list             Show which providers have a stored key\n' +
       '  gossipcat code [args...]       Launch Claude Code with the gossipcat channel active\n' +
