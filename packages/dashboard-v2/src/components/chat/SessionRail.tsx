@@ -5,8 +5,56 @@ import { ActivitySparkline } from '@/components/chat/ActivitySparkline';
 import { SignalsByAgent } from '@/components/chat/SignalsByAgent';
 import type { UseBridgeResult } from '@/lib/useBridge';
 import { api } from '@/lib/api';
+import { agentColor } from '@/lib/utils';
 
-/** Minimal slice of each agent entry we consume from GET /dashboard/api/agents. */
+/**
+ * SessionRail — right-side rail for ChatPage.
+ *
+ * Sections (top → bottom, flex column, full height):
+ *   1. SESSION INFO (~44px compact strip): status dot, chat_id, branch, tasks count, signals.
+ *      Slim — avoids duplicating the info-bar in ChatPage.
+ *   2. WORKING AGENTS (flex-none): compact cards for each active dispatch from /api/active-tasks.
+ *      Per-agent identity dot (agentColor) + name + live pulse + task label truncated.
+ *      Polls every 5 s — same cadence as ActiveTasksBanner.
+ *      Empty: "No agents dispatched" context line.
+ *   3. ACTIVITY FEED (flex:1, overflow-y:auto): scrolling list of SSE events.
+ *      Compact rows: timestamp · icon · event label, 200ms ease-out enter.
+ *      Empty: "No recent activity — fleet idle" (keep the frame, never blank void).
+ *
+ * DATA SOURCES (no fabricated data):
+ *   - status, chatId      → passed from useBridgeContext() in ChatPage
+ *   - gitBranch, activeTasks → GET /api/session (fetch once on mount)
+ *   - signalTotal         → GET /api/signal-activity (fetch once on mount)
+ *   - activeTasks list    → GET /api/active-tasks (poll 5 s)
+ *   - events              → useEventStream (SSE /api/events)
+ *
+ * DESIGN.md conformance:
+ *   - .h-section small-caps Geist section labels
+ *   - hairline --border card; --r-lg radius; chat-surface dark tokens
+ *   - StatusDot semantic colors (--ok/--warn/--bad/--idle)
+ *   - JetBrains Mono for timestamps, IDs, counts
+ *   - Per-agent identity color in dot ONLY; chrome stays neutral
+ *   - Working pulse: animate-pulse + prefers-reduced-motion:animate-none
+ *   - 200ms ease-out enter for activity rows
+ *   - No --accent in rail (owned by ChatPage Send button)
+ */
+
+const MAX_EVENTS = 20;
+const STALE_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+interface SessionInfo {
+  gitBranch: string | null;
+  projectName: string | null;
+  activeTasks: number;
+}
+
+interface ActiveTask {
+  taskId: string;
+  agentId: string;
+  task: string;
+  startedAt: string;
+}
+
 interface AgentScoreEntry {
   id: string;
   scores: {
@@ -17,56 +65,24 @@ interface AgentScoreEntry {
   };
 }
 
-/**
- * SessionRail — right-side rail for ChatPage operator command surface.
- *
- * Shows:
- *  1. Connection — StatusDot (live/connecting/offline/error) + chat_id in
- *     font-mono + one-liner copy.
- *  2. Session info (from /dashboard/api/session):
- *     - Working dir: `projectName · branch` (conditional — only when gitBranch
- *       is a non-empty string; absent on old relays or detached HEAD).
- *     - Tasks: active task count (always shown, 0 is fine).
- *  3. Activity feed — last ~6 SSE DashboardEvents (task.completed /
- *     consensus.completed) via useEventStream with mono timestamps.
- *     Empty state: "no recent activity" when stream is empty.
- *
- * DATA SOURCES (no fabricated data):
- *  - status, chatId     → passed from useBridgeContext() in ChatPage
- *  - gitBranch, projectName, activeTasks → GET /dashboard/api/session (fetch
- *    once on mount; graceful degradation on failure / 404 / old relay)
- *  - events             → useEventStream (SSE /dashboard/api/events)
- *
- * DESIGN.md conformance:
- *  - .h-section small-caps Geist section labels ("session", "activity")
- *  - hairline --border card; --surface-elev background; --r-lg radius
- *  - StatusDot semantic colors (--ok/--warn/--bad/--idle)
- *  - font-mono for chat_id, branch, counts (JetBrains Mono via --font-mono)
- *  - --ink-3 / --ink-4 for secondary / decorative text
- *  - prefers-reduced-motion honored by StatusDot animate-pulse
- *  - No --accent in the rail (owned by ChatPage's Send button)
- *  - No new colors, shadows, or fonts beyond DESIGN.md spec
- */
+// ── Utility: event type → icon + label ─────────────────────────────────────
 
-const MAX_EVENTS = 6;
-
-interface SessionInfo {
-  gitBranch: string | null;
-  projectName: string | null;
-  activeTasks: number;
-}
+const EVENT_ICONS: Record<string, string> = {
+  'task.completed': '✓',
+  'consensus.completed': '◈',
+};
 
 function formatEventLabel(event: DashboardEvent): string {
   const { type, payload } = event;
   if (type === 'task.completed') {
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : '';
-    return agentId ? `task completed → ${agentId}` : 'task completed';
+    return agentId ? `task · ${agentId}` : 'task completed';
   }
   if (type === 'consensus.completed') {
     const id = typeof payload.consensusId === 'string'
       ? payload.consensusId.slice(0, 8)
       : '';
-    return id ? `consensus completed ${id}` : 'consensus completed';
+    return id ? `consensus ${id}` : 'consensus done';
   }
   return type;
 }
@@ -76,6 +92,227 @@ function timeShortFromTs(ts: string): string {
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
+
+function elapsedShort(startedAt: string): string {
+  const ms = Date.now() - new Date(startedAt).getTime();
+  if (ms < 0) return '0s';
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+  return `${Math.floor(ms / 3_600_000)}h`;
+}
+
+// ── Working agents section ──────────────────────────────────────────────────
+
+function WorkingAgents({ tasks }: { tasks: ActiveTask[] }) {
+  const now = Date.now();
+  const live = tasks.filter(
+    (t) => now - new Date(t.startedAt).getTime() < STALE_MS,
+  );
+
+  return (
+    <section>
+      <h2
+        className="h-section"
+        style={{
+          marginBottom: '8px',
+          borderBottom: '1px solid var(--border)',
+          paddingBottom: '6px',
+        }}
+      >
+        agents
+      </h2>
+
+      {live.length === 0 ? (
+        <p
+          className="text-[11px]"
+          style={{ color: 'var(--ink-3)', margin: 0, lineHeight: 1.5 }}
+        >
+          No agents dispatched — fleet idle
+        </p>
+      ) : (
+        <ul
+          style={{
+            listStyle: 'none',
+            margin: 0,
+            padding: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+          }}
+        >
+          {live.map((t) => (
+            <WorkingAgentRow key={t.taskId} task={t} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function WorkingAgentRow({ task }: { task: ActiveTask }) {
+  const color = agentColor(task.agentId);
+  return (
+    <li
+      className="agent-working-row"
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: '8px',
+        padding: '6px 8px',
+        borderRadius: 'var(--r-md)',
+        background: 'color-mix(in srgb, var(--surface) 30%, transparent)',
+        border: '1px solid var(--border)',
+        transition: 'background 100ms ease-out',
+      }}
+    >
+      {/* Identity dot (agent color) + live pulse — ONLY identity color here */}
+      <span
+        className="agent-working-dot shrink-0 mt-[3px]"
+        style={{ '--dot-color': color } as React.CSSProperties}
+        aria-hidden
+      />
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Agent name + elapsed */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+          <span
+            className="font-mono text-[11px] font-medium truncate"
+            style={{ color: 'var(--ink-2)' }}
+          >
+            {task.agentId}
+          </span>
+          <span
+            className="font-mono text-[10px] shrink-0 tabular-nums"
+            style={{ color: 'var(--ink-3)' }}
+          >
+            {elapsedShort(task.startedAt)}
+          </span>
+        </div>
+        {/* Task label — truncated */}
+        {task.task && (
+          <span
+            className="text-[11px] block truncate"
+            style={{ color: 'var(--ink-3)', marginTop: '1px', lineHeight: 1.4 }}
+            title={task.task}
+          >
+            {task.task}
+          </span>
+        )}
+      </div>
+    </li>
+  );
+}
+
+// ── Activity feed section ───────────────────────────────────────────────────
+
+function ActivityFeed({ events }: { events: DashboardEvent[] }) {
+  return (
+    <section
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+      }}
+    >
+      <h2
+        className="h-section shrink-0"
+        style={{
+          borderBottom: '1px solid var(--border)',
+          paddingBottom: '6px',
+        }}
+      >
+        activity
+      </h2>
+
+      {/* design QA F7: context line sits directly under the header (not below
+          the sparkline) so the empty state reads in one glance, no eye-hop. */}
+      {events.length === 0 && (
+        <p
+          className="text-[11px] shrink-0"
+          style={{ color: 'var(--ink-3)', margin: '0 0 2px', lineHeight: 1.5 }}
+        >
+          No recent activity — fleet idle
+        </p>
+      )}
+
+      {/* Fleet signal-volume sparkline (7d). Renders only when ≥2 data points. */}
+      <div className="shrink-0">
+        <ActivitySparkline />
+      </div>
+
+      {events.length > 0 && (
+        <ul
+          aria-label="Recent activity"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            listStyle: 'none',
+            margin: 0,
+            padding: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '2px',
+          }}
+        >
+          {events.map((e) => (
+            <ActivityEventRow key={e.id} event={e} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ActivityEventRow({ event }: { event: DashboardEvent }) {
+  const icon = EVENT_ICONS[event.type] ?? '·';
+  const label = formatEventLabel(event);
+  const time = timeShortFromTs(event.ts);
+
+  return (
+    <li
+      className="activity-event-row"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '4px 6px',
+        borderRadius: 'var(--r-sm)',
+        transition: 'background 100ms ease-out',
+      }}
+    >
+      {/* Timestamp — mono small */}
+      {time && (
+        <span
+          className="font-mono text-[10px] shrink-0 tabular-nums"
+          style={{ color: 'var(--ink-3)' }}
+          aria-hidden
+        >
+          {time}
+        </span>
+      )}
+      {/* Icon */}
+      <span
+        className="font-mono text-[10px] shrink-0"
+        style={{ color: 'var(--info)', minWidth: '10px', textAlign: 'center' }}
+        aria-hidden
+      >
+        {icon}
+      </span>
+      {/* Label */}
+      <span
+        className="text-[11px] truncate"
+        style={{ color: 'var(--ink-2)', lineHeight: 1.4 }}
+      >
+        {label}
+      </span>
+    </li>
+  );
+}
+
+// ── SessionRail ─────────────────────────────────────────────────────────────
 
 interface SessionRailProps {
   status: UseBridgeResult['status'];
@@ -89,22 +326,16 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
     projectName: null,
     activeTasks: 0,
   });
-  // null = loading/failed (omit row); number = real data (show even if 0).
   const [signalTotal, setSignalTotal] = useState<number | null>(null);
-  // null = loading/failed (omit breakdown); [] = no agents with signals.
   const [agentScores, setAgentScores] = useState<AgentScoreEntry[] | null>(null);
+  const [activeTasks, setActiveTasks] = useState<ActiveTask[]>([]);
+  // Tick state for elapsed timer updates
+  const [, setTick] = useState(0);
 
-  // Fetch session info once on mount. Gracefully degrades on any error
-  // (network failure, 404 from old relay, missing git). The branch row is
-  // conditionally rendered only when gitBranch is a non-empty string.
+  // Fetch session info once on mount.
   useEffect(() => {
     const controller = new AbortController();
-    // FIX 1: pass the bare path 'session' — api() already prepends BASE
-    // ('/dashboard/api'). Passing the full 'dashboard/api/session' here produced
-    // the doubled URL '/dashboard/api/dashboard/api/session' → 404.
-    api<{ gitBranch: string | null; projectName: string; activeTasks: number }>(
-      'session',
-    )
+    api<{ gitBranch: string | null; projectName: string; activeTasks: number }>('session')
       .then((data) => {
         if (controller.signal.aborted) return;
         setSession({
@@ -113,41 +344,29 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
           activeTasks: typeof data.activeTasks === 'number' ? data.activeTasks : 0,
         });
       })
-      .catch(() => {
-        // Intentionally silenced — old relay (no endpoint) or network error;
-        // defaults (null/0) keep the rail usable.
-      });
+      .catch(() => { /* graceful degradation */ });
     return () => controller.abort();
   }, []);
 
-  // Fetch 24h signal activity once on mount. Only total is used — breakdown
-  // now comes from /api/agents polarity data. Omit row on any failure.
+  // Fetch 24h signal total once on mount.
   useEffect(() => {
     const controller = new AbortController();
     api<{ total: number }>('signal-activity')
       .then((data) => {
         if (controller.signal.aborted) return;
-        // total:0 is valid data — show "0 · 24h". Only omit on fetch failure.
-        if (typeof data.total === 'number') {
-          setSignalTotal(data.total);
-        }
+        if (typeof data.total === 'number') setSignalTotal(data.total);
       })
-      .catch(() => {
-        // Silenced — graceful degradation: row is omitted (signalTotal stays null).
-      });
+      .catch(() => { /* graceful degradation */ });
     return () => controller.abort();
   }, []);
 
-  // Fetch per-agent polarity scores from /dashboard/api/agents once on mount.
-  // Used by SignalsByAgent for the two-segment (positive/negative) bar.
-  // Omit breakdown on any failure — graceful degradation.
+  // Fetch per-agent polarity scores once on mount.
   useEffect(() => {
     const controller = new AbortController();
     api<AgentScoreEntry[]>('agents')
       .then((data) => {
         if (controller.signal.aborted) return;
         if (Array.isArray(data)) {
-          // Only keep agents that have the scores shape we need; skip malformed entries.
           const filtered = data.filter(
             (a): a is AgentScoreEntry =>
               typeof a === 'object' &&
@@ -159,15 +378,33 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
           setAgentScores(filtered);
         }
       })
-      .catch(() => {
-        // Silenced — graceful degradation: breakdown omitted (agentScores stays null).
-      });
+      .catch(() => { /* graceful degradation */ });
     return () => controller.abort();
   }, []);
 
+  // Poll active tasks every 5 s — same cadence as ActiveTasksBanner.
+  useEffect(() => {
+    let cancelled = false;
+    const fetchTasks = async () => {
+      try {
+        const data = await api<{ tasks: ActiveTask[] }>('active-tasks');
+        if (!cancelled) setActiveTasks(data.tasks || []);
+      } catch { /* graceful degradation */ }
+    };
+    void fetchTasks();
+    const interval = setInterval(() => { void fetchTasks(); }, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  // Tick elapsed timers once per second while tasks are running.
+  useEffect(() => {
+    if (activeTasks.length === 0) return;
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [activeTasks.length]);
+
   const onEvent = useCallback((e: DashboardEvent) => {
     setEvents((prev) => {
-      // Prepend new event, keep the most recent MAX_EVENTS.
       const next = [e, ...prev];
       return next.length > MAX_EVENTS ? next.slice(0, MAX_EVENTS) : next;
     });
@@ -180,172 +417,88 @@ export function SessionRail({ status, chatId }: SessionRailProps) {
 
   return (
     <aside
+      className="chat-surface"
       style={{
         width: '100%',
         minWidth: 0,
         border: '1px solid var(--border)',
         borderRadius: 'var(--r-lg)',
-        background: 'var(--surface-elev)',
-        padding: '20px',
+        padding: '14px 14px',
         display: 'flex',
         flexDirection: 'column',
-        gap: '20px',
+        gap: '14px',
         alignSelf: 'stretch',
+        overflow: 'hidden',
       }}
-      aria-label="Session info"
+      aria-label="Session info and live activity"
     >
-      {/* ── Section 1: Session ── */}
-      <section>
+      {/* ── Compact session strip ── */}
+      <section className="shrink-0">
         <h2
           className="h-section"
-          style={{ marginBottom: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}
+          style={{
+            marginBottom: '8px',
+            borderBottom: '1px solid var(--border)',
+            paddingBottom: '6px',
+          }}
         >
           session
         </h2>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
           {/* Status dot */}
-          <StatusDot status={status} compact={false} />
+          <StatusDot status={status} compact />
 
-          {/* chat_id */}
+          {/* chat_id — truncated */}
           {chatId && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <span
-                className="font-mono text-[11px]"
-                style={{ color: 'var(--ink-3)', wordBreak: 'break-all' }}
-              >
-                {chatId}
-              </span>
-            </div>
-          )}
-
-          {/* Working dir — only when gitBranch resolved (non-null, non-empty) */}
-          {showWorkingDir && (
-            <div
-              style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}
-              title="directory the gossipcat relay was launched in (worktree dispatches may differ)"
-            >
-              <span
-                className="text-[11px]"
-                style={{ color: 'var(--ink-3)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
-              >
-                working dir
-              </span>
-              <span
-                className="font-mono text-[11px]"
-                style={{ color: 'var(--ink-3)', wordBreak: 'break-all' }}
-              >
-                {session.projectName} · {session.gitBranch}
-              </span>
-            </div>
-          )}
-
-          {/* Active tasks — always shown */}
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
             <span
-              className="text-[11px]"
-              style={{ color: 'var(--ink-3)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
-            >
-              tasks
-            </span>
-            <span
-              className="font-mono text-[11px]"
+              className="font-mono text-[10px] truncate"
               style={{ color: 'var(--ink-3)' }}
+              title={chatId}
             >
-              {session.activeTasks} active
+              {chatId}
             </span>
+          )}
+
+          {/* Working dir + branch */}
+          {showWorkingDir && (
+            <span
+              className="font-mono text-[10px] truncate"
+              style={{ color: 'var(--ink-3)' }}
+              title={`${session.projectName} · ${session.gitBranch}`}
+            >
+              {session.projectName} · {session.gitBranch}
+            </span>
+          )}
+
+          {/* Tasks + signals inline */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <span className="font-mono text-[10px]" style={{ color: 'var(--ink-3)' }}>
+              <span style={{ color: 'var(--ink-2)', fontWeight: 500 }}>{session.activeTasks}</span>
+              {' '}tasks
+            </span>
+            {signalTotal !== null && (
+              <span className="font-mono text-[10px]" style={{ color: 'var(--ink-3)' }}>
+                <span style={{ color: 'var(--ink-2)', fontWeight: 500 }}>{signalTotal}</span>
+                {' '}signals · 24h
+              </span>
+            )}
           </div>
 
-          {/* 24h signal count + per-agent breakdown — only rendered when endpoint returned valid data */}
-          {signalTotal !== null && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-                <span
-                  className="text-[11px]"
-                  style={{ color: 'var(--ink-3)', fontVariant: 'small-caps', letterSpacing: '0.04em' }}
-                >
-                  signals
-                </span>
-                <span
-                  className="font-mono text-[11px]"
-                  style={{ color: 'var(--ink-3)' }}
-                >
-                  {signalTotal} · 24h
-                </span>
-              </div>
-              {/* Per-agent polarity breakdown — uses /api/agents scores for positive/negative split */}
-              {agentScores !== null && agentScores.length > 0 && (
-                <SignalsByAgent agents={agentScores} />
-              )}
-            </div>
+          {/* Per-agent polarity breakdown */}
+          {agentScores !== null && agentScores.length > 0 && (
+            <SignalsByAgent agents={agentScores} />
           )}
-
-          <p
-            className="text-[12px]"
-            style={{ color: 'var(--ink-3)', lineHeight: 1.5, margin: 0 }}
-          >
-            Same Claude Code session as your terminal.
-          </p>
         </div>
       </section>
 
-      {/* ── Section 2: Activity feed ── */}
-      <section style={{ flex: 1, minHeight: 0 }}>
-        <h2
-          className="h-section"
-          style={{ marginBottom: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}
-        >
-          activity
-        </h2>
+      {/* ── Working agents ── */}
+      <div className="shrink-0">
+        <WorkingAgents tasks={activeTasks} />
+      </div>
 
-        {/* Fleet signal-volume sparkline (7d). Renders only when ≥2 data points. */}
-        <ActivitySparkline />
-
-        {events.length === 0 ? (
-          <p
-            className="text-[12px]"
-            style={{ color: 'var(--ink-3)', margin: 0 }}
-          >
-            no recent activity
-          </p>
-        ) : (
-          <ul
-            style={{
-              listStyle: 'none',
-              margin: 0,
-              padding: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '8px',
-            }}
-          >
-            {events.map((e) => (
-              <li
-                key={e.id}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '2px',
-                }}
-              >
-                <span
-                  className="text-[12px]"
-                  style={{ color: 'var(--ink-2)', lineHeight: 1.4 }}
-                >
-                  {formatEventLabel(e)}
-                </span>
-                <span
-                  className="font-mono text-[10px]"
-                  style={{ color: 'var(--ink-3)' }}
-                  aria-hidden
-                >
-                  {timeShortFromTs(e.ts)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {/* ── Activity feed (fills remaining height) ── */}
+      <ActivityFeed events={events} />
     </aside>
   );
 }

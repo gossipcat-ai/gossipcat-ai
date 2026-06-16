@@ -856,7 +856,15 @@ export class DashboardRouter {
       return true;
     }
     const html = readFileSync(htmlPath, 'utf-8');
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    // The SPA entry HTML must ALWAYS be revalidated: it references content-hashed
+    // asset bundles (index-<hash>.js/.css, cached 24h as immutable). If index.html
+    // itself is cached, the browser keeps loading stale asset hashes after a
+    // rebuild and the operator never sees dashboard changes without a hard reload.
+    // `no-cache` = store but revalidate every load (304 when unchanged).
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-cache',
+    });
     res.end(html);
     return true;
   }

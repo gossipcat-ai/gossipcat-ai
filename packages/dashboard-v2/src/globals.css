@@ -771,6 +771,12 @@ html[data-theme="dark"]::after {
      whole --sx-* palette is AA-verified on it (--sx-fn #7e72c0 = 4.50:1). */
   --surface-sunk: #131210;
   --surface-2: #232019;
+  /* FIX 2b (design QA F2): .chat-surface is always dark, but MessageBubble +
+     other chat consumers reference --surface-elev / --text which were NOT
+     overridden here, so a light-mode user got near-white assistant bubbles on
+     the dark card. Pin both to dark-surface values. */
+  --surface-elev: #252320;
+  --text: #F2EDE3;
   --ink: #F2EDE3;
   --ink-2: #B8B2A6;
   --ink-3: #8A857B; /* AA text min (≈5.3:1 on --bg #14120F) — line numbers, hints, meta */
@@ -932,6 +938,9 @@ html[data-theme="dark"]::after {
   padding: 14px 12px;
   border: 1px dashed var(--border);
   border-radius: var(--r-md);
+  /* design QA F3: a slight warm fill so the dashed frame registers as composed
+     content, not dead void, against the large dark transcript canvas. */
+  background: color-mix(in srgb, var(--surface) 40%, transparent);
   color: var(--ink-3);
   font-size: 13px;
   margin: 4px 0;
@@ -985,3 +994,101 @@ html[data-theme="dark"]::after {
 .md-code-block .hljs-variable,
 .md-code-block .hljs-template-variable,
 .md-code-block .hljs-params { color: var(--sx-fn); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Chat page — info-bar, send button, SessionRail working-agents + activity
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Send button: terracotta CTA (enabled) + neutral ghost (disabled) ──
+   Styling lives here (not inline) so :disabled can override the bg — an inline
+   background:var(--accent) would win over any disabled rule. Disabled is a
+   clean neutral chip (--surface-2 + --ink-3), NOT faded terracotta, which read
+   as muddy/broken on the dark surface (design QA follow-up). */
+.chat-send-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: background 120ms ease-out, color 120ms ease-out,
+    box-shadow 100ms ease-out, filter 100ms ease-out;
+}
+.chat-send-btn:disabled {
+  background: var(--surface-2);
+  color: var(--ink-3);
+  cursor: not-allowed;
+  box-shadow: none;
+  filter: none;
+}
+.chat-send-btn:not(:disabled):hover {
+  filter: brightness(1.08);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.chat-send-btn:not(:disabled):active {
+  filter: brightness(0.92);
+}
+.chat-send-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ── Working agent identity dot with continuous pulse ── */
+/* The dot uses a CSS custom property --dot-color set inline from agentColor(). */
+@keyframes agent-working-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);    }
+  50%       { opacity: 0.5; transform: scale(0.78); }
+}
+
+.agent-working-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--dot-color, var(--info));
+  animation: agent-working-pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-working-dot {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+/* ── Rail enter animation — 200ms ease-out ── */
+@keyframes rail-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* design QA F6: apply the animation via the CLASS (not an inline style on the
+   element), so the prefers-reduced-motion guard below actually disables it. An
+   inline `animation:` could not be overridden by the @media rule. */
+.activity-event-row,
+.agent-working-row {
+  animation: rail-enter 200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-event-row,
+  .agent-working-row {
+    animation: none;
+  }
+}
+
+/* design QA F5: documented larger variant of the .h-section signature for the
+   chat info-bar route label (keeps the signature contract; no inline override). */
+.h-section--lg {
+  font-size: 15px;
+  letter-spacing: 0.05em;
+}
+
+/* ── Activity event row hover wash ── */
+.activity-event-row:hover {
+  background: color-mix(in srgb, var(--surface) 30%, transparent);
+}
+
+/* ── Working agent row hover wash ── */
+.agent-working-row:hover {
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
