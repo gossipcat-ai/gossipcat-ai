@@ -999,7 +999,26 @@ html[data-theme="dark"]::after {
    Chat page — info-bar, send button, SessionRail working-agents + activity
    ════════════════════════════════════════════════════════════════════════ */
 
-/* ── Send button hover/active/focus-visible polish ── */
+/* ── Send button: terracotta CTA (enabled) + neutral ghost (disabled) ──
+   Styling lives here (not inline) so :disabled can override the bg — an inline
+   background:var(--accent) would win over any disabled rule. Disabled is a
+   clean neutral chip (--surface-2 + --ink-3), NOT faded terracotta, which read
+   as muddy/broken on the dark surface (design QA follow-up). */
+.chat-send-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: background 120ms ease-out, color 120ms ease-out,
+    box-shadow 100ms ease-out, filter 100ms ease-out;
+}
+.chat-send-btn:disabled {
+  background: var(--surface-2);
+  color: var(--ink-3);
+  cursor: not-allowed;
+  box-shadow: none;
+  filter: none;
+}
 .chat-send-btn:not(:disabled):hover {
   filter: brightness(1.08);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);

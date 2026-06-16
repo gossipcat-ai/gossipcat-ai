@@ -260,16 +260,10 @@ export function ChatPage() {
               type="button"
               onClick={submit}
               disabled={draft.trim().length === 0}
-              className="chat-send-btn shrink-0 rounded-lg flex items-center gap-1.5 font-medium transition-opacity"
+              className="chat-send-btn shrink-0 rounded-lg flex items-center gap-1.5 font-medium"
               style={{
-                background: 'var(--accent)',
-                color: '#fff',
-                border: 'none',
                 padding: '10px 14px',
                 fontSize: '13px',
-                cursor: 'pointer',
-                opacity: draft.trim().length === 0 ? 0.55 : 1,
-                transition: 'opacity 100ms ease-out, box-shadow 100ms ease-out',
                 minHeight: '40px',
               }}
               aria-label="Send message"
@@ -281,7 +275,7 @@ export function ChatPage() {
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2.2"
+                strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 aria-hidden="true"
