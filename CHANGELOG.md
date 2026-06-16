@@ -4,6 +4,26 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-06-16
+
+Patch release. Makes the dashboard ⇄ live-Claude-Code **activity mirror
+actually render** in the chat surface.
+
+### Fixed
+
+- **Dashboard chat now emits live activity.** Terminal activity-mirror frames
+  never reached the dashboard chat — it appeared to "emit no messages". Mirror
+  hooks POST `{frames, session_id}` with no `chat_id`, and the relay could only
+  map `session_id → chat_id` from a field the browser cannot supply, so every
+  terminal frame fell into the internal `_provisional` buffer and was filtered
+  out client-side. `emitMirror()` now routes an unresolvable terminal frame to
+  the most-recently-registered active mirror chat_id instead of `_provisional`.
+  The trust boundary is unchanged: the target is only ever a relay-seeded
+  chat_id (hooks cannot seed it), and the outbound `reply` gate is untouched.
+  Known limitation: with multiple concurrent dashboard tabs only the
+  most-recent tab receives unresolved activity (a strict improvement over the
+  prior behaviour where every tab saw nothing).
+
 ## [0.6.2] — 2026-06-14
 
 Patch release. Makes the published MCP server binary **self-contained** so it
