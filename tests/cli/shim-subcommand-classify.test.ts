@@ -129,3 +129,121 @@ describe('classifyShimSubcommand', () => {
     expect(classify('setup')).toBe('unknown');
   });
 });
+
+// ── resolveHookAction unit tests ────────────────────────────────────────────
+// The dist-mcp shim's `hook` branch must dispatch each mirror decision to its
+// async handler module — NOT fall through to the synchronous bootstrap
+// runHook(). This regression-tests the bug where the bundled binary sent every
+// non-usage decision (incl. mirror-prompt|mirror-stop|mirror-tool) to runHook().
+describe('resolveHookAction', () => {
+  let resolveAction: (
+    decision: string,
+  ) => { action: string; run?: () => Promise<void> };
+  let mirrorPrompt: { runMirrorPromptHook: () => Promise<void> };
+  let mirrorStop: { runMirrorStopHook: () => Promise<void> };
+  let mirrorTool: { runMirrorToolHook: () => Promise<void> };
+
+  beforeAll(() => {
+    const savedArgv = process.argv;
+    const savedEnv = process.env.GOSSIPCAT_MCP_NO_MAIN;
+    process.argv = ['node', 'mcp-server.js'];
+    process.env.GOSSIPCAT_MCP_NO_MAIN = '1';
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require('../../apps/cli/src/mcp-server-sdk') as typeof import('../../apps/cli/src/mcp-server-sdk');
+      resolveAction = mod.resolveHookAction as typeof resolveAction;
+      // Same module instances the shim statically imports — identity comparison
+      // below proves resolveHookAction returns the bundled handler references.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      mirrorPrompt = require('../../apps/cli/src/hooks/mirror-prompt');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      mirrorStop = require('../../apps/cli/src/hooks/mirror-stop');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      mirrorTool = require('../../apps/cli/src/hooks/mirror-tool');
+    });
+    process.argv = savedArgv;
+    if (savedEnv === undefined) {
+      delete process.env.GOSSIPCAT_MCP_NO_MAIN;
+    } else {
+      process.env.GOSSIPCAT_MCP_NO_MAIN = savedEnv;
+    }
+  });
+
+  it('maps "run" → synchronous bootstrap hook', () => {
+    expect(resolveAction('run')).toEqual({ action: 'run' });
+  });
+
+  it('maps "usage" → usage', () => {
+    expect(resolveAction('usage')).toEqual({ action: 'usage' });
+  });
+
+  it('maps "mirror-prompt" → async runMirrorPromptHook (NOT runHook)', () => {
+    const a = resolveAction('mirror-prompt');
+    expect(a.action).toBe('mirror');
+    expect(a.run).toBe(mirrorPrompt.runMirrorPromptHook);
+  });
+
+  it('maps "mirror-stop" → async runMirrorStopHook (NOT runHook)', () => {
+    const a = resolveAction('mirror-stop');
+    expect(a.action).toBe('mirror');
+    expect(a.run).toBe(mirrorStop.runMirrorStopHook);
+  });
+
+  it('maps "mirror-tool" → async runMirrorToolHook (NOT runHook)', () => {
+    const a = resolveAction('mirror-tool');
+    expect(a.action).toBe('mirror');
+    expect(a.run).toBe(mirrorTool.runMirrorToolHook);
+  });
+
+  it('no mirror decision resolves to the bootstrap run action (the bug)', () => {
+    for (const d of ['mirror-prompt', 'mirror-stop', 'mirror-tool']) {
+      expect(resolveAction(d).action).toBe('mirror');
+      expect(resolveAction(d).action).not.toBe('run');
+    }
+  });
+});
+
+// ── Source-text assertions — hook branch dispatches mirror subcommands ───────
+// Locks the dist-mcp shim's `hook` branch structure so the async/fail-open
+// lifecycle (return true, no premature exit) cannot silently regress.
+describe('argv shim source — hook branch mirror dispatch', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const pathMod = require('path');
+  const SRC: string = fs.readFileSync(
+    pathMod.resolve(__dirname, '..', '..', 'apps', 'cli', 'src', 'mcp-server-sdk.ts'),
+    'utf-8',
+  );
+
+  it('exports resolveHookAction', () => {
+    expect(SRC).toMatch(/export function resolveHookAction/);
+  });
+
+  it('the hook branch derives its action from resolveHookAction', () => {
+    expect(SRC).toMatch(/if \(kind === 'hook'\)[\s\S]{0,400}resolveHookAction\(decision\)/);
+  });
+
+  it("the hook branch's mirror path returns true so the async handler owns the process", () => {
+    // The mirror dispatch must `return true` (like code/key) so the synchronous
+    // IIFE does NOT exit(0) before the async handler resolves. We anchor on the
+    // direct call of the resolved handler fn followed by `return true`.
+    expect(SRC).toMatch(/await mirrorRun\(\)[\s\S]*?return true;/);
+  });
+
+  it('the mirror handlers are STATIC top-level imports (so esbuild bundles them)', () => {
+    // The bug this fixes: a runtime `await import('./hooks/mirror-*')` is left
+    // un-inlined by esbuild --bundle and resolves against a non-existent
+    // dist-mcp/hooks/ dir → throws into fail-open catch{} → no frame. Static
+    // imports get bundled into the single-file artifact.
+    expect(SRC).toMatch(/import \{ runMirrorPromptHook \} from '\.\/hooks\/mirror-prompt';/);
+    expect(SRC).toMatch(/import \{ runMirrorStopHook \} from '\.\/hooks\/mirror-stop';/);
+    expect(SRC).toMatch(/import \{ runMirrorToolHook \} from '\.\/hooks\/mirror-tool';/);
+    // No runtime dynamic import of the mirror modules survives in the shim.
+    expect(SRC).not.toMatch(/await import\(mirrorModule\)/);
+  });
+
+  it('usage message lists the mirror subcommands', () => {
+    expect(SRC).toMatch(/Usage: gossipcat hook --run \| mirror-prompt \| mirror-stop \| mirror-tool/);
+  });
+});

@@ -9,6 +9,9 @@
 import { createWriteStream, mkdirSync } from 'fs';
 import { join } from 'path';
 import { runHook } from './hook-run';
+import { runMirrorPromptHook } from './hooks/mirror-prompt';
+import { runMirrorStopHook } from './hooks/mirror-stop';
+import { runMirrorToolHook } from './hooks/mirror-tool';
 import { parseHookSubcommand } from './hook-argv';
 import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgrade-check';
 
@@ -63,6 +66,47 @@ export function classifyShimSubcommand(
   return 'unknown';
 }
 
+/**
+ * Map a `parseHookSubcommand` decision to the dist-mcp shim's action.
+ *
+ * Exported so unit tests can assert routing without spawning the bundle: each
+ * mirror decision must dispatch its matching async handler module, never fall
+ * through to the synchronous bootstrap `runHook()` (the bug this fixes — the
+ * shim previously sent every non-usage decision to `runHook()`).
+ *
+ * The returned shape mirrors index.ts:75-97. 'usage' → exit 2; 'run' → the
+ * synchronous bootstrap hook; the mirror kinds → a direct reference to the
+ * async handler fn (statically imported + fail-open).
+ *
+ * The handler is returned as a `run` fn reference — NOT a module path + fn
+ * name string — because this file is the esbuild --bundle entrypoint. A
+ * runtime `await import('./hooks/mirror-prompt')` is left un-inlined by
+ * esbuild and resolves against a non-existent `dist-mcp/hooks/` dir at
+ * runtime, throwing into the fail-open catch{} and silently dropping the
+ * frame. Static top-level imports get bundled, so referencing the fn keeps
+ * the handler body inside the single-file artifact.
+ */
+export function resolveHookAction(
+  decision: import('./hook-argv').HookSubcommand,
+):
+  | { action: 'usage' }
+  | { action: 'run' }
+  | { action: 'mirror'; run: () => Promise<void> } {
+  switch (decision) {
+    case 'run':
+      return { action: 'run' };
+    case 'mirror-prompt':
+      return { action: 'mirror', run: runMirrorPromptHook };
+    case 'mirror-stop':
+      return { action: 'mirror', run: runMirrorStopHook };
+    case 'mirror-tool':
+      return { action: 'mirror', run: runMirrorToolHook };
+    case 'usage':
+    default:
+      return { action: 'usage' };
+  }
+}
+
 const __argvShimHandled = (() => {
   const argv = process.argv.slice(2);
   const sub = argv[0];
@@ -70,12 +114,38 @@ const __argvShimHandled = (() => {
 
   if (kind === 'hook') {
     const decision = parseHookSubcommand(argv[1]);
-    if (decision === 'usage') {
-      process.stderr.write('Usage: gossipcat hook --run\n');
+    const hookAction = resolveHookAction(decision);
+    if (hookAction.action === 'usage') {
+      process.stderr.write('Usage: gossipcat hook --run | mirror-prompt | mirror-stop | mirror-tool\n');
       process.exit(2);
     }
-    runHook();
-    process.exit(0);
+    if (hookAction.action === 'run') {
+      runHook();
+      process.exit(0);
+    }
+    // Activity-mirror hooks (mirror-prompt|mirror-stop|mirror-tool) are async,
+    // fail-open + non-blocking — mirrors index.ts:80-97. The shim is a
+    // synchronous IIFE, so we must NOT exit(0) before the async handler
+    // resolves: spawn it and `return true` (like the key/code branches) so the
+    // async work keeps the event loop alive and exits when done. A thrown error
+    // or missing relay must never propagate to a non-zero exit that would block
+    // the user's turn.
+    const mirrorRun = hookAction.run;
+    void (async () => {
+      try {
+        await mirrorRun();
+      } catch {
+        // fail-open — swallow.
+      }
+      process.exit(0);
+    })().catch(() => {
+      // Defense-in-depth backstop, parity with the key/code branches. The inner
+      // try/catch already covers handler throws; this guards a future edit that
+      // introduces an await before the try. Mirror hooks are fail-open and must
+      // NEVER block a turn, so swallow and exit 0 (NOT exit 1 like key/code).
+      process.exit(0);
+    });
+    return true; // async handler owns the process; do NOT boot the MCP server
   }
   if (kind === 'help') {
     process.stdout.write(
@@ -84,6 +154,7 @@ const __argvShimHandled = (() => {
       'Usage:\n' +
       '  gossipcat                Start MCP server (for Claude Code / Cursor)\n' +
       '  gossipcat hook --run     Run UserPromptSubmit bootstrap hook (internal)\n' +
+      '  gossipcat hook mirror-prompt|mirror-stop|mirror-tool   Activity-mirror hooks (internal; opt-in via gossip_setup mirror_hooks)\n' +
       '  gossipcat key set <provider>   Store an API key in the OS keychain (service: gossip-mesh)\n' +
       '  gossipcat key list             Show which providers have a stored key\n' +
       '  gossipcat code [args...]       Launch Claude Code with the gossipcat channel active\n' +
@@ -2449,6 +2520,8 @@ export function createMcpServer(): McpServer {
       instruction_agent_ids: z.union([z.string(), z.array(z.string())]).optional().describe('Agent IDs for instruction update'),
       instruction_update: z.string().optional().describe('Instruction text to append/replace'),
       instruction_mode: z.enum(['append', 'replace']).optional().describe('How to apply instruction update'),
+      mirror_hooks: z.boolean().default(false)
+        .describe('Opt-in (default false): install the activity-mirror hooks (UserPromptSubmit/Stop/PostToolUse) into .claude/settings.local.json so the live CC session is mirrored into the dashboard. OFF by default because these hooks mirror tool I/O externally — only enable after verifying the relay + dashboard render are ready.'),
       agents: z.array(z.object({
         id: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/, 'Agent ID must be alphanumeric with hyphens/underscores — path separators and ".." are rejected').describe('Agent ID (lowercase, hyphens). e.g. "claude-reviewer", "gemini-impl"'),
         type: z.enum(['native', 'custom']).describe(
@@ -2485,7 +2558,7 @@ export function createMcpServer(): McpServer {
           .describe(`Per-agent tool-turn budget override (integer in [1, ${MAX_TOOL_TURNS_CEILING}]). Defaults to 15 when omitted. Useful for slow-reasoning agents (e.g. deepseek-reasoner) that need more turns per cross-review. NOTE: re-declaring an existing agent replaces its whole config entry (even in merge mode) — omitting this field on a re-declare resets the agent to the default.`),
       })).describe('Array of agents to create'),
     },
-    async ({ main_provider, main_model, mode, agents, instruction_agent_ids, instruction_update, instruction_mode }) => {
+    async ({ main_provider, main_model, mode, agents, instruction_agent_ids, instruction_update, instruction_mode, mirror_hooks }) => {
       if (mode === 'update_instructions') {
         if (!instruction_agent_ids || !instruction_update) {
           return { content: [{ type: 'text' as const, text: 'Error: update_instructions mode requires instruction_agent_ids and instruction_update' }] };
@@ -2779,6 +2852,37 @@ export function createMcpServer(): McpServer {
         process.stderr.write(`[gossipcat] gossip_setup: discipline hook install failed: ${e}\n`);
       }
 
+      // Activity-mirror hooks — OPT-IN ONLY (default OFF). These mirror the live
+      // CC session's tool I/O into the dashboard, so they are never auto-enabled:
+      // installMirrorHooks runs only when the caller passes mirror_hooks:true.
+      let mirrorSummary = '';
+      if (mirror_hooks === true) {
+        try {
+          process.stderr.write(
+            '[gossipcat] Installing activity-mirror hooks into .claude/settings.local.json ' +
+            '(UserPromptSubmit/Stop/PostToolUse). Opt-in: mirrors tool I/O to the dashboard. ' +
+            'To skip: omit mirror_hooks or delete the entries after install.\n',
+          );
+          const { installMirrorHooks } = require('@gossip/orchestrator') as typeof import('@gossip/orchestrator');
+          const mirrorResult = installMirrorHooks(root);
+          if (mirrorResult.reason) {
+            mirrorSummary = `Mirror hooks: skipped (${mirrorResult.reason})`;
+          } else if (mirrorResult.installed.length > 0) {
+            mirrorSummary = `Mirror hooks: installed [${mirrorResult.installed.join(', ')}]`;
+            if (mirrorResult.skipped.length > 0) {
+              mirrorSummary += `, already present [${mirrorResult.skipped.join(', ')}]`;
+            }
+          } else {
+            mirrorSummary = 'Mirror hooks: already present (no changes)';
+          }
+        } catch (e) {
+          mirrorSummary = `Mirror hooks: skipped (${(e as Error).message})`;
+          process.stderr.write(`[gossipcat] gossip_setup: mirror hook install failed: ${e}\n`);
+        }
+      } else {
+        mirrorSummary = 'Mirror hooks: not enabled (opt-in — pass mirror_hooks:true to install)';
+      }
+
       // Bootstrap UserPromptSubmit hook (mtime-keyed sentinel) — spec
       // 2026-05-07-bootstrap-hook-trim. Idempotent: upgrades legacy
       // `cat .gossip/bootstrap.md` hooks, no-ops if already current, leaves
@@ -2877,6 +2981,9 @@ export function createMcpServer(): McpServer {
       }
       if (disciplineSummary) {
         lines.push(disciplineSummary);
+      }
+      if (mirrorSummary) {
+        lines.push(mirrorSummary);
       }
       lines.push('Agents will connect to relay on first gossip_dispatch() call.');
       if (nativeCreated.length > 0) {
