@@ -138,7 +138,10 @@ describe('classifyShimSubcommand', () => {
 describe('resolveHookAction', () => {
   let resolveAction: (
     decision: string,
-  ) => { action: string; module?: string; fn?: string };
+  ) => { action: string; run?: () => Promise<void> };
+  let mirrorPrompt: { runMirrorPromptHook: () => Promise<void> };
+  let mirrorStop: { runMirrorStopHook: () => Promise<void> };
+  let mirrorTool: { runMirrorToolHook: () => Promise<void> };
 
   beforeAll(() => {
     const savedArgv = process.argv;
@@ -149,6 +152,14 @@ describe('resolveHookAction', () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const mod = require('../../apps/cli/src/mcp-server-sdk') as typeof import('../../apps/cli/src/mcp-server-sdk');
       resolveAction = mod.resolveHookAction as typeof resolveAction;
+      // Same module instances the shim statically imports — identity comparison
+      // below proves resolveHookAction returns the bundled handler references.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      mirrorPrompt = require('../../apps/cli/src/hooks/mirror-prompt');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      mirrorStop = require('../../apps/cli/src/hooks/mirror-stop');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      mirrorTool = require('../../apps/cli/src/hooks/mirror-tool');
     });
     process.argv = savedArgv;
     if (savedEnv === undefined) {
@@ -167,27 +178,21 @@ describe('resolveHookAction', () => {
   });
 
   it('maps "mirror-prompt" → async runMirrorPromptHook (NOT runHook)', () => {
-    expect(resolveAction('mirror-prompt')).toEqual({
-      action: 'mirror',
-      module: './hooks/mirror-prompt',
-      fn: 'runMirrorPromptHook',
-    });
+    const a = resolveAction('mirror-prompt');
+    expect(a.action).toBe('mirror');
+    expect(a.run).toBe(mirrorPrompt.runMirrorPromptHook);
   });
 
   it('maps "mirror-stop" → async runMirrorStopHook (NOT runHook)', () => {
-    expect(resolveAction('mirror-stop')).toEqual({
-      action: 'mirror',
-      module: './hooks/mirror-stop',
-      fn: 'runMirrorStopHook',
-    });
+    const a = resolveAction('mirror-stop');
+    expect(a.action).toBe('mirror');
+    expect(a.run).toBe(mirrorStop.runMirrorStopHook);
   });
 
   it('maps "mirror-tool" → async runMirrorToolHook (NOT runHook)', () => {
-    expect(resolveAction('mirror-tool')).toEqual({
-      action: 'mirror',
-      module: './hooks/mirror-tool',
-      fn: 'runMirrorToolHook',
-    });
+    const a = resolveAction('mirror-tool');
+    expect(a.action).toBe('mirror');
+    expect(a.run).toBe(mirrorTool.runMirrorToolHook);
   });
 
   it('no mirror decision resolves to the bootstrap run action (the bug)', () => {
@@ -222,8 +227,20 @@ describe('argv shim source — hook branch mirror dispatch', () => {
   it("the hook branch's mirror path returns true so the async handler owns the process", () => {
     // The mirror dispatch must `return true` (like code/key) so the synchronous
     // IIFE does NOT exit(0) before the async handler resolves. We anchor on the
-    // dynamic-import of the resolved mirror module followed by `return true`.
-    expect(SRC).toMatch(/await import\(mirrorModule\)[\s\S]*?return true;/);
+    // direct call of the resolved handler fn followed by `return true`.
+    expect(SRC).toMatch(/await mirrorRun\(\)[\s\S]*?return true;/);
+  });
+
+  it('the mirror handlers are STATIC top-level imports (so esbuild bundles them)', () => {
+    // The bug this fixes: a runtime `await import('./hooks/mirror-*')` is left
+    // un-inlined by esbuild --bundle and resolves against a non-existent
+    // dist-mcp/hooks/ dir → throws into fail-open catch{} → no frame. Static
+    // imports get bundled into the single-file artifact.
+    expect(SRC).toMatch(/import \{ runMirrorPromptHook \} from '\.\/hooks\/mirror-prompt';/);
+    expect(SRC).toMatch(/import \{ runMirrorStopHook \} from '\.\/hooks\/mirror-stop';/);
+    expect(SRC).toMatch(/import \{ runMirrorToolHook \} from '\.\/hooks\/mirror-tool';/);
+    // No runtime dynamic import of the mirror modules survives in the shim.
+    expect(SRC).not.toMatch(/await import\(mirrorModule\)/);
   });
 
   it('usage message lists the mirror subcommands', () => {

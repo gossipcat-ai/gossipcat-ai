@@ -9,6 +9,9 @@
 import { createWriteStream, mkdirSync } from 'fs';
 import { join } from 'path';
 import { runHook } from './hook-run';
+import { runMirrorPromptHook } from './hooks/mirror-prompt';
+import { runMirrorStopHook } from './hooks/mirror-stop';
+import { runMirrorToolHook } from './hooks/mirror-tool';
 import { parseHookSubcommand } from './hook-argv';
 import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgrade-check';
 
@@ -72,24 +75,32 @@ export function classifyShimSubcommand(
  * shim previously sent every non-usage decision to `runHook()`).
  *
  * The returned shape mirrors index.ts:75-97. 'usage' → exit 2; 'run' → the
- * synchronous bootstrap hook; the mirror kinds → an async handler module +
- * exported function name (dynamic-imported, fail-open).
+ * synchronous bootstrap hook; the mirror kinds → a direct reference to the
+ * async handler fn (statically imported + fail-open).
+ *
+ * The handler is returned as a `run` fn reference — NOT a module path + fn
+ * name string — because this file is the esbuild --bundle entrypoint. A
+ * runtime `await import('./hooks/mirror-prompt')` is left un-inlined by
+ * esbuild and resolves against a non-existent `dist-mcp/hooks/` dir at
+ * runtime, throwing into the fail-open catch{} and silently dropping the
+ * frame. Static top-level imports get bundled, so referencing the fn keeps
+ * the handler body inside the single-file artifact.
  */
 export function resolveHookAction(
   decision: import('./hook-argv').HookSubcommand,
 ):
   | { action: 'usage' }
   | { action: 'run' }
-  | { action: 'mirror'; module: string; fn: string } {
+  | { action: 'mirror'; run: () => Promise<void> } {
   switch (decision) {
     case 'run':
       return { action: 'run' };
     case 'mirror-prompt':
-      return { action: 'mirror', module: './hooks/mirror-prompt', fn: 'runMirrorPromptHook' };
+      return { action: 'mirror', run: runMirrorPromptHook };
     case 'mirror-stop':
-      return { action: 'mirror', module: './hooks/mirror-stop', fn: 'runMirrorStopHook' };
+      return { action: 'mirror', run: runMirrorStopHook };
     case 'mirror-tool':
-      return { action: 'mirror', module: './hooks/mirror-tool', fn: 'runMirrorToolHook' };
+      return { action: 'mirror', run: runMirrorToolHook };
     case 'usage':
     default:
       return { action: 'usage' };
@@ -119,11 +130,10 @@ const __argvShimHandled = (() => {
     // async work keeps the event loop alive and exits when done. A thrown error
     // or missing relay must never propagate to a non-zero exit that would block
     // the user's turn.
-    const { module: mirrorModule, fn: mirrorFn } = hookAction;
+    const mirrorRun = hookAction.run;
     void (async () => {
       try {
-        const mod = (await import(mirrorModule)) as Record<string, () => Promise<void>>;
-        await mod[mirrorFn]();
+        await mirrorRun();
       } catch {
         // fail-open — swallow.
       }
