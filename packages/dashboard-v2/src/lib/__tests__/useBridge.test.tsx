@@ -196,8 +196,14 @@ describe('useBridge — mirror frames', () => {
 describe('useBridge — last_id high-water mark', () => {
   it('reconnects with ?last_id set to the highest mirror id seen', async () => {
     await mountWithChat();
+    // After mountWithChat(), setChat('chat-1') triggers an immediate reconnect
+    // so the server can subscribe this client to the correct ring (?chat_id=chat-1).
+    // instances[0] = initial (no chat_id); instances[1] = reconnect with ?chat_id.
+    // Wait for the chat_id reconnect to settle before emitting mirror frames.
+    await waitFor(() => expect(instances.length).toBeGreaterThanOrEqual(2));
+    const active = instances[instances.length - 1]; // most-recently-opened stream
     act(() => {
-      instances[0].emit({
+      active.emit({
         type: 'mirror',
         chat_id: 'chat-1',
         role: 'assistant',
@@ -205,7 +211,7 @@ describe('useBridge — last_id high-water mark', () => {
         ts: '2026-06-15T10:00:00.000Z',
         id: 5,
       });
-      instances[0].emit({
+      active.emit({
         type: 'mirror',
         chat_id: 'chat-1',
         role: 'assistant',
@@ -215,23 +221,28 @@ describe('useBridge — last_id high-water mark', () => {
       });
     });
     // Trigger a reconnect via onerror — the retry is scheduled behind a backoff
-    // timer, so drive it with fake timers to reach the second connect deterministically.
+    // timer, so drive it with fake timers to reach the next connect deterministically.
+    const countBefore = instances.length;
     vi.useFakeTimers();
-    act(() => instances[0].onerror?.call(instances[0] as unknown as EventSource, new Event('error')));
+    act(() => active.onerror?.call(active as unknown as EventSource, new Event('error')));
     act(() => {
       vi.advanceTimersByTime(1_000);
     });
     vi.useRealTimers();
-    expect(instances.length).toBe(2);
-    expect(lastIdOf(instances[1].url)).toBe('9');
+    expect(instances.length).toBe(countBefore + 1);
+    // The newly-opened stream should carry last_id=9 (the highest mirror id seen).
+    expect(lastIdOf(instances[instances.length - 1].url)).toBe('9');
   });
 });
 
 describe('useBridge — restart frame', () => {
   it('resets last_id to 0 and reconnects on a restart frame', async () => {
     await mountWithChat();
+    // Wait for the setChat-triggered reconnect to settle.
+    await waitFor(() => expect(instances.length).toBeGreaterThanOrEqual(2));
+    const active = instances[instances.length - 1];
     act(() => {
-      instances[0].emit({
+      active.emit({
         type: 'mirror',
         chat_id: 'chat-1',
         role: 'assistant',
@@ -240,12 +251,13 @@ describe('useBridge — restart frame', () => {
         id: 42,
       });
     });
+    const countBefore = instances.length;
     // Restart → relay counter reset; client must drop last_id and refetch from 0.
     act(() => {
-      instances[0].emit({ type: 'restart', chat_id: 'chat-1', ts: '2026-06-15T10:00:05.000Z' });
+      active.emit({ type: 'restart', chat_id: 'chat-1', ts: '2026-06-15T10:00:05.000Z' });
     });
-    await waitFor(() => expect(instances.length).toBe(2));
-    expect(lastIdOf(instances[1].url)).toBe('0');
-    expect(instances[0].closed).toBe(true);
+    await waitFor(() => expect(instances.length).toBe(countBefore + 1));
+    expect(lastIdOf(instances[instances.length - 1].url)).toBe('0');
+    expect(active.closed).toBe(true);
   });
 });

@@ -131,6 +131,13 @@ export class BridgeHub {
   // eviction can clearInterval too — the req 'close' handler may never fire on
   // an abrupt res.destroy(), which would otherwise leak the timer.
   private keepalives = new Map<ServerResponse, ReturnType<typeof setInterval>>();
+  // Per-client subscribed chat_id (null = no ?chat_id supplied = live-only legacy
+  // consumer). Set when the client is added to this.clients in handleStream.
+  // Server-side filtering in broadcast() uses this: each frame is only delivered
+  // to the client(s) whose subscribed chat_id matches frame.chat_id. A null-
+  // subscribed client receives nothing — the old "shared broadcast to all"
+  // behaviour is intentionally replaced with per-client routing.
+  private clientChatId = new Map<ServerResponse, string | null>();
   // chat_ids we have seen on an INBOUND POST. Outbound replies bind against this
   // set (consensus f5): the live session can only address a stream the dashboard
   // actually opened, never an arbitrary/forged id. Bounded + TTL'd so a long
@@ -148,19 +155,6 @@ export class BridgeHub {
   // emitReply STILL gates on knownChatIds, so mirroring never widens the
   // outbound reply boundary (api-bridge.ts emitReply isKnownChatId check).
   private mirrorChatIds = new Map<string, number>();
-  // The most-recently-registered active mirror chat_id (set in
-  // registerMirrorChatId, cleared/recomputed when that id is TTL-evicted).
-  // Used by emitMirror to route unresolved terminal frames to a live observer
-  // instead of the provisional buffer when one exists (fix: mirror frames
-  // previously fell into _provisional and were dropped by the dashboard client
-  // because bindSession never ran — the browser cannot send a session_id it
-  // doesn't know). SECURITY: only ever a chat_id already in mirrorChatIds.
-  // KNOWN LIMITATION (consensus 96350953-8ce94428): single-pointer, so with
-  // multiple concurrent dashboard tabs only the most-recently-registered one
-  // receives unresolved terminal frames; earlier tabs see no live activity until
-  // they send again. Accepted tradeoff — a strict improvement over the prior
-  // behaviour where the frames went to _provisional and EVERY tab saw nothing.
-  private latestMirrorChatId: string | null = null;
   // Session→chat_id map (P1#5). The relay has no native "active session
   // chat_id" notion — a no-chat_id inbound POST mints a fresh UUID. We learn the
   // mapping from the dashboard turn: a turn carries BOTH a chat_id (validated)
@@ -391,23 +385,39 @@ export class BridgeHub {
       } else if (this.dropUnresolvedMirror) {
         // Config: drop purely-terminal frames with no observer/mapping.
         return { status: 202, payload: { ok: true, chat_id: null, dropped: validated.length } };
-      } else if (
-        this.latestMirrorChatId !== null &&
-        this.isMirrorChatId(this.latestMirrorChatId)
-      ) {
-        // Fix: route to the most-recently-registered active mirror chat_id.
-        // The browser cannot send a session_id it doesn't know, so bindSession
-        // never runs and resolveSession always returns null. Without this branch
-        // every terminal mirror frame fell into the provisional ring, which the
-        // dashboard client filtered out (it gates on the active chat_id). We
-        // only ever route to a chat_id already in mirrorChatIds (relay-seeded
-        // from a validated dashboard inbound POST), so the trust boundary is
-        // unchanged: hook values CANNOT seed mirrorChatIds and cannot arrive here.
-        chatId = this.latestMirrorChatId;
       } else {
-        // Buffer under the reserved provisional id for later backfill. This id
-        // can never be a real chat_id (CHAT_ID_RE forbids the `_` route-side).
-        chatId = BridgeHub.PROVISIONAL_CHAT_ID;
+        // UNRESOLVED: no explicit chat_id AND no session-map hit.
+        // Run an eviction pass first so only live ids are targeted.
+        this.evictMirrorChatIds(Date.now());
+        const liveIds = Array.from(this.mirrorChatIds.keys());
+        if (liveIds.length > 0) {
+          // Multi-observer fanout: push a per-ring copy to EVERY live mirror
+          // chat_id. This replaces the single-pointer latestMirrorChatId
+          // heuristic (consensus 96350953) — every active dashboard tab receives
+          // the terminal frame instead of only the most-recently-registered one.
+          // Per-ring id counters are independent and correct by design.
+          // SECURITY: only chat_ids already in mirrorChatIds are targeted — that
+          // map is seeded ONLY from validated inbound POSTs (handlePost). Hooks
+          // cannot seed it.
+          let totalFrames = 0;
+          for (const id of liveIds) {
+            for (const { role, text } of validated) {
+              const frame = this.mirror.push(id, role, text);
+              // Do NOT gate on clients.size — frame is retained for replay.
+              this.broadcast(frame);
+              totalFrames++;
+            }
+          }
+          return {
+            status: 202,
+            payload: { ok: true, chat_id: null, fanout: liveIds.length, frames: totalFrames },
+          };
+        } else {
+          // No live mirror chat_ids → buffer under the reserved provisional id
+          // for later backfill. This id can never be a real chat_id (CHAT_ID_RE
+          // forbids the `_` route-side).
+          chatId = BridgeHub.PROVISIONAL_CHAT_ID;
+        }
       }
     }
 
@@ -462,6 +472,14 @@ export class BridgeHub {
     const params = new URLSearchParams(search);
     const chatId = validateChatId(params.get('chat_id'));
     const lastId = parseInt(params.get('last_id') ?? '0', 10) || 0;
+    // FORWARD-HARDENING (consensus 8c396aee, deferred): ?chat_id is shape-validated
+    // but NOT gated against knownChatIds/mirrorChatIds, so an authenticated client
+    // may subscribe to any chat_id it names. Not exploitable in the current
+    // single-auth-principal model (one dashboard key, server-minted random-UUID
+    // chat_ids) and strictly better than the prior broadcast-to-all. A gate here
+    // would have to preserve post-restart replay/re-register recovery (a naive
+    // null-store breaks it, since the client reuses its chat_id on resend without
+    // reconnecting) — implement carefully before any multi-user auth model.
 
     if (chatId !== null) {
       // f6: serving a chat_id that's an open mirror stream TOUCHES its TTL so an
@@ -500,6 +518,9 @@ export class BridgeHub {
 
     this.backpressure.set(res, 0);
     this.clients.add(res);
+    // Track which chat_id this client is subscribed to for server-side filtering
+    // in broadcast(). null means no ?chat_id (legacy live-only consumer).
+    this.clientChatId.set(res, chatId);
 
     const keepalive = setInterval(() => {
       // f6 (completion): an OPEN-but-idle stream — no mirror POST, no reconnect —
@@ -523,6 +544,7 @@ export class BridgeHub {
     req.on('close', () => {
       this.clearKeepalive(res);
       this.clients.delete(res);
+      this.clientChatId.delete(res);
     });
   }
 
@@ -558,13 +580,30 @@ export class BridgeHub {
     try { return res.write(`${idLine}data: ${JSON.stringify(frame)}\n\n`); } catch { return false; }
   }
 
-  /** Fan out one frame to every connected SSE client, with backpressure eviction. */
+  /**
+   * Fan out one frame to matching connected SSE clients (server-side filter),
+   * with backpressure eviction.
+   *
+   * Each frame carries a chat_id. Only the client(s) subscribed to that
+   * chat_id receive the write — clients subscribed to a different chat_id or
+   * with a null subscription (legacy live-only consumer) are skipped. This
+   * eliminates the prior behaviour of broadcasting EVERY frame to ALL clients
+   * (the bandwidth/confidentiality gap noted in the multi-tab fix spec).
+   */
   private broadcast(frame: BridgeReplyFrame | MirrorFrame): void {
     // Mirror frames carry an SSE `id:` line so the browser EventSource exposes
     // lastEventId; reply/ack/restart control frames have no per-chat_id id.
     const idLine = 'id' in frame && typeof (frame as MirrorFrame).id === 'number' ? `id: ${(frame as MirrorFrame).id}\n` : '';
     const data = `${idLine}data: ${JSON.stringify(frame)}\n\n`;
     for (const res of this.clients) {
+      // Server-side chat_id filter: only deliver to clients whose subscribed
+      // chat_id matches this frame's chat_id. A null-subscribed (legacy) client
+      // receives nothing — it never supplied a ?chat_id so the server has no
+      // basis to route to it. The dashboard client-side filter in useBridge.ts
+      // remains as defense-in-depth.
+      const subscribedChatId = this.clientChatId.get(res) ?? null;
+      if (subscribedChatId === null || subscribedChatId !== frame.chat_id) continue;
+
       try {
         const ok = res.write(data);
         if (ok) {
@@ -576,11 +615,13 @@ export class BridgeHub {
             this.clearKeepalive(res); // f12: don't leak the timer on eviction
             res.destroy();
             this.clients.delete(res);
+            this.clientChatId.delete(res); // clean up subscription on eviction
           }
         }
       } catch {
         this.clearKeepalive(res);
         this.clients.delete(res);
+        this.clientChatId.delete(res); // clean up subscription on exception
       }
     }
   }
@@ -661,11 +702,6 @@ export class BridgeHub {
       if (oldestKey !== null) this.mirrorChatIds.delete(oldestKey);
     }
     this.mirrorChatIds.set(chatId, now);
-    // Track the most-recently-registered mirror chat_id so emitMirror can route
-    // unresolved terminal frames to a live observer instead of the provisional
-    // buffer (fix: the browser can't know the CC session_id so bindSession never
-    // runs; latestMirrorChatId fills that gap without widening any trust boundary).
-    this.latestMirrorChatId = chatId;
     // Provisional backfill (spec §2 / P2 — f1/f7): the FIRST time a stream is
     // established, drain any frames buffered under the provisional id (terminal
     // mirror POSTs that arrived before this chat_id existed) into THIS ring,
@@ -698,21 +734,10 @@ export class BridgeHub {
   }
 
   private evictMirrorChatIds(now: number): void {
-    let evictedLatest = false;
     for (const [k, v] of this.mirrorChatIds) {
       if (now - v > BridgeHub.CHAT_ID_TTL_MS) {
         this.mirrorChatIds.delete(k);
-        if (k === this.latestMirrorChatId) evictedLatest = true;
       }
-    }
-    if (evictedLatest) {
-      // Recompute to the newest remaining entry (highest timestamp), or null.
-      let newestKey: string | null = null;
-      let newest = -Infinity;
-      for (const [k, v] of this.mirrorChatIds) {
-        if (v > newest) { newest = v; newestKey = k; }
-      }
-      this.latestMirrorChatId = newestKey;
     }
   }
 

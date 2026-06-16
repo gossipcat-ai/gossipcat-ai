@@ -277,7 +277,7 @@ describe('BridgeHub.handleStream mirror replay (?last_id) + restart sentinel (P1
   });
 });
 
-describe('BridgeHub.emitMirror — latestMirrorChatId fallback (terminal frame routing fix)', () => {
+describe('BridgeHub.emitMirror — multi-observer fanout for unresolved terminal frames', () => {
   let hub: BridgeHub;
   afterEach(() => hub?.dispose());
 
@@ -292,19 +292,19 @@ describe('BridgeHub.emitMirror — latestMirrorChatId fallback (terminal frame r
     expect(hub.mirrorRingCount()).toBe(1);
   });
 
-  it('(b) after registerMirrorChatId via handlePost, unresolved terminal POST routes to that chat_id', () => {
+  it('(b) single registered mirror chat_id → unresolved frame fans out to that chat_id', () => {
     hub = new BridgeHub();
     // Simulated inbound dashboard POST (the ONLY trusted seeding path).
     openDashboardStream(hub, 'uuid-A');
-    // Connect a SSE client so we can verify broadcast.
+    // Connect a SSE client subscribed to uuid-A so we can verify broadcast.
     const res = mockRes();
     hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=uuid-A'), res);
 
     // Terminal mirror POST with no chat_id and an UNBOUND session_id.
     const r = hub.emitMirror(null, frames(['activity', 'tool dispatch']), 'unbound-session');
     expect(r.status).toBe(202);
-    // Resolved to the latest mirror chat_id, NOT provisional.
-    expect(r.payload).toMatchObject({ ok: true, chat_id: 'uuid-A', frames: 1 });
+    // Single-id fanout: payload reports fanout=1, chat_id=null.
+    expect(r.payload).toMatchObject({ ok: true, chat_id: null, fanout: 1, frames: 1 });
 
     // Retained in uuid-A's ring.
     const ring = hub.mirrorReplay('uuid-A', 0);
@@ -322,53 +322,67 @@ describe('BridgeHub.emitMirror — latestMirrorChatId fallback (terminal frame r
     expect(hub.mirrorReplay('_provisional', 0)).toHaveLength(0);
   });
 
-  it('(c) dropUnresolvedMirror=true still drops even when latestMirrorChatId is set', () => {
+  it('(c) dropUnresolvedMirror=true still drops even when mirrorChatIds are registered', () => {
     hub = new BridgeHub();
     hub.setDropUnresolvedMirror(true);
     openDashboardStream(hub, 'uuid-B');
     const r = hub.emitMirror(null, frames(['activity', 'x']), 'unbound');
     expect(r.status).toBe(202);
     expect(r.payload).toMatchObject({ chat_id: null, dropped: 1 });
-    // Nothing retained anywhere.
+    // Nothing retained anywhere (the registered chat_id ring stays empty too).
+    expect(hub.mirrorReplay('uuid-B', 0)).toHaveLength(0);
     expect(hub.mirrorRingCount()).toBe(0);
   });
 
-  it('(d) multi-tab: unresolved frames route to the MOST-RECENTLY-registered chat_id, not earlier ones', () => {
+  it('(d) multi-tab FANOUT: unresolved frames are delivered to ALL registered chat_ids, not just the most-recent', () => {
     hub = new BridgeHub();
-    // Two dashboard tabs register in sequence (consensus 96350953-8ce94428:f1/f4).
+    // Two dashboard tabs register in sequence.
     openDashboardStream(hub, 'uuid-A');
-    openDashboardStream(hub, 'uuid-B'); // latest is now uuid-B
+    openDashboardStream(hub, 'uuid-B');
+
+    // Connect a SSE client subscribed to each tab's chat_id.
+    const resA = mockRes();
+    const resB = mockRes();
+    hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=uuid-A'), resA);
+    hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=uuid-B'), resB);
 
     const r = hub.emitMirror(null, frames(['activity', 'tool dispatch']), 'unbound-session');
     expect(r.status).toBe(202);
-    // Routes to the most-recent tab (uuid-B), NOT the earlier uuid-A.
-    expect(r.payload).toMatchObject({ ok: true, chat_id: 'uuid-B', frames: 1 });
+    // Fanout payload: chat_id=null, fanout=2 (both tabs), frames=2 (1 frame × 2 rings).
+    expect(r.payload).toMatchObject({ ok: true, chat_id: null, fanout: 2, frames: 2 });
 
+    // BOTH rings receive a copy.
+    expect(hub.mirrorReplay('uuid-A', 0)).toHaveLength(1);
     expect(hub.mirrorReplay('uuid-B', 0)).toHaveLength(1);
-    // Known limitation: the earlier tab's ring stays empty (documented tradeoff —
-    // a strict improvement over the pre-fix behaviour where ALL tabs got nothing).
-    expect(hub.mirrorReplay('uuid-A', 0)).toHaveLength(0);
+    expect(hub.mirrorReplay('uuid-A', 0)[0].text).toBe('tool dispatch');
+    expect(hub.mirrorReplay('uuid-B', 0)[0].text).toBe('tool dispatch');
+
+    // BOTH connected clients received the broadcast.
+    expect(dataFramesOf(resA)).toHaveLength(1);
+    expect(dataFramesOf(resB)).toHaveLength(1);
+    expect(dataFramesOf(resA)[0].chat_id).toBe('uuid-A');
+    expect(dataFramesOf(resB)[0].chat_id).toBe('uuid-B');
+
+    // Provisional ring stays empty.
     expect(hub.mirrorReplay('_provisional', 0)).toHaveLength(0);
   });
 
-  it('recomputes latestMirrorChatId to the newest survivor after the latest id is TTL-evicted', () => {
+  it('after all mirror chat_ids age out, an unresolved frame falls back to _provisional', () => {
     hub = new BridgeHub();
     openDashboardStream(hub, 'chatA');
-    openDashboardStream(hub, 'chatB'); // latest is chatB
+    openDashboardStream(hub, 'chatB');
     const TTL = 2 * 60 * 60 * 1000;
 
-    // Age chatB past the TTL, then trigger an eviction pass (hasMirrorChatId →
-    // evictMirrorChatIds). latestMirrorChatId must recompute to chatA.
-    hub.ageMirrorChatId('chatB', TTL + 1_000);
-    expect(hub.hasMirrorChatId('chatB')).toBe(false); // evicted
-    const afterB = hub.emitMirror(null, frames(['activity', 'after-B']), 'unbound');
-    expect(afterB.payload).toMatchObject({ chat_id: 'chatA', frames: 1 });
-
-    // Age chatA out too → no survivors → latest recomputes to null → provisional.
+    // Age both past the TTL, then trigger an eviction pass.
     hub.ageMirrorChatId('chatA', TTL + 1_000);
+    hub.ageMirrorChatId('chatB', TTL + 1_000);
     expect(hub.hasMirrorChatId('chatA')).toBe(false);
-    const afterA = hub.emitMirror(null, frames(['activity', 'after-A']), 'unbound');
-    expect(afterA.payload).toMatchObject({ chat_id: null });
+    expect(hub.hasMirrorChatId('chatB')).toBe(false);
+
+    // No live ids → falls back to provisional.
+    const r = hub.emitMirror(null, frames(['activity', 'after-eviction']), 'unbound');
+    expect(r.status).toBe(202);
+    expect(r.payload).toMatchObject({ chat_id: null });
     expect(hub.mirrorReplay('_provisional', 0)).toHaveLength(1);
   });
 });
@@ -538,9 +552,11 @@ describe('BridgeHub keepalive lifecycle (f12)', () => {
   it('clears the keepalive timer when a client is evicted under backpressure', () => {
     hub = new BridgeHub();
     openDashboardStream(hub, 'chatK');
-    // Connect a client that always signals backpressure (write→false).
+    // Connect a client subscribed to chatK that always signals backpressure.
+    // The client must subscribe to chatK so broadcast() actually delivers frames
+    // to it (server-side filter skips null-subscribed legacy clients).
     const res = backpressureRes(0);
-    hub.handleStream(mockReq('/dashboard/api/bridge/stream'), res);
+    hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=chatK'), res);
     expect(hub.keepaliveCount()).toBe(1);
     // Broadcast enough mirror frames to exceed BACKPRESSURE_EVICT_THRESHOLD (2)
     // → the client is destroyed AND its keepalive cleared (not leaked).
@@ -559,5 +575,72 @@ describe('BridgeHub keepalive lifecycle (f12)', () => {
     req.emit('close');
     expect(hub.keepaliveCount()).toBe(0);
     expect(hub.clientCount()).toBe(0);
+  });
+});
+
+describe('BridgeHub.broadcast — server-side per-client chat_id filter', () => {
+  let hub: BridgeHub;
+  afterEach(() => hub?.dispose());
+
+  it('a mirror frame for chat_id A is delivered only to the A-subscribed client, NOT to the B-subscribed client', () => {
+    hub = new BridgeHub();
+    openDashboardStream(hub, 'chat-A');
+    openDashboardStream(hub, 'chat-B');
+
+    // Two clients: one subscribed to chat-A, one to chat-B.
+    const resA = mockRes();
+    const resB = mockRes();
+    hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=chat-A'), resA);
+    hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=chat-B'), resB);
+    expect(hub.clientCount()).toBe(2);
+
+    // Emit a mirror frame explicitly for chat-A.
+    const r = hub.emitMirror('chat-A', frames(['activity', 'hello A']));
+    expect(r.status).toBe(202);
+
+    // resA received the frame; resB received nothing.
+    const framesA = dataFramesOf(resA);
+    const framesB = dataFramesOf(resB);
+    expect(framesA).toHaveLength(1);
+    expect(framesA[0].chat_id).toBe('chat-A');
+    expect(framesB).toHaveLength(0);
+  });
+
+  it('a reply frame for chat_id A reaches only the A-subscribed client, not B', () => {
+    hub = new BridgeHub();
+    openDashboardStream(hub, 'chat-A');
+    openDashboardStream(hub, 'chat-B');
+
+    const resA = mockRes();
+    const resB = mockRes();
+    hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=chat-A'), resA);
+    hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=chat-B'), resB);
+
+    // emitReply targets chat-A (known from handlePost above).
+    const ok = hub.emitReply('chat-A', 'reply text');
+    expect(ok).toBe(true);
+
+    const framesA = dataFramesOf(resA);
+    const framesB = dataFramesOf(resB);
+    expect(framesA).toHaveLength(1);
+    expect(framesA[0].type).toBe('reply');
+    expect(framesA[0].chat_id).toBe('chat-A');
+    expect(framesB).toHaveLength(0);
+  });
+
+  it('a null-subscribed (legacy no-?chat_id) client receives NO frames', () => {
+    hub = new BridgeHub();
+    openDashboardStream(hub, 'chat-A');
+
+    // Legacy client: no ?chat_id in URL.
+    const resLegacy = mockRes();
+    hub.handleStream(mockReq('/dashboard/api/bridge/stream'), resLegacy);
+    expect(hub.clientCount()).toBe(1);
+
+    hub.emitMirror('chat-A', frames(['activity', 'something']));
+
+    // Legacy client gets nothing — it supplied no chat_id so there is nothing
+    // to match against.
+    expect(dataFramesOf(resLegacy)).toHaveLength(0);
   });
 });
