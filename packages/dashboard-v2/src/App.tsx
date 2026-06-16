@@ -620,12 +620,22 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
     ? 'px-6 py-6'
     : 'mx-auto max-w-7xl space-y-6 px-6 py-6';
 
+  // /chat owns the full viewport: a fixed-height flex shell (topbar + flex-1
+  // main) so the chat page fills the remaining height exactly and scrolls
+  // internally — no page scroll, no main padding/max-width fighting it.
+  const isChat = route === '/chat';
+
   return (
-    <div className="min-h-screen" style={{ background: 'var(--surface)' }}>
+    <div
+      className={isChat ? 'flex h-screen flex-col overflow-hidden' : 'min-h-screen'}
+      style={{ background: 'var(--surface)' }}
+    >
       <TopBar />
-      <main className={mainClass}>
-        {content}
-      </main>
+      {isChat ? (
+        <main className="min-h-0 flex-1">{content}</main>
+      ) : (
+        <main className={mainClass}>{content}</main>
+      )}
     </div>
   );
 }
