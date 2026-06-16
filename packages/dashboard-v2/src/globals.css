@@ -963,6 +963,153 @@ html[data-theme="dark"]::after {
 }
 .cx-dimmed { opacity: 0.5; }
 
+/* ── conversation tab strip (multi-conversation ChatPage) ────────────────────
+   Rendered inside the .chat-surface left card, so all var() tokens resolve to
+   the dark carve-out values. Active = subtle --surface fill + 2px --ink-2 bottom
+   indicator; inactive = transparent / --ink-3 + hover wash. Unread dot is --info
+   teal (NEVER --accent — terracotta is the Send CTA only). */
+.cx-tabstrip {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 50%, var(--bg));
+  min-height: 34px;
+}
+.cx-tabstrip-scroll {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1;
+  min-width: 0;
+  scrollbar-width: thin;
+}
+.cx-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-width: 80px;
+  max-width: 180px;
+  border-radius: var(--r-md) var(--r-md) 0 0;
+  border-bottom: 3px solid transparent;
+  transition: background 100ms ease-out, border-color 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-tab { transition: none; }
+}
+.cx-tab:hover {
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+.cx-tab.is-active {
+  background: var(--surface);
+  border-bottom-color: var(--ink-2); /* 3px from .cx-tab above — more visible than hairline */
+}
+.cx-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 152px;
+  padding: 7px 4px 7px 10px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-3);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.cx-tab.is-active .cx-tab-btn { color: var(--ink); }
+.cx-tab-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 60%, transparent);
+  outline-offset: 1px; /* positive offset keeps ring fully visible above the 3px active indicator */
+  border-radius: var(--r-sm);
+}
+.cx-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cx-tab-label.font-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.cx-tab-unread {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--info);
+}
+.cx-tab-close {
+  flex: none;
+  width: 24px;  /* WCAG 2.2 AA 24×24 minimum hit area */
+  height: 24px;
+  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--ink-3); /* interactive glyph — must meet AA min (--ink-3), not non-text-only --ink-4 */
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 100ms ease-out, color 100ms ease-out, background 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-tab-close { transition: none; }
+}
+.cx-tab:hover .cx-tab-close,
+.cx-tab.is-active .cx-tab-close { opacity: 1; }
+.cx-tab-close:hover {
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--ink-4) 22%, transparent);
+}
+.cx-tab-close:focus-visible {
+  opacity: 1;
+  outline: 2px solid color-mix(in srgb, var(--info) 60%, transparent);
+  outline-offset: -1px;
+}
+.cx-tab-new {
+  flex: none;
+  align-self: center;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border); /* separator anchors + button; prevents it from floating */
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--ink-3);
+  font-size: 16px;
+  line-height: 1;
+  padding-left: 8px;
+  margin-left: 4px;
+  transition: background 100ms ease-out, color 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-tab-new { transition: none; }
+}
+.cx-tab-new:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  color: var(--ink);
+}
+.cx-tab-new:disabled { opacity: 0.4; cursor: not-allowed; }
+.cx-tab-new:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 60%, transparent);
+  outline-offset: -1px;
+}
+
 /* ── highlight.js token mapping ──────────────────────────────────────────────
    Scoped under .md-code-block so highlight.js's emitted .hljs-* classes pick up
    the --sx-* tokens. Base .hljs gets NO color override (inherits the surrounding

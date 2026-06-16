@@ -1,16 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
- * useBridge — frontend hook for the dashboard ⇄ LIVE Claude Code session bridge
- * (P1 backend, spec 2026-06-14-dashboard-cc-channel-bridge.md).
+ * useBridge — frontend hook for ONE conversation on the dashboard ⇄ LIVE Claude
+ * Code session bridge (P1 backend, spec 2026-06-14-dashboard-cc-channel-bridge.md).
+ *
+ * Each call to useBridge() is an INDEPENDENT conversation: it opens its OWN
+ * EventSource, keeps its OWN message list / status / awaitingReply, and mints (or
+ * adopts) its OWN chat_id. The multi-conversation tab store (BridgeContext) mounts
+ * one useBridge() instance per open tab via a headless ConversationController so
+ * inactive tabs keep streaming and accrue an `unread` marker.
  *
  * Mirrors the useEventStream SSE pattern: open an EventSource, parse frames,
  * manual reconnect with backoff, cleanup-on-unmount. Adds the conversational
  * layer the bridge needs:
  *   - send(text): POST to /dashboard/api/bridge. Omits chat_id on the first
  *     send; the server mints + returns one, which we reuse for the conversation.
- *   - Frames are filtered to the active chat_id so a stray/forged stream id
- *     (or a different tab's conversation) can't bleed into this view.
+ *   - Frames are filtered to this conversation's chat_id so a stray/forged stream
+ *     id (or a different tab's conversation) can't bleed into this view.
+ *   - unread: increments when a reply/mirror/error frame arrives while this
+ *     conversation is INACTIVE (options.active === false). markRead() clears it
+ *     (called by the store when the tab becomes active).
  *
  * IMPORTANT: this wires the LIVE Claude Code orchestrator session, NOT the
  * dormant ChatbotAgent /api/chat brain. The two must never be conflated.
@@ -82,6 +91,23 @@ export interface BridgeMessage {
 /** Connection lifecycle of the SSE stream. */
 export type BridgeStatus = 'connecting' | 'open' | 'closed' | 'error';
 
+/** Options for a single-conversation bridge instance. */
+export interface UseBridgeOptions {
+  /**
+   * Initial chat_id to (re)attach to — a persisted/restored conversation. When
+   * provided the stream opens immediately subscribed to this id and replays the
+   * server ring (?last_id=0). null/undefined = a brand-new, never-sent
+   * conversation that mints its id on first send.
+   */
+  initialChatId?: string | null;
+  /**
+   * Whether this conversation is the ACTIVE (visible) tab. Inbound reply/mirror/
+   * error frames that arrive while inactive increment `unread`. Defaults true so
+   * a bare useBridge() (no store) behaves like the old single-conversation hook.
+   */
+  active?: boolean;
+}
+
 export interface UseBridgeResult {
   messages: BridgeMessage[];
   /** SSE connection status. */
@@ -90,10 +116,14 @@ export interface UseBridgeResult {
   awaitingReply: boolean;
   /** True once the server has minted (or we have adopted) a chat_id. */
   chatId: string | null;
+  /** Count of inbound turns since this conversation was last marked read. */
+  unread: number;
   /** POST a user message to the live CC session. No-op for empty input. */
   send: (text: string) => Promise<void>;
   /** Last transient send error (network / HTTP), cleared on the next send. */
   sendError: string | null;
+  /** Clear the unread counter (called when the tab becomes active). */
+  markRead: () => void;
 }
 
 const BACKOFF_MIN_MS = 1_000;
@@ -143,17 +173,33 @@ function insertByTs(prev: readonly BridgeMessage[], msg: BridgeMessage): BridgeM
   return [...prev.slice(0, idx), msg, ...prev.slice(idx)];
 }
 
-export function useBridge(): UseBridgeResult {
+export function useBridge(options: UseBridgeOptions = {}): UseBridgeResult {
+  const { initialChatId = null, active = true } = options;
+
   const [messages, setMessages] = useState<BridgeMessage[]>([]);
   const [status, setStatus] = useState<BridgeStatus>('connecting');
   const [awaitingReply, setAwaitingReply] = useState(false);
-  const [chatId, setChatId] = useState<string | null>(null);
+  const [chatId, setChatId] = useState<string | null>(initialChatId);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [unread, setUnread] = useState(0);
+
+  // `active` is read inside the onmessage closure; a ref keeps it current without
+  // re-opening the stream when the active tab changes.
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
+  const markRead = useCallback(() => setUnread(0), []);
+
+  // Bump the unread counter only when this conversation is NOT the active tab.
+  const bumpUnreadIfInactive = useCallback(() => {
+    if (!activeRef.current) setUnread((n) => n + 1);
+  }, []);
 
   // chat_id is read inside the EventSource onmessage closure (created once in the
   // mount effect) and written by send(). A ref keeps the frame filter reading the
-  // latest value without re-opening the stream on every chat_id change.
-  const chatIdRef = useRef<string | null>(null);
+  // latest value without re-opening the stream on every chat_id change. Seeded
+  // with the restored initialChatId so a persisted conversation streams at once.
+  const chatIdRef = useRef<string | null>(initialChatId);
   const setChat = useCallback((id: string) => {
     const prev = chatIdRef.current;
     chatIdRef.current = id;
@@ -225,15 +271,16 @@ export function useBridge(): UseBridgeResult {
         } catch {
           return; // malformed frame — skip
         }
-        // Filter to the active conversation. Before our first send chatIdRef is
+        // Filter to this conversation. Before our first send chatIdRef is
         // null and we have no stream to claim, so ignore frames until then.
         // Mirror frames carry chat_id too — the same filter applies.
-        const active = chatIdRef.current;
-        if (!active || frame.chat_id !== active) return;
+        const activeChat = chatIdRef.current;
+        if (!activeChat || frame.chat_id !== activeChat) return;
 
         if (frame.type === 'reply') {
           setAwaitingReply(false);
           setMessages((prev) => insertByTs(prev, makeMessage('assistant', frame.text ?? '', frame.ts)));
+          bumpUnreadIfInactive();
         } else if (frame.type === 'ack') {
           // Ack means "received / working" — keep the awaiting indicator on but
           // record a discrete ack turn so the user sees the session is alive.
@@ -243,6 +290,7 @@ export function useBridge(): UseBridgeResult {
           setMessages((prev) =>
             insertByTs(prev, makeMessage('error', frame.text ?? 'the live session reported an error', frame.ts))
           );
+          bumpUnreadIfInactive();
         } else if (frame.type === 'mirror') {
           handleMirrorFrame(frame);
         } else if (frame.type === 'restart') {
@@ -293,6 +341,7 @@ export function useBridge(): UseBridgeResult {
       // and the frame interleaves near "now" instead of at an arbitrary position.
       const ts = typeof frame.ts === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(frame.ts) ? frame.ts : undefined;
       setMessages((prev) => insertByTs(prev, makeMessage(role, text, ts, frame.id)));
+      bumpUnreadIfInactive();
     }
 
     /** Close + reopen the stream immediately (used by the `restart` frame). */
@@ -323,7 +372,7 @@ export function useBridge(): UseBridgeResult {
         es = null;
       }
     };
-  }, []);
+  }, [bumpUnreadIfInactive]);
 
   const send = useCallback(
     async (raw: string): Promise<void> => {
@@ -380,5 +429,5 @@ export function useBridge(): UseBridgeResult {
     [setChat]
   );
 
-  return { messages, status, awaitingReply, chatId, send, sendError };
+  return { messages, status, awaitingReply, chatId, unread, send, sendError, markRead };
 }
