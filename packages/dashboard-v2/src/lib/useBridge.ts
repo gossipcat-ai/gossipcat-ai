@@ -18,9 +18,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * Backend contract (do NOT change — fixed by api-bridge.ts):
  *   POST /dashboard/api/bridge {chat_id?, message}
  *     → 202 {ok:true, chat_id} | 400 | 429 | 503
- *   GET  /dashboard/api/bridge/stream[?last_id=N]  (SSE)
- *     Frames arriving on the SHARED stream (activity-mirror v2, spec
- *     2026-06-14-dashboard-cc-activity-mirror-v2.md §5/§6):
+ *   GET  /dashboard/api/bridge/stream[?last_id=N][&chat_id=ID]  (SSE)
+ *     The stream is PER-chat_id: the relay filters server-side and delivers only
+ *     frames whose chat_id matches the ?chat_id this stream subscribed with. A
+ *     stream opened without ?chat_id (before the first send) receives NOTHING
+ *     until setChat reconnects it with the minted id. Frame kinds (activity-mirror
+ *     v2, spec 2026-06-14-dashboard-cc-activity-mirror-v2.md §5/§6):
  *       {type:'reply'|'ack'|'error', chat_id, text?, ts}      — dashboard-typed turns
  *       {type:'mirror', chat_id, role, text, ts, id}          — live CC-session mirror
  *           role ∈ 'user'|'assistant'|'activity'; id is a per-chat_id monotonic
@@ -152,8 +155,24 @@ export function useBridge(): UseBridgeResult {
   // latest value without re-opening the stream on every chat_id change.
   const chatIdRef = useRef<string | null>(null);
   const setChat = useCallback((id: string) => {
+    const prev = chatIdRef.current;
     chatIdRef.current = id;
     setChatId(id);
+    // When the chat_id transitions null→value (or changes), reconnect the
+    // EventSource so the server subscribes this client to the correct chat_id
+    // ring (server-side filtering requires the ?chat_id query param to be
+    // present on the stream URL). The reconnect also triggers ring replay for
+    // any mirror frames that arrived before the client connected with its id.
+    //
+    // Race note: a reply to the very first turn could theoretically arrive in
+    // the brief window between the send() returning a chat_id and the
+    // reconnect completing. In practice the reply lands seconds later (CC
+    // processing time), so the window is negligible. reply/ack frames are
+    // live-only (not ring-retained), so an extremely fast reply in this window
+    // would be missed — acceptable for the first-turn case.
+    if (prev !== id) {
+      reconnectRef.current?.();
+    }
   }, []);
 
   // Highest mirror `id` seen for the active chat. Read on each (re)connect to
@@ -183,7 +202,14 @@ export function useBridge(): UseBridgeResult {
       // only the gap (id > lastSeen), per spec §3 / P1#3. ?last_id mirrors the
       // working pattern in useEventStream.ts.
       const lastId = lastMirrorIdRef.current;
-      es = new window!.EventSource(`${STREAM_PATH}?last_id=${lastId}`);
+      // Include ?chat_id when we have one so the server subscribes this client
+      // to the correct ring and delivers only matching frames (server-side
+      // filter). Before the first send chatIdRef is null; we open without
+      // ?chat_id and receive no frames until setChat triggers a reconnect.
+      const chatIdParam = chatIdRef.current
+        ? `&chat_id=${encodeURIComponent(chatIdRef.current)}`
+        : '';
+      es = new window!.EventSource(`${STREAM_PATH}?last_id=${lastId}${chatIdParam}`);
 
       es.onopen = () => {
         if (destroyed) return;
