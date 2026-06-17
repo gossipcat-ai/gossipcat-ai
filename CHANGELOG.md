@@ -4,6 +4,21 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+### Added
+
+- **Durable dashboard chat history.** Mirror chat transcripts now persist to
+  `.gossip/chat/<chat_id>.jsonl` via a write-through `ChatStore` seam, so chat
+  history survives a relay restart and is no longer capped at the 100-frame
+  in-memory ring. On a cold ring, `MirrorEventStore` hydrates from disk and
+  continues the per-chat id sequence, so a reconnecting tab replays its history
+  instead of showing an empty transcript ("ghost tab"). Persistence is
+  best-effort and read-side only — the inbound `reply`/answer trust gates are
+  unchanged. Transcripts are written as plaintext under the gitignored
+  `.gossip/` dir; the store re-validates every `chat_id` against the id charset
+  before any path op (path-traversal defense-in-depth), bounds each file via
+  amortized truncation, writes truncations atomically (tmp→rename), skips
+  internal `_`-prefixed sentinels, and caps per-line length before parse.
+
 ## [0.6.5] — 2026-06-17
 
 Dashboard chat: multi-conversation tabs, a redesign, and dashboard-answerable

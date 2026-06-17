@@ -30,7 +30,8 @@
 
 import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
-import { MirrorEventStore } from './api-mirror-events';
+import { MirrorEventStore, MIRROR_RING_MAX, MIRROR_RING_TTL_MS } from './api-mirror-events';
+import { FileChatStore, NullChatStore } from './chat-store';
 
 /**
  * In-process sink the MCP server registers. Returns true when the message was
@@ -283,6 +284,12 @@ export function validateChatId(raw: unknown): string | null {
   return v;
 }
 
+/** Optional configuration for BridgeHub. */
+export interface BridgeHubOpts {
+  /** When provided, mirror history is persisted under this directory. */
+  chatDir?: string;
+}
+
 /**
  * BridgeHub — owns the outbound SSE client set and the registered inbound sink.
  * One instance per DashboardRouter. Process-local; a cold restart clears it.
@@ -337,7 +344,8 @@ export class BridgeHub {
   // through here. Established only from a validated dashboard inbound POST.
   private sessionToChatId = new Map<string, { chatId: string; at: number }>();
   // Per-chat_id mirror rings (bounded FIFO + TTL + proactive sweep).
-  private mirror = new MirrorEventStore();
+  // Constructed with a FileChatStore when chatDir is provided, else NullChatStore.
+  private mirror: MirrorEventStore;
   // PROVISIONAL buffer (P1#5 fallback): a purely-terminal mirror POST with no
   // resolvable chat_id (no body chat_id, no known session mapping) is buffered
   // under a provisional id so a later observer can backfill it — OR dropped,
@@ -352,6 +360,13 @@ export class BridgeHub {
   private dropUnresolvedMirror = false;
   // session→chat_id entries share the same 2h TTL ceiling as knownChatIds.
   private static readonly MAX_SESSION_MAPPINGS = 64;
+
+  constructor(opts: BridgeHubOpts = {}) {
+    const store = opts.chatDir
+      ? new FileChatStore(opts.chatDir)
+      : new NullChatStore();
+    this.mirror = new MirrorEventStore(MIRROR_RING_MAX, MIRROR_RING_TTL_MS, undefined, store);
+  }
 
   /** Register (or clear) the in-process inbound sink. Called by RelayServer. */
   registerSink(fn: BridgeSink | null): void {
