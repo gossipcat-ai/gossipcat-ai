@@ -4,6 +4,45 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-06-17
+
+Dashboard chat: multi-conversation tabs, a redesign, and dashboard-answerable
+structured questions; plus a Dependabot bump.
+
+### Added
+
+- **Multi-conversation chat tabs.** The Chat page now runs several independent
+  conversations as browser-style tabs — each its own `chat_id`, history, and SSE
+  subscription — with new/switch/close, per-tab unread markers, localStorage
+  persistence, and **double-click / F2 rename** (custom labels survive reload).
+- **`gossip_ask` — dashboard-answerable structured questions.** A new bridge MCP
+  tool: the orchestrator asks the dashboard a single/multi-select (+ optional
+  "Other") question, the dashboard renders a selectable card, and the answer
+  returns as a normal channel turn. The dashboard-answerable parallel to the
+  terminal-only `AskUserQuestion` (auto-routed by context). The untrusted answer
+  boundary is fail-closed and sanitizes `other` free-text (no turn injection).
+- **Working-agents rail** on the chat page — shows which agents are dispatched
+  and actively working (polls `/api/active-tasks`).
+
+### Changed
+
+- **Chat page redesign:** full-viewport fit (no page scroll; only the transcript
+  and rail scroll), compact info-bar header, filled activity rail, polished
+  composer/Send.
+- Bridge: per-client server-side `chat_id` filtering + multi-observer fanout so
+  every open tab sees live activity; unresolved mirror frames route to active
+  observers instead of being dropped.
+- Relay serves `index.html` with `Cache-Control: no-cache` so dashboard updates
+  appear on a normal reload (no hard-reload needed).
+
+### Fixed
+
+- Dashboard chat now actually renders live activity (mirror frames were stuck on
+  an internal `_provisional` id and dropped client-side).
+- **Dependabot:** bumped `hono` override to `>=4.12.25` (clears 1 high + 4
+  moderate advisories). The `esbuild` dev-scope advisory remains deferred to the
+  vite@8 upgrade (#605).
+
 ## [0.6.4] — 2026-06-16
 
 Patch release. Makes the dashboard ⇄ live-Claude-Code **activity mirror
