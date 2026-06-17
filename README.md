@@ -22,6 +22,7 @@
   <a href="#first-run--5-minutes"><strong>First Run</strong></a> ·
   <a href="#how-to-use-it-day-to-day"><strong>Daily Use</strong></a> ·
   <a href="#reading-the-dashboard"><strong>Dashboard</strong></a> ·
+  <a href="#drive-claude-code-from-your-browser"><strong>Chat Bridge</strong></a> ·
   <a href="#troubleshooting"><strong>Troubleshooting</strong></a> ·
   <a href="#configuration"><strong>Config</strong></a> ·
   <a href="#for-ai-agents"><strong>For AI Agents</strong></a>
@@ -61,6 +62,8 @@ Multi-agent consensus code review that catches hallucinations before you act on 
 ## What is Gossipcat?
 
 Gossipcat is an MCP server that orchestrates multiple AI agents to review your code in parallel. Agents independently review, then cross-review each other's findings. Agreements are confirmed. Hallucinations are caught and penalized. Over time, each agent builds an accuracy profile — the system learns who to trust for what.
+
+It ships with a [live operator dashboard](#reading-the-dashboard) you can watch the whole fleet through — and, as of v0.6, [drive Claude Code from](#drive-claude-code-from-your-browser): a two-way chat bridge with multi-conversation tabs and structured questions the orchestrator can ask you right in the browser.
 
 ### It's weightless in-context reinforcement learning
 
@@ -157,15 +160,21 @@ When an agent keeps failing in a category, targeted skills are generated from fa
 <tr>
 <td align="center">
 <h3>Multi-Provider</h3>
-Mix Anthropic, Google, OpenAI, and OpenClaw agents in one team. Each brings different strengths. Native agents need no API key. 🦞 Lobster friendly.
+Mix Anthropic, Google, OpenAI, xAI (Grok), DeepSeek, OpenClaw, and local (Ollama) agents in one team. Each brings different strengths. Native agents need no API key. 🦞 Lobster friendly.
 </td>
 <td align="center">
 <h3>Live Dashboard</h3>
-Real-time view of tasks, consensus reports, agent scores, and activity feed. Terminal Amber theme. WebSocket updates.
+Real-time view of tasks, consensus reports, agent scores, and activity feed. Warm-cream editorial UI (terracotta accent, Fraunces + Geist). WebSocket updates.
 </td>
 <td align="center">
 <h3>Agent Memory</h3>
 Per-agent cognitive memory persists across sessions. Agents remember past findings, patterns, and project context.
+</td>
+</tr>
+<tr>
+<td align="center" colspan="3">
+<h3>Dashboard Chat Bridge (v0.6.x)</h3>
+Drive the live Claude Code orchestrator straight from the browser. Multiple conversation tabs (each its own thread + history, renamable), a working-agents rail showing who's dispatched right now, and <strong><code>gossip_ask</code></strong> — structured single/multi-select questions the orchestrator can pop into the dashboard and read your answer back from. See <a href="#drive-claude-code-from-your-browser">Drive Claude Code from your browser</a>.
 </td>
 </tr>
 <tr>
@@ -295,19 +304,19 @@ Gossipcat is on **[npm](https://www.npmjs.com/package/gossipcat)** and **[GitHub
 |---|---|
 | **MCP server** | Bundled binary at `dist-mcp/mcp-server.js`, wired as the `gossipcat` command on `PATH` |
 | **Dashboard** | Prebuilt static assets in `dist-dashboard/` — launches automatically on a dynamic port (ask Claude Code *"what's my gossipcat dashboard URL?"*). Override with `GOSSIPCAT_PORT=24420` if you want a stable port. |
-| **Default skills + rules + archetypes** | 16 bundled skill templates, operational rules, and project archetypes copied into the install |
+| **Default skills + rules + archetypes** | 19 bundled skill templates, operational rules, and project archetypes copied into the install |
 | **Postinstall wizard** | Writes `.mcp.json` with correct absolute paths for your machine |
 
 ### Alternative install paths
 
 **Pin to a specific npm version:**
 ```bash
-npm install -g gossipcat@0.5.2
+npm install -g gossipcat@0.6.5
 ```
 
 **Pin to a specific GitHub release tarball** (version-locked, bypasses npm registry):
 ```bash
-npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.5.2/gossipcat-0.5.2.tgz
+npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.6.5/gossipcat-0.6.5.tgz
 ```
 
 **Project-local install** (each project gets its own gossipcat):
@@ -344,6 +353,8 @@ Add env vars for the providers you want to use. Pass them with `-e` when registe
 | Anthropic API | `ANTHROPIC_API_KEY` | Direct API access if you don't want to go through Claude Code. |
 | Google Gemini | `GOOGLE_API_KEY` | Gemini Pro / Flash relay agents. |
 | OpenAI | `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`) | GPT-4 / GPT-4o relay agents. `OPENAI_BASE_URL` lets you point at OpenAI-compatible gateways (Azure, Together, Groq, etc.). |
+| xAI (Grok) | keychain (`key_ref`) | Grok relay agents at `https://api.x.ai/v1`. No env var — store the key in the OS keychain and point the agent at it with `key_ref` (defaults to service `grok`). |
+| DeepSeek | keychain (`key_ref`) | DeepSeek relay agents. No env var — store the key in the OS keychain (`key_ref` defaults to service `deepseek`). |
 | OpenClaw | — (local gateway) | OpenAI-compatible, defaults to `http://127.0.0.1:18789/v1`. No API key — auth handled by your local OpenClaw daemon. |
 | Ollama (local) | — | Runs locally via `http://localhost:11434`. No key. Pull your model first with `ollama pull llama3.1:8b`. |
 
@@ -644,9 +655,27 @@ The dashboard at `http://localhost:<port>/dashboard` is the visual layer over ev
 | **Findings** | Consensus reports paginated by round, with CONFIRMED/DISPUTED/UNVERIFIED breakdowns | Reviewing what got caught in a recent review |
 | **Agent detail** | Per-agent memory entries, skills, score history, task history | Diagnosing why a specific agent keeps failing in a category |
 | **Signals** | Raw signal feed (agreement / hallucination / unique_confirmed) | Auditing the scoring pipeline if scores look wrong |
+| **Chat** | Live two-way bridge into the running orchestrator — multi-tab conversations, working-agents rail, structured questions | Driving Claude Code from the browser (see [Drive Claude Code from your browser](#drive-claude-code-from-your-browser)) |
 | **Logs** | mcp.log content (boot, errors, warnings) | When the MCP server is misbehaving and you need raw evidence |
 
 **Auth keys rotate every session.** A fresh key is generated each time gossipcat boots. If the dashboard says "unauthorized", run `gossip_status` again to get the new key.
+
+<br/>
+
+## Drive Claude Code from your browser
+
+The dashboard isn't read-only. The **Chat** page is a live, two-way bridge into the running Claude Code orchestrator — type from the browser, and your message lands in the active session as if you'd typed it in the terminal. The orchestrator's activity (dispatches, findings, replies) mirrors back into the same thread in real time.
+
+| Capability | What it does |
+|---|---|
+| **Multi-conversation tabs** | Run several independent conversations side by side — each its own `chat_id`, history, and live stream. New / switch / close, per-tab unread markers, persisted across reloads. |
+| **Renamable tabs** | Double-click a tab (or press **F2**) to give it a name. Custom labels survive reload — keep "auth refactor" and "perf audit" in separate, labelled threads. |
+| **Working-agents rail** | A live rail shows which agents are dispatched and actively working right now, so you can watch a consensus round progress without leaving the chat. |
+| **Structured questions** | When the orchestrator needs a decision it can ask *you* — `gossip_ask` renders a single/multi-select card (with an optional "Other" field) right in the chat. Pick an option, hit submit, and your answer flows back to the orchestrator as a normal turn. |
+
+`gossip_ask` is the dashboard-answerable parallel to Claude Code's terminal-only question prompt — the orchestrator auto-routes to whichever surface you're driving from. The answer boundary is fail-closed: only known options are accepted and free-text "Other" input is sanitized before it ever reaches the orchestrator, so a dashboard answer can't smuggle instructions into the session.
+
+> **How to start it:** launch your session with the `gossipcat code` wrapper (or ask Claude Code to enable channel mode), open the dashboard, and switch to the **Chat** tab. Messages you send there reach the live orchestrator; everything it does mirrors back.
 
 <br/>
 
@@ -704,6 +733,8 @@ gossip_scores()                                  → view agent performance
 gossip_skills(action: "develop", ...)            → improve a struggling agent
 gossip_status()                                  → system status + dashboard URL
 gossip_setup(...)                                → create or update your team
+gossip_ask(chat_id, questions)                   → ask the dashboard a structured question
+reply(chat_id, message)                          → answer a dashboard chat turn (channel mode)
 ```
 
 The dispatch rules at `.claude/rules/gossipcat.md` (auto-generated on first boot) teach Claude Code when to pick which mode based on what your change touches. You can edit these rules to bias the dispatch.
@@ -803,6 +834,9 @@ These tools are called by the internal LLM (the orchestrator — Claude Code wit
 | `gossip_scores` | View agent accuracy, uniqueness, and dispatch weights |
 | `gossip_skills` | Develop, bind, unbind, or list per-agent skills |
 | `gossip_setup` | Create or update agent team |
+| `gossip_ask` | Ask the dashboard a structured single/multi-select question and read the answer back as a channel turn |
+| `reply` | Send the orchestrator's response to the dashboard chat bridge (channel mode) |
+| `gossip_resolve_findings` | Mark consensus findings resolved/open from the dashboard |
 | `gossip_session_save` | Save session context for next session |
 | `gossip_remember` | Search an agent's cognitive memory |
 | `gossip_progress` | Check in-progress task status |
@@ -838,7 +872,7 @@ gossipcat/
     orchestrator/         Dispatch pipeline, consensus engine, memory, skills,
                           performance scoring, task graph, prompt assembly
     relay/                WebSocket relay server, dashboard REST/WS API
-    dashboard-v2/         React + Vite frontend (Terminal Amber theme)
+    dashboard-v2/         React + Vite frontend (warm-cream editorial theme — see DESIGN.md)
     client/               Lightweight WebSocket client for relay connections
     tools/                File/shell/git tool implementations for worker agents
     types/                Shared TypeScript types and message protocol
@@ -927,7 +961,8 @@ Config is searched in order: `.gossip/config.json` > `gossip.agents.json` > `gos
 | `main_agent` | Internal tool LLM for routing, planning, and synthesis |
 | `utility_model` | Memory compaction, gossip, lens generation |
 | `consensus_judge` | Model for cross-review synthesis |
-| `agents.<id>.provider` | `anthropic`, `google`, `openai`, `openclaw`, `local` |
+| `agents.<id>.provider` | `anthropic`, `google`, `openai`, `grok` (xAI), `deepseek`, `openclaw`, `local`, `native` |
+| `agents.<id>.key_ref` | Keychain service name to read the provider key from (defaults to the provider name) — used by `grok`/`deepseek`/`openai`/etc. |
 | `agents.<id>.base_url` | Custom endpoint for `openai`/`openclaw` (e.g. `http://127.0.0.1:18789/v1`) |
 | `agents.<id>.native` | `true` = runs via Claude Code Agent(), no API key |
 | `agents.<id>.preset` | `reviewer`, `implementer`, `tester`, `researcher`, `debugger`, `architect`, `security`, `designer`, `planner`, `devops`, `documenter` |
@@ -971,6 +1006,9 @@ Gossipcat auto-detects the host environment:
 | In-session bundle hot-swap (`gossip_reload`) | ✅ Shipped |
 | npm package — one-liner install with bundled MCP server + dashboard | ✅ Shipped |
 | Full implementation workflow (agents write code with scoped + worktree isolation) | ✅ Shipped |
+| Dashboard ⇄ Claude Code chat bridge (drive the live orchestrator from the browser, activity mirror) | ✅ Shipped |
+| Multi-conversation chat tabs (renamable, per-tab history + unread, working-agents rail) | ✅ Shipped |
+| Dashboard-answerable structured questions (`gossip_ask` — single/multi-select + Other, fail-closed answer boundary) | ✅ Shipped |
 | Dashboard enrichment (graphs, trends, session history) | ☐ Planned |
 | Local Postgres migration (embedded Postgres for tasks/signals/consensus/memory — unblocks full task results, real queries, no more JSONL scans) | ☐ Planned |
 | Full Cursor support | ☐ Planned |
