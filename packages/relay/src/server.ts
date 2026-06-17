@@ -15,7 +15,7 @@ import { AgentConnection, livenessMap } from './agent-connection';
 import { DashboardAuth } from './dashboard/auth';
 import { DashboardRouter } from './dashboard/routes';
 import { DashboardWs } from './dashboard/ws';
-import type { BridgeSink } from './dashboard/api-bridge';
+import type { BridgeSink, AskQuestion } from './dashboard/api-bridge';
 import type { ChatbotAgent } from '@gossip/orchestrator';
 
 export interface DashboardConfig {
@@ -492,5 +492,19 @@ export class RelayServer {
    */
   emitBridgeReply(chatId: string, text: string): boolean {
     return this.dashboardRouter?.emitBridgeReply(chatId, text) ?? false;
+  }
+
+  /**
+   * Ask the dashboard a structured selection question (MCP `gossip_ask` tool).
+   * Mirrors emitBridgeReply: chat_id is re-validated + bound to a stream the
+   * dashboard actually opened (the same knownChatIds gate as emitReply), the
+   * validated question set is registered under `qid` so a later inbound answer
+   * can be validated against what was asked, and a `question` frame fans out
+   * over SSE. Returns false (no registration, no broadcast) when the dashboard
+   * is disabled, the chat_id is unbound/malformed, or no SSE client is connected
+   * — so the caller can no-op honestly rather than claim a delivery.
+   */
+  emitBridgeQuestion(chatId: string, qid: string, questions: AskQuestion[]): boolean {
+    return this.dashboardRouter?.emitBridgeQuestion(chatId, qid, questions) ?? false;
   }
 }

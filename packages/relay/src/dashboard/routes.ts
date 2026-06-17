@@ -21,7 +21,7 @@ import { sessionHandler } from './api-session';
 import { logsHandler } from './api-logs';
 import { violationsHandler } from './api-violations';
 import { handleChat } from './api-chat';
-import { BridgeHub, validateChatId, type BridgeSink, type InboundMirrorFrame } from './api-bridge';
+import { BridgeHub, validateChatId, type BridgeSink, type InboundMirrorFrame, type AskQuestion } from './api-bridge';
 import { ChatConversationStore } from './chat-session-store';
 import type { ChatbotAgent } from '@gossip/orchestrator';
 import { buildCoverageDegradedMessage } from '@gossip/orchestrator';
@@ -258,6 +258,17 @@ export class DashboardRouter {
    */
   emitBridgeReply(chatId: string, text: string): boolean {
     return this.bridge.emitReply(chatId, text);
+  }
+
+  /**
+   * Ask the dashboard a structured selection question (MCP `gossip_ask` tool).
+   * The hub gates chat_id on knownChatIds exactly like emitReply, registers the
+   * validated question set under `qid`, and fans out a `question` frame. Returns
+   * false when the id was unbound/malformed or no SSE client is connected so the
+   * caller can no-op honestly.
+   */
+  emitBridgeQuestion(chatId: string, qid: string, questions: AskQuestion[]): boolean {
+    return this.bridge.emitQuestion(chatId, qid, questions);
   }
 
   /** Update live context (call when agents connect/disconnect) */
@@ -755,6 +766,15 @@ export class DashboardRouter {
       // route uses (consensus f13), a per-route readBody cap (consensus f3), then
       // hand the parsed body to the bridge hub, which validates {chat_id?,
       // message} and invokes the in-process sink.
+      //
+      // ANSWER multiplexing (gossip_ask round-trip): the dashboard posts a
+      // structured answer to a `gossip_ask` question on this SAME route, with an
+      // `answer` field instead of `message`. We detect that field and route to
+      // BridgeHub.handleAnswer — the UNTRUSTED answer boundary. Auth + the per-IP
+      // rate-limit + the readBody cap above all still apply; handleAnswer
+      // validates fail-closed against the registered question set and delivers a
+      // formatted channel turn through the SAME sink path inbound chat messages
+      // use, so the orchestrator receives it as a normal turn.
       if (url === '/dashboard/api/bridge' && req.method === 'POST') {
         const ip = req.socket?.remoteAddress || 'unknown';
         if (!this.allowChatTurn(ip)) {
@@ -768,7 +788,13 @@ export class DashboardRouter {
           this.json(res, 400, { error: 'Invalid JSON body' });
           return true;
         }
-        const { status, payload } = this.bridge.handlePost(body);
+        // An `answer` field routes to the answer boundary; otherwise it's a plain
+        // steering message. A body carrying both is treated as an answer (the
+        // structured path takes precedence) — handleAnswer ignores `message`.
+        const hasAnswer = body !== null && typeof body === 'object' && 'answer' in (body as Record<string, unknown>);
+        const { status, payload } = hasAnswer
+          ? this.bridge.handleAnswer(body)
+          : this.bridge.handlePost(body);
         this.json(res, status, payload);
         return true;
       }

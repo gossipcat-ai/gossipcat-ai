@@ -53,9 +53,35 @@ declare const window:
     }
   | undefined;
 
+/** One selectable option in a gossip_ask question (mirrors relay AskOption). */
+export interface AskOption {
+  label: string;
+  description?: string;
+}
+
+/** One gossip_ask question the dashboard renders (mirrors relay AskQuestion). */
+export interface AskQuestion {
+  /** Server-minted stable id (q0, q1, …) the submitted answer references. */
+  questionId: string;
+  header: string;
+  question: string;
+  /** false/undefined → single-select radios; true → multi-select checkboxes. */
+  multiSelect?: boolean;
+  options: AskOption[];
+  /** When true the dashboard shows a free-text "Other" input. */
+  allowOther?: boolean;
+}
+
+/** A pending gossip_ask question round awaiting a dashboard answer. */
+export interface PendingQuestion {
+  qid: string;
+  questions: AskQuestion[];
+  ts: string;
+}
+
 /** A single inbound SSE frame from the bridge (known frame kinds only). */
 export interface BridgeFrame {
-  type: 'reply' | 'ack' | 'error' | 'mirror' | 'restart';
+  type: 'reply' | 'ack' | 'error' | 'mirror' | 'restart' | 'question';
   chat_id: string;
   text?: string;
   ts: string;
@@ -63,6 +89,10 @@ export interface BridgeFrame {
   role?: string;
   /** Present on `mirror` frames: per-chat_id monotonic server counter. */
   id?: number;
+  /** Present on `question` frames: the outstanding-question id (qid). */
+  qid?: string;
+  /** Present on `question` frames: the question set to render. */
+  questions?: AskQuestion[];
 }
 
 /**
@@ -124,6 +154,26 @@ export interface UseBridgeResult {
   sendError: string | null;
   /** Clear the unread counter (called when the tab becomes active). */
   markRead: () => void;
+  /**
+   * The outstanding gossip_ask question for this conversation, or null. The
+   * Transcript renders a QuestionCard when present; submitAnswer clears it.
+   * Live-only — a reload loses it (the relay does not ring-retain question
+   * frames; the registry survives so a late answer still validates server-side).
+   */
+  pendingQuestion: PendingQuestion | null;
+  /**
+   * Submit an answer to the pending gossip_ask question. Optimistically renders
+   * the user's choice as a user turn, locks/clears the card, and POSTs the
+   * answer to the bridge. Resolves with true on a 202 accept, false otherwise.
+   */
+  submitAnswer: (responses: AnswerResponse[]) => Promise<boolean>;
+}
+
+/** One submitted answer to a single gossip_ask question. */
+export interface AnswerResponse {
+  questionId: string;
+  selected: string[];
+  other?: string;
 }
 
 const BACKOFF_MIN_MS = 1_000;
@@ -182,6 +232,7 @@ export function useBridge(options: UseBridgeOptions = {}): UseBridgeResult {
   const [chatId, setChatId] = useState<string | null>(initialChatId);
   const [sendError, setSendError] = useState<string | null>(null);
   const [unread, setUnread] = useState(0);
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
 
   // `active` is read inside the onmessage closure; a ref keeps it current without
   // re-opening the stream when the active tab changes.
@@ -291,6 +342,8 @@ export function useBridge(options: UseBridgeOptions = {}): UseBridgeResult {
             insertByTs(prev, makeMessage('error', frame.text ?? 'the live session reported an error', frame.ts))
           );
           bumpUnreadIfInactive();
+        } else if (frame.type === 'question') {
+          handleQuestionFrame(frame);
         } else if (frame.type === 'mirror') {
           handleMirrorFrame(frame);
         } else if (frame.type === 'restart') {
@@ -341,6 +394,36 @@ export function useBridge(options: UseBridgeOptions = {}): UseBridgeResult {
       // and the frame interleaves near "now" instead of at an arbitrary position.
       const ts = typeof frame.ts === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(frame.ts) ? frame.ts : undefined;
       setMessages((prev) => insertByTs(prev, makeMessage(role, text, ts, frame.id)));
+      bumpUnreadIfInactive();
+    }
+
+    /**
+     * Store a `question` frame as the pending gossip_ask round for this
+     * conversation. Defensively validates the shape (a malformed relay payload
+     * could carry a non-array `questions` or a missing qid) so the QuestionCard
+     * never renders garbage. A new question replaces any prior pending one
+     * (single outstanding question per conversation in the UI). Bumps unread
+     * when inactive so an off-screen tab flags that the session needs input.
+     */
+    function handleQuestionFrame(frame: BridgeFrame): void {
+      if (typeof frame.qid !== 'string' || frame.qid.length === 0) return;
+      if (!Array.isArray(frame.questions) || frame.questions.length === 0) return;
+      // Shallow shape check on each question — drop the whole frame if any is malformed.
+      for (const q of frame.questions) {
+        if (
+          !q ||
+          typeof q.questionId !== 'string' ||
+          typeof q.header !== 'string' ||
+          typeof q.question !== 'string' ||
+          !Array.isArray(q.options) ||
+          q.options.length === 0 ||
+          q.options.some((o) => !o || typeof o.label !== 'string')
+        ) {
+          return;
+        }
+      }
+      const ts = typeof frame.ts === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(frame.ts) ? frame.ts : new Date().toISOString();
+      setPendingQuestion({ qid: frame.qid, questions: frame.questions, ts });
       bumpUnreadIfInactive();
     }
 
@@ -429,5 +512,67 @@ export function useBridge(options: UseBridgeOptions = {}): UseBridgeResult {
     [setChat]
   );
 
-  return { messages, status, awaitingReply, chatId, unread, send, sendError, markRead };
+  const submitAnswer = useCallback(
+    async (responses: AnswerResponse[]): Promise<boolean> => {
+      const pending = pendingQuestion;
+      const existing = chatIdRef.current;
+      // Guard: no pending question or no chat_id → nothing to answer.
+      if (!pending || !existing) return false;
+
+      setSendError(null);
+      // Optimistically render the user's choice as a single user turn, formatted
+      // the way the orchestrator will see it (header: selection · …). This mirrors
+      // the server-side turn so the dashboard transcript and the orchestrator stay
+      // in sync without echoing back the [answer qid=…] control prefix.
+      const summary = responses
+        .map((r) => {
+          const q = pending.questions.find((x) => x.questionId === r.questionId);
+          const header = q?.header ?? r.questionId;
+          const segs: string[] = [];
+          if (r.selected.length > 0) segs.push(r.selected.join(', '));
+          if (r.other && r.other.trim().length > 0) segs.push(`other: "${r.other.trim()}"`);
+          return `${header}: ${segs.join(' · ')}`;
+        })
+        .join(' · ');
+      setMessages((prev) => [...prev, makeMessage('user', summary)]);
+      setAwaitingReply(true);
+      // Lock/clear the card immediately so it can't be double-submitted.
+      setPendingQuestion(null);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
+      try {
+        const res = await fetch(POST_PATH, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: existing,
+            answer: { qid: pending.qid, responses },
+          }),
+          signal: controller.signal,
+        });
+        if (res.status === 202) return true;
+        let payload: { error?: string } = {};
+        try {
+          payload = await res.json();
+        } catch {
+          /* non-JSON body */
+        }
+        setAwaitingReply(false);
+        setSendError(payload.error ?? postErrorMessage(res.status));
+        return false;
+      } catch (err) {
+        setAwaitingReply(false);
+        const aborted = err instanceof Error && err.name === 'AbortError';
+        setSendError(aborted ? 'answer timed out — relay unreachable' : 'answer failed — relay unreachable');
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    [pendingQuestion]
+  );
+
+  return { messages, status, awaitingReply, chatId, unread, send, sendError, markRead, pendingQuestion, submitAnswer };
 }

@@ -42,10 +42,174 @@ export type BridgeSink = (chatId: string, message: string) => boolean;
 
 /** One outbound frame pushed to the dashboard over SSE. */
 interface BridgeReplyFrame {
-  type: 'reply' | 'ack' | 'error' | 'mirror' | 'restart';
+  type: 'reply' | 'ack' | 'error' | 'mirror' | 'restart' | 'question';
   chat_id: string;
   text?: string;
   ts: string;
+  /** Present on `question` frames: the outstanding-question id (qid). */
+  qid?: string;
+  /** Present on `question` frames: the validated question set the dashboard renders. */
+  questions?: AskQuestion[];
+}
+
+/**
+ * One question in a `gossip_ask` round (spec 2026-06-16-dashboard-ask). The
+ * orchestrator asks the dashboard a selection question; the dashboard renders
+ * radios/checkboxes + an optional "Other" free-text and posts the answer back as
+ * a normal channel turn. This is the dashboard-answerable parallel to the
+ * terminal-only harness AskUserQuestion.
+ *
+ * UNTRUSTED on the inbound answer path: the registry retains the asked set so an
+ * answer can be validated label-for-label against what was actually asked — a
+ * forged questionId / option label / qid is rejected fail-closed (400).
+ */
+export interface AskOption {
+  label: string;
+  description?: string;
+}
+export interface AskQuestion {
+  /** Stable per-question id the answer references. Server-minted (q0, q1, …). */
+  questionId: string;
+  header: string;
+  question: string;
+  /** false/undefined → single-select radios; true → multi-select checkboxes. */
+  multiSelect?: boolean;
+  options: AskOption[];
+  /** When true the dashboard may submit a trimmed free-text "other" value. */
+  allowOther?: boolean;
+}
+
+/** One question as supplied by the MCP `gossip_ask` tool (pre-validation). */
+export interface InboundAskQuestion {
+  header?: unknown;
+  question?: unknown;
+  multiSelect?: unknown;
+  options?: unknown;
+  allowOther?: unknown;
+}
+
+/** One inbound answer to a single question (UNTRUSTED — from the dashboard POST). */
+export interface InboundAnswerResponse {
+  questionId?: unknown;
+  selected?: unknown;
+  other?: unknown;
+}
+
+/** The full inbound answer payload body (UNTRUSTED). */
+export interface InboundAnswer {
+  qid?: unknown;
+  responses?: unknown;
+}
+
+/** A bounded/validated question set with the chat_id it was asked on. */
+interface OutstandingQuestion {
+  chatId: string;
+  questions: AskQuestion[];
+  at: number;
+}
+
+/** Caps for the gossip_ask input (DoS + UI sanity). */
+export const ASK_MAX_QUESTIONS = 4;
+export const ASK_MAX_OPTIONS = 8;
+export const ASK_MAX_HEADER = 120;
+export const ASK_MAX_QUESTION = 600;
+export const ASK_MAX_LABEL = 120;
+export const ASK_MAX_DESCRIPTION = 240;
+/** Cap on a submitted free-text "other" value. */
+export const ASK_MAX_OTHER = 400;
+
+/**
+ * Validate + normalize an untrusted `gossip_ask` question set (from the MCP
+ * tool) into the canonical AskQuestion[] the dashboard renders and the registry
+ * retains. Server-mints a stable per-question id (q0, q1, …) — the answer path
+ * references these, never a client-supplied id. Fail-closed: any cap violation,
+ * missing/empty header/question, empty options, or non-unique option labels
+ * within a question returns an `error` string instead of a question set, so the
+ * MCP tool can surface a clear validation error and emit nothing.
+ *
+ * Caps (DoS + UI sanity): ≤ ASK_MAX_QUESTIONS questions, ≤ ASK_MAX_OPTIONS
+ * options each, with header/question/label/description length ceilings.
+ */
+export function validateAskQuestions(
+  raw: unknown,
+): { questions: AskQuestion[] } | { error: string } {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { error: 'questions must be a non-empty array' };
+  }
+  if (raw.length > ASK_MAX_QUESTIONS) {
+    return { error: `too many questions (max ${ASK_MAX_QUESTIONS})` };
+  }
+  const out: AskQuestion[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const q = raw[i] as InboundAskQuestion;
+    if (!q || typeof q !== 'object') {
+      return { error: `question ${i} must be an object` };
+    }
+    if (typeof q.header !== 'string' || q.header.trim().length === 0) {
+      return { error: `question ${i} header must be a non-empty string` };
+    }
+    if (q.header.length > ASK_MAX_HEADER) {
+      return { error: `question ${i} header too long (max ${ASK_MAX_HEADER})` };
+    }
+    if (typeof q.question !== 'string' || q.question.trim().length === 0) {
+      return { error: `question ${i} question must be a non-empty string` };
+    }
+    if (q.question.length > ASK_MAX_QUESTION) {
+      return { error: `question ${i} question too long (max ${ASK_MAX_QUESTION})` };
+    }
+    if (q.multiSelect !== undefined && typeof q.multiSelect !== 'boolean') {
+      return { error: `question ${i} multiSelect must be a boolean` };
+    }
+    if (q.allowOther !== undefined && typeof q.allowOther !== 'boolean') {
+      return { error: `question ${i} allowOther must be a boolean` };
+    }
+    if (!Array.isArray(q.options) || q.options.length === 0) {
+      return { error: `question ${i} options must be a non-empty array` };
+    }
+    if (q.options.length > ASK_MAX_OPTIONS) {
+      return { error: `question ${i} has too many options (max ${ASK_MAX_OPTIONS})` };
+    }
+    const options: AskOption[] = [];
+    const labels = new Set<string>();
+    for (let j = 0; j < q.options.length; j++) {
+      const o = q.options[j] as { label?: unknown; description?: unknown };
+      if (!o || typeof o !== 'object') {
+        return { error: `question ${i} option ${j} must be an object` };
+      }
+      if (typeof o.label !== 'string' || o.label.trim().length === 0) {
+        return { error: `question ${i} option ${j} label must be a non-empty string` };
+      }
+      if (o.label.length > ASK_MAX_LABEL) {
+        return { error: `question ${i} option ${j} label too long (max ${ASK_MAX_LABEL})` };
+      }
+      // Option labels must be unique WITHIN a question — the answer path matches
+      // a submitted label against this set, so a duplicate would be ambiguous.
+      if (labels.has(o.label)) {
+        return { error: `question ${i} has a duplicate option label` };
+      }
+      labels.add(o.label);
+      const opt: AskOption = { label: o.label };
+      if (o.description !== undefined && o.description !== null) {
+        if (typeof o.description !== 'string') {
+          return { error: `question ${i} option ${j} description must be a string` };
+        }
+        if (o.description.length > ASK_MAX_DESCRIPTION) {
+          return { error: `question ${i} option ${j} description too long (max ${ASK_MAX_DESCRIPTION})` };
+        }
+        opt.description = o.description;
+      }
+      options.push(opt);
+    }
+    out.push({
+      questionId: `q${i}`,
+      header: q.header,
+      question: q.question,
+      ...(q.multiSelect === true ? { multiSelect: true } : {}),
+      options,
+      ...(q.allowOther === true ? { allowOther: true } : {}),
+    });
+  }
+  return { questions: out };
 }
 
 /**
@@ -145,6 +309,16 @@ export class BridgeHub {
   private knownChatIds = new Map<string, number>();
   private static readonly MAX_KNOWN_CHAT_IDS = 64;
   private static readonly CHAT_ID_TTL_MS = 2 * 60 * 60 * 1000; // 2h, mirror chat-session-store
+
+  // ── Outstanding-question registry (gossip_ask round-trip) ───────────────────
+  // qid → {chatId, questions, at}. An inbound answer is validated against the
+  // EXACT set that was asked: the questionId must exist, each selected label must
+  // be one of that question's option labels, `other` only when allowOther. The
+  // registry is bounded + TTL'd (fail-closed eviction) so a long-running session
+  // can't grow it unbounded and a stale qid can never be answered.
+  private outstandingQuestions = new Map<string, OutstandingQuestion>();
+  private static readonly MAX_OUTSTANDING_QUESTIONS = 64;
+  private static readonly QUESTION_TTL_MS = 2 * 60 * 60 * 1000; // 2h, mirror knownChatIds
 
   // ── Mirror state (spec v2 §3) ──────────────────────────────────────────────
   // chat_ids eligible to RECEIVE mirror frames. SEPARATE from knownChatIds
@@ -297,6 +471,198 @@ export class BridgeHub {
     if (this.clients.size === 0) return false;
     this.broadcast({ type: 'ack', chat_id: chatId, ts: new Date().toISOString() });
     return true;
+  }
+
+  /**
+   * OUTBOUND: the MCP `gossip_ask` tool asks the dashboard a selection question.
+   * Gates on knownChatIds EXACTLY like emitReply — a question may only target a
+   * stream the dashboard actually opened, never an arbitrary/forged id. On
+   * success the validated question set is registered under `qid` (so a later
+   * inbound answer can be validated against what was asked) and a `question`
+   * frame is fanned out over SSE.
+   *
+   * LIVE-ONLY: like reply/ack, a `question` frame has NO per-chat_id ring — an
+   * unanswered question is LOST on a dashboard reload (acceptable v1). The
+   * registry entry survives a reload (so an answer typed after reconnect would
+   * still validate), but the rendered card does not.
+   *
+   * Returns false (no registration, no broadcast) when the chat_id is
+   * malformed/unbound or no SSE client is connected, so the MCP tool can no-op
+   * honestly — same posture as emitReply.
+   */
+  emitQuestion(rawChatId: string, qid: string, questions: AskQuestion[]): boolean {
+    const chatId = validateChatId(rawChatId);
+    if (chatId === null) return false;
+    if (!this.isKnownChatId(chatId)) return false;
+    if (this.clients.size === 0) return false;
+    if (typeof qid !== 'string' || qid.length === 0) return false;
+    if (!Array.isArray(questions) || questions.length === 0) return false;
+    this.registerOutstandingQuestion(qid, chatId, questions);
+    this.broadcast({ type: 'question', chat_id: chatId, qid, questions, ts: new Date().toISOString() });
+    return true;
+  }
+
+  /**
+   * INBOUND ANSWER (UNTRUSTED — this is the security boundary). The dashboard
+   * POSTs `{chat_id, answer:{qid, responses:[{questionId, selected[], other?}]}}`.
+   * VALIDATES fail-closed against the registered question set:
+   *   - chat_id is known (bound to an opened stream);
+   *   - qid is an outstanding question FOR THAT chat_id (cross-chat reuse → 400);
+   *   - each questionId exists in the asked set, with no duplicates / no missing;
+   *   - each `selected` label is one of THAT question's option labels (an unknown
+   *     label → 400; a single-select question accepts at most one label);
+   *   - `other` is only allowed when that question had allowOther, and is trimmed
+   *     + length-capped.
+   * On VALID: a concise channel turn is formatted and delivered to the live CC
+   * session via the SAME sink path inbound chat messages use (so it arrives as a
+   * normal turn), then the qid is deleted (single-use). Returns a route-shaped
+   * {status,payload}: 202 on accept, 400 on any validation failure, 503 when no
+   * sink is wired.
+   */
+  handleAnswer(body: unknown): { status: number; payload: Record<string, unknown> } {
+    const b = (body ?? {}) as { chat_id?: unknown; answer?: unknown };
+
+    const chatId = validateChatId(b.chat_id);
+    if (chatId === null) {
+      return { status: 400, payload: { error: 'invalid chat_id' } };
+    }
+    if (!this.isKnownChatId(chatId)) {
+      return { status: 400, payload: { error: 'unknown chat_id (not an open dashboard stream)' } };
+    }
+
+    const answer = b.answer as InboundAnswer | undefined;
+    if (!answer || typeof answer !== 'object') {
+      return { status: 400, payload: { error: 'answer must be an object' } };
+    }
+    const qid = answer.qid;
+    if (typeof qid !== 'string' || qid.length === 0) {
+      return { status: 400, payload: { error: 'answer.qid must be a non-empty string' } };
+    }
+    // Evict stale entries first so an aged-out qid fails closed.
+    this.evictOutstandingQuestions(Date.now());
+    const outstanding = this.outstandingQuestions.get(qid);
+    if (!outstanding) {
+      return { status: 400, payload: { error: 'unknown or expired qid' } };
+    }
+    // The qid must belong to THIS chat_id — a qid asked on another stream cannot
+    // be answered here (cross-stream replay guard).
+    if (outstanding.chatId !== chatId) {
+      return { status: 400, payload: { error: 'qid does not belong to this chat_id' } };
+    }
+
+    const responses = answer.responses;
+    if (!Array.isArray(responses) || responses.length === 0) {
+      return { status: 400, payload: { error: 'answer.responses must be a non-empty array' } };
+    }
+    if (responses.length > outstanding.questions.length) {
+      return { status: 400, payload: { error: 'too many responses' } };
+    }
+
+    // Validate each response against the asked question; collect formatted parts.
+    const seen = new Set<string>();
+    const parts: string[] = [];
+    for (const r of responses) {
+      if (!r || typeof r !== 'object') {
+        return { status: 400, payload: { error: 'each response must be an object' } };
+      }
+      const rr = r as InboundAnswerResponse;
+      if (typeof rr.questionId !== 'string') {
+        return { status: 400, payload: { error: 'response.questionId must be a string' } };
+      }
+      const questionId = rr.questionId;
+      if (seen.has(questionId)) {
+        return { status: 400, payload: { error: 'duplicate questionId in responses' } };
+      }
+      const q = outstanding.questions.find((x) => x.questionId === questionId);
+      if (!q) {
+        return { status: 400, payload: { error: `unknown questionId "${questionId}"` } };
+      }
+      seen.add(questionId);
+
+      if (!Array.isArray(rr.selected)) {
+        return { status: 400, payload: { error: 'response.selected must be an array' } };
+      }
+      const selected = rr.selected;
+      // A single-select question accepts at most one label; multi can be empty
+      // only when an `other` value is supplied (handled below).
+      if (!q.multiSelect && selected.length > 1) {
+        return { status: 400, payload: { error: `question "${questionId}" is single-select` } };
+      }
+      if (selected.length > q.options.length) {
+        return { status: 400, payload: { error: 'too many selected labels' } };
+      }
+      const labels = new Set(q.options.map((o) => o.label));
+      const chosen: string[] = [];
+      const seenLabels = new Set<string>();
+      for (const s of selected) {
+        if (typeof s !== 'string' || !labels.has(s)) {
+          return { status: 400, payload: { error: `unknown option label for question "${questionId}"` } };
+        }
+        if (seenLabels.has(s)) {
+          return { status: 400, payload: { error: 'duplicate selected label' } };
+        }
+        seenLabels.add(s);
+        chosen.push(s);
+      }
+
+      // `other` only allowed when the question opted in; trim + length-cap.
+      let otherText: string | null = null;
+      if (rr.other !== undefined && rr.other !== null) {
+        if (!q.allowOther) {
+          return { status: 400, payload: { error: `question "${questionId}" does not allow other` } };
+        }
+        if (typeof rr.other !== 'string') {
+          return { status: 400, payload: { error: 'response.other must be a string' } };
+        }
+        // SECURITY (consensus security review): `other` is untrusted dashboard
+        // free-text that gets echoed into the channel turn delivered to the live
+        // orchestrator. Collapse ALL control chars + whitespace (incl. newlines)
+        // to single spaces so it cannot inject a fake `[answer qid=…]` line or a
+        // standalone instruction line, then escape `\` and `"` so it cannot break
+        // the `other: "…"` framing. Length-cap the sanitized result.
+        const sanitized = rr.other
+          .replace(/[\x00-\x1F\x7F]/g, " ")
+          .replace(/\s+/g, " ")
+          // Defang the answer-framing token so `other` cannot forge a second
+          // `[answer qid=…]` marker inline (newlines are already collapsed above).
+          .replace(/\[answer/gi, "(answer")
+          .trim();
+        if (sanitized.length > ASK_MAX_OTHER) {
+          return { status: 400, payload: { error: 'other text too long' } };
+        }
+        if (sanitized.length > 0) {
+          otherText = sanitized.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        }
+      }
+
+      // A question must yield at least one signal (a chosen label OR other text).
+      if (chosen.length === 0 && otherText === null) {
+        return { status: 400, payload: { error: `question "${questionId}" has no selection` } };
+      }
+
+      const segs: string[] = [];
+      if (chosen.length > 0) segs.push(chosen.join(', '));
+      if (otherText !== null) segs.push(`other: "${otherText}"`);
+      parts.push(`${q.header}: ${segs.join(' · ')}`);
+    }
+
+    if (!this.sink) {
+      return { status: 503, payload: { error: 'No live Claude Code bridge session is active' } };
+    }
+
+    const turn = `[answer qid=${qid}] ${parts.join(' · ')}`;
+    let delivered: boolean;
+    try {
+      delivered = this.sink(chatId, turn);
+    } catch {
+      delivered = false;
+    }
+    if (!delivered) {
+      return { status: 503, payload: { error: 'Bridge sink rejected the answer' } };
+    }
+    // Single-use: drop the outstanding question so it can't be answered twice.
+    this.outstandingQuestions.delete(qid);
+    return { status: 202, payload: { ok: true, qid, chat_id: chatId } };
   }
 
   /**
@@ -675,6 +1041,34 @@ export class BridgeHub {
   private evictChatIds(now: number): void {
     for (const [k, v] of this.knownChatIds) {
       if (now - v > BridgeHub.CHAT_ID_TTL_MS) this.knownChatIds.delete(k);
+    }
+  }
+
+  // ── Outstanding-question registry helpers (gossip_ask) ──────────────────────
+
+  /**
+   * Register a validated question set under `qid`. Bounded + TTL'd: a stale
+   * entry is reaped before insert, and at capacity the oldest entry is dropped
+   * to make room (fail-closed — an unanswered old question is forgotten rather
+   * than letting the map grow unbounded).
+   */
+  private registerOutstandingQuestion(qid: string, chatId: string, questions: AskQuestion[]): void {
+    const now = Date.now();
+    this.evictOutstandingQuestions(now);
+    if (!this.outstandingQuestions.has(qid) && this.outstandingQuestions.size >= BridgeHub.MAX_OUTSTANDING_QUESTIONS) {
+      let oldestKey: string | null = null;
+      let oldest = Infinity;
+      for (const [k, v] of this.outstandingQuestions) {
+        if (v.at < oldest) { oldest = v.at; oldestKey = k; }
+      }
+      if (oldestKey !== null) this.outstandingQuestions.delete(oldestKey);
+    }
+    this.outstandingQuestions.set(qid, { chatId, questions, at: now });
+  }
+
+  private evictOutstandingQuestions(now: number): void {
+    for (const [k, v] of this.outstandingQuestions) {
+      if (now - v.at > BridgeHub.QUESTION_TTL_MS) this.outstandingQuestions.delete(k);
     }
   }
 

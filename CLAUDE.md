@@ -100,6 +100,24 @@ gossip_signals(action: "record", signals: [{
 **Every signal needs a finding_id.** Signals without finding_id break back-search:
 dashboard finding → signal → agent score adjustment becomes opaque.
 
+## Asking the user a selection question (dashboard vs terminal)
+
+When you need the user to pick from a set of options, route by context:
+
+- **Dashboard chat is active** (you are answering a `<channel source="gossipcat"
+  chat_id="...">` turn): call `gossip_ask(chat_id, questions)` with that exact
+  chat_id. The dashboard renders selectable radios/checkboxes (+ optional
+  "Other"); the user's answer arrives back as a NORMAL channel turn prefixed
+  `[answer qid=...]`. `gossip_ask` is NON-BLOCKING — it returns immediately; do
+  NOT wait for the answer in that call, just continue and handle the answer turn
+  when it lands. The harness `AskUserQuestion` is terminal-only and CANNOT be
+  answered from the dashboard, so never use it for a dashboard chat.
+- **Plain terminal session** (no dashboard chat_id): use the harness
+  `AskUserQuestion` as usual.
+
+Auto-route by context: if there is an active dashboard chat_id, prefer
+`gossip_ask`; otherwise `AskUserQuestion`.
+
 ## Agent Accuracy — Skill Development
 
 When an agent has low accuracy or repeated hallucinations, **use the skill system, not

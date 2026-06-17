@@ -181,6 +181,18 @@ Memory persists across sessions automatically:
 
 Use `gossip_status()` for URL and key. Tabs: Overview, Agents, Consensus, Skills, Memory.
 
+## Asking the user a selection question (dashboard vs terminal)
+
+Auto-route by context when you need the user to choose from options:
+
+- **Active dashboard chat** (you are answering a `<channel source="gossipcat"
+  chat_id="...">` turn): call `gossip_ask(chat_id, questions)` with that exact
+  chat_id. The dashboard renders radios/checkboxes (+ optional "Other"); the
+  answer comes back as a normal channel turn prefixed `[answer qid=...]`.
+  `gossip_ask` is NON-BLOCKING — continue working and handle the answer turn when
+  it arrives. The harness `AskUserQuestion` CANNOT be answered from the dashboard.
+- **Plain terminal session** (no dashboard chat_id): use `AskUserQuestion`.
+
 ## Subagent Override (IMPORTANT)
 
 When ANY skill or workflow (including subagent-driven-development, executing-plans, or

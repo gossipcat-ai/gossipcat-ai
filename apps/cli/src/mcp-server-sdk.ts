@@ -1987,6 +1987,74 @@ export function createMcpServer(): McpServer {
     },
   );
 
+  // ── Dashboard bridge: ask the live-CC channel a selection question ─────────
+  // gossip_ask is the dashboard-answerable parallel to the terminal-only harness
+  // AskUserQuestion: the orchestrator poses a structured selection question, the
+  // dashboard renders radios/checkboxes (+ optional "Other"), the user answers,
+  // and the answer arrives back as a NORMAL channel turn (the SAME path a typed
+  // dashboard message uses). NON-BLOCKING: this returns immediately after
+  // emitting the question; the answer is a later, independent turn. Use it ONLY
+  // when a dashboard chat_id is active (you are answering a <channel ...> turn) —
+  // in a plain terminal session use the harness AskUserQuestion instead.
+  server.tool(
+    'gossip_ask',
+    'Dashboard bridge ONLY: ask the dashboard chat (identified by chat_id) a structured selection question. The dashboard renders radios (single-select) or checkboxes (multiSelect) plus an optional free-text "Other"; the user\'s answer comes back to you as a NORMAL channel turn (a later message prefixed "[answer qid=…]"). This is the dashboard-answerable parallel to the terminal-only AskUserQuestion — use it when a <channel source="gossipcat" chat_id="..."> dashboard chat is active. NON-BLOCKING: returns at once; do NOT wait for the answer in this call. Pass the chat_id verbatim. Returns an error (no side effect) when no matching dashboard bridge stream is open.',
+    {
+      chat_id: z.string().describe('The chat_id verbatim from the <channel ... chat_id="..."> dashboard message.'),
+      questions: z
+        .array(
+          z.object({
+            header: z.string().describe('Short label for the question (e.g. "Approach").'),
+            question: z.string().describe('The prompt text shown above the options.'),
+            multiSelect: z.boolean().optional().describe('true → checkboxes (multiple allowed); false/omitted → radios (one).'),
+            options: z
+              .array(
+                z.object({
+                  label: z.string().describe('The option label the user selects; must be unique within the question.'),
+                  description: z.string().optional().describe('Optional one-line clarification shown under the label.'),
+                }),
+              )
+              .describe('Selectable options (≤8).'),
+            allowOther: z.boolean().optional().describe('When true, the dashboard shows a free-text "Other" input.'),
+          }),
+        )
+        .describe('1–4 questions, each with ≤8 options.'),
+    },
+    async ({ chat_id, questions }) => {
+      // Trust boundary: chat_id + questions are model-supplied. validateAskQuestions
+      // caps + normalizes the set and server-mints stable questionIds; the relay
+      // hub re-validates the chat_id shape and binds it to a stream the dashboard
+      // actually opened (the same knownChatIds gate as `reply`).
+      if (typeof chat_id !== 'string' || chat_id.trim().length === 0) {
+        return { content: [{ type: 'text' as const, text: 'gossip_ask error: chat_id is required.' }], isError: true };
+      }
+      if (!ctx.relay) {
+        return { content: [{ type: 'text' as const, text: 'gossip_ask error: no dashboard bridge is active (relay not started).' }], isError: true };
+      }
+      const { validateAskQuestions } = await import('@gossip/relay');
+      const validated = validateAskQuestions(questions);
+      if ('error' in validated) {
+        return { content: [{ type: 'text' as const, text: `gossip_ask error: ${validated.error}.` }], isError: true };
+      }
+      const qid = randomUUID();
+      let emitted = false;
+      try {
+        emitted = ctx.relay.emitBridgeQuestion(chat_id, qid, validated.questions) === true;
+      } catch {
+        emitted = false;
+      }
+      if (!emitted) {
+        return {
+          content: [{ type: 'text' as const, text: `gossip_ask error: no open dashboard bridge stream for chat_id "${chat_id}". This tool only sends to the dashboard channel.` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text' as const, text: `Asked the dashboard (qid=${qid}); the user's answer will arrive as a channel turn prefixed "[answer qid=${qid}]". Do not wait for it here.` }],
+      };
+    },
+  );
+
   // ── Info: status + agents (merged) ────────────────────────────────────────
   server.tool(
     'gossip_status',

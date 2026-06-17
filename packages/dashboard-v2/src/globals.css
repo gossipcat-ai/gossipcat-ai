@@ -963,6 +963,153 @@ html[data-theme="dark"]::after {
 }
 .cx-dimmed { opacity: 0.5; }
 
+/* ── gossip_ask question card (dashboard-answerable selection question) ───────
+   Rendered inline in the transcript when the active conversation has a pending
+   question. DESIGN.md dark carve-out: hairline --border, --r-md radius, NO
+   shadows; selection highlight uses --info teal (NEVER --accent — terracotta is
+   the Send CTA only); Submit is a NEUTRAL bordered button on --surface-2. */
+.cx-qcard {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--surface) 60%, var(--bg));
+  padding: 14px 16px;
+  margin: 8px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.cx-qfield {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.cx-qlegend {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  font-size: 12px;
+  color: var(--ink-2);
+  padding: 0;
+  margin: 0 0 2px;
+}
+.cx-qprompt {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  margin: 0 0 10px;
+}
+.cx-qoptions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cx-qopt {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  cursor: pointer;
+  transition: border-color 100ms ease-out, background 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-qopt { transition: none; }
+}
+.cx-qopt:hover {
+  border-color: var(--border-strong);
+}
+.cx-qopt.is-selected {
+  /* selection highlight = --info teal (semantic info/unverified), never --accent */
+  border-color: color-mix(in srgb, var(--info) 60%, var(--border));
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+}
+.cx-qinput {
+  margin-top: 2px;
+  flex: none;
+  accent-color: var(--info);
+  cursor: pointer;
+}
+.cx-qinput:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 70%, transparent);
+  outline-offset: 2px;
+}
+.cx-qopt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.cx-qopt-label {
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.4;
+}
+.cx-qopt-desc {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+.cx-qother {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.cx-qother-label {
+  font-variant: small-caps;
+  letter-spacing: 0.03em;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.cx-qother-input {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface) 50%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 7px 10px;
+}
+.cx-qother-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--info) 60%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 18%, transparent);
+}
+.cx-qactions {
+  display: flex;
+  justify-content: flex-end;
+}
+.cx-qsubmit {
+  /* NEUTRAL — bordered button on --surface-2, NOT terracotta --accent */
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: border-color 100ms ease-out, background 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-qsubmit { transition: none; }
+}
+.cx-qsubmit:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--info) 50%, var(--border-strong));
+  background: color-mix(in srgb, var(--info) 10%, var(--surface-2));
+}
+.cx-qsubmit:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 70%, transparent);
+  outline-offset: 2px;
+}
+.cx-qsubmit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ── conversation tab strip (multi-conversation ChatPage) ────────────────────
    Rendered inside the .chat-surface left card, so all var() tokens resolve to
    the dark carve-out values. Active = subtle --surface fill + 2px --ink-2 bottom
@@ -1077,6 +1224,36 @@ html[data-theme="dark"]::after {
   outline: 2px solid color-mix(in srgb, var(--info) 60%, transparent);
   outline-offset: -1px;
 }
+
+/* ── inline rename input — shown instead of cx-tab-btn during rename ──
+   Styled within the dark carve-out: --surface-2 bg, --ink text, hairline
+   --border, --r-sm. No accent colour — terracotta is reserved for Send CTA. */
+.cx-tab-rename-input {
+  flex: 1;
+  min-width: 0;
+  max-width: 140px;
+  padding: 4px 6px 4px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.2;
+  outline: none;
+  /* Hairline focus ring in --info teal — matches the rest of the tabstrip. */
+  box-shadow: none;
+}
+.cx-tab-rename-input:focus {
+  border-color: color-mix(in srgb, var(--info) 60%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--info) 25%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-tab-rename-input {
+    transition: none;
+  }
+}
+
 .cx-tab-new {
   flex: none;
   align-self: center;

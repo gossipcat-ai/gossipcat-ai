@@ -8,7 +8,13 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { useBridge, type BridgeMessage, type BridgeStatus } from '@/lib/useBridge';
+import {
+  useBridge,
+  type BridgeMessage,
+  type BridgeStatus,
+  type PendingQuestion,
+  type AnswerResponse,
+} from '@/lib/useBridge';
 
 /**
  * BridgeContext — MULTI-CONVERSATION store for the dashboard ⇄ LIVE Claude Code
@@ -47,6 +53,12 @@ interface TabMeta {
   chatId: string | null;
   /** Display label (first-message snippet, else short id, else "new chat"). */
   label: string;
+  /**
+   * User-assigned custom label, set via renameConversation(). When present,
+   * resolves first in label precedence (before snippet/chatId/"new chat").
+   * Cleared (set to undefined) when the user commits an empty/whitespace-only rename.
+   */
+  customLabel?: string;
 }
 
 /** Live per-conversation slice reported up by a ConversationController. */
@@ -54,18 +66,23 @@ export interface ConversationView {
   key: string;
   chatId: string | null;
   label: string;
+  /** User-assigned custom label. When set, takes precedence over auto-derived label. */
+  customLabel?: string;
   messages: BridgeMessage[];
   status: BridgeStatus;
   awaitingReply: boolean;
   unread: number;
   /** Last transient send error on this conversation (null when clear). */
   sendError: string | null;
+  /** Outstanding gossip_ask question for this conversation (null when none). */
+  pendingQuestion: PendingQuestion | null;
 }
 
 /** Imperative handle a ConversationController registers so the store can drive it. */
 interface ConversationHandle {
   send: (text: string) => Promise<void>;
   markRead: () => void;
+  submitAnswer: (responses: AnswerResponse[]) => Promise<boolean>;
 }
 
 export interface BridgeStoreValue {
@@ -79,12 +96,21 @@ export interface BridgeStoreValue {
   sendError: string | null;
   /** POST a message to the ACTIVE conversation. */
   send: (text: string) => Promise<void>;
+  /** Submit an answer to the ACTIVE conversation's pending gossip_ask question. */
+  submitAnswer: (responses: AnswerResponse[]) => Promise<boolean>;
   /** Open a fresh conversation tab and switch to it. No-op at MAX_TABS. */
   newConversation: () => void;
   /** Close a tab; activates a neighbor. Closing the last leaves one fresh tab. */
   closeConversation: (key: string) => void;
   /** Switch the active tab (clears its unread). */
   switchConversation: (key: string) => void;
+  /**
+   * Set a user-defined custom label on a conversation. Trimmed + capped at 40 chars.
+   * Passing an empty/whitespace-only string clears customLabel (reverts to auto-derived).
+   * A custom label survives subsequent messages — it is never overwritten by the
+   * auto-snippet or chat_id derivation once set.
+   */
+  renameConversation: (key: string, label: string) => void;
   /** True when another tab can be opened. */
   canAddTab: boolean;
 }
@@ -118,7 +144,7 @@ function deriveLabel(messages: readonly BridgeMessage[], chatId: string | null):
 // ── persistence ──────────────────────────────────────────────────────────────
 
 interface PersistShape {
-  tabs: { chatId: string; label: string }[];
+  tabs: { chatId: string; label: string; customLabel?: string }[];
   activeChatId: string | null;
 }
 
@@ -133,7 +159,12 @@ function loadPersisted(): { tabs: TabMeta[]; activeKey: string } | null {
     for (const t of parsed.tabs) {
       if (!t || typeof t.chatId !== 'string' || t.chatId.length === 0) continue;
       const label = typeof t.label === 'string' && t.label.length > 0 ? t.label.slice(0, 64) : t.chatId.slice(0, 6);
-      tabs.push({ key: freshKey(), chatId: t.chatId, label });
+      // Back-compat: old entries without customLabel are simply loaded without it.
+      const customLabel =
+        typeof t.customLabel === 'string' && t.customLabel.trim().length > 0
+          ? t.customLabel.slice(0, 40)
+          : undefined;
+      tabs.push({ key: freshKey(), chatId: t.chatId, label, customLabel });
       if (tabs.length >= MAX_TABS) break;
     }
     if (tabs.length === 0) return null;
@@ -151,7 +182,11 @@ function persist(tabs: readonly TabMeta[], activeKey: string): void {
     const persistable = tabs.filter((t): t is TabMeta & { chatId: string } => typeof t.chatId === 'string');
     const active = tabs.find((t) => t.key === activeKey);
     const shape: PersistShape = {
-      tabs: persistable.map((t) => ({ chatId: t.chatId, label: t.label })),
+      tabs: persistable.map((t) => ({
+        chatId: t.chatId,
+        label: t.label,
+        ...(t.customLabel ? { customLabel: t.customLabel } : {}),
+      })),
       activeChatId: active?.chatId ?? null,
     };
     if (shape.tabs.length === 0) {
@@ -189,26 +224,31 @@ function ConversationController({
 
   // Register/unregister this conversation's imperative handle.
   useEffect(() => {
-    registerHandle(meta.key, { send: bridge.send, markRead: bridge.markRead });
+    registerHandle(meta.key, { send: bridge.send, markRead: bridge.markRead, submitAnswer: bridge.submitAnswer });
     return () => registerHandle(meta.key, null);
-  }, [meta.key, bridge.send, bridge.markRead, registerHandle]);
+  }, [meta.key, bridge.send, bridge.markRead, bridge.submitAnswer, registerHandle]);
 
-  // Report the live slice up whenever any displayed field changes. The label is
+  // Report the live slice up whenever any displayed field changes. The auto-label is
   // derived from messages so it updates from "new chat" → first-message snippet.
-  const label = deriveLabel(bridge.messages, bridge.chatId);
+  // customLabel (when present) takes precedence and is NOT overwritten by auto-derivation.
+  const autoLabel = deriveLabel(bridge.messages, bridge.chatId);
+  const label = meta.customLabel ?? autoLabel;
   useEffect(() => {
     onState({
       key: meta.key,
       chatId: bridge.chatId,
       label,
+      customLabel: meta.customLabel,
       messages: bridge.messages,
       status: bridge.status,
       awaitingReply: bridge.awaitingReply,
       unread: bridge.unread,
       sendError: bridge.sendError,
+      pendingQuestion: bridge.pendingQuestion,
     });
   }, [
     meta.key,
+    meta.customLabel,
     bridge.chatId,
     label,
     bridge.messages,
@@ -216,18 +256,21 @@ function ConversationController({
     bridge.awaitingReply,
     bridge.unread,
     bridge.sendError,
+    bridge.pendingQuestion,
     onState,
   ]);
 
   // When this conversation mints its first chat_id, tell the store so it persists
-  // + records the id against the stable tab key.
+  // + records the id against the stable tab key. Pass autoLabel (not customLabel)
+  // so the stored label reflects the derived snippet for future sessions that
+  // don't yet have a customLabel set.
   const prevChatId = useRef<string | null>(meta.chatId);
   useEffect(() => {
     if (bridge.chatId && bridge.chatId !== prevChatId.current) {
       prevChatId.current = bridge.chatId;
-      onChatIdMinted(meta.key, bridge.chatId, label);
+      onChatIdMinted(meta.key, bridge.chatId, autoLabel);
     }
-  }, [meta.key, bridge.chatId, label, onChatIdMinted]);
+  }, [meta.key, bridge.chatId, autoLabel, onChatIdMinted]);
 
   return null;
 }
@@ -281,7 +324,8 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
         existing.status === view.status &&
         existing.awaitingReply === view.awaitingReply &&
         existing.unread === view.unread &&
-        existing.sendError === view.sendError
+        existing.sendError === view.sendError &&
+        existing.pendingQuestion === view.pendingQuestion
       ) {
         return prev; // no change — avoid a needless re-render
       }
@@ -311,6 +355,17 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
   const switchConversation = useCallback((key: string) => {
     setActiveKey(key);
     handlesRef.current[key]?.markRead();
+  }, []);
+
+  const renameConversation = useCallback((key: string, label: string) => {
+    const trimmed = label.trim().slice(0, 40);
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.key === key
+          ? { ...t, customLabel: trimmed.length > 0 ? trimmed : undefined }
+          : t
+      )
+    );
   }, []);
 
   const closeConversation = useCallback((key: string) => {
@@ -354,6 +409,15 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
     [activeKey]
   );
 
+  const submitAnswer = useCallback(
+    (responses: AnswerResponse[]): Promise<boolean> => {
+      const handle = handlesRef.current[activeKey];
+      if (!handle) return Promise.resolve(false);
+      return handle.submitAnswer(responses);
+    },
+    [activeKey]
+  );
+
   // Build the ordered, merged conversation list (tab order + live slice).
   const conversations = useMemo<ConversationView[]>(
     () =>
@@ -368,6 +432,7 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
             awaitingReply: false,
             unread: 0,
             sendError: null,
+            pendingQuestion: null,
           }
       ),
     [tabs, views]
@@ -384,12 +449,14 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
       active,
       sendError,
       send,
+      submitAnswer,
       newConversation,
       closeConversation,
       switchConversation,
+      renameConversation,
       canAddTab: tabs.length < MAX_TABS,
     }),
-    [conversations, activeKey, active, sendError, send, newConversation, closeConversation, switchConversation, tabs.length]
+    [conversations, activeKey, active, sendError, send, submitAnswer, newConversation, closeConversation, switchConversation, renameConversation, tabs.length]
   );
 
   return (

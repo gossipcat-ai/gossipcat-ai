@@ -1,5 +1,6 @@
-import type { BridgeMessage, BridgeStatus } from '@/lib/useBridge';
+import type { AnswerResponse, BridgeMessage, BridgeStatus, PendingQuestion } from '@/lib/useBridge';
 import { UserTurn, ProseBody, ActivityRow, AckRow, ErrorRow } from './transcript-parts';
+import { QuestionCard } from './QuestionCard';
 
 /**
  * Transcript — the activity-mirror v2 "CC-transcript" render: a flowing,
@@ -27,6 +28,10 @@ import { UserTurn, ProseBody, ActivityRow, AckRow, ErrorRow } from './transcript
 interface TranscriptProps {
   messages: readonly BridgeMessage[];
   status: BridgeStatus;
+  /** Outstanding gossip_ask question for the active conversation, if any. */
+  pendingQuestion?: PendingQuestion | null;
+  /** Submit handler for the pending question (required when one is rendered). */
+  onSubmitAnswer?: (responses: AnswerResponse[]) => Promise<boolean>;
 }
 
 /** Render one message as its transcript turn. */
@@ -106,16 +111,25 @@ function EmptyState() {
   );
 }
 
-export function Transcript({ messages, status }: TranscriptProps) {
+export function Transcript({ messages, status, pendingQuestion, onSubmitAnswer }: TranscriptProps) {
   const hasMessages = messages.length > 0;
 
-  // Loading: connecting with nothing to show yet → skeleton (no spinner).
-  if (!hasMessages && status === 'connecting') {
+  // A pending question renders even on an otherwise-empty/loading transcript —
+  // the operator must be able to answer the very first turn. onSubmitAnswer is
+  // always supplied alongside pendingQuestion by the page; guard defensively.
+  const questionCard =
+    pendingQuestion && onSubmitAnswer ? (
+      <QuestionCard pending={pendingQuestion} onSubmit={onSubmitAnswer} />
+    ) : null;
+
+  // Loading: connecting with nothing to show yet → skeleton (no spinner) unless
+  // a question is already pending (then show it).
+  if (!hasMessages && status === 'connecting' && !questionCard) {
     return <LoadingState />;
   }
 
-  // Empty: connected/closed with no frames → idle copy, keep the frame.
-  if (!hasMessages) {
+  // Empty: connected/closed with no frames AND no question → idle copy.
+  if (!hasMessages && !questionCard) {
     return <EmptyState />;
   }
 
@@ -135,6 +149,7 @@ export function Transcript({ messages, status }: TranscriptProps) {
           <Turn key={m.id} msg={m} />
         ))}
       </div>
+      {questionCard}
     </div>
   );
 }

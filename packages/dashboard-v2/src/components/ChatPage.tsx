@@ -38,9 +38,11 @@ export function ChatPage() {
     active,
     sendError,
     send,
+    submitAnswer,
     newConversation,
     closeConversation,
     switchConversation,
+    renameConversation,
     canAddTab,
   } = useBridgeStore();
   const [draft, setDraft] = useState('');
@@ -50,6 +52,7 @@ export function ChatPage() {
   const status = active?.status ?? 'connecting';
   const awaitingReply = active?.awaitingReply ?? false;
   const chatId = active?.chatId ?? null;
+  const pendingQuestion = active?.pendingQuestion ?? null;
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -59,7 +62,7 @@ export function ChatPage() {
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, awaitingReply, activeId]);
+  }, [messages, awaitingReply, activeId, pendingQuestion]);
 
   // Focus composer on page mount and when switching tabs.
   useEffect(() => {
@@ -213,6 +216,7 @@ export function ChatPage() {
             onSwitch={switchConversation}
             onClose={closeConversation}
             onNew={newConversation}
+            onRename={renameConversation}
           />
 
           {/* Scrollable transcript — fills remaining card height */}
@@ -224,7 +228,12 @@ export function ChatPage() {
               minHeight: 0,
             }}
           >
-            <Transcript messages={messages} status={status} />
+            <Transcript
+              messages={messages}
+              status={status}
+              pendingQuestion={pendingQuestion}
+              onSubmitAnswer={submitAnswer}
+            />
             {awaitingReply && <AwaitingDots compact={false} />}
           </div>
 
