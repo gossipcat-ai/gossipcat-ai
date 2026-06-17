@@ -220,7 +220,9 @@ export class DashboardRouter {
   // Dashboard ⇄ live-CC bridge transport (P1). Owns the outbound SSE client set
   // and the in-process inbound sink the MCP server registers. Distinct from the
   // dormant chatbot (consensus f14 — no dual-brain; /api/chat stays dormant).
-  private bridge = new BridgeHub();
+  // Constructed in the constructor body (not as a field initializer) so it can
+  // receive the chatDir option derived from projectRoot.
+  private bridge: BridgeHub;
 
   constructor(
     private auth: DashboardAuth,
@@ -228,6 +230,9 @@ export class DashboardRouter {
     private ctx: DashboardContext,
   ) {
     this.dashboardRoot = resolveDashboardRoot(projectRoot);
+    // Wire the chat write-through store: persist mirror frames under
+    // <projectRoot>/.gossip/chat/<chatId>.jsonl so history survives relay restart.
+    this.bridge = new BridgeHub({ chatDir: join(projectRoot, '.gossip', 'chat') });
   }
 
   /**

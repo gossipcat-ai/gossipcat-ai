@@ -19,6 +19,7 @@
  */
 
 import type { MirrorFrame } from './api-bridge';
+import { NullChatStore, type ChatStore } from './chat-store';
 
 /** Max frames retained per chat_id ring (bounded FIFO). Start conservative. */
 export const MIRROR_RING_MAX = 100;
@@ -40,16 +41,24 @@ interface MirrorRing {
  * MirrorEventStore — owns the per-chat_id rings. One instance per BridgeHub.
  * Process-local; a cold restart clears everything and resets every counter to
  * 0 (handled by the restart sentinel in api-bridge.handleStream).
+ *
+ * When a ChatStore is injected, rings are lazily hydrated from disk on first
+ * access (push/replaySlice/highestId) so post-restart replays and restart-
+ * sentinel checks see persisted frames and the id sequence continues across
+ * restarts (stopping false restart-sentinels).
  */
 export class MirrorEventStore {
   private rings = new Map<string, MirrorRing>();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private store: ChatStore;
 
   constructor(
     private readonly ringMax: number = MIRROR_RING_MAX,
     private readonly ttlMs: number = MIRROR_RING_TTL_MS,
     sweepIntervalMs: number = MIRROR_SWEEP_INTERVAL_MS,
+    store: ChatStore = new NullChatStore(),
   ) {
+    this.store = store;
     // Proactive sweep. unref so the timer never keeps node alive (tests, clean
     // shutdown). A sweepIntervalMs<=0 disables the timer (test injection).
     if (sweepIntervalMs > 0) {
@@ -59,17 +68,45 @@ export class MirrorEventStore {
   }
 
   /**
-   * Allocate the next id for a chat_id WITHOUT pushing a frame. The hub stamps
-   * id + ts server-side, so it asks the store to mint the id, builds the frame,
-   * then pushes it. Keeping mint+push as one call (push) avoids a torn counter,
-   * so this is internal — callers use push().
+   * Allocate or hydrate a ring for a chat_id. On first access when the ring is
+   * not in memory, loads persisted frames from the ChatStore so post-restart
+   * reads see durable history and the id sequence continues (preventing false
+   * restart-sentinels). Returns null when neither an in-memory ring exists NOR
+   * any persisted frames were found — callers treat null as "no data."
+   *
+   * Renamed from `ensureRing` to `getOrHydrate` to reflect the new semantics.
+   * push() uses a variant that always creates the ring (even if empty), since a
+   * push always establishes a new ring. replaySlice/highestId use this
+   * conditional form so they don't pollute ringCount() with empty rings on miss.
+   */
+  private getOrHydrate(chatId: string, now: number): MirrorRing | null {
+    const existing = this.rings.get(chatId);
+    if (existing) return existing;
+    // Not in memory — try to load from the persistent store.
+    const persisted = this.store.load(chatId, this.ringMax);
+    if (persisted.length === 0) return null;
+    const ring: MirrorRing = {
+      frames: persisted.slice(),
+      // Continue the id sequence from the highest persisted id so push() does
+      // not reset to 1 after a restart (preventing the false restart-sentinel).
+      nextId: persisted[persisted.length - 1].id,
+      touchedAt: now,
+    };
+    this.rings.set(chatId, ring);
+    return ring;
+  }
+
+  /**
+   * Ensure a ring exists for a chat_id, creating it from persisted data or
+   * fresh. Always returns a ring (never null). Used only by push() since a
+   * push always establishes a ring.
    */
   private ensureRing(chatId: string, now: number): MirrorRing {
-    let ring = this.rings.get(chatId);
-    if (!ring) {
-      ring = { frames: [], nextId: 0, touchedAt: now };
-      this.rings.set(chatId, ring);
-    }
+    const hydrated = this.getOrHydrate(chatId, now);
+    if (hydrated) return hydrated;
+    // No persisted data — fresh ring.
+    const ring: MirrorRing = { frames: [], nextId: 0, touchedAt: now };
+    this.rings.set(chatId, ring);
     return ring;
   }
 
@@ -94,6 +131,8 @@ export class MirrorEventStore {
     // Bounded FIFO: drop oldest beyond the cap. Distinct from TTL eviction.
     while (ring.frames.length > this.ringMax) ring.frames.shift();
     ring.touchedAt = now;
+    // Write-through to durable store (NullChatStore is a no-op).
+    this.store.append(chatId, frame);
     return frame;
   }
 
@@ -104,7 +143,7 @@ export class MirrorEventStore {
    * actively-observed stream isn't swept out from under a reconnecting client.
    */
   replaySlice(chatId: string, lastId: number, now: number = Date.now()): MirrorFrame[] {
-    const ring = this.rings.get(chatId);
+    const ring = this.getOrHydrate(chatId, now);
     if (!ring) return [];
     ring.touchedAt = now;
     // lastId<=0: return a defensive COPY (callers iterate while the ring may be
@@ -142,6 +181,9 @@ export class MirrorEventStore {
     const carried = src.frames.slice();
     // Clear the source ring entirely — provisional frames live exactly once.
     this.rings.delete(fromChatId);
+    // Drop the provisional file from disk — re-stamped frames persist via
+    // push() into the destination ring.
+    this.store.drop(fromChatId);
     const transferred: MirrorFrame[] = [];
     for (const f of carried) {
       transferred.push(this.push(toChatId, f.role, f.text, now));
@@ -157,7 +199,7 @@ export class MirrorEventStore {
    * sentinel in api-bridge.handleStream).
    */
   highestId(chatId: string): number {
-    const ring = this.rings.get(chatId);
+    const ring = this.getOrHydrate(chatId, Date.now());
     if (!ring || ring.frames.length === 0) return 0;
     return ring.frames[ring.frames.length - 1].id;
   }
