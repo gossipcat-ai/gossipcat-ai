@@ -284,3 +284,105 @@ describe('BridgeContext — render integration', () => {
     });
   });
 });
+
+describe('BridgeContext — renameConversation', () => {
+  it('sets customLabel and label resolves to it', async () => {
+    renderStore();
+    await waitFor(() => expect(store.conversations.length).toBe(1));
+    const key = store.conversations[0].key;
+    act(() => store.renameConversation(key, 'My custom tab'));
+    await waitFor(() => {
+      expect(store.conversations[0].customLabel).toBe('My custom tab');
+      expect(store.conversations[0].label).toBe('My custom tab');
+    });
+  });
+
+  it('trims + caps customLabel at 40 chars', async () => {
+    renderStore();
+    await waitFor(() => expect(store.conversations.length).toBe(1));
+    const key = store.conversations[0].key;
+    const longLabel = 'a'.repeat(60);
+    act(() => store.renameConversation(key, `  ${longLabel}  `));
+    await waitFor(() => {
+      expect(store.conversations[0].customLabel).toBe('a'.repeat(40));
+    });
+  });
+
+  it('custom label survives a subsequent message (not overwritten)', async () => {
+    renderStore();
+    await waitFor(() => expect(store.conversations.length).toBe(1));
+    const key = store.conversations[0].key;
+    act(() => store.renameConversation(key, 'Pinned name'));
+    await waitFor(() => expect(store.conversations[0].customLabel).toBe('Pinned name'));
+    // Send a message — auto-derived label would normally override "new chat"
+    await act(async () => {
+      await store.send('this is a long message that would become the snippet');
+    });
+    // customLabel should still be intact after the message lands
+    await waitFor(() => expect(store.conversations[0].chatId).toBe('chat-1'));
+    // The auto-snippet is derived, but customLabel wins
+    expect(store.conversations[0].customLabel).toBe('Pinned name');
+    expect(store.conversations[0].label).toBe('Pinned name');
+  });
+
+  it('empty/whitespace commit clears customLabel and reverts to auto-derived', async () => {
+    renderStore();
+    await waitFor(() => expect(store.conversations.length).toBe(1));
+    const key = store.conversations[0].key;
+    act(() => store.renameConversation(key, 'Custom'));
+    await waitFor(() => expect(store.conversations[0].customLabel).toBe('Custom'));
+    // Commit empty string → clears customLabel
+    act(() => store.renameConversation(key, '   '));
+    await waitFor(() => {
+      expect(store.conversations[0].customLabel).toBeUndefined();
+      // Reverts to auto-derived ("new chat" since no messages)
+      expect(store.conversations[0].label).toBe('new chat');
+    });
+  });
+
+  it('persistence round-trip includes customLabel', async () => {
+    const { unmount } = renderStore();
+    await waitFor(() => expect(store.conversations.length).toBe(1));
+    await act(async () => {
+      await store.send('hello world');
+    });
+    await waitFor(() => expect(store.conversations[0].chatId).toBe('chat-1'));
+    const key = store.conversations[0].key;
+    act(() => store.renameConversation(key, 'My saved tab'));
+    await waitFor(() => expect(store.conversations[0].customLabel).toBe('My saved tab'));
+
+    // Check localStorage persisted customLabel
+    const raw = localStorage.getItem(STORAGE_KEY);
+    expect(raw).toBeTruthy();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed.tabs[0].customLabel).toBe('My saved tab');
+
+    unmount();
+    instances.length = 0;
+
+    // Remount: customLabel should be restored
+    renderStore();
+    await waitFor(() => expect(store.conversations.length).toBe(1));
+    expect(store.conversations[0].customLabel).toBe('My saved tab');
+    expect(store.conversations[0].label).toBe('My saved tab');
+  });
+
+  it('old persisted entries without customLabel still load correctly', async () => {
+    // Simulate old storage format without customLabel field.
+    // The entry has no customLabel, so the tab loads fine without crashing.
+    // The label is auto-derived (first 6 chars of chatId) since no messages
+    // are in the live bridge on mount — that is correct behavior.
+    const oldShape = {
+      tabs: [{ chatId: 'chat-old', label: 'old label' }],
+      activeChatId: 'chat-old',
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(oldShape));
+    renderStore();
+    await waitFor(() => expect(store.conversations.length).toBe(1));
+    expect(store.conversations[0].chatId).toBe('chat-old');
+    // No customLabel set — back-compat entry is loaded without it.
+    expect(store.conversations[0].customLabel).toBeUndefined();
+    // Auto-derived: first 6 chars of chatId (no messages yet from live bridge).
+    expect(store.conversations[0].label).toBe('chat-o');
+  });
+});
