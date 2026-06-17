@@ -135,12 +135,34 @@ export class FileChatStore implements ChatStore {
       renameSync(tmp, fp);
     } catch (err) {
       // Retention is best-effort; log so a persistent failure is observable.
+      // Best-effort: remove our own tmp if the rename (not a crash) failed, so a
+      // failed retain does not leave an orphan behind.
+      this.cleanupStaleTmp(chatId);
       console.warn(`[chat-store] retain failed for chatId=${chatId}`, err);
+    }
+  }
+
+  /**
+   * Best-effort removal of a stale `<chatId>.jsonl.tmp` left by a crash between
+   * maybeRetain's writeFileSync and renameSync (the live .jsonl is always
+   * intact; only the tmp orphans). Called on cold load() so orphans from a
+   * prior process run are reclaimed when the chat is next hydrated, and from
+   * maybeRetain's catch. ENOENT (the normal case) is silent.
+   */
+  private cleanupStaleTmp(chatId: string): void {
+    try {
+      unlinkSync(this.filePath(chatId) + '.tmp');
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') {
+        console.warn(`[chat-store] stale .tmp cleanup failed for chatId=${chatId}:`, err);
+      }
     }
   }
 
   load(chatId: string, max: number): MirrorFrame[] {
     if (!this.isValidChatId(chatId)) return [];
+    // Reclaim any orphan tmp from a prior process run when a chat is hydrated.
+    this.cleanupStaleTmp(chatId);
     let content: string;
     try {
       content = readFileSync(this.filePath(chatId), 'utf8');
@@ -162,7 +184,7 @@ export class FileChatStore implements ChatStore {
         if (isMirrorFrameShaped(parsed)) {
           frames.push(parsed as MirrorFrame);
         } else {
-          console.warn(`[chat-store] skipping malformed frame line for chatId=${chatId}`);
+          console.warn(`[chat-store] skipping line with valid JSON but wrong MirrorFrame shape for chatId=${chatId}`);
         }
       } catch {
         console.warn(`[chat-store] skipping unparseable line for chatId=${chatId}`);

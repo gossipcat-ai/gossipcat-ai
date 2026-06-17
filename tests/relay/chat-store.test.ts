@@ -297,4 +297,17 @@ describe('FileChatStore', () => {
     const loaded = s.load('my-chat_id-123', 100);
     expect(loaded).toHaveLength(1);
   });
+
+  it('load() reclaims a stale .tmp orphan left by a prior-run crash', () => {
+    const s = store();
+    s.append('chat1', makeFrame(1));
+    // Simulate an orphan tmp left by a crash between writeFileSync and rename.
+    const orphan = join(dir, 'chat1.jsonl.tmp');
+    writeFileSync(orphan, 'garbage\n', 'utf8');
+    expect(existsSync(orphan)).toBe(true);
+    // Hydrating the chat cleans the orphan and still returns the real frames.
+    const loaded = s.load('chat1', 100);
+    expect(loaded).toHaveLength(1);
+    expect(existsSync(orphan)).toBe(false);
+  });
 });
