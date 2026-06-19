@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  <em>weightless in-context RL for code review — agents that learn from grounded signals, no weights touched.</em>
+  <strong>Multi-agent consensus code review.</strong> 3+ AI agents review your code independently, cross-check each other's findings against your actual source, and only surface what survives — and the system learns which agent to trust for what.
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/gossipcat"><img src="https://img.shields.io/npm/v/gossipcat?color=0ea5e9&v=0430" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/gossipcat"><img src="https://img.shields.io/npm/v/gossipcat?color=0ea5e9&v=0650" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/gossipcat"><img src="https://img.shields.io/npm/dw/gossipcat?color=0ea5e9" alt="npm weekly downloads" /></a>
   <a href="https://github.com/gossipcat-ai/gossipcat-ai/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="#quickstart"><img src="https://img.shields.io/badge/node-22%2B-green" alt="Node 22+" /></a>
@@ -19,13 +19,13 @@
 
 <p align="center">
   <a href="#quickstart"><strong>Install</strong></a> ·
-  <a href="#first-run--5-minutes"><strong>First Run</strong></a> ·
-  <a href="#how-to-use-it-day-to-day"><strong>Daily Use</strong></a> ·
+  <a href="#first-run"><strong>First Run</strong></a> ·
+  <a href="#daily-use"><strong>Daily Use</strong></a> ·
   <a href="#reading-the-dashboard"><strong>Dashboard</strong></a> ·
-  <a href="#drive-claude-code-from-your-browser"><strong>Chat Bridge</strong></a> ·
+  <a href="#drive-it-from-your-browser"><strong>Chat Bridge</strong></a> ·
   <a href="#troubleshooting"><strong>Troubleshooting</strong></a> ·
   <a href="#configuration"><strong>Config</strong></a> ·
-  <a href="#for-ai-agents"><strong>For AI Agents</strong></a>
+  <a href="#mcp-tools"><strong>Tools</strong></a>
 </p>
 
 <br/>
@@ -35,41 +35,32 @@
     <img src="https://raw.githubusercontent.com/gossipcat-ai/gossipcat-ai/master/packages/dashboard-v2/public/assets/dashboard-overview.png" alt="Gossipcat dashboard — live fleet view with per-agent vortexes, accuracy rings, signal volume, and recent hallucination catches" width="900" />
   </p>
   <p align="center">
-    <em>Live dashboard at <code>http://localhost:63007/dashboard</code> — fleet vortex, signal stream, skill graduation grid, and consensus flow, all in real time.</em>
-  </p>
-</p>
-
-<p align="center">
-  <a href="#reading-the-dashboard">
-    <img src="https://raw.githubusercontent.com/gossipcat-ai/gossipcat-ai/master/packages/dashboard-v2/public/assets/dashboard-team.png" alt="Gossipcat Team page — per-agent accuracy, weight, signals, hallucinations, and last task" width="900" />
-  </p>
-  <p align="center">
-    <em>Per-agent leaderboard — accuracy, uniqueness, impact, hallucinations caught, and dispatch weight. Updated after every consensus round.</em>
+    <em>Live dashboard at <code>http://localhost:&lt;port&gt;/dashboard</code> — fleet view, signal stream, skill-graduation grid, and consensus flow, all in real time.</em>
   </p>
 </p>
 
 <br/>
 
-> **The single-reviewer failure mode:** a solo AI reviewer ships hallucinated bugs as critical findings **5–10% of the time** in our internal usage. Gossipcat's cross-review drops that to **under 1%**. That delta is what the whole system exists to produce.
-<!-- TODO: link public benchmark -->
+## Why
+
+A single AI reviewer will, with total confidence, report bugs that aren't there. You read the finding, you go look, you waste twenty minutes — the code was fine. There's no second opinion and no track record, so you can't tell a real catch from a hallucination until you've already spent the time.
+
+Gossipcat runs **several agents in parallel**, has them **cross-check each other's findings against your actual `file:line`**, and only surfaces what survives. When an agent invents a finding, a peer catches it and the agent's accuracy score drops — so over time the system routes each kind of work to whoever is actually reliable at it. Cross-review catches hallucinations a solo reviewer would have shipped to you; that delta is the whole point.
+
+It runs as an MCP server inside **[Claude Code](https://claude.com/claude-code)** and **[Cursor](https://cursor.com)**, ships a [live operator dashboard](#reading-the-dashboard), and lets you [drive the orchestrator straight from the browser](#drive-it-from-your-browser).
+
+**The consensus tags you'll see** (this is your whole job — read these, ignore the rest):
+
+| Tag | Means | What you do |
+|-----|-------|-------------|
+| **CONFIRMED** | Multiple agents found it and verified it against the code | Fix it |
+| **UNIQUE** | One agent found it, cross-checked and held up | Fix it — high signal |
+| **DISPUTED** | Agents disagreed; gossipcat re-checked the code | Trust the verdict |
+| **UNVERIFIED** | Looks real but wasn't cross-checked yet | Glance, then verify |
 
 <br/>
 
-Multi-agent consensus code review that catches hallucinations before you act on them — and gets smarter every session.
-
-> Gossipcat is an MCP server for Claude Code that runs 3+ AI agents in parallel to review your code. They independently find bugs, then cross-review each other's findings. Confirmed = real. Caught = hallucination, penalized. Over time, agents accumulate accuracy profiles and the system routes tasks to whoever is most reliable for that category. No weights updated — the "policy" is a markdown skill file.
-
-## What is Gossipcat?
-
-Gossipcat is an MCP server that orchestrates multiple AI agents to review your code in parallel. Agents independently review, then cross-review each other's findings. Agreements are confirmed. Hallucinations are caught and penalized. Over time, each agent builds an accuracy profile — the system learns who to trust for what.
-
-It ships with a [live operator dashboard](#reading-the-dashboard) you can watch the whole fleet through — and, as of v0.6, [drive Claude Code from](#drive-claude-code-from-your-browser): a two-way chat bridge with multi-conversation tabs and structured questions the orchestrator can ask you right in the browser.
-
-### It's weightless in-context reinforcement learning
-
-> Most RL pipelines update model weights. **Gossipcat doesn't touch weights** — it learns by updating the prompt layer.
-
-Every finding an agent produces must cite a real `file:line`. Peers verify those citations against actual source code. Verified findings (and caught hallucinations) become **grounded reward signals** — no judge model, no subjective grade, just mechanical checks against ground truth. Those signals update per-agent competency scores, which steer future dispatch. When an agent keeps failing in a category, a targeted skill file is auto-generated from its own failure history and injected into future prompts.
+## How it works
 
 ```mermaid
 flowchart LR
@@ -89,430 +80,167 @@ flowchart LR
     style E fill:#ef4444,stroke:#b91c1c,color:#fff
 ```
 
-The "policy update" is a markdown file under `.gossip/agents/<id>/skills/`. No fine-tuning, no RLHF infrastructure, no labelling pipeline. The reward signal is grounded in source code rather than a judge model, which is the piece that makes the loop trustworthy enough to automate. When agents disagree, we check the code — not another LLM's opinion.
+| Step | What happens |
+|------|-------------|
+| **Dispatch** | Tasks routed to agents by *dispatch weight* — each agent's measured accuracy in that category |
+| **Parallel review** | Agents work independently, each producing findings with cited `file:line` |
+| **Cross-review** | Each agent checks peers' findings against the real code: agree, disagree, unverified, or new |
+| **Consensus** | Findings deduplicated and tagged CONFIRMED / DISPUTED / UNVERIFIED / UNIQUE |
+| **Signals** | Verified findings (and caught hallucinations) become *reward signals* that update accuracy scores |
+| **Skill development** | An agent that repeats a category of mistake gets a *skill file* — targeted instructions auto-generated from its own failure history — injected into future prompts |
+
+The reward signal is **grounded in your source code, not a judge model's opinion.** Every finding cites a real `file:line`; peers verify the citation mechanically. That ground truth is what makes the loop trustworthy enough to automate. The "policy update" is a markdown file under `.gossip/agents/<id>/skills/` — no weights touched, no fine-tuning, no RLHF. (It's effectively in-context reinforcement learning at the prompt layer; the framing is deliberate, the mechanism is exactly the table above.)
+
+> A small synthesis model (`consensus_judge`, configurable) merges and deduplicates the cross-review results — it does **not** grade quality. Verdicts come from citation checks against your code, never from one model judging another.
+
+<br/>
+
+## Native vs Relay agents
+
+Every agent has a **type** (where it runs) and a **preset** (what skills it starts with — `reviewer`, `implementer`, `researcher`, …). You mix them freely; a team of native reviewers and relay researchers is perfectly normal.
+
+| | Native | Relay |
+|---|---|---|
+| **Runs as** | A host subagent — Claude Code `Agent()` / Cursor `Task()` | A WebSocket worker on the relay server |
+| **Providers** | Your Claude Code / Cursor subscription — **no API key** | Google (Gemini), OpenAI, xAI (Grok), DeepSeek, OpenClaw, Ollama, any OpenAI-compatible endpoint |
+| **API key** | None | Required per provider |
+| **Defined in** | `.claude/agents/<id>.md` | `.gossip/config.json` |
+| **Consensus, memory, skills** | Yes | Yes |
+
+Both participate equally in consensus and skill development. Relay workers get `file_read` + `file_grep` during cross-review so their verification parity matches natives.
 
 <br/>
 
 ## How Gossipcat compares
 
-| | What you get | Hallucination filtering | Agents improve over time |
+| | What you get | Filters hallucinations | Improves over time |
 |---|---|---|---|
-| **Gossipcat** | 3+ agents cross-review each other's findings; confirmed bugs only | Yes — peers catch and penalize hallucinations mechanically | Yes — accuracy signals steer dispatch; skill files fix repeat failures |
-| **Single-agent review** (Claude Code built-in, Cursor review) | One model reviews your diff | No — hallucinations ship as findings | No — no feedback loop |
-| **LLM-as-judge cross-review** (most multi-agent frameworks) | One model grades another model's output | Partial — judge can hallucinate too; no ground truth | No — judge scores aren't wired to dispatch |
-| **Traditional review tools** (CodeRabbit, PR-Agent) | Pattern-match + one LLM pass | No | No |
+| **Gossipcat** | 3+ agents cross-review each other's findings; confirmed bugs only | **Yes** — peers catch and penalize hallucinations mechanically | **Yes** — accuracy signals steer dispatch; skill files fix repeat failures |
+| **Single-agent review** (Claude Code / Cursor built-in) | One model reviews your diff | No — hallucinations ship as findings | No feedback loop |
+| **Model-grades-model review** | One model scores another's output | Partial — the judge can hallucinate too; no ground truth | Scores aren't wired to dispatch |
+| **Pattern-match tools** (lint-style PR bots) | Rules + one LLM pass | No | No |
 
-The core difference: gossipcat verifies findings against actual `file:line` citations in your codebase. That ground truth is what makes the reward signal trustworthy enough to automate.
-
-<br/>
-
-## Real-world session
-
-What a typical gossipcat session looks like in practice (2026-05-22, v0.4.30 ship):
-
-- **1 feature shipped end-to-end** — consensus auto-verify (PR #448, master commit `4b28a1c`, 1255+ LOC, 50/50 new tests, zero regressions). Full design ↔ ship arc through gossipcat itself: 6 consensus rounds on the spec before any code was written.
-- **6 consensus rounds on the spec** caught **21+ HIGH-severity defects** across rev-1 → rev-6 — including a double-dispatch bug on the `run()` path (rev-3, opus-implementer), a phantom `AgentTeam` type the implementer would have invented if shipped (rev-5, sonnet-reviewer grep-grounded against live `AgentConfig`), and a `metadata` field that didn't exist on `ConsensusSignal` at all (rev-4, sonnet — `metadata` lives only on `MetaSignal` / `PipelineSignal`). Each round produced a measurable rev: rev-1 had 4 HIGHs, rev-6 had 0.
-- **1 post-merge bug caught by a pre-existing drift test** — `signal-allowlist-drift.test.ts:108` (which exists precisely to catch this — same failure mode as PR #329's silent-drop of `transport_failure`) flagged that the implementer added the 2 new signals to `KNOWN_SIGNALS` + the type union + `OPERATIONAL_SIGNAL_NAMES` but missed `VALID_CONSENSUS_SIGNALS` in `performance-writer.ts`. 7-line fix landed in the same PR before merge.
-- **Methodology lesson recorded** — sonnet-reviewer's habit of grepping cited file:line against live code (rather than trusting prose claims) is what ultimately closed the spec. Recorded as a `citation_grounding` agreement signal so the agent's pattern compounds across sessions.
-
-Nothing landed without cross-review. Two agents got `+/-` score adjustments based on what they caught vs. what they missed. The spec is now usable as a worked example of what 6 rounds of multi-agent design review looks like — `docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md`.
-
-<br/>
-
-## Why multi-agent?
-
-| Without gossipcat | With gossipcat |
-|---|---|
-| One AI reviews your code — and hallucinates a finding you waste 20 minutes on | Multiple agents cross-check each other — hallucinations get caught before you see them |
-| Every agent gets the same tasks regardless of track record | Dispatch weights route tasks to the agent with the best accuracy in that category |
-| An agent keeps making the same class of mistake | Skill files are auto-generated from failure data and injected into future prompts |
-| You don't know which agent to trust | Accuracy, uniqueness, and reliability scores are tracked per agent, per category |
-
-<br/>
-
-## Gossipcat is right for you if
-
-- You want **multiple AI models** catching different classes of bugs
-- You don't trust a single agent to catch everything
-- You want agents to **cross-check each other's findings** before you act on them
-- You want to know which agents are **actually accurate** vs. hallucinating
-- You want agents that **get better over time** based on their track record
-
-<br/>
-
-## Features
-
-<table>
-<tr>
-<td align="center" width="33%">
-<h3>Consensus Review</h3>
-3+ agents review independently, then cross-review each other. Findings tagged as CONFIRMED, DISPUTED, or UNIQUE.
-</td>
-<td align="center" width="33%">
-<h3>Adaptive Dispatch</h3>
-Agent accuracy is tracked per-category. Dispatch weights adjust automatically — the best agent for the job gets picked.
-</td>
-<td align="center" width="33%">
-<h3>Skill Development</h3>
-When an agent keeps failing in a category, targeted skills are generated from failure data and injected into future prompts. Effectiveness is measured with a z-test on post-bind signals — passed, failed, or inconclusive.
-</td>
-</tr>
-<tr>
-<td align="center">
-<h3>Multi-Provider</h3>
-Mix Anthropic, Google, OpenAI, xAI (Grok), DeepSeek, OpenClaw, and local (Ollama) agents in one team. Each brings different strengths. Native agents need no API key. 🦞 Lobster friendly.
-</td>
-<td align="center">
-<h3>Live Dashboard</h3>
-Real-time view of tasks, consensus reports, agent scores, and activity feed. Warm-cream editorial UI (terracotta accent, Fraunces + Geist). WebSocket updates.
-</td>
-<td align="center">
-<h3>Agent Memory</h3>
-Per-agent cognitive memory persists across sessions. Agents remember past findings, patterns, and project context.
-</td>
-</tr>
-<tr>
-<td align="center" colspan="3">
-<h3>Dashboard Chat Bridge (v0.6.x)</h3>
-Drive the live Claude Code orchestrator straight from the browser. Multiple conversation tabs (each its own thread + history, renamable), a working-agents rail showing who's dispatched right now, and <strong><code>gossip_ask</code></strong> — structured single/multi-select questions the orchestrator can pop into the dashboard and read your answer back from. See <a href="#drive-claude-code-from-your-browser">Drive Claude Code from your browser</a>.
-</td>
-</tr>
-<tr>
-<td align="center" colspan="3">
-<h3>Auto-Verify (v0.4.30)</h3>
-Opt-in. Every UNVERIFIED finding gets <code>file_read</code>-checked by a verifier agent before the report is returned. <code>tag</code> stays <code>'unverified'</code> — auto-verify is metadata, not state transition. Flag: <code>GOSSIP_CONSENSUS_AUTO_VERIFY_UNVERIFIED=1</code>.
-</td>
-</tr>
-</table>
+The difference: gossipcat verifies findings against actual `file:line` citations in *your* codebase. That ground truth is what makes the reward signal trustworthy enough to automate.
 
 <br/>
 
 <div align="center">
 <table>
   <tr>
-    <td align="center"><strong>Works<br/>with</strong></td>
-    <td align="center">
-      <img src="https://img.shields.io/badge/Claude%20Code-supported-orange?style=flat&logo=anthropic&logoColor=white" alt="Claude Code" /><br/><sub>Full support</sub>
-    </td>
-    <td align="center"><strong>Cursor</strong><br/><sub>Not yet</sub></td>
-    <td align="center"><strong>Windsurf</strong><br/><sub>Not yet</sub></td>
-    <td align="center"><strong>VS Code</strong><br/><sub>Not yet</sub></td>
+    <td align="center"><strong>Runs in</strong></td>
+    <td align="center"><img src="https://img.shields.io/badge/Claude%20Code-supported-orange?style=flat&logo=anthropic&logoColor=white" alt="Claude Code" /><br/><sub>Full support</sub></td>
+    <td align="center"><img src="https://img.shields.io/badge/Cursor-supported-0ea5e9?style=flat&logoColor=white" alt="Cursor" /><br/><sub>Full support</sub></td>
+    <td align="center"><strong>Windsurf</strong><br/><sub>Planned</sub></td>
+    <td align="center"><strong>VS Code</strong><br/><sub>Planned</sub></td>
   </tr>
 </table>
-
-<br/>
-
-<table>
-  <tr>
-    <td align="center"><strong>Provider<br/>gateways</strong></td>
-    <td align="center">
-      <img src="https://img.shields.io/badge/OpenClaw-gateway-4A90D9?style=flat" alt="OpenClaw" /><br/><sub>HTTP gateway ✅</sub>
-    </td>
-    <td align="center">
-      <img src="https://img.shields.io/badge/Ollama-local-gray?style=flat" alt="Ollama" /><br/><sub>Local models ✅</sub>
-    </td>
-    <td align="center">
-      <img src="https://img.shields.io/badge/OpenAI--compatible-any-green?style=flat" alt="OpenAI-compatible" /><br/><sub>Any base_url ✅</sub>
-    </td>
-  </tr>
-</table>
+<sub>Native agents run on Claude Code <code>Agent()</code> and Cursor <code>Task()</code>. Other MCP hosts work in relay-only mode (no native subagents).</sub>
 </div>
-
-<br/>
-
-## How it works
-
-The Mermaid diagram above shows the loop end-to-end. Here's the per-step definition:
-
-| Step | What happens |
-|------|-------------|
-| **Dispatch** | Tasks routed to agents based on dispatch weights (accuracy history per category) |
-| **Parallel review** | Agents work independently, each producing findings with confidence scores |
-| **Cross-review** | Each agent reviews peers' findings: agree, disagree, unverified, or new finding |
-| **Consensus** | Findings deduplicated and tagged: CONFIRMED, DISPUTED, UNVERIFIED, UNIQUE |
-| **Signals** | You verify findings against code and record accuracy signals |
-| **Skill development** | Agents with repeated failures get targeted skill files injected into future prompts |
-
-<br/>
-
-## Two types of agents
-
-| | Native | Relay |
-|---|---|---|
-| **Runs as** | Claude Code subagent (`Agent()` tool) | WebSocket worker on relay server |
-| **Providers** | Anthropic (Claude) | Google (Gemini), OpenAI, any provider |
-| **API key** | None — uses your Claude Code subscription | Required per provider |
-| **Defined in** | `.claude/agents/*.md` | `.gossip/config.json` |
-| **Consensus** | Yes | Yes |
-| **Memory & Skills** | Yes | Yes |
-
-Both types participate equally in consensus, cross-review, and skill development. Native subagents get skill files injected into their system prompts and can call `gossip_remember` for memory recall. Relay workers call the equivalent `memory_query` tool and get `file_read` + `file_grep` during cross-review so their verification parity matches natives.
 
 <br/>
 
 ## Quickstart
 
-**Requirements:** Node.js 22+ and [Claude Code](https://claude.com/claude-code).
+**Requirements:** Node.js 22+ and [Claude Code](https://claude.com/claude-code) or [Cursor](https://cursor.com).
 
-### One-liner
-
+**Claude Code:**
 ```bash
 npm install -g gossipcat && claude mcp add gossipcat -s user -- gossipcat
 ```
+Restart Claude Code, then in any project ask: *"Set up a gossipcat team for this project."*
 
-Restart Claude Code. Then in any project, ask:
-
-> "Set up a gossipcat team for this project"
+**Cursor:** install the package, then add gossipcat to `.cursor/mcp.json`:
+```jsonc
+{ "mcpServers": { "gossipcat": { "command": "gossipcat" } } }
+```
+Reload Cursor. Gossipcat detects Cursor automatically and dispatches native agents via the `Task` tool.
 
 <details>
-<summary><strong>Manual MCP config</strong> (if <code>claude mcp add</code> doesn't work for your setup)</summary>
+<summary><strong>Manual MCP config / alternative install paths</strong></summary>
 
-Add to `~/.claude/mcp_settings.json`:
-
+Add to `~/.claude/mcp_settings.json` (Claude Code) or project-local `.mcp.json`:
 ```json
-{
-  "mcpServers": {
-    "gossipcat": {
-      "command": "gossipcat"
-    }
-  }
-}
+{ "mcpServers": { "gossipcat": { "command": "npx", "args": ["gossipcat"] } } }
 ```
 
-Or project-local in `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "gossipcat": {
-      "command": "npx",
-      "args": ["gossipcat"]
-    }
-  }
-}
-```
-
-</details>
-
-Claude Code will call `gossip_setup()` to scaffold `.gossip/config.json` and your agent team. First-run bootstrap also writes the dispatch rules and tool catalog so Claude Code knows how to use gossipcat — no manual config needed.
-
-Gossipcat is on **[npm](https://www.npmjs.com/package/gossipcat)** and **[GitHub Releases](https://github.com/gossipcat-ai/gossipcat-ai/releases)** — both carry the same bundle. `npm install -g gossipcat` pulls from the registry and is the shortest path; the GitHub release URL is useful when you want to pin to a specific tarball (see [Alternative install paths](#alternative-install-paths) below). Either way, npm drops a `gossipcat` binary on your `PATH`.
-
-### What the install ships
-
-| | What you get |
-|---|---|
-| **MCP server** | Bundled binary at `dist-mcp/mcp-server.js`, wired as the `gossipcat` command on `PATH` |
-| **Dashboard** | Prebuilt static assets in `dist-dashboard/` — launches automatically on a dynamic port (ask Claude Code *"what's my gossipcat dashboard URL?"*). Override with `GOSSIPCAT_PORT=24420` if you want a stable port. |
-| **Default skills + rules + archetypes** | 19 bundled skill templates, operational rules, and project archetypes copied into the install |
-| **Postinstall wizard** | Writes `.mcp.json` with correct absolute paths for your machine |
-
-### Alternative install paths
-
-**Pin to a specific npm version:**
 ```bash
+# Pin to a version
 npm install -g gossipcat@0.6.5
-```
 
-**Pin to a specific GitHub release tarball** (version-locked, bypasses npm registry):
-```bash
+# Pin to a GitHub release tarball (bypasses the npm registry)
 npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.6.5/gossipcat-0.6.5.tgz
-```
 
-**Project-local install** (each project gets its own gossipcat):
-```bash
-cd your-project
-npm install --save-dev gossipcat
-```
-The postinstall writes `.mcp.json` to your project root. Open Claude Code in that directory and gossipcat connects automatically — no `claude mcp add` needed.
+# Project-local (postinstall writes .mcp.json — open the IDE there, no `mcp add` needed)
+cd your-project && npm install --save-dev gossipcat
 
-**From source** (contributors):
-```bash
-git clone https://github.com/gossipcat-ai/gossipcat-ai.git
-cd gossipcat-ai
-npm install
-npm run build:mcp
+# From source (contributors)
+git clone https://github.com/gossipcat-ai/gossipcat-ai.git && cd gossipcat-ai
+npm install && npm run build:mcp
 claude mcp add gossipcat -s user -- node "$PWD/dist-mcp/mcp-server.js"
 ```
 
-### Upgrading
+The install ships the MCP server binary, the prebuilt dashboard (`dist-dashboard/`, launches on a dynamic port), bundled skill templates + rules + project archetypes, and a postinstall wizard that writes `.mcp.json` with correct absolute paths.
 
-Re-run the install — npm will fetch the latest version and replace the installed binary:
-```bash
-npm install -g gossipcat@latest
-```
-Or in-session, ask Claude Code: *"Check for gossipcat updates"* — the `gossip_update` tool fetches the latest release notes and applies the upgrade with your confirmation.
+**Upgrade:** `npm install -g gossipcat@latest`, or ask in-session *"check for gossipcat updates"* (the `gossip_update` tool applies it with your confirmation).
+</details>
 
-### 3. API keys
+### API keys (relay agents only)
 
-Add env vars for the providers you want to use. Pass them with `-e` when registering, or set them in your shell environment.
+Native agents need **no key**. For relay agents, pass provider keys with `-e` at registration or set them in your shell:
 
-| Provider | Env var | Notes |
-|----------|---------|-------|
-| Native (Claude Code) | — | Dispatches through your active Claude Code subscription. No key needed. |
-| Anthropic API | `ANTHROPIC_API_KEY` | Direct API access if you don't want to go through Claude Code. |
-| Google Gemini | `GOOGLE_API_KEY` | Gemini Pro / Flash relay agents. |
-| OpenAI | `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`) | GPT-4 / GPT-4o relay agents. `OPENAI_BASE_URL` lets you point at OpenAI-compatible gateways (Azure, Together, Groq, etc.). |
-| xAI (Grok) | keychain (`key_ref`) | Grok relay agents at `https://api.x.ai/v1`. No env var — store the key in the OS keychain and point the agent at it with `key_ref` (defaults to service `grok`). |
-| DeepSeek | keychain (`key_ref`) | DeepSeek relay agents. No env var — store the key in the OS keychain (`key_ref` defaults to service `deepseek`). |
-| OpenClaw | — (local gateway) | OpenAI-compatible, defaults to `http://127.0.0.1:18789/v1`. No API key — auth handled by your local OpenClaw daemon. |
-| Ollama (local) | — | Runs locally via `http://localhost:11434`. No key. Pull your model first with `ollama pull llama3.1:8b`. |
+| Provider | How | Notes |
+|----------|-----|-------|
+| Native (Claude Code / Cursor) | — | Runs through your subscription. No key. |
+| Anthropic API | `ANTHROPIC_API_KEY` | Direct API access without the subscription path |
+| Google Gemini | `GOOGLE_API_KEY` | Built-in 429 watcher falls back to native on cooldown |
+| OpenAI / compatible | `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`) | Point `BASE_URL` at Azure / Together / Groq / OpenRouter |
+| xAI (Grok) | OS keychain via `key_ref` | No env var — store in keychain, set `key_ref` (default service `grok`) |
+| DeepSeek | OS keychain via `key_ref` | No env var — keychain, `key_ref` default service `deepseek` |
+| OpenClaw 🦞 | — (local gateway) | OpenAI-compatible at `http://127.0.0.1:18789/v1`, auth via the local daemon |
+| Ollama (local) | — | `http://localhost:11434`. `ollama pull llama3.1:8b` first |
 
-#### Examples — registering gossipcat with each provider
-
-**Native only** (zero API keys — everything runs through Claude Code):
-```bash
-claude mcp add gossipcat -s user -- gossipcat
-```
-Then in session ask for a team built from `sonnet-reviewer` / `haiku-researcher` / `opus-implementer`. Native agents dispatch through `Agent()` and relay back. Good zero-config starting point.
-
-**Anthropic API** (direct, bypasses Claude Code):
-```bash
-claude mcp add gossipcat -s user \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  -- gossipcat
-```
-Use this if you want relay agents running Claude models without going through the Claude Code subscription path — e.g. for parallelism beyond Claude Code's concurrency cap, or for running long background reviews while you keep working.
-
-**Google Gemini**:
-```bash
-claude mcp add gossipcat -s user \
-  -e GOOGLE_API_KEY=AIza... \
-  -- gossipcat
-```
-Enables `gemini-reviewer`, `gemini-tester`, `gemini-implementer` on the relay. Watch the quota — gossipcat has a built-in 429 watcher that falls back to native agents when Gemini is cooling down.
-
-**OpenAI** (and OpenAI-compatible gateways):
-```bash
-claude mcp add gossipcat -s user \
-  -e OPENAI_API_KEY=sk-... \
-  -- gossipcat
-```
-For Azure / Together / Groq / OpenRouter, add `OPENAI_BASE_URL`:
-```bash
-claude mcp add gossipcat -s user \
-  -e OPENAI_API_KEY=your-key \
-  -e OPENAI_BASE_URL=https://api.groq.com/openai/v1 \
-  -- gossipcat
-```
-
-**OpenClaw** (local gateway):
-```bash
-# Start the OpenClaw daemon first (see openclaw docs), default port 18789
-claude mcp add gossipcat -s user -- gossipcat
-```
-No env vars. Configure an agent with `provider: "openclaw"` in `.gossip/config.json` and gossipcat talks to the local gateway automatically. Override the port with `base_url` in the agent config if your daemon runs elsewhere.
-
-**Ollama** (fully local, no API):
-```bash
-# Pull a model once
-ollama pull llama3.1:8b
-# Then register gossipcat
-claude mcp add gossipcat -s user -- gossipcat
-```
-Configure the agent with `provider: "local"` and `model: "llama3.1:8b"` in `.gossip/config.json`. Good for airgapped dev, offline work, and burning-down-test-debt sessions where you don't want to spend API credits.
-
-**Mixed setup** (common production shape — Gemini cheap reviewers + Anthropic heavy implementers):
-```bash
-claude mcp add gossipcat -s user \
-  -e GOOGLE_API_KEY=AIza... \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  -- gossipcat
-```
-Then set up a team with `gemini-reviewer` + `haiku-researcher` (native) + `opus-implementer` (native) + `sonnet-reviewer` (native). Gossipcat dispatches by category strength from the signal pipeline.
-
-Keys are stored persistently and cross-platform:
-- **macOS** — OS Keychain
-- **Linux** — Secret Service (`secret-tool`)
-- **Windows / other** — AES-256-GCM encrypted file
-
-### 4. Initialize your team
-
-Start a Claude Code session in any project and ask Claude to set up your team:
-
-```
-"Set up a gossipcat team with a Gemini reviewer and a Sonnet implementer"
-```
-
-Claude Code calls `gossip_setup()` to create your `.gossip/config.json` and agent definitions. You choose the providers, models, and roles — gossipcat adapts to your setup.
-
-Available presets: `reviewer`, `implementer`, `tester`, `researcher`, `debugger`, `architect`, `security`, `designer`, `planner`, `devops`, `documenter`
+Keys are stored persistently and cross-platform — macOS Keychain, Linux Secret Service (`secret-tool`), or an AES-256-GCM encrypted file on Windows. Mixing providers is the common production shape: cheap Gemini reviewers + native heavy implementers, dispatched by category strength.
 
 <br/>
 
-## First Run — 5 Minutes
+## First Run
 
-The fastest path from "just installed" to "first useful review". If you skip this section you'll probably get stuck on the same things everyone else gets stuck on.
+The fastest path from "just installed" to "first useful review."
 
-### Step 1 — Open Claude Code in any project
-
-```bash
-cd ~/your-project
-claude
-```
-
-Gossipcat is registered globally now, so it boots automatically. You'll see it in the MCP server list.
-
-### Step 2 — Bootstrap once
-
-In Claude Code, just type:
+**1 · Open your IDE in a project and bootstrap once.** In Claude Code or Cursor, run:
 
 > **Run gossip_status**
 
-This loads gossipcat's operating rules into the current session, creates `.gossip/` in your project on first run, and prints the dashboard URL + auth key. Copy the key — you'll paste it into the dashboard once.
+This loads gossipcat's operating rules into the session, creates `.gossip/` on first run, and prints the dashboard URL + auth key:
 
-You'll see something like:
 ```
 Status:
-  Host: claude-code (native agents supported)
-  Relay: running :49664
-  Workers: 0
-  Dashboard: http://localhost:49664/dashboard (key: c3208820f8f70605fd45fa90004a2a4b)
-  Quota: google — OK
+  Host: claude-code (native agents supported)   ← which IDE you're in
+  Relay: running :49664                          ← background server for agents + dashboard
+  Workers: 0                                     ← agents busy right now (rises during a round)
+  Dashboard: http://localhost:49664/dashboard (key: c3208820…)  ← open it, paste the key
+  Quota: google — OK                             ← provider rate-limit status (falls back to native on cooldown)
 ```
 
-Open the dashboard URL in your browser, paste the key. You're now connected.
+Open the dashboard URL, paste the key (it rotates each boot — re-run `gossip_status` for a fresh one).
 
-### Step 3 — Create your first team
+**2 · Create your first team.** Tell the orchestrator what you're building:
 
-Tell Claude what you're building:
+> *"Set up a gossipcat team for this project — a TypeScript Next.js app with Postgres and Stripe."*
 
-> **"Set up a gossipcat team for this project — it's a TypeScript Next.js app with a Postgres backend and Stripe payments."**
+It proposes a team matched to your stack. **Smallest working team: `sonnet-reviewer` + `haiku-researcher` — both native, zero API keys.** Drop any relay agent whose provider key you don't have; add it later. Native agents (`native: true`) run on your subscription. Approve, and `.gossip/config.json` is written.
 
-Claude calls `gossip_setup()` and proposes a team. Typical proposal:
+**3 · Run your first review** in a project with some changes:
 
-```
-Proposed team:
-  - sonnet-reviewer    (anthropic/claude-sonnet-4-6, native)   reviewer + security
-  - gemini-reviewer    (google/gemini-2.5-pro, relay)          reviewer + types
-  - haiku-researcher   (anthropic/claude-haiku-4-5, native)    researcher
-  - opus-implementer   (anthropic/claude-opus-4-6, native)     implementer
-
-Approve? (y/n)
-```
-
-Native agents (`native: true`) run through your existing Claude Code subscription — **no API key needed**. Relay agents need a key for their provider. If you don't have a Google API key, drop `gemini-reviewer` from the team for now and add it later.
-
-Once you approve, gossipcat writes `.gossip/config.json` and the agents are live.
-
-### Step 4 — Run your first review
-
-In a project where you've made some changes:
-
-> **"Do a consensus review of my recent changes"**
-
-What happens (typical timing):
+> *"Do a consensus review of my recent changes"*
 
 | Phase | Time | What you see |
 |---|---|---|
-| 1. Decompose | 1s | Claude picks agents and dispatches them in parallel |
-| 2. Independent review | 30s–2min | Each agent reads your diff and reports findings |
-| 3. Cross-review | 30s–1min | Each agent reviews the others' findings |
-| 4. Consensus report | <1s | Findings tagged CONFIRMED / DISPUTED / UNVERIFIED / UNIQUE |
-| 5. Verification | varies | Claude reads UNVERIFIED findings against the code, decides if they're real |
-| 6. Signal recording | <1s | Accuracy signals saved per agent |
-
-You get a report like:
+| Decompose | ~1s | Orchestrator picks agents, dispatches in parallel |
+| Independent review | 30s–2min | Each agent reads your diff and reports findings |
+| Cross-review | 30s–1min | Each agent checks the others' findings against the code |
+| Consensus report | <1s | Findings tagged CONFIRMED / DISPUTED / UNVERIFIED / UNIQUE |
+| Verify + record | <1s | UNVERIFIED checked against code; accuracy signals saved |
 
 ```
 Consensus round b81956b2-e0fa4ea4 — 3 agents
@@ -520,436 +248,124 @@ Consensus round b81956b2-e0fa4ea4 — 3 agents
 CONFIRMED (2):
   [critical] Race condition in tasks Map at server.ts:47 — sonnet + gemini
   [high]     Missing auth on WebSocket upgrade at server.ts:112 — sonnet + gemini
-
 UNIQUE (1):
   [medium]   String concat in SQL query at queries.ts:88 — only sonnet caught this
-
 DISPUTED (1):
   [low]      "Memory leak in timer" — haiku says yes, sonnet/gemini say no
-             → verified, sonnet was right (not a leak — cleanup is in finally)
+             → verified: not a leak, cleanup is in finally. False alarm caught.
 
 Final: 3 real bugs to fix, 1 false alarm caught by cross-review.
 ```
 
-You only act on **CONFIRMED** + verified **UNIQUE** findings. The cross-review is the whole point — single-agent reviews ship hallucinated bugs as critical findings 5–10% of the time. Cross-review with verification drops that to under 1%.
-
-### Step 5 — Watch the dashboard
-
-The dashboard shows everything live: agents, scores, active tasks, consensus reports, signals. You can leave it open in a tab while you work — every gossipcat tool call pushes an update via WebSocket.
-
-That's the basic loop. The rest of this README covers advanced workflows, troubleshooting, and how to interpret what you're seeing.
+Act on **CONFIRMED** + verified **UNIQUE**. The false alarm that cross-review caught is the bug a single reviewer would have shipped to you.
 
 <br/>
 
-## How to use it day-to-day
+## <a id="daily-use"></a>How to use it day-to-day
 
-Concrete recipes for the most common workflows. Each one shows what to type, what you'll get back, and what to do with it.
+Each recipe: what to type, what you get, what to do with it.
 
-### Recipe 1: Review a diff before committing
+**Review a diff before committing** → *"Review my staged changes."* Consensus report in 1–3 min; fix CONFIRMED + verified findings. For diffs under ~20 lines, skip consensus — ask `gossip_run` for a single fast agent (~10s) and save the round.
 
-**Type:**
-> "Review my staged changes"
+**Catch security issues** → *"Security audit `lib/stripe/webhook.ts`."* Each security agent reviews from a different angle (OWASP, validation, auth, secrets); real vulns survive cross-review, theoretical ones get dropped. Be specific about the file — "audit the codebase" is too broad.
 
-**What you'll get:** A consensus report (1–3 minutes) with findings tagged CONFIRMED / UNIQUE / DISPUTED. Claude verifies UNVERIFIED findings against the code and tells you which are real.
+**Understand code before changing it** → *"Research how the WebSocket lifecycle works before I touch it."* A research agent traces call paths and writes a summary into its cognitive memory, so next time it remembers — no re-discovery cost.
 
-**What to do with it:** Fix the CONFIRMED + verified-real findings. Ignore disputed-but-falsified findings. If a finding looks important but you disagree, ask Claude *"verify finding f3 against the code yourself"* — it'll re-check and either back you up or push back.
+**Verify your own assumption** → *"I think there's a race in the tasks Map at server.ts:47 — check if I'm right."* Two agents independently confirm or push back. Author self-review is optimistic; this isn't.
 
-**When NOT to use it:** Tiny diffs (under 20 lines) — overhead exceeds value. Just eyeball them.
+**See which agents you can trust** → *"Show me agent scores."* Per-category accuracy + dispatch weights. If `gemini-reviewer` sits at 30% on `concurrency`, don't trust its concurrency findings solo.
 
----
+**Improve a struggling agent** → *"gemini-reviewer keeps hallucinating about concurrency — develop a skill for it."* Gossipcat generates a targeted skill from its failure data and measures whether it works (z-test on post-bind signals). Then it's automatic.
 
-### Recipe 2: Catch security issues before shipping a feature
-
-**Type:**
-> "Security audit the payment handler at lib/stripe/webhook.ts"
-
-**What you'll get:** Each security-skilled agent reviews from a different angle (OWASP, input validation, auth, secrets). Findings get cross-validated. Real vulns surface; theoretical ones get caught and dropped.
-
-**What to do with it:** Fix critical/high findings before merge. Bookmark medium/low findings for the next pass.
-
-**Tip:** Be specific about the file or module. "Security audit the codebase" is too broad and produces noisy results. "Security audit `lib/stripe/webhook.ts`" produces actionable findings.
-
----
-
-### Recipe 3: Understand a piece of code before changing it
-
-**Type:**
-> "Research how the WebSocket connection lifecycle works in this project before I touch it"
-
-**What you'll get:** A research agent (haiku-researcher by default — fast and cheap) reads the code, traces call paths, and writes a summary. The summary is saved to that agent's cognitive memory so the next time you ask about the same area it remembers.
-
-**What to do with it:** Use the summary to plan your change. The agent will reference it next time you ask anything related — no re-discovery cost.
-
----
-
-### Recipe 4: Verify your own assumption
-
-**Type:**
-> "I think there's a race condition in the tasks Map at server.ts:47 — check if I'm right"
-
-**What you'll get:** Two agents independently check the specific claim and either confirm or push back. Author self-review is optimistic — this isn't.
-
-**What to do with it:** If both agree with you, fix it. If they push back, read their reasoning before defending your hypothesis. They might be right.
-
----
-
-### Recipe 5: See which agents you can actually trust
-
-**Type:**
-> "Show me agent scores"
-
-**What you'll get:** A table of agents sorted by reliability with per-category accuracy and dispatch weights. Categories include `trust_boundaries`, `injection_vectors`, `concurrency`, `error_handling`, `data_integrity`, `type_safety`, etc.
-
-**What to do with it:** If `gemini-reviewer` is sitting at 30% accuracy on `concurrency`, you know not to trust its concurrency findings without cross-review. If `sonnet-reviewer` is at 90% on `trust_boundaries`, you can ship its findings on auth/session bugs with high confidence.
-
----
-
-### Recipe 6: Improve an agent that keeps making the same mistake
-
-**Type:**
-> "gemini-reviewer keeps hallucinating about concurrency — develop a skill for it"
-
-**What you'll get:** Gossipcat reads gemini-reviewer's failure data, generates a targeted skill file with concrete anti-patterns, and injects it into the agent's prompt for all future concurrency-related reviews. Effectiveness is measured statistically (z-test on post-bind signals) — it'll tell you if the skill is actually working after ~30 dispatches.
-
-**What to do with it:** Nothing — it's automatic. Just keep using the agent. Over time, the failure rate drops.
-
----
-
-### Recipe 7: Set up a team for a brand-new project
-
-**Type:**
-> "Set up a gossipcat team for a TypeScript Cloudflare Workers project with Drizzle ORM and KV storage"
-
-**What you'll get:** A proposed team with archetypes matched to your stack. Worker projects need different reviewers than long-running Node services — gossipcat picks accordingly.
-
-**What to do with it:** Review the proposal, drop agents you can't run (missing API keys), approve.
-
----
-
-### Things to avoid
-
-- **Don't ask for "review the whole codebase"** — too broad, agents will pick whatever they find first. Scope to a file, module, or diff.
-- **Don't approve findings without reading them** — even after cross-review, ~5% of findings are genuinely wrong. The reasoning matters more than the verdict.
-- **Don't ignore the dashboard** — when something feels weird (slow dispatch, repeated failures, suspicious findings), the dashboard usually shows you why before you have to ask.
-- **Don't run consensus mode for trivial questions** — `gossip_run` with one agent is fine for "what does this function do?"-tier queries. Save consensus for changes that touch shared state, auth, persistence, or the dispatch pipeline itself.
+> **Avoid:** "review the whole codebase" (too broad — scope to a file/module/diff); approving findings without reading the reasoning; running consensus for trivial questions (use a single `gossip_run` agent).
 
 <br/>
 
 ## Reading the dashboard
 
-The dashboard at `http://localhost:<port>/dashboard` is the visual layer over everything gossipcat knows. Open it once with the auth key from `gossip_status`, leave the tab open while you work. Updates push live via WebSocket.
+Open it once with the key from `gossip_status`; leave the tab open while you work. Every tool call pushes a live WebSocket update.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/gossipcat-ai/gossipcat-ai/master/packages/dashboard-v2/public/assets/dashboard-skills.png" alt="Skill graduation grid — per-skill effectiveness curve, 7d window, current/threshold value, and ±pp delta for graduated skills" width="900" />
 </p>
-<p align="center">
-  <em>Skill graduation grid — each card is one (skill × agent) pair: post-bind effectiveness curve over a 7-day window with current value vs threshold and ±pp drift on graduated skills.</em>
-</p>
+<p align="center"><em>Skill-graduation grid — each card is one (skill × agent): post-bind effectiveness over a 7-day window vs threshold, with ±pp drift on graduated skills.</em></p>
 
-
-| Panel | What it shows | When to look at it |
-|---|---|---|
-| **Overview** | Active agents, dispatch weights, recent finding counts | First thing in the morning — quick sanity check |
-| **Team** | All agents sorted by reliability score, with category breakdowns | Picking which agent to trust for a tricky finding |
-| **Tasks** | Live + historical task list with agent, duration, status | When something feels stuck — find it here first |
-| **Findings** | Consensus reports paginated by round, with CONFIRMED/DISPUTED/UNVERIFIED breakdowns | Reviewing what got caught in a recent review |
-| **Agent detail** | Per-agent memory entries, skills, score history, task history | Diagnosing why a specific agent keeps failing in a category |
-| **Signals** | Raw signal feed (agreement / hallucination / unique_confirmed) | Auditing the scoring pipeline if scores look wrong |
-| **Chat** | Live two-way bridge into the running orchestrator — multi-tab conversations, working-agents rail, structured questions | Driving Claude Code from the browser (see [Drive Claude Code from your browser](#drive-claude-code-from-your-browser)) |
-| **Logs** | mcp.log content (boot, errors, warnings) | When the MCP server is misbehaving and you need raw evidence |
-
-**Auth keys rotate every session.** A fresh key is generated each time gossipcat boots. If the dashboard says "unauthorized", run `gossip_status` again to get the new key.
+| Panel | What it shows |
+|---|---|
+| **Overview** | Active agents, dispatch weights, recent finding counts |
+| **Team** | Agents sorted by reliability, with category breakdowns |
+| **Tasks** | Live + historical tasks with agent, duration, status |
+| **Findings** | Consensus reports by round, CONFIRMED/DISPUTED/UNVERIFIED breakdowns |
+| **Agent detail** | Per-agent memory, skills, score history, task history |
+| **Signals** | Raw signal feed (agreement / hallucination / unique_confirmed) |
+| **Chat** | Live two-way bridge into the orchestrator (see below) |
+| **Logs** | `mcp.log` (boot, errors, warnings) |
 
 <br/>
 
-## Drive Claude Code from your browser
+## <a id="drive-it-from-your-browser"></a>Drive it from your browser
 
-The dashboard isn't read-only. The **Chat** page is a live, two-way bridge into the running Claude Code orchestrator — type from the browser, and your message lands in the active session as if you'd typed it in the terminal. The orchestrator's activity (dispatches, findings, replies) mirrors back into the same thread in real time.
+The dashboard's **Chat** page is a live, two-way bridge into the running orchestrator — type from the browser and your message lands in the active session; the orchestrator's dispatches, findings, and replies mirror back into the same thread in real time.
 
 | Capability | What it does |
 |---|---|
-| **Multi-conversation tabs** | Run several independent conversations side by side — each its own `chat_id`, history, and live stream. New / switch / close, per-tab unread markers, persisted across reloads. |
-| **Renamable tabs** | Double-click a tab (or press **F2**) to give it a name. Custom labels survive reload — keep "auth refactor" and "perf audit" in separate, labelled threads. |
-| **Working-agents rail** | A live rail shows which agents are dispatched and actively working right now, so you can watch a consensus round progress without leaving the chat. |
-| **Structured questions** | When the orchestrator needs a decision it can ask *you* — `gossip_ask` renders a single/multi-select card (with an optional "Other" field) right in the chat. Pick an option, hit submit, and your answer flows back to the orchestrator as a normal turn. |
+| **Multi-conversation tabs** | Several independent threads side by side — each its own `chat_id`, history, and live stream; per-tab unread, persisted across reloads |
+| **Renamable tabs** | Double-click or **F2** to label a tab ("auth refactor", "perf audit") — survives reload |
+| **Working-agents rail** | Live rail of who's dispatched and working right now — watch a round progress without leaving chat |
+| **Structured questions** | When the orchestrator needs a decision, `gossip_ask` renders a single/multi-select card right in the chat; your pick flows back as a normal turn |
 
-`gossip_ask` is the dashboard-answerable parallel to Claude Code's terminal-only question prompt — the orchestrator auto-routes to whichever surface you're driving from. The answer boundary is fail-closed: only known options are accepted and free-text "Other" input is sanitized before it ever reaches the orchestrator, so a dashboard answer can't smuggle instructions into the session.
+The `gossip_ask` answer boundary is fail-closed: only known options are accepted and "Other" free-text is sanitized before it reaches the orchestrator, so a dashboard answer can't smuggle instructions into the session. Launch with the `gossipcat code` wrapper (or ask the orchestrator to enable channel mode), then open the **Chat** tab.
 
-> **How to start it:** launch your session with the `gossipcat code` wrapper (or ask Claude Code to enable channel mode), open the dashboard, and switch to the **Chat** tab. Messages you send there reach the live orchestrator; everything it does mirrors back.
+<br/>
+
+## Host compatibility
+
+Gossipcat auto-detects the host and adapts dispatch + the rules file it writes.
+
+| Host | Native agents | Rules file |
+|------|---------------|------------|
+| **Claude Code** | Yes — `Agent()` | `.claude/rules/gossipcat.md` |
+| **Cursor** | Yes — `Task(subagent_type, model, …)` | `.cursor/rules/gossipcat.mdc` |
+| Windsurf | Relay-only (planned) | `.windsurfrules` |
+| VS Code | Relay-only (planned) | — |
+
+On Claude Code and Cursor, native agents run with no API key and participate fully in consensus. Other MCP hosts can still run relay agents.
 
 <br/>
 
 ## Troubleshooting
 
-### "Dashboard says unauthorized / 401"
-The auth key rotates every boot. Run `gossip_status` in Claude Code to get the current key, paste it into the dashboard login.
+**Dashboard says unauthorized / 401** — the key rotates every boot. Run `gossip_status` for the current key.
 
-### "Dashboard URL doesn't load at all"
-Check `~/.gossip/mcp.log` (or `<your-project>/.gossip/mcp.log`) for the boot log. Look for the `[gossipcat] 🌐 Dashboard:` line — that's the actual port. If it's missing, the relay didn't start. Common causes:
-- **Conflicting `.gossip/relay.pid`** from a crashed previous boot — delete it and restart Claude Code
-- **`GOSSIPCAT_PORT` set to a port already in use** — unset the env var or pick a free port
+**Dashboard URL won't load** — check `.gossip/mcp.log` for the `🌐 Dashboard:` line (the real port). If missing, the relay didn't start: delete a stale `.gossip/relay.pid` from a crashed boot and restart, or free up `GOSSIPCAT_PORT` if it's taken.
 
-### "Boot says 'No .gossip/config.json found' and nothing happens"
-This was a critical bug in v0.1.0 — fixed in v0.1.1. Upgrade with the install one-liner above. v0.1.1+ boots in degraded mode (dashboard + relay only) so you can run `gossip_setup` from inside Claude Code.
+**Agents return empty findings** — usually quota. `gossip_status` shows `Quota: <provider> — OK / cooling down`. On a rate limit gossipcat falls back to native agents (add some to your team if you have none).
 
-### "Agents keep returning empty findings"
-Usually a model or quota problem. Check `gossip_status` — it shows `Quota: google — OK` (or `cooling down`) per provider. If you're rate-limited, gossipcat will fall back to native agents automatically, but fallback agents may not be in your team. Either wait for the cooldown or add native agents to your team.
+**The same hallucinated finding keeps coming back** — record it: *"record a hallucination_caught signal for finding f3 — it claimed X but the code shows Y."* After 3, the agent's score drops in that category and dispatch stops routing it there.
 
-### "The same hallucinated finding keeps coming back"
-Record a `hallucination_caught` signal: ask Claude *"record a hallucination_caught signal for finding f3 in the last consensus round — it claimed X but the code shows Y"*. After 3 such signals, the offending agent's score drops in that category and the orchestrator stops asking it questions in that area.
+**An agent produced output but the consensus report is empty** — the strict `<agent_finding>` parser drops tags whose `type` isn't `finding | suggestion | insight` (invariant #8 in `docs/HANDBOOK.md`); the `gossip_signals` receipt surfaces the drop and a `finding_dropped_format` signal. If you see `&lt;agent_finding&gt;` instead of raw tags, a transport layer is entity-encoding output — pass agent output verbatim to `gossip_relay`.
 
-### "I want to use my own model / provider"
-Edit `.gossip/config.json` directly. Any OpenAI-compatible endpoint works via `provider: "openai"` + `base_url`. Local models work via Ollama (`provider: "local"`). See the [Configuration](#configuration) section.
+**Multiple IDE instances** — each gets its own dynamic port. For a stable port on one project, set `GOSSIPCAT_PORT=24420` in that environment.
 
-### "An agent produced output but the consensus report is empty"
-The strict `<agent_finding>` parser drops tags whose `type` isn't one of `finding | suggestion | insight` (see invariant #8 in `docs/HANDBOOK.md`). When that happens, the `gossip_signals` receipt surfaces the drop count and a `finding_dropped_format` pipeline signal is emitted. Check the consensus round's `droppedFindingsByType` field on the dashboard — it names the offending type. If you see `&lt;agent_finding&gt;` instead of raw `<agent_finding>`, a transport layer is entity-encoding the output; pass agent output verbatim to `gossip_relay`.
+**Uninstall** — `npm uninstall -g gossipcat && claude mcp remove gossipcat -s user`; `rm -rf ~/.gossip` (global state) or `<project>/.gossip` (per-project).
 
-### "Multiple Claude Code instances all want gossipcat"
-Already supported as of v0.1.1 — each instance gets its own dynamic port. If you want a stable port for one specific instance (e.g. for browser bookmarks), set `GOSSIPCAT_PORT=24420` for that one project's environment.
-
-### "How do I uninstall?"
-```bash
-npm uninstall -g gossipcat
-claude mcp remove gossipcat -s user
-rm -rf ~/.gossip  # if you want to wipe global memory + signals
-rm -rf <project>/.gossip  # if you want to wipe per-project state
-```
-
-### Still stuck?
-File an issue at https://github.com/gossipcat-ai/gossipcat-ai/issues. Include the contents of `.gossip/mcp.log` (last 100 lines) and the output of `gossip_status`. Or ask Claude in-session: *"file a gossipcat bug report about <...>"* — the `gossip_bug_feedback` tool packages it up automatically.
-
-<br/>
-
-## Under the hood
-
-Claude Code translates your natural-language requests into gossipcat MCP tool calls automatically — you don't need to type these — but if you want fine-grained control they're documented here:
-
-```
-gossip_run(agent_id: "auto", task: "...")        → single-agent task
-gossip_dispatch(mode: "consensus", tasks: [...]) → multi-agent review with cross-review
-gossip_collect(consensus: true)                  → wait for results, run consensus
-gossip_signals(action: "record", signals: [...]) → record accuracy after verification
-gossip_scores()                                  → view agent performance
-gossip_skills(action: "develop", ...)            → improve a struggling agent
-gossip_status()                                  → system status + dashboard URL
-gossip_setup(...)                                → create or update your team
-gossip_ask(chat_id, questions)                   → ask the dashboard a structured question
-reply(chat_id, message)                          → answer a dashboard chat turn (channel mode)
-```
-
-The dispatch rules at `.claude/rules/gossipcat.md` (auto-generated on first boot) teach Claude Code when to pick which mode based on what your change touches. You can edit these rules to bias the dispatch.
-
-<br/>
-
-## For AI Agents
-
-> **Currently supported orchestrator: Claude Code only.** Cursor, Windsurf, and VS Code agents do not yet have native agent support and cannot run consensus cross-review. If you are reading this as a Claude Code instance with the gossipcat MCP server connected, this guide applies to you.
-
-If you are a Claude Code instance reading this to understand how to use gossipcat, here is the complete operational guide.
-
-**You are the orchestrator.** Gossipcat gives you tools to dispatch work to a team of specialized agents, collect their results, run cross-review consensus, and record accuracy signals. You do not implement code directly — you coordinate.
-
-### Step 1 — Check what you have
-
-```
-gossip_status()
-```
-
-This tells you: which agents are available, their providers/models, relay status, dashboard URL, and suggested workflows. Always call this first in a new session.
-
-### Step 2 — Dispatch work
-
-**Single agent (auto-selected):**
-```
-gossip_run(agent_id: "auto", task: "Review the auth module for security issues")
-```
-The system picks the best agent for the task based on past accuracy. For relay agents, this returns the result directly. For native agents (Claude Code subagents), it returns `⚠️ EXECUTE NOW` instructions — follow them immediately in the same response.
-
-**Parallel (fan-out, no consensus):**
-```
-gossip_dispatch(mode: "parallel", tasks: [
-  { agent_id: "gemini-reviewer", task: "..." },
-  { agent_id: "sonnet-reviewer", task: "..." }
-])
-```
-
-**Consensus (cross-review):**
-```
-gossip_dispatch(mode: "consensus", tasks: [
-  { agent_id: "gemini-reviewer", task: "..." },
-  { agent_id: "sonnet-reviewer", task: "..." },
-  { agent_id: "haiku-researcher", task: "..." }
-])
-```
-
-### Step 3 — Collect results
-
-```
-gossip_collect(task_ids: ["id1", "id2", "id3"], consensus: true)
-```
-
-With `consensus: true`, agents cross-review each other's findings. If native agents are in the round, `gossip_collect` returns `⚠️ EXECUTE NOW` with prompts — dispatch those `Agent()` calls immediately, then relay each result via `gossip_relay_cross_review`.
-
-### Step 4 — Verify and record signals
-
-After consensus, **verify every UNVERIFIED finding** against the actual code (grep/read the cited files). Then record signals:
-
-```
-gossip_signals(action: "record", signals: [{
-  signal: "unique_confirmed",   // or "hallucination_caught", "agreement"
-  agent_id: "gemini-reviewer",
-  finding: "Race condition in task map at line 47",
-  finding_id: "<consensus_id>:<agent_id>:f1"   // mandatory
-}])
-```
-
-Signals update dispatch weights. Agents that hallucinate get penalized. Agents that catch real bugs get promoted.
-
-### Key rules
-
-- **Never leave UNVERIFIED findings unexamined** — read the code, confirm or deny, record the signal.
-- **`finding_id` is mandatory on every signal** — format: `<consensus_id>:<agent_id>:fN`.
-- **Use `gossip_progress` after reconnect** — if a consensus round was in flight, it re-surfaces the pending EXECUTE NOW prompts.
-
-### When to use consensus
-
-Use `gossip_dispatch(mode: "consensus")` when the change touches: shared mutable state, auth/sessions, file persistence, or the core dispatch pipeline. Use `gossip_run` for single-agent research, exploration, or review tasks that don't need cross-validation.
-
----
-
-## MCP Tools
-
-These tools are called by the internal LLM (the orchestrator — Claude Code with gossipcat MCP). You don't invoke them manually; the orchestrator selects and calls them based on your requests.
-
-| Tool | Purpose |
-|------|---------|
-| `gossip_status` | System status, dashboard URL, agent list |
-| `gossip_run` | Single-agent dispatch with auto agent selection |
-| `gossip_dispatch` | Multi-agent dispatch: `single`, `parallel`, or `consensus` |
-| `gossip_collect` | Collect results with optional cross-review synthesis |
-| `gossip_relay` | Feed native agent results back into the pipeline |
-| `gossip_relay_cross_review` | Feed native cross-review results into consensus |
-| `gossip_plan` | Decompose task into sub-tasks with agent assignments |
-| `gossip_signals` | Record or retract accuracy signals |
-| `gossip_scores` | View agent accuracy, uniqueness, and dispatch weights |
-| `gossip_skills` | Develop, bind, unbind, or list per-agent skills |
-| `gossip_setup` | Create or update agent team |
-| `gossip_ask` | Ask the dashboard a structured single/multi-select question and read the answer back as a channel turn |
-| `reply` | Send the orchestrator's response to the dashboard chat bridge (channel mode) |
-| `gossip_resolve_findings` | Mark consensus findings resolved/open from the dashboard |
-| `gossip_session_save` | Save session context for next session |
-| `gossip_remember` | Search an agent's cognitive memory |
-| `gossip_progress` | Check in-progress task status |
-| `gossip_watch` | Stream signals as agents emit them, between dispatch and collect (catches pipeline drops mid-round) |
-| `gossip_verify_memory` | Verify a memory claim against current code — FRESH / STALE / CONTRADICTED / INCONCLUSIVE — before acting on backlog items |
-| `gossip_reload` | Self-terminate the MCP process so Claude Code respawns with a fresh bundle (dev loop after code changes) |
-| `gossip_tools` | List all available tools |
-| `gossip_update` | Check for or apply gossipcat updates from npm |
-| `gossip_bug_feedback` | File a GitHub issue on the gossipcat repo from an in-session bug report |
-
-<br/>
-
-## Dashboard internals
-
-> User-facing dashboard guide is in [Reading the dashboard](#reading-the-dashboard) above. This section covers the build + tech stack.
-
-Built with React + Vite + shadcn/ui. Source lives at `packages/dashboard-v2/`. The bundled assets ship in `dist-dashboard/` and the relay serves them as static files at `http://localhost:<dynamic-port>/dashboard/`. Live updates push via WebSocket — every gossipcat tool call emits an event that connected dashboard tabs receive in real time.
-
-To rebuild from source (contributors only):
-```bash
-npm run build:dashboard
-```
-
-<br/>
-
-## Architecture
-
-```
-gossipcat/
-  apps/
-    cli/                  MCP server, native agent bridge, boot sequence
-  packages/
-    orchestrator/         Dispatch pipeline, consensus engine, memory, skills,
-                          performance scoring, task graph, prompt assembly
-    relay/                WebSocket relay server, dashboard REST/WS API
-    dashboard-v2/         React + Vite frontend (warm-cream editorial theme — see DESIGN.md)
-    client/               Lightweight WebSocket client for relay connections
-    tools/                File/shell/git tool implementations for worker agents
-    types/                Shared TypeScript types and message protocol
-```
-
-<br/>
-
-## OpenClaw Integration
-
-<p align="center">
-  <img src="https://img.shields.io/badge/OpenClaw-gateway-4A90D9?style=for-the-badge" alt="OpenClaw" />
-  <img src="https://img.shields.io/badge/%F0%9F%A6%9E-lobster%20friendly-red?style=for-the-badge" alt="Lobster friendly" />
-</p>
-
-Gossipcat supports [OpenClaw](https://github.com/openclaw/openclaw) as a provider gateway. OpenClaw runs locally and exposes an OpenAI-compatible HTTP API — gossipcat talks to it like any other relay agent, with your stored gateway token and a separate quota slot so OpenClaw rate limits never bleed into your OpenAI agents.
-
-### Wiring an OpenClaw agent
-
-Store your gateway token once (macOS):
-```bash
-security add-generic-password -s gossip-mesh -a openclaw -w <your-gateway-token>
-```
-
-On Linux:
-```bash
-secret-tool store --label "Gossip Mesh openclaw" service gossip-mesh provider openclaw
-# (enter token when prompted)
-```
-
-Then add it to your team:
-```
-"Add an OpenClaw reviewer to my team"
-```
-
-Or directly via `gossip_setup`:
-```
-gossip_setup(mode: "merge", agents: [{
-  id: "openclaw-agent",
-  type: "custom",
-  provider: "openclaw",
-  custom_model: "openclaw/default",
-  role: "reviewer",
-  skills: ["code_review", "typescript"]
-}])
-```
-
-The gateway runs at `http://127.0.0.1:18789/v1` by default. Override with `base_url` if yours is on a different port. Available models: `openclaw`, `openclaw/default`, `openclaw/main`.
-
-Once added, the agent participates in consensus rounds, accumulates accuracy signals, and gets skill files generated from its failure patterns — same as any other agent in the mesh.
+**Still stuck?** [Open an issue](https://github.com/gossipcat-ai/gossipcat-ai/issues) with the last 100 lines of `.gossip/mcp.log` + `gossip_status` output, or ask in-session *"file a gossipcat bug report about …"* (`gossip_bug_feedback` packages it).
 
 <br/>
 
 ## Configuration
 
-Config is searched in order: `.gossip/config.json` > `gossip.agents.json` > `gossip.agents.yaml`.
+Most of `.gossip/config.json` is **auto-generated by `gossip_setup()`** — hand-edit only to change providers/models/endpoints. First-run defaults work for most projects. Config is searched: `.gossip/config.json` → `gossip.agents.json` → `gossip.agents.yaml`.
 
 ```json
 {
-  "main_agent": {
-    "provider": "google",
-    "model": "gemini-2.5-pro"
-  },
-  "utility_model": {
-    "provider": "native",
-    "model": "haiku"
-  },
-  "consensus_judge": {
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-6",
-    "native": true
-  },
+  "main_agent":      { "provider": "google",    "model": "gemini-2.5-pro" },
+  "utility_model":   { "provider": "native",    "model": "haiku" },
+  "consensus_judge": { "provider": "anthropic", "model": "claude-sonnet-4-6", "native": true },
   "agents": {
     "sonnet-reviewer": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-6",
-      "preset": "reviewer",
-      "skills": ["code_review", "security_audit", "typescript"],
+      "provider": "anthropic", "model": "claude-sonnet-4-6",
+      "preset": "reviewer", "skills": ["code_review", "security_audit", "typescript"],
       "native": true
     }
   }
@@ -958,93 +374,100 @@ Config is searched in order: `.gossip/config.json` > `gossip.agents.json` > `gos
 
 | Field | Description |
 |-------|-------------|
-| `main_agent` | Internal tool LLM for routing, planning, and synthesis |
+| `main_agent` | Internal LLM for routing, planning, synthesis (set `provider: "none"` on Claude Code / Cursor to let the host classify natively) |
 | `utility_model` | Memory compaction, gossip, lens generation |
-| `consensus_judge` | Model for cross-review synthesis |
-| `agents.<id>.provider` | `anthropic`, `google`, `openai`, `grok` (xAI), `deepseek`, `openclaw`, `local`, `native` |
-| `agents.<id>.key_ref` | Keychain service name to read the provider key from (defaults to the provider name) — used by `grok`/`deepseek`/`openai`/etc. |
-| `agents.<id>.base_url` | Custom endpoint for `openai`/`openclaw` (e.g. `http://127.0.0.1:18789/v1`) |
-| `agents.<id>.native` | `true` = runs via Claude Code Agent(), no API key |
+| `consensus_judge` | Synthesis-only model that merges cross-review results (does not grade) |
+| `agents.<id>.provider` | `anthropic`, `google`, `openai`, `grok`, `deepseek`, `openclaw`, `local`, `native` |
+| `agents.<id>.key_ref` | Keychain service to read the provider key from (default = provider name). Used by keychain providers (`grok`, `deepseek`); env-var providers (`openai`, `google`, `anthropic`) read their key from the environment instead |
+| `agents.<id>.base_url` | Custom endpoint for `openai` / `openclaw` (e.g. `http://127.0.0.1:18789/v1`) |
+| `agents.<id>.native` | `true` = runs via the host's native tool, no API key |
 | `agents.<id>.preset` | `reviewer`, `implementer`, `tester`, `researcher`, `debugger`, `architect`, `security`, `designer`, `planner`, `devops`, `documenter` |
 | `agents.<id>.skills` | Skill labels for dispatch matching |
 
+<details>
+<summary><strong>OpenClaw 🦞 (local gateway provider)</strong></summary>
+
+[OpenClaw](https://github.com/openclaw/openclaw) runs locally and exposes an OpenAI-compatible API; gossipcat talks to it like any relay agent, with a separate quota slot so its rate limits don't bleed into your OpenAI agents. Store the gateway token once (macOS: `security add-generic-password -s gossip-mesh -a openclaw -w <token>`; Linux: `secret-tool store --label "Gossip Mesh openclaw" service gossip-mesh provider openclaw`), then add an agent with `provider: "openclaw"` (default `base_url` `http://127.0.0.1:18789/v1`, models `openclaw` / `openclaw/default` / `openclaw/main`). It joins consensus and earns skills like any other agent.
+</details>
+
 <br/>
 
-## Host compatibility
+## MCP Tools
 
-Gossipcat auto-detects the host environment:
+The orchestrator (Claude Code / Cursor) selects and calls these from your natural-language requests — you don't invoke them manually.
 
-| Host | Native agents | Rules file |
-|------|---------------|------------|
-| Claude Code | Yes | `.claude/rules/gossipcat.md` |
-| Cursor | No | `.cursor/rules/gossipcat.mdc` |
-| Windsurf | No | `.windsurfrules` |
-| VS Code | No | — |
+| Tool | Purpose |
+|------|---------|
+| `gossip_status` | System status, dashboard URL, agent list |
+| `gossip_setup` | Create or update an agent team |
+| `gossip_run` | Single-agent dispatch with auto agent selection |
+| `gossip_dispatch` | Multi-agent dispatch: `single`, `parallel`, or `consensus` |
+| `gossip_collect` | Collect results with optional cross-review synthesis |
+| `gossip_plan` | Decompose a task into sub-tasks with agent assignments |
+| `gossip_signals` | Record or retract accuracy signals |
+| `gossip_scores` | View agent accuracy, uniqueness, dispatch weights |
+| `gossip_skills` | Develop, bind, unbind, or list per-agent skills |
+| `gossip_resolve_findings` | Mark consensus findings resolved/open |
+| `gossip_remember` | Search an agent's cognitive memory |
+| `gossip_verify_memory` | Check a memory claim against current code (FRESH / STALE / CONTRADICTED) before acting on backlog |
+| `gossip_session_save` | Save session context for the next session |
+| `gossip_progress` | Check in-progress task status |
+| `gossip_watch` | Stream signals as agents emit them (catches pipeline drops mid-round) |
+| `gossip_ask` | Ask the dashboard a structured single/multi-select question |
+| `gossip_guide` | Print the gossipcat handbook for humans |
+| `gossip_config` | Manage runtime feature-gate flags |
+| `gossip_format` | Return the canonical `<agent_finding>` output format block |
+| `gossip_tools` | List all available tools |
+| `gossip_update` | Check for / apply gossipcat updates from npm |
+| `gossip_bug_feedback` | File a GitHub issue from an in-session bug report |
+| `gossip_reload` | Self-terminate so the host respawns with a fresh bundle (dev loop) |
+| _orchestrator-only_ | `gossip_relay`, `gossip_relay_cross_review`, `reply` — used internally to feed native results + the chat bridge back into the pipeline; you never call these |
+
+<br/>
+
+## Architecture
+
+```
+gossipcat/
+  apps/cli/               MCP server, host-aware native agent bridge, boot sequence
+  packages/
+    orchestrator/         Dispatch pipeline, consensus engine, memory, skills,
+                          performance scoring, task graph, prompt assembly
+    relay/                WebSocket relay server, dashboard REST/WS API
+    dashboard-v2/         React + Vite + shadcn/ui frontend (warm-cream theme — see DESIGN.md)
+    client/               Lightweight WebSocket client for relay connections
+    tools/                File / shell / git tool implementations for worker agents
+    types/                Shared TypeScript types and message protocol
+```
+
+The dashboard ships prebuilt in `dist-dashboard/` and the relay serves it as static files; rebuild from source with `npm run build:dashboard`.
+
+> **Reading this as a Claude Code or Cursor instance?** Call `gossip_status()` — it boots your full operating rules. The detailed orchestrator workflow (dispatch rules, consensus protocol, signal pipeline) lives in [`CLAUDE.md`](CLAUDE.md) and [`.claude/rules/gossipcat.md`](.claude/rules/gossipcat.md).
 
 <br/>
 
 ## Roadmap
 
+Shipped work lives in [CHANGELOG.md](CHANGELOG.md) and [GitHub Releases](https://github.com/gossipcat-ai/gossipcat-ai/releases). What's next:
+
 | Feature | Status |
 |---------|--------|
-| Consensus code review | ✅ Shipped |
-| Adaptive dispatch weights | ✅ Shipped |
-| Per-agent skill development | ✅ Shipped |
-| Agent cognitive memory | ✅ Shipped |
-| Live dashboard | ✅ Shipped |
-| Cross-platform key storage | ✅ Shipped |
-| OpenAI-compatible gateway support (`base_url`) | ✅ Shipped |
-| OpenClaw provider integration 🦞 | ✅ Shipped |
-| Local LLM support (Ollama) | ✅ Shipped |
-| Statistical skill effectiveness (z-test on per-category accuracy, auto pass/fail verdicts) | ✅ Shipped |
-| Native subagents get skill injection + cognitive memory recall | ✅ Shipped |
-| Relay cross-reviewers get `file_read` + `file_grep` (closes tool-blindness gap with natives) | ✅ Shipped |
-| Worktree-aware consensus (`resolutionRoots` + auto-discover for feature-branch reviews) | ✅ Shipped |
-| Signal pipeline observability (format-drop receipts + `finding_dropped_format` meta-signal + `gossip_watch` stream) | ✅ Shipped |
-| Consensus round retraction (`gossip_signals action: retract` with tombstones) | ✅ Shipped |
-| Worktree sandbox hardening (Layer 1+2+3 boundary enforcement + rotated audit log) | ✅ Shipped |
-| In-session bundle hot-swap (`gossip_reload`) | ✅ Shipped |
-| npm package — one-liner install with bundled MCP server + dashboard | ✅ Shipped |
-| Full implementation workflow (agents write code with scoped + worktree isolation) | ✅ Shipped |
-| Dashboard ⇄ Claude Code chat bridge (drive the live orchestrator from the browser, activity mirror) | ✅ Shipped |
-| Multi-conversation chat tabs (renamable, per-tab history + unread, working-agents rail) | ✅ Shipped |
-| Dashboard-answerable structured questions (`gossip_ask` — single/multi-select + Other, fail-closed answer boundary) | ✅ Shipped |
 | Dashboard enrichment (graphs, trends, session history) | ☐ Planned |
-| Local Postgres migration (embedded Postgres for tasks/signals/consensus/memory — unblocks full task results, real queries, no more JSONL scans) | ☐ Planned |
-| Full Cursor support | ☐ Planned |
-| Windsurf / VS Code parity | ☐ Planned |
-| Standalone CLI (no IDE required) | ☐ Planned |
-| CLI parity with MCP pipeline (gossip, task graph, agent memory in chat mode) | ☐ Planned |
+| Local Postgres migration (tasks/signals/consensus/memory — full task results, real queries, no JSONL scans) | ☐ Planned |
+| Windsurf / VS Code native parity | ☐ Planned |
+| Standalone CLI (no IDE required) + chat-mode pipeline parity | ☐ Planned |
 
 <br/>
 
 ## Contributing
 
-Gossipcat is open source and early-stage — bug reports, feature ideas, and PRs are all welcome.
+Gossipcat is open source and early-stage — bug reports, ideas, and PRs welcome.
 
-- **Bugs / feature requests** → [open an issue](https://github.com/gossipcat-ai/gossipcat-ai/issues). Or ask Claude Code directly: *"File a gossipcat bug report about <...>"* — the `gossip_bug_feedback` tool posts structured issues from your current session.
-- **Pull requests** → fork, branch, PR against `master`. Run `npm test` before pushing. Commit messages follow conventional commits (`fix:`, `feat:`, `chore:`, `docs:`).
-- **Discussions** → new ideas, design questions, "should this be a feature?" → [GitHub Discussions](https://github.com/gossipcat-ai/gossipcat-ai/discussions).
+- **Bugs / features** → [open an issue](https://github.com/gossipcat-ai/gossipcat-ai/issues), or ask Claude Code *"file a gossipcat bug report about …"* (`gossip_bug_feedback` posts a structured issue).
+- **Pull requests** → fork, branch, PR against `master`. Run `npm test` first. Conventional commits (`fix:`, `feat:`, `chore:`, `docs:`). Release process and contributor setup are in [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Discussions** → [GitHub Discussions](https://github.com/gossipcat-ai/gossipcat-ai/discussions).
 
-See `CLAUDE.md` in the repo for the operational rules gossipcat's own agents follow during development — it's a useful read if you want to understand the signal pipeline and consensus workflow from the inside.
-
-### Cutting a release (maintainers)
-
-Releases go to GitHub Releases via a two-stage script that respects branch protection — no direct commits to master.
-
-```bash
-# Stage 1 — open the version bump PR
-./scripts/release.sh 0.1.2
-
-# review + merge the PR via gh or web UI
-gh pr merge <pr-number> --squash --delete-branch
-
-# Stage 2 — build, tag, release (from master, after the PR is merged)
-git checkout master && git pull
-./scripts/release.sh   # no args
-```
-
-Stage 1 creates `chore/release-X.Y.Z`, bumps `package.json`, opens the PR, exits. Stage 2 reads the version from `package.json`, builds the MCP bundle + dashboard, packs the tarball, tags, pushes the tag, and creates the GitHub release with auto-generated notes from commits since the last tag.
+[`CLAUDE.md`](CLAUDE.md) documents the operational rules gossipcat's own agents follow during development — a useful read for understanding the signal pipeline and consensus workflow from the inside.
 
 <br/>
 
