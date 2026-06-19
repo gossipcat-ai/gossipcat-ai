@@ -4,6 +4,7 @@
  */
 import {
   buildNativeDispatchSingleResponse,
+  cursorSubagentType,
   detectNativeHost,
   formatNativeAgentCall,
   formatNativePromptInstruction,
@@ -159,6 +160,29 @@ describe('Claude Code output parity (legacy strings)', () => {
     expect(text).toContain('Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"\n\n');
     expect(text).not.toContain('Task() dispatch');
     expect(text).not.toContain('Cursor Task tool');
+  });
+});
+
+describe('cursorSubagentType', () => {
+  // Native agent ids are kebab-case and equal their .claude/agents/<id>.md
+  // filename = the type Cursor registered. Pass through verbatim.
+  it('passes a kebab-case native id through verbatim', () => {
+    expect(cursorSubagentType('unity-playtester')).toBe('unity-playtester');
+    expect(cursorSubagentType('sonnet-reviewer')).toBe('sonnet-reviewer');
+    expect(cursorSubagentType('opus-implementer')).toBe('opus-implementer');
+  });
+
+  // Reserved/utility ids start with '_', have no backing .claude/agents file →
+  // no registered Cursor type → fall back to the generalPurpose built-in.
+  it('falls back to generalPurpose for reserved/utility ids', () => {
+    expect(cursorSubagentType('_utility')).toBe('generalPurpose');
+    expect(cursorSubagentType('_project')).toBe('generalPurpose');
+  });
+
+  // A non-kebab id (no dash) has no backing file either → generalPurpose.
+  it('falls back to generalPurpose for non-kebab ids', () => {
+    expect(cursorSubagentType('claude')).toBe('generalPurpose');
+    expect(cursorSubagentType('Reviewer')).toBe('generalPurpose');
   });
 });
 
