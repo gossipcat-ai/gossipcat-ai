@@ -35,18 +35,34 @@ export function nativeHostLabel(host: NativeHost = detectNativeHost()): string {
   return 'host native subagent tool';
 }
 
-/** Cursor Task subagent_type: prefer agent id when it matches Cursor naming rules. */
+/**
+ * Cursor `Task` subagent_type for a NATIVE agent id.
+ *
+ * Cursor registers its `subagent_type` enum from `.claude/agents/<id>.md`
+ * filenames, so a native agent's id IS its registered Cursor type — pass it
+ * through verbatim. This function only runs for native agents (gated upstream by
+ * `ctx.nativeAgentConfigs` in handlers/dispatch.ts before formatNativeAgentCall),
+ * and a native agent maps 1:1 to a backing `.claude/agents/<id>.md` definition, so
+ * the kebab id is exactly the type Cursor knows. Verified against Cursor runtime:
+ * `Task(subagent_type: "unity-playtester")` resolved to a real sub-agent because
+ * `.claude/agents/unity-playtester.md` registered that type.
+ *
+ * Reserved/utility ids (`_utility`, `_project`, …) and any non-kebab id have no
+ * backing `.claude/agents/*.md` file and thus no registered Cursor type; fall back
+ * to the always-available `generalPurpose` built-in. (The former preset map —
+ * `sonnet-reviewer`→`code-reviewer` etc. — was dead code: every real native id is
+ * kebab-case and hits the pass-through, and a gossipcat-native project registers
+ * `sonnet-reviewer` itself as the type, so remapping it would have been wrong.)
+ *
+ * NOTE: relay-only ids (`gemini-reviewer`, `deepseek-challenger`) are kebab-case and
+ * would pass through here, but they never reach this function — the upstream
+ * nativeAgentConfigs gate routes them to the relay worker, not native Task dispatch.
+ */
 export function cursorSubagentType(agentId: string): string {
   if (/^[a-z][a-z0-9-]*$/.test(agentId) && agentId.includes('-')) {
     return agentId;
   }
-  const presetMap: Record<string, string> = {
-    'sonnet-reviewer': 'code-reviewer',
-    'haiku-researcher': 'explore',
-    'opus-implementer': 'generalPurpose',
-    'opus-architect': 'code-architect',
-  };
-  return presetMap[agentId] ?? 'generalPurpose';
+  return 'generalPurpose';
 }
 
 export interface FormatNativeCallOptions {
