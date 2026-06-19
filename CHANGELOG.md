@@ -6,6 +6,19 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ### Added
 
+- **First-class Cursor support.** Cursor is now a co-equal native host alongside
+  Claude Code. A host-aware dispatch bridge (`native-host-bridge.ts`) emits the
+  right call per host — Claude Code `Agent(model, …)` and Cursor
+  `Task(subagent_type, model, …)` — so native agents run on either editor's
+  subscription with no API key and participate fully in consensus cross-review.
+  Cursor detection sets `supportsNativeAgents: true`, writes
+  `.cursor/rules/gossipcat.mdc`, and the zero-config null-LLM "native
+  orchestration enabled" path now fires for Cursor too. Claude Code dispatch
+  output is byte-identical to before — the refactor is host-additive, not a
+  rewrite of the existing path. `cursorSubagentType` passes a native agent's id
+  through verbatim (Cursor registers its `subagent_type` enum from
+  `.claude/agents/<id>.md` filenames); reserved/utility ids fall back to the
+  `generalPurpose` built-in.
 - **Durable dashboard chat history.** Mirror chat transcripts now persist to
   `.gossip/chat/<chat_id>.jsonl` via a write-through `ChatStore` seam, so chat
   history survives a relay restart and is no longer capped at the 100-frame
@@ -18,6 +31,15 @@ All notable changes to gossipcat are documented here. The format is loosely base
   before any path op (path-traversal defense-in-depth), bounds each file via
   amortized truncation, writes truncations atomically (tmp→rename), skips
   internal `_`-prefixed sentinels, and caps per-line length before parse.
+
+### Changed
+
+- **README rework** — consensus-reviewed (4-agent panel), ~1060 → ~510 lines:
+  Claude Code and Cursor presented as co-equal first-class hosts; a consensus-tag
+  legend and concrete value hook moved to the top; the headline hallucination
+  figure softened to an honest directional claim; the MCP-tools reference
+  completed (`gossip_guide`/`gossip_config`/`gossip_format`); orchestrator-only
+  guide, OpenClaw deep-dive, and release runbook relocated to pointers.
 
 ## [0.6.5] — 2026-06-17
 
