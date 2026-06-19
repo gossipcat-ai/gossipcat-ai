@@ -377,7 +377,7 @@ function detectEnvironment(): EnvironmentInfo {
   }
   // Cursor uses .cursor/rules/ or .cursorrules
   if (process.env.CURSOR_TRACE_ID || process.env.CURSOR_SESSION_ID || process.env.CURSOR) {
-    return { host: 'cursor', supportsNativeAgents: false, nativeAgentDir: null, rulesDir: '.cursor/rules', rulesFile: '.cursor/rules/gossipcat.mdc' };
+    return { host: 'cursor', supportsNativeAgents: true, nativeAgentDir: '.claude/agents', rulesDir: '.cursor/rules', rulesFile: '.cursor/rules/gossipcat.mdc' };
   }
   // Windsurf uses .windsurfrules
   if (process.env.WINDSURF || process.env.WINDSURF_SESSION_ID) {
@@ -913,11 +913,12 @@ async function doBoot() {
     if (!mainKey) {
       mainProvider = 'none';
       config.main_agent.provider = 'none';
-      // On Claude Code hosts with native subagents available, "none" is the
-      // expected zero-config state — the host classifies via natural language
-      // through isNullLlm path. Don't misrepresent this as an error.
-      if (env.host === 'claude-code') {
-        process.stderr.write(`[gossipcat] ✅ Native Claude Code orchestration enabled (no API LLM needed — host classifies via natural language)\n`);
+      // On hosts with native subagents available (Claude Code, Cursor), "none"
+      // is the expected zero-config state — the host classifies via natural
+      // language through the isNullLlm path. Don't misrepresent this as an error.
+      if (env.host === 'claude-code' || env.host === 'cursor') {
+        const hostLabel = env.host === 'cursor' ? 'Cursor' : 'Claude Code';
+        process.stderr.write(`[gossipcat] ✅ Native ${hostLabel} orchestration enabled (no API LLM needed — host classifies via natural language)\n`);
       } else {
         process.stderr.write(`[gossipcat] ❌ No API keys available — orchestrator LLM disabled, features degrade to profile-based\n`);
       }
@@ -3015,7 +3016,10 @@ export function createMcpServer(): McpServer {
       const rulesDir = join(root, env.rulesDir);
       const rulesFile = join(root, env.rulesFile);
       mkdirSync(rulesDir, { recursive: true });
-      writeFileSync(rulesFile, generateRulesContent(agentList));
+      writeFileSync(rulesFile, generateRulesContent(
+        agentList,
+        env.host === 'cursor' || env.host === 'claude-code' ? env.host : undefined,
+      ));
 
       // Summary
       const lines: string[] = [`Host: ${env.host}`, ''];
@@ -3110,11 +3114,13 @@ export function createMcpServer(): McpServer {
         try {
           await syncWorkersViaKeychain();
 
-          // When orchestrator LLM is disabled (provider: "none") and host is Claude Code,
-          // delegate classification to the main orchestrator (Claude Code itself)
-          const isNullLlm = ctx.mainProvider === 'none';
+          // When orchestrator LLM is disabled (provider: "none") and host is Claude Code
+          // or Cursor, delegate classification to the host orchestrator. Use
+          // mainProviderConfig (synced from disk on every call) so config edits
+          // take effect without a full MCP reconnect.
+          const isNullLlm = ctx.mainProvider === 'none' || ctx.mainProviderConfig === 'none';
 
-          if (isNullLlm && env.host === 'claude-code') {
+          if (isNullLlm && (env.host === 'claude-code' || env.host === 'cursor')) {
             const agents = ctx.mainAgent.getAgentList?.() ?? [];
             const agentSummary = agents.map((a: any) =>
               `- ${a.id} (${a.provider}/${a.model}) [${a.skills?.join(', ') || 'no skills'}]`
