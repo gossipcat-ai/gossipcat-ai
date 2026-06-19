@@ -14,6 +14,7 @@ import {
 
 const CLAUDE: 'claude-code' = 'claude-code';
 const CURSOR: 'cursor' = 'cursor';
+const OTHER: 'other' = 'other';
 
 describe('detectNativeHost precedence', () => {
   const env = process.env;
@@ -136,6 +137,28 @@ describe('Claude Code output parity (legacy strings)', () => {
     });
     expect(text).toContain('Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"\n\n');
     expect(text).not.toContain('Cursor: no isolation');
+  });
+
+  // Regression: a non-cursor, non-claude-code host (the value detectNativeHost()
+  // returns under CI, where neither CLAUDECODE nor CURSOR is set) MUST get the
+  // Agent()-style banner — not an empty worktree note or a Cursor/Task header.
+  // Keying the banner on `=== 'claude-code'` dropped it for host='other' and broke
+  // dispatch-native-prompt.test.ts only in CI. The discriminator is cursor-vs-not.
+  it("buildNativeDispatchSingleResponse — host='other' falls back to Agent-style banner", () => {
+    const text = buildNativeDispatchSingleResponse({
+      taskId: 'o1',
+      agentId: 'unity-implementer',
+      model: 'claude-sonnet-4-6',
+      relayToken: 'tokO',
+      agentCall: 'Agent(model: "claude-sonnet-4-6", prompt: <x>, run_in_background: true)',
+      promptInstruction: 'Step 1 — ...\n',
+      useWorktree: true,
+      host: OTHER,
+    });
+    expect(text).toContain('⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.');
+    expect(text).toContain('Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"\n\n');
+    expect(text).not.toContain('Task() dispatch');
+    expect(text).not.toContain('Cursor Task tool');
   });
 });
 

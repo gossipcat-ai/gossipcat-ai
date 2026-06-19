@@ -136,14 +136,18 @@ export interface NativeDispatchBannerOptions {
 export function buildNativeDispatchSingleResponse(opts: NativeDispatchBannerOptions): string {
   const host = opts.host ?? detectNativeHost();
 
+  // Discriminate on cursor vs. not-cursor: the Agent()-style banner is the legacy
+  // default for EVERY non-cursor host (claude-code AND 'other'/unknown), matching
+  // formatNativeAgentCall. Keying on `=== 'claude-code'` would drop the banner for
+  // host='other' — which is exactly what CI (no CLAUDECODE/CURSOR env) exposed.
   let worktreeNote = '';
   if (host === 'cursor' && opts.useWorktree) {
     worktreeNote =
       '⚠️ Cursor worktree note: Claude Code isolation:"worktree" has no direct Cursor equivalent. ' +
       'Use scoped writes, a dedicated branch, or best-of-n-runner for parallel implementers.\n\n';
-  } else if (opts.useWorktree && host === 'claude-code') {
+  } else if (opts.useWorktree) {
     worktreeNote = `Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"\n\n`;
-  } else if (!opts.useWorktree) {
+  } else {
     worktreeNote = '\n';
   }
 
@@ -151,13 +155,13 @@ export function buildNativeDispatchSingleResponse(opts: NativeDispatchBannerOpti
     ? `⚠️ Isolation downgraded: requested write_mode="worktree" but ${opts.gitDowngradeReason}. Agent will run without worktree isolation.\n`
     : '';
 
-  // Claude path: preserve legacy banner strings exactly (downstream parsers depend on them).
-  const actionHeader = host === 'claude-code'
-    ? `⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.\n`
-    : `⚠️ REQUIRED_NEXT_ACTION: Task() dispatch — this is a TODO, not a result.\n`;
-  const dispatchIntro = host === 'claude-code'
-    ? `NATIVE_DISPATCH: Execute this via Claude Code Agent tool, then relay the result.\n\n`
-    : `NATIVE_DISPATCH: Execute this via Cursor Task tool, then relay the result.\n\n`;
+  // Non-cursor path preserves legacy banner strings exactly (downstream parsers depend on them).
+  const actionHeader = host === 'cursor'
+    ? `⚠️ REQUIRED_NEXT_ACTION: Task() dispatch — this is a TODO, not a result.\n`
+    : `⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.\n`;
+  const dispatchIntro = host === 'cursor'
+    ? `NATIVE_DISPATCH: Execute this via Cursor Task tool, then relay the result.\n\n`
+    : `NATIVE_DISPATCH: Execute this via Claude Code Agent tool, then relay the result.\n\n`;
 
   return (
     actionHeader +
