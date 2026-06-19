@@ -141,19 +141,40 @@ The difference: gossipcat verifies findings against actual `file:line` citations
 
 ## Quickstart
 
-**Requirements:** Node.js 22+ and [Claude Code](https://claude.com/claude-code) or [Cursor](https://cursor.com).
+**Requirements:** Node.js 22+ and either host below. Claude Code and Cursor are co-equal first-class hosts — pick the one you use; gossipcat auto-detects it and runs native agents either way.
 
-**Claude Code:**
+Install the package once:
 ```bash
-npm install -g gossipcat && claude mcp add gossipcat -s user -- gossipcat
+npm install -g gossipcat
 ```
-Restart Claude Code, then in any project ask: *"Set up a gossipcat team for this project."*
 
-**Cursor:** install the package, then add gossipcat to `.cursor/mcp.json`:
-```jsonc
-{ "mcpServers": { "gossipcat": { "command": "gossipcat" } } }
+<table>
+<tr><th><a href="https://claude.com/claude-code">Claude Code</a></th><th><a href="https://cursor.com">Cursor</a></th></tr>
+<tr valign="top">
+<td>
+
+Register the MCP server:
+```bash
+claude mcp add gossipcat -s user -- gossipcat
 ```
-Reload Cursor. Gossipcat detects Cursor automatically and dispatches native agents via the `Task` tool.
+Restart Claude Code. Native agents dispatch via `Agent()`.
+
+</td>
+<td>
+
+Add to `.cursor/mcp.json`:
+```jsonc
+{ "mcpServers": {
+  "gossipcat": { "command": "gossipcat" }
+} }
+```
+Reload Cursor. Native agents dispatch via `Task()`.
+
+</td>
+</tr>
+</table>
+
+Then in any project, ask the orchestrator: *"Set up a gossipcat team for this project."*
 
 <details>
 <summary><strong>Manual MCP config / alternative install paths</strong></summary>
