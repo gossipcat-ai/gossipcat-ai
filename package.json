@@ -24,6 +24,7 @@
     "dist-dashboard/",
     "docs/HANDBOOK.md",
     "docs/RULES.md",
+    "docs/CURSOR_RULES.md",
     "scripts/postinstall.js",
     "assets/hooks/discipline/**"
   ],

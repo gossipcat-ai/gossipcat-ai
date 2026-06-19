@@ -25,6 +25,7 @@
 
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { detectNativeHost, type NativeHost } from './native-host-bridge';
 
 /** Placeholder token in docs/RULES.md that gets replaced with the agent list.
  *  Double-braces so it's unambiguous vs any literal `${...}` in markdown. */
@@ -35,11 +36,17 @@ const AGENT_LIST_PLACEHOLDER = '{{AGENT_LIST}}';
  * docs/HANDBOOK.md in `gossip_status`. Returns the first path that exists, or
  * `null` if none do.
  */
-function resolveRulesPath(): string | null {
+function resolveRulesPath(host: NativeHost = detectNativeHost()): string | null {
+  const fileName = host === 'cursor' ? 'CURSOR_RULES.md' : 'RULES.md';
   const candidates = [
-    join(process.cwd(), 'docs', 'RULES.md'),
-    join(__dirname, '..', 'docs', 'RULES.md'),
-    join(__dirname, 'docs', 'RULES.md'),
+    join(process.cwd(), 'docs', fileName),
+    join(__dirname, '..', 'docs', fileName),
+    join(__dirname, 'docs', fileName),
+    // Fallback: bundled RULES.md when CURSOR_RULES.md not yet shipped
+    ...(host === 'cursor' ? [
+      join(process.cwd(), 'docs', 'RULES.md'),
+      join(__dirname, '..', 'docs', 'RULES.md'),
+    ] : []),
   ];
   return candidates.find((p) => existsSync(p)) ?? null;
 }
@@ -57,17 +64,27 @@ function resolveRulesPath(): string | null {
  *         Callers should surface this error — silent fallback would let a
  *         broken install pass `gossip_setup`.
  */
-export function generateRulesContent(agentList: string): string {
-  const rulesPath = resolveRulesPath();
+/**
+ * @param host Explicit host from detectEnvironment() — avoids env-var bleed between
+ *             Claude Code and Cursor when generating rules at gossip_setup time.
+ */
+export function generateRulesContent(agentList: string, host?: NativeHost): string {
+  const resolvedHost = host ?? detectNativeHost();
+  const rulesPath = resolveRulesPath(resolvedHost);
   if (!rulesPath) {
     throw new Error(
-      '[gossipcat] generateRulesContent: docs/RULES.md not found in any fallback path ' +
+      `[gossipcat] generateRulesContent: docs/RULES.md not found for host=${resolvedHost} ` +
         `(cwd=${process.cwd()}, dirname=${__dirname}). ` +
-        'Expected docs/RULES.md tracked in the gossipcat repo or shipped alongside the MCP bundle. ' +
-        'If running from a fresh install, re-run `npm run build:mcp` to copy docs/RULES.md into dist-mcp/docs/.',
+        'Expected docs/RULES.md or docs/CURSOR_RULES.md tracked in the gossipcat repo or shipped alongside the MCP bundle.',
     );
   }
-  const template = readFileSync(rulesPath, 'utf-8');
+  let template = readFileSync(rulesPath, 'utf-8');
+  if (resolvedHost === 'cursor' && rulesPath.endsWith('RULES.md')) {
+    template = template
+      .replace(/Agent\(\)/g, 'Task()')
+      .replace(/Agent\(/g, 'Task(')
+      .replace(/Claude Code/g, 'Cursor');
+  }
   // Use split/join rather than String.prototype.replace so a `$` in agentList
   // isn't interpreted as a replacement pattern.
   return template.split(AGENT_LIST_PLACEHOLDER).join(agentList);

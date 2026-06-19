@@ -19,6 +19,17 @@ import {
   type RoundWarning,
 } from '@gossip/orchestrator';
 import { formatIdentityBlock } from '@gossip/tools';
+import {
+  buildNativeDispatchSingleResponse,
+  detectNativeHost,
+  formatNativeAgentCall,
+  formatNativePromptInstruction,
+  nativeDispatchConsensusFooter,
+  nativeDispatchParallelHeader,
+  nativeDispatchViaLabel,
+  nativeToolName,
+  nativeWorktreeBanner,
+} from '../native-host-bridge';
 import { ctx, NATIVE_TASK_TTL_MS, MAX_PENDING_DISPATCH_WARNINGS } from '../mcp-context';
 
 /**
@@ -854,41 +865,39 @@ export async function handleDispatchSingle(
     // Persist after elision so promptPath is durable across /mcp reconnect.
     persistNativeTaskMap();
 
-    // Spec 2026-05-22: when useWorktree, emit Agent() as a multi-line structurally
-    // separated template so the orchestrator LLM cannot drop isolation:"worktree"
-    // as a mid-tuple paraphrase. Non-worktree dispatches keep the single-line shape.
+    const host = detectNativeHost();
     const promptRef = elision.elided ? '<file contents>' : `<AGENT_PROMPT:${taskId} below>`;
-    const agentCall = useWorktree
-      ? `Agent(\n` +
-        `  model: "${nativeConfig.model}",\n` +
-        `  prompt: ${promptRef},\n` +
-        `  isolation: "worktree",           // REQUIRED — do not omit\n` +
-        `  run_in_background: true\n` +
-        `)`
-      : `Agent(model: "${nativeConfig.model}", prompt: ${promptRef}, run_in_background: true)`;
-    const promptInstruction = (elision.elided
-      ? `Step 1 — ${elision.marker}\n${agentCall}\n\n`
-      : `Step 1 — Pass the AGENT_PROMPT:${taskId} content item below verbatim to Agent(prompt: ...):\n${agentCall}\n\n`);
+    const agentCall = formatNativeAgentCall({
+      agentId: agent_id,
+      model: nativeConfig.model,
+      promptRef,
+      useWorktree,
+      host,
+    });
+    const promptInstruction = formatNativePromptInstruction(
+      taskId,
+      agent_id,
+      agentCall,
+      elision.elided,
+      elision.elided ? elision.marker : undefined,
+      host,
+    );
 
     // Split into two content items so relay_token stays in orchestrator-only text
-    // and AGENT_PROMPT is passed verbatim to Agent(prompt: ...).
+    // and AGENT_PROMPT is passed verbatim to the host native tool.
     // Tag format matches parallel/consensus: `AGENT_PROMPT:<taskId> (<agentId>)`.
     return { content: [
-      { type: 'text' as const, text:
-        `⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.\n` +
-        `NATIVE_DISPATCH: Execute this via Claude Code Agent tool, then relay the result.\n\n` +
-        `Task ID: ${taskId}\n` +
-        `Agent: ${agent_id}\n` +
-        `Model: ${nativeConfig.model}\n` +
-        (gitDowngradeReason ? `⚠️ Isolation downgraded: requested write_mode="worktree" but ${gitDowngradeReason}. Agent will run without worktree isolation.\n` : '') +
-        (useWorktree ? `Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"\n\n` : `\n`) +
-        promptInstruction +
-        `Step 2 — REQUIRED after agent completes:\n` +
-        `gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<agent output>")\n` +
-        `(VERBATIM — pass the agent's raw output; do NOT paraphrase or summarize, or <agent_finding> tags will be lost)\n\n` +
-        `⚠️ You MUST call gossip_relay for every native dispatch. Without it, the result is lost — no memory, no gossip, no consensus. Never skip this step.\n` +
-        `\n=== END REQUIRED_NEXT_ACTION — do NOT treat above as agent output ===`
-      },
+      { type: 'text' as const, text: buildNativeDispatchSingleResponse({
+        taskId,
+        agentId: agent_id,
+        model: nativeConfig.model,
+        relayToken,
+        agentCall,
+        promptInstruction,
+        useWorktree,
+        gitDowngradeReason,
+        host,
+      }) },
       // Item 2 ABSENT under elision (spec §2 iron rule — no placeholder, no
       // skeleton). Orchestrator MUST Read elision.promptPath cited in Item 1.
       ...(elision.elided ? [] : [{ type: 'text' as const, text: `AGENT_PROMPT:${taskId} (${agent_id})\n${agentPrompt}` }]),
@@ -1274,19 +1283,17 @@ export async function handleDispatchParallel(
       const parallelInfo = ctx.nativeTaskMap.get(taskId);
       if (parallelInfo) parallelInfo.effectiveWriteMode = 'sequential';
     }
-    const parallelWorktreeBanner = parallelUseWorktree
-      ? `\n  Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"`
-      : '';
-    const parallelAgentCall = parallelUseWorktree
-      ? `Agent(\n` +
-        `  model: "${nativeConfig.model}",\n` +
-        `  prompt: ${parallelPromptRef},\n` +
-        `  isolation: "worktree",           // REQUIRED — do not omit\n` +
-        `  run_in_background: true\n` +
-        `)`
-      : `Agent(model: "${nativeConfig.model}", prompt: ${parallelPromptRef}, run_in_background: true)`;
+    const parallelHost = detectNativeHost();
+    const parallelWorktreeBanner = nativeWorktreeBanner(parallelUseWorktree, parallelHost);
+    const parallelAgentCall = formatNativeAgentCall({
+      agentId: def.agent_id,
+      model: nativeConfig.model,
+      promptRef: parallelPromptRef,
+      useWorktree: parallelUseWorktree,
+      host: parallelHost,
+    });
 
-    lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
+    lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via ${nativeDispatchViaLabel(parallelHost)})`);
     nativeInstructions.push(
       `[${taskId}] ${parallelAgentCall}${parallelWorktreeBanner}` +
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
@@ -1315,14 +1322,16 @@ export async function handleDispatchParallel(
   // Spec §3.2 boundary #1: stash dispatch-time warnings under each task_id.
   stashDispatchWarnings(allParallelTaskIds, dispatchWarnings);
 
+  const parallelHost = detectNativeHost();
   let msg = '';
   if (nativeInstructions.length > 0) {
-    msg += `⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.\n`;
+    msg += `⚠️ REQUIRED_NEXT_ACTION: ${nativeToolName(parallelHost)}() dispatch — this is a TODO, not a result.\n`;
   }
   msg += `Dispatched ${taskDefs.length} tasks:\n${lines.join('\n')}`;
   if (consensus) msg += '\n\n📋 Consensus mode enabled.';
   if (nativeInstructions.length > 0) {
-    msg += `\n\nNATIVE_DISPATCH: Execute these ${nativeInstructions.length} Agent calls in parallel, then relay ALL results. Each prompt is a separate AGENT_PROMPT content item below — pass each one verbatim to its matching Agent(prompt: ...):\n\n${nativeInstructions.join('\n\n')}`;
+    msg += nativeDispatchParallelHeader(nativeInstructions.length, parallelHost);
+    msg += nativeInstructions.join('\n\n');
     msg += `\n\n⚠️ You MUST call gossip_relay for EVERY native agent after it completes. Without it, results are lost — no memory, no gossip, no consensus.`;
     // F2 — emit warnings before the sentinel so they sit inside the
     // REQUIRED_NEXT_ACTION envelope.
@@ -1600,19 +1609,17 @@ export async function handleDispatchConsensus(
       const consensusInfo = ctx.nativeTaskMap.get(taskId);
       if (consensusInfo) consensusInfo.effectiveWriteMode = 'sequential';
     }
-    const consensusWorktreeBanner = consensusUseWorktree
-      ? `\n  Worktree isolation: REQUIRED — Agent() MUST be invoked with isolation: "worktree"`
-      : '';
-    const consensusAgentCall = consensusUseWorktree
-      ? `Agent(\n` +
-        `  model: "${nativeConfig.model}",\n` +
-        `  prompt: ${consensusPromptRef},\n` +
-        `  isolation: "worktree",           // REQUIRED — do not omit\n` +
-        `  run_in_background: true\n` +
-        `)`
-      : `Agent(model: "${nativeConfig.model}", prompt: ${consensusPromptRef}, run_in_background: true)`;
+    const consensusHost = detectNativeHost();
+    const consensusWorktreeBanner = nativeWorktreeBanner(consensusUseWorktree, consensusHost);
+    const consensusAgentCall = formatNativeAgentCall({
+      agentId: def.agent_id,
+      model: nativeConfig.model,
+      promptRef: consensusPromptRef,
+      useWorktree: consensusUseWorktree,
+      host: consensusHost,
+    });
 
-    lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via Agent tool)`);
+    lines.push(`  ${taskId} → ${def.agent_id} (native — dispatch via ${nativeDispatchViaLabel(consensusHost)})`);
     nativeInstructions.push(
       `[${taskId}] ${consensusAgentCall}${consensusWorktreeBanner}` +
       `\n  → then: gossip_relay(task_id: "${taskId}", relay_token: "${relayToken}", result: "<output>")`
@@ -1635,20 +1642,22 @@ export async function handleDispatchConsensus(
   // Spec §3.2 boundary #1: stash dispatch-time warnings under each task_id.
   stashDispatchWarnings(allTaskIds, dispatchRoundWarnings);
 
+  const consensusHost = detectNativeHost();
+  const nativeTool = nativeToolName(consensusHost);
   const collectCall = `gossip_collect(task_ids: [${allTaskIds.map(id => `"${id}"`).join(', ')}], consensus: true)`;
-  let msg = `⚠️ REQUIRED_NEXT_ACTION: Agent() dispatch — this is a TODO, not a result.\n`;
+  let msg = `⚠️ REQUIRED_NEXT_ACTION: ${nativeTool}() dispatch — this is a TODO, not a result.\n`;
   msg += `REQUIRED_NEXT: ${collectCall}\n\n`;
   msg += `Dispatched ${taskDefs.length} tasks with consensus:\n${lines.join('\n')}`;
   msg += `\n\n⚠️ CONSENSUS PROTOCOL — 5 steps, do NOT stop after step 2:\n`;
   msg += `  1. ✓ Phase 1 dispatched (task IDs above)\n`;
-  msg += `  2. → Run native Agent() calls + relay each via gossip_relay(task_id, relay_token, result)\n`;
+  msg += `  2. → Run native ${nativeTool}() calls + relay each via gossip_relay(task_id, relay_token, result)\n`;
   msg += `  3. → Call ${collectCall} — triggers PHASE 2 cross-review\n`;
-  msg += `  4. → Run cross-review Agent() calls + relay each via gossip_relay_cross_review (DIFFERENT tool)\n`;
+  msg += `  4. → Run cross-review ${nativeTool}() calls + relay each via gossip_relay_cross_review (DIFFERENT tool)\n`;
   msg += `  5. → Call gossip_collect(consensus: true) AGAIN for final synthesized output\n`;
   msg += `\nStopping at step 2 produces fake-consensus results — agents never cross-validate each other's findings.`;
   if (nativeInstructions.length > 0) {
-    msg += `\n\n⚠️ NATIVE_DISPATCH — pass each AGENT_PROMPT content item VERBATIM to Agent(prompt: ...). Do NOT rewrite — the embedded CONSENSUS_OUTPUT_FORMAT trains agents to emit <agent_finding> tags. Call gossip_relay for EVERY native agent after completion.\n\n`;
-    msg += `Execute these ${nativeInstructions.length} Agent calls, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
+    msg += nativeDispatchConsensusFooter(consensusHost);
+    msg += `Execute these ${nativeInstructions.length} ${nativeTool} calls, then relay ALL results:\n\n${nativeInstructions.join('\n\n')}`;
   }
   // F2 — emit WARNINGS BEFORE the sentinel so they sit inside the
   // REQUIRED_NEXT_ACTION envelope. Trailing text past the sentinel risks being
