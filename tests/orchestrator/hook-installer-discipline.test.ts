@@ -181,6 +181,45 @@ describe('installDisciplineHooks', () => {
     expect(after).toBe(arrayJson);
   });
 
+  it('does NOT copy discipline hook scripts when settings.local.json is malformed', () => {
+    const root = makeTmpProject();
+    created.push(root);
+
+    // Write a malformed settings.local.json before calling installDisciplineHooks.
+    mkdirSync(join(root, '.claude'), { recursive: true });
+    const malformed = '{not valid json';
+    const settingsPath = join(root, '.claude', 'settings.local.json');
+    writeFileSync(settingsPath, malformed);
+
+    let result: ReturnType<typeof installDisciplineHooks>;
+    expect(() => {
+      result = installDisciplineHooks(root);
+    }).not.toThrow();
+
+    // Must return a reason matching /malformed/i from the JSON parse error.
+    expect(result!.reason).toMatch(/malformed|Unexpected token|JSON/i);
+
+    // The discipline hook script files must NOT have been copied to disk —
+    // the load-before-copy ordering fix ensures no files land when settings
+    // validation fails.
+    const disciplineDir = join(root, '.claude', 'hooks', 'discipline');
+    const filenames = [
+      'session-start-bootstrap.sh',
+      'pretool-signals-validate.sh',
+      'posttool-collect-reminder.sh',
+    ];
+    for (const filename of filenames) {
+      expect(existsSync(join(disciplineDir, filename))).toBe(false);
+    }
+
+    // The discipline directory itself must not have been created either.
+    expect(existsSync(disciplineDir)).toBe(false);
+
+    // The malformed file must be byte-identical — zero data loss.
+    const after = readFileSync(settingsPath, 'utf-8');
+    expect(after).toBe(malformed);
+  });
+
   it('referenced discipline script files exist on disk as bundled assets', () => {
     // Sanity check — the hook-finder must locate all 3 scripts from the
     // current working environment (mirrors findBundledHook sanity test).
