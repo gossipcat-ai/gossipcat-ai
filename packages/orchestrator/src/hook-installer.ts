@@ -40,18 +40,20 @@ const HOOK_MATCHER = HOOKED_TOOLS.join('|');
  *   1. <__dirname>/assets/hooks/worktree-sandbox.sh
  *      — published: build:mcp copies ./assets → dist-mcp/assets
  *   2. <__dirname>/../../../assets/hooks/worktree-sandbox.sh
- *      — dev (ts-node): __dirname = packages/orchestrator/src/
+ *      — dev (ts-node): __dirname = packages/orchestrator/src/, so ../../.. = repo root
  *   3. <__dirname>/../assets/hooks/worktree-sandbox.sh
  *      — fallback for compiled-but-not-bundled layouts
- *   4. <cwd>/assets/hooks/worktree-sandbox.sh
- *      — last-resort dev fallback from monorepo root
+ *
+ * Note: a cwd-based candidate was intentionally removed (issue #570). cwd is
+ * attacker-influenceable; a planted ./assets/hooks/worktree-sandbox.sh would be
+ * copied into .claude/hooks/ and executed on every Bash/Edit/Write tool call.
+ * The dev-from-monorepo-root case is covered by candidate #2.
  */
 export function findBundledHook(): string | null {
   const candidates = [
     resolve(__dirname, 'assets', 'hooks', HOOK_FILENAME),
     resolve(__dirname, '..', '..', '..', 'assets', 'hooks', HOOK_FILENAME),
     resolve(__dirname, '..', 'assets', 'hooks', HOOK_FILENAME),
-    resolve(process.cwd(), 'assets', 'hooks', HOOK_FILENAME),
   ];
   for (const p of candidates) {
     if (existsSync(p)) return p;
@@ -145,17 +147,14 @@ export function writeOrchestratorRoleMarker(projectRoot: string): string {
  */
 export function installWorktreeSandboxHook(projectRoot: string): HookInstallResult {
   try {
+    // 1. Locate the bundled hook asset — bail early if not found.
     const bundled = findBundledHook();
     if (!bundled) return { installed: false, reason: 'bundled hook asset not found' };
 
-    // 1. Copy the hook script into the project and mark it executable.
-    const targetDir = join(projectRoot, '.claude', 'hooks');
-    const target = join(targetDir, HOOK_FILENAME);
-    mkdirSync(targetDir, { recursive: true });
-    copyFileSync(bundled, target);
-    chmodSync(target, 0o755);
-
-    // 2. Merge the PreToolUse registration into settings.json.
+    // 2. Load settings.json BEFORE touching the filesystem so a malformed file
+    //    causes an early return without leaving the hook script on disk
+    //    (issue #500 — previously a malformed settings.json threw AFTER copy,
+    //    leaving the script on disk but unregistered → Layer-2 sandbox silently inert).
     const settingsPath = join(projectRoot, '.claude', 'settings.json');
     mkdirSync(dirname(settingsPath), { recursive: true });
 
@@ -170,6 +169,14 @@ export function installWorktreeSandboxHook(projectRoot: string): HookInstallResu
       return { installed: false, reason: (err as Error).message };
     }
 
+    // 3. Settings loaded cleanly — now copy the hook script and mark it executable.
+    const targetDir = join(projectRoot, '.claude', 'hooks');
+    const target = join(targetDir, HOOK_FILENAME);
+    mkdirSync(targetDir, { recursive: true });
+    copyFileSync(bundled, target);
+    chmodSync(target, 0o755);
+
+    // 4. Merge the PreToolUse registration into settings.json.
     const mutated = mergePreToolUseEntry(settings);
     if (mutated) {
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
@@ -250,13 +257,15 @@ const DISCIPLINE_HOOKS = [
 /**
  * Resolve a bundled discipline hook asset. Mirrors `findBundledHook` candidate
  * strategy so it works from both the esbuild bundle (dist-mcp/) and dev (ts-node).
+ *
+ * Note: a cwd-based candidate was intentionally removed (issue #570). See
+ * `findBundledHook` doc comment for rationale.
  */
 function findDisciplineHook(filename: string): string | null {
   const candidates = [
     resolve(__dirname, 'assets', 'hooks', DISCIPLINE_HOOK_DIR, filename),
     resolve(__dirname, '..', '..', '..', 'assets', 'hooks', DISCIPLINE_HOOK_DIR, filename),
     resolve(__dirname, '..', 'assets', 'hooks', DISCIPLINE_HOOK_DIR, filename),
-    resolve(process.cwd(), 'assets', 'hooks', DISCIPLINE_HOOK_DIR, filename),
   ];
   for (const p of candidates) {
     if (existsSync(p)) return p;
