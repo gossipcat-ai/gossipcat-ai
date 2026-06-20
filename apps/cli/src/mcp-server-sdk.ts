@@ -4219,7 +4219,7 @@ export function createMcpServer(): McpServer {
         if (nonZeroSkips.length > 0) {
           lines.push(`  skipped: ${nonZeroSkips.map(([k, n]) => `${k}=${n}`).join(', ')}`);
           if ((result.skipReasons?.lineAnchoredOff ?? 0) > 0) {
-            lines.push(`  (lineAnchoredOff: enable consensus.resolverLineAnchored to resolve present-elsewhere findings as stale_anchor)`);
+            lines.push(`  (lineAnchoredOff: consensus.resolverLineAnchored is explicitly false in your config; set it to true or remove it — it now defaults on — to resolve present-elsewhere findings as stale_anchor)`);
           }
         }
         return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
