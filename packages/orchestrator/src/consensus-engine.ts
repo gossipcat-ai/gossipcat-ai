@@ -1093,7 +1093,9 @@ Return only valid JSON.${skillsBlock}`;
           }
           _log('consensus',
             `⚠ agent "${r.agentId}" emitted ZERO tags — falling back to bullet parsing. ` +
-            `Check if skill Output Format conflicts with FINDING TAG SCHEMA.`
+            `Common causes: the dispatch/cross-review prompt instructed plain prose (no <agent_finding> tags), ` +
+            `a design/research task where the agent emitted none, or a skill Output Format conflicting with the FINDING TAG SCHEMA. ` +
+            `Verify the dispatch prompt keeps the schema in force.`
           );
         } else {
           const offending = Object.entries(parseResult.droppedUnknownType)
@@ -3098,6 +3100,21 @@ Return only valid JSON.${skillsBlock}`;
       // travel in the warning message. Fires after synthesize()'s drain, so
       // write to both round + report.
       this.appendReportWarning(report, 'coverage_degraded', evidence);
+    }
+
+    // Surface zero-tag agents: agents that emitted no <agent_finding> tags were
+    // bullet-parsed, so CONFIRMED/DISPUTED scoring was NOT computed for them.
+    // Mirrors the coverage_degraded pattern: banner in summary + warnings entry.
+    if (report.zeroTagAgents && report.zeroTagAgents.length > 0) {
+      const n = report.zeroTagAgents.length;
+      const overflow = report.zeroTagOverflow ?? 0;
+      const list = report.zeroTagAgents.join(', ');
+      const evidence =
+        `UNSCORED ROUND — ${n}${overflow > 0 ? '+' + overflow : ''} agent(s) emitted zero <agent_finding> tags; ` +
+        `their output was bullet-parsed and CONFIRMED/DISPUTED scoring was NOT computed for them ` +
+        `(agents: ${list})`;
+      report.summary += `\n⚠️  ${evidence}\n`;
+      this.appendReportWarning(report, 'zero_tags', evidence);
     }
 
     // Surface dropped relay agents so the orchestrator can see who silently

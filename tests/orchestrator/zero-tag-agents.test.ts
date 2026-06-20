@@ -1,6 +1,7 @@
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
 import { testRound } from '../../packages/orchestrator/src/round-context';
 import { TaskEntry } from '../../packages/orchestrator/src/types';
+import { CrossReviewEntry } from '../../packages/orchestrator/src/consensus-types';
 
 // Minimal engine config so formatReport's registryGet call doesn't throw.
 const makeEngine = () => new ConsensusEngine({
@@ -134,5 +135,81 @@ describe('ConsensusEngine — zeroTagAgents accumulator', () => {
     // agent-b's "approval" type should land in droppedFindingsByType, not zeroTagAgents
     expect(report.droppedFindingsByType?.['approval']).toBeGreaterThanOrEqual(1);
     expect(report.zeroTagOverflow).toBeUndefined();
+  });
+});
+
+describe('ConsensusEngine — unscored-round banner + zero_tags warning (#554)', () => {
+  const makeEngine = () => new ConsensusEngine({
+    llm: { generate: jest.fn() } as any,
+    registryGet: (id: string) => ({ id, provider: 'local', model: 'test', preset: `preset-${id}`, skills: [] }),
+    round: testRound(),
+  } as any);
+
+  const makeTask = (agentId: string, result: string): TaskEntry => ({
+    id: `task-${agentId}`,
+    agentId,
+    task: 'review',
+    status: 'completed',
+    result,
+    startedAt: Date.now(),
+    completedAt: Date.now(),
+    inputTokens: 0,
+    outputTokens: 0,
+  });
+
+  const zeroTagResult = (note: string) => `## Summary\n- Bullet ${note} without any agent_finding tag\n`;
+  const taggedResult = `<agent_finding type="finding" severity="high">Tagged finding at file.ts:10 for the keeper</agent_finding>`;
+  const consensusId = 'test-consensus-1';
+
+  it('≥1 zero-tag agent → summary contains "UNSCORED ROUND" AND warnings has zero_tags entry', async () => {
+    const engine = makeEngine();
+    const tasks: TaskEntry[] = [
+      makeTask('zero-agent', zeroTagResult('a')),
+      makeTask('keeper', taggedResult),
+    ];
+    const crossReview: CrossReviewEntry[] = [];
+
+    const report = await engine.synthesizeWithCrossReview(tasks, crossReview, consensusId, []);
+
+    expect(report.summary).toContain('UNSCORED ROUND');
+    expect(report.warnings).toBeDefined();
+    const zeroTagWarning = report.warnings?.find(w => w.code === 'zero_tags');
+    expect(zeroTagWarning).toBeDefined();
+    expect(zeroTagWarning?.message).toContain('zero-agent');
+    expect(zeroTagWarning?.message).toContain('UNSCORED ROUND');
+  });
+
+  it('no zero-tag agents → summary does NOT contain "UNSCORED ROUND" and no zero_tags warning', async () => {
+    const engine = makeEngine();
+    const tasks: TaskEntry[] = [
+      makeTask('agent-a', taggedResult),
+      makeTask('agent-b', `<agent_finding type="finding" severity="low">Another finding at b.ts:2 something</agent_finding>`),
+    ];
+    const crossReview: CrossReviewEntry[] = [];
+
+    const report = await engine.synthesizeWithCrossReview(tasks, crossReview, consensusId, []);
+
+    expect(report.summary).not.toContain('UNSCORED ROUND');
+    const zeroTagWarning = report.warnings?.find(w => w.code === 'zero_tags');
+    expect(zeroTagWarning).toBeUndefined();
+  });
+
+  it('multiple zero-tag agents → warning message lists all agents', async () => {
+    const engine = makeEngine();
+    const tasks: TaskEntry[] = [
+      makeTask('zero-1', zeroTagResult('1')),
+      makeTask('zero-2', zeroTagResult('2')),
+      makeTask('keeper', taggedResult),
+    ];
+    const crossReview: CrossReviewEntry[] = [];
+
+    const report = await engine.synthesizeWithCrossReview(tasks, crossReview, consensusId, []);
+
+    const zeroTagWarning = report.warnings?.find(w => w.code === 'zero_tags');
+    expect(zeroTagWarning).toBeDefined();
+    expect(zeroTagWarning?.message).toContain('2');
+    expect(zeroTagWarning?.message).toContain('zero-1');
+    expect(zeroTagWarning?.message).toContain('zero-2');
+    expect(report.summary).toContain('UNSCORED ROUND');
   });
 });
