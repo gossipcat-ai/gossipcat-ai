@@ -143,6 +143,14 @@ The difference: gossipcat verifies findings against actual `file:line` citations
 
 **Requirements:** Node.js 22+ and either host below. Claude Code and Cursor are co-equal first-class hosts — pick the one you use; gossipcat auto-detects it and runs native agents either way.
 
+**Fastest path (skills CLI):** one command installs the server and walks you through setup:
+
+```bash
+npx skills add gossipcat-ai/gossipcat-ai
+```
+
+This drops an installer skill into `.claude/skills/`; your agent runs the install and then hands off to `gossip_status()` for the live rules. Prefer it over the manual steps below if you use the [skills](https://github.com/vercel-labs/skills) CLI. The manual npm install is documented next.
+
 Install the package once:
 ```bash
 npm install -g gossipcat
