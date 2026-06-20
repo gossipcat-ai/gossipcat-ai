@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import type React from 'react';
 import type { ConsensusData, ConsensusReportsData, ConsensusReportFinding, ConsensusReport, ParseDiagnostic } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -241,8 +241,9 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
   const runs = showAll ? sourceRuns : sourceRuns.slice(0, MAX_RUNS);
   const hasMore = !showAll && sourceRuns.length > MAX_RUNS;
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterType>('all');
-  const [sevFilter, setSevFilter] = useState<'all' | 'critical' | 'high' | 'medium' | 'low'>('all');
+  // Per-report filter state: reportId → active filter value. Default 'all' for any absent key.
+  const [filterByReport, setFilterByReport] = useState<Record<string, FilterType>>({});
+  const [sevByReport, setSevByReport] = useState<Record<string, 'all' | 'critical' | 'high' | 'medium' | 'low'>>({});
 
   const [reportPage, setReportPage] = useState(1);
   const [loadedReports, setLoadedReports] = useState<ConsensusReport[]>([]);
@@ -322,9 +323,50 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
   const [debatePage, setDebatePage] = useState(0);
   const totalDebatePages = Math.max(1, Math.ceil(sortedReports.length / PAGE_SIZE));
   const clampedDebatePage = Math.min(debatePage, totalDebatePages - 1);
+
+  // Reset debatePage when the report set shrinks such that the current page is out of range.
+  useEffect(() => {
+    if (debatePage >= totalDebatePages) {
+      setDebatePage(0);
+    }
+  }, [debatePage, totalDebatePages]);
   const latestReports = showAll
     ? sortedReports.slice(clampedDebatePage * PAGE_SIZE, (clampedDebatePage + 1) * PAGE_SIZE)
     : sortedReports.slice(0, MAX_RUNS);
+
+  // Memoized cross-review lookup: reportId → (findingId → FindingReviewInfo).
+  // Rebuilt only when loadedReports changes, not on every render.
+  const reviewLookupByReport = useMemo(() => {
+    const byReport = new Map<string, Record<string, FindingReviewInfo>>();
+    for (const report of loadedReports) {
+      const reviewLookup: Record<string, FindingReviewInfo> = {};
+      if (report.crossReviewAssignments || report.crossReviewCoverage) {
+        const findingReviewers: Record<string, string[]> = {};
+        if (report.crossReviewAssignments) {
+          for (const [reviewerId, findingIds] of Object.entries(report.crossReviewAssignments)) {
+            for (const fid of findingIds) {
+              (findingReviewers[fid] ??= []).push(reviewerId);
+            }
+          }
+        }
+        if (report.crossReviewCoverage) {
+          for (const cov of report.crossReviewCoverage) {
+            reviewLookup[cov.findingId] = {
+              reviewers: findingReviewers[cov.findingId] || [],
+              assigned: cov.assigned,
+              targetK: cov.targetK,
+            };
+          }
+        } else {
+          for (const [fid, reviewers] of Object.entries(findingReviewers)) {
+            reviewLookup[fid] = { reviewers, assigned: reviewers.length, targetK: reviewers.length };
+          }
+        }
+      }
+      byReport.set(report.id, reviewLookup);
+    }
+    return byReport;
+  }, [loadedReports]);
 
   // Group by date bucket (today / yesterday / N days ago)
   const dateBucket = (iso: string): string => {
@@ -362,34 +404,12 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
             const currentBucket = showAll ? dateBucket(report.timestamp) : null;
             const prevBucket = showAll && prev ? dateBucket(prev.timestamp) : null;
             const showBucketHeader = showAll && currentBucket !== prevBucket;
-            // Build cross-review lookup: findingId → FindingReviewInfo
-            const reviewLookup: Record<string, FindingReviewInfo> = {};
-            if (report.crossReviewAssignments || report.crossReviewCoverage) {
-              // Invert assignments: reviewerAgentId → findingId[] into findingId → reviewerAgentId[]
-              const findingReviewers: Record<string, string[]> = {};
-              if (report.crossReviewAssignments) {
-                for (const [reviewerId, findingIds] of Object.entries(report.crossReviewAssignments)) {
-                  for (const fid of findingIds) {
-                    (findingReviewers[fid] ??= []).push(reviewerId);
-                  }
-                }
-              }
-              // Build from coverage array
-              if (report.crossReviewCoverage) {
-                for (const cov of report.crossReviewCoverage) {
-                  reviewLookup[cov.findingId] = {
-                    reviewers: findingReviewers[cov.findingId] || [],
-                    assigned: cov.assigned,
-                    targetK: cov.targetK,
-                  };
-                }
-              } else {
-                // Fallback: only assignments, no coverage — synthesize from reviewer count
-                for (const [fid, reviewers] of Object.entries(findingReviewers)) {
-                  reviewLookup[fid] = { reviewers, assigned: reviewers.length, targetK: reviewers.length };
-                }
-              }
-            }
+            // Resolve per-report filter values (default 'all' if not yet set)
+            const filter = filterByReport[report.id] ?? 'all';
+            const sevFilter = sevByReport[report.id] ?? 'all';
+
+            // Retrieve memoized cross-review lookup for this report
+            const reviewLookup = reviewLookupByReport.get(report.id) ?? {};
 
             const allFindings = [
               ...report.confirmed,
@@ -501,7 +521,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                 <button
                   className="flex w-full items-start gap-3 px-3 py-2.5 text-left"
                   aria-expanded={isExpanded}
-                  onClick={() => { const opening = !isExpanded; setExpandedId(opening ? report.id : null); if (opening) { setFilter('all'); setSevFilter('all'); } }}
+                  onClick={() => { const opening = !isExpanded; setExpandedId(opening ? report.id : null); if (opening) { setFilterByReport(prev => ({ ...prev, [report.id]: 'all' })); setSevByReport(prev => ({ ...prev, [report.id]: 'all' })); } }}
                 >
                   <div className="flex-1 min-w-0">
                     {/* Row 1: count + agents + time */}
@@ -629,7 +649,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                     <div className="mb-2 flex items-center gap-2">
                       <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>Type:</span>
                       {FILTER_CHIPS.map(tab => (
-                        <button key={tab.key} onClick={() => setFilter(tab.key)}
+                        <button key={tab.key} onClick={() => setFilterByReport(prev => ({ ...prev, [report.id]: tab.key }))}
                           className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${filter === tab.key ? tab.activeCls : tab.cls}`}
                           style={filter === tab.key ? tab.activeStyle : tab.inactiveStyle}
                           {...(tab.tooltip ? { 'data-tooltip': tab.tooltip } : {})}>
@@ -640,7 +660,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                     <div className="mb-2 flex items-center gap-2">
                       <span className="font-mono text-[10px]" style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>Severity:</span>
                       {SEV_FILTER_CHIPS.map(chip => (
-                        <button key={chip.key} onClick={() => setSevFilter(chip.key)}
+                        <button key={chip.key} onClick={() => setSevByReport(prev => ({ ...prev, [report.id]: chip.key }))}
                           className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-medium transition ${sevFilter === chip.key ? chip.activeCls : chip.cls}`}
                           style={sevFilter === chip.key ? chip.activeStyle : chip.inactiveStyle}>
                           {chip.label}
@@ -808,12 +828,15 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
               { key: 'unique', count: (c.unique || 0) + (c.new || 0), color: 'bg-unique', text: 'text-unique', label: 'unique' },
             ];
 
+            // Per-run filter state (reuses filterByReport keyed by taskId)
+            const runFilter = filterByReport[run.taskId] ?? 'all';
+
             // Filter signals for expanded view
             const filteredSignals = run.signals.filter(sig => {
               if (sig.signal === 'signal_retracted') return false;
-              if (filter === 'all') return !!TAG_MAP[sig.signal];
+              if (runFilter === 'all') return !!TAG_MAP[sig.signal];
               const tag = TAG_MAP[sig.signal];
-              return tag && tag.filter === filter;
+              return tag && tag.filter === runFilter;
             });
 
             const isRunRetracted = !!run.retracted;
@@ -841,7 +864,7 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                 {/* Header — clickable */}
                 <button
                   aria-expanded={isOpen}
-                  onClick={() => { const opening = !isOpen; setExpandedId(opening ? run.taskId : null); if (opening) { setFilter('all'); setSevFilter('all'); } }}
+                  onClick={() => { const opening = !isOpen; setExpandedId(opening ? run.taskId : null); if (opening) { setFilterByReport(prev => ({ ...prev, [run.taskId]: 'all' })); } }}
                   className="flex w-full items-center p-3 text-left transition hover:bg-accent/10"
                 >
                   <span
@@ -893,9 +916,9 @@ export function FindingsMetrics({ consensus, reports, showAll = false, hideHeade
                       {FILTER_CHIPS.map((chip) => (
                         <button
                           key={chip.key}
-                          onClick={() => setFilter(chip.key)}
-                          className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold transition ${filter === chip.key ? chip.activeCls : chip.cls} hover:opacity-80`}
-                          style={filter === chip.key ? chip.activeStyle : chip.inactiveStyle}
+                          onClick={() => setFilterByReport(prev => ({ ...prev, [run.taskId]: chip.key }))}
+                          className={`rounded-sm px-2 py-0.5 font-mono text-[10px] font-semibold transition ${runFilter === chip.key ? chip.activeCls : chip.cls} hover:opacity-80`}
+                          style={runFilter === chip.key ? chip.activeStyle : chip.inactiveStyle}
                           {...(chip.tooltip ? { 'data-tooltip': chip.tooltip } : {})}
                         >
                           {chip.label}
