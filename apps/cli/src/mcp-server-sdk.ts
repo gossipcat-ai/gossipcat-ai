@@ -4196,7 +4196,7 @@ export function createMcpServer(): McpServer {
       try {
         const { resolveFindings } = await import('@gossip/orchestrator');
         const cfg = (() => { try { const { findConfigPath, loadConfig } = require('./config'); const p = findConfigPath(process.cwd()); return p ? loadConfig(p) : null; } catch { return null; } })();
-        const result = await resolveFindings(process.cwd(), { full, sinceSha, lineAnchored: cfg?.consensus?.resolverLineAnchored ?? false });
+        const result = await resolveFindings(process.cwd(), { full, sinceSha, lineAnchored: cfg?.consensus?.resolverLineAnchored ?? true });
         if (!result.ok) {
           return { content: [{ type: 'text' as const, text: `Resolver skipped: ${result.reason} (another resolver run in progress; try again in a moment).` }] };
         }

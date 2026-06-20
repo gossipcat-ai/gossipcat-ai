@@ -66,8 +66,10 @@ export interface GossipConfig {
      * Enable the line-anchored staleness heuristic in the findings resolver.
      * When true, a finding whose cited identifier is still present in the file
      * but NOT at the cited line (present_elsewhere) is auto-resolved as
-     * `stale_anchor`. Default false (opt-in) per the rollout plan — do NOT
-     * flip to true until the false-resolve safety brake is implemented.
+     * `stale_anchor`. Default true since the false-resolve safety brake shipped
+     * (#580, 2026-06-13) and the rollout audit window closed clean — zero
+     * `unresolve` reverts on `stale_anchor` resolutions (#622/#502). Set to
+     * false to opt out.
      */
     resolverLineAnchored?: boolean;
   };
