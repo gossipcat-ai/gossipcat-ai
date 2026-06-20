@@ -595,23 +595,9 @@ export function installDisciplineHooks(projectRoot: string): DisciplineHookInsta
   const skipped: string[] = [];
 
   try {
-    // 1. Copy hook scripts into .claude/hooks/discipline/ and mark executable.
-    const targetDir = join(projectRoot, '.claude', 'hooks', DISCIPLINE_HOOK_DIR);
-    mkdirSync(targetDir, { recursive: true });
-
-    for (const hook of DISCIPLINE_HOOKS) {
-      const bundled = findDisciplineHook(hook.filename);
-      if (!bundled) {
-        skipped.push(hook.name);
-        continue;
-      }
-      const target = join(targetDir, hook.filename);
-      copyFileSync(bundled, target);
-      chmodSync(target, 0o755);
-    }
-
-    // 2. Load settings.local.json — throw on malformed JSON so we never
-    //    silently clobber user content.
+    // 1. Load settings.local.json FIRST — throw on malformed JSON so we never
+    //    silently clobber user content, and so we never copy hook scripts that
+    //    will be left unregistered (mirrors the installWorktreeSandboxHook fix).
     const settingsPath = join(projectRoot, '.claude', 'settings.local.json');
     mkdirSync(dirname(settingsPath), { recursive: true });
 
@@ -624,6 +610,23 @@ export function installDisciplineHooks(projectRoot: string): DisciplineHookInsta
         `Fix the file or delete it and re-run gossip_setup.\n`,
       );
       return { installed, skipped, reason: (err as Error).message };
+    }
+
+    // 2. Copy hook scripts into .claude/hooks/discipline/ and mark executable.
+    //    Only reached after settings.local.json has been validated — no
+    //    copied-but-unregistered files can accumulate on malformed settings.
+    const targetDir = join(projectRoot, '.claude', 'hooks', DISCIPLINE_HOOK_DIR);
+    mkdirSync(targetDir, { recursive: true });
+
+    for (const hook of DISCIPLINE_HOOKS) {
+      const bundled = findDisciplineHook(hook.filename);
+      if (!bundled) {
+        skipped.push(hook.name);
+        continue;
+      }
+      const target = join(targetDir, hook.filename);
+      copyFileSync(bundled, target);
+      chmodSync(target, 0o755);
     }
 
     // 3. Merge all three hook entries idempotently.
