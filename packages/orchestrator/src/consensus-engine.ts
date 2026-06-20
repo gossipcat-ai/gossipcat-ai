@@ -256,6 +256,28 @@ export class ConsensusEngine {
     report.warnings.push(entry);
   }
 
+  /**
+   * Idempotent helper: appends the UNSCORED ROUND banner to report.summary and
+   * records a zero_tags warning when any agents emitted zero <agent_finding> tags.
+   * Safe to call multiple times — skips if the banner is already present or if
+   * zeroTagAgents is empty/absent.
+   * Called at each finalization point: run(), runSelectedCrossReview(), and
+   * synthesizeWithCrossReview() — so ALL synthesize paths surface the banner.
+   */
+  private surfaceZeroTagBanner(report: ConsensusReport): void {
+    if (!report.zeroTagAgents?.length) return;
+    if (report.summary.includes('UNSCORED ROUND')) return;
+    const n = report.zeroTagAgents.length;
+    const overflow = report.zeroTagOverflow ?? 0;
+    const list = report.zeroTagAgents.join(', ');
+    const evidence =
+      `UNSCORED ROUND — ${n}${overflow > 0 ? '+' + overflow : ''} agent(s) emitted zero <agent_finding> tags; ` +
+      `their output was bullet-parsed and CONFIRMED/DISPUTED scoring was NOT computed for them ` +
+      `(agents: ${list})`;
+    report.summary += `\n⚠️  ${evidence}\n`;
+    this.appendReportWarning(report, 'zero_tags', evidence);
+  }
+
   /** True when a PerformanceReader is available for orchestrator-selected cross-review (Step 3). */
   get hasPerformanceReader(): boolean {
     return this.config.performanceReader !== undefined;
@@ -562,6 +584,10 @@ export class ConsensusEngine {
 
     // Always regenerate report with timing data
     report.summary = this.formatReport(report.confirmed, report.disputed, report.unverified, report.unique, report.newFindings, successful.length, report.rounds, timing, report.insights);
+
+    // Append UNSCORED ROUND banner AFTER formatReport so it is not clobbered
+    // by the summary regeneration that includes timing data.
+    this.surfaceZeroTagBanner(report);
 
     return report;
   }
@@ -1093,7 +1119,9 @@ Return only valid JSON.${skillsBlock}`;
           }
           _log('consensus',
             `⚠ agent "${r.agentId}" emitted ZERO tags — falling back to bullet parsing. ` +
-            `Check if skill Output Format conflicts with FINDING TAG SCHEMA.`
+            `Common causes: the dispatch/cross-review prompt instructed plain prose (no <agent_finding> tags), ` +
+            `a design/research task where the agent emitted none, or a skill Output Format conflicting with the FINDING TAG SCHEMA. ` +
+            `Verify the dispatch prompt keeps the schema in force.`
           );
         } else {
           const offending = Object.entries(parseResult.droppedUnknownType)
@@ -2925,7 +2953,9 @@ Return only valid JSON.${skillsBlock}`;
     if (findingSeq === 0) {
       // No structured findings — fall back to synthesize with no cross-review entries
       _log('consensus', 'runSelectedCrossReview: no structured findings extracted; synthesizing without cross-review');
-      return this.synthesize(results, [], consensusId);
+      const report = await this.synthesize(results, [], consensusId);
+      this.surfaceZeroTagBanner(report);
+      return report;
     }
 
     // Build agent candidates from successful results
@@ -2940,6 +2970,7 @@ Return only valid JSON.${skillsBlock}`;
       // Spec §4 — the warnings channel SUBSUMES the legacy report.partialReview
       // field (deleted in PR-C). Fires after synthesize()'s drain.
       this.appendReportWarning(report, 'partial_review', 'no cross-reviewers selected — every finding is under-reviewed (0 of target K)');
+      this.surfaceZeroTagBanner(report);
       return report;
     }
 
@@ -3019,6 +3050,7 @@ Return only valid JSON.${skillsBlock}`;
       targetK: findingKMap.get(f.id) ?? 2,
     }));
 
+    this.surfaceZeroTagBanner(report);
     return report;
   }
 
@@ -3099,6 +3131,11 @@ Return only valid JSON.${skillsBlock}`;
       // write to both round + report.
       this.appendReportWarning(report, 'coverage_degraded', evidence);
     }
+
+    // Surface zero-tag agents via the shared idempotent helper (deduplicated from
+    // the inline block that previously lived here). Mirrors the coverage_degraded
+    // pattern: banner in summary + zero_tags warnings entry.
+    this.surfaceZeroTagBanner(report);
 
     // Surface dropped relay agents so the orchestrator can see who silently
     // failed instead of pretending the round was complete.

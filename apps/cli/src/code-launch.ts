@@ -67,29 +67,33 @@ function isGossipMcpEntry(entry: { command?: string; args?: unknown[] }): boolea
 /**
  * Detect the MCP server name for gossipcat by reading .mcp.json and/or ~/.claude.json.
  * Returns [serverName, usingFallback].
+ *
+ * Observability: when the chosen name came from <cwd>/.mcp.json (an untrusted,
+ * cwd-local config), a warning is emitted to stderr so users running `gossipcat code`
+ * inside a cloned repo are aware of the source. A mismatch warning is also emitted
+ * when both config files contain a gossipcat entry with different names.
  */
-function detectServerName(cwd: string): [string, boolean] {
+export function detectServerName(cwd: string): [string, boolean] {
+  const cwdPath = join(cwd, '.mcp.json');
+  const homePath = join(homedir(), '.claude.json');
+
   const candidates: [string, unknown][] = [
-    [join(cwd, '.mcp.json'), safeReadJson(join(cwd, '.mcp.json'))],
-    [join(homedir(), '.claude.json'), safeReadJson(join(homedir(), '.claude.json'))],
+    [cwdPath, safeReadJson(cwdPath)],
+    [homePath, safeReadJson(homePath)],
   ];
 
-  for (const [filePath, data] of candidates) {
-    if (!data || typeof data !== 'object') continue;
+  /** Extract the first safe gossipcat server name from a parsed JSON file. */
+  function extractName(data: unknown, filePath: string): string | null {
+    if (!data || typeof data !== 'object') return null;
     const root = data as Record<string, unknown>;
-
-    // .mcp.json top-level { mcpServers: { <name>: {...} } }
-    // ~/.claude.json nested: { mcpServers: { <name>: {...} } }
     const mcpServers = root['mcpServers'];
-    if (!mcpServers || typeof mcpServers !== 'object') continue;
-
+    if (!mcpServers || typeof mcpServers !== 'object') return null;
     const servers = mcpServers as McpServersMap;
     for (const [name, entry] of Object.entries(servers)) {
       if (!entry || typeof entry !== 'object') continue;
       if (isGossipMcpEntry(entry)) {
-        // Validate the name before returning it (it will be passed to spawn args)
         if (SAFE_SERVER_NAME_RE.test(name)) {
-          return [name, false];
+          return name;
         }
         // Name is present but unsafe — log and fall through
         process.stderr.write(
@@ -98,6 +102,28 @@ function detectServerName(cwd: string): [string, boolean] {
         );
       }
     }
+    return null;
+  }
+
+  const cwdName = extractName(candidates[0][1], cwdPath);
+  const homeName = extractName(candidates[1][1], homePath);
+
+  if (cwdName !== null) {
+    // Emit cwd-source observability warning (trust boundary)
+    process.stderr.write(
+      `[gossipcat code] Using channel server "${cwdName}" from ${cwdPath} (cwd-local config — only run this in repos you trust).\n`
+    );
+    // Emit mismatch warning when home also has a different name
+    if (homeName !== null && homeName !== cwdName) {
+      process.stderr.write(
+        `[gossipcat code] Warning: gossipcat server name differs between ${cwdPath} ("${cwdName}") and ${homePath} ("${homeName}"); using "${cwdName}" (cwd takes precedence).\n`
+      );
+    }
+    return [cwdName, false];
+  }
+
+  if (homeName !== null) {
+    return [homeName, false];
   }
 
   return ['gossipcat', true];

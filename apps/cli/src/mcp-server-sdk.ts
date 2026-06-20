@@ -158,6 +158,7 @@ const __argvShimHandled = (() => {
       '  gossipcat key set <provider>   Store an API key in the OS keychain (service: gossip-mesh)\n' +
       '  gossipcat key list             Show which providers have a stored key\n' +
       '  gossipcat code [args...]       Launch Claude Code with the gossipcat channel active\n' +
+      '                                 Note: <cwd>/.mcp.json is treated as trusted config (server name is read from it).\n' +
       '  gossipcat help           Show this help\n' +
       '\n' +
       'The published binary is the MCP server bundle. The full CLI\n' +
