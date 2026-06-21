@@ -314,6 +314,7 @@ try {
 } catch { /* never break boot */ }
 import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction, UTILITY_RESULT_TTL_MS } from './handlers/native-tasks';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus, detectLostDispatchWarnings } from './handlers/dispatch';
+import { buildIntrospectionPrompt, appendIntrospection } from './handlers/ask-back';
 import {
   invalidateAgent as invalidateDispatchPromptCacheForAgent,
   invalidateAll as invalidateAllDispatchPromptCache,
@@ -2053,6 +2054,90 @@ export function createMcpServer(): McpServer {
       }
       return {
         content: [{ type: 'text' as const, text: `Asked the dashboard (qid=${qid}); the user's answer will arrive as a channel turn prefixed "[answer qid=${qid}]". Do not wait for it here.` }],
+      };
+    },
+  );
+
+  // ── gossip_ask_back — agent fabrication introspection loop ───────────────
+  server.tool(
+    'gossip_ask_back',
+    'Re-engage an agent after a fabrication (hallucination_caught) for first-person root-cause analysis. action:"ask" dispatches an introspection prompt to the agent and logs the event; action:"record" stores the agent\'s answer. Builds a rich failure ledger (.gossip/fabrication-introspections.jsonl) that feeds skill development.',
+    {
+      action: z.enum(['ask', 'record']).default('ask').describe('"ask" (default): dispatch an introspection prompt to the agent. "record": store the agent\'s answer.'),
+      agent_id: z.string().describe('The agent that produced the fabrication.'),
+      claim: z.string().optional().describe('Required for action:"ask". The fabricated claim the agent made.'),
+      ground_truth: z.string().optional().describe('Required for action:"ask". What the code/evidence actually shows.'),
+      finding_id: z.string().optional().describe('Optional consensus finding_id (format: <consensus_id>:<agent:fN>) to link the introspection to a specific finding.'),
+      answer: z.string().optional().describe('Required for action:"record". The agent\'s root-cause explanation.'),
+    },
+    async ({ action, agent_id, claim, ground_truth, finding_id, answer }) => {
+      const projectRoot = process.cwd();
+      const now = new Date().toISOString();
+
+      if (action === 'ask') {
+        if (!claim || !ground_truth) {
+          return {
+            content: [{ type: 'text' as const, text: 'gossip_ask_back error: action:"ask" requires both claim and ground_truth.' }],
+            isError: true,
+          };
+        }
+
+        // Log the introspection request
+        appendIntrospection(projectRoot, {
+          agentId: agent_id,
+          findingId: finding_id,
+          claim,
+          groundTruth: ground_truth,
+          status: 'asked',
+          askedAt: now,
+        });
+
+        // Build the introspection prompt and dispatch it via handleDispatchSingle
+        const prompt = buildIntrospectionPrompt(claim, ground_truth);
+        const dispatchResult = await handleDispatchSingle(agent_id, prompt);
+
+        // Prepend instruction to record the answer
+        const instruction =
+          `After the agent answers, call gossip_ask_back(action:'record', agent_id:'${agent_id}'` +
+          (finding_id ? `, finding_id:'${finding_id}'` : '') +
+          `, answer:<agent response>) to log the introspection.\n\n`;
+
+        const dispatchText =
+          dispatchResult.content
+            .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
+            .map(c => c.text)
+            .join('\n');
+
+        return {
+          content: [{ type: 'text' as const, text: instruction + dispatchText }],
+        };
+      }
+
+      // action === 'record'
+      if (!answer) {
+        return {
+          content: [{ type: 'text' as const, text: 'gossip_ask_back error: action:"record" requires answer.' }],
+          isError: true,
+        };
+      }
+
+      appendIntrospection(projectRoot, {
+        agentId: agent_id,
+        findingId: finding_id,
+        claim: claim ?? '',
+        groundTruth: ground_truth ?? '',
+        answer,
+        status: 'answered',
+        askedAt: now,
+        answeredAt: now,
+      });
+
+      const ledgerPath = `${projectRoot}/.gossip/fabrication-introspections.jsonl`;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Introspection recorded for ${agent_id}${finding_id ? ` (finding: ${finding_id})` : ''}.\nLedger: ${ledgerPath}`,
+        }],
       };
     },
   );
@@ -5465,6 +5550,7 @@ export function createMcpServer(): McpServer {
         { name: 'gossip_reload', desc: 'Terminate MCP server so Claude Code respawns with fresh bundle. Use after npm run build:mcp.' },
         { name: 'gossip_format', desc: 'Return the CONSENSUS_OUTPUT_FORMAT block to paste into ad-hoc Agent() prompts so native subagents emit parseable <agent_finding> tags.' },
         { name: 'gossip_bug_feedback', desc: 'File a GitHub issue on the gossipcat repo from an in-session bug report. Dedupes against open issues.' },
+        { name: 'gossip_ask_back', desc: 'Re-engage an agent after a fabrication for first-person root-cause analysis. action:"ask" dispatches the introspection prompt; action:"record" logs the answer.' },
       ];
       const list = tools.map(t => `- ${t.name}: ${t.desc}`).join('\n');
       return { content: [{ type: 'text' as const, text: `Gossipcat Tools (${tools.length}):\n\n${list}` }] };
