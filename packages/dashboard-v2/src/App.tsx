@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
-import { useRoute } from '@/lib/router';
+import { useRoute, matchRoute } from '@/lib/router';
 import { OverviewPage } from '@/pages/OverviewPage';
 import { ConsensusFlowPage } from '@/pages/ConsensusFlowPage';
+import { TaskPage } from '@/pages/TaskPage';
 import { AuthGate } from '@/components/AuthGate';
 import { TopBar } from '@/components/TopBar';
 import { NeuralAvatar } from '@/components/NeuralAvatar';
@@ -12,6 +13,7 @@ import { AgentPage } from '@/components/AgentPage';
 import { LogsPage } from '@/components/LogsPage';
 import { SignalsPage } from '@/components/SignalsPage';
 import { TaskRow } from '@/components/TaskRow';
+import { EmptyState } from '@/components/EmptyState';
 import { OverviewSkeleton, TeamPageSkeleton, TasksPageSkeleton, DebatesPageSkeleton } from '@/components/Skeleton';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/useWebSocket';
@@ -418,9 +420,16 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
 
       <div className="overflow-hidden rounded-md [border-color:color-mix(in_oklch,var(--border)_40%,transparent)] border" style={{ background: 'color-mix(in oklch, var(--surface-elev) 80%, transparent)' }}>
         {paged.length === 0 ? (
-          <div className="py-12 text-center text-sm" style={{ color: 'var(--ink-3)' }}>
-            {q ? 'No tasks match your search.' : 'No tasks yet.'}
-          </div>
+          q ? (
+            <div className="py-12 text-center text-sm" style={{ color: 'var(--ink-3)' }}>
+              No tasks match your search.
+            </div>
+          ) : (
+            <EmptyState
+              title="No tasks yet"
+              hint="Dispatch with gossip_run to populate this view."
+            />
+          )
         ) : (
           <table className="w-full text-left">
             <thead>
@@ -428,6 +437,7 @@ function TasksPage({ tasks }: { tasks: import('@/lib/types').TasksData }) {
                 <th className="py-2.5 pl-4 pr-2 h-section" style={{ width: 32 }}></th>
                 <th className="py-2.5 pr-3 h-section">ID</th>
                 <th className="py-2.5 pr-3 h-section">Agent</th>
+                <th className="py-2.5 pr-3 h-section">Kind</th>
                 <th className="py-2.5 pr-3 h-section">Description</th>
                 <th className="py-2.5 pr-3 h-section">Duration</th>
                 <th className="py-2.5 pr-4 text-right h-section">When</th>
@@ -556,12 +566,15 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
   let content;
   const agentMatch = route.match(/^\/agent\/(.+)$/);
   const consensusFlowMatch = route.match(/^\/consensus\/(.+)$/);
+  const taskDetailId = matchRoute('/tasks/:id', route);
   if (agentMatch && agents) {
     const agentId = decodeURIComponent(agentMatch[1]);
     content = <AgentPage agentId={agentId} agents={agents} tasks={tasks} consensus={consensus} />;
   } else if (consensusFlowMatch) {
     const consensusId = decodeURIComponent(consensusFlowMatch[1]);
     content = <ConsensusFlowPage consensusId={consensusId} />;
+  } else if (taskDetailId) {
+    content = <TaskPage taskId={taskDetailId} tasks={tasks} />;
   } else if (route === '/team') {
     content = agents
       ? <TeamPage agents={agents} tasks={tasks} consensusReports={consensusReports} fleetTrend={fleetTrend} />
@@ -615,7 +628,7 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
   // Overview owns its own outer container (max-w-5xl). For everything else,
   // the historical max-w-7xl + space-y-6 wrapper applies.
   const isOverview = route === '/' || route === '/overview' ||
-    !(/^\/(agent\/|consensus\/|team|tasks|debates|logs|signals|violations|chat)/.test(route));
+    !(/^\/(agent\/|consensus\/|tasks\/|team|tasks|debates|logs|signals|violations|chat)/.test(route));
   const mainClass = isOverview
     ? 'px-6 py-6'
     : 'mx-auto max-w-7xl space-y-6 px-6 py-6';

@@ -314,3 +314,23 @@ export function agentColor(id: string): string {
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
   return AGENT_COLORS[h % AGENT_COLORS.length];
 }
+
+/**
+ * Derive a visual kind label from the agentId suffix.
+ * Returns null for unrecognized suffixes so the chip is omitted entirely.
+ * Shared between TaskRow.tsx, TasksSection.tsx, and TaskPage.tsx.
+ */
+export interface TaskKind {
+  label: string;
+  cls: string;
+  clsStyle?: import('react').CSSProperties;
+}
+
+export function taskKindFromAgentId(agentId: string): TaskKind | null {
+  if (agentId.endsWith('-implementer')) return { label: 'IMPL', cls: 'text-unique' };
+  if (agentId.endsWith('-reviewer'))    return { label: 'REVIEW', cls: 'text-chart' };
+  if (agentId.endsWith('-tester'))      return { label: 'TEST', cls: 'text-unique' };
+  if (agentId.endsWith('-researcher'))  return { label: 'RESEARCH', cls: '', clsStyle: { color: 'var(--text-dim)' } };
+  if (agentId.endsWith('-designer'))    return { label: 'DESIGN', cls: 'text-chart' };
+  return null;
+}
