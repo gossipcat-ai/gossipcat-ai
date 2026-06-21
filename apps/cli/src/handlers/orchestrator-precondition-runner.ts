@@ -17,6 +17,7 @@ import { execFileSync } from 'child_process';
 import {
   detectStaleBase,
   findUnreadablePaths,
+  detectMidFlightCommits,
 } from '@gossip/orchestrator/orchestrator-preconditions';
 import type { PerformanceSignal } from '@gossip/orchestrator';
 
@@ -41,6 +42,31 @@ export interface PreconditionRunnerDeps {
   emitSignals: (projectRoot: string, signals: PerformanceSignal[]) => void;
 }
 
+/** Injected collaborators for the mid-flight fixup detector (UNIT 3). */
+export interface MidFlightCheckDeps {
+  /**
+   * Synchronous git invocation — same signature as PreconditionRunnerDeps.execFile.
+   * Only needs to support `git log <sha>..HEAD --format=%H`.
+   */
+  execFile: (cmd: string, args: string[], opts: { cwd: string; encoding: 'utf8' }) => string;
+  /**
+   * Best-effort pipeline signal emitter.
+   * Signature mirrors emitPipelineSignals(projectRoot, signals).
+   */
+  emitSignals: (projectRoot: string, signals: PerformanceSignal[]) => void;
+}
+
+export interface MidFlightCheckInput {
+  projectRoot: string;
+  consensusId: string;
+  /** HEAD SHA captured at round-registration time; falsy → no-op. */
+  roundStartSha: string | undefined;
+}
+
+export interface MidFlightCheckResult {
+  warnings: string[];
+}
+
 export interface StaleBaseInputs {
   dispatchSha: string;
   originMasterSha: string;
@@ -55,6 +81,131 @@ export interface PreconditionGuardInput {
 
 export interface PreconditionGuardResult {
   warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// captureHeadSha — best-effort HEAD capture for round registration
+// ---------------------------------------------------------------------------
+
+/**
+ * Synchronously capture the current HEAD SHA for use as `roundStartSha`.
+ * Returns undefined on any error (git unavailable, not a repo, etc.).
+ * NEVER throws.
+ *
+ * @param projectRoot  - Directory to run `git rev-parse HEAD` in.
+ *                       Falls back to process.cwd() when falsy.
+ * @param execFile     - Injected git executor; defaults to execFileSync.
+ */
+export function captureHeadSha(
+  projectRoot: string | undefined,
+  execFile: (cmd: string, args: string[], opts: { cwd: string; encoding: 'utf8' }) => string = defaultExecFile,
+): string | undefined {
+  try {
+    const cwd = projectRoot || process.cwd();
+    const sha = execFile('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+    return sha || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// getCommitsSince — commits between a base SHA and HEAD
+// ---------------------------------------------------------------------------
+
+/**
+ * Return the list of commit SHAs that landed after `sinceSha` up to HEAD.
+ * Uses `git log <sinceSha>..HEAD --format=%H`.
+ * Returns [] on any error (never throws).
+ *
+ * @param sinceSha     - The base SHA (exclusive lower bound).
+ * @param projectRoot  - Working directory for git.
+ * @param execFile     - Injected git executor; defaults to execFileSync.
+ */
+export function getCommitsSince(
+  sinceSha: string,
+  projectRoot: string,
+  execFile: (cmd: string, args: string[], opts: { cwd: string; encoding: 'utf8' }) => string = defaultExecFile,
+): string[] {
+  try {
+    const output = execFile('git', ['log', `${sinceSha}..HEAD`, '--format=%H'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+    });
+    return output
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// runMidFlightCheck — UNIT 3 mid-flight fixup detector
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect commits that landed during Phase 2 cross-review (between round
+ * registration and collect-end synthesis). When detected, appends a human-
+ * readable warning and emits ONE `mid_flight_fixup` pipeline signal against
+ * agentId:'orchestrator'.
+ *
+ * Design rules:
+ *   - Falsy `roundStartSha` → immediate no-op {warnings:[]}.
+ *   - Best-effort throughout; NEVER throws into the consensus collect path.
+ *   - Injects all collaborators via `deps` for unit-testability.
+ *
+ * @param input  - Consensus round context (projectRoot, consensusId, roundStartSha).
+ * @param deps   - Optional injected collaborators.
+ */
+export async function runMidFlightCheck(
+  input: MidFlightCheckInput,
+  deps: Partial<MidFlightCheckDeps> = {},
+): Promise<MidFlightCheckResult> {
+  const warnings: string[] = [];
+
+  if (!input.roundStartSha) {
+    return { warnings };
+  }
+
+  const execFile = deps.execFile ?? defaultExecFile;
+  const emitSignals = deps.emitSignals ?? defaultEmitSignals;
+
+  try {
+    const { projectRoot, consensusId, roundStartSha } = input;
+
+    const commits = getCommitsSince(roundStartSha, projectRoot, execFile);
+    const { detected, count } = detectMidFlightCommits(commits);
+
+    if (!detected) {
+      return { warnings };
+    }
+
+    warnings.push(
+      `[mid-flight-fixup] ${count} commit(s) landed during Phase 2 cross-review ` +
+      `(since ${roundStartSha.slice(0, 8)}). Reviewers may have seen post-fix code ` +
+      `and marked legitimate Phase 1 findings DISAGREE. Consensus round: ${consensusId}.`,
+    );
+
+    try {
+      emitSignals(projectRoot, [{
+        type: 'pipeline' as const,
+        signal: 'mid_flight_fixup',
+        agentId: 'orchestrator',
+        taskId: consensusId,
+        consensusId,
+        metadata: {
+          count,
+          roundStartSha,
+          commits,
+        },
+        timestamp: new Date().toISOString(),
+      }]);
+    } catch { /* best-effort */ }
+  } catch { /* outer best-effort guard — must never propagate */ }
+
+  return { warnings };
 }
 
 // ---------------------------------------------------------------------------

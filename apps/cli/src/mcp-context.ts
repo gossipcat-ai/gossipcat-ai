@@ -44,6 +44,14 @@ export interface PendingConsensusRound {
   /** Cross-review prompts for still-pending native agents. Persisted so /mcp reconnect can re-issue EXECUTE NOW. */
   nativePrompts?: NativeCrossReviewPrompt[];
   /**
+   * HEAD SHA captured at the moment this consensus round was registered
+   * (Phase 2 start). Used by the mid_flight_fixup detector in collect.ts
+   * to check whether commits landed on the branch between Phase 2 start
+   * and collect-end synthesis. Undefined when git was unavailable at
+   * round-registration time (best-effort; never blocks the round).
+   */
+  roundStartSha?: string;
+  /**
    * Post-validation, post-realpath citation resolution roots. Carried from
    * dispatch-time or collect-time (collect-time REPLACES dispatch-time —
    * see #126 spec). Used to seed ConsensusEngineConfig.resolutionRoots at

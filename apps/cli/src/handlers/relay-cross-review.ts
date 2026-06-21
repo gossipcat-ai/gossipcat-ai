@@ -604,6 +604,8 @@ export function restorePendingConsensus(projectRoot: string): void {
         resolutionRoots: Array.isArray(data.resolutionRoots) && data.resolutionRoots.length > 0
           ? data.resolutionRoots
           : undefined,
+        // UNIT 3: restore roundStartSha from persisted data (back-compat: undefined for old rounds).
+        roundStartSha: typeof data.roundStartSha === 'string' ? data.roundStartSha : undefined,
         // Spec §3.2 disk back-compat: prefer the embedded roundContext; fall
         // back per-field to the old flat shape (mirrors the
         // participatingNativeAgents back-compat pattern above). Old pre-PR-A
