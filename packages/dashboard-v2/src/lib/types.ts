@@ -131,6 +131,18 @@ export interface TasksData {
   limit: number;
 }
 
+/** Enriched single-task response from /dashboard/api/tasks/:id */
+export interface TaskDetail extends TaskItem {
+  /** First consensusId from agent-performance rows matching this task. */
+  consensusId?: string;
+  /** Other taskIds sharing the same consensusId (capped at 25). */
+  siblingTaskIds?: string[];
+  /** Count of agent-performance signal rows for this task. */
+  signalCount?: number;
+  /** Count of implementation-findings rows for this task. */
+  findingCount?: number;
+}
+
 export interface ConsensusRun {
   taskId: string;
   timestamp: string;

@@ -1,16 +1,14 @@
 /**
  * TaskPage — deep-linkable full-page task detail view.
  *
- * Reads the task from the same tasks data TasksPage uses (passed as a prop).
- * Does NOT make any API call — that is Tranche 2.
- *
- * If the task ID is not in the loaded set (cold deep-link), renders a graceful
- * "not found" frame rather than crashing.
+ * Fetches enriched task detail from /dashboard/api/tasks/:id on mount so that
+ * deep-linked URLs work without prior navigation to the Tasks list. Falls back
+ * to the prop task if the fetch is in-flight or unavailable.
  */
 import { renderMarkdown, renderFindingMarkdown, agentColor, taskKindFromAgentId, formatDuration, timeAgo } from '@/lib/utils';
 import { normaliseStatus, STATUS_META, STATUS_ICON } from '@/lib/task-status';
-import type { TaskItem, TasksData } from '@/lib/types';
-import { navigate } from '@/lib/router';
+import type { TaskItem, TasksData, TaskDetail } from '@/lib/types';
+import { navigate, href } from '@/lib/router';
 
 interface TaskPageProps {
   taskId: string;
@@ -208,16 +206,172 @@ function TaskNotFound({ taskId }: { taskId: string }) {
 }
 
 // ──────────────────────────────────────────────
+// Context section — wired to backend enrichment
+// ──────────────────────────────────────────────
+
+/** Dimmed "○ none" placeholder for genuinely absent data. */
+function AbsentValue() {
+  return (
+    <span style={{ color: 'color-mix(in oklch, var(--ink-3) 50%, transparent)' }}>○ none</span>
+  );
+}
+
+interface ContextSectionProps {
+  detail: TaskDetail | null;
+  loading: boolean;
+}
+
+function ContextSection({ detail, loading }: ContextSectionProps) {
+  if (loading) {
+    return (
+      <div className="space-y-0">
+        {(['consensus round', 'sibling tasks', 'findings', 'signals'] as const).map((label) => (
+          <KVRow key={label} label={label} dimmed>
+            <span
+              className="inline-block h-3 w-24 rounded animate-pulse"
+              style={{ background: 'color-mix(in oklch, var(--border) 60%, transparent)' }}
+              aria-label="loading"
+            />
+          </KVRow>
+        ))}
+      </div>
+    );
+  }
+
+  const consensusId = detail?.consensusId;
+  const siblings = detail?.siblingTaskIds ?? [];
+  const signalCount = detail?.signalCount ?? 0;
+  const findingCount = detail?.findingCount ?? 0;
+
+  return (
+    <div className="space-y-0">
+      {/* Consensus round */}
+      <KVRow label="consensus round">
+        {consensusId ? (
+          <a
+            href={href(`/consensus/${encodeURIComponent(consensusId)}`)}
+            className="transition hover:underline"
+            style={{ color: 'var(--info)', fontFamily: 'JetBrains Mono, monospace' }}
+          >
+            {consensusId}
+          </a>
+        ) : (
+          <AbsentValue />
+        )}
+      </KVRow>
+
+      {/* Sibling tasks */}
+      <KVRow label="sibling tasks">
+        {siblings.length > 0 ? (
+          <span className="flex flex-wrap gap-x-3 gap-y-0.5">
+            <span style={{ color: 'var(--ink-2)' }}>{siblings.length}</span>
+            {siblings.slice(0, 5).map((sid) => (
+              <a
+                key={sid}
+                href={href(`/tasks/${encodeURIComponent(sid)}`)}
+                className="transition hover:underline"
+                style={{ color: 'var(--info)', fontFamily: 'JetBrains Mono, monospace' }}
+              >
+                {sid.slice(0, 8)}
+              </a>
+            ))}
+            {siblings.length > 5 && (
+              <span style={{ color: 'var(--ink-3)' }}>+{siblings.length - 5} more</span>
+            )}
+          </span>
+        ) : (
+          <AbsentValue />
+        )}
+      </KVRow>
+
+      {/* Findings */}
+      <KVRow label="findings">
+        {findingCount > 0 ? (
+          <span style={{ color: 'var(--ink-2)' }}>{findingCount}</span>
+        ) : (
+          <AbsentValue />
+        )}
+      </KVRow>
+
+      {/* Signals */}
+      <KVRow label="signals">
+        {signalCount > 0 ? (
+          <a
+            href={href('/signals')}
+            className="transition hover:underline"
+            style={{ color: 'var(--info)' }}
+          >
+            {signalCount}
+          </a>
+        ) : (
+          <AbsentValue />
+        )}
+      </KVRow>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
 // Main page
 // ──────────────────────────────────────────────
-import type React from 'react';
+import { useState, useEffect } from 'react';
 
 export function TaskPage({ taskId, tasks }: TaskPageProps) {
-  // Find the task in the loaded set
-  const task: TaskItem | undefined = tasks?.items.find((t) => t.taskId === taskId);
+  // Prop task used as fast initial render (if already loaded in the session).
+  const propTask: TaskItem | undefined = tasks?.items.find((t) => t.taskId === taskId);
 
-  if (!task) {
+  // Fetch enriched detail from the backend.
+  const [detail, setDetail] = useState<TaskDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailNotFound, setDetailNotFound] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailNotFound(false);
+    setDetail(null);
+
+    fetch(`/dashboard/api/tasks/${encodeURIComponent(taskId)}`)
+      .then(async (res) => {
+        if (res.status === 404) {
+          if (!cancelled) setDetailNotFound(true);
+          return;
+        }
+        if (!res.ok) return; // best-effort; fall back to prop
+        const body = await res.json().catch(() => null);
+        if (!cancelled && body) setDetail(body as TaskDetail);
+      })
+      .catch(() => { /* network failure — fall back to prop */ })
+      .finally(() => { if (!cancelled) setDetailLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [taskId]);
+
+  // Resolve which task record to render from.
+  // Prefer the fetched detail; fall back to the prop task while loading.
+  const task: TaskItem | undefined = detail ?? propTask;
+
+  // Not found: neither the API nor the prop list knows this taskId.
+  if (!detailLoading && detailNotFound && !task) {
     return <TaskNotFound taskId={taskId} />;
+  }
+
+  // Still loading AND no prop task to show yet.
+  if (!task) {
+    return (
+      <div>
+        <Breadcrumb taskId={taskId} />
+        <div
+          className="rounded-lg border p-8 text-center font-mono text-[11px]"
+          style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--ink-3)' }}
+        >
+          <span
+            className="inline-block h-3 w-32 rounded animate-pulse"
+            style={{ background: 'color-mix(in oklch, var(--border) 60%, transparent)' }}
+          />
+        </div>
+      </div>
+    );
   }
 
   const key = normaliseStatus(task.status);
@@ -301,31 +455,13 @@ export function TaskPage({ taskId, tasks }: TaskPageProps) {
         </div>
       </div>
 
-      {/* ── Context section (Tranche 2 placeholders) ── */}
+      {/* ── Context section ── */}
       <div
         className="rounded-lg border p-5"
         style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}
       >
         <SectionHeader>context</SectionHeader>
-        <div className="space-y-0">
-          {/* Tranche 2: these will be wired to backend data */}
-          <KVRow label="consensus round" dimmed>
-            <span style={{ color: 'color-mix(in oklch, var(--ink-3) 50%, transparent)' }}>○ none</span>
-            {/* TODO Tranche 2: wire to consensus round ID */}
-          </KVRow>
-          <KVRow label="sibling tasks" dimmed>
-            <span style={{ color: 'color-mix(in oklch, var(--ink-3) 50%, transparent)' }}>○ none</span>
-            {/* TODO Tranche 2: wire to parallel task siblings */}
-          </KVRow>
-          <KVRow label="findings" dimmed>
-            <span style={{ color: 'color-mix(in oklch, var(--ink-3) 50%, transparent)' }}>○ none</span>
-            {/* TODO Tranche 2: wire to implementation-findings.jsonl filtered by taskId */}
-          </KVRow>
-          <KVRow label="signals" dimmed>
-            <span style={{ color: 'color-mix(in oklch, var(--ink-3) 50%, transparent)' }}>○ none</span>
-            {/* TODO Tranche 2: wire to agent-performance.jsonl filtered by taskId */}
-          </KVRow>
-        </div>
+        <ContextSection detail={detail} loading={detailLoading} />
       </div>
 
       {/* ── Task prompt ── */}

@@ -65,7 +65,9 @@ export async function tasksHandler(projectRoot: string, query?: URLSearchParams)
           });
         } else if (entry.type === 'task.completed') {
           completed.set(entry.taskId, {
-            duration: entry.duration,
+            // On-disk field is "durationMs"; "entry.duration" was previously
+            // undefined, silently dropping all task durations from the response.
+            duration: entry.durationMs ?? entry.duration,
             timestamp: entry.timestamp,
             failed: false,
             inputTokens: entry.inputTokens,
