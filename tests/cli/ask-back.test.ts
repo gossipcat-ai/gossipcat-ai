@@ -19,6 +19,7 @@ import {
   buildIntrospectionPrompt,
   appendIntrospection,
   readIntrospections,
+  MAX_INTROSPECTION_BYTES,
   type IntrospectionRecord,
 } from '../../apps/cli/src/handlers/ask-back';
 
@@ -195,8 +196,12 @@ describe('readIntrospections', () => {
     const r1: IntrospectionRecord = { agentId: 'a1', claim: 'c1', groundTruth: 'g1', status: 'asked', askedAt: '2026-01-01T00:00:00.000Z' };
     const r2: IntrospectionRecord = { agentId: 'a2', claim: 'c2', groundTruth: 'g2', status: 'answered', askedAt: '2026-01-02T00:00:00.000Z', answeredAt: '2026-01-02T01:00:00.000Z', answer: 'pattern matched' };
     const jsonl = JSON.stringify(r1) + '\n' + JSON.stringify(r2) + '\n';
+    // Path-aware: .1 not present; only live file has content
     const fsDep = {
-      readFileSync: (_path: string): string => jsonl,
+      readFileSync: (path: string): string => {
+        if (path.endsWith('.1')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return jsonl;
+      },
     } as Parameters<typeof readIntrospections>[2];
     const result = readIntrospections('/fake/root', undefined, fsDep);
     expect(result).toHaveLength(2);
@@ -209,7 +214,10 @@ describe('readIntrospections', () => {
     const r1: IntrospectionRecord = { agentId: 'good', claim: 'c', groundTruth: 'g', status: 'asked', askedAt: '2026-01-01T00:00:00.000Z' };
     const jsonl = JSON.stringify(r1) + '\n' + 'TORN_LINE{{{invalid\n' + JSON.stringify(r1) + '\n';
     const fsDep = {
-      readFileSync: (_path: string): string => jsonl,
+      readFileSync: (path: string): string => {
+        if (path.endsWith('.1')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return jsonl;
+      },
     } as Parameters<typeof readIntrospections>[2];
     const result = readIntrospections('/fake/root', undefined, fsDep);
     expect(result).toHaveLength(2);
@@ -221,7 +229,10 @@ describe('readIntrospections', () => {
     const r3: IntrospectionRecord = { agentId: 'target', claim: 'c3', groundTruth: 'g3', status: 'answered', askedAt: '2026-01-01T00:00:00.000Z', answer: 'x' };
     const jsonl = [r1, r2, r3].map(r => JSON.stringify(r)).join('\n') + '\n';
     const fsDep = {
-      readFileSync: (_path: string): string => jsonl,
+      readFileSync: (path: string): string => {
+        if (path.endsWith('.1')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return jsonl;
+      },
     } as Parameters<typeof readIntrospections>[2];
     const result = readIntrospections('/fake/root', 'target', fsDep);
     expect(result).toHaveLength(2);
@@ -235,7 +246,10 @@ describe('readIntrospections', () => {
     ];
     const jsonl = records.map(r => JSON.stringify(r)).join('\n') + '\n';
     const fsDep = {
-      readFileSync: (_path: string): string => jsonl,
+      readFileSync: (path: string): string => {
+        if (path.endsWith('.1')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return jsonl;
+      },
     } as Parameters<typeof readIntrospections>[2];
     const result = readIntrospections('/fake/root', undefined, fsDep);
     expect(result).toHaveLength(2);
@@ -245,9 +259,240 @@ describe('readIntrospections', () => {
     const r: IntrospectionRecord = { agentId: 'a', claim: 'c', groundTruth: 'g', status: 'asked', askedAt: '2026-01-01T00:00:00.000Z' };
     const jsonl = '\n' + JSON.stringify(r) + '\n\n';
     const fsDep = {
-      readFileSync: (_path: string): string => jsonl,
+      readFileSync: (path: string): string => {
+        if (path.endsWith('.1')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return jsonl;
+      },
     } as Parameters<typeof readIntrospections>[2];
     const result = readIntrospections('/fake/root', undefined, fsDep);
     expect(result).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX 3: Guard — empty claim/groundTruth on 'asked' rejected; 'answered' allowed
+// ---------------------------------------------------------------------------
+
+describe('appendIntrospection — FIX 3 guard (empty claim/groundTruth)', () => {
+  it('does not write when claim is empty string and status is asked', () => {
+    const { written, fsDep } = makeFsSpyCapturing();
+    const record = {
+      agentId: 'agent',
+      claim: '',
+      groundTruth: 'valid truth',
+      status: 'asked' as const,
+    } as IntrospectionRecord;
+    appendIntrospection('/fake/root', record, fsDep);
+    expect(written).toHaveLength(0);
+  });
+
+  it('does not write when claim is whitespace-only and status is asked', () => {
+    const { written, fsDep } = makeFsSpyCapturing();
+    const record = {
+      agentId: 'agent',
+      claim: '   ',
+      groundTruth: 'valid truth',
+      status: 'asked' as const,
+    } as IntrospectionRecord;
+    appendIntrospection('/fake/root', record, fsDep);
+    expect(written).toHaveLength(0);
+  });
+
+  it('does not write when groundTruth is empty string and status is asked', () => {
+    const { written, fsDep } = makeFsSpyCapturing();
+    const record = {
+      agentId: 'agent',
+      claim: 'valid claim',
+      groundTruth: '',
+      status: 'asked' as const,
+    } as IntrospectionRecord;
+    appendIntrospection('/fake/root', record, fsDep);
+    expect(written).toHaveLength(0);
+  });
+
+  it('writes when status is answered and claim/groundTruth are empty (from mcp record action)', () => {
+    const { written, fsDep } = makeFsSpyCapturing();
+    // This mirrors what mcp-server-sdk.ts action:'record' sends:
+    // claim: claim ?? '', groundTruth: ground_truth ?? '' (may be empty)
+    const record = {
+      agentId: 'agent',
+      claim: '',
+      groundTruth: '',
+      answer: 'I pattern-matched the task framing',
+      status: 'answered' as const,
+      answeredAt: '2026-06-22T10:00:00.000Z',
+    } as IntrospectionRecord;
+    appendIntrospection('/fake/root', record, fsDep);
+    expect(written).toHaveLength(1);
+    const parsed = JSON.parse(written[0].data.trim());
+    expect(parsed.status).toBe('answered');
+    expect(parsed.answer).toBe('I pattern-matched the task framing');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX 4: 'answered' records omit askedAt
+// ---------------------------------------------------------------------------
+
+describe('appendIntrospection — FIX 4 askedAt optional on answered', () => {
+  it('writes answered record without askedAt when omitted', () => {
+    const { written, fsDep } = makeFsSpyCapturing();
+    const record: IntrospectionRecord = {
+      agentId: 'agent',
+      claim: 'claimed X',
+      groundTruth: 'actually Y',
+      answer: 'I assumed without checking',
+      status: 'answered',
+      answeredAt: '2026-06-22T10:00:00.000Z',
+      // askedAt intentionally absent
+    };
+    appendIntrospection('/fake/root', record, fsDep);
+    expect(written).toHaveLength(1);
+    const parsed = JSON.parse(written[0].data.trim());
+    expect('askedAt' in parsed).toBe(false);
+    expect(parsed.answeredAt).toBe('2026-06-22T10:00:00.000Z');
+  });
+
+  it('includes askedAt when explicitly provided on answered record', () => {
+    const { written, fsDep } = makeFsSpyCapturing();
+    const record: IntrospectionRecord = {
+      agentId: 'agent',
+      claim: 'c',
+      groundTruth: 'g',
+      answer: 'a',
+      status: 'answered',
+      askedAt: '2026-06-22T09:00:00.000Z',
+      answeredAt: '2026-06-22T10:00:00.000Z',
+    };
+    appendIntrospection('/fake/root', record, fsDep);
+    const parsed = JSON.parse(written[0].data.trim());
+    expect(parsed.askedAt).toBe('2026-06-22T09:00:00.000Z');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX 5: Rotation — renames at threshold; readIntrospections reads rotated + live
+// ---------------------------------------------------------------------------
+
+function makeRotationFsDep(fileSize: number): {
+  renamed: { src: string; dest: string }[];
+  written: { path: string; data: string }[];
+  fsDep: Parameters<typeof appendIntrospection>[2];
+} {
+  const renamed: { src: string; dest: string }[] = [];
+  const written: { path: string; data: string }[] = [];
+  const fsDep: Parameters<typeof appendIntrospection>[2] = {
+    mkdirSync: () => { /* no-op */ },
+    appendFileSync: (path: string, data: string) => { written.push({ path, data }); },
+    statSync: (_path: string) => ({ size: fileSize }),
+    renameSync: (src: string, dest: string) => { renamed.push({ src, dest }); },
+  };
+  return { renamed, written, fsDep };
+}
+
+describe('appendIntrospection — FIX 5 rotation', () => {
+  it('renames ledger to .1 when size >= MAX_INTROSPECTION_BYTES', () => {
+    const { renamed, written, fsDep } = makeRotationFsDep(MAX_INTROSPECTION_BYTES);
+    const record: IntrospectionRecord = {
+      agentId: 'agent',
+      claim: 'c',
+      groundTruth: 'g',
+      status: 'asked',
+      askedAt: '2026-01-01T00:00:00.000Z',
+    };
+    appendIntrospection('/fake/root', record, fsDep);
+    expect(renamed).toHaveLength(1);
+    expect(renamed[0].dest.endsWith('.1')).toBe(true);
+    // append still happens after rename
+    expect(written).toHaveLength(1);
+  });
+
+  it('does NOT rename when size < MAX_INTROSPECTION_BYTES', () => {
+    const { renamed, written, fsDep } = makeRotationFsDep(MAX_INTROSPECTION_BYTES - 1);
+    const record: IntrospectionRecord = {
+      agentId: 'agent',
+      claim: 'c',
+      groundTruth: 'g',
+      status: 'asked',
+      askedAt: '2026-01-01T00:00:00.000Z',
+    };
+    appendIntrospection('/fake/root', record, fsDep);
+    expect(renamed).toHaveLength(0);
+    expect(written).toHaveLength(1);
+  });
+
+  it('is best-effort: continues to append when statSync throws (file missing)', () => {
+    const written: { path: string; data: string }[] = [];
+    const fsDep: Parameters<typeof appendIntrospection>[2] = {
+      mkdirSync: () => { /* no-op */ },
+      appendFileSync: (path: string, data: string) => { written.push({ path, data }); },
+      statSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+      renameSync: () => { /* no-op */ },
+    };
+    const record: IntrospectionRecord = {
+      agentId: 'agent',
+      claim: 'c',
+      groundTruth: 'g',
+      status: 'asked',
+      askedAt: '2026-01-01T00:00:00.000Z',
+    };
+    expect(() => appendIntrospection('/fake/root', record, fsDep)).not.toThrow();
+    // Append still happens after stat failure
+    expect(written).toHaveLength(1);
+  });
+});
+
+describe('readIntrospections — FIX 5 reads rotated .1 + live', () => {
+  it('returns records from both .1 and live file', () => {
+    const r1: IntrospectionRecord = { agentId: 'a1', claim: 'c1', groundTruth: 'g1', status: 'asked', askedAt: '2026-01-01T00:00:00.000Z' };
+    const r2: IntrospectionRecord = { agentId: 'a2', claim: 'c2', groundTruth: 'g2', status: 'asked', askedAt: '2026-01-02T00:00:00.000Z' };
+    const rotatedContent = JSON.stringify(r1) + '\n'; // older records in .1
+    const liveContent = JSON.stringify(r2) + '\n';    // newer records in live
+
+    const fsDep: Parameters<typeof readIntrospections>[2] = {
+      readFileSync: (path: string): string => {
+        if (path.endsWith('.1')) return rotatedContent;
+        return liveContent;
+      },
+    };
+    const result = readIntrospections('/fake/root', undefined, fsDep);
+    expect(result).toHaveLength(2);
+    // .1 is read first (older), then live
+    expect(result[0].agentId).toBe('a1');
+    expect(result[1].agentId).toBe('a2');
+  });
+
+  it('returns records from live file when .1 is missing', () => {
+    const r: IntrospectionRecord = { agentId: 'live-only', claim: 'c', groundTruth: 'g', status: 'asked', askedAt: '2026-01-01T00:00:00.000Z' };
+    const fsDep: Parameters<typeof readIntrospections>[2] = {
+      readFileSync: (path: string): string => {
+        if (path.endsWith('.1')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return JSON.stringify(r) + '\n';
+      },
+    };
+    const result = readIntrospections('/fake/root', undefined, fsDep);
+    expect(result).toHaveLength(1);
+    expect(result[0].agentId).toBe('live-only');
+  });
+
+  it('returns records from .1 file when live is missing', () => {
+    const r: IntrospectionRecord = { agentId: 'rotated-only', claim: 'c', groundTruth: 'g', status: 'asked', askedAt: '2026-01-01T00:00:00.000Z' };
+    const fsDep: Parameters<typeof readIntrospections>[2] = {
+      readFileSync: (path: string): string => {
+        if (path.endsWith('.1')) return JSON.stringify(r) + '\n';
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      },
+    };
+    const result = readIntrospections('/fake/root', undefined, fsDep);
+    expect(result).toHaveLength(1);
+    expect(result[0].agentId).toBe('rotated-only');
+  });
+
+  it('returns [] when both .1 and live are missing', () => {
+    const fsDep: Parameters<typeof readIntrospections>[2] = {
+      readFileSync: (_path: string): string => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+    };
+    const result = readIntrospections('/fake/root', undefined, fsDep);
+    expect(result).toEqual([]);
   });
 });

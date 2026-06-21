@@ -4,6 +4,7 @@
  */
 import { ctx, RECENT_CONSENSUS_TASK_TTL_MS } from '../mcp-context';
 import { seedRecentConsensusAgentIds } from './native-tasks';
+import { runMidFlightCheck } from './orchestrator-precondition-runner';
 import type {
   ConsensusEngine as ConsensusEngineType,
   ConsensusReport,
@@ -121,6 +122,8 @@ export function startConsensusTimeout(consensusId: string): void {
     }
 
     const missingAgents = [...current.pendingNativeAgents];
+    // FIX 1: read roundStartSha BEFORE delete so mid-flight check has it.
+    const roundStartShaForMidFlight = current.roundStartSha;
     // Delete round BEFORE async work to prevent double-synthesis race with concurrent relay
     const snapshot = { allResults: current.allResults, relayCrossReviewEntries: current.relayCrossReviewEntries, relayCrossReviewSkipped: current.relayCrossReviewSkipped, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries], resolutionRoots: current.resolutionRoots, roundContext: current.roundContext };
     // PR #270 v3 review (HIGH): seed the agent-id fallback BEFORE delete from
@@ -163,6 +166,19 @@ export function startConsensusTimeout(consensusId: string): void {
       }
       const { report } = await synthesizeTimeoutRound(snapshot, consensusId, missingAgents, timeoutLlm);
       process.stderr.write(`[gossipcat] 🔮 Timeout synthesis complete: ${report.confirmed.length} confirmed, ${report.disputed.length} disputed\n`);
+
+      // FIX 1: mid_flight_fixup check at timeout-synthesis site.
+      // roundStartSha read BEFORE pendingConsensusRounds.delete above.
+      try {
+        const midFlightResult = await runMidFlightCheck({
+          projectRoot: process.cwd(),
+          consensusId,
+          roundStartSha: roundStartShaForMidFlight,
+        });
+        for (const warn of midFlightResult.warnings) {
+          process.stderr.write(`[gossipcat] ${warn}\n`);
+        }
+      } catch { /* best-effort */ }
     } catch (err) {
       process.stderr.write(`[gossipcat] ❌ Timeout synthesis failed: ${(err as Error).message}\n`);
     }
@@ -309,6 +325,8 @@ export async function handleRelayCrossReview(
 
   // All agents responded — synthesize
   // Snapshot and delete BEFORE async synthesis to prevent double-synthesis race with timeout
+  // FIX 1: read roundStartSha BEFORE delete so mid-flight check has it.
+  const completionRoundStartSha = round.roundStartSha;
   const synthSnapshot = {
     allResults: round.allResults,
     relayCrossReviewEntries: round.relayCrossReviewEntries,
@@ -395,6 +413,19 @@ export async function handleRelayCrossReview(
       const { emitConsensusSignals } = await import('@gossip/orchestrator');
       if (report.signals.length > 0) {
         emitConsensusSignals(process.cwd(), report.signals);
+      }
+    } catch { /* best-effort */ }
+
+    // FIX 1: mid_flight_fixup check at completion-synthesis site.
+    // completionRoundStartSha read BEFORE pendingConsensusRounds.delete above.
+    try {
+      const midFlightResult = await runMidFlightCheck({
+        projectRoot: process.cwd(),
+        consensusId: synthSnapshot.consensusId,
+        roundStartSha: completionRoundStartSha,
+      });
+      for (const warn of midFlightResult.warnings) {
+        process.stderr.write(`[gossipcat] ${warn}\n`);
       }
     } catch { /* best-effort */ }
 

@@ -15,7 +15,7 @@ import { makeRoundContext } from '@gossip/orchestrator';
 import type { RelayWarningEntry, RoundContext } from '@gossip/orchestrator';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
-import { captureHeadSha, runMidFlightCheck } from './orchestrator-precondition-runner';
+import { captureHeadSha } from './orchestrator-precondition-runner';
 
 /**
  * Schedule the per-skill checkEffectiveness runner as a detached, tracked
@@ -855,6 +855,9 @@ export async function handleCollect(
       } else {
         // Store pending round for native agents to complete.
         // nativePrompts is persisted so /mcp reconnect can re-issue the EXECUTE NOW block.
+        // FIX 2: hoist captureHeadSha so the execFileSync call is NOT inside
+        // pendingConsensusRounds.set(...) — blocking the MCP handler inline.
+        const roundStartSha = captureHeadSha(process.cwd());
         ctx.pendingConsensusRounds.set(consensusId, {
           consensusId,
           allResults: allResults.filter((r: any) => r.status === 'completed'),
@@ -881,7 +884,9 @@ export async function handleCollect(
           roundContext: effectiveRound,
           // UNIT 3: capture HEAD SHA at Phase 2 start for mid_flight_fixup detection.
           // Best-effort — undefined when git is unavailable (never blocks the round).
-          roundStartSha: captureHeadSha(process.cwd()),
+          // FIX 2: hoisted out of the set() literal so execFileSync does not block
+          // the MCP handler inline inside the Map mutation.
+          roundStartSha,
         });
 
         // Seed the relay-lint fallback membership map — keeps round-membership
@@ -1313,28 +1318,6 @@ export async function handleCollect(
           // the shortfall path) and not stale survivors (on the happy path,
           // where pre-Fix-1 the entry would leak in long-lived processes).
           resetRoundCounter(process.cwd(), authId);
-        }
-      }
-    } catch { /* best-effort */ }
-  }
-
-  // UNIT 3: mid_flight_fixup detection.
-  // Check whether commits landed between round-registration (Phase 2 start) and
-  // collect-end synthesis. Warns when reviewers may have seen post-fix code.
-  // Best-effort: never blocks or fails collect.
-  if (consensusReport) {
-    try {
-      const authId = consensusReport?.signals?.[0]?.consensusId
-        ?? consensusReport?.findings?.[0]?.id?.split(':')?.[0];
-      if (authId) {
-        const roundStartSha = ctx.pendingConsensusRounds.get(authId)?.roundStartSha;
-        const midFlightResult = await runMidFlightCheck({
-          projectRoot: process.cwd(),
-          consensusId: authId,
-          roundStartSha,
-        });
-        for (const warn of midFlightResult.warnings) {
-          process.stderr.write(`[gossipcat] ${warn}\n`);
         }
       }
     } catch { /* best-effort */ }

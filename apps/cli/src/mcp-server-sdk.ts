@@ -2121,6 +2121,11 @@ export function createMcpServer(): McpServer {
         };
       }
 
+      // FIX 4: 'answered' records write status + answeredAt only.
+      // Omit askedAt (we don't know when the 'ask' happened from here — writing
+      // now would corrupt latency measurements). Also omit empty claim/groundTruth
+      // (FIX 3: the guard rejects empty claim/groundTruth on 'asked' status only;
+      // 'answered' records legitimately don't carry them from the orchestrator).
       appendIntrospection(projectRoot, {
         agentId: agent_id,
         findingId: finding_id,
@@ -2128,7 +2133,6 @@ export function createMcpServer(): McpServer {
         groundTruth: ground_truth ?? '',
         answer,
         status: 'answered',
-        askedAt: now,
         answeredAt: now,
       });
 

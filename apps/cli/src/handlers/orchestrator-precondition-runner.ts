@@ -20,6 +20,10 @@ import {
   detectMidFlightCommits,
 } from '@gossip/orchestrator/orchestrator-preconditions';
 import type { PerformanceSignal } from '@gossip/orchestrator';
+// FIX 6: static import to ensure esbuild bundles emitPipelineSignals.
+// Dynamic import() is NOT bundled in esbuild single-file builds — this was the
+// root cause of the activity-mirror hooks silently no-op'ing (project_activity_mirror_v2_progress).
+import { emitPipelineSignals as staticEmitPipelineSignals } from '@gossip/orchestrator';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -230,13 +234,11 @@ function defaultCanRead(p: string): boolean {
 }
 
 function defaultEmitSignals(projectRoot: string, signals: PerformanceSignal[]): void {
-  // Dynamic import keeps the orchestrator coupling lazy and mirrors the
-  // pattern from dispatch-prompt-cache.ts:emitCacheEvictedSignal.
-  import('@gossip/orchestrator').then(({ emitPipelineSignals }) => {
-    try {
-      emitPipelineSignals(projectRoot, signals);
-    } catch { /* best-effort */ }
-  }).catch(() => { /* best-effort */ });
+  // FIX 6: use static import (bundled by esbuild). Dynamic import() is NOT
+  // bundled in esbuild single-file builds — it silently no-ops at runtime.
+  try {
+    staticEmitPipelineSignals(projectRoot, signals);
+  } catch { /* best-effort */ }
 }
 
 // ---------------------------------------------------------------------------
