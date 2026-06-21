@@ -77,6 +77,13 @@ describe('signal_class discriminator (PR 5)', () => {
       expect(classifySignal('unverified')).toBe('operational');
     });
 
+    it('maps orchestrator precondition signal names as operational', () => {
+      // UNIT 1 orchestrator signal pipeline — tallied only, never scored.
+      expect(classifySignal('dispatched_stale_base')).toBe('operational');
+      expect(classifySignal('referenced_unreadable_path')).toBe('operational');
+      expect(classifySignal('mid_flight_fixup')).toBe('operational');
+    });
+
     it('classifies category_confirmed / consensus_verified as performance', () => {
       // These are evidence-of-correctness signals — they affect agent accuracy
       // and belong in the performance bucket alongside agreement / hallucination_caught.

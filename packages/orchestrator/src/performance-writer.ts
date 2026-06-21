@@ -103,6 +103,13 @@ export const VALID_PIPELINE_SIGNALS = new Set([
   // Phase A self-telemetry: collect-end reconciliation detected fewer signals
   // written than findings in the consensus report. Observability-only.
   'signal_loss_suspected',
+  // UNIT 1 orchestrator signal pipeline: dispatch-hygiene precondition signals.
+  // Operational-only (tallied, never scored). Emitted by orchestrator-preconditions.ts
+  // when a dispatch-hygiene failure is detected (stale base, unreadable reference
+  // paths, mid-flight commits during a consensus round).
+  'dispatched_stale_base',
+  'referenced_unreadable_path',
+  'mid_flight_fixup',
 ]);
 
 /**

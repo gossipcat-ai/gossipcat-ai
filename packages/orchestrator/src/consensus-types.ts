@@ -335,7 +335,25 @@ export interface PipelineSignal {
      * invalidation, or concurrent-dispatch overwrite-race. metadata.reason
      * ∈ {'lru' | 'invalidation' | 'overwrite_race'}. Observability-only.
      */
-    | 'dispatch_cache_evicted';
+    | 'dispatch_cache_evicted'
+    /**
+     * UNIT 1 orchestrator signal pipeline — dispatch-hygiene precondition
+     * signals. Operational-only: tallied for observability, never scored into
+     * agent accuracy. Emitted by the orchestrator (not individual agents) when
+     * a precondition failure is detected via orchestrator-preconditions.ts.
+     *
+     * dispatched_stale_base      — dispatch SHA was behind origin/master at
+     *                              dispatch time (behind_origin or branched_pre_merge).
+     * referenced_unreadable_path — dispatch task referenced a spec or context
+     *                              file that the implementer agent cannot read.
+     * mid_flight_fixup           — commits landed on the consensus branch
+     *                              between Phase 1 dispatch and Phase 2
+     *                              cross-review, risking reviewer disagreement
+     *                              on already-fixed items.
+     */
+    | 'dispatched_stale_base'
+    | 'referenced_unreadable_path'
+    | 'mid_flight_fixup';
   /** Real agentId for agent-scoped events; '_system' for system-scoped events. */
   agentId: string;
   taskId: string;
@@ -403,6 +421,13 @@ export const OPERATIONAL_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'worktree_isolation_failed',
   'auto_verify_attempted',
   'auto_verify_skipped_misconfigured',
+  /**
+   * Orchestrator dispatch-hygiene signals (UNIT 1 — orchestrator signal pipeline).
+   * Tallied as operational; never affect agent accuracy scoring.
+   */
+  'dispatched_stale_base',
+  'referenced_unreadable_path',
+  'mid_flight_fixup',
 ]);
 
 /**
