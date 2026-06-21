@@ -26,7 +26,12 @@ interface TaskEntry {
   result?: string;
   status: 'completed' | 'failed' | 'cancelled' | 'running';
   duration?: number;
+  /** ISO timestamp of task.completed/failed/cancelled event (or task.created if still running).
+   *  Used as the "Completed" / "Failed" node in the LifecycleTimeline. */
   timestamp: string;
+  /** ISO timestamp of task.created event — always the dispatch time.
+   *  Used as the "Dispatched" node in the LifecycleTimeline. */
+  createdAt: string;
   inputTokens?: number;
   outputTokens?: number;
 }
@@ -101,7 +106,11 @@ export async function tasksHandler(projectRoot: string, query?: URLSearchParams)
       result: result?.result,
       status: result ? (result.cancelled ? 'cancelled' : result.failed ? 'failed' : 'completed') : 'running',
       duration: result?.duration,
+      // timestamp = completion time for terminal tasks (used as "Completed" node in timeline).
+      // For running tasks, falls back to createdAt.
       timestamp: result?.timestamp || info.timestamp,
+      // createdAt = always the dispatch time (task.created event timestamp).
+      createdAt: info.timestamp,
       inputTokens: result?.inputTokens,
       outputTokens: result?.outputTokens,
     });

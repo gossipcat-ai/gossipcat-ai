@@ -119,7 +119,12 @@ export interface TaskItem {
   result?: string;
   status: 'completed' | 'failed' | 'cancelled' | 'running';
   duration?: number;
+  /** ISO timestamp of completion/failure/cancellation event (or dispatch time if running).
+   *  Used as the "Completed" node in LifecycleTimeline. */
   timestamp: string;
+  /** ISO timestamp of task.created event — always the dispatch time.
+   *  Used as the "Dispatched" node in LifecycleTimeline. */
+  createdAt?: string;
   inputTokens?: number;
   outputTokens?: number;
 }
@@ -137,9 +142,11 @@ export interface TaskDetail extends TaskItem {
   consensusId?: string;
   /** Other taskIds sharing the same consensusId (capped at 25). */
   siblingTaskIds?: string[];
+  /** True if sibling list was truncated at the SIBLING_CAP limit. */
+  siblingsTruncated?: boolean;
   /** Count of agent-performance signal rows for this task. */
   signalCount?: number;
-  /** Count of implementation-findings rows for this task. */
+  /** Count of implementation-findings rows whose taskId starts with `${consensusId}:`. */
   findingCount?: number;
 }
 

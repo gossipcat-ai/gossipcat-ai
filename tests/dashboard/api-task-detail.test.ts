@@ -62,7 +62,50 @@ describe('taskDetailHandler', () => {
     expect(result!.result).toBe('done');
   });
 
-  it('enriches with signalCount and consensusId from agent-performance.jsonl', async () => {
+  it('returns createdAt as the dispatch (task.created) timestamp', async () => {
+    const graphPath = join(gossipDir, 'task-graph.jsonl');
+    writeLines(graphPath, [
+      { type: 'task.created', taskId: 'task-b2', agentId: 'haiku-researcher', task: 'Research B2', timestamp: '2026-06-01T00:00:00.000Z' },
+      { type: 'task.completed', taskId: 'task-b2', durationMs: 12000, result: 'done', timestamp: '2026-06-01T00:00:12.000Z' },
+    ]);
+    const result = await taskDetailHandler(dir, 'task-b2');
+    expect(result).not.toBeNull();
+    // createdAt = task.created timestamp
+    expect(result!.createdAt).toBe('2026-06-01T00:00:00.000Z');
+    // timestamp = task.completed timestamp (completion time, not dispatch time)
+    expect(result!.timestamp).toBe('2026-06-01T00:00:12.000Z');
+  });
+
+  it('resolves task beyond 2000 rows by reading task-graph directly', async () => {
+    const graphPath = join(gossipDir, 'task-graph.jsonl');
+    // Write 2001 tasks; the target task is last
+    const lines: object[] = [];
+    for (let i = 0; i < 2000; i++) {
+      lines.push({ type: 'task.created', taskId: `filler-${i}`, agentId: 'sonnet-implementer', task: `Task ${i}`, timestamp: '2026-06-01T00:00:00.000Z' });
+      lines.push({ type: 'task.completed', taskId: `filler-${i}`, durationMs: 1000, timestamp: '2026-06-01T00:00:01.000Z' });
+    }
+    lines.push({ type: 'task.created', taskId: 'task-deep', agentId: 'gemini-reviewer', task: 'Deep task', timestamp: '2026-05-01T00:00:00.000Z' });
+    lines.push({ type: 'task.completed', taskId: 'task-deep', durationMs: 5000, timestamp: '2026-05-01T00:00:05.000Z' });
+    writeLines(graphPath, lines);
+    const result = await taskDetailHandler(dir, 'task-deep');
+    expect(result).not.toBeNull();
+    expect(result!.taskId).toBe('task-deep');
+    expect(result!.agentId).toBe('gemini-reviewer');
+  });
+
+  it('resolves utility-agent tasks (not filtered out)', async () => {
+    const graphPath = join(gossipDir, 'task-graph.jsonl');
+    writeLines(graphPath, [
+      { type: 'task.created', taskId: 'util-task-1', agentId: '_utility', task: 'Utility work', timestamp: '2026-06-01T00:00:00.000Z' },
+      { type: 'task.completed', taskId: 'util-task-1', durationMs: 100, timestamp: '2026-06-01T00:00:00.100Z' },
+    ]);
+    const result = await taskDetailHandler(dir, 'util-task-1');
+    expect(result).not.toBeNull();
+    expect(result!.taskId).toBe('util-task-1');
+    expect(result!.agentId).toBe('_utility');
+  });
+
+  it('enriches with signalCount and consensusId from agent-performance.jsonl (single pass)', async () => {
     const graphPath = join(gossipDir, 'task-graph.jsonl');
     writeLines(graphPath, [
       { type: 'task.created', taskId: 'task-c', agentId: 'sonnet-reviewer', task: 'Review C', timestamp: '2026-06-02T00:00:00.000Z' },
@@ -110,7 +153,60 @@ describe('taskDetailHandler', () => {
     expect(result!.siblingTaskIds).not.toContain('task-other');
   });
 
-  it('returns findingCount=0 for a task with no matching implementation-findings rows', async () => {
+  it('sets siblingsTruncated=true when sibling cap is hit', async () => {
+    const graphPath = join(gossipDir, 'task-graph.jsonl');
+    writeLines(graphPath, [
+      { type: 'task.created', taskId: 'task-cap', agentId: 'sonnet-reviewer', task: 'Cap test', timestamp: '2026-06-03T00:00:00.000Z' },
+      { type: 'task.completed', taskId: 'task-cap', durationMs: 1000, timestamp: '2026-06-03T00:00:01.000Z' },
+    ]);
+
+    const perfPath = join(gossipDir, 'agent-performance.jsonl');
+    // Write 26 sibling entries (cap is 25) + 1 for the main task
+    const lines: object[] = [
+      { type: 'consensus', signal: 'agreement', taskId: 'task-cap', agentId: 'sonnet-reviewer', consensusId: 'cap-round-id', timestamp: '2026-06-03T00:00:02.000Z' },
+    ];
+    for (let i = 0; i < 26; i++) {
+      lines.push({ type: 'consensus', signal: 'agreement', taskId: `sib-${i}`, agentId: 'sonnet-reviewer', consensusId: 'cap-round-id', timestamp: '2026-06-03T00:00:02.000Z' });
+    }
+    writeLines(perfPath, lines);
+
+    const result = await taskDetailHandler(dir, 'task-cap');
+    expect(result).not.toBeNull();
+    expect(result!.siblingTaskIds).toHaveLength(25);
+    expect(result!.siblingsTruncated).toBe(true);
+  });
+
+  it('counts findingCount by consensusId prefix (not exact match)', async () => {
+    const graphPath = join(gossipDir, 'task-graph.jsonl');
+    writeLines(graphPath, [
+      { type: 'task.created', taskId: 'task-findings', agentId: 'gemini-reviewer', task: 'Review', timestamp: '2026-06-04T00:00:00.000Z' },
+      { type: 'task.completed', taskId: 'task-findings', durationMs: 3000, timestamp: '2026-06-04T00:00:03.000Z' },
+    ]);
+
+    const perfPath = join(gossipDir, 'agent-performance.jsonl');
+    writeLines(perfPath, [
+      { type: 'consensus', signal: 'agreement', taskId: 'task-findings', agentId: 'gemini-reviewer', consensusId: 'round-abc123', timestamp: '2026-06-04T00:00:04.000Z' },
+    ]);
+
+    const findingsPath = join(gossipDir, 'implementation-findings.jsonl');
+    writeLines(findingsPath, [
+      // These match the consensusId prefix
+      { taskId: 'round-abc123:f1', originalAgentId: 'gemini-reviewer', finding: 'bug A', tag: 'confirmed' },
+      { taskId: 'round-abc123:f2', originalAgentId: 'sonnet-reviewer', finding: 'bug B', tag: 'unique' },
+      // Different consensus round — should NOT be counted
+      { taskId: 'round-other:f1', originalAgentId: 'haiku-researcher', finding: 'bug C', tag: 'confirmed' },
+      // Exact task dispatch ID — also should NOT be counted (not the prefix format)
+      { taskId: 'task-findings', originalAgentId: 'gemini-reviewer', finding: 'bug D', tag: 'confirmed' },
+    ]);
+
+    const result = await taskDetailHandler(dir, 'task-findings');
+    expect(result).not.toBeNull();
+    expect(result!.consensusId).toBe('round-abc123');
+    // Only the two rows starting with "round-abc123:" should be counted
+    expect(result!.findingCount).toBe(2);
+  });
+
+  it('returns findingCount=0 when no consensusId (no findings lookup)', async () => {
     const graphPath = join(gossipDir, 'task-graph.jsonl');
     writeLines(graphPath, [
       { type: 'task.created', taskId: 'task-e', agentId: 'sonnet-implementer', task: 'Implement E', timestamp: '2026-06-04T00:00:00.000Z' },
@@ -124,8 +220,9 @@ describe('taskDetailHandler', () => {
 
     const result = await taskDetailHandler(dir, 'task-e');
     expect(result).not.toBeNull();
-    // implementation-findings taskId field uses consensusId:fN format, not dispatch taskIds
+    // No consensusId → findingCount stays 0, no prefix lookup
     expect(result!.findingCount).toBe(0);
+    expect(result!.consensusId).toBeUndefined();
   });
 
   it('gracefully handles missing agent-performance.jsonl (no enrichment fields)', async () => {
@@ -141,5 +238,6 @@ describe('taskDetailHandler', () => {
     expect(result!.signalCount).toBe(0);
     expect(result!.consensusId).toBeUndefined();
     expect(result!.siblingTaskIds).toBeUndefined();
+    expect(result!.siblingsTruncated).toBeUndefined();
   });
 });
