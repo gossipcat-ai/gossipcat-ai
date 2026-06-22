@@ -267,3 +267,5 @@ export { RUNTIME_FLAG_REGISTRY } from './runtime-config-schema';
 export type { RuntimeFlagKey, RuntimeFlagSpec } from './runtime-config-schema';
 export { ChatbotAgent } from './chatbot-agent';
 export type { ChatbotTool, ChatbotAgentConfig, ChatStreamEvent } from './chatbot-agent';
+export { detectStaleBase, findUnreadablePaths, detectMidFlightCommits } from './orchestrator-preconditions';
+export type { StaleBaseResult, MidFlightResult } from './orchestrator-preconditions';

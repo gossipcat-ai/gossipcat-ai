@@ -15,6 +15,7 @@ import { makeRoundContext } from '@gossip/orchestrator';
 import type { RelayWarningEntry, RoundContext } from '@gossip/orchestrator';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
+import { captureHeadSha } from './orchestrator-precondition-runner';
 
 /**
  * Schedule the per-skill checkEffectiveness runner as a detached, tracked
@@ -854,6 +855,9 @@ export async function handleCollect(
       } else {
         // Store pending round for native agents to complete.
         // nativePrompts is persisted so /mcp reconnect can re-issue the EXECUTE NOW block.
+        // FIX 2: hoist captureHeadSha so the execFileSync call is NOT inside
+        // pendingConsensusRounds.set(...) — blocking the MCP handler inline.
+        const roundStartSha = captureHeadSha(process.cwd());
         ctx.pendingConsensusRounds.set(consensusId, {
           consensusId,
           allResults: allResults.filter((r: any) => r.status === 'completed'),
@@ -878,6 +882,11 @@ export async function handleCollect(
           // populated in parallel for old-reader back-compat. PR-C: this is
           // always a concrete RoundContext (the engine now requires one).
           roundContext: effectiveRound,
+          // UNIT 3: capture HEAD SHA at Phase 2 start for mid_flight_fixup detection.
+          // Best-effort — undefined when git is unavailable (never blocks the round).
+          // FIX 2: hoisted out of the set() literal so execFileSync does not block
+          // the MCP handler inline inside the Map mutation.
+          roundStartSha,
         });
 
         // Seed the relay-lint fallback membership map — keeps round-membership

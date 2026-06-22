@@ -31,6 +31,7 @@ import {
   nativeWorktreeBanner,
 } from '../native-host-bridge';
 import { ctx, NATIVE_TASK_TTL_MS, MAX_PENDING_DISPATCH_WARNINGS } from '../mcp-context';
+import { runDispatchPreconditionGuard } from './orchestrator-precondition-runner';
 
 /**
  * Stash dispatch-time fail-loud warnings (spec §3.2 boundary #1) under every
@@ -708,6 +709,20 @@ export async function handleDispatchSingle(
     const timeoutMs = timeout_ms ?? NATIVE_TASK_TTL_MS;
     // Spec §3.2 boundary #1: stash dispatch-time warnings under this task_id.
     stashDispatchWarnings([taskId], dispatchWarnings);
+
+    // Unit 2 orchestrator signal pipeline: pre-dispatch precondition guard.
+    // Best-effort — never blocks/fails a dispatch. Emits operational pipeline
+    // signals (dispatched_stale_base, referenced_unreadable_path) against
+    // agentId:'orchestrator' and surfaces human-readable warnings to stderr.
+    runDispatchPreconditionGuard({
+      projectRoot: process.cwd(),
+      taskId,
+      resolutionRoots,
+    }).then(({ warnings: precondWarnings }) => {
+      for (const w of precondWarnings) {
+        process.stderr.write(`[gossipcat] ⚠️ precondition: ${w}\n`);
+      }
+    }).catch(() => { /* best-effort */ });
 
     // Stage 2 premise-verification — parse + verify any ```premise-claims
     // block in the task. Runs BEFORE assemblePrompt so the PREMISE-MISMATCH

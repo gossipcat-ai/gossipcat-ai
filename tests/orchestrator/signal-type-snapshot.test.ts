@@ -55,6 +55,13 @@ const DOCUMENTED_PATH_SPECIFIC = new Map<string, string>([
   ['relay_findings_dropped',    'collect.ts / relay-tasks.ts (relay-lint Path A)'],
   // Phase A self-telemetry: collect-end reconciliation shortfall
   ['signal_loss_suspected',     'collect.ts (round-reconcile assertion, Phase A self-telemetry)'],
+  // UNIT 1 orchestrator signal pipeline: dispatch-hygiene precondition signals.
+  // Emitted by the orchestrator via orchestrator-preconditions.ts detectors.
+  ['dispatched_stale_base',     'orchestrator-preconditions.ts / dispatch (detectStaleBase)'],
+  ['referenced_unreadable_path', 'orchestrator-preconditions.ts / dispatch (findUnreadablePaths)'],
+  ['mid_flight_fixup',          'orchestrator-preconditions.ts / collect (detectMidFlightCommits)'],
+  // Phase 2 dispatch-prompt warm cache (PR post-signal_loss_suspected)
+  ['dispatch_cache_evicted',    'apps/cli/src/handlers/dispatch-prompt-cache.ts (LRU/invalidation/overwrite_race)'],
 ]);
 
 // ── Exhaustive union of all known signal names ─────────────────────────────
@@ -77,6 +84,12 @@ const ALL_KNOWN_SIGNAL_NAMES: string[] = [
   'citation_fabricated', 'relay_findings_dropped',
   // Phase A self-telemetry
   'signal_loss_suspected',
+  // Phase 2 dispatch-prompt warm cache
+  'dispatch_cache_evicted',
+  // UNIT 1 orchestrator signal pipeline
+  'dispatched_stale_base',
+  'referenced_unreadable_path',
+  'mid_flight_fixup',
   // signal_retracted appears in both ConsensusSignal and PipelineSignal
 ];
 
