@@ -1,6 +1,7 @@
 import { readFile, writeFile, readdir, stat, mkdir, unlink } from 'fs/promises';
 import { resolve, relative, join } from 'path';
 import { existsSync, realpathSync } from 'fs';
+import RE2 from 're2';
 import { Sandbox } from './sandbox';
 
 export const MAX_GREP_FILE_BYTES = 2 * 1024 * 1024; // 2 MiB — skip files larger than this
@@ -121,9 +122,11 @@ export class FileTools {
     const searchRoot = args.path
       ? this.sandbox.validatePath(args.path, allowed)
       : (agentRoot || this.sandbox.projectRoot);
-    let regex: RegExp;
+    let regex: RE2;
     try {
-      regex = new RegExp(args.pattern);
+      // RE2 uses a linear-time engine — immune to catastrophic backtracking.
+      // Trade-off: backreferences and lookbehind assertions are not supported.
+      regex = new RE2(args.pattern);
     } catch (error) {
       return `Invalid regex pattern: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
@@ -166,7 +169,7 @@ export class FileTools {
       .replace(/[.+^${}()|[\]\\]/g, '\\$&')
       .replace(/\*/g, '.*')
       .replace(/\?/g, '.');
-    const regex = new RegExp(regexStr);
+    const regex = new RE2(regexStr);
 
     for (const entry of entries) {
       if (entry === 'node_modules' || entry === '.git') continue;

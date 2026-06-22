@@ -9,6 +9,7 @@
   "dependencies": {
     "@gossip/client": "*",
     "@gossip/types": "*",
+    "re2": "^1.25.0",
     "zod": "^3.25.76"
   }
 }

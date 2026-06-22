@@ -232,6 +232,29 @@ describe('FileTools', () => {
       const result = await fileTools.fileGrep({ pattern: 'NONEXISTENT_UNIQUE_STRING_XYZ' });
       expect(result).toBe('No matches found');
     });
+
+    it('completes promptly for a pathological ReDoS pattern against a long line', async () => {
+      // (a+)+$ causes catastrophic backtracking in JS RegExp against a long non-matching
+      // string. With RE2's linear-time engine this resolves in microseconds.
+      // Write a file containing a long line of 'a's that does NOT end with the pattern
+      // anchor match — RE2 should still complete immediately.
+      const redosDir = resolve(require('os').tmpdir(), 'gossip-redos-test-' + Date.now());
+      require('fs').mkdirSync(redosDir, { recursive: true });
+      // 10000 'a's then 'b' — catastrophic with JS RegExp, linear with RE2.
+      require('fs').writeFileSync(require('path').join(redosDir, 'redos.txt'), 'a'.repeat(10000) + 'b');
+      const redosSandbox = new Sandbox(redosDir);
+      const redosTools = new FileTools(redosSandbox);
+      const start = Date.now();
+      const result = await redosTools.fileGrep({ pattern: '(a+)+$' });
+      const elapsed = Date.now() - start;
+      // No match (line ends with 'b', not a sequence of a's completing the anchor)
+      expect(result).toBe('No matches found');
+      // RE2 is linear — should complete well under 1 second even for 10000 chars.
+      expect(elapsed).toBeLessThan(1000);
+      try {
+        require('fs').rmSync(redosDir, { recursive: true, force: true });
+      } catch { /* ignore */ }
+    });
   });
 
   // ─── fileGrep — resource exhaustion caps ──────────────────────────────────
