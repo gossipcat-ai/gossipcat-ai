@@ -161,6 +161,9 @@ describe('handleDispatchParallel — precondition guard invocation', () => {
     expect(mockedGuard).toHaveBeenCalledTimes(1);
     const [args] = mockedGuard.mock.calls[0];
     expect(args.resolutionRoots).toEqual(roots);
+    // Bug A wiring: the first task's text + write_mode must reach the guard.
+    expect(args.taskText).toBe('Review Y');
+    expect(args.writeMode).toBeUndefined();
   });
 
   it('guard is called only once even for multiple tasks', async () => {
@@ -181,6 +184,31 @@ describe('handleDispatchParallel — precondition guard invocation', () => {
     await new Promise(r => setImmediate(r));
 
     expect(mockedGuard).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes ALL non-primary tasks through as additionalTasks (Bug A Fix 1)', async () => {
+    ctx.mainAgent.dispatchParallel = jest.fn().mockResolvedValue({
+      taskIds: ['p-1', 'p-2'],
+      errors: [],
+    });
+    ctx.mainAgent.getTask = jest.fn().mockReturnValue({ agentId: 'gemini-tester' });
+
+    await handleDispatchParallel(
+      [
+        { agent_id: 'gemini-tester', task: 'Primary task' },
+        { agent_id: 'gemini-reviewer', task: 'Secondary references docs/specs/x.md', write_mode: 'worktree' },
+      ],
+      /* consensus */ false,
+    );
+
+    await new Promise(r => setImmediate(r));
+
+    expect(mockedGuard).toHaveBeenCalledTimes(1);
+    const [args] = mockedGuard.mock.calls[0];
+    expect(args.taskText).toBe('Primary task');
+    expect(args.additionalTasks).toEqual([
+      { taskText: 'Secondary references docs/specs/x.md', writeMode: 'worktree' },
+    ]);
   });
 
   it('dispatch succeeds even when runDispatchPreconditionGuard rejects', async () => {
@@ -277,6 +305,28 @@ describe('handleDispatchConsensus — precondition guard invocation', () => {
     await new Promise(r => setImmediate(r));
 
     expect(mockedGuard).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes non-primary consensus tasks through as additionalTasks (Bug A Fix 1)', async () => {
+    ctx.mainAgent.dispatchParallel = jest.fn().mockResolvedValue({
+      taskIds: ['c-1', 'c-2'],
+      errors: [],
+    });
+    ctx.mainAgent.getTask = jest.fn().mockReturnValue({ agentId: 'gemini-tester' });
+
+    await handleDispatchConsensus([
+      { agent_id: 'gemini-tester', task: 'Primary review' },
+      { agent_id: 'gemini-reviewer', task: 'Secondary review docs/specs/y.md', write_mode: 'worktree' },
+    ]);
+
+    await new Promise(r => setImmediate(r));
+
+    expect(mockedGuard).toHaveBeenCalledTimes(1);
+    const [args] = mockedGuard.mock.calls[0];
+    expect(args.taskText).toBe('Primary review');
+    expect(args.additionalTasks).toEqual([
+      { taskText: 'Secondary review docs/specs/y.md', writeMode: 'worktree' },
+    ]);
   });
 
   it('dispatch succeeds even when runDispatchPreconditionGuard rejects', async () => {

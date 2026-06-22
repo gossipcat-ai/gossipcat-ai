@@ -20,10 +20,16 @@ function makeDeps(overrides: Partial<PreconditionRunnerDeps> = {}): Precondition
   return {
     execFile: jest.fn(),
     canRead: jest.fn().mockReturnValue(true),
+    // Default: every referenced path exists and is tracked → no task-text signal.
+    pathExists: jest.fn().mockReturnValue(true),
+    isGitignoredOrUntracked: jest.fn().mockReturnValue(false),
     emitSignals: jest.fn(),
     ...overrides,
   };
 }
+
+/** Default guard input fields for the new task-text check (no referenced paths). */
+const NO_TASK_TEXT = { taskText: '', writeMode: undefined as string | undefined };
 
 // ---------------------------------------------------------------------------
 // gatherStaleBaseInputs
@@ -103,7 +109,7 @@ describe('runDispatchPreconditionGuard — stale base', () => {
         .mockReturnValueOnce('samesha\n'),
     });
     const result = await runDispatchPreconditionGuard(
-      { projectRoot: '/project', taskId: 't1', resolutionRoots: [] },
+      { projectRoot: '/project', taskId: 't1', resolutionRoots: [], ...NO_TASK_TEXT },
       deps,
     );
     expect(result.warnings).toHaveLength(0);
@@ -118,7 +124,7 @@ describe('runDispatchPreconditionGuard — stale base', () => {
         .mockReturnValueOnce('old111\n'),     // merge-base === HEAD → behind_origin
     });
     const result = await runDispatchPreconditionGuard(
-      { projectRoot: '/project', taskId: 'task-abc', resolutionRoots: [] },
+      { projectRoot: '/project', taskId: 'task-abc', resolutionRoots: [], ...NO_TASK_TEXT },
       deps,
     );
     expect(result.warnings.length).toBeGreaterThan(0);
@@ -139,7 +145,7 @@ describe('runDispatchPreconditionGuard — stale base', () => {
         .mockReturnValueOnce('commonancestor\n'),  // different from HEAD → branched_pre_merge
     });
     const result = await runDispatchPreconditionGuard(
-      { projectRoot: '/project', taskId: 'task-xyz', resolutionRoots: [] },
+      { projectRoot: '/project', taskId: 'task-xyz', resolutionRoots: [], ...NO_TASK_TEXT },
       deps,
     );
     expect(result.warnings.length).toBeGreaterThan(0);
@@ -156,7 +162,7 @@ describe('runDispatchPreconditionGuard — stale base', () => {
       }),
     });
     const result = await runDispatchPreconditionGuard(
-      { projectRoot: '/project', taskId: 'tX', resolutionRoots: [] },
+      { projectRoot: '/project', taskId: 'tX', resolutionRoots: [], ...NO_TASK_TEXT },
       deps,
     );
     expect(result.warnings).toHaveLength(0);
@@ -176,7 +182,7 @@ describe('runDispatchPreconditionGuard — stale base', () => {
       emitSignals: jest.fn().mockImplementation(() => { throw new Error('emit failed'); }),
     });
     await expect(
-      runDispatchPreconditionGuard({ projectRoot: '/p', taskId: 't', resolutionRoots: [] }, deps),
+      runDispatchPreconditionGuard({ projectRoot: '/p', taskId: 't', resolutionRoots: [], ...NO_TASK_TEXT }, deps),
     ).resolves.toBeDefined();
   });
 });
@@ -195,7 +201,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
       canRead: jest.fn().mockReturnValue(true),
     });
     const result = await runDispatchPreconditionGuard(
-      { projectRoot: '/p', taskId: 't1', resolutionRoots: ['/p/worktree1', '/p/worktree2'] },
+      { projectRoot: '/p', taskId: 't1', resolutionRoots: ['/p/worktree1', '/p/worktree2'], ...NO_TASK_TEXT },
       deps,
     );
     expect(result.warnings).toHaveLength(0);
@@ -218,6 +224,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
         projectRoot: '/p',
         taskId: 'task-123',
         resolutionRoots: ['/readable/path', '/missing/path'],
+        ...NO_TASK_TEXT,
       },
       deps,
     );
@@ -242,7 +249,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
       canRead: jest.fn().mockReturnValue(false), // would fail if called
     });
     const result = await runDispatchPreconditionGuard(
-      { projectRoot: '/p', taskId: 't', resolutionRoots: [] },
+      { projectRoot: '/p', taskId: 't', resolutionRoots: [], ...NO_TASK_TEXT },
       deps,
     );
     // canRead should not have been called (no paths to check)
@@ -263,7 +270,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
       canRead: jest.fn().mockReturnValue(false),
     });
     const result = await runDispatchPreconditionGuard(
-      { projectRoot: '/p', taskId: 't', resolutionRoots: undefined },
+      { projectRoot: '/p', taskId: 't', resolutionRoots: undefined, ...NO_TASK_TEXT },
       deps,
     );
     expect(deps.canRead).not.toHaveBeenCalled();
@@ -280,7 +287,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
     });
     await expect(
       runDispatchPreconditionGuard(
-        { projectRoot: '/p', taskId: 't', resolutionRoots: ['/some/path'] },
+        { projectRoot: '/p', taskId: 't', resolutionRoots: ['/some/path'], ...NO_TASK_TEXT },
         deps,
       ),
     ).resolves.toBeDefined();
@@ -305,6 +312,7 @@ describe('runDispatchPreconditionGuard — combined signals', () => {
         projectRoot: '/p',
         taskId: 'combined',
         resolutionRoots: ['/missing/root'],
+        ...NO_TASK_TEXT,
       },
       deps,
     );
@@ -314,5 +322,292 @@ describe('runDispatchPreconditionGuard — combined signals', () => {
       .map((s: { signal: string }) => s.signal);
     expect(allEmittedSignals).toContain('dispatched_stale_base');
     expect(allEmittedSignals).toContain('referenced_unreadable_path');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runDispatchPreconditionGuard — referenced_unreadable_path (TASK-TEXT, Bug A)
+// ---------------------------------------------------------------------------
+
+/** execFile stub that satisfies stale-base (fresh) so only the task-text path runs. */
+function freshStaleExecFile(): jest.Mock {
+  return jest.fn()
+    .mockReturnValueOnce('sha\n')   // HEAD
+    .mockReturnValueOnce('sha\n')   // origin/master
+    .mockReturnValueOnce('sha\n');  // merge-base === HEAD → fresh
+}
+
+type RefSignal = PerformanceSignal & {
+  agentId: string;
+  taskId: string;
+  metadata: { referenced: Array<{ path: string; reason: string }> };
+};
+
+function findRefSignal(emit: jest.Mock): RefSignal | undefined {
+  return emit.mock.calls
+    .flatMap(([, sigs]: [unknown, PerformanceSignal[]]) => sigs)
+    .find((s: PerformanceSignal) => s.signal === 'referenced_unreadable_path') as RefSignal | undefined;
+}
+
+describe('runDispatchPreconditionGuard — referenced_unreadable_path (task text)', () => {
+  it('emits signal + warning for a gitignored path under writeMode worktree', async () => {
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockReturnValue(true),
+      isGitignoredOrUntracked: jest.fn().mockReturnValue(true),
+    });
+    const result = await runDispatchPreconditionGuard(
+      {
+        projectRoot: '/p',
+        taskId: 'task-wt',
+        resolutionRoots: [],
+        taskText: 'Implement BUG A from spec `docs/specs/2026-06-22-fix.md` now.',
+        writeMode: 'worktree',
+      },
+      deps,
+    );
+    expect(result.warnings.join(' ')).toMatch(/cannot read/i);
+    const sig = findRefSignal(deps.emitSignals as jest.Mock);
+    expect(sig).toBeDefined();
+    expect(sig!.agentId).toBe('orchestrator');
+    expect(sig!.taskId).toBe('task-wt');
+    expect(sig!.metadata.referenced).toEqual([
+      { path: 'docs/specs/2026-06-22-fix.md', reason: 'gitignored_in_worktree' },
+    ]);
+  });
+
+  it('emits missing reason for a nonexistent referenced path (sequential mode)', async () => {
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockReturnValue(false),
+      isGitignoredOrUntracked: jest.fn().mockReturnValue(false),
+    });
+    const result = await runDispatchPreconditionGuard(
+      {
+        projectRoot: '/p',
+        taskId: 'task-typo',
+        resolutionRoots: [],
+        taskText: 'Read `docs/typo.md` and proceed.',
+        writeMode: 'sequential',
+      },
+      deps,
+    );
+    expect(result.warnings.length).toBeGreaterThan(0);
+    const sig = findRefSignal(deps.emitSignals as jest.Mock);
+    expect(sig!.metadata.referenced).toEqual([{ path: 'docs/typo.md', reason: 'missing' }]);
+  });
+
+  it('does NOT emit a task-text signal when the referenced path is readable', async () => {
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockReturnValue(true),
+      isGitignoredOrUntracked: jest.fn().mockReturnValue(false),
+    });
+    const result = await runDispatchPreconditionGuard(
+      {
+        projectRoot: '/p',
+        taskId: 't-ok',
+        resolutionRoots: [],
+        taskText: 'Edit `src/index.ts` carefully.',
+        writeMode: 'worktree',
+      },
+      deps,
+    );
+    expect(findRefSignal(deps.emitSignals as jest.Mock)).toBeUndefined();
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it('does NOT flag a gitignored path under non-worktree mode (readable from root)', async () => {
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockReturnValue(true),
+      isGitignoredOrUntracked: jest.fn().mockReturnValue(true),
+    });
+    await runDispatchPreconditionGuard(
+      {
+        projectRoot: '/p',
+        taskId: 't-seq',
+        resolutionRoots: [],
+        taskText: 'Read `docs/specs/x.md`.',
+        writeMode: 'sequential',
+      },
+      deps,
+    );
+    expect(findRefSignal(deps.emitSignals as jest.Mock)).toBeUndefined();
+  });
+
+  it('never throws when pathExists predicate throws (safe default → no signal)', async () => {
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockImplementation(() => { throw new Error('fs blew up'); }),
+      isGitignoredOrUntracked: jest.fn().mockReturnValue(true),
+    });
+    const result = await runDispatchPreconditionGuard(
+      {
+        projectRoot: '/p',
+        taskId: 't-throw',
+        resolutionRoots: [],
+        taskText: 'Read `docs/specs/x.md`.',
+        writeMode: 'worktree',
+      },
+      deps,
+    );
+    // pathExists throws → treated as "present" → no missing; gitignored check
+    // still runs (returns true) → flagged gitignored_in_worktree. Key assertion:
+    // the guard resolves and never throws.
+    expect(result).toBeDefined();
+  });
+
+  it('never throws when isGitignoredOrUntracked predicate throws', async () => {
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockReturnValue(true),
+      isGitignoredOrUntracked: jest.fn().mockImplementation(() => { throw new Error('git blew up'); }),
+    });
+    await expect(
+      runDispatchPreconditionGuard(
+        {
+          projectRoot: '/p',
+          taskId: 't-throw2',
+          resolutionRoots: [],
+          taskText: 'Read `docs/specs/x.md`.',
+          writeMode: 'worktree',
+        },
+        deps,
+      ),
+    ).resolves.toBeDefined();
+    // git predicate throws → safe default false → not flagged.
+    expect(findRefSignal(deps.emitSignals as jest.Mock)).toBeUndefined();
+  });
+
+  it('emits no task-text signal when taskText is empty', async () => {
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockReturnValue(false),
+    });
+    await runDispatchPreconditionGuard(
+      { projectRoot: '/p', taskId: 't', resolutionRoots: [], taskText: '', writeMode: 'worktree' },
+      deps,
+    );
+    expect(deps.pathExists).not.toHaveBeenCalled();
+    expect(findRefSignal(deps.emitSignals as jest.Mock)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runDispatchPreconditionGuard — multi-task referenced-path scan (Fix 1)
+// ---------------------------------------------------------------------------
+
+describe('runDispatchPreconditionGuard — additionalTasks (multi-task)', () => {
+  it('flags a gitignored spec referenced by a worktree task at index >=1', async () => {
+    // Primary task (index 0) references nothing; the SECOND task references a
+    // gitignored spec under writeMode worktree. Without Fix 1 this would never
+    // be flagged — the exact failure the signal exists to catch.
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockReturnValue(true),
+      isGitignoredOrUntracked: jest.fn().mockReturnValue(true),
+    });
+    const result = await runDispatchPreconditionGuard(
+      {
+        projectRoot: '/p',
+        taskId: 'task-multi',
+        resolutionRoots: [],
+        taskText: 'Primary task, no path refs here.',
+        writeMode: undefined,
+        additionalTasks: [
+          { taskText: 'Implement from `docs/specs/2026-06-22-fix.md`.', writeMode: 'worktree' },
+        ],
+      },
+      deps,
+    );
+    const sig = findRefSignal(deps.emitSignals as jest.Mock);
+    expect(sig).toBeDefined();
+    expect(sig!.metadata.referenced).toEqual([
+      { path: 'docs/specs/2026-06-22-fix.md', reason: 'gitignored_in_worktree' },
+    ]);
+    expect(result.warnings.join(' ')).toMatch(/cannot read/i);
+  });
+
+  it('dedupes the same unreadable path across tasks, preferring gitignored_in_worktree', async () => {
+    // Both tasks reference docs/specs/x.md. The primary (sequential) would yield
+    // 'missing' if it did not exist, but here it EXISTS; the worktree task makes
+    // it gitignored_in_worktree. Dedup must emit a single entry.
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      // exists everywhere → sequential task sees it as readable (no entry),
+      // worktree task sees gitignored → gitignored_in_worktree.
+      pathExists: jest.fn().mockReturnValue(true),
+      isGitignoredOrUntracked: jest.fn().mockReturnValue(true),
+    });
+    await runDispatchPreconditionGuard(
+      {
+        projectRoot: '/p',
+        taskId: 'task-dedup',
+        resolutionRoots: [],
+        taskText: 'Read `docs/specs/x.md`.',
+        writeMode: 'sequential',
+        additionalTasks: [
+          { taskText: 'Also read `docs/specs/x.md`.', writeMode: 'worktree' },
+        ],
+      },
+      deps,
+    );
+    const sig = findRefSignal(deps.emitSignals as jest.Mock);
+    expect(sig).toBeDefined();
+    expect(sig!.metadata.referenced).toEqual([
+      { path: 'docs/specs/x.md', reason: 'gitignored_in_worktree' },
+    ]);
+  });
+
+  it('evaluates each task under its OWN writeMode (worktree-only flag does not leak to sequential task)', async () => {
+    // Task A (sequential) references a.md; Task B (worktree) references b.md.
+    // a.md is gitignored but readable from root → NOT flagged (sequential).
+    // b.md is gitignored under worktree → flagged. Asserts per-task writeMode.
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockReturnValue(true),
+      isGitignoredOrUntracked: jest.fn().mockReturnValue(true),
+    });
+    const result = await runDispatchPreconditionGuard(
+      {
+        projectRoot: '/p',
+        taskId: 'task-permode',
+        resolutionRoots: [],
+        taskText: 'Read `a.md`.',
+        writeMode: 'sequential',
+        additionalTasks: [
+          { taskText: 'Read `b.md`.', writeMode: 'worktree' },
+        ],
+      },
+      deps,
+    );
+    const sig = findRefSignal(deps.emitSignals as jest.Mock);
+    expect(sig).toBeDefined();
+    expect(sig!.metadata.referenced).toEqual([
+      { path: 'b.md', reason: 'gitignored_in_worktree' },
+    ]);
+    expect(result.warnings.join(' ')).not.toMatch(/a\.md/);
+  });
+
+  it('emits an over-cap warning when more than 20 paths are referenced (Fix 3)', async () => {
+    const tokens = Array.from({ length: 25 }, (_, i) => `file${i}.ts`);
+    const deps = makeDeps({
+      execFile: freshStaleExecFile(),
+      pathExists: jest.fn().mockReturnValue(true),
+      isGitignoredOrUntracked: jest.fn().mockReturnValue(false),
+    });
+    const result = await runDispatchPreconditionGuard(
+      {
+        projectRoot: '/p',
+        taskId: 'task-cap',
+        resolutionRoots: [],
+        taskText: `Touch these: ${tokens.join(' ')}`,
+        writeMode: 'sequential',
+      },
+      deps,
+    );
+    // 5 over the cap of 20.
+    expect(result.warnings.join('\n')).toMatch(/5 referenced path\(s\) beyond the 20-path cap/);
   });
 });

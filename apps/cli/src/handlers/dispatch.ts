@@ -718,6 +718,8 @@ export async function handleDispatchSingle(
       projectRoot: process.cwd(),
       taskId,
       resolutionRoots,
+      taskText: task,
+      writeMode: write_mode,
     }).then(({ warnings: precondWarnings }) => {
       for (const w of precondWarnings) {
         process.stderr.write(`[gossipcat] ⚠️ precondition: ${w}\n`);
@@ -1345,6 +1347,11 @@ export async function handleDispatchParallel(
       projectRoot: process.cwd(),
       taskId: allParallelTaskIds[0],
       resolutionRoots: effectiveResolutionRoots,
+      taskText: taskDefs[0]?.task ?? '',
+      writeMode: taskDefs[0]?.write_mode,
+      // Bug A follow-up (Fix 1): scan ALL tasks for referenced paths, not just
+      // taskDefs[0]. Stale-base/mid-flight stay one-per-dispatch above.
+      additionalTasks: taskDefs.slice(1).map(d => ({ taskText: d.task ?? '', writeMode: d.write_mode })),
     }).then(({ warnings: precondWarnings }) => {
       for (const w of precondWarnings) {
         process.stderr.write(`[gossipcat] ⚠️ precondition: ${w}\n`);
@@ -1680,6 +1687,11 @@ export async function handleDispatchConsensus(
       projectRoot: process.cwd(),
       taskId: allTaskIds[0],
       resolutionRoots: dispatchResolutionRoots,
+      taskText: taskDefs[0]?.task ?? '',
+      writeMode: taskDefs[0]?.write_mode,
+      // Bug A follow-up (Fix 1): scan ALL tasks for referenced paths, not just
+      // taskDefs[0]. Stale-base/mid-flight stay one-per-dispatch above.
+      additionalTasks: taskDefs.slice(1).map(d => ({ taskText: d.task ?? '', writeMode: d.write_mode })),
     }).then(({ warnings: precondWarnings }) => {
       for (const w of precondWarnings) {
         process.stderr.write(`[gossipcat] ⚠️ precondition: ${w}\n`);

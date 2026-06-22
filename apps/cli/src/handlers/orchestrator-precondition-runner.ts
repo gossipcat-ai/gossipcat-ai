@@ -13,12 +13,15 @@
  */
 
 import * as fs from 'fs';
+import * as path from 'path';
 import { execFileSync } from 'child_process';
 import {
   detectStaleBase,
   findUnreadablePaths,
+  findUnreadableReferencedPathsWithMeta,
   detectMidFlightCommits,
 } from '@gossip/orchestrator';
+import type { UnreadableReferencedPath } from '@gossip/orchestrator';
 import type { PerformanceSignal } from '@gossip/orchestrator';
 // FIX 6: static import to ensure esbuild bundles emitPipelineSignals.
 // Dynamic import() is NOT bundled in esbuild single-file builds — this was the
@@ -39,6 +42,17 @@ export interface PreconditionRunnerDeps {
   execFile: (cmd: string, args: string[], opts: { cwd: string; encoding: 'utf8' }) => string;
   /** Returns true when the given path is readable by the current process. */
   canRead: (p: string) => boolean;
+  /**
+   * Returns true when the referenced repo-relative path exists / is readable at
+   * the project root. Injected so the task-text check is unit-testable without
+   * touching the filesystem.
+   */
+  pathExists: (projectRoot: string, p: string) => boolean;
+  /**
+   * Returns true when the repo-relative path is gitignored OR untracked (i.e.
+   * absent from a fresh worktree checkout). Injected for testability.
+   */
+  isGitignoredOrUntracked: (projectRoot: string, p: string, execFile: PreconditionRunnerDeps['execFile']) => boolean;
   /**
    * Best-effort pipeline signal emitter.
    * Signature mirrors emitPipelineSignals(projectRoot, signals).
@@ -77,10 +91,28 @@ export interface StaleBaseInputs {
   mergeBaseSha: string | null;
 }
 
+export interface PreconditionGuardAdditionalTask {
+  /** A non-primary task's body — scanned for referenced repo-relative paths. */
+  taskText: string;
+  /** That task's own effective write mode (gitignored_in_worktree is per-task). */
+  writeMode?: string;
+}
+
 export interface PreconditionGuardInput {
   projectRoot: string;
   taskId: string;
   resolutionRoots: readonly string[] | undefined;
+  /** The primary dispatch task body — scanned for referenced repo-relative paths. */
+  taskText: string;
+  /** Effective write mode of the primary task ('worktree' | 'sequential' | 'scoped' | undefined). */
+  writeMode: string | undefined;
+  /**
+   * Non-primary tasks in a multi-task dispatch. The referenced-path check (Signal
+   * 2b) runs per-task across the primary task + these, so a worktree implementer
+   * at index ≥1 referencing a gitignored spec is still flagged. Stale-base and
+   * mid-flight checks remain one-per-dispatch (repo-global) and ignore this.
+   */
+  additionalTasks?: ReadonlyArray<PreconditionGuardAdditionalTask>;
 }
 
 export interface PreconditionGuardResult {
@@ -233,6 +265,51 @@ function defaultCanRead(p: string): boolean {
   }
 }
 
+/**
+ * Production predicate: does the repo-relative path exist + read at projectRoot?
+ * Best-effort — any error (including a path that escapes the root) → false.
+ */
+function defaultPathExists(projectRoot: string, p: string): boolean {
+  try {
+    const resolved = path.resolve(projectRoot, p);
+    fs.accessSync(resolved, fs.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Production predicate: is the repo-relative path gitignored OR untracked (so it
+ * is absent from a fresh worktree checkout)?
+ *
+ * `git check-ignore <p>` exits 0 when the path IS ignored. `git ls-files
+ * --error-unmatch <p>` exits 0 when the path IS tracked; non-zero (throw) means
+ * untracked. A path is absent from a fresh checkout iff it is ignored OR
+ * untracked. Best-effort: on any git failure we return false (safe default —
+ * assume present rather than emit a spurious signal).
+ */
+function defaultIsGitignoredOrUntracked(
+  projectRoot: string,
+  p: string,
+  execFile: PreconditionRunnerDeps['execFile'],
+): boolean {
+  // Is it gitignored?
+  try {
+    execFile('git', ['check-ignore', '-q', p], { cwd: projectRoot, encoding: 'utf8' });
+    return true; // exit 0 → ignored
+  } catch {
+    // non-zero exit → not ignored (fall through to tracked check)
+  }
+  // Not ignored — is it tracked? Untracked ⇒ absent from a fresh checkout.
+  try {
+    execFile('git', ['ls-files', '--error-unmatch', p], { cwd: projectRoot, encoding: 'utf8' });
+    return false; // exit 0 → tracked → present in checkout
+  } catch {
+    return true; // non-zero → untracked → absent from checkout
+  }
+}
+
 function defaultEmitSignals(projectRoot: string, signals: PerformanceSignal[]): void {
   // FIX 6: use static import (bundled by esbuild). Dynamic import() is NOT
   // bundled in esbuild single-file builds — it silently no-ops at runtime.
@@ -297,9 +374,11 @@ export async function runDispatchPreconditionGuard(
 
   const execFile = deps.execFile ?? defaultExecFile;
   const canRead = deps.canRead ?? defaultCanRead;
+  const pathExists = deps.pathExists ?? defaultPathExists;
+  const isGitignoredOrUntracked = deps.isGitignoredOrUntracked ?? defaultIsGitignoredOrUntracked;
   const emitSignals = deps.emitSignals ?? defaultEmitSignals;
 
-  const { projectRoot, taskId, resolutionRoots } = input;
+  const { projectRoot, taskId, resolutionRoots, taskText, writeMode, additionalTasks } = input;
 
   try {
     // -----------------------------------------------------------------------
@@ -364,6 +443,113 @@ export async function runDispatchPreconditionGuard(
             timestamp: new Date().toISOString(),
           }]);
         } catch { /* best-effort */ }
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Signal 2b: referenced_unreadable_path — task-text path check (Bug A fix).
+    //
+    // Scans the TASK TEXT for referenced repo-relative paths the executing
+    // agent won't be able to read. This is the signal's DOCUMENTED purpose:
+    // the recurring "worktree agent can't read a gitignored docs/specs/*.md"
+    // failure. The resolutionRoots check above is a distinct, near-dead path
+    // (kept as-is for safety). All fs/git access is wrapped — never throws.
+    //
+    // PER-TASK: scans the primary task PLUS every additionalTask, each under
+    // THAT task's own writeMode (a path is only gitignored_in_worktree for a
+    // worktree task). Unreadable paths are deduped by `path` across all tasks
+    // (gitignored_in_worktree preferred over missing when both occur), so an
+    // index-≥1 worktree implementer referencing a gitignored spec is flagged.
+    // -----------------------------------------------------------------------
+    const scanTasks: PreconditionGuardAdditionalTask[] = [];
+    if (taskText) {
+      scanTasks.push({ taskText, writeMode });
+    }
+    if (additionalTasks) {
+      for (const t of additionalTasks) {
+        if (t && t.taskText) {
+          scanTasks.push({ taskText: t.taskText, writeMode: t.writeMode });
+        }
+      }
+    }
+
+    if (scanTasks.length > 0) {
+      // Dedupe by path; prefer gitignored_in_worktree over missing.
+      const byPath = new Map<string, UnreadableReferencedPath>();
+      let droppedOverCap = 0;
+
+      for (const t of scanTasks) {
+        let result: { unreadable: UnreadableReferencedPath[]; droppedOverCap: number } = {
+          unreadable: [],
+          droppedOverCap: 0,
+        };
+        try {
+          result = findUnreadableReferencedPathsWithMeta(t.taskText, {
+            writeMode: t.writeMode,
+            pathExists: (p: string) => {
+              try {
+                return pathExists(projectRoot, p);
+              } catch {
+                return true; // safe default: assume present → no spurious signal
+              }
+            },
+            isGitignoredOrUntracked: (p: string) => {
+              try {
+                return isGitignoredOrUntracked(projectRoot, p, execFile);
+              } catch {
+                return false; // safe default: assume present in checkout
+              }
+            },
+          });
+        } catch {
+          result = { unreadable: [], droppedOverCap: 0 }; // safe degradation
+        }
+
+        droppedOverCap += result.droppedOverCap;
+
+        for (const entry of result.unreadable) {
+          const existing = byPath.get(entry.path);
+          if (!existing) {
+            byPath.set(entry.path, entry);
+          } else if (
+            existing.reason !== 'gitignored_in_worktree' &&
+            entry.reason === 'gitignored_in_worktree'
+          ) {
+            byPath.set(entry.path, entry); // upgrade missing → gitignored_in_worktree
+          }
+        }
+      }
+
+      const referenced = [...byPath.values()];
+
+      if (referenced.length > 0) {
+        const detail = referenced.map(r => `${r.path} (${r.reason})`).join(', ');
+        warnings.push(
+          `[dispatch-hygiene] ${referenced.length} referenced path(s) the dispatched ` +
+          `agent cannot read: ${detail}. The agent may fail mid-task — inline the ` +
+          `file contents or copy it into the worktree.`,
+        );
+        try {
+          emitSignals(projectRoot, [{
+            type: 'pipeline' as const,
+            signal: 'referenced_unreadable_path',
+            agentId: 'orchestrator',
+            taskId,
+            metadata: {
+              referenced,
+            },
+            timestamp: new Date().toISOString(),
+          }]);
+        } catch { /* best-effort */ }
+      }
+
+      // Fix 3: surface tokens dropped over the 20-path cap (best-effort, never
+      // throws). The existence check never ran for these, so just warn.
+      if (droppedOverCap > 0) {
+        warnings.push(
+          `[dispatch-hygiene] ${droppedOverCap} referenced path(s) beyond the 20-path ` +
+          `cap were not checked.`,
+        );
       }
     }
   } catch { /* outer best-effort guard — must never propagate */ }
