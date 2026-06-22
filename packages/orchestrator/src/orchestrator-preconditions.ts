@@ -79,6 +79,202 @@ export function findUnreadablePaths(
 }
 
 // ---------------------------------------------------------------------------
+// extractReferencedPaths
+// ---------------------------------------------------------------------------
+
+/**
+ * Conservative repo-path shape: an optional `./` prefix followed by
+ * word/dot/slash/dash chars, ending in a known source/doc extension. The
+ * extension allowlist keeps the extractor narrow so arbitrary prose tokens
+ * (e.g. "e.g." or version strings) don't get treated as referenced files.
+ */
+const REPO_PATH_SHAPE = /^(?:\.\/)?[\w./-]+\.(?:md|ts|tsx|js|json|txt|ya?ml)$/;
+
+/** Max number of distinct referenced paths checked per dispatch. */
+const MAX_REFERENCED_PATHS = 20;
+
+/**
+ * Result of {@link extractReferencedPathsWithMeta}: the extracted paths plus a
+ * count of how many additional distinct path tokens were dropped because the
+ * {@link MAX_REFERENCED_PATHS} cap was reached.
+ */
+export interface ExtractReferencedPathsResult {
+  /** Up to {@link MAX_REFERENCED_PATHS} distinct paths, first-seen order. */
+  paths: string[];
+  /**
+   * Number of further DISTINCT, shape-valid path tokens that were not included
+   * because the cap was already full. 0 when nothing was dropped over the cap.
+   */
+  droppedOverCap: number;
+}
+
+/**
+ * Extract repo-relative, path-shaped tokens from free-form task text, returning
+ * both the (capped) path list and a count of distinct tokens dropped over the
+ * cap. See {@link extractReferencedPaths} for the matching rules.
+ *
+ * @param taskText - The dispatch task body to scan.
+ * @returns The capped path list plus `droppedOverCap`.
+ */
+export function extractReferencedPathsWithMeta(
+  taskText: string,
+): ExtractReferencedPathsResult {
+  if (!taskText) {
+    return { paths: [], droppedOverCap: 0 };
+  }
+
+  // Split on whitespace AND backticks so `path` and bare path both yield the
+  // raw token. Backticks are treated purely as delimiters here.
+  const rawTokens = taskText.split(/[\s`]+/);
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  let droppedOverCap = 0;
+
+  for (const raw of rawTokens) {
+    // Trim leading/trailing punctuation that commonly abuts a path in prose
+    // (e.g. "see foo.ts," or "(bar.md)") without altering the path itself.
+    const trimmed = raw.replace(/^[([{<"']+/, '').replace(/[)\]}>"',.;:]+$/, '');
+    // Strip a trailing line/col citation suffix (`path:line` or `path:line:col`)
+    // BEFORE the shape test — this codebase cites `path:line` pervasively, and
+    // the digits would otherwise fail REPO_PATH_SHAPE and drop the reference.
+    // Conservative: only a trailing :<digits>[:<digits>], never mid-path.
+    const token = trimmed.replace(/:\d+(?::\d+)?$/, '');
+    if (token.length === 0) {
+      continue;
+    }
+    // Reject absolute paths and traversal outright.
+    if (token.startsWith('/') || token.includes('..')) {
+      continue;
+    }
+    if (!REPO_PATH_SHAPE.test(token)) {
+      continue;
+    }
+    if (seen.has(token)) {
+      continue;
+    }
+    seen.add(token);
+    if (out.length >= MAX_REFERENCED_PATHS) {
+      // Cap full: count this distinct, shape-valid token as dropped but keep
+      // scanning so the dropped count reflects the true overflow.
+      droppedOverCap += 1;
+      continue;
+    }
+    out.push(token);
+  }
+
+  return { paths: out, droppedOverCap };
+}
+
+/**
+ * Extract repo-relative, path-shaped tokens from free-form task text.
+ *
+ * Accepts tokens that are EITHER backtick-quoted OR bare whitespace-delimited,
+ * provided they match {@link REPO_PATH_SHAPE}. Rejects:
+ *   - absolute paths (leading `/`),
+ *   - any token containing `..` (path traversal),
+ * so only conservative repo-relative references survive. A trailing `path:line`
+ * (or `path:line:col`) citation suffix is stripped before the shape test.
+ *
+ * Results are de-duplicated (first-seen order preserved) and CAPPED at
+ * {@link MAX_REFERENCED_PATHS}; tokens beyond the cap are dropped. The function
+ * is pure — it performs no filesystem access. Use
+ * {@link extractReferencedPathsWithMeta} when you also need the over-cap count.
+ *
+ * @param taskText - The dispatch task body to scan.
+ * @returns Up to 20 distinct repo-relative path tokens, in first-seen order.
+ */
+export function extractReferencedPaths(taskText: string): string[] {
+  return extractReferencedPathsWithMeta(taskText).paths;
+}
+
+// ---------------------------------------------------------------------------
+// findUnreadableReferencedPaths
+// ---------------------------------------------------------------------------
+
+export type UnreadableReason = 'missing' | 'gitignored_in_worktree';
+
+export interface UnreadableReferencedPath {
+  path: string;
+  reason: UnreadableReason;
+}
+
+export interface FindUnreadableReferencedPathsResult {
+  /** One entry per unreadable referenced path (readable paths omitted). */
+  unreadable: UnreadableReferencedPath[];
+  /**
+   * Count of distinct, shape-valid path tokens dropped because the 20-path cap
+   * was reached BEFORE any existence check ran. 0 when nothing was dropped.
+   */
+  droppedOverCap: number;
+}
+
+export interface FindUnreadableReferencedPathsOpts {
+  /**
+   * Effective write mode of the dispatch. `'worktree'` means the agent runs in
+   * a fresh checkout (so gitignored/untracked files are absent); any other
+   * value (or undefined) means the agent runs from the repo root.
+   */
+  writeMode?: string;
+  /** True iff the path exists / is readable at the project root. */
+  pathExists(p: string): boolean;
+  /** True iff the path is gitignored OR untracked (absent from a fresh checkout). */
+  isGitignoredOrUntracked(p: string): boolean;
+}
+
+/**
+ * Given task text, determine which referenced repo-relative paths the executing
+ * agent will be UNABLE to read, and why.
+ *
+ * Reasoning (all I/O is injected, so this stays pure + unit-testable):
+ *   - `writeMode === 'worktree'`: the agent runs in a fresh checkout. A path is
+ *     unreadable iff it is absent from that checkout — i.e. gitignored OR
+ *     untracked → reason `'gitignored_in_worktree'`. If the path does not exist
+ *     at the repo root at all → reason `'missing'` (a typo / nonexistent ref).
+ *   - any other writeMode: the agent runs from the repo root. A path is
+ *     unreadable iff it does not exist / is not readable there → `'missing'`.
+ *
+ * @param taskText - The dispatch task body.
+ * @param opts     - Injected write-mode + predicates.
+ * @returns One entry per unreadable referenced path (readable paths omitted).
+ */
+export function findUnreadableReferencedPaths(
+  taskText: string,
+  opts: FindUnreadableReferencedPathsOpts,
+): UnreadableReferencedPath[] {
+  return findUnreadableReferencedPathsWithMeta(taskText, opts).unreadable;
+}
+
+/**
+ * Variant of {@link findUnreadableReferencedPaths} that also reports how many
+ * distinct referenced-path tokens were dropped because the 20-path cap was hit
+ * before any existence check ran. Callers that surface an over-cap warning use
+ * this; everything else can use {@link findUnreadableReferencedPaths}.
+ */
+export function findUnreadableReferencedPathsWithMeta(
+  taskText: string,
+  opts: FindUnreadableReferencedPathsOpts,
+): FindUnreadableReferencedPathsResult {
+  const { paths, droppedOverCap } = extractReferencedPathsWithMeta(taskText);
+  const out: UnreadableReferencedPath[] = [];
+
+  const isWorktree = opts.writeMode === 'worktree';
+
+  for (const path of paths) {
+    const exists = opts.pathExists(path);
+    if (!exists) {
+      out.push({ path, reason: 'missing' });
+      continue;
+    }
+    if (isWorktree && opts.isGitignoredOrUntracked(path)) {
+      out.push({ path, reason: 'gitignored_in_worktree' });
+    }
+  }
+
+  return { unreadable: out, droppedOverCap };
+}
+
+// ---------------------------------------------------------------------------
 // detectMidFlightCommits
 // ---------------------------------------------------------------------------
 
