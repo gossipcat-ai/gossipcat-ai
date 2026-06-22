@@ -7,8 +7,10 @@
 
 /**
  * Returns signal names that are NOT covered by docs AND NOT in the exempt set.
- * "Covered by docs" means: the signal name appears as a substring of docsText
- * (backtick-wrapped names in markdown count because the name IS a substring of `name`).
+ * "Covered by docs" means: the backtick-wrapped form `` `<name>` `` appears in
+ * docsText. Raw substring matches are intentionally rejected — prose mentions
+ * like "UNVERIFIED findings" or sentences that incidentally contain the signal
+ * name must NOT satisfy the gate; only explicit backtick-code references count.
  *
  * @param {string[]} signalNames
  * @param {string} docsText — concatenated contents of all operator docs
@@ -18,7 +20,7 @@
 function findUndocumentedSignals(signalNames, docsText, exemptSet) {
   return signalNames.filter((name) => {
     if (exemptSet.has(name)) return false;
-    return !docsText.includes(name);
+    return !docsText.includes('`' + name + '`');
   });
 }
 
@@ -31,8 +33,9 @@ function findUndocumentedSignals(signalNames, docsText, exemptSet) {
  * @returns {string[]}
  */
 function extractOperationalSignalNames(sourceText) {
-  // Find the start of the OPERATIONAL_SIGNAL_NAMES block
-  const markerIdx = sourceText.indexOf('OPERATIONAL_SIGNAL_NAMES');
+  // Anchor to the `const OPERATIONAL_SIGNAL_NAMES` declaration so that a
+  // comment or string mention earlier in the file cannot redirect the search.
+  const markerIdx = sourceText.indexOf('const OPERATIONAL_SIGNAL_NAMES');
   if (markerIdx === -1) return [];
 
   const afterMarker = sourceText.slice(markerIdx);

@@ -33,12 +33,13 @@ const DOCS_EXEMPT = new Set([
   'signal_retracted',            // pipeline bookkeeping when a signal is corrected; surfaced only in audit logs
   'task_timeout',                // low-level relay timeout counter; operators act on agent scores, not this raw event
   'task_empty',                  // relay returned empty result; treated as a task_timeout variant internally
-  'citation_fabricated',         // performance signal variant; already captured under hallucination_caught in operator workflow
+  'citation_fabricated',         // operational pipeline signal; fabricated-citation case already actionable via the documented hallucination_caught workflow
   'consensus_round_retracted',   // internal consensus-engine retraction marker; no direct operator remediation
   'transport_failure',           // low-level relay transport error; operators see agent reliability via scores
   'worktree_isolation_failed',   // sandbox-level plumbing; surfaced via boundary_escape signal in operator-visible scoring
   'auto_verify_attempted',       // internal auto-verification telemetry; no operator action step
   'auto_verify_skipped_misconfigured', // internal telemetry when auto-verify config is absent; operators fix config, not this signal
+  'unverified',                  // per-finding "cross-reviewer couldn't check" plumbing signal; the UNVERIFIED finding-STATUS is documented in the consensus workflow; the raw signal is internal bookkeeping
 ]);
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,15 @@ function safeRead(p) {
   }
 }
 
+function safeReadDoc(p) {
+  try {
+    return fs.readFileSync(p, 'utf8');
+  } catch {
+    process.stderr.write(`rulebook-coverage-gate: cannot read ${p}\n`);
+    process.exit(1);
+  }
+}
+
 function main() {
   const sourceText = safeRead(SIGNAL_SOURCE);
   if (!sourceText) {
@@ -84,7 +94,7 @@ function main() {
     process.exit(1);
   }
 
-  const docsText = DOC_PATHS.map(safeRead).join('\n');
+  const docsText = DOC_PATHS.map(safeReadDoc).join('\n');
 
   const missing = lib.findUndocumentedSignals(signalNames, docsText, DOCS_EXEMPT);
 

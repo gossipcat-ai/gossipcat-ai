@@ -6,7 +6,7 @@
  * ESM mode. The .mjs is a thin CLI wrapper around this same library.
  */
 import * as path from 'node:path';
-import * as fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const mod = require(
@@ -18,11 +18,20 @@ const mod = require(
 // ---------------------------------------------------------------------------
 
 describe('findUndocumentedSignals', () => {
-  it('(a) documented name is NOT returned', () => {
+  it('(a) backtick-wrapped name is NOT returned', () => {
+    const names = ['task_completed'];
+    const docsText = 'The `task_completed` signal fires when a task finishes.';
+    const exempt = new Set<string>();
+    expect(mod.findUndocumentedSignals(names, docsText, exempt)).toEqual([]);
+  });
+
+  it('(a2) raw prose mention WITHOUT backticks IS returned (not documented)', () => {
     const names = ['task_completed'];
     const docsText = 'The task_completed signal fires when a task finishes.';
     const exempt = new Set<string>();
-    expect(mod.findUndocumentedSignals(names, docsText, exempt)).toEqual([]);
+    expect(mod.findUndocumentedSignals(names, docsText, exempt)).toEqual([
+      'task_completed',
+    ]);
   });
 
   it('(b) undocumented non-exempt name IS returned', () => {
@@ -58,7 +67,7 @@ describe('findUndocumentedSignals', () => {
 
   it('returns only undocumented + non-exempt from a mixed list', () => {
     const names = ['documented_one', 'exempt_one', 'missing_one'];
-    const docsText = 'documented_one appears here';
+    const docsText = 'Use `documented_one` here';
     const exempt = new Set(['exempt_one']);
     expect(mod.findUndocumentedSignals(names, docsText, exempt)).toEqual([
       'missing_one',
@@ -128,51 +137,24 @@ export const OPERATIONAL_SIGNAL_NAMES = new Set([
 });
 
 // ---------------------------------------------------------------------------
-// Smoke test: gate is GREEN on the real repo tree
+// Smoke test: run the REAL gate end-to-end against the live repo tree
 // ---------------------------------------------------------------------------
 
 describe('live gate smoke test', () => {
-  it('finds zero undocumented signals on the current repo tree', () => {
-    const ROOT = path.resolve(__dirname, '..', '..');
-
-    // Read the real signal source
-    const signalSource = fs.readFileSync(
-      path.join(ROOT, 'packages', 'orchestrator', 'src', 'consensus-types.ts'),
-      'utf8',
-    );
-    const signalNames: string[] = mod.extractOperationalSignalNames(signalSource);
-    expect(signalNames.length).toBeGreaterThan(0);
-
-    // Read the real docs
-    const docPaths = [
-      path.join(ROOT, 'docs', 'HANDBOOK.md'),
-      path.join(ROOT, '.claude', 'rules', 'gossipcat.md'),
-      path.join(ROOT, 'CLAUDE.md'),
-    ];
-    const docsText = docPaths
-      .map((p) => {
-        try { return fs.readFileSync(p, 'utf8'); } catch { return ''; }
-      })
-      .join('\n');
-
-    // Use the real DOCS_EXEMPT from the production gate via execFileSync —
-    // but we want pure-function coverage, so we replicate the exempt set here.
-    // This set MUST stay in sync with scripts/rulebook-coverage-gate.mjs.
-    const DOCS_EXEMPT = new Set([
-      'task_completed',
-      'task_tool_turns',
-      'signal_retracted',
-      'task_timeout',
-      'task_empty',
-      'citation_fabricated',
-      'consensus_round_retracted',
-      'transport_failure',
-      'worktree_isolation_failed',
-      'auto_verify_attempted',
-      'auto_verify_skipped_misconfigured',
-    ]);
-
-    const missing: string[] = mod.findUndocumentedSignals(signalNames, docsText, DOCS_EXEMPT);
-    expect(missing).toEqual([]);
+  it('exits 0 and reports OK on the current repo tree', () => {
+    const repoRoot = path.resolve(__dirname, '..', '..');
+    let stdout: string;
+    try {
+      stdout = execFileSync('node', ['scripts/rulebook-coverage-gate.mjs'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+    } catch (err: any) {
+      // execFileSync throws on non-zero exit; surface stderr for diagnostics
+      throw new Error(
+        `rulebook-coverage-gate exited non-zero.\nstdout: ${err.stdout ?? ''}\nstderr: ${err.stderr ?? ''}`,
+      );
+    }
+    expect(stdout).toContain('OK —');
   });
 });
