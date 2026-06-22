@@ -18,7 +18,7 @@ import {
   detectStaleBase,
   findUnreadablePaths,
   detectMidFlightCommits,
-} from '@gossip/orchestrator/orchestrator-preconditions';
+} from '@gossip/orchestrator';
 import type { PerformanceSignal } from '@gossip/orchestrator';
 // FIX 6: static import to ensure esbuild bundles emitPipelineSignals.
 // Dynamic import() is NOT bundled in esbuild single-file builds — this was the
