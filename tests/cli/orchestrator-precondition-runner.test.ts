@@ -173,6 +173,25 @@ describe('runDispatchPreconditionGuard — stale base', () => {
     expect(staleSignal).toBeUndefined();
   });
 
+  it('emits NO dispatched_stale_base signal when branch is strictly ahead of origin (ahead_of_origin)', async () => {
+    const deps = makeDeps({
+      execFile: jest.fn()
+        .mockReturnValueOnce('feature-tip\n')   // HEAD
+        .mockReturnValueOnce('origin-head\n')   // origin/master
+        .mockReturnValueOnce('origin-head\n'),  // merge-base === origin → strictly ahead
+    });
+    const result = await runDispatchPreconditionGuard(
+      { projectRoot: '/project', taskId: 'task-fwd', resolutionRoots: [], ...NO_TASK_TEXT },
+      deps,
+    );
+    // Branch strictly ahead of origin is NOT stale — no signal, no warning
+    expect(result.warnings).toHaveLength(0);
+    const staleSignal = (deps.emitSignals as jest.Mock).mock.calls
+      .flatMap(([, sigs]: [unknown, Array<{ signal: string }>]) => sigs)
+      .find((s: { signal: string }) => s.signal === 'dispatched_stale_base');
+    expect(staleSignal).toBeUndefined();
+  });
+
   it('never throws even if emitSignals throws', async () => {
     const deps = makeDeps({
       execFile: jest.fn()
