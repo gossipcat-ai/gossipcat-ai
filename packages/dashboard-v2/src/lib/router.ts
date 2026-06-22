@@ -44,6 +44,30 @@ if (typeof document !== 'undefined' && !(window as any).__dashboardRouterInstall
   });
 }
 
+/**
+ * Match a parametric route pattern against the current route string.
+ * Supports a single `:param` segment (e.g. "/tasks/:id").
+ *
+ * Returns the captured param value (URL-decoded) or null if no match.
+ *
+ * Examples:
+ *   matchRoute('/tasks/:id', '/tasks/abc123')  → 'abc123'
+ *   matchRoute('/tasks/:id', '/tasks')          → null
+ *   matchRoute('/agent/:id', '/tasks/abc123')   → null
+ */
+export function matchRoute(pattern: string, route: string): string | null {
+  // Build a regex from the pattern by replacing `:param` with a capture group.
+  // We first escape regex special chars, then replace the (now-escaped) `:param`
+  // placeholder with a capture group.  The `:` char is not a regex special char so
+  // it survives the first pass intact; `\w` is safe to replace afterward.
+  const escaped = pattern
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/:\w+/g, '([^/]+)');
+  const re = new RegExp(`^${escaped}$`);
+  const m = route.match(re);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 export function useRoute(): string {
   const [route, setRoute] = useState(currentRoute());
 

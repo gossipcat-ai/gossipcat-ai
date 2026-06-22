@@ -16,6 +16,7 @@ import { findingHandler } from './api-finding';
 import { openFindingsHandler } from './api-open-findings';
 import { learningsHandler } from './api-learnings';
 import { tasksHandler } from './api-tasks';
+import { taskDetailHandler } from './api-task-detail';
 import { activeTasksHandler } from './api-active-tasks';
 import { sessionHandler } from './api-session';
 import { logsHandler } from './api-logs';
@@ -583,6 +584,22 @@ export class DashboardRouter {
         const data = await tasksHandler(this.projectRoot, query ?? undefined);
         this.json(res, 200, data);
         return true;
+      }
+
+      {
+        // /dashboard/api/tasks/:id — placed AFTER the literal /tasks route so
+        // that the exact path still matches first.
+        const m = url.match(/^\/dashboard\/api\/tasks\/([^/]+)$/);
+        if (m && req.method === 'GET') {
+          const taskId = decodeURIComponent(m[1]);
+          const data = await taskDetailHandler(this.projectRoot, taskId);
+          if (data === null) {
+            this.json(res, 404, { error: `Task not found: ${taskId}` });
+          } else {
+            this.json(res, 200, data);
+          }
+          return true;
+        }
       }
 
       if (url === '/dashboard/api/active-tasks' && req.method === 'GET') {
