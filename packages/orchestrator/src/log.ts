@@ -2,11 +2,16 @@
 
 function ts(): string {
   const d = new Date();
+  const yyyy = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
   const ss = String(d.getUTCSeconds()).padStart(2, '0');
   const ms = String(d.getUTCMilliseconds()).padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms}`;
+  // Include the date so midnight crossings aren't ambiguous in long-running
+  // MCP server logs (UTC; trailing 'Z' marks the zone).
+  return `${yyyy}-${mo}-${dd} ${hh}:${mm}:${ss}.${ms}Z`;
 }
 
 /** Tag → emoji prefix for visual scanning in mcp.log. Null-prototype to avoid __proto__ traversal. */
