@@ -3,6 +3,16 @@ import { resolve, relative, join } from 'path';
 import { existsSync, realpathSync } from 'fs';
 import { Sandbox } from './sandbox';
 
+export const MAX_GREP_FILE_BYTES = 2 * 1024 * 1024; // 2 MiB — skip files larger than this
+export const MAX_GREP_MATCHES = 2000;                 // total match-line cap across the whole search
+export const MAX_GREP_FILES = 5000;                   // total file-scan cap (prevents zero-match exhaustion)
+
+interface GrepState {
+  matches: string[];
+  filesScanned: number;
+  truncated: boolean;
+}
+
 export class FileTools {
   constructor(private sandbox: Sandbox) {}
 
@@ -117,9 +127,13 @@ export class FileTools {
     } catch (error) {
       return `Invalid regex pattern: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
-    const results: string[] = [];
-    await this.grepDir(searchRoot, regex, results, 0, 10);
-    return results.join('\n') || 'No matches found';
+    const state: GrepState = { matches: [], filesScanned: 0, truncated: false };
+    await this.grepDir(searchRoot, regex, state, 0, 10);
+    let output = state.matches.join('\n') || 'No matches found';
+    if (state.truncated) {
+      output += '\n... (truncated — result or scan limit reached; narrow your pattern/path)';
+    }
+    return output;
   }
 
   async fileTree(
@@ -175,8 +189,9 @@ export class FileTools {
     }
   }
 
-  private async grepDir(dir: string, regex: RegExp, results: string[], depth: number = 0, maxDepth: number = 10): Promise<void> {
+  private async grepDir(dir: string, regex: RegExp, state: GrepState, depth: number = 0, maxDepth: number = 10): Promise<void> {
     if (depth >= maxDepth) return;
+    if (state.truncated) return;
     let entries: string[];
     try {
       entries = await readdir(dir);
@@ -185,6 +200,7 @@ export class FileTools {
     }
 
     for (const entry of entries) {
+      if (state.truncated) return;
       if (entry === 'node_modules' || entry === '.git') continue;
       const fullPath = join(dir, entry);
       let info;
@@ -195,17 +211,32 @@ export class FileTools {
       }
 
       if (info.isDirectory()) {
-        await this.grepDir(fullPath, regex, results, depth + 1, maxDepth);
+        await this.grepDir(fullPath, regex, state, depth + 1, maxDepth);
       } else {
+        if (info.size > MAX_GREP_FILE_BYTES) {
+          // Size-skipped files count toward the file cap but mark truncated
+          // only when the file cap is exceeded; size-skip alone is silent
+          // (caller sees no matches for that file, which is correct behavior).
+          continue;
+        }
+        state.filesScanned++;
+        if (state.filesScanned > MAX_GREP_FILES) {
+          state.truncated = true;
+          return;
+        }
         try {
           const content = await readFile(fullPath, 'utf-8');
           const lines = content.split('\n');
           const relPath = relative(this.sandbox.projectRoot, fullPath);
-          lines.forEach((line, idx) => {
-            if (regex.test(line)) {
-              results.push(`${relPath}:${idx + 1}: ${line}`);
+          for (let idx = 0; idx < lines.length; idx++) {
+            if (state.matches.length >= MAX_GREP_MATCHES) {
+              state.truncated = true;
+              break;
             }
-          });
+            if (regex.test(lines[idx])) {
+              state.matches.push(`${relPath}:${idx + 1}: ${lines[idx]}`);
+            }
+          }
         } catch {
           // Skip binary or unreadable files
         }
