@@ -3,6 +3,9 @@ import { resolve, relative, join } from 'path';
 import { existsSync, realpathSync } from 'fs';
 import { Sandbox } from './sandbox';
 
+const MAX_GREP_FILE_BYTES = 2 * 1024 * 1024; // 2 MiB — skip files larger than this
+const MAX_GREP_MATCHES = 2000;                 // total match-line cap across the whole search
+
 export class FileTools {
   constructor(private sandbox: Sandbox) {}
 
@@ -119,7 +122,11 @@ export class FileTools {
     }
     const results: string[] = [];
     await this.grepDir(searchRoot, regex, results, 0, 10);
-    return results.join('\n') || 'No matches found';
+    let output = results.join('\n') || 'No matches found';
+    if (results.length >= MAX_GREP_MATCHES) {
+      output += `\n... (truncated at ${MAX_GREP_MATCHES} matches — narrow your pattern)`;
+    }
+    return output;
   }
 
   async fileTree(
@@ -177,6 +184,7 @@ export class FileTools {
 
   private async grepDir(dir: string, regex: RegExp, results: string[], depth: number = 0, maxDepth: number = 10): Promise<void> {
     if (depth >= maxDepth) return;
+    if (results.length >= MAX_GREP_MATCHES) return;
     let entries: string[];
     try {
       entries = await readdir(dir);
@@ -197,15 +205,17 @@ export class FileTools {
       if (info.isDirectory()) {
         await this.grepDir(fullPath, regex, results, depth + 1, maxDepth);
       } else {
+        if (info.size > MAX_GREP_FILE_BYTES) continue;
         try {
           const content = await readFile(fullPath, 'utf-8');
           const lines = content.split('\n');
           const relPath = relative(this.sandbox.projectRoot, fullPath);
-          lines.forEach((line, idx) => {
-            if (regex.test(line)) {
-              results.push(`${relPath}:${idx + 1}: ${line}`);
+          for (let idx = 0; idx < lines.length; idx++) {
+            if (results.length >= MAX_GREP_MATCHES) break;
+            if (regex.test(lines[idx])) {
+              results.push(`${relPath}:${idx + 1}: ${lines[idx]}`);
             }
-          });
+          }
         } catch {
           // Skip binary or unreadable files
         }

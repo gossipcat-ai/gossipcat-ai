@@ -234,6 +234,66 @@ describe('FileTools', () => {
     });
   });
 
+  // ─── fileGrep — resource exhaustion caps ──────────────────────────────────
+
+  describe('fileGrep — resource exhaustion caps', () => {
+    const capDir = resolve(tmpdir(), 'gossip-file-tools-cap-' + Date.now());
+    let capSandbox: Sandbox;
+    let capTools: FileTools;
+
+    beforeAll(() => {
+      mkdirSync(resolve(capDir, 'data'), { recursive: true });
+
+      // (a) File with > 2000 matching lines — produces 2001 lines, each matching /^LINE/
+      const manyLines = Array.from({ length: 2001 }, (_, i) => `LINE${i}`).join('\n');
+      writeFileSync(resolve(capDir, 'data/many-lines.txt'), manyLines);
+
+      // (b) File larger than 2 MiB (2 * 1024 * 1024 bytes) — should be skipped entirely
+      // Write 2 MiB + 1 byte of data. Each char = 1 byte for ASCII.
+      const bigContent = 'x'.repeat(2 * 1024 * 1024 + 1);
+      writeFileSync(resolve(capDir, 'data/big-file.txt'), bigContent);
+
+      // Small file that IS readable — presence proves big-file was skipped, not the walk
+      writeFileSync(resolve(capDir, 'data/small-match.txt'), 'MARKER_LINE\n');
+
+      capSandbox = new Sandbox(capDir);
+      capTools = new FileTools(capSandbox);
+    });
+
+    afterAll(() => {
+      try {
+        const { rmSync } = require('fs');
+        rmSync(capDir, { recursive: true, force: true });
+      } catch { /* ignore */ }
+    });
+
+    it('(a) caps total matches at MAX_GREP_MATCHES and appends truncation notice', async () => {
+      // Pattern matches every LINE in many-lines.txt (2001 lines > 2000 cap)
+      const result = await capTools.fileGrep({ pattern: '^LINE' });
+      const lines = result.split('\n');
+      // Last line should be the truncation notice
+      const lastLine = lines[lines.length - 1];
+      expect(lastLine).toContain('truncated at 2000 matches');
+      // Exactly 2000 match lines + 1 notice line
+      expect(lines).toHaveLength(2001);
+    });
+
+    it('(b) skips files larger than MAX_GREP_FILE_BYTES', async () => {
+      // big-file.txt contains 'x' chars — pattern 'x' would match if not skipped
+      // small-match.txt contains MARKER_LINE which also has 'x' chars — but we
+      // use a pattern unique to small-match.txt to confirm the walk still works
+      const result = await capTools.fileGrep({ pattern: 'MARKER_LINE' });
+      expect(result).toContain('MARKER_LINE');
+      // big-file.txt has no MARKER_LINE, so this is mostly confirming the skip
+      // behavior doesn't break the overall walk. To directly verify the skip,
+      // search for 'x' (present in big-file only) — should be 'No matches found'
+      // because big-file is skipped and small-match.txt has no bare 'x' line.
+      const bigResult = await capTools.fileGrep({ pattern: '^x+$', path: 'data/big-file.txt' });
+      // big-file.txt is > 2 MiB so grepDir skips it — no matches
+      expect(bigResult).toBe('No matches found');
+    });
+  });
+
   // ─── fileTree ──────────────────────────────────────────────────────────────
 
   describe('fileTree', () => {
