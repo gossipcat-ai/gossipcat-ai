@@ -1,0 +1,38 @@
+name: Impact-Adjacency Gate
+
+on:
+  pull_request:
+    # Default activity types are opened/synchronize/reopened. We add `edited`
+    # so that updating the PR body to include a `consensus-id: <hex>-<hex>`
+    # marker re-runs the gate against the new body. Without this, the gate
+    # reads from a frozen event payload and `gh run rerun` replays the
+    # original (stale) body — the gate fails identically until an empty
+    # commit forces a `synchronize` event. See
+    # ~/.claude/projects/-Users-goku-Desktop-gossip/memory/project_impact_adjacency_gate_rerun_staleness.md
+    types: [opened, synchronize, reopened, edited]
+    branches: [master]
+
+jobs:
+  impact-adjacency-gate:
+    name: impact-adjacency consensus gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run impact-adjacency gate
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          IMPACT_ADJACENCY_BASE: ${{ github.event.pull_request.base.sha }}
+          IMPACT_ADJACENCY_DRY_RUN: '1'
+        run: node scripts/impact-adjacency-gate.mjs

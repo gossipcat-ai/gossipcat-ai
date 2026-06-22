@@ -1,0 +1,1013 @@
+/**
+ * MainAgent — the developer's single point of contact.
+ *
+ * Receives natural language tasks, decomposes them via TaskDispatcher,
+ * fans out to WorkerAgents, and synthesizes results.
+ */
+
+import { ILLMProvider, createProvider, createProviderForAgent } from './llm-client';
+import { AgentRegistry } from './agent-registry';
+import { TaskDispatcher } from './task-dispatcher';
+import { WorkerAgent } from './worker-agent';
+import { log as _log } from './log';
+import { AgentConfig, DispatchOptions, PlanState, ChatResponse, HandleMessageOptions, TaskProgressEvent } from './types';
+import { ALL_TOOLS } from '@gossip/tools';
+import { ContentBlock, TextContent, MessageType, MessageEnvelope, Message, LLMMessage } from '@gossip/types';
+import { GossipAgent } from '@gossip/client';
+import { encode as msgpackEncode } from '@msgpack/msgpack';
+import { DispatchPipeline, ToolServerCallbacks } from './dispatch-pipeline';
+import { TaskGraphSync } from './task-graph-sync';
+import { ToolRouter, ToolExecutor } from './tool-router';
+import { buildToolSystemPrompt, getOrchestratorToolDefinitions, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';
+import { ProjectInitializer } from './project-initializer';
+import { TeamManager } from './team-manager';
+
+const CHAT_SYSTEM_PROMPT = `You are the **orchestrator** of Gossip Mesh — a multi-agent system.
+
+## RULES
+1. NEVER output raw code — your agents write files.
+2. NEVER claim you dispatched unless you emitted a [TOOL_CALL] block.
+3. Respect the user's tech choice exactly. Don't switch technologies.
+4. NEVER describe file names, components, or architecture. That's the agent's job.
+
+## Workflow
+
+**Read the user's message and decide which path to take:**
+
+### Path A: User specifies everything
+If the user gives both the idea AND the tech stack (e.g. "build X with React and Vite"), use the spec tool immediately.
+
+### Path B: User describes what to build but no tech stack
+Brainstorm 2-3 creative directions as [CHOICES]. Do NOT suggest tech yet. After they pick a direction, present these options:
+
+[CHOICES]
+message: What would you like to do next?
+- proceed | Proceed with this idea | Choose a tech stack and start building
+- brainstorm_more | Brainstorm more | Explore variations and refine the concept
+[/CHOICES]
+
+If "proceed" → suggest 2-3 tech stacks as [CHOICES], then use the spec tool.
+If "brainstorm_more" → dig deeper into the chosen direction with more specific ideas and variations.
+
+### Path C: Bug fix / quick edit
+Use the plan tool immediately. No brainstorming.
+
+### Path D: Question
+Answer directly. No dispatch.
+
+**KEY: Minimize approval gates.** The user should go from idea to working code in 2-3 interactions max, not 6+. Don't ask "Start building?" — if the user approved a plan, execute it.
+
+## Choices Format
+[CHOICES]
+message: Your question?
+- value | Label | Hint
+[/CHOICES]
+
+## Agent Roles
+- **implementer** → write code, build features
+- **reviewer** → code review, security audit (use dispatch_consensus)
+- **researcher** → investigation, API research
+- **tester** → testing, debugging
+
+## Write Modes
+- sequential (safe default), scoped (parallel by directory), worktree (git branch isolation)`;
+
+
+export interface MainAgentConfig {
+  provider: string;
+  model: string;
+  apiKey?: string;
+  relayUrl: string;
+  relayApiKey?: string;  // shared secret for relay auth — passed to all workers
+  agents: AgentConfig[];
+  apiKeys?: Record<string, string>;  // keychain service name (key_ref ?? provider) → key
+  projectRoot?: string;  // defaults to process.cwd()
+  llm?: ILLMProvider;  // override for testing
+  bootstrapPrompt?: string;  // NEW — injected by BootstrapGenerator
+  syncFactory?: () => TaskGraphSync | null;
+  toolServer?: ToolServerCallbacks | null;
+  keyProvider?: (provider: string) => Promise<string | null>;
+  siblingRoots?: readonly string[];
+}
+
+export class MainAgent {
+  private llm: ILLMProvider;
+  private currentProvider: string;
+  private currentModel: string;
+  private registry: AgentRegistry;
+  private dispatcher: TaskDispatcher;
+  private workers: Map<string, WorkerAgent> = new Map();
+  /**
+   * Tracks the API key most recently used to build each worker. syncWorkers
+   * skips teardown+rebuild when the key (and existence) hasn't changed,
+   * preventing the relay-disconnect burst observed on every dispatch.
+   * Future improvement: hash full config (model, provider, base_url, skills)
+   * to detect non-key drift.
+   */
+  private lastKeyByAgent: Map<string, string | null> = new Map();
+  private relayUrl: string;
+  private relayApiKey: string | undefined;
+  private apiKeys: Record<string, string>;
+  /** Public so MCP handlers can resolve project-relative paths without going through getters. */
+  public projectRoot: string;
+  private pipeline: DispatchPipeline;
+  private bootstrapPrompt: string;
+  private orchestratorAgent: GossipAgent | null = null;
+  private toolExecutor: ToolExecutor;
+  private projectInitializer: ProjectInitializer;
+  private teamManager: TeamManager;
+  private keyProviderFn: ((provider: string) => Promise<string | null>) | undefined;
+  private conversationHistory: LLMMessage[] = [];
+  private lastAcceptedTask: string | null = null;
+  private readonly MAX_HISTORY = 20; // 10 pairs of user+assistant
+
+  constructor(config: MainAgentConfig) {
+    this.llm = config.llm ?? createProvider(config.provider, config.model, config.apiKey, config.projectRoot);
+    this.currentProvider = config.provider;
+    this.currentModel = config.model;
+    this.registry = new AgentRegistry();
+    this.dispatcher = new TaskDispatcher(this.llm, this.registry);
+    this.relayUrl = config.relayUrl;
+    this.relayApiKey = config.relayApiKey;
+    this.apiKeys = config.apiKeys ?? {};
+    this.bootstrapPrompt = config.bootstrapPrompt || '';
+
+    for (const agent of config.agents) {
+      this.registry.register(agent);
+    }
+
+    this.projectRoot = config.projectRoot || process.cwd();
+
+    // Wire performance reader for dispatch weighting (consensus signals → agent selection)
+    try {
+      const { PerformanceReader } = require('./performance-reader');
+      this.registry.setPerformanceReader(new PerformanceReader(this.projectRoot));
+    } catch { /* performance reader optional */ }
+
+    this.pipeline = new DispatchPipeline({
+      projectRoot: this.projectRoot,
+      workers: this.workers,
+      registryGet: (id) => this.registry.get(id),
+      llm: this.llm,
+      syncFactory: config.syncFactory,
+      toolServer: config.toolServer,
+      keyProvider: config.keyProvider,
+      siblingRoots: config.siblingRoots ?? [],
+    });
+
+    // Wire dispatch differentiator (after pipeline creation)
+    try {
+      const { DispatchDifferentiator } = require('./dispatch-differentiator');
+      this.pipeline.setDispatchDifferentiator(new DispatchDifferentiator());
+    } catch { /* dispatch differentiator optional */ }
+
+    this.keyProviderFn = config.keyProvider;
+    this.projectInitializer = new ProjectInitializer({
+      llm: this.llm,
+      projectRoot: this.projectRoot,
+      keyProvider: config.keyProvider ?? (async () => null),
+    });
+    this.teamManager = new TeamManager({
+      registry: this.registry,
+      pipeline: this.pipeline,
+      projectRoot: this.projectRoot,
+    });
+    this.toolExecutor = new ToolExecutor({
+      pipeline: this.pipeline,
+      registry: this.registry,
+      projectRoot: this.projectRoot,
+      dispatcher: this.dispatcher,
+      initializer: this.projectInitializer,
+      teamManager: this.teamManager,
+      llm: this.llm,
+    });
+  }
+
+  /** Start all worker agents (connect to relay) */
+  async start(): Promise<void> {
+    const { existsSync, readFileSync } = await import('fs');
+    const { join } = await import('path');
+
+    for (const config of this.registry.getAll()) {
+      if (config.native) continue; // native agents use host's Agent tool, not relay
+      if (this.workers.has(config.id)) continue; // skip if already set externally
+      // Try apiKeys map first, then keyProvider callback.
+      // #522: resolve from the per-agent keychain SERVICE (key_ref ?? provider),
+      // and build via createProviderForAgent so this MCP-boot path honors
+      // base_url and the DegradedProvider pre-flight — mirroring syncWorkers.
+      // Previously it used raw createProvider(config.provider, ...), which
+      // dropped base_url and bypassed the pre-flight (a latent #523 gap here).
+      const keyService = config.key_ref ?? config.provider;
+      let apiKey: string | undefined = this.apiKeys[keyService];
+      if (!apiKey && this.keyProviderFn) {
+        apiKey = (await this.keyProviderFn(keyService)) ?? undefined;
+      }
+      const llm = createProviderForAgent(
+        config.id, config.provider, config.model, apiKey, config.base_url, undefined, config.key_ref,
+      );
+
+      // Load per-agent instructions if available
+      const instructionsPath = join(this.projectRoot, '.gossip', 'agents', config.id, 'instructions.md');
+      const instructions = existsSync(instructionsPath)
+        ? readFileSync(instructionsPath, 'utf-8') : undefined;
+
+      // Enable web search for researcher agents (they need to look things up)
+      const enableWebSearch = config.preset === 'researcher' || config.skills.includes('research');
+      const worker = new WorkerAgent(config.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey, config.maxToolTurns);
+      await worker.start();
+      // Record the key snapshot so the first syncWorkers call can short-circuit
+      // when the keychain hasn't changed — otherwise every dispatch tears down
+      // the freshly-started workers.
+      this.lastKeyByAgent.set(config.id, apiKey ?? null);
+      this.workers.set(config.id, worker);
+    }
+
+    // Connect orchestrator agent to relay for verify_write review requests
+    try {
+      this.orchestratorAgent = new GossipAgent({ agentId: 'orchestrator', relayUrl: this.relayUrl, apiKey: this.relayApiKey, reconnect: true });
+      await this.orchestratorAgent.connect();
+      this.orchestratorAgent.on('message', this.handleReviewRequest.bind(this));
+    } catch (err) {
+      console.error(`[MainAgent] Orchestrator relay connection failed: ${(err as Error).message}`);
+    }
+  }
+
+  /** Set externally-created workers (used by MCP server to avoid duplicate connections) */
+  setWorkers(externalWorkers: Map<string, WorkerAgent>): void {
+    for (const [id, worker] of externalWorkers) {
+      this.workers.set(id, worker);
+    }
+  }
+
+  get scopeTracker() { return this.pipeline.scopeTracker; }
+  /** Get running relay task records for persistence */
+  getRelayTaskRecords() { return this.pipeline.getRunningTaskRecords(); }
+  /** Update bootstrap prompt after MCP reconnect so agents see fresh session context. */
+  setBootstrapPrompt(prompt: string) { this.bootstrapPrompt = prompt; }
+  dispatch(agentId: string, task: string, options?: DispatchOptions) { return this.pipeline.dispatch(agentId, task, options); }
+  async collect(taskIds?: string[], timeoutMs?: number, options?: { consensus?: boolean; consume?: boolean; resolutionRoots?: readonly string[]; round?: import('./round-context').RoundContext }) { return this.pipeline.collect(taskIds, timeoutMs, options); }
+  async dispatchParallel(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>, options?: { consensus?: boolean }) { return this.pipeline.dispatchParallel(tasks, options); }
+  async dispatchParallelWithLenses(tasks: Array<{ agentId: string; task: string; options?: DispatchOptions }>, options?: { consensus?: boolean }, precomputedLenses?: Map<string, string>) { return this.pipeline.dispatchParallelWithLenses(tasks, options, precomputedLenses); }
+  async generateLensesForAgents(taskDefs: Array<{ agentId: string; task: string }>) { return this.pipeline.generateLensesForAgents(taskDefs); }
+  registerPlan(plan: PlanState): void { this.pipeline.registerPlan(plan); }
+  getChainContext(planId: string, step: number): string { return this.pipeline.getChainContext(planId, step); }
+  recordPlanStepResult(planId: string, step: number, result: string): void { this.pipeline.recordPlanStepResult(planId, step, result); }
+  getWorker(agentId: string) { return this.workers.get(agentId); }
+  getTask(taskId: string) { return this.pipeline.getTask(taskId); }
+  setGossipPublisher(publisher: any) { this.pipeline.setGossipPublisher(publisher); }
+  setOverlapDetector(detector: any): void { this.pipeline.setOverlapDetector(detector); }
+  async runConsensus(results: any[], roundOrRoots?: import('./round-context').RoundContext | readonly string[]): Promise<any> { return this.pipeline.runConsensus(results, roundOrRoots); }
+  setLensGenerator(generator: any): void { this.pipeline.setLensGenerator(generator); }
+  setDispatchDifferentiator(differ: any): void { this.pipeline.setDispatchDifferentiator(differ); }
+  getSkillGapSuggestions() { return this.pipeline.getSkillGapSuggestions(); }
+  setSkillIndex(index: any): void { this.pipeline.setSkillIndex(index); }
+  invalidateProjectStructureCache(): void { this.pipeline.invalidateProjectStructureCache(); }
+  setSummaryLlm(llm: any): void { this.pipeline.setSummaryLlm(llm); }
+  getSessionConsensusHistory() { return this.pipeline.getSessionConsensusHistory(); }
+  getSessionStartTime() { return this.pipeline.getSessionStartTime(); }
+  getSessionGossip() { return this.pipeline.getSessionGossip(); }
+  getSkillIndex(): any { return this.pipeline.getSkillIndex(); }
+  getLlm() { return this.pipeline.getLlm(); }
+  getAgentConfig(agentId: string) { return this.pipeline.getAgentConfig(agentId); }
+  getPerfReader() { return this.pipeline.getPerfReader(); }
+
+  /** Health check for active tasks — diagnostics for "is it working?" */
+  getActiveTasksHealth() { return this.pipeline.getActiveTasksHealth(); }
+  getRecentlyCompletedTasks(maxAgeMs: number) { return this.pipeline.getRecentlyCompletedTasks(maxAgeMs); }
+  cancelRunningTasks() { return this.pipeline.cancelRunningTasks(); }
+  getConsensusCoordinator() { return this.pipeline.getConsensusCoordinator(); }
+
+  /** Seed conversation history with project context from a prior session */
+  seedContext(context: string): void {
+    this.conversationHistory.push(
+      { role: 'user', content: 'What is this project about?' },
+      { role: 'assistant', content: context },
+    );
+  }
+
+  /** Convenience: number of registered agents */
+  getAgentCount(): number { return this.registry.getAll().length; }
+  /** Convenience: whether any agents are registered */
+  hasAgents(): boolean { return this.registry.getAll().length > 0; }
+  /** Convenience: list all registered agent configs */
+  getAgentList(): AgentConfig[] { return this.registry.getAll(); }
+
+  /** Set a progress callback for plan execution */
+  onTaskProgress(cb: (event: TaskProgressEvent) => void): void {
+    this.toolExecutor.onTaskProgress = cb;
+  }
+
+  /** Publish gossip for a native agent result (so relay agents can see it) */
+  async publishNativeGossip(agentId: string, result: string): Promise<void> {
+    try {
+      await this.pipeline.summarizeAndStoreGossip(agentId, result);
+    } catch { /* gossip is best-effort */ }
+  }
+
+  /** Record a native agent task in the TaskGraph (for visibility in CLI/sync) */
+  recordNativeTask(taskId: string, agentId: string, task: string): void {
+    try {
+      const skills = this.registry.get(agentId)?.skills || [];
+      this.pipeline.recordNativeTaskCreated(taskId, agentId, task, skills);
+    } catch { /* best-effort */ }
+  }
+
+  /** Record a native agent task completion in the TaskGraph */
+  recordNativeTaskCompleted(taskId: string, result: string, error?: string, durationMs?: number, memoryQueryCalled?: boolean): void {
+    try {
+      this.pipeline.recordNativeTaskCompleted(taskId, result, error, durationMs, memoryQueryCalled);
+    } catch { /* best-effort */ }
+  }
+
+  /**
+   * Get the WorktreeManager from the dispatch pipeline (for native worktree cleanup).
+   * Returns `undefined` when the pipeline hasn't been constructed yet or the
+   * field is absent — callers already defensively `?.`/`if (wtm)` the result.
+   */
+  getWorktreeManager(): import('./worktree-manager').WorktreeManager | undefined {
+    return (this.pipeline as any)?.worktreeManager;
+  }
+
+  /** Get current orchestrator model info */
+  getModel(): { provider: string; model: string } {
+    return { provider: this.currentProvider, model: this.currentModel };
+  }
+
+  /** Get orchestrator's LLM provider (for consensus engine on mixed native+relay results) */
+  getLLM(): ILLMProvider { return this.llm; }
+
+  /** Switch orchestrator model at runtime */
+  async setModel(provider: string, model: string, apiKey?: string): Promise<void> {
+    const key = apiKey || (this.keyProviderFn ? await this.keyProviderFn(provider) : undefined);
+    this.llm = createProvider(provider, model, key ?? undefined);
+    this.currentProvider = provider;
+    this.currentModel = model;
+    // Clear conversation history since model context may differ
+    this.conversationHistory = [];
+  }
+
+  /** Register new agent configs (for hot-reload from config changes) */
+  registerAgent(config: AgentConfig): void {
+    this.registry.register(config);
+  }
+
+  async syncWorkers(keyProvider: (provider: string) => Promise<string | null>): Promise<number> {
+    const { existsSync, readFileSync } = await import('fs');
+    const { join } = await import('path');
+
+    let added = 0;
+    for (const ac of this.registry.getAll()) {
+      if (ac.native) continue; // native agents use host's Agent tool, not relay
+
+      // Fetch the current key first so we can compare against the snapshot taken
+      // when the existing worker was built. If nothing changed we leave the
+      // worker (and its live relay connection) alone — this kills the disconnect
+      // burst observed on every dispatch (see relay logs showing 4 workers
+      // RELAY DISCONNECTED + reconnected within 30ms per dispatch).
+      // #522: resolve the key from the per-agent keychain SERVICE (key_ref),
+      // defaulting to the provider name — byte-identical to pre-#522 when absent.
+      const key = await keyProvider(ac.key_ref ?? ac.provider);
+      const existing = this.workers.get(ac.id);
+      const hadKeySnapshot = this.lastKeyByAgent.has(ac.id);
+      const prevKey = this.lastKeyByAgent.get(ac.id) ?? null;
+
+      if (existing && (!hadKeySnapshot || prevKey === key)) {
+        // No-op: worker is live, and either (a) the keychain value matches
+        // what we built it with, or (b) we have no prior snapshot because
+        // the worker was created outside syncWorkers (e.g. at MCP boot in
+        // mcp-server-sdk.ts:488). In case (b), record the current key as
+        // the snapshot so subsequent calls can compare. Do NOT teardown.
+        if (!hadKeySnapshot) this.lastKeyByAgent.set(ac.id, key);
+        continue;
+      }
+
+      // Stop existing worker before recreating — ensures fresh API key from keychain.
+      // Without this, MCP reconnects reuse workers with stale cached keys, causing
+      // "API key not valid" errors when the key is rotated or refreshed.
+      if (existing) {
+        await existing.stop();
+        this.workers.delete(ac.id);
+      }
+
+      // Pre-flight key check (issue #522): a key-requiring provider with no
+      // configured key gets a DegradedProvider that fails the TASK with a clear
+      // diagnostic, instead of issuing an empty-Bearer request that returns a
+      // misleading 401. base_url is now a typed field on AgentConfig.
+      const llm = createProviderForAgent(ac.id, ac.provider, ac.model, key ?? undefined, ac.base_url, undefined, ac.key_ref);
+
+      const instructionsPath = join(this.projectRoot, '.gossip', 'agents', ac.id, 'instructions.md');
+      const instructions = existsSync(instructionsPath)
+        ? readFileSync(instructionsPath, 'utf-8') : undefined;
+
+      const enableWebSearch = ac.preset === 'researcher' || ac.skills.includes('research');
+      const worker = new WorkerAgent(ac.id, llm, this.relayUrl, ALL_TOOLS, instructions, enableWebSearch, this.relayApiKey, ac.maxToolTurns);
+      await worker.start();
+      this.workers.set(ac.id, worker);
+      this.lastKeyByAgent.set(ac.id, key);
+      added++;
+    }
+    return added;
+  }
+
+  /** Stop a single worker agent */
+  async stopWorker(agentId: string): Promise<void> {
+    const worker = this.workers.get(agentId);
+    if (worker) {
+      await worker.stop();
+      this.workers.delete(agentId);
+      this.lastKeyByAgent.delete(agentId);
+    }
+  }
+
+  /** Stop all worker agents */
+  async stop(): Promise<void> {
+    this.pipeline.flushTaskGraph();
+    for (const worker of this.workers.values()) {
+      await worker.stop();
+    }
+    this.workers.clear();
+    this.lastKeyByAgent.clear();
+  }
+
+  /** Handle a user message via cognitive (tool-calling) orchestration. */
+  async handleMessage(userMessage: string | ContentBlock[], _options?: HandleMessageOptions): Promise<ChatResponse> {
+    return this.handleMessageCognitive(userMessage);
+  }
+
+  /**
+   * Classifies a task's complexity to determine if it can be handled by a single agent
+   * or requires decomposition for multiple agents. This is a preliminary step to decide
+   * between a simple dispatch and a multi-agent plan.
+   *
+   * @param task The natural language description of the task.
+   * @returns A promise that resolves to either 'single' for simple, self-contained tasks
+   *          or 'multi' for complex tasks requiring a coordinated effort.
+   */
+  async classifyTaskComplexity(task: string): Promise<{ complexity: 'single' | 'multi'; agentId?: string }> {
+    const agents = this.registry.getAll();
+
+    // Build agent summary with dispatch weights + category strengths so the LLM respects scoring.
+    // Reuse the long-lived reader (wired at construction) so its mtime-keyed score cache is shared;
+    // a fresh PerformanceReader here would have an empty cache and re-read on every call.
+    let perfScores: ReadonlyMap<string, any> | null = null;
+    try {
+      perfScores = this.registry.getPerformanceReader()?.getScores() ?? null;
+    } catch { /* no perf data */ }
+
+    const agentLines = agents.map(a => {
+      const weight = this.registry.getDispatchWeight?.(a.id) ?? 1.0;
+      const status = weight <= 0.3 ? ' [LOW RELIABILITY]' : '';
+      // Include top category strengths so LLM can match task to agent expertise
+      let strengthsTag = '';
+      try {
+        const score = perfScores?.get(a.id);
+        if (score?.categoryStrengths) {
+          const top = Object.entries(score.categoryStrengths)
+            .filter(([, v]) => (v as number) >= 0.3)
+            .sort(([, a], [, b]) => (b as number) - (a as number))
+            .slice(0, 3)
+            .map(([k, v]) => `${k}(${(v as number).toFixed(1)})`);
+          if (top.length > 0) strengthsTag = ` strengths=[${top.join(', ')}]`;
+        }
+      } catch { /* best-effort */ }
+      return `${a.id}: ${a.role ?? a.preset ?? 'agent'} (${a.skills.join(', ')}) weight=${weight.toFixed(2)}${strengthsTag}${status}`;
+    });
+
+    const response = await this.llm.generate([
+      {
+        role: 'system',
+        content: `Classify this task and pick the best agent. Respond with ONLY one line in this format:
+single:<agent_id>
+OR
+multi
+
+"single" = one agent can handle it. Pick the best agent by skill match AND dispatch weight.
+  - Higher weight = more reliable. Prefer agents with weight > 1.0.
+  - Agents marked [LOW RELIABILITY] should be avoided for solo tasks.
+"multi" = needs decomposition across multiple agents.
+
+Available agents:
+${agentLines.join('\n')}`,
+      },
+      { role: 'user', content: task },
+    ]);
+
+    const answer = response.text.trim().toLowerCase();
+    if (answer.startsWith('multi')) return { complexity: 'multi' };
+    // Parse single:<agent_id> — tolerant of whitespace and minor formatting
+    const singleMatch = answer.match(/single\s*:\s*(.+)/);
+    if (singleMatch) {
+      const agentId = singleMatch[1].trim();
+      // Verify agent exists (case-insensitive lookup, return canonical ID)
+      const matched = agents.find(a => a.id.toLowerCase() === agentId.toLowerCase());
+      if (matched) {
+        return { complexity: 'single', agentId: matched.id };
+      }
+    }
+    // Default: single, let caller pick agent
+    return { complexity: 'single' };
+  }
+
+  /** Cognitive mode: LLM decides whether to chat or call tools. */
+  private async handleMessageCognitive(userMessage: string | ContentBlock[]): Promise<ChatResponse> {
+    const hasAgents = this.registry.getAll().length > 0;
+
+    // Extract text for LLM
+    const text = typeof userMessage === 'string'
+      ? userMessage
+      : userMessage.filter(b => b.type === 'text').map(b => (b as TextContent).text).join(' ') || 'Describe this image.';
+
+
+    // Build system prompt — with or without tool definitions depending on agent availability
+    const agents = this.registry.getAll();
+    const toolPrompt = hasAgents ? buildToolSystemPrompt(agents) : '';
+    const systemPrompt = [this.bootstrapPrompt, CHAT_SYSTEM_PROMPT, toolPrompt].filter(Boolean).join('\n\n');
+
+    // Call LLM with conversation history
+    const messages: LLMMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...this.conversationHistory,
+      { role: 'user', content: userMessage },  // preserve ContentBlock[] for multimodal
+    ];
+    // Pass orchestrator tools for native function calling when agents are available.
+    // This makes the LLM return structured tool calls instead of text-based [TOOL_CALL] blocks.
+    const orchestratorTools = hasAgents ? getOrchestratorToolDefinitions() : undefined;
+    let response = await this.llm.generate(messages, {
+      temperature: 0,
+      ...(orchestratorTools ? { tools: orchestratorTools } : {}),
+    });
+
+    // Retry on empty response (UNEXPECTED_TOOL_CALL or other Gemini failures)
+    if (!response.text && !response.toolCalls?.length) {
+      _log('MainAgent', 'Empty LLM response — retrying without tools');
+      response = await this.llm.generate(messages, { temperature: 0 });
+    }
+
+    // Check for tool calls — prefer native function calling over text-based [TOOL_CALL]
+    let toolCall: { tool: string; args: Record<string, unknown> } | null = null;
+
+    // Native tool calls first (structured, reliable)
+    if (response.toolCalls?.length) {
+      const native = response.toolCalls[0];
+      let toolName = native.name;
+      if (/^gossip[._]/.test(toolName)) {
+        toolName = toolName.replace(/^gossip[._]/, '');
+      }
+      // Normalize LLM-invented aliases (Gemini hallucinates tool names like execute_tool, create_spec)
+      const NATIVE_ALIASES: Record<string, string> = {
+        execute_tool: 'dispatch', run_tool: 'dispatch',
+        create_plan: 'plan', make_plan: 'plan', generate_plan: 'plan',
+        create_spec: 'spec', generate_spec: 'spec', write_spec: 'spec',
+        list_agents: 'agents', show_agents: 'agents', get_agents: 'agents',
+        init: 'init_project', initialize: 'init_project', project_init: 'init_project',
+      };
+      if (NATIVE_ALIASES[toolName]) toolName = NATIVE_ALIASES[toolName];
+
+      const nativeArgs = { ...native.arguments };
+      if (!nativeArgs.task) {
+        nativeArgs.task = nativeArgs.description || nativeArgs.title || nativeArgs.query || nativeArgs.input || nativeArgs.prompt;
+        if (!nativeArgs.task) {
+          const firstStr = Object.values(nativeArgs).find(v => typeof v === 'string' && (v as string).length > 10);
+          if (firstStr) nativeArgs.task = firstStr;
+        }
+      }
+      toolCall = { tool: toolName, args: nativeArgs };
+    }
+
+    // Fallback: text-based [TOOL_CALL] parsing (only if native didn't fire)
+    if (!toolCall) {
+      toolCall = ToolRouter.parseToolCall(response.text);
+    }
+
+    // If the response contains [TOOL_CALL] but parsing failed, the LLM produced
+    // malformed tool call syntax. Retry once with a correction prompt.
+    if (!toolCall && (response.text.includes('[TOOL_CALL]') || response.text.includes('[TOOL_CODE]'))) {
+      const retryMessages: LLMMessage[] = [
+        ...messages,
+        { role: 'assistant', content: response.text },
+        { role: 'user', content: 'Your previous response contained a [TOOL_CALL] block that could not be parsed. Please re-emit the tool call in valid JSON format:\n[TOOL_CALL]\n{"tool": "tool_name", "args": {"key": "value"}}\n[/TOOL_CALL]' },
+      ];
+      try {
+        const retry = await this.llm.generate(retryMessages, hasAgents ? { temperature: 0 } : undefined);
+        toolCall = ToolRouter.parseToolCall(retry.text);
+        if (!toolCall && retry.toolCalls?.length) {
+          const native = retry.toolCalls[0];
+          let toolName = native.name;
+          if (toolName.startsWith('gossip_')) toolName = toolName.replace(/^gossip_/, '');
+          toolCall = { tool: toolName, args: native.arguments };
+        }
+      } catch { /* retry failed — proceed without tool call */ }
+    }
+
+    // If the LLM wants to use tools but no agents exist yet, trigger team proposal.
+    // This happens naturally after brainstorming: the user describes a project,
+    // the orchestrator brainstorms ideas, and when it's ready to act (plan/dispatch),
+    // it discovers it needs agents. The full conversation context — including the
+    // refined idea from brainstorming — feeds into a better team proposal.
+    //
+    // Guard: require at least 1 prior exchange (2 history entries) before proposing team.
+    // This ensures the LLM brainstorms at least once rather than jumping straight to
+    // team proposal on the first message.
+    if (toolCall && !hasAgents && this.conversationHistory.length >= 2) {
+      // Extract the original project description from the first user message in history,
+      // not the current text which may be a choice passthrough like 'I chose: "X". Proceed.'
+      const firstUserMsg = this.conversationHistory.find(m => m.role === 'user');
+      const projectDescription = firstUserMsg && typeof firstUserMsg.content === 'string'
+        ? firstUserMsg.content
+        : text;
+
+      // Build context summary for the LLM (not shown to user)
+      const conversationSummary = this.conversationHistory
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.slice(0, 300) : '[media]'}`)
+        .join('\n');
+
+      const signals = this.projectInitializer.scanDirectory(this.projectRoot);
+      this.projectInitializer.pendingTask = projectDescription;
+      // Pass the project description as the user message (shown in proposal prompt)
+      // and the brainstorming context as additional signals (not echoed to user)
+      const enrichedSignals = {
+        ...signals,
+        brainstormContext: conversationSummary,
+      };
+      const proposal = await this.projectInitializer.proposeTeam(projectDescription, enrichedSignals);
+
+      // Record in history
+      this.conversationHistory.push(
+        { role: 'user', content: text },
+        { role: 'assistant', content: proposal.text.slice(0, 1500) },
+      );
+
+      // Only show the proposal to the user — don't include the LLM's brainstorming text
+      // or internal context summaries
+      return {
+        text: proposal.text,
+        choices: proposal.choices,
+        status: 'done',
+      };
+    }
+
+    // No agents and no tool call (or tool call too early) — pure brainstorming chat
+    // The LLM is still exploring the idea before trying to act
+    if (toolCall && !hasAgents && this.conversationHistory.length < 2) {
+      // LLM tried to act on the first message — strip tool call, return as brainstorming
+      toolCall = null;
+    }
+    if (!hasAgents && !toolCall) {
+      const result = this.parseResponse(response.text);
+      this.conversationHistory.push(
+        { role: 'user', content: text },
+        { role: 'assistant', content: result.text.slice(0, 2000) },
+      );
+      if (this.conversationHistory.length > this.MAX_HISTORY) {
+        this.conversationHistory = this.conversationHistory.slice(-this.MAX_HISTORY);
+      }
+      return result;
+    }
+
+    let result: ChatResponse;
+    if (toolCall) {
+      // Execute tool with auto-chaining
+      const toolResult = await this.toolExecutor.execute(toolCall);
+      const explanation = ToolRouter.stripToolCallBlocks(response.text);
+      result = {
+        text: explanation ? `${explanation}\n\n${toolResult.text}` : toolResult.text,
+        status: 'done',
+        agents: toolResult.agents,
+        choices: toolResult.choices,
+      };
+    } else {
+      // Detect hallucinated dispatches — LLM claims it dispatched but didn't emit a tool call.
+      // Common pattern: "I'm dispatching..." or "I've dispatched..." without [TOOL_CALL].
+      const claimsDispatch = /(?:dispatching|dispatched|dispatch.*(?:now|immediately|right away)|sending.*(?:to|the) (?:agent|team))/i.test(response.text);
+      if (claimsDispatch && hasAgents) {
+        // Force a retry — tell the LLM to actually emit the tool call
+        try {
+          const retryMessages: LLMMessage[] = [
+            ...messages,
+            { role: 'assistant', content: response.text },
+            { role: 'user', content: 'You said you would dispatch but did NOT emit a [TOOL_CALL]. You MUST emit an actual tool call to dispatch work. Emit the [TOOL_CALL] now.' },
+          ];
+          const retry = await this.llm.generate(retryMessages, { temperature: 0 });
+          let retryToolCall = ToolRouter.parseToolCall(retry.text);
+          if (!retryToolCall && retry.toolCalls?.length) {
+            const native = retry.toolCalls[0];
+            let toolName = native.name;
+            if (toolName.startsWith('gossip_')) toolName = toolName.replace(/^gossip_/, '');
+            retryToolCall = { tool: toolName, args: native.arguments };
+          }
+          if (retryToolCall) {
+            const toolResult = await this.toolExecutor.execute(retryToolCall);
+            const explanation = ToolRouter.stripToolCallBlocks(response.text);
+            result = {
+              text: explanation ? `${explanation}\n\n${toolResult.text}` : toolResult.text,
+              status: 'done',
+              agents: toolResult.agents,
+              choices: toolResult.choices,
+            };
+          } else {
+            result = this.parseResponse(response.text);
+          }
+        } catch {
+          result = this.parseResponse(response.text);
+        }
+      } else {
+        // Plain chat response — parse for [CHOICES]
+        result = this.parseResponse(response.text);
+      }
+    }
+
+    // Update conversation history (trim to MAX_HISTORY)
+    this.conversationHistory.push(
+      { role: 'user', content: text },
+      { role: 'assistant', content: result.text.slice(0, 2000) }, // cap to prevent context overflow
+    );
+    if (this.conversationHistory.length > this.MAX_HISTORY) {
+      this.conversationHistory = this.conversationHistory.slice(-this.MAX_HISTORY);
+    }
+
+    return result;
+  }
+
+  /** Handle a user's choice selection — continues the conversation with context */
+  async handleChoice(_originalMessage: string, choiceValue: string): Promise<ChatResponse> {
+    // Project init approval
+    if (this.projectInitializer.pendingTask) {
+      if (choiceValue === 'accept') {
+        await this.projectInitializer.writeConfig(this.projectRoot);
+        // Reload agents from new config
+        const newAgents: string[] = [];
+        if (this.projectInitializer.pendingProposal?.agents) {
+          for (const agent of this.projectInitializer.pendingProposal.agents) {
+            this.registry.register(agent);
+            newAgents.push(agent.id);
+          }
+        }
+        // Start workers if keyProvider available
+        if (this.keyProviderFn) {
+          try {
+            await this.syncWorkers(this.keyProviderFn);
+          } catch (err) {
+            _log('MainAgent', `Failed to start workers: ${(err as Error).message}`);
+          }
+        }
+        const task = this.projectInitializer.pendingTask;
+        this.lastAcceptedTask = task; // preserve for 'start' handler
+        this.projectInitializer.pendingTask = null;
+        this.projectInitializer.pendingProposal = null;
+
+        // Team accepted — skip "Start building?" gate, go straight to planning
+        const agentList = newAgents.join(', ');
+        const confirmText = `Team ready! ${newAgents.length} agents online (${agentList}). Creating plan...`;
+
+        this.conversationHistory.push(
+          { role: 'user', content: 'I accept this team configuration.' },
+          { role: 'assistant', content: confirmText },
+        );
+
+        // Auto-proceed to planning if we have a task
+        if (task) {
+          this.lastAcceptedTask = null;
+          // Return team confirmation, then the cognitive mode will create the plan
+          const planResponse = await this.handleMessageCognitive(
+            `The team is ready. Create a plan for: "${task}". Use the plan tool.`,
+          );
+          return {
+            text: `${confirmText}\n\n${planResponse.text}`,
+            status: planResponse.status,
+            agents: newAgents,
+            choices: planResponse.choices,
+          };
+        }
+
+        return { text: confirmText, status: 'done', agents: newAgents };
+      }
+      if (choiceValue === 'modify') {
+        // Keep pendingTask so next message re-triggers init with modifications
+        // pendingProposal cleared so a fresh proposal is generated
+        this.projectInitializer.pendingProposal = null;
+        return { text: 'Describe what you\'d like to change and I\'ll create a new proposal.', status: 'done' };
+      }
+      if (choiceValue === 'manual') {
+        this.projectInitializer.pendingTask = null;
+        this.projectInitializer.pendingProposal = null;
+        return { text: 'Run `gossipcat setup` in your terminal to manually configure agents.', status: 'done' };
+      }
+      if (choiceValue === 'skip') {
+        this.projectInitializer.pendingTask = null;
+        this.projectInitializer.pendingProposal = null;
+        return { text: 'No agents configured. You can chat directly or run /init later.', status: 'done' };
+      }
+    }
+
+    // Post-accept choices — these fire AFTER pendingTask is cleared
+    if (choiceValue === 'start') {
+      const task = this.lastAcceptedTask || 'the project we discussed';
+      this.lastAcceptedTask = null;
+      return this.handleMessageCognitive(
+        `The team is ready. Based on our earlier brainstorming, create a plan for: "${task}". Use the plan tool to decompose this into agent tasks.`,
+      );
+    }
+    if (choiceValue === 'different') {
+      this.lastAcceptedTask = null;
+      return { text: 'What would you like to do?', status: 'done' };
+    }
+
+    // Team update approval
+    if (this.teamManager.pendingAction) {
+      if (choiceValue === 'confirm_add' && this.teamManager.pendingAction.action === 'add') {
+        const config = this.teamManager.pendingAction.config as any;
+        this.teamManager.applyAdd(config);
+        this.teamManager.pendingAction = null;
+        if (this.keyProviderFn) {
+          await this.syncWorkers(this.keyProviderFn);
+        }
+        return { text: `Added ${config.id} to your team.`, status: 'done' };
+      }
+      if (choiceValue === 'confirm_remove' || choiceValue === 'force_remove') {
+        const agentId = this.teamManager.pendingAction.agentId!;
+        this.teamManager.applyRemove(agentId);
+        this.teamManager.pendingAction = null;
+        await this.stopWorker(agentId);
+        return { text: `Removed ${agentId} from your team.`, status: 'done' };
+      }
+      if (choiceValue === 'wait_and_remove') {
+        // Collect pending tasks first, then remove
+        const agentId = this.teamManager.pendingAction.agentId!;
+        this.teamManager.pendingAction = null;
+        // Best effort: wait briefly then remove
+        this.teamManager.applyRemove(agentId);
+        await this.stopWorker(agentId);
+        return { text: `Waited for tasks and removed ${agentId}.`, status: 'done' };
+      }
+      if (choiceValue === 'cancel') {
+        this.teamManager.pendingAction = null;
+        return { text: 'Cancelled.', status: 'done' };
+      }
+    }
+
+    // Spec approval
+    if (choiceValue === 'approve_spec') {
+      // Read the spec and use it as input for the plan tool
+      try {
+        const { existsSync: exists, readFileSync: readF } = require('fs');
+        const { join: j } = require('path');
+        const specPath = j(this.projectRoot, '.gossip', 'spec.md');
+        const spec = exists(specPath) ? readF(specPath, 'utf-8') : '';
+        return this.handleMessageCognitive(
+          `The spec is approved. Create a plan based on this spec:\n\n${spec.slice(0, 2000)}`,
+        );
+      } catch {
+        return this.handleMessageCognitive('The spec is approved. Create a plan for the project.');
+      }
+    }
+    if (choiceValue === 'edit_spec') {
+      return {
+        text: 'Edit .gossip/spec.md in your editor, then say "spec looks good" when ready.',
+        status: 'done',
+      };
+    }
+
+    // Plan approval
+    if (this.toolExecutor.pendingPlan) {
+      if (choiceValue === PLAN_CHOICES.EXECUTE) {
+        const plan = this.toolExecutor.pendingPlan;
+        this.toolExecutor.pendingPlan = null;
+        const toolResult = await this.toolExecutor.executePlan(plan);
+        return { text: toolResult.text, status: 'done', agents: toolResult.agents };
+      }
+      if (choiceValue === PLAN_CHOICES.CANCEL || choiceValue === PENDING_PLAN_CHOICES.CANCEL) {
+        this.toolExecutor.pendingPlan = null;
+        return { text: 'Plan cancelled.', status: 'done' };
+      }
+      if (choiceValue === PENDING_PLAN_CHOICES.DISCARD) {
+        this.toolExecutor.pendingPlan = null;
+        return { text: 'Old plan discarded. Send your new task.', status: 'done' };
+      }
+      if (choiceValue === PENDING_PLAN_CHOICES.EXECUTE_PENDING) {
+        const plan = this.toolExecutor.pendingPlan;
+        this.toolExecutor.pendingPlan = null;
+        const toolResult = await this.toolExecutor.executePlan(plan);
+        return { text: toolResult.text, status: 'done', agents: toolResult.agents };
+      }
+      if (choiceValue === PLAN_CHOICES.MODIFY) {
+        this.toolExecutor.pendingPlan = null;
+        return { text: 'Plan discarded. Describe your modifications and I\'ll create a new plan.', status: 'done' };
+      }
+    }
+
+    // Instruction update confirmation
+    if (this.toolExecutor.pendingInstructionUpdate) {
+      if (choiceValue === 'apply') {
+        const pending = this.toolExecutor.pendingInstructionUpdate;
+        this.toolExecutor.pendingInstructionUpdate = null;
+        const toolResult = await this.toolExecutor.applyInstructionUpdate(pending);
+        return { text: toolResult.text, status: 'done' };
+      }
+      this.toolExecutor.pendingInstructionUpdate = null;
+      return { text: 'Instruction update cancelled.', status: 'done' };
+    }
+
+    // Unhandled choice — pass through to cognitive mode with full conversation history.
+    // Inject the choice as a user message so the LLM knows what was selected.
+    return this.handleMessageCognitive(`I chose: "${choiceValue}". Proceed with that.`);
+  }
+
+  /**
+   * Parse LLM response for structured elements.
+   * Detects choice blocks in the format:
+   *   [CHOICES]
+   *   message: How should I proceed?
+   *   - option_value | Display Label | Optional hint
+   *   - option_value | Display Label
+   *   [/CHOICES]
+   */
+  private parseResponse(text: string): ChatResponse {
+    // Try with closing tag first, then fallback to unclosed (to end of text)
+    let choiceMatch = text.match(/\[CHOICES\]([\s\S]*?)\[\/CHOICES\]/);
+    let hasClosingTag = true;
+    if (!choiceMatch) {
+      choiceMatch = text.match(/\[CHOICES\]([\s\S]*)$/);
+      hasClosingTag = false;
+    }
+    if (!choiceMatch) {
+      return { text, status: 'done' };
+    }
+
+    const choiceBlock = choiceMatch[1].trim();
+    const lines = choiceBlock.split('\n').map(l => l.trim()).filter(Boolean);
+    const messageLine = lines.find(l => l.startsWith('message:'));
+    const optionLines = lines.filter(l => l.startsWith('- '));
+
+    // If we matched [CHOICES] but found no valid options, treat as plain text
+    if (optionLines.length === 0) {
+      return { text, status: 'done' };
+    }
+
+    const message = messageLine?.replace('message:', '').trim() || 'How should I proceed?';
+    const options = optionLines.map(line => {
+      const parts = line.slice(2).split('|').map(p => p.trim());
+      return {
+        value: parts[0],
+        label: parts[1] || parts[0],
+        hint: parts[2],
+      };
+    });
+
+    const textBefore = text.slice(0, text.indexOf('[CHOICES]')).trim();
+    const textAfter = hasClosingTag
+      ? text.slice(text.indexOf('[/CHOICES]') + '[/CHOICES]'.length).trim()
+      : '';
+    const cleanText = [textBefore, textAfter].filter(Boolean).join('\n\n');
+
+    return {
+      text: cleanText,
+      choices: options.length > 0 ? { message, options, allowCustom: true, type: 'select' } : undefined,
+      status: 'done',
+    };
+  }
+
+  private async handleReviewRequest(data: unknown, envelope: MessageEnvelope): Promise<void> {
+    if (envelope.t !== MessageType.RPC_REQUEST) return;
+
+    const payload = data as Record<string, unknown>;
+    if (payload?.tool !== 'review_request') return;
+
+    const rawArgs = payload.args as Record<string, unknown> | undefined;
+    if (!rawArgs || typeof rawArgs.callerId !== 'string' || typeof rawArgs.diff !== 'string' || typeof rawArgs.testResult !== 'string') {
+      console.error('[MainAgent] Malformed review_request payload — missing or invalid args');
+      return;
+    }
+    const args = rawArgs as { callerId: string; diff: string; testResult: string };
+    let reviewText = 'No reviewer available — tests-only verification.';
+
+    try {
+      // Find best reviewer, excluding the calling agent
+      const reviewer = this.registry.getAll()
+        .filter(a => a.id !== args.callerId && a.skills.includes('code_review'))
+        .find(a => this.workers.has(a.id));
+
+      if (reviewer) {
+        const { finalResultPromise: promise } = this.pipeline.dispatch(reviewer.id,
+          `Review this diff for correctness:\n\n${args.diff}\n\nTest results:\n${args.testResult}\n\nProvide a brief review: what's good, what needs fixing.`
+        );
+        try {
+          reviewText = (await promise).result;
+        } catch { reviewText = 'Reviewer agent failed.'; }
+      }
+    } catch (err) {
+      reviewText = `Review error: ${(err as Error).message}`;
+    }
+
+    // Send RPC response back to ToolServer
+    try {
+      const body = Buffer.from(msgpackEncode({ result: reviewText })) as unknown as Uint8Array;
+      const correlationId = (envelope.rid_req || envelope.id) as string;
+      const response = Message.createRpcResponse('orchestrator', envelope.sid, correlationId, body);
+      await this.orchestratorAgent!.sendEnvelope(response.toEnvelope());
+    } catch (err) {
+      console.error(`[MainAgent] Failed to send review response: ${(err as Error).message}`);
+    }
+  }
+
+}

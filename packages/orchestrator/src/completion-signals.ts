@@ -1,0 +1,319 @@
+/**
+ * emitCompletionSignals — shared helper for native and relay task completion.
+ *
+ * Fixes the signal-pipeline drift that caused native agents to be invisible
+ * in performance analytics (consensus 23687227-1462428b, bugs f1/f4/f8/f10/f11/f15).
+ *
+ * Both paths (apps/cli/src/handlers/native-tasks.ts and
+ * packages/orchestrator/src/dispatch-pipeline.ts) previously duplicated
+ * signal emission prose with divergent behaviour:
+ *   - Native: missing finding_dropped_format, missing diagnostic_codes, no
+ *     memoryQueryCalled threading, no effectiveStart fallback (f11), no
+ *     perfReader-weighted memory (f9), no worktree cleanup on error (f13).
+ *   - Relay: complete, but duplicated.
+ *
+ * This module is the single source of truth for task-completion signals.
+ * Call it from BOTH paths after the result is obtained.
+ */
+
+import { PerformanceWriter } from './performance-writer';
+import { WRITER_INTERNAL } from './_writer-internal';
+import { detectFormatCompliance } from './dispatch-pipeline';
+import { PROVIDER_PLACEHOLDER_RE } from './llm-client';
+import { dedupeOncePerTaskSignals } from './auto-signal-dedup';
+import type { ConsensusSignal, MetaSignal, PipelineSignal } from './consensus-types';
+
+export interface CompletionSignalInput {
+  agentId: string;
+  taskId: string;
+  result: string;
+  /**
+   * Measured wall-clock duration in milliseconds.
+   * Pass null when timing is genuinely unknown (then we emit 0 with
+   * metadata.estimated:true so downstream scorers can filter it).
+   */
+  elapsedMs: number | null;
+  /**
+   * Number of tool calls the agent made.
+   * Omit (leave undefined) for native agents where tool-call count is
+   * unobservable from gossipcat — this preserves the F16 skip contract:
+   * we NEVER emit task_tool_turns with value:null or value:0 for native
+   * agents because that would make downstream scorers treat them as
+   * never-using-tools and fire spurious skill-gap alerts.
+   */
+  toolCalls?: number;
+  /**
+   * Whether the agent called memory_query during this task.
+   * Threaded from TaskEntry.memoryQueryCalled (relay) or
+   * NativeTaskInfo.memoryQueryCalled (native, after f8 thread).
+   */
+  memoryQueryCalled?: boolean;
+  /**
+   * Whether this signal is emitted on the error path (task failed).
+   * When true, adds error:true to task_completed metadata so downstream
+   * scorers can compute per-agent failure rate and latency separately.
+   */
+  error?: boolean;
+}
+
+/**
+ * Emit task_completed, (conditionally) task_tool_turns, format_compliance,
+ * and (when drops > 0) finding_dropped_format signals.
+ *
+ * Contract:
+ * - Never throws — single try/catch writes to process.stderr on failure.
+ * - Never emits task_tool_turns when toolCalls is undefined (F16 preserve).
+ * - Always emits format_compliance with diagnostic_codes in metadata.
+ * - Emits task_completed with value:0 + metadata.estimated:true when
+ *   elapsedMs is null (bug f11: server-side startedAt is always present so
+ *   null should be rare, but we must not suppress the signal entirely).
+ */
+export function emitCompletionSignals(projectRoot: string, input: CompletionSignalInput): void {
+  try {
+    const { agentId, taskId, result, elapsedMs, toolCalls, memoryQueryCalled, error } = input;
+    if (agentId === '_system') {
+      process.stderr.write(`[gossipcat] emitCompletionSignals refused reserved agentId '_system' (taskId=${taskId})\n`);
+      return;
+    }
+    const now = new Date().toISOString();
+
+    // Detect provider-side placeholder strings (MALFORMED_FUNCTION_CALL, safety block, etc.).
+    // When the entire result is a placeholder, suppress format_compliance:0 — the agent never
+    // had the chance to comply or fail to comply. Emit transport_failure (operational signal,
+    // excluded from accuracy arithmetic) so the dashboard surfaces a clear diagnostic instead
+    // of mislabelling a transport error as a skill-quality failure.
+    // @gossip:impact-adjacent:signal-pipeline
+    const isProviderPlaceholder = !!result && PROVIDER_PLACEHOLDER_RE.test(result);
+    if (isProviderPlaceholder) {
+      // Classify placeholder_kind from the text prefix for downstream observability.
+      const placeholder_kind = result.startsWith('[Response blocked by ')
+        ? 'blocked_safety'
+        : result.includes('malformed_function_call')
+          ? 'malformed_function_call'
+          : 'no_candidates';
+      const transportSignal: ConsensusSignal = {
+        type: 'consensus',
+        signal: 'transport_failure',
+        signal_class: 'operational',
+        agentId,
+        taskId,
+        // retried-state intentionally omitted — emitCompletionSignals is called from
+        // dispatch-pipeline at completion time and has no view of worker-agent's
+        // providerRetryAttempted flag. Consensus c520ef0b-88114e21:f6 flagged the
+        // prior hardcoded "retried=true" as misleading.
+        evidence: `provider placeholder (kind=${placeholder_kind}): ${result.slice(0, 200)}`,
+        timestamp: now,
+        source: 'auto',
+      };
+      // Still emit task_completed (duration telemetry is valid) but skip format_compliance
+      // and finding_dropped_format — those metrics are meaningless for placeholder responses.
+      const durationValue = elapsedMs !== null ? elapsedMs : 0;
+      const metadataEntries: Record<string, unknown> = { transport_failure: true };
+      if (elapsedMs === null) metadataEntries.estimated = true;
+      if (error) metadataEntries.error = true;
+      const completedSignal: MetaSignal = {
+        type: 'meta',
+        signal: 'task_completed',
+        agentId,
+        taskId,
+        value: durationValue,
+        metadata: metadataEntries,
+        timestamp: now,
+      };
+      // Route through the same once-per-task dedup as the main path so a
+      // crash-retry cannot double-append transport_failure/task_completed
+      // (consensus f7d8b67a f13). transport_failure is consensus-type but
+      // never retracted and strictly once-per-task, so the dedup constraints
+      // documented in auto-signal-dedup.ts hold.
+      const placeholderBatch = [transportSignal, completedSignal];
+      const placeholderDedup = dedupeOncePerTaskSignals(projectRoot, placeholderBatch);
+      if (placeholderDedup.skipped > 0) {
+        process.stderr.write(`[gossipcat] skipped ${placeholderDedup.skipped} duplicate auto-signal(s) for task ${taskId}\n`);
+      }
+      if (placeholderDedup.kept.length > 0) {
+        const writer = new PerformanceWriter(projectRoot);
+        writer[WRITER_INTERNAL].appendSignals(placeholderDedup.kept, 'completion-signals-helper');
+      }
+      return;
+    }
+
+    const compliance = detectFormatCompliance(result);
+
+    const signals: (MetaSignal | PipelineSignal)[] = [];
+
+    // ── task_completed ────────────────────────────────────────────────────
+    // Bug f11: previous native path skipped emission when elapsed === null.
+    // Fix: always emit — use value 0 + estimated:true when null so the
+    // event lands in the time-series even if its duration isn't meaningful.
+    // error:true is added when the task failed so downstream scorers can
+    // compute per-agent failure rate and latency from the time-series.
+    {
+      const durationValue = elapsedMs !== null ? elapsedMs : 0;
+      const metadataEntries: Record<string, unknown> = {};
+      if (elapsedMs === null) metadataEntries.estimated = true;
+      if (error) metadataEntries.error = true;
+      const meta: MetaSignal = {
+        type: 'meta',
+        signal: 'task_completed',
+        agentId,
+        taskId,
+        value: durationValue,
+        ...(Object.keys(metadataEntries).length > 0 ? { metadata: metadataEntries } : {}),
+        timestamp: now,
+      };
+      signals.push(meta);
+    }
+
+    // ── task_tool_turns ───────────────────────────────────────────────────
+    // F16: only emit when toolCalls is defined. Native agents don't pass it
+    // so this block is skipped — zero tool-call data is BETTER than false data.
+    if (toolCalls !== undefined) {
+      signals.push({
+        type: 'meta',
+        signal: 'task_tool_turns',
+        agentId,
+        taskId,
+        value: toolCalls,
+        ...(memoryQueryCalled !== undefined ? { metadata: { memoryQueryCalled } } : {}),
+        timestamp: now,
+      } as MetaSignal);
+    }
+
+    // ── format_compliance ─────────────────────────────────────────────────
+    // Bug f4: native path was missing diagnostic_codes in metadata.
+    signals.push({
+      type: 'meta',
+      signal: 'format_compliance',
+      agentId,
+      taskId,
+      value: compliance.formatCompliant ? 1 : 0,
+      metadata: {
+        findingCount: compliance.findingCount,
+        citationCount: compliance.citationCount,
+        tags_total: compliance.tags_total,
+        tags_accepted: compliance.tags_accepted,
+        tags_dropped_unknown_type: compliance.tags_dropped_unknown_type,
+        tags_dropped_short_content: compliance.tags_dropped_short_content,
+        diagnostic_codes: compliance.diagnostics.map(d => d.code),
+      },
+      timestamp: now,
+    } as MetaSignal);
+
+    // ── finding_dropped_format (pipeline) ─────────────────────────────────
+    // Bug f1: native path never emitted this — zero type:pipeline entries in
+    // agent-performance.jsonl for native agents. This is the event that would
+    // have caught the drop-gate bug in-session.
+    const droppedTotal = compliance.tags_dropped_unknown_type + compliance.tags_dropped_short_content;
+    if (droppedTotal > 0) {
+      signals.push({
+        type: 'pipeline',
+        signal: 'finding_dropped_format',
+        agentId,
+        taskId,
+        value: droppedTotal,
+        metadata: {
+          tags_total: compliance.tags_total,
+          tags_accepted: compliance.tags_accepted,
+          tags_dropped_unknown_type: compliance.tags_dropped_unknown_type,
+          tags_dropped_short_content: compliance.tags_dropped_short_content,
+          diagnostic_codes: compliance.diagnostics.map(d => d.code),
+        },
+        timestamp: now,
+      } as PipelineSignal);
+    }
+
+    // Append-time dedup (audit 6eed37aa f9): a crash/retry between this append
+    // and nativeTaskMap.delete(task_id) re-runs emission for the same task.
+    // Skip any (agentId, taskId, signal) triple already on disk.
+    const { kept, skipped } = dedupeOncePerTaskSignals(projectRoot, signals);
+    if (skipped > 0) {
+      process.stderr.write(`[gossipcat] skipped ${skipped} duplicate auto-signal(s) for task ${taskId}\n`);
+    }
+    if (kept.length === 0) return;
+    const writer = new PerformanceWriter(projectRoot);
+    writer[WRITER_INTERNAL].appendSignals(kept, 'completion-signals-helper');
+  } catch (err) {
+    process.stderr.write(`[gossipcat] emitCompletionSignals failed: ${(err as Error).message}\n`);
+  }
+}
+
+/**
+ * Truncate a string to at most `maxBytes` UTF-8 bytes, appending a short
+ * marker when truncation occurred. Respects multi-byte boundaries so we
+ * never emit mojibake in the signal payload.
+ */
+function truncateUtf8(s: string, maxBytes: number): string {
+  const marker = '...[truncated]';
+  if (Buffer.byteLength(s, 'utf8') <= maxBytes) return s;
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(marker, 'utf8'));
+  const buf = Buffer.from(s, 'utf8').subarray(0, budget);
+  // Drop trailing incomplete UTF-8 continuation bytes (10xxxxxx).
+  let end = buf.length;
+  while (end > 0 && (buf[end - 1] & 0b11000000) === 0b10000000) end--;
+  // If we stopped just after a multi-byte lead byte, back off too.
+  if (end > 0) {
+    const lead = buf[end - 1];
+    if ((lead & 0b11100000) === 0b11000000 /* 2-byte lead */
+      || (lead & 0b11110000) === 0b11100000 /* 3-byte lead */
+      || (lead & 0b11111000) === 0b11110000 /* 4-byte lead */) {
+      end--;
+    }
+  }
+  return buf.subarray(0, end).toString('utf8') + marker;
+}
+
+export interface CitationFabricatedInput {
+  agentId: string;
+  taskId: string;
+  total: number;
+  verified: number;
+  unverifiedCitations: string[];
+}
+
+/**
+ * Emit `citation_fabricated` (type='pipeline') when the citation annotator
+ * finds unverified file-like tokens in knowledge-file body at write time.
+ *
+ * Mirrors `finding_dropped_format` — telemetry only, never gates the write.
+ * Truncates `unverifiedCitations` to the first 10 entries to bound metadata
+ * size (knowledge bodies can cite many paths; we only need a sample for
+ * observability). `value` carries the count so downstream time-series
+ * aggregators can track fabrication volume without parsing metadata.
+ */
+export function emitCitationFabricatedSignal(
+  projectRoot: string,
+  input: CitationFabricatedInput,
+): void {
+  try {
+    const { agentId, taskId, total, verified, unverifiedCitations } = input;
+    if (agentId === '_system') {
+      process.stderr.write(`[gossipcat] emitCitationFabricatedSignal refused reserved agentId '_system' (taskId=${taskId})\n`);
+      return;
+    }
+    const unverifiedCount = unverifiedCitations.length;
+    if (unverifiedCount === 0) return;
+
+    const signal: PipelineSignal = {
+      type: 'pipeline',
+      signal: 'citation_fabricated',
+      agentId,
+      taskId,
+      value: unverifiedCount,
+      metadata: {
+        total,
+        verified,
+        unverifiedCount,
+        // Per-entry cap: 512 UTF-8 bytes, preserving the 10-entry list cap.
+        // Prevents a single fabricated citation string from bloating the
+        // signal payload (JSONL line size is I/O sensitive).
+        unverifiedCitations: unverifiedCitations.slice(0, 10).map(c => truncateUtf8(c, 512)),
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const writer = new PerformanceWriter(projectRoot);
+    writer[WRITER_INTERNAL].appendSignal(signal, 'completion-signals-helper');
+  } catch (err) {
+    process.stderr.write(`[gossipcat] emitCitationFabricatedSignal failed: ${(err as Error).message}\n`);
+  }
+}

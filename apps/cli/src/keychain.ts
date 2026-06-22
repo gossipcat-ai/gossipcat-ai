@@ -1,0 +1,159 @@
+import { execFileSync } from 'child_process';
+import { platform, hostname, userInfo } from 'os';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from 'crypto';
+
+const DEFAULT_SERVICE_NAME = 'gossip-mesh';
+const VALID_PROVIDERS = /^[a-zA-Z0-9_-]{1,32}$/;
+const ENCRYPTED_FILE = '.gossip/keys.enc';
+const ALGO = 'aes-256-gcm';
+
+export class Keychain {
+  private inMemoryStore: Map<string, string> = new Map();
+  private keychainAvailable: boolean;
+  private readonly serviceName: string;
+
+  constructor(serviceName?: string) {
+    this.serviceName = serviceName ?? DEFAULT_SERVICE_NAME;
+    this.keychainAvailable = this.isKeychainAvailable();
+
+    if (!this.keychainAvailable) {
+      this.loadEncryptedFile();
+    }
+  }
+
+  async getKey(provider: string): Promise<string | null> {
+    if (this.keychainAvailable) {
+      try {
+        return this.readFromKeychain(provider);
+      } catch {
+        return this.inMemoryStore.get(provider) || null;
+      }
+    }
+    return this.inMemoryStore.get(provider) || null;
+  }
+
+  async setKey(provider: string, key: string): Promise<void> {
+    this.inMemoryStore.set(provider, key);
+    if (this.keychainAvailable) {
+      try {
+        this.writeToKeychain(provider, key);
+      } catch {
+        // Keychain write failed — fall through to encrypted file
+        this.saveEncryptedFile();
+      }
+    } else {
+      this.saveEncryptedFile();
+    }
+  }
+
+  private deriveKey(salt: Buffer): Buffer {
+    const seed = `${this.serviceName}:${hostname()}:${userInfo().username}`;
+    // PBKDF2 with random salt — resistant to offline brute-force on a stolen keys.enc
+    return pbkdf2Sync(seed, salt, 600_000, 32, 'sha256');
+  }
+
+  private loadEncryptedFile(): void {
+    const filePath = join(process.cwd(), ENCRYPTED_FILE);
+    if (!existsSync(filePath)) return;
+
+    try {
+      const raw = readFileSync(filePath);
+      // Format: salt(32) + iv(12) + tag(16) + ciphertext — min 61 bytes
+      if (raw.length < 61) return; // legacy or corrupted — start fresh
+
+      const salt = raw.subarray(0, 32);
+      const iv = raw.subarray(32, 44);
+      const tag = raw.subarray(44, 60);
+      const ciphertext = raw.subarray(60);
+
+      const key = this.deriveKey(salt);
+      const decipher = createDecipheriv(ALGO, key, iv);
+      decipher.setAuthTag(tag);
+      const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      const entries: Record<string, string> = JSON.parse(decrypted.toString('utf8'));
+
+      for (const [k, v] of Object.entries(entries)) {
+        this.inMemoryStore.set(k, v);
+      }
+    } catch {
+      // Corrupted or wrong machine — start fresh
+    }
+  }
+
+  private saveEncryptedFile(): void {
+    const filePath = join(process.cwd(), ENCRYPTED_FILE);
+    const dir = join(process.cwd(), '.gossip');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+    const data = JSON.stringify(Object.fromEntries(this.inMemoryStore));
+    const salt = randomBytes(32);
+    const iv = randomBytes(12);
+    const key = this.deriveKey(salt);
+    const cipher = createCipheriv(ALGO, key, iv);
+    const encrypted = Buffer.concat([cipher.update(data, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+
+    // Format: salt(32) + iv(12) + tag(16) + ciphertext
+    writeFileSync(filePath, Buffer.concat([salt, iv, tag, encrypted]), { mode: 0o600 });
+  }
+
+  private isKeychainAvailable(): boolean {
+    if (platform() === 'darwin') {
+      try {
+        execFileSync('security', ['help'], { stdio: 'pipe' });
+        return true;
+      } catch { return false; }
+    }
+    if (platform() === 'linux') {
+      try {
+        execFileSync('which', ['secret-tool'], { stdio: 'pipe' });
+        return true;
+      } catch { return false; }
+    }
+    return false;
+  }
+
+  private validateProvider(provider: string): void {
+    if (!VALID_PROVIDERS.test(provider)) {
+      throw new Error(`Invalid provider name: "${provider}"`);
+    }
+  }
+
+  private readFromKeychain(provider: string): string {
+    this.validateProvider(provider);
+    if (platform() === 'darwin') {
+      return execFileSync('security', [
+        'find-generic-password', '-s', this.serviceName, '-a', provider, '-w'
+      ], { stdio: 'pipe' }).toString().trim();
+    }
+    if (platform() === 'linux') {
+      return execFileSync('secret-tool', [
+        'lookup', 'service', this.serviceName, 'provider', provider
+      ], { stdio: 'pipe' }).toString().trim();
+    }
+    throw new Error('Unsupported platform');
+  }
+
+  private writeToKeychain(provider: string, key: string): void {
+    this.validateProvider(provider);
+    if (platform() === 'darwin') {
+      try {
+        execFileSync('security', [
+          'delete-generic-password', '-s', this.serviceName, '-a', provider
+        ], { stdio: 'pipe' });
+      } catch { /* doesn't exist yet */ }
+      execFileSync('security', [
+        'add-generic-password', '-s', this.serviceName, '-a', provider, '-w', key
+      ], { stdio: 'pipe' });
+      return;
+    }
+    if (platform() === 'linux') {
+      execFileSync('secret-tool', [
+        'store', '--label', `Gossip Mesh ${provider}`, 'service', this.serviceName, 'provider', provider
+      ], { input: key, stdio: ['pipe', 'pipe', 'pipe'] });
+      return;
+    }
+  }
+}

@@ -1,0 +1,578 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+/**
+ * useBridge — frontend hook for ONE conversation on the dashboard ⇄ LIVE Claude
+ * Code session bridge (P1 backend, spec 2026-06-14-dashboard-cc-channel-bridge.md).
+ *
+ * Each call to useBridge() is an INDEPENDENT conversation: it opens its OWN
+ * EventSource, keeps its OWN message list / status / awaitingReply, and mints (or
+ * adopts) its OWN chat_id. The multi-conversation tab store (BridgeContext) mounts
+ * one useBridge() instance per open tab via a headless ConversationController so
+ * inactive tabs keep streaming and accrue an `unread` marker.
+ *
+ * Mirrors the useEventStream SSE pattern: open an EventSource, parse frames,
+ * manual reconnect with backoff, cleanup-on-unmount. Adds the conversational
+ * layer the bridge needs:
+ *   - send(text): POST to /dashboard/api/bridge. Omits chat_id on the first
+ *     send; the server mints + returns one, which we reuse for the conversation.
+ *   - Frames are filtered to this conversation's chat_id so a stray/forged stream
+ *     id (or a different tab's conversation) can't bleed into this view.
+ *   - unread: increments when a reply/mirror/error frame arrives while this
+ *     conversation is INACTIVE (options.active === false). markRead() clears it
+ *     (called by the store when the tab becomes active).
+ *
+ * IMPORTANT: this wires the LIVE Claude Code orchestrator session, NOT the
+ * dormant ChatbotAgent /api/chat brain. The two must never be conflated.
+ *
+ * Backend contract (do NOT change — fixed by api-bridge.ts):
+ *   POST /dashboard/api/bridge {chat_id?, message}
+ *     → 202 {ok:true, chat_id} | 400 | 429 | 503
+ *   GET  /dashboard/api/bridge/stream[?last_id=N][&chat_id=ID]  (SSE)
+ *     The stream is PER-chat_id: the relay filters server-side and delivers only
+ *     frames whose chat_id matches the ?chat_id this stream subscribed with. A
+ *     stream opened without ?chat_id (before the first send) receives NOTHING
+ *     until setChat reconnects it with the minted id. Frame kinds (activity-mirror
+ *     v2, spec 2026-06-14-dashboard-cc-activity-mirror-v2.md §5/§6):
+ *       {type:'reply'|'ack'|'error', chat_id, text?, ts}      — dashboard-typed turns
+ *       {type:'mirror', chat_id, role, text, ts, id}          — live CC-session mirror
+ *           role ∈ 'user'|'assistant'|'activity'; id is a per-chat_id monotonic
+ *           counter, ts is server-stamped ISO. On connect the relay replays this
+ *           chat_id's ring where id > ?last_id, then goes live.
+ *       {type:'restart', chat_id, ts}                          — relay restarted; the
+ *           per-chat_id counter reset to 1, so a client holding last_id=N would
+ *           starve waiting for id>N. Drop last_id and reconnect with ?last_id=0.
+ *   Forward-compat: any unknown frame `type` is silently ignored so a newer relay
+ *   can add frame kinds without breaking an older dashboard build.
+ */
+
+// Minimal window surface — mirrors useEventStream so node/jsdom test envs that
+// lack a full lib.dom EventSource don't trip the import.
+declare const window:
+  | {
+      EventSource: typeof EventSource;
+    }
+  | undefined;
+
+/** One selectable option in a gossip_ask question (mirrors relay AskOption). */
+export interface AskOption {
+  label: string;
+  description?: string;
+}
+
+/** One gossip_ask question the dashboard renders (mirrors relay AskQuestion). */
+export interface AskQuestion {
+  /** Server-minted stable id (q0, q1, …) the submitted answer references. */
+  questionId: string;
+  header: string;
+  question: string;
+  /** false/undefined → single-select radios; true → multi-select checkboxes. */
+  multiSelect?: boolean;
+  options: AskOption[];
+  /** When true the dashboard shows a free-text "Other" input. */
+  allowOther?: boolean;
+}
+
+/** A pending gossip_ask question round awaiting a dashboard answer. */
+export interface PendingQuestion {
+  qid: string;
+  questions: AskQuestion[];
+  ts: string;
+}
+
+/** A single inbound SSE frame from the bridge (known frame kinds only). */
+export interface BridgeFrame {
+  type: 'reply' | 'ack' | 'error' | 'mirror' | 'restart' | 'question';
+  chat_id: string;
+  text?: string;
+  ts: string;
+  /** Present on `mirror` frames: 'user'|'assistant'|'activity'. */
+  role?: string;
+  /** Present on `mirror` frames: per-chat_id monotonic server counter. */
+  id?: number;
+  /** Present on `question` frames: the outstanding-question id (qid). */
+  qid?: string;
+  /** Present on `question` frames: the question set to render. */
+  questions?: AskQuestion[];
+}
+
+/**
+ * Role of a rendered conversation turn.
+ *   user/assistant — typed turns AND mirrored CC-session prose
+ *   activity       — mirrored curated tool/dispatch row (v2)
+ *   ack/error      — dashboard-typed status frames
+ */
+export type BridgeRole = 'user' | 'assistant' | 'activity' | 'ack' | 'error';
+
+/** One rendered turn in the conversation view. */
+export interface BridgeMessage {
+  /** Stable client-side id (monotonic) for React keys. */
+  id: number;
+  role: BridgeRole;
+  text: string;
+  ts: string;
+  /**
+   * Server-assigned per-chat_id id for `mirror`-sourced turns (undefined for
+   * locally-minted user echoes and dashboard reply/ack/error turns). Used to
+   * track the high-water mark for ?last_id replay.
+   */
+  serverId?: number;
+}
+
+/** Connection lifecycle of the SSE stream. */
+export type BridgeStatus = 'connecting' | 'open' | 'closed' | 'error';
+
+/** Options for a single-conversation bridge instance. */
+export interface UseBridgeOptions {
+  /**
+   * Initial chat_id to (re)attach to — a persisted/restored conversation. When
+   * provided the stream opens immediately subscribed to this id and replays the
+   * server ring (?last_id=0). null/undefined = a brand-new, never-sent
+   * conversation that mints its id on first send.
+   */
+  initialChatId?: string | null;
+  /**
+   * Whether this conversation is the ACTIVE (visible) tab. Inbound reply/mirror/
+   * error frames that arrive while inactive increment `unread`. Defaults true so
+   * a bare useBridge() (no store) behaves like the old single-conversation hook.
+   */
+  active?: boolean;
+}
+
+export interface UseBridgeResult {
+  messages: BridgeMessage[];
+  /** SSE connection status. */
+  status: BridgeStatus;
+  /** True between a send() and the next reply/ack/error frame for this chat. */
+  awaitingReply: boolean;
+  /** True once the server has minted (or we have adopted) a chat_id. */
+  chatId: string | null;
+  /** Count of inbound turns since this conversation was last marked read. */
+  unread: number;
+  /** POST a user message to the live CC session. No-op for empty input. */
+  send: (text: string) => Promise<void>;
+  /** Last transient send error (network / HTTP), cleared on the next send. */
+  sendError: string | null;
+  /** Clear the unread counter (called when the tab becomes active). */
+  markRead: () => void;
+  /**
+   * The outstanding gossip_ask question for this conversation, or null. The
+   * Transcript renders a QuestionCard when present; submitAnswer clears it.
+   * Live-only — a reload loses it (the relay does not ring-retain question
+   * frames; the registry survives so a late answer still validates server-side).
+   */
+  pendingQuestion: PendingQuestion | null;
+  /**
+   * Submit an answer to the pending gossip_ask question. Optimistically renders
+   * the user's choice as a user turn, locks/clears the card, and POSTs the
+   * answer to the bridge. Resolves with true on a 202 accept, false otherwise.
+   */
+  submitAnswer: (responses: AnswerResponse[]) => Promise<boolean>;
+}
+
+/** One submitted answer to a single gossip_ask question. */
+export interface AnswerResponse {
+  questionId: string;
+  selected: string[];
+  other?: string;
+}
+
+const BACKOFF_MIN_MS = 1_000;
+const BACKOFF_MAX_MS = 5_000;
+const STREAM_PATH = '/dashboard/api/bridge/stream';
+/** After this many consecutive onerror events with no successful onopen, surface 'error' status. */
+const ERROR_AFTER_FAILURES = 4;
+const POST_PATH = '/dashboard/api/bridge';
+const POST_TIMEOUT_MS = 30_000;
+
+/** HTTP status → human-readable send error, matching backend semantics. */
+function postErrorMessage(status: number): string {
+  switch (status) {
+    case 400:
+      return 'message rejected — invalid or empty';
+    case 429:
+      return 'rate limited — slow down';
+    case 503:
+      return 'no live Claude Code session — start `gossipcat code`';
+    case 401:
+      return 'session expired — reload to re-authenticate';
+    default:
+      return `send failed — HTTP ${status}`;
+  }
+}
+
+let nextMessageId = 1;
+function makeMessage(role: BridgeRole, text: string, ts?: string, serverId?: number): BridgeMessage {
+  return { id: nextMessageId++, role, text, ts: ts ?? new Date().toISOString(), serverId };
+}
+
+/**
+ * Insert a message keeping the list ordered by server-stamped `ts` (ascending).
+ * Mirror frames and dashboard reply/ack/error frames arrive on the same stream
+ * but are not guaranteed to be globally ordered, so we interleave by ts.
+ *
+ * Optimistic local user echoes (no serverId, ts = client clock) are appended in
+ * arrival order: we only reorder when the incoming frame's ts is strictly older
+ * than the last turn, so a normal forward-moving stream stays append-only.
+ */
+function insertByTs(prev: readonly BridgeMessage[], msg: BridgeMessage): BridgeMessage[] {
+  const last = prev[prev.length - 1];
+  if (!last || msg.ts >= last.ts) return [...prev, msg];
+  // Out-of-order arrival: find the first turn strictly newer than msg and splice before it.
+  const idx = prev.findIndex((m) => m.ts > msg.ts);
+  if (idx < 0) return [...prev, msg];
+  return [...prev.slice(0, idx), msg, ...prev.slice(idx)];
+}
+
+export function useBridge(options: UseBridgeOptions = {}): UseBridgeResult {
+  const { initialChatId = null, active = true } = options;
+
+  const [messages, setMessages] = useState<BridgeMessage[]>([]);
+  const [status, setStatus] = useState<BridgeStatus>('connecting');
+  const [awaitingReply, setAwaitingReply] = useState(false);
+  const [chatId, setChatId] = useState<string | null>(initialChatId);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [unread, setUnread] = useState(0);
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
+
+  // `active` is read inside the onmessage closure; a ref keeps it current without
+  // re-opening the stream when the active tab changes.
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
+  const markRead = useCallback(() => setUnread(0), []);
+
+  // Bump the unread counter only when this conversation is NOT the active tab.
+  const bumpUnreadIfInactive = useCallback(() => {
+    if (!activeRef.current) setUnread((n) => n + 1);
+  }, []);
+
+  // chat_id is read inside the EventSource onmessage closure (created once in the
+  // mount effect) and written by send(). A ref keeps the frame filter reading the
+  // latest value without re-opening the stream on every chat_id change. Seeded
+  // with the restored initialChatId so a persisted conversation streams at once.
+  const chatIdRef = useRef<string | null>(initialChatId);
+  const setChat = useCallback((id: string) => {
+    const prev = chatIdRef.current;
+    chatIdRef.current = id;
+    setChatId(id);
+    // When the chat_id transitions null→value (or changes), reconnect the
+    // EventSource so the server subscribes this client to the correct chat_id
+    // ring (server-side filtering requires the ?chat_id query param to be
+    // present on the stream URL). The reconnect also triggers ring replay for
+    // any mirror frames that arrived before the client connected with its id.
+    //
+    // Race note: a reply to the very first turn could theoretically arrive in
+    // the brief window between the send() returning a chat_id and the
+    // reconnect completing. In practice the reply lands seconds later (CC
+    // processing time), so the window is negligible. reply/ack frames are
+    // live-only (not ring-retained), so an extremely fast reply in this window
+    // would be missed — acceptable for the first-turn case.
+    if (prev !== id) {
+      reconnectRef.current?.();
+    }
+  }, []);
+
+  // Highest mirror `id` seen for the active chat. Read on each (re)connect to
+  // build ?last_id (mirrors useEventStream's read-on-open pattern so a reconnect
+  // replays only the gap). Reset to 0 on a `restart` frame (server counter reset)
+  // and a manual reconnect is triggered so the client doesn't starve on id>N.
+  const lastMirrorIdRef = useRef(0);
+  // Set by a `restart` frame to ask the open EventSource to close + reopen with
+  // ?last_id=0. Read by onerror's reconnect path is not enough (no error fires),
+  // so restart calls the captured reconnect() directly.
+  const reconnectRef = useRef<(() => void) | null>(null);
+
+  // ── SSE stream: open once, manual reconnect, filter frames to active chat ──
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') return;
+
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let backoff = BACKOFF_MIN_MS;
+    let destroyed = false;
+    let consecutiveFailures = 0;
+
+    function open(): void {
+      if (destroyed) return;
+      setStatus('connecting');
+      // Re-read the high-water mark on each (re)connect so a reconnect replays
+      // only the gap (id > lastSeen), per spec §3 / P1#3. ?last_id mirrors the
+      // working pattern in useEventStream.ts.
+      const lastId = lastMirrorIdRef.current;
+      // Include ?chat_id when we have one so the server subscribes this client
+      // to the correct ring and delivers only matching frames (server-side
+      // filter). Before the first send chatIdRef is null; we open without
+      // ?chat_id and receive no frames until setChat triggers a reconnect.
+      const chatIdParam = chatIdRef.current
+        ? `&chat_id=${encodeURIComponent(chatIdRef.current)}`
+        : '';
+      es = new window!.EventSource(`${STREAM_PATH}?last_id=${lastId}${chatIdParam}`);
+
+      es.onopen = () => {
+        if (destroyed) return;
+        consecutiveFailures = 0;
+        setStatus('open');
+        backoff = BACKOFF_MIN_MS;
+      };
+
+      es.onmessage = (evt: MessageEvent) => {
+        let frame: BridgeFrame;
+        try {
+          frame = JSON.parse(evt.data);
+        } catch {
+          return; // malformed frame — skip
+        }
+        // Filter to this conversation. Before our first send chatIdRef is
+        // null and we have no stream to claim, so ignore frames until then.
+        // Mirror frames carry chat_id too — the same filter applies.
+        const activeChat = chatIdRef.current;
+        if (!activeChat || frame.chat_id !== activeChat) return;
+
+        if (frame.type === 'reply') {
+          setAwaitingReply(false);
+          setMessages((prev) => insertByTs(prev, makeMessage('assistant', frame.text ?? '', frame.ts)));
+          bumpUnreadIfInactive();
+        } else if (frame.type === 'ack') {
+          // Ack means "received / working" — keep the awaiting indicator on but
+          // record a discrete ack turn so the user sees the session is alive.
+          setMessages((prev) => insertByTs(prev, makeMessage('ack', 'received — working…', frame.ts)));
+        } else if (frame.type === 'error') {
+          setAwaitingReply(false);
+          setMessages((prev) =>
+            insertByTs(prev, makeMessage('error', frame.text ?? 'the live session reported an error', frame.ts))
+          );
+          bumpUnreadIfInactive();
+        } else if (frame.type === 'question') {
+          handleQuestionFrame(frame);
+        } else if (frame.type === 'mirror') {
+          handleMirrorFrame(frame);
+        } else if (frame.type === 'restart') {
+          // Relay restarted → per-chat_id counter reset to 1. Drop our high-water
+          // mark and reconnect with ?last_id=0 so we don't starve on id>previous.
+          lastMirrorIdRef.current = 0;
+          reconnectRef.current?.();
+        }
+        // Forward-compat: any other frame.type is silently ignored (staged rollout).
+      };
+
+      es.onerror = () => {
+        if (es) {
+          es.close();
+          es = null;
+        }
+        if (destroyed) return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= ERROR_AFTER_FAILURES) {
+          setStatus('error');
+        } else {
+          setStatus('connecting');
+        }
+        retryTimer = setTimeout(() => open(), backoff);
+        backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
+      };
+    }
+
+    /** Append a `mirror` frame as a turn, tracking the high-water id. */
+    function handleMirrorFrame(frame: BridgeFrame): void {
+      const role = frame.role;
+      if (role !== 'user' && role !== 'assistant' && role !== 'activity') {
+        return; // unknown mirror role — ignore (forward-compat with future roles)
+      }
+      if (typeof frame.id === 'number' && frame.id > lastMirrorIdRef.current) {
+        lastMirrorIdRef.current = frame.id;
+      }
+      // An assistant mirror frame is the live session answering — clear the
+      // awaiting indicator so a typed turn's spinner doesn't linger.
+      if (role === 'assistant') setAwaitingReply(false);
+      // Coerce text defensively: a malformed relay payload could carry a
+      // non-string `text` (object/number), which would throw in the downstream
+      // .trim()/.replace() renderers. `?? ''` only guards null/undefined.
+      const text = typeof frame.text === 'string' ? frame.text : '';
+      // Guard the ts too: insertByTs orders by lexicographic string compare, so a
+      // malformed/empty ts from a relay bug would mis-sort (e.g. '' jumps to the
+      // top). Drop a non-ISO ts to undefined so makeMessage stamps the local clock
+      // and the frame interleaves near "now" instead of at an arbitrary position.
+      const ts = typeof frame.ts === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(frame.ts) ? frame.ts : undefined;
+      setMessages((prev) => insertByTs(prev, makeMessage(role, text, ts, frame.id)));
+      bumpUnreadIfInactive();
+    }
+
+    /**
+     * Store a `question` frame as the pending gossip_ask round for this
+     * conversation. Defensively validates the shape (a malformed relay payload
+     * could carry a non-array `questions` or a missing qid) so the QuestionCard
+     * never renders garbage. A new question replaces any prior pending one
+     * (single outstanding question per conversation in the UI). Bumps unread
+     * when inactive so an off-screen tab flags that the session needs input.
+     */
+    function handleQuestionFrame(frame: BridgeFrame): void {
+      if (typeof frame.qid !== 'string' || frame.qid.length === 0) return;
+      if (!Array.isArray(frame.questions) || frame.questions.length === 0) return;
+      // Shallow shape check on each question — drop the whole frame if any is malformed.
+      for (const q of frame.questions) {
+        if (
+          !q ||
+          typeof q.questionId !== 'string' ||
+          typeof q.header !== 'string' ||
+          typeof q.question !== 'string' ||
+          !Array.isArray(q.options) ||
+          q.options.length === 0 ||
+          q.options.some((o) => !o || typeof o.label !== 'string')
+        ) {
+          return;
+        }
+      }
+      const ts = typeof frame.ts === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(frame.ts) ? frame.ts : new Date().toISOString();
+      setPendingQuestion({ qid: frame.qid, questions: frame.questions, ts });
+      bumpUnreadIfInactive();
+    }
+
+    /** Close + reopen the stream immediately (used by the `restart` frame). */
+    function reconnect(): void {
+      if (destroyed) return;
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      if (es) {
+        es.close();
+        es = null;
+      }
+      backoff = BACKOFF_MIN_MS;
+      open();
+    }
+    reconnectRef.current = reconnect;
+
+    open();
+
+    return () => {
+      destroyed = true;
+      reconnectRef.current = null;
+      setStatus('closed');
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      if (es) {
+        es.close();
+        es = null;
+      }
+    };
+  }, [bumpUnreadIfInactive]);
+
+  const send = useCallback(
+    async (raw: string): Promise<void> => {
+      const text = raw.trim();
+      if (text.length === 0) return;
+
+      setSendError(null);
+      // Optimistically render the user's turn immediately.
+      setMessages((prev) => [...prev, makeMessage('user', text)]);
+      setAwaitingReply(true);
+
+      // Reuse the conversation's chat_id once minted; omit on the first send so
+      // the server mints one and returns it.
+      const existing = chatIdRef.current;
+      const body: { message: string; chat_id?: string } = { message: text };
+      if (existing) body.chat_id = existing;
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
+      try {
+        const res = await fetch(POST_PATH, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        // The backend returns chat_id on 202 AND on 503 (so a retry can reuse
+        // the same conversation). Adopt it whenever present.
+        let payload: { ok?: boolean; chat_id?: string; error?: string } = {};
+        try {
+          payload = await res.json();
+        } catch {
+          /* non-JSON body — fall through to status-based handling */
+        }
+        if (typeof payload.chat_id === 'string' && payload.chat_id.length > 0 && !chatIdRef.current) {
+          setChat(payload.chat_id);
+        }
+
+        if (res.status === 202) return;
+
+        // Non-2xx: surface the error, stop the awaiting indicator.
+        setAwaitingReply(false);
+        setSendError(payload.error ?? postErrorMessage(res.status));
+      } catch (err) {
+        setAwaitingReply(false);
+        const aborted = err instanceof Error && err.name === 'AbortError';
+        setSendError(aborted ? 'send timed out — relay unreachable' : 'send failed — relay unreachable');
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    [setChat]
+  );
+
+  const submitAnswer = useCallback(
+    async (responses: AnswerResponse[]): Promise<boolean> => {
+      const pending = pendingQuestion;
+      const existing = chatIdRef.current;
+      // Guard: no pending question or no chat_id → nothing to answer.
+      if (!pending || !existing) return false;
+
+      setSendError(null);
+      // Optimistically render the user's choice as a single user turn, formatted
+      // the way the orchestrator will see it (header: selection · …). This mirrors
+      // the server-side turn so the dashboard transcript and the orchestrator stay
+      // in sync without echoing back the [answer qid=…] control prefix.
+      const summary = responses
+        .map((r) => {
+          const q = pending.questions.find((x) => x.questionId === r.questionId);
+          const header = q?.header ?? r.questionId;
+          const segs: string[] = [];
+          if (r.selected.length > 0) segs.push(r.selected.join(', '));
+          if (r.other && r.other.trim().length > 0) segs.push(`other: "${r.other.trim()}"`);
+          return `${header}: ${segs.join(' · ')}`;
+        })
+        .join(' · ');
+      setMessages((prev) => [...prev, makeMessage('user', summary)]);
+      setAwaitingReply(true);
+      // Lock/clear the card immediately so it can't be double-submitted.
+      setPendingQuestion(null);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
+      try {
+        const res = await fetch(POST_PATH, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: existing,
+            answer: { qid: pending.qid, responses },
+          }),
+          signal: controller.signal,
+        });
+        if (res.status === 202) return true;
+        let payload: { error?: string } = {};
+        try {
+          payload = await res.json();
+        } catch {
+          /* non-JSON body */
+        }
+        setAwaitingReply(false);
+        setSendError(payload.error ?? postErrorMessage(res.status));
+        return false;
+      } catch (err) {
+        setAwaitingReply(false);
+        const aborted = err instanceof Error && err.name === 'AbortError';
+        setSendError(aborted ? 'answer timed out — relay unreachable' : 'answer failed — relay unreachable');
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    [pendingQuestion]
+  );
+
+  return { messages, status, awaitingReply, chatId, unread, send, sendError, markRead, pendingQuestion, submitAnswer };
+}

@@ -1,0 +1,18 @@
+id: pr325-color-token-split
+title: Color token used for both severity and status — semantic ambiguity in ViolationsPage
+parent_sha: 0424bf8
+fix_sha: d9c6f4a
+fix_pr: 325
+scope:
+  files:
+    - packages/dashboard-v2/src/components/ViolationsPage.tsx
+ground_truth:
+  - id: gt1
+    severity: critical
+    file: packages/dashboard-v2/src/components/ViolationsPage.tsx
+    line_range: [121, 121]
+    summary: Single color token mapped to both severity and status states; renders identical hue for unrelated meanings
+    category: type_safety
+prompt: |
+  Review this component for semantic / typing issues with color or status
+  mapping. Look for one token serving two different conceptual axes.

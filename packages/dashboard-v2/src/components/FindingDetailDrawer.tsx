@@ -1,0 +1,204 @@
+import { useEffect, useState, type CSSProperties } from 'react';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { api } from '@/lib/api';
+import { timeAgo } from '@/lib/utils';
+import { CitationSnippet } from './CitationSnippet';
+import { ErrorChip } from './ErrorChip';
+import type { FindingDetail } from '@/lib/types';
+import { href } from '@/lib/router';
+
+interface Props {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  consensusId: string | null;
+  findingId: string | null;
+}
+
+// Matches FindingsMetrics SEVERITY_CLS — global severity palette.
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: 'text-red-400 bg-red-500/10',
+  high: 'text-severity-high bg-severity-high/10',
+  medium: 'text-yellow-400 bg-yellow-500/10',
+  low: '',
+};
+const SEVERITY_LOW_STYLE = { color: 'var(--text-dim)', background: 'color-mix(in oklch, var(--surface-sunk) 50%, transparent)' };
+
+const TAG_COLORS: Record<string, string> = {
+  confirmed: 'text-confirmed bg-confirmed/10 border border-confirmed/20',
+  disputed: 'text-disputed bg-disputed/10 border border-disputed/20',
+  unverified: 'text-unverified bg-unverified/10 border border-unverified/20',
+  unique: 'text-unique bg-unique/10 border border-unique/20',
+  insight: 'text-insight bg-insight/10 border border-insight/20',
+  newFinding: 'text-unique bg-unique/10 border border-unique/20',
+};
+
+const drawerStyle: CSSProperties = {
+  background: 'var(--surface-elev)',
+  borderRadius: '16px 0 0 16px',
+  boxShadow: 'var(--shadow-overlay)',
+  border: '1px solid var(--border)',
+  color: 'var(--text)',
+  fontFamily: 'var(--font-sans)',
+};
+
+function FindingDetailSkeleton() {
+  const cell = (h: string, w: string) => (
+    <div className={`${h} ${w} rounded`} style={{ background: 'var(--border)', opacity: 0.4 }} />
+  );
+  return (
+    <div className="mt-4 space-y-4" aria-busy="true">
+      {/* Chip row: tag + severity + "by agent" */}
+      <div className="flex items-center gap-2">
+        {cell('h-3.5', 'w-12')}
+        {cell('h-3.5', 'w-14')}
+        {cell('h-3.5', 'w-16')}
+      </div>
+      {/* Finding text: 3 stacked bars */}
+      <div className="space-y-2">
+        {cell('h-2', 'w-full')}
+        {cell('h-2', 'w-[92%]')}
+        {cell('h-2', 'w-[70%]')}
+      </div>
+      {/* Citations: label + block */}
+      <div className="space-y-2">
+        {cell('h-2', 'w-16')}
+        {cell('h-12', 'w-full')}
+      </div>
+      {/* Coverage: label + 2 rows */}
+      <div className="space-y-2">
+        {cell('h-2', 'w-16')}
+        {cell('h-2', 'w-[60%]')}
+        {cell('h-2', 'w-[45%]')}
+      </div>
+      {/* Signals: label + 2 rows */}
+      <div className="space-y-2">
+        {cell('h-2', 'w-20')}
+        {cell('h-2', 'w-full')}
+        {cell('h-2', 'w-[80%]')}
+      </div>
+    </div>
+  );
+}
+
+export function FindingDetailDrawer({ open, onOpenChange, consensusId, findingId }: Props) {
+  const [detail, setDetail] = useState<FindingDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !consensusId || !findingId) { setDetail(null); setError(null); return; }
+    setDetail(null);
+    setError(null);
+    api<FindingDetail>(`finding/${encodeURIComponent(consensusId)}/${encodeURIComponent(findingId)}`)
+      .then(setDetail)
+      .catch((e) => setError(e.message || 'failed to load finding'));
+  }, [open, consensusId, findingId]);
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-[480px] sm:w-[480px] sm:max-w-[480px] overflow-y-auto" style={drawerStyle}>
+        <SheetHeader>
+          <SheetTitle className="font-mono text-sm" style={{ color: 'var(--text)' }}>Finding detail</SheetTitle>
+        </SheetHeader>
+
+        {error && <div className="mt-4"><ErrorChip message={error} /></div>}
+        {!error && !detail && <FindingDetailSkeleton />}
+
+        {detail && (
+          <div className="mt-4 space-y-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span
+                className={`font-mono text-[9px] uppercase tracking-wider px-2 py-0.5 rounded ${TAG_COLORS[detail.finding.tag] || ''}`}
+                style={TAG_COLORS[detail.finding.tag] ? undefined : { background: 'var(--surface-sunk)' }}
+              >
+                {detail.finding.tag}
+              </span>
+              {detail.finding.severity && (
+                <span
+                  className={`font-mono text-[9px] uppercase tracking-wider px-2 py-0.5 rounded ${SEVERITY_COLORS[detail.finding.severity] || ''}`}
+                  style={
+                    detail.finding.severity === 'low' ? SEVERITY_LOW_STYLE
+                    : !SEVERITY_COLORS[detail.finding.severity] ? { background: 'var(--surface-sunk)' }
+                    : undefined
+                  }
+                >
+                  {detail.finding.severity}
+                </span>
+              )}
+              <span className="font-mono text-[9px]" style={{ color: 'var(--text-dim)' }}>
+                by {detail.finding.originalAgentId}
+              </span>
+              {detail.retracted && (
+                <span className="font-mono text-[9px] uppercase tracking-wider px-2 py-0.5 rounded bg-disputed/50">
+                  retracted
+                </span>
+              )}
+            </div>
+
+            <div className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap">
+              {detail.finding.finding.replace(/<cite tag="file">[^<]+<\/cite>/g, '').trim()}
+            </div>
+
+            {detail.citations.length > 0 && (
+              <div className="space-y-2">
+                <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                  Citations
+                </div>
+                {detail.citations.map((c, i) => <CitationSnippet key={i} citation={c} />)}
+              </div>
+            )}
+
+            <div className="space-y-1">
+              <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                Coverage
+              </div>
+              {detail.finding.confirmedBy.length > 0 && (
+                <div className="text-[11px]">
+                  <span className="text-confirmed">✓</span> confirmed by {detail.finding.confirmedBy.join(', ')}
+                </div>
+              )}
+              {detail.finding.disputedBy.map((d, i) => (
+                <div key={i} className="text-[11px]">
+                  <span className="text-disputed">✗</span> disputed by {d.agentId}: <span style={{ color: 'var(--text-dim)' }}>{d.reason}</span>
+                </div>
+              ))}
+              {detail.finding.confirmedBy.length === 0 && detail.finding.disputedBy.length === 0 && (
+                <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>No peer review</div>
+              )}
+            </div>
+
+            {detail.signals.length > 0 && (
+              <div className="space-y-2">
+                <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                  Signals ({detail.signals.length})
+                </div>
+                <div className="space-y-1">
+                  {detail.signals.map((s, i) => (
+                    <div key={i} className="text-[11px] border-l-2 border-border/40 pl-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-semibold">{s.signal}</span>
+                        <span style={{ color: 'var(--text-dim)' }}>·</span>
+                        <span>{s.agentId}</span>
+                        {s.counterpartId && <>
+                          <span style={{ color: 'var(--text-dim)' }}>→</span>
+                          <span>{s.counterpartId}</span>
+                        </>}
+                        <span className="ml-auto" style={{ color: 'var(--text-dim)' }}>{timeAgo(s.timestamp)}</span>
+                      </div>
+                      {s.evidence && <div className="mt-0.5" style={{ color: 'var(--text-dim)' }}>{s.evidence.slice(0, 200)}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-border/40">
+              <a href={href(`/consensus/${detail.consensusId}`)} className="font-mono text-[10px] hover:underline" style={{ color: 'var(--accent)' }}>
+                → consensus round {detail.consensusId}
+              </a>
+            </div>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}

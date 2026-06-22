@@ -1,0 +1,123 @@
+import { GitTools } from '@gossip/tools';
+import { mkdirSync, writeFileSync } from 'fs';
+import { resolve } from 'path';
+import { tmpdir } from 'os';
+import { execFileSync } from 'child_process';
+
+describe('GitTools', () => {
+  // Use a fresh temp git repo for all git tests
+  const gitDir = resolve(tmpdir(), 'gossip-git-test-' + Date.now());
+  let gitTools: GitTools;
+
+  beforeAll(() => {
+    mkdirSync(gitDir, { recursive: true });
+    // Initialize a fresh git repo with a commit
+    execFileSync('git', ['init'], { cwd: gitDir });
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: gitDir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: gitDir });
+    writeFileSync(resolve(gitDir, 'README.md'), '# Test\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: gitDir });
+    execFileSync('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    gitTools = new GitTools(gitDir);
+  });
+
+  afterAll(() => {
+    try {
+      const { rmSync } = require('fs');
+      rmSync(gitDir, { recursive: true, force: true });
+    } catch { /* ignore */ }
+  });
+
+  describe('gitStatus', () => {
+    it('returns empty string for clean repo', async () => {
+      const result = await gitTools.gitStatus();
+      expect(result).toBe('');
+    });
+
+    it('shows untracked files', async () => {
+      writeFileSync(resolve(gitDir, 'untracked.ts'), 'const x = 1;\n');
+      const result = await gitTools.gitStatus();
+      expect(result).toContain('untracked.ts');
+      // Cleanup: remove it
+      const { rmSync } = require('fs');
+      rmSync(resolve(gitDir, 'untracked.ts'));
+    });
+  });
+
+  describe('gitDiff', () => {
+    it('returns empty for clean working tree', async () => {
+      const result = await gitTools.gitDiff();
+      expect(result).toBe('');
+    });
+
+    it('shows unstaged changes', async () => {
+      writeFileSync(resolve(gitDir, 'README.md'), '# Test\nModified line\n');
+      const result = await gitTools.gitDiff();
+      expect(result).toContain('Modified line');
+      // Restore
+      writeFileSync(resolve(gitDir, 'README.md'), '# Test\n');
+      execFileSync('git', ['checkout', 'README.md'], { cwd: gitDir });
+    });
+
+    it('returns staged diff when staged=true', async () => {
+      writeFileSync(resolve(gitDir, 'staged.ts'), 'const y = 2;\n');
+      execFileSync('git', ['add', 'staged.ts'], { cwd: gitDir });
+      const result = await gitTools.gitDiff({ staged: true });
+      expect(result).toContain('staged.ts');
+      // Cleanup
+      execFileSync('git', ['reset', 'HEAD', 'staged.ts'], { cwd: gitDir });
+      const { rmSync } = require('fs');
+      rmSync(resolve(gitDir, 'staged.ts'));
+    });
+  });
+
+  describe('gitLog', () => {
+    it('shows commit history', async () => {
+      const result = await gitTools.gitLog();
+      expect(result).toContain('initial commit');
+    });
+
+    it('respects count limit', async () => {
+      const result = await gitTools.gitLog({ count: 1 });
+      const lines = result.split('\n').filter(Boolean);
+      expect(lines.length).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe('gitCommit', () => {
+    it('commits staged files', async () => {
+      writeFileSync(resolve(gitDir, 'new-file.ts'), 'export const a = 1;\n');
+      execFileSync('git', ['add', 'new-file.ts'], { cwd: gitDir });
+      const result = await gitTools.gitCommit({ message: 'add new-file.ts' });
+      expect(result).toContain('add new-file.ts');
+    });
+
+    it('stages and commits specified files', async () => {
+      writeFileSync(resolve(gitDir, 'another.ts'), 'export const b = 2;\n');
+      const result = await gitTools.gitCommit({
+        message: 'add another.ts',
+        files: ['another.ts']
+      });
+      expect(result).toContain('add another.ts');
+    });
+
+    it('throws when there is nothing to commit', async () => {
+      // Nothing staged or changed
+      await expect(gitTools.gitCommit({ message: 'empty commit' }))
+        .rejects.toThrow();
+    });
+  });
+
+  describe('gitBranch', () => {
+    it('lists branches', async () => {
+      const result = await gitTools.gitBranch();
+      // Should contain at least one branch (master or main)
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    it('creates a new branch', async () => {
+      const result = await gitTools.gitBranch({ name: 'test-branch-' + Date.now() });
+      expect(result).toBe('');
+    });
+  });
+});

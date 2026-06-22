@@ -1,0 +1,88 @@
+import type { AgentData } from '@/lib/types';
+import { timeAgo } from '@/lib/utils';
+import { needsAttention } from '@/lib/bench';
+
+interface CircuitAlertsProps {
+  agents: AgentData[];
+}
+
+type Reason =
+  | { label: 'benched (chronic)'; cls: string }
+  | { label: 'benched (burst)'; cls: string }
+  | { label: string; cls: string };
+
+function describe(agent: AgentData): Reason {
+  const s = agent.scores;
+  if (s.bench?.state === 'benched') {
+    if (s.bench.reason === 'chronic-low-accuracy') {
+      return { label: 'benched (chronic)', cls: 'bg-bad/15 text-bad' };
+    }
+    if (s.bench.reason === 'burst-hallucination') {
+      return { label: 'benched (burst)', cls: 'bg-bad/15 text-bad' };
+    }
+    return { label: 'benched', cls: 'bg-bad/15 text-bad' };
+  }
+  if (s.bench?.state === 'kept-for-coverage') {
+    return { label: 'kept for coverage', cls: 'border border-unverified/40 bg-unverified/10 text-unverified' };
+  }
+  if (s.circuitOpen) {
+    return { label: `struggling (${s.consecutiveFailures} fails)`, cls: 'bg-unverified/15 text-unverified' };
+  }
+  return { label: '', cls: '' };
+}
+
+export function CircuitAlerts({ agents }: CircuitAlertsProps) {
+  const attention = agents.filter(needsAttention);
+  if (attention.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-border" style={{ background: 'var(--surface-elev)' }}>
+      <div className="flex items-center justify-between border-b border-border bg-bad/[0.04] px-3.5 py-3">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm bg-bad/15 font-mono text-[11px] font-bold text-bad">
+            !
+          </span>
+          <span className="font-mono text-[11px] font-bold uppercase tracking-wider text-bad">
+            Agents Needing Attention
+          </span>
+        </div>
+        <span className="rounded-full border border-bad/20 bg-bad/10 px-2 py-0.5 font-mono text-xs font-bold text-bad">
+          {attention.length}
+        </span>
+      </div>
+      <div>
+        {attention.map((agent, i) => {
+          const lastTime = agent.lastTask?.timestamp ? timeAgo(agent.lastTask.timestamp) : '';
+          const r = describe(agent);
+          const isBenched = agent.scores.bench?.state === 'benched';
+          return (
+            <a
+              key={agent.id}
+              href={`/dashboard/agent/${encodeURIComponent(agent.id)}`}
+              className={`block px-3.5 py-3 transition hover:bg-bad/[0.03] ${
+                i > 0 ? 'border-t border-border/40' : ''
+              }`}
+            >
+              <div className="mb-1 flex items-center gap-2.5">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${isBenched ? 'bg-bad' : 'bg-unverified'}`}
+                  style={isBenched ? { boxShadow: '0 0 6px color-mix(in oklch, var(--bad) 60%, transparent)' } : undefined}
+                />
+                <span className="text-sm font-semibold" style={{ color: 'var(--text)' }}>{agent.id}</span>
+                {r.label && (
+                  <span className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${r.cls}`}>
+                    {r.label}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center justify-between pl-4 font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                <span>{agent.scores.consecutiveFailures} consecutive fails</span>
+                {lastTime && <span style={{ color: 'color-mix(in oklch, var(--text-dim) 50%, transparent)' }}>{lastTime}</span>}
+              </div>
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

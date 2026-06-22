@@ -1,0 +1,261 @@
+#!/usr/bin/env node
+import { findConfigPath, loadConfig, configToAgentConfigs, GossipConfig } from './config';
+import { runSetupWizard } from './setup-wizard';
+import { startChat } from './chat';
+import { createAgent, listAgents, removeAgent } from './create-agent';
+import { createTeam } from './create-team';
+import { parseHookSubcommand } from './hook-argv';
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const command = args[0];
+
+  switch (command) {
+    case 'setup':
+      await runSetupWizard();
+      return;
+
+    case 'create-agent':
+      await createAgent();
+      return;
+
+    case 'list-agents':
+    case 'agents':
+      await listAgents();
+      return;
+
+    case 'remove-agent':
+      await removeAgent(args[1]);
+      return;
+
+    case 'create-team':
+      await createTeam(args.slice(1).join(' ') || undefined);
+      return;
+
+    case 'code': {
+      const { runCodeCommand } = await import('./code-launch');
+      runCodeCommand(process.argv.slice(3));
+      return;
+    }
+
+    case 'mcp-serve':
+      // Run MCP server via stdio — used by Claude Code / Cursor / any MCP client
+      await import('./mcp-server-sdk');
+      return;
+
+    case 'tasks': {
+      const { runTasksCommand } = await import('./tasks-command');
+      runTasksCommand(process.argv.slice(3));
+      return;
+    }
+
+    case 'sync': {
+      const { runSyncCommand } = await import('./sync-command');
+      await runSyncCommand(process.argv.slice(3));
+      return;
+    }
+
+    case 'eval': {
+      const { runEvalCommand } = await import('./commands/eval');
+      await runEvalCommand(process.argv.slice(3));
+      return;
+    }
+
+    case 'hook': {
+      // UserPromptSubmit bootstrap hook body + the activity-mirror v2 hooks.
+      // Valid invocations: `gossipcat hook --run` (bootstrap), `mirror-prompt`,
+      // `mirror-stop`, `mirror-tool`. Bare `gossipcat hook` previously fell
+      // through and silently fired the hook — fix MEDIUM f2 from consensus
+      // d88f27db-c0454640.
+      const decision = parseHookSubcommand(args[1]);
+      if (decision === 'usage') {
+        process.stderr.write('Usage: gossipcat hook --run | mirror-prompt | mirror-stop | mirror-tool\n');
+        process.exit(2);
+      }
+      if (decision === 'run') {
+        const { runHook } = await import('./hook-run');
+        runHook();
+        return;
+      }
+      // Activity-mirror hooks are fail-open + non-blocking: never let a thrown
+      // error or a missing relay propagate to a non-zero exit that would block
+      // the user's turn. exit 0 unconditionally.
+      try {
+        if (decision === 'mirror-prompt') {
+          const { runMirrorPromptHook } = await import('./hooks/mirror-prompt');
+          await runMirrorPromptHook();
+        } else if (decision === 'mirror-stop') {
+          const { runMirrorStopHook } = await import('./hooks/mirror-stop');
+          await runMirrorStopHook();
+        } else if (decision === 'mirror-tool') {
+          const { runMirrorToolHook } = await import('./hooks/mirror-tool');
+          await runMirrorToolHook();
+        }
+      } catch {
+        // fail-open — swallow.
+      }
+      process.exit(0);
+    }
+
+    case 'help':
+    case '--help':
+    case '-h':
+      printHelp();
+      return;
+  }
+
+  // Check for config
+  const configPath = findConfigPath();
+  if (!configPath) {
+    // No config — start chat anyway. Cognitive mode will detect no agents
+    // and trigger the project init flow automatically.
+    const minimalConfig: GossipConfig = {
+      main_agent: { provider: 'google', model: 'gemini-2.5-pro' },
+      agents: {},
+    };
+    // Try to detect a main agent provider from keychain
+    const { Keychain } = await import('./keychain');
+    const kc = new Keychain();
+    let hasKey = false;
+    for (const provider of ['google', 'anthropic', 'openai'] as const) {
+      const key = await kc.getKey(provider);
+      if (key) {
+        minimalConfig.main_agent.provider = provider;
+        minimalConfig.main_agent.model = provider === 'google' ? 'gemini-2.5-pro'
+          : provider === 'anthropic' ? 'claude-opus-4-6' : 'gpt-4o';
+        hasKey = true;
+        break;
+      }
+    }
+    if (!hasKey) {
+      console.log('No API keys found. Running setup wizard to configure providers...');
+      await runSetupWizard();
+      return;
+    }
+    await startChat(minimalConfig);
+    return;
+  }
+
+  const config = loadConfig(configPath);
+
+  // One-shot task — boot, run, print result, exit
+  if (args.length > 0) {
+    // Parse --write-mode flag
+    let writeMode: string | undefined;
+    let scope: string | undefined;
+    const filteredArgs: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--write-mode' && i + 1 < args.length) {
+        writeMode = args[++i];
+      } else if (args[i] === '--scope' && i + 1 < args.length) {
+        scope = args[++i];
+      } else {
+        filteredArgs.push(args[i]);
+      }
+    }
+    const task = filteredArgs.join(' ');
+
+    if (writeMode && !['sequential', 'scoped', 'worktree'].includes(writeMode)) {
+      console.error(`Invalid write mode: "${writeMode}". Must be sequential, scoped, or worktree.`);
+      process.exit(1);
+    }
+
+    const { RelayServer } = await import('@gossip/relay');
+    const { ToolServer } = await import('@gossip/tools');
+    const { MainAgent } = await import('@gossip/orchestrator');
+    const { Keychain } = await import('./keychain');
+
+    const keychain = new Keychain();
+    const relay = new RelayServer({ port: 0 });
+    await relay.start();
+    const toolServer = new ToolServer({ relayUrl: relay.url, projectRoot: process.cwd() });
+    await toolServer.start();
+
+    const mainKey = await keychain.getKey(config.main_agent.provider);
+    const mainAgent = new MainAgent({
+      provider: config.main_agent.provider, model: config.main_agent.model,
+      apiKey: mainKey || undefined, relayUrl: relay.url,
+      agents: configToAgentConfigs(config), projectRoot: process.cwd(),
+      toolServer: {
+        assignScope: (agentId: string, scope: string) => toolServer.assignScope(agentId, scope),
+        assignRoot: (agentId: string, root: string) => toolServer.assignRoot(agentId, root),
+        releaseAgent: (agentId: string) => toolServer.releaseAgent(agentId),
+      },
+    });
+    await mainAgent.start();
+
+    if (writeMode) {
+      // Write mode: dispatch to first available agent with write options
+      const agents = configToAgentConfigs(config);
+      if (agents.length === 0) {
+        console.error('No agents configured. Run gossipcat setup first.');
+        process.exit(1);
+      }
+      const options = { writeMode: writeMode as 'sequential' | 'scoped' | 'worktree', scope };
+      const { taskId } = mainAgent.dispatch(agents[0].id, task, options);
+      const { results } = await mainAgent.collect([taskId]);
+      const r = results[0];
+      console.log(r?.status === 'completed' ? r.result : `Error: ${r?.error || 'Unknown'}`);
+    } else {
+      const response = await mainAgent.handleMessage(task);
+      console.log(response.text);
+    }
+
+    await mainAgent.stop();
+    await toolServer.stop();
+    await relay.stop();
+    return;
+  }
+
+  // Interactive chat
+  await startChat(config);
+}
+
+function printHelp(): void {
+  console.log(`
+  gossipcat — Multi-Agent Orchestration CLI
+
+  Usage:
+    gossipcat                  Interactive chat with your agent team
+    gossipcat setup            Run the setup wizard
+    gossipcat create-agent     Add a new agent to your team (interactive)
+    gossipcat create-team      Create a full team from a description (AI-powered)
+    gossipcat list-agents      Show your current agent team
+    gossipcat remove-agent     Remove an agent from your team
+    gossipcat tasks            Show recent task history
+    gossipcat tasks <id>       Show detail for a specific task
+    gossipcat tasks --agent <id>  Filter tasks by agent
+    gossipcat eval             Run the curated eval suite (eval/cases/*.yaml)
+    gossipcat sync             Sync task history to Supabase
+    gossipcat sync --setup     Configure Supabase connection
+    gossipcat sync --status    Show sync status
+    gossipcat code [args...]   Launch Claude Code with gossipcat channel active
+    gossipcat mcp-serve        Start MCP server (for Claude Code / Cursor)
+    gossipcat hook --run       Run UserPromptSubmit bootstrap hook (internal)
+    gossipcat help             Show this help
+
+  Write modes:
+    --write-mode sequential    Queue write tasks (one at a time)
+    --write-mode scoped        Directory-locked parallel writes
+    --write-mode worktree      Git worktree isolation
+    --scope <path>             Directory scope for scoped mode
+
+  Examples:
+    gossipcat create-team "Building a Next.js + Supabase SaaS. Need architecture, coding, and review."
+    gossipcat create-team      (interactive prompt if no description given)
+    gossipcat --write-mode scoped --scope packages/relay/ "refactor the relay module"
+
+  Agent files:
+    .gossip/agents/<id>/
+      instructions.md          Agent system prompt and rules
+      memory/MEMORY.md         Persistent memory index
+      memory/*.md              Individual memory files
+      context/                 Context files injected into prompts
+      config.json              Agent-specific overrides
+`);
+}
+
+main().catch(err => {
+  console.error('Fatal:', err.message);
+  process.exit(1);
+});

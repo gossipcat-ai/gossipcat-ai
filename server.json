@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ataberk-xyz/gossipcat",
+  "description": "Multi-agent orchestration for Claude Code — consensus review, adaptive dispatch, skill learning",
+  "repository": {
+    "url": "https://github.com/gossipcat-ai/gossipcat-ai",
+    "source": "github"
+  },
+  "version": "0.2.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "gossipcat",
+      "version": "0.2.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Google Gemini API key for relay agents (optional — native agents need no API key)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "GOOGLE_API_KEY"
+        },
+        {
+          "description": "Fixed port for the relay/dashboard server (optional — defaults to OS-assigned with sticky file)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "GOSSIPCAT_PORT"
+        }
+      ]
+    }
+  ]
+}

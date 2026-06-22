@@ -1,0 +1,226 @@
+{
+  "quick-build": {
+    "name": "Quick Build",
+    "description": "Simple projects: scripts, CLIs, prototypes, small apps, one-off tools. One agent does everything.",
+    "roles": [
+      { "preset": "implementer", "focus": "full-stack: code, tests, docs, everything" }
+    ],
+    "signals": {
+      "keywords": ["cli", "script", "utility", "tool", "prototype", "poc", "simple", "quick", "small", "toy", "demo", "example"],
+      "files": ["bin/", "*.sh"],
+      "packages": ["commander", "yargs", "inquirer", "chalk", "ora", "meow"]
+    }
+  },
+  "web-app": {
+    "name": "Web App",
+    "description": "Full-stack web apps: SaaS, dashboards, admin panels, CMS, e-commerce storefronts. Frontend + backend + data layer.",
+    "roles": [
+      { "preset": "implementer", "focus": "features, components, API routes, database queries" },
+      { "preset": "researcher", "focus": "framework best practices, library evaluation, API docs, design patterns" }
+    ],
+    "signals": {
+      "keywords": ["webapp", "saas", "dashboard", "admin", "cms", "fullstack", "website", "portal", "app"],
+      "files": ["pages/", "app/", "components/", "api/", "src/"],
+      "packages": ["next", "nuxt", "remix", "sveltekit", "rails", "django", "laravel", "express", "fastify"]
+    }
+  },
+  "api-service": {
+    "name": "API Service",
+    "description": "Backend APIs: REST, GraphQL, microservices, serverless functions. Data-heavy, integration-heavy.",
+    "roles": [
+      { "preset": "implementer", "focus": "endpoints, middleware, database layer, integrations" },
+      { "preset": "researcher", "focus": "API design patterns, third-party API docs, schema design, protocol specs" }
+    ],
+    "signals": {
+      "keywords": ["api", "rest", "graphql", "microservice", "serverless", "backend", "endpoint", "service"],
+      "files": ["routes/", "controllers/", "middleware/", "handlers/", "Dockerfile"],
+      "packages": ["express", "fastify", "koa", "hono", "nestjs", "fastapi", "flask", "gin", "prisma", "drizzle"]
+    }
+  },
+  "frontend": {
+    "name": "Frontend",
+    "description": "Client-side apps: SPAs, PWAs, browser extensions, design systems, component libraries.",
+    "roles": [
+      { "preset": "implementer", "focus": "components, pages, styling, state management, animations" },
+      { "preset": "researcher", "focus": "UI/UX patterns, accessibility standards, browser APIs, CSS techniques, library docs" }
+    ],
+    "signals": {
+      "keywords": ["frontend", "spa", "ui", "design", "component", "pwa", "extension", "widget", "landing"],
+      "files": ["components/", "styles/", "public/", "manifest.json"],
+      "packages": ["react", "vue", "angular", "svelte", "tailwindcss", "shadcn", "radix", "storybook", "astro", "gatsby"]
+    }
+  },
+  "mobile": {
+    "name": "Mobile App",
+    "description": "Mobile apps: React Native, Flutter, Swift, Kotlin. Platform-specific quirks, navigation, native APIs.",
+    "roles": [
+      { "preset": "implementer", "focus": "screens, navigation, native modules, platform-specific code" },
+      { "preset": "researcher", "focus": "platform APIs, native capabilities, device compatibility, app store guidelines" }
+    ],
+    "signals": {
+      "keywords": ["mobile", "ios", "android", "app", "native", "phone", "tablet"],
+      "files": ["android/", "ios/", "screens/", "App.tsx"],
+      "packages": ["react-native", "expo", "flutter", "swift", "kotlin"]
+    }
+  },
+  "game": {
+    "name": "Game Dev",
+    "description": "Games and interactive experiences: browser games, game engines, simulations. Game logic, rendering, audio, input handling.",
+    "roles": [
+      { "preset": "implementer", "focus": "game loop, mechanics, rendering, audio, input, level design, UI/HUD" },
+      { "preset": "researcher", "focus": "game design patterns, engine APIs, audio synthesis, physics algorithms, reference games" }
+    ],
+    "signals": {
+      "keywords": ["game", "player", "score", "level", "sprite", "canvas", "render", "snake", "puzzle", "rpg", "arcade", "music", "sound"],
+      "files": ["assets/", "sprites/", "levels/", "scenes/"],
+      "packages": ["phaser", "pixi.js", "three.js", "babylon", "kaboom", "pygame", "love2d", "tone", "howler"]
+    }
+  },
+  "ai-llm": {
+    "name": "AI / LLM App",
+    "description": "AI-powered apps: RAG systems, chatbots, agents, prompt engineering, embeddings, fine-tuning pipelines.",
+    "roles": [
+      { "preset": "implementer", "focus": "chains, agents, embeddings, retrieval, prompt templates, API integration" },
+      { "preset": "researcher", "focus": "prompt optimization, model evaluation, hallucination testing, benchmarks, paper findings" }
+    ],
+    "signals": {
+      "keywords": ["llm", "rag", "chatbot", "agent", "prompt", "embedding", "openai", "anthropic", "gpt", "claude", "ai"],
+      "files": ["prompts/", "chains/", "agents/"],
+      "packages": ["langchain", "llamaindex", "openai", "anthropic", "pinecone", "chromadb", "weaviate"]
+    }
+  },
+  "data-pipeline": {
+    "name": "Data & ML",
+    "description": "Data engineering and ML: pipelines, ETL, training, analytics, notebooks, model serving.",
+    "roles": [
+      { "preset": "implementer", "focus": "pipelines, transformations, model training, data loading, feature engineering" },
+      { "preset": "researcher", "focus": "data exploration, model selection, experiment tracking, benchmarks, statistical methods" }
+    ],
+    "signals": {
+      "keywords": ["data", "ml", "machine", "learning", "pipeline", "etl", "analytics", "model", "training", "dataset"],
+      "files": ["notebooks/", "data/", "models/", "*.ipynb"],
+      "packages": ["pandas", "numpy", "scikit-learn", "tensorflow", "pytorch", "dbt", "airflow", "spark", "jupyter"]
+    }
+  },
+  "library": {
+    "name": "Library / SDK",
+    "description": "Reusable packages: npm modules, Python packages, Rust crates. API design, backwards compatibility, documentation, cross-platform.",
+    "roles": [
+      { "preset": "implementer", "focus": "core logic, public API, type definitions, examples" },
+      { "preset": "researcher", "focus": "similar libraries, API design conventions, ecosystem standards, backwards compatibility patterns" }
+    ],
+    "signals": {
+      "keywords": ["library", "package", "npm", "crate", "pip", "gem", "sdk", "framework", "module", "opensource"],
+      "files": ["lib/", "src/", "examples/", "CONTRIBUTING.md", "CHANGELOG.md"],
+      "packages": ["rollup", "esbuild", "tsup", "changesets", "semantic-release", "typedoc"]
+    }
+  },
+  "infra-devops": {
+    "name": "Infrastructure",
+    "description": "DevOps and platform: Terraform, Kubernetes, Docker, CI/CD, cloud architecture, monitoring.",
+    "roles": [
+      { "preset": "implementer", "focus": "IaC configs, pipelines, Dockerfiles, Helm charts, monitoring setup" },
+      { "preset": "researcher", "focus": "cloud provider docs, pricing, service limits, best practices, security baselines" }
+    ],
+    "signals": {
+      "keywords": ["devops", "infrastructure", "deploy", "kubernetes", "terraform", "docker", "cicd", "pipeline", "cloud"],
+      "files": ["terraform/", "k8s/", ".github/workflows/", "Dockerfile", "docker-compose.yml", "helm/"],
+      "packages": ["aws-cdk", "pulumi", "ansible"]
+    }
+  },
+  "enterprise": {
+    "name": "Enterprise Platform",
+    "description": "Large-scale systems: monorepos, multi-service architectures, payment systems, trading platforms. Needs architecture oversight, strict review, thorough testing.",
+    "roles": [
+      { "preset": "implementer", "focus": "features, cross-package changes, integrations, migrations" },
+      { "preset": "reviewer", "focus": "architecture, API contracts, security, compliance, breaking changes" },
+      { "preset": "researcher", "focus": "regulations, compliance requirements, vendor docs, integration specs, migration guides" }
+    ],
+    "signals": {
+      "keywords": ["monorepo", "enterprise", "platform", "payment", "checkout", "ecommerce", "fintech", "trading", "banking", "compliance"],
+      "files": ["packages/", "apps/", "libs/", "lerna.json", "nx.json", "turbo.json", "pnpm-workspace.yaml"],
+      "packages": ["lerna", "nx", "turborepo", "stripe", "paypal"]
+    }
+  },
+  "realtime": {
+    "name": "Realtime / Multiplayer",
+    "description": "Live systems: WebSocket apps, multiplayer games, collaborative editors, chat, streaming. State sync, conflict resolution, connection handling.",
+    "roles": [
+      { "preset": "implementer", "focus": "WebSocket handlers, state sync, conflict resolution, protocols, reconnection" },
+      { "preset": "researcher", "focus": "CRDT algorithms, sync protocols, connection management patterns, scaling strategies" }
+    ],
+    "signals": {
+      "keywords": ["realtime", "websocket", "multiplayer", "collaborative", "chat", "live", "sync", "streaming"],
+      "files": ["ws/", "sockets/", "channels/"],
+      "packages": ["socket.io", "ws", "pusher", "ably", "liveblocks", "yjs", "automerge"]
+    }
+  },
+  "blockchain": {
+    "name": "Blockchain / Web3",
+    "description": "Smart contracts, dApps, DeFi protocols. Solidity, gas optimization, security audits, fork testing.",
+    "roles": [
+      { "preset": "implementer", "focus": "smart contracts, frontend integration, deployment scripts" },
+      { "preset": "reviewer", "focus": "security audit, reentrancy, gas optimization, access control" },
+      { "preset": "researcher", "focus": "EIP standards, protocol mechanics, audit reports, gas benchmarks, similar contracts" }
+    ],
+    "signals": {
+      "keywords": ["blockchain", "web3", "smart", "contract", "solidity", "defi", "nft", "token", "dao", "ethereum"],
+      "files": ["contracts/", "scripts/deploy", "test/", "hardhat.config.*", "foundry.toml"],
+      "packages": ["hardhat", "foundry", "ethers", "web3", "wagmi", "viem", "openzeppelin"]
+    }
+  },
+  "embedded": {
+    "name": "Embedded / IoT",
+    "description": "Hardware-adjacent: firmware, Arduino/RPi, drivers, sensors, RTOS. Timing-sensitive, resource-constrained.",
+    "roles": [
+      { "preset": "implementer", "focus": "firmware, protocols, hardware abstraction, timing-critical code" },
+      { "preset": "researcher", "focus": "datasheets, pin configurations, protocol specs, hardware limitations, reference implementations" }
+    ],
+    "signals": {
+      "keywords": ["iot", "embedded", "firmware", "arduino", "raspberry", "sensor", "gpio", "rtos", "hardware"],
+      "files": ["firmware/", "drivers/", "*.ino", "platformio.ini"],
+      "packages": ["johnny-five", "serialport", "mqtt", "pigpio"]
+    }
+  },
+  "migration": {
+    "name": "Migration / Rewrite",
+    "description": "Framework upgrades, language migrations, legacy rewrites. High risk, needs careful review and regression testing.",
+    "roles": [
+      { "preset": "implementer", "focus": "rewrite, adaptation, codemods, compatibility shims" },
+      { "preset": "reviewer", "focus": "diff review, regression detection, API parity, backwards compatibility" },
+      { "preset": "researcher", "focus": "migration guides, breaking changes, deprecation notices, upgrade paths, codemod tools" }
+    ],
+    "signals": {
+      "keywords": ["migrate", "migration", "rewrite", "upgrade", "legacy", "port", "convert", "codemod"],
+      "files": ["legacy/", "migration/", "deprecated/"],
+      "packages": ["codemod", "jscodeshift"]
+    }
+  },
+  "docs": {
+    "name": "Documentation",
+    "description": "Technical writing: docs sites, tutorials, API references, READMEs. Accuracy and clarity matter.",
+    "roles": [
+      { "preset": "implementer", "focus": "writing, formatting, examples, code snippets, publishing" },
+      { "preset": "researcher", "focus": "fact checking, API verification, completeness audit, reference comparison, link validation" }
+    ],
+    "signals": {
+      "keywords": ["documentation", "docs", "tutorial", "guide", "wiki", "blog", "readme", "writing"],
+      "files": ["docs/", "content/", "wiki/", "blog/"],
+      "packages": ["docusaurus", "nextra", "vitepress", "mkdocs", "mdx"]
+    }
+  },
+  "security": {
+    "name": "Security",
+    "description": "Security-focused work: pen testing, vulnerability research, compliance, hardening. Needs adversarial thinking.",
+    "roles": [
+      { "preset": "reviewer", "focus": "security audit, OWASP, threat modeling, input validation, auth flows" },
+      { "preset": "implementer", "focus": "fixes, hardening, security middleware, encryption, access control" },
+      { "preset": "researcher", "focus": "CVE databases, attack vectors, exploit techniques, compliance frameworks, security advisories" }
+    ],
+    "signals": {
+      "keywords": ["security", "audit", "pentest", "vulnerability", "compliance", "owasp", "cve", "hardening"],
+      "files": ["security/", "audit/", "policies/"],
+      "packages": ["snyk", "eslint-plugin-security", "helmet", "csurf", "bcrypt"]
+    }
+  }
+}

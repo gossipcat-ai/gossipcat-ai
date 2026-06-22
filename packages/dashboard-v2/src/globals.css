@@ -1,0 +1,1418 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+/* Geist Variable — DESIGN.md primary body/UI/data font.
+   Self-hosted from the geist npm package's woff2 asset. Vite resolves the
+   relative path through node_modules at build time and hashes the output.
+   See main.tsx for why the npm package's JS entry can't be used directly. */
+@font-face {
+  font-family: 'Geist';
+  src: url('../../../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: var(--font-geist-sans, 'Geist'), 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-inter: 'Inter', system-ui, sans-serif;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+
+  /* Compat aliases — keep Tailwind utility classes (bg-card, border-border,
+     ring-primary, text-destructive, etc.) working after the Phase 1a token
+     rename. Each alias resolves to a new --surface/--text/--accent token so
+     theme switching still works. Tailwind v4 resolves @theme colors at
+     build time, so these MUST live here (not in :root).
+     IMPORTANT: Because @theme resolves at build time, the alias values are
+     STATIC snapshots of light-theme. Dark theme is handled by the [data-theme="dark"]
+     block re-declaring the underlying --surface/--text tokens, which the inline
+     `style={{ ... var(--surface-elev) ... }}` from Task 7 picks up; utility classes
+     bound here get the LIGHT value baked in at compile time. Anywhere theme
+     switching matters, use the inline style instead of the utility class. */
+  --color-background: #f5f4ef;
+  --color-foreground: #1f1f1d;
+  --color-card: #ffffff;
+  --color-card-foreground: #1f1f1d;
+  --color-muted: #ede9e0;
+  --color-muted-foreground: #6b6a64;
+  --color-border: #e0ddd2;
+  --color-input: #e0ddd2;
+  --color-ring: #cc785c;
+  --color-primary: #cc785c;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #ede9e0;
+  --color-secondary-foreground: #1f1f1d;
+  --color-accent: #cc785c;
+  --color-accent-foreground: #ffffff;
+  --color-destructive: #c0392b;
+  --color-destructive-foreground: #ffffff;
+
+  --color-confirmed: #1a7e5e;
+  --color-disputed: #c0392b;
+  /* unverified = --info teal per DESIGN.md:59 (status palette). Hex-literal
+     (not var(--color-info)) so Tailwind v4 opacity modifiers compose at build.
+     Was #b8741d ochre, which collided with --warn and rendered unverified two
+     different colors across the dashboard. Dark override below mirrors --color-info. */
+  --color-unverified: #3F8B86;
+  --color-unique: #7c5cbf;
+  /* DESIGN.md semantic palette exposed as Tailwind utilities so components
+     can use bg-warn / text-bad / border-info / bg-warn/10 etc. instead of
+     reaching for raw text-red-400 / text-yellow-400 Tailwind palette values.
+     Hex literals match DESIGN.md so Tailwind v4 opacity modifiers (/10, /20)
+     compose correctly at build time. Dark-mode overrides below. */
+  --color-warn: #B47A2A;
+  --color-bad: #A53A4A;
+  --color-info: #3F8B86;
+  --color-severity-high: #B47A2A;
+  --color-impact: #cc785c;
+  --color-insight: #6b6a64;
+  --color-text-dim: #6b6a64;
+
+  /* Chart fills (Reliability bars, sparklines, activity dots). Distinct
+     blue-grey so it reads as DATA, not status, alongside the warm accent. */
+  --color-chart: #5d7e9c;
+  --color-chart-accent: #1a7e5e;
+}
+
+/* ───── Phase 1a — warm palette tokens (light default) ───── */
+:root {
+  --surface: #f5f4ef;
+  --surface-elev: #ffffff;
+  --surface-sunk: #ede9e0;
+  --text: #1f1f1d;
+  --text-dim: #6b6a64;
+  --text-faint: #9c9a92;
+  --border: #e0ddd2;
+  --border-strong: #c9c5b8;
+  --accent: #cc785c;
+  --accent-bright: #e08a6c;
+  --accent-soft: rgba(204, 120, 92, 0.12);
+  --success: #1a7e5e;
+  /* --warn declared below in the DESIGN.md alias block (#B47A2A).
+     Legacy #b8741d removed to prevent a future merge from regressing the
+     spec'd value via cascade ordering. */
+  --danger: #c0392b;
+  --beat: 1.6s;
+  /* Phase 1b graph-stage tokens — cream stage in light mode. */
+  --stage-bg: #ede9e0;
+  --stage-grid: rgba(31, 31, 29, 0.025);
+  --stage-text-dim: #6b6a64;
+  /* AgentNetworkGraph edge opacity — targets WCAG 1.4.11 (3:1 for non-text
+     graphical elements) at the *base* and *selected* states. Light mode uses
+     the deeper #1a7e5e / #b8741d / #c0392b token values on cream stage, so
+     the floor is higher than dark mode. The *dim* state is intentional
+     de-emphasis for non-adjacent edges during a selection — these are not
+     decision-bearing and are not held to the 3:1 floor. Overridden in
+     [data-theme="dark"] below. */
+  --edge-opacity-base: 0.70;
+  --edge-opacity-selected: 0.90;
+  --edge-opacity-dim: 0.18;
+
+  /* DESIGN.md token aliases (added 2026-05-24).
+     Both name families resolve to identical values during migration.
+     Old color/surface/text names remain canonical until per-component
+     PRs migrate consumers. See DESIGN.md Token migration section. */
+  /* Foundation — literal hex per DESIGN.md (NOT aliased through legacy --color-*
+     tokens, which carry pre-WCAG-revision values; aliasing would defeat the
+     point of the spec's color-discipline pass). */
+  --bg: #FAF7F2;
+  /* --surface: NAMING CONFLICT — live --surface (line 60) means "page canvas"
+     (#f5f4ef); DESIGN.md --surface means "cards" (#FFFEFB). Aliasing here
+     would shift body bg cream → white (regression caught in PR #464 review).
+     Resolution candidates for a future PR: (a) rename live --surface → --bg-page
+     and let DESIGN.md --surface stand, (b) introduce --surface-card as a third
+     name and document --surface as deprecated. Until then, new code MUST NOT
+     reference --surface expecting card semantics — use --color-card or the
+     hex literal #FFFEFB. */
+  --surface-2: #F4EFE5;
+  --ink: #1A1916;
+  --ink-2: #4A4640;
+  --ink-3: #6B6862;
+  --ink-4: #807A71;
+  /* --accent-soft: SKIPPED — live --accent-soft (line 70) is identical value. */
+  --ok: #2A6E4F;
+  --ok-soft: #DCEBE2;
+  --warn: #B47A2A;
+  --warn-soft: #F2E4CC;
+  --bad: #A53A4A;
+  --bad-soft: #EFD4D8;
+  --info: #3F8B86;
+  --info-soft: #D5E6E4;
+  /* Medium severity. Was mapped to --info teal, which collided with the
+     unverified STATUS token (both teal) once --color-unverified was unified to
+     --info. A distinct cool blue keeps "medium = the calm severity" while
+     freeing --info to mean only unverified/info. Severity ramp: --bad rose
+     (critical) → --warn amber (high) → --severity-medium blue → --idle slate (low). */
+  --severity-medium: #3E6DA8;
+  /* Unique verdict — purple #7c5cbf (matches --color-unique in @theme).
+     Exposed as --unique so inline style={{ color: 'var(--unique)' }} works
+     alongside the Tailwind text-unique / bg-unique utility classes. */
+  --unique: #7c5cbf;
+  /* Citations — file path vs function name in finding evidence. NOT severity,
+     NOT agent identity. Muted indigo/violet chosen to clear --severity-medium
+     blue (cite-file ~15deg + lower saturation) and --c2 plum (cite-fn ~33deg).
+     See DESIGN.md Decisions Log 2026-06-04. */
+  --cite-file: #4D5B96;
+  --cite-fn: #675990;
+  --idle: #6B6862;
+  --idle-soft: #E5E0D7;
+  /* Chart palette (multi-series ONLY — never for status) */
+  --c1: #3F8B86;
+  --c2: #8C5E97;
+  --c3: #B47A2A;
+  --c4: #2F7D5B;
+  --c5: #A53A4A;
+  --c6: #6B6862;
+  --c7: #C8A45A;
+  /* --c8 added 2026-05-24 post-Step-2 review: --c3 (#B47A2A ochre) collides
+     hex-identically with --warn in light mode, breaking the impact-bar's
+     semantic neutrality. --c8 magenta is distinct from every semantic color
+     (--ok green / --warn amber / --bad rose / --info teal / --idle slate)
+     and from every other chart palette hue. Used for impact-bar fills. */
+  --c8: #B85FA0;
+  /* Per-agent identity (avatar bloom only — NEVER card chrome) */
+  --a-sonnet-reviewer: #8C5E97;
+  --a-sonnet-designer: #C8A45A;
+  --a-sonnet-implementer: #A53A4A;
+  --a-opus-implementer: #C97056;
+  --a-gemini-reviewer: #3F8B86;
+  --a-gemini-tester: #2F7D5B;
+  --a-haiku-researcher: #6B7A85;
+  /* Radius scale */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 9999px;
+  /* Spacing scale (4px base) */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  /* Syntax-highlight palette (highlight.js token → color). Light theme: tuned for
+     WCAG AA (≥4.5:1) on the code-block surface --surface-sunk #ede9e0. NEVER use
+     --accent here — terracotta stays reserved (DESIGN.md). */
+  --sx-keyword: #845a90; /* 4.51:1 */
+  --sx-string: #347554; /* 4.54:1 */
+  --sx-number: #866225; /* 4.58:1 */
+  --sx-fn: #675990; /* 5.08:1 */
+  --sx-type: #34736e; /* 4.53:1 */
+  --sx-comment: #6B6862; /* 4.58:1 */
+  --sx-punc: #6e6860; /* 4.55:1 */
+}
+
+/* Orchestrator easter egg — click the center blackhole.
+   Smile pops in with a quick bounce + fade out; ripple expands + fades. */
+@keyframes orch-smile-pop {
+  0%   { opacity: 0; transform: scale(0.4); }
+  20%  { opacity: 1; transform: scale(1.25); }
+  45%  { opacity: 1; transform: scale(0.95); }
+  60%  { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
+}
+@keyframes orch-ripple {
+  0%   { opacity: 0.7; transform: scale(0.9); }
+  100% { opacity: 0; transform: scale(3.4); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Respect motion sensitivity: easter egg still fires but instantly. */
+  [style*="orch-smile-pop"], [style*="orch-ripple"] { animation: none !important; opacity: 0; }
+  .animate-pulse { animation: none; }
+}
+
+/* DESIGN.md section header signature (small-caps Geist).
+   Replaces the legacy `font-mono text-[11px] font-bold uppercase tracking-widest` pattern.
+   Step 2 of the application checklist rolls this out across every existing header.
+   This PR only applies it to TeamHero as a smoke test. */
+/* DESIGN.md route title — Fraunces serif for every page H1 (and H2 used as route title).
+   Use .h-route--lg modifier for the Overview editorial 44px variant. */
+.h-route {
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
+  font-weight: 500;
+  font-size: 32px;
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+.h-route--lg {
+  font-size: 44px;
+}
+
+.h-section {
+  /* Geist literal first (per DESIGN.md), then fall through the --font-sans
+     chain so the class still renders if Geist asset load fails. */
+  font-family: 'Geist', var(--font-sans);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  /* font-variant-caps (longhand) preserves font-variant-numeric: tabular-nums
+     on numeric children like the count span in TeamHero (<h2>Team <span>7</span></h2>).
+     The font-variant shorthand would reset numeric sub-properties. */
+  font-variant-caps: small-caps;
+  color: var(--ink-2);
+}
+
+:root {
+  --shadow-overlay: 0 24px 64px -16px rgba(31, 31, 29, 0.32), 0 0 0 1px rgba(31, 31, 29, 0.04);
+  --shadow-overlay-hairline: 0 0 0 1px rgba(31, 31, 29, 0.02);
+  --shadow-card: 0 1px 2px rgba(31, 31, 29, 0.04), 0 2px 6px -2px rgba(31, 31, 29, 0.05);
+}
+
+[data-theme="dark"] {
+  --surface: #1c1a17;
+  --surface-elev: #252320;
+  --surface-sunk: #131210;
+  --text: #e8e4d7;
+  --text-dim: #87847b;
+  --text-faint: #5d5a52;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  /* Tailwind @theme tokens — these were missing from the dark override block,
+     so any Tailwind utility class that uses `border-border` / `bg-card` /
+     `bg-background` / `text-foreground` / etc. rendered light-mode values
+     (cream, dark ink) regardless of theme. That's why card borders in dark
+     mode read as bright cream lines on the dark canvas. Override the
+     @theme variables to dark-mode equivalents so the utility classes
+     theme-switch correctly. */
+  --color-background: #131210;
+  --color-foreground: #e8e4d7;
+  --color-card: #252320;
+  --color-card-foreground: #e8e4d7;
+  --color-muted: #1c1a17;
+  --color-muted-foreground: #87847b;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-input: rgba(255, 255, 255, 0.08);
+  --color-secondary: #1c1a17;
+  --color-secondary-foreground: #e8e4d7;
+  --color-text-dim: #87847b;
+  /* DESIGN.md semantic palette — dark-mode overrides (mirror the light block
+     above; values from DESIGN.md "Dark mode" subsection). */
+  --color-warn: #D8A35A;
+  --color-bad: #D26478;
+  --color-info: #7CC1C7;
+  --color-unverified: #7CC1C7;
+  --accent: #d68a6f;
+  --accent-bright: #e08a6c;
+  --accent-soft: rgba(214, 138, 111, 0.16);
+  --success: #57b289;
+  /* --warn declared below in the DESIGN.md dark-mode alias block (#D8A35A).
+     Legacy #c89a55 removed to prevent cascade-order regressions. */
+  --danger: #d68a7e;
+  --shadow-overlay: 0 24px 64px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-overlay-hairline: 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-card: none;
+  --color-unique: #9d7fd5;
+  --stage-bg: #131210;
+  --stage-grid: rgba(255, 255, 255, 0.03);
+  --stage-text-dim: #87847b;
+  /* Dark mode tokens are lighter (#57b289 / #c89a55 / #d68a7e) so a lower
+     baseline still reads clearly on #131210 stage. */
+  --edge-opacity-base: 0.55;
+  --edge-opacity-selected: 0.85;
+  --edge-opacity-dim: 0.15;
+
+  /* DESIGN.md token aliases — dark mode counterparts.
+     Per DESIGN.md "Dark mode" subsection: warm-charcoal foundation, cream text,
+     semantic colors at +10% lightness, accent slightly warmer.
+     These mirror the light-mode aliases inside the :root block above. */
+  --bg: #14120F;
+  --surface-2: #1F1D19;
+  --ink: #F2EDE3;
+  --ink-2: #B8B0A1;
+  --ink-3: #807A71;
+  --ink-4: #524E47;
+  --ok: #5BB58A;
+  --ok-soft: #1F3328;
+  --warn: #D8A35A;
+  --warn-soft: #3A2D17;
+  --bad: #D26478;
+  --bad-soft: #3A1C22;
+  --info: #7CC1C7;
+  --info-soft: #1A2729;
+  --severity-medium: #6E9BD4;
+  --cite-file: #7A8ED6; /* AA on dark surfaces — bumped from #6674C2 (2026-06-15 a11y pass) */
+  --cite-fn: #7A6FBA;
+  --idle: #807A71;
+  --idle-soft: #2A2722;
+  /* Unique verdict dark — brighter purple for dark canvas. */
+  --unique: #9d7fd5;
+  /* Chart palette stays identical across themes (semantically same hues). */
+  /* Per-agent identity hues stay identical too. */
+  /* --c8 magenta needs a slightly brighter shade in dark mode for legibility. */
+  --c8: #D478B8;
+  /* Syntax-highlight palette — dark theme. Values match the chat-surface palette
+     already in flight, AA-verified on code-block surface --surface-sunk #131210.
+     NEVER use --accent (terracotta is reserved, DESIGN.md). */
+  --sx-keyword: #9D72A8;
+  --sx-string: #4FA97D;
+  --sx-number: #C99A52;
+  --sx-fn: #7e72c0; /* AA-corrected from #7A6FBA (4.29:1 → 4.51:1 on #131210) */
+  --sx-type: #5FB0AA;
+  --sx-comment: #9B958D;
+  --sx-punc: #B8B2A6;
+}
+
+/* Tailwind utility classes (text-foreground, bg-card, etc.) resolve against
+   @theme at build time and CANNOT theme-switch at runtime. The aliases above
+   bake light-theme defaults into utility classes; this block overrides the
+   underlying tokens in dark mode so any element using `color: var(--text)` /
+   `background: var(--surface-elev)` (the spec-recommended pattern from Task 7)
+   DOES theme-switch correctly. The few remaining utility-class consumers
+   (App.tsx legacy view, AgentRow etc.) are a known gap tracked in PR notes. */
+
+/* Theme-aware warning badge — replaces the cold amber Tailwind classes
+   used across TaskRow, TaskDetailModal, SkillCard, App.tsx for "skipped /
+   scheduled / pending" states. Reads as warning, adapts to both themes. */
+.warn-badge {
+  color: var(--warn);
+  background: color-mix(in oklch, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in oklch, var(--warn) 30%, transparent);
+}
+
+body {
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ───── Phase 1a — luminance themes
+   Light is the implicit default (no [data-theme] attribute).
+   Dark activates via [data-theme="dark"] from useTheme.ts.
+   Tokens live in the :root + [data-theme="dark"] blocks above. ───── */
+
+/* Skill-graduation sparkline — lift the agent-hued curve on the dark canvas.
+   agentColor() returns fixed spec hexes (not --a-* tokens), so dim hues
+   (slate/plum/sage) wash out on the #252320 card. Opacity is already 1; the
+   lever is brightness + a hair more weight. Light mode is untouched. */
+[data-theme="dark"] .skill-spark-curve {
+  filter: brightness(1.3) saturate(1.1);
+  stroke-width: 1.85px;
+}
+
+/* Subtle vignette — dark theme only (washes out the warm light palette).
+   z-index 1 keeps it above body content but below dialogs/drawers (z-50) and
+   notification stacks. The earlier z-index 9998 obscured modals once the
+   selector was corrected. */
+html[data-theme="dark"]::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 65%, rgba(0, 0, 0, 0.35) 100%);
+}
+
+/* ───── CRT / TV hover effect ───── */
+@keyframes crt-flicker {
+  0%   { opacity: 1; }
+  8%   { opacity: 0.6; }
+  9%   { opacity: 1; }
+  22%  { opacity: 1; }
+  23%  { opacity: 0.4; }
+  24%  { opacity: 1; }
+  60%  { opacity: 1; }
+  61%  { opacity: 0.7; }
+  62%  { opacity: 0.3; }
+  63%  { opacity: 1; }
+  85%  { opacity: 1; }
+  86%  { opacity: 0.5; }
+  87%  { opacity: 1; }
+}
+
+@keyframes crt-scanlines-move {
+  from { background-position: 0 0; }
+  to   { background-position: 0 8px; }
+}
+
+@keyframes crt-rgb-bleed {
+  0%   { text-shadow: 2px 0 0 rgba(255,0,80,0.5), -2px 0 0 rgba(0,200,255,0.5); }
+  25%  { text-shadow: -2px 0 0 rgba(255,0,80,0.5), 2px 0 0 rgba(0,200,255,0.5); }
+  50%  { text-shadow: 1px 0 0 rgba(255,0,80,0.3), -1px 0 0 rgba(0,200,255,0.3); }
+  75%  { text-shadow: -1px 0 0 rgba(255,0,80,0.5), 1px 0 0 rgba(0,200,255,0.5); }
+  100% { text-shadow: 2px 0 0 rgba(255,0,80,0.5), -2px 0 0 rgba(0,200,255,0.5); }
+}
+
+/* ───── Beat-rhythm pulse — live-status indicators ───── */
+@keyframes beat-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.9); }
+}
+
+/* Subtler pulse for NarrativeStripe — slower (2×beat), opacity-only, no scale. */
+@keyframes beat-pulse-narrative {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.72; }
+}
+
+/* Override Tailwind's animate-pulse on live-indicator elements to use the
+   project-wide --beat cadence instead of the default 2s timing. */
+.animate-pulse {
+  animation: beat-pulse var(--beat) ease-in-out infinite;
+}
+
+.crt-logo {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+}
+
+/* Scanlines layer */
+.crt-logo::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    rgba(0, 0, 0, 0.25) 3px,
+    rgba(0, 0, 0, 0.25) 4px
+  );
+  pointer-events: none;
+  border-radius: 12px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 2;
+}
+
+/* Phosphor glow layer */
+.crt-logo::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 16px;
+  background: radial-gradient(ellipse at center, var(--accent-soft) 0%, transparent 70%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 1;
+}
+
+.crt-logo:hover::before,
+.crt-logo--glitch::before {
+  opacity: 1;
+  animation: crt-scanlines-move 0.1s linear infinite;
+}
+
+.crt-logo:hover::after,
+.crt-logo--glitch::after {
+  opacity: 1;
+}
+
+.crt-logo:hover .crt-logo-img,
+.crt-logo--glitch .crt-logo-img {
+  animation: crt-flicker 0.6s step-end infinite;
+  filter: brightness(1.25) saturate(1.1) drop-shadow(0 0 32px var(--accent));
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-soft); }
+
+/* ───── Tooltip system (CSS-only, data-tooltip="text") ───── */
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-6px);
+  padding: 8px 12px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-line;
+  width: max-content;
+  max-width: 220px;
+  text-align: left;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 150ms ease 50ms;
+  z-index: 1000;
+  box-shadow: var(--shadow-overlay);
+}
+[data-tooltip]::before {
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: var(--surface-sunk);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 150ms ease 50ms;
+  z-index: 1000;
+}
+[data-tooltip]:hover::after,
+[data-tooltip]:hover::before {
+  opacity: 1;
+}
+[data-tooltip]:focus-within::after,
+[data-tooltip]:focus-within::before {
+  opacity: 1;
+}
+[data-tooltip-pos="bottom"]::after {
+  bottom: auto;
+  top: 100%;
+  transform: translateX(-50%) translateY(6px);
+}
+[data-tooltip-pos="bottom"]::before {
+  bottom: auto;
+  top: 100%;
+  border-top-color: transparent;
+  border-bottom-color: var(--surface-sunk);
+}
+[data-tooltip-pos="left"]::after {
+  left: auto;
+  right: 0;
+  transform: translateY(-6px);
+}
+[data-tooltip-pos="left"]::before {
+  left: auto;
+  right: 12px;
+  transform: none;
+}
+[data-tooltip-pos="right"]::after {
+  left: 0;
+  right: auto;
+  transform: translateY(-6px);
+}
+[data-tooltip-pos="right"]::before {
+  left: 12px;
+  right: auto;
+  transform: none;
+}
+
+/* ───── Task markdown renderer (.task-md) ───── */
+.task-md {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.task-md h1.md-h1 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 0.75rem;
+  margin-bottom: 0.375rem;
+  line-height: 1.4;
+}
+
+.task-md h2.md-h2 {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 0.625rem;
+  margin-bottom: 0.3rem;
+  line-height: 1.4;
+}
+
+.task-md h3.md-h3 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+  line-height: 1.4;
+}
+
+.task-md ul.md-list {
+  list-style: disc;
+  padding-left: 1.25rem;
+  margin: 0.375rem 0;
+}
+
+.task-md ul.md-list li {
+  margin: 0.2rem 0;
+  line-height: 1.5;
+}
+
+.task-md code.md-inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  color: var(--text);
+}
+
+.task-md pre.md-code-block {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--surface-sunk);
+  border: none;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 0.5rem 0;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.task-md pre.md-code-block code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* ── finding-md: compact markdown scope for agent findings and signal evidence ── */
+
+.finding-md h1.md-h1 {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+  line-height: 1.4;
+}
+
+.finding-md h2.md-h2 {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 0.4rem;
+  margin-bottom: 0.2rem;
+  line-height: 1.4;
+}
+
+.finding-md h3.md-h3 {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 0.3rem;
+  margin-bottom: 0.15rem;
+  line-height: 1.4;
+}
+
+.finding-md ul.md-list {
+  list-style: disc;
+  padding-left: 1rem;
+  margin: 0.25rem 0;
+}
+
+.finding-md ul.md-list li {
+  margin: 0.1rem 0;
+  line-height: 1.5;
+}
+
+.finding-md code.md-inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+  color: var(--text);
+}
+
+.finding-md pre.md-code-block {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  background: var(--surface-sunk);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  margin: 0.35rem 0;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.finding-md pre.md-code-block code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Chat surface — activity-mirror v2 "CC-transcript" look
+   ────────────────────────────────────────────────────────────────────────
+   SCOPED dark warm-charcoal carve-out (DESIGN.md 2026-06-15 rows + spec
+   2026-06-14-dashboard-cc-activity-mirror-v2.md §6). These tokens override the
+   app theme ONLY inside `.chat-surface`; they do NOT leak app-wide. Values are
+   the AA-corrected mockup tokens (docs/specs/mockups/chat-transcript-dark.html).
+   ════════════════════════════════════════════════════════════════════════ */
+.chat-surface {
+  --bg: #14120F;
+  --surface: #1C1A16;
+  /* FIX 2a: .chat-surface is ALWAYS dark regardless of app theme. Without this,
+     --surface-sunk leaks the LIGHT app value (#ede9e0) into chat code blocks and
+     the MessageBubble cascade (#599 review). Pin it to the dark sunk value so the
+     whole --sx-* palette is AA-verified on it (--sx-fn #7e72c0 = 4.50:1). */
+  --surface-sunk: #131210;
+  --surface-2: #232019;
+  /* FIX 2b (design QA F2): .chat-surface is always dark, but MessageBubble +
+     other chat consumers reference --surface-elev / --text which were NOT
+     overridden here, so a light-mode user got near-white assistant bubbles on
+     the dark card. Pin both to dark-surface values. */
+  --surface-elev: #252320;
+  --text: #F2EDE3;
+  --ink: #F2EDE3;
+  --ink-2: #B8B2A6;
+  --ink-3: #8A857B; /* AA text min (≈5.3:1 on --bg #14120F) — line numbers, hints, meta */
+  --ink-4: #6B6862; /* NON-TEXT only — gutter borders, decorative glyphs */
+  --border: #2A2620;
+  --border-strong: #3A3429;
+  --accent: #D58267;
+  --ok: #4FA97D;
+  --ok-soft: rgba(79, 169, 125, 0.13);
+  --bad: #D2697A;
+  --bad-soft: rgba(210, 105, 122, 0.13);
+  --warn: #D6A04E;
+  --info: #5FB0AA;
+  --idle: #8A867E;
+  --cite-file: #7A8ED6;
+  --cite-fn: #7A6FBA;
+  /* syntax palette — derived from chart/cite tokens, NEVER --accent */
+  --sx-keyword: #9D72A8;
+  --sx-string: #4FA97D;
+  --sx-number: #C99A52;
+  --sx-fn: #7e72c0; /* AA on code-block surface --surface-sunk #131210 (was #7A6FBA, 4.29:1) */
+  --sx-type: #5FB0AA;
+  --sx-comment: #9B958D;
+  --sx-punc: #B8B2A6;
+  --r-md: 8px;
+  --r-lg: 12px;
+
+  background: var(--bg);
+  color: var(--ink);
+  background-image: radial-gradient(120% 80% at 50% -10%, #1a1713 0%, #14120f 60%);
+}
+
+/* ── transcript turns ── */
+.cx-turn { margin: 0 0 22px; }
+.cx-turn + .cx-turn {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  padding-top: 18px;
+}
+.cx-turn.user { display: flex; gap: 11px; align-items: flex-start; }
+.cx-turn.user .cx-gutter {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  flex: none;
+  padding-top: 1px;
+}
+.cx-turn.user .cx-body { color: var(--ink-2); }
+.cx-row { display: flex; gap: 11px; align-items: flex-start; }
+.cx-bullet {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 9px;
+  line-height: 1.9;
+  user-select: none;
+}
+.cx-body { flex: 1; min-width: 0; }
+
+/* prose (markdown) inside an assistant/mirror turn */
+.cx-prose { color: var(--ink); }
+.cx-prose p, .cx-prose { margin: 0 0 10px; }
+.cx-prose :last-child { margin-bottom: 0; }
+.cx-prose strong { color: var(--ink); font-weight: 600; }
+/* No `.cx-prose a` rule: renderFindingMarkdown emits no <a> tags (untrusted
+ * mirror text). If a markdown-link pass is ever added, the renderer MUST validate
+ * the URL scheme (reject javascript:/data:) and set rel="noopener noreferrer"
+ * before any link styling is reintroduced here. */
+.cx-prose code.md-inline-code,
+.cx-prose code.cite-fn {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--ink);
+}
+.cx-prose code.cite-file {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--cite-file);
+  background: color-mix(in srgb, var(--cite-file) 12%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.cx-prose ul.md-list { list-style: disc; padding-left: 1.1rem; margin: 0.25rem 0; }
+.cx-prose h1.md-h1, .cx-prose h2.md-h2, .cx-prose h3.md-h3 {
+  color: var(--ink);
+  font-weight: 600;
+  margin: 0.4rem 0 0.2rem;
+}
+
+/* code fence (plain — NO syntax highlighting in this PR) */
+.cx-prose pre.md-code-block {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  /* FIX 2b: render chat code blocks on --surface-sunk (#131210), not the lighter
+     --surface (#1C1A16). On #131210 the entire --sx-* syntax palette passes WCAG
+     AA — notably --sx-fn #7e72c0 (4.50:1 vs only ~4.18:1 on #1C1A16). */
+  background: var(--surface-sunk);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  margin: 4px 0 12px;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--ink);
+}
+.cx-prose pre.md-code-block code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* ── activity row (curated tool/dispatch mirror) ── */
+.cx-activity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  margin: 0 0 9px;
+}
+.cx-activity .cx-label {
+  font-variant: small-caps;
+  letter-spacing: 0.02em;
+  color: var(--idle);
+}
+.cx-activity .cx-agent {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--info);
+}
+.cx-activity .cx-cmd {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+/* Unstructured / ack one-liners that parsed no label or agent — de-emphasize so
+ * they don't read as equal-weight body copy next to semantic activity rows. */
+.cx-activity .cx-cmd-bare {
+  color: var(--ink-3);
+}
+/* Emoji icon must not inherit small-caps from any future parent change. */
+.cx-activity .cx-ic {
+  font-variant: normal;
+}
+
+/* ── states ── */
+.cx-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  /* design QA F3: a slight warm fill so the dashed frame registers as composed
+     content, not dead void, against the large dark transcript canvas. */
+  background: color-mix(in srgb, var(--surface) 40%, transparent);
+  color: var(--ink-3);
+  font-size: 13px;
+  margin: 4px 0;
+}
+.cx-state.err { border-style: solid; }
+.cx-chip-bad {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: var(--bad-soft);
+  color: var(--bad);
+  font-family: var(--font-mono);
+}
+.cx-skel {
+  height: 11px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+  margin: 6px 0;
+}
+.cx-dimmed { opacity: 0.5; }
+
+/* ── gossip_ask question card (dashboard-answerable selection question) ───────
+   Rendered inline in the transcript when the active conversation has a pending
+   question. DESIGN.md dark carve-out: hairline --border, --r-md radius, NO
+   shadows; selection highlight uses --info teal (NEVER --accent — terracotta is
+   the Send CTA only); Submit is a NEUTRAL bordered button on --surface-2. */
+.cx-qcard {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--surface) 60%, var(--bg));
+  padding: 14px 16px;
+  margin: 8px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.cx-qfield {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.cx-qlegend {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  font-size: 12px;
+  color: var(--ink-2);
+  padding: 0;
+  margin: 0 0 2px;
+}
+.cx-qprompt {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  margin: 0 0 10px;
+}
+.cx-qoptions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cx-qopt {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  cursor: pointer;
+  transition: border-color 100ms ease-out, background 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-qopt { transition: none; }
+}
+.cx-qopt:hover {
+  border-color: var(--border-strong);
+}
+.cx-qopt.is-selected {
+  /* selection highlight = --info teal (semantic info/unverified), never --accent */
+  border-color: color-mix(in srgb, var(--info) 60%, var(--border));
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+}
+.cx-qinput {
+  margin-top: 2px;
+  flex: none;
+  accent-color: var(--info);
+  cursor: pointer;
+}
+.cx-qinput:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 70%, transparent);
+  outline-offset: 2px;
+}
+.cx-qopt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.cx-qopt-label {
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.4;
+}
+.cx-qopt-desc {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+.cx-qother {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.cx-qother-label {
+  font-variant: small-caps;
+  letter-spacing: 0.03em;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.cx-qother-input {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface) 50%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 7px 10px;
+}
+.cx-qother-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--info) 60%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 18%, transparent);
+}
+.cx-qactions {
+  display: flex;
+  justify-content: flex-end;
+}
+.cx-qsubmit {
+  /* NEUTRAL — bordered button on --surface-2, NOT terracotta --accent */
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: border-color 100ms ease-out, background 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-qsubmit { transition: none; }
+}
+.cx-qsubmit:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--info) 50%, var(--border-strong));
+  background: color-mix(in srgb, var(--info) 10%, var(--surface-2));
+}
+.cx-qsubmit:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 70%, transparent);
+  outline-offset: 2px;
+}
+.cx-qsubmit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── conversation tab strip (multi-conversation ChatPage) ────────────────────
+   Rendered inside the .chat-surface left card, so all var() tokens resolve to
+   the dark carve-out values. Active = subtle --surface fill + 2px --ink-2 bottom
+   indicator; inactive = transparent / --ink-3 + hover wash. Unread dot is --info
+   teal (NEVER --accent — terracotta is the Send CTA only). */
+.cx-tabstrip {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 50%, var(--bg));
+  min-height: 34px;
+}
+.cx-tabstrip-scroll {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1;
+  min-width: 0;
+  scrollbar-width: thin;
+}
+.cx-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-width: 80px;
+  max-width: 180px;
+  border-radius: var(--r-md) var(--r-md) 0 0;
+  border-bottom: 3px solid transparent;
+  transition: background 100ms ease-out, border-color 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-tab { transition: none; }
+}
+.cx-tab:hover {
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+.cx-tab.is-active {
+  background: var(--surface);
+  border-bottom-color: var(--ink-2); /* 3px from .cx-tab above — more visible than hairline */
+}
+.cx-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 152px;
+  padding: 7px 4px 7px 10px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-3);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.cx-tab.is-active .cx-tab-btn { color: var(--ink); }
+.cx-tab-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 60%, transparent);
+  outline-offset: 1px; /* positive offset keeps ring fully visible above the 3px active indicator */
+  border-radius: var(--r-sm);
+}
+.cx-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cx-tab-label.font-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.cx-tab-unread {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--info);
+}
+.cx-tab-close {
+  flex: none;
+  width: 24px;  /* WCAG 2.2 AA 24×24 minimum hit area */
+  height: 24px;
+  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--ink-3); /* interactive glyph — must meet AA min (--ink-3), not non-text-only --ink-4 */
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 100ms ease-out, color 100ms ease-out, background 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-tab-close { transition: none; }
+}
+.cx-tab:hover .cx-tab-close,
+.cx-tab.is-active .cx-tab-close { opacity: 1; }
+.cx-tab-close:hover {
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--ink-4) 22%, transparent);
+}
+.cx-tab-close:focus-visible {
+  opacity: 1;
+  outline: 2px solid color-mix(in srgb, var(--info) 60%, transparent);
+  outline-offset: -1px;
+}
+
+/* ── inline rename input — shown instead of cx-tab-btn during rename ──
+   Styled within the dark carve-out: --surface-2 bg, --ink text, hairline
+   --border, --r-sm. No accent colour — terracotta is reserved for Send CTA. */
+.cx-tab-rename-input {
+  flex: 1;
+  min-width: 0;
+  max-width: 140px;
+  padding: 4px 6px 4px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.2;
+  outline: none;
+  /* Hairline focus ring in --info teal — matches the rest of the tabstrip. */
+  box-shadow: none;
+}
+.cx-tab-rename-input:focus {
+  border-color: color-mix(in srgb, var(--info) 60%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--info) 25%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-tab-rename-input {
+    transition: none;
+  }
+}
+
+.cx-tab-new {
+  flex: none;
+  align-self: center;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border); /* separator anchors + button; prevents it from floating */
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--ink-3);
+  font-size: 16px;
+  line-height: 1;
+  padding-left: 8px;
+  margin-left: 4px;
+  transition: background 100ms ease-out, color 100ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cx-tab-new { transition: none; }
+}
+.cx-tab-new:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  color: var(--ink);
+}
+.cx-tab-new:disabled { opacity: 0.4; cursor: not-allowed; }
+.cx-tab-new:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 60%, transparent);
+  outline-offset: -1px;
+}
+
+/* ── highlight.js token mapping ──────────────────────────────────────────────
+   Scoped under .md-code-block so highlight.js's emitted .hljs-* classes pick up
+   the --sx-* tokens. Base .hljs gets NO color override (inherits the surrounding
+   code color). NEVER map any token to --accent (terracotta is reserved). The
+   palette theme-switches via the --sx-* tokens in :root / [data-theme="dark"]. */
+.md-code-block .hljs-keyword { color: var(--sx-keyword); }
+.md-code-block .hljs-string,
+.md-code-block .hljs-meta .hljs-string { color: var(--sx-string); }
+.md-code-block .hljs-number,
+.md-code-block .hljs-literal { color: var(--sx-number); }
+.md-code-block .hljs-title,
+.md-code-block .hljs-title.function_,
+.md-code-block .hljs-section { color: var(--sx-fn); }
+.md-code-block .hljs-type,
+.md-code-block .hljs-built_in,
+.md-code-block .hljs-class .hljs-title { color: var(--sx-type); }
+.md-code-block .hljs-comment,
+.md-code-block .hljs-quote { color: var(--sx-comment); }
+.md-code-block .hljs-punctuation,
+.md-code-block .hljs-operator { color: var(--sx-punc); }
+.md-code-block .hljs-attr,
+.md-code-block .hljs-attribute { color: var(--sx-type); }
+/* HTML/CSS/JS token coverage so these don't fall back to flat base text. */
+.md-code-block .hljs-tag,
+.md-code-block .hljs-name,
+.md-code-block .hljs-selector-tag { color: var(--sx-keyword); }
+.md-code-block .hljs-selector-class,
+.md-code-block .hljs-selector-id { color: var(--sx-type); }
+.md-code-block .hljs-variable,
+.md-code-block .hljs-template-variable,
+.md-code-block .hljs-params { color: var(--sx-fn); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Chat page — info-bar, send button, SessionRail working-agents + activity
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Send button: terracotta CTA (enabled) + neutral ghost (disabled) ──
+   Styling lives here (not inline) so :disabled can override the bg — an inline
+   background:var(--accent) would win over any disabled rule. Disabled is a
+   clean neutral chip (--surface-2 + --ink-3), NOT faded terracotta, which read
+   as muddy/broken on the dark surface (design QA follow-up). */
+.chat-send-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: background 120ms ease-out, color 120ms ease-out,
+    box-shadow 100ms ease-out, filter 100ms ease-out;
+}
+.chat-send-btn:disabled {
+  background: var(--surface-2);
+  color: var(--ink-3);
+  cursor: not-allowed;
+  box-shadow: none;
+  filter: none;
+}
+.chat-send-btn:not(:disabled):hover {
+  filter: brightness(1.08);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.chat-send-btn:not(:disabled):active {
+  filter: brightness(0.92);
+}
+.chat-send-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ── Working agent identity dot with continuous pulse ── */
+/* The dot uses a CSS custom property --dot-color set inline from agentColor(). */
+@keyframes agent-working-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);    }
+  50%       { opacity: 0.5; transform: scale(0.78); }
+}
+
+.agent-working-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--dot-color, var(--info));
+  animation: agent-working-pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-working-dot {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+/* ── Rail enter animation — 200ms ease-out ── */
+@keyframes rail-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* design QA F6: apply the animation via the CLASS (not an inline style on the
+   element), so the prefers-reduced-motion guard below actually disables it. An
+   inline `animation:` could not be overridden by the @media rule. */
+.activity-event-row,
+.agent-working-row {
+  animation: rail-enter 200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-event-row,
+  .agent-working-row {
+    animation: none;
+  }
+}
+
+/* design QA F5: documented larger variant of the .h-section signature for the
+   chat info-bar route label (keeps the signature contract; no inline override). */
+.h-section--lg {
+  font-size: 15px;
+  letter-spacing: 0.05em;
+}
+
+/* ── Activity event row hover wash ── */
+.activity-event-row:hover {
+  background: color-mix(in srgb, var(--surface) 30%, transparent);
+}
+
+/* ── Working agent row hover wash ── */
+.agent-working-row:hover {
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+}

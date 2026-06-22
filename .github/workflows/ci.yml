@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# Cancel in-progress runs for the same PR/branch on new pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck-and-test:
+    name: typecheck + test + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      # Fail-fast: zero-deps script that checks every .claude/agents/*.md
+      # `tools:` frontmatter against .claude/settings.json `permissions.allow`.
+      # Catches the "agent declares MCP tool, allowlist is missing it, every
+      # subagent silently falls back to grep-only" failure mode that hid
+      # gossip_remember from native subagents for the entire project history
+      # until PR #384 / 2026-05-14. Runs in ~50ms before npm ci.
+      - name: Check MCP permissions (.claude/agents ↔ settings.json)
+        run: node scripts/check-mcp-permissions.mjs
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Build workspace packages in topological order so downstream
+      # typecheck / test / bundle steps can resolve @gossip/* imports
+      # against compiled dist/ output. `npm run build --workspaces` does
+      # NOT respect dep order — it walks the workspaces array as-listed,
+      # which produces build failures when a consumer builds before its
+      # dependency. Explicit order is the simplest correct fix.
+      #
+      # Topology (see each package.json @gossip/* deps):
+      #   types  →  client  →  tools  →  orchestrator  →  relay  →  cli
+      - name: Build @gossip/types
+        run: npm run build -w @gossip/types
+      - name: Build @gossip/client
+        run: npm run build -w @gossip/client
+      - name: Build @gossip/tools
+        run: npm run build -w @gossip/tools
+      - name: Build @gossip/orchestrator
+        run: npm run build -w @gossip/orchestrator
+      - name: Build @gossip/relay
+        run: npm run build -w @gossip/relay
+
+      - name: Typecheck — apps/cli
+        run: npx tsc --noEmit
+        working-directory: apps/cli
+
+      - name: Typecheck — packages/orchestrator
+        run: npx tsc --noEmit
+        working-directory: packages/orchestrator
+
+      # L2 boundary enforcement (spec 2026-04-19-l2-signal-writer-visibility).
+      # After L2 lands, every appendSignal(s) call must live in sanctioned
+      # files, and WRITER_INTERNAL must leak only through _writer-internal.ts.
+      # These greps fail CI on any regression — cheaper than re-running the
+      # full consensus round to catch it.
+      - name: L2 boundary — no raw appendSignal(s) outside sanctioned files
+        run: |
+          set -e
+          # Sanctioned callers (file-scoped):
+          #   packages/orchestrator/src/performance-writer.ts   (class definition)
+          #   packages/orchestrator/src/signal-helpers.ts       (helper impls)
+          #   packages/orchestrator/src/completion-signals.ts   (pre-L2 helper)
+          #   *.allowlist.ts                                    (documentation refs)
+          #   tests/**                                          (test exemption via WRITER_INTERNAL)
+          # Also ignore JSDoc / single-line comment lines — they only mention
+          # the method, they don't call it.
+          VIOLATIONS=$(grep -rnE '\.(appendSignal|appendSignals)\s*\(' \
+            packages/orchestrator/src apps/cli/src packages/relay/src 2>/dev/null \
+            | grep -vE '/(performance-writer|signal-helpers|completion-signals)\.ts:' \
+            | grep -vE '\.allowlist\.ts:' \
+            | grep -vE ':\s*(\*|//)' \
+            || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::L2 boundary violated — raw appendSignal(s) call outside sanctioned files:"
+            echo "$VIOLATIONS"
+            echo ""
+            echo "Fix: route through a signal-helpers.ts helper (emitConsensusSignals,"
+            echo "emitImplSignals, emitSandboxSignals, emitPipelineSignals, or"
+            echo "emitScoringAdjustmentSignals)."
+            exit 1
+          fi
+
+      - name: L2 boundary — WRITER_INTERNAL import confined to _writer-internal.ts
+        run: |
+          set -e
+          # Only signal-helpers.ts, completion-signals.ts, and _writer-internal.ts
+          # (the re-export) may import WRITER_INTERNAL. Tests may use it via
+          # the same import pattern (sanctioned test exemption).
+          LEAKS=$(grep -rnE "import\s*\{[^}]*WRITER_INTERNAL" \
+            packages/orchestrator/src apps/cli/src packages/relay/src 2>/dev/null \
+            | grep -vE '/(signal-helpers|completion-signals|_writer-internal|performance-writer)\.ts:' \
+            | grep -vE ':\s*(\*|//)' \
+            || true)
+          if [ -n "$LEAKS" ]; then
+            echo "::error::L2 boundary violated — WRITER_INTERNAL imported outside sanctioned files:"
+            echo "$LEAKS"
+            echo ""
+            echo "Fix: add a new helper to signal-helpers.ts instead of importing the Symbol directly."
+            exit 1
+          fi
+
+      # Known-broken suites are excluded via jest.config.base.js
+      # (KNOWN_BROKEN_SUITES) so local dev and CI share the same source of
+      # truth. Set RUN_KNOWN_BROKEN=1 locally when you're actively fixing
+      # one of them. See the config file for the list and debt tracking.
+      - name: Run tests
+        run: npm test -- --ci --reporters=default
+
+      # dashboard-v2 is a vite app and deliberately uses vitest, not the
+      # root jest config — it needs its own CI invocation.
+      - name: Run dashboard-v2 tests (vitest)
+        run: npm run test --workspace=packages/dashboard-v2
+
+      - name: Build MCP bundle
+        run: npm run build:mcp
+
+      - name: Verify MCP bundle size (informational)
+        run: |
+          ls -lh dist-mcp/mcp-server.js
+          SIZE=$(wc -c < dist-mcp/mcp-server.js)
+          echo "MCP bundle: $SIZE bytes"
+          # Fail if bundle explodes past 5MB — catches accidental inclusion
+          # of large native-agent dirs or vendor blobs.
+          if [ "$SIZE" -gt 5242880 ]; then
+            echo "::error::MCP bundle exceeded 5MB soft limit ($SIZE bytes)"
+            exit 1
+          fi

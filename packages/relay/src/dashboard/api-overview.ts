@@ -1,0 +1,291 @@
+import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
+import { join } from 'path';
+import { readJsonlWithRotated } from '@gossip/orchestrator';
+import { isUtilityAgent } from './utility-agents';
+import { countOpenActionableFindings } from './api-open-findings';
+
+interface AgentConfigLike {
+  id: string;
+  native?: boolean;
+}
+
+interface OverviewContext {
+  agentConfigs: AgentConfigLike[];
+  relayConnections: number;
+  connectedAgentIds: string[];
+}
+
+export interface OverviewResponse {
+  agentsOnline: number;
+  relayCount: number;
+  relayConnected: number;
+  nativeCount: number;
+  consensusRuns: number;
+  totalFindings: number;
+  confirmedFindings: number;
+  totalSignals: number;
+  tasksCompleted: number;
+  tasksFailed: number;
+  avgDurationMs: number;
+  lastConsensusTimestamp: string;
+  actionableFindings: number;
+  /** Task counts for each of the last 12 hours (index 0 = 12h ago, index 11 = current hour). */
+  hourlyActivity: number[];
+  /** Fleet-wide skill verdict counts bucketed by YAML frontmatter `status:` field. */
+  skillVerdictSummary?: {
+    pending: number;
+    passed: number;
+    failed: number;
+    silent_skill: number;
+    insufficient_evidence: number;
+    inconclusive: number;
+  };
+  /** Aggregate count of invalid finding type tokens from the last 20 consensus reports. */
+  droppedFindingTypeCounts?: Record<string, number>;
+}
+
+/**
+ * Hand-rolled frontmatter status parser. Returns the value of `status:` in
+ * the YAML frontmatter block, or null if none. Tolerant of quoted values.
+ */
+function readSkillStatus(path: string): string | null {
+  try {
+    const content = readFileSync(path, 'utf-8');
+    const m = content.match(/^---\n([\s\S]*?)\n---/);
+    if (!m) return null;
+    const block = m[1];
+    for (const line of block.split('\n')) {
+      const sm = line.match(/^status\s*:\s*["']?([A-Za-z_][A-Za-z0-9_-]*)["']?\s*$/);
+      if (sm) return sm[1].toLowerCase();
+    }
+    return null;
+  } catch { return null; }
+}
+
+function computeSkillVerdictSummary(projectRoot: string): OverviewResponse['skillVerdictSummary'] {
+  const agentsDir = join(projectRoot, '.gossip', 'agents');
+  if (!existsSync(agentsDir)) return undefined;
+  const summary = { pending: 0, passed: 0, failed: 0, silent_skill: 0, insufficient_evidence: 0, inconclusive: 0 };
+  let seen = false;
+  try {
+    const agentIds = readdirSync(agentsDir);
+    for (const agentId of agentIds) {
+      const skillsDir = join(agentsDir, agentId, 'skills');
+      if (!existsSync(skillsDir)) continue;
+      let entries: string[];
+      try { entries = readdirSync(skillsDir); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.endsWith('.md')) continue;
+        const status = readSkillStatus(join(skillsDir, entry));
+        if (!status) continue;
+        seen = true;
+        if (status === 'pending') summary.pending++;
+        else if (status === 'passed') summary.passed++;
+        else if (status === 'failed') summary.failed++;
+        else if (status === 'silent_skill') summary.silent_skill++;
+        else if (status === 'insufficient_evidence') summary.insufficient_evidence++;
+        else if (status === 'inconclusive') summary.inconclusive++;
+      }
+    }
+  } catch { return undefined; }
+  return seen ? summary : summary;
+}
+
+function computeDroppedFindingTypeCounts(projectRoot: string): Record<string, number> | undefined {
+  const dir = join(projectRoot, '.gossip', 'consensus-reports');
+  if (!existsSync(dir)) return undefined;
+  try {
+    const files = readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        const full = join(dir, f);
+        try { return { full, mtime: statSync(full).mtimeMs }; } catch { return null; }
+      })
+      .filter((x): x is { full: string; mtime: number } => x !== null)
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, 20);
+    const counts: Record<string, number> = {};
+    let seen = false;
+    for (const { full } of files) {
+      try {
+        const report = JSON.parse(readFileSync(full, 'utf-8'));
+        const dropped = report?.droppedFindingsByType;
+        if (!dropped || typeof dropped !== 'object') continue;
+        for (const [type, count] of Object.entries(dropped)) {
+          if (typeof count !== 'number' || count <= 0) continue;
+          counts[type] = (counts[type] ?? 0) + count;
+          seen = true;
+        }
+      } catch { /* skip */ }
+    }
+    return seen ? counts : counts;
+  } catch { return undefined; }
+}
+
+export async function overviewHandler(projectRoot: string, ctx: OverviewContext): Promise<OverviewResponse> {
+  const nativeCount = ctx.agentConfigs.filter(a => a.native).length;
+  const relayConnected = ctx.connectedAgentIds.length;
+  const relayCount = ctx.agentConfigs.filter(a => !a.native).length;
+
+  // "Online" = agents currently executing tasks.
+  // Relay agents: counted only if they have an in-flight task (connected + idle is not "online" for monitoring purposes).
+  // Native agents: counted if they have an active dispatch in task-graph.jsonl without a completion event.
+  // Cutoff: tasks older than 30 minutes are stale and ignored.
+  const activeAgentIds = new Set<string>();
+  const STALE_MS = 30 * 60 * 1000;
+  let tasksCompleted = 0;
+  let tasksFailed = 0;
+  let totalDuration = 0;
+  let durationCount = 0;
+  const hourlyActivity = new Array(12).fill(0);
+  const now = Date.now();
+  const hourMs = 60 * 60 * 1000;
+
+  // Single pass over task-graph.jsonl (+ rotated .1) for active agents,
+  // task stats, and hourly buckets. Rotation puts pre-rotation task.created in
+  // .jsonl.1; reading only the primary makes long-lived tasks orphan-completion
+  // and underreports taskCompletionRate / reliability bars.
+  const graphPath = join(projectRoot, '.gossip', 'task-graph.jsonl');
+  const archivePath = graphPath + '.1';
+  if (existsSync(graphPath) || existsSync(archivePath)) {
+    try {
+      const created = new Map<string, { agentId: string; timestamp: string }>();
+      const finished = new Set<string>();
+      const lines: string[] = [];
+      if (existsSync(archivePath)) {
+        lines.push(...readFileSync(archivePath, 'utf-8').split('\n').filter(Boolean));
+      }
+      if (existsSync(graphPath)) {
+        lines.push(...readFileSync(graphPath, 'utf-8').split('\n').filter(Boolean));
+      }
+      for (const line of lines) {
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === 'task.created') {
+            if (ev.agentId && isUtilityAgent(ev.agentId)) continue;
+            if (ev.taskId && ev.agentId) {
+              created.set(ev.taskId, { agentId: ev.agentId, timestamp: ev.timestamp || '' });
+            }
+            // Hourly activity buckets (index 0 = 12h ago, index 11 = current hour)
+            if (ev.timestamp) {
+              const ts = new Date(ev.timestamp).getTime();
+              if (Number.isFinite(ts)) {
+                const ageMs = now - ts;
+                if (ageMs >= 0 && ageMs < 12 * hourMs) {
+                  const idx = 11 - Math.floor(ageMs / hourMs);
+                  if (idx >= 0 && idx < 12) hourlyActivity[idx]++;
+                }
+              }
+            }
+          } else if (ev.type === 'task.completed') {
+            if (ev.taskId) finished.add(ev.taskId);
+            tasksCompleted++;
+            // Exclude durations exceeding 4 hours — anything longer indicates a fake/guessed
+            // dispatched_at_ms. Real tasks top out around ~4h for the slowest consensus rounds;
+            // the prior 30d clamp was defense-in-depth but left legacy bogus rows (181-365 days
+            // from synthesized timestamps pre-PR #88) free to skew avgDurationMs into the hours.
+            const MAX_VALID_DURATION_MS = 4 * 60 * 60 * 1000;
+            if (typeof ev.duration === 'number' && ev.duration > 0 && ev.duration <= MAX_VALID_DURATION_MS) {
+              totalDuration += ev.duration;
+              durationCount++;
+            }
+          } else if (ev.type === 'task.failed') {
+            if (ev.taskId) finished.add(ev.taskId);
+            tasksFailed++;
+          } else if (ev.type === 'task.cancelled') {
+            if (ev.taskId) finished.add(ev.taskId);
+          }
+        } catch { /* skip */ }
+      }
+      for (const [taskId, info] of created) {
+        if (finished.has(taskId)) continue;
+        const ts = info.timestamp ? new Date(info.timestamp).getTime() : NaN;
+        if (isNaN(ts) || now - ts > STALE_MS) continue;
+        activeAgentIds.add(info.agentId);
+      }
+    } catch { /* empty */ }
+  }
+
+  const agentsOnline = activeAgentIds.size;
+
+  let totalSignals = 0;
+  let consensusRuns = 0;
+  let totalFindings = 0;
+  let confirmedFindings = 0;
+  let lastConsensusTimestamp = '';
+  // Per-run buckets for the consensus-runs count: mirror api-consensus.ts:98's
+  // "real consensus run" definition (≥2 agents, ≥3 signals). Without this filter,
+  // SystemPulse.consensusRuns counts manual/singleton signal recordings and
+  // diverges from the Debates page which uses the filtered definition.
+  interface RunBucket { agents: Set<string>; signalCount: number; }
+  const runBuckets = new Map<string, RunBucket>();
+
+  const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
+  {
+    try {
+      const raw = readJsonlWithRotated(perfPath);
+      const lines = raw ? raw.trim().split('\n').filter(Boolean) : [];
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          // totalSignals counts only real consensus signals — impl_*, signal_retracted,
+          // consensus_round_retracted tombstones, and future metadata rows are not
+          // "signals" for this counter. Also drop `_system` sentinel rows at the
+          // data layer (round tombstones use agentId='_system').
+          if (
+            entry.type === 'consensus'
+            && typeof entry.signal === 'string'
+            && entry.signal !== 'signal_retracted'
+            && entry.signal !== 'consensus_round_retracted'
+            && entry.agentId !== '_system'
+          ) {
+            totalSignals++;
+          }
+          // Skip round-retraction tombstones from per-run aggregation.
+          if (entry.signal === 'consensus_round_retracted' || entry.agentId === '_system') {
+            continue;
+          }
+          if (entry.type === 'consensus' && (entry.consensusId || entry.taskId)) {
+            const runId = entry.consensusId ?? entry.taskId;
+            let bucket = runBuckets.get(runId);
+            if (!bucket) {
+              bucket = { agents: new Set(), signalCount: 0 };
+              runBuckets.set(runId, bucket);
+            }
+            bucket.signalCount++;
+            if (entry.agentId) bucket.agents.add(entry.agentId);
+            if (entry.counterpartId) bucket.agents.add(entry.counterpartId);
+          }
+          if (entry.consensusId && entry.timestamp > lastConsensusTimestamp) {
+            lastConsensusTimestamp = entry.timestamp;
+          }
+          if (entry.signal === 'agreement' || entry.signal === 'unique_confirmed' || entry.signal === 'consensus_verified') {
+            totalFindings++;
+            confirmedFindings++;
+          } else if (entry.signal === 'disagreement' || entry.signal === 'hallucination_caught') {
+            totalFindings++;
+          } else if (entry.signal === 'new_finding') {
+            totalFindings++;
+          } else if (entry.signal === 'unverified' || entry.signal === 'unique_unconfirmed') {
+            totalFindings++;
+          }
+        } catch { /* skip malformed */ }
+      }
+    } catch { /* empty */ }
+  }
+  // Only count runs with ≥2 agents AND ≥3 signals — matches api-consensus.ts:98.
+  for (const bucket of runBuckets.values()) {
+    if (bucket.agents.size >= 2 && bucket.signalCount >= 3) consensusRuns++;
+  }
+
+  // Resolution-aware open-findings count: read implementation-findings.jsonl once.
+  // Uses the shared predicate from api-open-findings so the two endpoints can never drift.
+  const actionableFindings = countOpenActionableFindings(projectRoot);
+
+  const avgDurationMs = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
+
+  const skillVerdictSummary = computeSkillVerdictSummary(projectRoot);
+  const droppedFindingTypeCounts = computeDroppedFindingTypeCounts(projectRoot);
+
+  return { agentsOnline, relayCount, relayConnected, nativeCount, consensusRuns, totalFindings, confirmedFindings, totalSignals, tasksCompleted, tasksFailed, avgDurationMs, lastConsensusTimestamp, actionableFindings, hourlyActivity, skillVerdictSummary, droppedFindingTypeCounts };
+}

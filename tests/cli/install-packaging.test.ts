@@ -1,0 +1,172 @@
+/**
+ * Tarball integrity regression guard — install-packaging.test.ts
+ *
+ * Verifies that the root package.json `files` array includes every artifact
+ * required for a working npm install, and that those artifacts are
+ * structurally sound (present, non-empty, contain expected markers).
+ *
+ * All assertions use fs.readFileSync / existsSync / statSync only.
+ * No exec, no spawnSync, no network calls.
+ */
+
+import { readFileSync, existsSync, statSync } from 'fs';
+import { resolve } from 'path';
+
+// Resolve project root from tests/cli/ → ../../
+const PROJECT_ROOT = resolve(__dirname, '..', '..');
+
+function pkgFiles(): string[] {
+  const raw = readFileSync(resolve(PROJECT_ROOT, 'package.json'), 'utf-8');
+  const pkg = JSON.parse(raw) as { files?: string[] };
+  return pkg.files ?? [];
+}
+
+// ── package.json `files` membership ───────────────────────────────────────
+
+describe('package.json `files` — required tarball entries', () => {
+  let files: string[];
+
+  beforeAll(() => {
+    files = pkgFiles();
+  });
+
+  it('includes docs/HANDBOOK.md', () => {
+    expect(files).toContain('docs/HANDBOOK.md');
+  });
+
+  it('includes docs/RULES.md', () => {
+    // Source of truth for rules-content.ts (which reads it via readFileSync
+    // with the same fallback chain as HANDBOOK.md). A missing entry here ships
+    // a tarball whose generateRulesContent() throws on gossip_setup.
+    expect(files).toContain('docs/RULES.md');
+  });
+
+  it('includes dist-mcp/', () => {
+    expect(files).toContain('dist-mcp/');
+  });
+
+  it('includes dist-dashboard/', () => {
+    expect(files).toContain('dist-dashboard/');
+  });
+
+  it('includes scripts/postinstall.js', () => {
+    expect(files).toContain('scripts/postinstall.js');
+  });
+});
+
+// ── docs/HANDBOOK.md integrity ────────────────────────────────────────────
+
+describe('docs/HANDBOOK.md — file integrity', () => {
+  const handbookPath = resolve(PROJECT_ROOT, 'docs', 'HANDBOOK.md');
+
+  it('exists on disk', () => {
+    expect(existsSync(handbookPath)).toBe(true);
+  });
+
+  it('is larger than 5 000 bytes (catches silent truncation)', () => {
+    // Handbook is ~28 KB; a 5 KB floor catches accidental truncation or
+    // replacement with a stub while still being generous enough not to
+    // break when non-essential sections are trimmed.
+    const { size } = statSync(handbookPath);
+    expect(size).toBeGreaterThan(5000);
+  });
+});
+
+// ── docs/RULES.md integrity ──────────────────────────────────────────────
+
+describe('docs/RULES.md — file integrity', () => {
+  const rulesPath = resolve(PROJECT_ROOT, 'docs', 'RULES.md');
+
+  it('exists on disk', () => {
+    expect(existsSync(rulesPath)).toBe(true);
+  });
+
+  it('contains the {{AGENT_LIST}} placeholder (substitution token present)', () => {
+    const body = readFileSync(rulesPath, 'utf-8');
+    expect(body).toContain('{{AGENT_LIST}}');
+  });
+
+  it('is larger than 3 000 bytes (catches silent truncation)', () => {
+    const { size } = statSync(rulesPath);
+    expect(size).toBeGreaterThan(3000);
+  });
+});
+
+// ── apps/cli/src/sandbox.ts — rotation constants ────────────────────────
+
+describe('apps/cli/src/sandbox.ts — exports rotation constants', () => {
+  let source: string;
+  beforeAll(() => {
+    source = readFileSync(resolve(PROJECT_ROOT, 'apps', 'cli', 'src', 'sandbox.ts'), 'utf-8');
+  });
+
+  it('exports MAX_PREMISE_VERIFICATION_BYTES (Stage 2 claim log rotation)', () => {
+    // Source-scan, not import — keeps this test as a file-convention check
+    // with no subprocess. PR C depends on this constant to bound the
+    // .gossip/premise-verification.jsonl log.
+    expect(source).toMatch(/export const MAX_PREMISE_VERIFICATION_BYTES\s*=/);
+  });
+});
+
+// ── scripts/postinstall.js integrity ─────────────────────────────────────
+
+describe('scripts/postinstall.js — error-path regression guard', () => {
+  let source: string;
+
+  beforeAll(() => {
+    source = readFileSync(resolve(PROJECT_ROOT, 'scripts', 'postinstall.js'), 'utf-8');
+  });
+
+  it('contains console.error (fatal error reporting path present)', () => {
+    // Guards against a silent-warn revert where console.error is replaced
+    // with console.log, masking install corruption from users.
+    expect(source).toContain('console.error');
+  });
+
+  it('contains process.exit(1) (hard-exit on fatal install failure)', () => {
+    // Guards against the error path being softened to a warning-only exit.
+    // If dist-mcp/mcp-server.js is missing in a non-git-clone install, the
+    // postinstall MUST exit non-zero so npm/npx surfaces the failure.
+    expect(source).toContain('process.exit(1)');
+  });
+
+  it('wraps writeFileSync in try/catch with console.warn (no EACCES abort on RO install dirs)', () => {
+    // Regression guard: global npm installs (root-owned dirs) MUST NOT abort
+    // with EACCES. The writeFileSync call must be wrapped and fall through to
+    // a warn without process.exit on failure.
+    expect(source).toMatch(/try\s*{[\s\S]*writeFileSync\(mcpConfig[\s\S]*}\s*catch/);
+    expect(source).toContain('console.warn');
+    expect(source).toMatch(/could not write \.mcp\.json/);
+  });
+
+  it('preserves existing .mcp.json entries via merge (no clobber)', () => {
+    // Regression guard (2026-04-24, consensus ce53c4ee-042444c3): postinstall
+    // must read an existing .mcp.json and merge the gossipcat entry, preserving
+    // user-added MCP server entries and unrelated top-level fields. Earlier
+    // behavior unconditionally overwrote the file on every npm install.
+    expect(source).toMatch(/readFileSync\([^)]*mcpConfig/);
+    expect(source).toMatch(/\.\.\.existing\b/);
+    expect(source).toMatch(/\.\.\.existingServers\b/);
+    // Malformed existing config must skip the write, not exit(1) — otherwise
+    // npm install breaks on a corrupt user file we can't parse.
+    expect(source).toMatch(/malformed[\s\S]*process\.exit\(0\)/);
+  });
+
+  it('git-clone early-exit is gated on the built server existing (f18 build recovery)', () => {
+    // Regression guard (f18, consensus 6eed37aa-dfba43ca): the
+    // "git clone — .mcp.json exists, skip" early-exit must NOT fire when
+    // dist-mcp/mcp-server.js is absent. Otherwise a fresh clone (or a deleted
+    // dist) exits 0 and never reaches the auto-build path at the end of the
+    // script, leaving the project unrunnable. The early-exit condition must
+    // include existsSync(mcpServerPath).
+    const earlyExit = source.match(
+      /if\s*\(\s*isGitClone\s*&&\s*existsSync\([^)]*\.mcp\.json[^)]*\)([\s\S]*?)\)\s*{/,
+    );
+    expect(earlyExit).not.toBeNull();
+    // The condition guarding the `.mcp.json already exists — skipping` exit
+    // must also require existsSync(mcpServerPath).
+    expect(earlyExit![0]).toMatch(/existsSync\(mcpServerPath\)/);
+    // And the auto-build recovery path (git clone, missing server) must remain.
+    expect(source).toMatch(/!existsSync\(mcpServerPath\)[\s\S]*npm run build:mcp/);
+  });
+});

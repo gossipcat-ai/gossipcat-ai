@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "gossipcat": {
+      "command": "node",
+      "args": ["/absolute/path/to/gossipcat/dist-mcp/mcp-server.js"],
+      "env": {
+        "GOOGLE_API_KEY": "your-gemini-key"
+      }
+    }
+  }
+}

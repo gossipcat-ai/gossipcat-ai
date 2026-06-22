@@ -1,0 +1,26 @@
+{
+  "main_agent": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6"
+  },
+  "agents": {
+    "claude-arch": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "preset": "architect",
+      "skills": ["typescript", "system_design", "code_review"]
+    },
+    "gpt-impl": {
+      "provider": "openai",
+      "model": "gpt-4o",
+      "preset": "implementer",
+      "skills": ["typescript", "implementation", "testing"]
+    },
+    "local-reviewer": {
+      "provider": "local",
+      "model": "qwen2.5:32b",
+      "preset": "reviewer",
+      "skills": ["code_review", "debugging"]
+    }
+  }
+}

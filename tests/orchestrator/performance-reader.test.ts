@@ -1,0 +1,1160 @@
+import {
+  PerformanceReader,
+  __resetWarnRateLimiterForTests,
+} from '../../packages/orchestrator/src/performance-reader';
+import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
+import { join } from 'path';
+
+/**
+ * Skill-gated hallucination recovery test helpers — write a bound skill file
+ * with the given category frontmatter under
+ * `<TEST_DIR>/.gossip/agents/<agentId>/skills/<name>.md`. Mirrors the
+ * production layout `hasSkillForCategory` walks.
+ */
+function writeBoundSkill(agentId: string, category: string, skillName = 'test-skill'): void {
+  const dir = join(TEST_DIR, '.gossip', 'agents', agentId, 'skills');
+  mkdirSync(dir, { recursive: true });
+  const body = `---\nname: ${skillName}\ncategory: ${category}\nagent: ${agentId}\n---\n\n# ${skillName}\n`;
+  writeFileSync(join(dir, `${skillName}.md`), body);
+}
+
+const TEST_DIR = join(__dirname, '..', '..', '.test-perf-reader');
+
+function writeSignals(signals: any[]): void {
+  mkdirSync(join(TEST_DIR, '.gossip'), { recursive: true });
+  const data = signals.map(s => JSON.stringify(s)).join('\n') + '\n';
+  writeFileSync(join(TEST_DIR, '.gossip', 'agent-performance.jsonl'), data);
+}
+
+let warnSpy: jest.SpyInstance;
+
+beforeEach(() => {
+  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  mkdirSync(TEST_DIR, { recursive: true });
+  // Torn-line fixtures route through the module-level warn rate-limiter; reset
+  // it and silence the warn so tests stay hermetic and CI output stays clean.
+  __resetWarnRateLimiterForTests();
+  warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  warnSpy.mockRestore();
+});
+
+afterAll(() => {
+  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+});
+
+describe('PerformanceReader', () => {
+  it('returns empty scores when no file exists', () => {
+    const reader = new PerformanceReader(TEST_DIR);
+    const scores = reader.getScores();
+    expect(scores.size).toBe(0);
+  });
+
+  it('returns empty scores for an empty file', () => {
+    writeSignals([]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const scores = reader.getScores();
+    expect(scores.size).toBe(0);
+  });
+
+  it('returns neutral weight (1.0) for unknown agent', () => {
+    const reader = new PerformanceReader(TEST_DIR);
+    expect(reader.getDispatchWeight('unknown-agent')).toBe(1.0);
+  });
+
+  it('returns neutral weight when fewer than 3 signals', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    expect(reader.getDispatchWeight('rev')).toBe(1.0); // not enough data
+  });
+
+  it('boosts weight for agent with agreements', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 't4', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const weight = reader.getDispatchWeight('rev');
+    expect(weight).toBeGreaterThan(1.0); // boosted
+  });
+
+  it('reduces weight for agent with hallucinations', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const weight = reader.getDispatchWeight('bad');
+    expect(weight).toBeLessThan(1.0); // penalized
+  });
+
+  it('tracks agreement and disagreement counts', () => {
+    // PR 4 Part B: disagreement requires category to count — otherwise it's
+    // treated as an operational timeout/transport signal and no-op'd. Tag with
+    // a finding-evaluation category so the assertion still exercises the
+    // review-verdict accumulator path.
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', category: 'testing', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'new_finding', agentId: 'rev', taskId: 't4', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('rev');
+    expect(score).not.toBeNull();
+    expect(score!.agreements).toBe(1);
+    expect(score!.disagreements).toBe(1);
+    expect(score!.uniqueFindings).toBe(2); // unique_confirmed + new_finding
+    expect(score!.totalSignals).toBe(4);
+  });
+
+  it('handles malformed lines gracefully', () => {
+    mkdirSync(join(TEST_DIR, '.gossip'), { recursive: true });
+    const recent = new Date().toISOString();
+    writeFileSync(
+      join(TEST_DIR, '.gossip', 'agent-performance.jsonl'),
+      `{"type":"consensus","signal":"agreement","agentId":"rev","taskId":"t1","evidence":"","timestamp":"${recent}"}\nnot json\n{"broken\n`
+    );
+    const reader = new PerformanceReader(TEST_DIR);
+    const scores = reader.getScores();
+    expect(scores.size).toBe(1); // only the valid line
+    expect(scores.get('rev')!.agreements).toBe(1);
+  });
+
+  it('computes reliability as weighted accuracy + uniqueness', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('rev')!;
+    // Ratio-based: rawAccuracy = 3/3 = 1.0, accuracy = 1.0
+    // Uniqueness: ratio-based with confidence gating.
+    //   unique=1, agreements=2 → rawUniqueness = 1/3 = 0.33
+    //   uniqueTotal=3, confidence = 1 - exp(-3/10) ≈ 0.26
+    //   uniqueness = 0.5 + (0.33 - 0.5) * 0.26 ≈ 0.46
+    // Reliability = accuracy*0.75 + uniqueness*0.15 + impactScore*0.10
+    //   ≈ 0.75 + 0.069 + 0.05 = 0.869
+    expect(score.accuracy).toBeCloseTo(1.0, 1);
+    expect(score.uniqueness).toBeGreaterThan(0.4);
+    expect(score.uniqueness).toBeLessThan(0.55);
+    expect(score.reliability).toBeGreaterThan(0.8);
+    expect(score.reliability).toBeLessThan(0.95);
+  });
+
+  it('clamps scores to 0-1 range', () => {
+    const manyBad = Array.from({ length: 10 }, (_, i) => ({
+      type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: `t${i}`, evidence: '', timestamp: new Date().toISOString(),
+    }));
+    const manyGood = Array.from({ length: 10 }, (_, i) => ({
+      type: 'consensus', signal: 'agreement', agentId: 'good', taskId: `t${i}`, evidence: '', timestamp: new Date().toISOString(),
+    }));
+    writeSignals([...manyBad, ...manyGood]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const badScore = reader.getAgentScore('bad')!;
+    const goodScore = reader.getAgentScore('good')!;
+    expect(badScore.accuracy).toBe(0);
+    expect(goodScore.accuracy).toBe(1);
+  });
+
+  it('handles multiple agents independently', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'good', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'agreement', agentId: 'good', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'agreement', agentId: 'good', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't4', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't5', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't6', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    expect(reader.getDispatchWeight('good')).toBeGreaterThan(1.0);
+    expect(reader.getDispatchWeight('bad')).toBeLessThan(1.0);
+  });
+
+  it('boosts winner accuracy and totalSignals when counterpart loses disagreement', () => {
+    // Agent "loser" gets disagreement signals, counterpartId points to "winner".
+    // PR 4 Part B: category required for finding-evaluation accumulation.
+    writeSignals([
+      { type: 'consensus', signal: 'disagreement', agentId: 'loser', category: 'testing', taskId: 't1', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'loser', category: 'testing', taskId: 't2', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'loser', category: 'testing', taskId: 't3', counterpartId: 'winner', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    // Loser: ratio = 0/3 = 0 (3 disagreements add to total but not correct)
+    const loserScore = reader.getAgentScore('loser')!;
+    expect(loserScore.accuracy).toBe(0);
+    expect(loserScore.totalSignals).toBe(3);
+    // Winner: ratio = 3/3 = 1.0 (counterpart bonus adds to weighted correct & total)
+    // totalSignals counts only rows where agentId == winner — here that's 0.
+    const winnerScore = reader.getAgentScore('winner')!;
+    expect(winnerScore.accuracy).toBeCloseTo(1.0, 1);
+    expect(winnerScore.totalSignals).toBe(0);
+    // Not enough signal rows (< 3) → neutral dispatch weight
+    expect(reader.getDispatchWeight('winner')).toBe(1.0);
+  });
+
+  it('ignores empty counterpartId', () => {
+    // PR 4 Part B: category required; otherwise the guard skips the
+    // counterpartId handling altogether. Still exercises the
+    // empty/null counterpartId branch.
+    writeSignals([
+      { type: 'consensus', signal: 'disagreement', agentId: 'a', category: 'testing', taskId: 't1', counterpartId: '', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'a', category: 'testing', taskId: 't2', counterpartId: null, evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'a', category: 'testing', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const scores = reader.getScores();
+    // Only agent 'a' should exist — no '' or 'null' keys
+    expect(scores.size).toBe(1);
+    expect(scores.has('')).toBe(false);
+    expect(scores.has('null')).toBe(false);
+  });
+
+  it('does not count unknown signal types toward totalSignals', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'a', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'FAKE_SIGNAL', agentId: 'a', taskId: 't2', evidence: '', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'garbage', agentId: 'a', taskId: 't3', evidence: '', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('a')!;
+    expect(score.totalSignals).toBe(1); // only the valid agreement
+    expect(score.agreements).toBe(1);
+  });
+
+  it('boosts uniqueness for unique_unconfirmed signals', () => {
+    writeSignals([
+        { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'a', taskId: 't1', timestamp: new Date().toISOString() },
+        { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'a', taskId: 't2', timestamp: new Date().toISOString() },
+        { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'a', taskId: 't3', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const scoreA = reader.getAgentScore('a')!;
+    // 3 unique_unconfirmed: weightedUnique = 3 * 0.05 = 0.15
+    // uniqueness = 0.5 + 0.5 * (1 - exp(-0.15 * 1.5)) ≈ 0.60
+    expect(scoreA.uniqueness).toBeGreaterThan(0.55);
+    expect(scoreA.uniqueness).toBeLessThan(0.65);
+    expect(scoreA.accuracy).toBe(0.5);
+  });
+
+  it('time decay reduces good agent reliability toward 0.5', () => {
+    const threeWeeksAgo = new Date(Date.now() - 21 * 86400000).toISOString();
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'good', taskId: 't1', evidence: '', timestamp: threeWeeksAgo },
+      { type: 'consensus', signal: 'agreement', agentId: 'good', taskId: 't2', evidence: '', timestamp: threeWeeksAgo },
+      { type: 'consensus', signal: 'agreement', agentId: 'good', taskId: 't3', evidence: '', timestamp: threeWeeksAgo },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('good')!;
+    // 3 agreements = perfect accuracy, but 21 days old
+    // Should decay toward 0.5 (lower than the raw ~1.0 reliability)
+    expect(score.reliability).toBeGreaterThan(0.5);
+    expect(score.reliability).toBeLessThan(0.8);
+  });
+
+  it('time decay slowly rehabilitates bad agents (21-day half-life)', () => {
+    const threeWeeksAgo = new Date(Date.now() - 21 * 86400000).toISOString();
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't1', evidence: '', timestamp: threeWeeksAgo },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't2', evidence: '', timestamp: threeWeeksAgo },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'bad', taskId: 't3', evidence: '', timestamp: threeWeeksAgo },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('bad')!;
+    // 3 hallucinations = low reliability. Bad agents DO decay toward 0.5, but at 3x slower
+    // rate than good agents (21-day half-life vs 7-day). After exactly 21 days (1 half-life),
+    // they are halfway back to neutral — still below 0.5 but measurably higher than raw score.
+    expect(score.reliability).toBeLessThan(0.5);
+  });
+
+  it('neutral agent (0.5) is unaffected by time decay', () => {
+    // An agent with no signals defaults to no score (null).
+    // An agent with equal positive/negative should hover near 0.5.
+    const threeWeeksAgo = new Date(Date.now() - 21 * 86400000).toISOString();
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'neutral', taskId: 't1', evidence: '', timestamp: threeWeeksAgo },
+      // PR 4 Part B: category required so the disagreement counts toward weightedTotal.
+      { type: 'consensus', signal: 'disagreement', agentId: 'neutral', category: 'testing', taskId: 't2', evidence: '', timestamp: threeWeeksAgo },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('neutral')!;
+    // ~0.5 accuracy, time decay should not push it below 0.5 (since it's ~0.5 already)
+    expect(score.reliability).toBeGreaterThanOrEqual(0.3);
+    expect(score.reliability).toBeLessThanOrEqual(0.55);
+  });
+
+  // ── PR 4 Part B: operational disagreement no-op guard ──────────────────
+  //
+  // Write sites that emit finding-evaluation disagreements (consensus-engine
+  // synthesis, gossip_signals record, collect provisional signals) MUST stamp
+  // category. Once Part A stamps category at every finding-evaluation site,
+  // any disagreement signal still arriving uncategorized is by definition
+  // operational (e.g. native-tasks.ts:recordTimeoutSignal) and must not touch
+  // weightedTotal/disagreements/categoryHallucinated. Mirrors the
+  // task_timeout/task_empty branch.
+  describe('disagreement no-op guard (PR 4 Part B)', () => {
+    it('orphan disagreement without category does not hit weightedTotal or disagreements', () => {
+      writeSignals([
+        // Anchor with a categorized agreement so the agent exists with
+        // finding-evaluation context (totalSignals=2, 1 real verdict).
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'testing', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+        // Operational disagreement — timeout-shaped, no category by design.
+        { type: 'consensus', signal: 'disagreement', agentId: 'rev', taskId: 't2', evidence: 'agent timed out', timestamp: new Date().toISOString() },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // totalSignals increments before the switch — observability preserved.
+      expect(score.totalSignals).toBe(2);
+      // But the operational disagreement must NOT appear in disagreements
+      // or drag accuracy down.
+      expect(score.disagreements).toBe(0);
+      // weightedCorrect / weightedTotal both advanced only by the categorized
+      // agreement → accuracy ≈ 1.0.
+      expect(score.accuracy).toBeCloseTo(1.0, 1);
+    });
+
+    it('categorized disagreement still accumulates and drags accuracy', () => {
+      writeSignals([
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'testing', taskId: 't1', evidence: '', timestamp: new Date().toISOString() },
+        { type: 'consensus', signal: 'disagreement', agentId: 'rev', category: 'testing', taskId: 't2', evidence: 'wrong verdict', timestamp: new Date().toISOString() },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      expect(score.disagreements).toBe(1);
+      // 1 agree (correct) / 2 evaluated → ~0.5 accuracy.
+      expect(score.accuracy).toBeGreaterThan(0.4);
+      expect(score.accuracy).toBeLessThan(0.6);
+      // categoryHallucinated should track the disagreement for per-category
+      // graduation math.
+      expect(score.categoryHallucinated?.testing ?? 0).toBe(1);
+    });
+
+    it('operational disagreement does NOT give winner counterpart credit', () => {
+      // Without category, the winner branch is skipped entirely so the
+      // counterpart doesn't get an undeserved boost from a transport event.
+      writeSignals([
+        { type: 'consensus', signal: 'disagreement', agentId: 'loser', counterpartId: 'winner', taskId: 't1', evidence: 'timeout', timestamp: new Date().toISOString() },
+        { type: 'consensus', signal: 'disagreement', agentId: 'loser', counterpartId: 'winner', taskId: 't2', evidence: 'timeout', timestamp: new Date().toISOString() },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const winnerScore = reader.getAgentScore('winner')!;
+      // Winner never accumulated anything — totalSignals stays 0, confirming
+      // the Part B guard skipped the counterpart credit path entirely.
+      // getAgentScore returns a neutral-default row for unknown agents rather
+      // than null, so we assert on the counters, not row presence.
+      expect(winnerScore.totalSignals).toBe(0);
+      expect(winnerScore.agreements).toBe(0);
+      expect(winnerScore.disagreements).toBe(0);
+    });
+  });
+});
+
+describe('PerformanceReader.getCountersSince', () => {
+  it('returns {correct: 0, hallucinated: 0} when no matching signals exist', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-a', taskId: 't1', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const counters = reader.getCountersSince('agent-2', 'cat-a', 0);
+    expect(counters).toEqual({ correct: 0, hallucinated: 0 });
+    const counters2 = reader.getCountersSince('agent-1', 'cat-b', 0);
+    expect(counters2).toEqual({ correct: 0, hallucinated: 0 });
+  });
+
+  it('lifetime mode (sinceMs=0) counts all non-retracted signals including >30d old', () => {
+    const fortyDaysAgo = new Date(Date.now() - 40 * 86400000).toISOString();
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400000).toISOString();
+    writeSignals([
+      // Old signals (should be counted)
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-a', taskId: 't1', timestamp: fortyDaysAgo },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'agent-1', category: 'cat-a', taskId: 't2', timestamp: fortyDaysAgo },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-1', category: 'cat-a', taskId: 't3', timestamp: fortyDaysAgo },
+      // Recent signals (should be counted)
+      { type: 'consensus', signal: 'category_confirmed', agentId: 'agent-1', category: 'cat-a', taskId: 't4', timestamp: tenDaysAgo },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-1', category: 'cat-a', taskId: 't5', timestamp: tenDaysAgo },
+      // Irrelevant signals (should be ignored)
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-2', category: 'cat-a', taskId: 't6', timestamp: tenDaysAgo },
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-b', taskId: 't7', timestamp: tenDaysAgo },
+    ]);
+
+    const reader = new PerformanceReader(TEST_DIR);
+    const counters = reader.getCountersSince('agent-1', 'cat-a', 0);
+    expect(counters).toEqual({ correct: 3, hallucinated: 2 });
+  });
+
+  it('anchored mode (sinceMs > 0) only counts signals after the timestamp', () => {
+    const fortyDaysAgo = new Date(Date.now() - 40 * 86400000);
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400000);
+    const anchorMs = Date.now() - 20 * 86400000;
+
+    writeSignals([
+      // Old signals (should be ignored)
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-a', taskId: 't1', timestamp: fortyDaysAgo.toISOString() },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-1', category: 'cat-a', taskId: 't2', timestamp: fortyDaysAgo.toISOString() },
+      // Recent signals (should be counted)
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'agent-1', category: 'cat-a', taskId: 't3', timestamp: tenDaysAgo.toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-1', category: 'cat-a', taskId: 't4', timestamp: tenDaysAgo.toISOString() },
+    ]);
+
+    const reader = new PerformanceReader(TEST_DIR);
+    const counters = reader.getCountersSince('agent-1', 'cat-a', anchorMs);
+    expect(counters).toEqual({ correct: 1, hallucinated: 1 });
+  });
+
+  it('excludes retracted signals regardless of age', () => {
+    const fortyDaysAgo = new Date(Date.now() - 40 * 86400000).toISOString();
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400000).toISOString();
+    writeSignals([
+      // Old signals, one retracted
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-1', category: 'cat-a', taskId: 't1', timestamp: fortyDaysAgo },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-1', category: 'cat-a', taskId: 't2', timestamp: fortyDaysAgo }, // This one is retracted
+      { type: 'consensus', signal: 'signal_retracted', agentId: 'agent-1', taskId: 't2', retractedSignal: 'disagreement', timestamp: tenDaysAgo },
+      // Recent signals, one retracted by wildcard
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'agent-1', category: 'cat-a', taskId: 't3', timestamp: tenDaysAgo }, // This one is retracted
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-1', category: 'cat-a', taskId: 't4', timestamp: tenDaysAgo },
+      { type: 'consensus', signal: 'signal_retracted', agentId: 'agent-1', taskId: 't3', timestamp: tenDaysAgo }, // Wildcard retraction
+    ]);
+
+    const reader = new PerformanceReader(TEST_DIR);
+    // Lifetime check
+    const counters1 = reader.getCountersSince('agent-1', 'cat-a', 0);
+    expect(counters1).toEqual({ correct: 1, hallucinated: 1 });
+    // Anchored check
+    const anchorMs = Date.now() - 20 * 86400000;
+    const counters2 = reader.getCountersSince('agent-1', 'cat-a', anchorMs);
+    expect(counters2).toEqual({ correct: 0, hallucinated: 1 });
+  });
+});
+
+describe('PerformanceReader — circuit breaker chronology (signal-timestamp-from-task-time)', () => {
+  // Regression suite for the bulk-record bug. Before the fix, every signal in a
+  // bulk-record call shared one timestamp; the reader's localeCompare sort
+  // returned 0 for every pair, making the sort a no-op and letting append order
+  // determine the tail. The reader was always correct in intent — these tests
+  // pin its behavior so a future regression to "single batch timestamp"
+  // recording immediately fails.
+
+  function ts(daysAgo: number, ms = 0): string {
+    return new Date(Date.now() - daysAgo * 86400000 + ms).toISOString();
+  }
+
+  it('circuit OPEN when 3 newest signals are negative (true chronology)', () => {
+    writeSignals([
+      // 3 positives in the past
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 't1', evidence: 'x', timestamp: ts(5) },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 't2', evidence: 'x', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 't3', evidence: 'x', timestamp: ts(3) },
+      // 3 negatives more recent (unique_unconfirmed removed from NEGATIVE_SIGNALS — use hallucination instead)
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't4', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 't5', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't6', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    expect(reader.isCircuitOpen('rev')).toBe(true);
+  });
+
+  it('circuit CLOSED when newest signal is positive even though older negatives exist', () => {
+    writeSignals([
+      // 3 negatives in the past
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't1', evidence: 'bad', timestamp: ts(5) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 't2', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rev', taskId: 't3', evidence: 'bad', timestamp: ts(3) },
+      // Newest is positive — must break the streak
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 't4', evidence: 'x', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    expect(reader.isCircuitOpen('rev')).toBe(false);
+  });
+
+  it('circuit CLOSED when negatives are recorded in append order but timestamps put them in the past', () => {
+    // Simulates the exact bug from session 2026-04-08: orchestrator bulk-records
+    // 5 backlogged rounds in newest-first read order, so the JSONL tail is the
+    // OLDEST round. With per-signal timestamps from the consensus reports, the
+    // reader's chronological sort must put the actually-newest round at the tail.
+    writeSignals([
+      // Append order = newest-first (file tail = oldest)
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 'newest', evidence: 'x', timestamp: ts(0) },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 'newer', evidence: 'x', timestamp: ts(1) },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 'mid', evidence: 'x', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 'old', evidence: 'bad', timestamp: ts(3) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'oldest1', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'oldest2', evidence: 'bad', timestamp: ts(5) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    // True chronology: 3 negatives (oldest) → 3 positives (newest). Tail is positive.
+    expect(reader.isCircuitOpen('rev')).toBe(false);
+  });
+
+  it('circuit OPEN when negatives appended first but timestamps make them newest', () => {
+    // The exact incident: even though file order looks "good then bad",
+    // the bad signals are CHRONOLOGICALLY NEWER and must trip the breaker.
+    writeSignals([
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'oldest', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 'mid', evidence: 'x', timestamp: ts(5) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 'newer', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'newest', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    expect(reader.isCircuitOpen('rev')).toBe(true);
+  });
+
+  it('consensusId tiebreaker keeps order deterministic when timestamps collide', () => {
+    // Two signals with the SAME timestamp — tiebreaker on consensusId.
+    // Without the tiebreaker, sort order would depend on file order; with it,
+    // 'aaa' always sorts before 'bbb' so the tail is deterministic.
+    const sameTime = ts(0);
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', consensusId: 'bbb', taskId: 't1', evidence: 'x', timestamp: sameTime },
+      { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', consensusId: 'aaa', taskId: 't2', evidence: 'x', timestamp: sameTime },
+      { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', consensusId: 'aaa', taskId: 't3', evidence: 'x', timestamp: ts(1) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    // The tail is the bbb-tagged signal (positive) — circuit closed.
+    // What we're really testing: the reader doesn't crash, returns deterministic state.
+    expect(reader.isCircuitOpen('rev')).toBe(false);
+    // Run twice to confirm idempotence under tiebreaker.
+    expect(reader.isCircuitOpen('rev')).toBe(false);
+  });
+});
+
+describe('PerformanceReader — circuit breaker: unique_unconfirmed removed from NEGATIVE_SIGNALS', () => {
+  // Change 1 from docs/specs/2026-04-14-circuit-breaker-fix.md
+  // Consensus round: 4d6406d5-b0e147a5
+  // Rationale: unique_unconfirmed covers 3 ambiguous conditions (peer couldn't verify,
+  // task timed out, empty output). None indicate hallucination. The weighted scoring
+  // loop already treats it as near-neutral. Removing it only relaxes the binary
+  // circuit-breaker streak count.
+
+  function ts(daysAgo: number, ms = 0): string {
+    return new Date(Date.now() - daysAgo * 86400000 + ms).toISOString();
+  }
+
+  it('5 consecutive unique_unconfirmed: consecutiveFailures === 0, circuitOpen === false', () => {
+    // unique_unconfirmed no longer benches — peer couldn't verify / timeout / empty
+    // output do not constitute evidence of agent error.
+    writeSignals([
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't1', evidence: '', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't2', evidence: '', timestamp: ts(3) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't3', evidence: '', timestamp: ts(2) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't4', evidence: '', timestamp: ts(1) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-a', taskId: 't5', evidence: '', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-a')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('3 consecutive hallucination_caught still bench: consecutiveFailures === 3, circuitOpen === true', () => {
+    // hallucination_caught remains in NEGATIVE_SIGNALS — real correctness error.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-b', counterpartId: 'peer', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-b', counterpartId: 'peer', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-b', counterpartId: 'peer', taskId: 't3', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-b')!;
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('3 consecutive disagreement (loser) still bench: circuitOpen === true', () => {
+    // disagreement remains in NEGATIVE_SIGNALS — agentId is the loser.
+    // Only the loser gets a disagreement signal record; winner gets no streak tick.
+    writeSignals([
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', taskId: 't3', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-c')!;
+    expect(score.circuitOpen).toBe(true);
+    // Winner must NOT be penalized
+    const winnerScore = reader.getAgentScore('winner');
+    expect(winnerScore?.circuitOpen ?? false).toBe(false);
+  });
+
+  it('unique_unconfirmed in middle breaks the streak: only trailing 3 hallucinations count', () => {
+    // Signal sequence (oldest → newest):
+    //   hallucination, hallucination, unique_unconfirmed, hallucination, hallucination, hallucination
+    //
+    // With unique_unconfirmed no longer negative, it acts as a streak-breaker
+    // (non-negative signal stops the backwards walk). The trailing 3 hallucinations
+    // form a streak of 3, not 5 (the earlier 2 are cut off by the non-negative signal).
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't1', evidence: 'bad', timestamp: ts(5) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't2', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-d', taskId: 't3', evidence: '', timestamp: ts(3) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't4', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't5', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-d', counterpartId: 'p', taskId: 't6', evidence: 'bad', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-d')!;
+    // Backwards walk: 3 hallucinations at tail → streak = 3. unique_unconfirmed is not
+    // negative, so it stops the walk. The two earlier hallucinations do not extend the streak.
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('positive signal after unique_unconfirmed run resets streak: consecutiveFailures === 0', () => {
+    // 3 unique_unconfirmed (now non-negative) followed by 1 agreement at tail.
+    // The tail is positive → streak walks back 0 consecutive negatives.
+    writeSignals([
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-e', taskId: 't1', evidence: '', timestamp: ts(3) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-e', taskId: 't2', evidence: '', timestamp: ts(2) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'agent-e', taskId: 't3', evidence: '', timestamp: ts(1) },
+      { type: 'consensus', signal: 'agreement', agentId: 'agent-e', counterpartId: 'peer', taskId: 't4', evidence: 'ok', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-e')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+});
+
+describe('PerformanceReader — circuit breaker Changes 2 & 3 (2026-04-14-circuit-breaker-fix.md)', () => {
+  // Change 2: task_timeout and task_empty are neutral transport signals, not
+  // evidence of agent correctness failure. They must not tick the streak counter.
+  //
+  // Change 3: impl signals (impl_test_pass, impl_peer_approved, impl_test_fail,
+  // impl_peer_rejected) now participate in streak building. A positive impl signal
+  // breaks a trailing run of consensus negatives; a negative impl signal extends it.
+
+  function ts(daysAgo: number, ms = 0): string {
+    return new Date(Date.now() - daysAgo * 86400000 + ms).toISOString();
+  }
+
+  // ── Change 2 tests ──────────────────────────────────────────────────────────
+
+  it('C2-1: 5 consecutive task_timeout → consecutiveFailures === 0, circuitOpen === false', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't1', evidence: 'Task timed out — no response', timestamp: ts(4) },
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't2', evidence: 'Task timed out — no response', timestamp: ts(3) },
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't3', evidence: 'Task timed out — no response', timestamp: ts(2) },
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't4', evidence: 'Task timed out — no response', timestamp: ts(1) },
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't5', evidence: 'Task timed out — no response', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agt')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C2-2: 5 consecutive task_empty → consecutiveFailures === 0, circuitOpen === false', () => {
+    writeSignals([
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't1', evidence: 'Empty response — agent produced no output', timestamp: ts(4) },
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't2', evidence: 'Empty response — agent produced no output', timestamp: ts(3) },
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't3', evidence: 'Empty response — agent produced no output', timestamp: ts(2) },
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't4', evidence: 'Empty response — agent produced no output', timestamp: ts(1) },
+      { type: 'consensus', signal: 'task_empty', agentId: 'agt', taskId: 't5', evidence: 'Empty response — agent produced no output', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agt')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C2: task_timeout and task_empty contribute nothing to accuracy scoring', () => {
+    // task_timeout / task_empty must not add to weightedTotal or weightedCorrect,
+    // so accuracy stays at 0.5 (neutral) when there are no other signals.
+    writeSignals([
+      { type: 'consensus', signal: 'task_timeout', agentId: 'agt', taskId: 't1', evidence: '', timestamp: ts(1) },
+      { type: 'consensus', signal: 'task_empty',   agentId: 'agt', taskId: 't2', evidence: '', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agt')!;
+    expect(score.accuracy).toBeCloseTo(0.5, 1);
+    expect(score.consecutiveFailures).toBe(0);
+  });
+
+  // ── Change 3 tests ──────────────────────────────────────────────────────────
+
+  it('C3-1: impl_test_pass resets a trailing consensus streak', () => {
+    // Tail order (oldest → newest): hallucination, hallucination, impl_test_pass
+    // impl_test_pass is a positive impl signal → streak walk stops at impl_test_pass → streak = 0.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_test_pass',       agentId: 'impl-agent', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('impl-agent')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C3-2: impl_test_fail extends a trailing consensus streak', () => {
+    // Tail order: hallucination, hallucination, impl_test_fail
+    // impl_test_fail is in NEGATIVE_IMPL_SIGNALS → extends the streak → streak = 3.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_test_fail',        agentId: 'impl-agent', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('impl-agent')!;
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('C3-3: impl_peer_rejected extends a trailing consensus streak', () => {
+    // Tail order: hallucination, hallucination, impl_peer_rejected
+    // impl_peer_rejected is in NEGATIVE_IMPL_SIGNALS → streak = 3.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'impl-agent', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_peer_rejected',   agentId: 'impl-agent', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('impl-agent')!;
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('C3-4: mixed recovery — agreement in middle caps trailing impl_test_fail streak at 2', () => {
+    // Tail order (oldest → newest):
+    //   hallucination, hallucination, agreement, impl_test_fail, impl_test_fail
+    // Walk: impl_test_fail (neg, streak=1) → impl_test_fail (neg, streak=2) → agreement (non-neg, STOP)
+    // consecutiveFailures = 2, circuit open (>= threshold 3) = false.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-z', taskId: 't1', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-z', taskId: 't2', evidence: 'bad', timestamp: ts(3) },
+      { type: 'consensus', signal: 'agreement',             agentId: 'agent-z', counterpartId: 'p', taskId: 't3', evidence: 'ok', timestamp: ts(2) },
+      { type: 'impl',      signal: 'impl_test_fail',        agentId: 'agent-z', taskId: 't4', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_test_fail',        agentId: 'agent-z', taskId: 't5', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-z')!;
+    expect(score.consecutiveFailures).toBe(2);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C3-5: pure impl streak of 3 impl_test_fail opens the circuit', () => {
+    // Agent with no consensus history, only 3 trailing impl_test_fail signals.
+    // Each is in NEGATIVE_IMPL_SIGNALS → consecutiveFailures = 3 → circuitOpen = true.
+    writeSignals([
+      { type: 'impl', signal: 'impl_test_fail', agentId: 'impl-only', taskId: 't1', timestamp: ts(2) },
+      { type: 'impl', signal: 'impl_test_fail', agentId: 'impl-only', taskId: 't2', timestamp: ts(1) },
+      { type: 'impl', signal: 'impl_test_fail', agentId: 'impl-only', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('impl-only')!;
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+  });
+
+  it('C3-6 (regression): unique_unconfirmed still does not bench (Change 1 carry-over)', () => {
+    // Regression guard: unique_unconfirmed must remain out of NEGATIVE_SIGNALS
+    // regardless of the Change 3 streak-loop rewrite.
+    writeSignals([
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't1', evidence: '', timestamp: ts(4) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't2', evidence: '', timestamp: ts(3) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't3', evidence: '', timestamp: ts(2) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't4', evidence: '', timestamp: ts(1) },
+      { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rg-agent', taskId: 't5', evidence: '', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('rg-agent')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+
+  it('C3: impl_peer_approved resets a trailing consensus streak', () => {
+    // impl_peer_approved is a positive impl signal (not in NEGATIVE_IMPL_SIGNALS) → streak-breaker.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-q', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'agent-q', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'impl',      signal: 'impl_peer_approved',   agentId: 'agent-q', taskId: 't3', timestamp: ts(0) },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('agent-q')!;
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+  });
+});
+
+describe('PerformanceReader — hallucination decay tune (HALLUCINATION_DECAY_HALF_LIFE = 20)', () => {
+  // Shorter half-life for hallucination penalties so historical mistakes fade
+  // ~2.5x faster than the generic DECAY_HALF_LIFE=50. See spec
+  // docs/specs/2026-04-16-hallucination-decay-tune.md.
+
+  function tsRecent(secondsAgo: number): string {
+    return new Date(Date.now() - secondsAgo * 1000).toISOString();
+  }
+
+  it('halluc-decay-20: hallucination 20 tasks ago decays ~34% more than the old 50-task curve', () => {
+    // Construct 21 distinct tasks for one agent: the oldest is a hallucination,
+    // followed by 20 agreements. Task-order-based decay makes tasksSince for the
+    // hallucination = 21 - 0 - 1 = 20, so hallucDecay = 0.5^(20/20) = 0.5 under
+    // the new constant (vs 0.5^(20/50) ≈ 0.7579 under the old DECAY_HALF_LIFE=50).
+    //
+    // Observable effect via accuracy: with weightedHallucinations = 0.5, the
+    // hallucinationMultiplier is 1/(1+0.5*0.3) ≈ 0.8696. With the old decay
+    // (weightedHallucinations ≈ 0.7579) it would be ≈ 0.8147 — a ~6.7% shift
+    // downstream on accuracy. Assertion band is tight enough that only the
+    // new constant produces a passing result.
+    const sigs: any[] = [];
+    // Oldest signal: hallucination_caught at task index 0.
+    sigs.push({
+      type: 'consensus', signal: 'hallucination_caught', agentId: 'ag',
+      taskId: 'halluc-old', evidence: 'bad', timestamp: tsRecent(210),
+    });
+    // 20 agreements at task indices 1..20 (newer).
+    for (let i = 1; i <= 20; i++) {
+      sigs.push({
+        type: 'consensus', signal: 'agreement', agentId: 'ag', counterpartId: 'peer',
+        taskId: `agree-${i}`, evidence: 'ok', timestamp: tsRecent(210 - i * 10),
+      });
+    }
+    writeSignals(sigs);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('ag')!;
+
+    // Under the new constant: accuracy ≈ 0.958 * 0.8696 ≈ 0.833.
+    // Under the old constant: accuracy ≈ 0.958 * 0.8147 ≈ 0.780.
+    // Band [0.82, 0.87] excludes the old-constant result and permits the new one.
+    expect(score.accuracy).toBeGreaterThan(0.82);
+    expect(score.accuracy).toBeLessThan(0.87);
+    expect(score.hallucinations).toBe(1);
+  });
+
+  it('empty-category-rejected: getCountersSince skips signals with empty-string category', () => {
+    // Align with computeScores behavior at :392, :450 (both use `if (signal.category)`
+    // to gate category-specific accumulators). A signal with category: '' should
+    // never satisfy a category-specific counter query.
+    writeSignals([
+      { type: 'consensus', signal: 'agreement', agentId: 'ag', category: '', taskId: 't1', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'ag', category: '', taskId: 't2', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'agreement', agentId: 'ag', category: 'cat-a', taskId: 't3', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    // Query for cat-a: only the one cat-a signal counts; the empty-category ones are skipped.
+    const counters = reader.getCountersSince('ag', 'cat-a', 0);
+    expect(counters).toEqual({ correct: 1, hallucinated: 0 });
+  });
+
+  it('category-undefined-legacy: hallucination_caught with category=undefined still penalizes weightedHallucinations', () => {
+    // Legacy-accept path at computeScores :442-453 has no category guard —
+    // a hallucination without category still decrements accuracy via the
+    // hallucinationMultiplier. This preserves backwards compatibility with
+    // legacy signals written before category enforcement was added.
+    // Observable: agent accuracy drops below neutral (0.5) when dominated by
+    // category-less hallucinations.
+    writeSignals([
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'legacy', taskId: 't1', evidence: 'bad', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'legacy', taskId: 't2', evidence: 'bad', timestamp: new Date().toISOString() },
+      { type: 'consensus', signal: 'hallucination_caught', agentId: 'legacy', taskId: 't3', evidence: 'bad', timestamp: new Date().toISOString() },
+    ]);
+    const reader = new PerformanceReader(TEST_DIR);
+    const score = reader.getAgentScore('legacy')!;
+    // All three hallucinations count — weightedHallucinations > 0, so accuracy
+    // is pulled toward 0 by the multiplier even with no category attached.
+    expect(score.hallucinations).toBe(3);
+    expect(score.accuracy).toBeLessThan(0.5);
+  });
+
+  describe('skill-gated hallucination recovery', () => {
+    // Spec: project_skill_gated_recovery.md (verified FRESH 2026-04-25).
+    // Recovery requires BOTH: (a) bound skill matching the hallucination's
+    // category, AND (b) >=3 positive signals (agreement|unique_confirmed)
+    // in the SAME category, timestamped AFTER the hallucination. Multiplier
+    // is 0.4 (60% reduction) on top of existing tasks-elapsed decay.
+
+    function ts(daysAgo: number): string {
+      return new Date(Date.now() - daysAgo * 86400000).toISOString();
+    }
+
+    it('does NOT reduce penalty when 3 clean signals are in a DIFFERENT category (skill bound for halluc category)', () => {
+      writeBoundSkill('rev', 'concurrency');
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'trust_boundaries', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'trust_boundaries', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'trust_boundaries', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // Full hallucination weight retained — clean signals were in unrelated category.
+      // weightedHallucinations should reflect base severity (3.0 for confirmed_hallucination
+      // default arm) * tasks-elapsed decay, NOT scaled by 0.4.
+      expect(score.weightedHallucinations).toBeGreaterThan(0.4);
+    });
+
+    it('does NOT reduce penalty when 3 clean signals match category but NO skill is bound', () => {
+      // Note: no writeBoundSkill() call — agent has no skill file at all.
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // No skill → no recovery, even with 3+ clean signals in matching category.
+      expect(score.weightedHallucinations).toBeGreaterThan(0.4);
+    });
+
+    it('REDUCES penalty (0.4x) when 3+ clean signals match category AND skill is bound', () => {
+      writeBoundSkill('rev', 'concurrency');
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const gatedScore = reader.getAgentScore('rev')!;
+
+      // Compare against the no-skill baseline by recreating signals in a sibling dir.
+      // try/finally guarantees temp-dir cleanup even when an assertion below throws (LOW #5).
+      const SIBLING = TEST_DIR + '-noskill';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip'), { recursive: true });
+        const data = [
+          { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+          { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+          { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+          { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+        ].map(s => JSON.stringify(s)).join('\n') + '\n';
+        writeFileSync(join(SIBLING, '.gossip', 'agent-performance.jsonl'), data);
+        const baselineScore = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+
+        // Gated should be ~0.4 of baseline (multiplier applied on top of identical decay).
+        expect(gatedScore.weightedHallucinations).toBeLessThan(baselineScore.weightedHallucinations);
+        const ratio = gatedScore.weightedHallucinations / baselineScore.weightedHallucinations;
+        expect(ratio).toBeGreaterThan(0.35);
+        expect(ratio).toBeLessThan(0.45);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
+
+    it('does NOT reduce penalty with only 2 matching clean signals (need 3+)', () => {
+      writeBoundSkill('rev', 'concurrency');
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+      ]);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      expect(score.weightedHallucinations).toBeGreaterThan(0.4);
+    });
+
+    it('time-only decay path still works when neither skill nor clean-signal condition applies', () => {
+      // Two hallucinations, no skill, no clean signals — verify the
+      // tasks-elapsed decay still produces weightedHallucinations > 0 and
+      // < raw severity sum (i.e. decay is observably applied).
+      const sigs: any[] = [];
+      for (let i = 0; i < 10; i++) {
+        sigs.push({
+          type: 'consensus',
+          signal: 'agreement',
+          agentId: 'rev',
+          category: 'unrelated',
+          taskId: `pad${i}`,
+          evidence: '',
+          timestamp: ts(20 - i),
+        });
+      }
+      sigs.push({ type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 'h1', evidence: '', timestamp: ts(9) });
+      sigs.push({ type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 'h2', evidence: '', timestamp: ts(1) });
+      writeSignals(sigs);
+      const reader = new PerformanceReader(TEST_DIR);
+      const score = reader.getAgentScore('rev')!;
+      // Both hallucinations contribute, decayed by tasks-elapsed factor.
+      // Default severity for hallucination_caught (no outcome) = 1.0; with two
+      // hallucinations weightedHallucinations should be in (0, 2.0] range.
+      expect(score.hallucinations).toBe(2);
+      expect(score.weightedHallucinations).toBeGreaterThan(0);
+      expect(score.weightedHallucinations).toBeLessThanOrEqual(2.0);
+    });
+
+    // PR #272 v2 — orchestrator-verified consensus follow-ups.
+
+    it('HIGH #1: skill-index.json enabled:false suppresses recovery (gate does NOT fire)', () => {
+      // Bound skill exists on disk AND 3 matching clean signals — but the
+      // skill-index.json marks the slot disabled. Recovery must NOT apply.
+      writeBoundSkill('rev', 'concurrency');
+      const indexPath = join(TEST_DIR, '.gossip', 'skill-index.json');
+      writeFileSync(indexPath, JSON.stringify({
+        rev: {
+          'test-skill': {
+            skill: 'test-skill',
+            enabled: false,
+            source: 'manual',
+            mode: 'permanent',
+            version: 2,
+            boundAt: new Date().toISOString(),
+          },
+        },
+      }));
+      const sigs = [
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ];
+      writeSignals(sigs);
+      const disabledScore = new PerformanceReader(TEST_DIR).getAgentScore('rev')!;
+
+      // Compare against an enabled-baseline run (no skill-index.json → assumed enabled).
+      const SIBLING = TEST_DIR + '-enabled';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip', 'agents', 'rev', 'skills'), { recursive: true });
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agents', 'rev', 'skills', 'test-skill.md'),
+          `---\nname: test-skill\ncategory: concurrency\nagent: rev\n---\n\n# test-skill\n`,
+        );
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agent-performance.jsonl'),
+          sigs.map(s => JSON.stringify(s)).join('\n') + '\n',
+        );
+        const enabledScore = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+        // Disabled slot → recovery suppressed → weightedHallucinations matches the
+        // baseline (no-recovery) path, which is strictly greater than the enabled (0.4×) run.
+        expect(disabledScore.weightedHallucinations).toBeGreaterThan(enabledScore.weightedHallucinations);
+        const ratio = enabledScore.weightedHallucinations / disabledScore.weightedHallucinations;
+        // Enabled path applies 0.4× multiplier; ratio should land in the recovery window.
+        expect(ratio).toBeGreaterThan(0.35);
+        expect(ratio).toBeLessThan(0.45);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
+
+    it('HIGH #1: skill-index.json missing entry is treated as enabled (back-compat)', () => {
+      // skill-index.json exists but has no entry for this agent's skill → must
+      // default to enabled so pre-existing skills not yet indexed keep working.
+      writeBoundSkill('rev', 'concurrency');
+      const indexPath = join(TEST_DIR, '.gossip', 'skill-index.json');
+      writeFileSync(indexPath, JSON.stringify({ 'other-agent': {} }));
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const score = new PerformanceReader(TEST_DIR).getAgentScore('rev')!;
+      // Recovery should fire (skill not explicitly disabled). Compare against a
+      // raw-baseline (no skill at all) sibling to confirm.
+      const SIBLING = TEST_DIR + '-noskill';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip'), { recursive: true });
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agent-performance.jsonl'),
+          [
+            { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+            { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+          ].map(s => JSON.stringify(s)).join('\n') + '\n',
+        );
+        const baseline = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+        expect(score.weightedHallucinations).toBeLessThan(baseline.weightedHallucinations);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
+
+    it('HIGH #2: retracted positive signals do NOT count toward recovery threshold', () => {
+      // 3 positive signals exist BUT all sit inside a retracted consensus round.
+      // Plus one outside → only 1 valid clean signal → below threshold (3+) → no recovery.
+      writeBoundSkill('rev', 'concurrency');
+      const cid = 'cid-retracted-1';
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        // Three retracted positives — findingId begins with the retracted consensus_id.
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', findingId: `${cid}:rev:f1`, taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', findingId: `${cid}:rev:f2`, taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', findingId: `${cid}:rev:f3`, taskId: 't4', evidence: '', timestamp: ts(3) },
+        // One non-retracted positive — alone, below the 3+ threshold.
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't5', evidence: '', timestamp: ts(2) },
+        // Round-retraction tombstone.
+        { type: 'consensus', signal: 'consensus_round_retracted', agentId: '_system', consensus_id: cid, reason: 'test retraction', taskId: 'tomb', evidence: '', timestamp: ts(1) },
+      ]);
+      const score = new PerformanceReader(TEST_DIR).getAgentScore('rev')!;
+
+      // Compare to a sibling with NO retraction — same data should yield recovery.
+      const SIBLING = TEST_DIR + '-noretract';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip', 'agents', 'rev', 'skills'), { recursive: true });
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agents', 'rev', 'skills', 'test-skill.md'),
+          `---\nname: test-skill\ncategory: concurrency\nagent: rev\n---\n\n# test-skill\n`,
+        );
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agent-performance.jsonl'),
+          [
+            { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+            { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't5', evidence: '', timestamp: ts(2) },
+          ].map(s => JSON.stringify(s)).join('\n') + '\n',
+        );
+        const recovered = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+        // Retracted positives blocked recovery → score's hallucination weight is HIGHER.
+        expect(score.weightedHallucinations).toBeGreaterThan(recovered.weightedHallucinations);
+        const ratio = recovered.weightedHallucinations / score.weightedHallucinations;
+        expect(ratio).toBeGreaterThan(0.35);
+        expect(ratio).toBeLessThan(0.45);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
+
+    it('MEDIUM #3: skill file with CRLF line endings still triggers recovery', () => {
+      // Authored on Windows / saved with \r\n — the front-matter parser must
+      // normalize CRLF before locating the `\n---` terminator.
+      const dir = join(TEST_DIR, '.gossip', 'agents', 'rev', 'skills');
+      mkdirSync(dir, { recursive: true });
+      const crlfBody = `---\r\nname: crlf-skill\r\ncategory: concurrency\r\nagent: rev\r\n---\r\n\r\n# crlf-skill\r\n`;
+      writeFileSync(join(dir, 'crlf-skill.md'), crlfBody);
+      writeSignals([
+        { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+        { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+        { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+      ]);
+      const score = new PerformanceReader(TEST_DIR).getAgentScore('rev')!;
+
+      // Compare to a no-skill baseline → CRLF skill must produce a strictly lower penalty.
+      const SIBLING = TEST_DIR + '-noskill-crlf';
+      try {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+        mkdirSync(join(SIBLING, '.gossip'), { recursive: true });
+        writeFileSync(
+          join(SIBLING, '.gossip', 'agent-performance.jsonl'),
+          [
+            { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', category: 'concurrency', taskId: 't1', evidence: '', timestamp: ts(10) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't2', evidence: '', timestamp: ts(5) },
+            { type: 'consensus', signal: 'agreement', agentId: 'rev', category: 'concurrency', taskId: 't3', evidence: '', timestamp: ts(4) },
+            { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', category: 'concurrency', taskId: 't4', evidence: '', timestamp: ts(3) },
+          ].map(s => JSON.stringify(s)).join('\n') + '\n',
+        );
+        const baseline = new PerformanceReader(SIBLING).getAgentScore('rev')!;
+        expect(score.weightedHallucinations).toBeLessThan(baseline.weightedHallucinations);
+        const ratio = score.weightedHallucinations / baseline.weightedHallucinations;
+        expect(ratio).toBeGreaterThan(0.35);
+        expect(ratio).toBeLessThan(0.45);
+      } finally {
+        if (existsSync(SIBLING)) rmSync(SIBLING, { recursive: true });
+      }
+    });
+  });
+});

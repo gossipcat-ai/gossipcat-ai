@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "name": "security_audit",
+      "description": "OWASP Top 10, injection, auth, secrets, path traversal, error leakage, DoS, resource exhaustion",
+      "keywords": ["security", "vulnerability", "injection", "auth", "owasp", "secrets", "dos", "rate-limit"],
+      "categories": ["review", "security"]
+    },
+    {
+      "name": "dos_resilience",
+      "description": "DoS vectors, rate limiting, resource exhaustion, backpressure, payload limits, connection caps",
+      "keywords": ["dos", "rate-limit", "resource", "exhaustion", "websocket", "payload", "memory", "connection"],
+      "categories": ["review", "security"]
+    },
+    {
+      "name": "code_review",
+      "description": "Bug finding, edge cases, naming, structure, error handling",
+      "keywords": ["review", "bugs", "quality", "patterns", "logic"],
+      "categories": ["review"]
+    },
+    {
+      "name": "testing",
+      "description": "AAA pattern, unit/integration/e2e, mocking, deterministic tests, behavior-focused",
+      "keywords": ["test", "unit", "integration", "e2e", "mock", "coverage"],
+      "categories": ["implementation", "testing"]
+    },
+    {
+      "name": "typescript",
+      "description": "Strict typing, interface-first, discriminated unions, readonly, type safety",
+      "keywords": ["typescript", "types", "generics", "interfaces", "strict"],
+      "categories": ["implementation"]
+    },
+    {
+      "name": "implementation",
+      "description": "TDD, small functions, error handling, test coverage, <300 line files",
+      "keywords": ["implement", "build", "feature", "tdd", "code"],
+      "categories": ["implementation"]
+    },
+    {
+      "name": "debugging",
+      "description": "Reproduce, isolate, hypothesize, test, fix, verify with regression tests",
+      "keywords": ["debug", "bug", "error", "trace", "root-cause", "reproduce"],
+      "categories": ["investigation"]
+    },
+    {
+      "name": "research",
+      "description": "Source prioritization, triangulation, conflicting info, gaps analysis, BLUF answers",
+      "keywords": ["research", "docs", "compare", "analyze", "summarize"],
+      "categories": ["investigation"]
+    },
+    {
+      "name": "documentation",
+      "description": "API docs, guides, ADRs, README, changelog, stale doc detection",
+      "keywords": ["docs", "readme", "changelog", "adr", "guide"],
+      "categories": ["documentation"]
+    },
+    {
+      "name": "api_design",
+      "description": "REST conventions, HTTP verbs, status codes, error shapes, pagination, versioning",
+      "keywords": ["api", "rest", "endpoint", "http", "pagination", "versioning"],
+      "categories": ["design"]
+    },
+    {
+      "name": "system_design",
+      "description": "Components, data flow, failure modes, trade-offs, scale, graceful degradation",
+      "keywords": ["architecture", "design", "scale", "components", "trade-offs"],
+      "categories": ["design"]
+    },
+    {
+      "name": "verification",
+      "description": "Evidence-based analysis, quote exact code, read before cite, no hallucination",
+      "keywords": ["verify", "evidence", "quote", "cite", "audit"],
+      "categories": ["review"]
+    },
+    {
+      "name": "ui_design",
+      "description": "Component hierarchy, layout systems, accessibility, responsive design, visual consistency",
+      "keywords": ["ui", "ux", "design", "accessibility", "responsive", "layout", "components"],
+      "categories": ["design"]
+    },
+    {
+      "name": "frontend",
+      "description": "React/Vue/Svelte components, state management, rendering optimization, client-side routing",
+      "keywords": ["frontend", "react", "components", "hooks", "rendering", "css", "tailwind"],
+      "categories": ["implementation"]
+    },
+    {
+      "name": "ci_cd",
+      "description": "Build pipelines, GitHub Actions, caching, deployment strategies, secret management",
+      "keywords": ["ci", "cd", "pipeline", "deploy", "github-actions", "docker", "build"],
+      "categories": ["infrastructure"]
+    },
+    {
+      "name": "infrastructure",
+      "description": "IaC, containers, networking, monitoring, alerting, scaling, disaster recovery",
+      "keywords": ["infra", "terraform", "kubernetes", "docker", "monitoring", "cloud", "networking"],
+      "categories": ["infrastructure"]
+    },
+    {
+      "name": "memory-retrieval",
+      "description": "Call gossip_remember BEFORE reviewing — recall prior findings on the same code so you don't re-discover or contradict yourself",
+      "keywords": [],
+      "categories": ["review"]
+    },
+    {
+      "name": "verify-the-premise",
+      "description": "Grep-verify quantitative claims in the dispatch task BEFORE writing code.",
+      "keywords": [],
+      "categories": ["verification"]
+    },
+    {
+      "name": "implementation-discipline",
+      "description": "Coding-time discipline for implementer agents — think first, simplest change, surgical edits, stated success criteria.",
+      "keywords": [],
+      "categories": ["implementation"]
+    },
+    {
+      "name": "emit-structured-claims",
+      "description": "Emit a structured premise-claims JSON block alongside prose findings so the orchestrator can grep-verify code-shape claims and close the four Stage-1 bypass classes.",
+      "keywords": [],
+      "categories": ["review", "research"]
+    }
+  ]
+}

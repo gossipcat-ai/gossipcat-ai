@@ -1,0 +1,67 @@
+{
+  "name": "gossipcat",
+  "version": "0.6.5",
+  "description": "Multi-agent orchestration for Claude Code — parallel review, consensus, adaptive dispatch",
+  "mcpName": "io.github.ataberk-xyz/gossipcat",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gossipcat-ai/gossipcat-ai.git"
+  },
+  "license": "MIT",
+  "main": "dist-mcp/mcp-server.js",
+  "bin": {
+    "gossipcat": "dist-mcp/mcp-server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "files": [
+    "dist-mcp/",
+    "dist-dashboard/",
+    "docs/HANDBOOK.md",
+    "docs/RULES.md",
+    "scripts/postinstall.js",
+    "assets/hooks/discipline/**"
+  ],
+  "scripts": {
+    "build": "npm run build:all",
+    "build:all": "npm run build -w @gossip/types && npm run build -w @gossip/client && npm run build -w @gossip/tools && npm run build -w @gossip/orchestrator && npm run build -w @gossip/relay",
+    "test": "jest --config jest.config.base.js",
+    "clean": "rm -rf packages/*/dist apps/*/dist dist-mcp/ dist-dashboard/",
+    "postinstall": "node scripts/postinstall.js",
+    "build:mcp": "rm -rf dist-mcp && npx esbuild apps/cli/src/mcp-server-sdk.ts --bundle --platform=node --target=node22 --outfile=dist-mcp/mcp-server.js --external:bufferutil --external:utf-8-validate --tsconfig=tsconfig.json && cp -r packages/orchestrator/src/default-skills dist-mcp/default-skills && cp -r packages/orchestrator/src/default-rules dist-mcp/default-rules && cp -r assets dist-mcp/assets && mkdir -p dist-mcp/data dist-mcp/docs && cp data/archetypes.json dist-mcp/data/archetypes.json && cp docs/RULES.md docs/CURSOR_RULES.md dist-mcp/docs/ && chmod +x dist-mcp/mcp-server.js && chmod +x dist-mcp/assets/hooks/worktree-sandbox.sh && chmod +x dist-mcp/assets/hooks/discipline/*.sh",
+    "build:dashboard": "cd packages/dashboard-v2 && npx vite build --outDir ../../dist-dashboard --emptyOutDir",
+    "prepublishOnly": "npm run build:all && npm run build:mcp && npm run build:dashboard",
+    "gossipcat": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts",
+    "start": "npx ts-node -r tsconfig-paths/register -P tsconfig.json apps/cli/src/index.ts",
+    "audit:memories": "node scripts/audit-memories.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.11",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.1.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "tsconfig-paths": "^4.2.0",
+    "ws": "^8.20.1"
+  },
+  "overrides": {
+    "ip-address": "^10.1.1",
+    "hono": ">=4.12.25 <5",
+    "fast-uri": ">=3.1.2",
+    "postcss": "^8.5.10",
+    "js-yaml": "^4.2.0"
+  }
+}

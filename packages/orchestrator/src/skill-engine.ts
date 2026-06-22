@@ -1,0 +1,1360 @@
+/**
+ * SkillEngine — manages the full skill lifecycle per agent:
+ * LLM-driven skill file generation, baseline snapshots, lazy migration,
+ * effectiveness evaluation (checkEffectiveness), and verdict resolution wiring.
+ *
+ * Originally named SkillGenerator; renamed in the checkEffectiveness branch
+ * once the class grew beyond generation into a full lifecycle engine.
+ */
+
+import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync, realpathSync, renameSync, unlinkSync } from 'fs';
+import { randomBytes } from 'crypto';
+import { join, resolve } from 'path';
+import { ILLMProvider } from './llm-client';
+import { PerformanceReader, readJsonlWithRotated } from './performance-reader';
+import { LLMMessage } from '@gossip/types';
+import { ConsensusSignal } from './consensus-types';
+import { normalizeSkillName } from './skill-name';
+import { readSkillFreshness } from './skill-freshness';
+import {
+  resolveVerdict,
+  TIMEOUT_MS,
+  MIN_EVIDENCE,
+  type SkillSnapshot,
+  type VerdictResult,
+  type VerdictStatus,
+} from './check-effectiveness';
+
+export const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+
+/**
+ * Test-only deterministic-interleaving hook for writeSkillFileFromParts.
+ *
+ * In production this is a no-op. Concurrency tests assign an async fn here to
+ * force an interleaving between the read-check and the write phases of the
+ * optimistic-concurrency cycle — see tests/orchestrator/skill-engine-concurrency.test.ts.
+ *
+ * Invoked once per writeback call, after the disk re-read and drift check
+ * but BEFORE the atomic temp-write+rename. Tests can use the hook to let a
+ * sibling writer race in and bump the on-disk version, then observe that
+ * the current writer aborts (the `version` the sibling wrote will differ
+ * from our expected `newVersion - 1` when re-read... but our check already
+ * passed, so in this path we rely on atomic rename ordering: the later
+ * rename wins. The *intended* race surfaces in two-writer scenarios where
+ * the hook runs BETWEEN both writers' checks, making one abort.)
+ *
+ * Exported — not in default schema — so only tests can reach it.
+ */
+export let __SKILL_ENGINE_TEST_HOOK: (() => void) | null = null;
+export function __setSkillEngineTestHook(fn: (() => void) | null): void {
+  __SKILL_ENGINE_TEST_HOOK = fn;
+}
+
+/**
+ * Valid terminal/transitional values for the `status` frontmatter field.
+ * Must be kept in sync with VerdictStatus in check-effectiveness.ts.
+ * The runtime list exists so we can validate string values read from disk —
+ * TypeScript types are erased at runtime and `frontmatter.status` is `unknown`.
+ */
+export const VALID_STATUSES: ReadonlyArray<VerdictStatus> = [
+  'pending',
+  'passed',
+  'failed',
+  'inconclusive',
+  'flagged_for_manual_review',
+  'not_applicable',
+  'silent_skill',
+  'insufficient_evidence',
+];
+
+/**
+ * Runtime-validate a status value read from skill frontmatter. Unknown string
+ * values (e.g. legacy `status: "active"`) are remapped to `pending` with a
+ * stderr warning. `undefined`/`null` also map to `pending` but silently —
+ * that's the expected shape for files written before the status field existed.
+ */
+export function coerceStatus(raw: unknown): VerdictStatus {
+  if (typeof raw === 'string' && (VALID_STATUSES as readonly string[]).includes(raw)) {
+    return raw as VerdictStatus;
+  }
+  if (raw !== undefined && raw !== null && raw !== '') {
+    process.stderr.write(
+      `[gossipcat] skill-engine: invalid status ${JSON.stringify(raw)} remapped to pending\n`,
+    );
+  }
+  return 'pending';
+}
+
+/**
+ * Minimum distinct dependency count across all collected package.json entries
+ * required to fire the tech-stack LLM detector. Below this, return null and
+ * skip the <tech_stack> injection entirely. Rationale: 1-2 dep signals are
+ * dominated by the LLM's Node.js training prior and produce hallucinated
+ * tech-stacks for non-Node host projects (issue #410).
+ */
+const TECH_STACK_MIN_DEPS = 3;
+
+/**
+ * Known non-Node manifest filenames and their associated language/toolchain.
+ * Checked via existsSync (presence only — no content read) in detectTechStack.
+ * Any match is a "non-Node signal" that bypasses the TECH_STACK_MIN_DEPS floor.
+ */
+const MANIFEST_HINTS: ReadonlyArray<readonly [string, string]> = [
+  ['Cargo.toml', 'Rust'],
+  ['pyproject.toml', 'Python'],
+  ['requirements.txt', 'Python'],
+  ['go.mod', 'Go'],
+  ['foundry.toml', 'Solidity/Foundry'],
+  ['Move.toml', 'Move/Aptos/Sui'],
+  ['Gemfile', 'Ruby'],
+  ['composer.json', 'PHP'],
+];
+
+const KNOWN_CATEGORIES = new Set([
+  'trust_boundaries', 'injection_vectors', 'input_validation', 'concurrency',
+  'resource_exhaustion', 'type_safety', 'error_handling', 'data_integrity',
+  'severity_calibration', 'citation_grounding',
+]);
+
+/** Default keywords per category for contextual skill activation */
+const CATEGORY_KEYWORDS: Record<string, string[]> = {
+  trust_boundaries: ['auth', 'authentication', 'authorization', 'session', 'cookie', 'token', 'path', 'traversal', 'injection', 'middleware', 'permission', 'role', 'privilege', 'acl'],
+  injection_vectors: ['injection', 'xss', 'sql', 'sanitize', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command'],
+  input_validation: ['validation', 'schema', 'zod', 'parse', 'sanitize', 'input', 'form', 'request', 'coerce', 'transform'],
+  concurrency: ['race condition', 'concurrent', 'mutex', 'lock', 'atomic', 'parallel', 'deadlock', 'semaphore'],
+  resource_exhaustion: ['memory', 'leak', 'unbounded', 'growth', 'limit', 'cap', 'timeout', 'pool', 'cache', 'backpressure', 'buffer', 'queue', 'throttle'],
+  type_safety: ['type guard', 'generic', 'cast', 'assertion', 'narrowing', 'discriminated', 'satisfies'],
+  error_handling: ['error handling', 'catch', 'throw', 'exception', 'retry', 'fallback', 'recovery', 'graceful'],
+  data_integrity: ['data integrity', 'migration', 'serialize', 'deserialize', 'corrupt', 'consistency', 'invariant', 'transaction', 'rollback', 'idempotent'],
+  severity_calibration: ['severity', 'critical', 'high', 'medium', 'low', 'impact', 'risk', 'priority', 'triage', 'cvss'],
+  // Citation grounding — fabrication-class failures: cited file/line/symbol does not match repo state.
+  // Gate for this is a skill bind + signal category, not the consensus-engine verifyCitations AND-gate
+  // (which only fires on keyword+regex dual-match, rarely in practice).
+  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricat', 'hallucin', 'verify', 'does not exist', 'no such'],
+};
+
+const REQUIRED_SECTIONS = ['## Iron Law', '## When This Skill Activates', '## Methodology', '## Key Patterns', '## Anti-Patterns', '## Quality Gate'];
+
+const BUNDLED_TEMPLATE = `---
+name: systematic-debugging
+description: Use when encountering any bug or unexpected behavior
+---
+
+# Systematic Debugging
+
+## Iron Law
+
+NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
+
+## When This Skill Activates
+
+- Test failures, bugs, unexpected behavior
+
+## Methodology
+
+1. Read error messages carefully — they often contain the solution
+2. Reproduce consistently — if not reproducible, gather more data
+3. Check recent changes — git diff, recent commits
+4. Form hypothesis and verify with evidence
+5. Fix the root cause, not the symptom
+
+## Key Patterns
+
+- Stack traces — read bottom-up, find the first project file
+- Error messages — search codebase for the exact string
+- State mutations — trace where the value changed unexpectedly
+
+## Anti-Patterns
+
+- **"Just one quick fix"** — Quick fixes mask root causes. Investigate before patching.
+- **"I know what's wrong"** — Verify with evidence before acting. Assumptions cause regressions.
+
+## Quality Gate
+
+- [ ] Root cause identified with evidence
+- [ ] Fix addresses root cause, not symptom
+- [ ] Tests verify the fix
+`;
+
+export class SkillEngine {
+  private techStackCache: string | null | undefined = undefined; // undefined = not yet computed
+  private statusMigrationRan = false;
+  private orphanCleanupRan = false;
+
+  constructor(
+    private llm: ILLMProvider,
+    private perfReader: PerformanceReader,
+    private projectRoot: string,
+  ) {
+    // Fire-and-forget: rewrite any skill files with missing or invalid status
+    // fields on boot. Runs synchronously, once per instance. Exceptions are
+    // swallowed with a stderr warning — a corrupt skill file must not prevent
+    // the engine from constructing.
+    try {
+      this.runOneTimeStatusMigration();
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: one-time status migration failed: ${(err as Error).message}\n`,
+      );
+    }
+
+    // Fire-and-forget: sweep orphan underscore duplicates and `.md.bak-*`
+    // migration artifacts from every agent's skills directory. Runs
+    // synchronously, once per instance, guarded by its own flag so it never
+    // reuses statusMigrationRan. try/catch so a corrupt directory cannot
+    // prevent the engine from constructing.
+    try {
+      this.runOrphanCleanup();
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: orphan cleanup failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  /**
+   * One-time startup pass: walks `.gossip/agents/<id>/skills/` and removes
+   * two kinds of detritus left over from prior renames/migrations:
+   *
+   * 1. `*.md.bak-<timestamp>` — leftover backup artifacts never read by
+   *    runtime. Deleted outright.
+   * 2. Underscore-form duplicates (e.g. `trust_boundaries.md`) sitting
+   *    alongside the hyphen-canonical file (`trust-boundaries.md`).
+   *    normalizeSkillName hyphenates, so the underscore copy is unreachable.
+   *
+   *    - Both exist and normalize to the same name → delete the underscore.
+   *    - Only underscore exists → rename it to hyphen canonical, preserving
+   *      the skill content.
+   *
+   * Runs exactly once per SkillEngine instance. Scope is bounded to
+   * `.gossip/agents/<id>/skills/` — no arbitrary directory recursion. Corrupt
+   * entries are skipped silently.
+   */
+  private runOrphanCleanup(): void {
+    if (this.orphanCleanupRan) return;
+    this.orphanCleanupRan = true;
+
+    const agentsDir = join(this.projectRoot, '.gossip', 'agents');
+    if (!existsSync(agentsDir)) return;
+
+    let agentDirs: string[];
+    try {
+      agentDirs = readdirSync(agentsDir);
+    } catch {
+      return;
+    }
+
+    for (const agentId of agentDirs) {
+      const skillsDir = join(agentsDir, agentId, 'skills');
+      if (!existsSync(skillsDir)) continue;
+
+      let entries: string[];
+      try {
+        entries = readdirSync(skillsDir);
+      } catch {
+        continue;
+      }
+
+      // Phase 1: delete *.md.bak-* artifacts.
+      for (const file of entries) {
+        if (!/\.md\.bak-\d+$/.test(file)) continue;
+        const fullPath = join(skillsDir, file);
+        try {
+          unlinkSync(fullPath);
+          process.stderr.write(
+            `[gossipcat] skill-engine: deleted backup artifact ${fullPath}\n`,
+          );
+        } catch (err) {
+          process.stderr.write(
+            `[gossipcat] skill-engine: failed to delete ${fullPath}: ${(err as Error).message}\n`,
+          );
+        }
+      }
+
+      // Phase 2: resolve underscore/hyphen duplicates. Re-list to reflect
+      // post-delete state and ignore any remaining non-.md files.
+      let mdFiles: string[];
+      try {
+        mdFiles = readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+      } catch {
+        continue;
+      }
+
+      const mdSet = new Set(mdFiles);
+      for (const file of mdFiles) {
+        const base = file.slice(0, -3); // strip .md
+        if (!base.includes('_')) continue;
+        const canonical = normalizeSkillName(base);
+        if (!canonical || canonical === base) continue;
+        const canonicalFile = `${canonical}.md`;
+        const underscorePath = join(skillsDir, file);
+        const canonicalPath = join(skillsDir, canonicalFile);
+
+        if (mdSet.has(canonicalFile)) {
+          // Both exist — delete the underscore duplicate.
+          try {
+            unlinkSync(underscorePath);
+            mdSet.delete(file);
+            process.stderr.write(
+              `[gossipcat] skill-engine: deleted underscore duplicate ${underscorePath} (canonical: ${canonicalPath})\n`,
+            );
+          } catch (err) {
+            process.stderr.write(
+              `[gossipcat] skill-engine: failed to delete ${underscorePath}: ${(err as Error).message}\n`,
+            );
+          }
+        } else {
+          // Only underscore exists — rename to canonical form.
+          try {
+            renameSync(underscorePath, canonicalPath);
+            mdSet.delete(file);
+            mdSet.add(canonicalFile);
+            process.stderr.write(
+              `[gossipcat] skill-engine: renamed ${underscorePath} → ${canonicalPath}\n`,
+            );
+          } catch (err) {
+            process.stderr.write(
+              `[gossipcat] skill-engine: failed to rename ${underscorePath}: ${(err as Error).message}\n`,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * One-time startup pass: walks .gossip/agents/<id>/skills/*.md and rewrites
+   * frontmatter when `status` is missing OR is a string not in VALID_STATUSES
+   * (e.g. legacy `status: "active"`). Writes directly to disk, bypassing
+   * migrateIfNeeded — the lazy migrator is gated behind `migration_count < 2`,
+   * which locks several files already at migration_count=3 despite having
+   * invalid statuses.
+   *
+   * Runs exactly once per SkillEngine instance. Missing files, directories,
+   * or unparseable frontmatter are skipped silently — the guarantee is
+   * "valid files get valid statuses", not "all files become parseable".
+   */
+  private runOneTimeStatusMigration(): void {
+    if (this.statusMigrationRan) return;
+    this.statusMigrationRan = true;
+
+    const agentsDir = join(this.projectRoot, '.gossip', 'agents');
+    if (!existsSync(agentsDir)) return;
+
+    let agentDirs: string[];
+    try {
+      agentDirs = readdirSync(agentsDir);
+    } catch {
+      return;
+    }
+
+    for (const agentId of agentDirs) {
+      const skillsDir = join(agentsDir, agentId, 'skills');
+      if (!existsSync(skillsDir)) continue;
+
+      let files: string[];
+      try {
+        files = readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+      } catch {
+        continue;
+      }
+
+      for (const file of files) {
+        const skillPath = join(skillsDir, file);
+        try {
+          const raw = readFileSync(skillPath, 'utf-8');
+          const { frontmatter, body } = this.parseSkillFile(raw);
+
+          // Skip non-skill markdown files (README, notes, etc.) that happen to live in
+          // this directory. Skill files always carry a `name` field in frontmatter;
+          // rewriting status on a file without that field would corrupt non-skill content.
+          if (typeof frontmatter.name !== 'string' || frontmatter.name.trim() === '') {
+            continue;
+          }
+
+          const current = frontmatter.status;
+          const isMissing = current === undefined || current === null || current === '';
+          const isInvalid =
+            typeof current === 'string' &&
+            current !== '' &&
+            !(VALID_STATUSES as readonly string[]).includes(current);
+
+          if (!isMissing && !isInvalid) continue;
+
+          const reason = isMissing
+            ? 'missing'
+            : `invalid(${JSON.stringify(current)})`;
+          const currentVersion = this.safeNumber(frontmatter.version ?? 0, 0);
+          const updated: Record<string, unknown> = {
+            ...frontmatter,
+            status: 'pending',
+            version: currentVersion + 1,
+          };
+          const writeResult = this.writeSkillFileFromParts(skillPath, updated, body);
+          if (!writeResult.ok) {
+            process.stderr.write(
+              `[gossipcat] skill-engine: status migration aborted on ${skillPath} (drift)\n`,
+            );
+            continue;
+          }
+          process.stderr.write(
+            `[gossipcat] skill-engine: rewrote status=${reason} → pending in ${skillPath}\n`,
+          );
+        } catch (err) {
+          process.stderr.write(
+            `[gossipcat] skill-engine: skip ${skillPath} during status migration: ${(err as Error).message}\n`,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Build the LLM prompt strings and metadata needed to generate a skill file.
+   * Separated from generate() so callers (e.g. the native-utility re-entry path)
+   * can obtain the prompt, dispatch it externally, and later call saveFromRaw()
+   * with the result — without re-running the expensive data-gathering step.
+   */
+  async buildPrompt(agentId: string, category: string): Promise<{
+    system: string;
+    user: string;
+    skillName: string;
+    skillPath: string;
+    baseline_accuracy_correct: number;
+    baseline_accuracy_hallucinated: number;
+    bound_at: string;
+  }> {
+    if (!SAFE_NAME.test(agentId)) {
+      throw new Error(`Invalid agent_id: "${agentId}". Must be lowercase alphanumeric with hyphens/underscores.`);
+    }
+    if (!KNOWN_CATEGORIES.has(category)) {
+      throw new Error(`Unknown category: "${category}". Known: ${[...KNOWN_CATEGORIES].join(', ')}`);
+    }
+
+    const template = this.loadTemplate();
+    const findings = this.loadCategoryFindings(category);
+    const scores = this.perfReader.getScores();
+    const agentScoreData = scores.get(agentId);
+    const agentCatScore = agentScoreData?.categoryStrengths[category] ?? 0;
+    const peerScores: string[] = [];
+    for (const [id, s] of scores) {
+      if (id === agentId) continue;
+      const catVal = s.categoryStrengths[category];
+      if (catVal !== undefined && catVal > 0.5) {
+        peerScores.push(`${id}: ${catVal.toFixed(2)}`);
+      }
+    }
+
+    let projectContext = '';
+    const bootstrapPath = join(this.projectRoot, '.gossip', 'bootstrap.md');
+    if (existsSync(bootstrapPath)) {
+      projectContext = readFileSync(bootstrapPath, 'utf-8').slice(0, 1500);
+    }
+
+    // Analyze project tech stack so skills are tailored, not generic (memoized)
+    if (this.techStackCache === undefined) {
+      this.techStackCache = this.readTechStackOverride() ?? await this.detectTechStack();
+    }
+    const techStack = this.techStackCache;
+    if (techStack) {
+      projectContext += `\n\n<tech_stack>\n${techStack}\n</tech_stack>`;
+    }
+
+    const totalDispatches = agentScoreData?.totalSignals ?? 0;
+    const categoryConfirmations = findings.filter(f => f.agentId === agentId).length;
+    const baselineRate = totalDispatches > 0 ? categoryConfirmations / totalDispatches : 0;
+
+    // Snapshot baseline counters at build time so they are stable regardless of
+    // which code path eventually calls saveFromRaw().
+    const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
+    const baseline_accuracy_correct = lifetime.correct;
+    const baseline_accuracy_hallucinated = lifetime.hallucinated;
+
+    // Invariant #6: bound_at is set at first-bind and is immutable thereafter.
+    // If the existing skill file is still `pending` (evidence accumulating),
+    // preserve its bound_at so redevelopment refines the prompt without
+    // restarting the MIN_EVIDENCE window. The cooldown gate hard-blocks
+    // redevelop for terminal verdicts (passed/failed/silent_skill/insufficient_evidence),
+    // so this branch is only reachable for pending or fresh skills. See #147.
+    const existing = readSkillFreshness(agentId, category, this.projectRoot);
+    const bound_at = (existing.status === 'pending' && existing.boundAt)
+      ? existing.boundAt
+      : new Date().toISOString();
+
+    const skillName = normalizeSkillName(category);
+    const skillPath = join(this.projectRoot, '.gossip', 'agents', agentId, 'skills', `${skillName}.md`);
+
+    const system = `You are a senior prompt engineer who builds skill files for AI code review agents. Your skills are injected into agent system prompts at dispatch time — every word costs tokens and shapes behavior. You write concise, opinionated methodology that changes how an agent thinks about a specific class of problems.
+
+Your output quality is measured by:
+1. **Relevance** — every check must apply to THIS project's tech stack. Generic checklists are waste.
+2. **Specificity** — cite actual project file paths and patterns, not abstract examples.
+3. **Behavioral impact** — Iron Laws and Anti-Patterns should catch the exact mistakes this agent has made before.
+4. **Token efficiency** — shorter is better. Agents have limited context windows.
+
+Study this reference skill — it represents the quality bar:
+
+<reference_skill>
+${template}
+</reference_skill>`;
+
+    const user = `Generate a skill file for agent "${agentId}" to improve its "${category}" review performance.
+
+<project_context>
+${projectContext || 'No project context available.'}
+</project_context>
+
+<findings_in_category>
+${findings.length > 0 ? findings.slice(-20).reverse().map(f => `- [${f.agentId}] ${f.evidence}`).join('\n') : 'No findings yet in this category.'}
+</findings_in_category>
+
+<agent_performance>
+Agent: ${agentId}
+Current ${category} score: ${agentCatScore.toFixed(2)}
+Peer scores: ${peerScores.length > 0 ? peerScores.join(', ') : 'no peer data'}
+</agent_performance>
+
+Output a skill markdown file with this exact structure:
+
+1. YAML frontmatter with fields: name, category (${category}), agent (${agentId}), generated, effectiveness (0.0), baseline_rate (${baselineRate.toFixed(3)}), baseline_dispatches (${totalDispatches}), version (1), mode (contextual), keywords ([${(CATEGORY_KEYWORDS[category] || [category]).join(', ')}])
+2. ## Iron Law — one absolute rule (MUST/NEVER language)
+3. ## When This Skill Activates — task patterns that trigger it
+4. ## Methodology — 5-8 step checklist, actionable not vague
+5. ## Key Patterns — important code patterns to look for
+6. ## Anti-Patterns — bullet list, each: **"Thought"** — Reality explanation
+7. ## Quality Gate — pre-report checklist with checkboxes
+
+Requirements:
+- CRITICAL: Your ENTIRE response must be the skill markdown file itself. The FIRST line of output must be \`---\` (the opening of the YAML frontmatter). No preamble, no explanation, no code fences.
+- Write with authority — MUST, NEVER, NO EXCEPTIONS
+- Keep under 150 lines
+- CRITICAL: Tailor ALL content to the project's actual tech stack (see <tech_stack>). Only include checks relevant to technologies the project uses. If the project has no SQL database, do NOT mention SQL injection. If no HTML rendering, do NOT mention XSS. Generic security checklists waste agent prompt tokens.
+- Reference actual project file paths and patterns from findings and context
+- Use bullet lists instead of markdown tables for Anti-Patterns (tables render poorly in agent prompts)`;
+
+    return { system, user, skillName, skillPath, baseline_accuracy_correct, baseline_accuracy_hallucinated, bound_at };
+  }
+
+  /**
+   * Persist a raw LLM-generated skill markdown string to disk.
+   * Mirrors the post-LLM steps from generate(): code-fence stripping,
+   * validation, snapshot-field injection, and atomic file write.
+   *
+   * Called by the native-utility re-entry path after gossip_relay delivers
+   * the agent output back to the orchestrator.
+   */
+  saveFromRaw(
+    _agentId: string,
+    _category: string,
+    rawMarkdown: string,
+    meta: {
+      skillName: string;
+      skillPath: string;
+      baseline_accuracy_correct: number;
+      baseline_accuracy_hallucinated: number;
+      bound_at: string;
+    },
+  ): { path: string; content: string } {
+    // Strip markdown code fences if LLM wrapped the output
+    let cleaned = rawMarkdown.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```\w*\n/, '').replace(/\n```\s*$/, '').trim();
+    }
+
+    this.validateSkillContent(cleaned);
+
+    cleaned = this.injectSnapshotFields(cleaned, {
+      baseline_accuracy_correct: meta.baseline_accuracy_correct,
+      baseline_accuracy_hallucinated: meta.baseline_accuracy_hallucinated,
+      bound_at: meta.bound_at,
+    });
+
+    const skillDir = join(this.projectRoot, '.gossip', 'agents', _agentId, 'skills');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(meta.skillPath, cleaned);
+
+    return { path: meta.skillPath, content: cleaned };
+  }
+
+  async generate(agentId: string, category: string): Promise<{ path: string; content: string }> {
+    const promptData = await this.buildPrompt(agentId, category);
+
+    const messages: LLMMessage[] = [
+      { role: 'system', content: promptData.system },
+      { role: 'user', content: promptData.user },
+    ];
+
+    const response = await this.llm.generate(messages, { temperature: 0.3 });
+    const content = response.text || '';
+
+    return this.saveFromRaw(agentId, category, content, promptData);
+  }
+
+  /**
+   * Post-processes LLM-generated skill content to inject or overwrite snapshot fields
+   * in the YAML frontmatter. This ensures spec compliance regardless of LLM output.
+   */
+  private injectSnapshotFields(
+    content: string,
+    snapshot: { baseline_accuracy_correct: number; baseline_accuracy_hallucinated: number; bound_at: string },
+  ): string {
+    const fmMatch = content.match(/^(---\n)([\s\S]*?)(\n---)/);
+    if (!fmMatch) return content;
+
+    let fm = fmMatch[2];
+    const rest = content.slice(fmMatch[0].length);
+
+    // Remove any pre-existing snapshot fields the LLM may have emitted
+    fm = fm
+      .replace(/^baseline_accuracy_correct:.*\n?/m, '')
+      .replace(/^baseline_accuracy_hallucinated:.*\n?/m, '')
+      .replace(/^baseline_correct:.*\n?/m, '')
+      .replace(/^baseline_hallucinated:.*\n?/m, '')
+      .replace(/^bound_at:.*\n?/m, '')
+      .replace(/^migration_count:.*\n?/m, '')
+      .replace(/^status:.*\n?/m, '');
+
+    // Ensure effectiveness is present as a number
+    if (!fm.match(/^effectiveness:/m)) {
+      fm = fm.trimEnd() + '\neffectiveness: 0.0';
+    }
+
+    // Append snapshot fields
+    fm = fm.trimEnd() +
+      `\nbaseline_accuracy_correct: ${snapshot.baseline_accuracy_correct}` +
+      `\nbaseline_accuracy_hallucinated: ${snapshot.baseline_accuracy_hallucinated}` +
+      `\nbound_at: ${snapshot.bound_at}` +
+      `\nmigration_count: 0` +
+      `\nstatus: pending`;
+
+    return `---\n${fm}\n---${rest}`;
+  }
+
+  private validateSkillContent(content: string): void {
+    if (!content.match(/^---\n[\s\S]*?\n---/)) {
+      throw new Error('Generated skill missing frontmatter. LLM output did not follow the required format.');
+    }
+    for (const section of REQUIRED_SECTIONS) {
+      if (!content.includes(section)) {
+        throw new Error(`Generated skill missing required section: "${section}". LLM output did not follow the required format.`);
+      }
+    }
+    const lines = content.split('\n').length;
+    if (lines > 200) {
+      throw new Error(`Generated skill is ${lines} lines (max 200). LLM output too verbose.`);
+    }
+    // Validate keywords presence for contextual activation
+    if (!content.match(/keywords:(\s*\[|\s*\n\s*-)/)) {
+      throw new Error('Generated skill missing keywords in frontmatter. Contextual activation requires keywords.');
+    }
+  }
+
+  private loadTemplate(): string {
+    const userDir = join(this.projectRoot, '.gossip', 'skill-templates');
+    if (existsSync(userDir)) {
+      const files = readdirSync(userDir).filter(f => f.endsWith('.md'));
+      if (files.length > 0) {
+        return readFileSync(join(userDir, files[0]), 'utf-8');
+      }
+    }
+
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const cacheBase = join(home, '.claude', 'plugins', 'cache', 'claude-plugins-official', 'superpowers');
+    if (existsSync(cacheBase)) {
+      try {
+        const versions = readdirSync(cacheBase).sort().reverse();
+        for (const ver of versions) {
+          const skillPath = join(cacheBase, ver, 'skills', 'systematic-debugging', 'SKILL.md');
+          if (existsSync(skillPath)) {
+            const realPath = realpathSync(skillPath);
+            if (realPath.startsWith(resolve(cacheBase))) {
+              return readFileSync(realPath, 'utf-8');
+            }
+          }
+        }
+      } catch { /* cache not readable */ }
+    }
+
+    return BUNDLED_TEMPLATE;
+  }
+
+  /**
+   * Use LLM to analyze the project's tech stack from package.json and structure.
+   * Returns a concise summary of what the project uses and what it does NOT use,
+   * so the skill generator can tailor content accordingly.
+   */
+  private async detectTechStack(): Promise<string | null> {
+    const inputs: string[] = [];
+    let totalDepCount = 0;
+
+    // Gather package.json(s) — root + workspace packages
+    const pkgPaths = [join(this.projectRoot, 'package.json')];
+    try {
+      const packagesDir = join(this.projectRoot, 'packages');
+      if (existsSync(packagesDir)) {
+        for (const dir of readdirSync(packagesDir)) {
+          const p = join(packagesDir, dir, 'package.json');
+          if (existsSync(p)) pkgPaths.push(p);
+        }
+      }
+    } catch { /* skip */ }
+
+    for (const p of pkgPaths.slice(0, 5)) { // cap at 5 packages
+      try {
+        const pkg = JSON.parse(readFileSync(p, 'utf-8'));
+        const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+        totalDepCount += deps.length;
+        if (deps.length > 0) {
+          inputs.push(`${p.replace(this.projectRoot + '/', '')}: ${deps.join(', ')}`);
+        }
+      } catch { /* skip */ }
+    }
+
+    // Source directory listing
+    try {
+      const srcDirs = ['src', 'packages', 'apps', 'lib'].filter(d => existsSync(join(this.projectRoot, d)));
+      inputs.push(`Source dirs: ${srcDirs.join(', ') || 'root'}`);
+    } catch { /* skip */ }
+
+    // A1 — Manifest presence scan (existence only, no content read)
+    let manifestCount = 0;
+    for (const [filename, language] of MANIFEST_HINTS) {
+      if (existsSync(join(this.projectRoot, filename))) {
+        inputs.push(`Manifest: ${filename} (${language})`);
+        manifestCount++;
+      }
+    }
+
+    // A2 — README first 30 lines or 2KB
+    const READMES = ['README.md', 'README', 'readme.md'];
+    let readmeFound = false;
+    for (const name of READMES) {
+      const p = join(this.projectRoot, name);
+      if (existsSync(p)) {
+        try {
+          const content = readFileSync(p, 'utf-8');
+          const lines = content.split('\n').slice(0, 30).join('\n');
+          const clamped = lines.slice(0, 2000);
+          if (clamped.trim()) {
+            inputs.push(`README (${name}, first ${Math.min(30, content.split('\n').length)} lines):\n${clamped}`);
+            readmeFound = true;
+            break; // first successful README wins; empty/error → try next candidate
+          }
+        } catch { /* skip — try next README */ }
+      }
+    }
+
+    // A3 — Shallow root extension census (root only, skip excluded dirs + config-only exts)
+    // Config/docs extensions are already covered by other signals (package.json → dep count,
+    // README → readmeFound, manifests → manifestCount). Only count source-code extensions
+    // to avoid false positives from ubiquitous config files in any project.
+    const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.gossip', 'dist', 'build', 'out', 'coverage']);
+    const EXCLUDED_EXTS = new Set(['.json', '.md', '.yaml', '.yml', '.toml', '.lock', '.txt', '.xml', '.ini', '.cfg', '.env', '.gitignore', '.gitattributes', '.editorconfig', '.npmrc', '.nvmrc', '.prettierrc', '.eslintrc', '.babelrc', '.dockerignore', '.flowconfig']);
+    let extensionSignal = false;
+    try {
+      const entries = readdirSync(this.projectRoot, { withFileTypes: true });
+      const extCounts = new Map<string, number>();
+      for (const entry of entries) {
+        if (EXCLUDED_DIRS.has(entry.name)) continue;
+        if (entry.isFile()) {
+          const dotIdx = entry.name.lastIndexOf('.');
+          if (dotIdx > 0) {
+            const ext = entry.name.slice(dotIdx).toLowerCase();
+            if (!EXCLUDED_EXTS.has(ext)) {
+              extCounts.set(ext, (extCounts.get(ext) ?? 0) + 1);
+            }
+          }
+        }
+      }
+      if (extCounts.size > 0) {
+        const sorted = Array.from(extCounts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+          .map(([ext, count]) => `${ext}(${count})`)
+          .join(', ');
+        inputs.push(`Root file extensions: ${sorted}`);
+        extensionSignal = true;
+      }
+    } catch { /* skip */ }
+
+    const hasNonNodeSignal = manifestCount > 0 || readmeFound || extensionSignal;
+    if (totalDepCount < TECH_STACK_MIN_DEPS && !hasNonNodeSignal) return null;
+
+    try {
+      const messages: LLMMessage[] = [{
+        role: 'user',
+        content: `Analyze this project's tech stack from its dependencies and structure. Output a concise summary (max 10 lines) covering:
+1. Primary language and runtime (e.g., TypeScript + Node.js)
+2. Frameworks and libraries actually used (e.g., WebSocket, Express, React)
+3. Data storage (e.g., PostgreSQL, Redis, file-based JSON) — or "none" if no database
+4. What the project does NOT use that is commonly assumed (e.g., "No SQL database", "No HTML rendering", "No GraphQL")
+
+This summary will be used to filter security skill content — irrelevant checks waste agent prompt tokens.
+
+<project_deps>
+${inputs.join('\n')}
+</project_deps>`,
+      }];
+
+      const response = await this.llm.generate(messages, { temperature: 0 });
+      return response.text?.trim().slice(0, 1000) || null;
+    } catch {
+      // Fallback: return raw dependency list if LLM fails
+      return inputs.join('\n').slice(0, 500);
+    }
+  }
+
+  /**
+   * Reads `.gossip/tech-stack.md` as a user-authored override for tech-stack
+   * detection. Returns the file content (clamped to 2000 chars) if present and
+   * non-empty, or null to fall through to auto-detect.
+   *
+   * Operator escape hatch for non-Node host projects (Solidity, Rust, Move, etc.)
+   * where the LLM hallucinates a Node.js stack from thin npm dep signal.
+   * Cache is session-stable via techStackCache — restart the MCP server to pick
+   * up edits to this file.
+   */
+  private readTechStackOverride(): string | null {
+    const overridePath = join(this.projectRoot, '.gossip', 'tech-stack.md');
+    if (!existsSync(overridePath)) return null;
+    try {
+      const { size } = statSync(overridePath);
+      if (size > 2048) {
+        process.stderr.write(`[skill-engine] tech-stack.md override is ${size} bytes, clamping to 2000 chars\n`);
+      }
+      const content = readFileSync(overridePath, 'utf-8').slice(0, 2000).trim();
+      if (!content) return null;
+      return content;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[skill-engine] tech-stack.md override read failed: ${msg}\n`);
+      return null;
+    }
+  }
+
+  private loadCategoryFindings(category: string): Array<{ agentId: string; evidence: string }> {
+    const filePath = join(this.projectRoot, '.gossip', 'agent-performance.jsonl');
+    if (!existsSync(filePath)) return [];
+    try {
+      return readJsonlWithRotated(filePath).trim().split('\n').filter(Boolean)
+        .map(line => { try { return JSON.parse(line); } catch { return null; } })
+        .filter((s): s is ConsensusSignal =>
+          s !== null && s.type === 'consensus' && s.signal === 'category_confirmed' && s.category === category
+        )
+        .map(s => ({ agentId: s.agentId, evidence: s.evidence || '' }));
+    } catch { return []; }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Skill effectiveness evaluation (Task 7)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Reads the skill file for (agentId, category), fetches live counters from
+   * PerformanceReader, runs resolveVerdict, and writes back any state changes
+   * (status, effectiveness, inconclusive epoch fields) atomically.
+   *
+   * Role is passed via opts.role — the caller (collect.ts, Task 9) provides it
+   * from the agent registry. This avoids wiring a registry getter into the
+   * constructor and keeps the class dependencies minimal.
+   */
+  async checkEffectiveness(
+    agentId: string,
+    category: string,
+    opts?: { role?: string },
+  ): Promise<VerdictResult> {
+    if (!SAFE_NAME.test(agentId)) {
+      return { status: 'pending', shouldUpdate: false };
+    }
+    const skillPath = this.resolveSkillPath(agentId, category);
+    if (!existsSync(skillPath)) {
+      return { status: 'pending', shouldUpdate: false };
+    }
+
+    const raw = readFileSync(skillPath, 'utf-8');
+    const { frontmatter: rawFrontmatter, body } = this.parseSkillFile(raw);
+
+    // Lazy migration: pre-existing skill files may lack the snapshot fields
+    const nowMs = Date.now();
+    const { frontmatter, mutated } = this.migrateIfNeeded(
+      rawFrontmatter,
+      agentId,
+      category,
+      nowMs,
+    );
+    if (mutated) {
+      const currentVersion = this.safeNumber(frontmatter.version ?? 0, 0);
+      frontmatter.version = currentVersion + 1;
+      const writeResult = this.writeSkillFileFromParts(skillPath, frontmatter, body);
+      if (!writeResult.ok) {
+        process.stderr.write(
+          `[gossipcat] skill-engine: lazy migration aborted on ${skillPath} (drift for ${agentId}/${category})\n`,
+        );
+      }
+    }
+
+    const snapshot: SkillSnapshot = {
+      baseline_accuracy_correct: this.safeNumber(
+        frontmatter.baseline_accuracy_correct ?? frontmatter.baseline_correct ?? 0,
+        0,
+      ),
+      baseline_accuracy_hallucinated: this.safeNumber(
+        frontmatter.baseline_accuracy_hallucinated ?? frontmatter.baseline_hallucinated ?? 0,
+        0,
+      ),
+      bound_at: String(frontmatter.bound_at ?? new Date(nowMs).toISOString()),
+      status: coerceStatus(frontmatter.status),
+      migration_count: this.safeNumber(frontmatter.migration_count ?? 0, 0),
+      inconclusive_at:
+        typeof frontmatter.inconclusive_at === 'string' ? frontmatter.inconclusive_at : undefined,
+      inconclusive_strikes:
+        frontmatter.inconclusive_strikes != null
+          ? (Number.isFinite(Number(frontmatter.inconclusive_strikes)) ? Number(frontmatter.inconclusive_strikes) : undefined)
+          : undefined,
+      version: this.safeNumber(frontmatter.version ?? 0, 0),
+      passed_at:
+        typeof frontmatter.passed_at === 'string' ? frontmatter.passed_at : undefined,
+      passed_baseline_rate:
+        frontmatter.passed_baseline_rate != null && Number.isFinite(Number(frontmatter.passed_baseline_rate))
+          ? Number(frontmatter.passed_baseline_rate)
+          : undefined,
+      passed_backfilled:
+        frontmatter.passed_backfilled === true || frontmatter.passed_backfilled === 'true'
+          ? true
+          : undefined,
+      regressed_from_passed_at:
+        typeof frontmatter.regressed_from_passed_at === 'string'
+          ? frontmatter.regressed_from_passed_at
+          : undefined,
+      drift_strikes:
+        frontmatter.drift_strikes != null && Number.isFinite(Number(frontmatter.drift_strikes))
+          ? Number(frontmatter.drift_strikes)
+          : undefined,
+      drift_strike_at:
+        typeof frontmatter.drift_strike_at === 'string' ? frontmatter.drift_strike_at : undefined,
+      failed_at:
+        typeof frontmatter.failed_at === 'string' ? frontmatter.failed_at : undefined,
+      recovery_strikes:
+        frontmatter.recovery_strikes != null && Number.isFinite(Number(frontmatter.recovery_strikes))
+          ? Number(frontmatter.recovery_strikes)
+          : undefined,
+      recovery_strike_at:
+        typeof frontmatter.recovery_strike_at === 'string' ? frontmatter.recovery_strike_at : undefined,
+      recovered_at:
+        typeof frontmatter.recovered_at === 'string' ? frontmatter.recovered_at : undefined,
+    };
+
+    const anchorMs = snapshot.inconclusive_at
+      ? new Date(snapshot.inconclusive_at).getTime()
+      : new Date(snapshot.bound_at).getTime();
+    const delta = this.perfReader.getCountersSince(agentId, category, anchorMs);
+    // FIX 4: inject agent-wide accuracy so resolveVerdict uses a realistic
+    // baselineP when baselineTotal=0 (no pre-bind history). Without this,
+    // the 0.5 fallback routes to the 'typical' Wilson regime even for high-
+    // accuracy agents, inflating the evidence bar unnecessarily.
+    const agentScore = this.perfReader.getAgentScore(agentId);
+
+    // Drift delta: counters since passed_at (for passed-status drift gate) OR
+    // since regressed_from_passed_at (for the inconclusive-fast-path). Computed
+    // only when the snapshot reaches a state that exercises the drift path —
+    // skipped otherwise to avoid the extra getCountersSince call on the hot
+    // pending/inconclusive paths.
+    let driftDelta: ReturnType<PerformanceReader['getCountersSince']> | undefined;
+    if (snapshot.status === 'passed' && snapshot.passed_at) {
+      // When strike-1 has fired, anchor the next window at drift_strike_at
+      // (not passed_at) so the two K=2 windows are independent. Without
+      // this, the strike-2 window includes strike-1's signals and the
+      // false-demote rate is α (≈0.025) instead of α² (≈0.000625).
+      const anchorIso =
+        (snapshot.drift_strikes ?? 0) >= 1 && snapshot.drift_strike_at
+          ? snapshot.drift_strike_at
+          : snapshot.passed_at;
+      const anchorAtMs = new Date(anchorIso).getTime();
+      if (!isNaN(anchorAtMs)) {
+        driftDelta = this.perfReader.getCountersSince(agentId, category, anchorAtMs);
+      }
+    } else if (
+      snapshot.status === 'inconclusive' &&
+      snapshot.regressed_from_passed_at
+    ) {
+      const regressedMs = new Date(snapshot.regressed_from_passed_at).getTime();
+      if (!isNaN(regressedMs)) {
+        driftDelta = this.perfReader.getCountersSince(agentId, category, regressedMs);
+      }
+    }
+
+    // Recovery delta: counters since failed_at (for the failed-status recovery
+    // gate). Symmetric inverse of the drift block above, on the DISJOINT failed
+    // population. When strike-1 has fired, anchor the next window at
+    // recovery_strike_at (not failed_at) so the two K=2 windows are independent
+    // — without this the strike-2 window includes strike-1's signals and the
+    // false-promote rate is α (≈0.025) instead of α² (≈0.000625). Falls back to
+    // bound_at when failed_at is absent (legacy snapshot — resolveFailedRecovery
+    // will stamp failed_at on this pass).
+    let recoveryDelta: ReturnType<PerformanceReader['getCountersSince']> | undefined;
+    if (snapshot.status === 'failed') {
+      const anchorIso =
+        (snapshot.recovery_strikes ?? 0) >= 1 && snapshot.recovery_strike_at
+          ? snapshot.recovery_strike_at
+          : (snapshot.failed_at ?? snapshot.bound_at);
+      const anchorAtMs = new Date(anchorIso).getTime();
+      if (!isNaN(anchorAtMs)) {
+        recoveryDelta = this.perfReader.getCountersSince(agentId, category, anchorAtMs);
+      }
+    }
+
+    const verdictOpts: Parameters<typeof resolveVerdict>[3] = {
+      ...(opts ?? {}),
+      ...(agentScore != null ? { agentAccuracy: agentScore.accuracy } : {}),
+      ...(driftDelta ? { driftDelta } : {}),
+      ...(recoveryDelta ? { recoveryDelta } : {}),
+    };
+    const verdict = resolveVerdict(snapshot, delta, nowMs, verdictOpts);
+
+    if (verdict.shouldUpdate && verdict.newSnapshotFields) {
+      const merged: Record<string, unknown> = { ...frontmatter, ...verdict.newSnapshotFields };
+      if (verdict.effectiveness !== undefined) {
+        merged.effectiveness = verdict.effectiveness;
+      }
+      // Prefer the SkillSnapshot's version (captured at read time) as the
+      // source of truth. The snapshot reflects the state observed when the
+      // verdict was computed; frontmatter has not been re-read since.
+      const baseVersion = this.safeNumber(
+        snapshot.version ?? frontmatter.version ?? 0,
+        0,
+      );
+      merged.version = baseVersion + 1;
+      const writeResult = this.writeSkillFileFromParts(skillPath, merged, body);
+      if (!writeResult.ok) {
+        process.stderr.write(
+          `[gossipcat] skill-engine: verdict writeback aborted on ${skillPath} (drift for ${agentId}/${category})\n`,
+        );
+        // Propagate the drift abort to the caller so the runner can suppress
+        // phantom transitions in skill-runner-health.json. Without this, the
+        // runner would log "passed" + increment counters even though the
+        // updated frontmatter never reached disk and skill-loader.ts would
+        // continue reading the stale on-disk status.
+        verdict.persisted = false;
+      }
+    }
+
+    return verdict;
+  }
+
+  /**
+   * Lazily migrates pre-existing skill files that lack the snapshot fields
+   * introduced by the checkEffectiveness redesign.
+   *
+   * - Snapshots current counters as the baseline when `baseline_correct` is
+   *   missing (giving migrated skills a fair window from migration time).
+   * - Resets `bound_at` to now when it is more than 90 days old (preventing
+   *   immediate insufficient_evidence timeout for old skills).
+   * - Refuses to re-fire when `migration_count >= 1` (idempotency guard).
+   */
+  private migrateIfNeeded(
+    frontmatter: Record<string, unknown>,
+    agentId: string,
+    category: string,
+    nowMs: number,
+  ): { frontmatter: Record<string, unknown>; mutated: boolean } {
+    const migration_count = Number(frontmatter.migration_count ?? 0);
+    if (migration_count >= 3) return { frontmatter, mutated: false };
+
+    const updates: Record<string, unknown> = {};
+
+    // Steps 1-5 (v1 → v2) only run on un-migrated files. v2-already files
+    // (migration_count === 2) jump straight to step 6 (v3 drift backfill).
+    // Without this guard, the legacy "snapshot lifetime if baseline absent"
+    // step would re-fire when a v2 file had its baseline_accuracy_correct
+    // manually deleted, masking the operator's intent.
+    const needsLegacySteps = migration_count < 2;
+
+    // Step 1: rename v1 fields if present
+    if (
+      needsLegacySteps &&
+      frontmatter.baseline_correct != null &&
+      frontmatter.baseline_accuracy_correct == null
+    ) {
+      updates.baseline_accuracy_correct = frontmatter.baseline_correct;
+      updates.baseline_accuracy_hallucinated = frontmatter.baseline_hallucinated ?? 0;
+    }
+
+    // Step 3: snapshot lifetime if no baseline at all (v0 case)
+    const renamedHere = updates.baseline_accuracy_correct != null;
+    const alreadyV2 = frontmatter.baseline_accuracy_correct != null;
+    if (needsLegacySteps && !renamedHere && !alreadyV2) {
+      const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
+      updates.baseline_accuracy_correct = lifetime.correct;
+      updates.baseline_accuracy_hallucinated = lifetime.hallucinated;
+    }
+
+    // Step 4: stale bound_at reset.
+    // Two sub-cases:
+    //   (a) bound_at is absent entirely — always set it; the system needs an anchor.
+    //   (b) bound_at exists but is > TIMEOUT_MS old — only reset when status:pending
+    //       is NOT set. A pending skill with an existing bound_at is actively
+    //       accumulating delta signals anchored to that timestamp; resetting it would
+    //       void all accumulated history and double the evidence bar for the current
+    //       verdict window. Status missing/null means this is an unmigrated legacy
+    //       file with no in-flight evaluation, so reset is safe there.
+    const boundAt = frontmatter.bound_at as string | undefined;
+    const hasActivePendingStatus = frontmatter.status === 'pending';
+    const boundAtStale = boundAt != null && (nowMs - new Date(boundAt).getTime()) > TIMEOUT_MS;
+    if (needsLegacySteps && (!boundAt || (!hasActivePendingStatus && boundAtStale))) {
+      updates.bound_at = new Date(nowMs).toISOString();
+      updates.migration_reason = 'v2_stale_baseline_reset';
+    }
+
+    // Step 5: write status if missing. Pre-v2 files had no status field; the
+    // v1→v2 rename migration forgot to backfill it, so 8 files on disk still
+    // lack one. Invalid existing values (e.g. legacy `status: "active"`) are
+    // NOT rewritten here — that's the job of runOneTimeStatusMigration, which
+    // also handles files locked by `migration_count >= 2`.
+    if (needsLegacySteps && (frontmatter.status === undefined || frontmatter.status === null)) {
+      updates.status = 'pending';
+    }
+
+    // ── Step 6 (v3): drift-detection fields for existing passed snapshots ──
+    // For skills already at `status: passed`, backfill passed_at/passed_baseline_rate
+    // so the drift detector has an anchor. The hybrid first-window test (see
+    // resolvePassedDrift in check-effectiveness.ts) uses passed_backfilled to
+    // also test against the 0.75 floor on the FIRST post-migration window —
+    // protecting fresh-install users from inherited maintainer-overfit skills.
+    //
+    // If fewer than MIN_EVIDENCE signals are reachable from `.gossip/agent-performance.jsonl`
+    // (rotated-out, evicted, or fresh install), leave passed_baseline_rate
+    // undefined — drift detection stays PAUSED until N=80 fresh signals
+    // accumulate, at which point the hybrid 0.75 floor side becomes the
+    // load-bearing check.
+    const effectiveStatus = updates.status ?? frontmatter.status;
+    const hasPassedAt = frontmatter.passed_at != null;
+    if (effectiveStatus === 'passed' && !hasPassedAt) {
+      const boundAtVal = updates.bound_at ?? frontmatter.bound_at;
+      if (typeof boundAtVal === 'string') {
+        updates.passed_at = boundAtVal;
+      } else {
+        updates.passed_at = new Date(nowMs).toISOString();
+      }
+      const lifetime = this.perfReader.getCountersSince(agentId, category, 0);
+      const lifetimeTotal = lifetime.correct + lifetime.hallucinated;
+      if (lifetimeTotal >= MIN_EVIDENCE) {
+        updates.passed_baseline_rate = lifetime.correct / lifetimeTotal;
+      }
+      // passed_baseline_rate omitted → PAUSED state. passed_backfilled remains
+      // true so the hybrid 0.75 floor fires once N=80 fresh signals land.
+      updates.passed_backfilled = true;
+    }
+
+    updates.migration_count = 3;
+    return { frontmatter: { ...frontmatter, ...updates }, mutated: true };
+  }
+
+  /**
+   * Returns the canonical path for a skill file given agentId and category.
+   * Uses the same normalizeSkillName logic as generate().
+   */
+  private resolveSkillPath(agentId: string, category: string): string {
+    const skillName = normalizeSkillName(category);
+    return join(this.projectRoot, '.gossip', 'agents', agentId, 'skills', `${skillName}.md`);
+  }
+
+  /**
+   * Splits a skill file into its frontmatter key-value map and the body text
+   * (everything after the closing ---).
+   *
+   * Handles simple scalar YAML (strings, numbers, inline arrays) — sufficient
+   * for the snapshot fields we write and read. Does NOT need a full YAML parser
+   * because the frontmatter schema is well-defined and written by this module.
+   */
+  private parseSkillFile(raw: string): {
+    frontmatter: Record<string, string | number>;
+    body: string;
+  } {
+    const match = raw.match(/^---\n([\s\S]*?)\n---(\n[\s\S]*)?$/);
+    if (!match) {
+      return { frontmatter: {}, body: raw };
+    }
+
+    const fmText = match[1];
+    const body = match[2] ?? '';
+
+    const frontmatter: Record<string, string | number> = {};
+    for (const line of fmText.split('\n')) {
+      const colon = line.indexOf(':');
+      if (colon === -1) continue;
+      const key = line.slice(0, colon).trim();
+      const rawVal = line.slice(colon + 1).trim();
+      if (!key) continue;
+      // Quoted strings preserve their string-ness even when the contents
+      // would otherwise parse as a number — `version: "1.0"` must stay a
+      // string. Strip surrounding quotes and unescape `\"` BEFORE the
+      // numeric-coercion check.
+      if (rawVal.length >= 2 && rawVal.startsWith('"') && rawVal.endsWith('"')) {
+        frontmatter[key] = rawVal.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        continue;
+      }
+      // Preserve numeric values as numbers so YAML round-trips correctly
+      const asNum = Number(rawVal);
+      if (rawVal !== '' && !isNaN(asNum) && !rawVal.startsWith('[')) {
+        frontmatter[key] = asNum;
+      } else {
+        frontmatter[key] = rawVal;
+      }
+    }
+
+    return { frontmatter, body };
+  }
+
+  /**
+   * Safely converts a value to a number, returning fallback if the result is not
+   * finite (NaN, Infinity). Guards against corrupted frontmatter from manual edits.
+   */
+  private safeNumber(value: unknown, fallback: number): number {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  /**
+   * Serialises a single frontmatter value to its YAML scalar form.
+   *
+   * - number / boolean: bare scalar via String(v) — round-trips through the
+   *   parser's Number()/literal coercion.
+   * - null / undefined: empty string (parser drops empty values gracefully).
+   * - inline arrays already in `[a, b, c]` form: passed through unchanged
+   *   for backward compat with existing skill files (the parser recognises
+   *   the leading `[`).
+   * - everything else (strings): wrapped in double quotes with `"` and `\`
+   *   internal escaping. This is the actual fix for the deferred TODO —
+   *   without quoting, a string value containing `:`, `#`, a leading `-`,
+   *   or other YAML-meaningful characters would corrupt the next read.
+   *   Quoting also pins the type so future fields like `version: "1.0"`
+   *   stay strings instead of being silently coerced to Number 1.0.
+   */
+  private serializeYamlValue(v: unknown): string {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    const s = String(v);
+    // Backward compat: existing skill files written by the old serializer
+    // have inline arrays as `[a, b, c]`. The parser checks `startsWith('[')`
+    // to skip the numeric-coercion branch, so we keep that shape unquoted.
+    if (s.startsWith('[') && s.endsWith(']')) return s;
+    // Quote everything else, escaping `\` and `"` so the parser's
+    // un-escape pass round-trips cleanly.
+    return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+
+  /**
+   * Serialises frontmatter + body back to a skill file and writes it atomically,
+   * guarded by optimistic concurrency control via `frontmatter.version`.
+   *
+   * **Concurrency contract.** The caller must:
+   *   1. Read the file, capture `version` (missing ⇒ 0).
+   *   2. Compute the new frontmatter with `version: expectedVersion + 1`.
+   *   3. Call this method.
+   *
+   * On entry we re-read the file, parse its on-disk `version`, and verify it
+   * equals the incoming `frontmatter.version - 1`. If not, a sibling writer
+   * raced in between the caller's read and this write — we stderr-log and
+   * return WITHOUT writing so the caller's stale snapshot can't clobber
+   * fresher state. Missing on-disk version is treated as 0 (rollback-safe:
+   * legacy files behave like version 0 and accept a single upgrade to version 1).
+   *
+   * Atomicity: writes to a sibling tmp file then renames into place. The
+   * rename is atomic on POSIX filesystems within a single mount, so a
+   * crash mid-write leaves either the old contents intact or the new
+   * contents fully present — never a torn file. The tmp file is cleaned
+   * up on the failure path.
+   *
+   * Returns `{ ok: true }` if the write landed, or
+   * `{ ok: false, drift: { expectedVersion, diskVersion } }` if version drift
+   * was detected and the write was aborted.
+   */
+  private writeSkillFileFromParts(
+    skillPath: string,
+    frontmatter: Record<string, unknown>,
+    body: string,
+  ): { ok: boolean; drift?: { expectedVersion: number; diskVersion: number } } {
+    const newVersion = this.safeNumber(frontmatter.version ?? 1, 1);
+    const expectedDiskVersion = newVersion - 1;
+
+    // Re-read the file to check for drift. If the file is missing this is
+    // a first-time write — expectedDiskVersion must be 0.
+    let diskVersion = 0;
+    if (existsSync(skillPath)) {
+      try {
+        const current = readFileSync(skillPath, 'utf-8');
+        const parsed = this.parseSkillFile(current);
+        diskVersion = this.safeNumber(parsed.frontmatter.version ?? 0, 0);
+      } catch {
+        // Unreadable file — treat as version 0, let write proceed.
+        diskVersion = 0;
+      }
+    }
+
+    if (diskVersion !== expectedDiskVersion) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: version drift on ${skillPath} — ` +
+        `expected v${expectedDiskVersion}, disk has v${diskVersion}. ` +
+        `Aborting stale write (would have been v${newVersion}).\n`,
+      );
+      return { ok: false, drift: { expectedVersion: expectedDiskVersion, diskVersion } };
+    }
+
+    // Test-only deterministic interleaving hook. Fires after the drift check
+    // passes but BEFORE the atomic temp-write+rename, so a sibling writer can
+    // race in and bump the on-disk version. The hook is read-and-cleared so
+    // re-entrant sibling writes from within the hook don't recurse forever.
+    // Production code leaves this null.
+    const hook = __SKILL_ENGINE_TEST_HOOK;
+    if (hook) {
+      __SKILL_ENGINE_TEST_HOOK = null;
+      try {
+        hook();
+      } catch (err) {
+        process.stderr.write(
+          `[gossipcat] skill-engine: test hook threw: ${(err as Error).message}\n`,
+        );
+      }
+    }
+
+    // After the hook runs (e.g. sibling writer bumped disk version), re-read
+    // and re-verify. Without this, writer A would happily overwrite writer B's
+    // fresher state even though B landed in between A's check and A's write.
+    if (hook && existsSync(skillPath)) {
+      try {
+        const current = readFileSync(skillPath, 'utf-8');
+        const parsed = this.parseSkillFile(current);
+        const postHookDisk = this.safeNumber(parsed.frontmatter.version ?? 0, 0);
+        if (postHookDisk !== expectedDiskVersion) {
+          process.stderr.write(
+            `[gossipcat] skill-engine: post-hook version drift on ${skillPath} — ` +
+            `expected v${expectedDiskVersion}, disk has v${postHookDisk}. ` +
+            `Aborting stale write (would have been v${newVersion}).\n`,
+          );
+          return { ok: false, drift: { expectedVersion: expectedDiskVersion, diskVersion: postHookDisk } };
+        }
+      } catch {
+        // If we can't re-read, fall through to the write and let rename win.
+      }
+    }
+
+    const fmLines = Object.entries(frontmatter).map(
+      ([k, v]) => `${k}: ${this.serializeYamlValue(v)}`,
+    );
+    const content = `---\n${fmLines.join('\n')}\n---${body}`;
+
+    // Atomic write: write to a sibling tmp, then rename into place.
+    // tmp must live in the same directory so rename(2) is a single inode
+    // operation rather than a cross-device copy+unlink.
+    const tmpPath = `${skillPath}.tmp.${process.pid}.${randomBytes(4).toString('hex')}`;
+    try {
+      writeFileSync(tmpPath, content, 'utf-8');
+      renameSync(tmpPath, skillPath);
+    } catch (err) {
+      // Best-effort tmp cleanup — never mask the original error.
+      try { unlinkSync(tmpPath); } catch { /* tmp already gone */ }
+      throw err;
+    }
+    return { ok: true };
+  }
+}

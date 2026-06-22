@@ -1,0 +1,794 @@
+import { ILLMProvider } from '@gossip/orchestrator';
+import { LLMMessage, ToolDefinition } from '@gossip/types';
+
+/** Local type for the legacy progress callback tested here */
+type WorkerProgressCallback = (event: {
+  toolCalls: number;
+  currentTool: string;
+  turn: number;
+  inputTokens: number;
+  outputTokens: number;
+}) => void;
+
+/**
+ * Test the WorkerAgent's multi-turn tool loop logic.
+ * We test the core loop behavior with a mock LLM, without connecting to a real relay.
+ */
+
+// Simulate the worker's executeTask loop logic in isolation
+async function simulateToolLoop(
+  llm: ILLMProvider,
+  tools: ToolDefinition[],
+  task: string,
+  callTool: (name: string, args: Record<string, unknown>) => Promise<string>,
+  maxTurns = 10
+): Promise<string> {
+  const messages: LLMMessage[] = [
+    { role: 'system', content: 'You are a developer agent.' },
+    { role: 'user', content: task },
+  ];
+
+  let lastToolSig = '';
+  let repeatCount = 0;
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    const response = await llm.generate(messages, { tools });
+
+    if (!response.toolCalls?.length) {
+      return response.text;
+    }
+
+    // Detect repetitive tool calls
+    const toolSig = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`).join('|');
+    if (toolSig === lastToolSig) {
+      repeatCount++;
+      if (repeatCount >= 2) {
+        return response.text || 'Task completed (agent was repeating the same action).';
+      }
+    } else {
+      lastToolSig = toolSig;
+      repeatCount = 0;
+    }
+
+    messages.push({
+      role: 'assistant',
+      content: response.text || '',
+      toolCalls: response.toolCalls,
+    });
+
+    for (const toolCall of response.toolCalls) {
+      const result = await callTool(toolCall.name, toolCall.arguments);
+      messages.push({
+        role: 'tool',
+        content: result,
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+      });
+    }
+  }
+
+  return 'Max tool turns reached';
+}
+
+// Simulate the worker's executeTask loop with onProgress callback support
+async function simulateToolLoopWithProgress(
+  llm: ILLMProvider,
+  tools: ToolDefinition[],
+  task: string,
+  callTool: (name: string, args: Record<string, unknown>) => Promise<string>,
+  onProgress?: WorkerProgressCallback,
+  maxTurns = 10
+): Promise<{ result: string; inputTokens: number; outputTokens: number }> {
+  const messages: LLMMessage[] = [
+    { role: 'system', content: 'You are a developer agent.' },
+    { role: 'user', content: task },
+  ];
+
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let toolCallCount = 0;
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    const response = await llm.generate(messages, { tools });
+
+    if (response.usage) {
+      totalInputTokens += response.usage.inputTokens;
+      totalOutputTokens += response.usage.outputTokens;
+    }
+
+    if (!response.toolCalls?.length) {
+      return { result: response.text, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+    }
+
+    messages.push({
+      role: 'assistant',
+      content: response.text || '',
+      toolCalls: response.toolCalls,
+    });
+
+    for (const toolCall of response.toolCalls) {
+      const result = await callTool(toolCall.name, toolCall.arguments);
+      messages.push({
+        role: 'tool',
+        content: result,
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+      });
+      toolCallCount++;
+      onProgress?.({
+        toolCalls: toolCallCount,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        currentTool: toolCall.name,
+        turn,
+      });
+    }
+  }
+
+  return { result: 'Max tool turns reached', inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
+}
+
+describe('WorkerAgent tool loop', () => {
+  const tools: ToolDefinition[] = [
+    { name: 'read_file', description: 'Read file', parameters: { type: 'object', properties: { path: { type: 'string', description: 'path' } } } },
+  ];
+
+  it('returns final text when no tool calls', async () => {
+    const llm: ILLMProvider = {
+      async generate() { return { text: 'Done!' }; },
+    };
+
+    const result = await simulateToolLoop(llm, tools, 'hello', async () => '');
+    expect(result).toBe('Done!');
+  });
+
+  it('executes tool calls and returns final response', async () => {
+    let callCount = 0;
+    const llm: ILLMProvider = {
+      async generate(_messages: LLMMessage[]) {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            text: 'Reading file...',
+            toolCalls: [{ id: 'call_1', name: 'read_file', arguments: { path: '/tmp/test.ts' } }],
+          };
+        }
+        return { text: 'File contains: hello world' };
+      },
+    };
+
+    const toolCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      toolCalls.push({ name, args });
+      return 'hello world';
+    };
+
+    const result = await simulateToolLoop(llm, tools, 'read /tmp/test.ts', callTool);
+    expect(result).toBe('File contains: hello world');
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toEqual({ name: 'read_file', args: { path: '/tmp/test.ts' } });
+  });
+
+  it('handles multi-turn tool use', async () => {
+    let callCount = 0;
+    const llm: ILLMProvider = {
+      async generate() {
+        callCount++;
+        if (callCount <= 3) {
+          return {
+            text: `Turn ${callCount}`,
+            toolCalls: [{ id: `call_${callCount}`, name: 'read_file', arguments: { path: `/file${callCount}` } }],
+          };
+        }
+        return { text: 'All done after 3 tool calls' };
+      },
+    };
+
+    let toolCallCount = 0;
+    const callTool = async () => { toolCallCount++; return `result ${toolCallCount}`; };
+
+    const result = await simulateToolLoop(llm, tools, 'process files', callTool);
+    expect(result).toBe('All done after 3 tool calls');
+    expect(toolCallCount).toBe(3);
+  });
+
+  it('stops at max tool turns', async () => {
+    let turn = 0;
+    const llm: ILLMProvider = {
+      async generate() {
+        turn++;
+        return {
+          text: 'more work',
+          toolCalls: [{ id: `call_${turn}`, name: 'read_file', arguments: { path: `/file${turn}` } }],
+        };
+      },
+    };
+
+    const result = await simulateToolLoop(llm, tools, 'infinite loop', async () => 'result', 3);
+    expect(result).toBe('Max tool turns reached');
+  });
+
+  it('exits early when agent repeats the same tool call 3 times', async () => {
+    const llm: ILLMProvider = {
+      async generate() {
+        return {
+          text: 'I am done.',
+          toolCalls: [{ id: 'call', name: 'read_file', arguments: { path: '/same-file' } }],
+        };
+      },
+    };
+
+    let callCount = 0;
+    const callTool = async () => { callCount++; return 'ok'; };
+
+    const result = await simulateToolLoop(llm, tools, 'stuck agent', callTool, 15);
+    expect(result).toBe('I am done.');
+    // Stops before executing the 3rd repeat — only 2 calls executed
+    expect(callCount).toBeLessThanOrEqual(3);
+    expect(callCount).toBeGreaterThan(0);
+  });
+
+  it('handles multiple tool calls in single turn', async () => {
+    let callCount = 0;
+    const llm: ILLMProvider = {
+      async generate() {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            text: 'Reading both files...',
+            toolCalls: [
+              { id: 'call_1', name: 'read_file', arguments: { path: '/file1' } },
+              { id: 'call_2', name: 'read_file', arguments: { path: '/file2' } },
+            ],
+          };
+        }
+        return { text: 'Got both files' };
+      },
+    };
+
+    const paths: string[] = [];
+    const callTool = async (_name: string, args: Record<string, unknown>) => {
+      paths.push(args.path as string);
+      return `content of ${args.path}`;
+    };
+
+    const result = await simulateToolLoop(llm, tools, 'read two files', callTool);
+    expect(result).toBe('Got both files');
+    expect(paths).toEqual(['/file1', '/file2']);
+  });
+});
+
+describe('WorkerProgressCallback', () => {
+  const tools: ToolDefinition[] = [
+    { name: 'read_file', description: 'Read file', parameters: { type: 'object', properties: { path: { type: 'string', description: 'path' } } } },
+  ];
+
+  it('fires onProgress after each tool call with cumulative counts', async () => {
+    let llmCallCount = 0;
+    const llm: ILLMProvider = {
+      async generate() {
+        llmCallCount++;
+        if (llmCallCount === 1) {
+          return {
+            text: 'Reading files...',
+            toolCalls: [
+              { id: 'call_1', name: 'read_file', arguments: { path: '/file1' } },
+              { id: 'call_2', name: 'read_file', arguments: { path: '/file2' } },
+            ],
+          };
+        }
+        return { text: 'Done' };
+      },
+    };
+
+    const progressEvents: Parameters<WorkerProgressCallback>[0][] = [];
+    const onProgress: WorkerProgressCallback = (event) => {
+      progressEvents.push({ ...event });
+    };
+
+    await simulateToolLoopWithProgress(llm, tools, 'read two files', async () => 'ok', onProgress);
+
+    expect(progressEvents).toHaveLength(2);
+    expect(progressEvents[0].toolCalls).toBe(1);
+    expect(progressEvents[0].currentTool).toBe('read_file');
+    expect(progressEvents[0].turn).toBe(0);
+    expect(progressEvents[1].toolCalls).toBe(2);
+    expect(progressEvents[1].currentTool).toBe('read_file');
+    expect(progressEvents[1].turn).toBe(0);
+  });
+
+  it('accumulates tokens across turns', async () => {
+    let llmCallCount = 0;
+    const llm: ILLMProvider = {
+      async generate() {
+        llmCallCount++;
+        if (llmCallCount === 1) {
+          return {
+            text: 'Turn 1',
+            toolCalls: [{ id: 'call_1', name: 'read_file', arguments: { path: '/file1' } }],
+            usage: { inputTokens: 100, outputTokens: 50 },
+          };
+        }
+        if (llmCallCount === 2) {
+          return {
+            text: 'Turn 2',
+            toolCalls: [{ id: 'call_2', name: 'read_file', arguments: { path: '/file2' } }],
+            usage: { inputTokens: 200, outputTokens: 80 },
+          };
+        }
+        return { text: 'Done', usage: { inputTokens: 50, outputTokens: 20 } };
+      },
+    };
+
+    const progressEvents: Parameters<WorkerProgressCallback>[0][] = [];
+    const onProgress: WorkerProgressCallback = (event) => {
+      progressEvents.push({ ...event });
+    };
+
+    const { inputTokens, outputTokens } = await simulateToolLoopWithProgress(
+      llm, tools, 'multi-turn task', async () => 'result', onProgress
+    );
+
+    // After turn 0 tool call: tokens from first LLM call only
+    expect(progressEvents[0].inputTokens).toBe(100);
+    expect(progressEvents[0].outputTokens).toBe(50);
+    expect(progressEvents[0].toolCalls).toBe(1);
+    expect(progressEvents[0].turn).toBe(0);
+
+    // After turn 1 tool call: cumulative tokens from both LLM calls
+    expect(progressEvents[1].inputTokens).toBe(300);
+    expect(progressEvents[1].outputTokens).toBe(130);
+    expect(progressEvents[1].toolCalls).toBe(2);
+    expect(progressEvents[1].turn).toBe(1);
+
+    // Final result includes all 3 LLM calls
+    expect(inputTokens).toBe(350);
+    expect(outputTokens).toBe(150);
+  });
+});
+
+describe('instructions and gossip', () => {
+  it('accepts instructions at constructor', () => {
+    // Create a WorkerAgent with custom instructions (don't need to connect for this)
+    const mockLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const worker = new WorkerAgent('test', mockLlm as any, 'ws://localhost:9999', [], 'You are a reviewer.');
+    expect(worker.getInstructions()).toBe('You are a reviewer.');
+  });
+
+  it('uses default instructions when none provided', () => {
+    const mockLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const worker = new WorkerAgent('test', mockLlm as any, 'ws://localhost:9999', []);
+    expect(worker.getInstructions()).toContain('skilled developer agent');
+  });
+
+  it('setInstructions updates instructions', () => {
+    const mockLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const worker = new WorkerAgent('test', mockLlm as any, 'ws://localhost:9999', []);
+    worker.setInstructions('New instructions');
+    expect(worker.getInstructions()).toBe('New instructions');
+  });
+});
+
+describe('WorkerAgent per-agent maxToolTurns (fix/per-agent-turn-cap)', () => {
+  it('uses the provided maxToolTurns when set', () => {
+    const stubLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const w = new WorkerAgent('a1', stubLlm as any, 'ws://x', [], undefined, false, undefined, 25);
+    expect((w as any).maxToolTurns).toBe(25);
+  });
+
+  it('falls back to the default (15) when omitted', () => {
+    const stubLlm = { generate: jest.fn().mockResolvedValue({ text: 'ok' }) };
+    const { WorkerAgent } = require('@gossip/orchestrator');
+    const w = new WorkerAgent('a1', stubLlm as any, 'ws://x', [], undefined, false, undefined);
+    expect((w as any).maxToolTurns).toBe(15);
+  });
+
+  it('executeTask loop terminates after exactly maxToolTurns turns when LLM always returns a tool call', async () => {
+    // Mock @gossip/client so WorkerAgent can be constructed and started without
+    // a real relay. The mock GossipAgent captures the 'message' handler registered
+    // in start() and fires back a synthetic RPC_RESPONSE so callTool() resolves
+    // immediately instead of timing out.
+    const { MessageType } = require('@gossip/types');
+
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        // Fire the RPC_RESPONSE on the next tick so callTool's Promise is already registered
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler(
+              { result: 'tool-ok' },
+              { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req }
+            );
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    // Reload WorkerAgent with the mock in scope. jest.doMock (unlike
+    // jest.mock) is not hoisted, so it reliably applies to the require()
+    // below after resetModules — jest.mock inside a test body has
+    // resolution-order-dependent behavior.
+    jest.resetModules();
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    let llmCallCount = 0;
+    const dummyTool: ToolDefinition = {
+      name: 'noop',
+      description: 'no-op',
+      parameters: { type: 'object', properties: {} },
+    };
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async () => {
+        const callN = (stubLlm.generate as jest.Mock).mock.calls.length;
+        // After 3 tool-turn calls the budget is exhausted; executeTask then
+        // calls generate once more for the summary. Return plain text for that.
+        if (callN > 3) {
+          return { text: 'summary after budget exhausted' };
+        }
+        // Vary the argument each turn so the repeat-detection (same toolSig
+        // 3x = exit early) doesn't fire before the budget cap.
+        llmCallCount++;
+        return {
+          text: `turn ${llmCallCount}`,
+          toolCalls: [{ id: `call_${llmCallCount}`, name: 'noop', arguments: { turn: llmCallCount } }],
+        };
+      }),
+    };
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', [dummyTool], undefined, false, undefined, 3);
+    await worker.start();
+
+    // Drain the async generator to completion
+    const events: unknown[] = [];
+    for await (const event of worker.executeTask('run forever', undefined, undefined, 'task-1')) {
+      events.push(event);
+    }
+
+    // The LLM was called 3 times for tool turns + 1 summary call after budget exhausted
+    const llmCalls = (stubLlm.generate as jest.Mock).mock.calls.length;
+    expect(llmCalls).toBe(4); // 3 tool turns + 1 summary
+    expect(llmCallCount).toBe(3); // incremented only during tool-turn calls
+
+    // Restore mocks so subsequent tests in the file are not affected
+    jest.resetModules();
+  }, 15_000);
+
+  it('executeTask loop runs exactly once for the minimal maxToolTurns of 1', async () => {
+    const { MessageType } = require('@gossip/types');
+
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler(
+              { result: 'tool-ok' },
+              { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req }
+            );
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    jest.resetModules();
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    const dummyTool: ToolDefinition = {
+      name: 'noop',
+      description: 'no-op',
+      parameters: { type: 'object', properties: {} },
+    };
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async () => {
+        const callN = (stubLlm.generate as jest.Mock).mock.calls.length;
+        if (callN > 1) {
+          return { text: 'summary after budget exhausted' };
+        }
+        return {
+          text: 'turn 1',
+          toolCalls: [{ id: 'call_1', name: 'noop', arguments: { turn: 1 } }],
+        };
+      }),
+    };
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', [dummyTool], undefined, false, undefined, 1);
+    await worker.start();
+
+    for await (const _event of worker.executeTask('run forever', undefined, undefined, 'task-min')) {
+      // drain
+    }
+
+    // 1 tool turn + 1 summary call after the budget is exhausted
+    expect((stubLlm.generate as jest.Mock).mock.calls.length).toBe(2);
+
+    jest.resetModules();
+  }, 15_000);
+});
+
+// ─── argumentsParseError short-circuit ───────────────────────────────────────
+describe('WorkerAgent — argumentsParseError short-circuit (deepseek relay crash fix)', () => {
+  /**
+   * Helper: build a WorkerAgent backed by a mock relay (no real WebSocket).
+   * sendEnvelope resolves the pending callTool promise immediately via
+   * messageHandler — same pattern as the per-agent maxToolTurns tests above.
+   */
+  function buildWorkerWithRelay(stubLlm: ILLMProvider, dummyTools: ToolDefinition[], maxTurns: number) {
+    const { MessageType } = require('@gossip/types');
+
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const sendEnvelopeCalls: Array<{ rid_req?: string }> = [];
+
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        sendEnvelopeCalls.push(envelope);
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler(
+              { result: 'relay-tool-ok' },
+              { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req }
+            );
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', dummyTools, undefined, false, undefined, maxTurns);
+    return { worker, mockGossipAgent, sendEnvelopeCalls };
+  }
+
+  it('a call with argumentsParseError is NOT forwarded to the relay (tool not executed)', async () => {
+    jest.resetModules();
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation((..._args: unknown[]) => buildWorkerWithRelay(null as any, [], 5).mockGossipAgent),
+    }));
+
+    const dummyTool: ToolDefinition = { name: 'file_tree', description: 'tree', parameters: { type: 'object', properties: {} } };
+
+    let llmCallCount = 0;
+    const capturedToolMessages: string[] = [];
+
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async (messages: LLMMessage[]) => {
+        llmCallCount++;
+        if (llmCallCount === 1) {
+          // Return one call with invalid JSON args (position-8 class: unquoted key)
+          return {
+            text: 'calling file_tree',
+            toolCalls: [{
+              id: 'call_bad',
+              name: 'file_tree',
+              arguments: {},
+              argumentsParseError: "Expected ':' after property name in JSON at position 8 (line 1 column 9)",
+              rawArguments: '{depth: 2}',
+            }],
+          };
+        }
+        // Second call: capture any tool result messages that were fed back
+        for (const msg of messages) {
+          if (msg.role === 'tool') {
+            capturedToolMessages.push(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content));
+          }
+        }
+        return { text: 'done after seeing error' };
+      }),
+    };
+
+    // Build relay mock directly so we can capture sendEnvelope calls
+    const { MessageType } = require('@gossip/types');
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const sendEnvelopeCalls: Array<unknown> = [];
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        sendEnvelopeCalls.push(envelope);
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler({ result: 'relay-ok' }, { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req });
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    jest.resetModules();
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', [dummyTool], undefined, false, undefined, 5);
+    await worker.start();
+
+    for await (const _event of worker.executeTask('do something', undefined, undefined, 'task-bad-args')) {
+      // drain
+    }
+
+    // The tool was NOT forwarded to the relay: sendEnvelope never called
+    expect(sendEnvelopeCalls).toHaveLength(0);
+
+    // The error message was fed back to the model and names "invalid JSON" + the raw snippet
+    expect(capturedToolMessages).toHaveLength(1);
+    expect(capturedToolMessages[0]).toContain('not valid JSON');
+    expect(capturedToolMessages[0]).toContain('{depth: 2}');
+
+    jest.resetModules();
+  }, 15_000);
+
+  it('a call with argumentsParseError increments turnErrors (streak machinery applies)', async () => {
+    jest.resetModules();
+
+    const dummyTool: ToolDefinition = { name: 'file_tree', description: 'tree', parameters: { type: 'object', properties: {} } };
+    let llmCallCount = 0;
+
+    // Three consecutive turns each returning ONE call with argumentsParseError
+    // → consecutiveErrors hits 3 → loop exits with ERROR event, not FATAL ERROR
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async () => {
+        llmCallCount++;
+        if (llmCallCount <= 3) {
+          return {
+            text: `bad turn ${llmCallCount}`,
+            toolCalls: [{
+              id: `call_bad_${llmCallCount}`,
+              name: 'file_tree',
+              arguments: {},
+              argumentsParseError: 'Unexpected token d',
+              rawArguments: `{depth: ${llmCallCount}}`,
+            }],
+          };
+        }
+        return { text: 'should not reach here' };
+      }),
+    };
+
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn(),
+      sendEnvelope: jest.fn().mockResolvedValue(undefined),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', [dummyTool], undefined, false, undefined, 10);
+    await worker.start();
+
+    const { TaskStreamEventType } = require('@gossip/orchestrator');
+    const events: Array<{ type: string }> = [];
+    for await (const event of worker.executeTask('trigger streak', undefined, undefined, 'task-streak')) {
+      events.push(event as { type: string });
+    }
+
+    // After 3 all-error turns the loop exits with FINAL_RESULT (error loop),
+    // NOT with a FATAL ERROR (which would mean an exception escaped parseOpenAIResponse)
+    const hasError = events.some(e => e.type === TaskStreamEventType.ERROR);
+    const hasFinal = events.some(e => e.type === TaskStreamEventType.FINAL_RESULT);
+    // The loop should exit cleanly — no FATAL ERROR type event
+    expect(hasError).toBe(false);
+    expect(hasFinal).toBe(true);
+    // Only 3 LLM calls before the streak exits (no summary call in the streak path)
+    expect(llmCallCount).toBe(3);
+
+    jest.resetModules();
+  }, 15_000);
+
+  it('sibling valid call in same response executes while the malformed call does not reach relay', async () => {
+    jest.resetModules();
+
+    const dummyTools: ToolDefinition[] = [
+      { name: 'file_tree', description: 'tree', parameters: { type: 'object', properties: {} } },
+      { name: 'file_read', description: 'read', parameters: { type: 'object', properties: { path: { type: 'string', description: 'path' } } } },
+    ];
+
+    let llmCallCount = 0;
+    const { MessageType } = require('@gossip/types');
+
+    let messageHandler: ((data: unknown, envelope: unknown) => void) | null = null;
+    const sendEnvelopeCalls: Array<{ rid_req?: string }> = [];
+
+    const mockGossipAgent = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'message') messageHandler = handler as (data: unknown, envelope: unknown) => void;
+      }),
+      sendEnvelope: jest.fn().mockImplementation(async (envelope: { rid_req?: string }) => {
+        sendEnvelopeCalls.push(envelope);
+        setImmediate(() => {
+          if (messageHandler && envelope.rid_req) {
+            messageHandler({ result: 'read-ok' }, { t: MessageType.RPC_RESPONSE, rid_req: envelope.rid_req });
+          }
+        });
+      }),
+      subscribe: jest.fn().mockResolvedValue(undefined),
+      unsubscribe: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const stubLlm: ILLMProvider = {
+      generate: jest.fn().mockImplementation(async () => {
+        llmCallCount++;
+        if (llmCallCount === 1) {
+          // First turn: one malformed call + one valid call
+          return {
+            text: 'mixed batch',
+            toolCalls: [
+              {
+                id: 'call_bad',
+                name: 'file_tree',
+                arguments: {},
+                argumentsParseError: 'Unexpected token d',
+                rawArguments: '{depth: 2}',
+              },
+              {
+                id: 'call_ok',
+                name: 'file_read',
+                arguments: { path: '/src/index.ts' },
+              },
+            ],
+          };
+        }
+        return { text: 'all done' };
+      }),
+    };
+
+    jest.doMock('@gossip/client', () => ({
+      GossipAgent: jest.fn().mockImplementation(() => mockGossipAgent),
+    }));
+    const { WorkerAgent: WA } = require('@gossip/orchestrator');
+
+    const worker = new WA('test-agent', stubLlm, 'ws://localhost:9999', dummyTools, undefined, false, undefined, 5);
+    await worker.start();
+
+    for await (const _event of worker.executeTask('mixed batch task', undefined, undefined, 'task-mixed')) {
+      // drain
+    }
+
+    // Only the valid file_read was forwarded to the relay
+    expect(sendEnvelopeCalls).toHaveLength(1);
+
+    jest.resetModules();
+  }, 15_000);
+});

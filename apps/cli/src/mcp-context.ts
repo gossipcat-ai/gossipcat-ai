@@ -1,0 +1,336 @@
+/**
+ * Shared MCP server context — all handlers import this.
+ * Single mutable context object avoids passing dozens of parameters.
+ */
+import { randomUUID } from 'crypto';
+import type { CrossReviewEntry, MainAgent, RoundContext, RoundWarning } from '@gossip/orchestrator';
+
+/**
+ * Maximum number of task_ids held in pendingDispatchWarnings at any time.
+ * When at cap, stashDispatchWarnings evicts the eldest (first Map entry by
+ * insertion order) before inserting a new entry. Tasks dispatched and never
+ * collected would otherwise leak entries for the server lifetime.
+ */
+export const MAX_PENDING_DISPATCH_WARNINGS = 200;
+
+export interface NativeCrossReviewPrompt {
+  agentId: string;
+  system: string;
+  user: string;
+}
+
+export interface PendingConsensusRound {
+  consensusId: string;
+  allResults: any[];  // TaskEntry[]
+  relayCrossReviewEntries: CrossReviewEntry[];
+  /** Relay agents whose phase-2 cross-review failed (quota / parse / network). Surfaced in the final report. */
+  relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;
+  pendingNativeAgents: Set<string>;
+  /**
+   * Exhaustive set of native cross-review agents that EVER participated in this
+   * round — populated at round-creation alongside `pendingNativeAgents` and NEVER
+   * mutated thereafter (no per-arrival delete). Used by the completion-path
+   * snapshot in relay-cross-review.ts so agents whose cross-review payload failed
+   * to parse (and therefore contributed zero `nativeCrossReviewEntries`) are still
+   * captured in `recentConsensusAgentIds`. Without this, the completion-path
+   * derivation from `nativeCrossReviewEntries[].agentId ∪ final-arrival agent_id`
+   * silently drops earlier parse-failed agents from the agentId fallback.
+   * Spec: PR #270 v3 review (HIGH — completion-path under-seeds on parse failure).
+   */
+  participatingNativeAgents: Set<string>;
+  nativeCrossReviewEntries: CrossReviewEntry[];
+  deadline: number;
+  createdAt: number;
+  /** Cross-review prompts for still-pending native agents. Persisted so /mcp reconnect can re-issue EXECUTE NOW. */
+  nativePrompts?: NativeCrossReviewPrompt[];
+  /**
+   * Post-validation, post-realpath citation resolution roots. Carried from
+   * dispatch-time or collect-time (collect-time REPLACES dispatch-time —
+   * see #126 spec). Used to seed ConsensusEngineConfig.resolutionRoots at
+   * every construction site (collect, relay-cross-review timeout,
+   * relay-cross-review arrival, synthesis). Persists across /mcp reconnect
+   * via persistPendingConsensus.
+   */
+  resolutionRoots?: readonly string[];
+  /**
+   * Per-round consensus context (spec §3.1/§3.2) EMBEDDING the resolutionRoots
+   * plus the fail-loud warnings array. Constructed at the MCP boundary
+   * immediately after validateResolutionRoot filtering. Alias mode (PR-A): the
+   * loose `resolutionRoots` field above is kept populated in parallel; readers
+   * prefer `roundContext` when present and fall back to the flat field for
+   * old persisted records. Persisted/restored with per-field back-compat.
+   */
+  roundContext?: RoundContext;
+}
+
+export interface NativeTaskInfo {
+  agentId: string;
+  task: string;
+  startedAt: number;
+  timeoutMs?: number;
+  planId?: string;
+  step?: number;
+  utilityType?: 'lens' | 'gossip' | 'summary' | 'session_summary' | 'verify_memory' | 'skill_develop' | 'plan';
+  writeMode?: 'sequential' | 'scoped' | 'worktree';
+  /**
+   * The effective write mode after runtime downgrade decisions (e.g. git-repo
+   * check at dispatch). When present, the relay-receipt isolation checker uses
+   * this instead of `writeMode` to avoid false-positive violation alerts on
+   * dispatches that were silently downgraded. Falls back to `writeMode` when
+   * absent (for old persisted entries restored from .gossip/native-tasks.json).
+   */
+  effectiveWriteMode?: 'sequential' | 'scoped' | 'worktree';
+  /** One-time token that must accompany gossip_relay — prevents task-ID spoofing */
+  relayToken?: string;
+  /**
+   * Whether the native agent called memory_query during this task.
+   * Set by gossip_relay when the agent includes memoryQueryCalled in its result metadata.
+   * Threaded to TaskGraph.recordCompleted/recordFailed for compliance auditing.
+   */
+  memoryQueryCalled?: boolean;
+  /**
+   * origin/master SHA captured just before the agent was dispatched.
+   * Used by the ref-allowlist detection layer (Phase 1) to detect direct
+   * pushes to master without a PR-merge entry.
+   * Null when git is unavailable (offline / no remote).
+   */
+  preDispatchSha?: string | null;
+  /**
+   * Snapshot of parent-checkout state at dispatch time, used by the
+   * Option B isolation-failure detector. Only populated for
+   * `writeMode === 'worktree'` native dispatches. See
+   * `apps/cli/src/handlers/worktree-isolation-detection.ts` and
+   * docs/specs/2026-05-20-native-worktree-isolation-fix.md §"Option B".
+   */
+  isolationSnapshot?: {
+    head: string | null;
+    dirty: string[];
+    takenAt: string;
+  };
+  /**
+   * Absolute path to the on-disk dispatch prompt file, set ONLY when the
+   * caller requested `prompt_format: 'elided'` (Option B server-side prompt
+   * elision, spec docs/specs/2026-05-18-native-dispatch-skill-handle-pattern.md).
+   * Persisted so /mcp reconnect can prune orphan files whose taskId is no
+   * longer in the restored map. Undefined for inline dispatches.
+   */
+  promptPath?: string;
+  /**
+   * True if this task's lifetime overlapped with another worktree-mode task.
+   * Set at dispatch time and never cleared. Used by checkIsolationViolation to
+   * skip ambiguous attribution — when Agent A leaks to master and finishes first,
+   * Agent B's later check would falsely attribute A's dirty paths. With this flag,
+   * any concurrent worktree task suppresses the worktree_isolation_failed signal
+   * in favour of a worktree_isolation_skipped breadcrumb.
+   */
+  concurrentWorktreeTaint?: boolean;
+  /**
+   * True when dispatch-time fail-loud warnings were stashed under this task_id
+   * (spec §3.2 / consensus f11 follow-up). The stash itself
+   * (`pendingDispatchWarnings`) is in-memory only and lost on /mcp reconnect,
+   * but THIS marker is persisted on the native task entry. At collect time, if
+   * the marker is set but the in-memory stash has no entry for the task, the
+   * loss is fail-loud: a `dispatch_warnings_lost` RoundWarning is emitted on the
+   * round so the dropped warnings are observable rather than silently gone.
+   */
+  dispatchWarningsStashed?: boolean;
+}
+
+export interface NativeResultInfo {
+  id: string;
+  agentId: string;
+  task: string;
+  status: 'completed' | 'failed' | 'timed_out' | 'superseded';
+  result?: string;
+  error?: string;
+  startedAt: number;
+  completedAt: number;
+  /**
+   * Carried over from NativeTaskInfo.dispatchWarningsStashed at relay time.
+   * Survives reconnect via the persisted slimResults. Allows
+   * detectLostDispatchWarnings to detect the lost-warnings case for tasks
+   * that completed before the next /mcp reconnect wiped the in-memory stash.
+   */
+  dispatchWarningsStashed?: boolean;
+}
+
+export interface McpContext {
+  mainAgent: MainAgent;  // assigned in boot(); accessed only after boot completes
+  relay: any;
+  toolServer: any;
+  workers: Map<string, any>;
+  keychain: any;
+  skillEngine: any;
+  nativeTaskMap: Map<string, NativeTaskInfo>;
+  nativeResultMap: Map<string, NativeResultInfo>;
+  /**
+   * Separate result map for skill_develop utility tasks. Unlike nativeResultMap,
+   * entries here are NOT swept by evictStaleNativeTasks() — utility results
+   * represent orchestrator re-entry intent and must survive the 2h TTL window
+   * so that long-running dispatch→relay→re-entry chains don't fall back to
+   * stale template skills.
+   */
+  nativeUtilityResultMap: Map<string, NativeResultInfo>;
+  nativeAgentConfigs: Map<string, { model: string; instructions: string; description: string; skills: string[] }>;
+  /**
+   * Identity registry — agentId → runtime/provider/model. Read by the
+   * ToolServer's self_identity tool for relay agents (native agents get
+   * the identity block injected directly into their prompt). Mutated at
+   * boot AND on every syncWorkersViaKeychain so newly-added agents are
+   * visible to self_identity without /mcp reconnect.
+   */
+  identityRegistry: Map<string, { agent_id: string; runtime: 'native' | 'relay'; provider: string; model: string }>;
+  pendingConsensusRounds: Map<string, PendingConsensusRound>;
+  /**
+   * Fallback membership map for the relay-lint detector — taskId → expiryEpoch.
+   * Populated at consensus round-seed time (collect.ts) and consulted by
+   * `taskWasInConsensusRound` when the live `pendingConsensusRounds` entry has
+   * already been deleted (timeout or completion). Without this fallback, late
+   * Phase 1 relays that arrive after the round was torn down silently miss
+   * the warning. TTL: 10 minutes; pruned lazily on read.
+   * Spec: PR #270 review (HIGH — round-deletion race).
+   */
+  recentConsensusTaskIds: Map<string, number>;
+  /**
+   * Companion to `recentConsensusTaskIds` — agentId → expiryEpoch. Seeded at
+   * round-deletion time (timeout/completion paths in relay-cross-review.ts)
+   * with the snapshot of `pendingNativeAgents` so late cross-review prose
+   * relays from those agents still register as "in consensus" via the agentId
+   * fallback. Without this, the misleading comment at collect.ts only seeded
+   * Phase 1 task IDs, leaving Phase 2 cross-review native agents uncovered
+   * after the round was torn down. TTL: same as recentConsensusTaskIds
+   * (10 min); pruned lazily on read.
+   * Spec: PR #270 v2 review (MEDIUM — late cross-review relay gap).
+   */
+  recentConsensusAgentIds: Map<string, number>;
+  /**
+   * Dispatch-time resolutionRoots (#126 PR-B) keyed by task_id. Populated
+   * from gossip_dispatch's `resolutionRoots` pass-through; consumed by
+   * gossip_collect when collect-time input is absent. Collect-time REPLACES
+   * dispatch-time per spec (not merges). Entries are deleted on collect to
+   * bound memory.
+   */
+  pendingDispatchResolutionRoots: Map<string, readonly string[]>;
+  /**
+   * Dispatch-time fail-loud warnings (spec §3.2 boundary #1) keyed by task_id.
+   * The dispatch handler creates NO consensus round (that happens at collect),
+   * so dispatch-time resolutionRoots rejections have no round to attach to.
+   * They are stashed here under the handler-minted task_ids and drained into
+   * the collect-built RoundContext at handleCollect time, where they reach
+   * `report.warnings` via the PR-A drains.
+   *
+   * Lifetime boundary: this stash is in-memory only. It MUST survive being read
+   * at collect within the SAME server lifetime, but it is NOT persisted across
+   * /mcp reconnect — once drained into the round, the round record's own
+   * persistence (pending-consensus.json) carries the warnings forward. A
+   * reconnect between dispatch and collect loses an undrained stash entry; that
+   * is the accepted residual window (symmetric with pendingDispatchResolutionRoots,
+   * which is also reconnect-volatile).
+   *
+   * Bounded to MAX_PENDING_DISPATCH_WARNINGS entries. stashDispatchWarnings in
+   * dispatch.ts evicts the eldest (first Map entry by insertion order) when the
+   * cap is reached, preventing unbounded growth for tasks dispatched but never
+   * collected (e.g. long-lived server under repeated dispatch-only workflows).
+   */
+  pendingDispatchWarnings: Map<string, readonly RoundWarning[]>;
+  nativeUtilityConfig: { model: string } | null;
+  /** Post-fallback runtime provider actually being used by the orchestrator LLM. */
+  mainProvider: string;
+  /** Post-fallback runtime model actually being used by the orchestrator LLM. */
+  mainModel: string;
+  /**
+   * Original main_agent values from config.json at boot, BEFORE any fallback.
+   * Used by syncWorkersViaKeychain to detect genuine config changes — comparing
+   * config.main_agent against the post-fallback `mainProvider`/`mainModel`
+   * falsely reports a change every sync for any user whose primary key was
+   * missing at boot.
+   */
+  mainProviderConfig: string;
+  mainModelConfig: string;
+  /** Actual bound HTTP MCP port (0/null if transport disabled). Set after listen(). */
+  httpMcpPort: number | null;
+  /** Source of the relay port: 'env' | 'sticky' | 'auto'. Used by gossip_status. */
+  relayPortSource: 'env' | 'sticky' | 'auto' | null;
+  /** Source of the HTTP MCP port. */
+  httpMcpPortSource: 'env' | 'sticky' | 'auto' | null;
+  booted: boolean;
+  /**
+   * Dashboard ⇄ live-CC bridge host (P1, spec 2026-06-14). Created in
+   * createMcpServer (it closes over the McpServer for stdio notifications) and
+   * registered as the relay's in-process inbound sink at boot. Null until the
+   * MCP server is constructed; null when the bridge module is absent. Typed
+   * `any` to avoid a cross-package import cycle (mirrors `relay`/`toolServer`).
+   */
+  bridgeHost: any;
+  /**
+   * True when `doBoot()` ran without a config file and synthesized an empty
+   * one (fresh-install / degraded-mode). The dashboard boots with 0 agents
+   * in this case — subsequent gossip_setup calls refresh it via
+   * ctx.relay.setAgentConfigs, but the dashboard poll interval (5s) still
+   * imposes a small latency. Used to surface a user-visible advisory in
+   * the gossip_setup response (issue #96).
+   */
+  bootedInDegradedMode: boolean;
+  /**
+   * Result of the last syncWorkersViaKeychain() call. Lets callers (e.g.
+   * gossip_setup) surface agent-count / error info to the user without
+   * having to reach into syncWorkers internals. Issue #96 — dashboard
+   * empty-agent-list on fresh install.
+   */
+  lastSyncResult: { ok: boolean; mergedAgentCount: number; error?: string } | null;
+  boot: () => Promise<void>;
+  syncWorkersViaKeychain: () => Promise<void>;
+  getModules: () => Promise<any>;
+}
+
+export const ctx: McpContext = {
+  mainAgent: null as unknown as MainAgent,
+  relay: null,
+  toolServer: null,
+  workers: new Map(),
+  keychain: null,
+  skillEngine: null,
+  nativeTaskMap: new Map(),
+  nativeResultMap: new Map(),
+  nativeUtilityResultMap: new Map(),
+  nativeAgentConfigs: new Map(),
+  identityRegistry: new Map(),
+  pendingConsensusRounds: new Map(),
+  recentConsensusTaskIds: new Map(),
+  recentConsensusAgentIds: new Map(),
+  pendingDispatchResolutionRoots: new Map(),
+  pendingDispatchWarnings: new Map(),
+  nativeUtilityConfig: null,
+  mainProvider: 'google',
+  mainModel: 'gemini-2.5-pro',
+  mainProviderConfig: 'google',
+  mainModelConfig: 'gemini-2.5-pro',
+  httpMcpPort: null,
+  relayPortSource: null,
+  httpMcpPortSource: null,
+  booted: false,
+  bridgeHost: null,
+  bootedInDegradedMode: false,
+  lastSyncResult: null,
+  boot: async () => { throw new Error('boot not initialized'); },
+  syncWorkersViaKeychain: async () => {},
+  getModules: async () => { throw new Error('getModules not initialized'); },
+};
+
+export const NATIVE_TASK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+/**
+ * TTL for `recentConsensusTaskIds` entries — 10 minutes. Window must outlast
+ * normal Phase 1 latency (timeouts, slow agents, /mcp reconnect) so the
+ * relay-lint fallback still catches late paraphrase-only relays after the
+ * live consensus round has been deleted.
+ */
+export const RECENT_CONSENSUS_TASK_TTL_MS = 10 * 60 * 1000;
+
+export function generateTaskId(): string {
+  return randomUUID().slice(0, 8);
+}
+
+export function defaultImportanceScores(): { relevance: number; accuracy: number; uniqueness: number } {
+  return { relevance: 3, accuracy: 3, uniqueness: 3 };
+}
