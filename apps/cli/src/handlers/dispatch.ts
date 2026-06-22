@@ -1337,6 +1337,21 @@ export async function handleDispatchParallel(
   // Spec §3.2 boundary #1: stash dispatch-time warnings under each task_id.
   stashDispatchWarnings(allParallelTaskIds, dispatchWarnings);
 
+  // Unit 2 orchestrator signal pipeline: pre-dispatch precondition guard.
+  // Best-effort — never blocks/fails a dispatch. Mirrors the single-dispatch
+  // call shape at dispatch.ts:717-725. One call per dispatch (not per task).
+  if (allParallelTaskIds.length > 0) {
+    runDispatchPreconditionGuard({
+      projectRoot: process.cwd(),
+      taskId: allParallelTaskIds[0],
+      resolutionRoots: effectiveResolutionRoots,
+    }).then(({ warnings: precondWarnings }) => {
+      for (const w of precondWarnings) {
+        process.stderr.write(`[gossipcat] ⚠️ precondition: ${w}\n`);
+      }
+    }).catch(() => { /* best-effort */ });
+  }
+
   const parallelHost = detectNativeHost();
   let msg = '';
   if (nativeInstructions.length > 0) {
@@ -1656,6 +1671,21 @@ export async function handleDispatchConsensus(
   }
   // Spec §3.2 boundary #1: stash dispatch-time warnings under each task_id.
   stashDispatchWarnings(allTaskIds, dispatchRoundWarnings);
+
+  // Unit 2 orchestrator signal pipeline: pre-dispatch precondition guard.
+  // Best-effort — never blocks/fails a dispatch. Mirrors the single-dispatch
+  // call shape at dispatch.ts:717-725. One call per dispatch (not per task).
+  if (allTaskIds.length > 0) {
+    runDispatchPreconditionGuard({
+      projectRoot: process.cwd(),
+      taskId: allTaskIds[0],
+      resolutionRoots: dispatchResolutionRoots,
+    }).then(({ warnings: precondWarnings }) => {
+      for (const w of precondWarnings) {
+        process.stderr.write(`[gossipcat] ⚠️ precondition: ${w}\n`);
+      }
+    }).catch(() => { /* best-effort */ });
+  }
 
   const consensusHost = detectNativeHost();
   const nativeTool = nativeToolName(consensusHost);
