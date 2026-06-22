@@ -15,7 +15,7 @@ const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
   resource_exhaustion: [/\bdos\b/i, /unbounded/i, /memory.?leak/i, /exhaust/i, /\btimeout\b/i, /infinite.?loop/i],
   type_safety: [/type.?safe/i, /typescript/i, /type.?narrow/i, /\bany\[?\]?\b/i, /type.?assert/i, /type.?guard/i],
   error_handling: [/error.?handl/i, /\bexception\b/i, /\bfallback\b/i, /try.?catch/i, /unhandled/i],
-  data_integrity: [/data.?corrupt/i, /\bintegrity\b/i, /\bconsistency\b/i, /idempoten/i, /non.?atomic/i],
+  data_integrity: [/data.?corrupt/i, /\bintegrity\b/i, /\bconsistency\b/i, /idempoten/i, /non.?atomic/i, /\bcontradict/i, /scope.?mismatch/i],
   // Fabrication-class failures: agent cites code that does not match repo state.
   // Kept in sync with DEFAULT_KEYWORDS.citation_grounding in skill-loader.ts —
   // both tables drive contextual activation and must agree.
@@ -27,6 +27,14 @@ const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
   cli_ergonomics: [/\bcli\b/i, /\bflag\b/i, /help text/i, /error message/i, /\busage\b/i, /\bprompt\b/i, /banner/i, /spinner/i],
   performance: [/\blatency/i, /slow/i, /performance/i, /\bn\+1\b/i, /uncached/i, /readFileSync/i, /synchronous/i, /hot path/i],
   testing: [/\btest(s|ing)?\b/i, /coverage/i, /\bmock\b/i, /\bfixture\b/i, /\bunit test/i, /integration test/i, /\be2e\b/i, /test suite/i],
+  // Game-design review vocabulary added 2026-06-22. The security/correctness buckets
+  // above leave player-feel and visual-clarity findings uncategorized (a Forbidden Brew
+  // gaze-cue consensus round logged ~8 "category resolution failed" misses on
+  // unity-playtester's UX prose). These two buckets cover game-feel/activation and
+  // legibility/observation findings. Patterns kept game-specific to avoid colliding with
+  // security review vocab (e.g. "ring buffer" matches neither — only "world-space ring/cue").
+  game_feel: [/game.?feel/i, /\bsticky\b/i, /\bsluggish\b/i, /\bsnappy\b/i, /\bjuice\b/i, /input.?trap/i, /mis.?fire/i, /mis.?trigger/i, /\bdwell\b/i, /auto.?fire/i, /\bhysteresis\b/i],
+  legibility: [/legibilit/i, /readab(le|ility)/i, /\bvisibility\b/i, /\bocclu(de|sion)/i, /\breticle\b/i, /\bcrosshair\b/i, /world.?space.?(ring|cue)/i, /\bgaze\b/i, /billboard/i, /screenshot/i],
 };
 
 /**
