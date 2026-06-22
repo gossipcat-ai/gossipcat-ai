@@ -138,6 +138,18 @@ Call `gossip_scores()` to see: accuracy (0-1), uniqueness (0-1), dispatchWeight 
 - High-uniqueness, low-accuracy → always use in consensus, never solo
 - Check scores periodically to track improvement
 
+### Orchestrator precondition signals (you are scored too)
+
+The orchestrator has its own signal stream under `agentId: 'orchestrator'`. Three
+dispatch-hygiene **preconditions** auto-fire: `dispatched_stale_base` (dispatch base
+diverged from `origin/master` — note `ahead_of_origin`, a clean branch strictly ahead,
+is **not** stale and emits nothing), `referenced_unreadable_path` (a task names a
+spec/context file the agent can't read), and `mid_flight_fixup` (a commit landed during
+Phase 2 cross-review). These are **operational signals — excluded from accuracy scoring**;
+they are telemetry, not a penalty. The rule: *score preconditions, not decisions.* The
+`ask_back()` tool re-engages an agent after `hallucination_caught` for a root-cause.
+Full detail: HANDBOOK.md invariant #14 + `project_orchestrator_signal_pipeline` memory.
+
 ## gossip_verify_memory — Backlog Hygiene
 
 Before acting on any backlog item from memory, call `gossip_verify_memory(memory_path, claim)`:

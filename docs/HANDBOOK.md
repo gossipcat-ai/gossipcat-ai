@@ -90,9 +90,7 @@ If you see a review agent claiming a "timing order bug" here, it is fabricated. 
 
 ### 7. The reward loop reads `snapshot.status` back in `skill-loader.ts`
 
-Skills with `status: 'failed'`, `status: 'silent_skill'`, or `status: 'inconclusive' && regressed_from_passed_at != null` (drift-demoted) are filtered out at `loadSkills()` injection time. Skills with `passed`, `pending`, `insufficient_evidence`, `flagged_for_manual_review`, or organically-inconclusive (no `regressed_from_passed_at`) are injected normally. This closes the RL loop — verdict → policy update — in a single place.
-
-The drift-demoted clause was added with the drift detector (invariant #11). The condition is dual: `status === 'inconclusive'` AND `regressed_from_passed_at` present. Organic inconclusive (the standard "ran the evidence window without a confident verdict" state) still injects — only the "was passed, then regressed" state is quarantined.
+Skills with `status: 'failed'`, `status: 'silent_skill'`, or `status: 'inconclusive' && regressed_from_passed_at != null` (drift-demoted by invariant #11) are filtered out at `loadSkills()` injection time. Skills with `passed`, `pending`, `insufficient_evidence`, `flagged_for_manual_review`, or organically-inconclusive (no `regressed_from_passed_at`) are injected normally. This closes the RL loop — verdict → policy update — in a single place.
 
 **Do not** add a second filter site. Filtering is a read-only operation at load-for-injection time; frontmatter is never mutated.
 
@@ -160,6 +158,16 @@ A **warning is useless** here: it ships in the *same* MCP response packet as the
 - Read-only **reviewers** (no `-implementer` suffix, `write_mode` omitted) — parallel review/consensus dispatch is unaffected.
 
 **Do NOT** "fix" this by auto-promoting `sequential` → `worktree`: worktree always forks a fresh branch from the base, which silently discards prior work when the task is a *revision to an existing branch* (see `feedback_worktree_dispatch_branch_divergence`). The caller must choose `worktree` (fresh isolation) or `scoped` (orchestrator-committed) explicitly. The predicate gates on the `-implementer` suffix for the same reason as invariant #10. Consensus: `974a1bb2-de854fb4`.
+
+### 14. The orchestrator is a scored pseudo-agent — preconditions only, never decisions
+
+PR #629 gave the orchestrator its own signals under `agentId: 'orchestrator'`. Three dispatch-hygiene **preconditions** fire from `runDispatchPreconditionGuard` / `runMidFlightCheck` (`orchestrator-precondition-runner.ts`):
+
+- **`dispatched_stale_base`** — the dispatch base diverged from `origin/master`. `detectStaleBase` (`orchestrator-preconditions.ts`) is a 4-way merge-base partition: `fresh`; `behind_origin` (HEAD ⊂ origin); `ahead_of_origin` (origin ⊂ HEAD — a clean branch strictly ahead, **`stale:false`, emits NOTHING**, the normal review-on-branch case); `branched_pre_merge` (true divergence). Only the two `stale:true` reasons emit.
+- **`referenced_unreadable_path`** — a dispatch task names a spec/context path the agent can't read (gitignored-in-worktree or missing).
+- **`mid_flight_fixup`** — a commit landed on the branch during Phase 2 cross-review (detected at collect-synthesis).
+
+**Two load-bearing rules.** (1) All three are registered in `OPERATIONAL_SIGNAL_NAMES` (`consensus-types.ts`) → `signal_class: 'operational'` → **EXCLUDED from accuracy scoring** (`performance-reader.ts` `readSignals` keeps only `consensus`/`impl`). They are telemetry, not a score — a noisy precondition never dents an agent score. (2) **Score preconditions, not decisions** — only mechanically-falsifiable dispatch-state failures qualify; never judgment calls. The companion **`ask_back()`** tool re-engages an agent after `hallucination_caught` for a first-person root-cause → `.gossip/fabrication-introspections.jsonl`. Full history: `project_orchestrator_signal_pipeline` memory; `ahead_of_origin` fix consensus `124a9ba4-ca5645e4`.
 
 ---
 
