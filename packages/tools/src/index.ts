@@ -1,7 +1,7 @@
 export { ToolServer } from './tool-server';
 export type { ToolServerConfig } from './tool-server';
 export { Sandbox } from './sandbox';
-export { FileTools } from './file-tools';
+export { FileTools, MAX_GREP_FILE_BYTES, MAX_GREP_MATCHES, MAX_GREP_FILES } from './file-tools';
 export { ShellTools } from './shell-tools';
 export { GitTools } from './git-tools';
 export { ALL_TOOLS, FILE_TOOLS, SHELL_TOOLS, GIT_TOOLS, SKILL_TOOLS, MEMORY_TOOLS, IDENTITY_TOOLS } from './definitions';
