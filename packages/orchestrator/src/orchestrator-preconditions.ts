@@ -16,7 +16,7 @@
 
 export interface StaleBaseResult {
   stale: boolean;
-  reason: 'behind_origin' | 'branched_pre_merge' | null;
+  reason: 'behind_origin' | 'branched_pre_merge' | 'ahead_of_origin' | null;
 }
 
 /**
@@ -29,31 +29,46 @@ export interface StaleBaseResult {
  *                         or null if it could not be determined.
  *
  * Classification:
- *   - Fresh:             dispatchSha === originMasterSha
- *   - behind_origin:     dispatchSha !== originMasterSha AND
- *                        mergeBaseSha === dispatchSha
- *                        (dispatch SHA is an ancestor of origin master — the
- *                        branch just hasn't been pulled up yet)
+ *   - Fresh:              dispatchSha === originMasterSha
+ *                         Branch is exactly at origin/master — nothing to flag.
+ *   - behind_origin:      dispatchSha !== originMasterSha AND
+ *                         mergeBaseSha === dispatchSha
+ *                         (dispatch SHA is an ancestor of origin/master — HEAD ⊂ origin;
+ *                         the local branch just hasn't been pulled up yet)
+ *   - ahead_of_origin:    dispatchSha !== originMasterSha AND
+ *                         mergeBaseSha === originMasterSha
+ *                         (origin/master is an ancestor of HEAD — origin ⊂ HEAD;
+ *                         branch is strictly ahead with no divergence; the normal
+ *                         review-on-branch workflow — NOT stale, informational only)
  *   - branched_pre_merge: dispatchSha !== originMasterSha AND
- *                         mergeBaseSha !== dispatchSha (or null)
- *                         (branch diverged from a common ancestor that is not
- *                         the dispatch SHA itself — PRs have landed on origin
- *                         that this branch has never seen)
+ *                         mergeBaseSha !== dispatchSha AND mergeBaseSha !== originMasterSha
+ *                         (or mergeBaseSha is null — true divergence; origin has commits
+ *                         that branched from a common ancestor this branch has never seen;
+ *                         merge-base equals neither SHA)
  */
 export function detectStaleBase(
   dispatchSha: string,
   originMasterSha: string,
   mergeBaseSha: string | null,
 ): StaleBaseResult {
+  // Case 1: exactly on origin/master — fresh, nothing to flag.
   if (dispatchSha === originMasterSha) {
     return { stale: false, reason: null };
   }
 
-  // SHAs differ → stale. Distinguish sub-reason via mergeBase.
-  const reason: 'behind_origin' | 'branched_pre_merge' =
-    mergeBaseSha === dispatchSha ? 'behind_origin' : 'branched_pre_merge';
+  // Case 2: HEAD is an ancestor of origin/master (behind_origin).
+  if (mergeBaseSha === dispatchSha) {
+    return { stale: true, reason: 'behind_origin' };
+  }
 
-  return { stale: true, reason };
+  // Case 3: origin/master is an ancestor of HEAD (strictly ahead — NOT stale).
+  if (mergeBaseSha === originMasterSha) {
+    return { stale: false, reason: 'ahead_of_origin' };
+  }
+
+  // Case 4: true divergence — merge-base is neither dispatch nor origin SHA
+  // (includes mergeBaseSha === null).
+  return { stale: true, reason: 'branched_pre_merge' };
 }
 
 // ---------------------------------------------------------------------------

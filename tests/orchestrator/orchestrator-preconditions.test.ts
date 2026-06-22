@@ -71,6 +71,19 @@ describe('detectStaleBase', () => {
     });
   });
 
+  describe('strictly ahead of origin (mergeBaseSha === originMasterSha)', () => {
+    it('returns { stale: false, reason: ahead_of_origin } when origin is an ancestor of HEAD', () => {
+      // mergeBase === originSha → origin is an ancestor of HEAD; branch is strictly ahead
+      const result = detectStaleBase('feature-tip', 'origin-head', 'origin-head');
+      expect(result).toEqual({ stale: false, reason: 'ahead_of_origin' });
+    });
+
+    it('returns ahead_of_origin for any feature branch strictly ahead of origin', () => {
+      const result = detectStaleBase('abc999', 'abc111', 'abc111');
+      expect(result).toEqual({ stale: false, reason: 'ahead_of_origin' });
+    });
+  });
+
   describe('edge cases', () => {
     it('treats empty string dispatch SHA as different from non-empty origin (stale)', () => {
       const result = detectStaleBase('', 'origin123', null);
