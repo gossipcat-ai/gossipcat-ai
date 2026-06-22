@@ -36,6 +36,9 @@ jobs:
       - name: Check MCP permissions (.claude/agents ↔ settings.json)
         run: node scripts/check-mcp-permissions.mjs
 
+      - name: Rule-book coverage gate
+        run: node scripts/rulebook-coverage-gate.mjs
+
       - name: Install dependencies
         run: npm ci
 
