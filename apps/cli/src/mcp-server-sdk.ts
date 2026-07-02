@@ -3373,6 +3373,7 @@ export function createMcpServer(): McpServer {
         agent_id: z.string().describe('Agent being evaluated'),
         counterpart_id: z.string().optional().describe('The other agent involved (e.g., who won the disagreement)'),
         finding: z.string().describe('Brief description of the finding'),
+        lesson: z.string().optional().describe('Root-cause narrative for a terminal correction signal — 1-2 sentences on why it failed and the check that would have caught it. Written verbatim into the discovering agent\'s lesson card (issue #642 A).'),
         finding_id: z.string().optional().describe('Consensus finding ID — links this signal to a specific finding in a consensus report. Enables dashboard to resolve UNVERIFIED findings.'),
         severity: z.enum(['critical', 'high', 'medium', 'low']).optional().describe('Finding severity for impact scoring. If omitted, defaults to medium.'),
         category: z.string().optional().describe('Finding category for ATI competency profiles (e.g., concurrency, trust_boundaries, injection_vectors, resource_exhaustion, type_safety, error_handling, data_integrity, input_validation)'),
@@ -3938,6 +3939,14 @@ export function createMcpServer(): McpServer {
           if (dedupedConsensus.length > 0) emitRecordConsensusSignals(process.cwd(), dedupedConsensus);
           if (dedupedImpl.length > 0) emitRecordImplSignals(process.cwd(), dedupedImpl);
         }
+
+        // Auto-write lesson cards for terminal outcome signals (issue #642 A).
+        // Uses the raw `signals` input (carries lesson/finding_id) — best-effort,
+        // never gates signal recording.
+        try {
+          const { writeLessonCardsForSignals } = await import('@gossip/orchestrator');
+          writeLessonCardsForSignals(process.cwd(), (signals ?? []) as Array<{ signal: string; agent_id: string; finding: string; finding_id?: string; lesson?: string }>);
+        } catch { /* best-effort */ }
 
         // Auto-convert hallucination signals into skill gap suggestions.
         // Reuses the category derived above (formatted[i].category) so the suggestion

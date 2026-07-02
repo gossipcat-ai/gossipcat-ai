@@ -1290,3 +1290,26 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     writeFileSync(join(memDir, 'MEMORY.md'), parts.join('\n'));
   }
 }
+
+/**
+ * Fan a batch of recorded signals into lesson cards (issue #642 A).
+ * Only terminal correction signals with a finding_id produce a card.
+ * Best-effort — never throws.
+ */
+export function writeLessonCardsForSignals(
+  projectRoot: string,
+  signals: Array<{ signal: string; agent_id: string; finding: string; finding_id?: string; lesson?: string }>,
+): void {
+  if (!Array.isArray(signals) || signals.length === 0) return;
+  const writer = new MemoryWriter(projectRoot);
+  for (const s of signals) {
+    if (!s || !s.finding_id || !TERMINAL_LESSON_SIGNALS.has(s.signal)) continue;
+    writer.writeLessonCard(s.agent_id, {
+      signal: s.signal,
+      findingId: s.finding_id,
+      finding: s.finding ?? '',
+      lesson: s.lesson,
+      taskTokens: s.finding,
+    });
+  }
+}
