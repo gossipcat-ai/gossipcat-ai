@@ -1121,11 +1121,11 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
         `generated: ${generated}`,
         '---',
         '',
-        `**Task context:** ${taskTokens}`,
+        `**Why it failed:** ${lessonBody}`,
         '',
         `**What happened:** ${finding}`,
         '',
-        `**Why it failed:** ${lessonBody}`,
+        `**Task context:** ${taskTokens}`,
       ].join('\n');
 
       this.pruneLessonCards(knowledgeDir, LESSON_CARDS_MAX_PER_AGENT);
