@@ -5,6 +5,7 @@ const FINDINGS_MAX_RESULTS = 3;
 const FINDINGS_MAX_CHARS = 150;
 const FINDINGS_STALE_DAYS = 30;
 const FINDINGS_MIN_SCORE = 1;
+const CORRECTIONS_MAX_RESULTS = 2;
 
 export class AgentMemoryReader {
   constructor(private projectRoot: string) {}
@@ -131,6 +132,61 @@ export class AgentMemoryReader {
     return scored
       .sort((a, b) => b.score - a.score)
       .slice(0, FINDINGS_MAX_RESULTS)
+      .map(s => s.text);
+  }
+
+  /**
+   * Pre-fetch this agent's own prior lesson cards relevant to the task (issue #642 B-delta).
+   * Selects by `lesson-*.md` filename (not frontmatter `type`, which parsers don't read),
+   * ranks by body keyword overlap, drops cards older than FINDINGS_STALE_DAYS, and strips
+   * prompt-injection delimiters before returning. Returns top CORRECTIONS_MAX_RESULTS snippets.
+   */
+  prefetchAgentCorrectionsText(agentId: string, taskText: string): string[] {
+    if (!agentId || /[/\\.\0]/.test(agentId)) return [];
+    const knowledgeDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory', 'knowledge');
+    if (!existsSync(knowledgeDir)) return [];
+
+    let files: string[];
+    try {
+      files = readdirSync(knowledgeDir).filter(f => f.startsWith('lesson-') && f.endsWith('.md'));
+    } catch {
+      return [];
+    }
+    if (files.length === 0) return [];
+
+    const keywords = this.extractKeywords(taskText);
+    if (keywords.length === 0) return [];
+
+    const cutoffMs = Date.now() - FINDINGS_STALE_DAYS * 86_400_000;
+    const scored: Array<{ text: string; score: number }> = [];
+
+    for (const file of files) {
+      const filePath = join(knowledgeDir, file);
+      let content: string;
+      try {
+        const mtime = statSync(filePath).mtimeMs;
+        if (mtime < cutoffMs) continue;
+        content = readFileSync(filePath, 'utf-8');
+      } catch {
+        continue;
+      }
+      // Body = content minus frontmatter; strip inject delimiters (mirror of loadMemory :31).
+      const body = content
+        .replace(/^---[\s\S]*?---\n*/, '')
+        .replace(/<\/?(?:agent-memory|system|instructions)>/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!body) continue;
+
+      const score = this.scoreKeywords(keywords, body);
+      if (score >= FINDINGS_MIN_SCORE) {
+        scored.push({ text: body.slice(0, FINDINGS_MAX_CHARS).trim(), score });
+      }
+    }
+
+    return scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, CORRECTIONS_MAX_RESULTS)
       .map(s => s.text);
   }
 
