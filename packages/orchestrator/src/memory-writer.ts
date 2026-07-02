@@ -1,4 +1,4 @@
-import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, openSync, closeSync, constants } from 'fs';
+import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, openSync, closeSync, constants, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { randomBytes } from 'crypto';
 import { TaskMemoryEntry } from './types';
@@ -85,6 +85,17 @@ export interface SessionArtifacts {
   /** Resolved status derived from the summary's "Open for next session" section ("open" | "shipped"). */
   gossipStatus: 'open' | 'shipped';
 }
+
+/** Terminal correction signals that produce a recallable lesson card (issue #642 A). */
+export const TERMINAL_LESSON_SIGNALS = new Set<string>([
+  'hallucination_caught', 'impl_test_fail', 'impl_peer_rejected',
+]);
+
+/** Max lesson cards retained per agent — count-based prune at write time (review f5). */
+export const LESSON_CARDS_MAX_PER_AGENT = 200;
+
+/** Agent ids that never receive lesson cards. */
+const LESSON_RESERVED_AGENT_IDS = new Set<string>(['_project', '_system', '_utility']);
 
 export class MemoryWriter {
   private summaryLlm: ILLMProvider | null = null;
@@ -1069,6 +1080,77 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     this.pruneKnowledgeDir(knowledgeDir, 25);
 
     writeFileSync(join(knowledgeDir, filename), content);
+  }
+
+  /**
+   * Write a recallable "lesson card" for a terminal correction signal (issue #642 A).
+   * Best-effort: any failure is swallowed — this MUST NOT fail signal recording.
+   * Idempotent: keyed by finding_id via sanitizeTaskId, no timestamp in the filename.
+   */
+  writeLessonCard(agentId: string, card: {
+    signal: string; findingId: string; finding: string; lesson?: string; taskTokens?: string;
+  }): void {
+    try {
+      if (LESSON_RESERVED_AGENT_IDS.has(agentId)) return;
+      validateAgentId(agentId); // throws on path escape
+      const slug = sanitizeTaskId(card.findingId).slice(0, 96);
+      if (!slug) return;
+
+      const memDir = this.ensureDirs(agentId);
+      const knowledgeDir = join(memDir, 'knowledge');
+      const today = new Date().toISOString().split('T')[0];
+      const generated = new Date().toISOString();
+      const shortId = slug.slice(0, 24);
+
+      const finding = truncateAtWord(sanitizeYamlValue(card.finding ?? ''), 400);
+      const lessonBody = card.lesson ? truncateAtWord(sanitizeYamlValue(card.lesson), 400) : '(no root-cause supplied)';
+      const desc = sanitizeYamlValue(card.lesson || card.finding || 'lesson').slice(0, 80);
+      const taskTokens = (card.taskTokens ?? card.finding ?? '').replace(/[\n\r]/g, ' ').slice(0, 300);
+
+      const content = [
+        '---',
+        `name: lesson-${card.signal}-${shortId}`,
+        `description: ${desc}`,
+        'type: lesson',
+        `agent: ${agentId}`,
+        `signal: ${sanitizeYamlValue(card.signal)}`,
+        `finding_id: ${sanitizeYamlValue(card.findingId)}`,
+        'importance: 0.7',
+        `lastAccessed: ${today}`,
+        'accessCount: 0',
+        `generated: ${generated}`,
+        '---',
+        '',
+        `**Task context:** ${taskTokens}`,
+        '',
+        `**What happened:** ${finding}`,
+        '',
+        `**Why it failed:** ${lessonBody}`,
+      ].join('\n');
+
+      this.pruneLessonCards(knowledgeDir, LESSON_CARDS_MAX_PER_AGENT);
+      writeFileSync(join(knowledgeDir, `lesson-${slug}.md`), content);
+    } catch {
+      /* best-effort — must never fail signal recording */
+    }
+  }
+
+  /** Count-based prune of lesson-*.md only (leaves consensus/session knowledge untouched). */
+  private pruneLessonCards(knowledgeDir: string, maxFiles: number): void {
+    try {
+      const cards = readdirSync(knowledgeDir).filter(f => f.startsWith('lesson-') && f.endsWith('.md'));
+      if (cards.length < maxFiles) return;
+      const withMtime = cards.map(f => {
+        let mtime = 0;
+        try { mtime = statSync(join(knowledgeDir, f)).mtimeMs; } catch { /* treat as oldest */ }
+        return { f, mtime };
+      });
+      withMtime.sort((a, b) => a.mtime - b.mtime); // oldest first
+      const toEvict = withMtime.slice(0, cards.length - (maxFiles - 1)); // leave room for incoming
+      for (const item of toEvict) {
+        try { unlinkSync(join(knowledgeDir, item.f)); } catch { /* already gone */ }
+      }
+    } catch { /* best-effort */ }
   }
 
   /**
