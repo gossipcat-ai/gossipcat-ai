@@ -165,6 +165,8 @@ export function assemblePrompt(parts: {
   projectStructure?: string;
   /** Pre-fetched consensus finding snippets to inject under MEMORY block. */
   consensusFindings?: string[];
+  /** Pre-fetched per-agent prior corrections (issue #642 B-delta) — rendered under MEMORY, distinct from consensusFindings. */
+  agentCorrections?: string[];
   /** The actual task to perform — placed last, always preserved under truncation. */
   task?: string;
 }): string {
@@ -227,7 +229,8 @@ export function assemblePrompt(parts: {
       parts.context || parts.sessionContext || parts.chainContext ||
       parts.specReviewContext || parts.projectStructure ||
       parts.task ||
-      (parts.consensusFindings && parts.consensusFindings.length > 0)
+      (parts.consensusFindings && parts.consensusFindings.length > 0) ||
+      (parts.agentCorrections && parts.agentCorrections.length > 0)
     );
     if (hasAnyMeaningfulPart) {
       suffix.push({ priority: 0, text: `\n\n--- FINDING TAG SCHEMA ---\n${FINDING_TAG_SCHEMA}\n--- END FINDING TAG SCHEMA ---` });
@@ -243,7 +246,9 @@ export function assemblePrompt(parts: {
     suffix.push({ priority: 2, text: `\n\n--- SPEC REVIEW ---\n${parts.specReviewContext}\n--- END SPEC REVIEW ---` });
   }
 
-  if (parts.memory || (parts.consensusFindings && parts.consensusFindings.length > 0)) {
+  if (parts.memory
+      || (parts.consensusFindings && parts.consensusFindings.length > 0)
+      || (parts.agentCorrections && parts.agentCorrections.length > 0)) {
     const memParts: string[] = [];
     if (parts.memory) memParts.push(parts.memory);
     if (parts.consensusFindings && parts.consensusFindings.length > 0) {
@@ -253,6 +258,13 @@ export function assemblePrompt(parts: {
         '### Recent Consensus Findings\n' +
         parts.consensusFindings.map((f, i) => `${i + 1}. ${f}`).join('\n');
       memParts.push(findingsBlock);
+    }
+    if (parts.agentCorrections && parts.agentCorrections.length > 0) {
+      // Your own prior misses — kept distinct so the agent reads them as personal history.
+      memParts.push(
+        '### Your Prior Corrections\n' +
+        parts.agentCorrections.map((f, i) => `${i + 1}. ${f}`).join('\n'),
+      );
     }
     suffix.push({ priority: 3, text: `\n\n--- MEMORY ---\n${memParts.join('\n\n')}\n--- END MEMORY ---` });
   }
