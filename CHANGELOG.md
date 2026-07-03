@@ -6,6 +6,16 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ### Added
 
+- **Agent learning loop (lesson cards + per-agent correction injection).** When an
+  agent's output is later marked wrong via a terminal correction signal
+  (`hallucination_caught` / `impl_test_fail` / `impl_peer_rejected`), the
+  orchestrator can attach a `lesson` narrative to `gossip_signals` and gossipcat
+  writes an idempotent lesson card into that agent's memory. On the agent's next
+  dispatch, its own most-relevant prior corrections are injected into the prompt
+  under a `### Your Prior Corrections` section — so the agent sees its past miss in
+  context, not just as a score change. Best-effort (never fails signal recording),
+  sanitized, and count-capped per agent. Closes #642 (requests A + B-delta).
+
 - **First-class Cursor support.** Cursor is now a co-equal native host alongside
   Claude Code. A host-aware dispatch bridge (`native-host-bridge.ts`) emits the
   right call per host — Claude Code `Agent(model, …)` and Cursor
