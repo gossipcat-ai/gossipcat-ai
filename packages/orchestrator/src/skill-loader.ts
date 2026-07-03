@@ -331,7 +331,7 @@ export function loadSkills(
     if (mode === 'permanent') {
       permanent.push({ name: skill, content, path: resolvedPath });
     } else if (task) {
-      const rawHits = countKeywordHits(content, skill, task);
+      const rawHits = countKeywordHits(content, skill, task, resolvedPath);
       const frontmatter = parseSkillFrontmatter(content, resolvedPath);
       const boost = categoryBoost(frontmatter?.category, categories);
       const effectiveHits = rawHits + boost;
@@ -431,9 +431,13 @@ function getPattern(keyword: string): RegExp {
 /**
  * Count keyword hits for a contextual skill against a task string.
  * Uses word-boundary matching to prevent false positives (e.g., "auth" won't match "author").
+ *
+ * `sourceLabel` is the resolved skill file path when the caller has one
+ * (threaded down to getKeywords -> parseSkillFrontmatter for diagnosability);
+ * falls back to `skillName` when no resolved path is available.
  */
-function countKeywordHits(skillContent: string, skillName: string, task: string): number {
-  const keywords = getKeywords(skillContent, skillName);
+function countKeywordHits(skillContent: string, skillName: string, task: string, sourceLabel?: string): number {
+  const keywords = getKeywords(skillContent, skillName, sourceLabel);
   if (keywords.length === 0) return 0;
 
   let hits = 0;
@@ -446,8 +450,8 @@ function countKeywordHits(skillContent: string, skillName: string, task: string)
 /**
  * Extract keywords from skill frontmatter or fall back to category defaults.
  */
-function getKeywords(content: string, skillName: string): string[] {
-  const frontmatter = parseSkillFrontmatter(content, skillName);
+function getKeywords(content: string, skillName: string, sourceLabel?: string): string[] {
+  const frontmatter = parseSkillFrontmatter(content, sourceLabel ?? skillName);
   if (frontmatter?.keywords && frontmatter.keywords.length > 0) {
     return frontmatter.keywords.map(k => k.toLowerCase());
   }

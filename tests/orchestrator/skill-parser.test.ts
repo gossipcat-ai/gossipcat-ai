@@ -123,6 +123,31 @@ Check endpoints.`;
       const result = parseSkillFrontmatter(md);
       expect(result?.keywords).toEqual(['dos', 'rate-limit', 'payload']);
     });
+
+    it('parses zero-indent block sequence items equal to their indented and inline equivalents', () => {
+      const inline = `---\nname: t\ndescription: d\nkeywords: [injection, sanitize]\nstatus: active\n---\nBody`;
+      const indented = `---\nname: t\ndescription: d\nkeywords:\n  - injection\n  - sanitize\nstatus: active\n---\nBody`;
+      // Zero-indent sequence items at column 0 under their key — valid YAML,
+      // and common LLM-authoring style.
+      const zeroIndent = `---\nname: t\ndescription: d\nkeywords:\n- injection\n- sanitize\nstatus: active\n---\nBody`;
+
+      const inlineResult = parseSkillFrontmatter(inline);
+      const indentedResult = parseSkillFrontmatter(indented);
+      const zeroIndentResult = parseSkillFrontmatter(zeroIndent);
+
+      expect(zeroIndentResult?.keywords).toEqual(['injection', 'sanitize']);
+      expect(zeroIndentResult?.keywords).toEqual(indentedResult?.keywords);
+      expect(zeroIndentResult?.keywords).toEqual(inlineResult?.keywords);
+    });
+
+    it('does NOT treat `-item` (no space after dash) as a block-sequence item', () => {
+      // Pinned behavior: YAML requires a space after `-` for a sequence
+      // item. `-item` fails the match, ends the block-sequence context, and
+      // (since it has no colon) is skipped entirely rather than collected.
+      const md = `---\nname: t\ndescription: d\nkeywords:\n-item\nstatus: active\n---\nBody`;
+      const result = parseSkillFrontmatter(md);
+      expect(result?.keywords).toEqual([]);
+    });
   });
 
   describe('parse-failure warnings', () => {

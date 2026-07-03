@@ -126,12 +126,23 @@ export function parseSkillFrontmatter(content: string, sourceLabel?: string): Sk
   let activeBlockKey: string | null = null;
 
   for (const line of lines) {
-    // Block-sequence continuation: an indented `- item` line following a
-    // key whose inline value was empty (e.g. `keywords:` with no trailing
-    // value). Only keywords/scope collect these; any other line ends the
-    // block-sequence context so scalar fields aren't misread as list items.
+    // Block-sequence continuation: a `- item` line following a key whose
+    // inline value was empty (e.g. `keywords:` with no trailing value).
+    // Leading indentation is OPTIONAL (`\s*`, not `\s+`) — valid YAML
+    // allows sequence items at column 0 under their key, which is common
+    // LLM-authoring style:
+    //   keywords:
+    //   - injection
+    //   - sanitize
+    // A single space after `-` is REQUIRED (`\s`, not `\s?`): per YAML,
+    // `- item` is a sequence item but `-item` (no space) is not — pin that
+    // distinction here rather than silently accepting it. Only
+    // keywords/scope collect these; any other line (including a bare
+    // `-item` that fails this match) ends the block-sequence context so
+    // scalar fields aren't misread as list items — this reset path is
+    // unchanged from before.
     if (activeBlockKey) {
-      const itemMatch = line.match(/^\s+-\s?(.*)$/);
+      const itemMatch = line.match(/^\s*-\s(.*)$/);
       if (itemMatch) {
         (blockSequences[activeBlockKey] ??= []).push(itemMatch[1].trim());
         continue;
