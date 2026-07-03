@@ -149,16 +149,12 @@ Check endpoints.`;
       expect(message).toContain('missing-name.md');
     });
 
-    it('returns null and warns to stderr when no frontmatter block is present', () => {
+    it('returns null and does NOT warn when no frontmatter block is present (supported format)', () => {
       const md = `# Just a title\n\nSome content`;
       const result = parseSkillFrontmatter(md, 'no-frontmatter.md');
 
       expect(result).toBeNull();
-      expect(stderrSpy).toHaveBeenCalledTimes(1);
-      const [message] = stderrSpy.mock.calls[0];
-      expect(message).toContain('[skill-parser]');
-      expect(message).toContain('no frontmatter block found');
-      expect(message).toContain('no-frontmatter.md');
+      expect(stderrSpy).not.toHaveBeenCalled();
     });
 
     it('does not warn when parsing succeeds', () => {

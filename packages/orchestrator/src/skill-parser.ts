@@ -96,9 +96,17 @@ export interface SkillFrontmatter {
 const BLOCK_SEQUENCE_KEYS = new Set(['keywords', 'scope']);
 
 /** Writes a loud, prefixed diagnostic to stderr for parse failures. Warnings
- * only fire on total parse failure or missing REQUIRED fields (name,
- * description, status) — the silent-coercion philosophy for OPTIONAL axes
- * (task_type, scope unknown-token dropping, mode) is unchanged below. */
+ * fire ONLY when a `---` frontmatter block IS present but is missing a
+ * REQUIRED field (name, description, status) — a genuine authoring error.
+ * The silent-coercion philosophy for OPTIONAL axes (task_type, scope
+ * unknown-token dropping, mode) is unchanged below.
+ *
+ * Deliberately silent when no frontmatter block is found at all: plain
+ * `# Title` markdown with no `---` block is a supported, common skill
+ * format — most of the bundled default skills under
+ * `packages/orchestrator/src/default-skills/` are authored this way.
+ * Warning on every such file would spam stderr/mcp.log on every dispatch
+ * that loads default skills for no actionable reason. */
 function warnParseFailure(message: string, sourceLabel?: string): void {
   const suffix = sourceLabel ? ` (source: ${sourceLabel})` : '';
   process.stderr.write(`[skill-parser] ${message}${suffix}\n`);
@@ -107,7 +115,8 @@ function warnParseFailure(message: string, sourceLabel?: string): void {
 export function parseSkillFrontmatter(content: string, sourceLabel?: string): SkillFrontmatter | null {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
   if (!match) {
-    warnParseFailure('no frontmatter block found', sourceLabel);
+    // No `---` frontmatter block — a supported format for skills without
+    // metadata (see warnParseFailure doc comment). Silent by design.
     return null;
   }
 
