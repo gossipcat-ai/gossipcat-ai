@@ -85,14 +85,51 @@ export interface SkillFrontmatter {
   scope?: SkillScope;
 }
 
-export function parseSkillFrontmatter(content: string): SkillFrontmatter | null {
+/**
+ * Fields that support the YAML block-sequence form:
+ *   keywords:
+ *     - injection
+ *     - sanitize
+ * in addition to the inline `keywords: [injection, sanitize]` form. Kept to
+ * these two list-valued axes deliberately — other fields stay scalar.
+ */
+const BLOCK_SEQUENCE_KEYS = new Set(['keywords', 'scope']);
+
+/** Writes a loud, prefixed diagnostic to stderr for parse failures. Warnings
+ * only fire on total parse failure or missing REQUIRED fields (name,
+ * description, status) — the silent-coercion philosophy for OPTIONAL axes
+ * (task_type, scope unknown-token dropping, mode) is unchanged below. */
+function warnParseFailure(message: string, sourceLabel?: string): void {
+  const suffix = sourceLabel ? ` (source: ${sourceLabel})` : '';
+  process.stderr.write(`[skill-parser] ${message}${suffix}\n`);
+}
+
+export function parseSkillFrontmatter(content: string, sourceLabel?: string): SkillFrontmatter | null {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return null;
+  if (!match) {
+    warnParseFailure('no frontmatter block found', sourceLabel);
+    return null;
+  }
 
   const lines = match[1].split('\n');
   const fields: Record<string, string> = {};
+  const blockSequences: Record<string, string[]> = {};
+  let activeBlockKey: string | null = null;
 
   for (const line of lines) {
+    // Block-sequence continuation: an indented `- item` line following a
+    // key whose inline value was empty (e.g. `keywords:` with no trailing
+    // value). Only keywords/scope collect these; any other line ends the
+    // block-sequence context so scalar fields aren't misread as list items.
+    if (activeBlockKey) {
+      const itemMatch = line.match(/^\s+-\s?(.*)$/);
+      if (itemMatch) {
+        (blockSequences[activeBlockKey] ??= []).push(itemMatch[1].trim());
+        continue;
+      }
+      activeBlockKey = null;
+    }
+
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
@@ -108,12 +145,24 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
       value = value.slice(1, -1);
     }
     fields[key] = value;
+
+    if (value === '' && BLOCK_SEQUENCE_KEYS.has(key)) {
+      activeBlockKey = key;
+    }
   }
 
-  if (!fields.name || !fields.description || !fields.status) return null;
+  if (!fields.name || !fields.description || !fields.status) {
+    const missing = ['name', 'description', 'status'].filter(f => !fields[f]);
+    warnParseFailure(`missing required field(s): ${missing.join(', ')}`, sourceLabel);
+    return null;
+  }
 
   let keywords: string[] = [];
-  if (fields.keywords) {
+  if (blockSequences.keywords && blockSequences.keywords.length > 0) {
+    keywords = blockSequences.keywords
+      .map(k => k.trim().replace(/^['"]|['"]$/g, '').slice(0, 100))
+      .filter(Boolean);
+  } else if (fields.keywords) {
     const raw = fields.keywords;
     if (raw.startsWith('[') && raw.endsWith(']')) {
       keywords = raw.slice(1, -1).split(',').map(k => k.trim().replace(/^['"]|['"]$/g, '').slice(0, 100)).filter(Boolean);
@@ -138,7 +187,14 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
   // dropped (same coercion philosophy as task_type). An empty parsed
   // array is treated as absent — callers check `scope && scope.length > 0`.
   let scope: SkillScope | undefined;
-  if (fields.scope) {
+  if (blockSequences.scope && blockSequences.scope.length > 0) {
+    const tokens = blockSequences.scope.map(t => t.trim().replace(/^['"]|['"]$/g, ''));
+    const valid = tokens.filter(
+      (t): t is 'review' | 'implement' | 'research' =>
+        t === 'review' || t === 'implement' || t === 'research',
+    );
+    if (valid.length > 0) scope = valid;
+  } else if (fields.scope) {
     const raw = fields.scope.trim();
     let tokens: string[];
     if (raw.startsWith('[') && raw.endsWith(']')) {
