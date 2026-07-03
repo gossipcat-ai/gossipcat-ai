@@ -1132,8 +1132,12 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
         `**Task context:** ${taskTokens}`,
       ].join('\n');
 
-      this.pruneLessonCards(knowledgeDir, LESSON_CARDS_MAX_PER_AGENT);
-      writeFileSync(join(knowledgeDir, `lesson-${slug}.md`), content);
+      // Prune only when INSERTING a new card. An idempotent update (existing
+      // finding_id → same filename → overwrite) adds no card, so pruning here
+      // would evict an unrelated oldest card and erode history below the cap.
+      const cardPath = join(knowledgeDir, `lesson-${slug}.md`);
+      if (!existsSync(cardPath)) this.pruneLessonCards(knowledgeDir, LESSON_CARDS_MAX_PER_AGENT);
+      writeFileSync(cardPath, content);
     } catch {
       /* best-effort — must never fail signal recording */
     }

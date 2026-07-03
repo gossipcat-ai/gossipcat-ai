@@ -37,6 +37,32 @@ describe('f1 — lesson cards survive the shared warmth pruner', () => {
   });
 });
 
+describe('f3 — idempotent update at cap does not evict an unrelated card', () => {
+  it('re-recording an existing finding_id at LESSON_CARDS_MAX_PER_AGENT keeps the count and the oldest unrelated card', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gossip-f3-'));
+    const w = new MemoryWriter(root);
+    const kdir = knowledgeDir(root, 'r1');
+    mkdirSync(kdir, { recursive: true });
+
+    // Seed exactly the cap with real-shaped lesson filenames (slug = sanitizeTaskId(finding_id)).
+    const CAP = 200; // LESSON_CARDS_MAX_PER_AGENT
+    for (let i = 0; i < CAP; i++) {
+      writeFileSync(join(kdir, `lesson-aaaaaaaa-bbbbbbbb_r1_f${i}.md`), '---\ntype: lesson\n---\nold');
+    }
+    const oldest = 'lesson-aaaaaaaa-bbbbbbbb_r1_f0.md';
+
+    // Update an EXISTING finding_id (f5), not the oldest — no new card is added.
+    w.writeLessonCard('r1', {
+      signal: 'hallucination_caught', findingId: 'aaaaaaaa-bbbbbbbb:r1:f5',
+      finding: 'x', lesson: 'updated lesson body',
+    });
+
+    const cards = readdirSync(kdir).filter(f => f.startsWith('lesson-'));
+    expect(cards.length).toBe(CAP);              // no eviction on update
+    expect(cards).toContain(oldest);             // unrelated oldest card survives
+  });
+});
+
 describe('f2 — inline "---" in a lesson does not leak frontmatter into the injected snippet', () => {
   it('the anchored frontmatter-strip keeps the real lesson, not YAML debris', () => {
     const root = mkdtempSync(join(tmpdir(), 'gossip-f2-'));
