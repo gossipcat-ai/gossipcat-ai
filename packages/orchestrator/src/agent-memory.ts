@@ -172,7 +172,7 @@ export class AgentMemoryReader {
       }
       // Body = content minus frontmatter; strip inject delimiters (mirror of loadMemory :31).
       const body = content
-        .replace(/^---[\s\S]*?---\n*/, '')
+        .replace(/^---\n[\s\S]*?\n---\n*/, '')
         .replace(/<\/?(?:agent-memory|system|instructions)>/gi, '')
         .replace(/\s+/g, ' ')
         .trim();

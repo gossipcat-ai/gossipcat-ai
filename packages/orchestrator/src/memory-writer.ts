@@ -807,7 +807,11 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
   /** Shared warmth-aware pruning — evicts lowest-warmth files, respects pinned */
   private pruneKnowledgeDir(knowledgeDir: string, maxFiles: number): void {
     try {
-      const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md') && !f.endsWith('-session.md')).sort();
+      // Exclude lesson-*.md: those are owned exclusively by pruneLessonCards
+      // (count-cap LESSON_CARDS_MAX_PER_AGENT). Without this carve-out the shared
+      // 25-file warmth pruner evicts lesson cards — and their non-date filenames
+      // yield NaN warmth — defeating the #642 learning-loop durability guarantee.
+      const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md') && !f.endsWith('-session.md') && !f.startsWith('lesson-')).sort();
 
       // Only run main eviction if over cap
       if (existing.length >= maxFiles) {
@@ -1109,10 +1113,10 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
 
       const content = [
         '---',
-        `name: lesson-${card.signal}-${shortId}`,
+        `name: lesson-${sanitizeYamlValue(card.signal)}-${shortId}`,
         `description: ${desc}`,
         'type: lesson',
-        `agent: ${agentId}`,
+        `agent: ${sanitizeYamlValue(agentId)}`,
         `signal: ${sanitizeYamlValue(card.signal)}`,
         `finding_id: ${sanitizeYamlValue(card.findingId)}`,
         'importance: 0.7',
