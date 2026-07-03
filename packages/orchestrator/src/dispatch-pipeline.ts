@@ -318,6 +318,10 @@ export class DispatchPipeline {
     if (consensusFindings.length > 0) {
       log(`📋 pre-fetched ${consensusFindings.length} consensus findings for ${agentId}`);
     }
+    const agentCorrections = this.memReader.prefetchAgentCorrectionsText(agentId, task);
+    if (agentCorrections.length > 0) {
+      log(`🧠 pre-fetched ${agentCorrections.length} prior corrections for ${agentId}`);
+    }
 
     // 3. Check skill coverage — SINGLE SOURCE OF TRUTH fix
     //    (project_coverage_gap_detector_config_vs_index, CONFIRMED 2026-06-11).
@@ -394,6 +398,7 @@ export class DispatchPipeline {
       specReviewContext,
       projectStructure: this.getProjectStructure(),
       consensusFindings: consensusFindings.length > 0 ? consensusFindings : undefined,
+      agentCorrections: agentCorrections.length > 0 ? agentCorrections : undefined,
     });
 
     // 6. Record TaskGraph created

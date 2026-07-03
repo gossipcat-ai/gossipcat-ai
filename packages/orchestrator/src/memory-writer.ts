@@ -1,4 +1,4 @@
-import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, openSync, closeSync, constants } from 'fs';
+import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, openSync, closeSync, constants, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { randomBytes } from 'crypto';
 import { TaskMemoryEntry } from './types';
@@ -85,6 +85,17 @@ export interface SessionArtifacts {
   /** Resolved status derived from the summary's "Open for next session" section ("open" | "shipped"). */
   gossipStatus: 'open' | 'shipped';
 }
+
+/** Terminal correction signals that produce a recallable lesson card (issue #642 A). */
+export const TERMINAL_LESSON_SIGNALS = new Set<string>([
+  'hallucination_caught', 'impl_test_fail', 'impl_peer_rejected',
+]);
+
+/** Max lesson cards retained per agent — count-based prune at write time (review f5). */
+export const LESSON_CARDS_MAX_PER_AGENT = 200;
+
+/** Agent ids that never receive lesson cards. */
+const LESSON_RESERVED_AGENT_IDS = new Set<string>(['_project', '_system', '_utility']);
 
 export class MemoryWriter {
   private summaryLlm: ILLMProvider | null = null;
@@ -796,7 +807,11 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
   /** Shared warmth-aware pruning — evicts lowest-warmth files, respects pinned */
   private pruneKnowledgeDir(knowledgeDir: string, maxFiles: number): void {
     try {
-      const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md') && !f.endsWith('-session.md')).sort();
+      // Exclude lesson-*.md: those are owned exclusively by pruneLessonCards
+      // (count-cap LESSON_CARDS_MAX_PER_AGENT). Without this carve-out the shared
+      // 25-file warmth pruner evicts lesson cards — and their non-date filenames
+      // yield NaN warmth — defeating the #642 learning-loop durability guarantee.
+      const existing = readdirSync(knowledgeDir).filter(f => f.endsWith('.md') && !f.endsWith('-session.md') && !f.startsWith('lesson-')).sort();
 
       // Only run main eviction if over cap
       if (existing.length >= maxFiles) {
@@ -1072,6 +1087,81 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
   }
 
   /**
+   * Write a recallable "lesson card" for a terminal correction signal (issue #642 A).
+   * Best-effort: any failure is swallowed — this MUST NOT fail signal recording.
+   * Idempotent: keyed by finding_id via sanitizeTaskId, no timestamp in the filename.
+   */
+  writeLessonCard(agentId: string, card: {
+    signal: string; findingId: string; finding: string; lesson?: string; taskTokens?: string;
+  }): void {
+    try {
+      if (LESSON_RESERVED_AGENT_IDS.has(agentId)) return;
+      validateAgentId(agentId); // throws on path escape
+      const slug = sanitizeTaskId(card.findingId).slice(0, 96);
+      if (!slug) return;
+
+      const memDir = this.ensureDirs(agentId);
+      const knowledgeDir = join(memDir, 'knowledge');
+      const today = new Date().toISOString().split('T')[0];
+      const generated = new Date().toISOString();
+      const shortId = slug.slice(0, 24);
+
+      const finding = truncateAtWord(sanitizeYamlValue(card.finding ?? ''), 400);
+      const lessonBody = card.lesson ? truncateAtWord(sanitizeYamlValue(card.lesson), 400) : '(no root-cause supplied)';
+      const desc = sanitizeYamlValue(card.lesson || card.finding || 'lesson').slice(0, 80);
+      const taskTokens = (card.taskTokens ?? card.finding ?? '').replace(/[\n\r]/g, ' ').slice(0, 300);
+
+      const content = [
+        '---',
+        `name: lesson-${sanitizeYamlValue(card.signal)}-${shortId}`,
+        `description: ${desc}`,
+        'type: lesson',
+        `agent: ${sanitizeYamlValue(agentId)}`,
+        `signal: ${sanitizeYamlValue(card.signal)}`,
+        `finding_id: ${sanitizeYamlValue(card.findingId)}`,
+        'importance: 0.7',
+        `lastAccessed: ${today}`,
+        'accessCount: 0',
+        `generated: ${generated}`,
+        '---',
+        '',
+        `**Why it failed:** ${lessonBody}`,
+        '',
+        `**What happened:** ${finding}`,
+        '',
+        `**Task context:** ${taskTokens}`,
+      ].join('\n');
+
+      // Prune only when INSERTING a new card. An idempotent update (existing
+      // finding_id → same filename → overwrite) adds no card, so pruning here
+      // would evict an unrelated oldest card and erode history below the cap.
+      const cardPath = join(knowledgeDir, `lesson-${slug}.md`);
+      if (!existsSync(cardPath)) this.pruneLessonCards(knowledgeDir, LESSON_CARDS_MAX_PER_AGENT);
+      writeFileSync(cardPath, content);
+    } catch {
+      /* best-effort — must never fail signal recording */
+    }
+  }
+
+  /** Count-based prune of lesson-*.md only (leaves consensus/session knowledge untouched). */
+  private pruneLessonCards(knowledgeDir: string, maxFiles: number): void {
+    try {
+      const cards = readdirSync(knowledgeDir).filter(f => f.startsWith('lesson-') && f.endsWith('.md'));
+      if (cards.length < maxFiles) return;
+      const withMtime = cards.map(f => {
+        let mtime = 0;
+        try { mtime = statSync(join(knowledgeDir, f)).mtimeMs; } catch { /* treat as oldest */ }
+        return { f, mtime };
+      });
+      withMtime.sort((a, b) => a.mtime - b.mtime); // oldest first
+      const toEvict = withMtime.slice(0, cards.length - (maxFiles - 1)); // leave room for incoming
+      for (const item of toEvict) {
+        try { unlinkSync(join(knowledgeDir, item.f)); } catch { /* already gone */ }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  /**
    * Update task memory importance based on consensus signals.
    * High-quality findings get boosted, hallucinations get reduced.
    */
@@ -1206,5 +1296,28 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     } catch { /* best-effort patterns */ }
 
     writeFileSync(join(memDir, 'MEMORY.md'), parts.join('\n'));
+  }
+}
+
+/**
+ * Fan a batch of recorded signals into lesson cards (issue #642 A).
+ * Only terminal correction signals with a finding_id produce a card.
+ * Best-effort — never throws.
+ */
+export function writeLessonCardsForSignals(
+  projectRoot: string,
+  signals: Array<{ signal: string; agent_id: string; finding: string; finding_id?: string; lesson?: string }>,
+): void {
+  if (!Array.isArray(signals) || signals.length === 0) return;
+  const writer = new MemoryWriter(projectRoot);
+  for (const s of signals) {
+    if (!s || !s.finding_id || !TERMINAL_LESSON_SIGNALS.has(s.signal)) continue;
+    writer.writeLessonCard(s.agent_id, {
+      signal: s.signal,
+      findingId: s.finding_id,
+      finding: s.finding ?? '',
+      lesson: s.lesson,
+      taskTokens: s.finding,
+    });
   }
 }

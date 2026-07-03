@@ -52,7 +52,7 @@ export type { ParsedFinding, ParseFindingsResult, ParseFindingsOptions, FindingT
 export { computeDedupeKey, DEDUPE_KEY_INTERNALS } from './dedupe-key';
 export type { DedupeKeyInput } from './dedupe-key';
 export { AgentMemoryReader } from './agent-memory';
-export { MemoryWriter } from './memory-writer';
+export { MemoryWriter, writeLessonCardsForSignals, TERMINAL_LESSON_SIGNALS, LESSON_CARDS_MAX_PER_AGENT } from './memory-writer';
 export type { SessionArtifacts } from './memory-writer';
 export { refreshMemoryIndex, applyStatusTags } from './memory-index';
 export type { RefreshResult, MemoryStatus } from './memory-index';
