@@ -80,6 +80,37 @@ SQL injection at db.ts:42
       expect(agreementSignal!.category).toBe('injection_vectors');
     });
 
+    it('ignores category supplied on an agree entry — parent finding category wins', async () => {
+      const engine = makeEngine();
+
+      const resultA = makeTask('agent-a', `<agent_finding type="finding" severity="high" category="injection_vectors">SQL injection at db.ts:42</agent_finding>`);
+      const resultB = makeTask('agent-b', `<agent_finding type="finding" severity="low">Unrelated finding at util.ts:10</agent_finding>`);
+
+      // Agent B agrees but ships its OWN (valid, different) category. The agree
+      // path at consensus-engine.ts resolveSignalCategory(f.category, ...) must
+      // use the parent finding's category and never the entry's.
+      const crossReview: CrossReviewEntry[] = [
+        {
+          action: 'agree',
+          agentId: 'agent-b',
+          peerAgentId: 'agent-a',
+          findingId: 'agent-a:f1',
+          finding: 'SQL injection at db.ts:42',
+          evidence: 'Confirmed — input unsanitised before query',
+          confidence: 5,
+          category: 'type_safety',
+        } as CrossReviewEntry,
+      ];
+
+      const report = await engine.synthesize([resultA, resultB], crossReview);
+
+      const agreementSignal = report.signals.find(
+        s => s.signal === 'agreement' && s.agentId === 'agent-b',
+      );
+      expect(agreementSignal).toBeDefined();
+      expect(agreementSignal!.category).toBe('injection_vectors'); // not 'type_safety'
+    });
+
     it('propagates category onto hallucination_caught signal (disagree path)', async () => {
       const engine = makeEngine();
 

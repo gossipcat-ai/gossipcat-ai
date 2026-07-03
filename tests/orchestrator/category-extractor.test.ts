@@ -1,4 +1,4 @@
-import { extractCategories, PerformanceWriter } from '@gossip/orchestrator';
+import { extractCategories, isValidCategory, PerformanceWriter } from '@gossip/orchestrator';
 import { mkdirSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -85,6 +85,26 @@ describe('extractCategories', () => {
   test('testing \\btest\\b avoids contest/protest/latest', () => {
     expect(extractCategories('the latest consensus round')).not.toContain('testing');
     expect(extractCategories('protest against unbounded growth')).not.toContain('testing');
+  });
+});
+
+describe('isValidCategory', () => {
+  test('accepts canonical lowercase category names', () => {
+    expect(isValidCategory('concurrency')).toBe(true);
+    expect(isValidCategory('injection_vectors')).toBe(true);
+  });
+
+  test('is case-sensitive — rejects valid names with wrong casing', () => {
+    // Agent-supplied categories must match the canonical (lowercase) keys
+    // exactly; "Concurrency" would otherwise poison categoryStrengths with a
+    // duplicate bucket (spec 2026-05-20-category-resolution-fix.md PART F).
+    expect(isValidCategory('Concurrency')).toBe(false);
+    expect(isValidCategory('INJECTION_VECTORS')).toBe(false);
+  });
+
+  test('rejects unknown categories and undefined', () => {
+    expect(isValidCategory('not_a_category')).toBe(false);
+    expect(isValidCategory(undefined)).toBe(false);
   });
 });
 
