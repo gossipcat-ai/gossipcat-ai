@@ -4,6 +4,11 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.9] — 2026-07-03
+
+Agents now learn from their own past mistakes: corrections are written into
+agent memory and re-surfaced on the next dispatch.
+
 ### Added
 
 - **Agent learning loop (lesson cards + per-agent correction injection).** When an
@@ -14,7 +19,75 @@ All notable changes to gossipcat are documented here. The format is loosely base
   dispatch, its own most-relevant prior corrections are injected into the prompt
   under a `### Your Prior Corrections` section — so the agent sees its past miss in
   context, not just as a score change. Best-effort (never fails signal recording),
-  sanitized, and count-capped per agent. Closes #642 (requests A + B-delta).
+  sanitized, and count-capped per agent. Closes #642 (requests A + B-delta). (#643)
+
+## [0.6.8] — 2026-06-22
+
+Tool-server hardening: linear-time regex matching and IO caps on the file tools
+agents use during cross-review.
+
+### Security
+
+- **RE2 linear-time regex engine for `fileGrep`/`walkDir`** — agent-supplied
+  patterns no longer run on V8's backtracking engine, closing a ReDoS vector
+  where a pathological pattern could pin the tool server. (#639)
+
+### Fixed
+
+- `grepDir` now caps result count and per-file read size, preventing IO
+  saturation on pathological scans of large trees. (#637)
+- MCP log timestamps include the date, disambiguating entries across midnight
+  crossings. (#638)
+
+## [0.6.7] — 2026-06-22
+
+The orchestrator becomes a scored pseudo-agent with its own signal stream, the
+dashboard gets deep-linkable task pages, and the hook installer is hardened.
+
+### Added
+
+- **Orchestrator signal pipeline + `ask_back()`.** The orchestrator now has its
+  own signals under `agentId: 'orchestrator'`: three mechanically-falsifiable
+  dispatch-hygiene preconditions (`dispatched_stale_base`,
+  `referenced_unreadable_path`, `mid_flight_fixup`) fire as operational-class
+  telemetry — excluded from accuracy scoring. The `ask_back()` tool re-engages
+  an agent after `hallucination_caught` for a first-person root-cause, logged to
+  `.gossip/fabrication-introspections.jsonl`. (#629)
+- **Deep-linkable task detail page** in the dashboard, with connective tissue
+  from consensus reports and the activity feed. (#631)
+- **One-command skill install:** `npx skills add gossipcat-ai/gossipcat-ai`. (#624)
+- **CI rule-book coverage gate** — every operational signal must be documented
+  in the handbook or explicitly exempted. (#635)
+
+### Fixed
+
+- Pre-dispatch precondition guard now runs for `parallel` and `consensus`
+  dispatches, not just single-task dispatch. (#632)
+- `referenced_unreadable_path` is wired to paths named in the task text, not
+  just structured context fields. (#633)
+- A branch strictly ahead of `origin/master` is classified `ahead_of_origin`
+  (not stale) — no more false `dispatched_stale_base` on the normal
+  review-on-branch flow. (#634)
+- Dashboard FindingsMetrics: per-report filter isolation, debate-page reset on
+  report switch, memoized review lookup. (#628)
+
+### Changed
+
+- `consensus.resolverLineAnchored` now defaults to `true` — the finding
+  auto-resolver requires line-anchored citations by default. (#626)
+- Launch warnings and the unscored-round banner hardened. (#627)
+
+### Security
+
+- **Hook-installer hardening:** dropped cwd-based path resolution and switched
+  to load-before-copy for the bundled hook asset. (#625)
+
+## [0.6.6] — 2026-06-19
+
+Cursor joins Claude Code as a first-class native host, and dashboard chat
+history survives relay restarts.
+
+### Added
 
 - **First-class Cursor support.** Cursor is now a co-equal native host alongside
   Claude Code. A host-aware dispatch bridge (`native-host-bridge.ts`) emits the
@@ -28,7 +101,7 @@ All notable changes to gossipcat are documented here. The format is loosely base
   rewrite of the existing path. `cursorSubagentType` passes a native agent's id
   through verbatim (Cursor registers its `subagent_type` enum from
   `.claude/agents/<id>.md` filenames); reserved/utility ids fall back to the
-  `generalPurpose` built-in.
+  `generalPurpose` built-in. (#617, #618)
 - **Durable dashboard chat history.** Mirror chat transcripts now persist to
   `.gossip/chat/<chat_id>.jsonl` via a write-through `ChatStore` seam, so chat
   history survives a relay restart and is no longer capped at the 100-frame
@@ -40,7 +113,7 @@ All notable changes to gossipcat are documented here. The format is loosely base
   `.gossip/` dir; the store re-validates every `chat_id` against the id charset
   before any path op (path-traversal defense-in-depth), bounds each file via
   amortized truncation, writes truncations atomically (tmp→rename), skips
-  internal `_`-prefixed sentinels, and caps per-line length before parse.
+  internal `_`-prefixed sentinels, and caps per-line length before parse. (#616)
 
 ### Changed
 
@@ -49,7 +122,7 @@ All notable changes to gossipcat are documented here. The format is loosely base
   legend and concrete value hook moved to the top; the headline hallucination
   figure softened to an honest directional claim; the MCP-tools reference
   completed (`gossip_guide`/`gossip_config`/`gossip_format`); orchestrator-only
-  guide, OpenClaw deep-dive, and release runbook relocated to pointers.
+  guide, OpenClaw deep-dive, and release runbook relocated to pointers. (#619)
 
 ## [0.6.5] — 2026-06-17
 
