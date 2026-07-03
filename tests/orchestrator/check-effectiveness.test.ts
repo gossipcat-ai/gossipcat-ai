@@ -18,7 +18,7 @@ import {
 const baseSnapshot: SkillSnapshot = {
   baseline_accuracy_correct: 50,
   baseline_accuracy_hallucinated: 50,
-  bound_at: '2026-04-01T00:00:00Z',
+  bound_at: new Date(Date.now() - 86400_000).toISOString(), // 1d ago — recent, deterministic (avoids wall-clock TIMEOUT_DAYS flip)
   status: 'pending',
   migration_count: 0,
 };
@@ -80,7 +80,7 @@ describe('checkEffectiveness — Test 4: Dampener asymmetry guard', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 90,
       baseline_accuracy_hallucinated: 10,
-      bound_at: '2026-04-01T00:00:00Z',
+      bound_at: new Date(Date.now() - 86400_000).toISOString(), // 1d ago — recent, deterministic (avoids wall-clock TIMEOUT_DAYS flip)
       status: 'pending',
       migration_count: 0,
     };
@@ -95,7 +95,7 @@ describe('checkEffectiveness — Test 4: Dampener asymmetry guard', () => {
     const snap: SkillSnapshot = {
       baseline_accuracy_correct: 50,
       baseline_accuracy_hallucinated: 50,
-      bound_at: '2026-04-01T00:00:00Z',
+      bound_at: new Date(Date.now() - 86400_000).toISOString(), // 1d ago — recent, deterministic (avoids wall-clock TIMEOUT_DAYS flip)
       status: 'pending',
       migration_count: 0,
     };
@@ -116,7 +116,7 @@ describe('checkEffectiveness — Test 5: Inconclusive epoch', () => {
   const snap: SkillSnapshot = {
     baseline_accuracy_correct: 50,
     baseline_accuracy_hallucinated: 50,
-    bound_at: '2026-04-01T00:00:00Z',
+    bound_at: new Date(Date.now() - 86400_000).toISOString(), // 1d ago — recent, deterministic (avoids wall-clock TIMEOUT_DAYS flip)
     status: 'pending',
     migration_count: 0,
   };
@@ -186,7 +186,7 @@ describe('checkEffectiveness — Test 6: FDR boundary at baseline', () => {
     const baseline: SkillSnapshot = {
       baseline_accuracy_correct: 75,
       baseline_accuracy_hallucinated: 25,
-      bound_at: '2026-04-01T00:00:00Z',
+      bound_at: new Date(Date.now() - 86400_000).toISOString(), // 1d ago — recent, deterministic (avoids wall-clock TIMEOUT_DAYS flip)
       status: 'pending',
       migration_count: 0,
     };

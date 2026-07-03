@@ -35,7 +35,7 @@ describe('resolveVerdict', () => {
   const baseSnapshot: SkillSnapshot = {
     baseline_accuracy_correct: 50,
     baseline_accuracy_hallucinated: 50,
-    bound_at: '2026-04-01T00:00:00Z',
+    bound_at: new Date(Date.now() - 86400_000).toISOString(), // 1d ago — recent, deterministic (avoids wall-clock TIMEOUT_DAYS flip)
     status: 'pending',
     migration_count: 0,
   };
