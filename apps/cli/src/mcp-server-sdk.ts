@@ -4791,7 +4791,7 @@ export function createMcpServer(): McpServer {
           // Overwrite protection
           if (existsSync(filePath)) {
             const existing = readFileSync(filePath, 'utf-8');
-            const fm = parseSkillFrontmatter(existing);
+            const fm = parseSkillFrontmatter(existing, filePath);
             if (fm) {
               if (fm.generated_by === 'manual') {
                 results.push(`Skipped ${name}: manually created file (generated_by: manual)`);

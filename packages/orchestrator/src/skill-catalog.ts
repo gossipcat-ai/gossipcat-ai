@@ -102,7 +102,7 @@ export class SkillCatalog {
         const mtime = statSync(filePath).mtimeMs;
         newMtimes.set(file, mtime);
         const content = readFileSync(filePath, 'utf-8');
-        const fm = parseSkillFrontmatter(content);
+        const fm = parseSkillFrontmatter(content, filePath);
         if (!fm) continue;
 
         const entry: CatalogEntry & { _status?: string } = {

@@ -219,7 +219,7 @@ export function loadSkills(
     // docs/specs/2026-05-13-passed-skill-drift-detection.md §"Quarantine
     // drift-demoted skills". Organic inconclusive (no regressed_from_passed_at)
     // continues to inject unchanged.
-    const parsedFrontmatter = parseSkillFrontmatter(content);
+    const parsedFrontmatter = parseSkillFrontmatter(content, resolvedPath);
     const frontmatterStatus = parsedFrontmatter?.status;
     const isDriftDemoted =
       frontmatterStatus === 'inconclusive' &&
@@ -297,7 +297,7 @@ export function loadSkills(
     // scope-declared skills are treated as permanent (injected unconditionally)
     // so the backwards-compat guarantee is preserved — the same as the
     // task_type filter, which is also skipped when dispatchTaskType is absent.
-    const frontmatterForScope = parseSkillFrontmatter(content);
+    const frontmatterForScope = parseSkillFrontmatter(content, resolvedPath);
     const skillScope = frontmatterForScope?.scope;
     if (skillScope && skillScope.length > 0) {
       if (!dispatchTaskType || skillScope.includes(dispatchTaskType)) {
@@ -331,8 +331,8 @@ export function loadSkills(
     if (mode === 'permanent') {
       permanent.push({ name: skill, content, path: resolvedPath });
     } else if (task) {
-      const rawHits = countKeywordHits(content, skill, task);
-      const frontmatter = parseSkillFrontmatter(content);
+      const rawHits = countKeywordHits(content, skill, task, resolvedPath);
+      const frontmatter = parseSkillFrontmatter(content, resolvedPath);
       const boost = categoryBoost(frontmatter?.category, categories);
       const effectiveHits = rawHits + boost;
       // Threshold applied to effective hits. With CATEGORY_BOOST=0.5 and
@@ -431,9 +431,13 @@ function getPattern(keyword: string): RegExp {
 /**
  * Count keyword hits for a contextual skill against a task string.
  * Uses word-boundary matching to prevent false positives (e.g., "auth" won't match "author").
+ *
+ * `sourceLabel` is the resolved skill file path when the caller has one
+ * (threaded down to getKeywords -> parseSkillFrontmatter for diagnosability);
+ * falls back to `skillName` when no resolved path is available.
  */
-function countKeywordHits(skillContent: string, skillName: string, task: string): number {
-  const keywords = getKeywords(skillContent, skillName);
+function countKeywordHits(skillContent: string, skillName: string, task: string, sourceLabel?: string): number {
+  const keywords = getKeywords(skillContent, skillName, sourceLabel);
   if (keywords.length === 0) return 0;
 
   let hits = 0;
@@ -446,8 +450,8 @@ function countKeywordHits(skillContent: string, skillName: string, task: string)
 /**
  * Extract keywords from skill frontmatter or fall back to category defaults.
  */
-function getKeywords(content: string, skillName: string): string[] {
-  const frontmatter = parseSkillFrontmatter(content);
+function getKeywords(content: string, skillName: string, sourceLabel?: string): string[] {
+  const frontmatter = parseSkillFrontmatter(content, sourceLabel ?? skillName);
   if (frontmatter?.keywords && frontmatter.keywords.length > 0) {
     return frontmatter.keywords.map(k => k.toLowerCase());
   }
