@@ -16,11 +16,11 @@ import { DashboardAuth } from './dashboard/auth';
 import { DashboardRouter } from './dashboard/routes';
 import { DashboardWs } from './dashboard/ws';
 import type { BridgeSink, AskQuestion } from './dashboard/api-bridge';
-import type { ChatbotAgent } from '@gossip/orchestrator';
+import type { ChatbotAgent, AgentConfig } from '@gossip/orchestrator';
 
 export interface DashboardConfig {
   projectRoot: string;
-  agentConfigs: Array<{ id: string; provider: string; model: string; preset?: string; skills: string[]; native?: boolean }>;
+  agentConfigs: AgentConfig[];
 }
 
 export interface RelayServerConfig {
@@ -457,7 +457,7 @@ export class RelayServer {
    * (mcp-server-sdk.ts:365) still wins on initial boot — this method is a
    * post-setup override, not a replacement.
    */
-  setAgentConfigs(configs: Array<{ id: string; provider: string; model: string; preset?: string; skills: string[]; native?: boolean }>): void {
+  setAgentConfigs(configs: AgentConfig[]): void {
     this.dashboardRouter?.updateContext({ agentConfigs: configs });
   }
 
