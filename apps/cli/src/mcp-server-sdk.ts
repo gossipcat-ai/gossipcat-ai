@@ -301,6 +301,7 @@ import { ctx, NATIVE_TASK_TTL_MS } from './mcp-context';
 import { MAX_TOOL_TURNS_CEILING, MCP_MAIN_PROVIDER_ENUM, MCP_CUSTOM_PROVIDER_ENUM } from './config';
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
+import { selectUtilityFallbackProvider } from './utility-provider';
 import { buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog, isValidCategory, seedPermanentDefaults, GLOBAL_PERMANENT_DEFAULTS, IMPLEMENTER_PERMANENT_DEFAULTS, RESEARCHER_REVIEWER_PERMANENT_DEFAULTS } from '@gossip/orchestrator';
 
 // Prime the dist-mcp staleness cache from the running bundle path. In the bundled
@@ -1001,14 +1002,52 @@ async function doBoot() {
     let utilityLlm = m.createProvider(mainProvider as any, mainModel, mainKey ?? undefined);
     let utilityModelId = `${mainProvider}/${mainModel}`;
 
+    // A provider is "cooled" while its exhaustedUntil (from a 429/spend-cap
+    // cooldown) is still in the future. Read+parse the quota-state file ONCE here
+    // so the pure selection helper stays fs-free and isCooled doesn't re-read on
+    // every candidate probe. Missing/unparseable file ⇒ {} ⇒ nothing cooled.
+    const quotaState: Record<string, { exhaustedUntil?: number }> = (() => {
+      try {
+        const { readFileSync } = require('fs');
+        const { join: joinP } = require('path');
+        const raw = readFileSync(joinP(process.cwd(), '.gossip', 'quota-state.json'), 'utf-8');
+        // A valid-JSON scalar (e.g. the literal `null`, a number, a string) parses
+        // WITHOUT throwing but is not an indexable record — guard so isCooled never
+        // indexes null and throws, which would be swallowed and disable all of ATI.
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch { return {}; }
+    })();
+    const isCooled = (provider: string): boolean =>
+      typeof quotaState[provider]?.exhaustedUntil === 'number' && quotaState[provider].exhaustedUntil! > Date.now();
+    // Pick the best keyed, non-cooled provider for the AUTOMATIC relay-side
+    // summarizers (they call summaryLlm directly with no turn to dispatch a
+    // native Agent(), so the native path can't cover them). Keeps a healthy
+    // main; only diverges when main is quota-exhausted or keyless.
+    const pickUtilityFallback = () => selectUtilityFallbackProvider({
+      main: { provider: mainProvider, model: mainModel, key: mainKey },
+      agents: agentConfigs as Array<{ provider: string; model: string; key_ref?: string; native?: boolean; base_url?: string }>,
+      getKey: (service: string) => ctx.keychain.getKey(service),
+      isCooled,
+      createProvider: m.createProvider,
+      projectRoot: process.cwd(),
+    });
+
     if (autoNative) {
       ctx.nativeUtilityConfig = { model: 'sonnet' };
-      utilityModelId = 'native/orchestrator';
+      // Explicit utility TASKS (session-save, verify-memory) still dispatch a
+      // native Agent(); the automatic summarizers fall back to a real keyed
+      // provider so they don't hit a quota-exhausted main (e.g. google 429).
+      const fb = await pickUtilityFallback();
+      utilityLlm = fb.llm;
+      utilityModelId = `native/orchestrator (summary via ${fb.label})`;
     } else if (config.utility_model?.provider === 'native') {
-      // Native utility: calls go through Agent() dispatch + gossip_relay, not direct LLM
+      // Native utility: explicit-task calls go through Agent() dispatch + gossip_relay.
       ctx.nativeUtilityConfig = { model: config.utility_model.model };
-      utilityModelId = `native/${config.utility_model.model}`;
-      // Don't override utilityLlm — native path branches at call sites, not at provider level
+      // Automatic summarizers still need a direct LLM — route them via the fallback.
+      const fb = await pickUtilityFallback();
+      utilityLlm = fb.llm;
+      utilityModelId = `native/${config.utility_model.model} (summary via ${fb.label})`;
     } else if (config.utility_model) {
       const utilityKey = await ctx.keychain.getKey(config.utility_model.provider);
       if (utilityKey) {
@@ -1016,8 +1055,12 @@ async function doBoot() {
         utilityLlm = m.createProvider(config.utility_model.provider, config.utility_model.model, utilityKey);
         utilityModelId = `${config.utility_model.provider}/${config.utility_model.model}`;
       } else {
-        // If configured but key is missing, just warn. The fallback is already set.
-        process.stderr.write(`[gossipcat] ⚠️  Utility model key for "${config.utility_model.provider}" not found, falling back to main agent model for lens generation.\n`);
+        // Configured but key is missing — don't strand summaries on a possibly
+        // quota-exhausted main; route through the same best-keyed fallback.
+        const fb = await pickUtilityFallback();
+        utilityLlm = fb.llm;
+        utilityModelId = `${config.utility_model.provider}/${config.utility_model.model} → ${fb.label}`;
+        process.stderr.write(`[gossipcat] ⚠️  Utility model key for "${config.utility_model.provider}" not found, using ${fb.label} for lens generation & summaries.\n`);
       }
     }
 

@@ -1,4 +1,4 @@
-import { createProvider, createProviderForAgent, resolveAgentProvider, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider } from '@gossip/orchestrator';
+import { createProvider, createProviderForAgent, resolveAgentProvider, AnthropicProvider, OpenAIProvider, GeminiProvider, OllamaProvider, isReasoningModel } from '@gossip/orchestrator';
 import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -433,6 +433,237 @@ describe('LLM Client', () => {
       expect(ok.name).toBe('file_read');
       expect(ok.arguments).toEqual({ path: '/src/main.ts' });
       expect(ok.argumentsParseError).toBeUndefined();
+
+      global.fetch = originalFetch;
+    });
+  });
+
+  describe('isReasoningModel — Responses API routing predicate', () => {
+    it.each([
+      ['gpt-5.6-terra', true],
+      ['gpt-5', true],
+      ['GPT-5.6-Terra', true],   // case-insensitive
+      ['o3', true],
+      ['o1-mini', true],
+      ['gpt-4o', false],
+      ['gpt-4o-mini', false],
+      ['gpt-3.5-turbo', false],
+      ['deepseek-chat', false],
+      ['omni-model', false],     // "o" not followed by a digit
+    ])('%s → %s', (model, expected) => {
+      expect(isReasoningModel(model)).toBe(expected);
+    });
+  });
+
+  describe('OpenAIProvider — Responses API (/v1/responses) path', () => {
+    it('reasoning model + tools ⇒ POSTs /responses with FLAT tool shape and an input array', async () => {
+      const originalFetch = global.fetch;
+      const seen: { url?: string; body?: any } = {};
+      global.fetch = jest.fn().mockImplementation((url: string, init: any) => {
+        seen.url = url;
+        seen.body = JSON.parse(init.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] }],
+            usage: { input_tokens: 3, output_tokens: 1 },
+          }),
+        });
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('test-key', 'gpt-5.6-terra');
+      const response = await provider.generate(
+        [
+          { role: 'system', content: 'you are terse' },
+          { role: 'user', content: 'hi' },
+        ],
+        { tools: [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: {} } }], maxTokens: 128, temperature: 0.2 },
+      );
+
+      // Hit the Responses endpoint, not chat/completions.
+      expect(seen.url).toBe('https://api.openai.com/v1/responses');
+      // System prompt rides as top-level `instructions`.
+      expect(seen.body.instructions).toBe('you are terse');
+      // FLAT function tool (no nested `function: {}`).
+      expect(seen.body.tools).toEqual([
+        { type: 'function', name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+      ]);
+      // Non-system messages become input items with input_text content.
+      expect(seen.body.input).toEqual([
+        { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+      ]);
+      expect(seen.body.max_output_tokens).toBe(128);
+      // temperature is intentionally OMITTED on /responses — reasoning models
+      // reject any non-default temperature, so the field must be absent even
+      // when the caller passed one.
+      expect('temperature' in seen.body).toBe(false);
+
+      expect(response.text).toBe('ok');
+      expect(response.usage).toEqual({ inputTokens: 3, outputTokens: 1 });
+
+      global.fetch = originalFetch;
+    });
+
+    it('non-reasoning model + tools ⇒ still hits /chat/completions', async () => {
+      const originalFetch = global.fetch;
+      const seen: { url?: string } = {};
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        seen.url = url;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ choices: [{ message: { content: 'chat', tool_calls: null } }] }),
+        });
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('test-key', 'gpt-4o');
+      await provider.generate(
+        [{ role: 'user', content: 'hi' }],
+        { tools: [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: {} } }] },
+      );
+      expect(seen.url).toBe('https://api.openai.com/v1/chat/completions');
+
+      global.fetch = originalFetch;
+    });
+
+    it('safety net: /chat/completions 400 saying "use /v1/responses" ⇒ transparent retry on /responses', async () => {
+      const originalFetch = global.fetch;
+      const urls: string[] = [];
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        urls.push(url);
+        if (url.endsWith('/chat/completions')) {
+          return Promise.resolve({
+            ok: false,
+            status: 400,
+            headers: { get: () => null },
+            text: async () => 'Function tools with reasoning_effort are not supported for future-model in /v1/chat/completions. To use function tools, use /v1/responses',
+          });
+        }
+        // /responses retry succeeds.
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            output: [{ type: 'message', content: [{ type: 'output_text', text: 'healed' }] }],
+          }),
+        });
+      }) as unknown as typeof fetch;
+
+      // A model isReasoningModel() does NOT recognize — the self-heal must still fire.
+      const provider = new OpenAIProvider('test-key', 'future-model');
+      const response = await provider.generate(
+        [{ role: 'user', content: 'hi' }],
+        { tools: [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: {} } }] },
+      );
+      expect(urls).toEqual([
+        'https://api.openai.com/v1/chat/completions',
+        'https://api.openai.com/v1/responses',
+      ]);
+      expect(response.text).toBe('healed');
+
+      global.fetch = originalFetch;
+    });
+
+    it('reasoning model on a NON-canonical base_url + tools ⇒ stays on /chat/completions (no silent /responses 404)', async () => {
+      const originalFetch = global.fetch;
+      const seen: { url?: string } = {};
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        seen.url = url;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ choices: [{ message: { content: 'chat', tool_calls: null } }] }),
+        });
+      }) as unknown as typeof fetch;
+
+      // deepseek-style custom endpoint + a reasoning-shaped model name. The
+      // up-front /responses route must NOT fire because only api.openai.com
+      // serves /v1/responses.
+      const provider = new OpenAIProvider('test-key', 'gpt-5-x', undefined, 'https://api.deepseek.com/v1');
+      await provider.generate(
+        [{ role: 'user', content: 'hi' }],
+        { tools: [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: {} } }] },
+      );
+      expect(seen.url).toBe('https://api.deepseek.com/v1/chat/completions');
+
+      global.fetch = originalFetch;
+    });
+
+    it('toResponsesInput maps an image ContentBlock to an input_image item with a data: URL', async () => {
+      const originalFetch = global.fetch;
+      const seen: { body?: any } = {};
+      global.fetch = jest.fn().mockImplementation((_url: string, init: any) => {
+        seen.body = JSON.parse(init.body);
+        return Promise.resolve({ ok: true, json: async () => ({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }] }) });
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('test-key', 'gpt-5.6-terra');
+      await provider.generate(
+        [{ role: 'user', content: [
+          { type: 'text', text: 'what is this?' },
+          { type: 'image', mediaType: 'image/png', data: 'BASE64DATA' },
+        ] }],
+        { tools: [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: {} } }] },
+      );
+
+      expect(seen.body.input).toEqual([
+        { role: 'user', content: [
+          { type: 'input_text', text: 'what is this?' },
+          { type: 'input_image', image_url: 'data:image/png;base64,BASE64DATA' },
+        ] },
+      ]);
+
+      global.fetch = originalFetch;
+    });
+
+    it('Responses parser extracts concatenated text, tool calls, and usage', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          output: [
+            { type: 'message', content: [{ type: 'output_text', text: 'part-a ' }, { type: 'output_text', text: 'part-b' }] },
+            { type: 'function_call', call_id: 'call_z', name: 'shell_exec', arguments: '{"command":"ls"}' },
+            { type: 'reasoning', summary: [] }, // ignored item type
+          ],
+          usage: { input_tokens: 11, output_tokens: 4 },
+        }),
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('test-key', 'gpt-5.6-terra');
+      const response = await provider.generate(
+        [{ role: 'user', content: 'do it' }],
+        { tools: [{ name: 'shell_exec', description: 'Run a shell command', parameters: { type: 'object', properties: {} } }] },
+      );
+
+      expect(response.text).toBe('part-a part-b');
+      expect(response.toolCalls).toHaveLength(1);
+      expect(response.toolCalls![0]).toEqual({ id: 'call_z', name: 'shell_exec', arguments: { command: 'ls' } });
+      expect(response.usage).toEqual({ inputTokens: 11, outputTokens: 4 });
+
+      global.fetch = originalFetch;
+    });
+
+    it('Responses path maps prior tool calls / results into function_call(+output) input items', async () => {
+      const originalFetch = global.fetch;
+      const seen: { body?: any } = {};
+      global.fetch = jest.fn().mockImplementation((_url: string, init: any) => {
+        seen.body = JSON.parse(init.body);
+        return Promise.resolve({ ok: true, json: async () => ({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'done' }] }] }) });
+      }) as unknown as typeof fetch;
+
+      const provider = new OpenAIProvider('test-key', 'gpt-5.6-terra');
+      await provider.generate(
+        [
+          { role: 'user', content: 'read the file' },
+          { role: 'assistant', content: '', toolCalls: [{ id: 'call_1', name: 'read_file', arguments: { path: '/a.ts' } }] },
+          { role: 'tool', toolCallId: 'call_1', content: 'file contents' },
+        ],
+        { tools: [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: {} } }] },
+      );
+
+      expect(seen.body.input).toEqual([
+        { role: 'user', content: [{ type: 'input_text', text: 'read the file' }] },
+        { type: 'function_call', call_id: 'call_1', name: 'read_file', arguments: '{"path":"/a.ts"}' },
+        { type: 'function_call_output', call_id: 'call_1', output: 'file contents' },
+      ]);
 
       global.fetch = originalFetch;
     });
