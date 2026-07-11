@@ -4,6 +4,34 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.11] — 2026-07-11
+
+Stops the `[skill-parser] missing required field(s)` warnings that reached
+installed users after PR #647's loud parse-failure warnings. Verified via
+consensus (`consensus-id: 41d9d4d9-16fb45b9`).
+
+### Fixed
+
+- **Bundled default skill `memory-retrieval.md` was missing `status`**, so the
+  strict parser dropped its metadata and warned on every dispatch that loaded
+  default skills. Added `status: active` (matching its sibling permanent
+  defaults) and a regression test that asserts every frontmatter-bearing bundled
+  default skill parses cleanly.
+- **A missing one-line `description` no longer drops a functional skill.**
+  `parseSkillFrontmatter` now hard-requires only `name` (identity); `description`
+  is backfilled from a humanized `name` and `status` defaults to `active`, with a
+  single `backfilled missing field(s): …` notice (the loud-visibility intent of
+  PR #647 is kept, but a usable contextual skill is no longer discarded and
+  double-warned). Generated agent-local skills that omitted `description` — the
+  develop prompt never listed it as required — were the main casualty.
+- **The skill generator now always emits `description`.** The develop prompt
+  lists it as required, and `injectSnapshotFields` guarantees a (colon-safe,
+  JSON-quoted) `description:` line at write time, derived from the skill name.
+- **Edge hardening:** a quoted-whitespace name (`name: "   "`) is now trimmed
+  after quote-stripping so it is correctly rejected instead of surviving as a
+  blank normalized name; the write-time derived description is JSON-quoted so a
+  name containing a colon can't produce malformed YAML.
+
 ## [0.6.10] — 2026-07-11
 
 Two provider/routing fixes so utility summarization survives a broken main

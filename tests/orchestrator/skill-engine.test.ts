@@ -1,4 +1,4 @@
-import { SkillEngine, PerformanceReader, ILLMProvider } from '@gossip/orchestrator';
+import { SkillEngine, PerformanceReader, ILLMProvider, parseSkillFrontmatter } from '@gossip/orchestrator';
 import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -157,6 +157,23 @@ describe('SkillEngine', () => {
     expect(body).toContain('# Injection Audit');
     expect(body).toContain('## Iron Law');
     expect(body).toContain('## Quality Gate');
+  });
+
+  test('injects a description into generated frontmatter when the LLM omits one', async () => {
+    // VALID_SKILL has no `description:` line. injectSnapshotFields must
+    // backfill one derived from `name` so the written file is spec-compliant
+    // and the loader's skill-parser never has to backfill+warn on dispatch.
+    const llm = mockLLM(VALID_SKILL);
+    const gen = new SkillEngine(llm, new PerformanceReader(testDir), testDir);
+    const result = await gen.generate('agent-a', 'injection_vectors');
+
+    const written = readFileSync(result.path, 'utf-8');
+    const fmEnd = written.indexOf('\n---', 4);
+    const frontmatter = written.slice(4, fmEnd);
+    // Derived description is written JSON-quoted (colon-safe); the loader's
+    // parser strips the quotes back to the plain value on read.
+    expect(frontmatter).toMatch(/^description:\s*"injection audit"$/m);
+    expect(parseSkillFrontmatter(written)?.description).toBe('injection audit');
   });
 
   test('rejects LLM output missing required sections', async () => {

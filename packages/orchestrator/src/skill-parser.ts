@@ -96,10 +96,11 @@ export interface SkillFrontmatter {
 const BLOCK_SEQUENCE_KEYS = new Set(['keywords', 'scope']);
 
 /** Writes a loud, prefixed diagnostic to stderr for parse failures. Warnings
- * fire ONLY when a `---` frontmatter block IS present but is missing a
- * REQUIRED field (name, description, status) — a genuine authoring error.
- * The silent-coercion philosophy for OPTIONAL axes (task_type, scope
- * unknown-token dropping, mode) is unchanged below.
+ * fire when a `---` frontmatter block IS present but either (a) is missing the
+ * hard-required `name` field — a genuine authoring error that drops the skill —
+ * or (b) had `description`/`status` backfilled with safe defaults (one warning,
+ * skill preserved). The silent-coercion philosophy for OPTIONAL axes (task_type,
+ * scope unknown-token dropping, mode) is unchanged below.
  *
  * Deliberately silent when no frontmatter block is found at all: plain
  * `# Title` markdown with no `---` block is a supported, common skill
@@ -162,7 +163,10 @@ export function parseSkillFrontmatter(content: string, sourceLabel?: string): Sk
     if (value.length >= 2 &&
         ((value.startsWith('"') && value.endsWith('"')) ||
          (value.startsWith("'") && value.endsWith("'")))) {
-      value = value.slice(1, -1);
+      // `.trim()` AFTER the strip too: a quoted-whitespace value like
+      // `name: "   "` is otherwise 3 truthy spaces that slip the `!name`
+      // guard below and normalize to '' downstream (consensus 41d9d4d9).
+      value = value.slice(1, -1).trim();
     }
     fields[key] = value;
 
@@ -171,10 +175,32 @@ export function parseSkillFrontmatter(content: string, sourceLabel?: string): Sk
     }
   }
 
-  if (!fields.name || !fields.description || !fields.status) {
-    const missing = ['name', 'description', 'status'].filter(f => !fields[f]);
-    warnParseFailure(`missing required field(s): ${missing.join(', ')}`, sourceLabel);
+  // `name` is the only HARD requirement: a skill with no identity is unusable,
+  // so keep PR #647's loud-drop path for it (warn + return null). `description`
+  // and `status` are recall/lifecycle metadata — dropping a functional
+  // contextual skill for a missing one-liner is too harsh (it stranded
+  // generated agent-local skills that omit `description`). Backfill safe
+  // defaults instead and emit ONE observability warning noting what was
+  // filled in.
+  if (!fields.name) {
+    warnParseFailure('missing required field(s): name', sourceLabel);
     return null;
+  }
+  const backfilled: string[] = [];
+  if (!fields.description) {
+    // Humanize the identity into a stand-in one-liner: `resource-exhaustion`
+    // → `resource exhaustion`. Pure recall metadata, so a derived value is
+    // strictly better than dropping the whole skill.
+    // `|| fields.name` guards an all-separator name (e.g. `---`) humanizing to ''.
+    fields.description = fields.name.replace(/[-_]/g, ' ').trim() || fields.name;
+    backfilled.push('description');
+  }
+  if (!fields.status) {
+    fields.status = 'active';
+    backfilled.push('status');
+  }
+  if (backfilled.length > 0) {
+    warnParseFailure(`backfilled missing field(s): ${backfilled.join(', ')}`, sourceLabel);
   }
 
   let keywords: string[] = [];
