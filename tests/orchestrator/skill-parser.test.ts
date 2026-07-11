@@ -1,4 +1,6 @@
 import { parseSkillFrontmatter } from '@gossip/orchestrator';
+import { readdirSync, readFileSync } from 'fs';
+import { join, resolve } from 'path';
 
 describe('parseSkillFrontmatter', () => {
   it('parses valid frontmatter with all fields', () => {
@@ -174,6 +176,59 @@ Check endpoints.`;
       expect(message).toContain('missing-name.md');
     });
 
+    it('backfills description from name and warns exactly once when only description is missing', () => {
+      // Generated agent-local skills (e.g. .gossip/agents/<id>/skills/
+      // resource-exhaustion.md) routinely omit `description`. Preserve the
+      // skill with a humanized stand-in instead of dropping it.
+      const md = `---\nname: resource-exhaustion\nkeywords: [dos]\nstatus: active\n---\nBody`;
+      const result = parseSkillFrontmatter(md, 'resource-exhaustion.md');
+
+      expect(result).not.toBeNull();
+      expect(result!.description).toBe('resource exhaustion');
+      expect(result!.status).toBe('active');
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [message] = stderrSpy.mock.calls[0];
+      expect(message).toContain('[skill-parser]');
+      expect(message).toContain('backfilled');
+      expect(message).toContain('description');
+      expect(message).toContain('resource-exhaustion.md');
+    });
+
+    it('backfills status to active and warns once when only status is missing', () => {
+      const md = `---\nname: t\ndescription: d\nkeywords: [k]\n---\nBody`;
+      const result = parseSkillFrontmatter(md, 'no-status.md');
+
+      expect(result).not.toBeNull();
+      expect(result!.status).toBe('active');
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [message] = stderrSpy.mock.calls[0];
+      expect(message).toContain('backfilled');
+      expect(message).toContain('status');
+    });
+
+    it('backfills BOTH description and status in a single joined warning when both are missing', () => {
+      const md = `---\nname: resource-exhaustion\nkeywords: [dos]\n---\nBody`;
+      const result = parseSkillFrontmatter(md, 'both-missing.md');
+
+      expect(result).not.toBeNull();
+      expect(result!.description).toBe('resource exhaustion');
+      expect(result!.status).toBe('active');
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [message] = stderrSpy.mock.calls[0];
+      expect(message).toContain('backfilled missing field(s): description, status');
+    });
+
+    it('rejects a quoted-whitespace name (trims after quote-strip) rather than backfilling from empty', () => {
+      // `name: "   "` must not slip the `!name` guard as three truthy spaces
+      // (consensus 41d9d4d9). The post-strip trim collapses it to '' → dropped.
+      const md = `---\nname: "   "\ndescription: d\nstatus: active\n---\nBody`;
+      const result = parseSkillFrontmatter(md, 'whitespace-name.md');
+
+      expect(result).toBeNull();
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      expect(stderrSpy.mock.calls[0][0]).toContain('missing required field(s): name');
+    });
+
     it('returns null and does NOT warn when no frontmatter block is present (supported format)', () => {
       const md = `# Just a title\n\nSome content`;
       const result = parseSkillFrontmatter(md, 'no-frontmatter.md');
@@ -188,6 +243,37 @@ Check endpoints.`;
 
       expect(result).not.toBeNull();
       expect(stderrSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // Regression: every SHIPPED default skill that carries a frontmatter block
+  // must satisfy the required-field contract, or the loud warnParseFailure path
+  // spams stderr on every install/dispatch and the skill's metadata is dropped.
+  // A missing `status:` on memory-retrieval.md reached users in v0.6.10 — this
+  // guards the whole default-skills dir so it can't recur.
+  describe('bundled default skills parse cleanly', () => {
+    const defaultSkillsDir = resolve(__dirname, '../../packages/orchestrator/src/default-skills');
+    const frontmatterSkills = readdirSync(defaultSkillsDir)
+      .filter(f => f.endsWith('.md'))
+      .filter(f => readFileSync(join(defaultSkillsDir, f), 'utf8').startsWith('---\n'));
+
+    it('has at least one frontmatter-bearing default skill to check', () => {
+      expect(frontmatterSkills.length).toBeGreaterThan(0);
+    });
+
+    it.each(frontmatterSkills)('%s parses non-null with name/description/status and no warning', (file) => {
+      const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        const content = readFileSync(join(defaultSkillsDir, file), 'utf8');
+        const result = parseSkillFrontmatter(content, file);
+        expect(result).not.toBeNull();
+        expect(result!.name).toBeTruthy();
+        expect(result!.description).toBeTruthy();
+        expect(result!.status).toBeTruthy();
+        expect(stderrSpy).not.toHaveBeenCalled();
+      } finally {
+        stderrSpy.mockRestore();
+      }
     });
   });
 });

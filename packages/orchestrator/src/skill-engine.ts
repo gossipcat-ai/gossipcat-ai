@@ -516,7 +516,7 @@ Peer scores: ${peerScores.length > 0 ? peerScores.join(', ') : 'no peer data'}
 
 Output a skill markdown file with this exact structure:
 
-1. YAML frontmatter with fields: name, category (${category}), agent (${agentId}), generated, effectiveness (0.0), baseline_rate (${baselineRate.toFixed(3)}), baseline_dispatches (${totalDispatches}), version (1), mode (contextual), keywords ([${(CATEGORY_KEYWORDS[category] || [category]).join(', ')}])
+1. YAML frontmatter with fields: name, description (one concise line describing what the skill improves), category (${category}), agent (${agentId}), generated, effectiveness (0.0), baseline_rate (${baselineRate.toFixed(3)}), baseline_dispatches (${totalDispatches}), version (1), mode (contextual), keywords ([${(CATEGORY_KEYWORDS[category] || [category]).join(', ')}])
 2. ## Iron Law — one absolute rule (MUST/NEVER language)
 3. ## When This Skill Activates — task patterns that trigger it
 4. ## Methodology — 5-8 step checklist, actionable not vague
@@ -617,6 +617,26 @@ Requirements:
     // Ensure effectiveness is present as a number
     if (!fm.match(/^effectiveness:/m)) {
       fm = fm.trimEnd() + '\neffectiveness: 0.0';
+    }
+
+    // Guarantee a `description` line so generated skills are spec-compliant
+    // regardless of LLM output. The develop prompt asks for one, but the LLM
+    // omits it non-deterministically; without it the loader's skill-parser
+    // would have to backfill a stand-in (and warn) on every dispatch. Derive
+    // a one-liner from the skill name (falling back to category) here so the
+    // authored file is complete at write time.
+    if (!fm.match(/^description:/m)) {
+      const nameMatch = fm.match(/^name:\s*(.+)$/m);
+      // Fall back to a literal AFTER the transform so a quoted-whitespace or
+      // all-separator name (which humanizes to '') doesn't write an empty
+      // `description:` that re-triggers the loader's backfill+warn every load.
+      const derived = ((nameMatch?.[1]?.trim() ?? '')
+        .replace(/^['"]|['"]$/g, '')
+        .replace(/[-_]/g, ' ')
+        .trim()) || 'generated skill';
+      // JSON.stringify quotes + escapes so a name with an unescaped colon
+      // (e.g. `circuit: breaker`) can't write malformed YAML (consensus 41d9d4d9).
+      fm = fm.trimEnd() + `\ndescription: ${JSON.stringify(derived)}`;
     }
 
     // Append snapshot fields

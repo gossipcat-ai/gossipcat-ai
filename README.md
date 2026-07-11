@@ -194,10 +194,10 @@ Add to `~/.claude/mcp_settings.json` (Claude Code) or project-local `.mcp.json`:
 
 ```bash
 # Pin to a version
-npm install -g gossipcat@0.6.10
+npm install -g gossipcat@0.6.11
 
 # Pin to a GitHub release tarball (bypasses the npm registry)
-npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.6.10/gossipcat-0.6.10.tgz
+npm install -g https://github.com/gossipcat-ai/gossipcat-ai/releases/download/v0.6.11/gossipcat-0.6.11.tgz
 
 # Project-local (postinstall writes .mcp.json — open the IDE there, no `mcp add` needed)
 cd your-project && npm install --save-dev gossipcat

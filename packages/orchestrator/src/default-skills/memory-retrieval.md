@@ -1,6 +1,7 @@
 ---
 name: memory-retrieval
 mode: permanent
+status: active
 description: Call gossip_remember BEFORE reviewing — recall prior findings on the same code so you don't re-discover or contradict yourself
 ---
 
