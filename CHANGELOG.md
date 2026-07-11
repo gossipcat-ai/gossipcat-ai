@@ -4,6 +4,54 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.10] — 2026-07-11
+
+Two provider/routing fixes so utility summarization survives a broken main
+provider and GPT-5.x reasoning models work with function tools. Verified across
+two consensus rounds (`consensus-id: 26ab9b31-b7aa4f69`, `consensus-id: b8138867-e4564f31`).
+
+### Fixed
+
+- **Automatic utility summarizers no longer pin to a quota-exhausted main
+  provider.** The relay-side summarizers (cognitive memory, session gossip,
+  sibling gossip) run synchronously in a post-dispatch hook with no turn to
+  dispatch a native `Agent()`, so they cannot use the native-utility path and
+  were left bound to the main provider. When `main_agent` is a keyed-but-cooled
+  provider (e.g. a Google 429 cooldown), every automatic summary silently failed.
+  A new `selectUtilityFallbackProvider` keeps a healthy main, else picks the best
+  keyed, non-cooled provider (preference-ordered, openai-first), else a
+  `NullProvider` that degrades summaries to regex extraction. Reads
+  `.gossip/quota-state.json` once to skip cooled providers; threads each agent's
+  `base_url`/`projectRoot` so a custom-endpoint key builds a correct fallback.
+- **OpenAI GPT-5.x / o-series reasoning models now work with function tools.**
+  These models reject function tools on `/v1/chat/completions` and require the
+  Responses API. `OpenAIProvider` now auto-routes tool-bearing reasoning-model
+  requests to `/v1/responses` — but only on the canonical `api.openai.com`
+  endpoint, so the DeepSeek/Grok/OpenClaw/custom-base_url reuses stay on
+  `/chat/completions` (they don't serve `/responses`). `temperature` is omitted
+  on the Responses path (reasoning models reject non-default temperature), image
+  blocks map to `input_image`, and a self-heal retry transparently falls back to
+  `/v1/responses` when any endpoint's error body asks for it.
+
+### Changed
+
+- **Utility summaries may now incur real HTTP spend on a stored-but-unagented
+  key.** On a host where the main provider degrades to `none` but a keyed
+  provider (e.g. an `openai` key) is present in the keychain, automatic summaries
+  now use that key instead of silently degrading to empty output. The chosen
+  provider is disclosed in the startup banner (`utility: native/orchestrator
+  (summary via openai/gpt-4o-mini)`).
+
+### Known limitations (low-severity, tracked for follow-up)
+
+- A custom-`base_url` `openai` fallback persists its cooldown under the
+  `openai:<base_url>` quota slot, which `isCooled('openai')` does not read back.
+- When the main key is missing and an agent is adopted as the main fallback, its
+  `base_url` is not carried, so a custom-endpoint agent can still resolve to
+  `api.openai.com`.
+- Fallback providers do not thread `key_ref` as `authSlot`, so a 401 names the
+  quota slot rather than the keychain service in the operator hint.
+
 ## [0.6.9] — 2026-07-03
 
 Agents now learn from their own past mistakes: corrections are written into

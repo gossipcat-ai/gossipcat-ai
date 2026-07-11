@@ -22,6 +22,7 @@ export {
   OllamaProvider,
   QuotaExhaustedException,
   PROVIDER_PLACEHOLDER_RE,
+  isReasoningModel,
 } from './llm-client';
 export type { ILLMProvider, LLMGenerateOptions } from './llm-client';
 export { recordAuthFailure, clearAuthFailure, readRecentAuthFailures } from './auth-state';

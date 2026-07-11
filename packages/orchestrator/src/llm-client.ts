@@ -384,6 +384,47 @@ export class AnthropicProvider implements ILLMProvider {
 
 // ─── OpenAI ─────────────────────────────────────────────────────────────────
 
+/**
+ * OpenAI reasoning models (GPT-5.x family, o-series) that reject function tools
+ * on the legacy `/chat/completions` endpoint and require the Responses API
+ * (`/v1/responses`) instead. Matching `gpt-5*` and `o<digit>*` is conservative:
+ * it only changes routing inside OpenAIProvider, and only when tools are present
+ * (see `generate`). Non-tool calls stay on `/chat/completions` for every model.
+ */
+export function isReasoningModel(model: string): boolean {
+  return /^gpt-5/i.test(model) || /^o[0-9]/i.test(model);
+}
+
+/**
+ * Error-body signature emitted by the OpenAI API when a reasoning model is sent
+ * function tools on `/chat/completions` (e.g. "Function tools with reasoning_effort
+ * are not supported … use /v1/responses"). Used as a transparent self-healing
+ * retry trigger for models `isReasoningModel` doesn't yet recognize.
+ */
+const RESPONSES_REQUIRED_RE = /use\s+\/?v1\/responses|use the Responses API/i;
+
+/**
+ * Build a toolCall entry from a provider-supplied arguments string, reusing the
+ * same JSON-parse-failure fallback for both the `/chat/completions` and
+ * `/v1/responses` parsers: on malformed JSON the tool is NOT executed — the raw
+ * string + parse error are surfaced so the model can self-correct. Shared so the
+ * two OpenAI response shapes never drift on argument handling.
+ */
+function parseToolArgs(id: string, name: string, rawArgs: string): NonNullable<LLMResponse['toolCalls']>[number] {
+  try {
+    return { id, name, arguments: JSON.parse(rawArgs) };
+  } catch (parseErr) {
+    const raw = rawArgs ?? '';
+    return {
+      id,
+      name,
+      arguments: {},
+      argumentsParseError: (parseErr as Error).message,
+      rawArguments: raw.slice(0, 200),
+    };
+  }
+}
+
 export class OpenAIProvider implements ILLMProvider {
   private quota: QuotaTracker;
   private baseUrl: string;
@@ -429,7 +470,27 @@ export class OpenAIProvider implements ILLMProvider {
     this.projectRoot = projectRoot;
   }
 
+  /**
+   * True only for the canonical OpenAI endpoint. The Responses API (/v1/responses)
+   * is served ONLY by api.openai.com — the deepseek/grok/openclaw/custom-base_url
+   * reuses of OpenAIProvider don't serve it, so up-front /responses routing must be
+   * gated on this to avoid a silent 404 on those endpoints. The self-heal retry
+   * stays ungated: it only fires when an endpoint itself asks for /v1/responses.
+   */
+  private get isCanonicalOpenAI(): boolean {
+    return this.baseUrl === 'https://api.openai.com/v1';
+  }
+
   async generate(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
+    // Reasoning models (GPT-5.x, o-series) reject function tools on
+    // /chat/completions and require /v1/responses. Route them there up front
+    // when tools are present — but ONLY on the canonical OpenAI endpoint, since
+    // the OpenAI-compatible reuses (deepseek/grok/openclaw/custom base_url) don't
+    // serve /responses and would silently 404. Every non-tool call stays on chat.
+    if (options?.tools?.length && isReasoningModel(this.model) && this.isCanonicalOpenAI) {
+      return this.generateViaResponses(messages, options);
+    }
+
     const body: Record<string, unknown> = {
       model: this.model,
       messages: messages.map(m => this.toOpenAIMessage(m)),
@@ -454,7 +515,11 @@ export class OpenAIProvider implements ILLMProvider {
     }, 'openai');
 
     if (!res.ok) {
-      const body = (await res.text()).slice(0, 200);
+      // Read the FULL body once: the truncated 200-char slice feeds the thrown
+      // message + quota handlers, but the Responses-retry directive can appear
+      // past char 200 in a verbose error, so the regex must test the full text.
+      const fullBody = await res.text();
+      const body = fullBody.slice(0, 200);
       if (res.status === 429) this.quota.handle429(res, body);
       if (res.status === 503) this.quota.handle503(res, body);
       // 401/403: auth/key failure for THIS endpoint. Surface a clear message
@@ -467,12 +532,170 @@ export class OpenAIProvider implements ILLMProvider {
         recordAuthFailure(this.projectRoot, this.authProvider, res.status);
         throw new Error(authErrorMessage(this.providerLabel, res.status, this.baseUrl, body));
       }
+      // SAFETY NET: a future reasoning model that isReasoningModel() doesn't yet
+      // know about will reject function tools here and tell us to use /v1/responses.
+      // Transparently retry the same request on the Responses API before surfacing
+      // a generic error, so routing self-heals without a code change. Only when
+      // tools were actually sent (the error can't occur otherwise). Fires for ANY
+      // endpoint — it's the endpoint itself asking for /responses, which is safe.
+      if (options?.tools?.length && RESPONSES_REQUIRED_RE.test(fullBody)) {
+        return this.generateViaResponses(messages, options);
+      }
       throw new Error(`OpenAI API error (${res.status}): ${body}`);
     }
     this.quota.onSuccess();
     clearAuthFailure(this.projectRoot, this.authProvider);
     const data = await res.json() as Record<string, unknown>;
     return this.parseOpenAIResponse(data);
+  }
+
+  /**
+   * OpenAI Responses API (`/v1/responses`) path — required for GPT-5.x / o-series
+   * reasoning models when function tools are present. Same auth/quota/503 handling
+   * as the chat path (shared via {@link raiseOpenAIError}); only the request body
+   * shape and response parsing differ. Verified against the openai-node SDK
+   * `ResponseInputItem` / `ResponseFunctionToolCall(Output)` / `FunctionTool` types.
+   */
+  private async generateViaResponses(messages: LLMMessage[], options?: LLMGenerateOptions): Promise<LLMResponse> {
+    const systemMsg = messages.find(m => m.role === 'system');
+    const input: Array<Record<string, unknown>> = [];
+    for (const m of messages) {
+      if (m.role === 'system') continue;
+      input.push(...this.toResponsesInput(m));
+    }
+
+    const body: Record<string, unknown> = { model: this.model, input };
+    // System prompt rides as top-level `instructions`, not an input message.
+    if (systemMsg) body.instructions = typeof systemMsg.content === 'string' ? systemMsg.content : '';
+    if (options?.maxTokens) body.max_output_tokens = options.maxTokens;
+    // temperature is intentionally OMITTED: the /responses path is only ever hit
+    // for reasoning models, which reject any non-default temperature (400 error).
+    if (options?.tools?.length) {
+      // Responses API uses a FLAT function-tool shape (no nested `function: {}`).
+      body.tools = options.tools.map(t => ({
+        type: 'function',
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      }));
+    }
+
+    this.quota.checkBeforeRequest();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    const res = await fetchWithRetry503(`${this.baseUrl}/responses`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    }, 'openai');
+
+    if (!res.ok) {
+      const errBody = (await res.text()).slice(0, 200);
+      this.raiseOpenAIError(res.status, errBody, res);
+    }
+    this.quota.onSuccess();
+    clearAuthFailure(this.projectRoot, this.authProvider);
+    const data = await res.json() as Record<string, unknown>;
+    return this.parseResponsesResponse(data);
+  }
+
+  /**
+   * Shared 4xx/5xx handling for both OpenAI endpoints: 429/503 feed the quota
+   * state machine, 401/403 record an auth failure and surface a keychain-aware
+   * message, everything else throws the generic OpenAI error. Takes a pre-read
+   * body so the caller can inspect it first (the chat path's Responses-retry
+   * safety net). Always throws.
+   */
+  private raiseOpenAIError(status: number, body: string, res: Response): never {
+    if (status === 429) this.quota.handle429(res, body);
+    if (status === 503) this.quota.handle503(res, body);
+    if (status === 401 || status === 403) {
+      recordAuthFailure(this.projectRoot, this.authProvider, status);
+      throw new Error(authErrorMessage(this.providerLabel, status, this.baseUrl, body));
+    }
+    throw new Error(`OpenAI API error (${status}): ${body}`);
+  }
+
+  /**
+   * Map one LLMMessage to zero-or-more Responses API `input` items. System
+   * messages are handled by the caller (top-level `instructions`) and never
+   * reach here. Tool results become `function_call_output`; prior assistant
+   * tool calls become `function_call` items; plain text becomes a `message`
+   * with an `input_text` (user) or `output_text` (assistant) content part.
+   */
+  private toResponsesInput(m: LLMMessage): Array<Record<string, unknown>> {
+    if (m.role === 'tool') {
+      return [{
+        type: 'function_call_output',
+        call_id: m.toolCallId,
+        output: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      }];
+    }
+
+    const textOf = (content: LLMMessage['content']): string =>
+      typeof content === 'string'
+        ? content
+        : content.map(b => (b.type === 'text' ? b.text : '')).join('');
+
+    if (m.role === 'assistant' && m.toolCalls?.length) {
+      const items: Array<Record<string, unknown>> = [];
+      const text = textOf(m.content);
+      if (text) items.push({ role: 'assistant', content: [{ type: 'output_text', text }] });
+      for (const tc of m.toolCalls) {
+        items.push({
+          type: 'function_call',
+          call_id: tc.id,
+          name: tc.name,
+          arguments: JSON.stringify(tc.arguments),
+        });
+      }
+      return items;
+    }
+
+    // Plain user/assistant message. For a string, keep the single-part shape.
+    // For a ContentBlock[], map each block: text → input_text/output_text, image
+    // → input_image with a data: URL (mirrors toOpenAIMessage + the Anthropic
+    // path). Images only make sense as user input; an assistant image block is
+    // not representable, so assistant content stays text-only via output_text.
+    const partType = m.role === 'assistant' ? 'output_text' : 'input_text';
+    if (typeof m.content === 'string') {
+      return [{ role: m.role, content: [{ type: partType, text: m.content }] }];
+    }
+    const parts = m.content.map(block =>
+      block.type === 'image'
+        ? { type: 'input_image', image_url: `data:${block.mediaType};base64,${block.data}` }
+        : { type: partType, text: block.text }
+    );
+    return [{ role: m.role, content: parts }];
+  }
+
+  /**
+   * Parse a Responses API payload: concatenate `output_text` parts from every
+   * `message` item for the text, collect `function_call` items as toolCalls
+   * (reusing {@link parseToolArgs} so malformed JSON degrades identically to the
+   * chat parser), and map `usage.input_tokens`/`output_tokens`.
+   */
+  private parseResponsesResponse(data: Record<string, unknown>): LLMResponse {
+    const output = (data.output as Array<Record<string, unknown>>) ?? [];
+    let text = '';
+    const toolCalls: LLMResponse['toolCalls'] = [];
+    for (const item of output) {
+      if (item.type === 'message') {
+        const content = (item.content as Array<Record<string, unknown>>) ?? [];
+        for (const part of content) {
+          if (part.type === 'output_text') text += (part.text as string) ?? '';
+        }
+      } else if (item.type === 'function_call') {
+        toolCalls.push(parseToolArgs(item.call_id as string, item.name as string, item.arguments as string));
+      }
+    }
+    const usage = data.usage as Record<string, number> | undefined;
+    return {
+      text,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      usage: usage ? { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens } : undefined,
+    };
   }
 
   private toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
@@ -510,20 +733,7 @@ export class OpenAIProvider implements ILLMProvider {
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
         const fn = tc.function as Record<string, string>;
-        let parsedArgs: Record<string, unknown>;
-        try {
-          parsedArgs = JSON.parse(fn.arguments);
-          toolCalls.push({ id: tc.id as string, name: fn.name, arguments: parsedArgs });
-        } catch (parseErr) {
-          const raw = fn.arguments ?? '';
-          toolCalls.push({
-            id: tc.id as string,
-            name: fn.name,
-            arguments: {},
-            argumentsParseError: (parseErr as Error).message,
-            rawArguments: raw.slice(0, 200),
-          });
-        }
+        toolCalls.push(parseToolArgs(tc.id as string, fn.name, fn.arguments));
       }
     }
     const usage = data.usage as Record<string, number> | undefined;
