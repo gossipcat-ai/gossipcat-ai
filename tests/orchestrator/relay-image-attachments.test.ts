@@ -1,4 +1,3 @@
-import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { OpenAIProvider, GeminiProvider, AnthropicProvider } from '../../packages/orchestrator/src/llm-client';
 import { LLMMessage } from '../../packages/types/src/tools';
 
@@ -27,14 +26,14 @@ const imageMessage: LLMMessage = {
 
 function captureBody(responseJson: unknown): { getBody: () => any } {
   let captured: any;
-  global.fetch = vi.fn(async (_url: any, init?: RequestInit) => {
+  global.fetch = jest.fn(async (_url: any, init?: RequestInit) => {
     captured = JSON.parse(init!.body as string);
     return new Response(JSON.stringify(responseJson), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }) as any;
   return { getBody: () => captured };
 }
 
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('relay image attachments — provider wire-format construction', () => {
   it('OpenAI: image block → { type:"image_url", image_url:{ url:"data:image/png;base64,..." } }', async () => {
