@@ -782,6 +782,42 @@ gossip_dispatch(mode: "consensus", tasks: [
 ])
 ```
 
+**Image attachments (vision-capable relay agents):**
+
+Relay agents on vision-capable providers (OpenAI, Google Gemini, Anthropic, Grok, local Ollama)
+can receive images. Pass an `images` array of **local absolute PNG/JPEG paths** — the relay
+worker reads each file, base64-encodes it, and attaches it as a native image content part
+(OpenAI `image_url` data URI, Gemini `inlineData`, Anthropic `image` block):
+
+```
+gossip_dispatch(
+  mode: "single",
+  agent_id: "gpt56-critic",
+  task: "Critique the HUD layout in this screenshot",
+  images: ["/abs/path/Logs/hud.png"]
+)
+
+// Per-task in parallel / consensus:
+gossip_dispatch(mode: "consensus", tasks: [
+  { agent_id: "gpt56-critic",    task: "...", images: ["/abs/path/a.png"] },
+  { agent_id: "gemini31-critic", task: "...", images: ["/abs/path/a.png"] }
+])
+```
+
+Auto-detect: if you omit `images`, any absolute PNG/JPEG paths already present in the task
+text are auto-attached (up to 4) — existing text workflows that cite screenshot paths start
+sending pixels with no change.
+
+Limits & behavior:
+- **Max 4 images** per task; overflow is rejected with a clear error (not silently truncated).
+- **≤ 4 MB each**; larger files are rejected per-image.
+- **PNG / JPEG only** — validated by extension **and** magic-byte sniff (a renamed non-image is rejected).
+- A **non-existent / unreadable path** produces a clear per-image error surfaced in the task
+  context, never a silent drop.
+- **Text-only providers** (e.g. DeepSeek) and the **native (Agent-tool) path** ignore the
+  field with a logged notice — native subagents receive images via their own multimodal flow,
+  not this relay path.
+
 ### Step 3 — Collect results
 
 ```

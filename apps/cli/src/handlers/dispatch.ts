@@ -651,6 +651,16 @@ export async function handleDispatchSingle(
    * stash is best-effort for the collect path.
    */
   dispatchWarnings?: readonly RoundWarning[],
+  /**
+   * Local absolute image file paths (PNG/JPEG) to attach to the dispatch for
+   * vision-capable relay providers. Forwarded to dispatch-pipeline via
+   * DispatchOptions.images; the worker reads + base64-encodes + guards them
+   * (max 4, ≤4 MB each, magic-byte sniff). When omitted, the worker
+   * auto-detects up to 4 absolute PNG/JPEG paths from the task text. Ignored by
+   * the native dispatch path (native agents receive images via their own Agent
+   * tool multimodal flow, not this relay path).
+   */
+  images?: readonly string[],
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -685,6 +695,12 @@ export async function handleDispatchSingle(
   // dispatch path above (native agents don't go through pipeline.dispatch).
   if (resolutionRoots && resolutionRoots.length > 0) {
     options.resolutionRoots = resolutionRoots;
+  }
+  // Image attachments for vision-capable relay providers. Threaded via
+  // DispatchOptions.images; the relay worker reads + guards them. Ignored by the
+  // native dispatch branch below (native agents don't go through pipeline.dispatch).
+  if (images && images.length > 0) {
+    options.images = [...images];
   }
   const dispatchOptions = Object.keys(options).length > 0 ? options : undefined;
 
@@ -1011,7 +1027,7 @@ async function resolveDispatchResolutionRoots(
 }
 
 export async function handleDispatchParallel(
-  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }>,
+  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string; images?: string[] }>,
   consensus: boolean,
   /**
    * Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md (Path 1).
@@ -1110,6 +1126,10 @@ export async function handleDispatchParallel(
         }
         if (effectiveResolutionRoots && effectiveResolutionRoots.length > 0) {
           opts.resolutionRoots = effectiveResolutionRoots;
+        }
+        // Per-task image attachments for vision-capable relay providers.
+        if (d.images && d.images.length > 0) {
+          opts.images = [...d.images];
         }
         return {
           agentId: d.agent_id,
@@ -1350,7 +1370,7 @@ export async function handleDispatchParallel(
 }
 
 export async function handleDispatchConsensus(
-  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string }>,
+  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string; images?: string[] }>,
   _utility_task_id?: string,
   /**
    * #126 PR-B: optional dispatch-time resolutionRoots (post-validation,
@@ -1469,17 +1489,23 @@ export async function handleDispatchConsensus(
     // pipeline can pin tool-call cwd via toolServer.assignRoot before
     // worker.executeTask iterates. Without this, gemini-reviewer / gemini-tester
     // run with cwd=projectRoot even when resolutionRoots was supplied.
-    const relayOptions = (dispatchResolutionRoots && dispatchResolutionRoots.length > 0)
-      ? { resolutionRoots: dispatchResolutionRoots }
-      : undefined;
+    // Per-task options merge shared resolutionRoots with the task's own image
+    // attachments (vision-capable relay providers). Returns undefined when
+    // neither is present so the pre-feature call shape is preserved.
+    const relayOptsFor = (d: any): Record<string, unknown> | undefined => {
+      const o: Record<string, unknown> = {};
+      if (dispatchResolutionRoots && dispatchResolutionRoots.length > 0) o.resolutionRoots = dispatchResolutionRoots;
+      if (d.images && d.images.length > 0) o.images = [...d.images];
+      return Object.keys(o).length > 0 ? o : undefined;
+    };
     const { taskIds, errors } = precomputedLenses
       ? await ctx.mainAgent.dispatchParallelWithLenses(
-          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptions })),
+          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptsFor(d) })),
           { consensus: true },
           precomputedLenses,
         )
       : await ctx.mainAgent.dispatchParallel(
-          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptions })),
+          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptsFor(d) })),
           { consensus: true },
         );
     persistRelayTasks(); // Survive MCP reconnects

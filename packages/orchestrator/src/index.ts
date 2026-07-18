@@ -8,6 +8,16 @@ export { SkillCounterTracker } from './skill-counters';
 export type { MainAgentConfig } from './main-agent';
 export { WorkerAgent } from './worker-agent';
 export type { TaskCompleteCallback } from './worker-agent';
+export {
+  resolveTaskImages,
+  buildUserContent,
+  detectImagePathsInText,
+  providerSupportsVision,
+  IMAGE_PATH_RE,
+  MAX_IMAGES,
+  MAX_IMAGE_BYTES,
+} from './task-images';
+export type { ResolvedTaskImages } from './task-images';
 export { AgentRegistry } from './agent-registry';
 export type { FindBestMatchOptions } from './agent-registry';
 export { TaskDispatcher } from './task-dispatcher';
