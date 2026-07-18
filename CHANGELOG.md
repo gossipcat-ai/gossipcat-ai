@@ -4,6 +4,38 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.12] — 2026-07-19
+
+Adds image attachments to custom-provider (relay) dispatches so OpenAI/Gemini/
+Anthropic/Ollama review agents can receive screenshots and diagrams, not just
+text. Verified via two consensus rounds (`consensus-id: 2a2f7f6b-186241dc`,
+`consensus-id: 771df75b-5e6647b6`).
+
+### Added
+
+- **`images: string[]` on `gossip_dispatch`** (single + per-task) — attaches
+  local PNG/JPEG files to a relay dispatch as provider-native multimodal content
+  (OpenAI `image_url`, Gemini `inlineData`, Anthropic `image`, Ollama `images`).
+  Guardrails: max 4 images, ≤4 MB each, extension + magic-byte validation,
+  per-image errors surfaced in task context, text-only providers ignore the
+  field with a notice.
+- **Opt-in path auto-detection** — absolute PNG/JPEG paths cited in task text are
+  attached automatically, but only when they resolve **inside the project root**.
+  Every image path (explicit or auto-detected) is `realpath`-resolved and
+  rejected if it lands outside `process.cwd()`, so untrusted task text cannot
+  cause reads of arbitrary on-disk files.
+
+### Security
+
+- Image resolution is confined to the project root via a `realpath` +
+  separator-boundary containment check (symlink/`..` escapes closed and
+  unit-tested), and files are read through a single capped file descriptor
+  (`fstat`+`read` on one fd, `MAX_IMAGE_BYTES+1` sentinel) to close stat→read
+  TOCTOU and oversize-slurp vectors. Known follow-ups tracked for a fast patch: a
+  low-severity realpath→open TOCTOU (only reachable by a local filesystem-write
+  attacker, out of scope for the untrusted-task-text threat model) and a
+  fail-open on an unresolvable project root (edge case; should fail closed).
+
 ## [0.6.11] — 2026-07-11
 
 Stops the `[skill-parser] missing required field(s)` warnings that reached
