@@ -1014,3 +1014,66 @@ describe('native dispatch — git-downgrade warning text (issue #538 item 2)', (
     expect(banner).not.toContain('isolation: "worktree"');
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Finding #6 (relay-image consensus round): images passed to a NATIVE agent
+// must produce an explicit "images are relay-only" notice — never a silent drop
+// (gossipcat has no native multimodal path). Covers single / parallel / consensus.
+// ────────────────────────────────────────────────────────────────────────────
+describe('native dispatch — image drop notice (relay-only, no silent drop)', () => {
+  let testDir: string;
+  let prevCwd: string;
+
+  beforeEach(() => {
+    prevCwd = process.cwd();
+    testDir = mkdtempSync(join(tmpdir(), 'gossip-native-imgdrop-'));
+    mkdirSync(join(testDir, '.gossip', 'skills'), { recursive: true });
+    process.chdir(testDir);
+    resetCtx({ generateLensesForAgents: jest.fn().mockResolvedValue(new Map()) });
+    ctx.nativeAgentConfigs.set('native-claude', {
+      model: 'claude-sonnet-4-6',
+      instructions: 'You are a reviewer.',
+      description: 'Native reviewer',
+      skills: [],
+    });
+  });
+
+  afterEach(() => {
+    restoreCtx();
+    process.chdir(prevCwd);
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('handleDispatchSingle surfaces the notice when images are passed to a native agent', async () => {
+    const result = await handleDispatchSingle(
+      'native-claude', 'Critique this screenshot',
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      ['/abs/a.png', '/abs/b.png'],
+    );
+    const banner = result.content[0].text;
+    expect(banner).toContain('images are relay-only');
+    expect(banner).toContain('native agent native-claude did not receive 2 image(s)');
+  });
+
+  it('handleDispatchSingle emits NO notice when no images are passed', async () => {
+    const result = await handleDispatchSingle('native-claude', 'Critique the design');
+    expect(result.content[0].text).not.toContain('images are relay-only');
+  });
+
+  it('handleDispatchParallel surfaces the notice per native task carrying images', async () => {
+    const result = await handleDispatchParallel(
+      [{ agent_id: 'native-claude', task: 'Audit A', images: ['/abs/a.png'] }],
+      false,
+    );
+    expect(result.content[0].text).toContain('images are relay-only');
+    expect(result.content[0].text).toContain('did not receive 1 image(s)');
+  });
+
+  it('handleDispatchConsensus surfaces the notice for a native task carrying images', async () => {
+    const result = await handleDispatchConsensus([
+      { agent_id: 'native-claude', task: 'Audit memory', images: ['/abs/a.png', '/abs/b.png', '/abs/c.png'] },
+    ]);
+    expect(result.content[0].text).toContain('images are relay-only');
+    expect(result.content[0].text).toContain('did not receive 3 image(s)');
+  });
+});

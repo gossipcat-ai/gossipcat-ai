@@ -206,6 +206,15 @@ export interface DispatchOptions {
    * Spec: docs/specs/2026-04-29-relay-worker-resolution-roots.md (Path 1).
    */
   resolutionRoots?: readonly string[];
+  /**
+   * Local absolute image file paths (PNG/JPEG) to attach to the initial user
+   * message for vision-capable relay providers. Read + base64-encoded + guarded
+   * (max 4 images, ≤4 MB each, magic-byte sniff) by the worker via
+   * `resolveTaskImages`. Non-vision providers ignore the field with a notice.
+   * When omitted, the worker auto-detects up to 4 absolute PNG/JPEG paths from
+   * the task text. See task-images.ts.
+   */
+  images?: string[];
 }
 
 /** Result of analyzing skill overlap between co-dispatched agents */

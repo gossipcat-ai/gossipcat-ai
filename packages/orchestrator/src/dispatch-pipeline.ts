@@ -75,6 +75,13 @@ type TrackedTask = TaskEntry & {
      * collect-time staleness sweep). Spec invariant #4.
      */
     resolutionRootAssigned?: boolean;
+    /**
+     * Local image file paths attached to this dispatch (DispatchOptions.images).
+     * Forwarded to worker.executeTask and persisted (audit symmetry with
+     * resolutionRoots) so the dashboard / reconnect audit can show a task ran
+     * with image attachments. Relay tasks do not resume after reconnect.
+     */
+    images?: string[];
 };
 
 /**
@@ -413,6 +420,7 @@ export class DispatchPipeline {
     };
     entry.writeMode = options?.writeMode;
     entry.scope = options?.scope;
+    if (options?.images && options.images.length > 0) entry.images = [...options.images];
     entry.planId = options?.planId;
     entry.planStep = options?.step;
     if (options?.resolutionRoots && options.resolutionRoots.length > 0) {
@@ -517,7 +525,7 @@ export class DispatchPipeline {
           log(`→ resolutionRoots: assignRoot(${agentId}, ${rrCandidate}) [taskId=${taskId}]`);
         }
       }
-      const stream = worker.executeTask(task, options?.lens, promptContent, taskId);
+      const stream = worker.executeTask(task, options?.lens, promptContent, taskId, options?.images, this.projectRoot);
       entry.stream = stream;
       for await (const event of stream) {
         entry.lastEventAt = Date.now();
@@ -636,12 +644,13 @@ export class DispatchPipeline {
   }
 
   /** Get metadata for all running tasks — used by relay task persistence */
-  getRunningTaskRecords(): Array<{ id: string; agentId: string; task: string; startedAt: number; timeoutMs: number; resolutionRoots?: readonly string[] }> {
+  getRunningTaskRecords(): Array<{ id: string; agentId: string; task: string; startedAt: number; timeoutMs: number; resolutionRoots?: readonly string[]; images?: string[] }> {
     return Array.from(this.tasks.entries())
       .filter(([, t]) => t.status === 'running')
       .map(([id, t]) => ({
         id, agentId: t.agentId, task: t.task, startedAt: t.startedAt, timeoutMs: 300_000,
         ...(t.resolutionRoots && t.resolutionRoots.length > 0 ? { resolutionRoots: t.resolutionRoots } : {}),
+        ...(t.images && t.images.length > 0 ? { images: [...t.images] } : {}),
       }));
   }
 

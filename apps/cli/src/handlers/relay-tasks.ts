@@ -28,6 +28,13 @@ export interface RelayTaskRecord {
    * resume capability inherit the field without a schema change.
    */
   resolutionRoots?: string[];
+  /**
+   * Local image file paths attached to this dispatch (DispatchOptions.images).
+   * Persisted for reconnect/audit symmetry with resolutionRoots — relay tasks
+   * do not resume after MCP restart, but the binding stays visible in the
+   * dashboard / re-dispatch hint.
+   */
+  images?: string[];
 }
 
 const RELAY_TASK_FILE = 'relay-tasks.json';
@@ -61,6 +68,9 @@ export function persistRelayTasks(): void {
         // websocket-bound runtime task is marked timed_out.
         ...(task.resolutionRoots && task.resolutionRoots.length > 0
           ? { resolutionRoots: [...task.resolutionRoots] }
+          : {}),
+        ...(task.images && task.images.length > 0
+          ? { images: [...task.images] }
           : {}),
       });
     }

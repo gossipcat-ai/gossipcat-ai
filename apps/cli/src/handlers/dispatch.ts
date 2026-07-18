@@ -624,6 +624,17 @@ function reroutableAgent(agentId: string): string {
   return agentId;
 }
 
+/**
+ * Finding #6 (relay-image consensus round): a NATIVE agent dispatch cannot
+ * deliver images — gossipcat has no native multimodal wiring; native subagents
+ * run through the host Agent() tool, which this handler cannot feed pixels.
+ * Callers surface this exact notice in the dispatch response instead of dropping
+ * the `images` field silently, so the operator knows the pixels never landed.
+ */
+function nativeImageDropNotice(agentId: string, count: number): string {
+  return `images are relay-only; native agent ${agentId} did not receive ${count} image(s)`;
+}
+
 export async function handleDispatchSingle(
   agent_id: string, task: string,
   write_mode?: 'sequential' | 'scoped' | 'worktree',
@@ -652,6 +663,20 @@ export async function handleDispatchSingle(
    * stash is best-effort for the collect path.
    */
   dispatchWarnings?: readonly RoundWarning[],
+  /**
+   * Local absolute image file paths (PNG/JPEG) to attach to the dispatch for
+   * vision-capable relay providers. Forwarded to dispatch-pipeline via
+   * DispatchOptions.images; the worker reads + base64-encodes + guards them
+   * (max 4, ≤4 MB each, magic-byte sniff). When omitted, the worker
+   * auto-detects up to 4 absolute PNG/JPEG paths from the task text.
+   *
+   * The NATIVE (Agent-tool) dispatch path does NOT deliver images — there is no
+   * native multimodal wiring in gossipcat; native subagents run through the host
+   * Agent() tool, which this handler cannot feed pixels. Rather than drop the
+   * field silently, the native branches emit an explicit "images are relay-only"
+   * notice in the dispatch response (see nativeImageDropNotice).
+   */
+  images?: readonly string[],
 ) {
   await ctx.boot();
   await ctx.syncWorkersViaKeychain();
@@ -686,6 +711,12 @@ export async function handleDispatchSingle(
   // dispatch path above (native agents don't go through pipeline.dispatch).
   if (resolutionRoots && resolutionRoots.length > 0) {
     options.resolutionRoots = resolutionRoots;
+  }
+  // Image attachments for vision-capable relay providers. Threaded via
+  // DispatchOptions.images; the relay worker reads + guards them. Ignored by the
+  // native dispatch branch below (native agents don't go through pipeline.dispatch).
+  if (images && images.length > 0) {
+    options.images = [...images];
   }
   const dispatchOptions = Object.keys(options).length > 0 ? options : undefined;
 
@@ -903,6 +934,11 @@ export async function handleDispatchSingle(
     // Split into two content items so relay_token stays in orchestrator-only text
     // and AGENT_PROMPT is passed verbatim to the host native tool.
     // Tag format matches parallel/consensus: `AGENT_PROMPT:<taskId> (<agentId>)`.
+    // Finding #6: native path can't deliver images — surface an explicit notice
+    // rather than silently dropping the `images` field.
+    const nativeImgNotice = (images && images.length > 0)
+      ? `\n\n⚠️ ${nativeImageDropNotice(agent_id, images.length)}`
+      : '';
     return { content: [
       { type: 'text' as const, text: buildNativeDispatchSingleResponse({
         taskId,
@@ -914,7 +950,7 @@ export async function handleDispatchSingle(
         useWorktree,
         gitDowngradeReason,
         host,
-      }) },
+      }) + nativeImgNotice },
       // Item 2 ABSENT under elision (spec §2 iron rule — no placeholder, no
       // skeleton). Orchestrator MUST Read elision.promptPath cited in Item 1.
       ...(elision.elided ? [] : [{ type: 'text' as const, text: `AGENT_PROMPT:${taskId} (${agent_id})\n${agentPrompt}` }]),
@@ -1028,7 +1064,7 @@ async function resolveDispatchResolutionRoots(
 }
 
 export async function handleDispatchParallel(
-  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string }>,
+  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string; scope?: string; images?: string[] }>,
   consensus: boolean,
   /**
    * Spec docs/specs/2026-04-29-relay-worker-resolution-roots.md (Path 1).
@@ -1090,6 +1126,15 @@ export async function handleDispatchParallel(
     }
   }
 
+  // Finding #6: native agents can't receive images (no native multimodal path).
+  // Surface an explicit notice per native task that carried images instead of
+  // dropping the field silently.
+  for (const def of taskDefs) {
+    if (ctx.nativeAgentConfigs.has(def.agent_id) && def.images && def.images.length > 0) {
+      parallelDispatchWarnings.push(nativeImageDropNotice(def.agent_id, def.images.length));
+    }
+  }
+
   // [issue #434 / consensus 974a1bb2-de854fb4] HARD pre-dispatch guard.
   // Two+ native write-intent tasks in mode:'parallel' run concurrently in the
   // SAME process.cwd(), so their `git checkout -b` calls clobber the shared
@@ -1127,6 +1172,10 @@ export async function handleDispatchParallel(
         }
         if (effectiveResolutionRoots && effectiveResolutionRoots.length > 0) {
           opts.resolutionRoots = effectiveResolutionRoots;
+        }
+        // Per-task image attachments for vision-capable relay providers.
+        if (d.images && d.images.length > 0) {
+          opts.images = [...d.images];
         }
         return {
           agentId: d.agent_id,
@@ -1387,7 +1436,7 @@ export async function handleDispatchParallel(
 }
 
 export async function handleDispatchConsensus(
-  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string }>,
+  taskDefs: Array<{ agent_id: string; task: string; write_mode?: string; images?: string[] }>,
   _utility_task_id?: string,
   /**
    * #126 PR-B: optional dispatch-time resolutionRoots (post-validation,
@@ -1496,6 +1545,15 @@ export async function handleDispatchConsensus(
     }
   }
 
+  // Finding #6: native agents can't receive images (no native multimodal path).
+  // Surface an explicit notice per native task that carried images instead of
+  // dropping the field silently.
+  for (const def of taskDefs) {
+    if (ctx.nativeAgentConfigs.has(def.agent_id) && def.images && def.images.length > 0) {
+      dispatchWarnings.push(nativeImageDropNotice(def.agent_id, def.images.length));
+    }
+  }
+
   const lines: string[] = [];
   const allTaskIds: string[] = [];
 
@@ -1506,17 +1564,23 @@ export async function handleDispatchConsensus(
     // pipeline can pin tool-call cwd via toolServer.assignRoot before
     // worker.executeTask iterates. Without this, gemini-reviewer / gemini-tester
     // run with cwd=projectRoot even when resolutionRoots was supplied.
-    const relayOptions = (dispatchResolutionRoots && dispatchResolutionRoots.length > 0)
-      ? { resolutionRoots: dispatchResolutionRoots }
-      : undefined;
+    // Per-task options merge shared resolutionRoots with the task's own image
+    // attachments (vision-capable relay providers). Returns undefined when
+    // neither is present so the pre-feature call shape is preserved.
+    const relayOptsFor = (d: any): Record<string, unknown> | undefined => {
+      const o: Record<string, unknown> = {};
+      if (dispatchResolutionRoots && dispatchResolutionRoots.length > 0) o.resolutionRoots = dispatchResolutionRoots;
+      if (d.images && d.images.length > 0) o.images = [...d.images];
+      return Object.keys(o).length > 0 ? o : undefined;
+    };
     const { taskIds, errors } = precomputedLenses
       ? await ctx.mainAgent.dispatchParallelWithLenses(
-          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptions })),
+          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptsFor(d) })),
           { consensus: true },
           precomputedLenses,
         )
       : await ctx.mainAgent.dispatchParallel(
-          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptions })),
+          relayTasks.map((d: any) => ({ agentId: d.agent_id, task: d.task, options: relayOptsFor(d) })),
           { consensus: true },
         );
     persistRelayTasks(); // Survive MCP reconnects
