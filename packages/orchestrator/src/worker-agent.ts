@@ -216,7 +216,7 @@ export class WorkerAgent {
    * Execute a task with the LLM, using multi-turn tool calling.
    * Returns the final text response.
    */
-  async *executeTask(task: string, context?: string, skillsContent?: string, taskId?: string, images?: string[]): AsyncGenerator<TaskStreamEvent, void, undefined> {
+  async *executeTask(task: string, context?: string, skillsContent?: string, taskId?: string, images?: string[], projectRoot?: string): AsyncGenerator<TaskStreamEvent, void, undefined> {
     const logAndYield = (message: string): TaskStreamEvent => {
         log(this.agentId, message);
         return { type: TaskStreamEventType.LOG, payload: message, timestamp: Date.now() };
@@ -233,6 +233,7 @@ export class WorkerAgent {
       task,
       images,
       provider: this.providerName,
+      projectRoot,
       logLabel: `worker:${this.agentId}`,
     });
     if (resolvedImages.blocks.length > 0) {
