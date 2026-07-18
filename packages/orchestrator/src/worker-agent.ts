@@ -11,6 +11,7 @@ import { GossipAgent } from '@gossip/client';
 import { MessageType, MessageEnvelope, Message, ToolDefinition, LLMMessage } from '@gossip/types';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
 import { ILLMProvider, PROVIDER_PLACEHOLDER_RE } from './llm-client';
+import { resolveTaskImages, buildUserContent } from './task-images';
 import {
   TaskStreamEvent,
   TaskStreamEventType,
@@ -149,6 +150,13 @@ export class WorkerAgent {
     webSearch?: boolean,
     apiKey?: string,
     maxToolTurns?: number,
+    /**
+     * Provider slug for THIS worker's LLM (anthropic / openai / google / …).
+     * Used only to decide image-attachment vision capability in executeTask
+     * (see task-images.ts). Optional — when omitted, image attachments are
+     * treated as non-vision-capable and ignored with a notice.
+     */
+    private readonly providerName?: string,
   ) {
     this.webSearchEnabled = webSearch ?? false;
     this.maxToolTurns = maxToolTurns ?? MAX_TOOL_TURNS;
@@ -208,7 +216,7 @@ export class WorkerAgent {
    * Execute a task with the LLM, using multi-turn tool calling.
    * Returns the final text response.
    */
-  async *executeTask(task: string, context?: string, skillsContent?: string, taskId?: string): AsyncGenerator<TaskStreamEvent, void, undefined> {
+  async *executeTask(task: string, context?: string, skillsContent?: string, taskId?: string, images?: string[]): AsyncGenerator<TaskStreamEvent, void, undefined> {
     const logAndYield = (message: string): TaskStreamEvent => {
         log(this.agentId, message);
         return { type: TaskStreamEventType.LOG, payload: message, timestamp: Date.now() };
@@ -216,6 +224,22 @@ export class WorkerAgent {
 
     yield logAndYield(`executeTask started — task: "${task.slice(0, 100)}..." webSearch=${this.webSearchEnabled} tools=${this.tools.length}`);
     this.gossipQueue = []; // clear gossip from previous task
+
+    // Resolve any image attachments (explicit `images` field or auto-detected
+    // absolute PNG/JPEG paths in the task text) into base64 blocks the provider
+    // client renders onto the API's multimodal shape. Non-vision providers get
+    // a notice and the plain-text message. See task-images.ts.
+    const resolvedImages = resolveTaskImages({
+      task,
+      images,
+      provider: this.providerName,
+      logLabel: `worker:${this.agentId}`,
+    });
+    if (resolvedImages.blocks.length > 0) {
+      yield logAndYield(`attached ${resolvedImages.blocks.length} image(s)${resolvedImages.autoDetected ? ' (auto-detected from task text)' : ''}`);
+    }
+    for (const n of resolvedImages.notices) yield logAndYield(n);
+    for (const e of resolvedImages.errors) yield logAndYield(`image attachment error: ${e}`);
     this.toolCallBudget = new Map(); // reset per-tool call budgets per task
     this.memoryQueryCalled = false; // reset memory_query tracking per task
     const startTime = Date.now();
@@ -253,7 +277,7 @@ export class WorkerAgent {
 
 10. **Update your memory.** If the AGENT MEMORY section is present above, save what you learned: tech stack, file structure, patterns, gotchas. Use file_write to your memory directory. This helps you on future tasks.`,
       },
-      { role: 'user', content: task },
+      { role: 'user', content: buildUserContent(task, resolvedImages) },
     ];
 
     try {

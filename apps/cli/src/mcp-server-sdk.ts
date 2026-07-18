@@ -853,7 +853,7 @@ async function doBoot() {
     const identityBlock = identity ? m.formatIdentityBlock(identity) + '\n' : '';
     const instructions = (identityBlock + baseInstructions).trim() || undefined;
     const enableWebSearch = ac.preset === 'researcher' || (ac.skills ?? []).includes('research');
-    const worker = new m.WorkerAgent(ac.id, llm, ctx.relay.url, m.ALL_TOOLS, instructions, enableWebSearch, relayApiKey, ac.maxToolTurns);
+    const worker = new m.WorkerAgent(ac.id, llm, ctx.relay.url, m.ALL_TOOLS, instructions, enableWebSearch, relayApiKey, ac.maxToolTurns, ac.provider);
     // ATI profiling signals (task_completed + task_tool_turns + format_compliance +
     // finding_dropped_format) are emitted from the dispatch-pipeline via the shared
     // `emitCompletionSignals` helper on FINAL_RESULT / ERROR. Emitting them here too
@@ -1700,7 +1700,7 @@ export function createMcpServer(): McpServer {
   // ── Low-level: dispatch to specific agent ─────────────────────────────────
   server.tool(
     'gossip_dispatch',
-    'Dispatch tasks to agents. mode:"single" (default) sends to one agent. mode:"parallel" fans out to multiple agents. mode:"consensus" dispatches with cross-review instructions. Returns task IDs for collecting results.',
+    'Dispatch tasks to agents. mode:"single" (default) sends to one agent. mode:"parallel" fans out to multiple agents. mode:"consensus" dispatches with cross-review instructions. Returns task IDs for collecting results. Image attachments: pass `images` (mode:"single") or per-task `images` (parallel/consensus) as local absolute PNG/JPEG paths to send screenshots to vision-capable relay providers (openai/google/anthropic/grok/local) — max 4 images, ≤4 MB each, magic-byte-sniffed. When omitted, absolute PNG/JPEG paths in the task text are auto-attached (up to 4). Text-only providers and native agents ignore the field.',
     {
       mode: z.enum(['single', 'parallel', 'consensus']).default('single').describe('Dispatch mode: "single" (one agent), "parallel" (fan-out), "consensus" (cross-review)'),
       agent_id: z.string().optional().describe('Agent ID — required for mode:"single"'),
@@ -1710,9 +1710,17 @@ export function createMcpServer(): McpServer {
         task: z.string(),
         write_mode: z.enum(['sequential', 'scoped', 'worktree']).optional(),
         scope: z.string().optional(),
+        images: z.array(z.string().min(1).max(4096)).max(4).optional().describe('Local absolute PNG/JPEG paths to attach as images for this task (vision-capable relay providers only). Max 4, ≤4 MB each.'),
       })).optional().describe('Task array — required for mode:"parallel" and mode:"consensus"'),
       write_mode: z.enum(['sequential', 'scoped', 'worktree']).optional().describe('Write mode for single dispatch'),
       scope: z.string().optional().describe('Directory scope for "scoped" write mode'),
+      // Image attachments for vision-capable relay providers (openai / google /
+      // anthropic / grok / local). Read + base64-encoded + guarded by the relay
+      // worker (max 4 images, ≤4 MB each, PNG/JPEG magic-byte sniff). When
+      // omitted, up to 4 absolute PNG/JPEG paths are auto-detected from the task
+      // text so existing text-only workflows keep working unchanged. Ignored by
+      // native (Agent-tool) dispatches and text-only providers.
+      images: z.array(z.string().min(1).max(4096)).max(4).optional().describe('mode:"single" only. Local absolute PNG/JPEG file paths to attach as images for vision-capable relay providers. Max 4, ≤4 MB each. When omitted, absolute PNG/JPEG paths in the task text are auto-attached (up to 4).'),
       timeout_ms: z.number().optional().describe('Write task timeout in ms. Default 300000.'),
       plan_id: z.string().optional().describe('Plan ID from gossip_plan. Enables chain context from prior steps.'),
       step: z.number().optional().describe('Step number in the plan (1-indexed).'),
@@ -1733,7 +1741,7 @@ export function createMcpServer(): McpServer {
       // orchestrator MUST Read the cited file and forward verbatim to Agent().
       prompt_format: z.enum(['inline', 'elided']).default('inline').describe('Prompt delivery mode for native dispatches: "inline" (default, AGENT_PROMPT content item) or "elided" (write to .gossip/dispatch-prompts/<taskId>.txt; orchestrator Reads + forwards).'),
     },
-    async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step, _utility_task_id, resolutionRoots, prompt_format }) => {
+    async ({ mode, agent_id, task, tasks, write_mode, scope, timeout_ms, plan_id, step, _utility_task_id, resolutionRoots, prompt_format, images }) => {
       // Track plan execution depth for re-entrant guard
       planExecutionDepth++;
       // #126 PR-B: validate resolutionRoots at the MCP boundary. Fatal (NUL /
@@ -1804,6 +1812,7 @@ export function createMcpServer(): McpServer {
             validatedDispatchRoots.length > 0 ? validatedDispatchRoots : undefined,
             prompt_format,
             dispatchWarnings.length > 0 ? dispatchWarnings : undefined,
+            images && images.length > 0 ? images : undefined,
           ), dispatchWarnings);
         }
         if (mode === 'parallel') {
