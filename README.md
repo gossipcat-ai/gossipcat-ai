@@ -810,13 +810,29 @@ sending pixels with no change.
 
 Limits & behavior:
 - **Max 4 images** per task; overflow is rejected with a clear error (not silently truncated).
-- **≤ 4 MB each**; larger files are rejected per-image.
+- **≤ 4 MB each**; larger files are rejected per-image. Reads are capped and go through a
+  single file descriptor (open → fstat → read the *same* fd), so a file swapped or grown
+  between the size check and the read cannot smuggle a larger/different file (TOCTOU-resistant).
 - **PNG / JPEG only** — validated by extension **and** magic-byte sniff (a renamed non-image is rejected).
+- **Path policy (allowed-root confinement).** Every image path is `realpath`'d (symlinks
+  followed) and must resolve **within the dispatching project root**. A path that escapes the
+  root — via `..`, an absolute path elsewhere, or a symlink pointing outside — is rejected with
+  a per-image "path policy" error and is never opened. Image paths are untrusted input (they
+  come from the caller or from task prose), so they are confined the same way citation
+  resolution roots are (`realpath` both sides + prefix check).
 - A **non-existent / unreadable path** produces a clear per-image error surfaced in the task
   context, never a silent drop.
-- **Text-only providers** (e.g. DeepSeek) and the **native (Agent-tool) path** ignore the
-  field with a logged notice — native subagents receive images via their own multimodal flow,
-  not this relay path.
+- **Explicit vs auto-detect error surfacing.** Errors from an **explicit `images` field** are
+  appended to the agent's prompt (the caller asked for those attachments). Errors from
+  **auto-detected** prose paths are **log-only** — a path-shaped token in prose that fails to
+  resolve must not mutate the prompt, keeping pure-prose tasks byte-identical to pre-feature
+  behavior.
+- **Text-only providers** (e.g. DeepSeek) ignore the field with a logged notice.
+- **The native (Agent-tool) path does NOT deliver images.** gossipcat has no native multimodal
+  wiring; native subagents run through the host `Agent()` tool, which the dispatch handler
+  cannot feed pixels. Passing `images` to a native agent produces an explicit
+  *"images are relay-only; native agent X did not receive N image(s)"* notice in the dispatch
+  response rather than a silent drop.
 
 ### Step 3 — Collect results
 

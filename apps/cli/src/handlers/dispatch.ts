@@ -623,6 +623,17 @@ function reroutableAgent(agentId: string): string {
   return agentId;
 }
 
+/**
+ * Finding #6 (relay-image consensus round): a NATIVE agent dispatch cannot
+ * deliver images — gossipcat has no native multimodal wiring; native subagents
+ * run through the host Agent() tool, which this handler cannot feed pixels.
+ * Callers surface this exact notice in the dispatch response instead of dropping
+ * the `images` field silently, so the operator knows the pixels never landed.
+ */
+function nativeImageDropNotice(agentId: string, count: number): string {
+  return `images are relay-only; native agent ${agentId} did not receive ${count} image(s)`;
+}
+
 export async function handleDispatchSingle(
   agent_id: string, task: string,
   write_mode?: 'sequential' | 'scoped' | 'worktree',
@@ -656,9 +667,13 @@ export async function handleDispatchSingle(
    * vision-capable relay providers. Forwarded to dispatch-pipeline via
    * DispatchOptions.images; the worker reads + base64-encodes + guards them
    * (max 4, ≤4 MB each, magic-byte sniff). When omitted, the worker
-   * auto-detects up to 4 absolute PNG/JPEG paths from the task text. Ignored by
-   * the native dispatch path (native agents receive images via their own Agent
-   * tool multimodal flow, not this relay path).
+   * auto-detects up to 4 absolute PNG/JPEG paths from the task text.
+   *
+   * The NATIVE (Agent-tool) dispatch path does NOT deliver images — there is no
+   * native multimodal wiring in gossipcat; native subagents run through the host
+   * Agent() tool, which this handler cannot feed pixels. Rather than drop the
+   * field silently, the native branches emit an explicit "images are relay-only"
+   * notice in the dispatch response (see nativeImageDropNotice).
    */
   images?: readonly string[],
 ) {
@@ -902,6 +917,11 @@ export async function handleDispatchSingle(
     // Split into two content items so relay_token stays in orchestrator-only text
     // and AGENT_PROMPT is passed verbatim to the host native tool.
     // Tag format matches parallel/consensus: `AGENT_PROMPT:<taskId> (<agentId>)`.
+    // Finding #6: native path can't deliver images — surface an explicit notice
+    // rather than silently dropping the `images` field.
+    const nativeImgNotice = (images && images.length > 0)
+      ? `\n\n⚠️ ${nativeImageDropNotice(agent_id, images.length)}`
+      : '';
     return { content: [
       { type: 'text' as const, text: buildNativeDispatchSingleResponse({
         taskId,
@@ -913,7 +933,7 @@ export async function handleDispatchSingle(
         useWorktree,
         gitDowngradeReason,
         host,
-      }) },
+      }) + nativeImgNotice },
       // Item 2 ABSENT under elision (spec §2 iron rule — no placeholder, no
       // skeleton). Orchestrator MUST Read elision.promptPath cited in Item 1.
       ...(elision.elided ? [] : [{ type: 'text' as const, text: `AGENT_PROMPT:${taskId} (${agent_id})\n${agentPrompt}` }]),
@@ -1086,6 +1106,15 @@ export async function handleDispatchParallel(
       nativeTasks.push(def);
     } else {
       relayTasks.push(def);
+    }
+  }
+
+  // Finding #6: native agents can't receive images (no native multimodal path).
+  // Surface an explicit notice per native task that carried images instead of
+  // dropping the field silently.
+  for (const def of taskDefs) {
+    if (ctx.nativeAgentConfigs.has(def.agent_id) && def.images && def.images.length > 0) {
+      parallelDispatchWarnings.push(nativeImageDropNotice(def.agent_id, def.images.length));
     }
   }
 
@@ -1476,6 +1505,15 @@ export async function handleDispatchConsensus(
       nativeTasks.push(def);
     } else {
       relayTasks.push(def);
+    }
+  }
+
+  // Finding #6: native agents can't receive images (no native multimodal path).
+  // Surface an explicit notice per native task that carried images instead of
+  // dropping the field silently.
+  for (const def of taskDefs) {
+    if (ctx.nativeAgentConfigs.has(def.agent_id) && def.images && def.images.length > 0) {
+      dispatchWarnings.push(nativeImageDropNotice(def.agent_id, def.images.length));
     }
   }
 

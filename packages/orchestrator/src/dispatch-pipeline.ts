@@ -520,7 +520,7 @@ export class DispatchPipeline {
           log(`→ resolutionRoots: assignRoot(${agentId}, ${rrCandidate}) [taskId=${taskId}]`);
         }
       }
-      const stream = worker.executeTask(task, options?.lens, promptContent, taskId, options?.images);
+      const stream = worker.executeTask(task, options?.lens, promptContent, taskId, options?.images, this.projectRoot);
       entry.stream = stream;
       for await (const event of stream) {
         entry.lastEventAt = Date.now();
