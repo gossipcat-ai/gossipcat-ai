@@ -23,31 +23,34 @@
  * Image paths are UNTRUSTED input: they arrive from the dispatch caller (the
  * `images` field) or from free-form task prose (auto-detect). Two defenses apply:
  *
- *  1. Allowed-root confinement. When a `projectRoot` is supplied, every candidate
- *     is `realpathSync`'d (canonicalized, symlinks followed) and MUST resolve
- *     within that root (`realPath === realRoot || realPath.startsWith(realRoot + sep)`).
- *     A path that escapes — via `..`, an absolute path elsewhere, or a symlink
- *     pointing outside — is rejected with a per-image "path policy" error and is
- *     never read. This mirrors the repo's own citation-root precedent
- *     (dispatch-pipeline.ts spec-review enrichment + validate-resolution-root.ts):
- *     realpath BOTH sides, then a `startsWith(root + sep)` prefix test. When
- *     `projectRoot` is omitted the confinement check is skipped (legacy callers /
- *     unit fixtures); production dispatch always threads it through from
- *     `WorkerAgent.executeTask` → `resolveTaskImages`.
+ *  1. Allowed-root confinement, fail-CLOSED. When a `projectRoot` is supplied,
+ *     every candidate is confined to that root (`canonical === realRoot ||
+ *     canonical.startsWith(realRoot + sep)`). A path that escapes — via `..`, an
+ *     absolute path elsewhere, or a symlink pointing outside — is rejected with a
+ *     per-image "path policy" error and is never read. If `projectRoot` is supplied
+ *     but does not itself resolve, the policy is unenforceable, so EVERY candidate
+ *     is rejected (fail closed) rather than silently read. This mirrors the repo's
+ *     citation-root precedent (validate-resolution-root.ts): realpath BOTH sides,
+ *     then a `startsWith(root + sep)` prefix test. When `projectRoot` is omitted the
+ *     confinement check is skipped (legacy callers / unit fixtures); production
+ *     dispatch always threads it through from `WorkerAgent.executeTask`.
  *
- *  2. Capped, TOCTOU-resistant reads. A candidate is opened ONCE (`openSync`);
- *     size, regular-file check, and the byte read all operate on that single file
- *     descriptor (`fstatSync`/`readSync`), so a swap between stat and read cannot
- *     smuggle a different or larger file. Reads are hard-capped at
- *     {@link MAX_IMAGE_BYTES} (+1 sentinel byte) so an under-reporting `fstat`
- *     can never cause an unbounded slurp — belt and suspenders.
+ *  2. Capped, TOCTOU-resistant reads — open FIRST, then validate the descriptor.
+ *     A candidate is opened ONCE (`openSync(p, O_RDONLY|O_NONBLOCK)`), which pins
+ *     the target inode; the confinement check then runs against the OPEN fd's real
+ *     path (`/proc/self/fd/<fd>` on Linux, or a realpath+inode-equality fallback
+ *     elsewhere), so a symlink swap between resolve and open (the realpath→open
+ *     TOCTOU) cannot escape the root. Size, regular-file check, and the byte read
+ *     all use that same fd, so a stat→read swap cannot smuggle a different or
+ *     larger file. Reads are hard-capped at {@link MAX_IMAGE_BYTES} (+1 sentinel
+ *     byte) so an under-reporting `fstat` can never cause an unbounded slurp.
  *
  * Log hygiene: `_log` lines hash candidate paths via {@link hashPath} so the MCP
  * stderr log never records absolute filesystem paths. Full paths DO remain in the
  * `errors[]` strings (surfaced in the operator-facing task context by design).
  */
 
-import { openSync, fstatSync, readSync, closeSync, realpathSync } from 'fs';
+import { openSync, fstatSync, readSync, closeSync, realpathSync, statSync, constants as fsConstants } from 'fs';
 import { isAbsolute, normalize, sep } from 'path';
 import { ContentBlock, ImageContent } from '@gossip/types';
 import { log as _log } from './log';
@@ -200,14 +203,17 @@ export function resolveTaskImages(opts: {
   }
 
   // 2b. Resolve the confinement root once (realpath'd). If projectRoot is given
-  // but unresolvable, the policy can't be enforced — note it and proceed without
-  // confinement rather than reject-all on a misconfiguration.
+  // but unresolvable, the policy CANNOT be enforced — fail CLOSED (reject every
+  // candidate below), never fail open. A misconfigured / transiently-unavailable
+  // root is safer as "all images rejected" than "all images accepted".
   let realRoot: string | undefined;
+  let rootUnresolved = false;
   if (projectRoot) {
     try {
       realRoot = realpathSync(projectRoot);
     } catch {
-      const notice = `image path policy disabled: project root "${projectRoot}" did not resolve`;
+      rootUnresolved = true;
+      const notice = `image path policy: project root "${projectRoot}" did not resolve — rejecting all attachments (fail-closed)`;
       result.notices.push(notice);
       _log(label, `${notice} (${hashPath(projectRoot)})`);
     }
@@ -221,34 +227,62 @@ export function resolveTaskImages(opts: {
     list = list.slice(0, MAX_IMAGES);
   }
 
-  // 4. Read + validate each candidate through a single file descriptor.
+  // 4. Read + validate each candidate. Open FIRST, then validate the pinned
+  //    descriptor — never a path string that open() would re-resolve.
   for (const p of list) {
     if (!isAbsolute(p)) { pathError(p, 'not an absolute path'); continue; }
     if (!IMAGE_EXT_RE.test(p)) { pathError(p, 'unsupported extension (png/jpeg only)'); continue; }
 
-    // Canonicalize (also proves existence). realpathSync throws on a missing path.
-    let realPath: string;
-    try {
-      realPath = realpathSync(p);
-    } catch {
-      pathError(p, 'file not found');
+    // Fail-closed: a supplied-but-unresolvable projectRoot means the confinement
+    // policy cannot be enforced — reject rather than read (never fail open).
+    if (rootUnresolved) {
+      pathError(p, 'project root did not resolve — image attachment rejected (path policy, fail-closed)');
       continue;
     }
 
-    // Allowed-root confinement (path policy). Rejected paths are never opened.
-    if (realRoot && !isWithinRoot(realPath, realRoot)) {
-      pathError(p, `resolves outside the allowed project root — image attachments must stay within ${realRoot} (path policy)`);
-      continue;
-    }
-
-    // fd-based capped read: open once; stat + read the SAME descriptor so a
-    // stat→read swap can't smuggle a different/larger file (TOCTOU), and the
-    // read is hard-capped so an under-reporting fstat can't cause a huge slurp.
+    // Open-first-then-validate closes the realpath→open TOCTOU: opening pins the
+    // target inode, so the confinement check below runs against the descriptor we
+    // actually hold, not a path string a concurrent symlink swap could re-point.
+    // O_NONBLOCK avoids hanging on a FIFO/device a hostile path might name; we
+    // reject non-regular files anyway. stat + read use the SAME fd so a stat→read
+    // swap can't smuggle a different/larger file, and the read is hard-capped.
     let fd: number | undefined;
     try {
-      fd = openSync(realPath, 'r');
+      try {
+        fd = openSync(p, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+      } catch {
+        pathError(p, 'file not found');
+        continue;
+      }
       const st = fstatSync(fd);
       if (!st.isFile()) { pathError(p, 'not a regular file'); continue; }
+
+      // Allowed-root confinement (path policy) — only when a root is configured.
+      // Validate the PINNED fd's real path, not a re-resolvable string, so a
+      // symlink swap between resolve and open (the realpath→open TOCTOU) can't
+      // escape the root.
+      if (realRoot) {
+        let canonical: string;
+        try {
+          // Linux: /proc/self/fd/<fd> reflects the pinned descriptor exactly.
+          canonical = realpathSync(`/proc/self/fd/${fd}`);
+        } catch {
+          // No /proc (e.g. macOS): fall back to realpath(p), then verify it
+          // resolves to the SAME inode we hold open — a swap between open and here
+          // surfaces as a dev/ino mismatch and is rejected.
+          canonical = realpathSync(p);
+          const cst = statSync(canonical);
+          if (cst.dev !== st.dev || cst.ino !== st.ino) {
+            pathError(p, 'path changed during open (possible symlink swap) — rejected (path policy)');
+            continue;
+          }
+        }
+        if (!isWithinRoot(canonical, realRoot)) {
+          pathError(p, `resolves outside the allowed project root — image attachments must stay within ${realRoot} (path policy)`);
+          continue;
+        }
+      }
+
       if (st.size > MAX_IMAGE_BYTES) {
         pathError(p, `too large (${(st.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_IMAGE_BYTES / 1024 / 1024} MB)`);
         continue;
