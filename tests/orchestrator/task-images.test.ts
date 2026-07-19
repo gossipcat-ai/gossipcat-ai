@@ -294,6 +294,27 @@ describe('task-images — image attachment resolution for relay dispatch', () =>
         rmSync(outside, { recursive: true, force: true });
       }
     });
+    it('fails CLOSED: supplied-but-unresolvable projectRoot rejects every candidate (#654)', () => {
+      // An in-root image that WOULD normally be accepted must be rejected when the
+      // policy cannot be enforced, rather than silently read (was a fail-open).
+      const good = mk('inroot.png', PNG_MAGIC);
+      const r = resolveTaskImages({
+        task: 't',
+        images: [good],
+        provider: 'openai',
+        projectRoot: join(dir, 'does-not-exist'),
+      });
+      expect(r.blocks).toEqual([]);
+      expect(r.errors[0]).toMatch(/fail-closed/);
+    });
+    it('still accepts a symlink that stays INSIDE the root (open-first keeps legit symlinks working) (#654)', () => {
+      const target = mk('target.png', PNG_MAGIC);
+      const link = join(dir, 'alias.png');
+      symlinkSync(target, link);
+      const r = resolveTaskImages({ task: 't', images: [link], provider: 'openai', projectRoot: dir });
+      expect(r.errors).toEqual([]);
+      expect(r.blocks).toHaveLength(1);
+    });
   });
 
   describe('dedup — both explicit and auto-detect sources', () => {
