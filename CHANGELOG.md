@@ -4,6 +4,24 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.6.13] — 2026-07-19
+
+Hardens the relay image path policy shipped in 0.6.12 (closes #654). Verified via
+consensus (`consensus-id: 040da732-35274d72`).
+
+### Security
+
+- **Image confinement now fails closed.** When a `projectRoot` is supplied but
+  cannot be resolved, every image candidate is rejected instead of being read
+  unconfined (previously a silent fail-open).
+- **Closed the realpath→open TOCTOU.** Each image is now opened first
+  (`O_RDONLY|O_NONBLOCK`, pinning the inode) and the project-root confinement
+  check runs against the open file descriptor's real path (`/proc/self/fd` on
+  Linux; a `realpath`+`dev`/`ino`-equality fallback elsewhere), so a symlink swap
+  between path resolution and open can no longer escape the root. Neither issue
+  was reachable by the untrusted-task-text threat model 0.6.12 already defended
+  against; both are defense-in-depth for local-filesystem attackers.
+
 ## [0.6.12] — 2026-07-19
 
 Adds image attachments to custom-provider (relay) dispatches so OpenAI/Gemini/
