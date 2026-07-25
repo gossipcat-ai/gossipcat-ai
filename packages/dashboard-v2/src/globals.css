@@ -2,12 +2,13 @@
 @import "tailwindcss";
 
 /* Geist Variable — DESIGN.md primary body/UI/data font.
-   Self-hosted from the geist npm package's woff2 asset. Vite resolves the
-   relative path through node_modules at build time and hashes the output.
-   See main.tsx for why the npm package's JS entry can't be used directly. */
+   Vendored woff2 (OFL 1.1, see assets/fonts/GEIST-LICENSE.txt) instead of the
+   geist npm package: the package's JS entry is Next.js-only and its sole use
+   here was this one asset, while its next peer dep dragged in vulnerable
+   postcss/sharp pins (issue #649). */
 @font-face {
   font-family: 'Geist';
-  src: url('../../../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2-variations');
+  src: url('./assets/fonts/Geist-Variable.woff2') format('woff2-variations');
   font-weight: 300 700;
   font-style: normal;
   font-display: swap;
