@@ -61,9 +61,10 @@
   },
   "overrides": {
     "ip-address": "^10.1.1",
-    "hono": ">=4.12.25 <5",
-    "fast-uri": ">=3.1.2",
-    "postcss": "^8.5.10",
-    "js-yaml": "^4.2.0"
+    "hono": ">=4.12.27 <5",
+    "fast-uri": ">=3.1.4",
+    "postcss": "^8.5.18",
+    "js-yaml": "^4.2.1",
+    "brace-expansion": "^5.0.8"
   }
 }
