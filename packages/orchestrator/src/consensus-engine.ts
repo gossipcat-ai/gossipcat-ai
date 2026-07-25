@@ -2069,6 +2069,70 @@ Return only valid JSON.${skillsBlock}`;
     });
   }
 
+  /**
+   * Accept a candidate path iff it exists AND stays inside a valid root, with
+   * symlink-safe containment checked both before and after realpath. Shared by
+   * absolute-citation resolution and (conceptually) the relative loop below.
+   * Returns the realpath'd absolute path, or null if unusable.
+   */
+  private async acceptCandidate(candidate: string, allRoots: string[]): Promise<string | null> {
+    try {
+      if (!this.isInsideAnyRoot(candidate, allRoots)) return null;
+      await stat(candidate);
+      let real = candidate;
+      try { real = realpathSync(candidate); } catch { /* keep pre-realpath form */ }
+      if (this.isInsideAnyRoot(real, allRoots)) return real;
+    } catch { /* candidate does not exist at this location */ }
+    return null;
+  }
+
+  /**
+   * Resolve an ABSOLUTE citation path (issue #660).
+   *
+   * `join(root, '/abs/root/src/f.ts')` yields '/abs/root/abs/root/src/f.ts',
+   * which never exists — so before this path existed, every absolute citation
+   * failed anchor resolution even when the cited file was inside a configured
+   * root. Agents emit absolute paths routinely (they echo paths they just read
+   * via shell), and the failure silently depressed their accuracy scores.
+   *
+   * Two strategies, in order:
+   *  1. Take the path as-is — but ONLY if it is contained in a configured root.
+   *     Containment goes through isInsideAnyRoot (realpath + `relative()`
+   *     boundary), NOT a naive startsWith, so `/abs/root-evil/x` does not pass
+   *     for root `/abs/root`. This preserves the worktree sandbox: an absolute
+   *     path outside every configured root is never resolved.
+   *  2. Strip a matching configured-root prefix and re-join the remainder
+   *     against each root in priority order. This repairs worktree-root
+   *     mismatches (resolutionRoots, issue #126) for free: a cite of
+   *     `<projectRoot>/packages/foo.ts` for a file that only exists in the
+   *     worktree resolves against the worktree root. The prefix must itself be
+   *     a configured root, so this cannot widen the sandbox either.
+   *
+   * Longest matching prefix wins in step 2 — worktrees are commonly nested
+   * under projectRoot, and the longer root yields the correct suffix.
+   */
+  private async resolveAbsoluteFileRef(
+    fileRef: string,
+    priorityRoots: string[],
+    allRoots: string[],
+  ): Promise<string | null> {
+    const asIs = await this.acceptCandidate(fileRef, allRoots);
+    if (asIs) return asIs;
+
+    const abs = resolve(fileRef);
+    const prefixRoots = [...allRoots].sort((a, b) => resolve(b).length - resolve(a).length);
+    for (const prefixRoot of prefixRoots) {
+      const rel = relative(resolve(prefixRoot), abs);
+      // Not under this root (or identical to it) — nothing to strip.
+      if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) continue;
+      for (const root of priorityRoots) {
+        const hit = await this.acceptCandidate(join(root, rel), allRoots);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+
   private async resolveFilePath(
     fileRef: string,
     opts: { priorityRoots?: string[] } = {},
@@ -2083,6 +2147,13 @@ Return only valid JSON.${skillsBlock}`;
     const fileName = fileRef.split('/').pop()!;
     const isBare = !fileRef.includes('/');
     const projectRoot = this.config.projectRoot ? resolve(this.config.projectRoot) : null;
+
+    // Absolute citations cannot be join()'d onto a root (issue #660) — handle
+    // them separately, then fall through to the relative loop on failure.
+    if (isAbsolute(fileRef)) {
+      const hit = await this.resolveAbsoluteFileRef(fileRef, roots, allRoots);
+      if (hit) return hit;
+    }
 
     // Try every root in order: projectRoot first (most files), then any
     // active worktree paths (for files only present on a feature branch).
