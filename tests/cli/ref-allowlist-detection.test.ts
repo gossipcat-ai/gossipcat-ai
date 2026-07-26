@@ -37,6 +37,7 @@ jest.mock('fs', () => ({
 // ── imports after mocks ──────────────────────────────────────────────────────
 
 import { capturePreDispatchSha, checkRefAllowlistViolation } from '../../apps/cli/src/handlers/ref-allowlist-detection';
+import { resetBaseRefDiscoveryCache } from '../../apps/cli/src/handlers/base-ref-discovery';
 import { emitConsensusSignals } from '@gossip/orchestrator';
 
 const mockExecFileSync = childProcess.execFileSync as jest.Mock;
@@ -53,6 +54,7 @@ const POST_SHA = 'ffff6666gggg7777hhhh8888iiii9999jjjj0000';
 describe('capturePreDispatchSha', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetBaseRefDiscoveryCache();
   });
 
   it('returns the trimmed SHA on success', () => {
@@ -71,6 +73,7 @@ describe('capturePreDispatchSha', () => {
 describe('checkRefAllowlistViolation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetBaseRefDiscoveryCache();
   });
 
   it('(a) SHA unchanged → no signal, no JSONL append', () => {

@@ -4,6 +4,27 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ref-allowlist / stale-base detection no longer hardcodes `origin/master`**
+  (issue #658). On repos whose default branch is `main` (or anything else),
+  every dispatch previously ran `git rev-parse origin/master`, which fails
+  with `fatal: ambiguous argument 'origin/master'` and silently disabled both
+  the ref-allowlist pre-dispatch snapshot (`apps/cli/src/handlers/ref-allowlist-detection.ts`)
+  and the `dispatched_stale_base` precondition (`gatherStaleBaseInputs` in
+  `apps/cli/src/handlers/orchestrator-precondition-runner.ts`) — plus printed
+  a misleading "offline or no remote" diagnostic even when the remote was
+  reachable. Both call sites now resolve the base ref through a shared
+  `discoverBaseRef()` helper (`apps/cli/src/handlers/base-ref-discovery.ts`),
+  cached per-process, with precedence: (1) new `GOSSIP_BASE_REF` env var
+  override, (2) `git symbolic-ref refs/remotes/origin/HEAD` (handles an unset
+  `origin/HEAD` quietly), (3) `origin/master` then `origin/main`, whichever
+  resolves first via `rev-parse --verify --quiet` (no `fatal:` log noise). If
+  nothing resolves, the diagnostic now distinguishes "no such base ref
+  (checked origin/master, origin/main)" from a genuine offline/no-remote
+  condition. Set `GOSSIP_BASE_REF=<ref>` (e.g. `origin/trunk`) to force a
+  specific base ref on repos where none of the above heuristics apply.
+
 ## [0.6.13] — 2026-07-19
 
 Hardens the relay image path policy shipped in 0.6.12 (closes #654). Verified via

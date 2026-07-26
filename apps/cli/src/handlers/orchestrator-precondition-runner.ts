@@ -27,6 +27,7 @@ import type { PerformanceSignal } from '@gossip/orchestrator';
 // Dynamic import() is NOT bundled in esbuild single-file builds — this was the
 // root cause of the activity-mirror hooks silently no-op'ing (project_activity_mirror_v2_progress).
 import { emitPipelineSignals as staticEmitPipelineSignals } from '@gossip/orchestrator';
+import { discoverBaseRef } from './base-ref-discovery';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -324,7 +325,9 @@ function defaultEmitSignals(projectRoot: string, signals: PerformanceSignal[]): 
 
 /**
  * Run the three git commands needed by detectStaleBase.
- * Returns null if git is unavailable, not in a repo, or origin/master is
+ * Returns null if git is unavailable, not in a repo, or the origin default
+ * branch (resolved via base-ref-discovery.ts — GOSSIP_BASE_REF override, then
+ * origin/HEAD, then origin/master/origin/main fallback; issue #658) is
  * unreachable. NEVER throws.
  */
 export async function gatherStaleBaseInputs(
@@ -332,17 +335,20 @@ export async function gatherStaleBaseInputs(
   execFile: PreconditionRunnerDeps['execFile'] = defaultExecFile,
 ): Promise<StaleBaseInputs | null> {
   try {
+    const { ref } = discoverBaseRef(projectRoot, execFile);
+    if (!ref) return null;
+
     const dispatchSha = execFile('git', ['rev-parse', 'HEAD'], {
       cwd: projectRoot,
       encoding: 'utf8',
     }).trim();
 
-    const originMasterSha = execFile('git', ['rev-parse', 'origin/master'], {
+    const originMasterSha = execFile('git', ['rev-parse', ref], {
       cwd: projectRoot,
       encoding: 'utf8',
     }).trim();
 
-    const mergeBaseSha = execFile('git', ['merge-base', 'HEAD', 'origin/master'], {
+    const mergeBaseSha = execFile('git', ['merge-base', 'HEAD', ref], {
       cwd: projectRoot,
       encoding: 'utf8',
     }).trim();

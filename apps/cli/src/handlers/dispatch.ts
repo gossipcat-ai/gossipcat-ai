@@ -769,9 +769,12 @@ export async function handleDispatchSingle(
       emitConsensusSignals(process.cwd(), premiseResult.signals);
     }
 
-    // Ref-allowlist Phase 1: snapshot origin/master before agent runs so the
-    // relay path can detect a direct push to master (no PR-merge entry).
-    // Runs for ALL write-mode dispatches; null on git failure (offline/no remote).
+    // Ref-allowlist Phase 1: snapshot the origin default branch (base ref
+    // resolved via base-ref-discovery.ts — GOSSIP_BASE_REF override, then
+    // origin/HEAD, then origin/master/origin/main fallback; issue #658)
+    // before agent runs so the relay path can detect a direct push (no
+    // PR-merge entry). Runs for ALL write-mode dispatches; null on git
+    // failure (offline/no remote) or when no base ref resolves.
     let preDispatchSha: string | null = null;
     if (write_mode) {
       const { capturePreDispatchSha } = require('./ref-allowlist-detection');

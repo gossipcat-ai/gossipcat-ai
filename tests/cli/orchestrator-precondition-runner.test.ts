@@ -9,6 +9,7 @@ import {
   runDispatchPreconditionGuard,
   type PreconditionRunnerDeps,
 } from '../../apps/cli/src/handlers/orchestrator-precondition-runner';
+import { resetBaseRefDiscoveryCache } from '../../apps/cli/src/handlers/base-ref-discovery';
 import type { PerformanceSignal } from '@gossip/orchestrator';
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,75 @@ function makeDeps(overrides: Partial<PreconditionRunnerDeps> = {}): Precondition
 /** Default guard input fields for the new task-text check (no referenced paths). */
 const NO_TASK_TEXT = { taskText: '', writeMode: undefined as string | undefined };
 
+type ExecFileArg = string | Error | undefined;
+
+/**
+ * Args-matching execFile stub covering both base-ref discovery calls
+ * (symbolic-ref, rev-parse --verify --quiet) and the three stale-base git
+ * calls (rev-parse HEAD, rev-parse <ref>, merge-base HEAD <ref>).
+ *
+ * By default `origin/HEAD` is unset (symbolic-ref throws, the realistic CI
+ * shallow-clone case) and `origin/master` resolves — matching this repo's
+ * actual default branch — so existing "fresh" / "behind_origin" /
+ * "branched_pre_merge" test intent carries over unchanged. Override any leg
+ * to test a different discovery path (e.g. verifyMaster: undefined,
+ * verifyMain: 'ok' to exercise the origin/main fallback).
+ */
+function makeExecFile(overrides: {
+  head?: ExecFileArg;
+  origin?: ExecFileArg;
+  mergeBase?: ExecFileArg;
+  symbolicRef?: ExecFileArg;
+  verifyMaster?: ExecFileArg;
+  verifyMain?: ExecFileArg;
+  ref?: string; // the ref name used in the 'rev-parse <ref>' / 'merge-base HEAD <ref>' calls
+} = {}): jest.Mock {
+  const ref = overrides.ref ?? 'origin/master';
+  const verifyMaster = 'verifyMaster' in overrides ? overrides.verifyMaster : 'origin/master-exists';
+  return jest.fn().mockImplementation((_cmd: string, args: string[]) => {
+    const key = args.join(' ');
+
+    const resolve = (v: ExecFileArg, unexpectedLabel: string): string => {
+      if (v instanceof Error) throw v;
+      if (v === undefined) throw new Error(`unexpected git call: ${unexpectedLabel}`);
+      return v;
+    };
+
+    if (key === 'symbolic-ref --quiet refs/remotes/origin/HEAD') {
+      if (overrides.symbolicRef instanceof Error) throw overrides.symbolicRef;
+      if (overrides.symbolicRef === undefined) {
+        throw new Error('fatal: ref refs/remotes/origin/HEAD is not a symbolic ref');
+      }
+      return overrides.symbolicRef;
+    }
+    if (key === 'rev-parse --verify --quiet origin/master') {
+      if (verifyMaster instanceof Error) throw verifyMaster;
+      if (verifyMaster === undefined) throw new Error('fatal: ambiguous argument \'origin/master\'');
+      return verifyMaster;
+    }
+    if (key === 'rev-parse --verify --quiet origin/main') {
+      if (overrides.verifyMain instanceof Error) throw overrides.verifyMain;
+      if (overrides.verifyMain === undefined) throw new Error('fatal: ambiguous argument \'origin/main\'');
+      return overrides.verifyMain;
+    }
+    if (key === 'remote') return 'origin\n';
+    if (key === 'rev-parse HEAD') return resolve(overrides.head, 'rev-parse HEAD');
+    if (key === `rev-parse ${ref}`) return resolve(overrides.origin, `rev-parse ${ref}`);
+    if (key === `merge-base HEAD ${ref}`) return resolve(overrides.mergeBase, `merge-base HEAD ${ref}`);
+
+    throw new Error(`unexpected git call: ${key}`);
+  });
+}
+
+/** execFile stub that satisfies stale-base (fresh) so only the task-text path runs. */
+function freshStaleExecFile(): jest.Mock {
+  return makeExecFile({ head: 'sha\n', origin: 'sha\n', mergeBase: 'sha\n' });
+}
+
+beforeEach(() => {
+  resetBaseRefDiscoveryCache();
+});
+
 // ---------------------------------------------------------------------------
 // gatherStaleBaseInputs
 // ---------------------------------------------------------------------------
@@ -42,11 +112,8 @@ describe('gatherStaleBaseInputs', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null when origin/master is not reachable', async () => {
-    // first call (HEAD) succeeds, second (origin/master) throws
-    const execFile = jest.fn()
-      .mockReturnValueOnce('abc123\n')         // git rev-parse HEAD
-      .mockImplementationOnce(() => { throw new Error('fatal: ambiguous argument'); });
+  it('returns null when no base ref resolves (origin/master, origin/main both unreachable)', async () => {
+    const execFile = makeExecFile({ verifyMaster: undefined, verifyMain: undefined });
     const result = await gatherStaleBaseInputs('/some/project', execFile);
     expect(result).toBeNull();
   });
@@ -60,10 +127,11 @@ describe('gatherStaleBaseInputs', () => {
   });
 
   it('returns trimmed SHAs on success', async () => {
-    const execFile = jest.fn()
-      .mockReturnValueOnce('  abc111  \n')    // HEAD
-      .mockReturnValueOnce('  def222  \n')    // origin/master
-      .mockReturnValueOnce('  abc111  \n');   // merge-base
+    const execFile = makeExecFile({
+      head: '  abc111  \n',
+      origin: '  def222  \n',
+      mergeBase: '  abc111  \n',
+    });
     const result = await gatherStaleBaseInputs('/root', execFile);
     expect(result).toEqual({
       dispatchSha: 'abc111',
@@ -73,26 +141,71 @@ describe('gatherStaleBaseInputs', () => {
   });
 
   it('returns null mergeBaseSha when merge-base call fails but HEAD/origin succeed', async () => {
-    const execFile = jest.fn()
-      .mockReturnValueOnce('aaa\n')           // HEAD
-      .mockReturnValueOnce('bbb\n')           // origin/master
-      .mockImplementationOnce(() => { throw new Error('fatal: no merge base'); });
+    const execFile = makeExecFile({
+      head: 'aaa\n',
+      origin: 'bbb\n',
+      mergeBase: new Error('fatal: no merge base'),
+    });
     const result = await gatherStaleBaseInputs('/root', execFile);
     // merge-base failure should produce null result (whole function returns null)
     expect(result).toBeNull();
   });
 
   it('passes cwd to execFile calls', async () => {
-    const execFile = jest.fn()
-      .mockReturnValueOnce('sha1\n')
-      .mockReturnValueOnce('sha2\n')
-      .mockReturnValueOnce('sha1\n');
+    const execFile = makeExecFile({ head: 'sha1\n', origin: 'sha2\n', mergeBase: 'sha1\n' });
     await gatherStaleBaseInputs('/my/project', execFile);
     expect(execFile).toHaveBeenCalledWith(
       'git',
       ['rev-parse', 'HEAD'],
       expect.objectContaining({ cwd: '/my/project' }),
     );
+  });
+
+  it('resolves via origin/main fallback when origin/master does not exist', async () => {
+    const execFile = makeExecFile({
+      ref: 'origin/main',
+      verifyMaster: undefined,
+      verifyMain: 'origin/main-exists',
+      head: 'h1\n',
+      origin: 'o1\n',
+      mergeBase: 'h1\n',
+    });
+    const result = await gatherStaleBaseInputs('/root', execFile);
+    expect(result).toEqual({
+      dispatchSha: 'h1',
+      originMasterSha: 'o1',
+      mergeBaseSha: 'h1',
+    });
+    expect(execFile).toHaveBeenCalledWith(
+      'git',
+      ['rev-parse', 'origin/main'],
+      expect.objectContaining({ cwd: '/root' }),
+    );
+  });
+
+  it('honors GOSSIP_BASE_REF override end to end', async () => {
+    const prev = process.env.GOSSIP_BASE_REF;
+    process.env.GOSSIP_BASE_REF = 'upstream/develop';
+    try {
+      const execFile = jest.fn().mockImplementation((_cmd: string, args: string[]) => {
+        const key = args.join(' ');
+        if (key === 'rev-parse HEAD') return 'h9\n';
+        if (key === 'rev-parse upstream/develop') return 'o9\n';
+        if (key === 'merge-base HEAD upstream/develop') return 'h9\n';
+        throw new Error(`unexpected git call: ${key}`);
+      });
+      const result = await gatherStaleBaseInputs('/root', execFile);
+      expect(result).toEqual({
+        dispatchSha: 'h9',
+        originMasterSha: 'o9',
+        mergeBaseSha: 'h9',
+      });
+      // Override skips discovery entirely — no symbolic-ref / verify calls.
+      expect(execFile).not.toHaveBeenCalledWith('git', expect.arrayContaining(['symbolic-ref']), expect.anything());
+    } finally {
+      if (prev === undefined) delete process.env.GOSSIP_BASE_REF;
+      else process.env.GOSSIP_BASE_REF = prev;
+    }
   });
 });
 
@@ -103,10 +216,7 @@ describe('gatherStaleBaseInputs', () => {
 describe('runDispatchPreconditionGuard — stale base', () => {
   it('emits no signal and no warning when base is fresh', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('samesha\n')
-        .mockReturnValueOnce('samesha\n')
-        .mockReturnValueOnce('samesha\n'),
+      execFile: makeExecFile({ head: 'samesha\n', origin: 'samesha\n', mergeBase: 'samesha\n' }),
     });
     const result = await runDispatchPreconditionGuard(
       { projectRoot: '/project', taskId: 't1', resolutionRoots: [], ...NO_TASK_TEXT },
@@ -118,10 +228,11 @@ describe('runDispatchPreconditionGuard — stale base', () => {
 
   it('emits dispatched_stale_base and warning when behind_origin', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('old111\n')      // HEAD
-        .mockReturnValueOnce('new999\n')      // origin/master
-        .mockReturnValueOnce('old111\n'),     // merge-base === HEAD → behind_origin
+      execFile: makeExecFile({
+        head: 'old111\n',       // HEAD
+        origin: 'new999\n',     // origin/master
+        mergeBase: 'old111\n',  // merge-base === HEAD → behind_origin
+      }),
     });
     const result = await runDispatchPreconditionGuard(
       { projectRoot: '/project', taskId: 'task-abc', resolutionRoots: [], ...NO_TASK_TEXT },
@@ -139,10 +250,11 @@ describe('runDispatchPreconditionGuard — stale base', () => {
 
   it('emits dispatched_stale_base with branched_pre_merge reason', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('branchsha\n')
-        .mockReturnValueOnce('mastersha\n')
-        .mockReturnValueOnce('commonancestor\n'),  // different from HEAD → branched_pre_merge
+      execFile: makeExecFile({
+        head: 'branchsha\n',
+        origin: 'mastersha\n',
+        mergeBase: 'commonancestor\n', // different from HEAD → branched_pre_merge
+      }),
     });
     const result = await runDispatchPreconditionGuard(
       { projectRoot: '/project', taskId: 'task-xyz', resolutionRoots: [], ...NO_TASK_TEXT },
@@ -175,10 +287,11 @@ describe('runDispatchPreconditionGuard — stale base', () => {
 
   it('emits NO dispatched_stale_base signal when branch is strictly ahead of origin (ahead_of_origin)', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('feature-tip\n')   // HEAD
-        .mockReturnValueOnce('origin-head\n')   // origin/master
-        .mockReturnValueOnce('origin-head\n'),  // merge-base === origin → strictly ahead
+      execFile: makeExecFile({
+        head: 'feature-tip\n',    // HEAD
+        origin: 'origin-head\n',  // origin/master
+        mergeBase: 'origin-head\n', // merge-base === origin → strictly ahead
+      }),
     });
     const result = await runDispatchPreconditionGuard(
       { projectRoot: '/project', taskId: 'task-fwd', resolutionRoots: [], ...NO_TASK_TEXT },
@@ -194,10 +307,7 @@ describe('runDispatchPreconditionGuard — stale base', () => {
 
   it('never throws even if emitSignals throws', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('old\n')
-        .mockReturnValueOnce('new\n')
-        .mockReturnValueOnce('old\n'),
+      execFile: makeExecFile({ head: 'old\n', origin: 'new\n', mergeBase: 'old\n' }),
       emitSignals: jest.fn().mockImplementation(() => { throw new Error('emit failed'); }),
     });
     await expect(
@@ -213,10 +323,7 @@ describe('runDispatchPreconditionGuard — stale base', () => {
 describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
   it('emits no signal when all resolutionRoots are readable', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n'),
+      execFile: freshStaleExecFile(),
       canRead: jest.fn().mockReturnValue(true),
     });
     const result = await runDispatchPreconditionGuard(
@@ -232,10 +339,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
 
   it('emits signal and warning when some resolutionRoots are unreadable', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n'),
+      execFile: freshStaleExecFile(),
       canRead: jest.fn().mockImplementation((p: string) => p !== '/missing/path'),
     });
     const result = await runDispatchPreconditionGuard(
@@ -261,10 +365,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
 
   it('emits no signal when resolutionRoots is empty', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n'),
+      execFile: freshStaleExecFile(),
       canRead: jest.fn().mockReturnValue(false), // would fail if called
     });
     const result = await runDispatchPreconditionGuard(
@@ -282,10 +383,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
 
   it('handles undefined resolutionRoots (same as empty)', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n'),
+      execFile: freshStaleExecFile(),
       canRead: jest.fn().mockReturnValue(false),
     });
     const result = await runDispatchPreconditionGuard(
@@ -298,10 +396,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
 
   it('never throws even when canRead throws', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n')
-        .mockReturnValueOnce('sha\n'),
+      execFile: freshStaleExecFile(),
       canRead: jest.fn().mockImplementation(() => { throw new Error('fs error'); }),
     });
     await expect(
@@ -320,10 +415,7 @@ describe('runDispatchPreconditionGuard — referenced_unreadable_path', () => {
 describe('runDispatchPreconditionGuard — combined signals', () => {
   it('can emit both stale base AND unreadable paths signals in one call', async () => {
     const deps = makeDeps({
-      execFile: jest.fn()
-        .mockReturnValueOnce('old\n')
-        .mockReturnValueOnce('new\n')
-        .mockReturnValueOnce('old\n'),     // behind_origin
+      execFile: makeExecFile({ head: 'old\n', origin: 'new\n', mergeBase: 'old\n' }), // behind_origin
       canRead: jest.fn().mockReturnValue(false),
     });
     const result = await runDispatchPreconditionGuard(
@@ -347,14 +439,6 @@ describe('runDispatchPreconditionGuard — combined signals', () => {
 // ---------------------------------------------------------------------------
 // runDispatchPreconditionGuard — referenced_unreadable_path (TASK-TEXT, Bug A)
 // ---------------------------------------------------------------------------
-
-/** execFile stub that satisfies stale-base (fresh) so only the task-text path runs. */
-function freshStaleExecFile(): jest.Mock {
-  return jest.fn()
-    .mockReturnValueOnce('sha\n')   // HEAD
-    .mockReturnValueOnce('sha\n')   // origin/master
-    .mockReturnValueOnce('sha\n');  // merge-base === HEAD → fresh
-}
 
 type RefSignal = PerformanceSignal & {
   agentId: string;
