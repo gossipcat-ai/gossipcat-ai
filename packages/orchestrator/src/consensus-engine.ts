@@ -62,6 +62,29 @@ const VALID_ACTIONS = new Set(['agree', 'disagree', 'unverified', 'new']);
 const ANCHOR_PATTERN = /(?:[a-zA-Z]:\/)?[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
 const MAX_VERIFIER_TURNS = 7;
 
+/**
+ * Verification-scoped memory directive for the Phase-2 cross-review system
+ * prompt (issue #659).
+ *
+ * The memory-recall tool is already REACHABLE during cross-review — `memory_query`
+ * is in VERIFIER_TOOLS for engine-driven reviewers, and native reviewers hold
+ * `mcp__gossipcat__gossip_remember` from their agent definition — but nothing in
+ * the cross-review prompt directs its use, so recall happens ad hoc with no
+ * discipline. This block narrows recall to PROCESS memory (prior adjudications,
+ * peer miscite patterns) and hard-forbids substituting a recalled verdict for
+ * fresh verification, reinforcing the "a false confirmation poisons the system"
+ * rule immediately above it.
+ *
+ * Runtime-agnostic on purpose: `buildCrossReviewPrompt` is shared by native and
+ * relay reviewers (the isNative split happens in the caller), so the tool name
+ * is stated conditionally the same way `default-skills/memory-retrieval.md`
+ * does — never naming a tool the reader's runtime lacks.
+ */
+export const CROSS_REVIEW_MEMORY_DIRECTIVE = `MEMORY (optional, verification-scoped) — recall tool: \`memory_query(query)\` if your Identity block says \`runtime: relay\`, \`gossip_remember(agent_id, query)\` if \`runtime: native\`.
+- ALLOWED: process memory only — whether this exact finding was already adjudicated in an earlier round, and known miscite patterns for the peer you are reviewing.
+- FORBIDDEN: substituting a recalled verdict for fresh verification against the code. A recalled verdict is NOT evidence — "I confirmed this last cycle" must NEVER produce an AGREE. Re-verify every round.
+- If memory informed your verdict, make it traceable: cite \`per gossip_remember finding <id>\` inline.`;
+
 const VERIFIER_TOOLS: ToolDefinition[] = [
   { name: 'file_read', description: 'Read file contents', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Absolute or project-relative file path' }, startLine: { type: 'number', description: 'First line to read (1-based)' }, endLine: { type: 'number', description: 'Last line to read (inclusive)' } }, required: ['path'] } },
   { name: 'file_grep', description: 'Search file contents by regex', parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Regex pattern to search for' }, path: { type: 'string', description: 'Directory or file to search in' }, maxResults: { type: 'number', description: 'Maximum number of results to return' } }, required: ['pattern'] } },
@@ -860,6 +883,8 @@ VERIFICATION RULES:
 - ⚠ warnings mean the agent's citation is unresolvable (file not found, line out of range, or blank line). Use file_read/file_grep to attempt verification before falling back to UNVERIFIED.
 - Do NOT agree with a finding just because it sounds plausible — verify it
 - Agreeing without verification is WORSE than disagreeing — a false confirmation poisons the system
+
+${CROSS_REVIEW_MEMORY_DIRECTIVE}
 
 Return only valid JSON.${skillsBlock}`;
 
