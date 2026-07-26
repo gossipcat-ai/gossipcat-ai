@@ -103,14 +103,54 @@ describe('ConsensusEngine — absolute citation paths (#660)', () => {
     const wtCopy = writeFileAt(join(wt, 'packages', 'a', 'both.ts'), 'branch\n');
     const engine = makeEngine(repo, [wt]);
 
-    // Cited with the worktree-mismatched (projectRoot) prefix — the file exists
-    // at both locations, so step 1 (as-is) wins and returns the cited copy.
-    const cited = await engine.resolveFilePath(join(repo, 'packages', 'a', 'both.ts'));
-    expect(cited).toBe(join(repo, 'packages', 'a', 'both.ts'));
+    // Cited with the worktree-mismatched (projectRoot) prefix. priorityRoots is
+    // authoritative: strip-and-rejoin runs before as-is acceptance, so the
+    // WORKTREE copy wins — an absolute cite must not pin the reviewer to master
+    // HEAD just because the file also exists there.
+    const cited = await engine.cachedResolveForAnchor(join(repo, 'packages', 'a', 'both.ts'));
+    expect(cited).toBe(wtCopy);
 
-    // A bare-relative citation still honours worktree-priority ordering.
+    // A bare-relative citation honours the same ordering.
     const anchored = await engine.cachedResolveForAnchor('packages/a/both.ts');
     expect(anchored).toBe(wtCopy);
+
+    // Non-anchor resolution (projectRoot-first priority) still returns master.
+    expect(await engine.resolveFilePath(join(repo, 'packages', 'a', 'both.ts')))
+      .toBe(join(repo, 'packages', 'a', 'both.ts'));
+  });
+
+  // Fix (3): the prefix comparison must be realpath-symmetric. With resolve()
+  // only, a root configured through a symlink never matches as a prefix, so
+  // strip-and-rejoin silently degrades to nothing. Note this suite's other
+  // tests sidestep the bug by realpath'ing tmp in setup — this one builds the
+  // asymmetry explicitly (root via symlink, citation via realpath).
+  it('strips a symlinked root prefix when re-joining (realpath-symmetric)', async () => {
+    const realRepo = join(root, 'realrepo');
+    const linkRepo = join(root, 'linkrepo');
+    mkdirSync(realRepo, { recursive: true });
+    symlinkSync(realRepo, linkRepo);
+    const wt = join(linkRepo, '.claude', 'worktrees', 'wt-1');
+    mkdirSync(wt, { recursive: true });
+    const target = writeFileAt(join(wt, 'packages', 'a', 'branch-only.ts'));
+    const engine = makeEngine(linkRepo, [wt]);
+
+    // Roots are configured through the symlink; the agent cited the realpath.
+    const citedAs = join(realRepo, 'packages', 'a', 'branch-only.ts');
+
+    expect(await engine.resolveFilePath(citedAs)).toBe(realpathSync(target));
+  });
+
+  // Fix (2): stat() succeeds for directories, so a directory citation used to
+  // "resolve"; cachedRead then hit EISDIR and the anchor was dropped silently
+  // instead of being counted as an unresolvable citation.
+  it('does NOT resolve a citation that points at a directory', async () => {
+    mkdirSync(join(repo, 'packages', 'orchestrator'), { recursive: true });
+    const engine = makeEngine(repo);
+
+    // Absolute form (acceptCandidate gate).
+    expect(await engine.resolveFilePath(join(repo, 'packages', 'orchestrator'))).toBeNull();
+    // Relative form (relative-loop gate).
+    expect(await engine.resolveFilePath('packages/orchestrator')).toBeNull();
   });
 
   it('leaves relative citation resolution unchanged', async () => {
