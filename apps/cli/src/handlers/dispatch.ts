@@ -8,6 +8,9 @@ import { join } from 'path';
 import {
   assemblePrompt,
   loadSkills,
+  selectLessons,
+  renderLessonBlock,
+  logLessonInjection,
   parseClaimBlock,
   verifyClaims,
   emitConsensusSignals,
@@ -15,6 +18,7 @@ import {
   hashPath,
   type ClaimBlock,
   type ClaimVerdict,
+  type SelectedLesson,
   type PerformanceSignal,
   type RoundWarning,
 } from '@gossip/orchestrator';
@@ -324,6 +328,54 @@ function maybeApplyUnverifiedNote(
     `[gossipcat] ⚠️ unverified-claim detected for ${agentId}: matched "${annotation.matchedText}" (pattern #${annotation.matchedPattern})\n`,
   );
   return prependUnverifiedNote(agentPrompt, annotation.reason || annotation.matchedText || '');
+}
+
+/** Structural anchor `assemblePrompt` always emits last (prompt-assembler.ts). */
+const NATIVE_TASK_ANCHOR = '\n\n---\n\nTask: ';
+
+/**
+ * Auto-inject task-matched lesson cards into a native agent prompt (issue #669).
+ *
+ * Applied AFTER assemblePrompt / the warm prompt cache, never inside it. The
+ * cache is keyed by (agentId, skillFingerprint, taskKind) and splices a live
+ * task tail onto a cached body — a task-dependent block stored in that body
+ * would leak task 1's lessons into task 2 on a warm hit.
+ *
+ * Insertion point mirrors the relay path: immediately before the trailing
+ * `Task:` segment, so the block sits in the same relative position agents see
+ * on `DispatchPipeline` dispatches. Falls back to appending if the anchor is
+ * absent.
+ *
+ * Returns the prompt unchanged when nothing clears the relevance floor.
+ */
+function maybeInjectLessons(
+  agentPrompt: string,
+  args: { agentId: string; task: string; taskId: string; consensus?: boolean },
+): string {
+  let lessons: SelectedLesson[];
+  try {
+    lessons = selectLessons(process.cwd(), args.agentId, args.task);
+  } catch {
+    return agentPrompt; // best-effort — recall must never fail a dispatch
+  }
+  if (lessons.length === 0) return agentPrompt;
+
+  const block = renderLessonBlock(lessons, { consensus: !!args.consensus });
+  if (!block) return agentPrompt;
+
+  logLessonInjection(process.cwd(), {
+    taskId: args.taskId,
+    agentId: args.agentId,
+    consensus: !!args.consensus,
+    lessons,
+  });
+  process.stderr.write(
+    `[gossipcat] 📚 injected ${lessons.length} lesson card(s) for ${args.agentId} [${args.taskId}]: ${lessons.map(l => l.source).join(', ')}\n`,
+  );
+
+  const anchor = agentPrompt.lastIndexOf(NATIVE_TASK_ANCHOR);
+  if (anchor < 0) return `${agentPrompt}\n\n${block}`;
+  return `${agentPrompt.slice(0, anchor)}\n\n${block}${agentPrompt.slice(anchor)}`;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -867,6 +919,9 @@ export async function handleDispatchSingle(
         cacheColdPathStore(process.cwd(), agentPrompt, singleCacheKey);
       }
     }
+    // Lesson auto-injection (issue #669) — applied post-cache; see
+    // maybeInjectLessons for why it must not live inside the cached body.
+    agentPrompt = maybeInjectLessons(agentPrompt, { agentId: agent_id, task, taskId });
     if (sanitizeResult.sanitized) agentPrompt = prependScopeNote(agentPrompt);
     // Premise verification (Component B). SCOPE NOTE composes first
     // (enforcement boundary); UNVERIFIED note layered on top (behavioral).
@@ -1317,6 +1372,10 @@ export async function handleDispatchParallel(
         cacheColdPathStore(process.cwd(), agentPrompt, parallelCacheKey);
       }
     }
+    // Lesson auto-injection (issue #669) — post-cache, per-def.
+    agentPrompt = maybeInjectLessons(agentPrompt, {
+      agentId: def.agent_id, task: def.task, taskId, consensus,
+    });
     if ((def as any)._sandboxSanitized) agentPrompt = prependScopeNote(agentPrompt);
     // Premise verification (Component B) — per-def in the native loop.
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
@@ -1684,6 +1743,12 @@ export async function handleDispatchConsensus(
         cacheColdPathStore(process.cwd(), agentPrompt, consensusCacheKey);
       }
     }
+    // Lesson auto-injection (issue #669) — post-cache, per-def. `consensus: true`
+    // adds the anti-anchoring FORBIDDEN clause (issue #659): a recalled lesson
+    // is never evidence and must never manufacture an AGREE.
+    agentPrompt = maybeInjectLessons(agentPrompt, {
+      agentId: def.agent_id, task: def.task, taskId, consensus: true,
+    });
     // Premise verification (Component B) — per-def in the consensus native loop.
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
 

@@ -7,6 +7,45 @@ const FINDINGS_STALE_DAYS = 30;
 const FINDINGS_MIN_SCORE = 1;
 const CORRECTIONS_MAX_RESULTS = 2;
 
+/**
+ * Simple word-boundary keyword extraction (no LLM). Module-level so the lesson
+ * auto-injector (issue #669) scores against the exact same tokenizer the
+ * dispatch prefetch already uses, instead of drifting a second copy.
+ *
+ * Split on whitespace, punctuation, and markdown/code emphasis markers so
+ * `**bold**`, `_italic_`, and `` `code` `` yield the inner word alone, not
+ * leaking asterisks/underscores/backticks into the keyword token.
+ */
+export function extractMemoryKeywords(taskText: string): string[] {
+  const words = taskText.toLowerCase().split(/[\s,/.;:!?()\[\]{}*_~`"'<>|]+/);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const w of words) {
+    if (w.length > 3 && !seen.has(w)) {
+      seen.add(w);
+      result.push(w);
+    }
+  }
+  return result;
+}
+
+/** Word-boundary match = 2 pts, substring = 1 pt. See extractMemoryKeywords. */
+export function scoreMemoryKeywords(keywords: readonly string[], text: string): number {
+  const lower = text.toLowerCase();
+  let score = 0;
+  for (const kw of keywords) {
+    // Escape regex metacharacters — keywords come from untrusted task text, so a
+    // token containing '**', '(', '[' etc. (e.g. markdown `**bold**` leaking
+    // through the split) would throw "Invalid regular expression" and crash the
+    // whole task dispatch.
+    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\b${escaped}\\b`);
+    if (re.test(lower)) score += 2;
+    else if (lower.includes(kw)) score += 1;
+  }
+  return score;
+}
+
 export class AgentMemoryReader {
   constructor(private projectRoot: string) {}
 
@@ -192,36 +231,11 @@ export class AgentMemoryReader {
 
   /** Simple word-boundary keyword overlap scoring (no LLM). */
   private extractKeywords(taskText: string): string[] {
-    // Split on whitespace, punctuation, and markdown/code emphasis markers so
-    // `**bold**`, `_italic_`, and `` `code` `` yield the inner word alone,
-    // not leaking asterisks/underscores/backticks into the keyword token.
-    const words = taskText.toLowerCase().split(/[\s,/.;:!?()\[\]{}*_~`"'<>|]+/);
-    const seen = new Set<string>();
-    const result: string[] = [];
-    for (const w of words) {
-      if (w.length > 3 && !seen.has(w)) {
-        seen.add(w);
-        result.push(w);
-      }
-    }
-    return result;
+    return extractMemoryKeywords(taskText);
   }
 
   private scoreKeywords(keywords: string[], text: string): number {
-    const lower = text.toLowerCase();
-    let score = 0;
-    for (const kw of keywords) {
-      // Word-boundary match (whole word = 2 pts, substring = 1 pt).
-      // Escape regex metacharacters — keywords come from untrusted task text,
-      // so a token containing '**', '(', '[' etc. (e.g. markdown `**bold**`
-      // leaking through the split) would throw "Invalid regular expression"
-      // and crash the whole task dispatch.
-      const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const re = new RegExp(`\\b${escaped}\\b`);
-      if (re.test(lower)) score += 2;
-      else if (lower.includes(kw)) score += 1;
-    }
-    return score;
+    return scoreMemoryKeywords(keywords, text);
   }
 
   private selectKnowledgeFiles(knowledgeDir: string, taskText: string, maxFiles = 5): Array<{ path: string; score: number }> {

@@ -62,7 +62,23 @@ export { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-finding
 export type { ParsedFinding, ParseFindingsResult, ParseFindingsOptions, FindingType, Severity, ParseDiagnostic } from './parse-findings';
 export { computeDedupeKey, DEDUPE_KEY_INTERNALS } from './dedupe-key';
 export type { DedupeKeyInput } from './dedupe-key';
-export { AgentMemoryReader } from './agent-memory';
+export { AgentMemoryReader, extractMemoryKeywords, scoreMemoryKeywords } from './agent-memory';
+export {
+  selectLessons,
+  renderLessonBlock,
+  logLessonInjection,
+  LESSON_MAX_CARDS,
+  LESSON_EXCERPT_MAX_CHARS,
+  LESSON_BLOCK_MAX_CHARS,
+  LESSON_MIN_SCORE,
+  LESSON_RELATIVE_FLOOR,
+  LESSON_STALE_DAYS,
+  LESSON_TRUNCATION_MARKER,
+  LESSON_CLAMP_LINE,
+  LESSON_CONSENSUS_FORBIDDEN_CLAUSE,
+  LESSON_INJECTION_LOG,
+} from './lesson-injector';
+export type { SelectedLesson } from './lesson-injector';
 export { MemoryWriter, writeLessonCardsForSignals, lessonCardSlug, TERMINAL_LESSON_SIGNALS, OPERATIONAL_LESSON_SIGNALS, PROJECT_LESSON_AGENT_ID, LESSON_CARDS_MAX_PER_AGENT, LESSON_ID_SEPARATOR } from './memory-writer';
 export type { SessionArtifacts } from './memory-writer';
 export { refreshMemoryIndex, applyStatusTags } from './memory-index';

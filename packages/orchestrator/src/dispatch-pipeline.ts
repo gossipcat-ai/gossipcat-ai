@@ -8,6 +8,7 @@ import { ILLMProvider } from './llm-client';
 import { loadSkills, resolveEffectiveSkills } from './skill-loader';
 import { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment, parseSpecFrontMatter } from './prompt-assembler';
 import { AgentMemoryReader } from './agent-memory';
+import { selectLessons, renderLessonBlock, logLessonInjection } from './lesson-injector';
 import { MemoryWriter } from './memory-writer';
 import { discoverProjectStructure } from './project-structure';
 import { MemoryCompactor } from './memory-compactor';
@@ -329,6 +330,23 @@ export class DispatchPipeline {
     if (agentCorrections.length > 0) {
       log(`🧠 pre-fetched ${agentCorrections.length} prior corrections for ${agentId}`);
     }
+    // 2b. Auto-inject task-matched lesson cards (issue #669). Distinct from
+    //     `agentCorrections` above in three ways that matter: it also searches
+    //     the shared `_project` surface (so a cross-cutting lesson reaches an
+    //     agent who never recorded it), it applies a calibrated relevance floor
+    //     (LESSON_MIN_SCORE) instead of FINDINGS_MIN_SCORE=1, and it carries the
+    //     `<retrieved_knowledge>` clamp so a stale card cannot read as an
+    //     instruction.
+    //     KNOWN OVERLAP (not fixed here — out of scope): a strongly-matching
+    //     own-agent card can appear in BOTH blocks, costing ~150 duplicate
+    //     chars. Deduping means retiring the #642 corrections wiring, which is
+    //     a separate decision.
+    const lessons = selectLessons(this.projectRoot, agentId, task);
+    const lessonBlock = renderLessonBlock(lessons, { consensus: !!options?.consensus });
+    if (lessons.length > 0) {
+      log(`📚 injected ${lessons.length} lesson card(s) for ${agentId}: ${lessons.map(l => l.source).join(', ')}`);
+      logLessonInjection(this.projectRoot, { taskId, agentId, consensus: !!options?.consensus, lessons });
+    }
 
     // 3. Check skill coverage — SINGLE SOURCE OF TRUTH fix
     //    (project_coverage_gap_detector_config_vs_index, CONFIRMED 2026-06-11).
@@ -406,6 +424,7 @@ export class DispatchPipeline {
       projectStructure: this.getProjectStructure(),
       consensusFindings: consensusFindings.length > 0 ? consensusFindings : undefined,
       agentCorrections: agentCorrections.length > 0 ? agentCorrections : undefined,
+      retrievedLessons: lessonBlock || undefined,
     });
 
     // 6. Record TaskGraph created

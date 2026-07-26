@@ -167,6 +167,13 @@ export function assemblePrompt(parts: {
   consensusFindings?: string[];
   /** Pre-fetched per-agent prior corrections (issue #642 B-delta) — rendered under MEMORY, distinct from consensusFindings. */
   agentCorrections?: string[];
+  /**
+   * Pre-rendered RECALLED LESSONS block (issue #669) from
+   * `renderLessonBlock`. Already carries its own delimiters and
+   * `<retrieved_knowledge>` clamp, so it is inserted verbatim. Empty string ⇒
+   * omitted entirely (never an empty header).
+   */
+  retrievedLessons?: string;
   /** The actual task to perform — placed last, always preserved under truncation. */
   task?: string;
 }): string {
@@ -230,7 +237,8 @@ export function assemblePrompt(parts: {
       parts.specReviewContext || parts.projectStructure ||
       parts.task ||
       (parts.consensusFindings && parts.consensusFindings.length > 0) ||
-      (parts.agentCorrections && parts.agentCorrections.length > 0)
+      (parts.agentCorrections && parts.agentCorrections.length > 0) ||
+      !!parts.retrievedLessons
     );
     if (hasAnyMeaningfulPart) {
       suffix.push({ priority: 0, text: `\n\n--- FINDING TAG SCHEMA ---\n${FINDING_TAG_SCHEMA}\n--- END FINDING TAG SCHEMA ---` });
@@ -244,6 +252,15 @@ export function assemblePrompt(parts: {
 
   if (parts.specReviewContext) {
     suffix.push({ priority: 2, text: `\n\n--- SPEC REVIEW ---\n${parts.specReviewContext}\n--- END SPEC REVIEW ---` });
+  }
+
+  // RECALLED LESSONS (issue #669) — auto-injected, task-matched lesson cards.
+  // Shares priority 3 with MEMORY but is inserted first, so under suffix
+  // pressure the stable drop-order sheds the auto-injected block before the
+  // agent's own memory. A caller that has no matching lessons passes '' and
+  // nothing is emitted.
+  if (parts.retrievedLessons) {
+    suffix.push({ priority: 3, text: `\n\n${parts.retrievedLessons}` });
   }
 
   if (parts.memory
