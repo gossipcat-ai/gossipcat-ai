@@ -9,7 +9,6 @@ describe('SkillLoader', () => {
   it('loads default skills by name', () => {
     const result = loadSkills('test-agent', ['typescript'], process.cwd());
     expect(result.content).toContain('TypeScript');
-    expect(result.content).toContain('SKILLS');
     expect(result.loaded).toContain('typescript');
   });
 
@@ -42,9 +41,14 @@ describe('SkillLoader', () => {
     expect(result.content).toContain('grep');
   });
 
-  it('wraps multiple skills with delimiters', () => {
-    const result = loadSkills('test-agent', ['typescript'], process.cwd());
-    expect(result.content).toMatch(/^[\s\S]*--- SKILLS ---[\s\S]*--- END SKILLS ---[\s\S]*$/);
+  // Issue #677: the loader no longer emits SKILLS delimiters — prompt-assembler's
+  // wrapSkillsBlock() is the sole owner. The loader only joins sections.
+  it('joins multiple skills with a separator and emits no delimiters', () => {
+    const result = loadSkills('test-agent', ['typescript', 'code-review'], process.cwd());
+    expect(result.loaded.length).toBeGreaterThan(1);
+    expect(result.content).toContain('\n\n---\n\n');
+    expect(result.content).not.toContain('--- SKILLS ---');
+    expect(result.content).not.toContain('--- END SKILLS ---');
   });
 
   it('resolves underscore skill names to hyphenated filenames', () => {

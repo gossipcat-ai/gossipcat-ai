@@ -56,7 +56,7 @@ export {
   IMPLEMENTER_PERMANENT_DEFAULTS,
   RESEARCHER_REVIEWER_PERMANENT_DEFAULTS,
 } from './permanent-defaults';
-export { assemblePrompt, assembleUtilityPrompt, MAX_ASSEMBLED_PROMPT_CHARS, extractSpecReferences, buildSpecReviewEnrichment, parseSpecFrontMatter, CONSENSUS_OUTPUT_FORMAT, FINDING_TAG_SCHEMA, UTILITY_DATA_ONLY_PREAMBLE, buildUtilityAgentPrompt } from './prompt-assembler';
+export { assemblePrompt, assembleUtilityPrompt, wrapSkillsBlock, SKILLS_BLOCK_OPEN, SKILLS_BLOCK_CLOSE, MAX_ASSEMBLED_PROMPT_CHARS, extractSpecReferences, buildSpecReviewEnrichment, parseSpecFrontMatter, CONSENSUS_OUTPUT_FORMAT, FINDING_TAG_SCHEMA, UTILITY_DATA_ONLY_PREAMBLE, buildUtilityAgentPrompt } from './prompt-assembler';
 export type { SpecStatus } from './prompt-assembler';
 export { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
 export type { ParsedFinding, ParseFindingsResult, ParseFindingsOptions, FindingType, Severity, ParseDiagnostic } from './parse-findings';

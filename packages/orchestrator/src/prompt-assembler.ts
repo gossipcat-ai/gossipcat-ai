@@ -4,6 +4,29 @@ import { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL }
 // Re-exported so existing import sites (`@gossip/orchestrator`) keep working.
 export { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL };
 
+/**
+ * Sole owner of the SKILLS block delimiters (issue #677).
+ *
+ * `loadSkills()` returns BARE skill content — it must not emit these markers.
+ * Every prompt builder that injects skills (this assembler and the Phase-2
+ * cross-review prompt in consensus-engine) frames that content exactly once
+ * via `wrapSkillsBlock`. Before this, both the loader and each consumer
+ * wrapped, producing a nested block whose inner `--- END SKILLS ---` closed
+ * the section early from the model's point of view.
+ *
+ * NOTE: the loader's content sanitizer (skill-loader.ts, `sanitizeContent`)
+ * still rewrites any `--- END SKILLS ---` occurring inside skill FILE content.
+ * That is the trust boundary preventing untrusted skill text from breaking out
+ * of the block, and it is independent of who emits the outer markers.
+ */
+export const SKILLS_BLOCK_OPEN = '--- SKILLS ---';
+export const SKILLS_BLOCK_CLOSE = '--- END SKILLS ---';
+
+/** Frame already-sanitized skill content in exactly one SKILLS block. */
+export function wrapSkillsBlock(skills: string): string {
+  return `\n\n${SKILLS_BLOCK_OPEN}\n${skills}\n${SKILLS_BLOCK_CLOSE}`;
+}
+
 const DOC_EXTENSIONS = new Set(['.md', '.txt', '.rst']);
 const SPEC_PATH_PATTERN = /(?:docs\/|specs\/|[\w-]+-(?:design|spec)\.md)/;
 const FILE_REF_PATTERN = /(?:`([^`]+\.[a-z]{1,6})`|([a-zA-Z][\w/.@-]+\.[a-z]{1,6})(?::\d+)?)/g;
@@ -208,7 +231,7 @@ export function assemblePrompt(parts: {
 
   // BEHAVIORAL — skills define how the agent thinks
   if (parts.skills) {
-    prefix.push(`\n\n--- SKILLS ---\n${parts.skills}\n--- END SKILLS ---`);
+    prefix.push(wrapSkillsBlock(parts.skills));
   }
 
   // ── SUFFIX (preserved under truncation, priority-ordered drop) ─────────

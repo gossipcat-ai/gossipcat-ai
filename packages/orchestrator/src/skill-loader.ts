@@ -40,7 +40,18 @@ export const DEFAULT_KEYWORDS: Record<string, string[]> = {
   // Fabrication-class failures: agent cites code that does not match repo state.
   // Kept in sync with CATEGORY_KEYWORDS in skill-engine.ts — both tables drive contextual activation
   // and auto-inference in gossip_signals, so they must agree.
-  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricat', 'hallucin', 'verify', 'does not exist', 'no such'],
+  // Issue #676: `fabricat` / `hallucin` were stems, but getPattern() compiles
+  // every keyword as /\b<escaped>\b/i — the escape step makes a regex literal
+  // impossible here, and a bare stem never occurs in English, so both entries
+  // were permanently dead on the fabrication-detection category. Listed as
+  // explicit inflections instead; that touches only this category, whereas
+  // relaxing the shared \b anchor in getPattern() would change matching for
+  // every keyword of every skill.
+  // Issue #679: `fabricating` / `hallucinating` were missing — the present
+  // participle is the most natural phrasing in a task brief ("the agent is
+  // fabricating citations"), and \b-anchored matching means no other inflection
+  // covers it.
+  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricate', 'fabricates', 'fabricated', 'fabricating', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucinating', 'hallucination', 'verify', 'does not exist', 'no such'],
   // Phase 1 dev-quality extensions (consensus 09693c51-184246e5).
   observability: ['log', 'logging', 'metric', 'tracing', 'telemetry', 'monitor', 'dashboard', 'stderr', 'observability'],
   cli_ergonomics: ['cli', 'flag', 'help text', 'error message', 'usage', 'prompt', 'banner', 'spinner'],
@@ -386,16 +397,64 @@ export function loadSkills(
   }
   for (const s of rejected) dropped.push({ skill: s.name, reason: 'budget-exceeded', hits: s.hits });
 
-  // Strip delimiter strings from skill content to prevent prompt injection
-  const sanitizeContent = (c: string) => c.replace(/---\s*END SKILLS\s*---/gi, '--- END-SKILLS ---');
+  // Strip delimiter strings from skill content to prevent prompt injection.
+  //
+  // Issue #679 — the previous form
+  //   c.replace(/---\s*END SKILLS\s*---/gi, '--- END-SKILLS ---')
+  // had a deterministic bypass. `--- END SKILLS --- END SKILLS ---` contains two
+  // markers that SHARE the middle `---`; the global scan consumed it in match 1
+  // and could not re-match the second, and the replacement itself ENDED in `---`,
+  // re-supplying the dashes the match took. One live terminator survived.
+  //
+  // Two properties fix it, and both are load-bearing:
+  //  1. the replacement emits NO dashes, so it can never re-form a marker nor
+  //     donate leading/trailing dashes to a neighbouring leftover;
+  //  2. the pattern also covers the OPEN marker (`END` is optional, mirroring the
+  //     LENS strip at apps/cli/src/handlers/dispatch.ts:1751), so a forged
+  //     `--- SKILLS ---` cannot open a nested block either.
+  //
+  // Bounds are deliberately tight — no wider than the strings a consumer would
+  // read as a real delimiter (SKILLS_BLOCK_OPEN / SKILLS_BLOCK_CLOSE in
+  // prompt-assembler.ts):
+  //  * `-{3,}` not `-{2,}`: `-- END SKILLS --` is not a delimiter, so rewriting it
+  //    would be over-sanitization. `{3,}` (not exactly 3) is still required —
+  //    `---- END SKILLS ----` DOES contain a live 3-dash marker.
+  //  * `END\s+` not `END[\s_-]*`: `END_SKILLS` / `END-SKILLS` are not delimiters.
+  //    Matching them would also make the pass non-idempotent against its own
+  //    historical output.
+  //  * a bare `---` never matches (SKILLS is required), so YAML frontmatter fences
+  //    and the `\n\n---\n\n` inter-skill separator below are untouched.
+  //
+  // Invariant: for ANY input, the output contains zero substrings matching
+  // /---\s*END SKILLS\s*---/i or /---\s*SKILLS\s*---/i. Holds because every
+  // marker-shaped substring is itself matched by this pattern, and the
+  // replacement text contains no character of the marker alphabet, so no match
+  // can span it. Covered by
+  // tests/orchestrator/skills-delimiter-and-keywords.test.ts.
+  const sanitizeContent = (c: string) =>
+    c.replace(/-{3,}\s*(?:END\s+)?SKILLS\s*-{3,}/gi, '[skill content: delimiter removed]');
   const sections = [
     ...permanent.map(s => sanitizeContent(s.content)),
     ...scoped.map(s => sanitizeContent(s.content)),
     ...accepted.map(s => sanitizeContent(s.content)),
   ];
 
+  // Issue #677: return BARE skill content — no `--- SKILLS ---` framing.
+  // The prompt builders own the delimiter (`wrapSkillsBlock` in
+  // prompt-assembler.ts); emitting it here too produced a nested block whose
+  // inner terminator closed the section early for the model. The
+  // `sanitizeContent` pass above is unaffected and still required: it is the
+  // trust boundary that stops untrusted skill FILE content from injecting its
+  // own terminator into whichever block the consumer builds.
+  // Sanitize AGAIN after the join. Per-section sanitization structurally cannot
+  // see a marker composed ACROSS the boundary: a section beginning `SKILLS ---`
+  // carries no marker on its own, but the `\n\n---\n\n` separator supplies the
+  // leading dashes, yielding a live forged open marker in the joined string.
+  // The second pass is safe for benign content — a bare separator has no
+  // `SKILLS` token after it, so it never matches — and the sanitizer is
+  // idempotent, so already-clean sections are untouched.
   const contentStr = sections.length > 0
-    ? '\n\n--- SKILLS ---\n\n' + sections.join('\n\n---\n\n') + '\n\n--- END SKILLS ---\n\n'
+    ? sanitizeContent(sections.join('\n\n---\n\n'))
     : '';
 
   return { content: contentStr, loaded, paths, dropped, activatedContextual, loadedScoped };

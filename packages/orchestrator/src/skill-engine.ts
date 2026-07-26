@@ -130,7 +130,15 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
   // Citation grounding — fabrication-class failures: cited file/line/symbol does not match repo state.
   // Gate for this is a skill bind + signal category, not the consensus-engine verifyCitations AND-gate
   // (which only fires on keyword+regex dual-match, rarely in practice).
-  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricat', 'hallucin', 'verify', 'does not exist', 'no such'],
+  // Issue #676: kept in sync with DEFAULT_KEYWORDS.citation_grounding in
+  // skill-loader.ts. This table seeds the `keywords:` frontmatter of generated
+  // skills (see the prompt below), and those keywords are matched by
+  // skill-loader's getPattern() as /\b<keyword>\b/i — so the old `fabricat` /
+  // `hallucin` stems were baked dead into every generated skill too.
+  // Issue #679 adds the present participles (`fabricating` / `hallucinating`) —
+  // the most natural phrasing in a brief, and unreachable from any other
+  // inflection under \b-anchored matching.
+  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricate', 'fabricates', 'fabricated', 'fabricating', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucinating', 'hallucination', 'verify', 'does not exist', 'no such'],
 };
 
 const REQUIRED_SECTIONS = ['## Iron Law', '## When This Skill Activates', '## Methodology', '## Key Patterns', '## Anti-Patterns', '## Quality Gate'];
