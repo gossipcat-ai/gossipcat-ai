@@ -4,15 +4,20 @@
  * dispatched_stale_base precondition. Issue #658.
  *
  * Precedence under test:
- *   1. GOSSIP_BASE_REF env override — wins unconditionally, no git calls.
+ *   1. GOSSIP_BASE_REF env override — wins, but is VALIDATED: it must be
+ *      ref-shaped, must resolve, and must be remote-tracking. An override
+ *      naming a local branch is rejected, because the direct-push detector
+ *      would then flag any unrelated local commit as a violation against an
+ *      innocent agent.
  *   2. git symbolic-ref refs/remotes/origin/HEAD, parsed to 'origin/<branch>'.
  *   3. Fallback candidates origin/master, then origin/main (first that
  *      verifies via `rev-parse --verify --quiet`).
- *   4. Unresolvable → null with a diagnostic distinguishing offline/no-remote
- *      from "checked candidates, none resolved".
+ *   4. Unresolvable → null with a diagnostic. Every git call here is a local
+ *      lookup, so the wording never claims "offline".
  *
- * Also covers per-process caching (discoverBaseRef only calls git once
- * across repeated calls, until resetBaseRefDiscoveryCache()).
+ * Also covers caching semantics: POSITIVE results are cached per cwd; negative
+ * results are NOT cached (so adding a remote mid-session recovers without a
+ * restart), and the env override is read BEFORE the cache.
  */
 
 import {
@@ -37,23 +42,74 @@ afterEach(() => {
 });
 
 describe('discoverBaseRef — GOSSIP_BASE_REF override', () => {
-  it('wins over everything else and makes no git calls', () => {
+  // A validated override DOES call git — it must prove the ref resolves and is
+  // remote-tracking. Accepting it blind is what let GOSSIP_BASE_REF=master fire
+  // a bogus REF-ALLOWLIST VIOLATION against an innocent agent.
+  const remoteTrackingExec = (ref: string) =>
+    jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>((_cmd, args) => {
+      if (args[0] === 'rev-parse' && args.includes('--verify')) return 'abc123\n';
+      if (args[0] === 'rev-parse' && args.includes('--symbolic-full-name')) return `refs/remotes/${ref}\n`;
+      return throwing(`unexpected git call: ${args.join(' ')}`);
+    });
+
+  it('wins over everything else when it names a resolvable remote-tracking ref', () => {
     process.env.GOSSIP_BASE_REF = 'upstream/develop';
-    const execFile = jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>(
-      () => throwing('should not be called'),
-    );
-    const result = discoverBaseRef(CWD, execFile);
-    expect(result).toEqual({ ref: 'upstream/develop' });
-    expect(execFile).not.toHaveBeenCalled();
+    const execFile = remoteTrackingExec('upstream/develop');
+    expect(discoverBaseRef(CWD, execFile)).toEqual({ ref: 'upstream/develop' });
+    // No symbolic-ref/remote discovery calls — the override short-circuits them.
+    expect(execFile.mock.calls.every(([, args]) => args[0] === 'rev-parse')).toBe(true);
   });
 
   it('trims surrounding whitespace', () => {
     process.env.GOSSIP_BASE_REF = '  origin/release  ';
+    expect(discoverBaseRef(CWD, remoteTrackingExec('origin/release')).ref).toBe('origin/release');
+  });
+
+  it('REJECTS an override naming a local branch (would flag an innocent agent)', () => {
+    process.env.GOSSIP_BASE_REF = 'master';
+    const execFile = jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>((_cmd, args) => {
+      if (args[0] === 'rev-parse' && args.includes('--verify')) return 'abc123\n';
+      if (args[0] === 'rev-parse' && args.includes('--symbolic-full-name')) return 'refs/heads/master\n';
+      return throwing(`unexpected git call: ${args.join(' ')}`);
+    });
+    const result = discoverBaseRef(CWD, execFile);
+    expect(result.ref).toBeNull();
+    expect(result.diagnostic).toContain('not a remote-tracking ref');
+    expect(result.diagnostic).toContain('origin/master');
+  });
+
+  it('REJECTS an override that does not resolve', () => {
+    process.env.GOSSIP_BASE_REF = 'origin/mian';
     const execFile = jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>(
-      () => throwing('should not be called'),
+      () => throwing('unknown revision'),
     );
     const result = discoverBaseRef(CWD, execFile);
-    expect(result.ref).toBe('origin/release');
+    expect(result.ref).toBeNull();
+    expect(result.diagnostic).toContain('does not resolve');
+  });
+
+  it.each(['--all', '-e', 'origin/main extra', 'origin/\tmain'])(
+    'REJECTS a non-ref-shaped override without calling git: %j',
+    (bad) => {
+      process.env.GOSSIP_BASE_REF = bad;
+      const execFile = jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>(
+        () => throwing('should not be called'),
+      );
+      const result = discoverBaseRef(CWD, execFile);
+      expect(result.ref).toBeNull();
+      expect(result.diagnostic).toContain('not a valid ref name');
+      expect(execFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it('is read BEFORE the cache, so it recovers a cached-negative session', () => {
+    const failing = jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>(
+      () => throwing('no refs'),
+    );
+    expect(discoverBaseRef(CWD, failing).ref).toBeNull();
+
+    process.env.GOSSIP_BASE_REF = 'origin/main';
+    expect(discoverBaseRef(CWD, remoteTrackingExec('origin/main')).ref).toBe('origin/main');
   });
 
   it('ignores an empty-string override and falls through to discovery', () => {
@@ -162,7 +218,7 @@ describe('discoverBaseRef — unresolvable diagnostic wording', () => {
     expect(result.diagnostic).toContain('origin/main');
   });
 
-  it('reports "offline or no remote" when there is no origin remote at all', () => {
+  it('names the honest causes when there is no origin remote at all', () => {
     const execFile = jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>((_cmd, args) => {
       const key = args.join(' ');
       if (key === 'symbolic-ref --quiet refs/remotes/origin/HEAD') return throwing('unset');
@@ -173,16 +229,48 @@ describe('discoverBaseRef — unresolvable diagnostic wording', () => {
     });
     const result = discoverBaseRef(CWD, execFile);
     expect(result.ref).toBeNull();
-    expect(result.diagnostic).toMatch(/offline or no remote/i);
+    expect(result.diagnostic).toContain('no remote named "origin"');
+    // Every git call in this module is a local ref/config lookup, so "offline"
+    // can never be the true cause and must not be claimed.
+    expect(result.diagnostic).not.toMatch(/offline/i);
   });
 
-  it('reports "offline or no remote" when git itself is unreachable (not a repo)', () => {
+  it('names the honest causes when git itself is unreachable (not a repo)', () => {
     const execFile = jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>(
       () => throwing('fatal: not a git repository'),
     );
     const result = discoverBaseRef(CWD, execFile);
     expect(result.ref).toBeNull();
-    expect(result.diagnostic).toMatch(/offline or no remote/i);
+    expect(result.diagnostic).toContain('not a git repository');
+    expect(result.diagnostic).not.toMatch(/offline/i);
+  });
+});
+
+describe('discoverBaseRef — cache semantics', () => {
+  const resolvingExec = (which: string) =>
+    jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>((_cmd, args) => {
+      const key = args.join(' ');
+      if (key === 'symbolic-ref --quiet refs/remotes/origin/HEAD') return throwing('unset');
+      if (key === `rev-parse --verify --quiet ${which}`) return 'abc123\n';
+      if (key.startsWith('rev-parse --verify --quiet')) return throwing('fatal: ambiguous argument');
+      return throwing(`unexpected: ${key}`);
+    });
+
+  it('does NOT cache a negative result — adding a remote mid-session recovers', () => {
+    const failing = jest.fn<ReturnType<ExecFileLike>, Parameters<ExecFileLike>>(
+      () => throwing('no refs yet'),
+    );
+    expect(discoverBaseRef(CWD, failing).ref).toBeNull();
+
+    // Operator runs `git remote add origin ... && git fetch`. No restart.
+    expect(discoverBaseRef(CWD, resolvingExec('origin/main')).ref).toBe('origin/main');
+  });
+
+  it('keys the cache by cwd — a second root does not inherit the first ref', () => {
+    expect(discoverBaseRef('/repoA', resolvingExec('origin/main')).ref).toBe('origin/main');
+    expect(discoverBaseRef('/repoB', resolvingExec('origin/master')).ref).toBe('origin/master');
+    // /repoA still served from its own cache entry, not overwritten by /repoB.
+    expect(discoverBaseRef('/repoA', resolvingExec('origin/main')).ref).toBe('origin/main');
   });
 });
 

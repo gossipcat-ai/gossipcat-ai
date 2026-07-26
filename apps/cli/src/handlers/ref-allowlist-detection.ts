@@ -21,10 +21,13 @@ import { discoverBaseRef } from './base-ref-discovery';
 const PROCESS_VIOLATIONS_FILE = '.gossip/process-violations.jsonl';
 
 function execFileForBaseRef(cmd: string, args: string[], opts: { cwd: string; encoding: 'utf8' }): string {
+  // stdio ignores stderr to match every other git call in this file — without
+  // it, git `fatal:` lines leak to the terminal, which is the exact noise class
+  // issue #658 set out to remove.
   // .toString() is a no-op when execFileSync already honored `encoding` and
   // returned a string; it correctly decodes a Buffer when a test double (or a
   // future refactor) returns one despite the encoding option.
-  return execFileSync(cmd, args, opts).toString();
+  return execFileSync(cmd, args, { ...opts, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
 }
 
 /**

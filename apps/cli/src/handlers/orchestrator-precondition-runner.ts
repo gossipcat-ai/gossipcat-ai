@@ -90,6 +90,13 @@ export interface StaleBaseInputs {
   dispatchSha: string;
   originMasterSha: string;
   mergeBaseSha: string | null;
+  /**
+   * The base ref the SHAs above were read from (e.g. 'origin/main'). Carried so
+   * the operator warning and the emitted signal name the ACTUAL ref — on a
+   * main-default repo or with GOSSIP_BASE_REF set, a hardcoded 'origin/master'
+   * label describes a ref that was never consulted.
+   */
+  baseRef: string;
 }
 
 export interface PreconditionGuardAdditionalTask {
@@ -335,8 +342,16 @@ export async function gatherStaleBaseInputs(
   execFile: PreconditionRunnerDeps['execFile'] = defaultExecFile,
 ): Promise<StaleBaseInputs | null> {
   try {
-    const { ref } = discoverBaseRef(projectRoot, execFile);
-    if (!ref) return null;
+    const { ref, diagnostic } = discoverBaseRef(projectRoot, execFile);
+    if (!ref) {
+      // Say so. Silently returning null disabled dispatched_stale_base with no
+      // operator-visible trace, so a misconfigured base ref looked like a
+      // healthy dispatch.
+      process.stderr.write(
+        `[gossipcat] stale-base check skipped — ${diagnostic ?? 'no base ref resolved'}\n`,
+      );
+      return null;
+    }
 
     const dispatchSha = execFile('git', ['rev-parse', 'HEAD'], {
       cwd: projectRoot,
@@ -353,7 +368,7 @@ export async function gatherStaleBaseInputs(
       encoding: 'utf8',
     }).trim();
 
-    return { dispatchSha, originMasterSha, mergeBaseSha };
+    return { dispatchSha, originMasterSha, mergeBaseSha, baseRef: ref };
   } catch {
     return null;
   }
@@ -401,7 +416,7 @@ export async function runDispatchPreconditionGuard(
         const reason = staleResult.reason;
         warnings.push(
           `[dispatch-hygiene] stale base detected (${reason}): ` +
-          `dispatch SHA ${gitInputs.dispatchSha} is behind origin/master ` +
+          `dispatch SHA ${gitInputs.dispatchSha} is behind ${gitInputs.baseRef} ` +
           `${gitInputs.originMasterSha}. Pull and rebase before dispatching.`,
         );
         try {
@@ -413,6 +428,7 @@ export async function runDispatchPreconditionGuard(
             metadata: {
               reason,
               dispatchSha: gitInputs.dispatchSha,
+              baseRef: gitInputs.baseRef,
             },
             timestamp: new Date().toISOString(),
           }]);

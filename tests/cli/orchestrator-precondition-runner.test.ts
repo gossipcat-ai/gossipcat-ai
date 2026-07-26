@@ -137,6 +137,7 @@ describe('gatherStaleBaseInputs', () => {
       dispatchSha: 'abc111',
       originMasterSha: 'def222',
       mergeBaseSha: 'abc111',
+      baseRef: 'origin/master',
     });
   });
 
@@ -175,6 +176,7 @@ describe('gatherStaleBaseInputs', () => {
       dispatchSha: 'h1',
       originMasterSha: 'o1',
       mergeBaseSha: 'h1',
+      baseRef: 'origin/main',
     });
     expect(execFile).toHaveBeenCalledWith(
       'git',
@@ -192,6 +194,11 @@ describe('gatherStaleBaseInputs', () => {
         if (key === 'rev-parse HEAD') return 'h9\n';
         if (key === 'rev-parse upstream/develop') return 'o9\n';
         if (key === 'merge-base HEAD upstream/develop') return 'h9\n';
+        // The override is validated before use: it must resolve and be
+        // remote-tracking (a local branch would make the direct-push detector
+        // flag an innocent agent).
+        if (key === 'rev-parse --verify --quiet upstream/develop') return 'o9\n';
+        if (key === 'rev-parse --symbolic-full-name upstream/develop') return 'refs/remotes/upstream/develop\n';
         throw new Error(`unexpected git call: ${key}`);
       });
       const result = await gatherStaleBaseInputs('/root', execFile);
@@ -199,8 +206,9 @@ describe('gatherStaleBaseInputs', () => {
         dispatchSha: 'h9',
         originMasterSha: 'o9',
         mergeBaseSha: 'h9',
+        baseRef: 'upstream/develop',
       });
-      // Override skips discovery entirely — no symbolic-ref / verify calls.
+      // Override skips symbolic-ref discovery — it only validates itself.
       expect(execFile).not.toHaveBeenCalledWith('git', expect.arrayContaining(['symbolic-ref']), expect.anything());
     } finally {
       if (prev === undefined) delete process.env.GOSSIP_BASE_REF;
