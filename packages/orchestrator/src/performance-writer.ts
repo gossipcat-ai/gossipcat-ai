@@ -80,6 +80,12 @@ export const VALID_CONSENSUS_SIGNALS = new Set([
   // transport_failure).
   'auto_verify_attempted',
   'auto_verify_skipped_misconfigured',
+  // Operator-authored process lesson (issue #668) — a mistake in how the SYSTEM
+  // was operated, carrying a session-scoped finding_id instead of a
+  // consensus-scoped one. Operational: performance-reader.ts filters it out of
+  // `consensusSignals` entirely, so it moves no score. Must be listed here or
+  // validateSignal drops every emit (the PR #329 failure mode).
+  'operational_lesson',
 ]);
 
 export const VALID_IMPL_SIGNALS = new Set([

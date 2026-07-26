@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { MemoryWriter } from '../../packages/orchestrator/src/memory-writer';
+import { MemoryWriter, lessonCardSlug } from '../../packages/orchestrator/src/memory-writer';
 import { AgentMemoryReader } from '../../packages/orchestrator/src/agent-memory';
 
 const knowledgeDir = (root: string, id: string) =>
@@ -44,12 +44,16 @@ describe('f3 — idempotent update at cap does not evict an unrelated card', () 
     const kdir = knowledgeDir(root, 'r1');
     mkdirSync(kdir, { recursive: true });
 
-    // Seed exactly the cap with real-shaped lesson filenames (slug = sanitizeTaskId(finding_id)).
+    // Seed exactly the cap with real-shaped lesson filenames. The slug is
+    // `lessonCardSlug(finding_id)` (issue #670 f1) — derive it rather than
+    // hand-writing the old `sanitizeTaskId` shape, or the "existing card"
+    // lookup below silently misses and this stops testing the update path.
     const CAP = 200; // LESSON_CARDS_MAX_PER_AGENT
+    const cardName = (i: number) => `lesson-${lessonCardSlug(`aaaaaaaa-bbbbbbbb:r1:f${i}`)}.md`;
     for (let i = 0; i < CAP; i++) {
-      writeFileSync(join(kdir, `lesson-aaaaaaaa-bbbbbbbb_r1_f${i}.md`), '---\ntype: lesson\n---\nold');
+      writeFileSync(join(kdir, cardName(i)), '---\ntype: lesson\n---\nold');
     }
-    const oldest = 'lesson-aaaaaaaa-bbbbbbbb_r1_f0.md';
+    const oldest = cardName(0);
 
     // Update an EXISTING finding_id (f5), not the oldest — no new card is added.
     w.writeLessonCard('r1', {

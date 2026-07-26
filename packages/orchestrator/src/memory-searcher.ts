@@ -74,26 +74,48 @@ export class MemorySearcher {
     // Cap query length to prevent DoS via keyword extraction
     const safeQuery = query.slice(0, MAX_QUERY_LENGTH);
 
-    // The _project sentinel searches the shared auto-memory corpus via BM25 sidecar.
-    // loadIndex inside searchCorpus handles lazy incremental rebuild when any
-    // corpus *.md mtime advances past the stored index entry mtime.
-    if (agentId === '_project') {
-      return this.searchCorpus(query, maxResults);
-    }
+    // The _project sentinel searches TWO surfaces and merges them:
+    //
+    //   1. the shared auto-memory corpus via the BM25 sidecar (`searchCorpus`).
+    //      loadIndex inside searchCorpus handles lazy incremental rebuild when
+    //      any corpus *.md mtime advances past the stored index entry mtime.
+    //   2. `.gossip/agents/_project/memory/knowledge/lesson-*.md` — the in-repo
+    //      home for cross-cutting operational lesson CARDS (issue #668 §3),
+    //      reached by falling through to the per-agent scan below.
+    //
+    // Surface 1 alone lives under ~/.claude/projects/<encoded-cwd>/memory, which
+    // is per-user and per-machine: a teammate cloning this repo sees none of it.
+    // Surface 2 is committed alongside the code, which is exactly why lessons
+    // about operating this repo belong there.
+    //
+    // Surface 2 is capped to `lesson-*.md` (and skips tasks.jsonl) on purpose —
+    // issue #670 f2. The two surfaces are scored by different, INCOMPARABLE
+    // functions: BM25 saturates (top observed ≈33) while `scoreContent` is
+    // unbounded upward (up to 10 per keyword × MAX_KEYWORDS × importance). With
+    // the whole `_project` dir in scope, generic session/consensus knowledge
+    // dumps outscored curated corpus hits and pushed them out of the shared
+    // `slice(0, limit)`. Capping the surface to the artifact the merge was
+    // actually added for keeps every non-lesson `_project` query byte-identical
+    // to its pre-merge result, without inventing a normalization between two
+    // scales that genuinely are not comparable.
+    const isSharedProjectSurface = agentId === '_project';
+    const corpusResults = isSharedProjectSurface ? this.searchCorpus(query, maxResults) : [];
 
     const limit = Math.min(maxResults, 10);
     const keywords = this.extractKeywords(safeQuery);
-    if (keywords.length === 0) return [];
+    if (keywords.length === 0) return corpusResults;
 
     const memDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory');
-    if (!existsSync(memDir)) return [];
+    if (!existsSync(memDir)) return corpusResults;
 
-    const results: SearchResult[] = [];
+    const results: SearchResult[] = [...corpusResults];
 
     // Search knowledge .md files
     const knowledgeDir = join(memDir, 'knowledge');
     if (existsSync(knowledgeDir)) {
-      const files = readdirSync(knowledgeDir).filter(f => f.endsWith('.md'));
+      const files = readdirSync(knowledgeDir).filter(
+        f => f.endsWith('.md') && (!isSharedProjectSurface || f.startsWith('lesson-')),
+      );
       for (const file of files) {
         const filePath = join(knowledgeDir, file);
         try {
@@ -122,9 +144,12 @@ export class MemorySearcher {
       }
     }
 
-    // Search tasks.jsonl (with size guard to prevent event-loop stall)
+    // Search tasks.jsonl (with size guard to prevent event-loop stall).
+    // Skipped for the shared `_project` surface — dispatch rows are not lesson
+    // cards, and letting them compete with the corpus is the regression #670 f2
+    // describes.
     const tasksPath = join(memDir, 'tasks.jsonl');
-    if (existsSync(tasksPath)) {
+    if (!isSharedProjectSurface && existsSync(tasksPath)) {
       try {
         const stat = statSync(tasksPath);
         if (stat.size > MAX_TASK_FILE_BYTES) return results.sort((a, b) => b.score - a.score).slice(0, limit);

@@ -1,6 +1,6 @@
 import { appendFileSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, openSync, closeSync, constants, statSync } from 'fs';
 import { join, resolve } from 'path';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { TaskMemoryEntry } from './types';
 import { MemoryCompactor } from './memory-compactor';
 import type { ILLMProvider } from './llm-client';
@@ -91,11 +91,87 @@ export const TERMINAL_LESSON_SIGNALS = new Set<string>([
   'hallucination_caught', 'impl_test_fail', 'impl_peer_rejected',
 ]);
 
+/**
+ * Operator-authored process-failure signals that also produce a lesson card
+ * (issue #668). Distinct from `TERMINAL_LESSON_SIGNALS`: those are verdicts on
+ * an agent's finding, these are verdicts on how the system was operated. Kept
+ * as a separate set so the two lifecycles can diverge without breaking callers
+ * that already import `TERMINAL_LESSON_SIGNALS`.
+ */
+export const OPERATIONAL_LESSON_SIGNALS = new Set<string>(['operational_lesson']);
+
 /** Max lesson cards retained per agent — count-based prune at write time (review f5). */
 export const LESSON_CARDS_MAX_PER_AGENT = 200;
 
-/** Agent ids that never receive lesson cards. */
+/**
+ * Shared cross-cutting lesson home. A lesson filed under a specific agent id is
+ * only reachable by a query carrying that id; lessons about operating this repo
+ * ("a dist-mcp bundle built inside a git worktree is always broken") apply to
+ * everyone and are routed here instead. Issue #668 §3.
+ */
+export const PROJECT_LESSON_AGENT_ID = '_project';
+
+/**
+ * Agent ids that never receive lesson cards.
+ *
+ * `_project` stays blocked on the default path — a per-agent verdict must not
+ * silently land in shared memory just because the caller passed the sentinel as
+ * `agentId`. The ONLY way to reach `_project` is the explicit `crossCutting`
+ * opt-in on `writeLessonCard` (issue #668 §3), which retargets the write rather
+ * than relaxing this gate.
+ */
 const LESSON_RESERVED_AGENT_IDS = new Set<string>(['_project', '_system', '_utility']);
+
+/**
+ * Separator that joins the components of a structured `finding_id` when it is
+ * flattened into one filename component.
+ *
+ * It MUST be a character the id components can never themselves contain, or the
+ * flattening is not injective and two distinct ids overwrite one card. The
+ * components are validated with `SAFE_NAME` (`/^[a-z0-9][a-z0-9_-]{0,62}$/`,
+ * skill-engine.ts), so `_` and `-` are BOTH payload characters — the previous
+ * `:`→`_` mapping made `session:a_b:c` and `session:a:b_c` collapse to the same
+ * file. `.` is outside `SAFE_NAME` and is a legal filename character on
+ * macOS/Linux/Windows (only a LEADING dot is meaningful, and every card name
+ * starts with the literal `lesson-`), so it can never be produced by a payload.
+ */
+export const LESSON_ID_SEPARATOR = '.';
+
+/** Chars that must never reach the filesystem, mapped to `_` (payload-safe: they are not valid in a component either). */
+const LESSON_PATH_UNSAFE = /[/\\*?"<>|\0]/g;
+
+/** Max flattened-id characters kept in a card filename, before the disambiguating digest. */
+const LESSON_SLUG_HEAD_MAX = 96;
+
+/** Hex characters of sha256(finding_id) appended to every card filename. */
+const LESSON_SLUG_DIGEST_LEN = 8;
+
+/**
+ * Build the filename slug for a lesson card from its `finding_id`.
+ *
+ * Two independent collision sources are closed here, and BOTH shapes of
+ * finding_id (consensus `<8hex>-<8hex>:<agent>:fN` and operational
+ * `session:<sessionId>:<slug>`) go through this one function, so neither can
+ * regress independently:
+ *
+ *  1. *Separator ambiguity* — `:` becomes `.` (see `LESSON_ID_SEPARATOR`)
+ *     instead of `_`, which is a legal payload character.
+ *  2. *Truncation ambiguity* — the flattened head is capped at
+ *     `LESSON_SLUG_HEAD_MAX`, so two long ids sharing a prefix used to land on
+ *     the same file. A short sha256 digest of the FULL, unflattened id is
+ *     appended, so ids that differ anywhere (including past the cap, and
+ *     including in characters the flattening rewrites) get distinct files.
+ *
+ * Returns `''` for an empty id; the caller must not write a card in that case.
+ */
+export function lessonCardSlug(findingId: string): string {
+  if (typeof findingId !== 'string' || findingId.length === 0) return '';
+  const flat = findingId.replace(/:/g, LESSON_ID_SEPARATOR).replace(LESSON_PATH_UNSAFE, '_');
+  const head = flat.slice(0, LESSON_SLUG_HEAD_MAX);
+  if (!head) return '';
+  const digest = createHash('sha256').update(findingId, 'utf8').digest('hex').slice(0, LESSON_SLUG_DIGEST_LEN);
+  return `${head}${LESSON_ID_SEPARATOR}${digest}`;
+}
 
 export class MemoryWriter {
   private summaryLlm: ILLMProvider | null = null;
@@ -1089,18 +1165,44 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
   /**
    * Write a recallable "lesson card" for a terminal correction signal (issue #642 A).
    * Best-effort: any failure is swallowed — this MUST NOT fail signal recording.
-   * Idempotent: keyed by finding_id via sanitizeTaskId, no timestamp in the filename.
+   * Idempotent: keyed by finding_id via `lessonCardSlug`, no timestamp in the
+   * filename — and injective, so two different finding_ids can never overwrite
+   * one another's card (issue #670 f1).
+   *
+   * `card.crossCutting` (issue #668 §3) retargets the write to the shared
+   * `_project` knowledge dir. It is an explicit opt-in — nothing infers it from
+   * the lesson text — and `agentId` is still recorded in frontmatter as
+   * `origin_agent` so provenance survives the move.
    */
   writeLessonCard(agentId: string, card: {
     signal: string; findingId: string; finding: string; lesson?: string; taskTokens?: string;
+    crossCutting?: boolean;
   }): void {
     try {
-      if (LESSON_RESERVED_AGENT_IDS.has(agentId)) return;
+      // Fail-closed: the `crossCutting` opt-in unblocks exactly ONE reserved id
+      // (`_project`, which is also where it writes). `_system` / `_utility` stay
+      // blocked no matter what the caller passes.
+      if (
+        LESSON_RESERVED_AGENT_IDS.has(agentId) &&
+        !(card.crossCutting && agentId === PROJECT_LESSON_AGENT_ID)
+      ) {
+        // Observability (issue #670 f3): a cross-cutting opt-in from a reserved
+        // agent id WOULD have targeted `_project`, so dropping it silently looks
+        // to the operator like the card was written. Say so instead.
+        if (card.crossCutting) {
+          gossipLog(
+            `lesson card dropped: cross_cutting requested by reserved agentId "${agentId}" — ` +
+            `only "${PROJECT_LESSON_AGENT_ID}" may write the shared dir (finding_id: ${card.findingId})`,
+          );
+        }
+        return;
+      }
       validateAgentId(agentId); // throws on path escape
-      const slug = sanitizeTaskId(card.findingId).slice(0, 96);
+      const targetAgentId = card.crossCutting ? PROJECT_LESSON_AGENT_ID : agentId;
+      const slug = lessonCardSlug(card.findingId);
       if (!slug) return;
 
-      const memDir = this.ensureDirs(agentId);
+      const memDir = this.ensureDirs(targetAgentId);
       const knowledgeDir = join(memDir, 'knowledge');
       const today = new Date().toISOString().split('T')[0];
       const generated = new Date().toISOString();
@@ -1116,7 +1218,11 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
         `name: lesson-${sanitizeYamlValue(card.signal)}-${shortId}`,
         `description: ${desc}`,
         'type: lesson',
-        `agent: ${sanitizeYamlValue(agentId)}`,
+        `agent: ${sanitizeYamlValue(targetAgentId)}`,
+        // Provenance for cross-cutting lessons: `agent` is where the card LIVES,
+        // `origin_agent` is who the signal was recorded against. Identical on the
+        // default (non-cross-cutting) path.
+        `origin_agent: ${sanitizeYamlValue(agentId)}`,
         `signal: ${sanitizeYamlValue(card.signal)}`,
         `finding_id: ${sanitizeYamlValue(card.findingId)}`,
         'importance: 0.7',
@@ -1300,21 +1406,42 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
 }
 
 /**
- * Fan a batch of recorded signals into lesson cards (issue #642 A).
- * Only terminal correction signals with a finding_id produce a card.
+ * Fan a batch of recorded signals into lesson cards (issue #642 A, extended by
+ * issue #668). A card is produced for terminal correction signals AND for
+ * operator-authored `operational_lesson` signals, in both cases only when a
+ * finding_id is present.
+ *
+ * `cross_cutting: true` routes the card to `_project` — but ONLY for
+ * `OPERATIONAL_LESSON_SIGNALS` (issue #670 f3). A terminal correction signal is
+ * a verdict about ONE agent's finding; filing it in shared memory would publish
+ * a per-agent blame card to every `_project` recall. The flag is ignored (with a
+ * warning) rather than honoured on those signals.
+ *
  * Best-effort — never throws.
  */
 export function writeLessonCardsForSignals(
   projectRoot: string,
-  signals: Array<{ signal: string; agent_id: string; finding: string; finding_id?: string; lesson?: string }>,
+  signals: Array<{
+    signal: string; agent_id: string; finding: string; finding_id?: string; lesson?: string;
+    cross_cutting?: boolean;
+  }>,
 ): void {
   if (!Array.isArray(signals) || signals.length === 0) return;
   const writer = new MemoryWriter(projectRoot);
   for (const s of signals) {
-    if (!s || !s.finding_id || !TERMINAL_LESSON_SIGNALS.has(s.signal)) continue;
+    if (!s || !s.finding_id) continue;
+    if (!TERMINAL_LESSON_SIGNALS.has(s.signal) && !OPERATIONAL_LESSON_SIGNALS.has(s.signal)) continue;
+    const isOperational = OPERATIONAL_LESSON_SIGNALS.has(s.signal);
+    if (s.cross_cutting === true && !isOperational) {
+      gossipLog(
+        `cross_cutting ignored on "${s.signal}" (finding_id: ${s.finding_id}) — ` +
+        'the shared _project lesson dir accepts operational_lesson only; card filed under the agent',
+      );
+    }
     writer.writeLessonCard(s.agent_id, {
       signal: s.signal,
       findingId: s.finding_id,
+      crossCutting: s.cross_cutting === true && isOperational,
       finding: s.finding ?? '',
       lesson: s.lesson,
       taskTokens: s.finding,

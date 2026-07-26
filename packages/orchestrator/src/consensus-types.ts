@@ -231,7 +231,18 @@ export interface ConsensusSignal {
      * suitable verifier. Closed `<reason>` union documented at the spec.
      * No-op for scoring.
      */
-    | 'auto_verify_skipped_misconfigured';
+    | 'auto_verify_skipped_misconfigured'
+    /**
+     * Operator-authored process lesson (issue #668). Unlike every other member
+     * of this union, it describes how the SYSTEM was operated — a stale dispatch
+     * base, an expired relay window, a branch switched under live reviewers —
+     * not the quality of a finding about code. It therefore carries a
+     * session-scoped `findingId` (`session:<sessionId>:<slug>`) instead of a
+     * consensus-scoped one, and is a hard no-op for accuracy / uniqueness /
+     * circuit-breaker arithmetic. Its payload is the `lesson` text, which is
+     * fanned into a recallable lesson card by `writeLessonCardsForSignals`.
+     */
+    | 'operational_lesson';
   agentId: string;
   counterpartId?: string;
   skill?: string;
@@ -428,6 +439,13 @@ export const OPERATIONAL_SIGNAL_NAMES: ReadonlySet<string> = new Set([
   'dispatched_stale_base',
   'referenced_unreadable_path',
   'mid_flight_fixup',
+  /**
+   * Operator-authored process lesson (issue #668). Same class as the three
+   * auto-fired dispatch-hygiene signals above — the only difference is that a
+   * human/orchestrator writes it via `gossip_signals(action: "record")` rather
+   * than the pipeline emitting it. Never affects accuracy scoring.
+   */
+  'operational_lesson',
 ]);
 
 /**
