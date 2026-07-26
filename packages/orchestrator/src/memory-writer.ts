@@ -91,10 +91,35 @@ export const TERMINAL_LESSON_SIGNALS = new Set<string>([
   'hallucination_caught', 'impl_test_fail', 'impl_peer_rejected',
 ]);
 
+/**
+ * Operator-authored process-failure signals that also produce a lesson card
+ * (issue #668). Distinct from `TERMINAL_LESSON_SIGNALS`: those are verdicts on
+ * an agent's finding, these are verdicts on how the system was operated. Kept
+ * as a separate set so the two lifecycles can diverge without breaking callers
+ * that already import `TERMINAL_LESSON_SIGNALS`.
+ */
+export const OPERATIONAL_LESSON_SIGNALS = new Set<string>(['operational_lesson']);
+
 /** Max lesson cards retained per agent — count-based prune at write time (review f5). */
 export const LESSON_CARDS_MAX_PER_AGENT = 200;
 
-/** Agent ids that never receive lesson cards. */
+/**
+ * Shared cross-cutting lesson home. A lesson filed under a specific agent id is
+ * only reachable by a query carrying that id; lessons about operating this repo
+ * ("a dist-mcp bundle built inside a git worktree is always broken") apply to
+ * everyone and are routed here instead. Issue #668 §3.
+ */
+export const PROJECT_LESSON_AGENT_ID = '_project';
+
+/**
+ * Agent ids that never receive lesson cards.
+ *
+ * `_project` stays blocked on the default path — a per-agent verdict must not
+ * silently land in shared memory just because the caller passed the sentinel as
+ * `agentId`. The ONLY way to reach `_project` is the explicit `crossCutting`
+ * opt-in on `writeLessonCard` (issue #668 §3), which retargets the write rather
+ * than relaxing this gate.
+ */
 const LESSON_RESERVED_AGENT_IDS = new Set<string>(['_project', '_system', '_utility']);
 
 export class MemoryWriter {
@@ -1090,17 +1115,30 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
    * Write a recallable "lesson card" for a terminal correction signal (issue #642 A).
    * Best-effort: any failure is swallowed — this MUST NOT fail signal recording.
    * Idempotent: keyed by finding_id via sanitizeTaskId, no timestamp in the filename.
+   *
+   * `card.crossCutting` (issue #668 §3) retargets the write to the shared
+   * `_project` knowledge dir. It is an explicit opt-in — nothing infers it from
+   * the lesson text — and `agentId` is still recorded in frontmatter as
+   * `origin_agent` so provenance survives the move.
    */
   writeLessonCard(agentId: string, card: {
     signal: string; findingId: string; finding: string; lesson?: string; taskTokens?: string;
+    crossCutting?: boolean;
   }): void {
     try {
-      if (LESSON_RESERVED_AGENT_IDS.has(agentId)) return;
+      // Fail-closed: the `crossCutting` opt-in unblocks exactly ONE reserved id
+      // (`_project`, which is also where it writes). `_system` / `_utility` stay
+      // blocked no matter what the caller passes.
+      if (
+        LESSON_RESERVED_AGENT_IDS.has(agentId) &&
+        !(card.crossCutting && agentId === PROJECT_LESSON_AGENT_ID)
+      ) return;
       validateAgentId(agentId); // throws on path escape
+      const targetAgentId = card.crossCutting ? PROJECT_LESSON_AGENT_ID : agentId;
       const slug = sanitizeTaskId(card.findingId).slice(0, 96);
       if (!slug) return;
 
-      const memDir = this.ensureDirs(agentId);
+      const memDir = this.ensureDirs(targetAgentId);
       const knowledgeDir = join(memDir, 'knowledge');
       const today = new Date().toISOString().split('T')[0];
       const generated = new Date().toISOString();
@@ -1116,7 +1154,11 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
         `name: lesson-${sanitizeYamlValue(card.signal)}-${shortId}`,
         `description: ${desc}`,
         'type: lesson',
-        `agent: ${sanitizeYamlValue(agentId)}`,
+        `agent: ${sanitizeYamlValue(targetAgentId)}`,
+        // Provenance for cross-cutting lessons: `agent` is where the card LIVES,
+        // `origin_agent` is who the signal was recorded against. Identical on the
+        // default (non-cross-cutting) path.
+        `origin_agent: ${sanitizeYamlValue(agentId)}`,
         `signal: ${sanitizeYamlValue(card.signal)}`,
         `finding_id: ${sanitizeYamlValue(card.findingId)}`,
         'importance: 0.7',
@@ -1300,21 +1342,28 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
 }
 
 /**
- * Fan a batch of recorded signals into lesson cards (issue #642 A).
- * Only terminal correction signals with a finding_id produce a card.
+ * Fan a batch of recorded signals into lesson cards (issue #642 A, extended by
+ * issue #668). A card is produced for terminal correction signals AND for
+ * operator-authored `operational_lesson` signals, in both cases only when a
+ * finding_id is present. `cross_cutting: true` routes the card to `_project`.
  * Best-effort — never throws.
  */
 export function writeLessonCardsForSignals(
   projectRoot: string,
-  signals: Array<{ signal: string; agent_id: string; finding: string; finding_id?: string; lesson?: string }>,
+  signals: Array<{
+    signal: string; agent_id: string; finding: string; finding_id?: string; lesson?: string;
+    cross_cutting?: boolean;
+  }>,
 ): void {
   if (!Array.isArray(signals) || signals.length === 0) return;
   const writer = new MemoryWriter(projectRoot);
   for (const s of signals) {
-    if (!s || !s.finding_id || !TERMINAL_LESSON_SIGNALS.has(s.signal)) continue;
+    if (!s || !s.finding_id) continue;
+    if (!TERMINAL_LESSON_SIGNALS.has(s.signal) && !OPERATIONAL_LESSON_SIGNALS.has(s.signal)) continue;
     writer.writeLessonCard(s.agent_id, {
       signal: s.signal,
       findingId: s.finding_id,
+      crossCutting: s.cross_cutting === true,
       finding: s.finding ?? '',
       lesson: s.lesson,
       taskTokens: s.finding,

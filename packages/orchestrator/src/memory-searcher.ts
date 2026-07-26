@@ -74,21 +74,34 @@ export class MemorySearcher {
     // Cap query length to prevent DoS via keyword extraction
     const safeQuery = query.slice(0, MAX_QUERY_LENGTH);
 
-    // The _project sentinel searches the shared auto-memory corpus via BM25 sidecar.
-    // loadIndex inside searchCorpus handles lazy incremental rebuild when any
-    // corpus *.md mtime advances past the stored index entry mtime.
-    if (agentId === '_project') {
-      return this.searchCorpus(query, maxResults);
-    }
+    // The _project sentinel searches TWO surfaces and merges them:
+    //
+    //   1. the shared auto-memory corpus via the BM25 sidecar (`searchCorpus`).
+    //      loadIndex inside searchCorpus handles lazy incremental rebuild when
+    //      any corpus *.md mtime advances past the stored index entry mtime.
+    //   2. `.gossip/agents/_project/memory/knowledge/` — the in-repo home for
+    //      cross-cutting operational lesson cards (issue #668 §3), reached by
+    //      falling through to the per-agent scan below.
+    //
+    // Surface 1 alone lives under ~/.claude/projects/<encoded-cwd>/memory, which
+    // is per-user and per-machine: a teammate cloning this repo sees none of it.
+    // Surface 2 is committed alongside the code, which is exactly why lessons
+    // about operating this repo belong there.
+    //
+    // The merge is a plain score-descending concat at the end of this method.
+    // The two surfaces are scored by different functions (BM25 vs the keyword
+    // scorer), so ordering is only meaningful WITHIN a surface — documented
+    // here rather than papered over with a fake normalization.
+    const corpusResults = agentId === '_project' ? this.searchCorpus(query, maxResults) : [];
 
     const limit = Math.min(maxResults, 10);
     const keywords = this.extractKeywords(safeQuery);
-    if (keywords.length === 0) return [];
+    if (keywords.length === 0) return corpusResults;
 
     const memDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory');
-    if (!existsSync(memDir)) return [];
+    if (!existsSync(memDir)) return corpusResults;
 
-    const results: SearchResult[] = [];
+    const results: SearchResult[] = [...corpusResults];
 
     // Search knowledge .md files
     const knowledgeDir = join(memDir, 'knowledge');

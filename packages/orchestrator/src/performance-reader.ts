@@ -265,6 +265,11 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   // Spec: docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md.
   auto_verify_attempted: true,
   auto_verify_skipped_misconfigured: true,
+  // Operator-authored process lesson (issue #668). Listed here only so the
+  // scoring switch's exhaustiveness check holds — the switch arm is a hard
+  // no-op. "Score preconditions, not decisions": an operator recording their
+  // own process mistake must never dent an agent's accuracy.
+  operational_lesson: true,
 };
 
 const SEVERITY_MULTIPLIER: Record<string, number> = {
@@ -835,7 +840,22 @@ export class PerformanceReader {
     // Split into typed arrays once so remaining code keeps narrow types.
     // consensusSignals → scoring + streak building.
     // implSignals      → streak building only (scoring is handled separately by getImplScore).
-    const consensusSignals = signals.filter((s): s is ConsensusSignal => s.type === 'consensus');
+    //
+    // `operational_lesson` (issue #668) is dropped HERE, before any other pass
+    // sees it. A no-op switch arm further down is NOT sufficient: the loops
+    // between here and there have side effects that a merely-unscored signal
+    // would still trigger —
+    //   1. the task-order index at :888 would advance `taskCounter`, shifting
+    //      `tasksSince` for every prior signal and silently re-weighting decay
+    //      (measured: weightedHallucinations 8.697 → 8.401 from one extra row);
+    //   2. the circuit-breaker streak at :1214 treats any non-negative known
+    //      signal as a streak-breaker, so recording a process lesson would
+    //      REHABILITATE an agent sitting on 3 consecutive hallucinations.
+    // Both are score movement, and "score preconditions, not decisions" means
+    // an operator logging their own mistake must move nothing at all.
+    const consensusSignals = signals.filter(
+      (s): s is ConsensusSignal => s.type === 'consensus' && s.signal !== 'operational_lesson',
+    );
     const implSignals = signals.filter((s): s is ImplSignal => s.type === 'impl');
 
     // Per-agent accumulators for ratio-based scoring
@@ -1181,6 +1201,12 @@ export class PerformanceReader {
         case 'worktree_isolation_failed':
         case 'auto_verify_attempted':
         case 'auto_verify_skipped_misconfigured':
+          break;
+        case 'operational_lesson':
+          // Unreachable: filtered out of `consensusSignals` at the split above,
+          // because a no-op arm here would still be too late (see the comment
+          // there). This arm exists only to satisfy the exhaustiveness check
+          // below, and to fail loudly in review if the filter is ever removed.
           break;
         default: {
           // Exhaustiveness: any new ConsensusSignal['signal'] member added to

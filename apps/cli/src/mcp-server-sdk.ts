@@ -321,6 +321,11 @@ import {
   invalidateAll as invalidateAllDispatchPromptCache,
 } from './handlers/dispatch-prompt-cache';
 import { handleCollect } from './handlers/collect';
+import {
+  validateOperationalLessonSignal,
+  isOperationalLessonSignal,
+  FINDING_ID_FORMS_HELP,
+} from './handlers/operational-lesson-id';
 import { restorePendingConsensus } from './handlers/relay-cross-review';
 // Hoisted from inline import inside createMcpServer (gossip_watch tool). Inline
 // `import` statements were valid at module scope before the createMcpServer
@@ -3420,13 +3425,14 @@ export function createMcpServer(): McpServer {
       task_id: z.string().optional().describe('Task ID to link signals to. For record: optional (synthetic ID if omitted). For per-signal retract: required.'),
       task_start_time: z.string().optional().describe('ISO-8601 timestamp of the underlying task/consensus round. Used as the per-batch fallback timestamp so bulk-recording from a backlog preserves true chronology. Falls back to wall-clock if omitted.'),
       signals: z.array(z.object({
-        signal: z.enum(['agreement', 'disagreement', 'unique_confirmed', 'unique_unconfirmed', 'new_finding', 'hallucination_caught', 'impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected'])
-          .describe('Signal type: agreement (both agree), disagreement (one wrong), unique_confirmed (only one found it + verified), unique_unconfirmed (only one found it, unverified), new_finding (discovered during cross-review), hallucination_caught (fabricated finding), impl_test_pass/fail (write-mode task outcome), impl_peer_approved/rejected (peer code review verdict)'),
+        signal: z.enum(['agreement', 'disagreement', 'unique_confirmed', 'unique_unconfirmed', 'new_finding', 'hallucination_caught', 'impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected', 'operational_lesson'])
+          .describe('Signal type: agreement (both agree), disagreement (one wrong), unique_confirmed (only one found it + verified), unique_unconfirmed (only one found it, unverified), new_finding (discovered during cross-review), hallucination_caught (fabricated finding), impl_test_pass/fail (write-mode task outcome), impl_peer_approved/rejected (peer code review verdict), operational_lesson (operator-authored PROCESS failure — no consensus round; requires finding_id "session:<sessionId>:<slug>" and a non-empty lesson; never affects accuracy scoring)'),
         agent_id: z.string().describe('Agent being evaluated'),
         counterpart_id: z.string().optional().describe('The other agent involved (e.g., who won the disagreement)'),
         finding: z.string().describe('Brief description of the finding'),
         lesson: z.string().optional().describe('Root-cause narrative for a terminal correction signal — 1-2 sentences on why it failed and the check that would have caught it. Written verbatim into the discovering agent\'s lesson card (issue #642 A).'),
-        finding_id: z.string().optional().describe('Consensus finding ID — links this signal to a specific finding in a consensus report. Enables dashboard to resolve UNVERIFIED findings.'),
+        finding_id: z.string().optional().describe('Finding ID. Two accepted shapes: (a) consensus-scoped "<8hex>-<8hex>:<agent>:fN" — links this signal to a specific finding in a consensus report, enabling the dashboard to resolve UNVERIFIED findings; (b) session-scoped "session:<sessionId>:<slug>" — REQUIRED and only valid for signal "operational_lesson". Both <sessionId> and <slug> must be safe path segments; a path-unsafe value is rejected, never sanitized.'),
+        cross_cutting: z.boolean().optional().describe('Explicit opt-in (no heuristic): file this signal\'s lesson card in the shared .gossip/agents/_project/memory/knowledge/ instead of the recording agent\'s own knowledge dir. Use for lessons every contributor needs (e.g. "a dist-mcp bundle built inside a git worktree is always broken"). The signal row itself stays attributed to agent_id; only the card moves, and it records origin_agent in frontmatter.'),
         severity: z.enum(['critical', 'high', 'medium', 'low']).optional().describe('Finding severity for impact scoring. If omitted, defaults to medium.'),
         category: z.string().optional().describe('Finding category for ATI competency profiles (e.g., concurrency, trust_boundaries, injection_vectors, resource_exhaustion, type_safety, error_handling, data_integrity, input_validation)'),
         evidence: z.string().optional().describe('Supporting evidence or reasoning'),
@@ -3732,16 +3738,30 @@ export function createMcpServer(): McpServer {
         const PUNITIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement']);
         const COUNTERPART_REQUIRED = new Set(['agreement', 'disagreement', 'impl_peer_approved', 'impl_peer_rejected']);
 
-        // finding_id schema gate. A finding_id, WHEN PROVIDED, must carry a
-        // consensus-id prefix (8-8 hex followed by ':'). The suffix is left
-        // permissive — `<cid>:fN`, `<cid>:<agent>:fN`, and `<cid>:<agent>:nN`
-        // shapes are all live. A malformed value silently breaks round-retraction
-        // prefix-match (performance-reader.ts) and resolve scoping, so reject it
-        // loudly here rather than persist an unauditable signal.
+        // finding_id schema gate. TWO shapes are accepted, and only two:
+        //
+        //   (a) consensus-scoped — a finding_id, WHEN PROVIDED, must carry a
+        //       consensus-id prefix (8-8 hex followed by ':'). The suffix is left
+        //       permissive — `<cid>:fN`, `<cid>:<agent>:fN`, and `<cid>:<agent>:nN`
+        //       shapes are all live. This is the PRIMARY contract and is
+        //       unchanged: a malformed value silently breaks round-retraction
+        //       prefix-match (performance-reader.ts) and resolve scoping.
+        //   (b) session-scoped — `session:<sessionId>:<slug>`, valid ONLY for
+        //       signal "operational_lesson" (issue #668). Process failures have
+        //       no consensus round, so requiring (a) forced operators to invent
+        //       filler consensus ids. See handlers/operational-lesson-id.ts.
+        //
+        // Anything else is rejected loudly rather than persisted as an
+        // unauditable signal — fail-closed, never sanitize-and-continue.
         const FINDING_ID_PREFIX = /^[0-9a-f]{8}-[0-9a-f]{8}:/;
         for (const s of signals) {
+          const opErr = validateOperationalLessonSignal(s);
+          if (opErr) return { content: [{ type: 'text' as const, text: opErr }] };
+          // Operational lessons were fully validated above (shape (b)); skip the
+          // consensus-prefix check so the two grammars stay disjoint.
+          if (isOperationalLessonSignal(s.signal)) continue;
           if (s.finding_id !== undefined && !FINDING_ID_PREFIX.test(s.finding_id)) {
-            return { content: [{ type: 'text' as const, text: `Error: malformed finding_id "${s.finding_id}" (agent: ${s.agent_id}). Expected a consensus-id prefix: <8hex>-<8hex>:... (e.g. "b81956b2-e0fa4ea4:sonnet-reviewer:f1"). See CLAUDE.md signal contract.` }] };
+            return { content: [{ type: 'text' as const, text: `Error: malformed finding_id "${s.finding_id}" (agent: ${s.agent_id}). ${FINDING_ID_FORMS_HELP} See CLAUDE.md signal contract.` }] };
           }
         }
 
@@ -3793,6 +3813,12 @@ export function createMcpServer(): McpServer {
           if (task_start_time) return new Date(new Date(task_start_time).getTime() + i).toISOString();
           return new Date(wallClockMs + i).toISOString();
         };
+        // `signal_class` is stamped only for operator-authored process lessons
+        // (issue #668) so dashboards can partition them without re-deriving the
+        // class from the signal name. Scoring exclusion does NOT depend on this
+        // field — performance-reader.ts drops `operational_lesson` from
+        // `consensusSignals` outright — it is display metadata, matching the
+        // write-forward-only contract documented on `SignalClass`.
         const formatted: PS[] = signals.map((s, i): PS => {
           const ts = resolveTs(s, i);
           const taskId = task_id || `manual-${batchFallback.replace(/[:.]/g, '')}-${i}`;
@@ -3811,6 +3837,7 @@ export function createMcpServer(): McpServer {
           return {
             type: 'consensus',
             signal: s.signal as Exclude<typeof s.signal, 'impl_test_pass' | 'impl_test_fail' | 'impl_peer_approved' | 'impl_peer_rejected'>,
+            signal_class: isOperationalLessonSignal(s.signal) ? 'operational' : undefined,
             agentId: s.agent_id,
             taskId,
             counterpartId: s.counterpart_id,
@@ -3997,7 +4024,7 @@ export function createMcpServer(): McpServer {
         // never gates signal recording.
         try {
           const { writeLessonCardsForSignals } = await import('@gossip/orchestrator');
-          writeLessonCardsForSignals(process.cwd(), (signals ?? []) as Array<{ signal: string; agent_id: string; finding: string; finding_id?: string; lesson?: string }>);
+          writeLessonCardsForSignals(process.cwd(), (signals ?? []) as Array<{ signal: string; agent_id: string; finding: string; finding_id?: string; lesson?: string; cross_cutting?: boolean }>);
         } catch { /* best-effort */ }
 
         // Auto-convert hallucination signals into skill gap suggestions.

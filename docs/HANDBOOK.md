@@ -169,6 +169,16 @@ PR #629 gave the orchestrator its own signals under `agentId: 'orchestrator'`. T
 
 **Two load-bearing rules.** (1) All three are registered in `OPERATIONAL_SIGNAL_NAMES` (`consensus-types.ts`) → `signal_class: 'operational'` → **EXCLUDED from accuracy scoring** (`performance-reader.ts` `readSignals` keeps only `consensus`/`impl`). They are telemetry, not a score — a noisy precondition never dents an agent score. (2) **Score preconditions, not decisions** — only mechanically-falsifiable dispatch-state failures qualify; never judgment calls. The companion **`ask_back()`** tool re-engages an agent after `hallucination_caught` for a first-person root-cause → `.gossip/fabrication-introspections.jsonl`. Full history: `project_orchestrator_signal_pipeline` memory; `ahead_of_origin` fix consensus `124a9ba4-ca5645e4`.
 
+**Operator-authored process lessons (`operational_lesson`, issue #668).** The three signals above auto-fire; a human/orchestrator can record the same CLASS of failure by hand with `gossip_signals(action: "record", signals: [{ signal: "operational_lesson", ... }])`. Process failures have no consensus round, so this signal takes a **session-scoped** `finding_id` instead of a consensus-scoped one:
+
+```
+session:<sessionId>:<slug>
+```
+
+`<sessionId>` is the analogue of the consensus id (which round-of-work the lesson belongs to); `<slug>` is the analogue of `fN` (a stable name, so re-recording overwrites one card instead of accumulating duplicates). Both components must match `SAFE_NAME` (`skill-engine.ts`) because they become part of the card filename — a path-unsafe value is **rejected, never sanitized**. The two grammars are disjoint and mutually exclusive: a session-scoped id on a consensus signal is rejected, and a consensus-scoped id on an `operational_lesson` is rejected. `lesson:` is **required** — the lesson text is the entire payload, since the signal is filtered out of `consensusSignals` in `performance-reader.ts` and therefore moves no score at all.
+
+Set `cross_cutting: true` to file the resulting lesson card in `.gossip/agents/_project/memory/knowledge/` instead of the recording agent's own dir. Use it for lessons every contributor needs (e.g. *a dist-mcp bundle built inside a git worktree is always broken, because the nested `packages/tools/node_modules/zod` is unreachable from a worktree*), since an agent-scoped card is only reachable by a query carrying that agent's id. It is an explicit opt-in — nothing infers it from the lesson text — and the card records `origin_agent` so provenance survives the move.
+
 ---
 
 ## Operator playbook (for orchestrator LLMs)
