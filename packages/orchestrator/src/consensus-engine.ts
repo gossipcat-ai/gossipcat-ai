@@ -2079,10 +2079,14 @@ Return only valid JSON.${skillsBlock}`;
     try {
       if (!this.isInsideAnyRoot(candidate, allRoots)) return null;
       await stat(candidate);
-      let real = candidate;
-      try { real = realpathSync(candidate); } catch { /* keep pre-realpath form */ }
+      // Fail CLOSED when realpath is unavailable. isInsideAnyRoot normalizes
+      // textually (resolve()), but stat/readFile let the kernel resolve `..`
+      // AFTER following symlinks — so realpath is the only check that sees
+      // where the path actually lands. Keeping the pre-realpath form here made
+      // the containment re-check below a no-op repeat of the pre-stat check.
+      const real = realpathSync(candidate);
       if (this.isInsideAnyRoot(real, allRoots)) return real;
-    } catch { /* candidate does not exist at this location */ }
+    } catch { /* candidate does not exist here, or realpath is unavailable */ }
     return null;
   }
 
@@ -2116,10 +2120,14 @@ Return only valid JSON.${skillsBlock}`;
     priorityRoots: string[],
     allRoots: string[],
   ): Promise<string | null> {
-    const asIs = await this.acceptCandidate(fileRef, allRoots);
+    // resolve() FIRST — never hand a raw citation to acceptCandidate. An
+    // un-normalized `<root>/<symlinked-dir>/../secret.ts` passes the textual
+    // containment check while the kernel resolves it outside every root.
+    const abs = resolve(fileRef);
+
+    const asIs = await this.acceptCandidate(abs, allRoots);
     if (asIs) return asIs;
 
-    const abs = resolve(fileRef);
     const prefixRoots = [...allRoots].sort((a, b) => resolve(b).length - resolve(a).length);
     for (const prefixRoot of prefixRoots) {
       const rel = relative(resolve(prefixRoot), abs);

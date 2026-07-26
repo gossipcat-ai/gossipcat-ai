@@ -8,7 +8,7 @@
  */
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
 import { testRound } from '../../packages/orchestrator/src/round-context';
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -132,5 +132,39 @@ describe('ConsensusEngine — absolute citation paths (#660)', () => {
     const resolved = await engine.resolveFilePath(join(repo, 'packages', 'a', 'zz-ghost-only.ts'));
 
     expect(resolved).toBeNull();
+  });
+
+  // Regression: the first cut of this fix passed the RAW fileRef to
+  // acceptCandidate, which let `<root>/<symlinked-dir>/../secret.ts` escape
+  // every configured root. isInsideAnyRoot collapses `..` textually (so the
+  // path looks contained), but stat/readFile let the kernel resolve `..` AFTER
+  // following the symlink — landing outside. realpathSync pre-resolves
+  // textually, so it ENOENT'd and the old fail-OPEN catch kept the raw path,
+  // making the post-realpath containment check a no-op. Caught by
+  // fable-reviewer; out-of-root file contents reached the <anchor> block.
+  //
+  // NOTE: the attack path MUST be built by string concat — join()/resolve()
+  // collapse `..` textually and silently defuse the exploit.
+  it('does NOT resolve an absolute path that escapes via a symlinked dir plus ..', async () => {
+    const victimDir = join(root, 'victim');
+    mkdirSync(join(victimDir, 'nested'), { recursive: true });
+    writeFileSync(join(victimDir, 'creds.ts'), 'const SECRET = "sk-EXFILTRATED";\n');
+    symlinkSync(join(victimDir, 'nested'), join(repo, 'link'));
+    const engine = makeEngine(repo);
+
+    const escape = repo + '/link/../creds.ts';
+
+    expect(await engine.resolveFilePath(escape)).toBeNull();
+    expect(await engine.cachedResolveForAnchor(escape)).toBeNull();
+  });
+
+  it('does NOT resolve an absolute path through a symlinked dir that leaves the root', async () => {
+    const victimDir = join(root, 'victim2');
+    mkdirSync(victimDir, { recursive: true });
+    writeFileSync(join(victimDir, 'leak.ts'), 'const SECRET = "leaked";\n');
+    symlinkSync(victimDir, join(repo, 'out'));
+    const engine = makeEngine(repo);
+
+    expect(await engine.resolveFilePath(join(repo, 'out', 'leak.ts'))).toBeNull();
   });
 });
