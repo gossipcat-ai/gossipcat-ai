@@ -40,7 +40,14 @@ export const DEFAULT_KEYWORDS: Record<string, string[]> = {
   // Fabrication-class failures: agent cites code that does not match repo state.
   // Kept in sync with CATEGORY_KEYWORDS in skill-engine.ts — both tables drive contextual activation
   // and auto-inference in gossip_signals, so they must agree.
-  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricat', 'hallucin', 'verify', 'does not exist', 'no such'],
+  // Issue #676: `fabricat` / `hallucin` were stems, but getPattern() compiles
+  // every keyword as /\b<escaped>\b/i — the escape step makes a regex literal
+  // impossible here, and a bare stem never occurs in English, so both entries
+  // were permanently dead on the fabrication-detection category. Listed as
+  // explicit inflections instead; that touches only this category, whereas
+  // relaxing the shared \b anchor in getPattern() would change matching for
+  // every keyword of every skill.
+  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricate', 'fabricates', 'fabricated', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucination', 'verify', 'does not exist', 'no such'],
   // Phase 1 dev-quality extensions (consensus 09693c51-184246e5).
   observability: ['log', 'logging', 'metric', 'tracing', 'telemetry', 'monitor', 'dashboard', 'stderr', 'observability'],
   cli_ergonomics: ['cli', 'flag', 'help text', 'error message', 'usage', 'prompt', 'banner', 'spinner'],
@@ -394,8 +401,15 @@ export function loadSkills(
     ...accepted.map(s => sanitizeContent(s.content)),
   ];
 
+  // Issue #677: return BARE skill content — no `--- SKILLS ---` framing.
+  // The prompt builders own the delimiter (`wrapSkillsBlock` in
+  // prompt-assembler.ts); emitting it here too produced a nested block whose
+  // inner terminator closed the section early for the model. The
+  // `sanitizeContent` pass above is unaffected and still required: it is the
+  // trust boundary that stops untrusted skill FILE content from injecting its
+  // own terminator into whichever block the consumer builds.
   const contentStr = sections.length > 0
-    ? '\n\n--- SKILLS ---\n\n' + sections.join('\n\n---\n\n') + '\n\n--- END SKILLS ---\n\n'
+    ? sections.join('\n\n---\n\n')
     : '';
 
   return { content: contentStr, loaded, paths, dropped, activatedContextual, loadedScoped };

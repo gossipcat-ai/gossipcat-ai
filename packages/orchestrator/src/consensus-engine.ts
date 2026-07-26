@@ -20,6 +20,7 @@ import { getRuntimeFlagBool } from './runtime-config';
 import { selectCrossReviewers, FindingForSelection, AgentCandidate } from './cross-reviewer-selection';
 import { parseAgentFindingsStrict, PARSE_FINDINGS_LIMITS } from './parse-findings';
 import { extractCategories, isValidCategory } from './category-extractor';
+import { wrapSkillsBlock } from './prompt-assembler';
 import { logUncategorizedFinding } from './uncategorized-logger';
 
 export type {
@@ -865,7 +866,7 @@ CHAINING (action:"new" only): if your NEW finding EXTENDS a specific peer findin
       try {
         const skills = this.config.getAgentSkillsContent(agent.agentId, agent.task);
         if (skills && skills.trim().length > 0) {
-          skillsBlock = `\n\n--- SKILLS ---\n${skills}\n--- END SKILLS ---`;
+          skillsBlock = wrapSkillsBlock(skills);
         }
       } catch { /* skill resolution is best-effort */ }
     }
