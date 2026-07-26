@@ -29,21 +29,46 @@ export function extractMemoryKeywords(taskText: string): string[] {
   return result;
 }
 
-/** Word-boundary match = 2 pts, substring = 1 pt. See extractMemoryKeywords. */
-export function scoreMemoryKeywords(keywords: readonly string[], text: string): number {
+/** A keyword paired with its precompiled word-boundary matcher. */
+export interface KeywordMatcher {
+  kw: string;
+  re: RegExp;
+}
+
+/**
+ * Compile one word-boundary RegExp per keyword, ONCE per keyword list.
+ *
+ * The compile used to live inside the per-(keyword, document) loop, so a
+ * dispatch scoring K keywords over D files performed K×D compiles. Measured on
+ * the lesson path: 8.8s for a 252KB task, ~0.25-0.5s for a realistic 30-60KB
+ * spec-inlined task. Hoisting makes it K compiles regardless of D.
+ *
+ * Metacharacters are escaped — keywords come from untrusted task text, so a
+ * token containing '**', '(', '[' etc. (e.g. markdown `**bold**` leaking
+ * through the split) would throw "Invalid regular expression" and crash the
+ * whole task dispatch.
+ */
+export function compileKeywordMatchers(keywords: readonly string[]): KeywordMatcher[] {
+  return keywords.map(kw => ({
+    kw,
+    re: new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`),
+  }));
+}
+
+/** Word-boundary match = 2 pts, substring = 1 pt, against precompiled matchers. */
+export function scoreCompiledKeywords(matchers: readonly KeywordMatcher[], text: string): number {
   const lower = text.toLowerCase();
   let score = 0;
-  for (const kw of keywords) {
-    // Escape regex metacharacters — keywords come from untrusted task text, so a
-    // token containing '**', '(', '[' etc. (e.g. markdown `**bold**` leaking
-    // through the split) would throw "Invalid regular expression" and crash the
-    // whole task dispatch.
-    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`\\b${escaped}\\b`);
-    if (re.test(lower)) score += 2;
-    else if (lower.includes(kw)) score += 1;
+  for (const m of matchers) {
+    if (m.re.test(lower)) score += 2;
+    else if (lower.includes(m.kw)) score += 1;
   }
   return score;
+}
+
+/** Word-boundary match = 2 pts, substring = 1 pt. See extractMemoryKeywords. */
+export function scoreMemoryKeywords(keywords: readonly string[], text: string): number {
+  return scoreCompiledKeywords(compileKeywordMatchers(keywords), text);
 }
 
 export class AgentMemoryReader {
@@ -118,6 +143,8 @@ export class AgentMemoryReader {
 
     const keywords = this.extractKeywords(taskText);
     if (keywords.length === 0) return [];
+    // Compile once for the whole scan — see compileKeywordMatchers.
+    const matchers = compileKeywordMatchers(keywords);
 
     const cutoffMs = Date.now() - FINDINGS_STALE_DAYS * 86_400_000;
     const scored: Array<{ text: string; score: number }> = [];
@@ -161,7 +188,7 @@ export class AgentMemoryReader {
 
       if (!body) continue;
 
-      const score = this.scoreKeywords(keywords, body);
+      const score = scoreCompiledKeywords(matchers, body);
       if (score >= FINDINGS_MIN_SCORE) {
         const snippet = body.slice(0, FINDINGS_MAX_CHARS).replace(/\s+/g, ' ').trim();
         scored.push({ text: snippet, score });
@@ -195,6 +222,8 @@ export class AgentMemoryReader {
 
     const keywords = this.extractKeywords(taskText);
     if (keywords.length === 0) return [];
+    // Compile once for the whole scan — see compileKeywordMatchers.
+    const matchers = compileKeywordMatchers(keywords);
 
     const cutoffMs = Date.now() - FINDINGS_STALE_DAYS * 86_400_000;
     const scored: Array<{ text: string; score: number }> = [];
@@ -217,7 +246,7 @@ export class AgentMemoryReader {
         .trim();
       if (!body) continue;
 
-      const score = this.scoreKeywords(keywords, body);
+      const score = scoreCompiledKeywords(matchers, body);
       if (score >= FINDINGS_MIN_SCORE) {
         scored.push({ text: body.slice(0, FINDINGS_MAX_CHARS).trim(), score });
       }
@@ -232,10 +261,6 @@ export class AgentMemoryReader {
   /** Simple word-boundary keyword overlap scoring (no LLM). */
   private extractKeywords(taskText: string): string[] {
     return extractMemoryKeywords(taskText);
-  }
-
-  private scoreKeywords(keywords: string[], text: string): number {
-    return scoreMemoryKeywords(keywords, text);
   }
 
   private selectKnowledgeFiles(knowledgeDir: string, taskText: string, maxFiles = 5): Array<{ path: string; score: number }> {

@@ -333,10 +333,10 @@ export class DispatchPipeline {
     // 2b. Auto-inject task-matched lesson cards (issue #669). Distinct from
     //     `agentCorrections` above in three ways that matter: it also searches
     //     the shared `_project` surface (so a cross-cutting lesson reaches an
-    //     agent who never recorded it), it applies a calibrated relevance floor
-    //     (LESSON_MIN_SCORE) instead of FINDINGS_MIN_SCORE=1, and it carries the
-    //     `<retrieved_knowledge>` clamp so a stale card cannot read as an
-    //     instruction.
+    //     agent who never recorded it), it applies a normalized relevance model
+    //     (lesson-scoring.ts) instead of a raw-overlap FINDINGS_MIN_SCORE=1, and
+    //     it carries the `<retrieved_knowledge>` clamp so a stale card cannot
+    //     read as an instruction.
     //     KNOWN OVERLAP (not fixed here — out of scope): a strongly-matching
     //     own-agent card can appear in BOTH blocks, costing ~150 duplicate
     //     chars. Deduping means retiring the #642 corrections wiring, which is

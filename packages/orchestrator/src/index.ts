@@ -70,8 +70,7 @@ export {
   LESSON_MAX_CARDS,
   LESSON_EXCERPT_MAX_CHARS,
   LESSON_BLOCK_MAX_CHARS,
-  LESSON_MIN_SCORE,
-  LESSON_RELATIVE_FLOOR,
+  LESSON_BLOCK_RENDERED_MAX_CHARS,
   LESSON_STALE_DAYS,
   LESSON_TRUNCATION_MARKER,
   LESSON_CLAMP_LINE,
@@ -79,6 +78,20 @@ export {
   LESSON_INJECTION_LOG,
 } from './lesson-injector';
 export type { SelectedLesson } from './lesson-injector';
+export {
+  lessonTerms,
+  scoreLessonCards,
+  clearsLessonFloor,
+  LESSON_QUERY_SATURATION,
+  LESSON_DF_WEIGHT_FLOOR,
+  LESSON_CARD_TERM_REFERENCE,
+  LESSON_MIN_DISTINCT_MATCHES,
+  LESSON_MIN_WEIGHTED_OVERLAP,
+  LESSON_MIN_RELEVANCE,
+  LESSON_MAX_SCORED_TASK_CHARS,
+} from './lesson-scoring';
+export type { LessonRelevance, ScorableCard } from './lesson-scoring';
+export { LESSON_STOPWORDS } from './lesson-stopwords';
 export { MemoryWriter, writeLessonCardsForSignals, lessonCardSlug, TERMINAL_LESSON_SIGNALS, OPERATIONAL_LESSON_SIGNALS, PROJECT_LESSON_AGENT_ID, LESSON_CARDS_MAX_PER_AGENT, LESSON_ID_SEPARATOR } from './memory-writer';
 export type { SessionArtifacts } from './memory-writer';
 export { refreshMemoryIndex, applyStatusTags } from './memory-index';
