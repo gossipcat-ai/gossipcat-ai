@@ -11,6 +11,7 @@ import { GossipAgent } from '@gossip/client';
 import { MessageType, MessageEnvelope, Message, ToolDefinition, LLMMessage } from '@gossip/types';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
 import { ILLMProvider, PROVIDER_PLACEHOLDER_RE } from './llm-client';
+import { formatErrorWithCause } from './error-format';
 import { resolveTaskImages, buildUserContent } from './task-images';
 import {
   TaskStreamEvent,
@@ -460,7 +461,10 @@ export class WorkerAgent {
         yield { type: TaskStreamEventType.FINAL_RESULT, payload: { result: 'Task incomplete — agent exhausted its turn budget.', inputTokens: totalInputTokens, outputTokens: totalOutputTokens, memoryQueryCalled: this.memoryQueryCalled }, timestamp: Date.now() };
       }
     } catch (err) {
-      const errorMessage = `FATAL ERROR in executeTask: ${(err as Error).message}`;
+      // formatErrorWithCause surfaces the OS-level cause undici hides behind a
+      // generic "fetch failed" (code/errno/syscall/hostname/...) — see #657.
+      // Never includes request body/headers/Authorization values.
+      const errorMessage = `FATAL ERROR in executeTask: ${formatErrorWithCause(err)}`;
       yield logAndYield(errorMessage);
       this.onTaskComplete?.({ agentId: this.agentId, taskId: taskId ?? '', toolCalls: toolCallCount, durationMs: Date.now() - startTime, memoryQueryCalled: this.memoryQueryCalled });
       yield { type: TaskStreamEventType.ERROR, payload: { error: errorMessage }, timestamp: Date.now() };

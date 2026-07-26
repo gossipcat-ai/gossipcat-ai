@@ -11,20 +11,60 @@
 import { randomUUID } from 'crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import * as dns from 'dns';
 import { ToolDefinition, LLMMessage } from '@gossip/types';
 import { LLMResponse } from './types';
 import { log as _log } from './log';
 import { recordAuthFailure, clearAuthFailure } from './auth-state';
+import { formatErrorWithCause, isRetryableTransportError } from './error-format';
 
-// ─── 503 Retry Helper ───────────────────────────────────────────────────────
+// ─── Optional IPv4-preference DNS toggle (issue #657) ──────────────────────
+//
+// HYPOTHESIS considered for #657 ("curl works, undici's fetch doesn't, from
+// the same host in the same minute"): curl performs classic Happy Eyeballs
+// (RFC 8305) — it races A/AAAA and uses whichever connects first — while
+// Node's global `fetch` resolves via `dns.lookup()`'s default result order and
+// does not itself race both families per attempt. If `dns.lookup` hands back
+// an AAAA (IPv6) record on a path where IPv6 is dark (blackholed rather than
+// simply absent), the connect attempt can hang for the OS-level TCP timeout
+// before undici ever surfaces a failure — which lines up with the reported
+// 89–168s latency far better than a fast DNS or connection-refused error would.
+//
+// CONCLUSION: plausible contributing factor, but UNCONFIRMED for this specific
+// incident — no packet capture / DNS trace was collected. This repo's
+// `engines.node` floor is >=22, which does not force IPv4 by default, and this
+// change does not either: silently forcing IPv4 process-wide to fix one
+// unconfirmed report would be a behavior change for every provider and every
+// environment, including ones where IPv6 is the working path. Instead this is
+// opt-in only: set GOSSIP_LLM_PREFER_IPV4=1 to flip Node's global DNS result
+// order so `dns.lookup` (which undici's fetch uses to resolve hosts) returns A
+// records before AAAA. Leave it unset and behavior is unchanged.
+if (process.env.GOSSIP_LLM_PREFER_IPV4 === '1') {
+  try {
+    dns.setDefaultResultOrder('ipv4first');
+    _log('llm-client', 'GOSSIP_LLM_PREFER_IPV4=1 — dns.setDefaultResultOrder("ipv4first")');
+  } catch { /* Node build without this API — no-op, opt-in has no effect */ }
+}
+
+// ─── Transport-retry constants ──────────────────────────────────────────────
+//
+// Bounded retry for socket/DNS/TLS-level failures ONLY (see
+// isRetryableTransportError) — never for an HTTP response the server actually
+// returned (4xx/5xx fail fast, exactly as before) and never for quota/429
+// (QuotaTracker owns that cooldown machinery; transport retries don't touch it)
+// or abort/cancellation.
+const TRANSPORT_RETRY_MAX_ATTEMPTS = 2; // additional attempts beyond the first (3 total)
+const TRANSPORT_RETRY_BACKOFF_MS = [1_000, 3_000];
+
+// ─── 503 + Transport Retry Helper ──────────────────────────────────────────
 
 /**
- * Wraps fetch with one-shot retry on 503 (service unavailable / overloaded).
- * Many 503s clear within seconds — a single short retry recovers the request
- * before triggering the cooldown dance in QuotaTracker.handle503. If the retry
- * also returns 503, returns that response and lets the caller's handle503()
- * set the cooldown as before. The caller does NOT need to know whether a
- * retry happened.
+ * One-shot retry on 503 (service unavailable / overloaded). Many 503s clear
+ * within seconds — a single short retry recovers the request before
+ * triggering the cooldown dance in QuotaTracker.handle503. If the retry also
+ * returns 503, returns that response and lets the caller's handle503() set
+ * the cooldown as before. The caller does NOT need to know whether a retry
+ * happened.
  *
  * Notes:
  * - Drains the first response body before retrying so the connection releases.
@@ -32,7 +72,7 @@ import { recordAuthFailure, clearAuthFailure } from './auth-state';
  * - Reuses the caller's RequestInit including AbortSignal — the original
  *   timeout budget still applies across both attempts combined.
  */
-async function fetchWithRetry503(
+async function fetchOnceWithServiceUnavailableRetry(
   url: string,
   init: RequestInit,
   providerName: string,
@@ -54,6 +94,48 @@ async function fetchWithRetry503(
   // Second attempt. If it also returns 503, the caller's existing handle503
   // path takes over and sets the cooldown.
   return fetch(url, init);
+}
+
+/**
+ * Wraps {@link fetchOnceWithServiceUnavailableRetry} with a bounded retry for
+ * transport-level failures — undici throwing "fetch failed" (or a recognized
+ * socket/DNS/TLS error code) BEFORE any HTTP response was ever received. See
+ * issue #657: undici discards the OS-level cause behind the generic
+ * "fetch failed" message, so this class of failure was previously both
+ * undiagnosable (fixed by {@link formatErrorWithCause}, used in the log line
+ * below and by worker-agent.ts's fatal-error path) and un-retried — a single
+ * transient ECONNRESET/timeout took down the whole dispatch.
+ *
+ * Retries up to TRANSPORT_RETRY_MAX_ATTEMPTS additional times with the
+ * TRANSPORT_RETRY_BACKOFF_MS backoff schedule. Does NOT retry: any HTTP
+ * response the server actually returned (this function never sees those —
+ * they resolve normally, 4xx/5xx included), QuotaExhaustedException (thrown
+ * by the 429/503 handlers *after* a response was received — not a transport
+ * failure), or abort/cancellation (isRetryableTransportError excludes both).
+ */
+async function fetchWithRetry503(
+  url: string,
+  init: RequestInit,
+  providerName: string,
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= TRANSPORT_RETRY_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetchOnceWithServiceUnavailableRetry(url, init, providerName);
+      if (attempt > 0) {
+        _log(providerName, `transport retry succeeded on attempt ${attempt + 1}/${TRANSPORT_RETRY_MAX_ATTEMPTS + 1}`);
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableTransportError(err) || attempt === TRANSPORT_RETRY_MAX_ATTEMPTS) throw err;
+      const backoffMs = TRANSPORT_RETRY_BACKOFF_MS[attempt] ?? TRANSPORT_RETRY_BACKOFF_MS[TRANSPORT_RETRY_BACKOFF_MS.length - 1];
+      _log(providerName, `transport failure (attempt ${attempt + 1}/${TRANSPORT_RETRY_MAX_ATTEMPTS + 1}): ${formatErrorWithCause(err)} — retrying in ${backoffMs}ms`);
+      await new Promise(r => setTimeout(r, backoffMs));
+    }
+  }
+  // Unreachable (loop above always returns or throws) — satisfies control-flow analysis.
+  throw lastErr;
 }
 
 // ─── Provider Placeholder Detection ─────────────────────────────────────────

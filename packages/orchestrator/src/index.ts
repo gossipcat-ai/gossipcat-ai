@@ -280,3 +280,4 @@ export { ChatbotAgent } from './chatbot-agent';
 export type { ChatbotTool, ChatbotAgentConfig, ChatStreamEvent } from './chatbot-agent';
 export { detectStaleBase, findUnreadablePaths, detectMidFlightCommits, extractReferencedPaths, extractReferencedPathsWithMeta, findUnreadableReferencedPaths, findUnreadableReferencedPathsWithMeta } from './orchestrator-preconditions';
 export type { StaleBaseResult, MidFlightResult, UnreadableReason, UnreadableReferencedPath, FindUnreadableReferencedPathsOpts, FindUnreadableReferencedPathsResult, ExtractReferencedPathsResult } from './orchestrator-preconditions';
+export { formatErrorWithCause, isRetryableTransportError } from './error-format';
