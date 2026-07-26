@@ -4,8 +4,71 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-07-26
+
+Adds a memory loop for operator process failures: lessons can now be recorded
+without a consensus round and are auto-injected into matching dispatches. Also
+clears every open dependency advisory and closes a sandbox escape found during
+review. Six of the seven changes were verified by pre-merge consensus rounds.
+
+### Upgrading
+
+**After upgrading, do a full server restart before testing relay agents.** An
+`/mcp` reconnect re-attaches the client but does not rebuild relay worker state,
+so workers keep composing prompts with the previous layout. Symptom: relay
+agents appear not to receive newly-added prompt sections while native agents do.
+This bit us during release testing and produced three false negatives before a
+full restart resolved it.
+
+### Added
+
+- **`operational_lesson` signal + session-scoped `finding_id`** (issue #668).
+  `gossip_signals` previously required a consensus-round-scoped `finding_id`
+  (`<8hex>-<8hex>:<agent>:fN`), which made process failures — no round, no
+  `file:line` — unrecordable except by inventing a filler id. A second shape is
+  now accepted: `session:<sessionId>:<slug>`. Both components are validated with
+  the project's existing `SAFE_NAME` regex and rejected (never sanitized) if
+  path-unsafe. `lesson:` is required, and the signal is excluded from accuracy
+  scoring entirely — an operator logging their own mistake moves no agent score.
+  Pass `cross_cutting: true` to file the card in shared `_project` memory so it
+  is reachable by agents that did not record it.
+- **Auto-injected lesson cards at dispatch** (issue #669). Task-matched lesson
+  cards are now injected into dispatched prompts, so an agent no longer has to
+  know a lesson exists in order to search for it. Relevance uses stopword
+  filtering, distinct-term matching, corpus-frequency demotion and saturating
+  query normalization; an off-domain task injects nothing rather than an empty
+  header. Budget: 2 cards, ~1.5 KB, hard-capped at 2000 chars and asserted by
+  test. Content is wrapped in `<retrieved_knowledge>` with an explicit
+  not-a-directive clamp, and entity-escaped so a card cannot spoof or close the
+  envelope. Consensus dispatches additionally carry an anti-anchoring clause: a
+  recalled verdict is never evidence and must not produce an AGREE. Injections
+  are logged to `.gossip/lesson-injections.jsonl`.
+- **Verification-scoped memory directive in cross-review** (issue #659).
+  Phase-2 reviewers had the memory tool available but no direction on using it,
+  so recall happened ad hoc. They now get a scoped directive permitting process
+  recall (prior adjudications, peer miscite patterns) while explicitly
+  forbidding a recalled verdict from substituting for fresh verification.
+
 ### Fixed
 
+- **Absolute citation paths now resolve** (issue #660). `path.join(root, cited)`
+  produced a doubled path for an already-absolute citation, so every absolute
+  `file:line` failed anchor resolution even when the file sat inside a
+  configured root — pushing correct findings toward UNVERIFIED and depressing
+  the citing agent's accuracy. Absolute citations now resolve, with
+  `priorityRoots` honoured so a worktree copy wins over the master copy, an
+  `isFile()` gate, and realpath-symmetric prefix matching.
+- **Relay `fetch failed` is now diagnosable** (issue #657). undici puts the real
+  OS/TLS/DNS error in `error.cause` and leaves only `"fetch failed"` in
+  `message`, which the worker was reading — discarding the only information
+  identifying the failure. The cause chain is now surfaced (depth-capped,
+  cycle-guarded) with an allow-listed field set; unknown objects are reported by
+  type only, never serialized. Adds a bounded transport retry (2 attempts,
+  1s/3s) that is idempotency-safe: connect-phase failures always retry, while
+  ambiguous ones retry only when an `Idempotency-Key` was sent (Anthropic and
+  canonical OpenAI only). Backoff is abort-aware. Opt into
+  `GOSSIP_LLM_PREFER_IPV4=1` for `ipv4first` DNS ordering — note this is a
+  process-global change.
 - **Ref-allowlist / stale-base detection no longer hardcodes `origin/master`**
   (issue #658). On repos whose default branch is `main` (or anything else),
   every dispatch previously ran `git rev-parse origin/master`, which fails
@@ -23,7 +86,52 @@ All notable changes to gossipcat are documented here. The format is loosely base
   nothing resolves, the diagnostic now distinguishes "no such base ref
   (checked origin/master, origin/main)" from a genuine offline/no-remote
   condition. Set `GOSSIP_BASE_REF=<ref>` (e.g. `origin/trunk`) to force a
-  specific base ref on repos where none of the above heuristics apply.
+  specific base ref on repos where none of the above heuristics apply. The
+  override is validated: it must resolve and must be a remote-tracking ref, so
+  a value like `master` (missing the `origin/` prefix) is rejected rather than
+  silently making the direct-push detector compare against a local branch — a
+  misconfiguration that would fire a high-severity signal at an innocent agent.
+
+### Security
+
+- **Closed a sandbox escape in citation resolution.** The first cut of the
+  absolute-path fix above passed the raw citation to the containment check. A
+  citation of the form `<configured-root>/<symlinked-dir>/../secret.ts` resolved
+  and its contents were emitted into an `<anchor>` block, despite the file
+  lying outside every configured root — three layers disagreed on when `..` is
+  resolved (textually by `resolve()`, by the kernel *after* following the
+  symlink, and textually again by `realpathSync`, whose ENOENT landed in a
+  fail-open catch). Citations are now normalized before the containment check
+  and `realpathSync` failure fails closed. Found by adversarial review before
+  merge; regression tests cover both the symlink+`..` case and a symlinked
+  directory leaving the root.
+
+### Dependencies
+
+- **All open advisories cleared.** fast-uri (high — host confusion), hono (×3),
+  body-parser, js-yaml, node-tar (critical), and next were updated;
+  brace-expansion is pinned via a root override because jest's `glob` chain
+  holds it below the fixed version and npm's own remedy is a jest v25
+  downgrade. The `geist` dependency was **removed** — its only use was a single
+  woff2 asset while its `next` peer dependency pulled in vulnerable
+  postcss/sharp pins that npm overrides cannot reach inside workspace subtrees.
+  The font is now vendored under `packages/dashboard-v2/src/assets/fonts/` with
+  its OFL licence. One advisory (`@hono/node-server` GHSA-frvp-7c67-39w9) is
+  dismissed as unreachable: it is a Windows-only `serve-static` traversal and
+  `serveStatic` is never invoked — the relay serves assets through its own
+  handler. It will clear on the next MCP SDK bump.
+
+### Known issues
+
+- `key list` / `key set` do not report which store resolved a key, and on
+  Windows the messages name a keychain that is never used (#667).
+- The warm prompt cache splits on `lastIndexOf('\n\nTask:')`, so a task whose
+  text contains that sequence can leak into a later same-key dispatch (#672).
+  Pre-existing; no cached section on record has been affected.
+- Cross-review skills injection is wired at only one of five `ConsensusEngine`
+  construction sites, so cross-reviewers receive no skills on the production
+  `gossip_collect` path (#666). Fixing it costs roughly 43 KB per agent per
+  round and is pending a cost decision.
 
 ## [0.6.13] — 2026-07-19
 
