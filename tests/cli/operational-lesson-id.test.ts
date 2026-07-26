@@ -217,4 +217,28 @@ describe('gossip_signals handler wiring', () => {
     expect(src).toContain("'impl_peer_rejected', 'operational_lesson'");
     expect(src).toContain('cross_cutting: z.boolean().optional()');
   });
+
+  // The record-action receipt is the ONLY feedback an operator sees at the moment
+  // they log their own process mistake. It previously fell through to the "neg"
+  // bucket, so recording a lesson printed "agent: +0 / -1" — telling the operator
+  // they had just penalized an agent, contradicting the invariant that this signal
+  // moves no score. Found in the #670 consensus round; the reader-side exclusion
+  // was correct all along, but nothing tested the handler's own output.
+  it('counts operational lessons separately in the receipt, never as negative', () => {
+    expect(src).toContain('if (isOperationalLessonSignal(s.signal)) entry.lessons++;');
+    // The lesson branch must come BEFORE the positive/negative classification,
+    // otherwise the conservative else-branch reclaims it as a penalty.
+    const lessonIdx = src.indexOf('if (isOperationalLessonSignal(s.signal)) entry.lessons++;');
+    const posIdx = src.indexOf('else if (POSITIVE_SIGNALS.has(s.signal)) entry.pos++;');
+    expect(lessonIdx).toBeGreaterThan(-1);
+    expect(posIdx).toBeGreaterThan(lessonIdx);
+    expect(src).toContain('lesson${lessons === 1 ? \'\' : \'s\'}, unscored)');
+  });
+
+  it('does not claim dispatch-weight impact for an all-lessons batch', () => {
+    expect(src).toContain('const scoringCount = deduped.filter(s => !isOperationalLessonSignal(s.signal)).length;');
+    expect(src).toContain('operational lessons never influence dispatch weighting.');
+    // The unconditional claim must be gone — it is now behind scoringCount > 0.
+    expect(src).not.toContain('${taskIdList}\\n\\nThese will influence future agent selection');
+  });
 });

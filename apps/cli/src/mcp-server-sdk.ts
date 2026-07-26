@@ -4199,7 +4199,10 @@ export function createMcpServer(): McpServer {
 
         // Summary by agent — impl_* signals reward/penalize the implementer's track record,
         // and must be classified explicitly. Anything not matched falls into "neg" as a
-        // conservative default.
+        // conservative default. Operational lessons are counted SEPARATELY: they move no
+        // score at all (performance-reader drops them before every scoring pass), so
+        // showing one as "-1" would tell an operator recording their own process mistake
+        // that they had just penalized an agent. Issue #668.
         const POSITIVE_SIGNALS = new Set([
           'agreement',
           'unique_confirmed',
@@ -4207,20 +4210,29 @@ export function createMcpServer(): McpServer {
           'impl_test_pass',
           'impl_peer_approved',
         ]);
-        const byAgent = new Map<string, { pos: number; neg: number }>();
+        const byAgent = new Map<string, { pos: number; neg: number; lessons: number }>();
         for (const s of deduped) {
-          const entry = byAgent.get(s.agentId) || { pos: 0, neg: 0 };
-          if (POSITIVE_SIGNALS.has(s.signal)) entry.pos++;
+          const entry = byAgent.get(s.agentId) || { pos: 0, neg: 0, lessons: 0 };
+          if (isOperationalLessonSignal(s.signal)) entry.lessons++;
+          else if (POSITIVE_SIGNALS.has(s.signal)) entry.pos++;
           else entry.neg++;
           byAgent.set(s.agentId, entry);
         }
 
         const summary = Array.from(byAgent.entries())
-          .map(([id, { pos, neg }]) => `  ${id}: +${pos} / -${neg}`)
+          .map(([id, { pos, neg, lessons }]) =>
+            `  ${id}: +${pos} / -${neg}${lessons > 0 ? ` (${lessons} lesson${lessons === 1 ? '' : 's'}, unscored)` : ''}`)
           .join('\n');
 
         const taskIdList = deduped.map(f => `  ${f.agentId}: ${f.taskId}`).join('\n');
-        let baseReceipt = `Recorded ${deduped.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\nThese will influence future agent selection via dispatch weighting.`;
+        // Only claim dispatch-weight impact when something recorded can actually
+        // move it. An all-lessons batch influences nothing — saying otherwise
+        // contradicts the contract the operator just relied on.
+        const scoringCount = deduped.filter(s => !isOperationalLessonSignal(s.signal)).length;
+        const effectLine = scoringCount > 0
+          ? 'These will influence future agent selection via dispatch weighting.'
+          : 'Recorded for recall only — operational lessons never influence dispatch weighting.';
+        let baseReceipt = `Recorded ${deduped.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\n${effectLine}`;
         if (missingFindingIdCount > 0) {
           baseReceipt += `\n\n⚠ ${missingFindingIdCount} signal(s) recorded without finding_id — unauditable, see CLAUDE.md contract`;
         }
